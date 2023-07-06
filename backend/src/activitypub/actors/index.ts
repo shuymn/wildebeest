@@ -22,6 +22,10 @@ export interface Actor extends APObject {
 	followers: URL
 
 	alsoKnownAs?: string
+	publicKey?: {
+		id: string
+		publicKeyPem: string
+	}
 
 	[emailSymbol]: string
 	[isAdminSymbol]: boolean
@@ -29,11 +33,7 @@ export interface Actor extends APObject {
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-person
 export interface Person extends Actor {
-	publicKey: {
-		id: string
-		owner: URL
-		publicKeyPem: string
-	}
+	type: typeof PERSON
 }
 
 export async function get(url: string | URL): Promise<Actor> {
@@ -131,7 +131,7 @@ export async function getPersonByEmail(db: Database, email: string): Promise<Per
 		return null
 	}
 	const row: any = results[0]
-	return personFromRow(row)
+	return actorFromRow(row) as Person
 }
 
 type PersonProperties = {
@@ -210,7 +210,7 @@ export async function createPerson(
 		.bind(id, PERSON, email, userKeyPair.pubKey, privkey, salt, JSON.stringify(properties), admin ? 1 : null)
 		.first()
 
-	return personFromRow(row)
+	return actorFromRow(row) as Person
 }
 
 export async function updateActorProperty(db: Database, actorId: URL, key: string, value: string) {
@@ -252,10 +252,10 @@ export async function getActorById(db: Database, id: URL): Promise<Actor | null>
 		return null
 	}
 	const row: any = results[0]
-	return personFromRow(row)
+	return actorFromRow(row)
 }
 
-export function personFromRow(row: any): Person {
+export function actorFromRow(row: any): Actor {
 	let properties
 	if (typeof row.properties === 'object') {
 		// neon uses JSONB for properties which is returned as a deserialized
@@ -286,7 +286,6 @@ export function personFromRow(row: any): Person {
 	if (row.pubkey !== null) {
 		publicKey = {
 			id: row.id + '#main-key',
-			owner: row.id,
 			publicKeyPem: row.pubkey,
 		}
 	}
@@ -330,10 +329,10 @@ export function personFromRow(row: any): Person {
 		preferredUsername,
 		discoverable: true,
 		publicKey,
-		type: PERSON,
+		type: row.type,
 		id,
 		published: new Date(row.cdate).toISOString(),
 
 		url: new URL('@' + preferredUsername, 'https://' + domain),
-	} as unknown as Person
+	} as unknown as Actor
 }

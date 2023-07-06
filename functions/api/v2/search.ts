@@ -6,7 +6,7 @@ import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 import { MastodonAccount } from 'wildebeest/backend/src/types/account'
 import { parseHandle } from 'wildebeest/backend/src/utils/parse'
 import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import { personFromRow } from 'wildebeest/backend/src/activitypub/actors'
+import { actorFromRow } from 'wildebeest/backend/src/activitypub/actors'
 import type { Handle } from 'wildebeest/backend/src/utils/parse'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 
@@ -74,7 +74,7 @@ export async function handleRequest(db: Database, request: Request): Promise<Res
 			if (results !== undefined) {
 				for (let i = 0, len = results.length; i < len; i++) {
 					const row: any = results[i]
-					const actor = personFromRow(row)
+					const actor = actorFromRow(row)
 					const acct = actorToHandle(actor)
 					out.accounts.push(await loadExternalMastodonAccount(acct, actor))
 				}
