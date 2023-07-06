@@ -8,6 +8,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      NO_D1_WARNING: true
     steps:
       - name: Ensure CF_DEPLOY_DOMAIN and CF_ZONE_ID are defined
         run: |
