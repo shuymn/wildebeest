@@ -13,24 +13,19 @@ export function initSentry(request: Request, env: Env, context: any) {
 		headers['CF-Access-Client-Secret'] = env.SENTRY_ACCESS_CLIENT_SECRET
 	}
 
-	try {
-		const sentry = new Toucan({
-			dsn: env.SENTRY_DSN,
-			context,
-			request,
-			transportOptions: { headers },
-		})
-		const cf = (request as { cf?: IncomingRequestCfProperties }).cf
-		const colo = cf?.colo ? cf.colo : 'UNKNOWN'
-		sentry.setTag('colo', colo)
+	const sentry = new Toucan({
+		dsn: env.SENTRY_DSN,
+		context,
+		request,
+		transportOptions: { headers },
+	})
+	const cf = (request as { cf?: IncomingRequestCfProperties }).cf
+	const colo = cf?.colo ? cf.colo : 'UNKNOWN'
+	sentry.setTag('colo', colo)
 
-		// cf-connecting-ip should always be present, but if not we can fallback to XFF.
-		const ipAddress = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for')
-		const userAgent = request.headers.get('user-agent') || ''
-		sentry.setUser({ ip: ipAddress, userAgent: userAgent, colo: colo })
-		return sentry
-	} catch (err: any) {
-		console.error(err.stack, err.cause)
-		return null
-	}
+	// cf-connecting-ip should always be present, but if not we can fallback to XFF.
+	const ipAddress = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for')
+	const userAgent = request.headers.get('user-agent') || ''
+	sentry.setUser({ ip: ipAddress, userAgent: userAgent, colo: colo })
+	return sentry
 }
