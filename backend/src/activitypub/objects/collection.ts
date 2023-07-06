@@ -28,27 +28,25 @@ export async function getMetadata(url: URL): Promise<OrderedCollection<any>> {
 	return res.json<OrderedCollection<any>>()
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function loadItems<T>(collection: OrderedCollection<T>, max?: number): Promise<Array<T>> {
-	// FIXME: implement max
-
 	const items = []
 	let pageUrl = collection.first
 
 	while (true) {
 		const page = await loadPage<T>(pageUrl)
 		if (page === null) {
-			break
+			return items
 		}
 		items.push(...page.orderedItems)
+		if (max && items.length >= max) {
+			return items.slice(0, max)
+		}
 		if (page.next) {
 			pageUrl = new URL(page.next)
 		} else {
-			break
+			return items
 		}
 	}
-
-	return items
 }
 
 export async function loadPage<T>(url: URL): Promise<null | OrderedCollectionPage<T>> {

@@ -29,25 +29,36 @@ export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request,
 	return handleRequest(request, await getDatabase(env), params.id as string)
 }
 
+const DEFAULT_LIMIT = 20
+
 export async function handleRequest(request: Request, db: Database, id: string): Promise<Response> {
 	const handle = parseHandle(id)
 	const url = new URL(request.url)
 	const domain = url.hostname
 	const offset = Number.parseInt(url.searchParams.get('offset') ?? '0')
-	const withReplies = url.searchParams.get('with-replies') === 'true'
+	const limit = Math.abs(Number.parseInt(url.searchParams.get('limit') ?? '0')) || DEFAULT_LIMIT
+
+	let withReplies: boolean | null = null
+	if (url.searchParams.get('with-replies') !== null) {
+		withReplies = url.searchParams.get('with-replies') === 'true'
+	}
+	let excludeReplies: boolean | null = null
+	if (url.searchParams.get('exclude_replies') !== null) {
+		excludeReplies = url.searchParams.get('exclude_replies') === 'true'
+	}
 
 	if (handle.domain === null || (handle.domain !== null && handle.domain === domain)) {
 		// Retrieve the statuses from a local user
-		return getLocalStatuses(request, db, handle, offset, withReplies)
+		return getLocalStatuses(request, db, handle, offset, withReplies ?? excludeReplies ?? false, limit)
 	} else if (handle.domain !== null) {
 		// Retrieve the statuses of a remote actor
-		return getRemoteStatuses(request, handle, db)
+		return getRemoteStatuses(request, handle, db, limit)
 	} else {
 		return new Response('', { status: 403 })
 	}
 }
 
-async function getRemoteStatuses(request: Request, handle: Handle, db: Database): Promise<Response> {
+async function getRemoteStatuses(request: Request, handle: Handle, db: Database, limit: number): Promise<Response> {
 	const url = new URL(request.url)
 	const domain = url.hostname
 	const isPinned = url.searchParams.get('pinned') === 'true'
@@ -65,7 +76,7 @@ async function getRemoteStatuses(request: Request, handle: Handle, db: Database)
 
 	const actor = await actors.getAndCache(link, db)
 
-	const activities = await outbox.get(actor)
+	const activities = await outbox.get(actor, limit)
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars -- TODO: use account
 	const account = await loadExternalMastodonAccount(acct, actor)
@@ -122,7 +133,8 @@ export async function getLocalStatuses(
 	db: Database,
 	handle: Handle,
 	offset: number,
-	withReplies: boolean
+	withReplies: boolean,
+	limit: number
 ): Promise<Response> {
 	const domain = new URL(request.url).hostname
 	const actorId = actorURL(adjustLocalHostDomain(domain), handle.localPart)
@@ -147,8 +159,6 @@ WHERE objects.type='Note'
 ORDER by outbox_objects.published_date DESC
 LIMIT ?3 OFFSET ?4
 `
-
-	const DEFAULT_LIMIT = 20
 
 	const out: Array<MastodonStatus> = []
 
@@ -177,7 +187,7 @@ LIMIT ?3 OFFSET ?4
 
 	const { success, error, results } = await db
 		.prepare(QUERY)
-		.bind(actorId.toString(), afterCdate, DEFAULT_LIMIT, offset)
+		.bind(actorId.toString(), afterCdate, limit ?? DEFAULT_LIMIT, offset)
 		.all()
 	if (!success) {
 		throw new Error('SQL error: ' + error)
