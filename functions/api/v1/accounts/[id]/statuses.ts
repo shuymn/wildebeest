@@ -77,57 +77,58 @@ async function getRemoteStatuses(request: Request, handle: Handle, db: Database,
 	const actor = await actors.getAndCache(link, db)
 
 	const activities = await outbox.get(actor, limit)
-	console.error(activities.items.length, 'activities fetched')
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars -- TODO: use account
 	const account = await loadExternalMastodonAccount(acct, actor)
 
-	const promises = activities.items.map(async (activity: Activity) => {
-		const getObjectAsId = makeGetObjectAsId(activity)
-		const getActorAsId = makeGetActorAsId(activity)
+	let statuses = []
+	for (const activity of activities.items) {
+		statuses.push(
+			await (async (activity: Activity) => {
+				const getObjectAsId = makeGetObjectAsId(activity)
+				const getActorAsId = makeGetActorAsId(activity)
 
-		if (activity.type === 'Create') {
-			const actorId = getActorAsId()
-			const originalObjectId = getObjectAsId()
-			const res = await objects.cacheObject(domain, db, activity.object, actorId, originalObjectId, false)
-			if (!res.object.content) {
-				console.error(`object ${res.object.id} has no content`)
-			}
-			return toMastodonStatusFromObject(db, res.object as Note, domain)
-		}
-
-		if (activity.type === 'Announce') {
-			let obj: any
-
-			const actorId = getActorAsId()
-			const objectId = getObjectAsId()
-
-			const localObject = await objects.getObjectById(db, objectId)
-			if (localObject === null) {
-				try {
-					// Object doesn't exists locally, we'll need to download it.
-					const remoteObject = await objects.get<Note>(objectId)
-
-					const res = await objects.cacheObject(domain, db, remoteObject, actorId, objectId, false)
-					if (res === null) {
-						return null
-					}
-					obj = res.object
-				} catch (err: any) {
-					console.warn(`failed to retrieve object ${objectId}: ${err.message}`)
-					return null
+				if (activity.type === 'Create') {
+					const actorId = getActorAsId()
+					const originalObjectId = getObjectAsId()
+					const res = await objects.cacheObject(domain, db, activity.object, actorId, originalObjectId, false)
+					return toMastodonStatusFromObject(db, res.object as Note, domain)
 				}
-			} else {
-				// Object already exists locally, we can just use it.
-				obj = localObject
-			}
 
-			return toMastodonStatusFromObject(db, obj, domain)
-		}
+				if (activity.type === 'Announce') {
+					let obj: any
 
-		// FIXME: support other Activities, like Update.
-	})
-	const statuses = (await Promise.all(promises)).filter(Boolean)
+					const actorId = getActorAsId()
+					const objectId = getObjectAsId()
+
+					const localObject = await objects.getObjectById(db, objectId)
+					if (localObject === null) {
+						try {
+							// Object doesn't exists locally, we'll need to download it.
+							const remoteObject = await objects.get<Note>(objectId)
+
+							const res = await objects.cacheObject(domain, db, remoteObject, actorId, objectId, false)
+							if (res === null) {
+								return null
+							}
+							obj = res.object
+						} catch (err: any) {
+							console.warn(`failed to retrieve object ${objectId}: ${err.message}`)
+							return null
+						}
+					} else {
+						// Object already exists locally, we can just use it.
+						obj = localObject
+					}
+
+					return toMastodonStatusFromObject(db, obj, domain)
+				}
+
+				// FIXME: support other Activities, like Update.
+			})(activity)
+		)
+	}
+	statuses = statuses.filter(Boolean)
 
 	return new Response(JSON.stringify(statuses), { headers })
 }
