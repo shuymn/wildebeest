@@ -93,8 +93,10 @@ export async function cacheObject(
 	originalObjectId: URL,
 	local: boolean
 ): Promise<CacheObjectRes> {
+	console.error('sanitize')
 	const sanitizedProperties = await sanitizeObjectProperties(properties)
 
+	console.error('getObjectBy')
 	const cachedObject = await getObjectBy(db, ObjectByKey.originalObjectId, originalObjectId.toString())
 	if (cachedObject !== null) {
 		return {
@@ -103,9 +105,11 @@ export async function cacheObject(
 		}
 	}
 
+	console.error('randomUUID')
 	const uuid = crypto.randomUUID()
 	const apId = uri(domain, uuid).toString()
 
+	console.error('INSERT')
 	const row: any = await db
 		.prepare(
 			'INSERT INTO objects(id, type, properties, original_actor_id, original_object_id, local, mastodon_id) VALUES(?, ?, ?, ?, ?, ?, ?) RETURNING *'
@@ -123,6 +127,7 @@ export async function cacheObject(
 
 	// Add peer
 	{
+		console.error('addPeer')
 		const domain = originalObjectId.host
 		await addPeer(db, domain)
 	}
@@ -137,6 +142,7 @@ export async function cacheObject(
 			// D1 uses a string for JSON properties
 			properties = JSON.parse(row.properties)
 		}
+		console.error('return')
 		const object = {
 			published: new Date(row.cdate).toISOString(),
 			...properties,
