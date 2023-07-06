@@ -6,7 +6,7 @@ import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import { parseHandle } from 'wildebeest/backend/src/utils/parse'
-import { urlToHandle } from 'wildebeest/backend/src/utils/handle'
+import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 import { MastodonAccount } from 'wildebeest/backend/src/types/account'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
@@ -46,7 +46,7 @@ async function getRemoteFollowers(request: Request, handle: Handle, db: Database
 	const followers = await loadActors(db, followersIds)
 
 	const promises = followers.map((actor) => {
-		const acct = urlToHandle(actor.id)
+		const acct = actorToHandle(actor)
 		return loadExternalMastodonAccount(acct, actor, false)
 	})
 
@@ -68,10 +68,10 @@ async function getLocalFollowers(request: Request, handle: Handle, db: Database)
 
 	for (let i = 0, len = followers.length; i < len; i++) {
 		const id = new URL(followers[i])
-		const acct = urlToHandle(id)
 
 		try {
 			const actor = await actors.getAndCache(id, db)
+			const acct = actorToHandle(actor)
 			out.push(await loadExternalMastodonAccount(acct, actor))
 		} catch (err: any) {
 			console.warn(`failed to retrieve follower (${id}): ${err.message}`)

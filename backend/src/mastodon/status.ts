@@ -12,7 +12,7 @@ import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import * as media from 'wildebeest/backend/src/media/'
 import type { MastodonStatus } from 'wildebeest/backend/src/types'
 import { parseHandle } from '../utils/parse'
-import { urlToHandle } from '../utils/handle'
+import { actorToHandle } from '../utils/handle'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInOutbox } from '../activitypub/actors/outbox'
 import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
@@ -59,7 +59,7 @@ export async function toMastodonStatusFromObject(
 	const actorId = new URL(obj[originalActorIdSymbol])
 	const actor = await actors.getAndCache(actorId, db)
 
-	const acct = urlToHandle(actorId)
+	const acct = actorToHandle(actor)
 	const account = await loadExternalMastodonAccount(acct, actor)
 
 	// FIXME: temporarly disable favourites and reblogs counts
@@ -114,15 +114,14 @@ export async function toMastodonStatusFromRow(domain: string, db: Database, row:
 		// D1 uses a string for JSON properties
 		properties = JSON.parse(row.properties)
 	}
-	const actorId = new URL(row.publisher_actor_id)
-
 	const author = actors.personFromRow({
 		id: row.actor_id,
 		cdate: row.actor_cdate,
 		properties: row.actor_properties,
+		preferredUsername: row.preferredUsername,
 	})
 
-	const acct = urlToHandle(actorId)
+	const acct = actorToHandle(author)
 	const account = await loadExternalMastodonAccount(acct, author)
 
 	if (row.favourites_count === undefined || row.reblogs_count === undefined || row.replies_count === undefined) {
@@ -171,8 +170,8 @@ export async function toMastodonStatusFromRow(domain: string, db: Database, row:
 		// as the object has been attributed to. Likely means it's a reblog.
 
 		const actorId = new URL(properties.attributedTo)
-		const acct = urlToHandle(actorId)
 		const author = await actors.getAndCache(actorId, db)
+		const acct = actorToHandle(author)
 		const account = await loadExternalMastodonAccount(acct, author)
 
 		// Restore reblogged status
