@@ -2,7 +2,7 @@
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import { queryAcct } from 'wildebeest/backend/src/webfinger'
-import { urlToHandle } from 'wildebeest/backend/src/utils/handle'
+import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 import { MastodonAccount } from 'wildebeest/backend/src/types/account'
 import { parseHandle } from 'wildebeest/backend/src/utils/parse'
 import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
@@ -75,7 +75,7 @@ export async function handleRequest(db: Database, request: Request): Promise<Res
 				for (let i = 0, len = results.length; i < len; i++) {
 					const row: any = results[i]
 					const actor = personFromRow(row)
-					const acct = urlToHandle(new URL(row.id))
+					const acct = actorToHandle(actor)
 					out.accounts.push(await loadExternalMastodonAccount(acct, actor))
 				}
 			}

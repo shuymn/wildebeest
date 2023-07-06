@@ -11,7 +11,7 @@ import { getMastodonStatusById, toMastodonStatusFromObject } from 'wildebeest/ba
 import type { Env } from 'wildebeest/backend/src/types/env'
 import * as errors from 'wildebeest/backend/src/errors'
 import { getObjectByMastodonId, deleteObject } from 'wildebeest/backend/src/activitypub/objects'
-import { urlToHandle } from 'wildebeest/backend/src/utils/handle'
+import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 import { deliverFollowers } from 'wildebeest/backend/src/activitypub/deliver'
 import type { Queue, DeliverMessageBody } from 'wildebeest/backend/src/types/queue'
 import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
@@ -50,8 +50,8 @@ export async function handleRequestGet(
 
 	// future validation for private statuses
 	/*
-	if (status.private && status.account.id !== urlToHandle(connectedActor.id)) {
-		return errors.notAuthorized("status is private");
+	if (status.private && status.account.id !== actorToHandle(connectedActor)) {
+		return errors.notAuthorized('status is private')
 	}
 	*/
 
@@ -80,7 +80,7 @@ export async function handleRequestDelete(
 	if (status === null) {
 		return errors.statusNotFound(id)
 	}
-	if (status.account.id !== urlToHandle(connectedActor.id)) {
+	if (status.account.id !== actorToHandle(connectedActor)) {
 		return errors.statusNotFound(id)
 	}
 

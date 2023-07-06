@@ -1,13 +1,15 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { parseHandle } from '../src/utils/parse'
-import { urlToHandle } from '../src/utils/handle'
+import { parseHandle } from 'wildebeest/backend/src/utils/parse'
+import { actorToHandle, urlToHandle } from 'wildebeest/backend/src/utils/handle'
 import { readBody } from 'wildebeest/backend/src/utils/body'
 import { generateUserKey, unwrapPrivateKey, importPublicKey } from 'wildebeest/backend/src/utils/key-ops'
 import { signRequest } from 'wildebeest/backend/src/utils/http-signing'
 import { generateDigestHeader } from 'wildebeest/backend/src/utils/http-signing-cavage'
 import { parseRequest } from 'wildebeest/backend/src/utils/httpsigjs/parser'
 import { verifySignature } from 'wildebeest/backend/src/utils/httpsigjs/verifier'
+import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
+import { makeDB } from './utils'
 
 describe('utils', () => {
 	test('user key lifecycle', async () => {
@@ -66,6 +68,20 @@ describe('utils', () => {
 	test('URL to handle', async () => {
 		const res = urlToHandle(new URL('https://host.org/users/foobar'))
 		assert.equal(res, 'foobar@host.org')
+	})
+
+	test('Actor to handle', async () => {
+		const domain = 'example.com'
+		const userKEK = 'userkey'
+		const db = await makeDB()
+
+		let actor = await createPerson(domain, db, userKEK, 'alice@cloudflare.com')
+		let res = actorToHandle(actor)
+		assert.equal(res, 'alice@example.com')
+
+		actor = await createPerson(domain, db, userKEK, 'alice@cloudflare.com', { preferredUsername: 'bob' })
+		res = actorToHandle(actor)
+		assert.equal(res, 'bob@example.com')
 	})
 
 	test('read body handles JSON', async () => {

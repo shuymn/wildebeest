@@ -3,7 +3,7 @@ import { type Database } from 'wildebeest/backend/src/database'
 import { defaultImages } from 'wildebeest/config/accounts'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
-import { urlToHandle } from 'wildebeest/backend/src/utils/handle'
+import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import { generateWebPushMessage } from 'wildebeest/backend/src/webpush'
 import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
@@ -242,7 +242,7 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 			continue
 		}
 
-		const acct = urlToHandle(notifFromActorId)
+		const acct = actorToHandle(notifFromActor)
 		const notifFromAccount = await loadExternalMastodonAccount(acct, notifFromActor)
 
 		const notif: Notification = {
@@ -256,7 +256,7 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 			const actorId = new URL(result.original_actor_id)
 			const actor = await actors.getAndCache(actorId, db)
 
-			const acct = urlToHandle(actorId)
+			const acct = actorToHandle(actor)
 			const account = await loadExternalMastodonAccount(acct, actor)
 
 			notif.status = {
