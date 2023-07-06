@@ -77,6 +77,7 @@ async function getRemoteStatuses(request: Request, handle: Handle, db: Database,
 	const actor = await actors.getAndCache(link, db)
 
 	const activities = await outbox.get(actor, limit)
+	console.error(activities.items.length, 'activities fetched')
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars -- TODO: use account
 	const account = await loadExternalMastodonAccount(acct, actor)
@@ -89,6 +90,9 @@ async function getRemoteStatuses(request: Request, handle: Handle, db: Database,
 			const actorId = getActorAsId()
 			const originalObjectId = getObjectAsId()
 			const res = await objects.cacheObject(domain, db, activity.object, actorId, originalObjectId, false)
+			if (!res.object.content) {
+				console.error(`object ${res.object.id} has no content`)
+			}
 			return toMastodonStatusFromObject(db, res.object as Note, domain)
 		}
 
