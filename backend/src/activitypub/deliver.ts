@@ -21,6 +21,7 @@ export async function deliverToActor(
 ) {
 	const headers = {
 		Accept: 'application/ld+json; profile="https://www.w3.org/ns/activitystreams"',
+		'Content-Type': 'application/activity+json',
 		'User-Agent': getFederationUA(domain),
 	}
 
@@ -33,7 +34,7 @@ export async function deliverToActor(
 	})
 	const digest = await generateDigestHeader(body)
 	req.headers.set('Digest', digest)
-	await signRequest(req, signingKey, new URL(from.id))
+	await signRequest(req, signingKey, new URL(from.publicKey?.id ?? from.id))
 
 	const res = await fetch(req)
 	if (!res.ok) {

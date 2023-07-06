@@ -114,7 +114,7 @@ export async function toMastodonStatusFromRow(domain: string, db: Database, row:
 		// D1 uses a string for JSON properties
 		properties = JSON.parse(row.properties)
 	}
-	const author = actors.personFromRow({
+	const author = actors.actorFromRow({
 		id: row.actor_id,
 		cdate: row.actor_cdate,
 		properties: row.actor_properties,

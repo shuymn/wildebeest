@@ -1,5 +1,5 @@
 import { type Database } from 'wildebeest/backend/src/database'
-import { Person, personFromRow } from 'wildebeest/backend/src/activitypub/actors'
+import { Person, actorFromRow } from 'wildebeest/backend/src/activitypub/actors'
 
 export async function getAdmins(db: Database): Promise<Person[]> {
 	let rows: unknown[] = []
@@ -11,5 +11,5 @@ export async function getAdmins(db: Database): Promise<Person[]> {
 		/* empty */
 	}
 
-	return rows.map(personFromRow)
+	return rows.map(actorFromRow) as Person[]
 }
