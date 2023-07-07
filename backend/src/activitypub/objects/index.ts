@@ -244,14 +244,12 @@ export function isAPObject(value: unknown): value is APObject {
 
 /** Sanitizes the ActivityPub Object `properties` prior to being stored in the DB. */
 export async function sanitizeObjectProperties(properties: unknown): Promise<APObject> {
-	console.error(properties)
 	if (!isAPObject(properties)) {
 		throw new Error('Invalid object properties. Expected an object but got ' + JSON.stringify(properties))
 	}
 	const sanitized: APObject = {
 		...properties,
 	}
-	console.error(sanitized)
 	if ('content' in properties) {
 		sanitized.content = await sanitizeContent(properties.content as string)
 	}
@@ -271,7 +269,9 @@ export async function sanitizeObjectProperties(properties: unknown): Promise<APO
  * See https://docs.joinmastodon.org/spec/activitypub/#sanitization
  */
 export async function sanitizeContent(unsafeContent: string): Promise<string> {
-	console.error(unsafeContent)
+	if (unsafeContent === '') {
+		return ''
+	}
 	return await getContentRewriter().transform(new Response(unsafeContent)).text()
 }
 
@@ -279,7 +279,9 @@ export async function sanitizeContent(unsafeContent: string): Promise<string> {
  * This method removes all HTML elements from the string leaving only the text content.
  */
 export async function getTextContent(unsafeName: string): Promise<string> {
-	console.error(unsafeName)
+	if (unsafeName === '') {
+		return ''
+	}
 	const rawContent = getTextContentRewriter().transform(new Response(unsafeName))
 	const text = await rawContent.text()
 	return text.trim()
