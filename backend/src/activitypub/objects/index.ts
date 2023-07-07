@@ -93,10 +93,8 @@ export async function cacheObject(
 	originalObjectId: URL,
 	local: boolean
 ): Promise<CacheObjectRes> {
-	console.error('sanitize')
 	const sanitizedProperties = await sanitizeObjectProperties(properties)
 
-	console.error('getObjectBy')
 	const cachedObject = await getObjectBy(db, ObjectByKey.originalObjectId, originalObjectId.toString())
 	if (cachedObject !== null) {
 		return {
@@ -105,11 +103,9 @@ export async function cacheObject(
 		}
 	}
 
-	console.error('randomUUID')
 	const uuid = crypto.randomUUID()
 	const apId = uri(domain, uuid).toString()
 
-	console.error('INSERT')
 	const row: any = await db
 		.prepare(
 			'INSERT INTO objects(id, type, properties, original_actor_id, original_object_id, local, mastodon_id) VALUES(?, ?, ?, ?, ?, ?, ?) RETURNING *'
@@ -127,7 +123,6 @@ export async function cacheObject(
 
 	// Add peer
 	{
-		console.error('addPeer')
 		const domain = originalObjectId.host
 		await addPeer(db, domain)
 	}
@@ -142,7 +137,6 @@ export async function cacheObject(
 			// D1 uses a string for JSON properties
 			properties = JSON.parse(row.properties)
 		}
-		console.error('return')
 		const object = {
 			published: new Date(row.cdate).toISOString(),
 			...properties,
@@ -250,12 +244,14 @@ export function isAPObject(value: unknown): value is APObject {
 
 /** Sanitizes the ActivityPub Object `properties` prior to being stored in the DB. */
 export async function sanitizeObjectProperties(properties: unknown): Promise<APObject> {
+	console.error(properties)
 	if (!isAPObject(properties)) {
 		throw new Error('Invalid object properties. Expected an object but got ' + JSON.stringify(properties))
 	}
 	const sanitized: APObject = {
 		...properties,
 	}
+	console.error(sanitized)
 	if ('content' in properties) {
 		sanitized.content = await sanitizeContent(properties.content as string)
 	}
@@ -275,6 +271,7 @@ export async function sanitizeObjectProperties(properties: unknown): Promise<APO
  * See https://docs.joinmastodon.org/spec/activitypub/#sanitization
  */
 export async function sanitizeContent(unsafeContent: string): Promise<string> {
+	console.error(unsafeContent)
 	return await getContentRewriter().transform(new Response(unsafeContent)).text()
 }
 
@@ -282,6 +279,7 @@ export async function sanitizeContent(unsafeContent: string): Promise<string> {
  * This method removes all HTML elements from the string leaving only the text content.
  */
 export async function getTextContent(unsafeName: string): Promise<string> {
+	console.error(unsafeName)
 	const rawContent = getTextContentRewriter().transform(new Response(unsafeName))
 	const text = await rawContent.text()
 	return text.trim()
