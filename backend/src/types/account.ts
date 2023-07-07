@@ -68,3 +68,13 @@ export type Field = {
 	value: string
 	verified_at?: string
 }
+
+export type ReadingExpandMedia = 'default' | 'show_all' | 'hide_all'
+
+export type Preference = {
+	posting_default_visibility: Privacy
+	posting_default_sensitive: boolean
+	posting_default_language: string | null
+	reading_expand_media: ReadingExpandMedia
+	reading_expand_spoilers: boolean
+}
