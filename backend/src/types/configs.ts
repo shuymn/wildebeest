@@ -17,7 +17,7 @@ export type InstanceConfig = {
 		status_count: number
 		domain_count: number
 	}
-	thumbnail: string | null
+	thumbnail: string
 	languages: Array<string>
 	registrations: boolean
 	approval_required: boolean
