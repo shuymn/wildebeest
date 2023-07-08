@@ -10,6 +10,7 @@ import { getCommitHash } from '~/utils/getCommitHash'
 import { InstanceConfigContext } from '~/utils/instanceConfig'
 import { getDocumentHead } from '~/utils/getDocumentHead'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
+import { getDatabase } from 'wildebeest/backend/src/database'
 
 export const instanceLoader = loader$<Promise<InstanceConfig>>(async ({ platform, html }) => {
 	const env = {
@@ -18,7 +19,8 @@ export const instanceLoader = loader$<Promise<InstanceConfig>>(async ({ platform
 		ADMIN_EMAIL: platform.ADMIN_EMAIL,
 	} as Env
 	try {
-		const response = await instance.handleRequest('', env)
+		const database = await getDatabase(platform)
+		const response = await instance.handleRequest('', database, env)
 		const results = await response.text()
 		const json = JSON.parse(results) as InstanceConfig
 		return json
