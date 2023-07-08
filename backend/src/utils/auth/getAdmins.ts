@@ -13,3 +13,13 @@ export async function getAdmins(db: Database): Promise<Person[]> {
 
 	return rows.map(actorFromRow) as Person[]
 }
+
+export async function getAdminByEmail(db: Database, email: string): Promise<Person | null> {
+	const stmt = db.prepare('SELECT * FROM actors WHERE email=? AND is_admin=1 AND type=?').bind(email, 'Person') // TODO: use constant
+	const { results } = await stmt.all()
+	if (!results || results.length === 0) {
+		return null
+	}
+	const row: any = results[0]
+	return actorFromRow(row) as Person
+}
