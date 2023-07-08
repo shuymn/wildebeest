@@ -4,6 +4,9 @@ import { DEFAULT_THUMBNAIL } from 'wildebeest/backend/src/config'
 import type { InstanceConfigV2 } from 'wildebeest/backend/src/types/configs'
 import { getVersion } from 'wildebeest/config/versions'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import { getAdminByEmail } from 'wildebeest/backend/src/utils/auth/getAdmins'
+import { loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import { getRules } from 'wildebeest/backend/src/config/rules'
 
 export const onRequest: PagesFunction<Env, any> = async ({ env, request }) => {
 	const domain = new URL(request.url).hostname
@@ -16,25 +19,67 @@ export async function handleRequest(domain: string, db: Database, env: Env) {
 		'content-type': 'application/json; charset=utf-8',
 	}
 
+	// TODO: make it more configurable
 	const res: InstanceConfigV2 = {
 		domain,
 		title: env.INSTANCE_TITLE,
 		version: getVersion(),
 		source_url: 'https://github.com/cloudflare/wildebeest',
 		description: env.INSTANCE_DESCR,
+		usage: {
+			users: {
+				active_month: 1,
+			},
+		},
 		thumbnail: {
 			url: DEFAULT_THUMBNAIL,
 		},
 		languages: ['en'],
+		configuration: {
+			urls: {},
+			accounts: {
+				max_featured_tags: 10,
+			},
+			statuses: {
+				max_characters: 500,
+				max_media_attachments: 4,
+				characters_reserved_per_url: 23,
+			},
+			media_attachments: {
+				supported_mime_types: ['image/jpeg', 'image/png', 'image/gif', 'image/heic', 'image/heif', 'image/webp'],
+				image_size_limit: 16 * 1024 * 1024, // 16 MB
+				image_matrix_limit: 7680 * 4320, // 8K
+				video_size_limit: 0,
+				video_frame_rate_limit: 0,
+				video_matrix_limit: 0,
+			},
+			polls: {
+				max_options: 4,
+				max_characters_per_option: 50,
+				min_expiration: 5 * 60, // 5 minutes
+				max_expiration: 2629746, // almost a month
+			},
+			translation: {
+				enabled: false,
+			},
+		},
 		registrations: {
 			// Registration is disabled because unsupported by Wildebeest. Users
 			// should go through the login flow and authenticate with Access.
 			enabled: false,
+			approval_required: false,
+			message: null,
 		},
 		contact: {
 			email: env.ADMIN_EMAIL,
+			account: null,
 		},
-		rules: [],
+		rules: await getRules(db),
+	}
+
+	const actor = await getAdminByEmail(db, env.ADMIN_EMAIL)
+	if (actor !== null) {
+		res.contact.account = await loadLocalMastodonAccount(db, actor)
 	}
 
 	return new Response(JSON.stringify(res), { headers })
