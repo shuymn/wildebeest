@@ -21,6 +21,7 @@ import { insertLike } from 'wildebeest/backend/src/mastodon/like'
 import { insertReblog } from 'wildebeest/backend/src/mastodon/reblog'
 import * as filters from 'wildebeest/functions/api/v1/filters'
 import { createStatus } from 'wildebeest/backend/src/mastodon/status'
+import * as preferences from 'wildebeest/functions/api/v1/preferences'
 
 const userKEK = 'test_kek2'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -1066,6 +1067,25 @@ describe('Mastodon APIs', () => {
 
 			const data = await res.json<any>()
 			assert.equal(data.length, 0)
+		})
+
+		test('preferences', async () => {
+			const db = await makeDB()
+			const actor = await createPerson(domain, db, userKEK, 'alice@example.com')
+			const connectedActor = actor
+
+			const context: any = { data: { connectedActor }, env: { DATABASE: db } }
+			const res = await preferences.onRequest(context)
+			assert.equal(res.status, 200)
+			assertCORS(res)
+			assertJSON(res)
+
+			const data = await res.json<any>()
+			assert.equal(data['posting:default:language'], null)
+			assert.equal(data['posting:default:sensitive'], false)
+			assert.equal(data['posting:default:visibility'], 'public')
+			assert.equal(data['reading:expand:media'], 'default')
+			assert.equal(data['reading:expand:spoilers'], false)
 		})
 	})
 })

@@ -1,4 +1,4 @@
-import { MastodonAccount } from 'wildebeest/backend/src/types/account'
+import type { MastodonAccount, Preference } from 'wildebeest/backend/src/types/account'
 import { unwrapPrivateKey } from 'wildebeest/backend/src/utils/key-ops'
 import { Actor } from '../activitypub/actors'
 import { defaultImages } from 'wildebeest/config/accounts'
@@ -96,5 +96,24 @@ export async function getSigningKey(instanceKey: string, db: Database, actor: Ac
 	} else {
 		// D1
 		return unwrapPrivateKey(instanceKey, new Uint8Array(privkey), new Uint8Array(privkey_salt))
+	}
+}
+
+export async function getPreference(db: Database, actor: Actor): Promise<Preference> {
+	const query = `
+SELECT
+	posting_default_visibility,
+	posting_default_sensitive,
+	posting_default_language,
+	reading_expand_spoilers
+FROM actor_preferences WHERE id=?
+`
+	const row: any = await db.prepare(query).bind(actor.id.toString()).first()
+	return {
+		posting_default_visibility: row.posting_default_visibility,
+		posting_default_sensitive: row.posting_default_sensitive === 1,
+		posting_default_language: row.posting_default_language,
+		reading_expand_media: 'default',
+		reading_expand_spoilers: row.reading_expand_spoilers === 1,
 	}
 }

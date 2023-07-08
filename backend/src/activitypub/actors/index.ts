@@ -209,6 +209,7 @@ export async function createPerson(
 		)
 		.bind(id, PERSON, email, userKeyPair.pubKey, privkey, salt, JSON.stringify(properties), admin ? 1 : null)
 		.first()
+	await db.prepare('INSERT INTO actor_preferences(id) VALUES(?)').bind(id).run()
 
 	return actorFromRow(row) as Person
 }

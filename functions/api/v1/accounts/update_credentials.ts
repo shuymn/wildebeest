@@ -13,7 +13,7 @@ import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { updateActorProperty } from 'wildebeest/backend/src/activitypub/actors'
 import type { CredentialAccount } from 'wildebeest/backend/src/types/account'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
-import { loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import { getPreference, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 
 const headers = {
 	...cors(),
@@ -82,6 +82,8 @@ export async function handleRequest(
 			const url = await images.uploadHeader(value, config)
 			await updateActorProperty(db, connectedActor.id, 'image.url', url.toString())
 		}
+
+		// TODO: update preferences
 	}
 
 	// reload the current user and sent back updated infos
@@ -91,15 +93,16 @@ export async function handleRequest(
 			return errors.notAuthorized('user not found')
 		}
 		const user = await loadLocalMastodonAccount(db, actor)
+		const preference = await getPreference(db, actor)
 
 		const res: CredentialAccount = {
 			...user,
 			source: {
 				note: user.note,
 				fields: user.fields,
-				privacy: 'public',
-				sensitive: false,
-				language: 'en',
+				privacy: preference.posting_default_visibility,
+				sensitive: preference.posting_default_sensitive,
+				language: preference.posting_default_language ?? '',
 				follow_requests_count: 0,
 			},
 			role: {
