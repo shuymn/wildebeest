@@ -44,7 +44,7 @@ export const aboutInfoLoader = loader$<Promise<AboutInfo>>(async ({ resolveValue
 		image: instance.thumbnail,
 		domain: getDomain(request.url),
 		admin: { account: JSON.parse(JSON.stringify(adminAccount)), email: platform.ADMIN_EMAIL },
-		rules: JSON.parse(JSON.stringify(rules.sort(({ id: idA }, { id: idB }) => idA - idB))),
+		rules: JSON.parse(JSON.stringify(rules.sort(({ id: idA }, { id: idB }) => parseInt(idA) - parseInt(idB)))),
 		extended_description: {
 			content: brandingData?.['extended description'] ?? '',
 		},
