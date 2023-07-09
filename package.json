@@ -53,6 +53,6 @@
 		"toucan-js": "^3.1.0"
 	},
 	"simple-git-hooks": {
-		"pre-commit": "yarn lint"
+		"pre-commit": "yarn run-p lint pretty"
 	}
 }
