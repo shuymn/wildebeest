@@ -70,7 +70,13 @@ export function getAPType(obj: APObject): string {
 }
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-document
-export type Document = APObject
+export type Document = RequiredProps<APObject, 'url'> & {
+	type: 'Document'
+}
+
+export function isDocument(object: APObject): object is Document {
+	return object.type === 'Document'
+}
 
 export function uri(domain: string, id: string): URL {
 	return new URL('/ap/o/' + id, 'https://' + domain)

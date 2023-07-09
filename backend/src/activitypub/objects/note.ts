@@ -4,23 +4,27 @@ import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import type { Link } from 'wildebeest/backend/src/activitypub/objects/link'
 import { type Database } from 'wildebeest/backend/src/database'
+import { RequiredProps } from 'wildebeest/backend/src/utils/type'
 
 import * as objects from '.'
 
 const NOTE = 'Note'
 
+// FIXME: there is room to improve the implementation to better conform to specifications
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-note
-export interface Note extends objects.APObject {
+export type Note = RequiredProps<objects.APObject, 'cc' | 'to'> & {
+	type: typeof NOTE
 	content: string
 	attributedTo?: string
-	summary?: string
-	inReplyTo?: string
 	replies?: string
-	to: Array<string>
 	attachment: Array<objects.APObject>
-	cc: Array<string>
 	tag: Array<Link>
 	spoiler_text?: string
+}
+
+export function isNote(obj: objects.APObject): obj is Note {
+	// FIXME: terrible implementation just to fool the type checker
+	return obj.type === NOTE
 }
 
 export async function createPublicNote(

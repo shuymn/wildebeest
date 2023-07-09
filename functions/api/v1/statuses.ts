@@ -6,7 +6,7 @@ import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/out
 import { deliverFollowers, deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
 import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
 import type { Document } from 'wildebeest/backend/src/activitypub/objects'
-import { getObjectByMastodonId } from 'wildebeest/backend/src/activitypub/objects'
+import { getObjectByMastodonId, isDocument } from 'wildebeest/backend/src/activitypub/objects'
 import { originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { newMention } from 'wildebeest/backend/src/activitypub/objects/mention'
 import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
@@ -94,6 +94,10 @@ export async function handleRequest(
 				console.warn('object attachement not found: ' + id)
 				continue
 			}
+			if (!isDocument(document)) {
+				console.warn('object is not a document: ' + id)
+				continue
+			}
 			mediaAttachments.push(document)
 		}
 	}
@@ -121,7 +125,7 @@ export async function handleRequest(
 
 	const content = enrichStatus(body.status, mentions)
 
-	let note
+	let note: Note
 
 	if (body.visibility === 'public') {
 		note = await createPublicNote(domain, db, content, connectedActor, mediaAttachments, extraProperties)
@@ -150,7 +154,11 @@ export async function handleRequest(
 		// actors.
 		for (let i = 0, len = mentions.length; i < len; i++) {
 			const targetActor = mentions[i]
-			note.cc.push(targetActor.id.toString())
+			if (Array.isArray(note.cc)) {
+				note.cc.push(targetActor.id)
+			} else {
+				note.cc = [note.cc, targetActor.id]
+			}
 		}
 	} else if (body.visibility === 'direct') {
 		//  A direct note is sent to mentioned people only
