@@ -1,9 +1,11 @@
-import { MessageType } from 'wildebeest/backend/src/types/queue'
 import { strict as assert } from 'node:assert/strict'
-import type { DeliverMessageBody } from 'wildebeest/backend/src/types/queue'
+
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
-import { makeDB } from 'wildebeest/backend/test/utils'
 import { createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
+import type { DeliverMessageBody } from 'wildebeest/backend/src/types/queue'
+import { MessageType } from 'wildebeest/backend/src/types/queue'
+import { makeDB } from 'wildebeest/backend/test/utils'
+
 import { handleDeliverMessage } from '../src/deliver'
 
 const domain = 'cloudflare.com'

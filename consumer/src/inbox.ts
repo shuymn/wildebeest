@@ -1,10 +1,11 @@
-import type { InboxMessageBody } from 'wildebeest/backend/src/types/queue'
-import { getDatabase } from 'wildebeest/backend/src/database'
 import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
+import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import { cacheFromEnv } from 'wildebeest/backend/src/cache'
+import { getDatabase } from 'wildebeest/backend/src/database'
 import * as notification from 'wildebeest/backend/src/mastodon/notification'
 import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
-import { cacheFromEnv } from 'wildebeest/backend/src/cache'
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import type { InboxMessageBody } from 'wildebeest/backend/src/types/queue'
+
 import type { Env } from './'
 
 export async function handleInboxMessage(env: Env, actor: Actor, message: InboxMessageBody) {
