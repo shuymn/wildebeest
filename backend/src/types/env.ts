@@ -20,7 +20,6 @@ export interface Env {
 	ADMIN_EMAIL: string
 	INSTANCE_DESCR: string
 	VAPID_JWK: string
-	DOMAIN: string
 
 	SENTRY_DSN: string
 	SENTRY_ACCESS_CLIENT_ID: string
