@@ -1,6 +1,7 @@
 import { Buffer } from 'buffer'
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
+import { Handle } from 'wildebeest/backend/src/utils/handle'
 import { generateUserKey } from 'wildebeest/backend/src/utils/key-ops'
 import { defaultImages } from 'wildebeest/config/accounts'
 
@@ -11,8 +12,11 @@ const isTesting = typeof jest !== 'undefined'
 export const emailSymbol = Symbol()
 export const isAdminSymbol = Symbol()
 
-export function actorURL(domain: string, id: string): URL {
-	return new URL(`/ap/users/${id}`, 'https://' + domain)
+export function actorURL(domain: string, obj: { perferredUsername: string } | Pick<Handle, 'localPart'>): URL {
+	if ('perferredUsername' in obj) {
+		return new URL(`/ap/users/${obj.perferredUsername}`, 'https://' + domain)
+	}
+	return new URL(`/ap/users/${obj.localPart}`, 'https://' + domain)
 }
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#actor-types
