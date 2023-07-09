@@ -58,7 +58,7 @@ export async function sendFollowNotification(
 	vapidKeys: JWK
 ) {
 	let icon = new URL(defaultImages.avatar)
-	if (follower.icon) {
+	if (follower.icon && follower.icon.url) {
 		icon = follower.icon.url
 	}
 
@@ -90,7 +90,7 @@ export async function sendLikeNotification(
 	vapidKeys: JWK
 ) {
 	let icon = new URL(defaultImages.avatar)
-	if (fromActor.icon) {
+	if (fromActor.icon && fromActor.icon.url) {
 		icon = fromActor.icon.url
 	}
 
@@ -122,7 +122,7 @@ export async function sendMentionNotification(
 	vapidKeys: JWK
 ) {
 	let icon = new URL(defaultImages.avatar)
-	if (fromActor.icon) {
+	if (fromActor.icon && fromActor.icon.url) {
 		icon = fromActor.icon.url
 	}
 
@@ -154,7 +154,7 @@ export async function sendReblogNotification(
 	vapidKeys: JWK
 ) {
 	let icon = new URL(defaultImages.avatar)
-	if (fromActor.icon) {
+	if (fromActor.icon && fromActor.icon.url) {
 		icon = fromActor.icon.url
 	}
 

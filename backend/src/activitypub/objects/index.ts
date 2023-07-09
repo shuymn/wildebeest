@@ -9,12 +9,14 @@ export const mastodonIdSymbol = Symbol()
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#object-types
 export interface APObject {
+	'@context'?: SingleOrArray<string | Record<string, unknown>> | string[] | Record<string, unknown>[]
+	// TODO: support string[]
 	type: string
 	// ObjectId, URL used for federation. Called `uri` in Mastodon APIs.
 	// https://www.w3.org/TR/activitypub/#obj-id
 	id: URL
 	// Link to the HTML representation of the object
-	url: URL
+	url?: URL
 	published?: string
 	icon?: APObject
 	image?: APObject
@@ -23,6 +25,8 @@ export interface APObject {
 	mediaType?: string
 	content?: string
 	inReplyTo?: string
+	cc?: SingleOrArray<APObjectOrId>
+	to?: SingleOrArray<APObjectOrId>
 
 	// Extension
 	preferredUsername?: string

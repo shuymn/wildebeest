@@ -8,8 +8,8 @@ import { defaultImages } from 'wildebeest/config/accounts'
 import { Actor } from '../activitypub/actors'
 
 function toMastodonAccount(acct: string, res: Actor): MastodonAccount {
-	const avatar = res.icon?.url.toString() ?? defaultImages.avatar
-	const header = res.image?.url.toString() ?? defaultImages.header
+	const avatar = res.icon?.url?.toString() ?? defaultImages.avatar
+	const header = res.image?.url?.toString() ?? defaultImages.header
 
 	return {
 		acct,
