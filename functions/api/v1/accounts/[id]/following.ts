@@ -10,7 +10,7 @@ import { MastodonAccount } from 'wildebeest/backend/src/types/account'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
+import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
 import type { Handle } from 'wildebeest/backend/src/utils/parse'
 import { parseHandle } from 'wildebeest/backend/src/utils/parse'
 import * as webfinger from 'wildebeest/backend/src/webfinger'
@@ -46,7 +46,7 @@ async function getRemoteFollowing(request: Request, handle: Handle, db: Database
 	const following = await loadActors(db, followingIds)
 
 	const promises = following.map((actor) => {
-		const acct = actorToHandle(actor)
+		const acct = actorToAcct(actor)
 		return loadExternalMastodonAccount(acct, actor, false)
 	})
 
@@ -71,7 +71,7 @@ async function getLocalFollowing(request: Request, handle: Handle, db: Database)
 
 		try {
 			const actor = await actors.getAndCache(id, db)
-			const acct = actorToHandle(actor)
+			const acct = actorToAcct(actor)
 			out.push(await loadExternalMastodonAccount(acct, actor))
 		} catch (err: any) {
 			console.warn(`failed to retrieve following (${id}): ${err.message}`)

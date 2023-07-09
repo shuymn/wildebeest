@@ -1,7 +1,7 @@
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { type Database } from 'wildebeest/backend/src/database'
-import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
+import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
 
 import { getResultsField } from './utils'
 
@@ -19,7 +19,7 @@ export async function moveFollowers(db: Database, actor: Actor, followers: Array
 	)
 
 	const actorId = actor.id.toString()
-	const actorAcc = actorToHandle(actor)
+	const actorAcc = actorToAcct(actor)
 
 	for (let i = 0; i < followers.length; i++) {
 		const follower = new URL(followers[i])
@@ -46,7 +46,7 @@ export async function moveFollowing(db: Database, actor: Actor, followingActors:
 	for (let i = 0; i < followingActors.length; i++) {
 		const following = new URL(followingActors[i])
 		const followingActor = await actors.getAndCache(following, db)
-		const actorAcc = actorToHandle(followingActor)
+		const actorAcc = actorToAcct(followingActor)
 
 		const id = crypto.randomUUID()
 		batch.push(stmt.bind(id, actorId, followingActor.id.toString(), actorAcc))

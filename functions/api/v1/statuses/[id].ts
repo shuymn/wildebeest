@@ -16,7 +16,7 @@ import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import type { DeliverMessageBody, Queue } from 'wildebeest/backend/src/types/queue'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
+import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
 
 export const onRequestGet: PagesFunction<Env, any, ContextData> = async ({ params, env, request, data }) => {
 	const domain = new URL(request.url).hostname
@@ -81,7 +81,7 @@ export async function handleRequestDelete(
 	if (status === null) {
 		return errors.statusNotFound(id)
 	}
-	if (status.account.id !== actorToHandle(connectedActor)) {
+	if (status.account.id !== actorToAcct(connectedActor)) {
 		return errors.statusNotFound(id)
 	}
 
