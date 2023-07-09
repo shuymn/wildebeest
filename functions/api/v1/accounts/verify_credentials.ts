@@ -1,12 +1,12 @@
 // https://docs.joinmastodon.org/methods/accounts/#verify_credentials
 
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import { getPreference, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import type { Env } from 'wildebeest/backend/src/types/env'
+import { getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
+import { getPreference, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import type { CredentialAccount } from 'wildebeest/backend/src/types/account'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
-import { getDatabase } from 'wildebeest/backend/src/database'
+import type { Env } from 'wildebeest/backend/src/types/env'
+import { cors } from 'wildebeest/backend/src/utils/cors'
 
 export const onRequest: PagesFunction<Env, any, ContextData> = async ({ data, env }) => {
 	if (!data.connectedActor) {

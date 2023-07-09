@@ -1,24 +1,24 @@
-import type { Env } from 'wildebeest/backend/src/types/env'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
-import * as errors from 'wildebeest/backend/src/errors'
-import { cors } from 'wildebeest/backend/src/utils/cors'
 import type { Activity } from 'wildebeest/backend/src/activitypub/activities'
-import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import { makeGetActorAsId, makeGetObjectAsId } from 'wildebeest/backend/src/activitypub/activities/handle'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
-import type { Handle } from 'wildebeest/backend/src/utils/parse'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import type { MastodonStatus } from 'wildebeest/backend/src/types'
-import { toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
-import * as objects from 'wildebeest/backend/src/activitypub/objects'
 import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
-import * as webfinger from 'wildebeest/backend/src/webfinger'
-import * as outbox from 'wildebeest/backend/src/activitypub/actors/outbox'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
+import * as outbox from 'wildebeest/backend/src/activitypub/actors/outbox'
+import * as objects from 'wildebeest/backend/src/activitypub/objects'
+import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
+import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import * as errors from 'wildebeest/backend/src/errors'
+import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import { toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
 import { toMastodonStatusFromRow } from 'wildebeest/backend/src/mastodon/status'
+import type { MastodonStatus } from 'wildebeest/backend/src/types'
+import type { ContextData } from 'wildebeest/backend/src/types/context'
+import type { Env } from 'wildebeest/backend/src/types/env'
 import { adjustLocalHostDomain } from 'wildebeest/backend/src/utils/adjustLocalHostDomain'
+import { cors } from 'wildebeest/backend/src/utils/cors'
+import type { Handle } from 'wildebeest/backend/src/utils/parse'
+import { parseHandle } from 'wildebeest/backend/src/utils/parse'
+import * as webfinger from 'wildebeest/backend/src/webfinger'
 
 const headers = {
 	...cors(),
@@ -78,7 +78,8 @@ async function getRemoteStatuses(request: Request, handle: Handle, db: Database,
 
 	const activities = await outbox.get(actor, limit)
 
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars -- TODO: use account
+	// TODO: use account
+	// eslint-disable-next-line unused-imports/no-unused-vars
 	const account = await loadExternalMastodonAccount(acct, actor)
 
 	const promises = activities.items.map(async (activity: Activity) => {

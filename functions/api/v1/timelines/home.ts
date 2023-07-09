@@ -1,9 +1,9 @@
-import type { Env } from 'wildebeest/backend/src/types/env'
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors/'
 import type { Cache } from 'wildebeest/backend/src/cache'
 import { cacheFromEnv } from 'wildebeest/backend/src/cache'
+import type { ContextData } from 'wildebeest/backend/src/types/context'
+import type { Env } from 'wildebeest/backend/src/types/env'
+import { cors } from 'wildebeest/backend/src/utils/cors'
 
 const headers = {
 	...cors(),

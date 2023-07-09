@@ -1,14 +1,14 @@
 // https://docs.joinmastodon.org/methods/oauth/#authorize
 
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import type { Env } from 'wildebeest/backend/src/types/env'
-import * as errors from 'wildebeest/backend/src/errors'
-import { getClientById } from 'wildebeest/backend/src/mastodon/client'
 import * as access from 'wildebeest/backend/src/access'
 import { getPersonByEmail } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import * as errors from 'wildebeest/backend/src/errors'
+import { getClientById } from 'wildebeest/backend/src/mastodon/client'
+import type { ContextData } from 'wildebeest/backend/src/types/context'
+import type { Env } from 'wildebeest/backend/src/types/env'
 import { isUserAuthenticated } from 'wildebeest/backend/src/utils/auth/isUserAuthenticated'
+import { cors } from 'wildebeest/backend/src/utils/cors'
 
 // Extract the JWT token sent by Access (running before us).
 const extractJWTFromRequest = (request: Request) => request.headers.get('Cf-Access-Jwt-Assertion') || ''

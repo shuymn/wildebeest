@@ -1,22 +1,22 @@
 // https://docs.joinmastodon.org/methods/statuses/#get
 
-import type { Cache } from 'wildebeest/backend/src/cache'
-import { type Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import * as activities from 'wildebeest/backend/src/activitypub/activities/delete'
-import { cors } from 'wildebeest/backend/src/utils/cors'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
-import type { UUID } from 'wildebeest/backend/src/types'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import { getMastodonStatusById, toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
-import type { Env } from 'wildebeest/backend/src/types/env'
-import * as errors from 'wildebeest/backend/src/errors'
-import { getObjectByMastodonId, deleteObject } from 'wildebeest/backend/src/activitypub/objects'
-import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 import { deliverFollowers } from 'wildebeest/backend/src/activitypub/deliver'
-import type { Queue, DeliverMessageBody } from 'wildebeest/backend/src/types/queue'
-import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
+import { deleteObject, getObjectByMastodonId } from 'wildebeest/backend/src/activitypub/objects'
+import { type Note } from 'wildebeest/backend/src/activitypub/objects/note'
+import type { Cache } from 'wildebeest/backend/src/cache'
 import { cacheFromEnv } from 'wildebeest/backend/src/cache'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import * as errors from 'wildebeest/backend/src/errors'
+import { getMastodonStatusById, toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
+import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
+import type { UUID } from 'wildebeest/backend/src/types'
+import type { ContextData } from 'wildebeest/backend/src/types/context'
+import type { Env } from 'wildebeest/backend/src/types/env'
+import type { DeliverMessageBody, Queue } from 'wildebeest/backend/src/types/queue'
+import { cors } from 'wildebeest/backend/src/utils/cors'
+import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 
 export const onRequestGet: PagesFunction<Env, any, ContextData> = async ({ params, env, request, data }) => {
 	const domain = new URL(request.url).hostname
@@ -40,7 +40,8 @@ export async function handleRequestGet(
 	db: Database,
 	id: UUID,
 	domain: string,
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars -- To be used when we implement private statuses
+	// To be used when we implement private statuses
+	// eslint-disable-next-line unused-imports/no-unused-vars
 	connectedActor: Person
 ): Promise<Response> {
 	const status = await getMastodonStatusById(db, id, domain)

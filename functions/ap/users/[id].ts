@@ -1,9 +1,9 @@
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { cors } from 'wildebeest/backend/src/utils/cors'
 import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
-import type { Env } from 'wildebeest/backend/src/types/env'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
+import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import type { Env } from 'wildebeest/backend/src/types/env'
+import { cors } from 'wildebeest/backend/src/utils/cors'
+import { parseHandle } from 'wildebeest/backend/src/utils/parse'
 
 export const onRequest: PagesFunction<Env, any> = async ({ params, request, env }) => {
 	const domain = new URL(request.url).hostname

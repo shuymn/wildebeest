@@ -1,11 +1,11 @@
 // https://docs.joinmastodon.org/methods/notifications/#get
 
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import type { Env } from 'wildebeest/backend/src/types/env'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Cache } from 'wildebeest/backend/src/cache'
 import { cacheFromEnv } from 'wildebeest/backend/src/cache'
+import type { ContextData } from 'wildebeest/backend/src/types/context'
+import type { Env } from 'wildebeest/backend/src/types/env'
+import { cors } from 'wildebeest/backend/src/utils/cors'
 
 export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request, env, data }) => {
 	return handleRequest(request, cacheFromEnv(env), data.connectedActor)

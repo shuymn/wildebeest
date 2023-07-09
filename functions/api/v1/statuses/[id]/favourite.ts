@@ -1,19 +1,19 @@
 // https://docs.joinmastodon.org/methods/statuses/#favourite
 
-import type { Env } from 'wildebeest/backend/src/types/env'
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import { insertLike } from 'wildebeest/backend/src/mastodon/like'
-import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
-import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
+import * as like from 'wildebeest/backend/src/activitypub/activities/like'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
-import * as like from 'wildebeest/backend/src/activitypub/activities/like'
+import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
 import { getObjectByMastodonId } from 'wildebeest/backend/src/activitypub/objects'
+import { originalActorIdSymbol, originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import { toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
-import { originalObjectIdSymbol, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
+import { insertLike } from 'wildebeest/backend/src/mastodon/like'
+import { toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
+import type { ContextData } from 'wildebeest/backend/src/types/context'
+import type { Env } from 'wildebeest/backend/src/types/env'
+import { cors } from 'wildebeest/backend/src/utils/cors'
 
 export const onRequest: PagesFunction<Env, any, ContextData> = async ({ env, data, params, request }) => {
 	const domain = new URL(request.url).hostname

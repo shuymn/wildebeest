@@ -1,12 +1,12 @@
 // https://docs.joinmastodon.org/methods/preferences/#get
 
+import { getDatabase } from 'wildebeest/backend/src/database'
+import * as errors from 'wildebeest/backend/src/errors'
+import { getPreference } from 'wildebeest/backend/src/mastodon/account'
+import { Privacy, ReadingExpandMedia } from 'wildebeest/backend/src/types'
 import { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import * as errors from 'wildebeest/backend/src/errors'
-import { getPreference } from 'wildebeest/backend/src/mastodon/account'
-import { getDatabase } from 'wildebeest/backend/src/database'
-import { Privacy, ReadingExpandMedia } from 'wildebeest/backend/src/types'
 
 type PreferenceResponse = {
 	'posting:default:visibility': Privacy

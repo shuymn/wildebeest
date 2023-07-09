@@ -1,11 +1,11 @@
 // https://docs.joinmastodon.org/methods/tags/#get
 
+import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import * as errors from 'wildebeest/backend/src/errors'
+import { getTag } from 'wildebeest/backend/src/mastodon/hashtag'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
-import { getTag } from 'wildebeest/backend/src/mastodon/hashtag'
-import * as errors from 'wildebeest/backend/src/errors'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 
 const headers = {
 	...cors(),

@@ -1,7 +1,7 @@
-import { cors } from 'wildebeest/backend/src/utils/cors'
+import { getPeers } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import type { Env } from 'wildebeest/backend/src/types/env'
-import { getPeers } from 'wildebeest/backend/src/activitypub/peers'
+import { cors } from 'wildebeest/backend/src/utils/cors'
 
 export const onRequest: PagesFunction<Env, any> = async ({ env }) => {
 	return handleRequest(await getDatabase(env))

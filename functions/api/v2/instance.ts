@@ -1,12 +1,12 @@
-import type { Env } from 'wildebeest/backend/src/types/env'
-import { cors } from 'wildebeest/backend/src/utils/cors'
 import { DEFAULT_THUMBNAIL } from 'wildebeest/backend/src/config'
-import type { InstanceConfigV2 } from 'wildebeest/backend/src/types/configs'
-import { getVersion } from 'wildebeest/config/versions'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { getAdminByEmail } from 'wildebeest/backend/src/utils/auth/getAdmins'
-import { loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import { getRules } from 'wildebeest/backend/src/config/rules'
+import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import { loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import type { InstanceConfigV2 } from 'wildebeest/backend/src/types/configs'
+import type { Env } from 'wildebeest/backend/src/types/env'
+import { getAdminByEmail } from 'wildebeest/backend/src/utils/auth/getAdmins'
+import { cors } from 'wildebeest/backend/src/utils/cors'
+import { getVersion } from 'wildebeest/config/versions'
 
 export const onRequest: PagesFunction<Env, any> = async ({ env, request }) => {
 	const domain = new URL(request.url).hostname

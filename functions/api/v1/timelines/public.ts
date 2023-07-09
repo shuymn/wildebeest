@@ -1,8 +1,8 @@
+import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import { getPublicTimeline, LocalPreference } from 'wildebeest/backend/src/mastodon/timeline'
+import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import { getPublicTimeline, LocalPreference } from 'wildebeest/backend/src/mastodon/timeline'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 
 const headers = {
 	...cors(),
@@ -22,7 +22,8 @@ export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request,
 export async function handleRequest(
 	domain: string,
 	db: Database,
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars -- TODO: use only_media
+	// TODO: use only_media
+	// eslint-disable-next-line unused-imports/no-unused-vars
 	{ local = false, remote = false, only_media = false, offset = 0 } = {}
 ): Promise<Response> {
 	let localParam = LocalPreference.NotSet
