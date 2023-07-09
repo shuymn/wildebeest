@@ -6,6 +6,7 @@ import type { DeliverMessageBody } from 'wildebeest/backend/src/types/queue'
 import { MessageType } from 'wildebeest/backend/src/types/queue'
 import { makeDB } from 'wildebeest/backend/test/utils'
 
+import { Env } from '../src'
 import { handleDeliverMessage } from '../src/deliver'
 
 const domain = 'cloudflare.com'
@@ -67,7 +68,7 @@ describe('Consumer', () => {
 			const env = {
 				DATABASE: db,
 				DOMAIN: domain,
-			} as any
+			} as Env
 			await handleDeliverMessage(env, actor, message)
 
 			assert(receivedActivity)

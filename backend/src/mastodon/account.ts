@@ -45,7 +45,7 @@ function toMastodonAccount(acct: string, res: Actor): MastodonAccount {
 export async function loadExternalMastodonAccount(
 	acct: string,
 	actor: Actor,
-	loadStats: boolean = false
+	loadStats = false
 ): Promise<MastodonAccount> {
 	const account = toMastodonAccount(acct, actor)
 	if (loadStats === true) {

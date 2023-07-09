@@ -50,7 +50,7 @@ export async function createPublicNote(
 		...extraProperties,
 	}
 
-	return (await objects.createObject(domain, db, NOTE, properties, actorId, true)) as Note
+	return await objects.createObject(domain, db, NOTE, properties, actorId, true)
 }
 
 export async function createDirectNote(
@@ -81,5 +81,5 @@ export async function createDirectNote(
 		...extraProperties,
 	}
 
-	return (await objects.createObject(domain, db, NOTE, properties, actorId, true)) as Note
+	return await objects.createObject(domain, db, NOTE, properties, actorId, true)
 }

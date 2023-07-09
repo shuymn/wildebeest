@@ -10,7 +10,7 @@ export function fromObject(obj: APObject): MediaAttachment {
 	} else if (obj.type === 'Video') {
 		return fromObjectVideo(obj)
 	} else if (obj.type === 'Document') {
-		return fromObjectDocument(obj as Document)
+		return fromObjectDocument(obj)
 	} else {
 		throw new Error(`unsupported media type ${obj.type}: ${JSON.stringify(obj)}`)
 	}

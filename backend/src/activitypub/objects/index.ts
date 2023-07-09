@@ -32,7 +32,7 @@ export interface APObject {
 }
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-document
-export interface Document extends APObject {}
+export type Document = APObject
 
 export function uri(domain: string, id: string): URL {
 	return new URL('/ap/o/' + id, 'https://' + domain)

@@ -12,5 +12,5 @@ export interface Image extends objects.Document {
 
 export async function createImage(domain: string, db: Database, actor: Actor, properties: any): Promise<Image> {
 	const actorId = new URL(actor.id)
-	return (await objects.createObject(domain, db, IMAGE, properties, actorId, true)) as Image
+	return await objects.createObject(domain, db, IMAGE, properties, actorId, true)
 }

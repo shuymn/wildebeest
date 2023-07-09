@@ -218,9 +218,8 @@ describe('Mastodon APIs', () => {
 					return new Response()
 				}
 
-				// @ts-ignore: shut up
-				if (Object.keys(input).includes('url') && input.url === 'https://social.com/sven/inbox') {
-					const request = input as Request
+				if (input instanceof Request && input.url === 'https://social.com/sven/inbox') {
+					const request = input
 					assert.equal(request.method, 'POST')
 					const bodyB = await streamToArrayBuffer(request.body as ReadableStream)
 					const dec = new TextDecoder()
@@ -267,12 +266,8 @@ describe('Mastodon APIs', () => {
 			const queue = makeQueue()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-			// @ts-ignore
-			globalThis.fetch = async (input: any) => {
-				if (
-					(input as RequestInfo).toString() ===
-					'https://cloudflare.com/.well-known/webfinger?resource=acct%3Asven%40cloudflare.com'
-				) {
+			globalThis.fetch = async (input: RequestInfo) => {
+				if (input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Asven%40cloudflare.com') {
 					return new Response(
 						JSON.stringify({
 							links: [
@@ -290,7 +285,7 @@ describe('Mastodon APIs', () => {
 					return new Response(JSON.stringify(actor))
 				}
 
-				if (input.url === actor.inbox.toString()) {
+				if (input instanceof Request && input.url === actor.inbox.toString()) {
 					return new Response()
 				}
 
@@ -911,7 +906,7 @@ describe('Mastodon APIs', () => {
 			// and that timeline is empty
 			const timeline = await cache.get<Array<any>>(actor.id.toString() + '/timeline/home')
 			assert(timeline)
-			assert.equal(timeline!.length, 0)
+			assert.equal(timeline.length, 0)
 		})
 
 		test('delete status sends to followers', async () => {
@@ -1011,13 +1006,13 @@ describe('Mastodon APIs', () => {
 				.all<{ value: string; object_id: string }>()
 			assert(success)
 			assert(results)
-			assert.equal(results!.length, 2)
-			assert.equal(results![0].value, 'hi')
-			assert.equal(results![1].value, 'car')
+			assert.equal(results.length, 2)
+			assert.equal(results[0].value, 'hi')
+			assert.equal(results[1].value, 'car')
 
 			const note = (await getObjectByMastodonId(db, data.id)) as unknown as Note
-			assert.equal(results![0].object_id, note.id.toString())
-			assert.equal(results![1].object_id, note.id.toString())
+			assert.equal(results[0].object_id, note.id.toString())
+			assert.equal(results[1].object_id, note.id.toString())
 		})
 
 		test('reject statuses exceeding limits', async () => {
@@ -1050,7 +1045,7 @@ describe('Mastodon APIs', () => {
 			let deliveredActivity1: any = null
 			let deliveredActivity2: any = null
 
-			globalThis.fetch = async (input: RequestInfo | Request) => {
+			globalThis.fetch = async (input: RequestInfo) => {
 				if (
 					input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Aactor1%40cloudflare.com'
 				) {
@@ -1082,15 +1077,15 @@ describe('Mastodon APIs', () => {
 					)
 				}
 
-				// @ts-ignore
-				if (input.url === actor1.inbox.toString()) {
-					deliveredActivity1 = await (input as Request).json()
-					return new Response()
-				}
-				// @ts-ignore
-				if (input.url === actor2.inbox.toString()) {
-					deliveredActivity2 = await (input as Request).json()
-					return new Response()
+				if (input instanceof Request) {
+					if (input.url === actor1.inbox.toString()) {
+						deliveredActivity1 = await input.json()
+						return new Response()
+					}
+					if (input.url === actor2.inbox.toString()) {
+						deliveredActivity2 = await input.json()
+						return new Response()
+					}
 				}
 
 				throw new Error('unexpected request to ' + input)

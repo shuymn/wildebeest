@@ -8,7 +8,7 @@ export interface Collection<T> extends APObject {
 	items: Array<T>
 }
 
-export interface OrderedCollection<T> extends Collection<T> {}
+export type OrderedCollection<T> = Collection<T>
 
 export interface OrderedCollectionPage<T> extends APObject {
 	next?: string

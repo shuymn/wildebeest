@@ -71,8 +71,8 @@ export async function streamToArrayBuffer(stream: ReadableStream) {
 
 export async function createTestClient(
 	db: Database,
-	redirectUri: string = 'https://localhost',
-	scopes: string = 'read follow'
+	redirectUri = 'https://localhost',
+	scopes = 'read follow'
 ): Promise<Client> {
 	return createClient(db, 'test client', redirectUri, scopes, 'https://cloudflare.com')
 }

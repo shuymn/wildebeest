@@ -35,7 +35,7 @@ export async function getMentions(input: string, instanceDomain: string, db: Dat
 			const handle = parseHandle(buffer)
 			const domain = handle.domain ? handle.domain : instanceDomain
 			const acct = `${handle.localPart}@${domain}`
-			const targetActor = await queryAcct(domain!, db, acct)
+			const targetActor = await queryAcct(domain, db, acct)
 			if (targetActor === null) {
 				console.warn(`actor ${acct} not found`)
 				continue
