@@ -1,6 +1,7 @@
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
 import type { UUID } from 'wildebeest/backend/src/types'
+import { KeyTypeOf, RequiredProps, SingleOrArray } from 'wildebeest/backend/src/utils/type'
 
 export const originalActorIdSymbol = Symbol()
 export const originalObjectIdSymbol = Symbol()
@@ -29,6 +30,39 @@ export interface APObject {
 	[originalActorIdSymbol]?: string
 	[originalObjectIdSymbol]?: string
 	[mastodonIdSymbol]?: UUID
+}
+
+export type APObjectId = KeyTypeOf<APObject, 'id'>
+export type APObjectOrId = APObject | APObjectId
+
+export function getAPId(value: string | APObjectOrId): APObjectId {
+	if (typeof value === 'object') {
+		if (value instanceof URL) {
+			// This is used for testing only.
+			return value
+		}
+		if (value.id !== undefined) {
+			return value.id
+		}
+		throw new Error('unknown value: ' + JSON.stringify(value))
+	}
+	try {
+		return new URL(value)
+	} catch (err: unknown) {
+		console.warn('invalid URL: ' + value)
+		throw err
+	}
+}
+
+export function getAPType(obj: APObject): string {
+	if (typeof obj.type === 'string') {
+		return obj.type
+	}
+	// TODO: support string[]
+	// if (Array.isArray(obj.type) && obj.type.length > 0 && typeof obj.type[0] === 'string') {
+	// 	return obj.type[0]
+	// }
+	throw new Error('`type` must be of type string or string[]')
 }
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-document
