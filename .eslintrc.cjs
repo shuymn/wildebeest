@@ -9,19 +9,25 @@ module.exports = {
 		tsconfigRootDir: __dirname,
 		project: ['./tsconfig.json'],
 	},
-	plugins: ['@typescript-eslint'],
+	plugins: ['@typescript-eslint', 'unused-imports', 'simple-import-sort'],
 	root: true,
 	rules: {
 		'prefer-const': 'error',
 		'no-var': 'error',
 		'@typescript-eslint/no-unsafe-return': 'error',
-		'@typescript-eslint/no-unused-vars': 'error',
+		'unused-imports/no-unused-imports': 'error',
+		'unused-imports/no-unused-vars': [
+			'error',
+			{ vars: 'all', varsIgnorePattern: '^_', args: 'after-used', argsIgnorePattern: '^_' },
+		],
 		'no-console': 'off',
 		'no-constant-condition': 'off',
 		'@typescript-eslint/require-await': 'off',
 		'@typescript-eslint/no-unsafe-call': 'error',
 		'@typescript-eslint/await-thenable': 'error',
 		'@typescript-eslint/no-misused-promises': 'error',
+		'simple-import-sort/imports': 'error',
+		'simple-import-sort/exports': 'error',
 		/*
 			Note: the following rules have been set to off so that linting
 				  can pass with the current code, but we need to gradually
@@ -40,5 +46,6 @@ module.exports = {
 		'@typescript-eslint/no-empty-function': 'off',
 		'@typescript-eslint/ban-types': 'off',
 		'@typescript-eslint/no-empty-interface': 'off',
+		'@typescript-eslint/no-unused-vars': 'off',
 	},
 }
