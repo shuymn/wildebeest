@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test'
+import { expect, type Page, test } from '@playwright/test'
 
 async function test404Page(page: Page, url: string) {
 	const response = await page.goto(url)

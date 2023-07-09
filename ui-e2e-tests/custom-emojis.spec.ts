@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 
 test('View of custom emojis in an toots author display name', async ({ page, browserName }) => {
 	test.skip(

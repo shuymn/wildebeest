@@ -1,4 +1,4 @@
-import { test, expect, Page } from '@playwright/test'
+import { expect, Page, test } from '@playwright/test'
 
 test.describe('Presence of appropriate SEO metadata across the application', () => {
 	test('in explore page', async ({ page }) => {

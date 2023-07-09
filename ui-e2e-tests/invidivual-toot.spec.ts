@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 
 const navigationVias = ['time link', 'toot content'] as const
 

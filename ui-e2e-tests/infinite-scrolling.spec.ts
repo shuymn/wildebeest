@@ -1,4 +1,4 @@
-import { test, expect, Page, Request } from '@playwright/test'
+import { expect, Page, Request, test } from '@playwright/test'
 import type { Account, MastodonStatus } from 'wildebeest/frontend/src/types'
 
 test.describe('Infinite (statuses) scrolling', () => {
