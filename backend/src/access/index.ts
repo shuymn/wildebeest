@@ -48,8 +48,11 @@ export type PluginArgs = {
 	domain: string
 }
 
-// use Node.js Buffer to decode base64url
-const base64URLDecode = (s: string) => Buffer.from(s, 'base64url')
+// Adapted slightly from https://github.com/cloudflare/workers-access-external-auth-example
+const base64URLDecode = (s: string) => {
+	s = s.replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, '')
+	return new Uint8Array([...atob(s)].map((c) => c.charCodeAt(0)))
+}
 
 const asciiToUint8Array = (s: string) => {
 	const chars = []
