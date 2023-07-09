@@ -33,8 +33,14 @@ export async function handleRequest(request: Request, db: Database, id: string):
 	const handle = parseHandle(id)
 	const url = new URL(request.url)
 	const domain = url.hostname
-	const offset = Number.parseInt(url.searchParams.get('offset') ?? '0')
-	const limit = Math.abs(Number.parseInt(url.searchParams.get('limit') ?? '0')) || DEFAULT_LIMIT
+	let offset = Number.parseInt(url.searchParams.get('offset') ?? '0')
+	if (offset < 0) {
+		offset = 0
+	}
+	let limit = Number.parseInt(url.searchParams.get('limit') ?? '0')
+	if (limit < 1 || limit > DEFAULT_LIMIT) {
+		limit = DEFAULT_LIMIT
+	}
 
 	let withReplies: boolean | null = null
 	if (url.searchParams.get('with-replies') !== null) {
@@ -134,7 +140,7 @@ export async function getLocalStatuses(
 	handle: LocalHandle,
 	offset: number,
 	withReplies: boolean,
-	limit: number
+	limit = DEFAULT_LIMIT
 ): Promise<Response> {
 	const domain = new URL(request.url).hostname
 	const actorId = actorURL(adjustLocalHostDomain(domain), handle)
@@ -187,10 +193,7 @@ LIMIT ?3 OFFSET ?4
 		afterCdate = row.cdate
 	}
 
-	const { success, error, results } = await db
-		.prepare(QUERY)
-		.bind(actorId.toString(), afterCdate, limit ?? DEFAULT_LIMIT, offset)
-		.all()
+	const { success, error, results } = await db.prepare(QUERY).bind(actorId.toString(), afterCdate, limit, offset).all()
 	if (!success) {
 		throw new Error('SQL error: ' + error)
 	}

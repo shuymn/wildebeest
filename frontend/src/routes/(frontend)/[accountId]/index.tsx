@@ -21,7 +21,7 @@ export const statusesLoader = loader$<
 
 		const handle = parseHandle(accountId)
 		accountId = handle.localPart
-		const response = await getLocalStatuses(request, await getDatabase(platform), handle as LocalHandle, 0, false, 0)
+		const response = await getLocalStatuses(request, await getDatabase(platform), handle as LocalHandle, 0, false)
 		statuses = await response.json<Array<MastodonStatus>>()
 	} catch {
 		throw html(
