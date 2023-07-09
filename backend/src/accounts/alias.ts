@@ -1,11 +1,11 @@
-import { setActorAlias } from 'wildebeest/backend/src/activitypub/actors'
-import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
-import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
 import * as follow from 'wildebeest/backend/src/activitypub/activities/follow'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import { setActorAlias } from 'wildebeest/backend/src/activitypub/actors'
+import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
+import { type Database } from 'wildebeest/backend/src/database'
+import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
 import { parseHandle } from 'wildebeest/backend/src/utils/parse'
 import { queryAcct } from 'wildebeest/backend/src/webfinger'
-import { type Database } from 'wildebeest/backend/src/database'
 
 export async function addAlias(db: Database, alias: string, connectedActor: Actor, userKEK: string, domain: string) {
 	const handle = parseHandle(alias)

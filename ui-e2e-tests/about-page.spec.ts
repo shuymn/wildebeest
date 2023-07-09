@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 
 test.skip('Navigation to about page', async () => {
 	// TODO: Implement after a navigation has been implemented

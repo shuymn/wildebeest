@@ -1,11 +1,11 @@
 // https://docs.joinmastodon.org/methods/oauth/#token
 
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import * as errors from 'wildebeest/backend/src/errors'
-import type { Env } from 'wildebeest/backend/src/types/env'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { readBody } from 'wildebeest/backend/src/utils/body'
+import * as errors from 'wildebeest/backend/src/errors'
 import { getClientById } from 'wildebeest/backend/src/mastodon/client'
+import type { Env } from 'wildebeest/backend/src/types/env'
+import { readBody } from 'wildebeest/backend/src/utils/body'
+import { cors } from 'wildebeest/backend/src/utils/cors'
 
 type Body = {
 	code: string | null

@@ -1,12 +1,12 @@
 // Screen after the first login to let the user configure the account (username
 // especially)
-import type { Env } from 'wildebeest/backend/src/types/env'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { parse } from 'cookie'
-import * as errors from 'wildebeest/backend/src/errors'
 import * as access from 'wildebeest/backend/src/access'
+import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import * as errors from 'wildebeest/backend/src/errors'
+import type { ContextData } from 'wildebeest/backend/src/types/context'
+import type { Env } from 'wildebeest/backend/src/types/env'
 import { getJwtEmail } from 'wildebeest/backend/src/utils/auth/getJwtEmail'
 
 export const onRequestPost: PagesFunction<Env, any, ContextData> = async ({ request, env }) => {

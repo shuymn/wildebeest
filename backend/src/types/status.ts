@@ -1,6 +1,7 @@
+import type { UUID } from 'wildebeest/backend/src/types'
+
 import type { MastodonAccount } from './account'
 import type { MediaAttachment } from './media'
-import type { UUID } from 'wildebeest/backend/src/types'
 
 export type Visibility = 'public' | 'unlisted' | 'private' | 'direct'
 

@@ -1,9 +1,10 @@
-import type { MastodonStatus } from 'wildebeest/backend/src/types/status'
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors/'
-import { toMastodonStatusFromRow } from './status'
 import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
+import type { Actor } from 'wildebeest/backend/src/activitypub/actors/'
 import type { Cache } from 'wildebeest/backend/src/cache'
 import { type Database } from 'wildebeest/backend/src/database'
+import type { MastodonStatus } from 'wildebeest/backend/src/types/status'
+
+import { toMastodonStatusFromRow } from './status'
 
 export async function pregenerateTimelines(domain: string, db: Database, cache: Cache, actor: Actor) {
 	const timeline = await getHomeTimeline(domain, db, actor)

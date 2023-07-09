@@ -1,10 +1,11 @@
 // https://www.w3.org/TR/activitystreams-vocabulary/#object-types
 
+import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import type { Link } from 'wildebeest/backend/src/activitypub/objects/link'
-import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
-import * as objects from '.'
 import { type Database } from 'wildebeest/backend/src/database'
+
+import * as objects from '.'
 
 const NOTE = 'Note'
 

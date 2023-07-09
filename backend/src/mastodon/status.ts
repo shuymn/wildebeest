@@ -1,23 +1,24 @@
-import { queryAcct } from 'wildebeest/backend/src/webfinger'
-import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
-import type { UUID } from 'wildebeest/backend/src/types'
+import type { Person } from 'wildebeest/backend/src/activitypub/actors'
+import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import * as actors from 'wildebeest/backend/src/activitypub/actors'
+import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
 import {
 	getObjectByMastodonId,
 	mastodonIdSymbol,
 	originalActorIdSymbol,
 } from 'wildebeest/backend/src/activitypub/objects'
 import { createPublicNote, type Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import * as actors from 'wildebeest/backend/src/activitypub/actors'
-import * as media from 'wildebeest/backend/src/media/'
-import type { MastodonStatus } from 'wildebeest/backend/src/types'
-import { parseHandle } from '../utils/parse'
-import { actorToHandle } from '../utils/handle'
-import type { Person } from 'wildebeest/backend/src/activitypub/actors'
-import { addObjectInOutbox } from '../activitypub/actors/outbox'
-import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database } from 'wildebeest/backend/src/database'
+import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import * as media from 'wildebeest/backend/src/media/'
+import type { UUID } from 'wildebeest/backend/src/types'
+import type { MastodonStatus } from 'wildebeest/backend/src/types'
+import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
+import { queryAcct } from 'wildebeest/backend/src/webfinger'
+
+import { addObjectInOutbox } from '../activitypub/actors/outbox'
+import { actorToHandle } from '../utils/handle'
+import { parseHandle } from '../utils/parse'
 
 export async function getMentions(input: string, instanceDomain: string, db: Database): Promise<Array<Actor>> {
 	const mentions: Array<Actor> = []

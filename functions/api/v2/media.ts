@@ -1,12 +1,12 @@
-import type { Env } from 'wildebeest/backend/src/types/env'
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
-import * as media from 'wildebeest/backend/src/media/image'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import * as media from 'wildebeest/backend/src/media/image'
+import type { ContextData } from 'wildebeest/backend/src/types/context'
+import type { Env } from 'wildebeest/backend/src/types/env'
+import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
+import { cors } from 'wildebeest/backend/src/utils/cors'
 
 export const onRequestPost: PagesFunction<Env, any, ContextData> = async ({ request, env, data }) => {
 	return handleRequestPost(request, await getDatabase(env), data.connectedActor, env.CF_ACCOUNT_ID, env.CF_API_TOKEN)

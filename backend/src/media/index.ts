@@ -1,8 +1,8 @@
-import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 import type { Document } from 'wildebeest/backend/src/activitypub/objects'
-import { IMAGE, type Image } from 'wildebeest/backend/src/activitypub/objects/image'
 import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
 import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import { IMAGE, type Image } from 'wildebeest/backend/src/activitypub/objects/image'
+import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 
 export function fromObject(obj: APObject): MediaAttachment {
 	if (obj.type === IMAGE) {

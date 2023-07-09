@@ -1,9 +1,9 @@
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import type { Env } from 'wildebeest/backend/src/types/env'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
+import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { getFollowingId } from 'wildebeest/backend/src/mastodon/follow'
+import type { Env } from 'wildebeest/backend/src/types/env'
+import { parseHandle } from 'wildebeest/backend/src/utils/parse'
 
 const headers = {
 	'content-type': 'application/json; charset=utf-8',

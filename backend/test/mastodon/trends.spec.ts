@@ -1,6 +1,8 @@
 import { strict as assert } from 'node:assert/strict'
-import * as trends_statuses from 'wildebeest/functions/api/v1/trends/statuses'
+
 import * as trends_links from 'wildebeest/functions/api/v1/trends/links'
+import * as trends_statuses from 'wildebeest/functions/api/v1/trends/statuses'
+
 import { assertJSON } from '../utils'
 
 describe('Mastodon APIs', () => {

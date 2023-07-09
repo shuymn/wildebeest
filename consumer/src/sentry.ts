@@ -1,4 +1,5 @@
 import { Toucan } from 'toucan-js'
+
 import type { Env } from './'
 
 export function initSentryQueue(env: Env, context: any) {

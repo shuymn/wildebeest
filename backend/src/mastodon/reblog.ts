@@ -1,10 +1,11 @@
 // Also known as boost.
 
+import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database } from 'wildebeest/backend/src/database'
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { getResultsField } from './utils'
+
 import { addObjectInOutbox } from '../activitypub/actors/outbox'
+import { getResultsField } from './utils'
 
 /**
  * Creates a reblog and inserts it in the reblog author's outbox

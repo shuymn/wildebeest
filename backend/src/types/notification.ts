@@ -1,5 +1,6 @@
 import type { MastodonAccount } from 'wildebeest/backend/src/types/account'
 import type { MastodonStatus } from 'wildebeest/backend/src/types/status'
+
 import type { ObjectsRow } from './objects'
 
 export type NotificationType =

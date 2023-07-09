@@ -1,10 +1,12 @@
-import { makeDB, assertCORS, assertJSON, createTestClient, generateVAPIDKeys } from '../utils'
-import { TEST_JWT } from '../test-data'
 import { strict as assert } from 'node:assert/strict'
+
+import { VAPIDPublicKey } from 'wildebeest/backend/src/mastodon/subscription'
 import * as apps from 'wildebeest/functions/api/v1/apps'
 import * as verify_app from 'wildebeest/functions/api/v1/apps/verify_credentials'
 import { CredentialApp } from 'wildebeest/functions/api/v1/apps/verify_credentials'
-import { VAPIDPublicKey } from 'wildebeest/backend/src/mastodon/subscription'
+
+import { TEST_JWT } from '../test-data'
+import { assertCORS, assertJSON, createTestClient, generateVAPIDKeys, makeDB } from '../utils'
 
 describe('Mastodon APIs', () => {
 	describe('/apps', () => {
@@ -24,7 +26,7 @@ describe('Mastodon APIs', () => {
 			assertCORS(res)
 			assertJSON(res)
 
-			// eslint-disable-next-line @typescript-eslint/no-unused-vars
+			// eslint-disable-next-line unused-imports/no-unused-vars
 			const { name, website, redirect_uri, client_id, client_secret, vapid_key, id, ...rest } = await res.json<
 				Record<string, string>
 			>()
@@ -52,7 +54,7 @@ describe('Mastodon APIs', () => {
 			assertCORS(res)
 			assertJSON(res)
 
-			// eslint-disable-next-line @typescript-eslint/no-unused-vars
+			// eslint-disable-next-line unused-imports/no-unused-vars
 			const { name, redirect_uri, client_id, client_secret, vapid_key, id, ...rest } = await res.json<
 				Record<string, string>
 			>()

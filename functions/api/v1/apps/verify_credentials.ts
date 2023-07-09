@@ -1,14 +1,14 @@
 // https://docs.joinmastodon.org/methods/apps/#verify_credentials
 
-import { type Database } from 'wildebeest/backend/src/database'
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import { VAPIDPublicKey } from 'wildebeest/backend/src/mastodon/subscription'
 import { getVAPIDKeys } from 'wildebeest/backend/src/config'
-import { getClientById } from 'wildebeest/backend/src/mastodon/client'
-import type { Env } from 'wildebeest/backend/src/types/env'
-import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
+import { type Database } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
+import { getClientById } from 'wildebeest/backend/src/mastodon/client'
+import { VAPIDPublicKey } from 'wildebeest/backend/src/mastodon/subscription'
+import type { ContextData } from 'wildebeest/backend/src/types/context'
+import type { Env } from 'wildebeest/backend/src/types/env'
+import { cors } from 'wildebeest/backend/src/utils/cors'
+import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
 export type CredentialApp = {
 	name: string

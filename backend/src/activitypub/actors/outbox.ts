@@ -1,9 +1,9 @@
-import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
 import type { Activity } from 'wildebeest/backend/src/activitypub/activities'
+import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
 import type { OrderedCollection } from 'wildebeest/backend/src/activitypub/objects/collection'
 import { getMetadata, loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
-import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import { type Database } from 'wildebeest/backend/src/database'
 
 export async function addObjectInOutbox(

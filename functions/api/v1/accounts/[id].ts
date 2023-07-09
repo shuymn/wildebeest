@@ -1,10 +1,10 @@
 // https://docs.joinmastodon.org/methods/accounts/#get
 
+import { getAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { cors } from 'wildebeest/backend/src/utils/cors'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
-import { getAccount } from 'wildebeest/backend/src/accounts/getAccount'
+import { cors } from 'wildebeest/backend/src/utils/cors'
 
 const headers = {
 	...cors(),

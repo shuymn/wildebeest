@@ -1,9 +1,10 @@
-import { defaultImages } from 'wildebeest/config/accounts'
-import { generateUserKey } from 'wildebeest/backend/src/utils/key-ops'
-import { type APObject, sanitizeContent, getTextContent } from '../objects'
+import { Buffer } from 'buffer'
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
-import { Buffer } from 'buffer'
+import { generateUserKey } from 'wildebeest/backend/src/utils/key-ops'
+import { defaultImages } from 'wildebeest/config/accounts'
+
+import { type APObject, getTextContent, sanitizeContent } from '../objects'
 
 const PERSON = 'Person'
 const isTesting = typeof jest !== 'undefined'

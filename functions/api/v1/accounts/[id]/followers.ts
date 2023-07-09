@@ -1,19 +1,19 @@
 // https://docs.joinmastodon.org/methods/accounts/#followers
 
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import type { Handle } from 'wildebeest/backend/src/utils/parse'
 import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
-import { cors } from 'wildebeest/backend/src/utils/cors'
+import * as actors from 'wildebeest/backend/src/activitypub/actors'
+import { getFollowers, loadActors } from 'wildebeest/backend/src/activitypub/actors/follow'
+import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
-import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
+import * as localFollow from 'wildebeest/backend/src/mastodon/follow'
 import { MastodonAccount } from 'wildebeest/backend/src/types/account'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
-import * as actors from 'wildebeest/backend/src/activitypub/actors'
+import { cors } from 'wildebeest/backend/src/utils/cors'
+import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
+import type { Handle } from 'wildebeest/backend/src/utils/parse'
+import { parseHandle } from 'wildebeest/backend/src/utils/parse'
 import * as webfinger from 'wildebeest/backend/src/webfinger'
-import { getFollowers, loadActors } from 'wildebeest/backend/src/activitypub/actors/follow'
-import * as localFollow from 'wildebeest/backend/src/mastodon/follow'
 
 export const onRequest: PagesFunction<Env, any, ContextData> = async ({ params, request, env }) => {
 	return handleRequest(request, await getDatabase(env), params.id as string)

@@ -1,8 +1,9 @@
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import { type Database } from 'wildebeest/backend/src/database'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 import { b64ToUrlEncoded, exportPublicKeyPair } from 'wildebeest/backend/src/webpush/util'
+
 import { Client } from './client'
-import { type Database } from 'wildebeest/backend/src/database'
 
 export type PushSubscription = {
 	endpoint: string

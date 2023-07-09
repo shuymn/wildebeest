@@ -1,7 +1,7 @@
 import type { JWK } from './jwk'
-import { WebPushInfos, WebPushMessage, WebPushResult } from './webpushinfos'
 import { generateAESGCMEncryptedMessage } from './message'
 import { generateV1Headers } from './vapid'
+import { WebPushInfos, WebPushMessage, WebPushResult } from './webpushinfos'
 
 export async function generateWebPushMessage(
 	message: WebPushMessage,

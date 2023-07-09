@@ -1,14 +1,14 @@
 // https://docs.joinmastodon.org/methods/search/#v2
+import { actorFromRow } from 'wildebeest/backend/src/activitypub/actors'
+import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import { MastodonAccount } from 'wildebeest/backend/src/types/account'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import { queryAcct } from 'wildebeest/backend/src/webfinger'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
-import { MastodonAccount } from 'wildebeest/backend/src/types/account'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
-import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import { actorFromRow } from 'wildebeest/backend/src/activitypub/actors'
 import type { Handle } from 'wildebeest/backend/src/utils/parse'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import { parseHandle } from 'wildebeest/backend/src/utils/parse'
+import { queryAcct } from 'wildebeest/backend/src/webfinger'
 
 const headers = {
 	...cors(),

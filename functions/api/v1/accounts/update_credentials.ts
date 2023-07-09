@@ -1,19 +1,19 @@
 // https://docs.joinmastodon.org/methods/accounts/#update_credentials
 
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import type { Queue, DeliverMessageBody } from 'wildebeest/backend/src/types/queue'
-import * as errors from 'wildebeest/backend/src/errors'
 import * as activities from 'wildebeest/backend/src/activitypub/activities/update'
-import * as actors from 'wildebeest/backend/src/activitypub/actors'
-import { deliverFollowers } from 'wildebeest/backend/src/activitypub/deliver'
-import * as images from 'wildebeest/backend/src/media/image'
-import type { Env } from 'wildebeest/backend/src/types/env'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { updateActorProperty } from 'wildebeest/backend/src/activitypub/actors'
+import { deliverFollowers } from 'wildebeest/backend/src/activitypub/deliver'
+import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import * as errors from 'wildebeest/backend/src/errors'
+import { getPreference, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import * as images from 'wildebeest/backend/src/media/image'
 import type { CredentialAccount } from 'wildebeest/backend/src/types/account'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
-import { getPreference, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import type { Env } from 'wildebeest/backend/src/types/env'
+import type { DeliverMessageBody, Queue } from 'wildebeest/backend/src/types/queue'
+import { cors } from 'wildebeest/backend/src/utils/cors'
 
 const headers = {
 	...cors(),

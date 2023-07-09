@@ -2,16 +2,16 @@
 
 import { getObjectByMastodonId } from 'wildebeest/backend/src/activitypub/objects'
 import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
-import type { Image } from 'wildebeest/backend/src/activitypub/objects/image'
-import { readBody } from 'wildebeest/backend/src/utils/body'
-import type { UUID } from 'wildebeest/backend/src/types'
-import type { Env } from 'wildebeest/backend/src/types/env'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import * as errors from 'wildebeest/backend/src/errors'
 import { updateObjectProperty } from 'wildebeest/backend/src/activitypub/objects'
+import type { Image } from 'wildebeest/backend/src/activitypub/objects/image'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import * as errors from 'wildebeest/backend/src/errors'
+import type { UUID } from 'wildebeest/backend/src/types'
+import type { ContextData } from 'wildebeest/backend/src/types/context'
+import type { Env } from 'wildebeest/backend/src/types/env'
+import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
+import { readBody } from 'wildebeest/backend/src/utils/body'
+import { cors } from 'wildebeest/backend/src/utils/cors'
 
 export const onRequestPut: PagesFunction<Env, any, ContextData> = async ({ params, env, request }) => {
 	return handleRequestPut(await getDatabase(env), params.id as UUID, request)

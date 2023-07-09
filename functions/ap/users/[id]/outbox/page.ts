@@ -1,14 +1,14 @@
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { cors } from 'wildebeest/backend/src/utils/cors'
 import type { Activity } from 'wildebeest/backend/src/activitypub/activities'
+import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
+import * as activityCreate from 'wildebeest/backend/src/activitypub/activities/create'
 import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
 import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
+import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
+import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
-import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import * as activityCreate from 'wildebeest/backend/src/activitypub/activities/create'
-import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
+import { cors } from 'wildebeest/backend/src/utils/cors'
+import { parseHandle } from 'wildebeest/backend/src/utils/parse'
 
 export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request, env, params }) => {
 	const domain = new URL(request.url).hostname

@@ -1,10 +1,10 @@
 import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
-import { type Database } from 'wildebeest/backend/src/database'
 import {
 	mastodonIdSymbol,
 	originalActorIdSymbol,
 	originalObjectIdSymbol,
 } from 'wildebeest/backend/src/activitypub/objects'
+import { type Database } from 'wildebeest/backend/src/database'
 
 export async function insertKey(db: Database, key: string, obj: APObject): Promise<void> {
 	const query = `

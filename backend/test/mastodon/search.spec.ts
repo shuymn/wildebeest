@@ -1,8 +1,10 @@
-import * as search from 'wildebeest/functions/api/v2/search'
+import { strict as assert } from 'node:assert/strict'
+
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { defaultImages } from 'wildebeest/config/accounts'
-import { makeDB, assertCORS, assertJSON } from '../utils'
-import { strict as assert } from 'node:assert/strict'
+import * as search from 'wildebeest/functions/api/v2/search'
+
+import { assertCORS, assertJSON, makeDB } from '../utils'
 
 const userKEK = 'test_kek11'
 const domain = 'cloudflare.com'

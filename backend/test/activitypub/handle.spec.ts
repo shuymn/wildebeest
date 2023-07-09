@@ -1,13 +1,15 @@
-import { makeDB } from '../utils'
-import { createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
-import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 import { strict as assert } from 'node:assert/strict'
-import { cacheObject, getObjectById } from 'wildebeest/backend/src/activitypub/objects/'
-import { addFollowing } from 'wildebeest/backend/src/mastodon/follow'
+
 import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
-import { ObjectsRow } from 'wildebeest/backend/src/types/objects'
 import { originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import { cacheObject, getObjectById } from 'wildebeest/backend/src/activitypub/objects/'
+import { createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
+import { addFollowing } from 'wildebeest/backend/src/mastodon/follow'
+import { ObjectsRow } from 'wildebeest/backend/src/types/objects'
+import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
+
+import { makeDB } from '../utils'
 
 const adminEmail = 'admin@example.com'
 const domain = 'cloudflare.com'

@@ -1,8 +1,8 @@
+import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import * as timelines from 'wildebeest/backend/src/mastodon/timeline'
+import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import * as timelines from 'wildebeest/backend/src/mastodon/timeline'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { getDomain } from 'wildebeest/backend/src/utils/getDomain'
 
 const headers = {

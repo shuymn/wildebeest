@@ -1,13 +1,13 @@
-import { ContextData } from 'wildebeest/backend/src/types/context'
-import { cors } from 'wildebeest/backend/src/utils/cors'
+import { getVAPIDKeys } from 'wildebeest/backend/src/config'
+import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
-import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
-import type { Env } from 'wildebeest/backend/src/types/env'
 import { createClient } from 'wildebeest/backend/src/mastodon/client'
 import { VAPIDPublicKey } from 'wildebeest/backend/src/mastodon/subscription'
-import { getVAPIDKeys } from 'wildebeest/backend/src/config'
+import { ContextData } from 'wildebeest/backend/src/types/context'
+import type { Env } from 'wildebeest/backend/src/types/env'
 import { readBody } from 'wildebeest/backend/src/utils/body'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import { cors } from 'wildebeest/backend/src/utils/cors'
+import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
 type AppsPost = {
 	redirect_uris: string

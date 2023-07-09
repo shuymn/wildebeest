@@ -1,33 +1,33 @@
-import * as actors from 'wildebeest/backend/src/activitypub/actors'
+import type { Activity } from 'wildebeest/backend/src/activitypub/activities'
 import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
-import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
-import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
-import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
-import * as objects from 'wildebeest/backend/src/activitypub/objects'
 import * as accept from 'wildebeest/backend/src/activitypub/activities/accept'
+import * as actors from 'wildebeest/backend/src/activitypub/actors'
+import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInInbox } from 'wildebeest/backend/src/activitypub/actors/inbox'
+import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
+import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
+import * as objects from 'wildebeest/backend/src/activitypub/objects'
+import { type APObject, updateObject } from 'wildebeest/backend/src/activitypub/objects'
+import { deleteObject, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import { getMetadata, loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
+import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
+import { type Database } from 'wildebeest/backend/src/database'
+import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
+import { acceptFollowing, addFollowing, moveFollowers, moveFollowing } from 'wildebeest/backend/src/mastodon/follow'
+import { insertLike } from 'wildebeest/backend/src/mastodon/like'
 import {
-	sendMentionNotification,
-	sendLikeNotification,
-	sendFollowNotification,
 	createNotification,
 	insertFollowNotification,
+	sendFollowNotification,
+	sendLikeNotification,
+	sendMentionNotification,
 	sendReblogNotification,
 } from 'wildebeest/backend/src/mastodon/notification'
-import { type APObject, updateObject } from 'wildebeest/backend/src/activitypub/objects'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
-import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import { addFollowing, acceptFollowing, moveFollowers, moveFollowing } from 'wildebeest/backend/src/mastodon/follow'
-import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
-import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
-import { insertLike } from 'wildebeest/backend/src/mastodon/like'
 import { createReblog } from 'wildebeest/backend/src/mastodon/reblog'
-import { insertReply } from 'wildebeest/backend/src/mastodon/reply'
-import type { Activity } from 'wildebeest/backend/src/activitypub/activities'
-import { originalActorIdSymbol, deleteObject } from 'wildebeest/backend/src/activitypub/objects'
 import { hasReblog } from 'wildebeest/backend/src/mastodon/reblog'
-import { getMetadata, loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
-import { type Database } from 'wildebeest/backend/src/database'
+import { insertReply } from 'wildebeest/backend/src/mastodon/reply'
+import { parseHandle } from 'wildebeest/backend/src/utils/parse'
+import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
 function extractID(domain: string, s: string | URL): string {
 	return s.toString().replace(`https://${domain}/ap/users/`, '')

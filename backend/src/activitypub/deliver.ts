@@ -1,14 +1,15 @@
 // https://www.w3.org/TR/activitypub/#delivery
 
-import type { MessageSendRequest, Queue, DeliverMessageBody } from 'wildebeest/backend/src/types/queue'
+import { type Database } from 'wildebeest/backend/src/database'
+import { getFollowers } from 'wildebeest/backend/src/mastodon/follow'
+import type { DeliverMessageBody, MessageSendRequest, Queue } from 'wildebeest/backend/src/types/queue'
 import { MessageType } from 'wildebeest/backend/src/types/queue'
+import { signRequest } from 'wildebeest/backend/src/utils/http-signing'
+import { generateDigestHeader } from 'wildebeest/backend/src/utils/http-signing-cavage'
+import { getFederationUA } from 'wildebeest/config/ua'
+
 import type { Activity } from './activities'
 import type { Actor } from './actors'
-import { generateDigestHeader } from 'wildebeest/backend/src/utils/http-signing-cavage'
-import { signRequest } from 'wildebeest/backend/src/utils/http-signing'
-import { getFollowers } from 'wildebeest/backend/src/mastodon/follow'
-import { getFederationUA } from 'wildebeest/config/ua'
-import { type Database } from 'wildebeest/backend/src/database'
 
 const MAX_BATCH_SIZE = 100
 

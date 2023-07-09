@@ -1,12 +1,12 @@
 // https://docs.joinmastodon.org/methods/statuses/#context
 
-import { cors } from 'wildebeest/backend/src/utils/cors'
+import { getObjectByMastodonId } from 'wildebeest/backend/src/activitypub/objects'
+import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import { getReplies } from 'wildebeest/backend/src/mastodon/reply'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
-import { getObjectByMastodonId } from 'wildebeest/backend/src/activitypub/objects'
-import { getReplies } from 'wildebeest/backend/src/mastodon/reply'
 import type { Context } from 'wildebeest/backend/src/types/status'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import { cors } from 'wildebeest/backend/src/utils/cors'
 
 export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request, env, params }) => {
 	const domain = new URL(request.url).hostname

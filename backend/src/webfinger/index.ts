@@ -1,6 +1,7 @@
-import * as actors from '../activitypub/actors'
 import { type Database } from 'wildebeest/backend/src/database'
+
 import type { Actor } from '../activitypub/actors'
+import * as actors from '../activitypub/actors'
 
 export type WebFingerResponse = {
 	subject: string

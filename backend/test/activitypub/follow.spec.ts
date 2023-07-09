@@ -1,13 +1,15 @@
-import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
-import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
-import * as ap_followers_page from 'wildebeest/functions/ap/users/[id]/followers/page'
-import * as ap_following_page from 'wildebeest/functions/ap/users/[id]/following/page'
-import * as ap_followers from 'wildebeest/functions/ap/users/[id]/followers'
-import * as ap_following from 'wildebeest/functions/ap/users/[id]/following'
-import { addFollowing, acceptFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { strict as assert } from 'node:assert/strict'
-import { makeDB } from '../utils'
+
+import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
+import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
+import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
+import * as ap_followers from 'wildebeest/functions/ap/users/[id]/followers'
+import * as ap_followers_page from 'wildebeest/functions/ap/users/[id]/followers/page'
+import * as ap_following from 'wildebeest/functions/ap/users/[id]/following'
+import * as ap_following_page from 'wildebeest/functions/ap/users/[id]/following/page'
+
+import { makeDB } from '../utils'
 
 const userKEK = 'test_kek10'
 const domain = 'cloudflare.com'
