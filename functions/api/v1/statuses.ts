@@ -77,6 +77,7 @@ export async function handleRequest(
 		return new Response('', { status: 400 })
 	}
 
+	// TODO: check server settings for max length
 	if (body.status.length > 500) {
 		return errors.validationError('text character limit of 500 exceeded')
 	}
