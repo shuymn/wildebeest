@@ -85,10 +85,10 @@ type CacheObjectRes = {
 	object: APObject
 }
 
-export async function cacheObject(
+export async function cacheObject<T>(
 	domain: string,
 	db: Database,
-	properties: unknown,
+	properties: T,
 	originalActorId: URL,
 	originalObjectId: URL,
 	local: boolean
@@ -153,7 +153,7 @@ export async function cacheObject(
 	}
 }
 
-export async function updateObject(db: Database, properties: any, id: URL): Promise<boolean> {
+export async function updateObject<T>(db: Database, properties: T, id: URL): Promise<boolean> {
 	// eslint-disable-next-line unused-imports/no-unused-vars
 	const res: any = await db
 		.prepare('UPDATE objects SET properties = ? WHERE id = ?')

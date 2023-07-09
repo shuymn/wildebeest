@@ -5,7 +5,7 @@ export type MediaAttachment = {
 	type: MediaType
 	url: URL
 	preview_url: URL
-	meta: any
+	meta: unknown
 	description: string
 	blurhash: string
 }
