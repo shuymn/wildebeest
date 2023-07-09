@@ -1,14 +1,45 @@
-import type { Actor } from '../actors'
-import type { APObject } from '../objects'
-import type { Activity } from '.'
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
+import {
+	AcceptActivity,
+	createActivityId,
+	getActivityObject,
+	isFollowActivity,
+} from 'wildebeest/backend/src/activitypub/activities'
+import { Actor, getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
+import { APObject, getAPId, getAPType } from 'wildebeest/backend/src/activitypub/objects'
+import { Database } from 'wildebeest/backend/src/database'
+import { acceptFollowing } from 'wildebeest/backend/src/mastodon/follow'
+import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 
-const ACCEPT = 'Accept'
-
-export function create(actor: Actor, object: APObject): Activity {
+export function createAcceptActivity(domain: string, actor: Actor, object: APObject): AcceptActivity {
 	return {
 		'@context': 'https://www.w3.org/ns/activitystreams',
-		type: ACCEPT,
+		type: 'Accept',
+		id: createActivityId(domain),
 		actor: actor.id,
 		object,
 	}
+}
+
+// https://www.w3.org/TR/activitystreams-vocabulary/#dfn-accept
+export async function handleAcceptActivity(domain: string, activity: AcceptActivity, db: Database) {
+	const obj = getActivityObject(activity)
+
+	if (!isFollowActivity(obj)) {
+		console.warn('unsupported Accept type: ' + getAPType(obj))
+		return
+	}
+
+	const followerId = getAPId(obj.actor)
+	const follower = await getActorById(db, followerId)
+	if (follower === null) {
+		console.warn(`actor ${followerId} not found`)
+		return
+	}
+	// activity.actor must be a local user
+	if (!isLocalAccount(domain, actorToHandle(follower))) {
+		return
+	}
+	const followee = await getAndCache(getAPId(activity.actor), db)
+	await acceptFollowing(db, follower, followee)
 }

@@ -1,6 +1,6 @@
 // https://docs.joinmastodon.org/methods/accounts/#update_credentials
 
-import * as activities from 'wildebeest/backend/src/activitypub/activities/update'
+import { createUpdateActivity } from 'wildebeest/backend/src/activitypub/activities/update'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { updateActorProperty } from 'wildebeest/backend/src/activitypub/actors'
@@ -118,7 +118,7 @@ export async function handleRequest(
 		}
 
 		// send updates
-		const activity = activities.create(domain, connectedActor, actor)
+		const activity = createUpdateActivity(domain, connectedActor, actor)
 		await deliverFollowers(db, userKEK, connectedActor, activity, queue)
 
 		return new Response(JSON.stringify(res), { headers })

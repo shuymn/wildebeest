@@ -1,8 +1,9 @@
 import type { Activity } from 'wildebeest/backend/src/activitypub/activities'
 import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
-import * as activityCreate from 'wildebeest/backend/src/activitypub/activities/create'
+import { createCreateActivity } from 'wildebeest/backend/src/activitypub/activities/create'
 import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
 import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
+import { getAPId } from 'wildebeest/backend/src/activitypub/objects'
 import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
@@ -84,11 +85,18 @@ LIMIT ?2
 
 				...properties,
 			}
-			const activity = activityCreate.create(domain, actor, note)
+			const activity = createCreateActivity(domain, actor, note)
 			delete activity['@context']
-			activity.id = note.id + '/activity'
+
+			const activityId = note.id
+			// check if the URL pathname ends with '/', if not add one.
+			activityId.pathname = activityId.pathname.endsWith('/') ? activityId.pathname : activityId.pathname + '/'
+			// append the additional path
+			activityId.pathname += 'activity'
+
+			activity.id = activityId
 			activity.published = new Date(result.cdate).toISOString()
-			activity.to = ['https://www.w3.org/ns/activitystreams#Public']
+			activity.to = [getAPId('https://www.w3.org/ns/activitystreams#Public')]
 			activity.cc = [actor.followers]
 			items.push(activity)
 		}

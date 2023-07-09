@@ -1,12 +1,23 @@
 import { strict as assert } from 'node:assert/strict'
 
+import {
+	AcceptActivity,
+	AnnounceActivity,
+	CreateActivity,
+	createActivityId,
+	DeleteActivity,
+	FollowActivity,
+	LikeActivity,
+	UpdateActivity,
+} from 'wildebeest/backend/src/activitypub/activities'
 import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
-import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
-import { originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import { actorURL, createPerson } from 'wildebeest/backend/src/activitypub/actors'
+import { APObject, getAPId, originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { cacheObject, getObjectById } from 'wildebeest/backend/src/activitypub/objects/'
 import { createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
 import { addFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { ObjectsRow } from 'wildebeest/backend/src/types/objects'
+import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
 import { makeDB } from '../utils'
@@ -26,8 +37,9 @@ describe('ActivityPub', () => {
 
 				const note = await createPublicNote(domain, db, 'my first status', actorA)
 
-				const activity: any = {
+				const activity: AnnounceActivity = {
 					type: 'Announce',
+					id: createActivityId(domain),
 					actor: actorB.id,
 					object: note.id,
 				}
@@ -48,8 +60,9 @@ describe('ActivityPub', () => {
 
 				const note = await createPublicNote(domain, db, 'my first status', actorA)
 
-				const activity: any = {
+				const activity: AnnounceActivity = {
 					type: 'Announce',
+					id: createActivityId(domain),
 					actor: actorB.id,
 					object: note.id,
 				}
@@ -75,8 +88,9 @@ describe('ActivityPub', () => {
 
 				const note = await createPublicNote(domain, db, 'my first status', actorA)
 
-				const activity: any = {
+				const activity: LikeActivity = {
 					type: 'Like',
+					id: createActivityId(domain),
 					actor: actorB.id,
 					object: note.id,
 				}
@@ -94,8 +108,9 @@ describe('ActivityPub', () => {
 
 				const note = await createPublicNote(domain, db, 'my first status', actorA)
 
-				const activity: any = {
+				const activity: LikeActivity = {
 					type: 'Like',
+					id: createActivityId(domain),
 					actor: actorB.id,
 					object: note.id,
 				}
@@ -118,8 +133,9 @@ describe('ActivityPub', () => {
 
 				const note = await createPublicNote(domain, db, 'my first status', actorA)
 
-				const activity: any = {
+				const activity: LikeActivity = {
 					type: 'Like',
+					id: createActivityId(domain),
 					actor: actorB.id,
 					object: note.id,
 				}
@@ -147,15 +163,16 @@ describe('ActivityPub', () => {
 				const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 				await addFollowing(db, actor, actor2, 'not needed')
 
-				const activity = {
+				const activity: AcceptActivity = {
 					'@context': 'https://www.w3.org/ns/activitystreams',
+					id: createActivityId(domain),
 					type: 'Accept',
-					actor: { id: 'https://' + domain + '/ap/users/sven2' },
+					actor: actorURL(domain, actorToHandle(actor2).localPart),
 					object: {
 						type: 'Follow',
 						actor: actor.id,
-						object: 'https://' + domain + '/ap/users/sven2',
-					},
+						object: actorURL(domain, actorToHandle(actor).localPart),
+					} as FollowActivity,
 				}
 
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
@@ -176,10 +193,11 @@ describe('ActivityPub', () => {
 				const db = await makeDB()
 				await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-				const activity = {
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				const activity: any = {
 					'@context': 'https://www.w3.org/ns/activitystreams',
 					type: 'Accept',
-					actor: 'https://example.com/actor',
+					actor: getAPId('https://example.com/actor'),
 					object: 'a',
 				}
 
@@ -194,7 +212,8 @@ describe('ActivityPub', () => {
 				const db = await makeDB()
 				await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-				const activity = {
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				const activity: any = {
 					'@context': 'https://www.w3.org/ns/activitystreams',
 					type: 'Create',
 					actor: 'https://example.com/actor',
@@ -210,13 +229,14 @@ describe('ActivityPub', () => {
 				const db = await makeDB()
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-				const activity: any = {
+				const activity: CreateActivity = {
 					type: 'Create',
-					actor: actor.id.toString(),
-					to: [actor.id.toString()],
+					id: createActivityId(domain),
+					actor: actor.id,
+					to: [actor.id],
 					cc: [],
 					object: {
-						id: 'https://example.com/note1',
+						id: getAPId('https://example.com/note1'),
 						type: 'Note',
 						content: 'test note',
 					},
@@ -249,13 +269,14 @@ describe('ActivityPub', () => {
 				const db = await makeDB()
 				await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-				const activity: any = {
+				const activity: CreateActivity = {
 					type: 'Create',
-					actor: remoteActorId,
+					id: createActivityId(domain),
+					actor: getAPId(remoteActorId),
 					to: [],
 					cc: [],
 					object: {
-						id: 'https://example.com/note1',
+						id: getAPId('https://example.com/note1'),
 						type: 'Note',
 						content: 'test note',
 					},
@@ -274,13 +295,14 @@ describe('ActivityPub', () => {
 				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 				const actorB = await createPerson(domain, db, userKEK, 'b@cloudflare.com')
 
-				const activity: any = {
+				const activity: CreateActivity = {
 					type: 'Create',
-					actor: actorB.id.toString(),
-					to: [actorA.id.toString()],
+					id: createActivityId(domain),
+					actor: actorB.id,
+					to: [actorA.id],
 					cc: [],
 					object: {
-						id: 'https://example.com/note2',
+						id: getAPId('https://example.com/note2'),
 						type: 'Note',
 						content: 'test note',
 					},
@@ -303,12 +325,13 @@ describe('ActivityPub', () => {
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 				{
-					const activity: any = {
+					const activity: CreateActivity = {
 						type: 'Create',
-						actor: actor.id.toString(),
-						to: [actor.id.toString()],
+						id: createActivityId(domain),
+						actor: actor.id,
+						to: [actor.id],
 						object: {
-							id: 'https://example.com/note1',
+							id: getAPId('https://example.com/note1'),
 							type: 'Note',
 							content: 'post',
 						},
@@ -317,13 +340,14 @@ describe('ActivityPub', () => {
 				}
 
 				{
-					const activity: any = {
+					const activity: CreateActivity = {
 						type: 'Create',
-						actor: actor.id.toString(),
-						to: [actor.id.toString()],
+						id: createActivityId(domain),
+						actor: actor.id,
+						to: [actor.id],
 						object: {
 							inReplyTo: 'https://example.com/note1',
-							id: 'https://example.com/note2',
+							id: getAPId('https://example.com/note2'),
 							type: 'Note',
 							content: 'reply',
 						},
@@ -338,11 +362,11 @@ describe('ActivityPub', () => {
 				}>()
 				assert.equal(entry.actor_id, actor.id.toString().toString())
 
-				const obj: any = await getObjectById(db, entry.object_id)
+				const obj = await getObjectById(db, entry.object_id)
 				assert(obj)
 				assert.equal(obj[originalObjectIdSymbol], 'https://example.com/note2')
 
-				const inReplyTo: any = await getObjectById(db, entry.in_reply_to_object_id)
+				const inReplyTo = await getObjectById(db, entry.in_reply_to_object_id)
 				assert(inReplyTo)
 				assert.equal(inReplyTo[originalObjectIdSymbol], 'https://example.com/note1')
 			})
@@ -351,13 +375,14 @@ describe('ActivityPub', () => {
 				const db = await makeDB()
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-				const activity = {
+				const activity: CreateActivity = {
 					type: 'Create',
-					actor: actor.id.toString(),
-					to: ['https://example.com/some-actor'],
+					id: createActivityId(domain),
+					actor: actor.id,
+					to: [getAPId('https://example.com/some-actor')],
 					cc: [],
 					object: {
-						id: 'https://example.com/note1',
+						id: getAPId('https://example.com/note1'),
 						type: 'Note',
 						content: 'test note',
 					},
@@ -372,12 +397,13 @@ describe('ActivityPub', () => {
 				const db = await makeDB()
 				const person = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-				const activity = {
+				const activity: CreateActivity = {
 					'@context': 'https://www.w3.org/ns/activitystreams',
+					id: createActivityId(domain),
 					type: 'Create',
 					actor: person,
 					object: {
-						id: 'https://example.com/note2',
+						id: getAPId('https://example.com/note2'),
 						type: 'Note',
 						name: '<script>Dr Evil</script>',
 						content:
@@ -401,7 +427,8 @@ describe('ActivityPub', () => {
 			test('Object must be an object', async () => {
 				const db = await makeDB()
 
-				const activity = {
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				const activity: any = {
 					'@context': 'https://www.w3.org/ns/activitystreams',
 					type: 'Update',
 					actor: 'https://example.com/actor',
@@ -416,12 +443,13 @@ describe('ActivityPub', () => {
 			test('Object must exist', async () => {
 				const db = await makeDB()
 
-				const activity = {
+				const activity: UpdateActivity = {
 					'@context': 'https://www.w3.org/ns/activitystreams',
+					id: createActivityId(domain),
 					type: 'Update',
-					actor: 'https://example.com/actor',
+					actor: getAPId('https://example.com/actor'),
 					object: {
-						id: 'https://example.com/note2',
+						id: getAPId('https://example.com/note2'),
 						type: 'Note',
 						content: 'test note',
 					},
@@ -435,24 +463,25 @@ describe('ActivityPub', () => {
 			test('Object must have the same origin', async () => {
 				const db = await makeDB()
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-				const object = {
-					id: 'https://example.com/note2',
+				const object: APObject = {
+					id: getAPId('https://example.com/note2'),
 					type: 'Note',
 					content: 'test note',
 				}
 
-				const obj = await cacheObject(domain, db, object, actor.id, new URL(object.id), false)
+				const obj = await cacheObject(domain, db, object, actor.id, getAPId(object.id), false)
 				assert.notEqual(obj, null, 'could not create object')
 
-				const activity = {
+				const activity: UpdateActivity = {
 					'@context': 'https://www.w3.org/ns/activitystreams',
+					id: createActivityId(domain),
 					type: 'Update',
-					actor: 'https://example.com/actor',
+					actor: getAPId('https://example.com/actor'),
 					object: object,
 				}
 
 				await assert.rejects(activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys), {
-					message: 'actorid mismatch when updating object',
+					message: 'actor.id mismatch when updating object',
 				})
 			})
 
@@ -465,17 +494,18 @@ describe('ActivityPub', () => {
 					content: 'test note',
 				}
 
-				const obj = await cacheObject(domain, db, object, actor.id, new URL(object.id), false)
+				const obj = await cacheObject(domain, db, object, actor.id, getAPId(object.id), false)
 				assert.notEqual(obj, null, 'could not create object')
 
-				const newObject = {
-					id: 'https://example.com/note2',
+				const newObject: APObject = {
+					id: getAPId('https://example.com/note2'),
 					type: 'Note',
 					content: 'new test note',
 				}
 
-				const activity = {
+				const activity: UpdateActivity = {
 					'@context': 'https://www.w3.org/ns/activitystreams',
+					id: createActivityId(domain),
 					type: 'Update',
 					actor: actor.id,
 					object: newObject,
@@ -523,12 +553,13 @@ describe('ActivityPub', () => {
 				const db = await makeDB()
 				await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-				const activity: any = {
+				const activity: AnnounceActivity = {
 					type: 'Announce',
-					actor: remoteActorId,
+					id: createActivityId(domain),
+					actor: getAPId(remoteActorId),
 					to: [],
 					cc: [],
-					object: objectId,
+					object: getAPId(objectId),
 				}
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
@@ -578,12 +609,13 @@ describe('ActivityPub', () => {
 				const db = await makeDB()
 				await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-				const activity: any = {
+				const activity: AnnounceActivity = {
 					type: 'Announce',
-					actor: remoteActorId,
+					id: createActivityId(domain),
+					actor: getAPId(remoteActorId),
 					to: [],
 					cc: [],
-					object: objectId,
+					object: getAPId(objectId),
 				}
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
@@ -616,12 +648,13 @@ describe('ActivityPub', () => {
 					)
 					.run()
 
-				const activity: any = {
+				const activity: DeleteActivity = {
 					type: 'Delete',
+					id: createActivityId(domain),
 					actor: actorA.id,
 					to: [],
 					cc: [],
-					object: originalObjectId,
+					object: getAPId(originalObjectId),
 				}
 
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
@@ -649,14 +682,15 @@ describe('ActivityPub', () => {
 					)
 					.run()
 
-				const activity: any = {
+				const activity: DeleteActivity = {
 					type: 'Delete',
+					id: createActivityId(domain),
 					actor: actorA.id,
 					to: [],
 					cc: [],
 					object: {
 						type: 'Tombstone',
-						id: originalObjectId,
+						id: getAPId(originalObjectId),
 					},
 				}
 
@@ -688,8 +722,9 @@ describe('ActivityPub', () => {
 					)
 					.run()
 
-				const activity: any = {
+				const activity: DeleteActivity = {
 					type: 'Delete',
+					id: createActivityId(domain),
 					actor: actorA.id, // ActorA attempts to delete
 					to: [],
 					cc: [],
@@ -707,8 +742,9 @@ describe('ActivityPub', () => {
 				const db = await makeDB()
 				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 
-				const activity: any = {
+				const activity: DeleteActivity = {
 					type: 'Delete',
+					id: createActivityId(domain),
 					actor: actorA.id,
 					to: [],
 					cc: [],
@@ -731,8 +767,9 @@ describe('ActivityPub', () => {
 
 				const note = await createPublicNote(domain, db, 'my first status', actorA)
 
-				const activity: any = {
+				const activity: DeleteActivity = {
 					type: 'Delete',
+					id: createActivityId(domain),
 					actor: actorA.id,
 					to: [],
 					cc: [],

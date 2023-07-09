@@ -1,6 +1,6 @@
 // https://docs.joinmastodon.org/methods/statuses/#create
 
-import * as activities from 'wildebeest/backend/src/activitypub/activities/create'
+import { createCreateActivity } from 'wildebeest/backend/src/activitypub/activities/create'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { deliverFollowers, deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
@@ -144,7 +144,7 @@ export async function handleRequest(
 		await insertReply(db, connectedActor, note, inReplyToObject)
 	}
 
-	const activity = activities.create(domain, connectedActor, note)
+	const activity = createCreateActivity(domain, connectedActor, note)
 	await deliverFollowers(db, userKEK, connectedActor, activity, queue)
 
 	if (body.visibility === 'public') {
@@ -172,7 +172,7 @@ export async function handleRequest(
 		// If the status is mentioning other persons, we need to delivery it to them.
 		for (let i = 0, len = mentions.length; i < len; i++) {
 			const targetActor = mentions[i]
-			const activity = activities.create(domain, connectedActor, note)
+			const activity = createCreateActivity(domain, connectedActor, note)
 			const signingKey = await getSigningKey(userKEK, db, connectedActor)
 			await deliverToActor(signingKey, connectedActor, targetActor, activity, domain)
 		}

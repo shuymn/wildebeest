@@ -1,12 +1,11 @@
 // https://docs.joinmastodon.org/methods/statuses/#get
 
-import * as activities from 'wildebeest/backend/src/activitypub/activities/delete'
+import { createDeleteActivity } from 'wildebeest/backend/src/activitypub/activities/delete'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverFollowers } from 'wildebeest/backend/src/activitypub/deliver'
 import { deleteObject, getObjectByMastodonId } from 'wildebeest/backend/src/activitypub/objects'
-import { type Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import type { Cache } from 'wildebeest/backend/src/cache'
-import { cacheFromEnv } from 'wildebeest/backend/src/cache'
+import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
+import { Cache, cacheFromEnv } from 'wildebeest/backend/src/cache'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import { getMastodonStatusById, toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
@@ -88,7 +87,7 @@ export async function handleRequestDelete(
 	await deleteObject(db, obj)
 
 	// FIXME: deliver a Delete message to our peers
-	const activity = activities.create(domain, connectedActor, obj)
+	const activity = createDeleteActivity(domain, connectedActor, obj)
 	await deliverFollowers(db, userKEK, connectedActor, activity, queue)
 
 	await timeline.pregenerateTimelines(domain, db, cache, connectedActor)

@@ -1,11 +1,10 @@
 import type { Activity } from 'wildebeest/backend/src/activitypub/activities'
-import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
-import { makeGetActorAsId, makeGetObjectAsId } from 'wildebeest/backend/src/activitypub/activities/handle'
+import { isAnnounceActivity, isCreateActivity, PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import * as outbox from 'wildebeest/backend/src/activitypub/actors/outbox'
 import * as objects from 'wildebeest/backend/src/activitypub/objects'
-import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
+import { isNote, type Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
@@ -18,6 +17,7 @@ import { adjustLocalHostDomain } from 'wildebeest/backend/src/utils/adjustLocalH
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import type { Handle } from 'wildebeest/backend/src/utils/parse'
 import { parseHandle } from 'wildebeest/backend/src/utils/parse'
+import { NonNullableProps } from 'wildebeest/backend/src/utils/type'
 import * as webfinger from 'wildebeest/backend/src/webfinger'
 
 const headers = {
@@ -52,13 +52,18 @@ export async function handleRequest(request: Request, db: Database, id: string):
 		return getLocalStatuses(request, db, handle, offset, withReplies ?? excludeReplies ?? false, limit)
 	} else if (handle.domain !== null) {
 		// Retrieve the statuses of a remote actor
-		return getRemoteStatuses(request, handle, db, limit)
+		return getRemoteStatuses(request, { ...handle, domain: handle.domain }, db, limit)
 	} else {
 		return new Response('', { status: 403 })
 	}
 }
 
-async function getRemoteStatuses(request: Request, handle: Handle, db: Database, limit: number): Promise<Response> {
+async function getRemoteStatuses(
+	request: Request,
+	handle: NonNullableProps<Handle, 'domain'>,
+	db: Database,
+	limit: number
+): Promise<Response> {
 	const url = new URL(request.url)
 	const domain = url.hostname
 	const isPinned = url.searchParams.get('pinned') === 'true'
@@ -69,8 +74,9 @@ async function getRemoteStatuses(request: Request, handle: Handle, db: Database,
 	}
 
 	const acct = `${handle.localPart}@${handle.domain}`
-	const link = await webfinger.queryAcctLink(handle.domain!, acct)
+	const link = await webfinger.queryAcctLink(handle.domain, acct)
 	if (link === null) {
+		console.warn('link is null')
 		return new Response('', { status: 404 })
 	}
 
@@ -83,21 +89,15 @@ async function getRemoteStatuses(request: Request, handle: Handle, db: Database,
 	const account = await loadExternalMastodonAccount(acct, actor)
 
 	const promises = activities.items.map(async (activity: Activity) => {
-		const getObjectAsId = makeGetObjectAsId(activity)
-		const getActorAsId = makeGetActorAsId(activity)
+		const actorId = objects.getAPId(activity.actor)
+		const objectId = objects.getAPId(activity.object)
 
-		if (activity.type === 'Create') {
-			const actorId = getActorAsId()
-			const originalObjectId = getObjectAsId()
-			const res = await objects.cacheObject(domain, db, activity.object, actorId, originalObjectId, false)
+		if (isCreateActivity(activity)) {
+			const res = await objects.cacheObject(domain, db, activity.object, actorId, objectId, false)
 			return toMastodonStatusFromObject(db, res.object as Note, domain)
 		}
-
-		if (activity.type === 'Announce') {
-			let obj: any
-
-			const actorId = getActorAsId()
-			const objectId = getObjectAsId()
+		if (isAnnounceActivity(activity)) {
+			let obj: objects.APObject
 
 			const localObject = await objects.getObjectById(db, objectId)
 			if (localObject === null) {
@@ -118,11 +118,16 @@ async function getRemoteStatuses(request: Request, handle: Handle, db: Database,
 				// Object already exists locally, we can just use it.
 				obj = localObject
 			}
+			if (!isNote(obj)) {
+				console.warn('object type is not "Note"', obj.type)
+				return null
+			}
 
 			return toMastodonStatusFromObject(db, obj, domain)
 		}
 
 		// FIXME: support other Activities, like Update.
+		console.warn(`unsupported activity type: ${activity.type}`)
 	})
 	const statuses = (await Promise.all(promises)).filter(Boolean)
 
@@ -173,13 +178,15 @@ LIMIT ?3 OFFSET ?4
 	}
 
 	let afterCdate = db.qb.epoch()
-	if (url.searchParams.has('max_id')) {
+	const maxId = url.searchParams.get('max_id')
+	if (maxId !== null) {
 		// Client asked to retrieve statuses after the max_id
 		// As opposed to Mastodon we don't use incremental ID but UUID, we need
 		// to retrieve the cdate of the max_id row and only show the newer statuses.
-		const maxId = url.searchParams.get('max_id')!
-
-		const row: any = await db.prepare('SELECT cdate FROM outbox_objects WHERE object_id=?').bind(maxId).first()
+		const row = await db
+			.prepare('SELECT cdate FROM outbox_objects WHERE object_id=?')
+			.bind(maxId)
+			.first<{ cdate: string } | null>()
 		if (!row) {
 			return errors.statusNotFound(maxId)
 		}

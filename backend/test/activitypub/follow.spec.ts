@@ -1,5 +1,6 @@
 import { strict as assert } from 'node:assert/strict'
 
+import { Activity, createActivityId } from 'wildebeest/backend/src/activitypub/activities'
 import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
@@ -41,11 +42,12 @@ describe('ActivityPub', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 
-			const activity = {
+			const activity: Activity = {
 				'@context': 'https://www.w3.org/ns/activitystreams',
+				id: createActivityId(domain),
 				type: 'Follow',
-				actor: actor2.id.toString(),
-				object: actor.id.toString(),
+				actor: actor2.id,
+				object: actor.id,
 			}
 
 			await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
@@ -64,7 +66,7 @@ describe('ActivityPub', () => {
 			assert(receivedActivity)
 			assert.equal(receivedActivity.type, 'Accept')
 			assert.equal((receivedActivity.actor as object).toString(), actor.id.toString())
-			assert.equal(receivedActivity.object.actor, activity.actor)
+			assert.equal(receivedActivity.object.actor, activity.actor.toString())
 			assert.equal(receivedActivity.object.type, activity.type)
 		})
 
@@ -140,8 +142,9 @@ describe('ActivityPub', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 
-			const activity = {
+			const activity: Activity = {
 				'@context': 'https://www.w3.org/ns/activitystreams',
+				id: createActivityId(domain),
 				type: 'Follow',
 				actor: actor2.id,
 				object: actor.id,
@@ -164,8 +167,9 @@ describe('ActivityPub', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 
-			const activity = {
+			const activity: Activity = {
 				'@context': 'https://www.w3.org/ns/activitystreams',
+				id: createActivityId(domain),
 				type: 'Follow',
 				actor: actor2.id,
 				object: actor.id,
