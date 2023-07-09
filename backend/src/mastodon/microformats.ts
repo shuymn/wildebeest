@@ -1,5 +1,5 @@
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
+import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
 import { parseHandle } from 'wildebeest/backend/src/utils/parse'
 
 function tag(name: string, content: string, attrs: Record<string, string> = {}): string {
@@ -35,7 +35,7 @@ export function enrichStatus(status: string, mentions: Array<Actor>): string {
 		.replace(mentionedEmailRegex, (_, matchPrefix: string, email: string, matchSuffix: string) => {
 			// ensure that the match is part of the mentions array
 			for (let i = 0, len = mentions.length; i < len; i++) {
-				if (email === actorToHandle(mentions[i])) {
+				if (email === actorToAcct(mentions[i])) {
 					return `${matchPrefix}${getMentionSpan(email)}${matchSuffix}`
 				}
 			}

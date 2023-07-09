@@ -17,7 +17,7 @@ import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 import { queryAcct } from 'wildebeest/backend/src/webfinger'
 
 import { addObjectInOutbox } from '../activitypub/actors/outbox'
-import { actorToHandle } from '../utils/handle'
+import { actorToAcct } from '../utils/handle'
 import { parseHandle } from '../utils/parse'
 
 export async function getMentions(input: string, instanceDomain: string, db: Database): Promise<Array<Actor>> {
@@ -60,7 +60,7 @@ export async function toMastodonStatusFromObject(
 	const actorId = new URL(obj[originalActorIdSymbol])
 	const actor = await actors.getAndCache(actorId, db)
 
-	const acct = actorToHandle(actor)
+	const acct = actorToAcct(actor)
 	const account = await loadExternalMastodonAccount(acct, actor)
 
 	// FIXME: temporarly disable favourites and reblogs counts
@@ -122,7 +122,7 @@ export async function toMastodonStatusFromRow(domain: string, db: Database, row:
 		preferredUsername: row.preferredUsername,
 	})
 
-	const acct = actorToHandle(author)
+	const acct = actorToAcct(author)
 	const account = await loadExternalMastodonAccount(acct, author)
 
 	if (row.favourites_count === undefined || row.reblogs_count === undefined || row.replies_count === undefined) {
@@ -172,7 +172,7 @@ export async function toMastodonStatusFromRow(domain: string, db: Database, row:
 
 		const actorId = new URL(properties.attributedTo)
 		const author = await actors.getAndCache(actorId, db)
-		const acct = actorToHandle(author)
+		const acct = actorToAcct(author)
 		const account = await loadExternalMastodonAccount(acct, author)
 
 		// Restore reblogged status

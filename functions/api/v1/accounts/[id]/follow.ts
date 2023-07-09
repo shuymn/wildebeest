@@ -1,4 +1,4 @@
-import * as follow from 'wildebeest/backend/src/activitypub/activities/follow'
+import { createFollowActivity } from 'wildebeest/backend/src/activitypub/activities/follow'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
@@ -36,14 +36,14 @@ export async function handleRequest(
 	}
 
 	const acct = `${handle.localPart}@${handle.domain}`
-	const link = await webfinger.queryAcctLink(handle.domain!, acct)
+	const link = await webfinger.queryAcctLink(handle.domain, acct)
 	if (link === null) {
 		return new Response('', { status: 404 })
 	}
 
 	const targetActor = await actors.getAndCache(link, db)
 
-	const activity = follow.create(connectedActor, targetActor)
+	const activity = createFollowActivity(domain, connectedActor, targetActor)
 	const signingKey = await getSigningKey(userKEK, db, connectedActor)
 	await deliverToActor(signingKey, connectedActor, targetActor, activity, domain)
 

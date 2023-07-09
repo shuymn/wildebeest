@@ -1,12 +1,11 @@
 // https://docs.joinmastodon.org/methods/statuses/#get
 
-import * as activities from 'wildebeest/backend/src/activitypub/activities/delete'
+import { createDeleteActivity } from 'wildebeest/backend/src/activitypub/activities/delete'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverFollowers } from 'wildebeest/backend/src/activitypub/deliver'
 import { deleteObject, getObjectByMastodonId } from 'wildebeest/backend/src/activitypub/objects'
-import { type Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import type { Cache } from 'wildebeest/backend/src/cache'
-import { cacheFromEnv } from 'wildebeest/backend/src/cache'
+import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
+import { Cache, cacheFromEnv } from 'wildebeest/backend/src/cache'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import { getMastodonStatusById, toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
@@ -16,7 +15,7 @@ import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import type { DeliverMessageBody, Queue } from 'wildebeest/backend/src/types/queue'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
+import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
 
 export const onRequestGet: PagesFunction<Env, any, ContextData> = async ({ params, env, request, data }) => {
 	const domain = new URL(request.url).hostname
@@ -81,14 +80,14 @@ export async function handleRequestDelete(
 	if (status === null) {
 		return errors.statusNotFound(id)
 	}
-	if (status.account.id !== actorToHandle(connectedActor)) {
+	if (status.account.id !== actorToAcct(connectedActor)) {
 		return errors.statusNotFound(id)
 	}
 
 	await deleteObject(db, obj)
 
 	// FIXME: deliver a Delete message to our peers
-	const activity = activities.create(domain, connectedActor, obj)
+	const activity = createDeleteActivity(domain, connectedActor, obj)
 	await deliverFollowers(db, userKEK, connectedActor, activity, queue)
 
 	await timeline.pregenerateTimelines(domain, db, cache, connectedActor)

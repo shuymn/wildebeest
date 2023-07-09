@@ -1,6 +1,7 @@
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
 import type { UUID } from 'wildebeest/backend/src/types'
+import { KeyTypeOf, RequiredProps, SingleOrArray } from 'wildebeest/backend/src/utils/type'
 
 export const originalActorIdSymbol = Symbol()
 export const originalObjectIdSymbol = Symbol()
@@ -8,12 +9,14 @@ export const mastodonIdSymbol = Symbol()
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#object-types
 export interface APObject {
+	'@context'?: SingleOrArray<string | Record<string, unknown>> | string[] | Record<string, unknown>[]
+	// TODO: support string[]
 	type: string
 	// ObjectId, URL used for federation. Called `uri` in Mastodon APIs.
 	// https://www.w3.org/TR/activitypub/#obj-id
 	id: URL
 	// Link to the HTML representation of the object
-	url: URL
+	url?: URL
 	published?: string
 	icon?: APObject
 	image?: APObject
@@ -22,6 +25,8 @@ export interface APObject {
 	mediaType?: string
 	content?: string
 	inReplyTo?: string
+	cc?: SingleOrArray<APObjectOrId>
+	to?: SingleOrArray<APObjectOrId>
 
 	// Extension
 	preferredUsername?: string
@@ -31,8 +36,47 @@ export interface APObject {
 	[mastodonIdSymbol]?: UUID
 }
 
+export type APObjectId = KeyTypeOf<APObject, 'id'>
+export type APObjectOrId = APObject | APObjectId
+
+export function getAPId(value: string | APObjectOrId): APObjectId {
+	if (typeof value === 'object') {
+		if (value instanceof URL) {
+			// This is used for testing only.
+			return value
+		}
+		if (value.id !== undefined) {
+			return value.id
+		}
+		throw new Error('unknown value: ' + JSON.stringify(value))
+	}
+	try {
+		return new URL(value)
+	} catch (err: unknown) {
+		console.warn('invalid URL: ' + value)
+		throw err
+	}
+}
+
+export function getAPType(obj: APObject): string {
+	if (typeof obj.type === 'string') {
+		return obj.type
+	}
+	// TODO: support string[]
+	// if (Array.isArray(obj.type) && obj.type.length > 0 && typeof obj.type[0] === 'string') {
+	// 	return obj.type[0]
+	// }
+	throw new Error('`type` must be of type string or string[]')
+}
+
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-document
-export type Document = APObject
+export type Document = RequiredProps<APObject, 'url'> & {
+	type: 'Document'
+}
+
+export function isDocument(object: APObject): object is Document {
+	return object.type === 'Document'
+}
 
 export function uri(domain: string, id: string): URL {
 	return new URL('/ap/o/' + id, 'https://' + domain)
@@ -85,10 +129,10 @@ type CacheObjectRes = {
 	object: APObject
 }
 
-export async function cacheObject(
+export async function cacheObject<T>(
 	domain: string,
 	db: Database,
-	properties: unknown,
+	properties: T,
 	originalActorId: URL,
 	originalObjectId: URL,
 	local: boolean
@@ -153,7 +197,7 @@ export async function cacheObject(
 	}
 }
 
-export async function updateObject(db: Database, properties: any, id: URL): Promise<boolean> {
+export async function updateObject<T>(db: Database, properties: T, id: URL): Promise<boolean> {
 	// eslint-disable-next-line unused-imports/no-unused-vars
 	const res: any = await db
 		.prepare('UPDATE objects SET properties = ? WHERE id = ?')

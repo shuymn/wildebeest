@@ -1,6 +1,6 @@
 // https://docs.joinmastodon.org/methods/statuses/#favourite
 
-import * as like from 'wildebeest/backend/src/activitypub/activities/like'
+import { createLikeActivity } from 'wildebeest/backend/src/activitypub/activities/like'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
@@ -44,7 +44,7 @@ export async function handleRequest(
 			return new Response(`target Actor ${obj[originalActorIdSymbol]} not found`, { status: 404 })
 		}
 
-		const activity = like.create(connectedActor, new URL(obj[originalObjectIdSymbol]))
+		const activity = createLikeActivity(domain, connectedActor, new URL(obj[originalObjectIdSymbol]))
 		const signingKey = await getSigningKey(userKEK, db, connectedActor)
 		await deliverToActor(signingKey, connectedActor, targetActor, activity, domain)
 	}

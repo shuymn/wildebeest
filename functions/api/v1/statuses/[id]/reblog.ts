@@ -1,5 +1,5 @@
 // https://docs.joinmastodon.org/methods/statuses/#boost
-import * as announce from 'wildebeest/backend/src/activitypub/activities/announce'
+import { createAnnounceActivity } from 'wildebeest/backend/src/activitypub/activities/announce'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { deliverFollowers, deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
@@ -46,7 +46,7 @@ export async function handleRequest(
 			return new Response(`target Actor ${obj[originalActorIdSymbol]} not found`, { status: 404 })
 		}
 
-		const activity = announce.create(connectedActor, new URL(obj[originalObjectIdSymbol]))
+		const activity = createAnnounceActivity(domain, connectedActor, new URL(obj[originalObjectIdSymbol]))
 		const signingKey = await getSigningKey(userKEK, db, connectedActor)
 
 		await Promise.all([

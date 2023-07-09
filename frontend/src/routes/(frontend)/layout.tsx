@@ -17,10 +17,11 @@ export const instanceLoader = loader$<Promise<InstanceConfig>>(async ({ platform
 		INSTANCE_DESCR: platform.INSTANCE_DESCR,
 		INSTANCE_TITLE: platform.INSTANCE_TITLE,
 		ADMIN_EMAIL: platform.ADMIN_EMAIL,
+		DOMAIN: platform.DOMAIN,
 	} as Env
 	try {
 		const database = await getDatabase(platform)
-		const response = await instance.handleRequest('', database, env)
+		const response = await instance.handleRequest(env.DOMAIN, database, env)
 		const results = await response.text()
 		const json = JSON.parse(results) as InstanceConfig
 		return json

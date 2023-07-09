@@ -1,4 +1,5 @@
-import * as unfollow from 'wildebeest/backend/src/activitypub/activities/unfollow'
+import { UndoActivity } from 'wildebeest/backend/src/activitypub/activities'
+import { createUnfollowActivity } from 'wildebeest/backend/src/activitypub/activities/undo'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
@@ -35,14 +36,14 @@ export async function handleRequest(
 	}
 
 	const acct = `${handle.localPart}@${handle.domain}`
-	const targetActor = await webfinger.queryAcct(handle.domain!, db, acct)
+	const targetActor = await webfinger.queryAcct(handle.domain, db, acct)
 	if (targetActor === null) {
 		return new Response('', { status: 404 })
 	}
 
-	const activity = unfollow.create(connectedActor, targetActor)
+	const activity = createUnfollowActivity(domain, connectedActor, targetActor)
 	const signingKey = await getSigningKey(userKEK, db, connectedActor)
-	await deliverToActor(signingKey, connectedActor, targetActor, activity, domain)
+	await deliverToActor<UndoActivity>(signingKey, connectedActor, targetActor, activity, domain)
 	await removeFollowing(db, connectedActor, targetActor)
 
 	const res: Relationship = {

@@ -13,11 +13,11 @@ import type { Actor } from './actors'
 
 const MAX_BATCH_SIZE = 100
 
-export async function deliverToActor(
+export async function deliverToActor<T extends Activity>(
 	signingKey: CryptoKey,
 	from: Actor,
 	to: Actor,
-	activity: Activity,
+	activity: T,
 	domain: string
 ) {
 	const headers = {

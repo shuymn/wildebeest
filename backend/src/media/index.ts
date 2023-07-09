@@ -1,30 +1,33 @@
 import type { Document } from 'wildebeest/backend/src/activitypub/objects'
 import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
-import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { IMAGE, type Image } from 'wildebeest/backend/src/activitypub/objects/image'
+import { isDocument, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import { type Image, isImage } from 'wildebeest/backend/src/activitypub/objects/image'
+import { isVideo, Video } from 'wildebeest/backend/src/activitypub/objects/video'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 
 export function fromObject(obj: APObject): MediaAttachment {
-	if (obj.type === IMAGE) {
-		return fromObjectImage(obj as Image)
-	} else if (obj.type === 'Video') {
-		return fromObjectVideo(obj)
-	} else if (obj.type === 'Document') {
-		return fromObjectDocument(obj)
-	} else {
-		throw new Error(`unsupported media type ${obj.type}: ${JSON.stringify(obj)}`)
+	if (isImage(obj)) {
+		return fromObjectImage(obj)
 	}
+	if (isVideo(obj)) {
+		return fromObjectVideo(obj)
+	}
+	if (isDocument(obj)) {
+		return fromObjectDocument(obj)
+	}
+	throw new Error(`unsupported media type ${obj.type}: ${JSON.stringify(obj)}`)
 }
 
 const imageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
 export function fromObjectDocument(obj: Document): MediaAttachment {
-	if (imageTypes.includes(obj.mediaType as string)) {
-		return fromObjectImage(obj)
-	} else if (obj.mediaType === 'video/mp4') {
-		return fromObjectVideo(obj)
-	} else {
-		throw new Error(`unsupported media Document type: ${JSON.stringify(obj)}`)
+	if (obj.mediaType !== undefined) {
+		if (imageTypes.includes(obj.mediaType)) {
+			return fromObjectImage({ ...obj, type: 'Image' })
+		} else if (obj.mediaType === 'video/mp4') {
+			return fromObjectVideo({ ...obj, type: 'Video' })
+		}
 	}
+	throw new Error(`unsupported media Document type: ${JSON.stringify(obj)}`)
 }
 
 function fromObjectImage(obj: Image): MediaAttachment {
@@ -56,7 +59,7 @@ function fromObjectImage(obj: Image): MediaAttachment {
 	}
 }
 
-function fromObjectVideo(obj: APObject): MediaAttachment {
+function fromObjectVideo(obj: Video): MediaAttachment {
 	return {
 		url: new URL(obj.url),
 		preview_url: new URL(obj.url),

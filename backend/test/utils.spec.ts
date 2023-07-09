@@ -2,7 +2,7 @@ import { strict as assert } from 'node:assert/strict'
 
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { readBody } from 'wildebeest/backend/src/utils/body'
-import { actorToHandle, urlToHandle } from 'wildebeest/backend/src/utils/handle'
+import { actorToAcct, urlToAcct } from 'wildebeest/backend/src/utils/handle'
 import { signRequest } from 'wildebeest/backend/src/utils/http-signing'
 import { generateDigestHeader } from 'wildebeest/backend/src/utils/http-signing-cavage'
 import { parseRequest } from 'wildebeest/backend/src/utils/httpsigjs/parser'
@@ -67,7 +67,7 @@ describe('utils', () => {
 	})
 
 	test('URL to handle', async () => {
-		const res = urlToHandle(new URL('https://host.org/users/foobar'))
+		const res = urlToAcct(new URL('https://host.org/users/foobar'))
 		assert.equal(res, 'foobar@host.org')
 	})
 
@@ -77,11 +77,11 @@ describe('utils', () => {
 		const db = await makeDB()
 
 		let actor = await createPerson(domain, db, userKEK, 'alice@cloudflare.com')
-		let res = actorToHandle(actor)
+		let res = actorToAcct(actor)
 		assert.equal(res, 'alice@example.com')
 
 		actor = await createPerson(domain, db, userKEK, 'alice@cloudflare.com', { preferredUsername: 'bob' })
-		res = actorToHandle(actor)
+		res = actorToAcct(actor)
 		assert.equal(res, 'bob@example.com')
 	})
 

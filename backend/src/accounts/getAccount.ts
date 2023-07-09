@@ -10,19 +10,23 @@ import { queryAcct } from 'wildebeest/backend/src/webfinger/index'
 import { MastodonAccount } from '../types'
 import { adjustLocalHostDomain } from '../utils/adjustLocalHostDomain'
 
+export function isLocalAccount(domain: string, handle: Handle): boolean {
+	return handle.domain === null || handle.domain === domain
+}
+
 export async function getAccount(domain: string, accountId: string, db: Database): Promise<MastodonAccount | null> {
 	const handle = parseHandle(accountId)
 
-	if (handle.domain === null || (handle.domain !== null && handle.domain === domain)) {
+	if (isLocalAccount(domain, handle)) {
 		// Retrieve the statuses from a local user
 		return getLocalAccount(domain, db, handle)
-	} else if (handle.domain !== null) {
+	}
+	if (handle.domain !== null) {
 		// Retrieve the statuses of a remote actor
 		const acct = `${handle.localPart}@${handle.domain}`
 		return getRemoteAccount(handle, acct, db)
-	} else {
-		return null
 	}
+	return null
 }
 
 async function getRemoteAccount(handle: Handle, acct: string, db: Database): Promise<MastodonAccount | null> {

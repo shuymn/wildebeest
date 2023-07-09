@@ -5,7 +5,7 @@ import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/acc
 import { MastodonAccount } from 'wildebeest/backend/src/types/account'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
+import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
 import type { Handle } from 'wildebeest/backend/src/utils/parse'
 import { parseHandle } from 'wildebeest/backend/src/utils/parse'
 import { queryAcct } from 'wildebeest/backend/src/webfinger'
@@ -75,7 +75,7 @@ export async function handleRequest(db: Database, request: Request): Promise<Res
 				for (let i = 0, len = results.length; i < len; i++) {
 					const row: any = results[i]
 					const actor = actorFromRow(row)
-					const acct = actorToHandle(actor)
+					const acct = actorToAcct(actor)
 					out.accounts.push(await loadExternalMastodonAccount(acct, actor))
 				}
 			}
