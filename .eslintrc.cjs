@@ -16,10 +16,7 @@ module.exports = {
 		'no-var': 'error',
 		'@typescript-eslint/no-unsafe-return': 'error',
 		'unused-imports/no-unused-imports': 'error',
-		'unused-imports/no-unused-vars': [
-			'error',
-			{ vars: 'all', varsIgnorePattern: '^_', args: 'after-used', argsIgnorePattern: '^_' },
-		],
+		'unused-imports/no-unused-vars': ['error'],
 		'no-console': 'off',
 		'no-constant-condition': 'off',
 		'@typescript-eslint/require-await': 'off',
