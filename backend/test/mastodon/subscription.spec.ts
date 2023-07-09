@@ -1,8 +1,10 @@
-import { createSubscription } from '../../src/mastodon/subscription'
-import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { strict as assert } from 'node:assert/strict'
-import { makeDB, createTestClient, generateVAPIDKeys, assertCORS } from '../utils'
+
+import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import * as subscription from 'wildebeest/functions/api/v1/push/subscription'
+
+import { createSubscription } from '../../src/mastodon/subscription'
+import { assertCORS, createTestClient, generateVAPIDKeys, makeDB } from '../utils'
 
 const userKEK = 'test_kek21'
 const domain = 'cloudflare.com'

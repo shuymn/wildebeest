@@ -1,7 +1,9 @@
-import { makeDB } from '../utils'
 import { strict as assert } from 'node:assert/strict'
-import { createPerson, getActorById } from 'wildebeest/backend/src/activitypub/actors'
+
 import * as alias from 'wildebeest/backend/src/accounts/alias'
+import { createPerson, getActorById } from 'wildebeest/backend/src/activitypub/actors'
+
+import { makeDB } from '../utils'
 
 const domain = 'cloudflare.com'
 const userKEK = 'test_kek22'

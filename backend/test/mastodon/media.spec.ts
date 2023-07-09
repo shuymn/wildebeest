@@ -1,11 +1,13 @@
-import * as media from 'wildebeest/functions/api/v2/media'
-import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
-import * as media_id from 'wildebeest/functions/api/v2/media/[id]'
-import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { strict as assert } from 'node:assert/strict'
-import { makeDB, assertJSON, isUrlValid } from '../utils'
+
+import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import * as objects from 'wildebeest/backend/src/activitypub/objects'
 import { mastodonIdSymbol, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
+import * as media from 'wildebeest/functions/api/v2/media'
+import * as media_id from 'wildebeest/functions/api/v2/media/[id]'
+
+import { assertJSON, isUrlValid, makeDB } from '../utils'
 
 const userKEK = 'test_kek10'
 const CF_ACCOUNT_ID = 'testaccountid'

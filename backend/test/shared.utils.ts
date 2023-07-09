@@ -5,9 +5,10 @@
  */
 
 import { type Database } from 'wildebeest/backend/src/database'
+
 import type { Actor } from '../src/activitypub/actors'
 import { addObjectInOutbox } from '../src/activitypub/actors/outbox'
-import { type Note, createPublicNote } from '../src/activitypub/objects/note'
+import { createPublicNote, type Note } from '../src/activitypub/objects/note'
 import { insertReply } from '../src/mastodon/reply'
 
 /**

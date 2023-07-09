@@ -1,8 +1,10 @@
-import { isUrlValid, makeDB, assertCORS } from './utils'
-import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
-import { TEST_JWT, ACCESS_CERTS } from './test-data'
 import { strict as assert } from 'node:assert/strict'
+
+import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import * as middleware_main from 'wildebeest/backend/src/middleware/main'
+
+import { ACCESS_CERTS, TEST_JWT } from './test-data'
+import { assertCORS, isUrlValid, makeDB } from './utils'
 
 const userKEK = 'test_kek12'
 const domain = 'cloudflare.com'

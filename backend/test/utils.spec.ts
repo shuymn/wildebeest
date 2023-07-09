@@ -1,14 +1,15 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
-import { actorToHandle, urlToHandle } from 'wildebeest/backend/src/utils/handle'
+import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { readBody } from 'wildebeest/backend/src/utils/body'
-import { generateUserKey, unwrapPrivateKey, importPublicKey } from 'wildebeest/backend/src/utils/key-ops'
+import { actorToHandle, urlToHandle } from 'wildebeest/backend/src/utils/handle'
 import { signRequest } from 'wildebeest/backend/src/utils/http-signing'
 import { generateDigestHeader } from 'wildebeest/backend/src/utils/http-signing-cavage'
 import { parseRequest } from 'wildebeest/backend/src/utils/httpsigjs/parser'
 import { verifySignature } from 'wildebeest/backend/src/utils/httpsigjs/verifier'
-import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
+import { generateUserKey, importPublicKey, unwrapPrivateKey } from 'wildebeest/backend/src/utils/key-ops'
+import { parseHandle } from 'wildebeest/backend/src/utils/parse'
+
 import { makeDB } from './utils'
 
 describe('utils', () => {

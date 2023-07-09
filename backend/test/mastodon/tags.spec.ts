@@ -1,9 +1,11 @@
 import { strict as assert } from 'node:assert/strict'
+
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
-import { makeDB, assertCORS, isUrlValid } from '../utils'
-import * as tag_id from 'wildebeest/functions/api/v1/tags/[tag]'
 import { insertHashtags } from 'wildebeest/backend/src/mastodon/hashtag'
+import * as tag_id from 'wildebeest/functions/api/v1/tags/[tag]'
+
+import { assertCORS, isUrlValid, makeDB } from '../utils'
 
 const domain = 'cloudflare.com'
 const userKEK = 'test_kek20'
