@@ -5,9 +5,8 @@ import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/acc
 import { MastodonAccount } from 'wildebeest/backend/src/types/account'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
-import type { Handle } from 'wildebeest/backend/src/utils/parse'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
+import type { Handle } from 'wildebeest/backend/src/utils/handle'
+import { isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
 import { queryAcct } from 'wildebeest/backend/src/webfinger'
 
 const headers = {
@@ -48,15 +47,14 @@ export async function handleRequest(db: Database, request: Request): Promise<Res
 		return new Response('', { status: 400 })
 	}
 
-	if (useWebFinger && query.domain !== null) {
-		const acct = `${query.localPart}@${query.domain}`
-		const res = await queryAcct(query.domain, db, acct)
+	if (useWebFinger && !isLocalHandle(query)) {
+		const res = await queryAcct(query, db)
 		if (res !== null) {
-			out.accounts.push(await loadExternalMastodonAccount(acct, res))
+			out.accounts.push(await loadExternalMastodonAccount(res, false, query))
 		}
 	}
 
-	if (query.domain === null) {
+	if (isLocalHandle(query)) {
 		const sql = `
           SELECT actors.* FROM actors
           WHERE rowid IN (SELECT rowid FROM search_fts WHERE (preferredUsername MATCH ? OR name MATCH ?) AND type='Person' ORDER BY rank LIMIT 10)
@@ -75,8 +73,7 @@ export async function handleRequest(db: Database, request: Request): Promise<Res
 				for (let i = 0, len = results.length; i < len; i++) {
 					const row: any = results[i]
 					const actor = actorFromRow(row)
-					const acct = actorToAcct(actor)
-					out.accounts.push(await loadExternalMastodonAccount(acct, actor))
+					out.accounts.push(await loadExternalMastodonAccount(actor))
 				}
 			}
 		} catch (err: any) {

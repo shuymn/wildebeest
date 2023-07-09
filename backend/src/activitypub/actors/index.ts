@@ -186,7 +186,7 @@ export async function createPerson(
 		)
 	}
 
-	const id = actorURL(domain, properties.preferredUsername).toString()
+	const id = actorURL(domain, { perferredUsername: properties.preferredUsername }).toString()
 
 	if (properties.inbox === undefined) {
 		properties.inbox = id + '/inbox'

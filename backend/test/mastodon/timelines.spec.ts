@@ -29,7 +29,7 @@ describe('Mastodon APIs', () => {
 			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
 
 			// Actor is following actor2, but not actor3.
-			await addFollowing(db, actor, actor2, 'not needed')
+			await addFollowing(db, actor, actor2)
 			await acceptFollowing(db, actor, actor2)
 
 			// Actor 2 is posting
@@ -63,9 +63,9 @@ describe('Mastodon APIs', () => {
 			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
 
 			// actor3 follows actor1 and actor2
-			await addFollowing(db, actor3, actor1, 'not needed')
+			await addFollowing(db, actor3, actor1)
 			await acceptFollowing(db, actor3, actor1)
-			await addFollowing(db, actor3, actor2, 'not needed')
+			await addFollowing(db, actor3, actor2)
 			await acceptFollowing(db, actor3, actor2)
 
 			// actor2 sends a DM to actor1
@@ -83,7 +83,7 @@ describe('Mastodon APIs', () => {
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 
 			// Actor is following actor2
-			await addFollowing(db, actor, actor2, 'not needed')
+			await addFollowing(db, actor, actor2)
 			await acceptFollowing(db, actor, actor2)
 
 			// Actor 2 is posting

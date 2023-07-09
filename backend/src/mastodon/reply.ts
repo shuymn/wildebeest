@@ -1,9 +1,8 @@
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database } from 'wildebeest/backend/src/database'
+import { toMastodonStatusFromRow } from 'wildebeest/backend/src/mastodon/status'
 import type { MastodonStatus } from 'wildebeest/backend/src/types/status'
-
-import { toMastodonStatusFromRow } from './status'
 
 export async function insertReply(db: Database, actor: Actor, obj: APObject, inReplyToObj: APObject) {
 	const id = crypto.randomUUID()

@@ -9,7 +9,7 @@ import type { Relationship } from 'wildebeest/backend/src/types/account'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
+import { isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
 import * as webfinger from 'wildebeest/backend/src/webfinger'
 
 export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request, env, params, data }) => {
@@ -31,12 +31,11 @@ export async function handleRequest(
 
 	// Only allow to unfollow remote users
 	// TODO: implement unfollowing local users
-	if (handle.domain === null) {
+	if (isLocalHandle(handle)) {
 		return new Response('', { status: 403 })
 	}
 
-	const acct = `${handle.localPart}@${handle.domain}`
-	const targetActor = await webfinger.queryAcct(handle.domain, db, acct)
+	const targetActor = await webfinger.queryAcct(handle, db)
 	if (targetActor === null) {
 		return new Response('', { status: 404 })
 	}

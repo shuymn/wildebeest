@@ -116,12 +116,12 @@ export async function handleCreateActivity(
 		}
 
 		const handle = parseHandle(extractID(domain, recipient))
-		if (handle.domain !== null && handle.domain !== domain) {
+		if (!isLocalAccount(domain, handle)) {
 			console.warn('activity not for current instance')
 			continue
 		}
 
-		const person = await getActorById(db, actorURL(domain, handle.localPart))
+		const person = await getActorById(db, actorURL(domain, handle))
 		if (person === null) {
 			console.warn(`person ${recipient} not found`)
 			continue

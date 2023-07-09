@@ -1,6 +1,7 @@
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
+import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
 import {
 	getObjectByMastodonId,
@@ -14,11 +15,8 @@ import * as media from 'wildebeest/backend/src/media/'
 import type { UUID } from 'wildebeest/backend/src/types'
 import type { MastodonStatus } from 'wildebeest/backend/src/types'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
+import { handleToAcct, parseHandle, toRemoteHandle } from 'wildebeest/backend/src/utils/handle'
 import { queryAcct } from 'wildebeest/backend/src/webfinger'
-
-import { addObjectInOutbox } from '../activitypub/actors/outbox'
-import { actorToAcct } from '../utils/handle'
-import { parseHandle } from '../utils/parse'
 
 export async function getMentions(input: string, instanceDomain: string, db: Database): Promise<Array<Actor>> {
 	const mentions: Array<Actor> = []
@@ -32,12 +30,10 @@ export async function getMentions(input: string, instanceDomain: string, db: Dat
 				i++
 			}
 
-			const handle = parseHandle(buffer)
-			const domain = handle.domain ? handle.domain : instanceDomain
-			const acct = `${handle.localPart}@${domain}`
-			const targetActor = await queryAcct(domain, db, acct)
+			const handle = toRemoteHandle(parseHandle(buffer), instanceDomain)
+			const targetActor = await queryAcct(handle, db)
 			if (targetActor === null) {
-				console.warn(`actor ${acct} not found`)
+				console.warn(`actor ${handleToAcct(handle)} not found`)
 				continue
 			}
 			mentions.push(targetActor)
@@ -60,8 +56,7 @@ export async function toMastodonStatusFromObject(
 	const actorId = new URL(obj[originalActorIdSymbol])
 	const actor = await actors.getAndCache(actorId, db)
 
-	const acct = actorToAcct(actor)
-	const account = await loadExternalMastodonAccount(acct, actor)
+	const account = await loadExternalMastodonAccount(actor)
 
 	// FIXME: temporarly disable favourites and reblogs counts
 	const favourites = []
@@ -122,8 +117,7 @@ export async function toMastodonStatusFromRow(domain: string, db: Database, row:
 		preferredUsername: row.preferredUsername,
 	})
 
-	const acct = actorToAcct(author)
-	const account = await loadExternalMastodonAccount(acct, author)
+	const account = await loadExternalMastodonAccount(author)
 
 	if (row.favourites_count === undefined || row.reblogs_count === undefined || row.replies_count === undefined) {
 		throw new Error('logic error; missing fields.')
@@ -172,8 +166,7 @@ export async function toMastodonStatusFromRow(domain: string, db: Database, row:
 
 		const actorId = new URL(properties.attributedTo)
 		const author = await actors.getAndCache(actorId, db)
-		const acct = actorToAcct(author)
-		const account = await loadExternalMastodonAccount(acct, author)
+		const account = await loadExternalMastodonAccount(author)
 
 		// Restore reblogged status
 		status.reblog = {

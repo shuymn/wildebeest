@@ -1,6 +1,5 @@
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
+import { actorToAcct, parseHandle } from 'wildebeest/backend/src/utils/handle'
 
 function tag(name: string, content: string, attrs: Record<string, string> = {}): string {
 	let htmlAttrs = ''
