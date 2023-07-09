@@ -1,9 +1,9 @@
 import * as access from 'wildebeest/backend/src/access'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
-import type { Env } from 'wildebeest/backend/src/types/env'
-import * as errors from 'wildebeest/backend/src/errors'
-import { cors } from 'wildebeest/backend/src/utils/cors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import * as errors from 'wildebeest/backend/src/errors'
+import type { Env } from 'wildebeest/backend/src/types/env'
+import { cors } from 'wildebeest/backend/src/utils/cors'
 
 async function loadContextData(db: Database, clientId: string, email: string, ctx: any): Promise<boolean> {
 	const query = `

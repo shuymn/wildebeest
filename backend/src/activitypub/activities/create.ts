@@ -1,5 +1,5 @@
-import type { Note } from '../objects/note'
 import type { Actor } from '../actors'
+import type { Note } from '../objects/note'
 import type { Activity } from '.'
 import * as activity from '.'
 

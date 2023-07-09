@@ -1,8 +1,9 @@
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
-import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
-import { getResultsField } from './utils'
 import { type Database } from 'wildebeest/backend/src/database'
+import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
+
+import { getResultsField } from './utils'
 
 const STATE_PENDING = 'pending'
 const STATE_ACCEPTED = 'accepted'

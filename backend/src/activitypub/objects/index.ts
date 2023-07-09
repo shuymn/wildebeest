@@ -1,6 +1,6 @@
-import type { UUID } from 'wildebeest/backend/src/types'
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
+import type { UUID } from 'wildebeest/backend/src/types'
 
 export const originalActorIdSymbol = Symbol()
 export const originalObjectIdSymbol = Symbol()
@@ -154,7 +154,7 @@ export async function cacheObject(
 }
 
 export async function updateObject(db: Database, properties: any, id: URL): Promise<boolean> {
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	// eslint-disable-next-line unused-imports/no-unused-vars
 	const res: any = await db
 		.prepare('UPDATE objects SET properties = ? WHERE id = ?')
 		.bind(JSON.stringify(properties), id.toString())

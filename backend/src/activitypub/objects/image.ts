@@ -1,6 +1,7 @@
-import * as objects from '.'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database } from 'wildebeest/backend/src/database'
+
+import * as objects from '.'
 
 export const IMAGE = 'Image'
 

@@ -1,22 +1,22 @@
-import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
-import { type Database } from 'wildebeest/backend/src/database'
-import { defaultImages } from 'wildebeest/config/accounts'
-import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
-import * as actors from 'wildebeest/backend/src/activitypub/actors'
-import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
-import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import { generateWebPushMessage } from 'wildebeest/backend/src/webpush'
-import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
-import type { WebPushInfos, WebPushMessage } from 'wildebeest/backend/src/webpush/webpushinfos'
-import { WebPushResult } from 'wildebeest/backend/src/webpush/webpushinfos'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import * as actors from 'wildebeest/backend/src/activitypub/actors'
+import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
+import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
+import type { Cache } from 'wildebeest/backend/src/cache'
+import { type Database } from 'wildebeest/backend/src/database'
+import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import { getSubscriptionForAllClients } from 'wildebeest/backend/src/mastodon/subscription'
 import type {
-	NotificationType,
 	Notification,
 	NotificationsQueryResult,
+	NotificationType,
 } from 'wildebeest/backend/src/types/notification'
-import { getSubscriptionForAllClients } from 'wildebeest/backend/src/mastodon/subscription'
-import type { Cache } from 'wildebeest/backend/src/cache'
+import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
+import { generateWebPushMessage } from 'wildebeest/backend/src/webpush'
+import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
+import type { WebPushInfos, WebPushMessage } from 'wildebeest/backend/src/webpush/webpushinfos'
+import { WebPushResult } from 'wildebeest/backend/src/webpush/webpushinfos'
+import { defaultImages } from 'wildebeest/config/accounts'
 
 export async function createNotification(
 	db: Database,

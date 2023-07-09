@@ -1,6 +1,7 @@
-import { internalServerError } from '../errors'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { initSentry } from 'wildebeest/backend/src/utils/sentry'
+
+import { internalServerError } from '../errors'
 
 /**
  * A Pages middleware function that logs errors to the console and responds with 500 errors and stack-traces.

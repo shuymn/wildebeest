@@ -1,5 +1,5 @@
-import type { APObject } from '../objects'
 import type { Actor } from '../actors'
+import type { APObject } from '../objects'
 import type { Activity } from '.'
 import * as follow from './follow'
 

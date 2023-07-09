@@ -1,5 +1,7 @@
+import { urlsafeBase64Decode } from 'wildebeest/backend/src/utils/key-ops'
+
+import { hkdfGenerate } from './hkdf'
 import type { JWK } from './jwk'
-import type { WebPushInfos } from './webpushinfos'
 import {
 	b64ToUrlEncoded,
 	cryptoKeysToUint8Array,
@@ -8,8 +10,7 @@ import {
 	stringToU8Array,
 	u8ToString,
 } from './util'
-import { hkdfGenerate } from './hkdf'
-import { urlsafeBase64Decode } from 'wildebeest/backend/src/utils/key-ops'
+import type { WebPushInfos } from './webpushinfos'
 
 const encoder = new TextEncoder()
 

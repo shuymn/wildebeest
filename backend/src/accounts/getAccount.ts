@@ -1,11 +1,12 @@
 // https://docs.joinmastodon.org/methods/accounts/#get
 
-import { type Database } from 'wildebeest/backend/src/database'
 import { actorURL, getActorById } from 'wildebeest/backend/src/activitypub/actors'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
-import type { Handle } from 'wildebeest/backend/src/utils/parse'
-import { queryAcct } from 'wildebeest/backend/src/webfinger/index'
+import { type Database } from 'wildebeest/backend/src/database'
 import { loadExternalMastodonAccount, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import type { Handle } from 'wildebeest/backend/src/utils/parse'
+import { parseHandle } from 'wildebeest/backend/src/utils/parse'
+import { queryAcct } from 'wildebeest/backend/src/webfinger/index'
+
 import { MastodonAccount } from '../types'
 import { adjustLocalHostDomain } from '../utils/adjustLocalHostDomain'
 

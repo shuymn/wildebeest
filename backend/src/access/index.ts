@@ -79,7 +79,7 @@ export function getPayload(jwt: string): JWTPayload {
 export const generateValidator =
 	({ domain, aud, jwt }: { domain: string; aud: string; jwt: string }) =>
 	async (
-		// eslint-disable-next-line @typescript-eslint/no-unused-vars
+		// eslint-disable-next-line unused-imports/no-unused-vars
 		request: Request
 	): Promise<{
 		payload: object

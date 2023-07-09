@@ -1,5 +1,5 @@
-import type { Link } from 'wildebeest/backend/src/activitypub/objects/link'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import type { Link } from 'wildebeest/backend/src/activitypub/objects/link'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-mention

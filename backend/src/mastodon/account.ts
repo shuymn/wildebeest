@@ -1,10 +1,11 @@
+import * as apFollow from 'wildebeest/backend/src/activitypub/actors/follow'
+import * as apOutbox from 'wildebeest/backend/src/activitypub/actors/outbox'
+import { type Database } from 'wildebeest/backend/src/database'
 import type { MastodonAccount, Preference } from 'wildebeest/backend/src/types/account'
 import { unwrapPrivateKey } from 'wildebeest/backend/src/utils/key-ops'
-import { Actor } from '../activitypub/actors'
 import { defaultImages } from 'wildebeest/config/accounts'
-import * as apOutbox from 'wildebeest/backend/src/activitypub/actors/outbox'
-import * as apFollow from 'wildebeest/backend/src/activitypub/actors/follow'
-import { type Database } from 'wildebeest/backend/src/database'
+
+import { Actor } from '../activitypub/actors'
 
 function toMastodonAccount(acct: string, res: Actor): MastodonAccount {
 	const avatar = res.icon?.url.toString() ?? defaultImages.avatar

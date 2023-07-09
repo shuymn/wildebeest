@@ -1,6 +1,7 @@
+import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database } from 'wildebeest/backend/src/database'
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
+
 import { getResultsField } from './utils'
 
 export async function insertLike(db: Database, actor: Actor, obj: APObject) {

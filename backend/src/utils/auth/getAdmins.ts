@@ -1,5 +1,5 @@
+import { actorFromRow, Person } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database } from 'wildebeest/backend/src/database'
-import { Person, actorFromRow } from 'wildebeest/backend/src/activitypub/actors'
 
 export async function getAdmins(db: Database): Promise<Person[]> {
 	let rows: unknown[] = []
