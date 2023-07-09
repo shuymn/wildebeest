@@ -155,7 +155,7 @@ export async function createPerson(
 	userKEK: string,
 	email: string,
 	properties: PersonProperties = {},
-	admin: boolean = false
+	admin = false
 ): Promise<Person> {
 	const userKeyPair = await generateUserKey(userKEK)
 

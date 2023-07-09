@@ -114,7 +114,7 @@ export async function getPublicTimeline(
 	domain: string,
 	db: Database,
 	localPreference: LocalPreference,
-	offset: number = 0,
+	offset = 0,
 	hashtag?: string
 ): Promise<Array<MastodonStatus>> {
 	let hashtagFilter = ''

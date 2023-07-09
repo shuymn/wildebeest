@@ -334,7 +334,9 @@ describe('ActivityPub', () => {
 			const db = await makeDB()
 
 			const queue = {
-				async send() {},
+				async send() {
+					return
+				},
 				async sendBatch() {
 					throw new Error('unimplemented')
 				},

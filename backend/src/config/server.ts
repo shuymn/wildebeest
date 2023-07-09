@@ -10,7 +10,7 @@ export async function getSettings(db: Database): Promise<ServerSettingsData> {
 			...settings,
 			[setting_name]: setting_value,
 		}),
-		{} as Object
+		{}
 	)
 
 	if (!result.success) {

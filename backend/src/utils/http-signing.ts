@@ -10,7 +10,7 @@ export async function signRequest(request: Request, key: CryptoKey, keyId: URL):
 					hash: 'SHA-256',
 				},
 				key,
-				str2ab(data as string)
+				str2ab(data)
 			)
 		)
 	mySigner.alg = 'hs2019' as Algorithm
