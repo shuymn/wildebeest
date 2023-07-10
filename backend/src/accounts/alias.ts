@@ -1,20 +1,20 @@
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import { createFollowActivity } from 'wildebeest/backend/src/activitypub/activities/follow'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { setActorAlias } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
 import { type Database } from 'wildebeest/backend/src/database'
 import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
+import { parseHandle } from 'wildebeest/backend/src/utils/handle'
 import { queryAcct } from 'wildebeest/backend/src/webfinger'
 
 export async function addAlias(db: Database, alias: string, connectedActor: Actor, userKEK: string, domain: string) {
 	const handle = parseHandle(alias)
-	const acct = `${handle.localPart}@${handle.domain}`
-	if (handle.domain === null) {
+	if (isLocalAccount(domain, handle)) {
 		throw new Error("account migration within an instance isn't supported")
 	}
 
-	const actor = await queryAcct(handle.domain, db, acct)
+	const actor = await queryAcct(handle, db)
 	if (actor === null) {
 		throw new Error('actor not found')
 	}

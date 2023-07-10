@@ -75,9 +75,9 @@ describe('ActivityPub', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
-			await addFollowing(db, actor, actor2, 'not needed')
+			await addFollowing(db, actor, actor2)
 			await acceptFollowing(db, actor, actor2)
-			await addFollowing(db, actor, actor3, 'not needed')
+			await addFollowing(db, actor, actor3)
 			await acceptFollowing(db, actor, actor3)
 
 			const res = await ap_following.handleRequest(domain, db, 'sven')
@@ -93,9 +93,9 @@ describe('ActivityPub', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
-			await addFollowing(db, actor, actor2, 'not needed')
+			await addFollowing(db, actor, actor2)
 			await acceptFollowing(db, actor, actor2)
-			await addFollowing(db, actor, actor3, 'not needed')
+			await addFollowing(db, actor, actor3)
 			await acceptFollowing(db, actor, actor3)
 
 			const res = await ap_following_page.handleRequest(domain, db, 'sven')
@@ -111,7 +111,7 @@ describe('ActivityPub', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			await addFollowing(db, actor2, actor, 'not needed')
+			await addFollowing(db, actor2, actor)
 			await acceptFollowing(db, actor2, actor)
 
 			const res = await ap_followers.handleRequest(domain, db, 'sven')
@@ -126,7 +126,7 @@ describe('ActivityPub', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			await addFollowing(db, actor2, actor, 'not needed')
+			await addFollowing(db, actor2, actor)
 			await acceptFollowing(db, actor2, actor)
 
 			const res = await ap_followers_page.handleRequest(domain, db, 'sven')

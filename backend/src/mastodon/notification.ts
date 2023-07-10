@@ -11,7 +11,6 @@ import type {
 	NotificationsQueryResult,
 	NotificationType,
 } from 'wildebeest/backend/src/types/notification'
-import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
 import { generateWebPushMessage } from 'wildebeest/backend/src/webpush'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 import type { WebPushInfos, WebPushMessage } from 'wildebeest/backend/src/webpush/webpushinfos'
@@ -242,8 +241,7 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 			continue
 		}
 
-		const acct = actorToAcct(notifFromActor)
-		const notifFromAccount = await loadExternalMastodonAccount(acct, notifFromActor)
+		const notifFromAccount = await loadExternalMastodonAccount(notifFromActor)
 
 		const notif: Notification = {
 			id: result.notif_id.toString(),
@@ -255,9 +253,7 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 		if (result.type === 'mention' || result.type === 'favourite') {
 			const actorId = new URL(result.original_actor_id)
 			const actor = await actors.getAndCache(actorId, db)
-
-			const acct = actorToAcct(actor)
-			const account = await loadExternalMastodonAccount(acct, actor)
+			const account = await loadExternalMastodonAccount(actor)
 
 			notif.status = {
 				id: result.mastodon_id,

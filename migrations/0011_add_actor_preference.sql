@@ -9,4 +9,5 @@ CREATE TABLE IF NOT EXISTS actor_preferences (
     FOREIGN KEY(id) REFERENCES actors(id) ON DELETE CASCADE
 );
 
-INSERT INTO actor_preferences SELECT id, 'public', 0, null, 'default', 0 FROM actors;
+INSERT INTO actor_preferences SELECT id, 'public', 0, null, 'default', 0 FROM actors
+WHERE id = (SELECT id FROM actors ORDER BY cdate ASC LIMIT 1);

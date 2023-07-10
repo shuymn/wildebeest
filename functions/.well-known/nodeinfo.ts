@@ -1,4 +1,3 @@
-import type { Env } from 'wildebeest/backend/src/types/env'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
 const headers = {
@@ -7,8 +6,9 @@ const headers = {
 	'cache-control': 'max-age=259200, public',
 }
 
-export const onRequest: PagesFunction<Env, any> = async ({ env }) => {
-	return handleRequest(env.DOMAIN)
+export const onRequest: PagesFunction<unknown, any> = async ({ request }) => {
+	const domain = new URL(request.url).hostname
+	return handleRequest(domain)
 }
 
 export async function handleRequest(domain: string): Promise<Response> {

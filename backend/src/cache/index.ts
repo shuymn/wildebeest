@@ -7,7 +7,7 @@ export interface Cache {
 	put<T>(key: string, value: T): Promise<void>
 }
 
-export function cacheFromEnv(env: Env): Cache {
+export function cacheFromEnv(env: Pick<Env, 'DO_CACHE'>): Cache {
 	return {
 		async get<T>(key: string): Promise<T | null> {
 			const id = env.DO_CACHE.idFromName(CACHE_DO_NAME)

@@ -9,7 +9,7 @@ import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
+import { isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
 
 export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request, env, params }) => {
 	const domain = new URL(request.url).hostname
@@ -26,11 +26,11 @@ const DEFAULT_LIMIT = 20
 export async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
 	const handle = parseHandle(id)
 
-	if (handle.domain !== null) {
+	if (!isLocalHandle(handle)) {
 		return new Response('', { status: 403 })
 	}
 
-	const actorId = actorURL(domain, handle.localPart)
+	const actorId = actorURL(domain, handle)
 	const actor = await getActorById(db, actorId)
 	if (actor === null) {
 		return new Response('', { status: 404 })

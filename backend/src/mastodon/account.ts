@@ -1,19 +1,34 @@
+import { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as apFollow from 'wildebeest/backend/src/activitypub/actors/follow'
 import * as apOutbox from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { type Database } from 'wildebeest/backend/src/database'
 import type { MastodonAccount, Preference } from 'wildebeest/backend/src/types/account'
+import {
+	actorToHandle,
+	Handle,
+	handleToAcct,
+	isLocalHandle,
+	parseHandle,
+	RemoteHandle,
+} from 'wildebeest/backend/src/utils/handle'
 import { unwrapPrivateKey } from 'wildebeest/backend/src/utils/key-ops'
 import { defaultImages } from 'wildebeest/config/accounts'
 
-import { Actor } from '../activitypub/actors'
-
-function toMastodonAccount(acct: string, res: Actor): MastodonAccount {
+function toMastodonAccount(handle: Handle, res: Actor): MastodonAccount {
 	const avatar = res.icon?.url?.toString() ?? defaultImages.avatar
 	const header = res.image?.url?.toString() ?? defaultImages.header
+
+	let acct: string
+	if (isLocalHandle(handle)) {
+		acct = handle.localPart
+	} else {
+		acct = handleToAcct(handle)
+	}
 
 	return {
 		acct,
 
+		// FIXME: use numeric id
 		id: acct,
 		username: res.preferredUsername || res.name || 'unnamed',
 		url: res.url ? res.url.toString() : '',
@@ -43,11 +58,14 @@ function toMastodonAccount(acct: string, res: Actor): MastodonAccount {
 
 // Load an external user, using ActivityPub queries, and return it as a MastodonAccount
 export async function loadExternalMastodonAccount(
-	acct: string,
 	actor: Actor,
-	loadStats = false
+	loadStats = false,
+	handle?: RemoteHandle
 ): Promise<MastodonAccount> {
-	const account = toMastodonAccount(acct, actor)
+	if (handle === undefined) {
+		handle = actorToHandle(actor)
+	}
+	const account = toMastodonAccount(handle, actor)
 	if (loadStats === true) {
 		account.statuses_count = await apOutbox.countStatuses(actor)
 		account.followers_count = await apFollow.countFollowers(actor)
@@ -76,8 +94,8 @@ SELECT
   `
 
 	// For local user the acct is only the local part of the email address.
-	const acct = res.preferredUsername || 'unknown'
-	const account = toMastodonAccount(acct, res)
+	const handle = parseHandle(res.preferredUsername || 'unknown')
+	const account = toMastodonAccount(handle, res)
 
 	const row: any = await db.prepare(query).bind(res.id.toString(), res.id.toString(), res.id.toString()).first()
 	account.statuses_count = row.statuses_count

@@ -7,7 +7,6 @@ import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/acc
 import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import type { Notification, NotificationsQueryResult } from 'wildebeest/backend/src/types/notification'
-import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
 
 const headers = {
 	'content-type': 'application/json; charset=utf-8',
@@ -45,8 +44,7 @@ export async function handleRequest(
 		throw new Error('unknown from actor')
 	}
 
-	const acct = actorToAcct(fromActor)
-	const fromAccount = await loadExternalMastodonAccount(acct, fromActor)
+	const fromAccount = await loadExternalMastodonAccount(fromActor)
 
 	const out: Notification = {
 		id: row.notif_id.toString(),

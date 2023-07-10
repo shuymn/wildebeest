@@ -161,17 +161,17 @@ describe('ActivityPub', () => {
 				const db = await makeDB()
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-				await addFollowing(db, actor, actor2, 'not needed')
+				await addFollowing(db, actor, actor2)
 
 				const activity: AcceptActivity = {
 					'@context': 'https://www.w3.org/ns/activitystreams',
 					id: createActivityId(domain),
 					type: 'Accept',
-					actor: actorURL(domain, actorToHandle(actor2).localPart),
+					actor: actorURL(domain, actorToHandle(actor2)),
 					object: {
 						type: 'Follow',
 						actor: actor.id,
-						object: actorURL(domain, actorToHandle(actor).localPart),
+						object: actorURL(domain, actorToHandle(actor)),
 					} as FollowActivity,
 				}
 

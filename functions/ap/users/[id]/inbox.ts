@@ -1,3 +1,4 @@
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import type { Activity } from 'wildebeest/backend/src/activitypub/activities'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
@@ -6,10 +7,10 @@ import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import type { InboxMessageBody } from 'wildebeest/backend/src/types/queue'
 import { MessageType } from 'wildebeest/backend/src/types/queue'
+import { parseHandle } from 'wildebeest/backend/src/utils/handle'
 import { generateDigestHeader } from 'wildebeest/backend/src/utils/http-signing-cavage'
 import { parseRequest } from 'wildebeest/backend/src/utils/httpsigjs/parser'
 import { fetchKey, verifySignature } from 'wildebeest/backend/src/utils/httpsigjs/verifier'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
 export const onRequest: PagesFunction<Env, any> = async ({ params, request, env }) => {
@@ -61,10 +62,10 @@ export async function handleRequest(
 ): Promise<Response> {
 	const handle = parseHandle(id)
 
-	if (handle.domain !== null && handle.domain !== domain) {
+	if (!isLocalAccount(domain, handle)) {
 		return new Response('', { status: 403 })
 	}
-	const actorId = actorURL(domain, handle.localPart)
+	const actorId = actorURL(domain, handle)
 
 	const actor = await actors.getActorById(db, actorId)
 	if (actor === null) {

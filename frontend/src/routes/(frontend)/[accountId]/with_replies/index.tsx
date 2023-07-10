@@ -5,8 +5,8 @@ import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
 import type { MastodonStatus } from '~/types'
 import { StatusesPanel } from '~/components/StatusesPanel/StatusesPanel'
 import { getLocalStatuses } from 'wildebeest/functions/api/v1/accounts/[id]/statuses'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
 import { getDatabase } from 'wildebeest/backend/src/database'
+import { LocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
 
 export const statusesLoader = loader$<
 	Promise<{
@@ -22,7 +22,7 @@ export const statusesLoader = loader$<
 
 		const handle = parseHandle(accountId)
 		accountId = handle.localPart
-		const response = await getLocalStatuses(request as Request, await getDatabase(platform), handle, 0, true)
+		const response = await getLocalStatuses(request, await getDatabase(platform), handle as LocalHandle, 0, true)
 		statuses = await response.json<Array<MastodonStatus>>()
 	} catch {
 		throw html(

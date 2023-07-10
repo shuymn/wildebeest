@@ -139,7 +139,7 @@ describe('Mastodon APIs', () => {
 			const queue = makeQueue()
 			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			await addFollowing(db, actor2, connectedActor, 'sven2@' + domain)
+			await addFollowing(db, actor2, connectedActor)
 			await acceptFollowing(db, actor2, connectedActor)
 
 			const updates = new FormData()
@@ -316,11 +316,11 @@ describe('Mastodon APIs', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
-			await addFollowing(db, actor, actor2, 'sven2@' + domain)
+			await addFollowing(db, actor, actor2)
 			await acceptFollowing(db, actor, actor2)
-			await addFollowing(db, actor, actor3, 'sven3@' + domain)
+			await addFollowing(db, actor, actor3)
 			await acceptFollowing(db, actor, actor3)
-			await addFollowing(db, actor3, actor, 'sven@' + domain)
+			await addFollowing(db, actor3, actor)
 			await acceptFollowing(db, actor3, actor)
 
 			await createStatus(domain, db, actor, 'my first status')
@@ -723,8 +723,7 @@ describe('Mastodon APIs', () => {
 				throw new Error('unexpected request to ' + input)
 			}
 
-			const req = new Request(`https://${domain}`)
-			const res = await accounts_followers.handleRequest(req, db, 'sven@example.com')
+			const res = await accounts_followers.handleRequest(domain, db, 'sven@example.com')
 			assert.equal(res.status, 200)
 
 			const data = await res.json<Array<any>>()
@@ -751,11 +750,10 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			await addFollowing(db, actor2, actor, 'sven@' + domain)
+			await addFollowing(db, actor2, actor)
 			await acceptFollowing(db, actor2, actor)
 
-			const req = new Request(`https://${domain}`)
-			const res = await accounts_followers.handleRequest(req, db, 'sven')
+			const res = await accounts_followers.handleRequest(domain, db, 'sven')
 			assert.equal(res.status, 200)
 
 			const data = await res.json<Array<any>>()
@@ -779,11 +777,10 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			await addFollowing(db, actor, actor2, 'sven@' + domain)
+			await addFollowing(db, actor, actor2)
 			await acceptFollowing(db, actor, actor2)
 
-			const req = new Request(`https://${domain}`)
-			const res = await accounts_following.handleRequest(req, db, 'sven')
+			const res = await accounts_following.handleRequest(domain, db, 'sven')
 			assert.equal(res.status, 200)
 
 			const data = await res.json<Array<any>>()
@@ -859,8 +856,7 @@ describe('Mastodon APIs', () => {
 				throw new Error('unexpected request to ' + input)
 			}
 
-			const req = new Request(`https://${domain}`)
-			const res = await accounts_following.handleRequest(req, db, 'sven@example.com')
+			const res = await accounts_following.handleRequest(domain, db, 'sven@example.com')
 			assert.equal(res.status, 200)
 
 			const data = await res.json<Array<any>>()
@@ -925,7 +921,7 @@ describe('Mastodon APIs', () => {
 				const db = await makeDB()
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-				await addFollowing(db, actor, actor2, 'sven2@' + domain)
+				await addFollowing(db, actor, actor2)
 				await acceptFollowing(db, actor, actor2)
 
 				const req = new Request('https://mastodon.example/api/v1/accounts/relationships?id[]=sven2@' + domain)
@@ -941,7 +937,7 @@ describe('Mastodon APIs', () => {
 				const db = await makeDB()
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-				await addFollowing(db, actor, actor2, 'sven2@' + domain)
+				await addFollowing(db, actor, actor2)
 
 				const req = new Request('https://mastodon.example/api/v1/accounts/relationships?id[]=sven2@' + domain)
 				const res = await accounts_relationships.handleRequest(req, db, actor)
@@ -1039,7 +1035,7 @@ describe('Mastodon APIs', () => {
 				const db = await makeDB()
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const follower = await createPerson(domain, db, userKEK, 'actor@cloudflare.com')
-				await addFollowing(db, actor, follower, 'not needed')
+				await addFollowing(db, actor, follower)
 
 				const connectedActor = actor
 

@@ -8,7 +8,7 @@ import { Database } from 'wildebeest/backend/src/database'
 import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { insertFollowNotification, sendFollowNotification } from 'wildebeest/backend/src/mastodon/notification'
-import { actorToHandle, handleToAcct } from 'wildebeest/backend/src/utils/handle'
+import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 import { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
 export function createFollowActivity(domain: string, actor: Actor, object: APObject): FollowActivity {
@@ -36,16 +36,15 @@ export async function handleFollowActivity(
 		console.warn(`actor ${followee} not found`)
 		return
 	}
-	const followeeHandle = actorToHandle(followee)
 	// activity.object must be a local user
-	if (!isLocalAccount(domain, followeeHandle)) {
+	if (!isLocalAccount(domain, actorToHandle(followee))) {
 		return
 	}
 
 	const followerId = getAPId(activity.actor)
 	const follower = await getAndCache(followerId, db)
 
-	await addFollowing(db, follower, followee, handleToAcct({ localPart: followeeHandle.localPart, domain }))
+	await addFollowing(db, follower, followee)
 
 	// Automatically send the Accept reply
 	await acceptFollowing(db, follower, followee)

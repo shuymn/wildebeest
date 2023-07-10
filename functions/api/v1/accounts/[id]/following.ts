@@ -1,5 +1,6 @@
 // https://docs.joinmastodon.org/methods/accounts/#following
 
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { getFollowing, loadActors } from 'wildebeest/backend/src/activitypub/actors/follow'
@@ -10,33 +11,27 @@ import { MastodonAccount } from 'wildebeest/backend/src/types/account'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
-import type { Handle } from 'wildebeest/backend/src/utils/parse'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
+import { LocalHandle, parseHandle, RemoteHandle } from 'wildebeest/backend/src/utils/handle'
 import * as webfinger from 'wildebeest/backend/src/webfinger'
 
-export const onRequest: PagesFunction<Env, any, ContextData> = async ({ params, request, env }) => {
-	return handleRequest(request, await getDatabase(env), params.id as string)
-}
-
-export async function handleRequest(request: Request, db: Database, id: string): Promise<Response> {
-	const handle = parseHandle(id)
+export const onRequest: PagesFunction<Env, 'id', ContextData> = async ({ params, request, env }) => {
 	const domain = new URL(request.url).hostname
-
-	if (handle.domain === null || (handle.domain !== null && handle.domain === domain)) {
-		// Retrieve the infos from a local user
-		return getLocalFollowing(request, handle, db)
-	} else if (handle.domain !== null) {
-		// Retrieve the infos of a remote actor
-		return getRemoteFollowing(request, handle, db)
-	} else {
-		return new Response('', { status: 403 })
-	}
+	return handleRequest(domain, await getDatabase(env), params.id as string)
 }
 
-async function getRemoteFollowing(request: Request, handle: Handle, db: Database): Promise<Response> {
-	const acct = `${handle.localPart}@${handle.domain}`
-	const link = await webfinger.queryAcctLink(handle.domain!, acct)
+export async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
+	const handle = parseHandle(id)
+
+	if (isLocalAccount(domain, handle)) {
+		// Retrieve the infos from a local user
+		return getLocalFollowing(domain, handle, db)
+	}
+	// Retrieve the infos of a remote actor
+	return getRemoteFollowing(handle, db)
+}
+
+async function getRemoteFollowing(handle: RemoteHandle, db: Database): Promise<Response> {
+	const link = await webfinger.queryAcctLink(handle)
 	if (link === null) {
 		return new Response('', { status: 404 })
 	}
@@ -46,8 +41,7 @@ async function getRemoteFollowing(request: Request, handle: Handle, db: Database
 	const following = await loadActors(db, followingIds)
 
 	const promises = following.map((actor) => {
-		const acct = actorToAcct(actor)
-		return loadExternalMastodonAccount(acct, actor, false)
+		return loadExternalMastodonAccount(actor)
 	})
 
 	const out = await Promise.all(promises)
@@ -58,9 +52,8 @@ async function getRemoteFollowing(request: Request, handle: Handle, db: Database
 	return new Response(JSON.stringify(out), { headers })
 }
 
-async function getLocalFollowing(request: Request, handle: Handle, db: Database): Promise<Response> {
-	const domain = new URL(request.url).hostname
-	const actorId = actorURL(domain, handle.localPart)
+async function getLocalFollowing(domain: string, handle: LocalHandle, db: Database): Promise<Response> {
+	const actorId = actorURL(domain, handle)
 	const actor = await actors.getAndCache(actorId, db)
 
 	const following = await localFollow.getFollowingId(db, actor)
@@ -71,8 +64,7 @@ async function getLocalFollowing(request: Request, handle: Handle, db: Database)
 
 		try {
 			const actor = await actors.getAndCache(id, db)
-			const acct = actorToAcct(actor)
-			out.push(await loadExternalMastodonAccount(acct, actor))
+			out.push(await loadExternalMastodonAccount(actor))
 		} catch (err: any) {
 			console.warn(`failed to retrieve following (${id}): ${err.message}`)
 		}

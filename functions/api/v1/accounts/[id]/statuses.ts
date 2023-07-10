@@ -1,3 +1,4 @@
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import type { Activity } from 'wildebeest/backend/src/activitypub/activities'
 import { isAnnounceActivity, isCreateActivity, PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
@@ -7,7 +8,6 @@ import * as objects from 'wildebeest/backend/src/activitypub/objects'
 import { isNote, type Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
-import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import { toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
 import { toMastodonStatusFromRow } from 'wildebeest/backend/src/mastodon/status'
 import type { MastodonStatus } from 'wildebeest/backend/src/types'
@@ -15,9 +15,7 @@ import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { adjustLocalHostDomain } from 'wildebeest/backend/src/utils/adjustLocalHostDomain'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import type { Handle } from 'wildebeest/backend/src/utils/parse'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
-import { NonNullableProps } from 'wildebeest/backend/src/utils/type'
+import { LocalHandle, parseHandle, RemoteHandle } from 'wildebeest/backend/src/utils/handle'
 import * as webfinger from 'wildebeest/backend/src/webfinger'
 
 const headers = {
@@ -25,7 +23,7 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
-export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request, env, params }) => {
+export const onRequest: PagesFunction<Env, 'id', ContextData> = async ({ request, env, params }) => {
 	return handleRequest(request, await getDatabase(env), params.id as string)
 }
 
@@ -35,8 +33,14 @@ export async function handleRequest(request: Request, db: Database, id: string):
 	const handle = parseHandle(id)
 	const url = new URL(request.url)
 	const domain = url.hostname
-	const offset = Number.parseInt(url.searchParams.get('offset') ?? '0')
-	const limit = Math.abs(Number.parseInt(url.searchParams.get('limit') ?? '0')) || DEFAULT_LIMIT
+	let offset = Number.parseInt(url.searchParams.get('offset') ?? '0')
+	if (offset < 0) {
+		offset = 0
+	}
+	let limit = Number.parseInt(url.searchParams.get('limit') ?? '0')
+	if (limit < 1 || limit > DEFAULT_LIMIT) {
+		limit = DEFAULT_LIMIT
+	}
 
 	let withReplies: boolean | null = null
 	if (url.searchParams.get('with-replies') !== null) {
@@ -47,20 +51,17 @@ export async function handleRequest(request: Request, db: Database, id: string):
 		excludeReplies = url.searchParams.get('exclude_replies') === 'true'
 	}
 
-	if (handle.domain === null || (handle.domain !== null && handle.domain === domain)) {
+	if (isLocalAccount(domain, handle)) {
 		// Retrieve the statuses from a local user
 		return getLocalStatuses(request, db, handle, offset, withReplies ?? excludeReplies ?? false, limit)
-	} else if (handle.domain !== null) {
-		// Retrieve the statuses of a remote actor
-		return getRemoteStatuses(request, { ...handle, domain: handle.domain }, db, limit)
-	} else {
-		return new Response('', { status: 403 })
 	}
+	// Retrieve the statuses of a remote actor
+	return getRemoteStatuses(request, handle, db, limit)
 }
 
 async function getRemoteStatuses(
 	request: Request,
-	handle: NonNullableProps<Handle, 'domain'>,
+	handle: RemoteHandle,
 	db: Database,
 	limit: number
 ): Promise<Response> {
@@ -73,8 +74,7 @@ async function getRemoteStatuses(
 		return new Response(JSON.stringify([]), { headers })
 	}
 
-	const acct = `${handle.localPart}@${handle.domain}`
-	const link = await webfinger.queryAcctLink(handle.domain, acct)
+	const link = await webfinger.queryAcctLink(handle)
 	if (link === null) {
 		console.warn('link is null')
 		return new Response('', { status: 404 })
@@ -86,7 +86,7 @@ async function getRemoteStatuses(
 
 	// TODO: use account
 	// eslint-disable-next-line unused-imports/no-unused-vars
-	const account = await loadExternalMastodonAccount(acct, actor)
+	// const account = await loadExternalMastodonAccount(acct, actor)
 
 	const promises = activities.items.map(async (activity: Activity) => {
 		const actorId = objects.getAPId(activity.actor)
@@ -137,13 +137,13 @@ async function getRemoteStatuses(
 export async function getLocalStatuses(
 	request: Request,
 	db: Database,
-	handle: Handle,
+	handle: LocalHandle,
 	offset: number,
 	withReplies: boolean,
-	limit: number
+	limit = DEFAULT_LIMIT
 ): Promise<Response> {
 	const domain = new URL(request.url).hostname
-	const actorId = actorURL(adjustLocalHostDomain(domain), handle.localPart)
+	const actorId = actorURL(adjustLocalHostDomain(domain), handle)
 
 	const QUERY = `
 SELECT objects.*,
@@ -193,10 +193,7 @@ LIMIT ?3 OFFSET ?4
 		afterCdate = row.cdate
 	}
 
-	const { success, error, results } = await db
-		.prepare(QUERY)
-		.bind(actorId.toString(), afterCdate, limit ?? DEFAULT_LIMIT, offset)
-		.all()
+	const { success, error, results } = await db.prepare(QUERY).bind(actorId.toString(), afterCdate, limit, offset).all()
 	if (!success) {
 		throw new Error('SQL error: ' + error)
 	}

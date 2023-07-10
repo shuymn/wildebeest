@@ -1,11 +1,12 @@
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
+import { parseHandle } from 'wildebeest/backend/src/utils/handle'
 
-export const onRequest: PagesFunction<Env, any> = async ({ params, request, env }) => {
+export const onRequest: PagesFunction<Env, 'id'> = async ({ params, request, env }) => {
 	const domain = new URL(request.url).hostname
 	return handleRequest(domain, await getDatabase(env), params.id as string)
 }
@@ -19,11 +20,11 @@ const headers = {
 export async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
 	const handle = parseHandle(id)
 
-	if (handle.domain !== null && handle.domain !== domain) {
+	if (!isLocalAccount(domain, handle)) {
 		return new Response('', { status: 403 })
 	}
 
-	const person = await actors.getActorById(db, actorURL(domain, handle.localPart))
+	const person = await actors.getActorById(db, actorURL(domain, handle))
 	if (person === null) {
 		return new Response('', { status: 404 })
 	}

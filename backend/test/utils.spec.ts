@@ -2,13 +2,12 @@ import { strict as assert } from 'node:assert/strict'
 
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { readBody } from 'wildebeest/backend/src/utils/body'
-import { actorToAcct, urlToAcct } from 'wildebeest/backend/src/utils/handle'
+import { actorToAcct, parseHandle } from 'wildebeest/backend/src/utils/handle'
 import { signRequest } from 'wildebeest/backend/src/utils/http-signing'
 import { generateDigestHeader } from 'wildebeest/backend/src/utils/http-signing-cavage'
 import { parseRequest } from 'wildebeest/backend/src/utils/httpsigjs/parser'
 import { verifySignature } from 'wildebeest/backend/src/utils/httpsigjs/verifier'
 import { generateUserKey, importPublicKey, unwrapPrivateKey } from 'wildebeest/backend/src/utils/key-ops'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
 
 import { makeDB } from './utils'
 
@@ -64,11 +63,6 @@ describe('utils', () => {
 		res = parseHandle('a%40masto.ai')
 		assert.equal(res.localPart, 'a')
 		assert.equal(res.domain, 'masto.ai')
-	})
-
-	test('URL to handle', async () => {
-		const res = urlToAcct(new URL('https://host.org/users/foobar'))
-		assert.equal(res, 'foobar@host.org')
 	})
 
 	test('Actor to handle', async () => {

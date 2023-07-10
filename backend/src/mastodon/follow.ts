@@ -56,7 +56,7 @@ export async function moveFollowing(db: Database, actor: Actor, followingActors:
 }
 
 // Add a pending following
-export async function addFollowing(db: Database, actor: Actor, target: Actor, targetAcct: string): Promise<string> {
+export async function addFollowing(db: Database, follower: Actor, followee: Actor): Promise<string> {
 	const id = crypto.randomUUID()
 
 	const query = db.qb.insertOrIgnore(`
@@ -66,7 +66,7 @@ export async function addFollowing(db: Database, actor: Actor, target: Actor, ta
 
 	const out = await db
 		.prepare(query)
-		.bind(id, actor.id.toString(), target.id.toString(), STATE_PENDING, targetAcct)
+		.bind(id, follower.id.toString(), followee.id.toString(), STATE_PENDING, actorToAcct(followee))
 		.run()
 	if (!out.success) {
 		throw new Error('SQL error: ' + out.error)

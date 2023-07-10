@@ -9,10 +9,10 @@ import type { Relationship } from 'wildebeest/backend/src/types/account'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import { parseHandle } from 'wildebeest/backend/src/utils/parse'
+import { isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
 import * as webfinger from 'wildebeest/backend/src/webfinger'
 
-export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request, env, params, data }) => {
+export const onRequest: PagesFunction<Env, 'id', ContextData> = async ({ request, env, params, data }) => {
 	return handleRequest(request, await getDatabase(env), params.id as string, data.connectedActor, env.userKEK)
 }
 
@@ -20,35 +20,34 @@ export async function handleRequest(
 	request: Request,
 	db: Database,
 	id: string,
-	connectedActor: Person,
+	follower: Person,
 	userKEK: string
 ): Promise<Response> {
 	if (request.method !== 'POST') {
 		return new Response('', { status: 400 })
 	}
 	const domain = new URL(request.url).hostname
-	const handle = parseHandle(id)
+	const followeeHandle = parseHandle(id)
 
 	// Only allow to follow remote users
 	// TODO: implement following local users
-	if (handle.domain === null) {
+	if (isLocalHandle(followeeHandle)) {
 		return new Response('', { status: 403 })
 	}
 
-	const acct = `${handle.localPart}@${handle.domain}`
-	const link = await webfinger.queryAcctLink(handle.domain, acct)
+	const link = await webfinger.queryAcctLink(followeeHandle)
 	if (link === null) {
 		return new Response('', { status: 404 })
 	}
 
-	const targetActor = await actors.getAndCache(link, db)
+	const followee = await actors.getAndCache(link, db)
 
-	const activity = createFollowActivity(domain, connectedActor, targetActor)
-	const signingKey = await getSigningKey(userKEK, db, connectedActor)
-	await deliverToActor(signingKey, connectedActor, targetActor, activity, domain)
+	const activity = createFollowActivity(domain, follower, followee)
+	const signingKey = await getSigningKey(userKEK, db, follower)
+	await deliverToActor(signingKey, follower, followee, activity, domain)
 
 	const res: Relationship = {
-		id: await addFollowing(db, connectedActor, targetActor, acct),
+		id: await addFollowing(db, follower, followee),
 	}
 	const headers = {
 		...cors(),
