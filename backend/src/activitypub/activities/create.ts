@@ -91,6 +91,7 @@ export async function handleCreateActivity(
 
 	// This note is actually a reply to another one, record it in the replies
 	// table.
+	console.warn('inReplyTo', obj.inReplyTo)
 	if (obj.type === 'Note' && obj.inReplyTo) {
 		const inReplyToObjectId = getAPId(obj.inReplyTo)
 		let inReplyToObject = await getObjectByOriginalId(db, inReplyToObjectId)
