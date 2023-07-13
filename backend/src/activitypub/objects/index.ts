@@ -24,7 +24,7 @@ export interface APObject {
 	name?: string
 	mediaType?: string
 	content?: string
-	inReplyTo?: string
+	inReplyTo?: string | null
 	cc?: SingleOrArray<APObjectOrId>
 	to?: SingleOrArray<APObjectOrId>
 
