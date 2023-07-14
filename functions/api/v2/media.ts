@@ -1,5 +1,5 @@
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
-import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import { getApUrl, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as media from 'wildebeest/backend/src/media/image'
@@ -33,12 +33,13 @@ export async function handleRequestPost(
 	}
 	const domain = new URL(request.url).hostname
 	const image = await createImage(domain, db, connectedActor, properties)
+	const imageUrl = getApUrl(image)
 	console.log({ image })
 
 	const res: MediaAttachment = {
 		id: image[mastodonIdSymbol]!,
-		url: image.url,
-		preview_url: image.url,
+		url: imageUrl,
+		preview_url: imageUrl,
 		type: 'image',
 		meta: {
 			original: {
