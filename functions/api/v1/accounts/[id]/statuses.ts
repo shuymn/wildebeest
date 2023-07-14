@@ -162,7 +162,7 @@ WHERE objects.type='Note'
       AND outbox_objects.target = '${PUBLIC_GROUP}'
       AND outbox_objects.actor_id = ?1
       AND outbox_objects.cdate > ?2${db.qb.psqlOnly('::timestamp')}
-ORDER by outbox_objects.published_date DESC
+ORDER by strftime('%Y-%m-%d %H:%M:%f', outbox_objects.published_date) DESC
 LIMIT ?3 OFFSET ?4
 `
 
