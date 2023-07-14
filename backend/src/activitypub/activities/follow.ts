@@ -3,7 +3,7 @@ import { createActivityId, FollowActivity } from 'wildebeest/backend/src/activit
 import { createAcceptActivity } from 'wildebeest/backend/src/activitypub/activities/accept'
 import { type Actor, getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
-import { type APObject, getAPId } from 'wildebeest/backend/src/activitypub/objects'
+import { type ApObject, getApId } from 'wildebeest/backend/src/activitypub/objects'
 import { Database } from 'wildebeest/backend/src/database'
 import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
@@ -11,7 +11,7 @@ import { insertFollowNotification, sendFollowNotification } from 'wildebeest/bac
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 import { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
-export function createFollowActivity(domain: string, actor: Actor, object: APObject): FollowActivity {
+export function createFollowActivity(domain: string, actor: Actor, object: ApObject): FollowActivity {
 	return {
 		'@context': 'https://www.w3.org/ns/activitystreams',
 		id: createActivityId(domain),
@@ -30,7 +30,7 @@ export async function handleFollowActivity(
 	adminEmail: string,
 	vapidKeys: JWK
 ) {
-	const followeeId = getAPId(activity.object)
+	const followeeId = getApId(activity.object)
 	const followee = await getActorById(db, followeeId)
 	if (followee === null) {
 		console.warn(`actor ${followee} not found`)
@@ -41,7 +41,7 @@ export async function handleFollowActivity(
 		return
 	}
 
-	const followerId = getAPId(activity.actor)
+	const followerId = getApId(activity.actor)
 	const follower = await getAndCache(followerId, db)
 
 	await addFollowing(db, follower, followee)

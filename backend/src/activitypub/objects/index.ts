@@ -8,7 +8,7 @@ export const originalObjectIdSymbol = Symbol()
 export const mastodonIdSymbol = Symbol()
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#object-types
-export interface APObject {
+export interface ApObject {
 	'@context'?: SingleOrArray<string | Record<string, unknown>> | string[] | Record<string, unknown>[]
 	// TODO: support string[]
 	type: string
@@ -18,15 +18,15 @@ export interface APObject {
 	// Link to the HTML representation of the object
 	url?: string | URL
 	published?: string
-	icon?: APObject
-	image?: APObject
+	icon?: ApObject
+	image?: ApObject
 	summary?: string
 	name?: string
 	mediaType?: string
 	content?: string
 	inReplyTo?: string | null
-	cc?: SingleOrArray<APObjectOrId>
-	to?: SingleOrArray<APObjectOrId>
+	cc?: SingleOrArray<ApObjectOrId>
+	to?: SingleOrArray<ApObjectOrId>
 
 	// Extension
 	preferredUsername?: string
@@ -36,10 +36,10 @@ export interface APObject {
 	[mastodonIdSymbol]?: UUID
 }
 
-export type APObjectId = KeyTypeOf<APObject, 'id'>
-export type ApObjectUrl = NonNullable<KeyTypeOf<APObject, 'url'>>
-export type APObjectOrId = APObject | APObjectId
-export type ApObjectOrUrl = APObject | ApObjectUrl
+export type ApObjectId = KeyTypeOf<ApObject, 'id'>
+export type ApObjectUrl = NonNullable<KeyTypeOf<ApObject, 'url'>>
+export type ApObjectOrId = ApObject | ApObjectId
+export type ApObjectOrUrl = ApObject | ApObjectUrl
 
 function parseUrl(value: string): URL {
 	try {
@@ -50,14 +50,14 @@ function parseUrl(value: string): URL {
 	}
 }
 
-export function getAPId(value: APObjectOrId): URL {
+export function getApId(value: ApObjectOrId): URL {
 	if (typeof value === 'object') {
 		if (value instanceof URL) {
 			// This is used for testing only.
 			return value
 		}
 		if (value.id !== undefined) {
-			return getAPId(value.id)
+			return getApId(value.id)
 		}
 		throw new Error('unknown value: ' + JSON.stringify(value))
 	}
@@ -77,7 +77,7 @@ export function getApUrl(value: ApObjectOrUrl): URL {
 	return parseUrl(value)
 }
 
-export function getAPType(obj: APObject): string {
+export function getApType(obj: ApObject): string {
 	if (typeof obj.type === 'string') {
 		return obj.type
 	}
@@ -89,11 +89,11 @@ export function getAPType(obj: APObject): string {
 }
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-document
-export type Document = RequiredProps<APObject, 'url'> & {
+export type Document = RequiredProps<ApObject, 'url'> & {
 	type: 'Document'
 }
 
-export function isDocument(object: APObject): object is Document {
+export function isDocument(object: ApObject): object is Document {
 	return object.type === 'Document'
 }
 
@@ -101,7 +101,7 @@ export function uri(domain: string, id: string): URL {
 	return new URL('/ap/o/' + id, 'https://' + domain)
 }
 
-export async function createObject<Type extends APObject>(
+export async function createObject<Type extends ApObject>(
 	domain: string,
 	db: Database,
 	type: string,
@@ -145,7 +145,7 @@ export async function get<T>(url: URL): Promise<T> {
 
 type CacheObjectRes = {
 	created: boolean
-	object: APObject
+	object: ApObject
 }
 
 export async function cacheObject<T>(
@@ -210,7 +210,7 @@ export async function cacheObject<T>(
 			[mastodonIdSymbol]: row.mastodon_id,
 			[originalActorIdSymbol]: row.original_actor_id,
 			[originalObjectIdSymbol]: row.original_object_id,
-		} as APObject
+		} as ApObject
 
 		return { object, created: true }
 	}
@@ -228,7 +228,7 @@ export async function updateObject<T>(db: Database, properties: T, id: URL): Pro
 	return true
 }
 
-export async function updateObjectProperty(db: Database, obj: APObject, key: string, value: string) {
+export async function updateObjectProperty(db: Database, obj: ApObject, key: string, value: string) {
 	const { success, error } = await db
 		.prepare(`UPDATE objects SET properties=${db.qb.jsonSet('properties', key, '?1')} WHERE id=?2`)
 		.bind(value, obj.id.toString())
@@ -238,15 +238,15 @@ export async function updateObjectProperty(db: Database, obj: APObject, key: str
 	}
 }
 
-export async function getObjectById(db: Database, id: string | URL): Promise<APObject | null> {
+export async function getObjectById(db: Database, id: string | URL): Promise<ApObject | null> {
 	return getObjectBy(db, ObjectByKey.id, id.toString())
 }
 
-export async function getObjectByOriginalId(db: Database, id: string | URL): Promise<APObject | null> {
+export async function getObjectByOriginalId(db: Database, id: string | URL): Promise<ApObject | null> {
 	return getObjectBy(db, ObjectByKey.originalObjectId, id.toString())
 }
 
-export async function getObjectByMastodonId(db: Database, id: UUID): Promise<APObject | null> {
+export async function getObjectByMastodonId(db: Database, id: UUID): Promise<ApObject | null> {
 	return getObjectBy(db, ObjectByKey.mastodonId, id)
 }
 
@@ -297,20 +297,20 @@ export async function getObjectBy(db: Database, key: ObjectByKey, value: string)
 		[mastodonIdSymbol]: result.mastodon_id,
 		[originalActorIdSymbol]: result.original_actor_id,
 		[originalObjectIdSymbol]: result.original_object_id,
-	} as APObject
+	} as ApObject
 }
 
 /** Is the given `value` an ActivityPub Object? */
-export function isAPObject(value: unknown): value is APObject {
+export function isApObject(value: unknown): value is ApObject {
 	return value !== null && typeof value === 'object'
 }
 
 /** Sanitizes the ActivityPub Object `properties` prior to being stored in the DB. */
-export async function sanitizeObjectProperties(properties: unknown): Promise<APObject> {
-	if (!isAPObject(properties)) {
+export async function sanitizeObjectProperties(properties: unknown): Promise<ApObject> {
+	if (!isApObject(properties)) {
 		throw new Error('Invalid object properties. Expected an object but got ' + JSON.stringify(properties))
 	}
-	const sanitized: APObject = {
+	const sanitized: ApObject = {
 		...properties,
 	}
 	if ('content' in properties) {
@@ -387,7 +387,7 @@ function getTextContentRewriter() {
 // TODO: eventually use SQLite's `ON DELETE CASCADE` but requires writing the DB
 // schema directly into D1, which D1 disallows at the moment.
 // Some context at: https://stackoverflow.com/questions/13150075/add-on-delete-cascade-behavior-to-an-sqlite3-table-after-it-has-been-created
-export async function deleteObject<T extends APObject>(db: Database, note: T) {
+export async function deleteObject<T extends ApObject>(db: Database, note: T) {
 	const nodeId = note.id.toString()
 	const batch = [
 		db.prepare('DELETE FROM outbox_objects WHERE object_id=?').bind(nodeId),

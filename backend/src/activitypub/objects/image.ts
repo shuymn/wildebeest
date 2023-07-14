@@ -1,14 +1,14 @@
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { APObject, createObject } from 'wildebeest/backend/src/activitypub/objects'
+import { ApObject, createObject } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database } from 'wildebeest/backend/src/database'
 import { RequiredProps } from 'wildebeest/backend/src/utils/type'
 
 export const IMAGE = 'Image'
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-image
-export type Image = RequiredProps<APObject, 'url'> & { type: typeof IMAGE; description?: string }
+export type Image = RequiredProps<ApObject, 'url'> & { type: typeof IMAGE; description?: string }
 
-export function isImage(object: APObject): object is Image {
+export function isImage(object: ApObject): object is Image {
 	return object.type === IMAGE
 }
 

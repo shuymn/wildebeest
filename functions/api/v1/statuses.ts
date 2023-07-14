@@ -4,7 +4,7 @@ import { createCreateActivity } from 'wildebeest/backend/src/activitypub/activit
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { deliverFollowers, deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
-import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
+import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
 import type { Document } from 'wildebeest/backend/src/activitypub/objects'
 import { getObjectByMastodonId, isDocument } from 'wildebeest/backend/src/activitypub/objects'
 import { originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
@@ -103,7 +103,7 @@ export async function handleRequest(
 		}
 	}
 
-	let inReplyToObject: APObject | null = null
+	let inReplyToObject: ApObject | null = null
 
 	if (body.in_reply_to_id) {
 		inReplyToObject = await getObjectByMastodonId(db, body.in_reply_to_id)

@@ -1,6 +1,6 @@
-import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
+import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
 
-export interface Collection<T> extends APObject {
+export interface Collection<T> extends ApObject {
 	totalItems: number
 	current?: string
 	first: URL
@@ -10,7 +10,7 @@ export interface Collection<T> extends APObject {
 
 export type OrderedCollection<T> = Collection<T>
 
-export interface OrderedCollectionPage<T> extends APObject {
+export interface OrderedCollectionPage<T> extends ApObject {
 	next?: string
 	orderedItems: Array<T>
 }

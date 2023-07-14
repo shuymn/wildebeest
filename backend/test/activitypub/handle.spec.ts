@@ -12,7 +12,7 @@ import {
 } from 'wildebeest/backend/src/activitypub/activities'
 import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
 import { actorURL, createPerson } from 'wildebeest/backend/src/activitypub/actors'
-import { APObject, getAPId, originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import { ApObject, getApId, originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { cacheObject, getObjectById } from 'wildebeest/backend/src/activitypub/objects/'
 import { createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
 import { addFollowing } from 'wildebeest/backend/src/mastodon/follow'
@@ -197,7 +197,7 @@ describe('ActivityPub', () => {
 				const activity: any = {
 					'@context': 'https://www.w3.org/ns/activitystreams',
 					type: 'Accept',
-					actor: getAPId('https://example.com/actor'),
+					actor: getApId('https://example.com/actor'),
 					object: 'a',
 				}
 
@@ -236,7 +236,7 @@ describe('ActivityPub', () => {
 					to: [actor.id],
 					cc: [],
 					object: {
-						id: getAPId('https://example.com/note1'),
+						id: getApId('https://example.com/note1'),
 						type: 'Note',
 						content: 'test note',
 					},
@@ -272,11 +272,11 @@ describe('ActivityPub', () => {
 				const activity: CreateActivity = {
 					type: 'Create',
 					id: createActivityId(domain),
-					actor: getAPId(remoteActorId),
+					actor: getApId(remoteActorId),
 					to: [],
 					cc: [],
 					object: {
-						id: getAPId('https://example.com/note1'),
+						id: getApId('https://example.com/note1'),
 						type: 'Note',
 						content: 'test note',
 					},
@@ -302,7 +302,7 @@ describe('ActivityPub', () => {
 					to: [actorA.id],
 					cc: [],
 					object: {
-						id: getAPId('https://example.com/note2'),
+						id: getApId('https://example.com/note2'),
 						type: 'Note',
 						content: 'test note',
 					},
@@ -331,7 +331,7 @@ describe('ActivityPub', () => {
 						actor: actor.id,
 						to: [actor.id],
 						object: {
-							id: getAPId('https://example.com/note1'),
+							id: getApId('https://example.com/note1'),
 							type: 'Note',
 							content: 'post',
 						},
@@ -347,7 +347,7 @@ describe('ActivityPub', () => {
 						to: [actor.id],
 						object: {
 							inReplyTo: 'https://example.com/note1',
-							id: getAPId('https://example.com/note2'),
+							id: getApId('https://example.com/note2'),
 							type: 'Note',
 							content: 'reply',
 						},
@@ -379,10 +379,10 @@ describe('ActivityPub', () => {
 					type: 'Create',
 					id: createActivityId(domain),
 					actor: actor.id,
-					to: [getAPId('https://example.com/some-actor')],
+					to: [getApId('https://example.com/some-actor')],
 					cc: [],
 					object: {
-						id: getAPId('https://example.com/note1'),
+						id: getApId('https://example.com/note1'),
 						type: 'Note',
 						content: 'test note',
 					},
@@ -403,7 +403,7 @@ describe('ActivityPub', () => {
 					type: 'Create',
 					actor: person,
 					object: {
-						id: getAPId('https://example.com/note2'),
+						id: getApId('https://example.com/note2'),
 						type: 'Note',
 						name: '<script>Dr Evil</script>',
 						content:
@@ -447,9 +447,9 @@ describe('ActivityPub', () => {
 					'@context': 'https://www.w3.org/ns/activitystreams',
 					id: createActivityId(domain),
 					type: 'Update',
-					actor: getAPId('https://example.com/actor'),
+					actor: getApId('https://example.com/actor'),
 					object: {
-						id: getAPId('https://example.com/note2'),
+						id: getApId('https://example.com/note2'),
 						type: 'Note',
 						content: 'test note',
 					},
@@ -463,20 +463,20 @@ describe('ActivityPub', () => {
 			test('Object must have the same origin', async () => {
 				const db = await makeDB()
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-				const object: APObject = {
-					id: getAPId('https://example.com/note2'),
+				const object: ApObject = {
+					id: getApId('https://example.com/note2'),
 					type: 'Note',
 					content: 'test note',
 				}
 
-				const obj = await cacheObject(domain, db, object, getAPId(actor), getAPId(object.id), false)
+				const obj = await cacheObject(domain, db, object, getApId(actor), getApId(object.id), false)
 				assert.notEqual(obj, null, 'could not create object')
 
 				const activity: UpdateActivity = {
 					'@context': 'https://www.w3.org/ns/activitystreams',
 					id: createActivityId(domain),
 					type: 'Update',
-					actor: getAPId('https://example.com/actor'),
+					actor: getApId('https://example.com/actor'),
 					object: object,
 				}
 
@@ -494,11 +494,11 @@ describe('ActivityPub', () => {
 					content: 'test note',
 				}
 
-				const obj = await cacheObject(domain, db, object, getAPId(actor), getAPId(object.id), false)
+				const obj = await cacheObject(domain, db, object, getApId(actor), getApId(object.id), false)
 				assert.notEqual(obj, null, 'could not create object')
 
-				const newObject: APObject = {
-					id: getAPId('https://example.com/note2'),
+				const newObject: ApObject = {
+					id: getApId('https://example.com/note2'),
 					type: 'Note',
 					content: 'new test note',
 				}
@@ -556,10 +556,10 @@ describe('ActivityPub', () => {
 				const activity: AnnounceActivity = {
 					type: 'Announce',
 					id: createActivityId(domain),
-					actor: getAPId(remoteActorId),
+					actor: getApId(remoteActorId),
 					to: [],
 					cc: [],
-					object: getAPId(objectId),
+					object: getApId(objectId),
 				}
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
@@ -612,10 +612,10 @@ describe('ActivityPub', () => {
 				const activity: AnnounceActivity = {
 					type: 'Announce',
 					id: createActivityId(domain),
-					actor: getAPId(remoteActorId),
+					actor: getApId(remoteActorId),
 					to: [],
 					cc: [],
-					object: getAPId(objectId),
+					object: getApId(objectId),
 				}
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
@@ -654,7 +654,7 @@ describe('ActivityPub', () => {
 					actor: actorA.id,
 					to: [],
 					cc: [],
-					object: getAPId(originalObjectId),
+					object: getApId(originalObjectId),
 				}
 
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
@@ -690,7 +690,7 @@ describe('ActivityPub', () => {
 					cc: [],
 					object: {
 						type: 'Tombstone',
-						id: getAPId(originalObjectId),
+						id: getApId(originalObjectId),
 					},
 				}
 

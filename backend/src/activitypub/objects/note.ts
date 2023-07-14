@@ -12,17 +12,17 @@ const NOTE = 'Note'
 
 // FIXME: there is room to improve the implementation to better conform to specifications
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-note
-export type Note = RequiredProps<objects.APObject, 'cc' | 'to'> & {
+export type Note = RequiredProps<objects.ApObject, 'cc' | 'to'> & {
 	type: typeof NOTE
 	content: string
 	attributedTo?: string
 	replies?: string
-	attachment: Array<objects.APObject>
+	attachment: Array<objects.ApObject>
 	tag: Array<Link>
 	spoiler_text?: string
 }
 
-export function isNote(obj: objects.APObject): obj is Note {
+export function isNote(obj: objects.ApObject): obj is Note {
 	// FIXME: terrible implementation just to fool the type checker
 	return obj.type === NOTE
 }
@@ -32,7 +32,7 @@ export async function createPublicNote(
 	db: Database,
 	content: string,
 	actor: Actor,
-	attachments: Array<objects.APObject> = [],
+	attachments: Array<objects.ApObject> = [],
 	extraProperties: any = {}
 ): Promise<Note> {
 	const actorId = new URL(actor.id)
@@ -63,7 +63,7 @@ export async function createDirectNote(
 	content: string,
 	actor: Actor,
 	targetActors: Array<Actor>,
-	attachment: Array<objects.APObject> = [],
+	attachment: Array<objects.ApObject> = [],
 	extraProperties: any = {}
 ): Promise<Note> {
 	const actorId = new URL(actor.id)

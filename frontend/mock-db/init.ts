@@ -5,7 +5,7 @@ import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { createReblog } from 'wildebeest/backend/src/mastodon/reblog'
 import { createReply as createReplyInBackend } from 'wildebeest/backend/test/shared.utils'
 import { createStatus } from 'wildebeest/backend/src/mastodon/status'
-import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
+import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database } from 'wildebeest/backend/src/database'
 import { upsertRule } from 'wildebeest/backend/src/config/rules'
 import { upsertServerSettings } from 'wildebeest/backend/src/config/server'
@@ -22,7 +22,7 @@ export async function init(domain: string, db: Database) {
 			db,
 			actor,
 			status.content,
-			status.media_attachments as unknown as APObject[],
+			status.media_attachments as unknown as ApObject[],
 			{ spoiler_text: status.spoiler_text }
 		)
 		loadedStatuses.push({ status, note })

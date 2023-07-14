@@ -89,15 +89,15 @@ async function getRemoteStatuses(
 	// const account = await loadExternalMastodonAccount(acct, actor)
 
 	const promises = activities.items.map(async (activity: Activity) => {
-		const actorId = objects.getAPId(activity.actor)
-		const objectId = objects.getAPId(activity.object)
+		const actorId = objects.getApId(activity.actor)
+		const objectId = objects.getApId(activity.object)
 
 		if (isCreateActivity(activity)) {
 			const res = await objects.cacheObject(domain, db, activity.object, actorId, objectId, false)
 			return toMastodonStatusFromObject(db, res.object as Note, domain)
 		}
 		if (isAnnounceActivity(activity)) {
-			let obj: objects.APObject
+			let obj: objects.ApObject
 
 			const localObject = await objects.getObjectById(db, objectId)
 			if (localObject === null) {

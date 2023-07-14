@@ -1,5 +1,5 @@
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { getAPId } from 'wildebeest/backend/src/activitypub/objects'
+import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import type { Link } from 'wildebeest/backend/src/activitypub/objects/link'
 import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
 
@@ -9,7 +9,7 @@ export type Mention = Link
 export function newMention(actor: Actor): Mention {
 	return {
 		type: 'Mention',
-		href: getAPId(actor.id),
+		href: getApId(actor.id),
 		name: actorToAcct(actor),
 	}
 }

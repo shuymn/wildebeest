@@ -1,5 +1,5 @@
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { getAPId } from 'wildebeest/backend/src/activitypub/objects'
+import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 
 const remoteHandleSymbol = Symbol()
 const localHandleSymbol = Symbol()
@@ -64,7 +64,7 @@ function urlToHandle({ pathname, host }: URL): RemoteHandle {
 }
 
 export function actorToAcct(actor: Actor): string {
-	const actorId = getAPId(actor)
+	const actorId = getApId(actor)
 	if (actor.preferredUsername !== undefined) {
 		return `${actor.preferredUsername}@${actorId.host}`
 	}
@@ -72,7 +72,7 @@ export function actorToAcct(actor: Actor): string {
 }
 
 export function actorToHandle(actor: Actor): RemoteHandle {
-	const actorId = getAPId(actor)
+	const actorId = getApId(actor)
 	if (actor.preferredUsername !== undefined) {
 		return { localPart: actor.preferredUsername, domain: actorId.host } as RemoteHandle
 	}

@@ -1,15 +1,15 @@
 import { createActivityId, DeleteActivity } from 'wildebeest/backend/src/activitypub/activities'
 import { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import {
-	APObject,
+	ApObject,
 	deleteObject,
-	getAPId,
+	getApId,
 	getObjectByOriginalId,
 	originalActorIdSymbol,
 } from 'wildebeest/backend/src/activitypub/objects'
 import { Database } from 'wildebeest/backend/src/database'
 
-export function createDeleteActivity(domain: string, actor: Actor, object: APObject): DeleteActivity {
+export function createDeleteActivity(domain: string, actor: Actor, object: ApObject): DeleteActivity {
 	return {
 		'@context': ['https://www.w3.org/ns/activitystreams'],
 		id: createActivityId(domain),
@@ -21,8 +21,8 @@ export function createDeleteActivity(domain: string, actor: Actor, object: APObj
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-delete
 export async function handleDeleteActivity(activity: DeleteActivity, db: Database) {
-	const objectId = getAPId(activity.object)
-	const actorId = getAPId(activity.actor)
+	const objectId = getApId(activity.object)
+	const actorId = getApId(activity.actor)
 
 	const obj = await getObjectByOriginalId(db, objectId)
 	if (obj === null || !obj[originalActorIdSymbol]) {

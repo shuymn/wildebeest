@@ -1,11 +1,11 @@
 import type { Document } from 'wildebeest/backend/src/activitypub/objects'
-import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
+import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
 import { isDocument, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { type Image, isImage } from 'wildebeest/backend/src/activitypub/objects/image'
 import { isVideo, Video } from 'wildebeest/backend/src/activitypub/objects/video'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 
-export function fromObject(obj: APObject): MediaAttachment {
+export function fromObject(obj: ApObject): MediaAttachment {
 	if (isImage(obj)) {
 		return fromObjectImage(obj)
 	}

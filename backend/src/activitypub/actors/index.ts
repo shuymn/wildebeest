@@ -1,5 +1,5 @@
 import { Buffer } from 'buffer'
-import { type APObject, getAPId, getTextContent, sanitizeContent } from 'wildebeest/backend/src/activitypub/objects'
+import { type ApObject, getApId, getTextContent, sanitizeContent } from 'wildebeest/backend/src/activitypub/objects'
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
 import { Handle } from 'wildebeest/backend/src/utils/handle'
@@ -19,7 +19,7 @@ export function actorURL(domain: string, obj: { perferredUsername: string } | Pi
 }
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#actor-types
-export interface Actor extends APObject {
+export interface Actor extends ApObject {
 	inbox: URL
 	outbox: URL
 	following: URL
@@ -122,7 +122,7 @@ export async function getAndCache(url: URL, db: Database): Promise<Actor> {
 
 	// Add peer
 	{
-		const domain = getAPId(actor.id).host
+		const domain = getApId(actor.id).host
 		await addPeer(db, domain)
 	}
 	return actor

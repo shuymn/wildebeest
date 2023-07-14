@@ -5,7 +5,7 @@ import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { updateActorProperty } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverFollowers } from 'wildebeest/backend/src/activitypub/deliver'
-import { getAPId } from 'wildebeest/backend/src/activitypub/objects'
+import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import { getPreference, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
@@ -53,7 +53,7 @@ export async function handleRequest(
 	}
 
 	const domain = new URL(request.url).hostname
-	const actorId = getAPId(connectedActor)
+	const actorId = getApId(connectedActor)
 
 	// update actor
 	{

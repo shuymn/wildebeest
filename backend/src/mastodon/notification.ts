@@ -1,7 +1,7 @@
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
-import { type APObject, getApUrl } from 'wildebeest/backend/src/activitypub/objects'
+import { type ApObject, getApUrl } from 'wildebeest/backend/src/activitypub/objects'
 import type { Cache } from 'wildebeest/backend/src/cache'
 import { type Database } from 'wildebeest/backend/src/database'
 import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
@@ -22,7 +22,7 @@ export async function createNotification(
 	type: NotificationType,
 	actor: Actor,
 	fromActor: Actor,
-	obj: APObject
+	obj: ApObject
 ): Promise<string> {
 	const query = `
           INSERT INTO actor_notifications (type, actor_id, from_actor_id, object_id)

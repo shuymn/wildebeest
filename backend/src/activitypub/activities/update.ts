@@ -1,8 +1,8 @@
 import { createActivityId, getActivityObject, UpdateActivity } from 'wildebeest/backend/src/activitypub/activities'
 import { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import {
-	APObject,
-	getAPId,
+	ApObject,
+	getApId,
 	getObjectBy,
 	ObjectByKey,
 	originalActorIdSymbol,
@@ -10,7 +10,7 @@ import {
 } from 'wildebeest/backend/src/activitypub/objects'
 import { Database } from 'wildebeest/backend/src/database'
 
-export function createUpdateActivity(domain: string, actor: Actor, object: APObject): UpdateActivity {
+export function createUpdateActivity(domain: string, actor: Actor, object: ApObject): UpdateActivity {
 	return {
 		'@context': ['https://www.w3.org/ns/activitystreams'],
 		id: createActivityId(domain),
@@ -23,8 +23,8 @@ export function createUpdateActivity(domain: string, actor: Actor, object: APObj
 export async function handleUpdateActivity(activity: UpdateActivity, db: Database) {
 	activity.object = getActivityObject(activity)
 
-	const actorId = getAPId(activity.actor)
-	const objectId = getAPId(activity.object)
+	const actorId = getApId(activity.actor)
+	const objectId = getApId(activity.object)
 
 	if (!['Note', 'Person', 'Service'].includes(activity.object.type)) {
 		console.warn('unsupported Update for Object type: ' + JSON.stringify(activity.object.type))
@@ -41,7 +41,7 @@ export async function handleUpdateActivity(activity: UpdateActivity, db: Databas
 		throw new Error('actor.id mismatch when updating object')
 	}
 
-	const updated = await updateObject(db, activity.object, getAPId(obj))
+	const updated = await updateObject(db, activity.object, getApId(obj))
 	if (!updated) {
 		throw new Error('could not update object in database')
 	}
