@@ -37,7 +37,18 @@ export interface APObject {
 }
 
 export type APObjectId = KeyTypeOf<APObject, 'id'>
+export type ApObjectUrl = NonNullable<KeyTypeOf<APObject, 'url'>>
 export type APObjectOrId = APObject | APObjectId
+export type ApObjectOrUrl = APObject | ApObjectUrl
+
+function parseUrl(value: string): URL {
+	try {
+		return new URL(value)
+	} catch (err: unknown) {
+		console.warn('invalid URL: ' + value)
+		throw err
+	}
+}
 
 export function getAPId(value: string | APObjectOrId): APObjectId {
 	if (typeof value === 'object') {
@@ -50,12 +61,20 @@ export function getAPId(value: string | APObjectOrId): APObjectId {
 		}
 		throw new Error('unknown value: ' + JSON.stringify(value))
 	}
-	try {
-		return new URL(value)
-	} catch (err: unknown) {
-		console.warn('invalid URL: ' + value)
-		throw err
+	return parseUrl(value)
+}
+
+export function getApUrl(value: ApObjectOrUrl): URL {
+	if (typeof value === 'object') {
+		if (value instanceof URL) {
+			return value
+		}
+		if (value.url !== undefined) {
+			return getApUrl(value.url)
+		}
+		throw new Error('unknown value: ' + JSON.stringify(value))
 	}
+	return parseUrl(value)
 }
 
 export function getAPType(obj: APObject): string {
