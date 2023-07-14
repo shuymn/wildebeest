@@ -2,7 +2,7 @@
 
 import { AnnounceActivity, cacheActivityObject, createActivityId } from 'wildebeest/backend/src/activitypub/activities'
 import { Actor, getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
-import { get, getAPId, getObjectById, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import { get, getApId, getObjectById, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { Database } from 'wildebeest/backend/src/database'
 import { createNotification, sendReblogNotification } from 'wildebeest/backend/src/mastodon/notification'
@@ -27,8 +27,8 @@ export async function handleAnnounceActivity(
 	adminEmail: string,
 	vapidKeys: JWK
 ) {
-	const objectId = getAPId(activity.object)
-	const actorId = getAPId(activity.actor)
+	const objectId = getApId(activity.object)
+	const actorId = getApId(activity.actor)
 
 	let obj: any = null
 

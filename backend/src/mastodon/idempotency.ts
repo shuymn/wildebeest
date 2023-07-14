@@ -1,4 +1,4 @@
-import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
+import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
 import {
 	mastodonIdSymbol,
 	originalActorIdSymbol,
@@ -6,7 +6,7 @@ import {
 } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database } from 'wildebeest/backend/src/database'
 
-export async function insertKey(db: Database, key: string, obj: APObject): Promise<void> {
+export async function insertKey(db: Database, key: string, obj: ApObject): Promise<void> {
 	const query = `
         INSERT INTO idempotency_keys (key, object_id, expires_at)
         VALUES (?1, ?2, datetime('now', '+1 hour'))
@@ -18,7 +18,7 @@ export async function insertKey(db: Database, key: string, obj: APObject): Promi
 	}
 }
 
-export async function hasKey(db: Database, key: string): Promise<APObject | null> {
+export async function hasKey(db: Database, key: string): Promise<ApObject | null> {
 	const query = `
         SELECT objects.*
         FROM idempotency_keys
@@ -56,5 +56,5 @@ export async function hasKey(db: Database, key: string): Promise<APObject | null
 		[mastodonIdSymbol]: result.mastodon_id,
 		[originalActorIdSymbol]: result.original_actor_id,
 		[originalObjectIdSymbol]: result.original_object_id,
-	} as APObject
+	} as ApObject
 }

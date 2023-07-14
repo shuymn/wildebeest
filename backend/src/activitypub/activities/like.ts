@@ -2,7 +2,7 @@
 
 import { createActivityId, LikeActivity } from 'wildebeest/backend/src/activitypub/activities'
 import { Actor, getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
-import { getAPId, getObjectById, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import { getApId, getObjectById, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { Database } from 'wildebeest/backend/src/database'
 import { insertLike } from 'wildebeest/backend/src/mastodon/like'
 import { createNotification, sendLikeNotification } from 'wildebeest/backend/src/mastodon/notification'
@@ -20,8 +20,8 @@ export function createLikeActivity(domain: string, actor: Actor, object: URL): L
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-like
 export async function handleLikeActivity(activity: LikeActivity, db: Database, adminEmail: string, vapidKeys: JWK) {
-	const objectId = getAPId(activity.object)
-	const actorId = getAPId(activity.actor)
+	const objectId = getApId(activity.object)
+	const actorId = getApId(activity.actor)
 
 	const obj = await getObjectById(db, objectId)
 	if (obj === null || !obj[originalActorIdSymbol]) {

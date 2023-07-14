@@ -1,18 +1,18 @@
 import {
-	type APObject,
-	APObjectId,
-	type APObjectOrId,
+	type ApObject,
+	ApObjectId,
+	type ApObjectOrId,
 	cacheObject,
-	getAPType,
+	getApType,
 } from 'wildebeest/backend/src/activitypub/objects'
 import { Database } from 'wildebeest/backend/src/database'
 
 export const PUBLIC_GROUP = 'https://www.w3.org/ns/activitystreams#Public'
 
-export interface Activity extends APObject {
-	actor: APObjectOrId
-	object: APObjectOrId
-	target?: APObjectOrId
+export interface Activity extends ApObject {
+	actor: ApObjectOrId
+	object: ApObjectOrId
+	target?: ApObjectOrId
 }
 
 export interface UpdateActivity extends Activity {
@@ -45,52 +45,52 @@ export interface DeleteActivity extends Activity {
 
 export interface MoveActivity extends Activity {
 	type: 'Move'
-	target: APObjectOrId
+	target: ApObjectOrId
 }
 
 export interface UndoActivity extends Activity {
 	type: 'Undo'
 }
 
-export function isUpdateActivity(obj: APObject): obj is UpdateActivity {
-	return getAPType(obj) === 'Update'
+export function isUpdateActivity(obj: ApObject): obj is UpdateActivity {
+	return getApType(obj) === 'Update'
 }
 
-export function isCreateActivity(obj: APObject): obj is CreateActivity {
-	return getAPType(obj) === 'Create'
+export function isCreateActivity(obj: ApObject): obj is CreateActivity {
+	return getApType(obj) === 'Create'
 }
 
-export function isAcceptActivity(obj: APObject): obj is AcceptActivity {
-	return getAPType(obj) === 'Accept'
+export function isAcceptActivity(obj: ApObject): obj is AcceptActivity {
+	return getApType(obj) === 'Accept'
 }
 
-export function isFollowActivity(obj: APObject): obj is FollowActivity {
-	return getAPType(obj) === 'Follow'
+export function isFollowActivity(obj: ApObject): obj is FollowActivity {
+	return getApType(obj) === 'Follow'
 }
 
-export function isAnnounceActivity(obj: APObject): obj is AnnounceActivity {
-	return getAPType(obj) === 'Announce'
+export function isAnnounceActivity(obj: ApObject): obj is AnnounceActivity {
+	return getApType(obj) === 'Announce'
 }
 
-export function isLikeActivity(obj: APObject): obj is LikeActivity {
-	return getAPType(obj) === 'Like'
+export function isLikeActivity(obj: ApObject): obj is LikeActivity {
+	return getApType(obj) === 'Like'
 }
 
-export function isDeleteActivity(obj: APObject): obj is DeleteActivity {
-	return getAPType(obj) === 'Delete'
+export function isDeleteActivity(obj: ApObject): obj is DeleteActivity {
+	return getApType(obj) === 'Delete'
 }
 
-export function isMoveActivity(obj: APObject): obj is MoveActivity {
-	return getAPType(obj) === 'Move'
+export function isMoveActivity(obj: ApObject): obj is MoveActivity {
+	return getApType(obj) === 'Move'
 }
 
 // Generate a unique ID. Note that currently the generated URL aren't routable.
-export function createActivityId(domain: string): APObjectId {
+export function createActivityId(domain: string): ApObjectId {
 	const id = crypto.randomUUID()
 	return new URL('/ap/a/' + id, 'https://' + domain)
 }
 
-export function getActivityObject(activity: Activity): APObject {
+export function getActivityObject(activity: Activity): ApObject {
 	if (typeof activity.object === 'string' || activity.object instanceof URL) {
 		throw new Error('`activity.object` must be of type object')
 	}
@@ -99,7 +99,7 @@ export function getActivityObject(activity: Activity): APObject {
 
 export async function cacheActivityObject(
 	domain: string,
-	obj: APObject,
+	obj: ApObject,
 	db: Database,
 	originalActorId: URL,
 	originalObjectId: URL

@@ -10,7 +10,7 @@ import { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { actorURL, getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInInbox } from 'wildebeest/backend/src/activitypub/actors/inbox'
 import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
-import { APObject, cacheObject, get, getAPId, getObjectByOriginalId } from 'wildebeest/backend/src/activitypub/objects'
+import { ApObject, cacheObject, get, getApId, getObjectByOriginalId } from 'wildebeest/backend/src/activitypub/objects'
 import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { Database } from 'wildebeest/backend/src/database'
 import { createNotification, sendMentionNotification } from 'wildebeest/backend/src/mastodon/notification'
@@ -55,7 +55,7 @@ export async function handleCreateActivity(
 	vapidKeys: JWK
 ) {
 	activity.object = getActivityObject(activity)
-	const actorId = getAPId(activity.actor)
+	const actorId = getApId(activity.actor)
 
 	// FIXME: download any attachment Objects
 
@@ -63,18 +63,18 @@ export async function handleCreateActivity(
 	let target = PUBLIC_GROUP
 
 	if (Array.isArray(activity.to) && activity.to.length > 0) {
-		recipients = [...recipients, ...activity.to.map(getAPId)]
+		recipients = [...recipients, ...activity.to.map(getApId)]
 
 		if (activity.to.length !== 1) {
 			console.warn("multiple `Activity.to` isn't supported")
 		}
-		target = getAPId(activity.to[0]).toString()
+		target = getApId(activity.to[0]).toString()
 	}
 	if (Array.isArray(activity.cc) && activity.cc.length > 0) {
-		recipients = [...recipients, ...activity.cc.map(getAPId)]
+		recipients = [...recipients, ...activity.cc.map(getApId)]
 	}
 
-	const objectId = getAPId(activity.object)
+	const objectId = getApId(activity.object)
 	const res = await cacheActivityObject(domain, activity.object, db, actorId, objectId)
 	if (res === null) {
 		return
@@ -91,14 +91,13 @@ export async function handleCreateActivity(
 
 	// This note is actually a reply to another one, record it in the replies
 	// table.
-	console.warn('inReplyTo', obj.inReplyTo)
 	if (obj.type === 'Note' && obj.inReplyTo) {
-		const inReplyToObjectId = getAPId(obj.inReplyTo)
+		const inReplyToObjectId = getApId(obj.inReplyTo)
 		let inReplyToObject = await getObjectByOriginalId(db, inReplyToObjectId)
 
 		if (inReplyToObject === null) {
-			const remoteObject = await get<APObject>(inReplyToObjectId)
-			const res = await cacheObject<APObject>(domain, db, remoteObject, actorId, inReplyToObjectId, false)
+			const remoteObject = await get<ApObject>(inReplyToObjectId)
+			const res = await cacheObject<ApObject>(domain, db, remoteObject, actorId, inReplyToObjectId, false)
 			inReplyToObject = res.object
 		}
 

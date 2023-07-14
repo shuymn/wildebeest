@@ -3,6 +3,7 @@ import { createFollowActivity } from 'wildebeest/backend/src/activitypub/activit
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { setActorAlias } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
+import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database } from 'wildebeest/backend/src/database'
 import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
 import { parseHandle } from 'wildebeest/backend/src/utils/handle'
@@ -19,7 +20,7 @@ export async function addAlias(db: Database, alias: string, connectedActor: Acto
 		throw new Error('actor not found')
 	}
 
-	await setActorAlias(db, connectedActor.id, actor.id)
+	await setActorAlias(db, getApId(connectedActor.id), getApId(actor.id))
 
 	// For Mastodon to deliver the Move Activity we need to be following the
 	// "moving from" actor.

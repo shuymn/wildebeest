@@ -3,7 +3,7 @@ import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import { createCreateActivity } from 'wildebeest/backend/src/activitypub/activities/create'
 import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
 import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
-import { getAPId } from 'wildebeest/backend/src/activitypub/objects'
+import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
@@ -88,7 +88,7 @@ LIMIT ?2
 			const activity = createCreateActivity(domain, actor, note)
 			delete activity['@context']
 
-			const activityId = note.id
+			const activityId = getApId(note.id)
 			// check if the URL pathname ends with '/', if not add one.
 			activityId.pathname = activityId.pathname.endsWith('/') ? activityId.pathname : activityId.pathname + '/'
 			// append the additional path
@@ -96,7 +96,7 @@ LIMIT ?2
 
 			activity.id = activityId
 			activity.published = new Date(result.cdate).toISOString()
-			activity.to = [getAPId('https://www.w3.org/ns/activitystreams#Public')]
+			activity.to = [getApId('https://www.w3.org/ns/activitystreams#Public')]
 			activity.cc = [actor.followers]
 			items.push(activity)
 		}

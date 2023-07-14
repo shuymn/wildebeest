@@ -1,6 +1,6 @@
 // https://docs.joinmastodon.org/methods/media/#update
 
-import { getObjectByMastodonId } from 'wildebeest/backend/src/activitypub/objects'
+import { getApUrl, getObjectByMastodonId } from 'wildebeest/backend/src/activitypub/objects'
 import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { updateObjectProperty } from 'wildebeest/backend/src/activitypub/objects'
 import type { Image } from 'wildebeest/backend/src/activitypub/objects/image'
@@ -38,11 +38,12 @@ export async function handleRequestPut(db: Database, id: UUID, request: Request)
 
 	// reload the image for fresh state
 	const image = (await getObjectByMastodonId(db, id)) as Image
+	const imageUrl = getApUrl(image)
 
 	const res: MediaAttachment = {
 		id: image[mastodonIdSymbol]!,
-		url: image.url,
-		preview_url: image.url,
+		url: imageUrl,
+		preview_url: imageUrl,
 		type: 'image',
 		meta: {
 			original: {

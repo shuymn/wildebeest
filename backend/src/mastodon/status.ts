@@ -2,8 +2,9 @@ import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
-import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
+import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
 import {
+	getApId,
 	getObjectByMastodonId,
 	mastodonIdSymbol,
 	originalActorIdSymbol,
@@ -83,7 +84,7 @@ export async function toMastodonStatusFromObject(
 		media_attachments: mediaAttachments,
 		content: obj.content || '',
 		id: obj[mastodonIdSymbol] || '',
-		uri: obj.id,
+		uri: getApId(obj.id),
 		url: new URL(`/@${actor.preferredUsername}/${obj[mastodonIdSymbol]}`, 'https://' + domain),
 		created_at: obj.published || '',
 		account,
@@ -202,7 +203,7 @@ export async function createStatus(
 	db: Database,
 	actor: Person,
 	content: string,
-	attachments?: APObject[],
+	attachments?: ApObject[],
 	extraProperties?: any
 ) {
 	const note = await createPublicNote(domain, db, content, actor, attachments, extraProperties)

@@ -1,10 +1,10 @@
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
+import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database } from 'wildebeest/backend/src/database'
 import { toMastodonStatusFromRow } from 'wildebeest/backend/src/mastodon/status'
 import type { MastodonStatus } from 'wildebeest/backend/src/types/status'
 
-export async function insertReply(db: Database, actor: Actor, obj: APObject, inReplyToObj: APObject) {
+export async function insertReply(db: Database, actor: Actor, obj: ApObject, inReplyToObj: ApObject) {
 	const id = crypto.randomUUID()
 	const query = `
         INSERT INTO actor_replies (id, actor_id, object_id, in_reply_to_object_id)
@@ -19,7 +19,7 @@ export async function insertReply(db: Database, actor: Actor, obj: APObject, inR
 	}
 }
 
-export async function getReplies(domain: string, db: Database, obj: APObject): Promise<Array<MastodonStatus>> {
+export async function getReplies(domain: string, db: Database, obj: ApObject): Promise<Array<MastodonStatus>> {
 	const QUERY = `
 SELECT objects.*,
        actors.id as actor_id,
