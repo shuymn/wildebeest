@@ -531,7 +531,7 @@ describe('ActivityPub', () => {
 						return new Response(
 							JSON.stringify({
 								id: remoteActorId,
-								icon: { url: 'img.com' },
+								icon: { url: 'https://img.com' },
 								type: 'Person',
 							})
 						)
@@ -587,7 +587,7 @@ describe('ActivityPub', () => {
 						return new Response(
 							JSON.stringify({
 								id: remoteActorId,
-								icon: { url: 'img.com' },
+								icon: { url: 'https://img.com' },
 								type: 'Person',
 							})
 						)
