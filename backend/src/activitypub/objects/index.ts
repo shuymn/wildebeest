@@ -53,7 +53,6 @@ function parseUrl(value: string): URL {
 export function getApId(value: ApObjectOrId): URL {
 	if (typeof value === 'object') {
 		if (value instanceof URL) {
-			// This is used for testing only.
 			return value
 		}
 		if (value.id !== undefined) {
