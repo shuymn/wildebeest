@@ -4,6 +4,7 @@ import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import type { APObject } from 'wildebeest/backend/src/activitypub/objects'
 import {
+	getAPId,
 	getObjectByMastodonId,
 	mastodonIdSymbol,
 	originalActorIdSymbol,
@@ -83,7 +84,7 @@ export async function toMastodonStatusFromObject(
 		media_attachments: mediaAttachments,
 		content: obj.content || '',
 		id: obj[mastodonIdSymbol] || '',
-		uri: obj.id,
+		uri: getAPId(obj.id),
 		url: new URL(`/@${actor.preferredUsername}/${obj[mastodonIdSymbol]}`, 'https://' + domain),
 		created_at: obj.published || '',
 		account,

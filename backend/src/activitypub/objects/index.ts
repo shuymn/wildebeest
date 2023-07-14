@@ -14,9 +14,9 @@ export interface APObject {
 	type: string
 	// ObjectId, URL used for federation. Called `uri` in Mastodon APIs.
 	// https://www.w3.org/TR/activitypub/#obj-id
-	id: URL
+	id: string | URL
 	// Link to the HTML representation of the object
-	url?: URL
+	url?: string | URL
 	published?: string
 	icon?: APObject
 	image?: APObject
@@ -50,14 +50,14 @@ function parseUrl(value: string): URL {
 	}
 }
 
-export function getAPId(value: string | APObjectOrId): APObjectId {
+export function getAPId(value: APObjectOrId): URL {
 	if (typeof value === 'object') {
 		if (value instanceof URL) {
 			// This is used for testing only.
 			return value
 		}
 		if (value.id !== undefined) {
-			return value.id
+			return getAPId(value.id)
 		}
 		throw new Error('unknown value: ' + JSON.stringify(value))
 	}

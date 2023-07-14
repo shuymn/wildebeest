@@ -5,6 +5,7 @@ import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { updateActorProperty } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverFollowers } from 'wildebeest/backend/src/activitypub/deliver'
+import { getAPId } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import { getPreference, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
@@ -52,6 +53,7 @@ export async function handleRequest(
 	}
 
 	const domain = new URL(request.url).hostname
+	const actorId = getAPId(connectedActor)
 
 	// update actor
 	{
@@ -59,12 +61,12 @@ export async function handleRequest(
 
 		if (formData.has('display_name')) {
 			const value = formData.get('display_name')!
-			await updateActorProperty(db, connectedActor.id, 'name', value as string)
+			await updateActorProperty(db, actorId, 'name', value as string)
 		}
 
 		if (formData.has('note')) {
 			const value = formData.get('note')!
-			await updateActorProperty(db, connectedActor.id, 'summary', value as string)
+			await updateActorProperty(db, actorId, 'summary', value as string)
 		}
 
 		if (formData.has('avatar')) {
@@ -72,7 +74,7 @@ export async function handleRequest(
 
 			const config = { accountId, apiToken }
 			const url = await images.uploadAvatar(value, config)
-			await updateActorProperty(db, connectedActor.id, 'icon.url', url.toString())
+			await updateActorProperty(db, actorId, 'icon.url', url.toString())
 		}
 
 		if (formData.has('header')) {
@@ -80,7 +82,7 @@ export async function handleRequest(
 
 			const config = { accountId, apiToken }
 			const url = await images.uploadHeader(value, config)
-			await updateActorProperty(db, connectedActor.id, 'image.url', url.toString())
+			await updateActorProperty(db, actorId, 'image.url', url.toString())
 		}
 
 		// TODO: update preferences
@@ -88,7 +90,7 @@ export async function handleRequest(
 
 	// reload the current user and sent back updated infos
 	{
-		const actor = await actors.getActorById(db, connectedActor.id)
+		const actor = await actors.getActorById(db, actorId)
 		if (actor === null) {
 			return errors.notAuthorized('user not found')
 		}

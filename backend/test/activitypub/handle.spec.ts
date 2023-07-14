@@ -469,7 +469,7 @@ describe('ActivityPub', () => {
 					content: 'test note',
 				}
 
-				const obj = await cacheObject(domain, db, object, actor.id, getAPId(object.id), false)
+				const obj = await cacheObject(domain, db, object, getAPId(actor), getAPId(object.id), false)
 				assert.notEqual(obj, null, 'could not create object')
 
 				const activity: UpdateActivity = {
@@ -494,7 +494,7 @@ describe('ActivityPub', () => {
 					content: 'test note',
 				}
 
-				const obj = await cacheObject(domain, db, object, actor.id, getAPId(object.id), false)
+				const obj = await cacheObject(domain, db, object, getAPId(actor), getAPId(object.id), false)
 				assert.notEqual(obj, null, 'could not create object')
 
 				const newObject: APObject = {

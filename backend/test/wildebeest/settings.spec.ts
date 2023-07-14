@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert/strict'
 
 import * as alias from 'wildebeest/backend/src/accounts/alias'
 import { createPerson, getActorById } from 'wildebeest/backend/src/activitypub/actors'
+import { getAPId } from 'wildebeest/backend/src/activitypub/objects'
 
 import { makeDB } from '../utils'
 
@@ -55,7 +56,7 @@ describe('Wildebeest', () => {
 			await alias.addAlias(db, 'test@example.com', actor, userKEK, domain)
 
 			// Ensure the actor has the alias set
-			const newActor = await getActorById(db, actor.id)
+			const newActor = await getActorById(db, getAPId(actor))
 			assert(newActor)
 			assert(newActor.alsoKnownAs)
 			assert.equal(newActor.alsoKnownAs.length, 1)

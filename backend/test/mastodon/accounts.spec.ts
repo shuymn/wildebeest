@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
 import { createPerson, getActorById } from 'wildebeest/backend/src/activitypub/actors'
+import { getAPId } from 'wildebeest/backend/src/activitypub/objects'
 import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
 import { createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
@@ -128,7 +129,7 @@ describe('Mastodon APIs', () => {
 			assert.equal(data.display_name, 'newsven')
 			assert.equal(data.note, 'hein')
 
-			const updatedActor: any = await getActorById(db, connectedActor.id)
+			const updatedActor: any = await getActorById(db, getAPId(connectedActor))
 			assert(updatedActor)
 			assert.equal(updatedActor.name, 'newsven')
 			assert.equal(updatedActor.summary, 'hein')

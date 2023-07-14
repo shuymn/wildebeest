@@ -3,7 +3,7 @@ import { strict as assert } from 'node:assert/strict'
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
-import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import { getAPId, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { cacheObject } from 'wildebeest/backend/src/activitypub/objects/'
 import { loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
 import { createDirectNote, createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
@@ -276,7 +276,7 @@ describe('ActivityPub', () => {
 			let result: any
 
 			// Cache object once adds it to the database
-			const res1: any = await cacheObject(domain, db, properties, actor.id, originalObjectId, false)
+			const res1: any = await cacheObject(domain, db, properties, getAPId(actor), originalObjectId, false)
 			assert.equal(res1.object.a, 1)
 			assert.equal(res1.object.b, 2)
 			assert(res1.created)
@@ -286,7 +286,7 @@ describe('ActivityPub', () => {
 
 			// Cache object second time updates the first one
 			properties.a = 3
-			const res2: any = await cacheObject(domain, db, properties, actor.id, originalObjectId, false)
+			const res2: any = await cacheObject(domain, db, properties, getAPId(actor), originalObjectId, false)
 			// The creation date and properties don't change
 			assert.equal(res1.object.a, res2.object.a)
 			assert.equal(res1.object.b, res2.object.b)
@@ -303,7 +303,7 @@ describe('ActivityPub', () => {
 			const actor = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 			const originalObjectId = new URL('https://example.com/object1')
 
-			await cacheObject(domain, db, properties, actor.id, originalObjectId, false)
+			await cacheObject(domain, db, properties, getAPId(actor), originalObjectId, false)
 
 			const { results } = (await db.prepare('SELECT domain from peers').all()) as any
 			assert.equal(results.length, 1)

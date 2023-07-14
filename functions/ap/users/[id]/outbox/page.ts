@@ -88,7 +88,7 @@ LIMIT ?2
 			const activity = createCreateActivity(domain, actor, note)
 			delete activity['@context']
 
-			const activityId = note.id
+			const activityId = getAPId(note.id)
 			// check if the URL pathname ends with '/', if not add one.
 			activityId.pathname = activityId.pathname.endsWith('/') ? activityId.pathname : activityId.pathname + '/'
 			// append the additional path

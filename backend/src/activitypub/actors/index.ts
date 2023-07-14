@@ -1,11 +1,10 @@
 import { Buffer } from 'buffer'
+import { type APObject, getAPId, getTextContent, sanitizeContent } from 'wildebeest/backend/src/activitypub/objects'
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
 import { Handle } from 'wildebeest/backend/src/utils/handle'
 import { generateUserKey } from 'wildebeest/backend/src/utils/key-ops'
 import { defaultImages } from 'wildebeest/config/accounts'
-
-import { type APObject, getTextContent, sanitizeContent } from '../objects'
 
 const PERSON = 'Person'
 const isTesting = typeof jest !== 'undefined'
@@ -123,7 +122,7 @@ export async function getAndCache(url: URL, db: Database): Promise<Actor> {
 
 	// Add peer
 	{
-		const domain = actor.id.host
+		const domain = getAPId(actor.id).host
 		await addPeer(db, domain)
 	}
 	return actor
