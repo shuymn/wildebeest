@@ -5,7 +5,7 @@
 Install:
 
 ```sh
-yarn
+npm install
 ```
 
 ## Running tests
@@ -13,21 +13,21 @@ yarn
 Run the API (backend) unit tests:
 
 ```sh
-yarn test
+npm run test
 ```
 
 Run the UI (frontend) integration tests:
 
 ```sh
-yarn database:create-mock # this initializes a local test database
-yarn test:ui
+npm run database:create-mock # this initializes a local test database
+npm run test:ui
 ```
 
 ## Debugging locally
 
 ```sh
-yarn database:create-mock # this initializes a local test database
-yarn dev
+npm run database:create-mock # this initializes a local test database
+npm run dev
 ```
 
 If only working on the REST API endpoints this is sufficient.
@@ -37,7 +37,7 @@ Changes to the UI code will not trigger a rebuild automatically.
 To do so, run the following in second terminal:
 
 ```sh
-yarn --cwd frontend watch
+npm --prefix frontend run watch
 ```
 
 ## Deploying
@@ -51,7 +51,7 @@ First you must create and configure the Pages project and bindings (D1 database,
 Run the following command to create the Pages project and the D1 database in your account.
 
 ```
-yarn deploy:init
+npm run deploy:init
 ```
 
 You should see output like:
@@ -82,9 +82,11 @@ Enter `DATABASE` for the variable name and select the `wildebeest` database from
 wildebeest expectes the Pages project to inject the following environment variables.
 
 Secret used to encrypt user private key in the database:
+
 - `USER_KEY`
 
 API token for integration with Cloudflare services (Cloudflare Images for example):
+
 - `CF_ACCOUNT_ID`
 - `CF_API_TOKEN`
 
@@ -93,5 +95,5 @@ API token for integration with Cloudflare services (Cloudflare Images for exampl
 Run the following command to deploy the current working directory to Cloudflare Pages:
 
 ```
-yarn deploy
+npm run deploy
 ```
