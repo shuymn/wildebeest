@@ -19,16 +19,16 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v3
         with:
-          node-version: 16.13.x
+          node-version: 18
 
       - name: Install
-        run: yarn
+        run: corepack pnpm install
 
       - name: Build
-        run: yarn build
+        run: npm run build
 
       - name: Run API tests
-        run: yarn test
+        run: npm run test
 
   lint:
     runs-on: ubuntu-latest
@@ -38,25 +38,28 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v3
         with:
-          node-version: 16.13.x
+          node-version: 18
 
       - name: Install
-        run: yarn && yarn --cwd frontend
+        run: corepack pnpm install && corepack pnpm --dir frontend install
 
       - name: Check formatting
-        run: yarn pretty
+        run: npm run pretty
 
       - name: Check backend linting
-        run: yarn lint:backend
+        run: npm run lint:backend
+
+      - name: Check consumer linting
+        run: npm run lint:consumer
 
       - name: Check functions linting
-        run: yarn lint:functions
+        run: npm run lint:functions
 
       - name: Check frontend linting
-        run: yarn lint:frontend
+        run: npm run lint:frontend
 
       - name: Check frontend types
-        run: yarn --cwd types-check
+        run: npm --prefix frontend run types-check
 
   test-ui:
     runs-on: ubuntu-latest
@@ -66,15 +69,15 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v3
         with:
-          node-version: 16.13.x
+          node-version: 18
       - name: Install dependencies
-        run: yarn
+        run: corepack pnpm install
       - name: Run App in the background
-        run: yarn ci-dev-test-ui &
+        run: npm run ci-dev-test-ui &
       - name: Install Playwright Browsers
-        run: yarn playwright install --with-deps
+        run: npx playwright install --with-deps
       - name: Run Playwright tests
-        run: yarn playwright test
+        run: npx playwright test
       - uses: actions/upload-artifact@v3
         if: always()
         with:

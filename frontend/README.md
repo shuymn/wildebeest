@@ -7,11 +7,11 @@ The site is built using the Qwik framework, which consists of client-side JavaSc
 In the top level of the repository run the following to build the app and host the whole server:
 
 ```
-yarn dev
+npm run dev
 ```
 
 If you make a change to the Qwik application, you can open a new terminal and run the following to regenerate the website code:
 
 ```
-yarn --cwd ui build
+npm run build
 ```

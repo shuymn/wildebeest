@@ -7,6 +7,7 @@ export interface Env {
 	userKEK: string
 	QUEUE: Queue<MessageBody>
 	DO_CACHE: DurableObjectNamespace
+	DOMAIN: string
 
 	CF_ACCOUNT_ID: string
 	CF_API_TOKEN: string
