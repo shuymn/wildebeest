@@ -38,7 +38,7 @@
 		"ts-jest": "^29.0.3",
 		"typescript": "4.9.4",
 		"undici": "5.19.1",
-		"vite": "4.0.1",
+		"vite": "4.4.4",
 		"vite-tsconfig-paths": "3.5.0"
 	},
 	"dependencies": {
