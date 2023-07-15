@@ -30,10 +30,10 @@ devDependencies:
     version: 4.20221111.1
   '@databases/split-sql-query':
     specifier: 1.0.4
-    version: 1.0.4(@databases/sql@3.2.0)
+    version: 1.0.4(@databases/sql@3.3.0)
   '@databases/sql':
-    specifier: 3.2.0
-    version: 3.2.0
+    specifier: 3.3.0
+    version: 3.3.0
   '@playwright/test':
     specifier: ^1.30.0
     version: 1.30.0
@@ -441,16 +441,16 @@ packages:
     resolution: {integrity: sha512-BNV2wN8V6Zduvo7UzxcdjBbLQ906D2KhS804PDufLgx/sanGJCHVJMOIaLvS/b61JKtot1U7P/l1fjrjZ7/E3A==}
     dev: true
 
-  /@databases/split-sql-query@1.0.4(@databases/sql@3.2.0):
+  /@databases/split-sql-query@1.0.4(@databases/sql@3.3.0):
     resolution: {integrity: sha512-lDqDQvH34NNjLs0knaDvL6HKgPtishQlDYHfOkvbAd5VQOEhcDvvmG2zbBuFvS2HQAz5NsyLj5erGaxibkxhvQ==}
     peerDependencies:
       '@databases/sql': '*'
     dependencies:
-      '@databases/sql': 3.2.0
+      '@databases/sql': 3.3.0
     dev: true
 
-  /@databases/sql@3.2.0:
-    resolution: {integrity: sha512-xQZzKIa0lvcdo0MYxnyFMVS1TRla9lpDSCYkobJl19vQEOJ9TqE4o8QBGRJNUfhSkbQIWyvMeBl3KBBbqyUVQQ==}
+  /@databases/sql@3.3.0:
+    resolution: {integrity: sha512-vj9huEy4mjJ48GS1Z8yvtMm4BYAnFYACUds25ym6Gd/gsnngkJ17fo62a6mmbNNwCBS/8467PmZR01Zs/06TjA==}
     dev: true
 
   /@esbuild-plugins/node-globals-polyfill@0.1.1(esbuild@0.14.51):
