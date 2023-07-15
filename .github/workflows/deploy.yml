@@ -276,7 +276,7 @@ jobs:
             echo -e "ADMIN_EMAIL=\"${{ vars.ADMIN_EMAIL }}\"\n" >> consumer/wrangler.toml
 
             npm install
-            npm --prefix cconsumer install
+            npm --prefix consumer install
             echo "******"
           command: publish --config consumer/wrangler.toml
         env:
