@@ -16,7 +16,6 @@ async function main() {
 	const options = {
 		local: true,
 		persist: true,
-		nodeCompat: true,
 		config: resolve(__dirname, '../../wrangler.toml'),
 		tsconfig: resolve(__dirname, '../../tsconfig.json'),
 		define: ['jest:{}'],
