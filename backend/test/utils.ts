@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { BetaDatabase } from '@miniflare/d1'
+import { D1Database, D1DatabaseAPI } from '@miniflare/d1'
 import * as SQLiteDatabase from 'better-sqlite3'
 import { promises as fs } from 'fs'
 import * as path from 'path'
@@ -24,7 +24,7 @@ export function isUrlValid(s: string) {
 
 export async function makeDB(): Promise<Database> {
 	const db = new SQLiteDatabase(':memory:')
-	const db2 = new BetaDatabase(db)!
+	const db2 = new D1Database(new D1DatabaseAPI(db))
 
 	// Manually run our migrations since @miniflare/d1 doesn't support it (yet).
 	const migrations = await fs.readdir('./migrations/')
