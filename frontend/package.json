@@ -41,6 +41,6 @@
 		"vite-tsconfig-paths": "3.6.0"
 	},
 	"dependencies": {
-		"modern-normalize": "^1.1.0"
+		"modern-normalize": "^2.0.0"
 	}
 }
