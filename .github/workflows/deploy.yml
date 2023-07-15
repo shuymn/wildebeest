@@ -309,9 +309,10 @@ jobs:
             npm run build
             cp -rv ./frontend/dist/* .
             # remove folder that aren't needed in Pages before we upload
-            rm -rf ./tf ./scripts ./.github ./.npm ./consumer ./do ./*.md ./.cache ./.local
+            rm -rf ./tf ./scripts ./.github ./.npm ./consumer ./do ./*.md ./.cache ./.local ./.pnpm-store
             echo "******"
           command: pages publish --project-name=wildebeest-${{ env.NAME_SUFFIX }} .
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           COMMIT_HASH: ${{ github.sha }}
+          PNPM_HOME: /tmp/pnpm
