@@ -87,6 +87,7 @@ describe('Mastodon APIs', () => {
 
 			const env = {
 				INSTANCE_DESCR: 'c',
+				ADMIN_EMAIL: 'b',
 			} as Env
 
 			const res = await v1_instance.handleRequest(domain, db, env)

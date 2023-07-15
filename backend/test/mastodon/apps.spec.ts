@@ -73,7 +73,7 @@ describe('Mastodon APIs', () => {
 
 			const validURIException = new Request('https://example.com', {
 				method: 'POST',
-				body: '{"redirect_uris":"urn:ietf:wg:oauth:2.0:oob","client_name":"Mastodon for iOS"}',
+				body: '{"redirect_uris":"urn:ietf:wg:oauth:2.0:oob","client_name":"Mastodon for iOS","scopes":"read write follow push"}',
 				headers: headers,
 			})
 			let res = await apps.handleRequest(db, validURIException, vapidKeys)
