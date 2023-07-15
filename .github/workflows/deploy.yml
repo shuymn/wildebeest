@@ -309,7 +309,8 @@ jobs:
             npm run build
             cp -rv ./frontend/dist/* .
             # remove folder that aren't needed in Pages before we upload
-            rm -rf ./tf ./scripts ./.github ./.npm ./consumer ./do ./*.md ./node_modules ./frontend/node_modules
+            rm -rf ./tf ./scripts ./.github ./.npm ./consumer ./do ./frontend ./*.md
+            npm install --package-lock-only
             echo "******"
           command: pages publish --project-name=wildebeest-${{ env.NAME_SUFFIX }} .
         env:
