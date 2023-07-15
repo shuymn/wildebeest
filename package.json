@@ -30,7 +30,7 @@
 	"scripts": {
 		"pretty": "npx prettier --list-different './**/*.ts'",
 		"test": "NODE_OPTIONS=--experimental-vm-modules yarn jest",
-		"lint": "run-p lint:* --print-label",
+		"lint": "run-p 'lint:*' --print-label",
 		"lint:frontend": "npm --prefix frontend run lint",
 		"lint:backend": "npx eslint backend",
 		"lint:functions": "npx eslint functions",
@@ -54,5 +54,6 @@
 	},
 	"simple-git-hooks": {
 		"pre-commit": "yarn run-p lint pretty"
-	}
+	},
+	"packageManager": "yarn@3.6.1"
 }

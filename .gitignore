@@ -6,3 +6,7 @@ package-lock.json
 /test-results/
 /playwright-report/
 /playwright/.cache/
+**/.yarn/*
+!/.yarn/releases/
+/.yarn/releases/*
+!/.yarn/releases/yarn-*.cjs
