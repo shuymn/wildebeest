@@ -306,11 +306,17 @@ jobs:
           preCommands: |
             echo "*** pre commands ***"
             corepack pnpm install
-            npm run build
+            npm install --package-lock-only
+            rm -rf node_modules
+            npm install --frozen-lockfile
+            corepack pnpm --dir frontend install
+            npm --prefix frontend install --package-lock-only
+            rm -rf frontend/node_modules
+            npm --prefix frontend install --frozen-lockfile
+            npm --prefix frontend run build
             cp -rv ./frontend/dist/* .
             # remove folder that aren't needed in Pages before we upload
             rm -rf ./tf ./scripts ./.github ./.npm ./consumer ./do ./*.md
-            npm install --package-lock-only
             echo "******"
           command: pages publish --project-name=wildebeest-${{ env.NAME_SUFFIX }} .
         env:

@@ -7,7 +7,6 @@
 	},
 	"private": true,
 	"scripts": {
-		"preinstall": "npx only-allow pnpm",
 		"pretypes-check": "npm run build",
 		"types-check": "tsc",
 		"lint": "eslint src mock-db adaptors",
