@@ -22,7 +22,7 @@ jobs:
           node-version: 18
 
       - name: Install
-        run: npm install
+        run: corepack pnpm install
 
       - name: Build
         run: npm run build
@@ -41,7 +41,7 @@ jobs:
           node-version: 18
 
       - name: Install
-        run: npm install && npm --prefix frontend install
+        run: corepack pnpm install && corepack pnpm --dir frontend install
 
       - name: Check formatting
         run: npm run pretty
@@ -71,7 +71,7 @@ jobs:
         with:
           node-version: 18
       - name: Install dependencies
-        run: npm install
+        run: corepack pnpm install
       - name: Run App in the background
         run: npm run ci-dev-test-ui &
       - name: Install Playwright Browsers
