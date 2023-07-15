@@ -29,21 +29,21 @@
 	"private": true,
 	"scripts": {
 		"pretty": "npx prettier --list-different './**/*.ts'",
-		"test": "NODE_OPTIONS=--experimental-vm-modules yarn jest",
+		"test": "NODE_OPTIONS=--experimental-vm-modules npx jest",
 		"lint": "run-p lint:* --print-label",
 		"lint:frontend": "npm --prefix frontend run lint",
 		"lint:backend": "npx eslint backend",
 		"lint:functions": "npx eslint functions",
 		"lint:consumer": "npx eslint consumer",
-		"build": "yarn --cwd frontend install && yarn --cwd frontend build",
+		"build": "npm --prefix frontend install && npm --prefix frontend run build",
 		"d1": "NO_D1_WARNING=true wrangler d1",
 		"pages": "NO_D1_WARNING=true wrangler pages",
-		"database:migrate": "yarn d1 migrations apply DATABASE",
-		"database:create-mock": "rm -f .wrangler/state/d1/DATABASE.sqlite3 && CI=true yarn database:migrate --local && node ./frontend/mock-db/run.mjs",
-		"dev": "export COMMIT_HASH=$(git rev-parse HEAD) && yarn build && yarn database:migrate --local && yarn pages dev frontend/dist --d1 DATABASE --persist --compatibility-date=2022-12-20 --binding 'INSTANCE_TITLE=Test Wildebeest' 'INSTANCE_DESCR=My Wildebeest Instance' 'ACCESS_AUTH_DOMAIN=0.0.0.0.cloudflareaccess.com' 'ACCESS_AUD=DEV_AUD' 'ADMIN_EMAIL=george@test.email'  --live-reload",
-		"ci-dev-test-ui": "yarn build && yarn database:create-mock && yarn pages dev frontend/dist --d1 DATABASE --persist --port 8788  --binding 'INSTANCE_TITLE=Test Wildebeest' 'INSTANCE_DESCR=My Wildebeest Instance' 'ACCESS_AUTH_DOMAIN=0.0.0.0.cloudflareaccess.com' 'ACCESS_AUD=DEV_AUD' 'ADMIN_EMAIL=george@test.email' --compatibility-date=2022-12-20",
-		"deploy:init": "yarn pages project create wildebeest && yarn d1 create wildebeest",
-		"deploy": "yarn build && yarn database:migrate && yarn pages publish frontend/dist --project-name=wildebeest"
+		"database:migrate": "npm run d1 migrations apply DATABASE",
+		"database:create-mock": "rm -f .wrangler/state/d1/DATABASE.sqlite3 && CI=true npm run database:migrate --local && node ./frontend/mock-db/run.mjs",
+		"dev": "export COMMIT_HASH=$(git rev-parse HEAD) && npm run build && npm run database:migrate --local && npm run pages dev frontend/dist --d1 DATABASE --persist --compatibility-date=2022-12-20 --binding 'INSTANCE_TITLE=Test Wildebeest' 'INSTANCE_DESCR=My Wildebeest Instance' 'ACCESS_AUTH_DOMAIN=0.0.0.0.cloudflareaccess.com' 'ACCESS_AUD=DEV_AUD' 'ADMIN_EMAIL=george@test.email'  --live-reload",
+		"ci-dev-test-ui": "npm run build && npm run database:create-mock && npm run pages dev frontend/dist --d1 DATABASE --persist --port 8788  --binding 'INSTANCE_TITLE=Test Wildebeest' 'INSTANCE_DESCR=My Wildebeest Instance' 'ACCESS_AUTH_DOMAIN=0.0.0.0.cloudflareaccess.com' 'ACCESS_AUD=DEV_AUD' 'ADMIN_EMAIL=george@test.email' --compatibility-date=2022-12-20",
+		"deploy:init": "npm run pages project create wildebeest && npm run d1 create wildebeest",
+		"deploy": "npm run build && npm run database:migrate && npm run pages publish frontend/dist --project-name=wildebeest"
 	},
 	"dependencies": {
 		"@neondatabase/serverless": "^0.2.5",
@@ -53,6 +53,7 @@
 		"toucan-js": "^3.1.0"
 	},
 	"simple-git-hooks": {
-		"pre-commit": "yarn run-p lint pretty"
-	}
+		"pre-commit": "npm exec --package npm-run-all -- run-p lint pretty"
+	},
+	"packageManager": "npm@8.19.4"
 }

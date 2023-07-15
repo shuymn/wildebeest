@@ -275,8 +275,8 @@ jobs:
             echo -e "DOMAIN=\"${{ vars.CF_DEPLOY_DOMAIN }}\"\n" >> consumer/wrangler.toml
             echo -e "ADMIN_EMAIL=\"${{ vars.ADMIN_EMAIL }}\"\n" >> consumer/wrangler.toml
 
-            yarn
-            yarn --cwd consumer/
+            npm install
+            npm --prefix cconsumer install
             echo "******"
           command: publish --config consumer/wrangler.toml
         env:
@@ -305,8 +305,8 @@ jobs:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           preCommands: |
             echo "*** pre commands ***"
-            yarn
-            yarn build
+            npm install
+            npm run build
             cp -rv ./frontend/dist/* .
             # remove folder that aren't needed in Pages before we upload
             rm -rf ./tf ./scripts ./.github ./.npm ./consumer ./*.md
