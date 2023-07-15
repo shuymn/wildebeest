@@ -51,11 +51,17 @@ export const userLoader = loader$<Promise<{ email: string; avatar: URL; name: st
 		}
 
 		const name = person.name
-		const avatar = person.icon?.url
-		const url = person.url
+		let avatar = person.icon?.url
+		let url = person.url
 
-		if (!name || !avatar) {
+		if (!name || !avatar || !url) {
 			throw html(500, getErrorHtml("The person associated with the Access JWT doesn't include a name or avatar"))
+		}
+		if (typeof avatar === 'string') {
+			avatar = new URL(avatar)
+		}
+		if (typeof url === 'string') {
+			url = new URL(url)
 		}
 
 		return { email, avatar, name, url }
