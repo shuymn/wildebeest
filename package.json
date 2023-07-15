@@ -47,7 +47,7 @@
 		"deploy": "npm run build && npm run database:migrate && npm run pages -- publish frontend/dist --project-name=wildebeest"
 	},
 	"dependencies": {
-		"@neondatabase/serverless": "^0.2.5",
+		"@neondatabase/serverless": "^0.5.0",
 		"@types/cookie": "^0.5.1",
 		"cookie": "^0.5.0",
 		"http-message-signatures": "^0.1.2",
