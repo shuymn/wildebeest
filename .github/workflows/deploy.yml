@@ -305,8 +305,9 @@ jobs:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           preCommands: |
             echo "*** pre commands ***"
-            export PNPM_HOME=/tmp/pnpm
-            corepack pnpm install
+            corepack enable
+            pnpm config set store-dir /tmp/pnpm
+            pnpm install
             npm run build
             cp -rv ./frontend/dist/* .
             # remove folder that aren't needed in Pages before we upload
