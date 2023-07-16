@@ -153,7 +153,10 @@ describe('ActivityPub', () => {
 		describe('Accept', () => {
 			beforeEach(() => {
 				globalThis.fetch = async (input: RequestInfo) => {
-					throw new Error('unexpected request to ' + input)
+					if (input instanceof Request) {
+						throw new Error('unexpected request to ' + input.url)
+					}
+					throw new Error('unexpected request to ' + input.toString())
 				}
 			})
 
@@ -254,16 +257,18 @@ describe('ActivityPub', () => {
 				const remoteActorId = 'https://example.com/actor'
 
 				globalThis.fetch = async (input: RequestInfo) => {
-					if (input.toString() === remoteActorId) {
-						return new Response(
-							JSON.stringify({
-								id: remoteActorId,
-								type: 'Person',
-							})
-						)
+					if (input instanceof URL || typeof input === 'string') {
+						if (input.toString() === remoteActorId) {
+							return new Response(
+								JSON.stringify({
+									id: remoteActorId,
+									type: 'Person',
+								})
+							)
+						}
+						throw new Error('unexpected request to ' + input.toString())
 					}
-
-					throw new Error('unexpected request to ' + input)
+					throw new Error('unexpected request to ' + input.url)
 				}
 
 				const db = await makeDB()
@@ -527,27 +532,30 @@ describe('ActivityPub', () => {
 				const remoteActorId = 'https://example.com/actor'
 				const objectId = 'https://example.com/some-object'
 				globalThis.fetch = async (input: RequestInfo) => {
-					if (input.toString() === remoteActorId) {
-						return new Response(
-							JSON.stringify({
-								id: remoteActorId,
-								icon: { url: 'https://img.com' },
-								type: 'Person',
-							})
-						)
-					}
+					if (input instanceof URL || typeof input === 'string') {
+						if (input.toString() === remoteActorId) {
+							return new Response(
+								JSON.stringify({
+									id: remoteActorId,
+									icon: { url: 'https://img.com' },
+									type: 'Person',
+								})
+							)
+						}
 
-					if (input.toString() === objectId) {
-						return new Response(
-							JSON.stringify({
-								id: objectId,
-								type: 'Note',
-								content: 'foo',
-							})
-						)
-					}
+						if (input.toString() === objectId) {
+							return new Response(
+								JSON.stringify({
+									id: objectId,
+									type: 'Note',
+									content: 'foo',
+								})
+							)
+						}
 
-					throw new Error('unexpected request to ' + input)
+						throw new Error('unexpected request to ' + input.toString())
+					}
+					throw new Error('unexpected request to ' + input.url)
 				}
 
 				const db = await makeDB()
@@ -583,27 +591,30 @@ describe('ActivityPub', () => {
 				const remoteActorId = 'https://example.com/actor'
 				const objectId = 'https://example.com/some-object'
 				globalThis.fetch = async (input: RequestInfo) => {
-					if (input.toString() === remoteActorId) {
-						return new Response(
-							JSON.stringify({
-								id: remoteActorId,
-								icon: { url: 'https://img.com' },
-								type: 'Person',
-							})
-						)
-					}
+					if (input instanceof URL || typeof input === 'string') {
+						if (input.toString() === remoteActorId) {
+							return new Response(
+								JSON.stringify({
+									id: remoteActorId,
+									icon: { url: 'https://img.com' },
+									type: 'Person',
+								})
+							)
+						}
 
-					if (input.toString() === objectId) {
-						return new Response(
-							JSON.stringify({
-								id: objectId,
-								type: 'Note',
-								content: 'foo',
-							})
-						)
-					}
+						if (input.toString() === objectId) {
+							return new Response(
+								JSON.stringify({
+									id: objectId,
+									type: 'Note',
+									content: 'foo',
+								})
+							)
+						}
 
-					throw new Error('unexpected request to ' + input)
+						throw new Error('unexpected request to ' + input.toString())
+					}
+					throw new Error('unexpected request to ' + input.url)
 				}
 
 				const db = await makeDB()

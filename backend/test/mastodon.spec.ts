@@ -331,17 +331,19 @@ describe('Mastodon APIs', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input === 'https://example.com/user/a') {
-					return new Response(JSON.stringify({ id: 'https://example.com/user/a', type: 'Actor' }))
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://example.com/user/a') {
+						return new Response(JSON.stringify({ id: 'https://example.com/user/a', type: 'Actor' }))
+					}
+					if (input.toString() === 'https://example.com/user/b') {
+						return new Response(JSON.stringify({ id: 'https://example.com/user/b', type: 'Actor' }))
+					}
+					if (input.toString() === 'https://example.com/user/c') {
+						return new Response(JSON.stringify({ id: 'https://example.com/user/c', type: 'Actor' }))
+					}
+					throw new Error(`unexpected request to "${input.toString()}"`)
 				}
-				if (input === 'https://example.com/user/b') {
-					return new Response(JSON.stringify({ id: 'https://example.com/user/b', type: 'Actor' }))
-				}
-				if (input === 'https://example.com/user/c') {
-					return new Response(JSON.stringify({ id: 'https://example.com/user/c', type: 'Actor' }))
-				}
-
-				throw new Error(`unexpected request to "${input}"`)
+				throw new Error('unexpected request to ' + input.url)
 			}
 
 			const followers = ['https://example.com/user/a', 'https://example.com/user/b', 'https://example.com/user/c']

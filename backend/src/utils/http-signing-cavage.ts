@@ -1,20 +1,9 @@
 // see https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-message-signatures-06#section-2.3.1
-export type Parameter = 'created' | 'expires' | 'nonce' | 'alg' | 'keyid' | string
+export type Parameter = string
 
-export type Component =
-	| '@method'
-	| '@target-uri'
-	| '@authority'
-	| '@scheme'
-	| '@request-target'
-	| '@path'
-	| '@query'
-	| '@query-params'
-	| string
+export type Component = string
 
-export type ResponseComponent = '@status' | '@request-response' | Component
-
-export type Parameters = { [name: Parameter]: string | number | Date | { [Symbol.toStringTag]: () => string } }
+export type Parameters = { [name: Parameter]: string | number | Date }
 
 export type Algorithm = 'rsa-v1_5-sha256' | 'ecdsa-p256-sha256' | 'hmac-sha256' | 'rsa-pss-sha512'
 

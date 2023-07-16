@@ -13,63 +13,69 @@ describe('Mastodon APIs', () => {
 	describe('search', () => {
 		beforeEach(() => {
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input.toString() === 'https://remote.com/.well-known/webfinger?resource=acct%3Asven%40remote.com') {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: 'https://social.com/sven',
-								},
-							],
-						})
-					)
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://remote.com/.well-known/webfinger?resource=acct%3Asven%40remote.com') {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: 'https://social.com/sven',
+									},
+								],
+							})
+						)
+					}
+
+					if (
+						input.toString() ===
+						'https://remote.com/.well-known/webfinger?resource=acct%3Adefault-avatar-and-header%40remote.com'
+					) {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: 'https://social.com/default-avatar-and-header',
+									},
+								],
+							})
+						)
+					}
+
+					if (input.toString() === 'https://social.com/sven') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://social.com/sven',
+								type: 'Person',
+								preferredUsername: 'sven',
+								name: 'sven ssss',
+
+								icon: { url: 'icon.jpg' },
+								image: { url: 'image.jpg' },
+							})
+						)
+					}
+
+					if (input.toString() === 'https://social.com/default-avatar-and-header') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://social.com/default-avatar-and-header',
+								type: 'Person',
+								preferredUsername: 'sven',
+								name: 'sven ssss',
+							})
+						)
+					}
 				}
 
-				if (
-					input.toString() ===
-					'https://remote.com/.well-known/webfinger?resource=acct%3Adefault-avatar-and-header%40remote.com'
-				) {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: 'https://social.com/default-avatar-and-header',
-								},
-							],
-						})
-					)
+				if (input instanceof URL || typeof input === 'string') {
+					throw new Error('unexpected request to ' + input.toString())
+				} else {
+					throw new Error('unexpected request to ' + input.url)
 				}
-
-				if (input.toString() === 'https://social.com/sven') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://social.com/sven',
-							type: 'Person',
-							preferredUsername: 'sven',
-							name: 'sven ssss',
-
-							icon: { url: 'icon.jpg' },
-							image: { url: 'image.jpg' },
-						})
-					)
-				}
-
-				if (input.toString() === 'https://social.com/default-avatar-and-header') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://social.com/default-avatar-and-header',
-							type: 'Person',
-							preferredUsername: 'sven',
-							name: 'sven ssss',
-						})
-					)
-				}
-
-				throw new Error(`unexpected request to "${input}"`)
 			}
 		})
 

@@ -119,22 +119,27 @@ describe('Mastodon APIs', () => {
 			])) as CryptoKeyPair
 
 			globalThis.fetch = async (input: RequestInfo, data: any) => {
-				if (input === 'https://push.com') {
-					assert((data.headers['Authorization'] as string).includes('WebPush'))
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://push.com') {
+						assert((data.headers['Authorization'] as string).includes('WebPush'))
 
-					const cryptoKeyHeader = parseCryptoKey(data.headers['Crypto-Key'])
-					assert(cryptoKeyHeader.dh)
-					assert(cryptoKeyHeader.p256ecdsa)
+						const cryptoKeyHeader = parseCryptoKey(data.headers['Crypto-Key'])
+						assert(cryptoKeyHeader.dh)
+						assert(cryptoKeyHeader.p256ecdsa)
 
-					// Ensure the data has a valid signature using the client public key
-					const sign = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, clientKeys.privateKey, data.body)
-					assert(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, clientKeys.publicKey, sign, data.body))
+						// Ensure the data has a valid signature using the client public key
+						const sign = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, clientKeys.privateKey, data.body)
+						assert(
+							await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, clientKeys.publicKey, sign, data.body)
+						)
 
-					// TODO: eventually decrypt what the server pushed
+						// TODO: eventually decrypt what the server pushed
 
-					return new Response()
+						return new Response()
+					}
+					throw new Error('unexpected request to ' + input.toString())
 				}
-				throw new Error('unexpected request to ' + input)
+				throw new Error('unexpected request to ' + input.url)
 			}
 
 			const client = await createTestClient(db)
