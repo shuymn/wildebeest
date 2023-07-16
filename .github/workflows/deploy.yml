@@ -305,10 +305,16 @@ jobs:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           preCommands: |
             echo "*** pre commands ***"
+            # setup pnpm
             corepack enable
             pnpm config set store-dir /tmp/pnpm
-            pnpm install
-            npm run build
+            # root
+            pnpm install && npm install --package-lock-only
+            rm -rf node_modules && npm install --frozen-lockfile
+            # frontend
+            pnpm --dir frontend install && npm --prefix frontend install --package-lock-only
+            rm -rf frontend/node_modules && npm --prefix frontend install --frozen-lockfile
+            npm --prefix frontend run build
             cp -rv ./frontend/dist/* .
             # remove folder that aren't needed in Pages before we upload
             rm -rf ./tf ./scripts ./.github ./.npm ./consumer ./do ./*.md ./.cache ./.local
