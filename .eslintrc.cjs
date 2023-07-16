@@ -37,5 +37,6 @@ module.exports = {
 		'@typescript-eslint/restrict-plus-operands': 'off',
 		'@typescript-eslint/restrict-template-expressions': 'off',
 		'@typescript-eslint/no-unnecessary-type-assertion': 'off',
+		'@typescript-eslint/no-explicit-any': 'warn',
 	},
 }
