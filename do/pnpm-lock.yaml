@@ -9,8 +9,8 @@ devDependencies:
     specifier: ^4.20221111.1
     version: 4.20230710.1
   typescript:
-    specifier: ^4.9.4
-    version: 4.9.5
+    specifier: ^5.0.0
+    version: 5.0.2
   wrangler:
     specifier: 2.20.0
     version: 2.20.0
@@ -891,9 +891,9 @@ packages:
       is-number: 7.0.0
     dev: true
 
-  /typescript@4.9.5:
-    resolution: {integrity: sha512-1FXk9E2Hm+QzZQ7z+McJiHL4NW1F2EzMu9Nq9i3zAaGqibafqYwCVU6WyWAuyQRRzOlxou8xZSyXLEN8oKj24g==}
-    engines: {node: '>=4.2.0'}
+  /typescript@5.0.2:
+    resolution: {integrity: sha512-wVORMBGO/FAs/++blGNeAVdbNKtIh1rbBL2EyQ1+J9lClJ93KiiKe8PmFIVdXhHcyv44SL9oglmfeSsndo0jRw==}
+    engines: {node: '>=12.20'}
     hasBin: true
     dev: true
 
