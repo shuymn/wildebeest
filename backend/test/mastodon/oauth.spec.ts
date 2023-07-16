@@ -17,19 +17,25 @@ describe('Mastodon APIs', () => {
 	describe('oauth', () => {
 		beforeEach(() => {
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input === 'https://' + accessDomain + '/cdn-cgi/access/certs') {
-					return new Response(JSON.stringify(ACCESS_CERTS))
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/certs') {
+						return new Response(JSON.stringify(ACCESS_CERTS))
+					}
+
+					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/get-identity') {
+						return new Response(
+							JSON.stringify({
+								email: 'some@cloudflare.com',
+							})
+						)
+					}
 				}
 
-				if (input === 'https://' + accessDomain + '/cdn-cgi/access/get-identity') {
-					return new Response(
-						JSON.stringify({
-							email: 'some@cloudflare.com',
-						})
-					)
+				if (input instanceof URL || typeof input === 'string') {
+					throw new Error('unexpected request to ' + input.toString())
+				} else {
+					throw new Error('unexpected request to ' + input.url)
 				}
-
-				throw new Error('unexpected request to ' + input)
 			}
 		})
 

@@ -187,35 +187,37 @@ describe('Mastodon APIs', () => {
 			let deliveredNote: Note | null = null
 
 			globalThis.fetch = async (input: RequestInfo, data: any) => {
-				if (input.toString() === 'https://remote.com/.well-known/webfinger?resource=acct%3Asven%40remote.com') {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: 'https://social.com/users/sven',
-								},
-							],
-						})
-					)
-				}
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://remote.com/.well-known/webfinger?resource=acct%3Asven%40remote.com') {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: 'https://social.com/users/sven',
+									},
+								],
+							})
+						)
+					}
 
-				if (input.toString() === 'https://social.com/users/sven') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://social.com/users/sven',
-							type: 'Person',
-							inbox: 'https://social.com/sven/inbox',
-						})
-					)
-				}
+					if (input.toString() === 'https://social.com/users/sven') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://social.com/users/sven',
+								type: 'Person',
+								inbox: 'https://social.com/sven/inbox',
+							})
+						)
+					}
 
-				if (input === 'https://social.com/sven/inbox') {
-					assert.equal(data.method, 'POST')
-					const body = JSON.parse(data.body)
-					deliveredNote = body
-					return new Response()
+					if (input.toString() === 'https://social.com/sven/inbox') {
+						assert.equal(data.method, 'POST')
+						const body = JSON.parse(data.body)
+						deliveredNote = body
+						return new Response()
+					}
 				}
 
 				if (input instanceof Request && input.url === 'https://social.com/sven/inbox') {
@@ -228,7 +230,11 @@ describe('Mastodon APIs', () => {
 					return new Response()
 				}
 
-				throw new Error('unexpected request to ' + input)
+				if (input instanceof URL || typeof input === 'string') {
+					throw new Error('unexpected request to ' + input.toString())
+				} else {
+					throw new Error('unexpected request to ' + input.url)
+				}
 			}
 
 			const db = await makeDB()
@@ -267,29 +273,37 @@ describe('Mastodon APIs', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Asven%40cloudflare.com') {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: actor.id,
-								},
-							],
-						})
-					)
-				}
+				if (input instanceof URL || typeof input === 'string') {
+					if (
+						input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Asven%40cloudflare.com'
+					) {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: actor.id,
+									},
+								],
+							})
+						)
+					}
 
-				if (input === actor.id.toString()) {
-					return new Response(JSON.stringify(actor))
+					if (input.toString() === actor.id.toString()) {
+						return new Response(JSON.stringify(actor))
+					}
 				}
 
 				if (input instanceof Request && input.url === actor.inbox.toString()) {
 					return new Response()
 				}
 
-				throw new Error('unexpected request to ' + JSON.stringify(input))
+				if (input instanceof URL || typeof input === 'string') {
+					throw new Error('unexpected request to ' + input.toString())
+				} else {
+					throw new Error('unexpected request to ' + input.url)
+				}
 			}
 
 			const body = {
@@ -405,98 +419,108 @@ describe('Mastodon APIs', () => {
 		test('get mentions from status', async () => {
 			const db = await makeDB()
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input.toString() === 'https://instance.horse/.well-known/webfinger?resource=acct%3Asven%40instance.horse') {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: 'https://instance.horse/users/sven',
-								},
-							],
-						})
-					)
-				}
-				if (input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Asven%40cloudflare.com') {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: 'https://cloudflare.com/users/sven',
-								},
-							],
-						})
-					)
-				}
-				if (input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Aa%40cloudflare.com') {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: 'https://cloudflare.com/users/a',
-								},
-							],
-						})
-					)
-				}
-				if (input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Ab%40cloudflare.com') {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: 'https://cloudflare.com/users/b',
-								},
-							],
-						})
-					)
-				}
-				if (
-					input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Ano-json%40cloudflare.com'
-				) {
-					return new Response('not json', { status: 200 })
+				if (input instanceof URL || typeof input === 'string') {
+					if (
+						input.toString() === 'https://instance.horse/.well-known/webfinger?resource=acct%3Asven%40instance.horse'
+					) {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: 'https://instance.horse/users/sven',
+									},
+								],
+							})
+						)
+					}
+					if (
+						input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Asven%40cloudflare.com'
+					) {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: 'https://cloudflare.com/users/sven',
+									},
+								],
+							})
+						)
+					}
+					if (input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Aa%40cloudflare.com') {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: 'https://cloudflare.com/users/a',
+									},
+								],
+							})
+						)
+					}
+					if (input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Ab%40cloudflare.com') {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: 'https://cloudflare.com/users/b',
+									},
+								],
+							})
+						)
+					}
+					if (
+						input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Ano-json%40cloudflare.com'
+					) {
+						return new Response('not json', { status: 200 })
+					}
+
+					if (input.toString() === 'https://instance.horse/users/sven') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://instance.horse/users/sven',
+								type: 'Person',
+							})
+						)
+					}
+					if (input.toString() === 'https://cloudflare.com/users/sven') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://cloudflare.com/users/sven',
+								type: 'Person',
+							})
+						)
+					}
+					if (input.toString() === 'https://cloudflare.com/users/a') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://cloudflare.com/users/a',
+								type: 'Person',
+							})
+						)
+					}
+					if (input.toString() === 'https://cloudflare.com/users/b') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://cloudflare.com/users/b',
+								type: 'Person',
+							})
+						)
+					}
 				}
 
-				if (input.toString() === 'https://instance.horse/users/sven') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://instance.horse/users/sven',
-							type: 'Person',
-						})
-					)
+				if (input instanceof URL || typeof input === 'string') {
+					throw new Error('unexpected request to ' + input.toString())
+				} else {
+					throw new Error('unexpected request to ' + input.url)
 				}
-				if (input.toString() === 'https://cloudflare.com/users/sven') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://cloudflare.com/users/sven',
-							type: 'Person',
-						})
-					)
-				}
-				if (input.toString() === 'https://cloudflare.com/users/a') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://cloudflare.com/users/a',
-							type: 'Person',
-						})
-					)
-				}
-				if (input.toString() === 'https://cloudflare.com/users/b') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://cloudflare.com/users/b',
-							type: 'Person',
-						})
-					)
-				}
-
-				throw new Error('unexpected request to ' + input)
 			}
 
 			{
@@ -1046,35 +1070,37 @@ describe('Mastodon APIs', () => {
 			let deliveredActivity2: any = null
 
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (
-					input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Aactor1%40cloudflare.com'
-				) {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: actor1.id,
-								},
-							],
-						})
-					)
-				}
-				if (
-					input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Aactor2%40cloudflare.com'
-				) {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: actor2.id,
-								},
-							],
-						})
-					)
+				if (input instanceof URL || typeof input === 'string') {
+					if (
+						input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Aactor1%40cloudflare.com'
+					) {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: actor1.id,
+									},
+								],
+							})
+						)
+					}
+					if (
+						input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Aactor2%40cloudflare.com'
+					) {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: actor2.id,
+									},
+								],
+							})
+						)
+					}
 				}
 
 				if (input instanceof Request) {
@@ -1088,7 +1114,11 @@ describe('Mastodon APIs', () => {
 					}
 				}
 
-				throw new Error('unexpected request to ' + input)
+				if (input instanceof URL || typeof input === 'string') {
+					throw new Error('unexpected request to ' + input.toString())
+				} else {
+					throw new Error('unexpected request to ' + input.url)
+				}
 			}
 
 			const body = {

@@ -1,8 +1,9 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { Activity, createActivityId } from 'wildebeest/backend/src/activitypub/activities'
+import { Activity, createActivityId, FollowActivity } from 'wildebeest/backend/src/activitypub/activities'
 import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
+import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 import * as ap_followers from 'wildebeest/functions/ap/users/[id]/followers'
@@ -19,7 +20,7 @@ const vapidKeys = {} as JWK
 
 describe('ActivityPub', () => {
 	describe('Follow', () => {
-		let receivedActivity: any = null
+		let receivedActivity: Activity | null = null
 
 		beforeEach(() => {
 			receivedActivity = null
@@ -28,7 +29,7 @@ describe('ActivityPub', () => {
 				const request = new Request(input)
 				if (request.url === `https://${domain}/ap/users/sven2/inbox`) {
 					assert.equal(request.method, 'POST')
-					const data = await request.json()
+					const data = await request.json<Activity>()
 					receivedActivity = data
 					return new Response('')
 				}
@@ -56,18 +57,21 @@ describe('ActivityPub', () => {
 				.prepare(`SELECT target_actor_id, state FROM actor_following WHERE actor_id=?`)
 				.bind(actor2.id.toString())
 				.first<{
-					target_actor_id: object
+					target_actor_id: string
 					state: string
 				}>()
 			assert(row)
-			assert.equal(row.target_actor_id.toString(), actor.id.toString())
+			assert.equal(row.target_actor_id, actor.id.toString())
 			assert.equal(row.state, 'accepted')
 
 			assert(receivedActivity)
 			assert.equal(receivedActivity.type, 'Accept')
-			assert.equal((receivedActivity.actor as object).toString(), actor.id.toString())
-			assert.equal(receivedActivity.object.actor, activity.actor.toString())
-			assert.equal(receivedActivity.object.type, activity.type)
+			assert.equal(getApId(receivedActivity.actor).toString(), actor.id.toString())
+			assert.equal(
+				getApId((receivedActivity.object as FollowActivity).actor).toString(),
+				getApId(activity.actor).toString()
+			)
+			assert.equal((receivedActivity.object as FollowActivity).type, activity.type)
 		})
 
 		test('list actor following', async () => {
@@ -154,8 +158,8 @@ describe('ActivityPub', () => {
 
 			const entry = await db.prepare('SELECT * FROM actor_notifications').first<{
 				type: string
-				actor_id: object
-				from_actor_id: object
+				actor_id: string
+				from_actor_id: string
 			}>()
 			assert.equal(entry.type, 'follow')
 			assert.equal(entry.actor_id.toString(), actor.id.toString())

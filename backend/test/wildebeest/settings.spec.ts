@@ -18,28 +18,30 @@ describe('Wildebeest', () => {
 			let receivedActivity: any = null
 
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input.toString() === 'https://example.com/.well-known/webfinger?resource=acct%3Atest%40example.com') {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: 'https://social.com/someone',
-								},
-							],
-						})
-					)
-				}
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://example.com/.well-known/webfinger?resource=acct%3Atest%40example.com') {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: 'https://social.com/someone',
+									},
+								],
+							})
+						)
+					}
 
-				if (input.toString() === 'https://social.com/someone') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://social.com/someone',
-							type: 'Person',
-							inbox: 'https://social.com/someone/inbox',
-						})
-					)
+					if (input.toString() === 'https://social.com/someone') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://social.com/someone',
+								type: 'Person',
+								inbox: 'https://social.com/someone/inbox',
+							})
+						)
+					}
 				}
 
 				const request = new Request(input)
@@ -50,7 +52,11 @@ describe('Wildebeest', () => {
 					return new Response('')
 				}
 
-				throw new Error('unexpected request to ' + input)
+				if (input instanceof URL || typeof input === 'string') {
+					throw new Error('unexpected request to ' + input.toString())
+				} else {
+					throw new Error('unexpected request to ' + input.url)
+				}
 			}
 
 			await alias.addAlias(db, 'test@example.com', actor, userKEK, domain)

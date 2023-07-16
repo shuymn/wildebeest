@@ -66,18 +66,21 @@ describe('ActivityPub', () => {
 
 		test('sanitize Actor properties', async () => {
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input === 'https://example.com/actor') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://example.com/actor',
-							type: 'Person',
-							summary: "it's me, Mario. <script>alert(1)</script>",
-							name: 'hi<br />hey',
-							preferredUsername: 'sven <script>alert(1)</script>',
-						})
-					)
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://example.com/actor') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://example.com/actor',
+								type: 'Person',
+								summary: "it's me, Mario. <script>alert(1)</script>",
+								name: 'hi<br />hey',
+								preferredUsername: 'sven <script>alert(1)</script>',
+							})
+						)
+					}
+					throw new Error(`unexpected request to "${input.toString()}"`)
 				}
-				throw new Error(`unexpected request to "${input}"`)
+				throw new Error('unexpected request to ' + input.url)
 			}
 
 			const actor = await actors.get('https://example.com/actor')
@@ -88,18 +91,21 @@ describe('ActivityPub', () => {
 
 		test('Actor properties limits', async () => {
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input === 'https://example.com/actor') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://example.com/actor',
-							type: 'Person',
-							summary: 'a'.repeat(612),
-							name: 'b'.repeat(50),
-							preferredUsername: 'c'.repeat(50),
-						})
-					)
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://example.com/actor') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://example.com/actor',
+								type: 'Person',
+								summary: 'a'.repeat(612),
+								name: 'b'.repeat(50),
+								preferredUsername: 'c'.repeat(50),
+							})
+						)
+					}
+					throw new Error(`unexpected request to "${input.toString()}"`)
 				}
-				throw new Error(`unexpected request to "${input}"`)
+				throw new Error('unexpected request to ' + input.url)
 			}
 
 			const actor = await actors.get('https://example.com/actor')
@@ -189,21 +195,24 @@ describe('ActivityPub', () => {
 			const actorId = new URL('https://example.com/user/foo')
 
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input.toString() === actorId.toString()) {
-					return new Response(
-						JSON.stringify({
-							id: actorId,
-							type: 'Person',
-							preferredUsername: 'sven',
-							name: 'sven ssss',
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === actorId.toString()) {
+						return new Response(
+							JSON.stringify({
+								id: actorId,
+								type: 'Person',
+								preferredUsername: 'sven',
+								name: 'sven ssss',
 
-							icon: { url: 'icon.jpg' },
-							image: { url: 'image.jpg' },
-						})
-					)
+								icon: { url: 'icon.jpg' },
+								image: { url: 'image.jpg' },
+							})
+						)
+					}
+
+					throw new Error(`unexpected request to "${input.toString()}"`)
 				}
-
-				throw new Error(`unexpected request to "${input}"`)
+				throw new Error('unexpected request to ' + input.url)
 			}
 
 			const db = await makeDB()
@@ -224,35 +233,38 @@ describe('ActivityPub', () => {
 			const actorId = new URL('https://example.com/user/foo')
 
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input.toString() === actorId.toString()) {
-					return new Response(
-						JSON.stringify({
-							id: actorId,
-							type: 'Service',
-							preferredUsername: 'sven',
-							name: 'sven ssss',
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === actorId.toString()) {
+						return new Response(
+							JSON.stringify({
+								id: actorId,
+								type: 'Service',
+								preferredUsername: 'sven',
+								name: 'sven ssss',
 
-							icon: { url: 'icon.jpg' },
-							image: { url: 'image.jpg' },
-						})
-					)
+								icon: { url: 'icon.jpg' },
+								image: { url: 'image.jpg' },
+							})
+						)
+					}
+
+					if (input.toString() === actorId.toString()) {
+						return new Response(
+							JSON.stringify({
+								id: actorId,
+								type: 'Person',
+								preferredUsername: 'sven',
+								name: 'sven ssss',
+
+								icon: { url: 'icon.jpg' },
+								image: { url: 'image.jpg' },
+							})
+						)
+					}
+
+					throw new Error(`unexpected request to "${input.toString()}"`)
 				}
-
-				if (input.toString() === actorId.toString()) {
-					return new Response(
-						JSON.stringify({
-							id: actorId,
-							type: 'Person',
-							preferredUsername: 'sven',
-							name: 'sven ssss',
-
-							icon: { url: 'icon.jpg' },
-							image: { url: 'image.jpg' },
-						})
-					)
-				}
-
-				throw new Error(`unexpected request to "${input}"`)
+				throw new Error('unexpected request to ' + input.url)
 			}
 
 			const db = await makeDB()
@@ -383,31 +395,34 @@ describe('ActivityPub', () => {
 			} as any
 
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input.toString() === 'https://example.com/1') {
-					return new Response(
-						JSON.stringify({
-							next: 'https://example.com/2',
-							orderedItems: ['a', 'b'],
-						})
-					)
-				}
-				if (input.toString() === 'https://example.com/2') {
-					return new Response(
-						JSON.stringify({
-							next: 'https://example.com/3',
-							orderedItems: ['c', 'd'],
-						})
-					)
-				}
-				if (input.toString() === 'https://example.com/3') {
-					return new Response(
-						JSON.stringify({
-							orderedItems: ['e', 'f'],
-						})
-					)
-				}
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://example.com/1') {
+						return new Response(
+							JSON.stringify({
+								next: 'https://example.com/2',
+								orderedItems: ['a', 'b'],
+							})
+						)
+					}
+					if (input.toString() === 'https://example.com/2') {
+						return new Response(
+							JSON.stringify({
+								next: 'https://example.com/3',
+								orderedItems: ['c', 'd'],
+							})
+						)
+					}
+					if (input.toString() === 'https://example.com/3') {
+						return new Response(
+							JSON.stringify({
+								orderedItems: ['e', 'f'],
+							})
+						)
+					}
 
-				throw new Error(`unexpected request to "${input}"`)
+					throw new Error(`unexpected request to "${input.toString()}"`)
+				}
+				throw new Error('unexpected request to ' + input.url)
 			}
 
 			const items = await loadItems(collection)

@@ -34,35 +34,38 @@ describe('Mastodon APIs', () => {
 	describe('accounts', () => {
 		beforeEach(() => {
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input.toString() === 'https://remote.com/.well-known/webfinger?resource=acct%3Asven%40remote.com') {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: 'https://social.com/sven',
-								},
-							],
-						})
-					)
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://remote.com/.well-known/webfinger?resource=acct%3Asven%40remote.com') {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: 'https://social.com/sven',
+									},
+								],
+							})
+						)
+					}
+
+					if (input.toString() === 'https://social.com/sven') {
+						return new Response(
+							JSON.stringify({
+								id: 'sven@remote.com',
+								type: 'Person',
+								preferredUsername: 'sven',
+								name: 'sven ssss',
+
+								icon: { url: 'icon.jpg' },
+								image: { url: 'image.jpg' },
+							})
+						)
+					}
+
+					throw new Error('unexpected request to ' + input.toString)
 				}
-
-				if (input.toString() === 'https://social.com/sven') {
-					return new Response(
-						JSON.stringify({
-							id: 'sven@remote.com',
-							type: 'Person',
-							preferredUsername: 'sven',
-							name: 'sven ssss',
-
-							icon: { url: 'icon.jpg' },
-							image: { url: 'image.jpg' },
-						})
-					)
-				}
-
-				throw new Error('unexpected request to ' + input)
+				throw new Error('unexpected request to ' + input.url)
 			}
 		})
 
@@ -171,23 +174,25 @@ describe('Mastodon APIs', () => {
 
 		test('update credentials avatar and header', async () => {
 			globalThis.fetch = async (input: RequestInfo, data: any) => {
-				if (input === 'https://api.cloudflare.com/client/v4/accounts/CF_ACCOUNT_ID/images/v1') {
-					assert.equal(data.method, 'POST')
-					const file: any = (data.body as { get: (str: string) => any }).get('file')
-					return new Response(
-						JSON.stringify({
-							success: true,
-							result: {
-								variants: [
-									'https://example.com/' + file.name + '/avatar',
-									'https://example.com/' + file.name + '/header',
-								],
-							},
-						})
-					)
+				if (input instanceof URL || typeof input === 'string') {
+					if (input === 'https://api.cloudflare.com/client/v4/accounts/CF_ACCOUNT_ID/images/v1') {
+						assert.equal(data.method, 'POST')
+						const file: any = (data.body as { get: (str: string) => any }).get('file')
+						return new Response(
+							JSON.stringify({
+								success: true,
+								result: {
+									variants: [
+										'https://example.com/' + file.name + '/avatar',
+										'https://example.com/' + file.name + '/header',
+									],
+								},
+							})
+						)
+					}
+					throw new Error('unexpected request to ' + input.toString())
 				}
-
-				throw new Error('unexpected request to ' + input)
+				throw new Error('unexpected request to ' + input.url)
 			}
 
 			const db = await makeDB()
@@ -220,72 +225,75 @@ describe('Mastodon APIs', () => {
 
 		test('get remote actor by id', async () => {
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input.toString() === 'https://social.com/.well-known/webfinger?resource=acct%3Asven%40social.com') {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: 'https://social.com/someone',
-								},
-							],
-						})
-					)
-				}
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://social.com/.well-known/webfinger?resource=acct%3Asven%40social.com') {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: 'https://social.com/someone',
+									},
+								],
+							})
+						)
+					}
 
-				if (input.toString() === 'https://social.com/someone') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://social.com/someone',
-							url: 'https://social.com/@someone',
-							type: 'Person',
-							preferredUsername: '<script>bad</script>sven',
-							name: 'Sven <i>Cool<i>',
-							outbox: 'https://social.com/someone/outbox',
-							following: 'https://social.com/someone/following',
-							followers: 'https://social.com/someone/followers',
-						})
-					)
-				}
+					if (input.toString() === 'https://social.com/someone') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://social.com/someone',
+								url: 'https://social.com/@someone',
+								type: 'Person',
+								preferredUsername: '<script>bad</script>sven',
+								name: 'Sven <i>Cool<i>',
+								outbox: 'https://social.com/someone/outbox',
+								following: 'https://social.com/someone/following',
+								followers: 'https://social.com/someone/followers',
+							})
+						)
+					}
 
-				if (input.toString() === 'https://social.com/someone/following') {
-					return new Response(
-						JSON.stringify({
-							'@context': 'https://www.w3.org/ns/activitystreams',
-							id: 'https://social.com/someone/following',
-							type: 'OrderedCollection',
-							totalItems: 123,
-							first: 'https://social.com/someone/following/page',
-						})
-					)
-				}
+					if (input.toString() === 'https://social.com/someone/following') {
+						return new Response(
+							JSON.stringify({
+								'@context': 'https://www.w3.org/ns/activitystreams',
+								id: 'https://social.com/someone/following',
+								type: 'OrderedCollection',
+								totalItems: 123,
+								first: 'https://social.com/someone/following/page',
+							})
+						)
+					}
 
-				if (input.toString() === 'https://social.com/someone/followers') {
-					return new Response(
-						JSON.stringify({
-							'@context': 'https://www.w3.org/ns/activitystreams',
-							id: 'https://social.com/someone/followers',
-							type: 'OrderedCollection',
-							totalItems: 321,
-							first: 'https://social.com/someone/followers/page',
-						})
-					)
-				}
+					if (input.toString() === 'https://social.com/someone/followers') {
+						return new Response(
+							JSON.stringify({
+								'@context': 'https://www.w3.org/ns/activitystreams',
+								id: 'https://social.com/someone/followers',
+								type: 'OrderedCollection',
+								totalItems: 321,
+								first: 'https://social.com/someone/followers/page',
+							})
+						)
+					}
 
-				if (input.toString() === 'https://social.com/someone/outbox') {
-					return new Response(
-						JSON.stringify({
-							'@context': 'https://www.w3.org/ns/activitystreams',
-							id: 'https://social.com/someone/outbox',
-							type: 'OrderedCollection',
-							totalItems: 890,
-							first: 'https://social.com/someone/outbox/page',
-						})
-					)
-				}
+					if (input.toString() === 'https://social.com/someone/outbox') {
+						return new Response(
+							JSON.stringify({
+								'@context': 'https://www.w3.org/ns/activitystreams',
+								id: 'https://social.com/someone/outbox',
+								type: 'OrderedCollection',
+								totalItems: 890,
+								first: 'https://social.com/someone/outbox/page',
+							})
+						)
+					}
 
-				throw new Error('unexpected request to ' + input)
+					throw new Error('unexpected request to ' + input.toString())
+				}
+				throw new Error('unexpected request to ' + input.url)
 			}
 
 			const db = await makeDB()
@@ -482,87 +490,90 @@ describe('Mastodon APIs', () => {
 			})
 
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input.toString() === 'https://social.com/.well-known/webfinger?resource=acct%3Asomeone%40social.com') {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: 'https://social.com/users/someone',
-								},
-							],
-						})
-					)
-				}
-
-				if (input.toString() === 'https://social.com/users/someone') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://social.com/users/someone',
-							type: 'Person',
-							preferredUsername: 'someone',
-							outbox: 'https://social.com/outbox',
-						})
-					)
-				}
-
-				if (input.toString() === 'https://social.com/outbox') {
-					return new Response(
-						JSON.stringify({
-							first: 'https://social.com/outbox/page1',
-						})
-					)
-				}
-
-				if (input.toString() === 'https://social.com/outbox/page1') {
-					return new Response(
-						JSON.stringify({
-							orderedItems: [
-								{
-									id: 'https://mastodon.social/users/a/statuses/b/activity',
-									type: 'Create',
-									actor: 'https://social.com/users/someone',
-									published: '2022-12-10T23:48:38Z',
-									object: {
-										id: 'https://example.com/object1',
-										type: 'Note',
-										content: '<p>p</p>',
-										attachment: [
-											{
-												type: 'Document',
-												mediaType: 'image/jpeg',
-												url: 'https://example.com/image',
-												name: null,
-												blurhash: 'U48;V;_24mx[_1~p.7%MW9?a-;xtxvWBt6ad',
-												width: 1080,
-												height: 894,
-											},
-											{
-												type: 'Document',
-												mediaType: 'video/mp4',
-												url: 'https://example.com/video',
-												name: null,
-												blurhash: 'UB9jfvtT0gO^N5tSX4XV9uR%^Ni]D%Rj$*nf',
-												width: 1080,
-												height: 616,
-											},
-										],
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://social.com/.well-known/webfinger?resource=acct%3Asomeone%40social.com') {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: 'https://social.com/users/someone',
 									},
-								},
-								{
-									id: 'https://mastodon.social/users/c/statuses/d/activity',
-									type: 'Announce',
-									actor: 'https://social.com/users/someone',
-									published: '2022-12-10T23:48:38Z',
-									object: note.id,
-								},
-							],
-						})
-					)
-				}
+								],
+							})
+						)
+					}
 
-				throw new Error('unexpected request to ' + input)
+					if (input.toString() === 'https://social.com/users/someone') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://social.com/users/someone',
+								type: 'Person',
+								preferredUsername: 'someone',
+								outbox: 'https://social.com/outbox',
+							})
+						)
+					}
+
+					if (input.toString() === 'https://social.com/outbox') {
+						return new Response(
+							JSON.stringify({
+								first: 'https://social.com/outbox/page1',
+							})
+						)
+					}
+
+					if (input.toString() === 'https://social.com/outbox/page1') {
+						return new Response(
+							JSON.stringify({
+								orderedItems: [
+									{
+										id: 'https://mastodon.social/users/a/statuses/b/activity',
+										type: 'Create',
+										actor: 'https://social.com/users/someone',
+										published: '2022-12-10T23:48:38Z',
+										object: {
+											id: 'https://example.com/object1',
+											type: 'Note',
+											content: '<p>p</p>',
+											attachment: [
+												{
+													type: 'Document',
+													mediaType: 'image/jpeg',
+													url: 'https://example.com/image',
+													name: null,
+													blurhash: 'U48;V;_24mx[_1~p.7%MW9?a-;xtxvWBt6ad',
+													width: 1080,
+													height: 894,
+												},
+												{
+													type: 'Document',
+													mediaType: 'video/mp4',
+													url: 'https://example.com/video',
+													name: null,
+													blurhash: 'UB9jfvtT0gO^N5tSX4XV9uR%^Ni]D%Rj$*nf',
+													width: 1080,
+													height: 616,
+												},
+											],
+										},
+									},
+									{
+										id: 'https://mastodon.social/users/c/statuses/d/activity',
+										type: 'Announce',
+										actor: 'https://social.com/users/someone',
+										published: '2022-12-10T23:48:38Z',
+										object: note.id,
+									},
+								],
+							})
+						)
+					}
+
+					throw new Error('unexpected request to ' + input.toString())
+				}
+				throw new Error('unexpected request to ' + input.url)
 			}
 
 			const req = new Request('https://example.com')
@@ -591,60 +602,63 @@ describe('Mastodon APIs', () => {
 			await createPublicNote(domain, db, 'my localnote status', actor)
 
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input.toString() === 'https://social.com/.well-known/webfinger?resource=acct%3Asomeone%40social.com') {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: 'https://social.com/someone',
-								},
-							],
-						})
-					)
-				}
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://social.com/.well-known/webfinger?resource=acct%3Asomeone%40social.com') {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: 'https://social.com/someone',
+									},
+								],
+							})
+						)
+					}
 
-				if (input.toString() === 'https://social.com/someone') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://social.com/someone',
-							type: 'Person',
-							preferredUsername: 'someone',
-							outbox: 'https://social.com/outbox',
-						})
-					)
-				}
+					if (input.toString() === 'https://social.com/someone') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://social.com/someone',
+								type: 'Person',
+								preferredUsername: 'someone',
+								outbox: 'https://social.com/outbox',
+							})
+						)
+					}
 
-				if (input.toString() === 'https://social.com/outbox') {
-					return new Response(
-						JSON.stringify({
-							first: 'https://social.com/outbox/page1',
-						})
-					)
-				}
+					if (input.toString() === 'https://social.com/outbox') {
+						return new Response(
+							JSON.stringify({
+								first: 'https://social.com/outbox/page1',
+							})
+						)
+					}
 
-				if (input.toString() === 'https://nonexistingobject.com/') {
-					return new Response('', { status: 400 })
-				}
+					if (input.toString() === 'https://nonexistingobject.com/') {
+						return new Response('', { status: 400 })
+					}
 
-				if (input.toString() === 'https://social.com/outbox/page1') {
-					return new Response(
-						JSON.stringify({
-							orderedItems: [
-								{
-									id: 'https://mastodon.social/users/c/statuses/d/activity',
-									type: 'Announce',
-									actor: 'https://mastodon.social/users/someone',
-									published: '2022-12-10T23:48:38Z',
-									object: 'https://nonexistingobject.com',
-								},
-							],
-						})
-					)
-				}
+					if (input.toString() === 'https://social.com/outbox/page1') {
+						return new Response(
+							JSON.stringify({
+								orderedItems: [
+									{
+										id: 'https://mastodon.social/users/c/statuses/d/activity',
+										type: 'Announce',
+										actor: 'https://mastodon.social/users/someone',
+										published: '2022-12-10T23:48:38Z',
+										object: 'https://nonexistingobject.com',
+									},
+								],
+							})
+						)
+					}
 
-				throw new Error('unexpected request to ' + input)
+					throw new Error('unexpected request to ' + input.toString())
+				}
+				throw new Error('unexpected request to ' + input.url)
 			}
 
 			const req = new Request('https://example.com')
@@ -660,68 +674,71 @@ describe('Mastodon APIs', () => {
 			const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input.toString() === 'https://example.com/.well-known/webfinger?resource=acct%3Asven%40example.com') {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: 'https://example.com/users/sven',
-								},
-							],
-						})
-					)
-				}
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://example.com/.well-known/webfinger?resource=acct%3Asven%40example.com') {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: 'https://example.com/users/sven',
+									},
+								],
+							})
+						)
+					}
 
-				if (input.toString() === 'https://example.com/users/sven') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://example.com/users/sven',
-							type: 'Person',
-							followers: 'https://example.com/users/sven/followers',
-						})
-					)
-				}
+					if (input.toString() === 'https://example.com/users/sven') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://example.com/users/sven',
+								type: 'Person',
+								followers: 'https://example.com/users/sven/followers',
+							})
+						)
+					}
 
-				if (input.toString() === 'https://example.com/users/sven/followers') {
-					return new Response(
-						JSON.stringify({
-							'@context': 'https://www.w3.org/ns/activitystreams',
-							id: 'https://example.com/users/sven/followers',
-							type: 'OrderedCollection',
-							totalItems: 3,
-							first: 'https://example.com/users/sven/followers/1',
-						})
-					)
-				}
+					if (input.toString() === 'https://example.com/users/sven/followers') {
+						return new Response(
+							JSON.stringify({
+								'@context': 'https://www.w3.org/ns/activitystreams',
+								id: 'https://example.com/users/sven/followers',
+								type: 'OrderedCollection',
+								totalItems: 3,
+								first: 'https://example.com/users/sven/followers/1',
+							})
+						)
+					}
 
-				if (input.toString() === 'https://example.com/users/sven/followers/1') {
-					return new Response(
-						JSON.stringify({
-							'@context': 'https://www.w3.org/ns/activitystreams',
-							id: 'https://example.com/users/sven/followers/1',
-							type: 'OrderedCollectionPage',
-							totalItems: 3,
-							partOf: 'https://example.com/users/sven/followers',
-							orderedItems: [
-								actorA.id.toString(), // local user
-								'https://example.com/users/b', // remote user
-							],
-						})
-					)
-				}
+					if (input.toString() === 'https://example.com/users/sven/followers/1') {
+						return new Response(
+							JSON.stringify({
+								'@context': 'https://www.w3.org/ns/activitystreams',
+								id: 'https://example.com/users/sven/followers/1',
+								type: 'OrderedCollectionPage',
+								totalItems: 3,
+								partOf: 'https://example.com/users/sven/followers',
+								orderedItems: [
+									actorA.id.toString(), // local user
+									'https://example.com/users/b', // remote user
+								],
+							})
+						)
+					}
 
-				if (input.toString() === 'https://example.com/users/b') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://example.com/users/b',
-							type: 'Person',
-						})
-					)
-				}
+					if (input.toString() === 'https://example.com/users/b') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://example.com/users/b',
+								type: 'Person',
+							})
+						)
+					}
 
-				throw new Error('unexpected request to ' + input)
+					throw new Error('unexpected request to ' + input.toString())
+				}
+				throw new Error('unexpected request to ' + input.url)
 			}
 
 			const res = await accounts_followers.handleRequest(domain, db, 'sven@example.com')
@@ -735,17 +752,19 @@ describe('Mastodon APIs', () => {
 		})
 
 		test('get local actor followers', async () => {
-			globalThis.fetch = async (input: any) => {
-				if ((input as object).toString() === 'https://' + domain + '/ap/users/sven2') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://example.com/actor',
-							type: 'Person',
-						})
-					)
+			globalThis.fetch = async (input: RequestInfo) => {
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://' + domain + '/ap/users/sven2') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://example.com/actor',
+								type: 'Person',
+							})
+						)
+					}
+					throw new Error('unexpected request to ' + input.toString())
 				}
-
-				throw new Error('unexpected request to ' + input)
+				throw new Error('unexpected request to ' + input.url)
 			}
 
 			const db = await makeDB()
@@ -762,17 +781,19 @@ describe('Mastodon APIs', () => {
 		})
 
 		test('get local actor following', async () => {
-			globalThis.fetch = async (input: any) => {
-				if ((input as object).toString() === 'https://' + domain + '/ap/users/sven2') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://example.com/foo',
-							type: 'Person',
-						})
-					)
+			globalThis.fetch = async (input: RequestInfo) => {
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://' + domain + '/ap/users/sven2') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://example.com/foo',
+								type: 'Person',
+							})
+						)
+					}
+					throw new Error('unexpected request to ' + input.toString())
 				}
-
-				throw new Error('unexpected request to ' + input)
+				throw new Error('unexpected request to ' + input.url)
 			}
 
 			const db = await makeDB()
@@ -793,68 +814,71 @@ describe('Mastodon APIs', () => {
 			const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 
 			globalThis.fetch = async (input: RequestInfo) => {
-				if (input.toString() === 'https://example.com/.well-known/webfinger?resource=acct%3Asven%40example.com') {
-					return new Response(
-						JSON.stringify({
-							links: [
-								{
-									rel: 'self',
-									type: 'application/activity+json',
-									href: 'https://example.com/users/sven',
-								},
-							],
-						})
-					)
-				}
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://example.com/.well-known/webfinger?resource=acct%3Asven%40example.com') {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: 'https://example.com/users/sven',
+									},
+								],
+							})
+						)
+					}
 
-				if (input.toString() === 'https://example.com/users/sven') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://example.com/users/sven',
-							type: 'Person',
-							following: 'https://example.com/users/sven/following',
-						})
-					)
-				}
+					if (input.toString() === 'https://example.com/users/sven') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://example.com/users/sven',
+								type: 'Person',
+								following: 'https://example.com/users/sven/following',
+							})
+						)
+					}
 
-				if (input.toString() === 'https://example.com/users/sven/following') {
-					return new Response(
-						JSON.stringify({
-							'@context': 'https://www.w3.org/ns/activitystreams',
-							id: 'https://example.com/users/sven/following',
-							type: 'OrderedCollection',
-							totalItems: 3,
-							first: 'https://example.com/users/sven/following/1',
-						})
-					)
-				}
+					if (input.toString() === 'https://example.com/users/sven/following') {
+						return new Response(
+							JSON.stringify({
+								'@context': 'https://www.w3.org/ns/activitystreams',
+								id: 'https://example.com/users/sven/following',
+								type: 'OrderedCollection',
+								totalItems: 3,
+								first: 'https://example.com/users/sven/following/1',
+							})
+						)
+					}
 
-				if (input.toString() === 'https://example.com/users/sven/following/1') {
-					return new Response(
-						JSON.stringify({
-							'@context': 'https://www.w3.org/ns/activitystreams',
-							id: 'https://example.com/users/sven/following/1',
-							type: 'OrderedCollectionPage',
-							totalItems: 3,
-							partOf: 'https://example.com/users/sven/following',
-							orderedItems: [
-								actorA.id.toString(), // local user
-								'https://example.com/users/b', // remote user
-							],
-						})
-					)
-				}
+					if (input.toString() === 'https://example.com/users/sven/following/1') {
+						return new Response(
+							JSON.stringify({
+								'@context': 'https://www.w3.org/ns/activitystreams',
+								id: 'https://example.com/users/sven/following/1',
+								type: 'OrderedCollectionPage',
+								totalItems: 3,
+								partOf: 'https://example.com/users/sven/following',
+								orderedItems: [
+									actorA.id.toString(), // local user
+									'https://example.com/users/b', // remote user
+								],
+							})
+						)
+					}
 
-				if (input.toString() === 'https://example.com/users/b') {
-					return new Response(
-						JSON.stringify({
-							id: 'https://example.com/users/b',
-							type: 'Person',
-						})
-					)
-				}
+					if (input.toString() === 'https://example.com/users/b') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://example.com/users/b',
+								type: 'Person',
+							})
+						)
+					}
 
-				throw new Error('unexpected request to ' + input)
+					throw new Error('unexpected request to ' + input.toString())
+				}
+				throw new Error('unexpected request to ' + input.url)
 			}
 
 			const res = await accounts_following.handleRequest(domain, db, 'sven@example.com')
