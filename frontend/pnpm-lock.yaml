@@ -11,11 +11,11 @@ dependencies:
 
 devDependencies:
   '@builder.io/qwik':
-    specifier: 0.21.0
-    version: 0.21.0(undici@5.22.1)
+    specifier: 0.107.0
+    version: 0.107.0(undici@5.22.1)
   '@builder.io/qwik-city':
     specifier: 0.4.0
-    version: 0.4.0(@builder.io/qwik@0.21.0)
+    version: 0.4.0(@builder.io/qwik@0.107.0)
   '@types/eslint':
     specifier: 8.44.0
     version: 8.44.0
@@ -429,13 +429,13 @@ packages:
     resolution: {integrity: sha512-0hYQ8SB4Db5zvZB4axdMHGwEaQjkZzFjQiN9LVYvIFB2nSUHW9tYpxWriPrWDASIxiaXax83REcLxuSdnGPZtw==}
     dev: true
 
-  /@builder.io/qwik-city@0.4.0(@builder.io/qwik@0.21.0):
+  /@builder.io/qwik-city@0.4.0(@builder.io/qwik@0.107.0):
     resolution: {integrity: sha512-XNpmHzSHam7ZYrd12kJdwFerMEck0iOk3Wgb9IlVIuaN/nLuN033qrNWLVq+ZzlhplUea9DGc4job8qMix7WWA==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     peerDependencies:
       '@builder.io/qwik': '>=0.19.0'
     dependencies:
-      '@builder.io/qwik': 0.21.0(undici@5.22.1)
+      '@builder.io/qwik': 0.107.0(undici@5.22.1)
       '@mdx-js/mdx': 2.3.0
       '@types/mdx': 2.0.3
       source-map: 0.7.4
@@ -445,8 +445,8 @@ packages:
       - supports-color
     dev: true
 
-  /@builder.io/qwik@0.21.0(undici@5.22.1):
-    resolution: {integrity: sha512-YDQcCSGPgXLQkY260N4XvYavxPNHewzIzIjqbl9hvnnk7a1s4EkcCrkudbGCl6VkkiQsDKMYPsemy4sFpKlafg==}
+  /@builder.io/qwik@0.107.0(undici@5.22.1):
+    resolution: {integrity: sha512-YcLvM4sW69rKbK+tcOm60+rvbH7j/b3x2m3+dhGQOgyGMWw8WqoCAmr5clF5xONM0pCaOkrh6I3SncRedXFBYw==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     hasBin: true
     peerDependencies:
