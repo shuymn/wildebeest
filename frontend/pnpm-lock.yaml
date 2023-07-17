@@ -11,11 +11,11 @@ dependencies:
 
 devDependencies:
   '@builder.io/qwik':
-    specifier: 0.21.0
-    version: 0.21.0(undici@5.22.1)
+    specifier: 1.2.6
+    version: 1.2.6(undici@5.22.1)
   '@builder.io/qwik-city':
     specifier: 0.4.0
-    version: 0.4.0(@builder.io/qwik@0.21.0)
+    version: 0.4.0(@builder.io/qwik@1.2.6)
   '@types/eslint':
     specifier: 8.44.0
     version: 8.44.0
@@ -429,13 +429,13 @@ packages:
     resolution: {integrity: sha512-0hYQ8SB4Db5zvZB4axdMHGwEaQjkZzFjQiN9LVYvIFB2nSUHW9tYpxWriPrWDASIxiaXax83REcLxuSdnGPZtw==}
     dev: true
 
-  /@builder.io/qwik-city@0.4.0(@builder.io/qwik@0.21.0):
+  /@builder.io/qwik-city@0.4.0(@builder.io/qwik@1.2.6):
     resolution: {integrity: sha512-XNpmHzSHam7ZYrd12kJdwFerMEck0iOk3Wgb9IlVIuaN/nLuN033qrNWLVq+ZzlhplUea9DGc4job8qMix7WWA==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     peerDependencies:
       '@builder.io/qwik': '>=0.19.0'
     dependencies:
-      '@builder.io/qwik': 0.21.0(undici@5.22.1)
+      '@builder.io/qwik': 1.2.6(undici@5.22.1)
       '@mdx-js/mdx': 2.3.0
       '@types/mdx': 2.0.3
       source-map: 0.7.4
@@ -445,13 +445,14 @@ packages:
       - supports-color
     dev: true
 
-  /@builder.io/qwik@0.21.0(undici@5.22.1):
-    resolution: {integrity: sha512-YDQcCSGPgXLQkY260N4XvYavxPNHewzIzIjqbl9hvnnk7a1s4EkcCrkudbGCl6VkkiQsDKMYPsemy4sFpKlafg==}
+  /@builder.io/qwik@1.2.6(undici@5.22.1):
+    resolution: {integrity: sha512-Cm1sLAimML55I5T1RI80R1lLgI4cnSeQt5obQtcMKa8wMmf2/luEyQaEkeN2fV3sp/gaVXCfAuKaddXK6ONdww==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     hasBin: true
     peerDependencies:
       undici: ^5.14.0
     dependencies:
+      csstype: 3.1.2
       undici: 5.22.1
     dev: true
 
@@ -1795,6 +1796,10 @@ packages:
     resolution: {integrity: sha512-/Tb/JcjK111nNScGob5MNtsntNM1aCNUDipB/TkwZFhyDrrE47SOx/18wF2bbjgc3ZzCSKW1T5nt5EbFoAz/Vg==}
     engines: {node: '>=4'}
     hasBin: true
+    dev: true
+
+  /csstype@3.1.2:
+    resolution: {integrity: sha512-I7K1Uu0MBPzaFKg4nI5Q7Vs2t+3gWWW648spaF+Rg7pI9ds18Ugn+lvg4SHczUdKlHI5LWBXyqfS8+DufyBsgQ==}
     dev: true
 
   /data-uri-to-buffer@4.0.0:
