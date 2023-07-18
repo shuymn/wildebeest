@@ -1,5 +1,26 @@
 {
 	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
 	"extends": ["config:recommended"],
-	"labels": ["dependencies"]
+	"labels": ["dependencies"],
+	"lockFileMaintenance": {
+		"enabled": true
+	},
+	"packageRules": [
+		{
+			"matchUpdateTypes": ["patch", "pin"],
+			"automerge": true
+		},
+		{
+			"groupName": "linters",
+			"extends": ["packages:linters"],
+			"matchPackageNames": ["prettier"],
+			"matchPackagePatterns": ["^@typescript-eslint/"],
+			"excludePackageNames": ["eslint-plugin-qwik"]
+		},
+		{
+			"groupName": "qwik",
+			"matchPackagePatterns": ["^@builder.io/qwik"],
+			"matchPackageNames": ["eslint-plugin-qwik"]
+		}
+	]
 }
