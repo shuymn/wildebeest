@@ -15,8 +15,8 @@
 		"watch": "nodemon -w ./src --ext tsx,ts --exec npm run build"
 	},
 	"devDependencies": {
-		"@builder.io/qwik": "0.21.0",
-		"@builder.io/qwik-city": "0.4.0",
+		"@builder.io/qwik": "1.2.6",
+		"@builder.io/qwik-city": "1.2.6",
 		"@types/eslint": "8.44.0",
 		"@types/jest": "^29.2.4",
 		"@types/node": "^18.11.16",
@@ -25,7 +25,7 @@
 		"@typescript-eslint/parser": "6.1.0",
 		"autoprefixer": "10.4.14",
 		"eslint": "8.45.0",
-		"eslint-plugin-qwik": "0.16.1",
+		"eslint-plugin-qwik": "1.2.6",
 		"jest": "^29.3.1",
 		"lorem-ipsum": "^2.0.8",
 		"node-fetch": "3.3.1",
