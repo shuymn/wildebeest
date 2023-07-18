@@ -24,7 +24,7 @@
 		"simple-git-hooks": "^2.8.1",
 		"ts-jest": "^29.0.3",
 		"typescript": "^5.0.0",
-		"wrangler": "2.20.0"
+		"wrangler": "3.3.0"
 	},
 	"private": true,
 	"scripts": {
