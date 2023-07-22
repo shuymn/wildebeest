@@ -94,10 +94,36 @@ export async function toMastodonStatusFromObject(
 	}
 }
 
+type MastodonStatusRow = {
+	actor_id: string
+	actor_type: Actor['type']
+	actor_pubkey: string | null
+	actor_cdate: string
+	actor_properties: string
+	actor_is_admin: 1 | null
+	actor_mastodon_id: string
+
+	mastodon_id: string
+	id: string
+	cdate: string
+	properties: string
+	reblogged?: 1 | 0
+	favourited?: 1 | 0
+
+	publisher_actor_id?: string
+	favourites_count?: number
+	reblogs_count?: number
+	replies_count?: number
+}
+
 // toMastodonStatusFromRow makes assumption about what field are available on
 // the `row` object. This function is only used for timelines, which is optimized
 // SQL. Otherwise don't use this function.
-export async function toMastodonStatusFromRow(domain: string, db: Database, row: any): Promise<MastodonStatus | null> {
+export async function toMastodonStatusFromRow(
+	domain: string,
+	db: Database,
+	row: MastodonStatusRow
+): Promise<MastodonStatus | null> {
 	if (row.publisher_actor_id === undefined) {
 		console.warn('missing `row.publisher_actor_id`')
 		return null
@@ -113,9 +139,12 @@ export async function toMastodonStatusFromRow(domain: string, db: Database, row:
 	}
 	const author = actors.actorFromRow({
 		id: row.actor_id,
+		type: row.actor_type,
+		pubkey: row.actor_pubkey,
 		cdate: row.actor_cdate,
 		properties: row.actor_properties,
-		preferredUsername: row.preferredUsername,
+		is_admin: row.actor_is_admin,
+		mastodon_id: row.actor_mastodon_id,
 	})
 
 	const account = await loadExternalMastodonAccount(author)
@@ -136,7 +165,7 @@ export async function toMastodonStatusFromRow(domain: string, db: Database, row:
 	const status: MastodonStatus = {
 		id: row.mastodon_id,
 		url: new URL(`/@${author.preferredUsername}/${row.mastodon_id}`, 'https://' + domain),
-		uri: row.id,
+		uri: new URL(row.id),
 		created_at: new Date(row.cdate).toISOString(),
 		emojis: [],
 		media_attachments: mediaAttachments,
