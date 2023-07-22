@@ -6,8 +6,8 @@ import { Handle } from 'wildebeest/backend/src/utils/handle'
 import { generateUserKey } from 'wildebeest/backend/src/utils/key-ops'
 import { defaultImages } from 'wildebeest/config/accounts'
 
-const PERSON = 'Person'
 const isTesting = typeof jest !== 'undefined'
+
 export const emailSymbol = Symbol()
 export const isAdminSymbol = Symbol()
 
@@ -20,6 +20,7 @@ export function actorURL(domain: string, obj: { perferredUsername: string } | Pi
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#actor-types
 export interface Actor extends ApObject {
+	type: 'Person' | 'Service' | 'Organization' | 'Group' | 'Application'
 	inbox: URL
 	outbox: URL
 	following: URL
@@ -34,6 +35,8 @@ export interface Actor extends ApObject {
 	[emailSymbol]: string
 	[isAdminSymbol]: boolean
 }
+
+const PERSON = 'Person'
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-person
 export interface Person extends Actor {
