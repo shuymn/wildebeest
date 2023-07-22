@@ -1,11 +1,14 @@
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
 import type { MastodonID } from 'wildebeest/backend/src/types'
-import { RequiredProps, SingleOrArray } from 'wildebeest/backend/src/utils/type'
+import { Intersect, RequiredProps, SingleOrArray } from 'wildebeest/backend/src/utils/type'
 
 export const originalActorIdSymbol = Symbol()
 export const originalObjectIdSymbol = Symbol()
 export const mastodonIdSymbol = Symbol()
+
+export type Remote<T extends ApObject> = Omit<ApObject & Partial<Intersect<ApObject, T>>, symbol>
+export type Local<T extends ApObject> = T & Required<Pick<T, Extract<keyof T, symbol>>>
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#object-types
 export interface ApObject {
