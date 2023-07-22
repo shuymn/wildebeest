@@ -389,7 +389,8 @@ export function actorFromRow(row: any): Actor {
 		outbox: properties.outbox,
 		following: properties.following,
 		followers: properties.followers,
-		discoverable: true,
+		discoverable: properties.discoverable ?? false,
+		manuallyApprovesFollowers: properties.manuallyApprovesFollowers ?? false,
 		publicKey: publicKey ?? undefined,
 		alsoKnownAs: properties.alsoKnownAs ?? undefined,
 
