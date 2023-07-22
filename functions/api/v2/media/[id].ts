@@ -13,8 +13,11 @@ import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 import { readBody } from 'wildebeest/backend/src/utils/body'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
-export const onRequestPut: PagesFunction<Env, any, ContextData> = async ({ params, env, request }) => {
-	return handleRequestPut(await getDatabase(env), params.id as MastodonId, request)
+export const onRequestPut: PagesFunction<Env, 'id', ContextData> = async ({ params: { id }, env, request }) => {
+	if (typeof id !== 'string') {
+		return errors.mediaNotFound(String(id))
+	}
+	return handleRequestPut(await getDatabase(env), id, request)
 }
 
 type UpdateMedia = {

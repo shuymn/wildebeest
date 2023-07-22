@@ -1,6 +1,7 @@
 import { Buffer } from 'buffer'
 import {
 	type ApObject,
+	ApObjectId,
 	getApId,
 	getTextContent,
 	mastodonIdSymbol,
@@ -151,29 +152,40 @@ RETURNING type
 
 export async function getPersonByEmail(db: Database, email: string): Promise<Person | null> {
 	const stmt = db.prepare('SELECT * FROM actors WHERE email=? AND type=?').bind(email, PERSON)
-	const { results } = await stmt.all()
+	const { results } = await stmt.all<{
+		id: string
+		type: typeof PERSON
+		pubkey: string
+		cdate: string
+		properties: string
+		is_admin: 1 | null
+		mastodon_id: string | null
+	}>()
 	if (!results || results.length === 0) {
 		return null
 	}
-	const row: any = {
+	const row: ActorRow<Person> = {
 		...results[0],
 		mastodon_id: results[0].mastodon_id ?? (await setMastodonId(db, results[0].id, results[0].cdate)),
 	}
 	return actorFromRow(row)
 }
 
-type PersonProperties = {
-	name?: string
-	summary?: string
-	icon?: { url: string }
-	image?: { url: string }
-	preferredUsername?: string
-
-	inbox?: string
-	outbox?: string
-	following?: string
-	followers?: string
-}
+type ActorProperties = Pick<
+	Remote<Actor>,
+	| 'name'
+	| 'summary'
+	| 'icon'
+	| 'image'
+	| 'preferredUsername'
+	| 'inbox'
+	| 'outbox'
+	| 'following'
+	| 'followers'
+	| 'alsoKnownAs'
+	| 'discoverable'
+	| 'manuallyApprovesFollowers'
+>
 
 // Create a local user
 export async function createPerson(
@@ -181,7 +193,7 @@ export async function createPerson(
 	db: Database,
 	userKEK: string,
 	email: string,
-	properties: PersonProperties = {},
+	properties: ActorProperties = {},
 	admin = false
 ): Promise<Person> {
 	const userKeyPair = await generateUserKey(userKEK)
@@ -212,24 +224,24 @@ export async function createPerson(
 	const id = actorURL(domain, { perferredUsername: properties.preferredUsername }).toString()
 
 	if (properties.inbox === undefined) {
-		properties.inbox = id + '/inbox'
+		properties.inbox = new URL(id + '/inbox')
 	}
 
 	if (properties.outbox === undefined) {
-		properties.outbox = id + '/outbox'
+		properties.outbox = new URL(id + '/outbox')
 	}
 
 	if (properties.following === undefined) {
-		properties.following = id + '/following'
+		properties.following = new URL(id + '/following')
 	}
 
 	if (properties.followers === undefined) {
-		properties.followers = id + '/followers'
+		properties.followers = new URL(id + '/followers')
 	}
 
 	const now = new Date()
 	const mastodonId = await generateMastodonId(db, 'actors', now)
-	const row = await db
+	const row: ActorRow<Person> = await db
 		.prepare(
 			`
 INSERT INTO actors(id, type, cdate, email, pubkey, privkey, privkey_salt, properties, is_admin, mastodon_id)
@@ -249,10 +261,18 @@ RETURNING *
 			admin ? 1 : null,
 			mastodonId
 		)
-		.first()
+		.first<{
+			id: string
+			type: typeof PERSON
+			pubkey: string
+			cdate: string
+			properties: string
+			is_admin: 1 | null
+			mastodon_id: string
+		}>()
 	await db.prepare('INSERT INTO actor_preferences(id) VALUES(?)').bind(id).run()
 
-	return actorFromRow(row) as Person
+	return actorFromRow(row)
 }
 
 export async function updateActorProperty(db: Database, actorId: URL, key: string, value: string) {
@@ -299,9 +319,35 @@ export async function setMastodonId(db: Database, actorId: string | URL, cdate: 
 	return mastodonId
 }
 
+export async function getActorByMastodonId(db: Database, id: MastodonId): Promise<Actor | null> {
+	const { results } = await db.prepare(`SELECT * FROM actors WHERE mastodon_id=?`).bind(id).all<{
+		id: string
+		type: Actor['type']
+		email: string
+		pubkey: string | null
+		cdate: string
+		properties: string
+		is_admin: 1 | null
+		mastodon_id: string
+	}>()
+	if (!results || results.length === 0) {
+		return null
+	}
+	return actorFromRow(results[0])
+}
+
 export async function getActorById(db: Database, id: Actor['id']): Promise<Actor | null> {
 	const stmt = db.prepare('SELECT * FROM actors WHERE id=?').bind(id.toString())
-	const { results } = await stmt.all()
+	const { results } = await stmt.all<{
+		id: string
+		type: Actor['type']
+		email: string
+		pubkey: string | null
+		cdate: string
+		properties: string
+		is_admin: 1 | null
+		mastodon_id: string | null
+	}>()
 	if (!results || results.length === 0) {
 		return null
 	}
@@ -311,15 +357,26 @@ export async function getActorById(db: Database, id: Actor['id']): Promise<Actor
 	})
 }
 
-export function actorFromRow(row: any): Actor {
+export type ActorRow<T extends Actor> = {
+	id: string
+	type: T['type']
+	pubkey: string | null
+	cdate: string
+	properties: ActorProperties | string
+	is_admin: 1 | null
+	mastodon_id: string
+	original_actor_id?: ApObjectId
+}
+
+export function actorFromRow<T extends Actor>(row: ActorRow<T>) {
 	let properties
 	if (typeof row.properties === 'object') {
 		// neon uses JSONB for properties which is returned as a deserialized
 		// object.
-		properties = row.properties as PersonProperties
+		properties = row.properties
 	} else {
 		// D1 uses a string for JSON properties
-		properties = JSON.parse(row.properties) as PersonProperties
+		properties = JSON.parse(row.properties) as ActorProperties
 	}
 
 	const icon = properties.icon ?? {
@@ -350,27 +407,25 @@ export function actorFromRow(row: any): Actor {
 
 	let domain = id.hostname
 	if (row.original_actor_id) {
-		domain = new URL(row.original_actor_id).hostname
+		domain = getApId(row.original_actor_id).hostname
 	}
 
 	// Old local actors weren't created with inbox/outbox/etc properties, so add
 	// them if missing.
-	{
-		if (properties.inbox === undefined) {
-			properties.inbox = id + '/inbox'
-		}
+	if (properties.inbox === undefined) {
+		properties.inbox = new URL(id + '/inbox')
+	}
 
-		if (properties.outbox === undefined) {
-			properties.outbox = id + '/outbox'
-		}
+	if (properties.outbox === undefined) {
+		properties.outbox = new URL(id + '/outbox')
+	}
 
-		if (properties.following === undefined) {
-			properties.following = id + '/following'
-		}
+	if (properties.following === undefined) {
+		properties.following = new URL(id + '/following')
+	}
 
-		if (properties.followers === undefined) {
-			properties.followers = id + '/followers'
-		}
+	if (properties.followers === undefined) {
+		properties.followers = new URL(id + '/followers')
 	}
 
 	return {

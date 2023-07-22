@@ -6,7 +6,7 @@ import { internalServerError } from '../errors'
 /**
  * A Pages middleware function that logs errors to the console and responds with 500 errors and stack-traces.
  */
-export async function errorHandling(context: EventContext<Env, any, any>) {
+export async function errorHandling(context: EventContext<Env, string, unknown>) {
 	const sentry = initSentry(context.request, context.env, context)
 
 	try {

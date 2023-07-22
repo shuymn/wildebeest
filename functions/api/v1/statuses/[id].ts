@@ -17,16 +17,27 @@ import type { DeliverMessageBody, Queue } from 'wildebeest/backend/src/types/que
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
 
-export const onRequestGet: PagesFunction<Env, any, ContextData> = async ({ params, env, request, data }) => {
+export const onRequestGet: PagesFunction<Env, 'id', ContextData> = async ({ params: { id }, env, request, data }) => {
+	if (typeof id !== 'string') {
+		return errors.statusNotFound(String(id))
+	}
 	const domain = new URL(request.url).hostname
-	return handleRequestGet(await getDatabase(env), params.id as MastodonId, domain, data.connectedActor)
+	return handleRequestGet(await getDatabase(env), id, domain, data.connectedActor)
 }
 
-export const onRequestDelete: PagesFunction<Env, any, ContextData> = async ({ params, env, request, data }) => {
+export const onRequestDelete: PagesFunction<Env, 'id', ContextData> = async ({
+	params: { id },
+	env,
+	request,
+	data,
+}) => {
+	if (typeof id !== 'string') {
+		return errors.statusNotFound(String(id))
+	}
 	const domain = new URL(request.url).hostname
 	return handleRequestDelete(
 		await getDatabase(env),
-		params.id as MastodonId,
+		id,
 		data.connectedActor,
 		domain,
 		env.userKEK,

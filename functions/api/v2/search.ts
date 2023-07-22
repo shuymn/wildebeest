@@ -1,5 +1,5 @@
 // https://docs.joinmastodon.org/methods/search/#v2
-import { actorFromRow, PERSON, Person, setMastodonId } from 'wildebeest/backend/src/activitypub/actors'
+import { actorFromRow, ActorRow, PERSON, Person, setMastodonId } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import { MastodonAccount } from 'wildebeest/backend/src/types/account'
@@ -64,14 +64,22 @@ WHERE rowid IN (SELECT rowid FROM search_fts WHERE (preferredUsername MATCH ?1 O
 			const { results, success, error } = await db
 				.prepare(sql)
 				.bind(query.localPart + '*', PERSON)
-				.all()
+				.all<{
+					id: string
+					type: typeof PERSON
+					pubkey: string | null
+					cdate: string
+					properties: string
+					is_admin: 1 | null
+					mastodon_id: string | null
+				}>()
 			if (!success) {
 				throw new Error('SQL error: ' + error)
 			}
 
 			if (results !== undefined) {
 				for (let i = 0, len = results.length; i < len; i++) {
-					const row: any = {
+					const row: ActorRow<Person> = {
 						...results[i],
 						mastodon_id: results[i].mastodon_id ?? (await setMastodonId(db, results[i].id, results[i].cdate)),
 					}
