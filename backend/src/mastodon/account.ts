@@ -1,6 +1,7 @@
 import { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as apFollow from 'wildebeest/backend/src/activitypub/actors/follow'
 import * as apOutbox from 'wildebeest/backend/src/activitypub/actors/outbox'
+import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database } from 'wildebeest/backend/src/database'
 import type { MastodonAccount, Preference } from 'wildebeest/backend/src/types/account'
 import {
@@ -25,11 +26,10 @@ function toMastodonAccount(handle: Handle, res: Actor): MastodonAccount {
 		acct = handleToAcct(handle)
 	}
 
+	// TODO: replace stubs with actual values
 	return {
 		acct,
-
-		// FIXME: use numeric id
-		id: acct,
+		id: res[mastodonIdSymbol],
 		username: res.preferredUsername || res.name || 'unnamed',
 		url: res.url ? res.url.toString() : '',
 		display_name: res.name || res.preferredUsername || '',

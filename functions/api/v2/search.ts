@@ -1,5 +1,5 @@
 // https://docs.joinmastodon.org/methods/search/#v2
-import { actorFromRow } from 'wildebeest/backend/src/activitypub/actors'
+import { actorFromRow, PERSON, Person, setMastodonId } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import { MastodonAccount } from 'wildebeest/backend/src/types/account'
@@ -56,14 +56,14 @@ export async function handleRequest(db: Database, request: Request): Promise<Res
 
 	if (isLocalHandle(query)) {
 		const sql = `
-          SELECT actors.* FROM actors
-          WHERE rowid IN (SELECT rowid FROM search_fts WHERE (preferredUsername MATCH ? OR name MATCH ?) AND type='Person' ORDER BY rank LIMIT 10)
+SELECT actors.* FROM actors
+WHERE rowid IN (SELECT rowid FROM search_fts WHERE (preferredUsername MATCH ?1 OR name MATCH ?1) AND type=?2 ORDER BY rank LIMIT 10)
         `
 
 		try {
 			const { results, success, error } = await db
 				.prepare(sql)
-				.bind(query.localPart + '*', query.localPart + '*')
+				.bind(query.localPart + '*', PERSON)
 				.all()
 			if (!success) {
 				throw new Error('SQL error: ' + error)
@@ -71,7 +71,10 @@ export async function handleRequest(db: Database, request: Request): Promise<Res
 
 			if (results !== undefined) {
 				for (let i = 0, len = results.length; i < len; i++) {
-					const row: any = results[i]
+					const row: any = {
+						...results[i],
+						mastodon_id: results[i].mastodon_id ?? (await setMastodonId(db, results[i].id, results[i].cdate)),
+					}
 					const actor = actorFromRow(row)
 					out.accounts.push(await loadExternalMastodonAccount(actor))
 				}
