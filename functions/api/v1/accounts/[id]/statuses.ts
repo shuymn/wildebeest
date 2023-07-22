@@ -85,8 +85,6 @@ async function getRemoteStatuses(
 	const activities = await outbox.get(actor, limit)
 
 	// TODO: use account
-	// eslint-disable-next-line unused-imports/no-unused-vars
-	// const account = await loadExternalMastodonAccount(acct, actor)
 
 	const promises = activities.items.map(async (activity: Activity) => {
 		const actorId = objects.getApId(activity.actor)
