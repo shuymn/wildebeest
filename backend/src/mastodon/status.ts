@@ -13,7 +13,7 @@ import { createPublicNote, type Note } from 'wildebeest/backend/src/activitypub/
 import { type Database } from 'wildebeest/backend/src/database'
 import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import * as media from 'wildebeest/backend/src/media/'
-import type { MastodonID } from 'wildebeest/backend/src/types'
+import type { MastodonId } from 'wildebeest/backend/src/types'
 import type { MastodonStatus } from 'wildebeest/backend/src/types'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 import { handleToAcct, parseHandle, toRemoteHandle } from 'wildebeest/backend/src/utils/handle'
@@ -181,7 +181,7 @@ export async function toMastodonStatusFromRow(domain: string, db: Database, row:
 
 export async function getMastodonStatusById(
 	db: Database,
-	id: MastodonID,
+	id: MastodonId,
 	domain: string
 ): Promise<MastodonStatus | null> {
 	const obj = await getObjectByMastodonId(db, id)

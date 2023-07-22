@@ -1,4 +1,4 @@
-import type { MastodonID } from 'wildebeest/backend/src/types'
+import type { MastodonId } from 'wildebeest/backend/src/types'
 
 import type { MastodonAccount } from './account'
 import type { MediaAttachment } from './media'
@@ -8,7 +8,7 @@ export type Visibility = 'public' | 'unlisted' | 'private' | 'direct'
 // https://docs.joinmastodon.org/entities/Status/
 // https://github.com/mastodon/mastodon-android/blob/master/mastodon/src/main/java/org/joinmastodon/android/model/Status.java
 export type MastodonStatus = {
-	id: MastodonID
+	id: MastodonId
 	uri: URL
 	url: URL
 	created_at: string

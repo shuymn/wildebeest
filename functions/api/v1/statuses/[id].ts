@@ -10,7 +10,7 @@ import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import { getMastodonStatusById, toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
 import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
-import type { MastodonID } from 'wildebeest/backend/src/types'
+import type { MastodonId } from 'wildebeest/backend/src/types'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import type { DeliverMessageBody, Queue } from 'wildebeest/backend/src/types/queue'
@@ -19,14 +19,14 @@ import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
 
 export const onRequestGet: PagesFunction<Env, any, ContextData> = async ({ params, env, request, data }) => {
 	const domain = new URL(request.url).hostname
-	return handleRequestGet(await getDatabase(env), params.id as MastodonID, domain, data.connectedActor)
+	return handleRequestGet(await getDatabase(env), params.id as MastodonId, domain, data.connectedActor)
 }
 
 export const onRequestDelete: PagesFunction<Env, any, ContextData> = async ({ params, env, request, data }) => {
 	const domain = new URL(request.url).hostname
 	return handleRequestDelete(
 		await getDatabase(env),
-		params.id as MastodonID,
+		params.id as MastodonId,
 		data.connectedActor,
 		domain,
 		env.userKEK,
@@ -37,7 +37,7 @@ export const onRequestDelete: PagesFunction<Env, any, ContextData> = async ({ pa
 
 export async function handleRequestGet(
 	db: Database,
-	id: MastodonID,
+	id: MastodonId,
 	domain: string,
 	// To be used when we implement private statuses
 	// eslint-disable-next-line unused-imports/no-unused-vars
@@ -64,7 +64,7 @@ export async function handleRequestGet(
 
 export async function handleRequestDelete(
 	db: Database,
-	id: MastodonID,
+	id: MastodonId,
 	connectedActor: Person,
 	domain: string,
 	userKEK: string,

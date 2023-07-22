@@ -1,6 +1,6 @@
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
-import type { MastodonID } from 'wildebeest/backend/src/types'
+import type { MastodonId } from 'wildebeest/backend/src/types'
 import { Intersect, RequiredProps, SingleOrArray } from 'wildebeest/backend/src/utils/type'
 
 export const originalActorIdSymbol = Symbol()
@@ -36,7 +36,7 @@ export interface ApObject {
 	// Internal
 	[originalActorIdSymbol]?: string
 	[originalObjectIdSymbol]?: string
-	[mastodonIdSymbol]?: MastodonID
+	[mastodonIdSymbol]?: MastodonId
 }
 
 export type ApObjectId = ApObject['id']
@@ -248,7 +248,7 @@ export async function getObjectByOriginalId(db: Database, id: string | URL): Pro
 	return getObjectBy(db, ObjectByKey.originalObjectId, id.toString())
 }
 
-export async function getObjectByMastodonId(db: Database, id: MastodonID): Promise<ApObject | null> {
+export async function getObjectByMastodonId(db: Database, id: MastodonId): Promise<ApObject | null> {
 	return getObjectBy(db, ObjectByKey.mastodonId, id)
 }
 

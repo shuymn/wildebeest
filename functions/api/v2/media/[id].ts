@@ -6,7 +6,7 @@ import { updateObjectProperty } from 'wildebeest/backend/src/activitypub/objects
 import type { Image } from 'wildebeest/backend/src/activitypub/objects/image'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
-import type { MastodonID } from 'wildebeest/backend/src/types'
+import type { MastodonId } from 'wildebeest/backend/src/types'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
@@ -14,14 +14,14 @@ import { readBody } from 'wildebeest/backend/src/utils/body'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
 export const onRequestPut: PagesFunction<Env, any, ContextData> = async ({ params, env, request }) => {
-	return handleRequestPut(await getDatabase(env), params.id as MastodonID, request)
+	return handleRequestPut(await getDatabase(env), params.id as MastodonId, request)
 }
 
 type UpdateMedia = {
 	description?: string
 }
 
-export async function handleRequestPut(db: Database, id: MastodonID, request: Request): Promise<Response> {
+export async function handleRequestPut(db: Database, id: MastodonId, request: Request): Promise<Response> {
 	// Update the image properties
 	{
 		const image = (await getObjectByMastodonId(db, id)) as Image
