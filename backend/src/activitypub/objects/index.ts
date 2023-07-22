@@ -1,7 +1,7 @@
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
 import type { MastodonID } from 'wildebeest/backend/src/types'
-import { KeyTypeOf, RequiredProps, SingleOrArray } from 'wildebeest/backend/src/utils/type'
+import { RequiredProps, SingleOrArray } from 'wildebeest/backend/src/utils/type'
 
 export const originalActorIdSymbol = Symbol()
 export const originalObjectIdSymbol = Symbol()
@@ -36,8 +36,8 @@ export interface ApObject {
 	[mastodonIdSymbol]?: MastodonID
 }
 
-export type ApObjectId = KeyTypeOf<ApObject, 'id'>
-export type ApObjectUrl = NonNullable<KeyTypeOf<ApObject, 'url'>>
+export type ApObjectId = ApObject['id']
+export type ApObjectUrl = NonNullable<ApObject['url']>
 export type ApObjectOrId = ApObject | ApObjectId
 export type ApObjectOrUrl = ApObject | ApObjectUrl
 
