@@ -43,5 +43,5 @@ async function getLocalAccount(domain: string, db: Database, handle: LocalHandle
 		return null
 	}
 
-	return await loadLocalMastodonAccount(db, actor)
+	return await loadLocalMastodonAccount(db, actor, handle)
 }

@@ -8,7 +8,7 @@ import {
 	Handle,
 	handleToAcct,
 	isLocalHandle,
-	parseHandle,
+	LocalHandle,
 	RemoteHandle,
 } from 'wildebeest/backend/src/utils/handle'
 import { unwrapPrivateKey } from 'wildebeest/backend/src/utils/key-ops'
@@ -75,7 +75,13 @@ export async function loadExternalMastodonAccount(
 }
 
 // Load a local user and return it as a MastodonAccount
-export async function loadLocalMastodonAccount(db: Database, res: Actor): Promise<MastodonAccount> {
+export async function loadLocalMastodonAccount(
+	db: Database,
+	res: Actor,
+	handle: LocalHandle
+): Promise<MastodonAccount> {
+	const account = toMastodonAccount(handle, res)
+
 	const query = `
 SELECT
   (SELECT count(*)
@@ -93,11 +99,11 @@ SELECT
    WHERE actor_following.target_actor_id=?) AS followers_count
   `
 
-	// For local user the acct is only the local part of the email address.
-	const handle = parseHandle(res.preferredUsername || 'unknown')
-	const account = toMastodonAccount(handle, res)
+	const row = await db
+		.prepare(query)
+		.bind(res.id.toString(), res.id.toString(), res.id.toString())
+		.first<{ statuses_count: number; followers_count: number; following_count: number }>()
 
-	const row: any = await db.prepare(query).bind(res.id.toString(), res.id.toString(), res.id.toString()).first()
 	account.statuses_count = row.statuses_count
 	account.followers_count = row.followers_count
 	account.following_count = row.following_count
