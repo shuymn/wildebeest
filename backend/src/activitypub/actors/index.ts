@@ -34,6 +34,7 @@ export interface Actor extends ApObject {
 	following: URL
 	followers: URL
 	discoverable: boolean
+	manuallyApprovesFollowers?: boolean
 	alsoKnownAs?: string[]
 	publicKey?: {
 		id: string
