@@ -40,13 +40,13 @@ export interface Person extends Actor {
 	type: typeof PERSON
 }
 
-export async function get(url: string | URL): Promise<Actor> {
+export async function fetchActor(url: string | URL): Promise<Actor> {
 	const headers = {
 		accept: 'application/activity+json',
 	}
-	const res = await fetch(url.toString(), { headers })
+	const res = await fetch(url, { headers })
 	if (!res.ok) {
-		throw new Error(`${url} returned: ${res.status}`)
+		throw new Error(`${url.toString()} returned: ${res.status}`)
 	}
 
 	const data = await res.json<any>()
@@ -100,7 +100,7 @@ export async function getAndCache(url: URL, db: Database): Promise<Actor> {
 		}
 	}
 
-	const actor = await get(url)
+	const actor = await fetchActor(url)
 	if (!actor.type || !actor.id) {
 		throw new Error('missing fields on Actor')
 	}
