@@ -78,8 +78,14 @@ export async function loadExternalMastodonAccount(
 export async function loadLocalMastodonAccount(
 	db: Database,
 	res: Actor,
-	handle: LocalHandle
+	handle?: LocalHandle
 ): Promise<MastodonAccount> {
+	if (handle === undefined) {
+		handle = {
+			localPart: actorToHandle(res).localPart,
+			domain: null,
+		}
+	}
 	const account = toMastodonAccount(handle, res)
 
 	const query = `
