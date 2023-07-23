@@ -26,10 +26,10 @@ export default component$(() => {
 	return (
 		<StatusesPanel
 			initialStatuses={statuses}
-			fetchMoreStatuses={$(async (numOfCurrentStatuses: number) => {
+			fetchMoreStatuses={$(async (maxId: string) => {
 				let statuses: MastodonStatus[] = []
 				try {
-					const response = await fetch(`/api/v1/timelines/public?offset=${numOfCurrentStatuses}`)
+					const response = await fetch(`/api/v1/timelines/public?max_id=${maxId}`)
 					if (response.ok) {
 						const results = await response.text()
 						statuses = JSON.parse(results)

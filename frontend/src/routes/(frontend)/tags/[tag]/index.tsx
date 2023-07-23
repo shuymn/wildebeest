@@ -32,12 +32,11 @@ export default component$(() => {
 				</StickyHeader>
 				<StatusesPanel
 					initialStatuses={loaderData.value.statuses}
-					fetchMoreStatuses={$(async (numOfCurrentStatuses: number) => {
+					fetchMoreStatuses={$(async (maxId: string) => {
 						let statuses: MastodonStatus[] = []
 						try {
-							const response = await fetch(
-								`/api/v1/timelines/tags/${loaderData.value.tag}/?offset=${numOfCurrentStatuses}`
-							)
+							// FIXME: this endpoint does not have max_id parameter
+							const response = await fetch(`/api/v1/timelines/tag/${loaderData.value.tag}?max_id=${maxId}`)
 							if (response.ok) {
 								const results = await response.text()
 								statuses = JSON.parse(results)

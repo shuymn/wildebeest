@@ -4,7 +4,7 @@ import Status from '../Status'
 
 type Props = {
 	initialStatuses: MastodonStatus[]
-	fetchMoreStatuses: QRL<(numOfCurrentStatuses: number) => Promise<MastodonStatus[]>>
+	fetchMoreStatuses: QRL<(maxId: string) => Promise<MastodonStatus[]>>
 }
 
 export const StatusesPanel = component$(({ initialStatuses, fetchMoreStatuses: fetchMoreStatusesFn }: Props) => {
@@ -18,7 +18,8 @@ export const StatusesPanel = component$(({ initialStatuses, fetchMoreStatuses: f
 			return
 		}
 		fetchingMoreStatuses.value = true
-		const newStatuses = await fetchMoreStatusesFn(statuses.value.length)
+		const newStatuses =
+			statuses.value.length === 0 ? [] : await fetchMoreStatusesFn(statuses.value[statuses.value.length - 1].id)
 		fetchingMoreStatuses.value = false
 		noMoreStatusesAvailable.value = newStatuses.length === 0
 		statuses.value = [...statuses.value, ...newStatuses]
