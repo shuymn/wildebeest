@@ -15,9 +15,10 @@ import { signRequest } from 'wildebeest/backend/src/utils/http-signing'
 import { generateDigestHeader } from 'wildebeest/backend/src/utils/http-signing-cavage'
 import { parseRequest } from 'wildebeest/backend/src/utils/httpsigjs/parser'
 import { verifySignature } from 'wildebeest/backend/src/utils/httpsigjs/verifier'
+import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
 import { generateUserKey, importPublicKey, unwrapPrivateKey } from 'wildebeest/backend/src/utils/key-ops'
 
-import { makeDB } from './utils'
+import { hexToBytes, makeDB } from './utils'
 
 describe('utils', () => {
 	test('user key lifecycle', async () => {
@@ -169,5 +170,47 @@ describe('utils', () => {
 
 		const data = await readBody<any>(req)
 		assert.equal(data.a, '1')
+	})
+
+	test('generate mastodon id', async () => {
+		let count = 0
+		Object.defineProperty(globalThis, 'crypto', {
+			value: {
+				getRandomValues: (b: Uint8Array): Uint8Array => {
+					if (count === 0 || count === 1) {
+						b.set(hexToBytes('0123456789abcdef0123456789abcdef'))
+					} else {
+						b.set(hexToBytes('0123456789abcdef0123456789ghijkl'))
+					}
+					count = count + 1
+					return b
+				},
+				subtle: {
+					// eslint-disable-next-line @typescript-eslint/unbound-method
+					digest: crypto.subtle.digest,
+				},
+			},
+		})
+		const db = await makeDB()
+
+		const id1 = await generateMastodonId(db, 'test', new Date('2022-12-18T14:42:59.001Z'))
+		assert.equal(id1, '109535204409443108')
+		const { value: first } = await db
+			.prepare(`SELECT value FROM id_sequences WHERE key = 'test_id_seq'`)
+			.first<{ value: number }>()
+		assert.equal(first, 1)
+
+		const id2 = await generateMastodonId(db, 'test', new Date('2022-12-18T14:42:59.002Z'))
+		assert.equal(id2, '109535204409475804')
+		const { value: second } = await db
+			.prepare(`SELECT value FROM id_sequences WHERE key = 'test_id_seq'`)
+			.first<{ value: number }>()
+		assert.equal(second, 2)
+
+		const id3 = await generateMastodonId(db, 'test', new Date('2022-12-18T14:42:59.002Z'))
+		assert.ok(id3 !== id2)
+
+		const id4 = await generateMastodonId(db, 'test', new Date('2022-12-18T14:42:59.003Z'))
+		assert.ok(id4 > id3)
 	})
 })
