@@ -15,14 +15,14 @@ export async function countFollowers(actor: Actor): Promise<number> {
 }
 
 export async function getFollowers(actor: Actor): Promise<OrderedCollection<string>> {
-	const collection = await getMetadata(actor.followers)
-	collection.items = await loadItems<string>(collection)
+	const collection: OrderedCollection<string> = await getMetadata(actor.followers)
+	collection.items = await loadItems(collection)
 	return collection
 }
 
 export async function getFollowing(actor: Actor): Promise<OrderedCollection<string>> {
-	const collection = await getMetadata(actor.following)
-	collection.items = await loadItems<string>(collection)
+	const collection: OrderedCollection<string> = await getMetadata(actor.following)
+	collection.items = await loadItems(collection)
 	return collection
 }
 

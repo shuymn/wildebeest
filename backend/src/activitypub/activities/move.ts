@@ -1,7 +1,7 @@
 import { MoveActivity } from 'wildebeest/backend/src/activitypub/activities'
 import { getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
 import { getApId } from 'wildebeest/backend/src/activitypub/objects'
-import { getMetadata, loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
+import { getMetadata, loadItems, OrderedCollection } from 'wildebeest/backend/src/activitypub/objects/collection'
 import { Database } from 'wildebeest/backend/src/database'
 import { moveFollowers, moveFollowing } from 'wildebeest/backend/src/mastodon/follow'
 
@@ -27,8 +27,8 @@ export async function handleMoveActivity(domain: string, activity: MoveActivity,
 
 	// move followers
 	{
-		const collection = await getMetadata(fromActor.followers)
-		collection.items = await loadItems<string>(collection)
+		const collection: OrderedCollection<string> = await getMetadata(fromActor.followers)
+		collection.items = await loadItems(collection)
 
 		// TODO: eventually move to queue and move workers
 		while (collection.items.length > 0) {
@@ -40,8 +40,8 @@ export async function handleMoveActivity(domain: string, activity: MoveActivity,
 
 	// move following
 	{
-		const collection = await getMetadata(fromActor.following)
-		collection.items = await loadItems<string>(collection)
+		const collection: OrderedCollection<string> = await getMetadata(fromActor.following)
+		collection.items = await loadItems(collection)
 
 		// TODO: eventually move to queue and move workers
 		while (collection.items.length > 0) {

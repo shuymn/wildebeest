@@ -1,6 +1,6 @@
 import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
 
-export interface Collection<T extends ApObject> extends ApObject {
+export interface Collection<T> extends ApObject {
 	totalItems: number
 	current?: string
 	first: URL
@@ -8,7 +8,7 @@ export interface Collection<T extends ApObject> extends ApObject {
 	items: Array<T>
 }
 
-export type OrderedCollection<T extends ApObject> = Collection<T>
+export type OrderedCollection<T> = Collection<T>
 
 export interface OrderedCollectionPage<T> extends ApObject {
 	next?: string
@@ -19,7 +19,7 @@ const headers = {
 	accept: 'application/activity+json',
 }
 
-export async function getMetadata<T extends ApObject>(url: URL): Promise<OrderedCollection<T>> {
+export async function getMetadata<T>(url: URL): Promise<OrderedCollection<T>> {
 	const res = await fetch(url, { headers })
 	if (!res.ok) {
 		throw new Error(`${url} returned ${res.status}`)
@@ -28,7 +28,7 @@ export async function getMetadata<T extends ApObject>(url: URL): Promise<Ordered
 	return res.json<OrderedCollection<T>>()
 }
 
-export async function loadItems<T extends ApObject>(collection: OrderedCollection<T>, max?: number): Promise<Array<T>> {
+export async function loadItems<T>(collection: OrderedCollection<T>, max?: number): Promise<Array<T>> {
 	const items = []
 	let pageUrl = collection.first
 
