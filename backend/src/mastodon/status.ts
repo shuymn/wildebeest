@@ -57,7 +57,7 @@ export async function toMastodonStatusFromObject(
 	const actorId = new URL(obj[originalActorIdSymbol])
 	const actor = await actors.getAndCache(actorId, db)
 
-	const account = await loadExternalMastodonAccount(actor)
+	const account = await loadExternalMastodonAccount(db, actor)
 
 	// FIXME: temporarly disable favourites and reblogs counts
 	const favourites = []
@@ -147,7 +147,7 @@ export async function toMastodonStatusFromRow(
 		mastodon_id: row.actor_mastodon_id,
 	})
 
-	const account = await loadExternalMastodonAccount(author)
+	const account = await loadExternalMastodonAccount(db, author)
 
 	if (row.favourites_count === undefined || row.reblogs_count === undefined || row.replies_count === undefined) {
 		throw new Error('logic error; missing fields.')
@@ -196,7 +196,7 @@ export async function toMastodonStatusFromRow(
 
 		const actorId = new URL(properties.attributedTo)
 		const author = await actors.getAndCache(actorId, db)
-		const account = await loadExternalMastodonAccount(author)
+		const account = await loadExternalMastodonAccount(db, author)
 
 		// Restore reblogged status
 		status.reblog = {

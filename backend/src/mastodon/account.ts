@@ -1,6 +1,6 @@
 import { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import * as apFollow from 'wildebeest/backend/src/activitypub/actors/follow'
-import * as apOutbox from 'wildebeest/backend/src/activitypub/actors/outbox'
+import { countFollowers, countFollowing } from 'wildebeest/backend/src/activitypub/actors/follow'
+import { countStatuses } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database } from 'wildebeest/backend/src/database'
 import type { MastodonAccount, Preference } from 'wildebeest/backend/src/types/account'
@@ -54,63 +54,105 @@ function toMastodonAccount(
 
 // Load an external user, using ActivityPub queries, and return it as a MastodonAccount
 export async function loadExternalMastodonAccount(
+	db: Database,
 	actor: Actor,
-	loadStats = false,
-	handle?: RemoteHandle
+	handle?: RemoteHandle,
+	loadStat = false
 ): Promise<MastodonAccount> {
 	if (handle === undefined) {
 		handle = actorToHandle(actor)
 	}
+	const { results } = await db
+		.prepare(
+			`
+SELECT outbox_objects.published_date as last_status_at
+FROM outbox_objects
+INNER JOIN objects ON objects.id = outbox_objects.object_id
+WHERE outbox_objects.actor_id=?
+  AND objects.type = 'Note'
+ORDER BY strftime('%Y-%m-%d %H:%M:%f', outbox_objects.published_date) DESC
+LIMIT 1
+  `
+		)
+		.bind(actor.id.toString())
+		.all<{ last_status_at: string }>()
+
+	const lastStatusAt =
+		results !== undefined && results.length === 1 ? new Date(results[0].last_status_at).toISOString() : null
+
 	const account = toMastodonAccount(handle, actor)
-	if (loadStats === true) {
-		account.statuses_count = await apOutbox.countStatuses(actor)
-		account.followers_count = await apFollow.countFollowers(actor)
-		account.following_count = await apFollow.countFollowing(actor)
+	if (loadStat) {
+		return {
+			...account,
+			// TODO: cache this
+			statuses_count: await countStatuses(actor),
+			followers_count: await countFollowers(actor),
+			following_count: await countFollowing(actor),
+			last_status_at: lastStatusAt,
+		}
 	}
-	return account
+	return {
+		...account,
+		statuses_count: 0,
+		followers_count: 0,
+		following_count: 0,
+		last_status_at: lastStatusAt,
+	}
 }
 
 // Load a local user and return it as a MastodonAccount
 export async function loadLocalMastodonAccount(
 	db: Database,
-	res: Actor,
+	actor: Actor,
 	handle?: LocalHandle
 ): Promise<MastodonAccount> {
 	if (handle === undefined) {
 		handle = {
-			localPart: actorToHandle(res).localPart,
+			localPart: actorToHandle(actor).localPart,
 			domain: null,
 		}
 	}
-	const account = toMastodonAccount(handle, res)
+	const account = toMastodonAccount(handle, actor)
 
 	const query = `
 SELECT
   (SELECT count(*)
    FROM outbox_objects
    INNER JOIN objects ON objects.id = outbox_objects.object_id
-   WHERE outbox_objects.actor_id=?
+   WHERE outbox_objects.actor_id=?1
      AND objects.type = 'Note') AS statuses_count,
 
   (SELECT count(*)
    FROM actor_following
-   WHERE actor_following.actor_id=?) AS following_count,
+   WHERE actor_following.actor_id=?1) AS following_count,
 
   (SELECT count(*)
    FROM actor_following
-   WHERE actor_following.target_actor_id=?) AS followers_count
+   WHERE actor_following.target_actor_id=?1) AS followers_count,
+
+  (SELECT outbox_objects.published_date
+   FROM outbox_objects
+   INNER JOIN objects ON objects.id = outbox_objects.object_id
+   WHERE outbox_objects.actor_id=?1
+     AND objects.type = 'Note'
+   ORDER BY strftime('%Y-%m-%d %H:%M:%f', outbox_objects.published_date) DESC
+   LIMIT 1) as last_status_at
   `
 
-	const row = await db
-		.prepare(query)
-		.bind(res.id.toString(), res.id.toString(), res.id.toString())
-		.first<{ statuses_count: number; followers_count: number; following_count: number }>()
+	const row = await db.prepare(query).bind(actor.id.toString()).first<{
+		statuses_count: number
+		followers_count: number
+		following_count: number
+		last_status_at: string | null
+	}>()
 
-	account.statuses_count = row.statuses_count
-	account.followers_count = row.followers_count
-	account.following_count = row.following_count
-
-	return account
+	return {
+		...account,
+		statuses_count: row.statuses_count,
+		followers_count: row.followers_count,
+		following_count: row.following_count,
+		last_status_at: row.last_status_at === null ? null : new Date(row.last_status_at).toISOString(),
+	}
 }
 
 export async function getSigningKey(instanceKey: string, db: Database, actor: Actor): Promise<CryptoKey> {

@@ -44,7 +44,7 @@ export async function handleRequest(
 		throw new Error('unknown from actor')
 	}
 
-	const fromAccount = await loadExternalMastodonAccount(fromActor)
+	const fromAccount = await loadExternalMastodonAccount(db, fromActor)
 
 	const out: Notification = {
 		id: row.notif_id.toString(),

@@ -50,7 +50,7 @@ export async function handleRequest(db: Database, request: Request): Promise<Res
 	if (useWebFinger && !isLocalHandle(query)) {
 		const res = await queryAcct(query, db)
 		if (res !== null) {
-			out.accounts.push(await loadExternalMastodonAccount(res, false, query))
+			out.accounts.push(await loadExternalMastodonAccount(db, res, query))
 		}
 	}
 
@@ -84,7 +84,7 @@ WHERE rowid IN (SELECT rowid FROM search_fts WHERE (preferredUsername MATCH ?1 O
 						mastodon_id: results[i].mastodon_id ?? (await setMastodonId(db, results[i].id, results[i].cdate)),
 					}
 					const actor = actorFromRow(row)
-					out.accounts.push(await loadExternalMastodonAccount(actor))
+					out.accounts.push(await loadExternalMastodonAccount(db, actor))
 				}
 			}
 		} catch (err: any) {

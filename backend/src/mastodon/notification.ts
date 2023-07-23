@@ -241,7 +241,7 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 			continue
 		}
 
-		const notifFromAccount = await loadExternalMastodonAccount(notifFromActor)
+		const notifFromAccount = await loadExternalMastodonAccount(db, notifFromActor)
 
 		const notif: Notification = {
 			id: result.notif_id.toString(),
@@ -253,7 +253,7 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 		if (result.type === 'mention' || result.type === 'favourite') {
 			const actorId = new URL(result.original_actor_id)
 			const actor = await actors.getAndCache(actorId, db)
-			const account = await loadExternalMastodonAccount(actor)
+			const account = await loadExternalMastodonAccount(db, actor)
 
 			notif.status = {
 				id: result.mastodon_id,
