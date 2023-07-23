@@ -1,3 +1,4 @@
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
@@ -11,12 +12,12 @@ import {
 } from 'wildebeest/backend/src/activitypub/objects'
 import { createPublicNote, type Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database } from 'wildebeest/backend/src/database'
-import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import { loadExternalMastodonAccount, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import * as media from 'wildebeest/backend/src/media/'
 import type { MastodonId } from 'wildebeest/backend/src/types'
 import type { MastodonStatus } from 'wildebeest/backend/src/types'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
-import { handleToAcct, parseHandle, toRemoteHandle } from 'wildebeest/backend/src/utils/handle'
+import { actorToHandle, handleToAcct, parseHandle, toRemoteHandle } from 'wildebeest/backend/src/utils/handle'
 import { queryAcct } from 'wildebeest/backend/src/webfinger'
 
 export async function getMentions(input: string, instanceDomain: string, db: Database): Promise<Array<Actor>> {
@@ -116,6 +117,94 @@ type MastodonStatusRow = {
 	replies_count?: number
 }
 
+export async function toMastodonStatusesFromRowsWithActor(
+	domain: string,
+	db: Database,
+	actor: Actor,
+	rows: Omit<
+		MastodonStatusRow,
+		| 'actor_id'
+		| 'actor_type'
+		| 'actor_pubkey'
+		| 'actor_cdate'
+		| 'actor_properties'
+		| 'actor_is_admin'
+		| 'actor_mastodon_id'
+	>[]
+): Promise<MastodonStatus[]> {
+	const account = isLocalAccount(domain, actorToHandle(actor))
+		? await loadLocalMastodonAccount(db, actor)
+		: await loadExternalMastodonAccount(db, actor)
+
+	const statuses: MastodonStatus[] = []
+	for (const row of rows) {
+		if (row.publisher_actor_id === undefined) {
+			console.warn('missing `row.publisher_actor_id`')
+			continue
+		}
+		if (row.favourites_count === undefined || row.reblogs_count === undefined || row.replies_count === undefined) {
+			throw new Error('logic error; missing fields.')
+		}
+
+		let properties: any
+		if (typeof row.properties === 'object') {
+			// neon uses JSONB for properties which is returned as a deserialized
+			// object.
+			properties = row.properties
+		} else {
+			// D1 uses a string for JSON properties
+			properties = JSON.parse(row.properties)
+		}
+
+		const mediaAttachments: MediaAttachment[] = []
+		if (Array.isArray(properties.attachment)) {
+			for (const document of properties.attachment) {
+				mediaAttachments.push(media.fromObject(document))
+			}
+		}
+
+		const status: MastodonStatus = {
+			id: row.mastodon_id,
+			url: new URL(`/@${actor.preferredUsername}/${row.mastodon_id}`, 'https://' + domain),
+			uri: new URL(row.id),
+			created_at: new Date(row.cdate).toISOString(),
+			emojis: [],
+			media_attachments: mediaAttachments,
+			tags: [],
+			mentions: [],
+			account,
+			spoiler_text: properties.spoiler_text ?? '',
+
+			// TODO: stub values
+			visibility: 'public',
+
+			content: properties.content,
+			favourites_count: row.favourites_count,
+			reblogs_count: row.reblogs_count,
+			replies_count: row.replies_count,
+			reblogged: row.reblogged === 1,
+			favourited: row.favourited === 1,
+		}
+
+		if (properties.updated) {
+			status.edited_at = new Date(properties.updated).toISOString()
+		}
+		if (properties.attributedTo && properties.attributedTo !== row.publisher_actor_id) {
+			const actorId = new URL(properties.attributedTo)
+			const author = await actors.getAndCache(actorId, db)
+
+			status.reblog = {
+				...status,
+				account: isLocalAccount(domain, actorToHandle(author))
+					? await loadLocalMastodonAccount(db, author)
+					: await loadExternalMastodonAccount(db, author),
+			}
+		}
+		statuses.push(status)
+	}
+	return statuses
+}
+
 // toMastodonStatusFromRow makes assumption about what field are available on
 // the `row` object. This function is only used for timelines, which is optimized
 // SQL. Otherwise don't use this function.
@@ -128,7 +217,7 @@ export async function toMastodonStatusFromRow(
 		console.warn('missing `row.publisher_actor_id`')
 		return null
 	}
-	let properties
+	let properties: any
 	if (typeof row.properties === 'object') {
 		// neon uses JSONB for properties which is returned as a deserialized
 		// object.
@@ -147,6 +236,7 @@ export async function toMastodonStatusFromRow(
 		mastodon_id: row.actor_mastodon_id,
 	})
 
+	// TODO: Distinguish between LocalAccount and RemoteAccount
 	const account = await loadExternalMastodonAccount(db, author)
 
 	if (row.favourites_count === undefined || row.reblogs_count === undefined || row.replies_count === undefined) {
