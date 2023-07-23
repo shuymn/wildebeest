@@ -97,7 +97,7 @@ async function getOrCreatePerson(
 		'test-kek',
 		email,
 		{
-			icon: { url: avatar },
+			icon: { type: 'Image', id: avatar, url: avatar },
 			name: display_name,
 		},
 		isAdmin

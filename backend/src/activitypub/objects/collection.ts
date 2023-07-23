@@ -19,13 +19,13 @@ const headers = {
 	accept: 'application/activity+json',
 }
 
-export async function getMetadata(url: URL): Promise<OrderedCollection<any>> {
+export async function getMetadata<T>(url: URL): Promise<OrderedCollection<T>> {
 	const res = await fetch(url, { headers })
 	if (!res.ok) {
 		throw new Error(`${url} returned ${res.status}`)
 	}
 
-	return res.json<OrderedCollection<any>>()
+	return res.json<OrderedCollection<T>>()
 }
 
 export async function loadItems<T>(collection: OrderedCollection<T>, max?: number): Promise<Array<T>> {

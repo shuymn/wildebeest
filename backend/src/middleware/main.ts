@@ -1,17 +1,31 @@
 import * as access from 'wildebeest/backend/src/access'
-import * as actors from 'wildebeest/backend/src/activitypub/actors'
+import { actorFromRow, ActorRow, PERSON, Person, setMastodonId } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
+import { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
-async function loadContextData(db: Database, clientId: string, email: string, ctx: any): Promise<boolean> {
+async function loadContextData(
+	db: Database,
+	clientId: string,
+	email: string,
+	ctx: { data: Partial<ContextData> }
+): Promise<boolean> {
 	const query = `
         SELECT *
         FROM actors
         WHERE email=? AND type='Person'
     `
-	const { results, success, error } = await db.prepare(query).bind(email).all()
+	const { results, success, error } = await db.prepare(query).bind(email).all<{
+		id: string
+		type: typeof PERSON
+		pubkey: string
+		cdate: string
+		properties: string
+		is_admin: 1 | null
+		mastodon_id: string | null
+	}>()
 	if (!success) {
 		throw new Error('SQL error: ' + error)
 	}
@@ -21,14 +35,17 @@ async function loadContextData(db: Database, clientId: string, email: string, ct
 		return false
 	}
 
-	const row: any = results[0]
+	const row: ActorRow<Person> = {
+		...results[0],
+		mastodon_id: results[0].mastodon_id || (await setMastodonId(db, results[0].id, results[0].cdate)),
+	}
 
 	if (!row.id) {
 		console.warn('person not found')
 		return false
 	}
 
-	const actor = actors.actorFromRow(row)
+	const actor = actorFromRow(row)
 
 	ctx.data.connectedActor = actor
 	ctx.data.identity = { email }
@@ -37,7 +54,7 @@ async function loadContextData(db: Database, clientId: string, email: string, ct
 	return true
 }
 
-export async function main(context: EventContext<Env, any, any>) {
+export async function main(context: EventContext<Env, string, Partial<ContextData>>) {
 	if (context.request.method === 'OPTIONS') {
 		const headers = {
 			...cors(),
@@ -64,6 +81,7 @@ export async function main(context: EventContext<Env, any, any>) {
 		/^\/api\/v1\/accounts\/(.*)\/statuses$/.test(url.pathname) ||
 		url.pathname.startsWith('/api/v1/tags/') ||
 		url.pathname.startsWith('/api/v1/timelines/tag/') ||
+		url.pathname.startsWith('/api/v1/accounts/lookup') ||
 		url.pathname.startsWith('/ap/') // all ActivityPub endpoints
 	) {
 		return context.next()

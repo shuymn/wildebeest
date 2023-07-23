@@ -1,11 +1,13 @@
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
-import type { UUID } from 'wildebeest/backend/src/types'
-import { KeyTypeOf, RequiredProps, SingleOrArray } from 'wildebeest/backend/src/utils/type'
+import type { MastodonId } from 'wildebeest/backend/src/types'
+import { Intersect, RequiredProps, SingleOrArray } from 'wildebeest/backend/src/utils/type'
 
 export const originalActorIdSymbol = Symbol()
 export const originalObjectIdSymbol = Symbol()
 export const mastodonIdSymbol = Symbol()
+
+export type Remote<T extends ApObject> = Omit<ApObject & Partial<Intersect<ApObject, T>>, symbol>
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#object-types
 export interface ApObject {
@@ -33,11 +35,11 @@ export interface ApObject {
 	// Internal
 	[originalActorIdSymbol]?: string
 	[originalObjectIdSymbol]?: string
-	[mastodonIdSymbol]?: UUID
+	[mastodonIdSymbol]?: MastodonId
 }
 
-export type ApObjectId = KeyTypeOf<ApObject, 'id'>
-export type ApObjectUrl = NonNullable<KeyTypeOf<ApObject, 'url'>>
+export type ApObjectId = ApObject['id']
+export type ApObjectUrl = NonNullable<ApObject['url']>
 export type ApObjectOrId = ApObject | ApObjectId
 export type ApObjectOrUrl = ApObject | ApObjectUrl
 
@@ -245,7 +247,7 @@ export async function getObjectByOriginalId(db: Database, id: string | URL): Pro
 	return getObjectBy(db, ObjectByKey.originalObjectId, id.toString())
 }
 
-export async function getObjectByMastodonId(db: Database, id: UUID): Promise<ApObject | null> {
+export async function getObjectByMastodonId(db: Database, id: MastodonId): Promise<ApObject | null> {
 	return getObjectBy(db, ObjectByKey.mastodonId, id)
 }
 

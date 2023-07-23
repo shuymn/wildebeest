@@ -85,8 +85,6 @@ async function getRemoteStatuses(
 	const activities = await outbox.get(actor, limit)
 
 	// TODO: use account
-	// eslint-disable-next-line unused-imports/no-unused-vars
-	// const account = await loadExternalMastodonAccount(acct, actor)
 
 	const promises = activities.items.map(async (activity: Activity) => {
 		const actorId = objects.getApId(activity.actor)
@@ -148,8 +146,12 @@ export async function getLocalStatuses(
 	const QUERY = `
 SELECT objects.*,
        actors.id as actor_id,
+       actors.type as actor_type,
+       actors.pubkey as actor_pubkey,
        actors.cdate as actor_cdate,
        actors.properties as actor_properties,
+       actors.is_admin as actor_is_admin,
+       actors.mastodon_id as actor_mastodon_id,
        outbox_objects.actor_id as publisher_actor_id,
        (SELECT count(*) FROM actor_favourites WHERE actor_favourites.object_id=objects.id) as favourites_count,
        (SELECT count(*) FROM actor_reblogs WHERE actor_reblogs.object_id=objects.id) as reblogs_count,
@@ -193,7 +195,23 @@ LIMIT ?3 OFFSET ?4
 		afterCdate = row.cdate
 	}
 
-	const { success, error, results } = await db.prepare(QUERY).bind(actorId.toString(), afterCdate, limit, offset).all()
+	const { success, error, results } = await db.prepare(QUERY).bind(actorId.toString(), afterCdate, limit, offset).all<{
+		mastodon_id: string
+		id: string
+		cdate: string
+		properties: string
+		actor_id: string
+		actor_type: actors.Actor['type']
+		actor_pubkey: string | null
+		actor_cdate: string
+		actor_properties: string
+		actor_is_admin: 1 | null
+		actor_mastodon_id: string
+		publisher_actor_id: string
+		favourites_count: number
+		reblogs_count: number
+		replies_count: number
+	}>()
 	if (!success) {
 		throw new Error('SQL error: ' + error)
 	}

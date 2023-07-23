@@ -13,7 +13,7 @@ import { createPublicNote, type Note } from 'wildebeest/backend/src/activitypub/
 import { type Database } from 'wildebeest/backend/src/database'
 import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import * as media from 'wildebeest/backend/src/media/'
-import type { UUID } from 'wildebeest/backend/src/types'
+import type { MastodonId } from 'wildebeest/backend/src/types'
 import type { MastodonStatus } from 'wildebeest/backend/src/types'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 import { handleToAcct, parseHandle, toRemoteHandle } from 'wildebeest/backend/src/utils/handle'
@@ -57,7 +57,7 @@ export async function toMastodonStatusFromObject(
 	const actorId = new URL(obj[originalActorIdSymbol])
 	const actor = await actors.getAndCache(actorId, db)
 
-	const account = await loadExternalMastodonAccount(actor)
+	const account = await loadExternalMastodonAccount(db, actor)
 
 	// FIXME: temporarly disable favourites and reblogs counts
 	const favourites = []
@@ -94,10 +94,36 @@ export async function toMastodonStatusFromObject(
 	}
 }
 
+type MastodonStatusRow = {
+	actor_id: string
+	actor_type: Actor['type']
+	actor_pubkey: string | null
+	actor_cdate: string
+	actor_properties: string
+	actor_is_admin: 1 | null
+	actor_mastodon_id: string
+
+	mastodon_id: string
+	id: string
+	cdate: string
+	properties: string
+	reblogged?: 1 | 0
+	favourited?: 1 | 0
+
+	publisher_actor_id?: string
+	favourites_count?: number
+	reblogs_count?: number
+	replies_count?: number
+}
+
 // toMastodonStatusFromRow makes assumption about what field are available on
 // the `row` object. This function is only used for timelines, which is optimized
 // SQL. Otherwise don't use this function.
-export async function toMastodonStatusFromRow(domain: string, db: Database, row: any): Promise<MastodonStatus | null> {
+export async function toMastodonStatusFromRow(
+	domain: string,
+	db: Database,
+	row: MastodonStatusRow
+): Promise<MastodonStatus | null> {
 	if (row.publisher_actor_id === undefined) {
 		console.warn('missing `row.publisher_actor_id`')
 		return null
@@ -113,12 +139,15 @@ export async function toMastodonStatusFromRow(domain: string, db: Database, row:
 	}
 	const author = actors.actorFromRow({
 		id: row.actor_id,
+		type: row.actor_type,
+		pubkey: row.actor_pubkey,
 		cdate: row.actor_cdate,
 		properties: row.actor_properties,
-		preferredUsername: row.preferredUsername,
+		is_admin: row.actor_is_admin,
+		mastodon_id: row.actor_mastodon_id,
 	})
 
-	const account = await loadExternalMastodonAccount(author)
+	const account = await loadExternalMastodonAccount(db, author)
 
 	if (row.favourites_count === undefined || row.reblogs_count === undefined || row.replies_count === undefined) {
 		throw new Error('logic error; missing fields.')
@@ -136,7 +165,7 @@ export async function toMastodonStatusFromRow(domain: string, db: Database, row:
 	const status: MastodonStatus = {
 		id: row.mastodon_id,
 		url: new URL(`/@${author.preferredUsername}/${row.mastodon_id}`, 'https://' + domain),
-		uri: row.id,
+		uri: new URL(row.id),
 		created_at: new Date(row.cdate).toISOString(),
 		emojis: [],
 		media_attachments: mediaAttachments,
@@ -167,7 +196,7 @@ export async function toMastodonStatusFromRow(domain: string, db: Database, row:
 
 		const actorId = new URL(properties.attributedTo)
 		const author = await actors.getAndCache(actorId, db)
-		const account = await loadExternalMastodonAccount(author)
+		const account = await loadExternalMastodonAccount(db, author)
 
 		// Restore reblogged status
 		status.reblog = {
@@ -179,7 +208,11 @@ export async function toMastodonStatusFromRow(domain: string, db: Database, row:
 	return status
 }
 
-export async function getMastodonStatusById(db: Database, id: UUID, domain: string): Promise<MastodonStatus | null> {
+export async function getMastodonStatusById(
+	db: Database,
+	id: MastodonId,
+	domain: string
+): Promise<MastodonStatus | null> {
 	const obj = await getObjectByMastodonId(db, id)
 	if (obj === null) {
 		return null

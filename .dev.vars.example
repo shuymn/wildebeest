@@ -1,0 +1,7 @@
+INSTANCE_TITLE=Test Wildebeest
+INSTANCE_DESCR=My Wildebeest Instance
+ACCESS_AUTH_DOMAIN=0.0.0.0.cloudflareaccess.com
+ACCESS_AUD=DEV_AUD
+ADMIN_EMAIL=george@test.email
+DOMAIN=0.0.0.0
+userKEK=dev_key

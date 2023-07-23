@@ -1,4 +1,10 @@
-export type KeyTypeOf<T, K extends keyof T> = { [P in K]: T[P] }[K]
 export type SingleOrArray<T> = T | T[]
 export type RequiredProps<T, K extends keyof T> = Omit<T, K> & Required<Pick<T, K>>
 export type NonNullableProps<T, K extends keyof T> = Omit<T, K> & { [P in K]: NonNullable<T[P]> }
+export type PartialProps<T, K extends keyof T> = Omit<T, K> & { [P in K]?: T[P] }
+
+export type Intersect<T, U> = Exclude<keyof T, keyof U> extends never
+	? Exclude<keyof U, keyof T> extends never
+		? never
+		: { [P in Exclude<keyof U, keyof T>]: U[P] }
+	: { [P in Exclude<keyof T, keyof U>]: T[P] }

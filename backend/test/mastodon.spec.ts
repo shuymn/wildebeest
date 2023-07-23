@@ -75,10 +75,10 @@ describe('Mastodon APIs', () => {
 				assert.equal(data.configuration.polls.max_expiration, 2629746)
 				assert.equal(data.contact_account!.acct, 'b')
 				assert.equal(data.contact_account!.display_name, 'b')
-				assert.equal(data.contact_account!.id, 'b')
 				assert.equal(data.contact_account!.username, 'b')
 				assert.equal(data.contact_account!.url, 'https://cloudflare.com/@b')
 				assert.equal(data.rules.length, 0)
+				assert.ok(data.contact_account!.id)
 			}
 		})
 
@@ -157,10 +157,10 @@ describe('Mastodon APIs', () => {
 				assert.equal(data.contact.email, 'b')
 				assert.equal(data.contact.account!.acct, 'b')
 				assert.equal(data.contact.account!.display_name, 'b')
-				assert.equal(data.contact.account!.id, 'b')
 				assert.equal(data.contact.account!.username, 'b')
 				assert.equal(data.contact.account!.url, 'https://cloudflare.com/@b')
 				assert.equal(data.rules.length, 0)
+				assert.ok(data.contact.account!.id)
 			}
 		})
 	})

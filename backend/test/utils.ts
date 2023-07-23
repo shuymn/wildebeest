@@ -131,3 +131,12 @@ export async function generateVAPIDKeys(): Promise<JWK> {
 	const jwk = (await crypto.subtle.exportKey('jwk', keyPair.privateKey)) as JWK
 	return jwk
 }
+
+export function hexToBytes(hex: string): Uint8Array {
+	const bytes = new Uint8Array(Math.ceil(hex.length / 2))
+	for (let i = 0; i < bytes.length; i++) {
+		const start = i * 2
+		bytes[i] = parseInt(hex.substring(start, start + 2), 16)
+	}
+	return bytes
+}

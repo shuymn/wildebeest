@@ -33,7 +33,7 @@ export async function addObjectInOutbox(
 }
 
 export async function get(actor: Actor, limit?: number): Promise<OrderedCollection<Activity>> {
-	const collection = await getMetadata(actor.outbox)
+	const collection = await getMetadata<any>(actor.outbox)
 	collection.items = await loadItems(collection, limit ?? 20)
 
 	return collection

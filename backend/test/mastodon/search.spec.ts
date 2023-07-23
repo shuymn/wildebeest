@@ -114,7 +114,7 @@ describe('Mastodon APIs', () => {
 			assert.equal(data.hashtags.length, 0)
 
 			const account = data.accounts[0]
-			assert.equal(account.id, 'sven@remote.com')
+			assert.ok(account.id)
 			assert.equal(account.username, 'sven')
 			assert.equal(account.acct, 'sven@remote.com')
 		})

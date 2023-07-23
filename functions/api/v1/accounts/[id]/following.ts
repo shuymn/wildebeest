@@ -41,7 +41,7 @@ async function getRemoteFollowing(handle: RemoteHandle, db: Database): Promise<R
 	const following = await loadActors(db, followingIds)
 
 	const promises = following.map((actor) => {
-		return loadExternalMastodonAccount(actor)
+		return loadExternalMastodonAccount(db, actor)
 	})
 
 	const out = await Promise.all(promises)
@@ -64,7 +64,7 @@ async function getLocalFollowing(domain: string, handle: LocalHandle, db: Databa
 
 		try {
 			const actor = await actors.getAndCache(id, db)
-			out.push(await loadExternalMastodonAccount(actor))
+			out.push(await loadExternalMastodonAccount(db, actor))
 		} catch (err: any) {
 			console.warn(`failed to retrieve following (${id}): ${err.message}`)
 		}

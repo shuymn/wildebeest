@@ -1,6 +1,7 @@
 node_modules/
 .wrangler/state/d1/*.sqlite3
 .DS_Store
+.dev.vars
 /test-results/
 /playwright-report/
 /playwright/.cache/

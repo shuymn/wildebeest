@@ -23,8 +23,12 @@ export async function getReplies(domain: string, db: Database, obj: ApObject): P
 	const QUERY = `
 SELECT objects.*,
        actors.id as actor_id,
+       actors.type as actor_type,
+       actors.pubkey as actor_pubkey,
        actors.cdate as actor_cdate,
        actors.properties as actor_properties,
+       actors.is_admin as actor_is_admin,
+       actors.mastodon_id as actor_mastodon_id,
        actor_replies.actor_id as publisher_actor_id,
        (SELECT count(*) FROM actor_favourites WHERE actor_favourites.object_id=objects.id) as favourites_count,
        (SELECT count(*) FROM actor_reblogs WHERE actor_reblogs.object_id=objects.id) as reblogs_count,
@@ -38,7 +42,23 @@ LIMIT ?
 `
 	const DEFAULT_LIMIT = 20
 
-	const { success, error, results } = await db.prepare(QUERY).bind(obj.id.toString(), DEFAULT_LIMIT).all()
+	const { success, error, results } = await db.prepare(QUERY).bind(obj.id.toString(), DEFAULT_LIMIT).all<{
+		mastodon_id: string
+		id: string
+		cdate: string
+		properties: string
+		actor_id: string
+		actor_type: Actor['type']
+		actor_pubkey: string | null
+		actor_cdate: string
+		actor_properties: string
+		actor_is_admin: 1 | null
+		actor_mastodon_id: string
+		publisher_actor_id: string
+		favourites_count: number
+		reblogs_count: number
+		replies_count: number
+	}>()
 	if (!success) {
 		throw new Error('SQL error: ' + error)
 	}

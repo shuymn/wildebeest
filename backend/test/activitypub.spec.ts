@@ -35,6 +35,7 @@ describe('ActivityPub', () => {
 		test('fetch user by id', async () => {
 			const db = await makeDB()
 			const properties = {
+				discoverable: true,
 				summary: 'test summary',
 				inbox: 'https://example.com/inbox',
 				outbox: 'https://example.com/outbox',
@@ -83,7 +84,7 @@ describe('ActivityPub', () => {
 				throw new Error('unexpected request to ' + input.url)
 			}
 
-			const actor = await actors.get('https://example.com/actor')
+			const actor = await actors.fetchActor('https://example.com/actor')
 			assert.equal(actor.summary, "it's me, Mario. <p>alert(1)</p>")
 			assert.equal(actor.name, 'hi hey')
 			assert.equal(actor.preferredUsername, 'sven alert(1)')
@@ -108,7 +109,7 @@ describe('ActivityPub', () => {
 				throw new Error('unexpected request to ' + input.url)
 			}
 
-			const actor = await actors.get('https://example.com/actor')
+			const actor = await actors.fetchActor('https://example.com/actor')
 			assert.equal(actor.summary, 'a'.repeat(500))
 			assert.equal(actor.name, 'b'.repeat(30))
 			assert.equal(actor.preferredUsername, 'c'.repeat(30))

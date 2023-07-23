@@ -1,19 +1,14 @@
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 
-const remoteHandleSymbol = Symbol()
-const localHandleSymbol = Symbol()
-
 export type RemoteHandle = {
 	localPart: string
 	domain: string
-	[remoteHandleSymbol]: never
 }
 
 export type LocalHandle = {
 	localPart: string
-	domain: string | null
-	[localHandleSymbol]: never
+	domain: null
 }
 
 export type Handle = LocalHandle | RemoteHandle
@@ -81,4 +76,8 @@ export function actorToHandle(actor: Actor): RemoteHandle {
 
 export function handleToAcct(handle: RemoteHandle): string {
 	return `${handle.localPart}@${handle.domain}`
+}
+
+export function handleToUrl(handle: RemoteHandle): URL {
+	return new URL('@' + handle.localPart, 'https://' + handle.domain)
 }
