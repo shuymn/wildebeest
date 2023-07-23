@@ -68,7 +68,7 @@ WHERE
      AND ${db.qb.jsonExtractIsNull('objects.properties', 'inReplyTo')}
      AND (outbox_objects.target = '${PUBLIC_GROUP}' OR outbox_objects.target IN ${db.qb.set('?3')})
 GROUP BY objects.id ${db.qb.psqlOnly(', actors.id, outbox_objects.actor_id, outbox_objects.published_date')}
-ORDER by strftime('%Y-%m-%d %H:%M:%f', outbox_objects.published_date) DESC
+ORDER BY ${db.qb.timeNormalize('outbox_objects.published_date')} DESC
 LIMIT ?4
 `
 	const DEFAULT_LIMIT = 20
@@ -168,7 +168,7 @@ WHERE objects.type='Note'
 GROUP BY objects.id ${db.qb.psqlOnly(
 		', actors.id, actors.cdate, actors.properties, outbox_objects.actor_id, outbox_objects.published_date'
 	)}
-ORDER by strftime('%Y-%m-%d %H:%M:%f', outbox_objects.published_date) DESC
+ORDER BY ${db.qb.timeNormalize('outbox_objects.published_date')} DESC
 LIMIT ?1 OFFSET ?2
 `
 	const DEFAULT_LIMIT = 20

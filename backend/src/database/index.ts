@@ -35,6 +35,7 @@ export interface QueryBuilder {
 	insertOrIgnore(q: string): string
 	psqlOnly(raw: string): string
 	jsonSet(obj: string, field: string, value: string): string
+	timeNormalize(column: string): string
 }
 
 export async function getDatabase(env: Pick<Env, 'DATABASE' | 'NEON_DATABASE_URL'>): Promise<Database> {

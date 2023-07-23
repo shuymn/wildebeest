@@ -29,6 +29,10 @@ const qb: QueryBuilder = {
 	jsonSet(obj: string, field: string, value: string): string {
 		return `json_set(${obj}, '$.${field}', ${value})`
 	},
+
+	timeNormalize(column: string): string {
+		return `strftime('%Y-%m-%d %H:%M:%f', ${column})`
+	},
 }
 
 export default function make({ DATABASE }: Pick<Env, 'DATABASE'>): Database {

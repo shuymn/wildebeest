@@ -68,9 +68,9 @@ export async function loadExternalMastodonAccount(
 SELECT outbox_objects.published_date as last_status_at
 FROM outbox_objects
 INNER JOIN objects ON objects.id = outbox_objects.object_id
-WHERE outbox_objects.actor_id=?
+WHERE outbox_objects.actor_id=?1
   AND objects.type = 'Note'
-ORDER BY strftime('%Y-%m-%d %H:%M:%f', outbox_objects.published_date) DESC
+ORDER BY ${db.qb.timeNormalize('outbox_objects.published_date')} DESC
 LIMIT 1
   `
 		)
@@ -135,7 +135,7 @@ SELECT
    INNER JOIN objects ON objects.id = outbox_objects.object_id
    WHERE outbox_objects.actor_id=?1
      AND objects.type = 'Note'
-   ORDER BY strftime('%Y-%m-%d %H:%M:%f', outbox_objects.published_date) DESC
+   ORDER BY ${db.qb.timeNormalize('outbox_objects.published_date')} DESC
    LIMIT 1) as last_status_at
   `
 
