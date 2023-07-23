@@ -431,7 +431,7 @@ export function actorFromRow<T extends Actor>(row: ActorRow<T>) {
 	return {
 		type: row.type,
 		id,
-		url: new URL('@' + preferredUsername, 'https://' + domain),
+		url: handleToUrl({ localPart: preferredUsername ?? name ?? 'unnamed', domain }),
 		published: new Date(row.cdate).toISOString(),
 		icon,
 		image,

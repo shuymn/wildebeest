@@ -77,3 +77,7 @@ export function actorToHandle(actor: Actor): RemoteHandle {
 export function handleToAcct(handle: RemoteHandle): string {
 	return `${handle.localPart}@${handle.domain}`
 }
+
+export function handleToUrl(handle: RemoteHandle): URL {
+	return new URL('@' + handle.localPart, 'https://' + handle.domain)
+}
