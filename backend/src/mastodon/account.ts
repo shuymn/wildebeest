@@ -13,11 +13,15 @@ import {
 	RemoteHandle,
 } from 'wildebeest/backend/src/utils/handle'
 import { unwrapPrivateKey } from 'wildebeest/backend/src/utils/key-ops'
+import { PartialProps } from 'wildebeest/backend/src/utils/type'
 import { defaultImages } from 'wildebeest/config/accounts'
 
-function toMastodonAccount(handle: Handle, res: Actor): MastodonAccount {
-	const avatar = res.icon?.url?.toString() ?? defaultImages.avatar
-	const header = res.image?.url?.toString() ?? defaultImages.header
+function toMastodonAccount(
+	handle: Handle,
+	actor: Actor
+): PartialProps<MastodonAccount, 'last_status_at' | 'followers_count' | 'following_count' | 'statuses_count'> {
+	const avatar = actor.icon?.url?.toString() ?? defaultImages.avatar
+	const header = actor.image?.url?.toString() ?? defaultImages.header
 
 	let acct: string
 	if (isLocalHandle(handle)) {
@@ -26,33 +30,25 @@ function toMastodonAccount(handle: Handle, res: Actor): MastodonAccount {
 		acct = handleToAcct(handle)
 	}
 
-	// TODO: replace stubs with actual values
 	return {
+		id: actor[mastodonIdSymbol],
+		username: actor.preferredUsername ?? actor.name ?? 'unnamed',
 		acct,
-		id: res[mastodonIdSymbol],
-		username: res.preferredUsername || res.name || 'unnamed',
-		url: res.url ? res.url.toString() : '',
-		display_name: res.name || res.preferredUsername || '',
-		note: res.summary || '',
-		created_at: res.published || new Date().toISOString(),
-
+		url: actor.url ? actor.url.toString() : '',
+		display_name: actor.name ?? actor.preferredUsername ?? '',
+		note: actor.summary ?? '',
 		avatar,
 		avatar_static: avatar,
-
 		header,
 		header_static: header,
-
-		locked: false,
-		bot: false,
-		discoverable: true,
-		group: false,
-
-		emojis: [],
+		locked: actor.manuallyApprovesFollowers ?? false,
+		// TODO: replace stubs with actual values
 		fields: [],
-
-		followers_count: 0,
-		following_count: 0,
-		statuses_count: 0,
+		emojis: [],
+		bot: actor.type === 'Service',
+		group: actor.type === 'Group',
+		discoverable: actor.discoverable,
+		created_at: actor.published ?? new Date().toISOString(),
 	}
 }
 

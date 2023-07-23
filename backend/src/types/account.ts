@@ -7,26 +7,25 @@ export interface MastodonAccount {
 	url: string
 	display_name: string
 	note: string
-
 	avatar: string
 	avatar_static: string
-
 	header: string
 	header_static: string
-
+	locked: boolean
+	fields: Array<Field>
+	emojis: Array<CustomEmoji>
+	bot: boolean
+	group: boolean
+	discoverable: boolean | null
+	noindex?: boolean | null
+	moved?: MastodonAccount | null
+	suspended?: boolean
+	limited?: boolean
 	created_at: string
-
-	locked?: boolean
-	bot?: boolean
-	discoverable?: boolean
-	group?: boolean
-
+	last_status_at: string | null
+	statuses_count: number
 	followers_count: number
 	following_count: number
-	statuses_count: number
-
-	emojis: Array<any>
-	fields: Array<Field>
 }
 
 // https://docs.joinmastodon.org/entities/Relationship/
@@ -77,4 +76,12 @@ export type Preference = {
 	posting_default_language: string | null
 	reading_expand_media: ReadingExpandMedia
 	reading_expand_spoilers: boolean
+}
+
+export type CustomEmoji = {
+	shortcode: string
+	url: string
+	static_url: string
+	visible_in_picker: boolean
+	category: string
 }
