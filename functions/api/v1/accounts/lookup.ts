@@ -12,20 +12,20 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
-export const onRequest: PagesFunction<Env, '', ContextData> = async ({ request, env }) => {
-	return handleRequest(request, await getDatabase(env))
-}
+type Dependency = { domain: string; db: Database }
 
-export async function handleRequest(req: Request, db: Database): Promise<Response> {
-	const url = new URL(req.url)
+export const onRequestGet: PagesFunction<Env, '', ContextData> = async ({ request, env }) => {
+	const url = new URL(request.url)
 
 	const acct = url.searchParams.get('acct')
 	if (acct === null || acct === '') {
 		return resourceNotFound('acct', '')
 	}
+	return handleRequest({ domain: url.hostname, db: await getDatabase(env) }, acct)
+}
 
-	const account = await getAccount(url.hostname, db, acct)
-
+export async function handleRequest({ domain, db }: Dependency, acct: string): Promise<Response> {
+	const account = await getAccount(domain, db, acct)
 	if (account === null) {
 		return resourceNotFound('acct', acct)
 	}

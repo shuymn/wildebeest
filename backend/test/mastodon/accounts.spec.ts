@@ -227,15 +227,13 @@ describe('Mastodon APIs', () => {
 
 		test('lookup unknown remote actor', async () => {
 			const db = await makeDB()
-			const req = new Request(new URL('?acct=sven@social.com', 'https://' + domain))
-			const res = await lookup.handleRequest(req, db)
+			const res = await lookup.handleRequest({ domain, db }, 'sven@social.com')
 			assert.equal(res.status, 404)
 		})
 
 		test('lookup unknown local actor', async () => {
 			const db = await makeDB()
-			const req = new Request(new URL('?acct=sven', 'https://' + domain))
-			const res = await lookup.handleRequest(req, db)
+			const res = await lookup.handleRequest({ domain, db }, 'sven')
 			assert.equal(res.status, 404)
 		})
 
@@ -314,8 +312,7 @@ describe('Mastodon APIs', () => {
 
 			const db = await makeDB()
 			await queryAcct({ localPart: 'someone', domain: 'social.com' }, db)
-			const req = new Request('https://' + domain + '?acct=someone@social.com')
-			const res = await lookup.handleRequest(req, db)
+			const res = await lookup.handleRequest({ domain, db }, 'someone@social.com')
 			assert.equal(res.status, 200)
 
 			const data = await res.json<any>()
@@ -345,8 +342,7 @@ describe('Mastodon APIs', () => {
 
 			await createStatus(domain, db, actor, 'my first status')
 
-			const req = new Request('https://' + domain + '?acct=sven')
-			const res = await lookup.handleRequest(req, db)
+			const res = await lookup.handleRequest({ domain, db }, 'sven')
 			assert.equal(res.status, 200)
 
 			const data = await res.json<any>()
