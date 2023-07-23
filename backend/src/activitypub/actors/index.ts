@@ -11,7 +11,7 @@ import {
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
 import { MastodonId } from 'wildebeest/backend/src/types'
-import { Handle } from 'wildebeest/backend/src/utils/handle'
+import { Handle, handleToUrl, RemoteHandle } from 'wildebeest/backend/src/utils/handle'
 import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
 import { generateUserKey } from 'wildebeest/backend/src/utils/key-ops'
 import { defaultImages } from 'wildebeest/config/accounts'
@@ -348,6 +348,29 @@ export async function getActorById(db: Database, id: Actor['id']): Promise<Actor
 		is_admin: 1 | null
 		mastodon_id: string | null
 	}>()
+	if (!results || results.length === 0) {
+		return null
+	}
+	return actorFromRow({
+		...results[0],
+		mastodon_id: results[0].mastodon_id ?? (await setMastodonId(db, results[0].id, results[0].cdate)),
+	})
+}
+
+export async function getActorByRemoteHandle(db: Database, handle: RemoteHandle): Promise<Actor | null> {
+	const { results } = await db
+		.prepare(`SELECT * FROM actors WHERE ${db.qb.jsonExtract('properties', 'url')} = ?`)
+		.bind(handleToUrl(handle).toString())
+		.all<{
+			id: string
+			type: Actor['type']
+			email: string
+			pubkey: string | null
+			cdate: string
+			properties: string
+			is_admin: 1 | null
+			mastodon_id: string | null
+		}>()
 	if (!results || results.length === 0) {
 		return null
 	}
