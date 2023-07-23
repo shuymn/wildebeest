@@ -46,7 +46,7 @@ type Parameters = {
 	tagged?: string
 }
 
-export const onRequest: PagesFunction<Env, 'id', ContextData> = async ({ request, env, params: { id } }) => {
+export const onRequestGet: PagesFunction<Env, 'id', ContextData> = async ({ request, env, params: { id } }) => {
 	if (typeof id !== 'string') {
 		return resourceNotFound('id', String(id))
 	}
