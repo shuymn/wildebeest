@@ -22,7 +22,7 @@ export const accountPageLoader = loader$<
 	try {
 		const url = new URL(request.url)
 		const domain = url.hostname
-		const accountId = url.pathname.split('/')[1]
+		const handle = url.pathname.split('/')[1]
 
 		try {
 			const statusResponse = await statusAPI.handleRequestGet(
@@ -37,7 +37,7 @@ export const accountPageLoader = loader$<
 			isValidStatus = false
 		}
 
-		account = await getAccount(domain, accountId, await getDatabase(platform))
+		account = await getAccount(domain, await getDatabase(platform), handle)
 	} catch {
 		throw html(
 			500,

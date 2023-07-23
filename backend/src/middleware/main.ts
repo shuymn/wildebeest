@@ -81,6 +81,7 @@ export async function main(context: EventContext<Env, string, Partial<ContextDat
 		/^\/api\/v1\/accounts\/(.*)\/statuses$/.test(url.pathname) ||
 		url.pathname.startsWith('/api/v1/tags/') ||
 		url.pathname.startsWith('/api/v1/timelines/tag/') ||
+		url.pathname.startsWith('/api/v1/accounts/lookup') ||
 		url.pathname.startsWith('/ap/') // all ActivityPub endpoints
 	) {
 		return context.next()
