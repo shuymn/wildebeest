@@ -35,6 +35,7 @@ describe('ActivityPub', () => {
 		test('fetch user by id', async () => {
 			const db = await makeDB()
 			const properties = {
+				discoverable: true,
 				summary: 'test summary',
 				inbox: 'https://example.com/inbox',
 				outbox: 'https://example.com/outbox',

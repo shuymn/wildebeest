@@ -2,7 +2,15 @@ import { strict as assert } from 'node:assert/strict'
 
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { readBody } from 'wildebeest/backend/src/utils/body'
-import { actorToAcct, parseHandle } from 'wildebeest/backend/src/utils/handle'
+import {
+	actorToAcct,
+	actorToHandle,
+	handleToAcct,
+	handleToUrl,
+	isLocalHandle,
+	parseHandle,
+	toRemoteHandle,
+} from 'wildebeest/backend/src/utils/handle'
 import { signRequest } from 'wildebeest/backend/src/utils/http-signing'
 import { generateDigestHeader } from 'wildebeest/backend/src/utils/http-signing-cavage'
 import { parseRequest } from 'wildebeest/backend/src/utils/httpsigjs/parser'
@@ -65,7 +73,7 @@ describe('utils', () => {
 		assert.equal(res.domain, 'masto.ai')
 	})
 
-	test('Actor to handle', async () => {
+	test('actor to acct', async () => {
 		const domain = 'example.com'
 		const userKEK = 'userkey'
 		const db = await makeDB()
@@ -77,6 +85,57 @@ describe('utils', () => {
 		actor = await createPerson(domain, db, userKEK, 'alice@cloudflare.com', { preferredUsername: 'bob' })
 		res = actorToAcct(actor)
 		assert.equal(res, 'bob@example.com')
+	})
+
+	test('actor to handle', async () => {
+		const domain = 'example.com'
+		const userKEK = 'userkey'
+		const db = await makeDB()
+
+		{
+			const actor = await createPerson(domain, db, userKEK, 'alice@cloudflare.com')
+			const handle = actorToHandle(actor)
+			assert.equal(handle.localPart, 'alice')
+			assert.equal(handle.domain, 'example.com')
+		}
+
+		{
+			const actor = await createPerson(domain, db, userKEK, 'alice@cloudflare.com', { preferredUsername: 'bob' })
+			const res = actorToHandle(actor)
+			assert.equal(res.localPart, 'bob')
+			assert.equal(res.domain, 'example.com')
+		}
+	})
+
+	test('handle is LocalHandle', () => {
+		assert.equal(isLocalHandle({ localPart: 'a', domain: null }), true)
+		assert.equal(isLocalHandle({ localPart: 'a', domain: 'b' }), false)
+	})
+
+	test('handle to RemoteHandle', () => {
+		{
+			const local = { localPart: 'a', domain: null }
+			const res = toRemoteHandle(local, 'b')
+			assert.equal(res.localPart, 'a')
+			assert.equal(res.domain, 'b')
+		}
+
+		{
+			const remote = { localPart: 'a', domain: 'b' }
+			const res = toRemoteHandle(remote, 'c')
+			assert.equal(res.localPart, 'a')
+			assert.equal(res.domain, 'b')
+		}
+	})
+
+	test('handle to acct', () => {
+		const handle = { localPart: 'a', domain: 'b' }
+		assert.equal(handleToAcct(handle), 'a@b')
+	})
+
+	test('handle to url', () => {
+		const handle = { localPart: 'a', domain: 'b' }
+		assert.equal(handleToUrl(handle).toString(), 'https://b/@a')
 	})
 
 	test('read body handles JSON', async () => {

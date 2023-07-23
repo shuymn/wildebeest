@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
 import { createPerson, getActorById } from 'wildebeest/backend/src/activitypub/actors'
-import { getApId } from 'wildebeest/backend/src/activitypub/objects'
+import { getApId, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
 import { createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
@@ -9,6 +9,7 @@ import { insertLike } from 'wildebeest/backend/src/mastodon/like'
 import { insertReblog } from 'wildebeest/backend/src/mastodon/reblog'
 import { createStatus } from 'wildebeest/backend/src/mastodon/status'
 import { MessageType } from 'wildebeest/backend/src/types/queue'
+import { queryAcct } from 'wildebeest/backend/src/webfinger'
 import { createReply } from 'wildebeest/backend/test/shared.utils'
 import * as accounts_get from 'wildebeest/functions/api/v1/accounts/[id]'
 import * as accounts_featured_tags from 'wildebeest/functions/api/v1/accounts/[id]/featured_tags'
@@ -18,6 +19,7 @@ import * as accounts_following from 'wildebeest/functions/api/v1/accounts/[id]/f
 import * as accounts_lists from 'wildebeest/functions/api/v1/accounts/[id]/lists'
 import * as accounts_statuses from 'wildebeest/functions/api/v1/accounts/[id]/statuses'
 import * as accounts_unfollow from 'wildebeest/functions/api/v1/accounts/[id]/unfollow'
+import * as lookup from 'wildebeest/functions/api/v1/accounts/lookup'
 import * as accounts_relationships from 'wildebeest/functions/api/v1/accounts/relationships'
 import * as accounts_update_creds from 'wildebeest/functions/api/v1/accounts/update_credentials'
 import * as accounts_verify_creds from 'wildebeest/functions/api/v1/accounts/verify_credentials'
@@ -223,6 +225,140 @@ describe('Mastodon APIs', () => {
 			assert.equal(data.header, 'https://example.com/mountain.jpg/header')
 		})
 
+		test('lookup unknown remote actor', async () => {
+			const db = await makeDB()
+			const req = new Request(new URL('?acct=sven@social.com', 'https://' + domain))
+			const res = await lookup.handleRequest(req, db)
+			assert.equal(res.status, 404)
+		})
+
+		test('lookup unknown local actor', async () => {
+			const db = await makeDB()
+			const req = new Request(new URL('?acct=sven', 'https://' + domain))
+			const res = await lookup.handleRequest(req, db)
+			assert.equal(res.status, 404)
+		})
+
+		test('lookup remote actor', async () => {
+			globalThis.fetch = async (input: RequestInfo) => {
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://social.com/.well-known/webfinger?resource=acct%3Asomeone%40social.com') {
+						return new Response(
+							JSON.stringify({
+								links: [
+									{
+										rel: 'self',
+										type: 'application/activity+json',
+										href: 'https://social.com/someone',
+									},
+								],
+							})
+						)
+					}
+
+					if (input.toString() === 'https://social.com/someone') {
+						return new Response(
+							JSON.stringify({
+								id: 'https://social.com/someone',
+								url: 'https://social.com/@someone',
+								type: 'Person',
+								preferredUsername: '<script>some</script>one',
+								name: 'Sven <i>Cool<i>',
+								outbox: 'https://social.com/someone/outbox',
+								following: 'https://social.com/someone/following',
+								followers: 'https://social.com/someone/followers',
+							})
+						)
+					}
+
+					if (input.toString() === 'https://social.com/someone/following') {
+						return new Response(
+							JSON.stringify({
+								'@context': 'https://www.w3.org/ns/activitystreams',
+								id: 'https://social.com/someone/following',
+								type: 'OrderedCollection',
+								totalItems: 123,
+								first: 'https://social.com/someone/following/page',
+							})
+						)
+					}
+
+					if (input.toString() === 'https://social.com/someone/followers') {
+						return new Response(
+							JSON.stringify({
+								'@context': 'https://www.w3.org/ns/activitystreams',
+								id: 'https://social.com/someone/followers',
+								type: 'OrderedCollection',
+								totalItems: 321,
+								first: 'https://social.com/someone/followers/page',
+							})
+						)
+					}
+
+					if (input.toString() === 'https://social.com/someone/outbox') {
+						return new Response(
+							JSON.stringify({
+								'@context': 'https://www.w3.org/ns/activitystreams',
+								id: 'https://social.com/someone/outbox',
+								type: 'OrderedCollection',
+								totalItems: 890,
+								first: 'https://social.com/someone/outbox/page',
+							})
+						)
+					}
+
+					throw new Error('unexpected request to ' + input.toString())
+				}
+				throw new Error('unexpected request to ' + input.url)
+			}
+
+			const db = await makeDB()
+			await queryAcct({ localPart: 'someone', domain: 'social.com' }, db)
+			const req = new Request('https://' + domain + '?acct=someone@social.com')
+			const res = await lookup.handleRequest(req, db)
+			assert.equal(res.status, 200)
+
+			const data = await res.json<any>()
+			assert.equal(data.username, 'someone')
+			assert.equal(data.display_name, 'Sven Cool')
+			assert.equal(data.acct, 'someone@social.com')
+
+			assert(isUrlValid(data.url))
+			assert(data.url, 'https://social.com/@someone')
+
+			assert.equal(data.followers_count, 321)
+			assert.equal(data.following_count, 123)
+			assert.equal(data.statuses_count, 890)
+		})
+
+		test('lookup local actor', async () => {
+			const db = await makeDB()
+			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
+			await addFollowing(db, actor, actor2)
+			await acceptFollowing(db, actor, actor2)
+			await addFollowing(db, actor, actor3)
+			await acceptFollowing(db, actor, actor3)
+			await addFollowing(db, actor3, actor)
+			await acceptFollowing(db, actor3, actor)
+
+			await createStatus(domain, db, actor, 'my first status')
+
+			const req = new Request('https://' + domain + '?acct=sven')
+			const res = await lookup.handleRequest(req, db)
+			assert.equal(res.status, 200)
+
+			const data = await res.json<any>()
+			assert.equal(data.username, 'sven')
+			assert.equal(data.acct, 'sven')
+			assert.equal(data.followers_count, 1)
+			assert.equal(data.following_count, 2)
+			assert.equal(data.statuses_count, 1)
+			assert(isUrlValid(data.url))
+			assert((data.url as string).includes(domain))
+		})
+
 		test('get remote actor by id', async () => {
 			globalThis.fetch = async (input: RequestInfo) => {
 				if (input instanceof URL || typeof input === 'string') {
@@ -297,14 +433,15 @@ describe('Mastodon APIs', () => {
 			}
 
 			const db = await makeDB()
-			const res = await accounts_get.handleRequest(domain, 'sven@social.com', db)
+			const actor = await queryAcct({ localPart: 'sven', domain: 'social.com' }, db)
+			assert.ok(actor)
+			const res = await accounts_get.handleRequest(domain, db, actor[mastodonIdSymbol])
 			assert.equal(res.status, 200)
-
 			const data = await res.json<any>()
 			// Note the sanitization
 			assert.equal(data.username, 'badsven')
 			assert.equal(data.display_name, 'Sven Cool')
-			assert.equal(data.acct, 'sven@social.com')
+			assert.equal(data.acct, 'badsven@social.com')
 
 			assert(isUrlValid(data.url))
 			assert(data.url, 'https://social.com/@someone')
@@ -314,9 +451,9 @@ describe('Mastodon APIs', () => {
 			assert.equal(data.statuses_count, 890)
 		})
 
-		test('get unknown local actor by id', async () => {
+		test('get unknown actor by id', async () => {
 			const db = await makeDB()
-			const res = await accounts_get.handleRequest(domain, 'sven', db)
+			const res = await accounts_get.handleRequest(domain, db, '123456789')
 			assert.equal(res.status, 404)
 		})
 
@@ -334,7 +471,7 @@ describe('Mastodon APIs', () => {
 
 			await createStatus(domain, db, actor, 'my first status')
 
-			const res = await accounts_get.handleRequest(domain, 'sven', db)
+			const res = await accounts_get.handleRequest(domain, db, actor[mastodonIdSymbol])
 			assert.equal(res.status, 200)
 
 			const data = await res.json<any>()
@@ -435,24 +572,24 @@ describe('Mastodon APIs', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			await db
 				.prepare("INSERT INTO objects (id, type, properties, local, mastodon_id) VALUES (?, ?, ?, 1, 'mastodon_id')")
-				.bind('object1', 'Note', JSON.stringify({ content: 'my first status' }))
+				.bind('https://example.com/object1', 'Note', JSON.stringify({ content: 'my first status' }))
 				.run()
 			await db
 				.prepare("INSERT INTO objects (id, type, properties, local, mastodon_id) VALUES (?, ?, ?, 1, 'mastodon_id2')")
-				.bind('object2', 'Note', JSON.stringify({ content: 'my second status' }))
+				.bind('https://example.com/object2', 'Note', JSON.stringify({ content: 'my second status' }))
 				.run()
 			await db
 				.prepare('INSERT INTO outbox_objects (id, actor_id, object_id, cdate) VALUES (?, ?, ?, ?)')
-				.bind('outbox1', actor.id.toString(), 'object1', '2022-12-16 08:14:48')
+				.bind('outbox1', actor.id.toString(), 'https://example.com/object1', '2022-12-16 08:14:48')
 				.run()
 			await db
 				.prepare('INSERT INTO outbox_objects (id, actor_id, object_id, cdate) VALUES (?, ?, ?, ?)')
-				.bind('outbox2', actor.id.toString(), 'object2', '2022-12-16 10:14:48')
+				.bind('outbox2', actor.id.toString(), 'https://example.com/object2', '2022-12-16 10:14:48')
 				.run()
 
 			{
 				// Query statuses after object1, should only see object2.
-				const req = new Request('https://' + domain + '?max_id=object1')
+				const req = new Request('https://' + domain + '?max_id=https://example.com/object1')
 				const res = await accounts_statuses.handleRequest(req, db, 'sven@' + domain)
 				assert.equal(res.status, 200)
 
@@ -464,7 +601,7 @@ describe('Mastodon APIs', () => {
 
 			{
 				// Query statuses after object2, nothing is after.
-				const req = new Request('https://' + domain + '?max_id=object2')
+				const req = new Request('https://' + domain + '?max_id=https://example.com/object2')
 				const res = await accounts_statuses.handleRequest(req, db, 'sven@' + domain)
 				assert.equal(res.status, 200)
 
