@@ -20,7 +20,8 @@ export interface Database {
 }
 
 export interface PreparedStatement {
-	bind(...values: (null | number | string | Buffer | number[])[]): PreparedStatement
+	// https://developers.cloudflare.com/d1/platform/client-api/#type-conversion
+	bind(...values: (null | number | string | boolean | ArrayBuffer)[]): PreparedStatement
 	first<T = unknown>(colName?: string): Promise<T>
 	run<T = unknown>(): Promise<Result<T>>
 	all<T = unknown>(): Promise<Result<T>>

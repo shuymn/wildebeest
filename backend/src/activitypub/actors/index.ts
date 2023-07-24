@@ -206,8 +206,8 @@ export async function createPerson(
 		privkey = Buffer.from(userKeyPair.wrappedPrivKey)
 		salt = Buffer.from(userKeyPair.salt)
 	} else {
-		privkey = [...new Uint8Array(userKeyPair.wrappedPrivKey)]
-		salt = [...new Uint8Array(userKeyPair.salt)]
+		privkey = userKeyPair.wrappedPrivKey
+		salt = userKeyPair.salt.buffer
 	}
 
 	if (properties.preferredUsername === undefined) {
