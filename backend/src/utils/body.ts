@@ -1,38 +1,74 @@
+type ReadableValue = string | number | boolean | string[]
+
+type Stringify<T extends Record<string, ReadableValue>> = {
+	[P in keyof T]: T[P] extends string | undefined
+		? 'string'
+		: T[P] extends number | undefined
+		? 'number'
+		: T[P] extends boolean | undefined
+		? 'boolean'
+		: T[P] extends string[] | undefined
+		? 'string[]'
+		: never
+}
+
 // Extract the request body as the type `T`. Use this function when the requset
 // can be url encoded, form data or JSON. However, not working for formData
 // containing binary data (like File).
-export async function readBody<T>(request: Request): Promise<T> {
-	let form = null
-	const contentType = request.headers.get('content-type')
-	if (contentType === null) {
-		throw new Error('invalid request')
-	}
-	if (contentType.startsWith('application/json')) {
-		return request.json<T>()
-	} else if (
-		contentType.includes('charset') &&
-		contentType.includes('multipart/form-data') &&
-		contentType.includes('boundary')
-	) {
-		form = await localFormDataParse(request)
-	} else {
-		form = await request.formData()
-	}
+export function makeReadBody<T extends Record<string, ReadableValue>>(
+	typeOf: Stringify<Required<T>>
+): (request: Request) => Promise<T> {
+	const convert = (data: FormData) => {
+		const out: Record<string, ReadableValue> = {}
+		for (const pair of data) {
+			let key = pair[0]
+			const value = pair[1]
 
-	const out: any = {}
-
-	for (const [key, value] of form) {
-		if (key.endsWith('[]')) {
+			if (key.endsWith('[]')) {
+				key = key.replace('[]', '')
+			}
 			// The `key[]` notiation is used when sending an array of values.
-
-			const key2 = key.replace('[]', '')
-			const outArr: unknown[] = (out[key2] ??= [])
-			outArr.push(value)
-		} else {
-			out[key] = value
+			switch (typeOf[key]) {
+				case 'string': {
+					out[key] = value as string
+					break
+				}
+				case 'number': {
+					out[key] = Number(value)
+					break
+				}
+				case 'boolean': {
+					out[key] = value === 'true'
+					break
+				}
+				case 'string[]': {
+					if (!out[key]) {
+						out[key] = [value as string]
+					} else {
+						const a = out[key] as string[]
+						a.push(value as string)
+					}
+					break
+				}
+			}
 		}
+		return out
 	}
-	return out as T
+
+	return async (request: Request): Promise<T> => {
+		const contentType = request.headers.get('content-type')
+		if (contentType === null) {
+			throw new Error('invalid request')
+		}
+		if (contentType.startsWith('application/json')) {
+			return request.json<T>()
+		}
+		const data = ['charset', 'multipart/form-data', 'boundary'].some((v) => contentType.includes(v))
+			? await localFormDataParse(request)
+			: await request.formData()
+
+		return convert(data) as T
+	}
 }
 
 export async function localFormDataParse(request: Request): Promise<FormData> {

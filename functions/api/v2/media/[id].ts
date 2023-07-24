@@ -10,7 +10,7 @@ import type { MastodonId } from 'wildebeest/backend/src/types'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
-import { readBody } from 'wildebeest/backend/src/utils/body'
+import { makeReadBody } from 'wildebeest/backend/src/utils/body'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
 export const onRequestPut: PagesFunction<Env, 'id', ContextData> = async ({ params: { id }, env, request }) => {
@@ -24,6 +24,8 @@ type UpdateMedia = {
 	description?: string
 }
 
+const readBody = makeReadBody<UpdateMedia>({ description: 'string' })
+
 export async function handleRequestPut(db: Database, id: MastodonId, request: Request): Promise<Response> {
 	// Update the image properties
 	{
@@ -32,7 +34,7 @@ export async function handleRequestPut(db: Database, id: MastodonId, request: Re
 			return errors.mediaNotFound(id)
 		}
 
-		const body = await readBody<UpdateMedia>(request)
+		const body = await readBody(request)
 
 		if (body.description !== undefined) {
 			await updateObjectProperty(db, image, 'description', body.description)
