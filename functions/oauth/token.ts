@@ -4,11 +4,18 @@ import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import { getClientById } from 'wildebeest/backend/src/mastodon/client'
 import type { Env } from 'wildebeest/backend/src/types/env'
-import { readBody } from 'wildebeest/backend/src/utils/body'
+import { makeReadBody } from 'wildebeest/backend/src/utils/body'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
 type Body = {
 	code: string | null
+}
+
+const readBody = makeReadBody<{ code?: string }>({ code: 'string' })
+
+const headers = {
+	...cors(),
+	'content-type': 'application/json; charset=utf-8',
 }
 
 export const onRequest: PagesFunction<Env, any> = async ({ request, env }) => {
@@ -16,23 +23,20 @@ export const onRequest: PagesFunction<Env, any> = async ({ request, env }) => {
 }
 
 export async function handleRequest(db: Database, request: Request): Promise<Response> {
-	const headers = {
-		...cors(),
-		'content-type': 'application/json; charset=utf-8',
-	}
-
 	if (request.method === 'OPTIONS') {
 		return new Response('', { headers })
 	}
 
-	let data: Body = { code: null }
+	let code: Body['code'] = null
 	try {
-		data = await readBody<Body>(request)
+		const body = await readBody(request)
+		if (body.code) {
+			code = body.code
+		}
 	} catch (err) {
 		// ignore error
 	}
 
-	let code = data.code
 	if (!code) {
 		const url = new URL(request.url)
 		code = url.searchParams.get('code')

@@ -896,13 +896,15 @@ describe('Mastodon APIs', () => {
 				throw new Error('unexpected request to ' + input.url)
 			}
 
-			const res = await accounts_followers.handleRequest(domain, db, 'sven@example.com')
+			const actor = await queryAcct({ localPart: 'sven', domain: 'example.com' }, db)
+			assert.ok(actor)
+			const res = await accounts_followers.handleRequest({ domain, db }, actor[mastodonIdSymbol], { limit: null })
 			assert.equal(res.status, 200)
 
 			const data = await res.json<Array<any>>()
 			assert.equal(data.length, 2)
 
-			assert.equal(data[0].acct, 'a@cloudflare.com')
+			assert.equal(data[0].acct, 'a')
 			assert.equal(data[1].acct, 'b@example.com')
 		})
 
@@ -928,7 +930,7 @@ describe('Mastodon APIs', () => {
 			await addFollowing(db, actor2, actor)
 			await acceptFollowing(db, actor2, actor)
 
-			const res = await accounts_followers.handleRequest(domain, db, 'sven')
+			const res = await accounts_followers.handleRequest({ domain, db }, actor[mastodonIdSymbol], { limit: null })
 			assert.equal(res.status, 200)
 
 			const data = await res.json<Array<any>>()
@@ -957,7 +959,7 @@ describe('Mastodon APIs', () => {
 			await addFollowing(db, actor, actor2)
 			await acceptFollowing(db, actor, actor2)
 
-			const res = await accounts_following.handleRequest(domain, db, 'sven')
+			const res = await accounts_following.handleRequest({ domain, db }, actor[mastodonIdSymbol], { limit: null })
 			assert.equal(res.status, 200)
 
 			const data = await res.json<Array<any>>()
@@ -1036,23 +1038,27 @@ describe('Mastodon APIs', () => {
 				throw new Error('unexpected request to ' + input.url)
 			}
 
-			const res = await accounts_following.handleRequest(domain, db, 'sven@example.com')
+			const actor = await queryAcct({ localPart: 'sven', domain: 'example.com' }, db)
+			assert.ok(actor)
+			const res = await accounts_following.handleRequest({ domain, db }, actor[mastodonIdSymbol], { limit: null })
 			assert.equal(res.status, 200)
 
 			const data = await res.json<Array<any>>()
 			assert.equal(data.length, 2)
 
-			assert.equal(data[0].acct, 'a@cloudflare.com')
+			assert.equal(data[0].acct, 'a')
 			assert.equal(data[1].acct, 'b@example.com')
 		})
 
 		test('get remote actor featured_tags', async () => {
-			const res = await accounts_featured_tags.onRequest()
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const res = await accounts_featured_tags.onRequestGet({ params: { id: 'stub' } } as any)
 			assert.equal(res.status, 200)
 		})
 
 		test('get remote actor lists', async () => {
-			const res = await accounts_lists.onRequest()
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const res = await accounts_lists.onRequestGet({ params: { id: 'stub' } } as any)
 			assert.equal(res.status, 200)
 		})
 
@@ -1132,11 +1138,14 @@ describe('Mastodon APIs', () => {
 
 		test('follow local account', async () => {
 			const db = await makeDB()
-
 			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const targetActor = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 
-			const req = new Request('https://example.com', { method: 'POST' })
-			const res = await accounts_follow.handleRequest(req, db, 'localuser', connectedActor, userKEK)
+			const res = await accounts_follow.handleRequest(
+				{ domain, db, connectedActor, userKEK },
+				targetActor[mastodonIdSymbol],
+				{}
+			)
 			assert.equal(res.status, 403)
 		})
 
@@ -1148,31 +1157,31 @@ describe('Mastodon APIs', () => {
 
 				globalThis.fetch = async (input: RequestInfo) => {
 					const request = new Request(input)
-					if (request.url === 'https://' + domain + '/.well-known/webfinger?resource=acct%3Aactor%40' + domain + '') {
+					if (request.url === 'https://example.com/.well-known/webfinger?resource=acct%3Aactor%40example.com') {
 						return new Response(
 							JSON.stringify({
 								links: [
 									{
 										rel: 'self',
 										type: 'application/activity+json',
-										href: `https://${domain}/ap/users/actor`,
+										href: `https://example.com/ap/users/actor`,
 									},
 								],
 							})
 						)
 					}
 
-					if (request.url === `https://${domain}/ap/users/actor`) {
+					if (request.url === `https://example.com/ap/users/actor`) {
 						return new Response(
 							JSON.stringify({
-								id: `https://${domain}/ap/users/actor`,
+								id: `https://example.com/ap/users/actor`,
 								type: 'Person',
-								inbox: `https://${domain}/ap/users/actor/inbox`,
+								inbox: `https://example.com/ap/users/actor/inbox`,
 							})
 						)
 					}
 
-					if (request.url === `https://${domain}/ap/users/actor/inbox`) {
+					if (request.url === `https://example.com/ap/users/actor/inbox`) {
 						assert.equal(request.method, 'POST')
 						receivedActivity = await request.json()
 						return new Response('')
@@ -1185,11 +1194,15 @@ describe('Mastodon APIs', () => {
 			test('follow account', async () => {
 				const db = await makeDB()
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-
 				const connectedActor = actor
 
-				const req = new Request('https://example.com', { method: 'POST' })
-				const res = await accounts_follow.handleRequest(req, db, 'actor@' + domain, connectedActor, userKEK)
+				const followee = await queryAcct({ localPart: 'actor', domain: 'example.com' }, db)
+				assert.ok(followee)
+				const res = await accounts_follow.handleRequest(
+					{ domain, db, connectedActor, userKEK },
+					followee[mastodonIdSymbol],
+					{}
+				)
 				assert.equal(res.status, 200)
 				assertCORS(res)
 				assertJSON(res)
@@ -1206,21 +1219,23 @@ describe('Mastodon APIs', () => {
 					.bind(actor.id.toString())
 					.first()
 				assert(row)
-				assert.equal(row.target_actor_acct, 'actor@' + domain)
-				assert.equal(row.target_actor_id, `https://${domain}/ap/users/actor`)
+				assert.equal(row.target_actor_acct, 'actor@example.com')
+				assert.equal(row.target_actor_id, `https://example.com/ap/users/actor`)
 				assert.equal(row.state, 'pending')
 			})
 
 			test('unfollow account', async () => {
 				const db = await makeDB()
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-				const follower = await createPerson(domain, db, userKEK, 'actor@cloudflare.com')
-				await addFollowing(db, actor, follower)
+				const followee = await queryAcct({ localPart: 'actor', domain: 'example.com' }, db)
+				assert.ok(followee)
+				await addFollowing(db, actor, followee)
 
 				const connectedActor = actor
-
-				const req = new Request('https://' + domain, { method: 'POST' })
-				const res = await accounts_unfollow.handleRequest(req, db, 'actor@' + domain, connectedActor, userKEK)
+				const res = await accounts_unfollow.handleRequest(
+					{ domain, db, connectedActor, userKEK },
+					followee[mastodonIdSymbol]
+				)
 				assert.equal(res.status, 200)
 				assertCORS(res)
 				assertJSON(res)

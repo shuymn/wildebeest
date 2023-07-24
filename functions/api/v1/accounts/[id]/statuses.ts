@@ -114,10 +114,12 @@ WHERE objects.mastodon_id = ?1
 			return resourceNotFound('max_id', params.maxId)
 		}
 		cdate = results[0].cdate
-		if (params.sinceId) {
-			const { results } = await db.prepare(CDATE_QUERY).bind(params.sinceId).all<{ cdate: string }>()
+
+		const sinceId = params.sinceId || params.minId
+		if (sinceId) {
+			const { results } = await db.prepare(CDATE_QUERY).bind(sinceId).all<{ cdate: string }>()
 			if (results === undefined || results.length === 0) {
-				return resourceNotFound('since_id', params.sinceId)
+				return resourceNotFound(params.sinceId ? 'since_id' : 'min_id', sinceId)
 			}
 			since = results[0].cdate
 		}

@@ -5,7 +5,7 @@ import { createClient } from 'wildebeest/backend/src/mastodon/client'
 import { VAPIDPublicKey } from 'wildebeest/backend/src/mastodon/subscription'
 import { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
-import { readBody } from 'wildebeest/backend/src/utils/body'
+import { makeReadBody } from 'wildebeest/backend/src/utils/body'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
@@ -16,6 +16,13 @@ type AppsPost = {
 	scopes: string
 }
 
+const readBody = makeReadBody<AppsPost>({
+	redirect_uris: 'string',
+	website: 'string',
+	client_name: 'string',
+	scopes: 'string',
+})
+
 export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request, env }) => {
 	return handleRequest(await getDatabase(env), request, getVAPIDKeys(env))
 }
@@ -25,7 +32,7 @@ export async function handleRequest(db: Database, request: Request, vapidKeys: J
 		return errors.methodNotAllowed()
 	}
 
-	const body: AppsPost = await readBody<AppsPost>(request)
+	const body: AppsPost = await readBody(request)
 
 	// Parameter validation according to https://github.com/mastodon/mastodon/blob/main/app/lib/application_extension.rb
 	if (body.client_name === undefined || body.client_name?.trim() === '') {

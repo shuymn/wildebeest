@@ -1,10 +1,19 @@
-import { cors } from 'wildebeest/backend/src/utils/cors'
+// https://docs.joinmastodon.org/methods/accounts/#featured_tags
 
-export const onRequest = async () => {
-	const headers = {
-		...cors(),
-		'content-type': 'application/json; charset=utf-8',
+import { resourceNotFound } from 'wildebeest/backend/src/errors'
+import { ContextData } from 'wildebeest/backend/src/types/context'
+import { cors } from 'wildebeest/backend/src/utils/cors'
+import { Env } from 'wildebeest/consumer/src'
+
+const headers = {
+	...cors(),
+	'content-type': 'application/json; charset=utf-8',
+}
+
+// TODO: implement
+export const onRequestGet: PagesFunction<Env, 'id', ContextData> = async ({ params: { id } }) => {
+	if (typeof id !== 'string') {
+		return resourceNotFound('id', String(id))
 	}
-	const res: any = []
-	return new Response(JSON.stringify(res), { headers })
+	return new Response(JSON.stringify([]), { headers })
 }

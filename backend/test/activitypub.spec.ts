@@ -426,8 +426,14 @@ describe('ActivityPub', () => {
 				throw new Error('unexpected request to ' + input.url)
 			}
 
-			const items = await loadItems(collection)
-			assert.deepEqual(items, ['a', 'b', 'c', 'd', 'e', 'f'])
+			{
+				const items = await loadItems(collection, 10)
+				assert.deepEqual(items, ['a', 'b', 'c', 'd', 'e', 'f'])
+			}
+			{
+				const items = await loadItems(collection, 3)
+				assert.deepEqual(items.length, 3)
+			}
 		})
 	})
 })

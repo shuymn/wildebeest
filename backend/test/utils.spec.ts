@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
-import { readBody } from 'wildebeest/backend/src/utils/body'
+import { makeReadBody } from 'wildebeest/backend/src/utils/body'
 import {
 	actorToAcct,
 	actorToHandle,
@@ -146,30 +146,94 @@ describe('utils', () => {
 		}
 		const req = new Request('https://a.com', { method: 'POST', headers, body })
 
-		const data = await readBody<any>(req)
+		const readBody = makeReadBody<{ a: number }>({ a: 'number' })
+		const data = await readBody(req)
 		assert.equal(data.a, 1)
 	})
 
 	test('read body handles FormData', async () => {
-		const body = new FormData()
-		body.append('a', '1')
+		{
+			const body = new FormData()
+			body.append('a', '1')
 
-		const headers = {}
-		const req = new Request('https://a.com', { method: 'POST', headers, body })
+			const headers = {}
+			const req = new Request('https://a.com', { method: 'POST', headers, body })
 
-		const data = await readBody<any>(req)
-		assert.equal(data.a, '1')
+			const readBody = makeReadBody<{ a: number }>({ a: 'number' })
+			const data = await readBody(req)
+			assert.equal(data.a, 1)
+		}
+		{
+			const body = new FormData()
+			body.append('a', 'hello')
+			body.append('a', 'world')
+			const headers = {}
+			const req = new Request('https://a.com', { method: 'POST', headers, body })
+
+			const readBody = makeReadBody<{ a: string[] }>({ a: 'string[]' })
+			const data = await readBody(req)
+			assert.equal(data.a.length, 2)
+			assert.equal(data.a[0], 'hello')
+			assert.equal(data.a[1], 'world')
+		}
+		{
+			const body = new FormData()
+			body.append('a', '1')
+			body.append('b', '2')
+
+			const headers = {}
+			const req = new Request('https://a.com', { method: 'POST', headers, body })
+
+			const readBody = makeReadBody<{ a: number; b?: number; c?: number }>({ a: 'number', b: 'number', c: 'number' })
+			const data = await readBody(req)
+			assert.equal(data.a, 1)
+			assert.equal(data.b, 2)
+			assert.equal(data.c, undefined)
+		}
 	})
 
 	test('read body handles URL encoded', async () => {
-		const body = new URLSearchParams({ a: '1' })
-		const headers = {
-			'content-type': 'application/x-www-form-urlencoded',
-		}
-		const req = new Request('https://a.com', { method: 'POST', headers, body })
+		{
+			const body = new URLSearchParams({ a: '1' })
+			const headers = {
+				'content-type': 'application/x-www-form-urlencoded',
+			}
+			const req = new Request('https://a.com', { method: 'POST', headers, body })
 
-		const data = await readBody<any>(req)
-		assert.equal(data.a, '1')
+			const readBody = makeReadBody<{ a: number }>({ a: 'number' })
+			const data = await readBody(req)
+			assert.equal(data.a, 1)
+		}
+		{
+			const body = new URLSearchParams()
+			body.append('a', 'hello')
+			body.append('a', 'world')
+
+			const headers = {
+				'content-type': 'application/x-www-form-urlencoded',
+			}
+			const req = new Request('https://a.com', { method: 'POST', headers, body })
+
+			const readBody = makeReadBody<{ a: string[] }>({ a: 'string[]' })
+			const data = await readBody(req)
+			assert.equal(data.a.length, 2)
+			assert.equal(data.a[0], 'hello')
+			assert.equal(data.a[1], 'world')
+		}
+		{
+			const body = new URLSearchParams({ a: '1', b: '2' })
+
+			const headers = {
+				'content-type': 'application/x-www-form-urlencoded',
+			}
+			const req = new Request('https://a.com', { method: 'POST', headers, body })
+
+			const readBody = makeReadBody<{ a: number; b?: number; c?: number }>({ a: 'number', b: 'number', c: 'number' })
+			const data = await readBody(req)
+			assert.equal(data.a, 1)
+			assert.equal(data.b, 2)
+			assert.equal(data.c, undefined)
+		}
 	})
 
 	test('generate mastodon id', async () => {

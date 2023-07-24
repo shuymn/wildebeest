@@ -1,7 +1,7 @@
 // https://www.w3.org/TR/activitypub/#delivery
 
 import { type Database } from 'wildebeest/backend/src/database'
-import { getFollowers } from 'wildebeest/backend/src/mastodon/follow'
+import { getFollowerIds } from 'wildebeest/backend/src/mastodon/follow'
 import type { DeliverMessageBody, MessageSendRequest, Queue } from 'wildebeest/backend/src/types/queue'
 import { MessageType } from 'wildebeest/backend/src/types/queue'
 import { signRequest } from 'wildebeest/backend/src/utils/http-signing'
@@ -55,7 +55,7 @@ export async function deliverFollowers(
 	activity: Activity,
 	queue: Queue<DeliverMessageBody>
 ) {
-	const followers = await getFollowers(db, from)
+	const followers = await getFollowerIds(db, from)
 	if (followers.length === 0) {
 		// No one is following the user so no updates to send. Sad.
 		return

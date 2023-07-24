@@ -119,22 +119,48 @@ export function getFollowingRequestedAcct(db: Database, actor: Actor): Promise<A
 	return getResultsField(statement, 'target_actor_acct')
 }
 
-export function getFollowingId(db: Database, actor: Actor): Promise<Array<string>> {
+export function getFollowingId(db: Database, actor: Actor, limit?: number): Promise<Array<string>> {
 	const query = `
-		SELECT target_actor_id FROM actor_following WHERE actor_id=? AND state=?
+		SELECT target_actor_id FROM actor_following WHERE actor_id=?1 AND state=?2 ${limit ? 'LIMIT ?3' : ''}
 	`
 
-	const statement = db.prepare(query).bind(actor.id.toString(), STATE_ACCEPTED)
+	const statement = db
+		.prepare(query)
+		.bind(...(limit ? [actor.id.toString(), STATE_ACCEPTED, limit] : [actor.id.toString(), STATE_ACCEPTED]))
 
 	return getResultsField(statement, 'target_actor_id')
 }
 
-export function getFollowers(db: Database, actor: Actor): Promise<Array<string>> {
+export function getFollowerIds(db: Database, actor: Actor, limit?: number): Promise<Array<string>> {
 	const query = `
-		SELECT actor_id FROM actor_following WHERE target_actor_id=? AND state=?
+		SELECT actor_id FROM actor_following WHERE target_actor_id=?1 AND state=?2 ${limit ? 'LIMIT ?3' : ''}
 	`
 
-	const statement = db.prepare(query).bind(actor.id.toString(), STATE_ACCEPTED)
+	const statement = db
+		.prepare(query)
+		.bind(...(limit ? [actor.id.toString(), STATE_ACCEPTED, limit] : [actor.id.toString(), STATE_ACCEPTED]))
 
 	return getResultsField(statement, 'actor_id')
+}
+
+export async function isFollowingOrFollowingRequested(db: Database, actor: Actor, target: Actor): Promise<boolean> {
+	const { yes } = await db
+		.prepare(
+			'SELECT COUNT(*) > 0 as yes FROM actor_following WHERE actor_id = ?1 AND target_actor_id = ?2 AND state IN (?3, ?4)'
+		)
+		.bind(actor.id.toString(), target.id.toString(), STATE_ACCEPTED, STATE_PENDING)
+		.first<{ yes: 1 | 0 }>()
+
+	return yes === 1
+}
+
+export async function isNotFollowing(db: Database, actor: Actor, target: Actor): Promise<boolean> {
+	const { following } = await db
+		.prepare(
+			'SELECT COUNT(*) > 0 as following FROM actor_following WHERE actor_id = ?1 AND target_actor_id = ?2 AND state = ?3'
+		)
+		.bind(actor.id.toString(), target.id.toString(), STATE_ACCEPTED)
+		.first<{ following: 1 | 0 }>()
+
+	return following === 0
 }

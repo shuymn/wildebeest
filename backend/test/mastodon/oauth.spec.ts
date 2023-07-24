@@ -209,11 +209,13 @@ describe('Mastodon APIs', () => {
 
 		test('token error on unknown client', async () => {
 			const db = await makeDB()
-			const body = new URLSearchParams({ code: 'some-code' })
 
 			const req = new Request('https://example.com/oauth/token', {
 				method: 'POST',
-				body,
+				body: new URLSearchParams({ code: 'some-code' }),
+				headers: {
+					'content-type': 'application/x-www-form-urlencoded',
+				},
 			})
 			const res = await oauth_token.handleRequest(db, req)
 			assert.equal(res.status, 403)
@@ -224,13 +226,14 @@ describe('Mastodon APIs', () => {
 			const testScope = 'test abcd'
 			const client = await createTestClient(db, 'https://localhost', testScope)
 
-			const body = new URLSearchParams({
-				code: client.id + '.some-code',
-			})
-
 			const req = new Request('https://example.com/oauth/token', {
 				method: 'POST',
-				body,
+				body: new URLSearchParams({
+					code: client.id + '.some-code',
+				}),
+				headers: {
+					'content-type': 'application/x-www-form-urlencoded',
+				},
 			})
 			const res = await oauth_token.handleRequest(db, req)
 			assert.equal(res.status, 200)
@@ -249,6 +252,9 @@ describe('Mastodon APIs', () => {
 			const req = new Request('https://example.com/oauth/token', {
 				method: 'POST',
 				body,
+				headers: {
+					'content-type': 'application/x-www-form-urlencoded',
+				},
 			})
 			const res = await oauth_token.handleRequest(db, req)
 			assert.equal(res.status, 401)

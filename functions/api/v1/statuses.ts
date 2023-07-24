@@ -27,7 +27,7 @@ import type { Visibility } from 'wildebeest/backend/src/types'
 import type { ContextData } from 'wildebeest/backend/src/types/context'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import type { DeliverMessageBody, Queue } from 'wildebeest/backend/src/types/queue'
-import { readBody } from 'wildebeest/backend/src/utils/body'
+import { makeReadBody } from 'wildebeest/backend/src/utils/body'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
 type StatusCreate = {
@@ -37,6 +37,14 @@ type StatusCreate = {
 	media_ids?: Array<string>
 	in_reply_to_id?: string
 }
+
+const readBody = makeReadBody<StatusCreate>({
+	status: 'string',
+	visibility: 'string',
+	sensitive: 'boolean',
+	media_ids: 'string[]',
+	in_reply_to_id: 'string',
+})
 
 export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request, env, data }) => {
 	return handleRequest(request, await getDatabase(env), data.connectedActor, env.userKEK, env.QUEUE, cacheFromEnv(env))
@@ -71,7 +79,7 @@ export async function handleRequest(
 		}
 	}
 
-	const body = await readBody<StatusCreate>(request)
+	const body = await readBody(request)
 	console.log(body)
 	if (body.status === undefined || body.visibility === undefined) {
 		return new Response('', { status: 400 })
