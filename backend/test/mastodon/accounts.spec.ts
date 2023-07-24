@@ -785,7 +785,8 @@ describe('Mastodon APIs', () => {
 					const objectId = getApId(item.object)
 					const res = await cacheActivityObject(domain, getActivityObject(item), db, getApId(item.actor), objectId)
 					assert.ok(res)
-					await addObjectInOutbox(db, actorB, res.object)
+					// Date in the past to create the order
+					await addObjectInOutbox(db, actorB, res.object, '2022-12-10T23:48:38Z')
 				}
 				if (isAnnounceActivity(item)) {
 					const objectId = getApId(item.object)
@@ -810,12 +811,12 @@ describe('Mastodon APIs', () => {
 
 			const data = await res.json<Array<any>>()
 			assert.equal(data.length, 2)
-			assert.equal(data[0].content, '<p>p</p>')
-			assert.equal(data[0].account.username, 'someone')
+			assert.equal(data[1].content, '<p>p</p>')
+			assert.equal(data[1].account.username, 'someone')
 
-			assert.equal(data[0].media_attachments.length, 2)
-			assert.equal(data[0].media_attachments[0].type, 'image')
-			assert.equal(data[0].media_attachments[1].type, 'video')
+			assert.equal(data[1].media_attachments.length, 2)
+			assert.equal(data[1].media_attachments[0].type, 'image')
+			assert.equal(data[1].media_attachments[1].type, 'video')
 
 			// Statuses were imported locally and once was a reblog of an already
 			// existing local object.
