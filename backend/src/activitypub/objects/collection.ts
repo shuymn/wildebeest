@@ -28,7 +28,7 @@ export async function getMetadata<T>(url: URL): Promise<OrderedCollection<T>> {
 	return res.json<OrderedCollection<T>>()
 }
 
-export async function loadItems<T>(collection: OrderedCollection<T>, max?: number): Promise<Array<T>> {
+export async function loadItems<T>(collection: OrderedCollection<T>, limit: number): Promise<Array<T>> {
 	const items = []
 	let pageUrl = collection.first
 
@@ -38,8 +38,8 @@ export async function loadItems<T>(collection: OrderedCollection<T>, max?: numbe
 			return items
 		}
 		items.push(...page.orderedItems)
-		if (max && items.length >= max) {
-			return items.slice(0, max)
+		if (limit && items.length >= limit) {
+			return items.slice(0, limit)
 		}
 		if (page.next) {
 			pageUrl = new URL(page.next)

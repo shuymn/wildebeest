@@ -1,7 +1,7 @@
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { getFollowers } from 'wildebeest/backend/src/mastodon/follow'
+import { getFollowerIds } from 'wildebeest/backend/src/mastodon/follow'
 import type { Env } from 'wildebeest/backend/src/types/env'
 import { isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
 
@@ -27,7 +27,7 @@ export async function handleRequest(domain: string, db: Database, id: string): P
 		return new Response('', { status: 404 })
 	}
 
-	const followers = await getFollowers(db, actor)
+	const followers = await getFollowerIds(db, actor)
 
 	const out = {
 		'@context': 'https://www.w3.org/ns/activitystreams',

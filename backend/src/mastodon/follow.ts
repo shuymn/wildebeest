@@ -119,22 +119,26 @@ export function getFollowingRequestedAcct(db: Database, actor: Actor): Promise<A
 	return getResultsField(statement, 'target_actor_acct')
 }
 
-export function getFollowingId(db: Database, actor: Actor): Promise<Array<string>> {
+export function getFollowingId(db: Database, actor: Actor, limit?: number): Promise<Array<string>> {
 	const query = `
-		SELECT target_actor_id FROM actor_following WHERE actor_id=? AND state=?
+		SELECT target_actor_id FROM actor_following WHERE actor_id=?1 AND state=?2 ${limit ? 'LIMIT ?3' : ''}
 	`
 
-	const statement = db.prepare(query).bind(actor.id.toString(), STATE_ACCEPTED)
+	const statement = db
+		.prepare(query)
+		.bind(...(limit ? [actor.id.toString(), STATE_ACCEPTED, limit] : [actor.id.toString(), STATE_ACCEPTED]))
 
 	return getResultsField(statement, 'target_actor_id')
 }
 
-export function getFollowers(db: Database, actor: Actor): Promise<Array<string>> {
+export function getFollowerIds(db: Database, actor: Actor, limit?: number): Promise<Array<string>> {
 	const query = `
-		SELECT actor_id FROM actor_following WHERE target_actor_id=? AND state=?
+		SELECT actor_id FROM actor_following WHERE target_actor_id=?1 AND state=?2 ${limit ? 'LIMIT ?3' : ''}
 	`
 
-	const statement = db.prepare(query).bind(actor.id.toString(), STATE_ACCEPTED)
+	const statement = db
+		.prepare(query)
+		.bind(...(limit ? [actor.id.toString(), STATE_ACCEPTED, limit] : [actor.id.toString(), STATE_ACCEPTED]))
 
 	return getResultsField(statement, 'actor_id')
 }

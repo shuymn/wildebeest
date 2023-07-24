@@ -25,10 +25,15 @@ export async function handleMoveActivity(domain: string, activity: MoveActivity,
 
 	// FIXME: Requires alsoKnownAs to be set in both directions
 
+	// FIXME: Depending on the number of followings/followers the account has,
+	// it may be caught by the Cloudflare Workers limit.
+	// ref: https://developers.cloudflare.com/workers/platform/limits/
+
 	// move followers
 	{
 		const collection: OrderedCollection<string> = await getMetadata(fromActor.followers)
-		collection.items = await loadItems(collection)
+		// FIXME: stub
+		collection.items = await loadItems(collection, 500)
 
 		// TODO: eventually move to queue and move workers
 		while (collection.items.length > 0) {
@@ -41,7 +46,8 @@ export async function handleMoveActivity(domain: string, activity: MoveActivity,
 	// move following
 	{
 		const collection: OrderedCollection<string> = await getMetadata(fromActor.following)
-		collection.items = await loadItems(collection)
+		// FIXME: stub
+		collection.items = await loadItems(collection, 500)
 
 		// TODO: eventually move to queue and move workers
 		while (collection.items.length > 0) {
