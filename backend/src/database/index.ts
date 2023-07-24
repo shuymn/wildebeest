@@ -20,7 +20,7 @@ export interface Database {
 }
 
 export interface PreparedStatement {
-	bind(...values: any[]): PreparedStatement
+	bind(...values: (null | number | string | Buffer | number[])[]): PreparedStatement
 	first<T = unknown>(colName?: string): Promise<T>
 	run<T = unknown>(): Promise<Result<T>>
 	all<T = unknown>(): Promise<Result<T>>
