@@ -38,6 +38,10 @@ const qb: QueryBuilder = {
 	jsonSet(obj: string, field: string, value: string): string {
 		return `jsonb_set(${obj}, '{${field}}', ${value})`
 	},
+
+	timeNormalize(column: string): string {
+		return column
+	},
 }
 
 export default async function make(env: Pick<Env, 'NEON_DATABASE_URL'>): Promise<Database> {

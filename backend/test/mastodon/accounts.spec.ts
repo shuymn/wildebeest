@@ -1,12 +1,19 @@
 import { strict as assert } from 'node:assert/strict'
 
+import {
+	cacheActivityObject,
+	getActivityObject,
+	isAnnounceActivity,
+	isCreateActivity,
+} from 'wildebeest/backend/src/activitypub/activities'
 import { createPerson, getActorById } from 'wildebeest/backend/src/activitypub/actors'
-import { getApId, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import { addObjectInOutbox, get } from 'wildebeest/backend/src/activitypub/actors/outbox'
+import { getApId, getObjectById, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
 import { createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { insertLike } from 'wildebeest/backend/src/mastodon/like'
-import { insertReblog } from 'wildebeest/backend/src/mastodon/reblog'
+import { createReblog, insertReblog } from 'wildebeest/backend/src/mastodon/reblog'
 import { createStatus } from 'wildebeest/backend/src/mastodon/status'
 import { MessageType } from 'wildebeest/backend/src/types/queue'
 import { queryAcct } from 'wildebeest/backend/src/webfinger'
@@ -431,7 +438,7 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const actor = await queryAcct({ localPart: 'sven', domain: 'social.com' }, db)
 			assert.ok(actor)
-			const res = await accounts_get.handleRequest(domain, db, actor[mastodonIdSymbol])
+			const res = await accounts_get.handleRequest({ domain, db }, actor[mastodonIdSymbol])
 			assert.equal(res.status, 200)
 			const data = await res.json<any>()
 			// Note the sanitization
@@ -449,7 +456,7 @@ describe('Mastodon APIs', () => {
 
 		test('get unknown actor by id', async () => {
 			const db = await makeDB()
-			const res = await accounts_get.handleRequest(domain, db, '123456789')
+			const res = await accounts_get.handleRequest({ domain, db }, '123456789')
 			assert.equal(res.status, 404)
 		})
 
@@ -467,7 +474,7 @@ describe('Mastodon APIs', () => {
 
 			await createStatus(domain, db, actor, 'my first status')
 
-			const res = await accounts_get.handleRequest(domain, db, actor[mastodonIdSymbol])
+			const res = await accounts_get.handleRequest({ domain, db }, actor[mastodonIdSymbol])
 			assert.equal(res.status, 200)
 
 			const data = await res.json<any>()
@@ -490,8 +497,17 @@ describe('Mastodon APIs', () => {
 			const secondNote = await createStatus(domain, db, actor, 'my second status')
 			await insertReblog(db, actor, secondNote)
 
-			const req = new Request('https://' + domain)
-			const res = await accounts_statuses.handleRequest(req, db, 'sven@' + domain)
+			const res = await accounts_statuses.handleRequest({ domain, db }, actor[mastodonIdSymbol], {
+				maxId: null,
+				sinceId: null,
+				minId: null,
+				limit: null,
+				onlyMedia: null,
+				excludeReplies: null,
+				excludeReblogs: null,
+				pinned: null,
+				tagged: null,
+			})
 			assert.equal(res.status, 200)
 
 			const data = await res.json<Array<any>>()
@@ -499,7 +515,7 @@ describe('Mastodon APIs', () => {
 
 			assert(isUUID(data[0].id))
 			assert.equal(data[0].content, 'my second status')
-			assert.equal(data[0].account.acct, 'sven@' + domain)
+			assert.equal(data[0].account.acct, 'sven')
 			assert.equal(data[0].favourites_count, 0)
 			assert.equal(data[0].reblogs_count, 1)
 			assert.equal(new URL(data[0].uri).pathname, '/ap/o/' + data[0].id)
@@ -514,15 +530,21 @@ describe('Mastodon APIs', () => {
 		test("get local actor statuses doesn't include replies", async () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-
 			const note = await createStatus(domain, db, actor, 'a post')
-
 			await sleep(10)
-
 			await createReply(domain, db, actor, note, 'a reply')
 
-			const req = new Request('https://' + domain)
-			const res = await accounts_statuses.handleRequest(req, db, 'sven@' + domain)
+			const res = await accounts_statuses.handleRequest({ domain, db }, actor[mastodonIdSymbol], {
+				maxId: null,
+				sinceId: null,
+				minId: null,
+				limit: null,
+				onlyMedia: null,
+				excludeReplies: 'true',
+				excludeReblogs: null,
+				pinned: null,
+				tagged: null,
+			})
 			assert.equal(res.status, 200)
 
 			const data = await res.json<Array<any>>()
@@ -539,8 +561,17 @@ describe('Mastodon APIs', () => {
 			const mediaAttachments = [await createImage(domain, db, actor, properties)]
 			await createStatus(domain, db, actor, 'status from actor', mediaAttachments)
 
-			const req = new Request('https://' + domain)
-			const res = await accounts_statuses.handleRequest(req, db, 'sven@' + domain)
+			const res = await accounts_statuses.handleRequest({ domain, db }, actor[mastodonIdSymbol], {
+				maxId: null,
+				sinceId: null,
+				minId: null,
+				limit: null,
+				onlyMedia: null,
+				excludeReplies: null,
+				excludeReblogs: null,
+				pinned: null,
+				tagged: null,
+			})
 			assert.equal(res.status, 200)
 
 			const data = await res.json<Array<any>>()
@@ -553,10 +584,19 @@ describe('Mastodon APIs', () => {
 
 		test('get pinned statuses', async () => {
 			const db = await makeDB()
-			await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-			const req = new Request('https://' + domain + '?pinned=true')
-			const res = await accounts_statuses.handleRequest(req, db, 'sven@' + domain)
+			const res = await accounts_statuses.handleRequest({ domain, db }, actor[mastodonIdSymbol], {
+				maxId: null,
+				sinceId: null,
+				minId: null,
+				limit: null,
+				onlyMedia: null,
+				excludeReplies: null,
+				excludeReblogs: null,
+				pinned: 'true',
+				tagged: null,
+			})
 			assert.equal(res.status, 200)
 
 			const data = await res.json<Array<any>>()
@@ -584,21 +624,39 @@ describe('Mastodon APIs', () => {
 				.run()
 
 			{
-				// Query statuses after object1, should only see object2.
-				const req = new Request('https://' + domain + '?max_id=https://example.com/object1')
-				const res = await accounts_statuses.handleRequest(req, db, 'sven@' + domain)
+				// Query statuses before object2, should only see object1.
+				const res = await accounts_statuses.handleRequest({ domain, db }, actor[mastodonIdSymbol], {
+					maxId: 'https://example.com/object2',
+					sinceId: null,
+					minId: null,
+					limit: null,
+					onlyMedia: null,
+					excludeReplies: null,
+					excludeReblogs: null,
+					pinned: null,
+					tagged: null,
+				})
 				assert.equal(res.status, 200)
 
 				const data = await res.json<Array<any>>()
 				assert.equal(data.length, 1)
-				assert.equal(data[0].content, 'my second status')
-				assert.equal(data[0].account.acct, 'sven@' + domain)
+				assert.equal(data[0].content, 'my first status')
+				assert.equal(data[0].account.acct, 'sven')
 			}
 
 			{
-				// Query statuses after object2, nothing is after.
-				const req = new Request('https://' + domain + '?max_id=https://example.com/object2')
-				const res = await accounts_statuses.handleRequest(req, db, 'sven@' + domain)
+				// Query statuses before object1, nothing is after.
+				const res = await accounts_statuses.handleRequest({ domain, db }, actor[mastodonIdSymbol], {
+					maxId: 'https://example.com/object1',
+					sinceId: null,
+					minId: null,
+					limit: null,
+					onlyMedia: null,
+					excludeReplies: null,
+					excludeReblogs: null,
+					pinned: null,
+					tagged: null,
+				})
 				assert.equal(res.status, 200)
 
 				const data = await res.json<Array<any>>()
@@ -608,8 +666,18 @@ describe('Mastodon APIs', () => {
 
 		test('get local actor statuses with max_id poiting to unknown id', async () => {
 			const db = await makeDB()
-			const req = new Request('https://' + domain + '?max_id=object1')
-			const res = await accounts_statuses.handleRequest(req, db, 'sven@' + domain)
+			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const res = await accounts_statuses.handleRequest({ domain, db }, actor[mastodonIdSymbol], {
+				maxId: 'object1',
+				sinceId: null,
+				minId: null,
+				limit: null,
+				onlyMedia: null,
+				excludeReplies: null,
+				excludeReblogs: null,
+				pinned: null,
+				tagged: null,
+			})
 			assert.equal(res.status, 404)
 		})
 
@@ -709,97 +777,51 @@ describe('Mastodon APIs', () => {
 				throw new Error('unexpected request to ' + input.url)
 			}
 
-			const req = new Request('https://example.com')
-			const res = await accounts_statuses.handleRequest(req, db, 'someone@social.com')
+			const actorB = await queryAcct({ localPart: 'someone', domain: 'social.com' }, db)
+			assert.ok(actorB)
+			const collection = await get(actorB)
+			for (const item of collection.items) {
+				if (isCreateActivity(item)) {
+					const objectId = getApId(item.object)
+					const res = await cacheActivityObject(domain, getActivityObject(item), db, getApId(item.actor), objectId)
+					assert.ok(res)
+					// Date in the past to create the order
+					await addObjectInOutbox(db, actorB, res.object, '2022-12-10T23:48:38Z')
+				}
+				if (isAnnounceActivity(item)) {
+					const objectId = getApId(item.object)
+					const obj = await getObjectById(db, objectId)
+					assert.ok(obj)
+					await createReblog(db, actorB, obj)
+				}
+			}
+
+			const res = await accounts_statuses.handleRequest({ domain, db }, actorB[mastodonIdSymbol], {
+				maxId: null,
+				sinceId: null,
+				minId: null,
+				limit: null,
+				onlyMedia: null,
+				excludeReplies: null,
+				excludeReblogs: null,
+				pinned: null,
+				tagged: null,
+			})
 			assert.equal(res.status, 200)
 
 			const data = await res.json<Array<any>>()
 			assert.equal(data.length, 2)
-			assert.equal(data[0].content, '<p>p</p>')
-			assert.equal(data[0].account.username, 'someone')
+			assert.equal(data[1].content, '<p>p</p>')
+			assert.equal(data[1].account.username, 'someone')
 
-			assert.equal(data[0].media_attachments.length, 2)
-			assert.equal(data[0].media_attachments[0].type, 'image')
-			assert.equal(data[0].media_attachments[1].type, 'video')
+			assert.equal(data[1].media_attachments.length, 2)
+			assert.equal(data[1].media_attachments[0].type, 'image')
+			assert.equal(data[1].media_attachments[1].type, 'video')
 
 			// Statuses were imported locally and once was a reblog of an already
 			// existing local object.
 			const row: { count: number } = await db.prepare(`SELECT count(*) as count FROM objects`).first()
 			assert.equal(row.count, 2)
-		})
-
-		test('get remote actor statuses ignoring object that fail to download', async () => {
-			const db = await makeDB()
-
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			await createPublicNote(domain, db, 'my localnote status', actor)
-
-			globalThis.fetch = async (input: RequestInfo) => {
-				if (input instanceof URL || typeof input === 'string') {
-					if (input.toString() === 'https://social.com/.well-known/webfinger?resource=acct%3Asomeone%40social.com') {
-						return new Response(
-							JSON.stringify({
-								links: [
-									{
-										rel: 'self',
-										type: 'application/activity+json',
-										href: 'https://social.com/someone',
-									},
-								],
-							})
-						)
-					}
-
-					if (input.toString() === 'https://social.com/someone') {
-						return new Response(
-							JSON.stringify({
-								id: 'https://social.com/someone',
-								type: 'Person',
-								preferredUsername: 'someone',
-								outbox: 'https://social.com/outbox',
-							})
-						)
-					}
-
-					if (input.toString() === 'https://social.com/outbox') {
-						return new Response(
-							JSON.stringify({
-								first: 'https://social.com/outbox/page1',
-							})
-						)
-					}
-
-					if (input.toString() === 'https://nonexistingobject.com/') {
-						return new Response('', { status: 400 })
-					}
-
-					if (input.toString() === 'https://social.com/outbox/page1') {
-						return new Response(
-							JSON.stringify({
-								orderedItems: [
-									{
-										id: 'https://mastodon.social/users/c/statuses/d/activity',
-										type: 'Announce',
-										actor: 'https://mastodon.social/users/someone',
-										published: '2022-12-10T23:48:38Z',
-										object: 'https://nonexistingobject.com',
-									},
-								],
-							})
-						)
-					}
-
-					throw new Error('unexpected request to ' + input.toString())
-				}
-				throw new Error('unexpected request to ' + input.url)
-			}
-
-			const req = new Request('https://example.com')
-			const res = await accounts_statuses.handleRequest(req, db, 'someone@social.com')
-			assert.equal(res.status, 200)
-
-			const data = await res.json<Array<any>>()
-			assert.equal(data.length, 0)
 		})
 
 		test('get remote actor followers', async () => {

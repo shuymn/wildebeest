@@ -12,19 +12,24 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
+type Dependencies = {
+	domain: string
+	db: Database
+}
+
 export const onRequest: PagesFunction<Env, 'id', ContextData> = async ({ request, env, params: { id } }) => {
 	if (typeof id !== 'string') {
 		return resourceNotFound('id', String(id))
 	}
-	return handleRequest(new URL(request.url).hostname, await getDatabase(env), id)
+	return handleRequest({ domain: new URL(request.url).hostname, db: await getDatabase(env) }, id)
 }
 
-export async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
+export async function handleRequest({ domain, db }: Dependencies, id: string): Promise<Response> {
 	const account = await getAccountByMastodonId(domain, db, id)
 
 	if (account) {
 		return new Response(JSON.stringify(account), { headers })
 	} else {
-		return new Response('', { status: 404 })
+		return resourceNotFound('id', id)
 	}
 }

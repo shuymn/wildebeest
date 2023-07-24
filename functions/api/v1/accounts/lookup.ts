@@ -12,7 +12,7 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
-type Dependency = { domain: string; db: Database }
+type Dependencies = { domain: string; db: Database }
 
 export const onRequestGet: PagesFunction<Env, '', ContextData> = async ({ request, env }) => {
 	const url = new URL(request.url)
@@ -24,7 +24,7 @@ export const onRequestGet: PagesFunction<Env, '', ContextData> = async ({ reques
 	return handleRequest({ domain: url.hostname, db: await getDatabase(env) }, acct)
 }
 
-export async function handleRequest({ domain, db }: Dependency, acct: string): Promise<Response> {
+export async function handleRequest({ domain, db }: Dependencies, acct: string): Promise<Response> {
 	const account = await getAccount(domain, db, acct)
 	if (account === null) {
 		return resourceNotFound('acct', acct)

@@ -68,7 +68,7 @@ WHERE
      AND ${db.qb.jsonExtractIsNull('objects.properties', 'inReplyTo')}
      AND (outbox_objects.target = '${PUBLIC_GROUP}' OR outbox_objects.target IN ${db.qb.set('?3')})
 GROUP BY objects.id ${db.qb.psqlOnly(', actors.id, outbox_objects.actor_id, outbox_objects.published_date')}
-ORDER by strftime('%Y-%m-%d %H:%M:%f', outbox_objects.published_date) DESC
+ORDER BY ${db.qb.timeNormalize('outbox_objects.published_date')} DESC
 LIMIT ?4
 `
 	const DEFAULT_LIMIT = 20
@@ -138,11 +138,6 @@ export async function getPublicTimeline(
 	offset = 0,
 	hashtag?: string
 ): Promise<Array<MastodonStatus>> {
-	let hashtagFilter = ''
-	if (hashtag) {
-		hashtagFilter = 'AND note_hashtags.value=?3'
-	}
-
 	const QUERY = `
 SELECT objects.*,
        actors.id as actor_id,
@@ -164,37 +159,35 @@ WHERE objects.type='Note'
       AND ${localPreferenceQuery(localPreference)}
       AND ${db.qb.jsonExtractIsNull('objects.properties', 'inReplyTo')}
       AND outbox_objects.target = '${PUBLIC_GROUP}'
-      ${hashtagFilter}
+      ${hashtag ? 'AND note_hashtags.value=?3' : ''}
 GROUP BY objects.id ${db.qb.psqlOnly(
 		', actors.id, actors.cdate, actors.properties, outbox_objects.actor_id, outbox_objects.published_date'
 	)}
-ORDER by strftime('%Y-%m-%d %H:%M:%f', outbox_objects.published_date) DESC
+ORDER BY ${db.qb.timeNormalize('outbox_objects.published_date')} DESC
 LIMIT ?1 OFFSET ?2
 `
 	const DEFAULT_LIMIT = 20
 
-	let query = db.prepare(QUERY).bind(DEFAULT_LIMIT, offset)
-	if (hashtagFilter) {
-		query = db.prepare(QUERY).bind(DEFAULT_LIMIT, offset, hashtag)
-	}
-
-	const { success, error, results } = await query.all<{
-		mastodon_id: string
-		id: string
-		cdate: string
-		properties: string
-		actor_id: string
-		actor_type: Actor['type']
-		actor_pubkey: string | null
-		actor_cdate: string
-		actor_properties: string
-		actor_is_admin: 1 | null
-		actor_mastodon_id: string
-		publisher_actor_id: string
-		favourites_count: number
-		reblogs_count: number
-		replies_count: number
-	}>()
+	const { success, error, results } = await db
+		.prepare(QUERY)
+		.bind(...(hashtag ? [DEFAULT_LIMIT, offset, hashtag] : [DEFAULT_LIMIT, offset]))
+		.all<{
+			mastodon_id: string
+			id: string
+			cdate: string
+			properties: string
+			actor_id: string
+			actor_type: Actor['type']
+			actor_pubkey: string | null
+			actor_cdate: string
+			actor_properties: string
+			actor_is_admin: 1 | null
+			actor_mastodon_id: string
+			publisher_actor_id: string
+			favourites_count: number
+			reblogs_count: number
+			replies_count: number
+		}>()
 	if (!success) {
 		throw new Error('SQL error: ' + error)
 	}

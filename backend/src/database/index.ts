@@ -20,7 +20,8 @@ export interface Database {
 }
 
 export interface PreparedStatement {
-	bind(...values: any[]): PreparedStatement
+	// https://developers.cloudflare.com/d1/platform/client-api/#type-conversion
+	bind(...values: (null | number | string | boolean | ArrayBuffer)[]): PreparedStatement
 	first<T = unknown>(colName?: string): Promise<T>
 	run<T = unknown>(): Promise<Result<T>>
 	all<T = unknown>(): Promise<Result<T>>
@@ -35,6 +36,7 @@ export interface QueryBuilder {
 	insertOrIgnore(q: string): string
 	psqlOnly(raw: string): string
 	jsonSet(obj: string, field: string, value: string): string
+	timeNormalize(column: string): string
 }
 
 export async function getDatabase(env: Pick<Env, 'DATABASE' | 'NEON_DATABASE_URL'>): Promise<Database> {

@@ -29,7 +29,7 @@ test.describe('Infinite (statuses) scrolling', () => {
 				await page.getByRole('article').getByRole('link').filter({ hasText: 'Raffa123$' }).first().click()
 				await expect(page.getByTestId('account-info').getByRole('img', { name: 'Header of Raffa123$' })).toBeVisible()
 			},
-			fetchUrl: 'http://127.0.0.1:8788/api/v1/accounts/Rafael/statuses?*',
+			fetchUrl: 'http://127.0.0.1:8788/api/v1/accounts/*/statuses?*',
 		},
 	]
 

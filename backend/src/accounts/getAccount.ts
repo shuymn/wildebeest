@@ -5,12 +5,20 @@ import {
 	getActorById,
 	getActorByMastodonId,
 	getActorByRemoteHandle,
+	setMastodonId,
 } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database } from 'wildebeest/backend/src/database'
 import { loadExternalMastodonAccount, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import { MastodonAccount, MastodonId } from 'wildebeest/backend/src/types'
 import { adjustLocalHostDomain } from 'wildebeest/backend/src/utils/adjustLocalHostDomain'
-import { actorToHandle, Handle, isLocalHandle, LocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
+import {
+	actorToHandle,
+	Handle,
+	handleToUrl,
+	isLocalHandle,
+	LocalHandle,
+	parseHandle,
+} from 'wildebeest/backend/src/utils/handle'
 
 export function isLocalAccount(domain: string, handle: Handle): handle is LocalHandle {
 	return isLocalHandle(handle) || handle.domain === domain
@@ -48,4 +56,37 @@ export async function getAccountByMastodonId(
 		return await loadLocalMastodonAccount(db, actor)
 	}
 	return await loadExternalMastodonAccount(db, actor, handle, true)
+}
+
+export async function getMastodonIdByHandle(domain: string, db: Database, handle: Handle): Promise<MastodonId | null> {
+	if (isLocalAccount(domain, handle)) {
+		const id = actorURL(adjustLocalHostDomain(domain), handle).toString()
+		const { results } = await db
+			.prepare('SELECT mastodon_id FROM actors WHERE id = ?1')
+			.bind(id)
+			.all<{ mastodon_id: string | null }>()
+		if (!results || results.length === 0) {
+			return null
+		}
+		const { mastodon_id: mastodonId } = results[0]
+		if (mastodonId) {
+			return mastodonId
+		}
+		const { cdate } = await db.prepare('SELECT cdate FROM actors WHERE id = ?1').bind(id).first<{ cdate: string }>()
+		return await setMastodonId(db, id, cdate)
+	}
+
+	const { results } = await db
+		.prepare(`SELECT id, mastodon_id FROM actors WHERE ${db.qb.jsonExtract('properties', 'url')} = ?1`)
+		.bind(handleToUrl(handle).toString())
+		.all<{ id: string; mastodon_id: string | null }>()
+	if (!results || results.length === 0) {
+		return null
+	}
+	const { id, mastodon_id: mastodonId } = results[0]
+	if (mastodonId) {
+		return mastodonId
+	}
+	const { cdate } = await db.prepare('SELECT cdate FROM actors WHERE id = ?1').bind(id).first<{ cdate: string }>()
+	return await setMastodonId(db, id, cdate)
 }

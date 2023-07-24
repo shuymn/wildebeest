@@ -206,8 +206,8 @@ export async function createPerson(
 		privkey = Buffer.from(userKeyPair.wrappedPrivKey)
 		salt = Buffer.from(userKeyPair.salt)
 	} else {
-		privkey = [...new Uint8Array(userKeyPair.wrappedPrivKey)]
-		salt = [...new Uint8Array(userKeyPair.salt)]
+		privkey = userKeyPair.wrappedPrivKey
+		salt = userKeyPair.salt.buffer
 	}
 
 	if (properties.preferredUsername === undefined) {
@@ -307,6 +307,8 @@ export async function setActorAlias(db: Database, actorId: URL, alias: URL) {
 	}
 }
 
+// TODO: Keep ActivityPub-specific and non-ActivityPub-specific items separate
+// At least this is not necessary to meet the ActivityPub specification.
 export async function setMastodonId(db: Database, actorId: string | URL, cdate: string): Promise<MastodonId> {
 	const mastodonId = await generateMastodonId(db, 'actors', new Date(cdate))
 	const { success, error } = await db
