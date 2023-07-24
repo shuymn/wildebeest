@@ -60,7 +60,7 @@ export async function getAccountByMastodonId(
 
 export async function getMastodonIdByHandle(domain: string, db: Database, handle: Handle): Promise<MastodonId | null> {
 	if (isLocalAccount(domain, handle)) {
-		const id = actorURL(adjustLocalHostDomain(domain), handle)
+		const id = actorURL(adjustLocalHostDomain(domain), handle).toString()
 		const { results } = await db
 			.prepare('SELECT mastodon_id FROM actors WHERE id = ?1')
 			.bind(id)
@@ -78,7 +78,7 @@ export async function getMastodonIdByHandle(domain: string, db: Database, handle
 
 	const { results } = await db
 		.prepare(`SELECT id, mastodon_id FROM actors WHERE ${db.qb.jsonExtract('properties', 'url')} = ?1`)
-		.bind(handleToUrl(handle))
+		.bind(handleToUrl(handle).toString())
 		.all<{ id: string; mastodon_id: string | null }>()
 	if (!results || results.length === 0) {
 		return null
