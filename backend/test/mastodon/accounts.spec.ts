@@ -626,7 +626,7 @@ describe('Mastodon APIs', () => {
 			{
 				// Query statuses before object2, should only see object1.
 				const res = await accounts_statuses.handleRequest({ domain, db }, actor[mastodonIdSymbol], {
-					maxId: 'https://example.com/object2',
+					maxId: 'mastodon_id2',
 					sinceId: null,
 					minId: null,
 					limit: null,
@@ -647,7 +647,7 @@ describe('Mastodon APIs', () => {
 			{
 				// Query statuses before object1, nothing is after.
 				const res = await accounts_statuses.handleRequest({ domain, db }, actor[mastodonIdSymbol], {
-					maxId: 'https://example.com/object1',
+					maxId: 'mastodon_id',
 					sinceId: null,
 					minId: null,
 					limit: null,

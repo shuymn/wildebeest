@@ -100,7 +100,12 @@ async function getStatuses(domain: string, db: Database, actor: Actor, params: P
 	// Client asked to retrieve statuses using max_id or (max_id and since_id) or min_id
 	// As opposed to Mastodon we don't use incremental ID but UUID, we need
 	// to retrieve the cdate of the xxx_id row and only show the specific statuses.
-	const CDATE_QUERY = 'SELECT cdate FROM outbox_objects WHERE object_id=?'
+	const CDATE_QUERY = `
+SELECT outbox_objects.cdate
+FROM outbox_objects
+INNER JOIN objects ON objects.id = outbox_objects.object_id
+WHERE objects.mastodon_id = ?1
+`
 	let cdate: string = db.qb.epoch()
 	let since: string | null = null
 	if (params.maxId) {
@@ -127,7 +132,7 @@ async function getStatuses(domain: string, db: Database, actor: Actor, params: P
 	const { success, error, results } = await db
 		.prepare(
 			`
-SELECt
+SELECT
   objects.*,
   outbox_objects.actor_id as publisher_actor_id,
   (SELECT count(*) FROM actor_favourites WHERE actor_favourites.object_id=objects.id) as favourites_count,
