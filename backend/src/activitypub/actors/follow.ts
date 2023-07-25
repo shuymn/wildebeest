@@ -26,11 +26,17 @@ export async function getFollowing(actor: Actor, limit: number): Promise<Ordered
 	return collection
 }
 
-export async function loadActors(db: Database, collection: OrderedCollection<string>): Promise<Array<Actor>> {
+export async function loadActors(db: Database, collection: OrderedCollection<string>): Promise<Actor[]> {
 	const promises = collection.items.map((item) => {
 		const actorId = new URL(item)
-		return actors.getAndCache(actorId, db)
+		return actors.getAndCache(actorId, db).catch((err: unknown) => {
+			if (err instanceof Error) {
+				console.warn(`${err.message}. but skipped`)
+				return null
+			}
+			throw err
+		})
 	})
 
-	return Promise.all(promises)
+	return (await Promise.all(promises)).filter((v): v is Actor => v !== null)
 }
