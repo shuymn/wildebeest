@@ -123,12 +123,15 @@ WHERE objects.mastodon_id = ?1
 			}
 			since = results[0].cdate
 		}
-	} else if (params.minId) {
-		const { results } = await db.prepare(CDATE_QUERY).bind(params.minId).all<{ cdate: string }>()
-		if (results === undefined || results.length === 0) {
-			return resourceNotFound('min_id', params.minId)
+	} else {
+		const minId = params.minId || params.sinceId
+		if (minId) {
+			const { results } = await db.prepare(CDATE_QUERY).bind(minId).all<{ cdate: string }>()
+			if (results === undefined || results.length === 0) {
+				return resourceNotFound('min_id', minId)
+			}
+			cdate = results[0].cdate
 		}
-		cdate = results[0].cdate
 	}
 
 	const { success, error, results } = await db
