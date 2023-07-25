@@ -1,43 +1,54 @@
 // https://docs.joinmastodon.org/methods/media/#update
 
-import { getApUrl, getObjectByMastodonId } from 'wildebeest/backend/src/activitypub/objects'
-import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { updateObjectProperty } from 'wildebeest/backend/src/activitypub/objects'
+import {
+	getApUrl,
+	getObjectByMastodonId,
+	mastodonIdSymbol,
+	updateObjectProperty,
+} from 'wildebeest/backend/src/activitypub/objects'
 import type { Image } from 'wildebeest/backend/src/activitypub/objects/image'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import * as errors from 'wildebeest/backend/src/errors'
+import { mediaNotFound, unprocessableEntity } from 'wildebeest/backend/src/errors'
 import type { MastodonId } from 'wildebeest/backend/src/types'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { ContextData } from 'wildebeest/backend/src/types'
+import type { Env } from 'wildebeest/backend/src/types'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
-import { makeReadBody } from 'wildebeest/backend/src/utils/body'
-import { cors } from 'wildebeest/backend/src/utils/cors'
+import { cors, readBody } from 'wildebeest/backend/src/utils'
+import { z } from 'zod'
+
+const headers = {
+	...cors(),
+	'content-type': 'application/json; charset=utf-8',
+}
+
+const schema = z.object({
+	description: z.string().nonempty().optional(),
+})
+
+type Parameters = z.infer<typeof schema>
 
 export const onRequestPut: PagesFunction<Env, 'id', ContextData> = async ({ params: { id }, env, request }) => {
 	if (typeof id !== 'string') {
-		return errors.mediaNotFound(String(id))
+		return mediaNotFound(String(id))
 	}
-	return handleRequestPut(await getDatabase(env), id, request)
+	const result = await readBody(request, schema)
+	if (result.success) {
+		return handleRequestPut(await getDatabase(env), id, result.data)
+	}
+	const [issue] = result.error.issues
+	return unprocessableEntity(`${issue?.path.join('.')}: ${issue?.message}`)
 }
 
-type UpdateMedia = {
-	description?: string
-}
-
-const readBody = makeReadBody<UpdateMedia>({ description: 'string' })
-
-export async function handleRequestPut(db: Database, id: MastodonId, request: Request): Promise<Response> {
+export async function handleRequestPut(db: Database, id: MastodonId, params: Parameters): Promise<Response> {
 	// Update the image properties
 	{
 		const image = (await getObjectByMastodonId(db, id)) as Image
 		if (image === null) {
-			return errors.mediaNotFound(id)
+			return mediaNotFound(id)
 		}
 
-		const body = await readBody(request)
-
-		if (body.description !== undefined) {
-			await updateObjectProperty(db, image, 'description', body.description)
+		if (params.description) {
+			await updateObjectProperty(db, image, 'description', params.description)
 		}
 	}
 
@@ -72,9 +83,5 @@ export async function handleRequestPut(db: Database, id: MastodonId, request: Re
 		blurhash: 'UFBWY:8_0Jxv4mx]t8t64.%M-:IUWGWAt6M}',
 	}
 
-	const headers = {
-		...cors(),
-		'content-type': 'application/json; charset=utf-8',
-	}
 	return new Response(JSON.stringify(res), { headers })
 }

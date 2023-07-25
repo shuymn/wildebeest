@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
-import { makeReadBody } from 'wildebeest/backend/src/utils/body'
+import { myz, readBody } from 'wildebeest/backend/src/utils'
 import {
 	actorToAcct,
 	actorToHandle,
@@ -17,6 +17,7 @@ import { parseRequest } from 'wildebeest/backend/src/utils/httpsigjs/parser'
 import { verifySignature } from 'wildebeest/backend/src/utils/httpsigjs/verifier'
 import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
 import { generateUserKey, importPublicKey, unwrapPrivateKey } from 'wildebeest/backend/src/utils/key-ops'
+import { z } from 'zod'
 
 import { hexToBytes, makeDB } from './utils'
 
@@ -140,15 +141,38 @@ describe('utils', () => {
 	})
 
 	test('read body handles JSON', async () => {
-		const body = JSON.stringify({ a: 1 })
 		const headers = {
 			'content-type': 'application/json;charset=utf-8',
 		}
-		const req = new Request('https://a.com', { method: 'POST', headers, body })
+		{
+			const body = JSON.stringify({ a: 1 })
+			const req = new Request('https://a.com', { method: 'POST', headers, body })
 
-		const readBody = makeReadBody<{ a: number }>({ a: 'number' })
-		const data = await readBody(req)
-		assert.equal(data.a, 1)
+			const result = await readBody(req, { a: z.number() })
+			assert(result.success)
+			assert.equal(result.data.a, 1)
+		}
+		{
+			const body = JSON.stringify({ a: 1, b: '2' })
+			const req = new Request('https://a.com', { method: 'POST', headers, body })
+
+			const result = await readBody(req, {
+				a: z.number(),
+				b: z.number(),
+			})
+			assert.ok(!result.success)
+		}
+		{
+			const body = JSON.stringify({ a: 1, b: ['a', 'b'] })
+			const req = new Request('https://a.com', { method: 'POST', headers, body })
+
+			const result = await readBody(req, {
+				a: z.number(),
+				b: z.string().array().length(2).optional(),
+				c: z.string().array().length(2).optional(),
+			})
+			assert.ok(result.success)
+		}
 	})
 
 	test('read body handles FormData', async () => {
@@ -159,9 +183,9 @@ describe('utils', () => {
 			const headers = {}
 			const req = new Request('https://a.com', { method: 'POST', headers, body })
 
-			const readBody = makeReadBody<{ a: number }>({ a: 'number' })
-			const data = await readBody(req)
-			assert.equal(data.a, 1)
+			const result = await readBody(req, { a: myz.numeric() })
+			assert(result.success)
+			assert.equal(result.data.a, 1)
 		}
 		{
 			const body = new FormData()
@@ -170,11 +194,9 @@ describe('utils', () => {
 			const headers = {}
 			const req = new Request('https://a.com', { method: 'POST', headers, body })
 
-			const readBody = makeReadBody<{ a: string[] }>({ a: 'string[]' })
-			const data = await readBody(req)
-			assert.equal(data.a.length, 2)
-			assert.equal(data.a[0], 'hello')
-			assert.equal(data.a[1], 'world')
+			const result = await readBody(req, { a: z.string() })
+			assert(result.success)
+			assert.equal(result.data.a, 'world')
 		}
 		{
 			const body = new FormData()
@@ -184,11 +206,34 @@ describe('utils', () => {
 			const headers = {}
 			const req = new Request('https://a.com', { method: 'POST', headers, body })
 
-			const readBody = makeReadBody<{ a: number; b?: number; c?: number }>({ a: 'number', b: 'number', c: 'number' })
-			const data = await readBody(req)
-			assert.equal(data.a, 1)
-			assert.equal(data.b, 2)
-			assert.equal(data.c, undefined)
+			const result = await readBody(req, {
+				a: myz.numeric(),
+				b: z.optional(myz.numeric()),
+				c: myz.logical().default(String(false)),
+				d: z.optional(myz.numeric()),
+			})
+			assert(result.success)
+			assert.equal(result.data.a, 1)
+			assert.equal(result.data.b, 2)
+			assert.equal(result.data.c, false)
+			assert.equal(result.data.d, undefined)
+		}
+		{
+			const body = new FormData()
+			body.append('a[]', '1')
+			body.append('a[]', '2')
+			body.append('a', '3')
+
+			const headers = {}
+			const req = new Request('https://a.com', { method: 'POST', headers, body })
+
+			const result = await readBody(req, {
+				a: myz.numeric().array().length(2),
+			})
+			assert(result.success)
+			assert.equal(result.data.a.length, 2)
+			assert.equal(result.data.a[0], 1)
+			assert.equal(result.data.a[1], 2)
 		}
 	})
 
@@ -200,25 +245,25 @@ describe('utils', () => {
 			}
 			const req = new Request('https://a.com', { method: 'POST', headers, body })
 
-			const readBody = makeReadBody<{ a: number }>({ a: 'number' })
-			const data = await readBody(req)
-			assert.equal(data.a, 1)
+			const result = await readBody(req, { a: myz.numeric() })
+			assert(result.success)
+			assert.equal(result.data.a, 1)
 		}
 		{
 			const body = new URLSearchParams()
-			body.append('a', 'hello')
-			body.append('a', 'world')
+			body.append('a[]', 'hello')
+			body.append('a[]', 'world')
 
 			const headers = {
 				'content-type': 'application/x-www-form-urlencoded',
 			}
 			const req = new Request('https://a.com', { method: 'POST', headers, body })
 
-			const readBody = makeReadBody<{ a: string[] }>({ a: 'string[]' })
-			const data = await readBody(req)
-			assert.equal(data.a.length, 2)
-			assert.equal(data.a[0], 'hello')
-			assert.equal(data.a[1], 'world')
+			const result = await readBody(req, { a: z.array(z.string()) })
+			assert(result.success)
+			assert.equal(result.data.a.length, 2)
+			assert.equal(result.data.a[0], 'hello')
+			assert.equal(result.data.a[1], 'world')
 		}
 		{
 			const body = new URLSearchParams({ a: '1', b: '2' })
@@ -228,11 +273,15 @@ describe('utils', () => {
 			}
 			const req = new Request('https://a.com', { method: 'POST', headers, body })
 
-			const readBody = makeReadBody<{ a: number; b?: number; c?: number }>({ a: 'number', b: 'number', c: 'number' })
-			const data = await readBody(req)
-			assert.equal(data.a, 1)
-			assert.equal(data.b, 2)
-			assert.equal(data.c, undefined)
+			const result = await readBody(req, {
+				a: myz.numeric(),
+				b: z.optional(myz.numeric()),
+				c: z.optional(myz.numeric()),
+			})
+			assert(result.success)
+			assert.equal(result.data.a, 1)
+			assert.equal(result.data.b, 2)
+			assert.equal(result.data.c, undefined)
 		}
 	})
 
