@@ -1,5 +1,5 @@
 import { type Database } from 'wildebeest/backend/src/database'
-import type { MessageBody, Queue } from 'wildebeest/backend/src/types/queue'
+import type { MessageBody, Queue } from 'wildebeest/backend/src/types'
 
 export interface Env {
 	DATABASE: Database

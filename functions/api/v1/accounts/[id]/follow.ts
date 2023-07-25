@@ -4,15 +4,15 @@ import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { resourceNotFound } from 'wildebeest/backend/src/errors'
+import { resourceNotFound, unprocessableEntity } from 'wildebeest/backend/src/errors'
 import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
 import { addFollowing, isNotFollowing } from 'wildebeest/backend/src/mastodon/follow'
+import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import type { Relationship } from 'wildebeest/backend/src/types/account'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import type { Env } from 'wildebeest/backend/src/types/env'
-import { makeReadBody } from 'wildebeest/backend/src/utils/body'
+import { myz, readBody } from 'wildebeest/backend/src/utils'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
+import { z } from 'zod'
 
 type Dependencies = {
 	domain: string
@@ -21,18 +21,18 @@ type Dependencies = {
 	userKEK: string
 }
 
-type Parameters = {
-	reblogs?: boolean
-	notify?: boolean
-	languages?: string[]
-}
+const schema = z.object({
+	reblogs: z.optional(myz.logical()),
+	notify: z.optional(myz.logical()),
+	languages: z.optional(z.array(z.string())),
+})
+
+type Parameters = z.infer<typeof schema>
 
 const headers = {
 	...cors(),
 	'content-type': 'application/json; charset=utf-8',
 }
-
-const readBody = makeReadBody<Parameters>({ reblogs: 'boolean', notify: 'boolean', languages: 'string[]' })
 
 // TODO: support request form parameters
 export const onRequestPost: PagesFunction<Env, 'id', ContextData> = async ({
@@ -44,10 +44,22 @@ export const onRequestPost: PagesFunction<Env, 'id', ContextData> = async ({
 	if (typeof id !== 'string') {
 		return resourceNotFound('id', String(id))
 	}
+
+	const result = await readBody(request, schema)
+	if (!result.success) {
+		const [issue] = result.error.issues
+		return unprocessableEntity(`${issue?.path.join('.')}: ${issue?.message}`)
+	}
+
 	return handleRequest(
-		{ domain: new URL(request.url).hostname, db: await getDatabase(env), connectedActor, userKEK: env.userKEK },
+		{
+			domain: new URL(request.url).hostname,
+			db: await getDatabase(env),
+			connectedActor,
+			userKEK: env.userKEK,
+		},
 		id,
-		await readBody(request)
+		result.data
 	)
 }
 

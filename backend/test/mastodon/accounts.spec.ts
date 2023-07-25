@@ -15,7 +15,7 @@ import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/f
 import { insertLike } from 'wildebeest/backend/src/mastodon/like'
 import { createReblog, insertReblog } from 'wildebeest/backend/src/mastodon/reblog'
 import { createStatus } from 'wildebeest/backend/src/mastodon/status'
-import { MessageType } from 'wildebeest/backend/src/types/queue'
+import { MessageType } from 'wildebeest/backend/src/types'
 import { queryAcct } from 'wildebeest/backend/src/webfinger'
 import { createReply } from 'wildebeest/backend/test/shared.utils'
 import * as accounts_get from 'wildebeest/functions/api/v1/accounts/[id]'
@@ -33,7 +33,7 @@ import * as accounts_verify_creds from 'wildebeest/functions/api/v1/accounts/ver
 import * as filters from 'wildebeest/functions/api/v1/filters'
 import * as preferences from 'wildebeest/functions/api/v1/preferences'
 
-import { assertCORS, assertJSON, isUrlValid, isUUID, makeDB, makeQueue } from '../utils'
+import { assertCORS, assertJSON, assertStatus, isUrlValid, isUUID, makeDB, makeQueue } from '../utils'
 
 const userKEK = 'test_kek2'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -91,7 +91,7 @@ describe('Mastodon APIs', () => {
 
 			const context: any = { data }
 			const res = await accounts_verify_creds.onRequest(context)
-			assert.equal(res.status, 401)
+			await assertStatus(res, 401)
 		})
 
 		test('verify the credentials', async () => {
@@ -101,7 +101,7 @@ describe('Mastodon APIs', () => {
 
 			const context: any = { data: { connectedActor }, env: { DATABASE: db } }
 			const res = await accounts_verify_creds.onRequest(context)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 			assertCORS(res)
 			assertJSON(res)
 
@@ -135,7 +135,7 @@ describe('Mastodon APIs', () => {
 				userKEK,
 				queue
 			)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data.display_name, 'newsven')
@@ -171,7 +171,7 @@ describe('Mastodon APIs', () => {
 				userKEK,
 				queue
 			)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			assert.equal(queue.messages.length, 1)
 
@@ -225,7 +225,7 @@ describe('Mastodon APIs', () => {
 				userKEK,
 				queue
 			)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data.avatar, 'https://example.com/selfie.jpg/avatar')
@@ -235,13 +235,13 @@ describe('Mastodon APIs', () => {
 		test('lookup unknown remote actor', async () => {
 			const db = await makeDB()
 			const res = await lookup.handleRequest({ domain, db }, 'sven@social.com')
-			assert.equal(res.status, 404)
+			await assertStatus(res, 404)
 		})
 
 		test('lookup unknown local actor', async () => {
 			const db = await makeDB()
 			const res = await lookup.handleRequest({ domain, db }, 'sven')
-			assert.equal(res.status, 404)
+			await assertStatus(res, 404)
 		})
 
 		test('lookup remote actor', async () => {
@@ -320,7 +320,7 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			await queryAcct({ localPart: 'someone', domain: 'social.com' }, db)
 			const res = await lookup.handleRequest({ domain, db }, 'someone@social.com')
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data.username, 'someone')
@@ -350,7 +350,7 @@ describe('Mastodon APIs', () => {
 			await createStatus(domain, db, actor, 'my first status')
 
 			const res = await lookup.handleRequest({ domain, db }, 'sven')
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data.username, 'sven')
@@ -439,7 +439,7 @@ describe('Mastodon APIs', () => {
 			const actor = await queryAcct({ localPart: 'sven', domain: 'social.com' }, db)
 			assert.ok(actor)
 			const res = await accounts_get.handleRequest({ domain, db }, actor[mastodonIdSymbol])
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 			const data = await res.json<any>()
 			// Note the sanitization
 			assert.equal(data.username, 'badsven')
@@ -457,7 +457,7 @@ describe('Mastodon APIs', () => {
 		test('get unknown actor by id', async () => {
 			const db = await makeDB()
 			const res = await accounts_get.handleRequest({ domain, db }, '123456789')
-			assert.equal(res.status, 404)
+			await assertStatus(res, 404)
 		})
 
 		test('get local actor by id', async () => {
@@ -475,7 +475,7 @@ describe('Mastodon APIs', () => {
 			await createStatus(domain, db, actor, 'my first status')
 
 			const res = await accounts_get.handleRequest({ domain, db }, actor[mastodonIdSymbol])
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data.username, 'sven')
@@ -508,7 +508,7 @@ describe('Mastodon APIs', () => {
 				pinned: null,
 				tagged: null,
 			})
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<Array<any>>()
 			assert.equal(data.length, 2)
@@ -545,7 +545,7 @@ describe('Mastodon APIs', () => {
 				pinned: null,
 				tagged: null,
 			})
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<Array<any>>()
 
@@ -572,7 +572,7 @@ describe('Mastodon APIs', () => {
 				pinned: null,
 				tagged: null,
 			})
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<Array<any>>()
 
@@ -597,7 +597,7 @@ describe('Mastodon APIs', () => {
 				pinned: 'true',
 				tagged: null,
 			})
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<Array<any>>()
 			assert.equal(data.length, 0)
@@ -636,7 +636,7 @@ describe('Mastodon APIs', () => {
 					pinned: null,
 					tagged: null,
 				})
-				assert.equal(res.status, 200)
+				await assertStatus(res, 200)
 
 				const data = await res.json<Array<any>>()
 				assert.equal(data.length, 1)
@@ -657,7 +657,7 @@ describe('Mastodon APIs', () => {
 					pinned: null,
 					tagged: null,
 				})
-				assert.equal(res.status, 200)
+				await assertStatus(res, 200)
 
 				const data = await res.json<Array<any>>()
 				assert.equal(data.length, 0)
@@ -678,7 +678,7 @@ describe('Mastodon APIs', () => {
 				pinned: null,
 				tagged: null,
 			})
-			assert.equal(res.status, 404)
+			await assertStatus(res, 404)
 		})
 
 		test('get remote actor statuses', async () => {
@@ -807,7 +807,7 @@ describe('Mastodon APIs', () => {
 				pinned: null,
 				tagged: null,
 			})
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<Array<any>>()
 			assert.equal(data.length, 2)
@@ -899,7 +899,7 @@ describe('Mastodon APIs', () => {
 			const actor = await queryAcct({ localPart: 'sven', domain: 'example.com' }, db)
 			assert.ok(actor)
 			const res = await accounts_followers.handleRequest({ domain, db }, actor[mastodonIdSymbol], { limit: null })
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<Array<any>>()
 			assert.equal(data.length, 2)
@@ -931,7 +931,7 @@ describe('Mastodon APIs', () => {
 			await acceptFollowing(db, actor2, actor)
 
 			const res = await accounts_followers.handleRequest({ domain, db }, actor[mastodonIdSymbol], { limit: null })
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<Array<any>>()
 			assert.equal(data.length, 1)
@@ -960,7 +960,7 @@ describe('Mastodon APIs', () => {
 			await acceptFollowing(db, actor, actor2)
 
 			const res = await accounts_following.handleRequest({ domain, db }, actor[mastodonIdSymbol], { limit: null })
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<Array<any>>()
 			assert.equal(data.length, 1)
@@ -1041,7 +1041,7 @@ describe('Mastodon APIs', () => {
 			const actor = await queryAcct({ localPart: 'sven', domain: 'example.com' }, db)
 			assert.ok(actor)
 			const res = await accounts_following.handleRequest({ domain, db }, actor[mastodonIdSymbol], { limit: null })
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<Array<any>>()
 			assert.equal(data.length, 2)
@@ -1053,13 +1053,13 @@ describe('Mastodon APIs', () => {
 		test('get remote actor featured_tags', async () => {
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const res = await accounts_featured_tags.onRequestGet({ params: { id: 'stub' } } as any)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 		})
 
 		test('get remote actor lists', async () => {
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const res = await accounts_lists.onRequestGet({ params: { id: 'stub' } } as any)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 		})
 
 		describe('relationships', () => {
@@ -1068,7 +1068,7 @@ describe('Mastodon APIs', () => {
 				const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const req = new Request('https://mastodon.example/api/v1/accounts/relationships')
 				const res = await accounts_relationships.handleRequest(req, db, connectedActor)
-				assert.equal(res.status, 400)
+				await assertStatus(res, 400)
 			})
 
 			test('relationships with ids', async () => {
@@ -1076,7 +1076,7 @@ describe('Mastodon APIs', () => {
 				const req = new Request('https://mastodon.example/api/v1/accounts/relationships?id[]=first&id[]=second')
 				const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const res = await accounts_relationships.handleRequest(req, db, connectedActor)
-				assert.equal(res.status, 200)
+				await assertStatus(res, 200)
 				assertCORS(res)
 				assertJSON(res)
 
@@ -1093,7 +1093,7 @@ describe('Mastodon APIs', () => {
 				const req = new Request('https://mastodon.example/api/v1/accounts/relationships?id[]=first')
 				const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const res = await accounts_relationships.handleRequest(req, db, connectedActor)
-				assert.equal(res.status, 200)
+				await assertStatus(res, 200)
 				assertCORS(res)
 				assertJSON(res)
 
@@ -1112,7 +1112,7 @@ describe('Mastodon APIs', () => {
 
 				const req = new Request('https://mastodon.example/api/v1/accounts/relationships?id[]=sven2@' + domain)
 				const res = await accounts_relationships.handleRequest(req, db, actor)
-				assert.equal(res.status, 200)
+				await assertStatus(res, 200)
 
 				const data = await res.json<Array<any>>()
 				assert.equal(data.length, 1)
@@ -1127,7 +1127,7 @@ describe('Mastodon APIs', () => {
 
 				const req = new Request('https://mastodon.example/api/v1/accounts/relationships?id[]=sven2@' + domain)
 				const res = await accounts_relationships.handleRequest(req, db, actor)
-				assert.equal(res.status, 200)
+				await assertStatus(res, 200)
 
 				const data = await res.json<Array<any>>()
 				assert.equal(data.length, 1)
@@ -1146,7 +1146,7 @@ describe('Mastodon APIs', () => {
 				targetActor[mastodonIdSymbol],
 				{}
 			)
-			assert.equal(res.status, 403)
+			await assertStatus(res, 403)
 		})
 
 		describe('follow', () => {
@@ -1203,7 +1203,7 @@ describe('Mastodon APIs', () => {
 					followee[mastodonIdSymbol],
 					{}
 				)
-				assert.equal(res.status, 200)
+				await assertStatus(res, 200)
 				assertCORS(res)
 				assertJSON(res)
 
@@ -1236,7 +1236,7 @@ describe('Mastodon APIs', () => {
 					{ domain, db, connectedActor, userKEK },
 					followee[mastodonIdSymbol]
 				)
-				assert.equal(res.status, 200)
+				await assertStatus(res, 200)
 				assertCORS(res)
 				assertJSON(res)
 
@@ -1255,7 +1255,7 @@ describe('Mastodon APIs', () => {
 
 		test('view filters return empty array', async () => {
 			const res = await filters.onRequest()
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 			assertJSON(res)
 
 			const data = await res.json<any>()
@@ -1269,7 +1269,7 @@ describe('Mastodon APIs', () => {
 
 			const context: any = { data: { connectedActor }, env: { DATABASE: db } }
 			const res = await preferences.onRequest(context)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 			assertCORS(res)
 			assertJSON(res)
 

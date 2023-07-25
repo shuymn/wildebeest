@@ -3,8 +3,7 @@
 import { getObjectByMastodonId } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { getReplies } from 'wildebeest/backend/src/mastodon/reply'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import type { Context } from 'wildebeest/backend/src/types/status'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 

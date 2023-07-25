@@ -5,7 +5,7 @@ import { createPublicNote } from 'wildebeest/backend/src/activitypub/objects/not
 import { insertHashtags } from 'wildebeest/backend/src/mastodon/hashtag'
 import * as tag_id from 'wildebeest/functions/api/v1/tags/[tag]'
 
-import { assertCORS, isUrlValid, makeDB } from '../utils'
+import { assertCORS, assertStatus, isUrlValid, makeDB } from '../utils'
 
 const domain = 'cloudflare.com'
 const userKEK = 'test_kek20'
@@ -16,7 +16,7 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const res = await tag_id.handleRequestGet(db, domain, 'non-existent-tag')
 			assertCORS(res)
-			assert.equal(res.status, 404)
+			await assertStatus(res, 404)
 		})
 
 		test('return tag', async () => {
@@ -28,7 +28,7 @@ describe('Mastodon APIs', () => {
 
 			const res = await tag_id.handleRequestGet(db, domain, 'test')
 			assertCORS(res)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data.name, 'test')

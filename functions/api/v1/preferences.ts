@@ -3,9 +3,8 @@
 import { getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import { getPreference } from 'wildebeest/backend/src/mastodon/account'
+import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import { Privacy, ReadingExpandMedia } from 'wildebeest/backend/src/types'
-import { ContextData } from 'wildebeest/backend/src/types/context'
-import type { Env } from 'wildebeest/backend/src/types/env'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
 type PreferenceResponse = {

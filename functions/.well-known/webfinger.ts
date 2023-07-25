@@ -1,7 +1,7 @@
 // https://www.rfc-editor.org/rfc/rfc7033
 
 import { getActorById, actorURL } from 'wildebeest/backend/src/activitypub/actors'
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { Env } from 'wildebeest/backend/src/types'
 import type { WebFingerResponse } from 'wildebeest/backend/src/webfinger'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { handleToAcct, isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'

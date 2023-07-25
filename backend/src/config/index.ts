@@ -1,4 +1,4 @@
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { Env } from 'wildebeest/backend/src/types'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
 export const DEFAULT_THUMBNAIL =

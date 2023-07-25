@@ -6,13 +6,14 @@ import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/out
 import { getObjectByMastodonId, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
 import { createPublicNote, type Note } from 'wildebeest/backend/src/activitypub/objects/note'
+import { cacheFromEnv } from 'wildebeest/backend/src/cache'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { insertLike } from 'wildebeest/backend/src/mastodon/like'
 import { insertReblog } from 'wildebeest/backend/src/mastodon/reblog'
 import { createStatus, getMentions } from 'wildebeest/backend/src/mastodon/status'
 import * as timelines from 'wildebeest/backend/src/mastodon/timeline'
 import { MastodonStatus } from 'wildebeest/backend/src/types'
-import { MessageType } from 'wildebeest/backend/src/types/queue'
+import { MessageType } from 'wildebeest/backend/src/types'
 import { createReply } from 'wildebeest/backend/test/shared.utils'
 import * as statuses from 'wildebeest/functions/api/v1/statuses'
 import * as statuses_id from 'wildebeest/functions/api/v1/statuses/[id]'
@@ -20,29 +21,37 @@ import * as statuses_context from 'wildebeest/functions/api/v1/statuses/[id]/con
 import * as statuses_favourite from 'wildebeest/functions/api/v1/statuses/[id]/favourite'
 import * as statuses_reblog from 'wildebeest/functions/api/v1/statuses/[id]/reblog'
 
-import { assertJSON, isUrlValid, makeCache, makeDB, makeQueue, streamToArrayBuffer } from '../utils'
+import {
+	assertJSON,
+	assertStatus,
+	isUrlValid,
+	makeCache,
+	makeDB,
+	makeDOCache,
+	makeQueue,
+	streamToArrayBuffer,
+} from '../utils'
 
 const userKEK = 'test_kek4'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const domain = 'cloudflare.com'
-const cache = makeCache()
+const doCache = makeDOCache()
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const cache = cacheFromEnv({ DO_CACHE: doCache } as any)
 
 describe('Mastodon APIs', () => {
 	describe('statuses', () => {
 		test('create new status missing params', async () => {
-			const db = await makeDB()
-			const queue = makeQueue()
-
 			const body = { status: 'my status' }
-			const req = new Request('https://example.com', {
+			const request = new Request('https://example.com', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 			})
 
-			const connectedActor: any = {}
-			const res = await statuses.handleRequest(req, db, connectedActor, userKEK, queue, cache)
-			assert.equal(res.status, 400)
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const res = await statuses.onRequestPost({ request, data: {} } as any)
+			await assertStatus(res, 400)
 		})
 
 		test('create new status creates Note', async () => {
@@ -54,15 +63,25 @@ describe('Mastodon APIs', () => {
 				status: 'my status <script>evil</script>',
 				visibility: 'public',
 			}
-			const req = new Request('https://example.com', {
+			const request = new Request('https://example.com', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 			})
 
 			const connectedActor = actor
-			const res = await statuses.handleRequest(req, db, connectedActor, userKEK, queue, cache)
-			assert.equal(res.status, 200)
+			const res = await statuses.onRequestPost({
+				request,
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 200)
 			assertJSON(res)
 
 			const data = await res.json<MastodonStatus>()
@@ -99,25 +118,34 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const queue = makeQueue()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const cache = makeCache()
 
 			const body = {
 				status: 'my status',
 				visibility: 'public',
 			}
-			const req = new Request('https://example.com', {
+			const request = new Request('https://example.com', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 			})
 
-			const res = await statuses.handleRequest(req, db, actor, userKEK, queue, cache)
-			assert.equal(res.status, 200)
+			const res = await statuses.onRequestPost({
+				request,
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor: actor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 200)
 			assertJSON(res)
 
-			const data = await res.json<any>()
+			const data = await res.json<{ id: unknown }>()
 
-			const cachedData = await cache.get<any>(actor.id + '/timeline/home')
+			const cachedData = await cache.get<Array<{ id: unknown }>>(actor.id + '/timeline/home')
 			assert(cachedData)
 			assert.equal(cachedData.length, 1)
 			assert.equal(cachedData[0].id, data.id)
@@ -132,15 +160,25 @@ describe('Mastodon APIs', () => {
 				status: 'my status',
 				visibility: 'public',
 			}
-			const req = new Request('https://example.com', {
+			const request = new Request('https://example.com', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 			})
 
 			const connectedActor = actor
-			const res = await statuses.handleRequest(req, db, connectedActor, userKEK, queue, cache)
-			assert.equal(res.status, 200)
+			const res = await statuses.onRequestPost({
+				request,
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 200)
 
 			const row = await db.prepare(`SELECT count(*) as count FROM outbox_objects`).first<{ count: number }>()
 			assert.equal(row.count, 1)
@@ -161,14 +199,24 @@ describe('Mastodon APIs', () => {
 			await acceptFollowing(db, followerB, actor)
 
 			const body = { status: 'my status', visibility: 'public' }
-			const req = new Request('https://example.com', {
+			const request = new Request('https://example.com', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 			})
 
-			const res = await statuses.handleRequest(req, db, actor, userKEK, queue, cache)
-			assert.equal(res.status, 200)
+			const res = await statuses.onRequestPost({
+				request,
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor: actor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 200)
 
 			assert.equal(queue.messages.length, 2)
 
@@ -186,6 +234,7 @@ describe('Mastodon APIs', () => {
 		test('create new status with mention delivers ActivityPub Note', async () => {
 			let deliveredNote: Note | null = null
 
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			globalThis.fetch = async (input: RequestInfo, data: any) => {
 				if (input instanceof URL || typeof input === 'string') {
 					if (input.toString() === 'https://remote.com/.well-known/webfinger?resource=acct%3Asven%40remote.com') {
@@ -245,15 +294,25 @@ describe('Mastodon APIs', () => {
 				status: '@sven@remote.com my status',
 				visibility: 'public',
 			}
-			const req = new Request('https://example.com', {
+			const request = new Request('https://example.com', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 			})
 
 			const connectedActor = actor
-			const res = await statuses.handleRequest(req, db, connectedActor, userKEK, queue, cache)
-			assert.equal(res.status, 200)
+			const res = await statuses.onRequestPost({
+				request,
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 200)
 
 			assert(deliveredNote)
 			assert.equal((deliveredNote as { type: string }).type, 'Create')
@@ -310,17 +369,27 @@ describe('Mastodon APIs', () => {
 				status: 'my status @sven@' + domain,
 				visibility: 'public',
 			}
-			const req = new Request('https://example.com', {
+			const request = new Request('https://example.com', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 			})
 
 			const connectedActor = actor
-			const res = await statuses.handleRequest(req, db, connectedActor, userKEK, queue, cache)
-			assert.equal(res.status, 200)
+			const res = await statuses.onRequestPost({
+				request,
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 200)
 
-			const data = await res.json<any>()
+			const data = await res.json<{ id: string }>()
 
 			const note = (await getObjectByMastodonId(db, data.id)) as unknown as Note
 			assert.equal(note.tag.length, 1)
@@ -341,21 +410,32 @@ describe('Mastodon APIs', () => {
 				media_ids: [image[mastodonIdSymbol]],
 				visibility: 'public',
 			}
-			const req = new Request('https://example.com', {
+			const request = new Request('https://example.com', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 			})
 
-			const res = await statuses.handleRequest(req, db, connectedActor, userKEK, queue, cache)
-			assert.equal(res.status, 200)
+			const res = await statuses.onRequestPost({
+				request,
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 200)
 
-			const data = await res.json<any>()
+			const data = await res.json<{ id: string }>()
 
 			assert(!isUrlValid(data.id))
 		})
 
 		test('favourite status sends Like activity', async () => {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			let deliveredActivity: any = null
 
 			const db = await makeDB()
@@ -388,10 +468,10 @@ describe('Mastodon APIs', () => {
 				throw new Error('unexpected request to ' + request.url)
 			}
 
-			const connectedActor: any = actor
+			const connectedActor = actor
 
 			const res = await statuses_favourite.handleRequest(db, 'mastodonid1', connectedActor, userKEK, domain)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			assert(deliveredActivity)
 			assert.equal(deliveredActivity.type, 'Like')
@@ -403,12 +483,12 @@ describe('Mastodon APIs', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const note = await createPublicNote(domain, db, 'my first status', actor)
 
-			const connectedActor: any = actor
+			const connectedActor = actor
 
 			const res = await statuses_favourite.handleRequest(db, note[mastodonIdSymbol]!, connectedActor, userKEK, domain)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
-			const data = await res.json<any>()
+			const data = await res.json<{ favourited: boolean }>()
 			assert.equal(data.favourited, true)
 
 			const row = await db.prepare(`SELECT * FROM actor_favourites`).first<{ actor_id: string; object_id: string }>()
@@ -575,9 +655,9 @@ describe('Mastodon APIs', () => {
 			await insertLike(db, actor3, note)
 
 			const res = await statuses_id.handleRequestGet(db, note[mastodonIdSymbol]!, domain, actor)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
-			const data = await res.json<any>()
+			const data = await res.json<{ favourites_count: unknown }>()
 			// FIXME: temporarly disable favourites counts
 			assert.equal(data.favourites_count, 0)
 		})
@@ -591,9 +671,9 @@ describe('Mastodon APIs', () => {
 			const note = await createPublicNote(domain, db, 'my first status', actor, mediaAttachments)
 
 			const res = await statuses_id.handleRequestGet(db, note[mastodonIdSymbol]!, domain, actor)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
-			const data = await res.json<any>()
+			const data = await res.json<{ media_attachments: Array<{ url: unknown; preview_url: unknown; type: unknown }> }>()
 			assert.equal(data.media_attachments.length, 1)
 			assert.equal(data.media_attachments[0].url, properties.url)
 			assert.equal(data.media_attachments[0].preview_url, properties.url)
@@ -610,9 +690,9 @@ describe('Mastodon APIs', () => {
 			await createReply(domain, db, actor, note, 'a reply')
 
 			const res = await statuses_context.handleRequest(domain, db, note[mastodonIdSymbol]!)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
-			const data = await res.json<any>()
+			const data = await res.json<{ ancestors: unknown[]; descendants: Array<{ content: unknown }> }>()
 			assert.equal(data.ancestors.length, 0)
 			assert.equal(data.descendants.length, 1)
 			assert.equal(data.descendants[0].content, 'a reply')
@@ -630,9 +710,9 @@ describe('Mastodon APIs', () => {
 				await insertReblog(db, actor3, note)
 
 				const res = await statuses_id.handleRequestGet(db, note[mastodonIdSymbol]!, domain, actor)
-				assert.equal(res.status, 200)
+				await assertStatus(res, 200)
 
-				const data = await res.json<any>()
+				const data = await res.json<{ reblogs_count: unknown }>()
 				// FIXME: temporarly disable reblogs counts
 				assert.equal(data.reblogs_count, 0)
 			})
@@ -643,7 +723,7 @@ describe('Mastodon APIs', () => {
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const note = await createPublicNote(domain, db, 'my first status', actor)
 
-				const connectedActor: any = actor
+				const connectedActor = actor
 
 				const res = await statuses_reblog.handleRequest(
 					db,
@@ -653,9 +733,9 @@ describe('Mastodon APIs', () => {
 					queue,
 					domain
 				)
-				assert.equal(res.status, 200)
+				await assertStatus(res, 200)
 
-				const data = await res.json<any>()
+				const data = await res.json<{ reblogged: unknown }>()
 				assert.equal(data.reblogged, true)
 
 				const row = await db.prepare(`SELECT * FROM actor_reblogs`).first<{ actor_id: string; object_id: string }>()
@@ -670,7 +750,7 @@ describe('Mastodon APIs', () => {
 
 				const note = await createPublicNote(domain, db, 'my first status', actor)
 
-				const connectedActor: any = actor
+				const connectedActor = actor
 
 				const res = await statuses_reblog.handleRequest(
 					db,
@@ -680,7 +760,7 @@ describe('Mastodon APIs', () => {
 					queue,
 					domain
 				)
-				assert.equal(res.status, 200)
+				await assertStatus(res, 200)
 
 				const row = await db.prepare(`SELECT * FROM outbox_objects`).first<{ actor_id: string; object_id: string }>()
 				assert.equal(row.actor_id, actor.id.toString())
@@ -688,6 +768,7 @@ describe('Mastodon APIs', () => {
 			})
 
 			test('reblog remote status status sends Announce activity to author', async () => {
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				let deliveredActivity: any = null
 
 				const db = await makeDB()
@@ -721,10 +802,10 @@ describe('Mastodon APIs', () => {
 					throw new Error('unexpected request to ' + request.url)
 				}
 
-				const connectedActor: any = actor
+				const connectedActor = actor
 
 				const res = await statuses_reblog.handleRequest(db, 'mastodonid1', connectedActor, userKEK, queue, domain)
-				assert.equal(res.status, 200)
+				await assertStatus(res, 200)
 
 				assert(deliveredActivity)
 				assert.equal(deliveredActivity.type, 'Announce')
@@ -743,14 +824,24 @@ describe('Mastodon APIs', () => {
 				in_reply_to_id: 'hein',
 				visibility: 'public',
 			}
-			const req = new Request('https://example.com', {
+			const request = new Request('https://example.com', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 			})
 
-			const res = await statuses.handleRequest(req, db, actor, userKEK, queue, cache)
-			assert.equal(res.status, 404)
+			const res = await statuses.onRequestPost({
+				request,
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor: actor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 404)
 		})
 
 		test('create new status in reply to', async () => {
@@ -764,16 +855,26 @@ describe('Mastodon APIs', () => {
 				in_reply_to_id: note[mastodonIdSymbol],
 				visibility: 'public',
 			}
-			const req = new Request('https://example.com', {
+			const request = new Request('https://example.com', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 			})
 
-			const res = await statuses.handleRequest(req, db, actor, userKEK, queue, cache)
-			assert.equal(res.status, 200)
+			const res = await statuses.onRequestPost({
+				request,
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor: actor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 200)
 
-			const data = await res.json<any>()
+			const data = await res.json<{ id: string }>()
 
 			{
 				const row = await db
@@ -811,14 +912,24 @@ describe('Mastodon APIs', () => {
 				media_ids: ['id', 'id', 'id', 'id', 'id'],
 				visibility: 'public',
 			}
-			const req = new Request('https://example.com', {
+			const request = new Request('https://example.com', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 			})
 
-			const res = await statuses.handleRequest(req, db, actor, userKEK, queue, cache)
-			assert.equal(res.status, 400)
+			const res = await statuses.onRequestPost({
+				request,
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor: actor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 400)
 			const data = await res.json<{ error: string }>()
 			assert(data.error.includes('Limit exceeded'))
 		})
@@ -837,13 +948,23 @@ describe('Mastodon APIs', () => {
 			body.append('media_ids[]', 'id')
 			body.append('media_ids[]', 'id')
 
-			const req = new Request('https://example.com', {
+			const request = new Request('https://example.com', {
 				method: 'POST',
 				body,
 			})
 
-			const res = await statuses.handleRequest(req, db, actor, userKEK, queue, cache)
-			assert.equal(res.status, 400)
+			const res = await statuses.onRequestPost({
+				request,
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor: actor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 400)
 			const data = await res.json<{ error: string }>()
 			assert(data.error.includes('Limit exceeded'))
 		})
@@ -854,7 +975,7 @@ describe('Mastodon APIs', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const mastodonId = 'abcd'
 			const res = await statuses_id.handleRequestDelete(db, mastodonId, actor, domain, userKEK, queue, cache)
-			assert.equal(res.status, 404)
+			await assertStatus(res, 404)
 		})
 
 		test('delete status from a different actor', async () => {
@@ -873,7 +994,7 @@ describe('Mastodon APIs', () => {
 				queue,
 				cache
 			)
-			assert.equal(res.status, 404)
+			await assertStatus(res, 404)
 		})
 
 		test('delete status remove DB rows', async () => {
@@ -892,14 +1013,14 @@ describe('Mastodon APIs', () => {
 				queue,
 				cache
 			)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			{
-				const { count } = await db.prepare(`SELECT count(*) as count FROM outbox_objects`).first<any>()
+				const { count } = await db.prepare(`SELECT count(*) as count FROM outbox_objects`).first<{ count: number }>()
 				assert.equal(count, 0)
 			}
 			{
-				const { count } = await db.prepare(`SELECT count(*) as count FROM objects`).first<any>()
+				const { count } = await db.prepare(`SELECT count(*) as count FROM objects`).first<{ count: number }>()
 				assert.equal(count, 0)
 			}
 		})
@@ -924,11 +1045,11 @@ describe('Mastodon APIs', () => {
 				queue,
 				cache
 			)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			// ensure that timeline has been regenerated after the deletion
 			// and that timeline is empty
-			const timeline = await cache.get<Array<any>>(actor.id.toString() + '/timeline/home')
+			const timeline = await cache.get<unknown[]>(actor.id.toString() + '/timeline/home')
 			assert(timeline)
 			assert.equal(timeline.length, 0)
 		})
@@ -955,7 +1076,7 @@ describe('Mastodon APIs', () => {
 				queue,
 				cache
 			)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			assert.equal(queue.messages.length, 2)
 			assert.equal(queue.messages[0].activity.type, 'Delete')
@@ -984,11 +1105,31 @@ describe('Mastodon APIs', () => {
 					body: JSON.stringify(body),
 				})
 
-			const res1 = await statuses.handleRequest(req(), db, actor, userKEK, queue, cache)
+			const res1 = await statuses.onRequestPost({
+				request: req(),
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor: actor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
 			assert.equal(res1.status, 200)
 			const data1 = await res1.json()
 
-			const res2 = await statuses.handleRequest(req(), db, actor, userKEK, queue, cache)
+			const res2 = await statuses.onRequestPost({
+				request: req(),
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor: actor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
 			assert.equal(res2.status, 200)
 			const data2 = await res2.json()
 
@@ -1014,16 +1155,26 @@ describe('Mastodon APIs', () => {
 				status: 'hey #hi #car',
 				visibility: 'public',
 			}
-			const req = new Request('https://example.com', {
+			const request = new Request('https://example.com', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 			})
 
-			const res = await statuses.handleRequest(req, db, actor, userKEK, queue, cache)
-			assert.equal(res.status, 200)
+			const res = await statuses.onRequestPost({
+				request,
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor: actor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 200)
 
-			const data = await res.json<any>()
+			const data = await res.json<{ id: string }>()
 
 			const { results, success } = await db
 				.prepare('SELECT value, object_id FROM note_hashtags')
@@ -1048,14 +1199,24 @@ describe('Mastodon APIs', () => {
 				status: 'a'.repeat(501),
 				visibility: 'public',
 			}
-			const req = new Request('https://example.com', {
+			const request = new Request('https://example.com', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 			})
 
-			const res = await statuses.handleRequest(req, db, actor, userKEK, queue, cache)
-			assert.equal(res.status, 422)
+			const res = await statuses.onRequestPost({
+				request,
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor: actor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 422)
 			assertJSON(res)
 		})
 
@@ -1066,7 +1227,9 @@ describe('Mastodon APIs', () => {
 			const actor1 = await createPerson(domain, db, userKEK, 'actor1@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'actor2@cloudflare.com')
 
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			let deliveredActivity1: any = null
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			let deliveredActivity2: any = null
 
 			globalThis.fetch = async (input: RequestInfo) => {
@@ -1125,14 +1288,24 @@ describe('Mastodon APIs', () => {
 				status: '@actor1 @actor2 hey',
 				visibility: 'direct',
 			}
-			const req = new Request('https://' + domain, {
+			const request = new Request('https://' + domain, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 			})
 
-			const res = await statuses.handleRequest(req, db, actor, userKEK, queue, cache)
-			assert.equal(res.status, 200)
+			const res = await statuses.onRequestPost({
+				request,
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor: actor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 200)
 
 			assert(deliveredActivity1)
 			assert(deliveredActivity2)
@@ -1159,14 +1332,24 @@ describe('Mastodon APIs', () => {
 				status: 'something nice',
 				visibility: 'unlisted',
 			}
-			const req = new Request('https://' + domain, {
+			const request = new Request('https://' + domain, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 			})
 
-			const res = await statuses.handleRequest(req, db, actor, userKEK, queue, cache)
-			assert.equal(res.status, 422)
+			const res = await statuses.onRequestPost({
+				request,
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor: actor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 422)
 			assertJSON(res)
 		})
 
@@ -1179,14 +1362,24 @@ describe('Mastodon APIs', () => {
 				status: 'something nice',
 				visibility: 'private',
 			}
-			const req = new Request('https://' + domain, {
+			const request = new Request('https://' + domain, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 			})
 
-			const res = await statuses.handleRequest(req, db, actor, userKEK, queue, cache)
-			assert.equal(res.status, 422)
+			const res = await statuses.onRequestPost({
+				request,
+				env: {
+					DATABASE: db,
+					QUEUE: queue,
+					userKEK,
+					DO_CACHE: doCache,
+				},
+				data: { connectedActor: actor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 422)
 			assertJSON(res)
 		})
 	})

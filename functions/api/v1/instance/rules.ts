@@ -1,6 +1,5 @@
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { ContextData, Env } from 'wildebeest/backend/src/types'
 
 export const onRequestGet: PagesFunction<Env, any, ContextData> = async ({ env }) => {
 	return handleRequestGet(await getDatabase(env))

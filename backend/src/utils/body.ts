@@ -1,73 +1,100 @@
-type ReadableValue = string | number | boolean | string[]
+import { output, SafeParseReturnType, z, ZodObject, ZodRawShape, ZodTypeAny } from 'zod'
 
-type Stringify<T extends Record<string, ReadableValue>> = {
-	[P in keyof T]: T[P] extends string | undefined
-		? 'string'
-		: T[P] extends number | undefined
-		? 'number'
-		: T[P] extends boolean | undefined
-		? 'boolean'
-		: T[P] extends string[] | undefined
-		? 'string[]'
-		: never
+// The following variable is taken from the zodix library (https://github.com/rileytomasek/zodix)
+// Copyright (c) 2022 Riley Tomasek
+// The zodix library is released under the MIT License.
+const isZodType = (input: ZodRawShape | ZodTypeAny): input is ZodTypeAny => {
+	return typeof input.parse === 'function'
+}
+
+// The following type is taken from the zodix library (https://github.com/rileytomasek/zodix)
+// Copyright (c) 2022 Riley Tomasek
+// The zodix library is released under the MIT License.
+type ParsedData<T extends ZodRawShape | ZodTypeAny> = T extends ZodTypeAny
+	? output<T>
+	: T extends ZodRawShape
+	? output<ZodObject<T>>
+	: never
+
+// The following type is taken from the zodix library (https://github.com/rileytomasek/zodix)
+// Copyright (c) 2022 Riley Tomasek
+// The zodix library is released under the MIT License.
+type SafeParsedData<T extends ZodRawShape | ZodTypeAny> = T extends ZodTypeAny
+	? SafeParseReturnType<z.infer<T>, ParsedData<T>>
+	: T extends ZodRawShape
+	? SafeParseReturnType<ZodObject<T>, ParsedData<T>>
+	: never
+
+// The following type is taken from the zodix library (https://github.com/rileytomasek/zodix)
+// Copyright (c) 2022 Riley Tomasek
+// The zodix library is released under the MIT License.
+type ParsedSearchParams = Record<string, string | string[]>
+
+function parseSearchParams(searchParams: URLSearchParams): ParsedSearchParams {
+	const values: ParsedSearchParams = {}
+	for (const [key, value] of searchParams) {
+		if (!key.endsWith('[]')) {
+			values[key] = value
+			continue
+		}
+
+		const currentVal = values[key]
+		if (currentVal && Array.isArray(currentVal)) {
+			currentVal.push(value)
+		} else if (currentVal) {
+			values[key] = [currentVal, value]
+		} else {
+			values[key] = [value]
+		}
+	}
+	for (const key in values) {
+		if (key.endsWith('[]')) {
+			const newKey = key.slice(0, -2)
+			values[newKey] = [...values[key]]
+			delete values[key]
+		}
+	}
+	return values
 }
 
 // Extract the request body as the type `T`. Use this function when the requset
 // can be url encoded, form data or JSON. However, not working for formData
 // containing binary data (like File).
-export function makeReadBody<T extends Record<string, ReadableValue>>(
-	typeOf: Stringify<Required<T>>
-): (request: Request) => Promise<T> {
-	const convert = (data: FormData) => {
-		const out: Record<string, ReadableValue> = {}
-		for (const pair of data) {
-			let key = pair[0]
-			const value = pair[1]
-
-			if (key.endsWith('[]')) {
-				key = key.replace('[]', '')
-			}
-			// The `key[]` notiation is used when sending an array of values.
-			switch (typeOf[key]) {
-				case 'string': {
-					out[key] = value as string
-					break
-				}
-				case 'number': {
-					out[key] = Number(value)
-					break
-				}
-				case 'boolean': {
-					out[key] = value === 'true'
-					break
-				}
-				case 'string[]': {
-					if (!out[key]) {
-						out[key] = [value as string]
-					} else {
-						const a = out[key] as string[]
-						a.push(value as string)
-					}
-					break
-				}
-			}
-		}
-		return out
-	}
-
-	return async (request: Request): Promise<T> => {
+export async function readBody<T extends ZodRawShape | ZodTypeAny>(
+	request: Request,
+	schema: T
+): Promise<SafeParsedData<T>> {
+	try {
 		const contentType = request.headers.get('content-type')
 		if (contentType === null) {
 			throw new Error('invalid request')
 		}
+		const finalSchema = isZodType(schema) ? schema : z.object(schema)
 		if (contentType.startsWith('application/json')) {
-			return request.json<T>()
+			return finalSchema.safeParseAsync(await request.json()) as Promise<SafeParsedData<T>>
 		}
 		const data = ['charset', 'multipart/form-data', 'boundary'].some((v) => contentType.includes(v))
 			? await localFormDataParse(request)
 			: await request.formData()
 
-		return convert(data) as T
+		// Context on `as any` usage: https://github.com/microsoft/TypeScript/issues/30584
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const result = parseSearchParams(new URLSearchParams(data as any))
+		return finalSchema.safeParseAsync(result) as Promise<SafeParsedData<T>>
+	} catch (err: unknown) {
+		if (err instanceof Error) {
+			return {
+				success: false,
+				error: new z.ZodError([
+					{
+						code: z.ZodIssueCode.custom,
+						path: [],
+						message: err.message,
+					},
+				]),
+			} as SafeParsedData<T>
+		}
+		throw err
 	}
 }
 

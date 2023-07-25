@@ -4,7 +4,7 @@ import { cacheFromEnv } from 'wildebeest/backend/src/cache'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import * as notification from 'wildebeest/backend/src/mastodon/notification'
 import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
-import type { InboxMessageBody } from 'wildebeest/backend/src/types/queue'
+import type { InboxMessageBody } from 'wildebeest/backend/src/types'
 
 import type { Env } from './'
 

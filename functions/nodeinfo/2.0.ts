@@ -1,4 +1,4 @@
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { Env } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import { WILDEBEEST_VERSION } from 'wildebeest/config/versions'
 

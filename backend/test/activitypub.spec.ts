@@ -7,7 +7,7 @@ import { getApId, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/ob
 import { cacheObject } from 'wildebeest/backend/src/activitypub/objects/'
 import { loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
 import { createDirectNote, createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
-import { MessageType } from 'wildebeest/backend/src/types/queue'
+import { MessageType } from 'wildebeest/backend/src/types'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 import * as ap_objects from 'wildebeest/functions/ap/o/[id]'
 import * as ap_users from 'wildebeest/functions/ap/users/[id]'
@@ -16,7 +16,7 @@ import * as ap_outbox from 'wildebeest/functions/ap/users/[id]/outbox'
 import * as ap_outbox_page from 'wildebeest/functions/ap/users/[id]/outbox/page'
 
 import { createStatus } from '../src/mastodon/status'
-import { isUrlValid, makeDB } from './utils'
+import { assertStatus, isUrlValid, makeDB } from './utils'
 
 const userKEK = 'test_kek5'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -29,7 +29,7 @@ describe('ActivityPub', () => {
 			const db = await makeDB()
 
 			const res = await ap_users.handleRequest(domain, db, 'nonexisting')
-			assert.equal(res.status, 404)
+			await assertStatus(res, 404)
 		})
 
 		test('fetch user by id', async () => {
@@ -50,7 +50,7 @@ describe('ActivityPub', () => {
 				.run()
 
 			const res = await ap_users.handleRequest(domain, db, 'sven')
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data.summary, 'test summary')
@@ -125,7 +125,7 @@ describe('ActivityPub', () => {
 			await createStatus(domain, db, actor, 'my second status')
 
 			const res = await ap_outbox.handleRequest(domain, db, 'sven', userKEK)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data.type, 'OrderedCollection')
@@ -141,7 +141,7 @@ describe('ActivityPub', () => {
 			await createStatus(domain, db, actor, 'my second status')
 
 			const res = await ap_outbox_page.handleRequest(domain, db, 'sven')
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data.type, 'OrderedCollectionPage')
@@ -160,7 +160,7 @@ describe('ActivityPub', () => {
 
 			{
 				const res = await ap_outbox_page.handleRequest(domain, db, 'a')
-				assert.equal(res.status, 200)
+				await assertStatus(res, 200)
 
 				const data = await res.json<any>()
 				assert.equal(data.orderedItems.length, 0)
@@ -168,7 +168,7 @@ describe('ActivityPub', () => {
 
 			{
 				const res = await ap_outbox_page.handleRequest(domain, db, 'b')
-				assert.equal(res.status, 200)
+				await assertStatus(res, 200)
 
 				const data = await res.json<any>()
 				assert.equal(data.orderedItems.length, 0)
@@ -184,7 +184,7 @@ describe('ActivityPub', () => {
 			await addObjectInOutbox(db, actorA, note)
 
 			const res = await ap_outbox_page.handleRequest(domain, db, 'target')
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data.orderedItems.length, 0)
@@ -326,7 +326,7 @@ describe('ActivityPub', () => {
 		test('serve unknown object', async () => {
 			const db = await makeDB()
 			const res = await ap_objects.handleRequest(domain, db, 'unknown id')
-			assert.equal(res.status, 404)
+			await assertStatus(res, 404)
 		})
 
 		test('serve object', async () => {
@@ -335,7 +335,7 @@ describe('ActivityPub', () => {
 			const note = await createPublicNote(domain, db, 'content', actor)
 
 			const res = await ap_objects.handleRequest(domain, db, note[mastodonIdSymbol]!)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data.content, 'content')
@@ -357,7 +357,7 @@ describe('ActivityPub', () => {
 
 			const activity: any = {}
 			const res = await ap_inbox.handleRequest(domain, db, 'sven', activity, queue, userKEK, vapidKeys)
-			assert.equal(res.status, 404)
+			await assertStatus(res, 404)
 		})
 
 		test('send activity sends message in queue', async () => {
@@ -379,7 +379,7 @@ describe('ActivityPub', () => {
 				type: 'some activity',
 			}
 			const res = await ap_inbox.handleRequest(domain, db, 'sven', activity, queue, userKEK, vapidKeys)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			assert(msg)
 			assert.equal(msg.type, MessageType.Inbox)

@@ -1,6 +1,6 @@
 import * as objects from 'wildebeest/backend/src/activitypub/objects'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { Env } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
 export const onRequest: PagesFunction<Env, any> = async ({ params, request, env }) => {

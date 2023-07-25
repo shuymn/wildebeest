@@ -3,7 +3,7 @@ import { strict as assert } from 'node:assert/strict'
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { moveFollowers } from 'wildebeest/backend/src/mastodon/follow'
 import { enrichStatus } from 'wildebeest/backend/src/mastodon/microformats'
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { Env } from 'wildebeest/backend/src/types'
 import * as blocks from 'wildebeest/functions/api/v1/blocks'
 import * as custom_emojis from 'wildebeest/functions/api/v1/custom_emojis'
 import * as v1_instance from 'wildebeest/functions/api/v1/instance'
@@ -11,7 +11,7 @@ import * as mutes from 'wildebeest/functions/api/v1/mutes'
 import * as v2_instance from 'wildebeest/functions/api/v2/instance'
 
 import { InstanceConfig, InstanceConfigV2 } from '../src/types/configs'
-import { assertCache, assertCORS, assertJSON, makeDB } from './utils'
+import { assertCache, assertCORS, assertJSON, assertStatus, makeDB } from './utils'
 
 const userKEK = 'test_kek23'
 const domain = 'cloudflare.com'
@@ -29,7 +29,7 @@ describe('Mastodon APIs', () => {
 			await createPerson(domain, db, userKEK, env.ADMIN_EMAIL, undefined, true)
 
 			const res = await v1_instance.handleRequest(domain, db, env)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 			assertCORS(res)
 			assertJSON(res)
 
@@ -91,7 +91,7 @@ describe('Mastodon APIs', () => {
 			} as Env
 
 			const res = await v1_instance.handleRequest(domain, db, env)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			{
 				const data = await res.json<InstanceConfig>()
@@ -110,7 +110,7 @@ describe('Mastodon APIs', () => {
 			await createPerson(domain, db, userKEK, env.ADMIN_EMAIL, undefined, true)
 
 			const res = await v2_instance.handleRequest(domain, db, env)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 			assertCORS(res)
 			assertJSON(res)
 
@@ -168,7 +168,7 @@ describe('Mastodon APIs', () => {
 	describe('custom emojis', () => {
 		test('returns an empty array', async () => {
 			const res = await custom_emojis.onRequest()
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 			assertJSON(res)
 			assertCORS(res)
 			assertCache(res, 300)
@@ -180,7 +180,7 @@ describe('Mastodon APIs', () => {
 
 	test('mutes returns an empty array', async () => {
 		const res = await mutes.onRequest()
-		assert.equal(res.status, 200)
+		await assertStatus(res, 200)
 		assertJSON(res)
 
 		const data = await res.json<any>()
@@ -189,7 +189,7 @@ describe('Mastodon APIs', () => {
 
 	test('blocks returns an empty array', async () => {
 		const res = await blocks.onRequest()
-		assert.equal(res.status, 200)
+		await assertStatus(res, 200)
 		assertJSON(res)
 
 		const data = await res.json<any>()

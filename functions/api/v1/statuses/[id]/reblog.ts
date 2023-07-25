@@ -10,9 +10,7 @@ import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
 import { createReblog } from 'wildebeest/backend/src/mastodon/reblog'
 import { toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import type { Env } from 'wildebeest/backend/src/types/env'
-import type { DeliverMessageBody, Queue } from 'wildebeest/backend/src/types/queue'
+import type { ContextData, DeliverMessageBody, Env, Queue } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
 export const onRequest: PagesFunction<Env, any, ContextData> = async ({ env, data, params, request }) => {

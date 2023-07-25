@@ -3,8 +3,7 @@ import { getApUrl, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/o
 import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as media from 'wildebeest/backend/src/media/image'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 

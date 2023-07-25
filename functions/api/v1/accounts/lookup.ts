@@ -3,9 +3,8 @@
 import { getAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { resourceNotFound } from 'wildebeest/backend/src/errors'
-import { ContextData } from 'wildebeest/backend/src/types/context'
+import { ContextData, Env } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import { Env } from 'wildebeest/consumer/src'
 
 const headers = {
 	...cors(),

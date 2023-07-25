@@ -9,7 +9,7 @@ import { type Database } from 'wildebeest/backend/src/database'
 import d1 from 'wildebeest/backend/src/database/d1'
 import type { Client } from 'wildebeest/backend/src/mastodon/client'
 import { createClient } from 'wildebeest/backend/src/mastodon/client'
-import type { Queue } from 'wildebeest/backend/src/types/queue'
+import type { Queue } from 'wildebeest/backend/src/types'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
 export function isUrlValid(s: string) {
@@ -50,6 +50,13 @@ export function assertJSON(response: Response) {
 export function assertCache(response: Response, maxge: number) {
 	assert(response.headers.has('cache-control'))
 	assert(response.headers.get('cache-control')!.includes('max-age=' + maxge))
+}
+
+export async function assertStatus(response: Response, status: number) {
+	if (response.status !== status) {
+		assert.equal(response.status, status, await response.text())
+	}
+	assert.equal(response.status, status)
 }
 
 export async function streamToArrayBuffer(stream: ReadableStream) {
@@ -98,7 +105,7 @@ export function makeQueue(): TestQueue {
 }
 
 export function makeCache(): Cache {
-	const cache: any = {}
+	const cache: Record<string, unknown> = {}
 
 	return {
 		async get<T>(key: string): Promise<T | null> {
@@ -111,6 +118,41 @@ export function makeCache(): Cache {
 
 		async put<T>(key: string, value: T): Promise<void> {
 			cache[key] = value
+		},
+	}
+}
+
+export function makeDOCache(): Pick<DurableObjectNamespace, 'idFromName' | 'get'> {
+	const cache = makeCache()
+
+	return {
+		idFromName(name: string): DurableObjectId {
+			return {
+				name,
+				toString() {
+					return name
+				},
+				equals(other: DurableObjectId) {
+					return this.toString() === other.toString()
+				},
+			}
+		},
+		get(id: DurableObjectId): DurableObjectStub {
+			return {
+				id,
+				async fetch(key: string, data?: { body: string }): Promise<Response> {
+					if (data) {
+						const { key, value } = JSON.parse(data.body)
+						await cache.put(key, value)
+						return new Response()
+					}
+					key = key.replace('http://cache/', '')
+					return new Response(JSON.stringify(await cache.get(key)))
+				},
+				connect(): Socket {
+					return {} as Socket
+				},
+			}
 		},
 	}
 }
