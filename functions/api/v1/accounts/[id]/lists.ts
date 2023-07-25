@@ -1,9 +1,8 @@
 // https://docs.joinmastodon.org/methods/accounts/#lists
 
 import { resourceNotFound } from 'wildebeest/backend/src/errors'
-import { ContextData } from 'wildebeest/backend/src/types/context'
+import { ContextData, Env } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import { Env } from 'wildebeest/consumer/src'
 
 const headers = {
 	...cors(),

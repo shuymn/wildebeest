@@ -5,8 +5,7 @@ import * as access from 'wildebeest/backend/src/access'
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import { getJwtEmail } from 'wildebeest/backend/src/utils/auth/getJwtEmail'
 
 export const onRequestPost: PagesFunction<Env, any, ContextData> = async ({ request, env }) => {

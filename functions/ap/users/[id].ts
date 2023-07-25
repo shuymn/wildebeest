@@ -2,7 +2,7 @@ import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { Env } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import { parseHandle } from 'wildebeest/backend/src/utils/handle'
 

@@ -10,10 +10,8 @@ import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import { getPreference, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import * as images from 'wildebeest/backend/src/media/image'
+import type { ContextData, DeliverMessageBody, Env, Queue } from 'wildebeest/backend/src/types'
 import type { CredentialAccount } from 'wildebeest/backend/src/types/account'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import type { Env } from 'wildebeest/backend/src/types/env'
-import type { DeliverMessageBody, Queue } from 'wildebeest/backend/src/types/queue'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
 const headers = {

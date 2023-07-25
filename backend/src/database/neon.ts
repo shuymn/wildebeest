@@ -1,6 +1,6 @@
 import * as neon from '@neondatabase/serverless'
 import type { Database, QueryBuilder, Result } from 'wildebeest/backend/src/database'
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { Env } from 'wildebeest/backend/src/types'
 
 function sqliteToPsql(query: string): string {
 	let c = 0

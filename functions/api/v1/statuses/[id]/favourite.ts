@@ -11,8 +11,7 @@ import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
 import { insertLike } from 'wildebeest/backend/src/mastodon/like'
 import { toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
-import type { ContextData } from 'wildebeest/backend/src/types/context'
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
 export const onRequest: PagesFunction<Env, any, ContextData> = async ({ env, data, params, request }) => {

@@ -2,8 +2,8 @@
 
 import { type Database } from 'wildebeest/backend/src/database'
 import { getFollowerIds } from 'wildebeest/backend/src/mastodon/follow'
-import type { DeliverMessageBody, MessageSendRequest, Queue } from 'wildebeest/backend/src/types/queue'
-import { MessageType } from 'wildebeest/backend/src/types/queue'
+import type { DeliverMessageBody, MessageSendRequest, Queue } from 'wildebeest/backend/src/types'
+import { MessageType } from 'wildebeest/backend/src/types'
 import { signRequest } from 'wildebeest/backend/src/utils/http-signing'
 import { generateDigestHeader } from 'wildebeest/backend/src/utils/http-signing-cavage'
 import { getFederationUA } from 'wildebeest/config/ua'

@@ -1,5 +1,5 @@
 import { type Database, QueryBuilder } from 'wildebeest/backend/src/database'
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { Env } from 'wildebeest/backend/src/types'
 
 const qb: QueryBuilder = {
 	jsonExtract(obj: string, prop: string): string {

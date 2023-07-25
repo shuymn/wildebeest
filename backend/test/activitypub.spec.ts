@@ -7,7 +7,7 @@ import { getApId, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/ob
 import { cacheObject } from 'wildebeest/backend/src/activitypub/objects/'
 import { loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
 import { createDirectNote, createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
-import { MessageType } from 'wildebeest/backend/src/types/queue'
+import { MessageType } from 'wildebeest/backend/src/types'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 import * as ap_objects from 'wildebeest/functions/ap/o/[id]'
 import * as ap_users from 'wildebeest/functions/ap/users/[id]'

@@ -2,7 +2,7 @@ import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { getFollowingId } from 'wildebeest/backend/src/mastodon/follow'
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { Env } from 'wildebeest/backend/src/types'
 import { isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
 
 const headers = {

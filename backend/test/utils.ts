@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
 import { D1Database, D1DatabaseAPI } from '@miniflare/d1'
-import * as SQLiteDatabase from 'better-sqlite3'
+import SQLiteDatabase from 'better-sqlite3'
 import { promises as fs } from 'fs'
 import * as path from 'path'
 import type { Cache } from 'wildebeest/backend/src/cache'
@@ -9,7 +9,7 @@ import { type Database } from 'wildebeest/backend/src/database'
 import d1 from 'wildebeest/backend/src/database/d1'
 import type { Client } from 'wildebeest/backend/src/mastodon/client'
 import { createClient } from 'wildebeest/backend/src/mastodon/client'
-import type { Queue } from 'wildebeest/backend/src/types/queue'
+import type { Queue } from 'wildebeest/backend/src/types'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
 export function isUrlValid(s: string) {

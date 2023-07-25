@@ -1,7 +1,7 @@
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import type { DeliverMessageBody, InboxMessageBody, MessageBody } from 'wildebeest/backend/src/types/queue'
-import { MessageType } from 'wildebeest/backend/src/types/queue'
+import type { DeliverMessageBody, InboxMessageBody, MessageBody } from 'wildebeest/backend/src/types'
+import { MessageType } from 'wildebeest/backend/src/types'
 
 import { handleDeliverMessage } from './deliver'
 import { handleInboxMessage } from './inbox'

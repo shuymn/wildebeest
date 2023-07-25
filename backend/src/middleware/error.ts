@@ -1,4 +1,4 @@
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { Env } from 'wildebeest/backend/src/types'
 import { initSentry } from 'wildebeest/backend/src/utils/sentry'
 
 import { internalServerError } from '../errors'

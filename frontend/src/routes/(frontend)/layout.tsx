@@ -1,5 +1,5 @@
 import { component$, Slot, useContextProvider } from '@builder.io/qwik'
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { Env } from 'wildebeest/backend/src/types'
 import { DocumentHead, Link, loader$ } from '@builder.io/qwik-city'
 import * as instance from 'wildebeest/functions/api/v1/instance'
 import type { InstanceConfig } from 'wildebeest/backend/src/types/configs'

@@ -1,4 +1,4 @@
-import type { Env } from 'wildebeest/backend/src/types/env'
+import type { Env } from 'wildebeest/backend/src/types'
 
 import d1 from './d1'
 import neon from './neon'
