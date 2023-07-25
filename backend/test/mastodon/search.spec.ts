@@ -4,7 +4,7 @@ import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { defaultImages } from 'wildebeest/config/accounts'
 import * as search from 'wildebeest/functions/api/v2/search'
 
-import { assertCORS, assertJSON, makeDB } from '../utils'
+import { assertCORS, assertJSON, assertStatus, makeDB } from '../utils'
 
 const userKEK = 'test_kek11'
 const domain = 'cloudflare.com'
@@ -83,14 +83,14 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const req = new Request('https://example.com/api/v2/search')
 			const res = await search.handleRequest(db, req)
-			assert.equal(res.status, 400)
+			await assertStatus(res, 400)
 		})
 
 		test('empty results', async () => {
 			const db = await makeDB()
 			const req = new Request('https://example.com/api/v2/search?q=non-existing-local-user')
 			const res = await search.handleRequest(db, req)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 			assertJSON(res)
 			assertCORS(res)
 
@@ -104,7 +104,7 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const req = new Request('https://example.com/api/v2/search?q=@sven@remote.com&resolve=true')
 			const res = await search.handleRequest(db, req)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 			assertJSON(res)
 			assertCORS(res)
 
@@ -123,7 +123,7 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const req = new Request('https://example.com/api/v2/search?q=@default-avatar-and-header@remote.com&resolve=true')
 			const res = await search.handleRequest(db, req)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 			assertJSON(res)
 			assertCORS(res)
 
@@ -145,7 +145,7 @@ describe('Mastodon APIs', () => {
 
 			const req = new Request('https://example.com/api/v2/search?q=@sven@remote.com&resolve=false')
 			const res = await search.handleRequest(db, req)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 			assertJSON(res)
 			assertCORS(res)
 		})
@@ -158,7 +158,7 @@ describe('Mastodon APIs', () => {
 			{
 				const req = new Request('https://example.com/api/v2/search?q=foo&resolve=false')
 				const res = await search.handleRequest(db, req)
-				assert.equal(res.status, 200)
+				await assertStatus(res, 200)
 
 				const data = await res.json<any>()
 				assert.equal(data.accounts.length, 1)
@@ -168,7 +168,7 @@ describe('Mastodon APIs', () => {
 			{
 				const req = new Request('https://example.com/api/v2/search?q=user&resolve=false')
 				const res = await search.handleRequest(db, req)
-				assert.equal(res.status, 200)
+				await assertStatus(res, 200)
 
 				const data = await res.json<any>()
 				assert.equal(data.accounts.length, 2)
@@ -181,7 +181,7 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const req = new Request('https://example.com/api/v2/search?q=    ')
 			const res = await search.handleRequest(db, req)
-			assert.equal(res.status, 400)
+			await assertStatus(res, 400)
 		})
 	})
 })

@@ -6,7 +6,7 @@ import * as verify_app from 'wildebeest/functions/api/v1/apps/verify_credentials
 import { CredentialApp } from 'wildebeest/functions/api/v1/apps/verify_credentials'
 
 import { TEST_JWT } from '../test-data'
-import { assertCORS, assertJSON, createTestClient, generateVAPIDKeys, makeDB } from '../utils'
+import { assertCORS, assertJSON, assertStatus, createTestClient, generateVAPIDKeys, makeDB } from '../utils'
 
 describe('Mastodon APIs', () => {
 	describe('/apps', () => {
@@ -133,7 +133,7 @@ describe('Mastodon APIs', () => {
 			const req = new Request('https://example.com/api/v1/verify_credentials', { headers })
 
 			const res = await verify_app.handleRequest(db, req, vapidKeys)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 			assertCORS(res)
 			assertJSON(res)
 
@@ -153,7 +153,7 @@ describe('Mastodon APIs', () => {
 			const req = new Request('https://example.com/api/v1/verify_credentials', { headers })
 
 			const res = await verify_app.handleRequest(db, req, vapidKeys)
-			assert.equal(res.status, 403)
+			await assertStatus(res, 403)
 		})
 	})
 })

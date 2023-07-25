@@ -12,7 +12,7 @@ import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 import * as notifications from 'wildebeest/functions/api/v1/notifications'
 import * as notifications_get from 'wildebeest/functions/api/v1/notifications/[id]'
 
-import { assertJSON, createTestClient, makeCache, makeDB } from '../utils'
+import { assertJSON, assertStatus, createTestClient, makeCache, makeDB } from '../utils'
 
 const userKEK = 'test_kek15'
 const domain = 'cloudflare.com'
@@ -82,7 +82,7 @@ describe('Mastodon APIs', () => {
 
 			const res = await notifications_get.handleRequest(domain, '1', db, actor)
 
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 			assertJSON(res)
 
 			const data = await res.json<any>()
@@ -100,7 +100,7 @@ describe('Mastodon APIs', () => {
 
 			const res = await notifications_get.handleRequest(domain, '1', db, actor)
 
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 			assertJSON(res)
 
 			const data = await res.json<any>()

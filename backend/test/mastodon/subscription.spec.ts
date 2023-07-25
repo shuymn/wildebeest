@@ -4,7 +4,7 @@ import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import * as subscription from 'wildebeest/functions/api/v1/push/subscription'
 
 import { createSubscription } from '../../src/mastodon/subscription'
-import { assertCORS, createTestClient, generateVAPIDKeys, makeDB } from '../utils'
+import { assertCORS, assertStatus, createTestClient, generateVAPIDKeys, makeDB } from '../utils'
 
 const userKEK = 'test_kek21'
 const domain = 'cloudflare.com'
@@ -19,7 +19,7 @@ describe('Mastodon APIs', () => {
 			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const res = await subscription.handleGetRequest(db, req, connectedActor, client.id, vapidKeys)
-			assert.equal(res.status, 404)
+			await assertStatus(res, 404)
 			assertCORS(res)
 		})
 
@@ -51,7 +51,7 @@ describe('Mastodon APIs', () => {
 			await createSubscription(db, connectedActor, client, data)
 
 			const res = await subscription.handleGetRequest(db, req, connectedActor, client.id, vapidKeys)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const out = await res.json<any>()
 			assert.equal(typeof out.id, 'number')
@@ -90,7 +90,7 @@ describe('Mastodon APIs', () => {
 			})
 
 			const res = await subscription.handlePostRequest(db, req, connectedActor, client.id, vapidKeys)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const out = await res.json<any>()
 			assert.equal(out.alerts.mention, true)
@@ -135,7 +135,7 @@ describe('Mastodon APIs', () => {
 			})
 
 			const res = await subscription.handlePostRequest(db, req, connectedActor, client.id, vapidKeys)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const { count } = await db.prepare('SELECT count(*) as count FROM subscriptions').first<{ count: number }>()
 			assert.equal(count, 1)

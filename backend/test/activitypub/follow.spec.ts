@@ -11,7 +11,7 @@ import * as ap_followers_page from 'wildebeest/functions/ap/users/[id]/followers
 import * as ap_following from 'wildebeest/functions/ap/users/[id]/following'
 import * as ap_following_page from 'wildebeest/functions/ap/users/[id]/following/page'
 
-import { makeDB } from '../utils'
+import { assertStatus, makeDB } from '../utils'
 
 const userKEK = 'test_kek10'
 const domain = 'cloudflare.com'
@@ -85,7 +85,7 @@ describe('ActivityPub', () => {
 			await acceptFollowing(db, actor, actor3)
 
 			const res = await ap_following.handleRequest(domain, db, 'sven')
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data.type, 'OrderedCollection')
@@ -103,7 +103,7 @@ describe('ActivityPub', () => {
 			await acceptFollowing(db, actor, actor3)
 
 			const res = await ap_following_page.handleRequest(domain, db, 'sven')
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data.type, 'OrderedCollectionPage')
@@ -119,7 +119,7 @@ describe('ActivityPub', () => {
 			await acceptFollowing(db, actor2, actor)
 
 			const res = await ap_followers.handleRequest(domain, db, 'sven')
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data.type, 'OrderedCollection')
@@ -134,7 +134,7 @@ describe('ActivityPub', () => {
 			await acceptFollowing(db, actor2, actor)
 
 			const res = await ap_followers_page.handleRequest(domain, db, 'sven')
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data.type, 'OrderedCollectionPage')

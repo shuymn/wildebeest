@@ -7,7 +7,7 @@ import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
 import * as media from 'wildebeest/functions/api/v2/media'
 import * as media_id from 'wildebeest/functions/api/v2/media/[id]'
 
-import { assertJSON, isUrlValid, makeDB } from '../utils'
+import { assertJSON, assertStatus, isUrlValid, makeDB } from '../utils'
 
 const userKEK = 'test_kek10'
 const CF_ACCOUNT_ID = 'testaccountid'
@@ -46,7 +46,7 @@ describe('Mastodon APIs', () => {
 				body,
 			})
 			const res = await media.handleRequestPost(req, db, connectedActor, CF_ACCOUNT_ID, CF_API_TOKEN)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 			assertJSON(res)
 
 			const data = await res.json<any>()

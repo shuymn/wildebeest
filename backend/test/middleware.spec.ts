@@ -4,7 +4,7 @@ import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import * as middleware_main from 'wildebeest/backend/src/middleware/main'
 
 import { ACCESS_CERTS, TEST_JWT } from './test-data'
-import { assertCORS, isUrlValid, makeDB } from './utils'
+import { assertCORS, assertStatus, isUrlValid, makeDB } from './utils'
 
 const userKEK = 'test_kek12'
 const domain = 'cloudflare.com'
@@ -19,7 +19,7 @@ describe('middleware', () => {
 		}
 
 		const res = await middleware_main.main(ctx)
-		assert.equal(res.status, 200)
+		await assertStatus(res, 200)
 		assertCORS(res)
 	})
 
@@ -53,7 +53,7 @@ describe('middleware', () => {
 		}
 
 		const res = await middleware_main.main(ctx)
-		assert.equal(res.status, 401)
+		await assertStatus(res, 401)
 	})
 
 	test('test user not found', async () => {
@@ -90,7 +90,7 @@ describe('middleware', () => {
 		}
 
 		const res = await middleware_main.main(ctx)
-		assert.equal(res.status, 401)
+		await assertStatus(res, 401)
 	})
 
 	test('success passes data and calls next', async () => {
@@ -129,7 +129,7 @@ describe('middleware', () => {
 		}
 
 		const res = await middleware_main.main(ctx)
-		assert.equal(res.status, 200)
+		await assertStatus(res, 200)
 		assert(!ctx.data.connectedUser)
 		assert(isUrlValid(ctx.data.connectedActor.id))
 		assert.equal(ctx.env.ACCESS_AUTH_DOMAIN, accessDomain)

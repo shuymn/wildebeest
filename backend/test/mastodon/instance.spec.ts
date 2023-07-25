@@ -3,7 +3,7 @@ import { strict as assert } from 'node:assert/strict'
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import * as peers from 'wildebeest/functions/api/v1/instance/peers'
 
-import { makeDB } from '../utils'
+import { assertStatus, makeDB } from '../utils'
 
 describe('Mastodon APIs', () => {
 	describe('instance', () => {
@@ -13,7 +13,7 @@ describe('Mastodon APIs', () => {
 			await addPeer(db, 'b')
 
 			const res = await peers.handleRequest(db)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<Array<string>>()
 			assert.equal(data.length, 2)

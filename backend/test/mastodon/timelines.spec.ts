@@ -14,7 +14,7 @@ import { createReply } from 'wildebeest/backend/test/shared.utils'
 import * as timelines_home from 'wildebeest/functions/api/v1/timelines/home'
 import * as timelines_public from 'wildebeest/functions/api/v1/timelines/public'
 
-import { assertCORS, assertJSON, makeCache, makeDB } from '../utils'
+import { assertCORS, assertJSON, assertStatus, makeCache, makeDB } from '../utils'
 
 const userKEK = 'test_kek6'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -160,7 +160,7 @@ describe('Mastodon APIs', () => {
 			await insertReblog(db, actor, statusFromActor)
 
 			const res = await timelines_public.handleRequest(domain, db)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 			assertJSON(res)
 			assertCORS(res)
 
@@ -196,7 +196,7 @@ describe('Mastodon APIs', () => {
 			await createStatus(domain, db, actor, 'status from actor', mediaAttachments)
 
 			const res = await timelines_public.handleRequest(domain, db)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data.length, 1)
@@ -217,7 +217,7 @@ describe('Mastodon APIs', () => {
 			await addObjectInOutbox(db, actor, note3, '2048-12-10T23:48:38Z')
 
 			const res = await timelines_public.handleRequest(domain, db)
-			assert.equal(res.status, 200)
+			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
 			assert.equal(data[0].content, 'note3')
