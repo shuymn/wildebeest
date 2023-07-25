@@ -105,7 +105,7 @@ export function makeQueue(): TestQueue {
 }
 
 export function makeCache(): Cache {
-	const cache: any = {}
+	const cache: Record<string, unknown> = {}
 
 	return {
 		async get<T>(key: string): Promise<T | null> {
@@ -118,6 +118,41 @@ export function makeCache(): Cache {
 
 		async put<T>(key: string, value: T): Promise<void> {
 			cache[key] = value
+		},
+	}
+}
+
+export function makeDOCache(): Pick<DurableObjectNamespace, 'idFromName' | 'get'> {
+	const cache = makeCache()
+
+	return {
+		idFromName(name: string): DurableObjectId {
+			return {
+				name,
+				toString() {
+					return name
+				},
+				equals(other: DurableObjectId) {
+					return this.toString() === other.toString()
+				},
+			}
+		},
+		get(id: DurableObjectId): DurableObjectStub {
+			return {
+				id,
+				async fetch(key: string, data?: { body: string }): Promise<Response> {
+					if (data) {
+						const { key, value } = JSON.parse(data.body)
+						await cache.put(key, value)
+						return new Response()
+					}
+					key = key.replace('http://cache/', '')
+					return new Response(JSON.stringify(await cache.get(key)))
+				},
+				connect(): Socket {
+					return {} as Socket
+				},
+			}
 		},
 	}
 }
