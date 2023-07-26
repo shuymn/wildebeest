@@ -43,7 +43,7 @@ const schema = z.object({
 		z.literal('private'),
 		z.literal('direct'),
 	]) satisfies z.ZodType<Visibility>,
-	sensitive: myz.logical().default(String(false)),
+	sensitive: myz.logical().default(false),
 	// TODO: check server settings for max length
 	media_ids: z.optional(z.array(z.string()).max(MAX_MEDIA_ATTACHMENTS)),
 	in_reply_to_id: z.string().optional(),

@@ -209,7 +209,7 @@ describe('utils', () => {
 			const result = await readBody(req, {
 				a: myz.numeric(),
 				b: z.optional(myz.numeric()),
-				c: myz.logical().default(String(false)),
+				c: myz.logical().default(false),
 				d: z.optional(myz.numeric()),
 			})
 			assert(result.success)
