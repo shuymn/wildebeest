@@ -6,83 +6,68 @@ import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { resourceNotFound } from 'wildebeest/backend/src/errors'
 import { toMastodonStatusesFromRowsWithActor } from 'wildebeest/backend/src/mastodon/status'
 import type { ContextData, Env, MastodonId } from 'wildebeest/backend/src/types'
-import { boolParam, numberParam } from 'wildebeest/backend/src/utils'
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import { Override } from 'wildebeest/backend/src/utils/type'
+import { cors, myz, readParams } from 'wildebeest/backend/src/utils'
+import { z } from 'zod'
 
 const headers = {
 	...cors(),
 	'content-type': 'application/json; charset=utf-8',
 }
 
+const schema = z.object({
+	// return results older than this ID
+	max_id: z.string().optional(),
+	// return results newer than this ID
+	since_id: z.string().optional(),
+	// return results immediately newer than this ID
+	min_id: z.string().optional(),
+	// maximim number of results to return
+	// defaults to 20 statuses. max 40 statuses
+	limit: myz
+		.numeric()
+		.refine((value) => value >= 1 && value <= 40 && (value | 0) === value)
+		.default(20),
+	// filter out statuses without attachments
+	only_media: myz.logical().default(false),
+	// filter out statuses in reply to a different account
+	exclude_replies: myz.logical().default(false),
+	// filter out boosts from the response
+	exclude_reblogs: myz.logical().default(false),
+	// filter for pinned statuses only. defaults to false,
+	// which includes all statuses. pinned statuses do not receive
+	// special priority in the order of the returned results
+	pinned: myz.logical().default(false),
+	// filter for statuses using a specific hashtag
+	tagged: z.string().optional(),
+})
+
 type Dependencies = {
 	domain: string
 	db: Database
 }
 
-type Parameters = {
-	// return results older than this ID
-	maxId?: string
-	// return results newer than this ID
-	sinceId?: string
-	// return results immediately newer than this ID
-	minId?: string
-	// maximim number of results to return
-	// defaults to 20 statuses. max 40 statuses
-	limit: number
-	// filter out statuses without attachments
-	onlyMedia?: boolean
-	// filter out statuses in reply to a different account
-	excludeReplies: boolean
-	// filter out boosts from the response
-	excludeReblogs?: boolean
-	// filter for pinned statuses only. defaults to false,
-	// which includes all statuses. pinned statuses do not receive
-	// special priority in the order of the returned results
-	pinned?: boolean
-	// filter for statuses using a specific hashtag
-	tagged?: string
-}
+type Parameters = z.infer<typeof schema>
 
 export const onRequestGet: PagesFunction<Env, 'id', ContextData> = async ({ request, env, params: { id } }) => {
 	if (typeof id !== 'string') {
 		return resourceNotFound('id', String(id))
 	}
+	const result = await readParams(request, schema)
+	if (!result.success) {
+		return new Response('', { status: 400 })
+	}
 	const url = new URL(request.url)
-	return handleRequest({ domain: url.hostname, db: await getDatabase(env) }, id, {
-		maxId: url.searchParams.get('max_id'),
-		sinceId: url.searchParams.get('since_id'),
-		minId: url.searchParams.get('min_id'),
-		limit: url.searchParams.get('limit'),
-		onlyMedia: url.searchParams.get('only_media'),
-		excludeReplies: url.searchParams.get('exclude_replies'),
-		excludeReblogs: url.searchParams.get('exclude_reblogs'),
-		pinned: url.searchParams.get('pinned'),
-		tagged: url.searchParams.get('tagged'),
-	})
+	return handleRequest({ domain: url.hostname, db: await getDatabase(env) }, id, result.data)
 }
-
-const DEFAULT_LIMIT = 20
-const MAX_LIMIT = 40
 
 export async function handleRequest(
 	{ domain, db }: Dependencies,
 	id: MastodonId,
-	params: Override<Required<Parameters>, string | null>
+	params: Parameters
 ): Promise<Response> {
 	const actor = await getActorByMastodonId(db, id)
 	if (actor) {
-		return await getStatuses(domain, db, actor, {
-			maxId: params.maxId ?? undefined,
-			sinceId: params.sinceId ?? undefined,
-			minId: params.minId ?? undefined,
-			limit: numberParam(params.limit, DEFAULT_LIMIT, { maxValue: MAX_LIMIT }),
-			onlyMedia: boolParam(params.onlyMedia, false),
-			excludeReplies: boolParam(params.excludeReplies, false),
-			excludeReblogs: boolParam(params.excludeReblogs, false),
-			pinned: boolParam(params.pinned, false),
-			tagged: params.tagged ?? undefined,
-		})
+		return await getStatuses(domain, db, actor, params)
 	}
 	return resourceNotFound('id', id)
 }
@@ -106,23 +91,23 @@ WHERE objects.mastodon_id = ?1
 `
 	let cdate: string = db.qb.epoch()
 	let since: string | null = null
-	if (params.maxId) {
-		const { results } = await db.prepare(CDATE_QUERY).bind(params.maxId).all<{ cdate: string }>()
+	if (params.max_id) {
+		const { results } = await db.prepare(CDATE_QUERY).bind(params.max_id).all<{ cdate: string }>()
 		if (results === undefined || results.length === 0) {
-			return resourceNotFound('max_id', params.maxId)
+			return resourceNotFound('max_id', params.max_id)
 		}
 		cdate = results[0].cdate
 
-		const sinceId = params.sinceId || params.minId
+		const sinceId = params.since_id || params.min_id
 		if (sinceId) {
 			const { results } = await db.prepare(CDATE_QUERY).bind(sinceId).all<{ cdate: string }>()
 			if (results === undefined || results.length === 0) {
-				return resourceNotFound(params.sinceId ? 'since_id' : 'min_id', sinceId)
+				return resourceNotFound(params.since_id ? 'since_id' : 'min_id', sinceId)
 			}
 			since = results[0].cdate
 		}
 	} else {
-		const minId = params.minId || params.sinceId
+		const minId = params.min_id || params.since_id
 		if (minId) {
 			const { results } = await db.prepare(CDATE_QUERY).bind(minId).all<{ cdate: string }>()
 			if (results === undefined || results.length === 0) {
@@ -145,17 +130,17 @@ FROM outbox_objects
 INNER JOIN objects ON objects.id = outbox_objects.object_id
 WHERE
   objects.type = 'Note'
-  ${params.excludeReplies ? 'AND ' + db.qb.jsonExtractIsNull('objects.properties', 'inReplyTo') : ''}
+  ${params.exclude_replies ? 'AND ' + db.qb.jsonExtractIsNull('objects.properties', 'inReplyTo') : ''}
   AND outbox_objects.target = '${PUBLIC_GROUP}'
   AND outbox_objects.actor_id = ?1
-  AND ${db.qb.timeNormalize('outbox_objects.cdate')} ${params.maxId ? '<' : '>'} ?2
-  ${params.maxId && since ? 'AND ' + db.qb.timeNormalize('outbox_objects.cdate') + ' > ?4' : ''}
+  AND ${db.qb.timeNormalize('outbox_objects.cdate')} ${params.max_id ? '<' : '>'} ?2
+  ${params.max_id && since ? 'AND ' + db.qb.timeNormalize('outbox_objects.cdate') + ' > ?4' : ''}
 ORDER BY ${db.qb.timeNormalize('outbox_objects.published_date')} DESC
 LIMIT ?3
   `
 		)
 		.bind(
-			...(params.maxId && since
+			...(params.max_id && since
 				? [actor.id.toString(), cdate, params.limit, since]
 				: [actor.id.toString(), cdate, params.limit])
 		)

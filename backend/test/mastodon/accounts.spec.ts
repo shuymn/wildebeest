@@ -497,20 +497,25 @@ describe('Mastodon APIs', () => {
 			const secondNote = await createStatus(domain, db, actor, 'my second status')
 			await insertReblog(db, actor, secondNote)
 
-			const res = await accounts_statuses.handleRequest({ domain, db }, actor[mastodonIdSymbol], {
-				maxId: null,
-				sinceId: null,
-				minId: null,
-				limit: null,
-				onlyMedia: null,
-				excludeReplies: null,
-				excludeReblogs: null,
-				pinned: null,
-				tagged: null,
-			})
+			const res = await accounts_statuses.onRequestGet({
+				request: new Request('https://' + domain),
+				env: { DATABASE: db },
+				params: { id: actor[mastodonIdSymbol] },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
 			await assertStatus(res, 200)
 
-			const data = await res.json<Array<any>>()
+			const data = await res.json<
+				{
+					id: string
+					content: unknown
+					account: { acct: unknown }
+					favourites_count: unknown
+					reblogs_count: unknown
+					uri: string
+					url: string
+				}[]
+			>()
 			assert.equal(data.length, 2)
 
 			assert(isUUID(data[0].id))
@@ -534,20 +539,15 @@ describe('Mastodon APIs', () => {
 			await sleep(10)
 			await createReply(domain, db, actor, note, 'a reply')
 
-			const res = await accounts_statuses.handleRequest({ domain, db }, actor[mastodonIdSymbol], {
-				maxId: null,
-				sinceId: null,
-				minId: null,
-				limit: null,
-				onlyMedia: null,
-				excludeReplies: 'true',
-				excludeReblogs: null,
-				pinned: null,
-				tagged: null,
-			})
+			const res = await accounts_statuses.onRequestGet({
+				request: new Request(`https://${domain}?exclude_replies=true`),
+				env: { DATABASE: db },
+				params: { id: actor[mastodonIdSymbol] },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
 			await assertStatus(res, 200)
 
-			const data = await res.json<Array<any>>()
+			const data = await res.json<unknown[]>()
 
 			// Only 1 post because the reply is hidden
 			assert.equal(data.length, 1)
@@ -561,20 +561,15 @@ describe('Mastodon APIs', () => {
 			const mediaAttachments = [await createImage(domain, db, actor, properties)]
 			await createStatus(domain, db, actor, 'status from actor', mediaAttachments)
 
-			const res = await accounts_statuses.handleRequest({ domain, db }, actor[mastodonIdSymbol], {
-				maxId: null,
-				sinceId: null,
-				minId: null,
-				limit: null,
-				onlyMedia: null,
-				excludeReplies: null,
-				excludeReblogs: null,
-				pinned: null,
-				tagged: null,
-			})
+			const res = await accounts_statuses.onRequestGet({
+				request: new Request('https://' + domain),
+				env: { DATABASE: db },
+				params: { id: actor[mastodonIdSymbol] },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
 			await assertStatus(res, 200)
 
-			const data = await res.json<Array<any>>()
+			const data = await res.json<{ media_attachments: { type: unknown; url: unknown }[] }[]>()
 
 			assert.equal(data.length, 1)
 			assert.equal(data[0].media_attachments.length, 1)
@@ -586,20 +581,15 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-			const res = await accounts_statuses.handleRequest({ domain, db }, actor[mastodonIdSymbol], {
-				maxId: null,
-				sinceId: null,
-				minId: null,
-				limit: null,
-				onlyMedia: null,
-				excludeReplies: null,
-				excludeReblogs: null,
-				pinned: 'true',
-				tagged: null,
-			})
+			const res = await accounts_statuses.onRequestGet({
+				request: new Request(`https://${domain}?pinned=true`),
+				env: { DATABASE: db },
+				params: { id: actor[mastodonIdSymbol] },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
 			await assertStatus(res, 200)
 
-			const data = await res.json<Array<any>>()
+			const data = await res.json<unknown[]>()
 			assert.equal(data.length, 0)
 		})
 
@@ -625,20 +615,15 @@ describe('Mastodon APIs', () => {
 
 			{
 				// Query statuses before object2, should only see object1.
-				const res = await accounts_statuses.handleRequest({ domain, db }, actor[mastodonIdSymbol], {
-					maxId: 'mastodon_id2',
-					sinceId: null,
-					minId: null,
-					limit: null,
-					onlyMedia: null,
-					excludeReplies: null,
-					excludeReblogs: null,
-					pinned: null,
-					tagged: null,
-				})
+				const res = await accounts_statuses.onRequestGet({
+					request: new Request(`https://${domain}?max_id=mastodon_id2`),
+					env: { DATABASE: db },
+					params: { id: actor[mastodonIdSymbol] },
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				} as any)
 				await assertStatus(res, 200)
 
-				const data = await res.json<Array<any>>()
+				const data = await res.json<{ content: unknown; account: { acct: unknown } }[]>()
 				assert.equal(data.length, 1)
 				assert.equal(data[0].content, 'my first status')
 				assert.equal(data[0].account.acct, 'sven')
@@ -646,20 +631,15 @@ describe('Mastodon APIs', () => {
 
 			{
 				// Query statuses before object1, nothing is after.
-				const res = await accounts_statuses.handleRequest({ domain, db }, actor[mastodonIdSymbol], {
-					maxId: 'mastodon_id',
-					sinceId: null,
-					minId: null,
-					limit: null,
-					onlyMedia: null,
-					excludeReplies: null,
-					excludeReblogs: null,
-					pinned: null,
-					tagged: null,
-				})
+				const res = await accounts_statuses.onRequestGet({
+					request: new Request(`https://${domain}?max_id=mastodon_id`),
+					env: { DATABASE: db },
+					params: { id: actor[mastodonIdSymbol] },
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				} as any)
 				await assertStatus(res, 200)
 
-				const data = await res.json<Array<any>>()
+				const data = await res.json<unknown[]>()
 				assert.equal(data.length, 0)
 			}
 		})
@@ -667,17 +647,12 @@ describe('Mastodon APIs', () => {
 		test('get local actor statuses with max_id poiting to unknown id', async () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const res = await accounts_statuses.handleRequest({ domain, db }, actor[mastodonIdSymbol], {
-				maxId: 'object1',
-				sinceId: null,
-				minId: null,
-				limit: null,
-				onlyMedia: null,
-				excludeReplies: null,
-				excludeReblogs: null,
-				pinned: null,
-				tagged: null,
-			})
+			const res = await accounts_statuses.onRequestGet({
+				request: new Request(`https://${domain}?max_id=object1`),
+				env: { DATABASE: db },
+				params: { id: actor[mastodonIdSymbol] },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
 			await assertStatus(res, 404)
 		})
 
@@ -796,20 +771,17 @@ describe('Mastodon APIs', () => {
 				}
 			}
 
-			const res = await accounts_statuses.handleRequest({ domain, db }, actorB[mastodonIdSymbol], {
-				maxId: null,
-				sinceId: null,
-				minId: null,
-				limit: null,
-				onlyMedia: null,
-				excludeReplies: null,
-				excludeReblogs: null,
-				pinned: null,
-				tagged: null,
-			})
+			const res = await accounts_statuses.onRequestGet({
+				request: new Request('https://' + domain),
+				env: { DATABASE: db },
+				params: { id: actorB[mastodonIdSymbol] },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
 			await assertStatus(res, 200)
 
-			const data = await res.json<Array<any>>()
+			const data = await res.json<
+				{ content: unknown; account: { username: unknown }; media_attachments: { type: unknown }[] }[]
+			>()
 			assert.equal(data.length, 2)
 			assert.equal(data[1].content, '<p>p</p>')
 			assert.equal(data[1].account.username, 'someone')
@@ -898,10 +870,16 @@ describe('Mastodon APIs', () => {
 
 			const actor = await queryAcct({ localPart: 'sven', domain: 'example.com' }, db)
 			assert.ok(actor)
-			const res = await accounts_followers.handleRequest({ domain, db }, actor[mastodonIdSymbol], { limit: null })
+
+			const res = await accounts_followers.onRequestGet({
+				request: new Request('https://' + domain),
+				env: { DATABASE: db },
+				params: { id: actor[mastodonIdSymbol] },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
 			await assertStatus(res, 200)
 
-			const data = await res.json<Array<any>>()
+			const data = await res.json<{ acct: unknown }[]>()
 			assert.equal(data.length, 2)
 
 			assert.equal(data[0].acct, 'a')
@@ -930,10 +908,15 @@ describe('Mastodon APIs', () => {
 			await addFollowing(db, actor2, actor)
 			await acceptFollowing(db, actor2, actor)
 
-			const res = await accounts_followers.handleRequest({ domain, db }, actor[mastodonIdSymbol], { limit: null })
+			const res = await accounts_followers.onRequestGet({
+				request: new Request('https://' + domain),
+				env: { DATABASE: db },
+				params: { id: actor[mastodonIdSymbol] },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
 			await assertStatus(res, 200)
 
-			const data = await res.json<Array<any>>()
+			const data = await res.json<unknown[]>()
 			assert.equal(data.length, 1)
 		})
 
@@ -959,10 +942,15 @@ describe('Mastodon APIs', () => {
 			await addFollowing(db, actor, actor2)
 			await acceptFollowing(db, actor, actor2)
 
-			const res = await accounts_following.handleRequest({ domain, db }, actor[mastodonIdSymbol], { limit: null })
+			const res = await accounts_following.onRequestGet({
+				request: new Request('https://' + domain),
+				env: { DATABASE: db },
+				params: { id: actor[mastodonIdSymbol] },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
 			await assertStatus(res, 200)
 
-			const data = await res.json<Array<any>>()
+			const data = await res.json<unknown[]>()
 			assert.equal(data.length, 1)
 		})
 
@@ -1040,10 +1028,16 @@ describe('Mastodon APIs', () => {
 
 			const actor = await queryAcct({ localPart: 'sven', domain: 'example.com' }, db)
 			assert.ok(actor)
-			const res = await accounts_following.handleRequest({ domain, db }, actor[mastodonIdSymbol], { limit: null })
+
+			const res = await accounts_following.onRequestGet({
+				request: new Request('https://' + domain),
+				env: { DATABASE: db },
+				params: { id: actor[mastodonIdSymbol] },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
 			await assertStatus(res, 200)
 
-			const data = await res.json<Array<any>>()
+			const data = await res.json<{ acct: unknown }[]>()
 			assert.equal(data.length, 2)
 
 			assert.equal(data[0].acct, 'a')

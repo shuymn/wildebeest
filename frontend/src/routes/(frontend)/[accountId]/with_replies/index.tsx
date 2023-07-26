@@ -25,15 +25,12 @@ export const statusesLoader = loader$<
 		mastodonId = await getMastodonIdByHandle(url.hostname, db, handle)
 		if (mastodonId) {
 			const response = await handleRequest({ domain: url.hostname, db: await getDatabase(platform) }, mastodonId, {
-				maxId: null,
-				sinceId: null,
-				minId: null,
-				limit: null,
-				onlyMedia: null,
-				excludeReplies: null,
-				excludeReblogs: null,
-				pinned: null,
-				tagged: null,
+				// default values
+				limit: 20,
+				only_media: false,
+				exclude_replies: false,
+				exclude_reblogs: false,
+				pinned: false,
 			})
 			statuses = await response.json<Array<MastodonStatus>>()
 		}
