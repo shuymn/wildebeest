@@ -26,7 +26,7 @@ const schema = z.object({
 	limit: myz
 		.numeric()
 		.refine((value) => value >= 1 && value <= 40 && (value | 0) === value)
-		.default(20),
+		.catch(20),
 	// filter out statuses without attachments
 	only_media: myz.logical().default(false),
 	// filter out statuses in reply to a different account
