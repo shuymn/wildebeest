@@ -3,10 +3,11 @@
 import { getVAPIDKeys } from 'wildebeest/backend/src/config'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { unprocessableEntity } from 'wildebeest/backend/src/errors'
+import { Application } from 'wildebeest/backend/src/mastodon'
 import { createClient } from 'wildebeest/backend/src/mastodon/client'
 import { VAPIDPublicKey } from 'wildebeest/backend/src/mastodon/subscription'
 import type { Env } from 'wildebeest/backend/src/types'
-import { readBody } from 'wildebeest/backend/src/utils'
+import { makeJsonResponse, MastodonApiResponse, readBody } from 'wildebeest/backend/src/utils'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 import { z } from 'zod'
@@ -70,23 +71,27 @@ export const onRequestPost: PagesFunction<Env, ''> = async ({ request, env }) =>
 	return unprocessableEntity(result.error.issues[0]?.message)
 }
 
-export async function handleRequest(db: Database, vapidKeys: JWK, params: Parameters) {
+export async function handleRequest(
+	db: Database,
+	vapidKeys: JWK,
+	params: Parameters
+): Promise<MastodonApiResponse<Application>> {
 	const client = await createClient(db, params.client_name, params.redirect_uris, params.scopes, params.website)
-
-	return new Response(
-		JSON.stringify({
+	return makeJsonResponse(
+		{
 			name: params.client_name,
 			website: params.website,
-			redirect_uri: params.redirect_uris,
-
+			vapid_key: VAPIDPublicKey(vapidKeys),
 			client_id: client.id,
 			client_secret: client.secret,
 
-			vapid_key: VAPIDPublicKey(vapidKeys),
-
+			// These fields do not exist in the Application type,
+			// but it appears in the Mastodon API documentation.
+			// So, it was followed as it is.
 			// FIXME: stub value
 			id: '20',
-		}),
+			redirect_uri: params.redirect_uris,
+		},
 		{ headers }
 	)
 }
