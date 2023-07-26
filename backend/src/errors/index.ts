@@ -1,6 +1,6 @@
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
-type ErrorResponse = {
+export type MastodonError = {
 	error: string
 	error_description?: string
 }
@@ -11,7 +11,7 @@ const headers = {
 } as const
 
 function generateErrorResponse(error: string, status: number, errorDescription?: string): Response {
-	const res: ErrorResponse = {
+	const res: MastodonError = {
 		error: `${error}. If the problem persists please contact your instance administrator.`,
 		...(errorDescription ? { error_description: errorDescription } : {}),
 	}
