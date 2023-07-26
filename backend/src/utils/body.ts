@@ -71,7 +71,12 @@ export async function readBody<T extends ZodRawShape | ZodTypeAny>(
 		}
 		const finalSchema = isZodType(schema) ? schema : z.object(schema)
 		if (contentType.startsWith('application/json')) {
-			return finalSchema.safeParseAsync(await request.json()) as Promise<SafeParsedData<T>>
+			const url = new URL(request.url)
+			const data = await request.json<Record<string, unknown>>()
+			return finalSchema.safeParseAsync({
+				...parseSearchParams(url.searchParams),
+				...data,
+			}) as Promise<SafeParsedData<T>>
 		}
 		const data = ['charset', 'multipart/form-data', 'boundary'].some((v) => contentType.includes(v))
 			? await localFormDataParse(request)
