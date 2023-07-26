@@ -57,6 +57,15 @@ function parseSearchParams(searchParams: URLSearchParams): ParsedSearchParams {
 	return values
 }
 
+export async function readParams<T extends ZodRawShape | ZodTypeAny>(
+	request: Request,
+	schema: T
+): Promise<SafeParsedData<T>> {
+	const finalSchema = isZodType(schema) ? schema : z.object(schema)
+	const url = new URL(request.url)
+	return finalSchema.safeParseAsync(parseSearchParams(url.searchParams)) as Promise<SafeParsedData<T>>
+}
+
 // Extract the request body as the type `T`. Use this function when the requset
 // can be url encoded, form data or JSON. However, not working for formData
 // containing binary data (like File).
