@@ -62,6 +62,8 @@ describe('Mastodon APIs', () => {
 			const body = {
 				status: 'my status <script>evil</script>',
 				visibility: 'public',
+				sensitive: false,
+				media_ids: [],
 			}
 			const request = new Request('https://example.com', {
 				method: 'POST',
