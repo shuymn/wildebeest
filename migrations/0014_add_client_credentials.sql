@@ -6,4 +6,4 @@ CREATE TABLE IF NOT EXISTS client_credentials (
   cdate DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
 
   FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
-)
+);
