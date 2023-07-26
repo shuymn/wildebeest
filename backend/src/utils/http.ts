@@ -1,4 +1,22 @@
+import { MastodonError } from 'wildebeest/backend/src/errors'
 import { output, SafeParseReturnType, z, ZodObject, ZodRawShape, ZodTypeAny } from 'zod'
+
+export type JsonResponse<T> = Response & {
+	_T: T
+}
+
+export type MastodonApiResponse<T> = JsonResponse<T> | JsonResponse<MastodonError>
+
+export function makeJsonResponse<T>(
+	data: T,
+	init: ResponseInit = {
+		headers: {
+			'content-type': 'application/json; charset=utf-8',
+		},
+	}
+): JsonResponse<T> {
+	return new Response(JSON.stringify(data), init) as JsonResponse<T>
+}
 
 // The following variable is taken from the zodix library (https://github.com/rileytomasek/zodix)
 // Copyright (c) 2022 Riley Tomasek
@@ -57,6 +75,15 @@ function parseSearchParams(searchParams: URLSearchParams): ParsedSearchParams {
 	return values
 }
 
+export async function readParams<T extends ZodRawShape | ZodTypeAny>(
+	request: Request,
+	schema: T
+): Promise<SafeParsedData<T>> {
+	const finalSchema = isZodType(schema) ? schema : z.object(schema)
+	const url = new URL(request.url)
+	return finalSchema.safeParseAsync(parseSearchParams(url.searchParams)) as Promise<SafeParsedData<T>>
+}
+
 // Extract the request body as the type `T`. Use this function when the requset
 // can be url encoded, form data or JSON. However, not working for formData
 // containing binary data (like File).
@@ -71,7 +98,12 @@ export async function readBody<T extends ZodRawShape | ZodTypeAny>(
 		}
 		const finalSchema = isZodType(schema) ? schema : z.object(schema)
 		if (contentType.startsWith('application/json')) {
-			return finalSchema.safeParseAsync(await request.json()) as Promise<SafeParsedData<T>>
+			const url = new URL(request.url)
+			const data = await request.json<Record<string, unknown>>()
+			return finalSchema.safeParseAsync({
+				...parseSearchParams(url.searchParams),
+				...data,
+			}) as Promise<SafeParsedData<T>>
 		}
 		const data = ['charset', 'multipart/form-data', 'boundary'].some((v) => contentType.includes(v))
 			? await localFormDataParse(request)

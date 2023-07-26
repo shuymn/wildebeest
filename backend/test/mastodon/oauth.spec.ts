@@ -1,7 +1,9 @@
 import { strict as assert } from 'node:assert/strict'
 
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import { MastodonError } from 'wildebeest/backend/src/errors'
 import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
+import { getClientByClientCredential } from 'wildebeest/backend/src/mastodon/client'
 import * as first_login from 'wildebeest/functions/first-login'
 import * as oauth_authorize from 'wildebeest/functions/oauth/authorize'
 import * as oauth_token from 'wildebeest/functions/oauth/token'
@@ -212,25 +214,12 @@ describe('Mastodon APIs', () => {
 
 			const req = new Request('https://example.com/oauth/token', {
 				method: 'POST',
-				body: new URLSearchParams({ code: 'some-code' }),
-				headers: {
-					'content-type': 'application/x-www-form-urlencoded',
-				},
-			})
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			const res = await oauth_token.onRequestPost({ request: req, env: { DATABASE: db } } as any)
-			await assertStatus(res, 403)
-		})
-
-		test('token returns auth infos', async () => {
-			const db = await makeDB()
-			const testScope = 'test abcd'
-			const client = await createTestClient(db, 'https://localhost', testScope)
-
-			const req = new Request('https://example.com/oauth/token', {
-				method: 'POST',
 				body: new URLSearchParams({
-					code: client.id + '.some-code',
+					grant_type: 'authorization_code',
+					code: 'some-code',
+					client_id: 'unknown',
+					client_secret: 'unknown',
+					redirect_uri: 'https://example.com',
 				}),
 				headers: {
 					'content-type': 'application/x-www-form-urlencoded',
@@ -238,13 +227,65 @@ describe('Mastodon APIs', () => {
 			})
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const res = await oauth_token.onRequestPost({ request: req, env: { DATABASE: db } } as any)
-			await assertStatus(res, 200)
-			assertCORS(res)
-			assertJSON(res)
+			await assertStatus(res, 401)
+			const body = await res.json<MastodonError>()
+			assert.ok(body.error.includes('invalid_client'))
+		})
 
-			const data = await res.json<{ access_token: unknown; scope: unknown }>()
-			assert.equal(data.access_token, client.id + '.some-code')
-			assert.equal(data.scope, testScope)
+		test('token returns auth infos', async () => {
+			const db = await makeDB()
+			const testScope = 'test abcd'
+			const client = await createTestClient(db, 'https://localhost', testScope)
+
+			{
+				const req = new Request('https://example.com/oauth/token', {
+					method: 'POST',
+					body: new URLSearchParams({
+						grant_type: 'authorization_code',
+						code: client.id + '.some-code',
+						client_id: client.id,
+						client_secret: client.secret,
+						redirect_uri: client.redirect_uris,
+						scope: testScope,
+					}),
+					headers: {
+						'content-type': 'application/x-www-form-urlencoded',
+					},
+				})
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				const res = await oauth_token.onRequestPost({ request: req, env: { DATABASE: db } } as any)
+				await assertStatus(res, 200)
+				assertCORS(res)
+				assertJSON(res)
+
+				const data = await res.json<{ access_token: unknown; scope: unknown }>()
+				assert.equal(data.access_token, client.id + '.some-code')
+				assert.equal(data.scope, testScope)
+			}
+			{
+				const req = new Request('https://example.com/oauth/token', {
+					method: 'POST',
+					body: new URLSearchParams({
+						grant_type: 'client_credentials',
+						client_id: client.id,
+						client_secret: client.secret,
+						redirect_uri: client.redirect_uris,
+						scope: testScope,
+					}),
+					headers: {
+						'content-type': 'application/x-www-form-urlencoded',
+					},
+				})
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				const res = await oauth_token.onRequestPost({ request: req, env: { DATABASE: db } } as any)
+				await assertStatus(res, 200)
+				assertCORS(res)
+				assertJSON(res)
+
+				const data = await res.json<{ access_token: string; scope: unknown }>()
+				assert.deepEqual(client, await getClientByClientCredential(db, data.access_token))
+				assert.equal(data.scope, testScope)
+			}
 		})
 
 		test('token handles empty code', async () => {
@@ -294,7 +335,12 @@ describe('Mastodon APIs', () => {
 				headers: {
 					'content-type': 'application/json',
 				},
-				body: '',
+				body: JSON.stringify({
+					grant_type: 'authorization_code',
+					client_id: client.id,
+					client_secret: client.secret,
+					redirect_uri: client.redirect_uris,
+				}),
 			})
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const res = await oauth_token.onRequestPost({ request: req, env: { DATABASE: db } } as any)

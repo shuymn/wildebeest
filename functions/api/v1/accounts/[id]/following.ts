@@ -9,22 +9,20 @@ import { loadExternalMastodonAccount, loadLocalMastodonAccount } from 'wildebees
 import { getFollowingId } from 'wildebeest/backend/src/mastodon/follow'
 import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import { MastodonAccount } from 'wildebeest/backend/src/types/account'
-import { numberParam } from 'wildebeest/backend/src/utils'
-import { cors } from 'wildebeest/backend/src/utils/cors'
+import { cors, makeJsonResponse, MastodonApiResponse, readParams } from 'wildebeest/backend/src/utils'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
-import { Override } from 'wildebeest/backend/src/utils/type'
+import { z } from 'zod'
+
+const schema = z.object({
+	limit: z.number().int().min(1).max(80).default(40),
+})
 
 type Dependencies = {
 	domain: string
 	db: Database
 }
 
-type Parameters = {
-	limit: number
-}
-
-const DEFAULT_LIMIT = 40
-const MAX_LIMIT = 80
+type Parameters = z.infer<typeof schema>
 
 const headers = {
 	...cors(),
@@ -36,27 +34,32 @@ export const onRequestGet: PagesFunction<Env, 'id', ContextData> = async ({ para
 	if (typeof id !== 'string') {
 		return resourceNotFound('id', String(id))
 	}
+	const result = await readParams(request, schema)
+	if (!result.success) {
+		throw new Error('failed to read params')
+	}
 	const url = new URL(request.url)
-	return handleRequest({ domain: url.hostname, db: await getDatabase(env) }, id, {
-		limit: url.searchParams.get('limit'),
-	})
+	return handleRequest({ domain: url.hostname, db: await getDatabase(env) }, id, result.data)
 }
 
 export async function handleRequest(
 	{ domain, db }: Dependencies,
 	id: string,
-	params: Override<Required<Parameters>, string | null>
-): Promise<Response> {
+	params: Parameters
+): Promise<MastodonApiResponse<MastodonAccount[]>> {
 	const actor = await getActorByMastodonId(db, id)
 	if (!actor) {
 		return resourceNotFound('id', id)
 	}
-	return await get(domain, db, actor, {
-		limit: numberParam(params.limit, DEFAULT_LIMIT, { maxValue: MAX_LIMIT }),
-	})
+	return await get(domain, db, actor, params)
 }
 
-async function get(domain: string, db: Database, actor: Actor, params: Parameters): Promise<Response> {
+async function get(
+	domain: string,
+	db: Database,
+	actor: Actor,
+	params: Parameters
+): Promise<MastodonApiResponse<MastodonAccount[]>> {
 	if (isLocalAccount(domain, actorToHandle(actor))) {
 		const followingIds = await getFollowingId(db, actor, params.limit)
 		const promises: Promise<MastodonAccount>[] = []
@@ -69,13 +72,15 @@ async function get(domain: string, db: Database, actor: Actor, params: Parameter
 				} else {
 					promises.push(loadExternalMastodonAccount(db, followee, handle))
 				}
-			} catch (err: any) {
-				console.warn(`failed to retrieve following (${id}): ${err.message}`)
+			} catch (err) {
+				if (err instanceof Error) {
+					console.warn(`failed to retrieve following (${id}): ${err.message}`)
+				}
+				throw err
 			}
 		}
 
-		const accounts = await Promise.all(promises)
-		return new Response(JSON.stringify(accounts), { headers })
+		return makeJsonResponse(await Promise.all(promises), { headers })
 	}
 
 	const following = await loadActors(db, await getFollowing(actor, params.limit))
@@ -87,6 +92,5 @@ async function get(domain: string, db: Database, actor: Actor, params: Parameter
 		return loadExternalMastodonAccount(db, followee, handle)
 	})
 
-	const accounts = await Promise.all(promises)
-	return new Response(JSON.stringify(accounts), { headers })
+	return makeJsonResponse(await Promise.all(promises), { headers })
 }

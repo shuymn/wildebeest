@@ -8,5 +8,3 @@ export type Intersect<T, U> = Exclude<keyof T, keyof U> extends never
 		? never
 		: { [P in Exclude<keyof U, keyof T>]: U[P] }
 	: { [P in Exclude<keyof T, keyof U>]: T[P] }
-
-export type Override<T extends Record<string, unknown>, U> = { [P in keyof T]: U }

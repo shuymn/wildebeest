@@ -44,7 +44,10 @@ export async function buildRedirect(
 	const clientId = url.searchParams.get('client_id') || ''
 	const client = await getClientById(db, clientId)
 	if (client === null) {
-		return errors.clientUnknown()
+		return errors.clientUnknown(
+			'invalid_grant',
+			'The provided authorization grant is invalid, expired, revoked, does not match the redirection URI used in the authorization request, or was issued to another client.'
+		)
 	}
 
 	const redirect_uri = url.searchParams.get('redirect_uri')

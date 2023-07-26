@@ -21,7 +21,6 @@ export async function createClient(
 
 	const secretBytes = new Uint8Array(64)
 	crypto.getRandomValues(secretBytes)
-
 	const secret = arrayBufferToBase64(secretBytes.buffer)
 
 	const query = `
@@ -59,6 +58,57 @@ export async function getClientById(db: Database, id: string): Promise<Client | 
 		name: row.name,
 		redirect_uris: row.redirect_uris,
 		website: row.website,
+		scopes: row.scopes,
+	}
+}
+
+export async function createClientCredential(
+	db: Database,
+	clientId: string,
+	scopes: string
+): Promise<[secret: string, epoch: number]> {
+	const id = crypto.randomUUID()
+	const secretBytes = new Uint8Array(64)
+	crypto.getRandomValues(secretBytes)
+	const secret = arrayBufferToBase64(secretBytes.buffer)
+
+	const { success, error, results } = await db
+		.prepare(
+			`
+INSERT INTO client_credentials (id, client_id, access_token, scopes)
+VALUES (?, ?, ?, ?)
+RETURNING cdate
+  `
+		)
+		.bind(id, clientId, secret, scopes)
+		.all<{ cdate: string }>()
+	if (!success || !results) {
+		throw new Error('SQL error: ' + error)
+	}
+
+	return [secret, new Date(results[0].cdate).getTime()]
+}
+
+export async function getClientByClientCredential(db: Database, secret: string): Promise<Client | null> {
+	const { results } = await db
+		.prepare(
+			`
+SELECT clients.* FROM clients
+INNER JOIN client_credentials ON clients.id = client_credentials.client_id
+WHERE client_credentials.access_token=?1`
+		)
+		.bind(secret)
+		.all<{ id: string; secret: string; name: string; redirect_uris: string; website: string | null; scopes: string }>()
+	if (!results || results.length === 0) {
+		return null
+	}
+	const [row] = results
+	return {
+		id: row.id,
+		secret: row.secret,
+		name: row.name,
+		redirect_uris: row.redirect_uris,
+		website: row.website ?? undefined,
 		scopes: row.scopes,
 	}
 }
