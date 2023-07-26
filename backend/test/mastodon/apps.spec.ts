@@ -1,9 +1,9 @@
 import { strict as assert } from 'node:assert/strict'
 
+import { createClientCredential } from 'wildebeest/backend/src/mastodon/client'
 import { VAPIDPublicKey } from 'wildebeest/backend/src/mastodon/subscription'
 import * as apps from 'wildebeest/functions/api/v1/apps'
 import * as verify_app from 'wildebeest/functions/api/v1/apps/verify_credentials'
-import { CredentialApp } from 'wildebeest/functions/api/v1/apps/verify_credentials'
 
 import { TEST_JWT } from '../test-data'
 import { assertCORS, assertJSON, assertStatus, createTestClient, generateVAPIDKeys, makeDB } from '../utils'
@@ -131,20 +131,41 @@ describe('Mastodon APIs', () => {
 			const client = await createTestClient(db, 'https://localhost', testScope)
 			const vapidKeys = await generateVAPIDKeys()
 
-			const headers = { authorization: 'Bearer ' + client.id + '.' + TEST_JWT }
+			{
+				const headers = { authorization: 'Bearer ' + client.id + '.' + TEST_JWT }
+				const req = new Request('https://example.com/api/v1/verify_credentials', { headers })
+				const res = await verify_app.onRequestGet({
+					request: req,
+					env: { DATABASE: db, VAPID_JWK: JSON.stringify(vapidKeys) },
+				} as any)
+				await assertStatus(res, 200)
+				assertCORS(res)
+				assertJSON(res)
 
-			const req = new Request('https://example.com/api/v1/verify_credentials', { headers })
+				const jsonResponse = await res.json<{ name: unknown; website: unknown; vapid_key: unknown }>()
+				const publicVAPIDKey = VAPIDPublicKey(vapidKeys)
+				assert.equal(jsonResponse.name, 'test client')
+				assert.equal(jsonResponse.website, 'https://cloudflare.com')
+				assert.equal(jsonResponse.vapid_key, publicVAPIDKey)
+			}
+			{
+				const [secret] = await createClientCredential(db, client.id, client.scopes)
+				const headers = { authorization: 'Bearer ' + secret }
+				const req = new Request('https://example.com/api/v1/verify_credentials', { headers })
+				const res = await verify_app.onRequestGet({
+					request: req,
+					env: { DATABASE: db, VAPID_JWK: JSON.stringify(vapidKeys) },
+				} as any)
+				await assertStatus(res, 200)
+				assertCORS(res)
+				assertJSON(res)
 
-			const res = await verify_app.handleRequest(db, req, vapidKeys)
-			await assertStatus(res, 200)
-			assertCORS(res)
-			assertJSON(res)
-
-			const jsonResponse: CredentialApp = await res.json()
-			const publicVAPIDKey = VAPIDPublicKey(vapidKeys)
-			assert.equal(jsonResponse.name, 'test client')
-			assert.equal(jsonResponse.website, 'https://cloudflare.com')
-			assert.equal(jsonResponse.vapid_key, publicVAPIDKey)
+				const jsonResponse = await res.json<{ name: unknown; website: unknown; vapid_key: unknown }>()
+				const publicVAPIDKey = VAPIDPublicKey(vapidKeys)
+				assert.equal(jsonResponse.name, 'test client')
+				assert.equal(jsonResponse.website, 'https://cloudflare.com')
+				assert.equal(jsonResponse.vapid_key, publicVAPIDKey)
+			}
 		})
 
 		test('GET /verify_credentials returns 403 for unauthorized clients', async () => {
@@ -155,8 +176,11 @@ describe('Mastodon APIs', () => {
 
 			const req = new Request('https://example.com/api/v1/verify_credentials', { headers })
 
-			const res = await verify_app.handleRequest(db, req, vapidKeys)
-			await assertStatus(res, 403)
+			const res = await verify_app.onRequestGet({
+				request: req,
+				env: { DATABASE: db, VAPID_JWK: JSON.stringify(vapidKeys) },
+			} as any)
+			await assertStatus(res, 401)
 		})
 	})
 })
