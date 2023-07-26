@@ -30,8 +30,8 @@ export function userConflict() {
 	return makeErrorResponse(`User already exists or conflicts`, 403)
 }
 
-export function clientUnknown() {
-	return makeErrorResponse(`The client is unknown or invalid`, 403)
+export function clientUnknown(error: string, descr?: string) {
+	return makeErrorResponse(error, 400, descr)
 }
 
 export function methodNotAllowed() {

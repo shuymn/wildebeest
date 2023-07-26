@@ -32,7 +32,7 @@ export async function handleGetRequest(
 ) {
 	const client = await getClientById(db, clientId)
 	if (client === null) {
-		return errors.clientUnknown()
+		return errors.notAuthorized('the access token is invalid')
 	}
 
 	const subscription = await getSubscription(db, connectedActor, client)
@@ -63,7 +63,7 @@ export async function handlePostRequest(
 ) {
 	const client = await getClientById(db, clientId)
 	if (client === null) {
-		return errors.clientUnknown()
+		return errors.notAuthorized('the access token is invalid')
 	}
 
 	const data = await request.json<CreateRequest>()
