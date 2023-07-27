@@ -1,3 +1,4 @@
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 
@@ -58,12 +59,15 @@ function urlToHandle({ pathname, host }: URL): RemoteHandle {
 	return { localPart, domain: host } as RemoteHandle
 }
 
-export function actorToAcct(actor: Actor): string {
+export function actorToAcct(actor: Actor, domain?: string): string {
 	const actorId = getApId(actor)
 	if (actor.preferredUsername !== undefined) {
+		if (domain && actorId.host === domain) {
+			return actor.preferredUsername
+		}
 		return `${actor.preferredUsername}@${actorId.host}`
 	}
-	return handleToAcct(urlToHandle(actorId))
+	return handleToAcct(urlToHandle(actorId), domain)
 }
 
 export function actorToHandle(actor: Actor): RemoteHandle {
@@ -74,7 +78,10 @@ export function actorToHandle(actor: Actor): RemoteHandle {
 	return urlToHandle(actorId)
 }
 
-export function handleToAcct(handle: RemoteHandle): string {
+export function handleToAcct(handle: Handle, domain?: string): string {
+	if (isLocalHandle(handle) || (domain && isLocalAccount(domain, handle))) {
+		return handle.localPart
+	}
 	return `${handle.localPart}@${handle.domain}`
 }
 

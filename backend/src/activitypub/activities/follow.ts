@@ -44,7 +44,7 @@ export async function handleFollowActivity(
 	const followerId = getApId(activity.actor)
 	const follower = await getAndCache(followerId, db)
 
-	await addFollowing(db, follower, followee)
+	await addFollowing(domain, db, follower, followee)
 
 	// Automatically send the Accept reply
 	await acceptFollowing(db, follower, followee)

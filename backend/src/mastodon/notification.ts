@@ -262,7 +262,7 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 				id: result.mastodon_id,
 				content: properties.content,
 				uri: result.id,
-				url: new URL(`/@${actor.preferredUsername}/${result.mastodon_id}`, 'https://' + domain),
+				url: new URL(`/@${handleToAcct(handle, domain)}/${result.mastodon_id}`, 'https://' + domain),
 				created_at: new Date(result.cdate).toISOString(),
 
 				account: await loadMastodonAccount(db, domain, actor, handle),

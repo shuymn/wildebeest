@@ -1,6 +1,7 @@
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { type Database } from 'wildebeest/backend/src/database'
+import { MastodonId } from 'wildebeest/backend/src/types'
 import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
 
 import { getResultsField } from './utils'
@@ -9,7 +10,12 @@ const STATE_PENDING = 'pending'
 const STATE_ACCEPTED = 'accepted'
 
 // During a migration we move the followers from the old Actor to the new
-export async function moveFollowers(db: Database, actor: Actor, followers: Array<string>): Promise<void> {
+export async function moveFollowers(
+	domain: string,
+	db: Database,
+	actor: Actor,
+	followers: Array<string>
+): Promise<void> {
 	const batch = []
 	const stmt = db.prepare(
 		db.qb.insertOrIgnore(`
@@ -19,20 +25,25 @@ export async function moveFollowers(db: Database, actor: Actor, followers: Array
 	)
 
 	const actorId = actor.id.toString()
-	const actorAcc = actorToAcct(actor)
+	const actorAcct = actorToAcct(actor, domain)
 
 	for (let i = 0; i < followers.length; i++) {
 		const follower = new URL(followers[i])
 		const followActor = await actors.getAndCache(follower, db)
 
 		const id = crypto.randomUUID()
-		batch.push(stmt.bind(id, followActor.id.toString(), actorId, actorAcc))
+		batch.push(stmt.bind(id, followActor.id.toString(), actorId, actorAcct))
 	}
 
 	await db.batch(batch)
 }
 
-export async function moveFollowing(db: Database, actor: Actor, followingActors: Array<string>): Promise<void> {
+export async function moveFollowing(
+	domain: string,
+	db: Database,
+	actor: Actor,
+	followingActors: Array<string>
+): Promise<void> {
 	const batch = []
 	const stmt = db.prepare(
 		db.qb.insertOrIgnore(`
@@ -46,7 +57,7 @@ export async function moveFollowing(db: Database, actor: Actor, followingActors:
 	for (let i = 0; i < followingActors.length; i++) {
 		const following = new URL(followingActors[i])
 		const followingActor = await actors.getAndCache(following, db)
-		const actorAcc = actorToAcct(followingActor)
+		const actorAcc = actorToAcct(followingActor, domain)
 
 		const id = crypto.randomUUID()
 		batch.push(stmt.bind(id, actorId, followingActor.id.toString(), actorAcc))
@@ -56,7 +67,7 @@ export async function moveFollowing(db: Database, actor: Actor, followingActors:
 }
 
 // Add a pending following
-export async function addFollowing(db: Database, follower: Actor, followee: Actor): Promise<string> {
+export async function addFollowing(domain: string, db: Database, follower: Actor, followee: Actor): Promise<string> {
 	const id = crypto.randomUUID()
 
 	const query = db.qb.insertOrIgnore(`
@@ -66,7 +77,7 @@ export async function addFollowing(db: Database, follower: Actor, followee: Acto
 
 	const out = await db
 		.prepare(query)
-		.bind(id, follower.id.toString(), followee.id.toString(), STATE_PENDING, actorToAcct(followee))
+		.bind(id, follower.id.toString(), followee.id.toString(), STATE_PENDING, actorToAcct(followee, domain))
 		.run()
 	if (!out.success) {
 		throw new Error('SQL error: ' + out.error)

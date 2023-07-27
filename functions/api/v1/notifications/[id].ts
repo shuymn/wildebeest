@@ -63,7 +63,7 @@ export async function handleRequest(
 			id: row.mastodon_id,
 			content: properties.content,
 			uri: row.id,
-			url: new URL(`/@${fromActor.preferredUsername}/${row.mastodon_id}`, 'https://' + domain),
+			url: new URL(`/@${handleToAcct(fromHandle, domain)}/${row.mastodon_id}`, 'https://' + domain),
 			created_at: new Date(row.cdate).toISOString(),
 
 			emojis: [],

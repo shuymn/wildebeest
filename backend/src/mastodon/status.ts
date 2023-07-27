@@ -85,7 +85,7 @@ export async function toMastodonStatusFromObject(
 		content: obj.content || '',
 		id: obj[mastodonIdSymbol] || '',
 		uri: getApId(obj.id),
-		url: new URL(`/@${actor.preferredUsername}/${obj[mastodonIdSymbol]}`, 'https://' + domain),
+		url: new URL(`/@${handleToAcct(handle, domain)}/${obj[mastodonIdSymbol]}`, 'https://' + domain),
 		created_at: obj.published || '',
 		account: await loadMastodonAccount(db, domain, actor, handle),
 
@@ -131,10 +131,6 @@ export async function toMastodonStatusesFromRowsWithActor(
 		| 'actor_mastodon_id'
 	>[]
 ): Promise<MastodonStatus[]> {
-	const account = isLocalAccount(domain, actorToHandle(actor))
-		? await loadLocalMastodonAccount(db, actor)
-		: await loadExternalMastodonAccount(db, actor)
-
 	const statuses: MastodonStatus[] = []
 	for (const row of rows) {
 		row.mastodon_id = await ensureObjectMastodonId(db, row.mastodon_id, row.cdate)
@@ -164,16 +160,17 @@ export async function toMastodonStatusesFromRowsWithActor(
 			}
 		}
 
+		const handle = actorToHandle(actor)
 		const status: MastodonStatus = {
 			id: row.mastodon_id,
-			url: new URL(`/@${actor.preferredUsername}/${row.mastodon_id}`, 'https://' + domain),
+			url: new URL(`/@${handleToAcct(handle, domain)}/${row.mastodon_id}`, 'https://' + domain),
 			uri: new URL(row.id),
 			created_at: new Date(row.cdate).toISOString(),
 			emojis: [],
 			media_attachments: mediaAttachments,
 			tags: [],
 			mentions: [],
-			account,
+			account: await loadMastodonAccount(db, domain, actor, handle),
 			spoiler_text: properties.spoiler_text ?? '',
 
 			// TODO: stub values
@@ -196,9 +193,7 @@ export async function toMastodonStatusesFromRowsWithActor(
 
 			status.reblog = {
 				...status,
-				account: isLocalAccount(domain, actorToHandle(author))
-					? await loadLocalMastodonAccount(db, author)
-					: await loadExternalMastodonAccount(db, author),
+				account: await loadMastodonAccount(db, domain, author, actorToHandle(author)),
 			}
 		}
 		statuses.push(status)
@@ -237,9 +232,6 @@ export async function toMastodonStatusFromRow(
 		mastodon_id: row.actor_mastodon_id,
 	})
 
-	// TODO: Distinguish between LocalAccount and RemoteAccount
-	const account = await loadExternalMastodonAccount(db, author)
-
 	if (row.favourites_count === undefined || row.reblogs_count === undefined || row.replies_count === undefined) {
 		throw new Error('logic error; missing fields.')
 	}
@@ -253,16 +245,17 @@ export async function toMastodonStatusFromRow(
 		}
 	}
 
+	const handle = actorToHandle(author)
 	const status: MastodonStatus = {
 		id: row.mastodon_id,
-		url: new URL(`/@${author.preferredUsername}/${row.mastodon_id}`, 'https://' + domain),
+		url: new URL(`/@${handleToAcct(handle, domain)}/${row.mastodon_id}`, 'https://' + domain),
 		uri: new URL(row.id),
 		created_at: new Date(row.cdate).toISOString(),
 		emojis: [],
 		media_attachments: mediaAttachments,
 		tags: [],
 		mentions: [],
-		account,
+		account: await loadMastodonAccount(db, domain, author, handle),
 		spoiler_text: properties.spoiler_text ?? '',
 
 		// TODO: stub values
@@ -287,12 +280,11 @@ export async function toMastodonStatusFromRow(
 
 		const actorId = new URL(properties.attributedTo)
 		const author = await actors.getAndCache(actorId, db)
-		const account = await loadExternalMastodonAccount(db, author)
 
 		// Restore reblogged status
 		status.reblog = {
 			...status,
-			account,
+			account: await loadMastodonAccount(db, domain, author, actorToHandle(author)),
 		}
 	}
 
