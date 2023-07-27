@@ -6,6 +6,7 @@ import type { Env } from 'wildebeest/backend/src/types'
 import type { InstanceConfig } from 'wildebeest/backend/src/types/configs'
 import { getAdminByEmail } from 'wildebeest/backend/src/utils/auth/getAdmins'
 import { cors } from 'wildebeest/backend/src/utils/cors'
+import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 import { getVersion } from 'wildebeest/config/versions'
 
 export const onRequest: PagesFunction<Env, any> = async ({ env, request }) => {
@@ -72,7 +73,7 @@ export async function handleRequest(domain: string, db: Database, env: Env) {
 
 	const actor = await getAdminByEmail(db, env.ADMIN_EMAIL)
 	if (actor !== null) {
-		res.contact_account = await loadLocalMastodonAccount(db, actor)
+		res.contact_account = await loadLocalMastodonAccount(db, actor, { ...actorToHandle(actor), domain: null })
 	}
 
 	return new Response(JSON.stringify(res), { headers })
