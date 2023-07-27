@@ -1,5 +1,5 @@
 import * as access from 'wildebeest/backend/src/access'
-import { actorFromRow, ActorRow, PERSON, Person, setMastodonId } from 'wildebeest/backend/src/activitypub/actors'
+import { actorFromRow, ActorRow, PERSON, Person, setActorMastodonId } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import type { ContextData, Env } from 'wildebeest/backend/src/types'
@@ -36,7 +36,7 @@ async function loadContextData(
 
 	const row: ActorRow<Person> = {
 		...results[0],
-		mastodon_id: results[0].mastodon_id || (await setMastodonId(db, results[0].id, results[0].cdate)),
+		mastodon_id: results[0].mastodon_id || (await setActorMastodonId(db, results[0].id, results[0].cdate)),
 	}
 
 	if (!row.id) {

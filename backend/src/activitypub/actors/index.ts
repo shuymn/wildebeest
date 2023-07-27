@@ -166,7 +166,7 @@ export async function getPersonByEmail(db: Database, email: string): Promise<Per
 	}
 	const row: ActorRow<Person> = {
 		...results[0],
-		mastodon_id: results[0].mastodon_id ?? (await setMastodonId(db, results[0].id, results[0].cdate)),
+		mastodon_id: results[0].mastodon_id ?? (await setActorMastodonId(db, results[0].id, results[0].cdate)),
 	}
 	return actorFromRow(row)
 }
@@ -309,7 +309,7 @@ export async function setActorAlias(db: Database, actorId: URL, alias: URL) {
 
 // TODO: Keep ActivityPub-specific and non-ActivityPub-specific items separate
 // At least this is not necessary to meet the ActivityPub specification.
-export async function setMastodonId(db: Database, actorId: string | URL, cdate: string): Promise<MastodonId> {
+export async function setActorMastodonId(db: Database, actorId: string | URL, cdate: string): Promise<MastodonId> {
 	const mastodonId = await generateMastodonId(db, 'actors', new Date(cdate))
 	const { success, error } = await db
 		.prepare(`UPDATE actors SET mastodon_id = ? WHERE id = ?`)
@@ -355,7 +355,7 @@ export async function getActorById(db: Database, id: Actor['id']): Promise<Actor
 	}
 	return actorFromRow({
 		...results[0],
-		mastodon_id: results[0].mastodon_id ?? (await setMastodonId(db, results[0].id, results[0].cdate)),
+		mastodon_id: results[0].mastodon_id ?? (await setActorMastodonId(db, results[0].id, results[0].cdate)),
 	})
 }
 
@@ -378,7 +378,7 @@ export async function getActorByRemoteHandle(db: Database, handle: RemoteHandle)
 	}
 	return actorFromRow({
 		...results[0],
-		mastodon_id: results[0].mastodon_id ?? (await setMastodonId(db, results[0].id, results[0].cdate)),
+		mastodon_id: results[0].mastodon_id ?? (await setActorMastodonId(db, results[0].id, results[0].cdate)),
 	})
 }
 

@@ -5,7 +5,7 @@ import {
 	getActorById,
 	getActorByMastodonId,
 	getActorByRemoteHandle,
-	setMastodonId,
+	setActorMastodonId,
 } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database } from 'wildebeest/backend/src/database'
 import { loadExternalMastodonAccount, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
@@ -73,7 +73,7 @@ export async function getMastodonIdByHandle(domain: string, db: Database, handle
 			return mastodonId
 		}
 		const { cdate } = await db.prepare('SELECT cdate FROM actors WHERE id = ?1').bind(id).first<{ cdate: string }>()
-		return await setMastodonId(db, id, cdate)
+		return await setActorMastodonId(db, id, cdate)
 	}
 
 	const { results } = await db
@@ -88,5 +88,5 @@ export async function getMastodonIdByHandle(domain: string, db: Database, handle
 		return mastodonId
 	}
 	const { cdate } = await db.prepare('SELECT cdate FROM actors WHERE id = ?1').bind(id).first<{ cdate: string }>()
-	return await setMastodonId(db, id, cdate)
+	return await setActorMastodonId(db, id, cdate)
 }
