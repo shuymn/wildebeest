@@ -21,7 +21,7 @@ export const accountPageLoader = loader$<
 	let account: MastodonAccount | null = null
 	try {
 		const url = new URL(request.url)
-		const domain = url.hostname
+		const domain = platform.DOMAIN
 		const handle = url.pathname.split('/')[1]
 
 		try {
