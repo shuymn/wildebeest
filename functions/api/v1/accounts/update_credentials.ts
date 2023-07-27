@@ -13,6 +13,7 @@ import * as images from 'wildebeest/backend/src/media/image'
 import type { ContextData, DeliverMessageBody, Env, Queue } from 'wildebeest/backend/src/types'
 import type { CredentialAccount } from 'wildebeest/backend/src/types/account'
 import { cors } from 'wildebeest/backend/src/utils/cors'
+import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 
 const headers = {
 	...cors(),
@@ -92,7 +93,7 @@ export async function handleRequest(
 		if (actor === null) {
 			return errors.notAuthorized('user not found')
 		}
-		const user = await loadLocalMastodonAccount(db, actor)
+		const user = await loadLocalMastodonAccount(db, actor, { ...actorToHandle(actor), domain: null })
 		const preference = await getPreference(db, actor)
 
 		const res: CredentialAccount = {

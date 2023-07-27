@@ -81,11 +81,11 @@ describe('utils', () => {
 		const db = await makeDB()
 
 		let actor = await createPerson(domain, db, userKEK, 'alice@cloudflare.com')
-		let res = actorToAcct(actor)
-		assert.equal(res, 'alice@example.com')
+		let res = actorToAcct(actor, domain)
+		assert.equal(res, 'alice')
 
 		actor = await createPerson(domain, db, userKEK, 'alice@cloudflare.com', { preferredUsername: 'bob' })
-		res = actorToAcct(actor)
+		res = actorToAcct(actor, 'cloudflare.com')
 		assert.equal(res, 'bob@example.com')
 	})
 

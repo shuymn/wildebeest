@@ -164,7 +164,7 @@ describe('ActivityPub', () => {
 				const db = await makeDB()
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-				await addFollowing(db, actor, actor2)
+				await addFollowing(domain, db, actor, actor2)
 
 				const activity: AcceptActivity = {
 					'@context': 'https://www.w3.org/ns/activitystreams',

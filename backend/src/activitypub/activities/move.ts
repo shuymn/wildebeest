@@ -38,7 +38,7 @@ export async function handleMoveActivity(domain: string, activity: MoveActivity,
 		// TODO: eventually move to queue and move workers
 		while (collection.items.length > 0) {
 			const batch = collection.items.splice(0, 20)
-			await moveFollowers(db, localActor, batch)
+			await moveFollowers(domain, db, localActor, batch)
 			console.log(`moved ${batch.length} followers`)
 		}
 	}
@@ -52,7 +52,7 @@ export async function handleMoveActivity(domain: string, activity: MoveActivity,
 		// TODO: eventually move to queue and move workers
 		while (collection.items.length > 0) {
 			const batch = collection.items.splice(0, 20)
-			await moveFollowing(db, localActor, batch)
+			await moveFollowing(domain, db, localActor, batch)
 			console.log(`moved ${batch.length} following`)
 		}
 	}

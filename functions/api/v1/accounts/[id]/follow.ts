@@ -83,7 +83,7 @@ export async function handleRequest(
 		const activity = createFollowActivity(domain, connectedActor, followee)
 		const signingKey = await getSigningKey(userKEK, db, connectedActor)
 		await deliverToActor(signingKey, connectedActor, followee, activity, domain)
-		await addFollowing(db, connectedActor, followee)
+		await addFollowing(domain, db, connectedActor, followee)
 	}
 
 	const res: Relationship = {

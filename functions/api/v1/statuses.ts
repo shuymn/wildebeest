@@ -144,7 +144,7 @@ export async function handleRequest(
 
 	const mentions = await getMentions(params.status, domain, db)
 	if (mentions.length > 0) {
-		extraProperties.tag = mentions.map(newMention)
+		extraProperties.tag = mentions.map((actor) => newMention(actor, domain))
 	}
 
 	const content = enrichStatus(params.status, mentions)

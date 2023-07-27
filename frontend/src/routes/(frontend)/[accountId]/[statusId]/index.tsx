@@ -13,8 +13,8 @@ import { Person } from 'wildebeest/backend/src/activitypub/actors'
 
 export const statusLoader = loader$<
 	Promise<{ status: MastodonStatus; statusTextContent: string; context: StatusContext }>
->(async ({ request, html, platform, params }) => {
-	const domain = new URL(request.url).hostname
+>(async ({ html, platform, params }) => {
+	const domain = platform.DOMAIN
 	let statusText = ''
 	try {
 		const statusResponse = await statusAPI.handleRequestGet(

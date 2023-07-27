@@ -6,13 +6,17 @@ import { getPreference, loadLocalMastodonAccount } from 'wildebeest/backend/src/
 import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import type { CredentialAccount } from 'wildebeest/backend/src/types/account'
 import { cors } from 'wildebeest/backend/src/utils/cors'
+import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 
 export const onRequest: PagesFunction<Env, any, ContextData> = async ({ data, env }) => {
 	if (!data.connectedActor) {
 		return errors.notAuthorized('no connected user')
 	}
 	const db = await getDatabase(env)
-	const user = await loadLocalMastodonAccount(db, data.connectedActor)
+	const user = await loadLocalMastodonAccount(db, data.connectedActor, {
+		...actorToHandle(data.connectedActor),
+		domain: null,
+	})
 	const preference = await getPreference(db, data.connectedActor)
 
 	const res: CredentialAccount = {

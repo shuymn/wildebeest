@@ -4,9 +4,10 @@ import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
 import { ensureObjectMastodonId } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import { loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import type { Notification, NotificationsQueryResult } from 'wildebeest/backend/src/types/notification'
+import { actorToHandle, handleToAcct } from 'wildebeest/backend/src/utils/handle'
 
 const headers = {
 	'content-type': 'application/json; charset=utf-8',
@@ -45,7 +46,8 @@ export async function handleRequest(
 		throw new Error('unknown from actor')
 	}
 
-	const fromAccount = await loadExternalMastodonAccount(db, fromActor)
+	const fromHandle = actorToHandle(fromActor)
+	const fromAccount = await loadMastodonAccount(db, domain, fromActor, fromHandle)
 
 	const out: Notification = {
 		id: row.notif_id.toString(),
@@ -61,7 +63,7 @@ export async function handleRequest(
 			id: row.mastodon_id,
 			content: properties.content,
 			uri: row.id,
-			url: new URL(`/@${fromActor.preferredUsername}/${row.mastodon_id}`, 'https://' + domain),
+			url: new URL(`/@${handleToAcct(fromHandle, domain)}/${row.mastodon_id}`, 'https://' + domain),
 			created_at: new Date(row.cdate).toISOString(),
 
 			emojis: [],

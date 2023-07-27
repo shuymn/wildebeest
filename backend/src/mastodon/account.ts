@@ -1,17 +1,11 @@
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { countFollowers, countFollowing } from 'wildebeest/backend/src/activitypub/actors/follow'
 import { countStatuses } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database } from 'wildebeest/backend/src/database'
 import type { MastodonAccount, Preference } from 'wildebeest/backend/src/types/account'
-import {
-	actorToHandle,
-	Handle,
-	handleToAcct,
-	isLocalHandle,
-	LocalHandle,
-	RemoteHandle,
-} from 'wildebeest/backend/src/utils/handle'
+import { Handle, handleToAcct, isLocalHandle, LocalHandle, RemoteHandle } from 'wildebeest/backend/src/utils/handle'
 import { unwrapPrivateKey } from 'wildebeest/backend/src/utils/key-ops'
 import { PartialProps } from 'wildebeest/backend/src/utils/type'
 import { defaultImages } from 'wildebeest/config/accounts'
@@ -52,16 +46,26 @@ function toMastodonAccount(
 	}
 }
 
+export async function loadMastodonAccount(
+	db: Database,
+	domain: string,
+	actor: Actor,
+	handle: Handle,
+	loadStat = false
+): Promise<MastodonAccount> {
+	if (isLocalAccount(domain, handle)) {
+		return await loadLocalMastodonAccount(db, actor, handle)
+	}
+	return await loadExternalMastodonAccount(db, actor, handle, loadStat)
+}
+
 // Load an external user, using ActivityPub queries, and return it as a MastodonAccount
 export async function loadExternalMastodonAccount(
 	db: Database,
 	actor: Actor,
-	handle?: RemoteHandle,
+	handle: RemoteHandle,
 	loadStat = false
 ): Promise<MastodonAccount> {
-	if (handle === undefined) {
-		handle = actorToHandle(actor)
-	}
 	const { results } = await db
 		.prepare(
 			`
@@ -104,15 +108,9 @@ LIMIT 1
 export async function loadLocalMastodonAccount(
 	db: Database,
 	actor: Actor,
-	handle?: LocalHandle
+	handle: LocalHandle
 ): Promise<MastodonAccount> {
-	if (handle === undefined) {
-		handle = {
-			localPart: actorToHandle(actor).localPart,
-			domain: null,
-		}
-	}
-	const account = toMastodonAccount(handle, actor)
+	const account = toMastodonAccount({ ...handle, domain: null }, actor)
 
 	const query = `
 SELECT

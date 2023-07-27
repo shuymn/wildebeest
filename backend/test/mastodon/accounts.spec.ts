@@ -153,7 +153,7 @@ describe('Mastodon APIs', () => {
 			const queue = makeQueue()
 			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			await addFollowing(db, actor2, connectedActor)
+			await addFollowing(domain, db, actor2, connectedActor)
 			await acceptFollowing(db, actor2, connectedActor)
 
 			const updates = new FormData()
@@ -341,11 +341,11 @@ describe('Mastodon APIs', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
-			await addFollowing(db, actor, actor2)
+			await addFollowing(domain, db, actor, actor2)
 			await acceptFollowing(db, actor, actor2)
-			await addFollowing(db, actor, actor3)
+			await addFollowing(domain, db, actor, actor3)
 			await acceptFollowing(db, actor, actor3)
-			await addFollowing(db, actor3, actor)
+			await addFollowing(domain, db, actor3, actor)
 			await acceptFollowing(db, actor3, actor)
 
 			await createStatus(domain, db, actor, 'my first status')
@@ -466,11 +466,11 @@ describe('Mastodon APIs', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
-			await addFollowing(db, actor, actor2)
+			await addFollowing(domain, db, actor, actor2)
 			await acceptFollowing(db, actor, actor2)
-			await addFollowing(db, actor, actor3)
+			await addFollowing(domain, db, actor, actor3)
 			await acceptFollowing(db, actor, actor3)
-			await addFollowing(db, actor3, actor)
+			await addFollowing(domain, db, actor3, actor)
 			await acceptFollowing(db, actor3, actor)
 
 			await createStatus(domain, db, actor, 'my first status')
@@ -905,7 +905,7 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			await addFollowing(db, actor2, actor)
+			await addFollowing(domain, db, actor2, actor)
 			await acceptFollowing(db, actor2, actor)
 
 			const res = await accounts_followers.onRequestGet({
@@ -939,7 +939,7 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			await addFollowing(db, actor, actor2)
+			await addFollowing(domain, db, actor, actor2)
 			await acceptFollowing(db, actor, actor2)
 
 			const res = await accounts_following.onRequestGet({
@@ -1061,7 +1061,12 @@ describe('Mastodon APIs', () => {
 				const db = await makeDB()
 				const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const req = new Request('https://mastodon.example/api/v1/accounts/relationships')
-				const res = await accounts_relationships.handleRequest(req, db, connectedActor)
+				const res = await accounts_relationships.onRequestGet({
+					request: req,
+					env: { DATABASE: db },
+					data: { connectedActor },
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				} as any)
 				await assertStatus(res, 400)
 			})
 
@@ -1069,7 +1074,12 @@ describe('Mastodon APIs', () => {
 				const db = await makeDB()
 				const req = new Request('https://mastodon.example/api/v1/accounts/relationships?id[]=first&id[]=second')
 				const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-				const res = await accounts_relationships.handleRequest(req, db, connectedActor)
+				const res = await accounts_relationships.onRequestGet({
+					request: req,
+					env: { DATABASE: db },
+					data: { connectedActor },
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				} as any)
 				await assertStatus(res, 200)
 				assertCORS(res)
 				assertJSON(res)
@@ -1086,7 +1096,12 @@ describe('Mastodon APIs', () => {
 				const db = await makeDB()
 				const req = new Request('https://mastodon.example/api/v1/accounts/relationships?id[]=first')
 				const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-				const res = await accounts_relationships.handleRequest(req, db, connectedActor)
+				const res = await accounts_relationships.onRequestGet({
+					request: req,
+					env: { DATABASE: db },
+					data: { connectedActor },
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				} as any)
 				await assertStatus(res, 200)
 				assertCORS(res)
 				assertJSON(res)
@@ -1101,11 +1116,18 @@ describe('Mastodon APIs', () => {
 				const db = await makeDB()
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-				await addFollowing(db, actor, actor2)
+				await addFollowing(domain, db, actor, actor2)
 				await acceptFollowing(db, actor, actor2)
 
-				const req = new Request('https://mastodon.example/api/v1/accounts/relationships?id[]=sven2@' + domain)
-				const res = await accounts_relationships.handleRequest(req, db, actor)
+				const req = new Request(
+					'https://mastodon.example/api/v1/accounts/relationships?id[]=' + actor2[mastodonIdSymbol]
+				)
+				const res = await accounts_relationships.onRequestGet({
+					request: req,
+					env: { DATABASE: db },
+					data: { connectedActor: actor },
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				} as any)
 				await assertStatus(res, 200)
 
 				const data = await res.json<Array<any>>()
@@ -1117,10 +1139,17 @@ describe('Mastodon APIs', () => {
 				const db = await makeDB()
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-				await addFollowing(db, actor, actor2)
+				await addFollowing(domain, db, actor, actor2)
 
-				const req = new Request('https://mastodon.example/api/v1/accounts/relationships?id[]=sven2@' + domain)
-				const res = await accounts_relationships.handleRequest(req, db, actor)
+				const req = new Request(
+					'https://mastodon.example/api/v1/accounts/relationships?id[]=' + actor2[mastodonIdSymbol]
+				)
+				const res = await accounts_relationships.onRequestGet({
+					request: req,
+					env: { DATABASE: db },
+					data: { connectedActor: actor },
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				} as any)
 				await assertStatus(res, 200)
 
 				const data = await res.json<Array<any>>()
@@ -1223,7 +1252,7 @@ describe('Mastodon APIs', () => {
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const followee = await queryAcct({ localPart: 'actor', domain: 'example.com' }, db)
 				assert.ok(followee)
-				await addFollowing(db, actor, followee)
+				await addFollowing(domain, db, actor, followee)
 
 				const connectedActor = actor
 				const res = await accounts_unfollow.handleRequest(

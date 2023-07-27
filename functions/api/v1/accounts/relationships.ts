@@ -2,61 +2,59 @@
 
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { getFollowingAcct, getFollowingRequestedAcct } from 'wildebeest/backend/src/mastodon/follow'
+import { getFollowingMastodonIds, getFollowingRequestedMastodonIds } from 'wildebeest/backend/src/mastodon/follow'
 import type { ContextData, Env } from 'wildebeest/backend/src/types'
-import { cors } from 'wildebeest/backend/src/utils/cors'
+import { cors, readParams } from 'wildebeest/backend/src/utils'
+import { z } from 'zod'
 
-export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request, env, data }) => {
-	return handleRequest(request, await getDatabase(env), data.connectedActor)
+const headers = {
+	...cors(),
+	'content-type': 'application/json; charset=utf-8',
 }
 
-export async function handleRequest(req: Request, db: Database, connectedActor: Person): Promise<Response> {
-	const url = new URL(req.url)
+const schema = z.object({
+	id: z.union([z.string().nonempty(), z.array(z.string().nonempty()).nonempty()]),
+})
 
-	let ids = []
-	if (url.searchParams.has('id')) {
-		ids.push(url.searchParams.get('id'))
-	}
+type Parameters = z.infer<typeof schema>
 
-	if (url.searchParams.has('id[]')) {
-		ids = url.searchParams.getAll('id[]')
-	}
+type Dependencies = {
+	db: Database
+	connectedActor: Person
+}
 
-	if (ids.length === 0) {
+export const onRequestGet: PagesFunction<Env, '', ContextData> = async ({ request, env, data: { connectedActor } }) => {
+	const result = await readParams(request, schema)
+	if (!result.success) {
 		return new Response('', { status: 400 })
 	}
+	return handleRequest({ db: await getDatabase(env), connectedActor }, result.data)
+}
 
-	const res = []
-	const following = await getFollowingAcct(db, connectedActor)
-	const followingRequested = await getFollowingRequestedAcct(db, connectedActor)
+export async function handleRequest({ db, connectedActor }: Dependencies, params: Parameters): Promise<Response> {
+	const ids = Array.isArray(params.id) ? params.id : [params.id]
+	const following = await getFollowingMastodonIds(db, connectedActor)
+	const followingRequested = await getFollowingRequestedMastodonIds(db, connectedActor)
 
-	for (let i = 0, len = ids.length; i < len; i++) {
-		const id = ids[i]
-		if (!id) {
-			break
-		}
+	return new Response(
+		JSON.stringify(
+			ids.map((id) => ({
+				id,
+				following: following.includes(id),
+				requested: followingRequested.includes(id),
 
-		res.push({
-			id,
-			following: following.includes(id),
-			requested: followingRequested.includes(id),
-
-			// FIXME: stub values
-			showing_reblogs: false,
-			notifying: false,
-			followed_by: false,
-			blocking: false,
-			blocked_by: false,
-			muting: false,
-			muting_notifications: false,
-			domain_blocking: false,
-			endorsed: false,
-		})
-	}
-
-	const headers = {
-		...cors(),
-		'content-type': 'application/json; charset=utf-8',
-	}
-	return new Response(JSON.stringify(res), { headers })
+				// FIXME: stub values
+				showing_reblogs: false,
+				notifying: false,
+				followed_by: false,
+				blocking: false,
+				blocked_by: false,
+				muting: false,
+				muting_notifications: false,
+				domain_blocking: false,
+				endorsed: false,
+			}))
+		),
+		{ headers }
+	)
 }

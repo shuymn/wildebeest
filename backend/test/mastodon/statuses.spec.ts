@@ -194,9 +194,9 @@ describe('Mastodon APIs', () => {
 			const followerA = await createPerson(domain, db, userKEK, 'followerA@cloudflare.com')
 			const followerB = await createPerson(domain, db, userKEK, 'followerB@cloudflare.com')
 
-			await addFollowing(db, followerA, actor)
+			await addFollowing(domain, db, followerA, actor)
 			await sleep(10)
-			await addFollowing(db, followerB, actor)
+			await addFollowing(domain, db, followerB, actor)
 			await acceptFollowing(db, followerA, actor)
 			await acceptFollowing(db, followerB, actor)
 
@@ -1064,9 +1064,9 @@ describe('Mastodon APIs', () => {
 			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
 			const note = await createPublicNote(domain, db, 'note from actor', actor)
 
-			await addFollowing(db, actor2, actor)
+			await addFollowing(domain, db, actor2, actor)
 			await acceptFollowing(db, actor2, actor)
-			await addFollowing(db, actor3, actor)
+			await addFollowing(domain, db, actor3, actor)
 			await acceptFollowing(db, actor3, actor)
 
 			const res = await statuses_id.handleRequestDelete(
