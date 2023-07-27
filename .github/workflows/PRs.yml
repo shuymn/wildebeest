@@ -3,7 +3,19 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - '.github/workflows/**'
+      - '!.github/workflows/PRs.yml'
+      - '*.md'
+      - 'docs/**'
+      - 'renovate.json'
   pull_request:
+    paths-ignore:
+      - '.github/workflows/**'
+      - '!.github/workflows/PRs.yml'
+      - '*.md'
+      - 'docs/**'
+      - 'renovate.json'
 
 # This allows a subsequently queued workflow run to interrupt previous runs
 concurrency:

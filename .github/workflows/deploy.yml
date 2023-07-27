@@ -3,7 +3,14 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - '.github/workflows/**'
+      - '!.github/workflows/deploy.yml'
+      - '*.md'
+      - 'docs/**'
+      - 'renovate.json'
   repository_dispatch:
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
