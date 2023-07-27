@@ -8,7 +8,11 @@ import {
 	setActorMastodonId,
 } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database } from 'wildebeest/backend/src/database'
-import { loadExternalMastodonAccount, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import {
+	loadExternalMastodonAccount,
+	loadLocalMastodonAccount,
+	loadMastodonAccount,
+} from 'wildebeest/backend/src/mastodon/account'
 import { MastodonAccount, MastodonId } from 'wildebeest/backend/src/types'
 import { adjustLocalHostDomain } from 'wildebeest/backend/src/utils/adjustLocalHostDomain'
 import {
@@ -51,11 +55,7 @@ export async function getAccountByMastodonId(
 	if (actor === null) {
 		return null
 	}
-	const handle = actorToHandle(actor)
-	if (isLocalAccount(domain, handle)) {
-		return await loadLocalMastodonAccount(db, actor)
-	}
-	return await loadExternalMastodonAccount(db, actor, handle, true)
+	return loadMastodonAccount(db, domain, actor, actorToHandle(actor), true)
 }
 
 export async function getMastodonIdByHandle(domain: string, db: Database, handle: Handle): Promise<MastodonId | null> {

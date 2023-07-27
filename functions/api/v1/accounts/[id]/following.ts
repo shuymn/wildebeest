@@ -5,7 +5,7 @@ import { Actor, getActorByMastodonId, getAndCache } from 'wildebeest/backend/src
 import { getFollowing, loadActors } from 'wildebeest/backend/src/activitypub/actors/follow'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { resourceNotFound } from 'wildebeest/backend/src/errors'
-import { loadExternalMastodonAccount, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import { loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import { getFollowingId } from 'wildebeest/backend/src/mastodon/follow'
 import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import { MastodonAccount } from 'wildebeest/backend/src/types/account'
@@ -66,12 +66,7 @@ async function get(
 		for (const id of followingIds) {
 			try {
 				const followee = await getAndCache(new URL(id), db)
-				const handle = actorToHandle(followee)
-				if (isLocalAccount(domain, handle)) {
-					promises.push(loadLocalMastodonAccount(db, followee))
-				} else {
-					promises.push(loadExternalMastodonAccount(db, followee, handle))
-				}
+				promises.push(loadMastodonAccount(db, domain, followee, actorToHandle(followee)))
 			} catch (err) {
 				if (err instanceof Error) {
 					console.warn(`failed to retrieve following (${id}): ${err.message}`)
@@ -85,11 +80,7 @@ async function get(
 
 	const following = await loadActors(db, await getFollowing(actor, params.limit))
 	const promises = following.map((followee) => {
-		const handle = actorToHandle(followee)
-		if (isLocalAccount(domain, handle)) {
-			return loadLocalMastodonAccount(db, followee)
-		}
-		return loadExternalMastodonAccount(db, followee, handle)
+		return loadMastodonAccount(db, domain, followee, actorToHandle(followee))
 	})
 
 	return makeJsonResponse(await Promise.all(promises), { headers })

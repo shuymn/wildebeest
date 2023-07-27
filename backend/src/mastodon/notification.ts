@@ -4,13 +4,14 @@ import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
 import { type ApObject, ensureObjectMastodonId, getApUrl } from 'wildebeest/backend/src/activitypub/objects'
 import type { Cache } from 'wildebeest/backend/src/cache'
 import { type Database } from 'wildebeest/backend/src/database'
-import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import { loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import { getSubscriptionForAllClients } from 'wildebeest/backend/src/mastodon/subscription'
 import type {
 	Notification,
 	NotificationsQueryResult,
 	NotificationType,
 } from 'wildebeest/backend/src/types/notification'
+import { actorToHandle, handleToAcct } from 'wildebeest/backend/src/utils/handle'
 import { generateWebPushMessage } from 'wildebeest/backend/src/webpush'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 import type { WebPushInfos, WebPushMessage } from 'wildebeest/backend/src/webpush/webpushinfos'
@@ -243,7 +244,7 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 			continue
 		}
 
-		const notifFromAccount = await loadExternalMastodonAccount(db, notifFromActor)
+		const notifFromAccount = await loadMastodonAccount(db, domain, notifFromActor, actorToHandle(notifFromActor))
 
 		const notif: Notification = {
 			id: result.notif_id.toString(),
@@ -255,7 +256,7 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 		if (result.type === 'mention' || result.type === 'favourite') {
 			const actorId = new URL(result.original_actor_id)
 			const actor = await actors.getAndCache(actorId, db)
-			const account = await loadExternalMastodonAccount(db, actor)
+			const handle = actorToHandle(actor)
 
 			notif.status = {
 				id: result.mastodon_id,
@@ -264,7 +265,7 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 				url: new URL(`/@${actor.preferredUsername}/${result.mastodon_id}`, 'https://' + domain),
 				created_at: new Date(result.cdate).toISOString(),
 
-				account,
+				account: await loadMastodonAccount(db, domain, actor, handle),
 
 				// TODO: stub values
 				emojis: [],

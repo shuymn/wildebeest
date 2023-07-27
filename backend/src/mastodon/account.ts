@@ -1,3 +1,4 @@
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { countFollowers, countFollowing } from 'wildebeest/backend/src/activitypub/actors/follow'
 import { countStatuses } from 'wildebeest/backend/src/activitypub/actors/outbox'
@@ -50,6 +51,19 @@ function toMastodonAccount(
 		discoverable: actor.discoverable,
 		created_at: actor.published ?? new Date().toISOString(),
 	}
+}
+
+export async function loadMastodonAccount(
+	db: Database,
+	domain: string,
+	actor: Actor,
+	handle: Handle,
+	loadStat = false
+): Promise<MastodonAccount> {
+	if (isLocalAccount(domain, handle)) {
+		return await loadLocalMastodonAccount(db, actor, handle)
+	}
+	return await loadExternalMastodonAccount(db, actor, handle, loadStat)
 }
 
 // Load an external user, using ActivityPub queries, and return it as a MastodonAccount

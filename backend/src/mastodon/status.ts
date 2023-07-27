@@ -1,4 +1,3 @@
-import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
@@ -13,7 +12,7 @@ import {
 } from 'wildebeest/backend/src/activitypub/objects'
 import { createPublicNote, type Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database } from 'wildebeest/backend/src/database'
-import { loadExternalMastodonAccount, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import { loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import * as media from 'wildebeest/backend/src/media/'
 import type { MastodonId } from 'wildebeest/backend/src/types'
 import type { MastodonStatus } from 'wildebeest/backend/src/types'
@@ -58,8 +57,7 @@ export async function toMastodonStatusFromObject(
 
 	const actorId = new URL(obj[originalActorIdSymbol])
 	const actor = await actors.getAndCache(actorId, db)
-
-	const account = await loadExternalMastodonAccount(db, actor)
+	const handle = actorToHandle(actor)
 
 	// FIXME: temporarly disable favourites and reblogs counts
 	const favourites = []
@@ -89,7 +87,7 @@ export async function toMastodonStatusFromObject(
 		uri: getApId(obj.id),
 		url: new URL(`/@${actor.preferredUsername}/${obj[mastodonIdSymbol]}`, 'https://' + domain),
 		created_at: obj.published || '',
-		account,
+		account: await loadMastodonAccount(db, domain, actor, handle),
 
 		favourites_count: favourites.length,
 		reblogs_count: reblogs.length,
