@@ -53,8 +53,8 @@ devDependencies:
     specifier: 6.2.0
     version: 6.2.0(eslint@8.45.0)(typescript@5.1.6)
   better-sqlite3:
-    specifier: 8.0.0
-    version: 8.0.0
+    specifier: 8.5.0
+    version: 8.5.0
   eslint:
     specifier: 8.45.0
     version: 8.45.0
@@ -1830,8 +1830,8 @@ packages:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
     dev: true
 
-  /better-sqlite3@8.0.0:
-    resolution: {integrity: sha512-DhIPmhV+F3NBb9oGCNqNON8Cg4nP3/7NOwx412SL6JJUclYjAKmqNtbL6xBfG2RcG0uZWUS/TEHRy4AFLeq5Zg==}
+  /better-sqlite3@8.5.0:
+    resolution: {integrity: sha512-vbPcv/Hx5WYdyNg/NbcfyaBZyv9s/NVbxb7yCeC5Bq1pVocNxeL2tZmSu3Rlm4IEOTjYdGyzWQgyx0OSdORBzw==}
     requiresBuild: true
     dependencies:
       bindings: 1.5.0
