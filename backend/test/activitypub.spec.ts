@@ -3,7 +3,7 @@ import { strict as assert } from 'node:assert/strict'
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
-import { getApId, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import { cacheObject } from 'wildebeest/backend/src/activitypub/objects/'
 import { loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
 import { createDirectNote, createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
@@ -282,7 +282,7 @@ describe('ActivityPub', () => {
 	describe('Objects', () => {
 		test('cacheObject deduplicates object', async () => {
 			const db = await makeDB()
-			const properties = { type: 'Note', a: 1, b: 2 }
+			const properties: any = { type: 'Note', a: 1, b: 2 }
 			const actor = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 			const originalObjectId = new URL('https://example.com/object1')
 
@@ -312,7 +312,7 @@ describe('ActivityPub', () => {
 
 		test('cacheObject adds peer', async () => {
 			const db = await makeDB()
-			const properties = { type: 'Note', a: 1, b: 2 }
+			const properties: any = { type: 'Note', a: 1, b: 2 }
 			const actor = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 			const originalObjectId = new URL('https://example.com/object1')
 
@@ -334,7 +334,8 @@ describe('ActivityPub', () => {
 			const actor = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 			const note = await createPublicNote(domain, db, 'content', actor)
 
-			const res = await ap_objects.handleRequest(domain, db, note[mastodonIdSymbol]!)
+			const uuid = note.id.toString().replace('https://' + domain + '/ap/o/', '')
+			const res = await ap_objects.handleRequest(domain, db, uuid)
 			await assertStatus(res, 200)
 
 			const data = await res.json<any>()

@@ -16,6 +16,7 @@ import { insertLike } from 'wildebeest/backend/src/mastodon/like'
 import { createReblog, insertReblog } from 'wildebeest/backend/src/mastodon/reblog'
 import { createStatus } from 'wildebeest/backend/src/mastodon/status'
 import { MessageType } from 'wildebeest/backend/src/types'
+import { isUUID } from 'wildebeest/backend/src/utils'
 import { queryAcct } from 'wildebeest/backend/src/webfinger'
 import { createReply } from 'wildebeest/backend/test/shared.utils'
 import * as accounts_get from 'wildebeest/functions/api/v1/accounts/[id]'
@@ -33,7 +34,7 @@ import * as accounts_verify_creds from 'wildebeest/functions/api/v1/accounts/ver
 import * as filters from 'wildebeest/functions/api/v1/filters'
 import * as preferences from 'wildebeest/functions/api/v1/preferences'
 
-import { assertCORS, assertJSON, assertStatus, isUrlValid, isUUID, makeDB, makeQueue } from '../utils'
+import { assertCORS, assertJSON, assertStatus, isUrlValid, makeDB, makeQueue } from '../utils'
 
 const userKEK = 'test_kek2'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -518,15 +519,14 @@ describe('Mastodon APIs', () => {
 			>()
 			assert.equal(data.length, 2)
 
-			assert(isUUID(data[0].id))
+			assert(!isUUID(data[0].id) && !isNaN(Number(data[0].id)), data[0].id)
 			assert.equal(data[0].content, 'my second status')
 			assert.equal(data[0].account.acct, 'sven')
 			assert.equal(data[0].favourites_count, 0)
 			assert.equal(data[0].reblogs_count, 1)
-			assert.equal(new URL(data[0].uri).pathname, '/ap/o/' + data[0].id)
 			assert.equal(new URL(data[0].url).pathname, '/@sven/' + data[0].id)
 
-			assert(isUUID(data[1].id))
+			assert(!isUUID(data[1].id) && !isNaN(Number(data[1].id)), data[1].id)
 			assert.equal(data[1].content, 'my first status')
 			assert.equal(data[1].favourites_count, 1)
 			assert.equal(data[1].reblogs_count, 0)

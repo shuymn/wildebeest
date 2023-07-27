@@ -157,14 +157,6 @@ export function makeDOCache(): Pick<DurableObjectNamespace, 'idFromName' | 'get'
 	}
 }
 
-export function isUUID(v: string): boolean {
-	assert.equal(typeof v, 'string')
-	if (v.match('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') === null) {
-		return false
-	}
-	return true
-}
-
 export async function generateVAPIDKeys(): Promise<JWK> {
 	const keyPair = (await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, [
 		'sign',
