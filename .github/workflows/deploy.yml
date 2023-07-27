@@ -49,15 +49,15 @@ jobs:
           GH_OWNER: ${{ github.repository_owner }}
           OVERRIDE_NAME_SUFFIX: ${{ vars.OVERRIDE_NAME_SUFFIX }}
 
-      - uses: actions/checkout@v3
-      - uses: hashicorp/setup-terraform@v2
+      - uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3
+      - uses: hashicorp/setup-terraform@633666f66e0061ca3b725c73b2ec20cd13a8fdd1 # v2
 
       - name: Install package
         run: |
           sudo apt-get -y install jq
 
       - name: Setup node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@e33196f7422957bea03ed53f6fbb155025ffc7b8 # v3
         with:
           node-version: 18
 
@@ -95,7 +95,7 @@ jobs:
               -H 'Authorization: Bearer ${{ secrets.CF_API_TOKEN }}'
 
       - name: Create D1 database
-        uses: cloudflare/wrangler-action@2.0.0
+        uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
           command: d1 create wildebeest-${{ env.NAME_SUFFIX }}
           apiToken: ${{ secrets.CF_API_TOKEN }}
@@ -104,7 +104,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: retrieve D1 database
-        uses: cloudflare/wrangler-action@2.0.0
+        uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
           command: d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}") | .uuid' | awk '{print "d1_id="$1}' >> $GITHUB_ENV
           apiToken: ${{ secrets.CF_API_TOKEN }}
@@ -116,7 +116,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: migrate D1 database
-        uses: cloudflare/wrangler-action@2.0.0
+        uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
           command: d1 migrations apply wildebeest-${{ env.NAME_SUFFIX }}
           apiToken: ${{ secrets.CF_API_TOKEN }}
@@ -134,7 +134,7 @@ jobs:
           printf "auth_domain=$auth_domain" >> $GITHUB_ENV
 
       - name: retrieve Terraform state KV namespace
-        uses: cloudflare/wrangler-action@2.0.0
+        uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
           command: kv:namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv="$1}' >> $GITHUB_ENV
           apiToken: ${{ secrets.CF_API_TOKEN }}
@@ -150,7 +150,7 @@ jobs:
         working-directory: ./tf
 
       - name: download Terraform state
-        uses: cloudflare/wrangler-action@2.0.0
+        uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
           command: kv:key get --namespace-id=${{ env.tfstate_kv }} terraform.tfstate > ./tf/terraform.tfstate
           postCommands: |
@@ -163,7 +163,7 @@ jobs:
         if: ${{ env.tfstate_kv != '' }}
 
       - name: download VAPID keys
-        uses: cloudflare/wrangler-action@2.0.0
+        uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
           command: kv:key get --namespace-id=${{ env.tfstate_kv }} vapid_jwk | jq . > ./tf/vapid_jwk
           apiToken: ${{ secrets.CF_API_TOKEN }}
@@ -187,7 +187,7 @@ jobs:
           fi
 
       - name: Publish DO
-        uses: cloudflare/wrangler-action@2.0.0
+        uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           command: publish --config do/wrangler.toml
@@ -220,7 +220,7 @@ jobs:
           TF_VAR_sentry_access_client_secret: ${{ secrets.SENTRY_ACCESS_CLIENT_SECRET }}
 
       - name: retrieve Terraform state KV namespace
-        uses: cloudflare/wrangler-action@2.0.0
+        uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
           command: kv:namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv="$1}' >> $GITHUB_ENV
           apiToken: ${{ secrets.CF_API_TOKEN }}
@@ -233,7 +233,7 @@ jobs:
         if: ${{ env.tfstate_kv == '' }}
 
       - name: store VAPID keys state
-        uses: cloudflare/wrangler-action@2.0.0
+        uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
           command: kv:key put --namespace-id=${{ env.tfstate_kv }} vapid_jwk --path=./tf/vapid_jwk
           apiToken: ${{ secrets.CF_API_TOKEN }}
@@ -241,7 +241,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: store Terraform state
-        uses: cloudflare/wrangler-action@2.0.0
+        uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
           command: kv:key put --namespace-id=${{ env.tfstate_kv }} terraform.tfstate --path=./tf/terraform.tfstate
           apiToken: ${{ secrets.CF_API_TOKEN }}
@@ -249,7 +249,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: Create Queue
-        uses: cloudflare/wrangler-action@2.0.0
+        uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
           command: queues create wildebeest-${{ env.NAME_SUFFIX }}
           apiToken: ${{ secrets.CF_API_TOKEN }}
@@ -258,7 +258,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: Publish consumer
-        uses: cloudflare/wrangler-action@2.0.0
+        uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           preCommands: |
@@ -307,7 +307,7 @@ jobs:
                 }' > /dev/null
 
       - name: Publish
-        uses: cloudflare/wrangler-action@2.0.0
+        uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           preCommands: |
