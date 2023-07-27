@@ -1,5 +1,6 @@
 import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors/'
+import { ensureObjectMastodonId } from 'wildebeest/backend/src/activitypub/objects'
 import type { Cache } from 'wildebeest/backend/src/cache'
 import { type Database } from 'wildebeest/backend/src/database'
 import { toMastodonStatusFromRow } from 'wildebeest/backend/src/mastodon/status'
@@ -105,7 +106,10 @@ LIMIT ?4
 	const out: Array<MastodonStatus> = []
 
 	for (let i = 0, len = results.length; i < len; i++) {
-		const status = await toMastodonStatusFromRow(domain, db, results[i])
+		const result = results[i]
+		result.mastodon_id = await ensureObjectMastodonId(db, result.mastodon_id, result.cdate)
+
+		const status = await toMastodonStatusFromRow(domain, db, result)
 		if (status !== null) {
 			out.push(status)
 		}
@@ -198,7 +202,10 @@ LIMIT ?1 OFFSET ?2
 	const out: Array<MastodonStatus> = []
 
 	for (let i = 0, len = results.length; i < len; i++) {
-		const status = await toMastodonStatusFromRow(domain, db, results[i])
+		const result = results[i]
+		result.mastodon_id = await ensureObjectMastodonId(db, result.mastodon_id, result.cdate)
+
+		const status = await toMastodonStatusFromRow(domain, db, result)
 		if (status !== null) {
 			out.push(status)
 		}

@@ -1,7 +1,7 @@
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
-import { type ApObject, getApUrl } from 'wildebeest/backend/src/activitypub/objects'
+import { type ApObject, ensureObjectMastodonId, getApUrl } from 'wildebeest/backend/src/activitypub/objects'
 import type { Cache } from 'wildebeest/backend/src/cache'
 import { type Database } from 'wildebeest/backend/src/database'
 import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
@@ -224,6 +224,8 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 
 	for (let i = 0, len = results.length; i < len; i++) {
 		const result = results[i]
+		result.mastodon_id = await ensureObjectMastodonId(db, result.mastodon_id, result.cdate)
+
 		let properties
 		if (typeof result.properties === 'object') {
 			// neon uses JSONB for properties which is returned as a deserialized

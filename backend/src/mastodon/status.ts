@@ -5,6 +5,7 @@ import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
 import {
+	ensureObjectMastodonId,
 	getApId,
 	getObjectByMastodonId,
 	mastodonIdSymbol,
@@ -138,6 +139,8 @@ export async function toMastodonStatusesFromRowsWithActor(
 
 	const statuses: MastodonStatus[] = []
 	for (const row of rows) {
+		row.mastodon_id = await ensureObjectMastodonId(db, row.mastodon_id, row.cdate)
+
 		if (row.publisher_actor_id === undefined) {
 			console.warn('missing `row.publisher_actor_id`')
 			continue

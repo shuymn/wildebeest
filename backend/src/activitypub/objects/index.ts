@@ -255,7 +255,7 @@ export async function updateObjectProperty(db: Database, obj: ApObject, key: str
 	}
 }
 
-async function ensureMastodonId(db: Database, mastodonId: MastodonId, cdate: string): Promise<MastodonId> {
+export async function ensureObjectMastodonId(db: Database, mastodonId: MastodonId, cdate: string): Promise<MastodonId> {
 	if (!isUUID(mastodonId)) {
 		return mastodonId
 	}
@@ -329,7 +329,7 @@ export async function getObjectBy<T extends ApObject>(
 		type: result.type,
 		id: new URL(result.id),
 
-		[mastodonIdSymbol]: await ensureMastodonId(db, result.mastodon_id, result.cdate),
+		[mastodonIdSymbol]: await ensureObjectMastodonId(db, result.mastodon_id, result.cdate),
 		[originalActorIdSymbol]: result.original_actor_id,
 		[originalObjectIdSymbol]: result.original_object_id,
 	} as T
