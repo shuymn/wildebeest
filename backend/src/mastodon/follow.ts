@@ -100,23 +100,29 @@ export async function removeFollowing(db: Database, actor: Actor, target: Actor)
 	}
 }
 
-export function getFollowingAcct(db: Database, actor: Actor): Promise<Array<string>> {
+export function getFollowingMastodonIds(db: Database, actor: Actor): Promise<MastodonId[]> {
 	const query = `
-		SELECT target_actor_acct FROM actor_following WHERE actor_id=? AND state=?
-	`
+SELECT actors.mastodon_id
+FROM actor_following
+INNER JOIN actors ON actors.id = actor_following.target_actor_id
+WHERE actor_following.actor_id=?1 AND actor_following.state=?2
+`
 	const statement = db.prepare(query).bind(actor.id.toString(), STATE_ACCEPTED)
 
-	return getResultsField(statement, 'target_actor_acct')
+	return getResultsField(statement, 'mastodon_id')
 }
 
-export function getFollowingRequestedAcct(db: Database, actor: Actor): Promise<Array<string>> {
+export function getFollowingRequestedMastodonIds(db: Database, actor: Actor): Promise<MastodonId[]> {
 	const query = `
-		SELECT target_actor_acct FROM actor_following WHERE actor_id=? AND state=?
+SELECT actors.mastodon_id
+FROM actor_following
+INNER JOIN actors ON actors.id = actor_following.target_actor_id
+WHERE actor_following.actor_id=?1 AND actor_following.state=?2
 	`
 
 	const statement = db.prepare(query).bind(actor.id.toString(), STATE_PENDING)
 
-	return getResultsField(statement, 'target_actor_acct')
+	return getResultsField(statement, 'mastodon_id')
 }
 
 export function getFollowingId(db: Database, actor: Actor, limit?: number): Promise<Array<string>> {
