@@ -1,6 +1,8 @@
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
 import type { MastodonId } from 'wildebeest/backend/src/types'
+import { isUUID } from 'wildebeest/backend/src/utils'
+import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
 import { Intersect, RequiredProps, SingleOrArray } from 'wildebeest/backend/src/utils/type'
 
 export const originalActorIdSymbol = Symbol()
@@ -102,34 +104,46 @@ export function uri(domain: string, id: string): URL {
 	return new URL('/ap/o/' + id, 'https://' + domain)
 }
 
-export async function createObject<Type extends ApObject>(
+export async function createObject<T extends ApObject>(
 	domain: string,
 	db: Database,
 	type: string,
 	properties: any,
 	originalActorId: URL,
 	local: boolean
-): Promise<Type> {
-	const uuid = crypto.randomUUID()
-	const apId = uri(domain, uuid).toString()
+): Promise<T> {
+	const now = new Date()
+	const mastodonId = await generateMastodonId(db, 'objects', now)
+	const apId = uri(domain, crypto.randomUUID())
 	const sanitizedProperties = await sanitizeObjectProperties(properties)
 
-	const row: any = await db
+	const { success, error } = await db
 		.prepare(
-			'INSERT INTO objects(id, type, properties, original_actor_id, local, mastodon_id) VALUES(?, ?, ?, ?, ?, ?) RETURNING *'
+			'INSERT INTO objects(id, type, properties, original_actor_id, local, mastodon_id, cdate) VALUES(?, ?, ?, ?, ?, ?, ?)'
 		)
-		.bind(apId, type, JSON.stringify(sanitizedProperties), originalActorId.toString(), local ? 1 : 0, uuid)
-		.first()
+		.bind(
+			apId.toString(),
+			type,
+			JSON.stringify(sanitizedProperties),
+			originalActorId.toString(),
+			local ? 1 : 0,
+			mastodonId,
+			now.toISOString()
+		)
+		.run()
+	if (!success) {
+		throw new Error('SQL error: ' + error)
+	}
 
 	return {
 		...sanitizedProperties,
 		type,
-		id: new URL(row.id),
-		published: new Date(row.cdate).toISOString(),
+		id: apId,
+		published: now.toISOString(),
 
-		[mastodonIdSymbol]: row.mastodon_id,
-		[originalActorIdSymbol]: row.original_actor_id,
-	} as Type
+		[mastodonIdSymbol]: mastodonId,
+		[originalActorIdSymbol]: originalActorId.toString(),
+	} as T
 }
 
 export async function get<T>(url: URL): Promise<T> {
@@ -144,22 +158,22 @@ export async function get<T>(url: URL): Promise<T> {
 	return res.json<T>()
 }
 
-type CacheObjectRes = {
+type CacheObjectRes<T extends ApObject> = {
 	created: boolean
-	object: ApObject
+	object: T
 }
 
-export async function cacheObject<T>(
+export async function cacheObject<T extends ApObject>(
 	domain: string,
 	db: Database,
 	properties: T,
 	originalActorId: URL,
 	originalObjectId: URL,
 	local: boolean
-): Promise<CacheObjectRes> {
+): Promise<CacheObjectRes<T>> {
 	const sanitizedProperties = await sanitizeObjectProperties(properties)
 
-	const cachedObject = await getObjectBy(db, ObjectByKey.originalObjectId, originalObjectId.toString())
+	const cachedObject = await getObjectBy<T>(db, ObjectByKey.originalObjectId, originalObjectId.toString())
 	if (cachedObject !== null) {
 		return {
 			created: false,
@@ -167,12 +181,13 @@ export async function cacheObject<T>(
 		}
 	}
 
-	const uuid = crypto.randomUUID()
-	const apId = uri(domain, uuid).toString()
+	const now = new Date()
+	const mastodonId = await generateMastodonId(db, 'objects', now)
+	const apId = uri(domain, crypto.randomUUID()).toString()
 
 	const row: any = await db
 		.prepare(
-			'INSERT INTO objects(id, type, properties, original_actor_id, original_object_id, local, mastodon_id) VALUES(?, ?, ?, ?, ?, ?, ?) RETURNING *'
+			'INSERT INTO objects(id, type, properties, original_actor_id, original_object_id, local, mastodon_id, cdate) VALUES(?, ?, ?, ?, ?, ?, ?, ?) RETURNING *'
 		)
 		.bind(
 			apId,
@@ -181,7 +196,8 @@ export async function cacheObject<T>(
 			originalActorId.toString(),
 			originalObjectId.toString(),
 			local ? 1 : 0,
-			uuid
+			mastodonId,
+			now.toISOString()
 		)
 		.first()
 
@@ -211,7 +227,7 @@ export async function cacheObject<T>(
 			[mastodonIdSymbol]: row.mastodon_id,
 			[originalActorIdSymbol]: row.original_actor_id,
 			[originalObjectIdSymbol]: row.original_object_id,
-		} as ApObject
+		} as any
 
 		return { object, created: true }
 	}
@@ -239,6 +255,21 @@ export async function updateObjectProperty(db: Database, obj: ApObject, key: str
 	}
 }
 
+async function ensureMastodonId(db: Database, mastodonId: MastodonId, cdate: string): Promise<MastodonId> {
+	if (!isUUID(mastodonId)) {
+		return mastodonId
+	}
+	const newMastodonId = await generateMastodonId(db, 'objects', new Date(cdate))
+	const { success, error } = await db
+		.prepare(`UPDATE objects SET mastodon_id=?1 WHERE mastodon_id=?2`)
+		.bind(newMastodonId, mastodonId)
+		.run()
+	if (!success) {
+		throw new Error('SQL error: ' + error)
+	}
+	return newMastodonId
+}
+
 export async function getObjectById(db: Database, id: string | URL): Promise<ApObject | null> {
 	return getObjectBy(db, ObjectByKey.id, id.toString())
 }
@@ -259,7 +290,11 @@ export enum ObjectByKey {
 
 const allowedObjectByKeysSet = new Set(Object.values(ObjectByKey))
 
-export async function getObjectBy(db: Database, key: ObjectByKey, value: string) {
+export async function getObjectBy<T extends ApObject>(
+	db: Database,
+	key: ObjectByKey,
+	value: string
+): Promise<T | null> {
 	if (!allowedObjectByKeysSet.has(key)) {
 		throw new Error('getObjectBy run with invalid key: ' + key)
 	}
@@ -272,7 +307,6 @@ export async function getObjectBy(db: Database, key: ObjectByKey, value: string)
 	if (!success) {
 		throw new Error('SQL error: ' + error)
 	}
-
 	if (!results || results.length === 0) {
 		return null
 	}
@@ -295,10 +329,10 @@ export async function getObjectBy(db: Database, key: ObjectByKey, value: string)
 		type: result.type,
 		id: new URL(result.id),
 
-		[mastodonIdSymbol]: result.mastodon_id,
+		[mastodonIdSymbol]: await ensureMastodonId(db, result.mastodon_id, result.cdate),
 		[originalActorIdSymbol]: result.original_actor_id,
 		[originalObjectIdSymbol]: result.original_object_id,
-	} as ApObject
+	} as T
 }
 
 /** Is the given `value` an ActivityPub Object? */

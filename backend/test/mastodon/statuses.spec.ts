@@ -88,7 +88,7 @@ describe('Mastodon APIs', () => {
 
 			const data = await res.json<MastodonStatus>()
 			assert((data.uri as unknown as string).includes('example.com'))
-			assert((data.uri as unknown as string).includes(data.id))
+			assert((data.url as unknown as string).includes(data.id))
 			// Required fields from https://github.com/mastodon/mastodon-android/blob/master/mastodon/src/main/java/org/joinmastodon/android/model/Status.java
 			assert(data.created_at !== undefined)
 			assert(data.account !== undefined)
