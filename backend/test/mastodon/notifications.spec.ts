@@ -88,7 +88,7 @@ describe('Mastodon APIs', () => {
 			const data = await res.json<any>()
 			assert.equal(data.id, '1')
 			assert.equal(data.type, 'favourite')
-			assert.equal(data.account.acct, 'from@cloudflare.com')
+			assert.equal(data.account.acct, 'from')
 			assert.equal(data.status.content, 'my first status')
 		})
 
@@ -106,7 +106,7 @@ describe('Mastodon APIs', () => {
 			const data = await res.json<any>()
 			assert.equal(data.id, '1')
 			assert.equal(data.type, 'follow')
-			assert.equal(data.account.acct, 'from@cloudflare.com')
+			assert.equal(data.account.acct, 'from')
 			assert.equal(data.status, undefined)
 		})
 
