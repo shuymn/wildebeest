@@ -2,6 +2,7 @@
 
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
+import { ensureObjectMastodonId } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { loadExternalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import type { ContextData, Env } from 'wildebeest/backend/src/types'
@@ -36,6 +37,7 @@ export async function handleRequest(
     `
 
 	const row = await db.prepare(query).bind(id, connectedActor.id.toString()).first<NotificationsQueryResult>()
+	row.mastodon_id = await ensureObjectMastodonId(db, row.mastodon_id, row.cdate)
 
 	const from_actor_id = new URL(row.from_actor_id)
 	const fromActor = await getActorById(db, from_actor_id)

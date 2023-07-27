@@ -1,5 +1,6 @@
 import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
 import {
+	ensureObjectMastodonId,
 	mastodonIdSymbol,
 	originalActorIdSymbol,
 	originalObjectIdSymbol,
@@ -53,7 +54,7 @@ export async function hasKey(db: Database, key: string): Promise<ApObject | null
 		type: result.type,
 		id: new URL(result.id),
 
-		[mastodonIdSymbol]: result.mastodon_id,
+		[mastodonIdSymbol]: await ensureObjectMastodonId(db, result.mastodon_id, result.cdate),
 		[originalActorIdSymbol]: result.original_actor_id,
 		[originalObjectIdSymbol]: result.original_object_id,
 	} as ApObject
