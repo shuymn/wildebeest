@@ -140,6 +140,19 @@ describe('utils', () => {
 		assert.equal(handleToUrl(handle).toString(), 'https://b/@a')
 	})
 
+	test('read body handles empty body', async () => {
+		{
+			const req = new Request('https://a.com', { method: 'POST' })
+			const result = await readBody(req, { a: z.number().optional() })
+			assert.ok(result.success)
+		}
+		{
+			const req = new Request('https://a.com', { method: 'POST' })
+			const result = await readBody(req, z.number().optional())
+			assert.ok(!result.success)
+		}
+	})
+
 	test('read body handles JSON', async () => {
 		const headers = {
 			'content-type': 'application/json;charset=utf-8',

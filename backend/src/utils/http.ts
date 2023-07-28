@@ -1,5 +1,5 @@
 import { MastodonError } from 'wildebeest/backend/src/errors'
-import { output, SafeParseReturnType, z, ZodObject, ZodRawShape, ZodTypeAny } from 'zod'
+import { output, SafeParseReturnType, SomeZodObject, z, ZodObject, ZodRawShape, ZodTypeAny } from 'zod'
 
 export type JsonResponse<T> = Response & {
 	_T: T
@@ -23,6 +23,17 @@ export function makeJsonResponse<T>(
 // The zodix library is released under the MIT License.
 const isZodType = (input: ZodRawShape | ZodTypeAny): input is ZodTypeAny => {
 	return typeof input.parse === 'function'
+}
+
+const isZodObject = (input: ZodTypeAny): input is SomeZodObject => {
+	return z.getParsedType(input) === z.ZodParsedType.object
+}
+
+const isAllPropsOptional = (input: ZodTypeAny): boolean => {
+	if (isZodObject(input)) {
+		return Object.values(input.shape).every((v) => v.isOptional())
+	}
+	return false
 }
 
 // The following type is taken from the zodix library (https://github.com/rileytomasek/zodix)
@@ -92,11 +103,16 @@ export async function readBody<T extends ZodRawShape | ZodTypeAny>(
 	schema: T
 ): Promise<SafeParsedData<T>> {
 	try {
+		const finalSchema = isZodType(schema) ? schema : z.object(schema)
+
 		const contentType = request.headers.get('content-type')
 		if (contentType === null) {
+			if (isAllPropsOptional(finalSchema)) {
+				return finalSchema.safeParseAsync({}) as Promise<SafeParsedData<T>>
+			}
 			throw new Error('invalid request')
 		}
-		const finalSchema = isZodType(schema) ? schema : z.object(schema)
+
 		if (contentType.startsWith('application/json')) {
 			const url = new URL(request.url)
 			const data = await request.json<Record<string, unknown>>()
