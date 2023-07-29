@@ -34,6 +34,7 @@ export interface ApObject {
 
 	// Extension
 	preferredUsername?: string
+	sensitive?: boolean
 	// Internal
 	[originalActorIdSymbol]?: string
 	[originalObjectIdSymbol]?: string
