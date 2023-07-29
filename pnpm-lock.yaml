@@ -29,8 +29,8 @@ devDependencies:
     specifier: 1.0.3
     version: 1.0.3
   '@cloudflare/workers-types':
-    specifier: 4.20230717.1
-    version: 4.20230717.1
+    specifier: 4.20230724.0
+    version: 4.20230724.0
   '@databases/split-sql-query':
     specifier: 1.0.4
     version: 1.0.4(@databases/sql@3.3.0)
@@ -445,8 +445,8 @@ packages:
     resolution: {integrity: sha512-hnKhUMvhMIFkLxwYO+b1Hw58nG5CJjCm5YVMJ5073NKxm8pHTk7gGUhy39ugvaXDJ0pAeb07axoyJb0L/4xIyg==}
     dev: true
 
-  /@cloudflare/workers-types@4.20230717.1:
-    resolution: {integrity: sha512-JmtYqsn/rc0gq83rlgItGsh/aJsTQh6ebJTDbq794kGOH7ym6MlpLtbCJj/Qz+hCPgdqoHDOLTlQQguARLi78A==}
+  /@cloudflare/workers-types@4.20230724.0:
+    resolution: {integrity: sha512-WuFlsai21oJhRMBHdkM0saIuK1Faitp/GXWj31Zlbe3cCtPNlwYtX5WkojDNWWAxX47LMHBF9wv7wrytNLabYA==}
     dev: true
 
   /@databases/split-sql-query@1.0.4(@databases/sql@3.3.0):
@@ -1206,7 +1206,7 @@ packages:
     resolution: {integrity: sha512-Iarxqo9hR4Gi6i7iF/hXJbHuPCXTZbA4z91Gwhet8dhK6c0zWGU3xi7zjr5XTaawd/cuR1g6bi0cwt/10bAEsg==}
     engines: {node: '>=16.13'}
     dependencies:
-      '@cloudflare/workers-types': 4.20230717.1
+      '@cloudflare/workers-types': 4.20230724.0
       '@miniflare/cache': 2.14.0
       '@miniflare/core': 2.14.0
       '@miniflare/d1': 2.14.0
