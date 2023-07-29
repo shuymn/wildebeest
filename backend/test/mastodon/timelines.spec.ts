@@ -8,9 +8,8 @@ import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/f
 import { insertHashtags } from 'wildebeest/backend/src/mastodon/hashtag'
 import { insertLike } from 'wildebeest/backend/src/mastodon/like'
 import { createReblog, insertReblog } from 'wildebeest/backend/src/mastodon/reblog'
-import { createStatus } from 'wildebeest/backend/src/mastodon/status'
 import * as timelines from 'wildebeest/backend/src/mastodon/timeline'
-import { createReply } from 'wildebeest/backend/test/shared.utils'
+import { createReply, createStatus } from 'wildebeest/backend/test/shared.utils'
 import * as timelines_home from 'wildebeest/functions/api/v1/timelines/home'
 import * as timelines_public from 'wildebeest/functions/api/v1/timelines/public'
 
@@ -69,7 +68,10 @@ describe('Mastodon APIs', () => {
 			await acceptFollowing(db, actor3, actor2)
 
 			// actor2 sends a DM to actor1
-			const note = await createDirectNote(domain, db, 'DM', actor2, [actor1])
+			const note = await createDirectNote(domain, db, 'DM', actor2, new Set([actor1]), [], {
+				sensitive: false,
+				source: { content: 'DM', mediaType: 'text/markdown' },
+			})
 			await addObjectInOutbox(db, actor2, note, undefined, actor1.id.toString())
 
 			// actor3 shouldn't see the private note
@@ -87,7 +89,10 @@ describe('Mastodon APIs', () => {
 			await acceptFollowing(db, actor, actor2)
 
 			// Actor 2 is posting
-			const note = await createPublicNote(domain, db, 'test post', actor2)
+			const note = await createPublicNote(domain, db, 'test post', actor2, new Set(), [], {
+				sensitive: false,
+				source: { content: 'test post', mediaType: 'text/markdown' },
+			})
 			await addObjectInOutbox(db, actor2, note, undefined, actor2.followers.toString())
 
 			// Actor should only see posts from actor2 in the timeline
@@ -102,7 +107,10 @@ describe('Mastodon APIs', () => {
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 
 			// actor2 sends a DM to actor1
-			const note = await createDirectNote(domain, db, 'DM', actor2, [actor1])
+			const note = await createDirectNote(domain, db, 'DM', actor2, new Set([actor1]), [], {
+				sensitive: false,
+				source: { content: 'DM', mediaType: 'text/markdown' },
+			})
 			await addObjectInOutbox(db, actor2, note, undefined, actor1.id.toString())
 
 			const data = await timelines.getPublicTimeline(domain, db, timelines.LocalPreference.NotSet)
@@ -209,9 +217,18 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-			const note1 = await createPublicNote(domain, db, 'note1', actor)
-			const note2 = await createPublicNote(domain, db, 'note2', actor)
-			const note3 = await createPublicNote(domain, db, 'note3', actor)
+			const note1 = await createPublicNote(domain, db, 'note1', actor, new Set(), [], {
+				sensitive: false,
+				source: { content: 'note1', mediaType: 'text/markdown' },
+			})
+			const note2 = await createPublicNote(domain, db, 'note2', actor, new Set(), [], {
+				sensitive: false,
+				source: { content: 'note2', mediaType: 'text/markdown' },
+			})
+			const note3 = await createPublicNote(domain, db, 'note3', actor, new Set(), [], {
+				sensitive: false,
+				source: { content: 'note3', mediaType: 'text/markdown' },
+			})
 			await addObjectInOutbox(db, actor, note1, '2022-12-10T23:48:38Z')
 			await addObjectInOutbox(db, actor, note2, '2000-12-10T23:48:38Z')
 			await addObjectInOutbox(db, actor, note3, '2048-12-10T23:48:38Z')

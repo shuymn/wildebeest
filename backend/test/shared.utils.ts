@@ -29,7 +29,7 @@ export async function createReply(
 	replyContent: string
 ) {
 	const inReplyTo = originalNote.id
-	const replyNote = await createPublicNote(domain, db, replyContent, actor, undefined, [], [], { inReplyTo } as any)
+	const replyNote = await createPublicNote(domain, db, replyContent, actor, new Set(), [], { inReplyTo } as any)
 	await addObjectInOutbox(db, actor, replyNote)
 	await insertReply(db, actor, replyNote, originalNote)
 }
@@ -51,9 +51,17 @@ export async function createStatus(
 	actor: Person,
 	content: string,
 	attachments?: ApObject[],
-	extraProperties?: any
+	extraProperties?: Record<string, any>
 ) {
-	const note = await createPublicNote(domain, db, content, actor, undefined, [], attachments, extraProperties)
+	const note = await createPublicNote(
+		domain,
+		db,
+		content,
+		actor,
+		new Set(),
+		attachments,
+		(extraProperties as any) ?? { sensitive: false, source: { content: 'test', mediaType: 'text/plain' } }
+	)
 	await addObjectInOutbox(db, actor, note)
 	return note
 }
