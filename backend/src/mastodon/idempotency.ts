@@ -19,7 +19,7 @@ export async function insertKey(db: Database, key: string, obj: ApObject): Promi
 	}
 }
 
-export async function hasKey(db: Database, key: string): Promise<ApObject | null> {
+export async function hasKey<T extends ApObject>(db: Database, key: string) {
 	const query = `
         SELECT objects.*
         FROM idempotency_keys
@@ -27,7 +27,15 @@ export async function hasKey(db: Database, key: string): Promise<ApObject | null
         WHERE idempotency_keys.key = ?1 AND expires_at >= datetime() 
     `
 
-	const { results, success, error } = await db.prepare(query).bind(key).all<any>()
+	const { results, success, error } = await db.prepare(query).bind(key).all<{
+		properties: string | object
+		cdate: string
+		type: ApObject['type']
+		id: string
+		mastodon_id: string
+		original_actor_id: string | null
+		original_object_id: string | null
+	}>()
 	if (!success) {
 		throw new Error('SQL error: ' + error)
 	}
@@ -36,15 +44,15 @@ export async function hasKey(db: Database, key: string): Promise<ApObject | null
 		return null
 	}
 
-	const result = results[0]
+	const [result] = results
 	let properties
 	if (typeof result.properties === 'object') {
 		// neon uses JSONB for properties which is returned as a deserialized
 		// object.
-		properties = result.properties
+		properties = result.properties as T
 	} else {
 		// D1 uses a string for JSON properties
-		properties = JSON.parse(result.properties)
+		properties = JSON.parse(result.properties) as T
 	}
 
 	return {
@@ -57,5 +65,5 @@ export async function hasKey(db: Database, key: string): Promise<ApObject | null
 		[mastodonIdSymbol]: await ensureObjectMastodonId(db, result.mastodon_id, result.cdate),
 		[originalActorIdSymbol]: result.original_actor_id,
 		[originalObjectIdSymbol]: result.original_object_id,
-	} as ApObject
+	}
 }
