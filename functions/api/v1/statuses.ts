@@ -157,7 +157,7 @@ export async function handleRequest(
 		extraProperties.tag = [...mentions].map((actor) => newMention(actor, domain))
 	}
 
-	const content = enrichStatus(params.status, [...mentions])
+	const content = enrichStatus(params.status, mentions)
 
 	let createFn
 	if (params.visibility === 'public') {
