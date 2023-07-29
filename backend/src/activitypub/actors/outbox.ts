@@ -6,16 +6,16 @@ import type { OrderedCollection } from 'wildebeest/backend/src/activitypub/objec
 import { getMetadata, loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
 import { type Database } from 'wildebeest/backend/src/database'
 
-export async function addObjectInOutbox(
+export async function addObjectInOutbox<T extends ApObject>(
 	db: Database,
 	actor: Actor,
-	obj: ApObject,
+	obj: T,
 	published_date?: string,
 	target: string = PUBLIC_GROUP
 ) {
 	const id = crypto.randomUUID()
-	let out: any = null
 
+	let out
 	if (published_date !== undefined) {
 		out = await db
 			.prepare('INSERT INTO outbox_objects(id, actor_id, object_id, published_date, target) VALUES(?, ?, ?, ?, ?)')
@@ -32,8 +32,8 @@ export async function addObjectInOutbox(
 	}
 }
 
-export async function get(actor: Actor, limit?: number): Promise<OrderedCollection<Activity>> {
-	const collection = await getMetadata<any>(actor.outbox)
+export async function get<T extends Activity>(actor: Actor, limit?: number): Promise<OrderedCollection<T>> {
+	const collection = await getMetadata<T>(actor.outbox)
 	collection.items = await loadItems(collection, limit ?? 20)
 
 	return collection

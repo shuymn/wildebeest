@@ -59,8 +59,8 @@ function urlToHandle({ pathname, host }: URL): RemoteHandle {
 	return { localPart, domain: host } as RemoteHandle
 }
 
-export function actorToAcct(actor: Actor, domain?: string): string {
-	const actorId = getApId(actor)
+export function actorToAcct(actor: Pick<Actor, 'preferredUsername' | 'id'>, domain?: string): string {
+	const actorId = getApId(actor.id)
 	if (actor.preferredUsername !== undefined) {
 		if (domain && actorId.host === domain) {
 			return actor.preferredUsername

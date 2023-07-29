@@ -131,7 +131,7 @@ export async function handleRequest(
 
 	let inReplyToObject
 	if (params.in_reply_to_id) {
-		inReplyToObject = await getObjectByMastodonId(db, params.in_reply_to_id)
+		inReplyToObject = await getObjectByMastodonId<Note>(db, params.in_reply_to_id)
 		if (inReplyToObject === null) {
 			return statusNotFound(params.in_reply_to_id)
 		}
