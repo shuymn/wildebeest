@@ -6,7 +6,8 @@ import {
 	actorToAcct,
 	actorToHandle,
 	handleToAcct,
-	handleToUrl,
+	handleToMastodonUrl,
+	handleToPleromaUrl,
 	isLocalHandle,
 	parseHandle,
 	toRemoteHandle,
@@ -137,7 +138,8 @@ describe('utils', () => {
 
 	test('handle to url', () => {
 		const handle = { localPart: 'a', domain: 'b' }
-		assert.equal(handleToUrl(handle).toString(), 'https://b/@a')
+		assert.equal(handleToMastodonUrl(handle).toString(), 'https://b/@a')
+		assert.equal(handleToPleromaUrl(handle).toString(), 'https://b/users/a')
 	})
 
 	test('read body handles empty body', async () => {
