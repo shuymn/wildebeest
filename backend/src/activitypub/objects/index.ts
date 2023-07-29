@@ -108,27 +108,29 @@ export async function createObject<T extends ApObject>(
 	domain: string,
 	db: Database,
 	type: string,
-	properties: any,
+	properties: Omit<T, 'id'>,
 	originalActorId: URL,
 	local: boolean
-): Promise<T> {
+) {
 	const now = new Date()
 	const mastodonId = await generateMastodonId(db, 'objects', now)
 	const apId = uri(domain, crypto.randomUUID())
-	const sanitizedProperties = await sanitizeObjectProperties(properties)
+	properties = await sanitizeObjectProperties({ id: apId, ...properties })
 
 	const { success, error } = await db
 		.prepare(
-			'INSERT INTO objects(id, type, properties, original_actor_id, local, mastodon_id, cdate) VALUES(?, ?, ?, ?, ?, ?, ?)'
+			`INSERT INTO objects(id, type, properties, original_actor_id, local, mastodon_id, cdate, reply_to_object_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			apId.toString(),
 			type,
-			JSON.stringify(sanitizedProperties),
+			JSON.stringify(properties),
 			originalActorId.toString(),
 			local ? 1 : 0,
 			mastodonId,
-			now.toISOString()
+			now.toISOString(),
+			properties.inReplyTo ? properties.inReplyTo.toString() : null
 		)
 		.run()
 	if (!success) {
@@ -136,14 +138,14 @@ export async function createObject<T extends ApObject>(
 	}
 
 	return {
-		...sanitizedProperties,
+		...properties,
 		type,
 		id: apId,
 		published: now.toISOString(),
 
 		[mastodonIdSymbol]: mastodonId,
 		[originalActorIdSymbol]: originalActorId.toString(),
-	} as T
+	}
 }
 
 export async function get<T>(url: URL): Promise<T> {
