@@ -1,9 +1,21 @@
 import type { MastodonId } from 'wildebeest/backend/src/types'
 
-import type { MastodonAccount } from './account'
+import type { CustomEmoji, MastodonAccount } from './account'
 import type { MediaAttachment } from './media'
 
 export type Visibility = 'public' | 'unlisted' | 'private' | 'direct'
+
+type Mention = {
+	id: string
+	username: string
+	url: string
+	acct: string
+}
+
+type Tag = {
+	name: string
+	url: string
+}
 
 // https://docs.joinmastodon.org/entities/Status/
 // https://github.com/mastodon/mastodon-android/blob/master/mastodon/src/main/java/org/joinmastodon/android/model/Status.java
@@ -16,10 +28,10 @@ export type MastodonStatus = {
 	content: string
 	visibility: Visibility
 	spoiler_text: string
-	emojis: Array<any>
-	media_attachments: Array<MediaAttachment>
-	mentions: Array<any>
-	tags: Array<any>
+	emojis: CustomEmoji[]
+	media_attachments: MediaAttachment[]
+	mentions: Mention[]
+	tags: Tag[]
 	favourites_count?: number
 	reblogs_count?: number
 	reblog?: MastodonStatus
@@ -33,6 +45,6 @@ export type MastodonStatus = {
 
 // https://docs.joinmastodon.org/entities/Context/
 export type Context = {
-	ancestors: Array<MastodonStatus>
-	descendants: Array<MastodonStatus>
+	ancestors: MastodonStatus[]
+	descendants: MastodonStatus[]
 }

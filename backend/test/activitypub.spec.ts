@@ -9,13 +9,13 @@ import { loadItems } from 'wildebeest/backend/src/activitypub/objects/collection
 import { createDirectNote, createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
 import { MessageType } from 'wildebeest/backend/src/types'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
+import { createStatus } from 'wildebeest/backend/test/shared.utils'
 import * as ap_objects from 'wildebeest/functions/ap/o/[id]'
 import * as ap_users from 'wildebeest/functions/ap/users/[id]'
 import * as ap_inbox from 'wildebeest/functions/ap/users/[id]/inbox'
 import * as ap_outbox from 'wildebeest/functions/ap/users/[id]/outbox'
 import * as ap_outbox_page from 'wildebeest/functions/ap/users/[id]/outbox/page'
 
-import { createStatus } from '../src/mastodon/status'
 import { assertStatus, isUrlValid, makeDB } from './utils'
 
 const userKEK = 'test_kek5'
@@ -155,7 +155,10 @@ describe('ActivityPub', () => {
 			const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 			const actorB = await createPerson(domain, db, userKEK, 'b@cloudflare.com')
 
-			const note = await createDirectNote(domain, db, 'DM', actorA, [actorB])
+			const note = await createDirectNote(domain, db, 'DM', actorA, new Set([actorB]), [], {
+				sensitive: false,
+				source: { content: 'DM', mediaType: 'text/plain' },
+			})
 			await addObjectInOutbox(db, actorA, note, undefined, actorB.id.toString())
 
 			{
@@ -180,7 +183,10 @@ describe('ActivityPub', () => {
 			const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 			const actorB = await createPerson(domain, db, userKEK, 'target@cloudflare.com')
 
-			const note = await createDirectNote(domain, db, 'DM', actorA, [actorB])
+			const note = await createDirectNote(domain, db, 'DM', actorA, new Set([actorB]), [], {
+				sensitive: false,
+				source: { content: 'DM', mediaType: 'text/plain' },
+			})
 			await addObjectInOutbox(db, actorA, note)
 
 			const res = await ap_outbox_page.handleRequest(domain, db, 'target')
@@ -332,7 +338,10 @@ describe('ActivityPub', () => {
 		test('serve object', async () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
-			const note = await createPublicNote(domain, db, 'content', actor)
+			const note = await createPublicNote(domain, db, 'content', actor, new Set(), [], {
+				sensitive: false,
+				source: { content: 'content', mediaType: 'text/plain' },
+			})
 
 			const uuid = note.id.toString().replace('https://' + domain + '/ap/o/', '')
 			const res = await ap_objects.handleRequest(domain, db, uuid)

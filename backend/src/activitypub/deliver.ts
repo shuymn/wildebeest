@@ -46,7 +46,7 @@ export async function deliverToActor<T extends Activity>(
 }
 
 // TODO: eventually move this to the queue worker, the backend can send a message
-// to a collection (followers) and the worker creates the indivual messages. More
+// to a collection (followers) and the worker creates the individual messages. More
 // reliable and scalable.
 export async function deliverFollowers(
 	db: Database,
@@ -64,7 +64,7 @@ export async function deliverFollowers(
 	const messages: Array<MessageSendRequest<DeliverMessageBody>> = followers.map((id) => {
 		const body = {
 			// Make sure the object is supported by `structuredClone()`, ie
-			// removing the URL objects as they aren't clonabled.
+			// removing the URL objects as they aren't cloneable.
 			activity: JSON.parse(JSON.stringify(activity)),
 
 			actorId: from.id.toString(),

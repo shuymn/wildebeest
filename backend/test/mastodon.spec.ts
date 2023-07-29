@@ -248,11 +248,11 @@ describe('Mastodon APIs', () => {
 		})
 
 		test('handle invalid mention', () => {
-			assert.equal(enrichStatus('hey @#-...@example.com', []), '<p>hey @#-...@example.com</p>')
+			assert.equal(enrichStatus('hey @#-...@example.com', new Set()), '<p>hey @#-...@example.com</p>')
 		})
 
 		test('mention to invalid user', () => {
-			assert.equal(enrichStatus('hey test@example.com', []), '<p>hey test@example.com</p>')
+			assert.equal(enrichStatus('hey test@example.com', new Set()), '<p>hey test@example.com</p>')
 		})
 
 		test('convert links to HTML', () => {
@@ -271,11 +271,11 @@ describe('Mastodon APIs', () => {
 			linksToTest.forEach((link) => {
 				const url = new URL(link)
 				const urlDisplayText = `${url.hostname}${url.pathname}`
-				assert.equal(enrichStatus(`hey ${link} hi`, []), `<p>hey <a href="${link}">${urlDisplayText}</a> hi</p>`)
-				assert.equal(enrichStatus(`${link} hi`, []), `<p><a href="${link}">${urlDisplayText}</a> hi</p>`)
-				assert.equal(enrichStatus(`hey ${link}`, []), `<p>hey <a href="${link}">${urlDisplayText}</a></p>`)
-				assert.equal(enrichStatus(`${link}`, []), `<p><a href="${link}">${urlDisplayText}</a></p>`)
-				assert.equal(enrichStatus(`@!@£${link}!!!`, []), `<p>@!@£<a href="${link}">${urlDisplayText}</a>!!!</p>`)
+				assert.equal(enrichStatus(`hey ${link} hi`, new Set()), `<p>hey <a href="${link}">${urlDisplayText}</a> hi</p>`)
+				assert.equal(enrichStatus(`${link} hi`, new Set()), `<p><a href="${link}">${urlDisplayText}</a> hi</p>`)
+				assert.equal(enrichStatus(`hey ${link}`, new Set()), `<p>hey <a href="${link}">${urlDisplayText}</a></p>`)
+				assert.equal(enrichStatus(`${link}`, new Set()), `<p><a href="${link}">${urlDisplayText}</a></p>`)
+				assert.equal(enrichStatus(`@!@£${link}!!!`, new Set()), `<p>@!@£<a href="${link}">${urlDisplayText}</a>!!!</p>`)
 			})
 		})
 
@@ -307,19 +307,19 @@ describe('Mastodon APIs', () => {
 			for (let i = 0, len = tagsToTest.length; i < len; i++) {
 				const { tag, expectedTagAnchor } = tagsToTest[i]
 
-				assert.equal(enrichStatus(`hey ${tag} hi`, []), `<p>hey ${expectedTagAnchor} hi</p>`)
-				assert.equal(enrichStatus(`${tag} hi`, []), `<p>${expectedTagAnchor} hi</p>`)
-				assert.equal(enrichStatus(`${tag}\n\thein`, []), `<p>${expectedTagAnchor}\n\thein</p>`)
-				assert.equal(enrichStatus(`hey ${tag}`, []), `<p>hey ${expectedTagAnchor}</p>`)
-				assert.equal(enrichStatus(`${tag}`, []), `<p>${expectedTagAnchor}</p>`)
-				assert.equal(enrichStatus(`@!@£${tag}!!!`, []), `<p>@!@£${expectedTagAnchor}!!!</p>`)
+				assert.equal(enrichStatus(`hey ${tag} hi`, new Set()), `<p>hey ${expectedTagAnchor} hi</p>`)
+				assert.equal(enrichStatus(`${tag} hi`, new Set()), `<p>${expectedTagAnchor} hi</p>`)
+				assert.equal(enrichStatus(`${tag}\n\thein`, new Set()), `<p>${expectedTagAnchor}\n\thein</p>`)
+				assert.equal(enrichStatus(`hey ${tag}`, new Set()), `<p>hey ${expectedTagAnchor}</p>`)
+				assert.equal(enrichStatus(`${tag}`, new Set()), `<p>${expectedTagAnchor}</p>`)
+				assert.equal(enrichStatus(`@!@£${tag}!!!`, new Set()), `<p>@!@£${expectedTagAnchor}!!!</p>`)
 			}
 		})
 
 		test('ignore invalid tags', () => {
-			assert.equal(enrichStatus('tags cannot be empty like: #', []), `<p>tags cannot be empty like: #</p>`)
+			assert.equal(enrichStatus('tags cannot be empty like: #', new Set()), `<p>tags cannot be empty like: #</p>`)
 			assert.equal(
-				enrichStatus('tags cannot contain only numbers like: #123', []),
+				enrichStatus('tags cannot contain only numbers like: #123', new Set()),
 				`<p>tags cannot contain only numbers like: #123</p>`
 			)
 		})

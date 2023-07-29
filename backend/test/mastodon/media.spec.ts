@@ -64,11 +64,10 @@ describe('Mastodon APIs', () => {
 		test('update image description', async () => {
 			const db = await makeDB()
 			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const properties = {
+			const image = await createImage(domain, db, connectedActor, {
 				url: 'https://cloudflare.com/image.jpg',
 				description: 'foo bar',
-			}
-			const image = await createImage(domain, db, connectedActor, properties)
+			})
 
 			const request = new Request('https://' + domain, {
 				method: 'PUT',

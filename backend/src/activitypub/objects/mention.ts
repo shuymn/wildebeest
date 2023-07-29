@@ -6,7 +6,7 @@ import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-mention
 export type Mention = Link
 
-export function newMention(actor: Actor, domain: string): Mention {
+export function newMention(actor: Pick<Actor, 'id' | 'preferredUsername'>, domain: string): Mention {
 	return {
 		type: 'Mention',
 		href: getApId(actor.id),

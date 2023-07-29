@@ -6,13 +6,17 @@ import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
 import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import { resourceNotFound } from 'wildebeest/backend/src/errors'
 import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import { isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
 
-export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request, env, params }) => {
+export const onRequest: PagesFunction<Env, 'id', ContextData> = async ({ request, env, params: { id } }) => {
+	if (typeof id !== 'string') {
+		return resourceNotFound('id', String(id))
+	}
 	const domain = new URL(request.url).hostname
-	return handleRequest(domain, await getDatabase(env), params.id as string)
+	return handleRequest(domain, await getDatabase(env), id)
 }
 
 const headers = {
@@ -45,28 +49,32 @@ INNER JOIN objects ON objects.id = outbox_objects.object_id
 WHERE outbox_objects.actor_id = ?1
       AND objects.type = 'Note'
       AND outbox_objects.target = '${PUBLIC_GROUP}'
-ORDER by outbox_objects.cdate DESC
+ORDER BY ${db.qb.timeNormalize('outbox_objects.cdate')} DESC
 LIMIT ?2
 `
 
-	const { success, error, results } = await db.prepare(QUERY).bind(actorId.toString(), DEFAULT_LIMIT).all()
+	const { success, error, results } = await db.prepare(QUERY).bind(actorId.toString(), DEFAULT_LIMIT).all<{
+		properties: string | object
+		id: string
+		cdate: string
+	}>()
 	if (!success) {
 		throw new Error('SQL error: ' + error)
 	}
 
 	if (results && results.length > 0) {
-		for (let i = 0, len = results.length; i < len; i++) {
-			const result: any = results[i]
-			const properties = JSON.parse(result.properties)
+		for (const result of results) {
+			const properties =
+				typeof result.properties === 'string' ? JSON.parse(result.properties) : (result.properties as Partial<Note>)
 
-			const note: Note = {
+			const note = {
 				id: new URL(result.id),
 				atomUri: new URL(result.id),
 				type: 'Note',
 				published: new Date(result.cdate).toISOString(),
 
 				// FIXME: stub
-				sensitive: false,
+				sensitive: properties.sensitive ?? false,
 				attachment: [],
 				tag: [],
 				replies: {
@@ -84,8 +92,6 @@ LIMIT ?2
 
 				...properties,
 			}
-			const activity = createCreateActivity(domain, actor, note)
-			delete activity['@context']
 
 			const activityId = getApId(note.id)
 			// check if the URL pathname ends with '/', if not add one.
@@ -93,11 +99,16 @@ LIMIT ?2
 			// append the additional path
 			activityId.pathname += 'activity'
 
-			activity.id = activityId
-			activity.published = new Date(result.cdate).toISOString()
-			activity.to = [getApId('https://www.w3.org/ns/activitystreams#Public')]
-			activity.cc = [actor.followers]
-			items.push(activity)
+			const activity = createCreateActivity(domain, actor, note)
+			items.push({
+				id: activityId,
+				type: activity.type,
+				actor: activity.actor,
+				object: activity.object,
+				to: [new URL('https://www.w3.org/ns/activitystreams#Public')],
+				cc: [actor.followers],
+				published: new Date(result.cdate).toISOString(),
+			})
 		}
 	}
 

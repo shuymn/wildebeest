@@ -21,7 +21,7 @@ const schema = z.object({
 	since_id: z.string().optional(),
 	// return results immediately newer than this ID
 	min_id: z.string().optional(),
-	// maximim number of results to return
+	// maximum number of results to return
 	// defaults to 20 statuses. max 40 statuses
 	limit: myz
 		.numeric()

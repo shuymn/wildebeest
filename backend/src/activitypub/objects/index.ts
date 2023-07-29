@@ -34,6 +34,7 @@ export interface ApObject {
 
 	// Extension
 	preferredUsername?: string
+	sensitive?: boolean
 	// Internal
 	[originalActorIdSymbol]?: string
 	[originalObjectIdSymbol]?: string
@@ -107,28 +108,30 @@ export function uri(domain: string, id: string): URL {
 export async function createObject<T extends ApObject>(
 	domain: string,
 	db: Database,
-	type: string,
-	properties: any,
+	type: T['type'],
+	properties: Omit<T, 'id' | 'type'>,
 	originalActorId: URL,
 	local: boolean
-): Promise<T> {
+) {
 	const now = new Date()
 	const mastodonId = await generateMastodonId(db, 'objects', now)
 	const apId = uri(domain, crypto.randomUUID())
-	const sanitizedProperties = await sanitizeObjectProperties(properties)
+	properties = await sanitizeObjectProperties({ id: apId, type, ...properties })
 
 	const { success, error } = await db
 		.prepare(
-			'INSERT INTO objects(id, type, properties, original_actor_id, local, mastodon_id, cdate) VALUES(?, ?, ?, ?, ?, ?, ?)'
+			`INSERT INTO objects(id, type, properties, original_actor_id, local, mastodon_id, cdate, reply_to_object_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			apId.toString(),
 			type,
-			JSON.stringify(sanitizedProperties),
+			JSON.stringify(properties),
 			originalActorId.toString(),
 			local ? 1 : 0,
 			mastodonId,
-			now.toISOString()
+			now.toISOString(),
+			properties.inReplyTo ? properties.inReplyTo.toString() : null
 		)
 		.run()
 	if (!success) {
@@ -136,14 +139,14 @@ export async function createObject<T extends ApObject>(
 	}
 
 	return {
-		...sanitizedProperties,
+		...properties,
 		type,
 		id: apId,
 		published: now.toISOString(),
 
 		[mastodonIdSymbol]: mastodonId,
 		[originalActorIdSymbol]: originalActorId.toString(),
-	} as T
+	}
 }
 
 export async function get<T>(url: URL): Promise<T> {
@@ -270,16 +273,16 @@ export async function ensureObjectMastodonId(db: Database, mastodonId: MastodonI
 	return newMastodonId
 }
 
-export async function getObjectById(db: Database, id: string | URL): Promise<ApObject | null> {
-	return getObjectBy(db, ObjectByKey.id, id.toString())
+export async function getObjectById<T extends ApObject>(db: Database, id: string | URL): Promise<T | null> {
+	return getObjectBy<T>(db, ObjectByKey.id, id.toString())
 }
 
-export async function getObjectByOriginalId(db: Database, id: string | URL): Promise<ApObject | null> {
+export async function getObjectByOriginalId<T extends ApObject>(db: Database, id: string | URL): Promise<T | null> {
 	return getObjectBy(db, ObjectByKey.originalObjectId, id.toString())
 }
 
-export async function getObjectByMastodonId(db: Database, id: MastodonId): Promise<ApObject | null> {
-	return getObjectBy(db, ObjectByKey.mastodonId, id)
+export async function getObjectByMastodonId<T extends ApObject>(db: Database, id: MastodonId): Promise<T | null> {
+	return getObjectBy<T>(db, ObjectByKey.mastodonId, id)
 }
 
 export enum ObjectByKey {
@@ -303,7 +306,17 @@ export async function getObjectBy<T extends ApObject>(
 		FROM objects
 		WHERE objects.${key}=?
 	`
-	const { results, success, error } = await db.prepare(query).bind(value).all()
+	const { results, success, error } = await db.prepare(query).bind(value).all<{
+		id: string
+		mastodon_id: string
+		type: string
+		cdate: string
+		original_actor_id: string
+		original_object_id: string | null
+		reply_to_object_id: string | null
+		properties: string | object
+		local: 1 | 0
+	}>()
 	if (!success) {
 		throw new Error('SQL error: ' + error)
 	}
@@ -311,7 +324,7 @@ export async function getObjectBy<T extends ApObject>(
 		return null
 	}
 
-	const result: any = results[0]
+	const [result] = results
 	let properties
 	if (typeof result.properties === 'object') {
 		// neon uses JSONB for properties which is returned as a deserialized
@@ -341,11 +354,11 @@ export function isApObject(value: unknown): value is ApObject {
 }
 
 /** Sanitizes the ActivityPub Object `properties` prior to being stored in the DB. */
-export async function sanitizeObjectProperties(properties: unknown): Promise<ApObject> {
+export async function sanitizeObjectProperties<T extends ApObject>(properties: T): Promise<T> {
 	if (!isApObject(properties)) {
 		throw new Error('Invalid object properties. Expected an object but got ' + JSON.stringify(properties))
 	}
-	const sanitized: ApObject = {
+	const sanitized: T = {
 		...properties,
 	}
 	if ('content' in properties) {

@@ -4,7 +4,7 @@ import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import type { Link } from 'wildebeest/backend/src/activitypub/objects/link'
 import { type Database } from 'wildebeest/backend/src/database'
-import { RequiredProps } from 'wildebeest/backend/src/utils/type'
+import { PartialProps, RequiredProps } from 'wildebeest/backend/src/utils/type'
 
 import * as objects from '.'
 
@@ -15,11 +15,17 @@ const NOTE = 'Note'
 export type Note = RequiredProps<objects.ApObject, 'cc' | 'to'> & {
 	type: typeof NOTE
 	content: string
-	attributedTo?: string
-	replies?: string
+	source: {
+		content: string
+		mediaType: string
+	}
+	attributedTo?: objects.ApObjectId
 	attachment: Array<objects.ApObject>
-	tag: Array<Link>
+	tag?: Array<Link>
 	spoiler_text?: string
+	sensitive: boolean
+	replies?: objects.ApObjectOrId
+	updated?: string
 }
 
 export function isNote(obj: objects.ApObject): obj is Note {
@@ -27,34 +33,54 @@ export function isNote(obj: objects.ApObject): obj is Note {
 	return obj.type === NOTE
 }
 
+type ExtraProperties = PartialProps<
+	Pick<Note, 'source' | 'sensitive' | 'inReplyTo' | 'tag' | 'spoiler_text'>,
+	'inReplyTo' | 'tag' | 'spoiler_text'
+>
+
 export async function createPublicNote(
 	domain: string,
 	db: Database,
 	content: string,
 	actor: Actor,
-	attachments: Array<objects.ApObject> = [],
-	extraProperties: any = {}
-): Promise<Note> {
-	const actorId = new URL(actor.id)
+	ccActors: Set<Actor>,
+	attachment: objects.ApObject[] = [],
+	extraProperties: ExtraProperties
+) {
+	const cc =
+		ccActors.size > 0
+			? [actor.followers.toString(), ...Array.from(ccActors).map((a) => a.id.toString())]
+			: [actor.followers.toString()]
 
-	const properties = {
-		attributedTo: actorId,
-		content,
-		to: [PUBLIC_GROUP],
-		cc: [actor.followers.toString()],
+	return await createNote(domain, db, content, actor, [PUBLIC_GROUP], cc, attachment, extraProperties)
+}
 
-		// FIXME: stub values
-		replies: null,
-		sensitive: false,
-		summary: null,
-		tag: [],
+export async function createUnlistedNote(
+	domain: string,
+	db: Database,
+	content: string,
+	actor: Actor,
+	ccActors: Set<Actor>,
+	attachment: objects.ApObject[] = [],
+	extraProperties: ExtraProperties
+) {
+	const cc = ccActors.size > 0 ? [PUBLIC_GROUP, ...Array.from(ccActors).map((a) => a.id.toString())] : [PUBLIC_GROUP]
 
-		attachment: attachments,
-		inReplyTo: null,
-		...extraProperties,
-	}
+	return await createNote(domain, db, content, actor, [actor.followers.toString()], cc, attachment, extraProperties)
+}
 
-	return await objects.createObject(domain, db, NOTE, properties, actorId, true)
+export async function createPrivateNote(
+	domain: string,
+	db: Database,
+	content: string,
+	actor: Actor,
+	ccActors: Set<Actor>,
+	attachment: objects.ApObject[] = [],
+	extraProperties: ExtraProperties
+) {
+	const cc = ccActors.size > 0 ? Array.from(ccActors).map((a) => a.id.toString()) : []
+
+	return await createNote(domain, db, content, actor, [actor.followers.toString()], cc, attachment, extraProperties)
 }
 
 export async function createDirectNote(
@@ -62,28 +88,42 @@ export async function createDirectNote(
 	db: Database,
 	content: string,
 	actor: Actor,
-	targetActors: Array<Actor>,
-	attachment: Array<objects.ApObject> = [],
-	extraProperties: any = {}
-): Promise<Note> {
+	toActors: Set<Actor>,
+	attachment: objects.ApObject[] = [],
+	extraProperties: ExtraProperties
+) {
+	const to = toActors.size > 0 ? Array.from(toActors).map((a) => a.id.toString()) : []
+
+	return await createNote(domain, db, content, actor, to, [], attachment, extraProperties)
+}
+
+async function createNote(
+	domain: string,
+	db: Database,
+	content: string,
+	actor: Actor,
+	to: string[],
+	cc: string[],
+	attachment: objects.ApObject[] = [],
+	extraProperties: ExtraProperties
+) {
 	const actorId = new URL(actor.id)
+	return await objects.createObject<Note>(
+		domain,
+		db,
+		NOTE,
+		{
+			attributedTo: actorId,
+			content,
+			to,
+			cc,
 
-	const properties = {
-		attributedTo: actorId,
-		content,
-		to: targetActors.map((a) => a.id.toString()),
-		cc: [],
-
-		// FIXME: stub values
-		inReplyTo: null,
-		replies: null,
-		sensitive: false,
-		summary: null,
-		tag: [],
-		attachment,
-
-		...extraProperties,
-	}
-
-	return await objects.createObject(domain, db, NOTE, properties, actorId, true)
+			tag: extraProperties.tag ?? [],
+			attachment,
+			inReplyTo: extraProperties.inReplyTo ?? null,
+			...extraProperties,
+		},
+		actorId,
+		true
+	)
 }

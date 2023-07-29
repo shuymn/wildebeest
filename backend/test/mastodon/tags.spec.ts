@@ -23,7 +23,10 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-			const note = await createPublicNote(domain, db, 'my localnote status', actor)
+			const note = await createPublicNote(domain, db, 'my localnote status', actor, new Set(), [], {
+				sensitive: false,
+				source: { content: 'my first status', mediaType: 'text/markdown' },
+			})
 			await insertHashtags(db, note, ['test'])
 
 			const res = await tag_id.handleRequestGet(db, domain, 'test')

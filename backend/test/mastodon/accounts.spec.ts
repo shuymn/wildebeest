@@ -14,11 +14,10 @@ import { createPublicNote } from 'wildebeest/backend/src/activitypub/objects/not
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { insertLike } from 'wildebeest/backend/src/mastodon/like'
 import { createReblog, insertReblog } from 'wildebeest/backend/src/mastodon/reblog'
-import { createStatus } from 'wildebeest/backend/src/mastodon/status'
 import { MessageType } from 'wildebeest/backend/src/types'
 import { isUUID } from 'wildebeest/backend/src/utils'
 import { queryAcct } from 'wildebeest/backend/src/webfinger'
-import { createReply } from 'wildebeest/backend/test/shared.utils'
+import { createReply, createStatus } from 'wildebeest/backend/test/shared.utils'
 import * as accounts_get from 'wildebeest/functions/api/v1/accounts/[id]'
 import * as accounts_featured_tags from 'wildebeest/functions/api/v1/accounts/[id]/featured_tags'
 import * as accounts_follow from 'wildebeest/functions/api/v1/accounts/[id]/follow'
@@ -557,7 +556,7 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-			const properties = { url: 'https://example.com/image.jpg' }
+			const properties = { url: 'https://example.com/image.jpg', type: 'Image' as const }
 			const mediaAttachments = [await createImage(domain, db, actor, properties)]
 			await createStatus(domain, db, actor, 'status from actor', mediaAttachments)
 
@@ -661,8 +660,9 @@ describe('Mastodon APIs', () => {
 
 			const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 
-			const note = await createPublicNote(domain, db, 'my localnote status', actorA, [], {
-				attributedTo: actorA.id.toString(),
+			const note = await createPublicNote(domain, db, 'my localnote status', actorA, new Set(), [], {
+				sensitive: false,
+				source: { content: 'my localnote status', mediaType: 'text/plain' },
 			})
 
 			globalThis.fetch = async (input: RequestInfo) => {

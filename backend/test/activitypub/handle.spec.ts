@@ -8,6 +8,7 @@ import {
 	DeleteActivity,
 	FollowActivity,
 	LikeActivity,
+	PUBLIC_GROUP,
 	UpdateActivity,
 } from 'wildebeest/backend/src/activitypub/activities'
 import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
@@ -35,7 +36,10 @@ describe('ActivityPub', () => {
 				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 				const actorB = await createPerson(domain, db, userKEK, 'b@cloudflare.com')
 
-				const note = await createPublicNote(domain, db, 'my first status', actorA)
+				const note = await createPublicNote(domain, db, 'my first status', actorA, new Set(), [], {
+					sensitive: false,
+					source: { content: 'my first status', mediaType: 'text/plain' },
+				})
 
 				const activity: AnnounceActivity = {
 					type: 'Announce',
@@ -58,7 +62,10 @@ describe('ActivityPub', () => {
 				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 				const actorB = await createPerson(domain, db, userKEK, 'b@cloudflare.com')
 
-				const note = await createPublicNote(domain, db, 'my first status', actorA)
+				const note = await createPublicNote(domain, db, 'my first status', actorA, new Set(), [], {
+					sensitive: false,
+					source: { content: 'my first status', mediaType: 'text/plain' },
+				})
 
 				const activity: AnnounceActivity = {
 					type: 'Announce',
@@ -86,7 +93,10 @@ describe('ActivityPub', () => {
 				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 				const actorB = await createPerson(domain, db, userKEK, 'b@cloudflare.com')
 
-				const note = await createPublicNote(domain, db, 'my first status', actorA)
+				const note = await createPublicNote(domain, db, 'my first status', actorA, new Set(), [], {
+					sensitive: false,
+					source: { content: 'my first status', mediaType: 'text/plain' },
+				})
 
 				const activity: LikeActivity = {
 					type: 'Like',
@@ -106,7 +116,10 @@ describe('ActivityPub', () => {
 				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 				const actorB = await createPerson(domain, db, userKEK, 'b@cloudflare.com')
 
-				const note = await createPublicNote(domain, db, 'my first status', actorA)
+				const note = await createPublicNote(domain, db, 'my first status', actorA, new Set(), [], {
+					sensitive: false,
+					source: { content: 'my first status', mediaType: 'text/plain' },
+				})
 
 				const activity: LikeActivity = {
 					type: 'Like',
@@ -131,7 +144,10 @@ describe('ActivityPub', () => {
 				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 				const actorB = await createPerson(domain, db, userKEK, 'b@cloudflare.com')
 
-				const note = await createPublicNote(domain, db, 'my first status', actorA)
+				const note = await createPublicNote(domain, db, 'my first status', actorA, new Set(), [], {
+					sensitive: false,
+					source: { content: 'my first status', mediaType: 'text/plain' },
+				})
 
 				const activity: LikeActivity = {
 					type: 'Like',
@@ -278,7 +294,7 @@ describe('ActivityPub', () => {
 					type: 'Create',
 					id: createActivityId(domain),
 					actor: getApId(remoteActorId),
-					to: [],
+					to: [PUBLIC_GROUP],
 					cc: [],
 					object: {
 						id: getApId('https://example.com/note1'),
@@ -776,7 +792,10 @@ describe('ActivityPub', () => {
 				const db = await makeDB()
 				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 
-				const note = await createPublicNote(domain, db, 'my first status', actorA)
+				const note = await createPublicNote(domain, db, 'my first status', actorA, new Set(), [], {
+					sensitive: false,
+					source: { content: 'my first status', mediaType: 'text/plain' },
+				})
 
 				const activity: DeleteActivity = {
 					type: 'Delete',

@@ -46,7 +46,10 @@ describe('Consumer', () => {
 			}
 
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const note = await createPublicNote(domain, db, 'my first status', actor)
+			const note = await createPublicNote(domain, db, 'my first status', actor, new Set(), [], {
+				sensitive: false,
+				source: { content: 'my first status', mediaType: 'text/plain' },
+			})
 
 			const activity: any = {
 				type: 'Create',

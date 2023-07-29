@@ -50,7 +50,10 @@ describe('Mastodon APIs', () => {
 			const fromActor = await createPerson(domain, db, userKEK, 'from@cloudflare.com')
 
 			const connectedActor = actor
-			const note = await createPublicNote(domain, db, 'my first status', connectedActor)
+			const note = await createPublicNote(domain, db, 'my first status', connectedActor, new Set(), [], {
+				sensitive: false,
+				source: { content: 'my first status', mediaType: 'text/markdown' },
+			})
 			await insertFollowNotification(db, connectedActor, fromActor)
 			await sleep(10)
 			await createNotification(db, 'favourite', connectedActor, fromActor, note)
@@ -77,7 +80,10 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const fromActor = await createPerson(domain, db, userKEK, 'from@cloudflare.com')
-			const note = await createPublicNote(domain, db, 'my first status', actor)
+			const note = await createPublicNote(domain, db, 'my first status', actor, new Set(), [], {
+				sensitive: false,
+				source: { content: 'my first status', mediaType: 'text/markdown' },
+			})
 			await createNotification(db, 'favourite', actor, fromActor, note)
 
 			const res = await notifications_get.handleRequest(domain, '1', db, actor)
