@@ -1,7 +1,7 @@
 // https://docs.joinmastodon.org/methods/statuses/#create
 
 import { createCreateActivity } from 'wildebeest/backend/src/activitypub/activities/create'
-import { getActorById, Person } from 'wildebeest/backend/src/activitypub/actors'
+import { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { deliverFollowers, deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
 import {
@@ -9,11 +9,16 @@ import {
 	getApId,
 	getObjectByMastodonId,
 	isDocument,
-	originalActorIdSymbol,
 	originalObjectIdSymbol,
 } from 'wildebeest/backend/src/activitypub/objects'
 import { newMention } from 'wildebeest/backend/src/activitypub/objects/mention'
-import { createDirectNote, createPublicNote, Note } from 'wildebeest/backend/src/activitypub/objects/note'
+import {
+	createDirectNote,
+	createPrivateNote,
+	createPublicNote,
+	createUnlistedNote,
+	Note,
+} from 'wildebeest/backend/src/activitypub/objects/note'
 import { Cache, cacheFromEnv } from 'wildebeest/backend/src/cache'
 import { Database, getDatabase } from 'wildebeest/backend/src/database'
 import { exceededLimit, statusNotFound, validationError } from 'wildebeest/backend/src/errors'
@@ -163,7 +168,9 @@ export async function handleRequest(
 	if (params.visibility === 'public') {
 		createFn = createPublicNote
 	} else if (params.visibility === 'unlisted') {
-		createFn = createPublicNote
+		createFn = createUnlistedNote
+	} else if (params.visibility === 'private') {
+		createFn = createPrivateNote
 	} else if (params.visibility === 'direct') {
 		createFn = createDirectNote
 	} else {
