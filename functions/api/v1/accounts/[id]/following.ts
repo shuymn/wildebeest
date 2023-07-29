@@ -14,7 +14,7 @@ import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 import { z } from 'zod'
 
 const schema = z.object({
-	limit: z.number().int().min(1).max(80).catch(40),
+	limit: z.coerce.number().int().min(1).max(80).catch(40),
 })
 
 type Dependencies = {
