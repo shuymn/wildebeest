@@ -16,9 +16,10 @@ import { Database } from 'wildebeest/backend/src/database'
 import { createNotification, sendMentionNotification } from 'wildebeest/backend/src/mastodon/notification'
 import { insertReply } from 'wildebeest/backend/src/mastodon/reply'
 import { parseHandle } from 'wildebeest/backend/src/utils/handle'
+import { RequiredProps } from 'wildebeest/backend/src/utils/type'
 import { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
-export function createCreateActivity(domain: string, actor: Actor, object: Note): CreateActivity {
+export function createCreateActivity(domain: string, actor: Actor, object: RequiredProps<Note, 'published'>) {
 	return {
 		'@context': [
 			'https://www.w3.org/ns/activitystreams',
@@ -38,8 +39,8 @@ export function createCreateActivity(domain: string, actor: Actor, object: Note)
 		object,
 		to: object.to,
 		cc: object.cc,
-		published: object.published ? object.published : undefined,
-	}
+		published: object.published,
+	} satisfies CreateActivity
 }
 
 function extractID(domain: string, s: string | URL): string {
