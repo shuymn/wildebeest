@@ -12,7 +12,12 @@ export function isImage(object: ApObject): object is Image {
 	return object.type === IMAGE
 }
 
-export async function createImage(domain: string, db: Database, actor: Actor, properties: Image): Promise<Image> {
+export async function createImage(
+	domain: string,
+	db: Database,
+	actor: Actor,
+	properties: Omit<Image, 'id' | 'type'>
+): Promise<Image> {
 	const actorId = new URL(actor.id)
 	return await createObject<Image>(domain, db, IMAGE, properties, actorId, true)
 }

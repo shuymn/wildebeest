@@ -108,15 +108,15 @@ export function uri(domain: string, id: string): URL {
 export async function createObject<T extends ApObject>(
 	domain: string,
 	db: Database,
-	type: string,
-	properties: Omit<T, 'id'>,
+	type: T['type'],
+	properties: Omit<T, 'id' | 'type'>,
 	originalActorId: URL,
 	local: boolean
 ) {
 	const now = new Date()
 	const mastodonId = await generateMastodonId(db, 'objects', now)
 	const apId = uri(domain, crypto.randomUUID())
-	properties = await sanitizeObjectProperties({ id: apId, ...properties })
+	properties = await sanitizeObjectProperties({ id: apId, type, ...properties })
 
 	const { success, error } = await db
 		.prepare(
