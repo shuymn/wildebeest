@@ -97,8 +97,8 @@ export async function handleCreateActivity(
 		let inReplyToObject = await getObjectByOriginalId(db, inReplyToObjectId)
 
 		if (inReplyToObject === null) {
-			const remoteObject = await get<ApObject>(inReplyToObjectId)
-			const res = await cacheObject<ApObject>(domain, db, remoteObject, actorId, inReplyToObjectId, false)
+			const remoteObject = await get<Note>(inReplyToObjectId)
+			const res = await cacheObject<Note>(domain, db, remoteObject, actorId, inReplyToObjectId, false)
 			inReplyToObject = res.object
 		}
 

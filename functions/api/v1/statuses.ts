@@ -106,9 +106,9 @@ export async function handleRequest(
 	idempotencyKey: string | null
 ): Promise<Response> {
 	if (idempotencyKey !== null) {
-		const maybeObject = await idempotency.hasKey(db, idempotencyKey)
+		const maybeObject = await idempotency.hasKey<Note>(db, idempotencyKey)
 		if (maybeObject !== null) {
-			const res = await toMastodonStatusFromObject(db, maybeObject as Note, domain)
+			const res = await toMastodonStatusFromObject(db, maybeObject, domain)
 			return new Response(JSON.stringify(res), { headers })
 		}
 	}
@@ -137,7 +137,13 @@ export async function handleRequest(
 		}
 	}
 
-	const extraProperties: any = {}
+	const extraProperties: PartialProps<Pick<Note, 'source' | 'sensitive' | 'inReplyTo' | 'tag'>, 'inReplyTo' | 'tag'> = {
+		source: {
+			content: params.status,
+			mediaType: 'text/plain',
+		},
+		sensitive: params.sensitive,
+	}
 	if (inReplyToObject) {
 		extraProperties.inReplyTo = inReplyToObject[originalObjectIdSymbol] || inReplyToObject.id.toString()
 	}

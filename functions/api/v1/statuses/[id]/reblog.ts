@@ -26,12 +26,12 @@ export async function handleRequest(
 	queue: Queue<DeliverMessageBody>,
 	domain: string
 ): Promise<Response> {
-	const obj = await getObjectByMastodonId(db, id)
+	const obj = await getObjectByMastodonId<Note>(db, id)
 	if (obj === null) {
 		return new Response('', { status: 404 })
 	}
 
-	const status = await toMastodonStatusFromObject(db, obj as Note, domain)
+	const status = await toMastodonStatusFromObject(db, obj, domain)
 	if (status === null) {
 		return new Response('', { status: 404 })
 	}
