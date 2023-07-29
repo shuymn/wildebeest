@@ -17,6 +17,7 @@ export default defineConfig(() => {
 			qwikVite(),
 			tsconfigPaths(),
 		],
+		build: { sourcemap: process.env.NODE_ENV === 'test' },
 		preview: {
 			headers: {
 				'Cache-Control': 'public, max-age=600',
