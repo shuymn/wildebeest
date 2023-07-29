@@ -1,5 +1,16 @@
 {
-	"cSpell.words": ["activitypub", "cdate", "favourited", "favourites", "reblog", "reblogged", "reblogger", "reblogs"],
+	"cSpell.words": [
+		"activitypub",
+		"cdate",
+		"favourited",
+		"favourites",
+		"idempotency",
+		"qwik",
+		"reblog",
+		"reblogged",
+		"reblogger",
+		"reblogs"
+	],
 	"typescript.preferences.importModuleSpecifier": "non-relative",
 	"editor.codeActionsOnSave": ["source.addMissingImports", "source.fixAll.eslint"]
 }
