@@ -143,7 +143,8 @@ export async function handleRequest(
 	const extraProperties: PartialProps<Pick<Note, 'source' | 'sensitive' | 'inReplyTo' | 'tag'>, 'inReplyTo' | 'tag'> = {
 		source: {
 			content: params.status,
-			mediaType: 'text/plain',
+			// TODO: selectable mediaType
+			mediaType: 'text/markdown',
 		},
 		sensitive: params.sensitive,
 	}
