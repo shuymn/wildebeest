@@ -1,13 +1,15 @@
 // https://docs.joinmastodon.org/methods/statuses/#create
 
 import { createCreateActivity } from 'wildebeest/backend/src/activitypub/activities/create'
-import { Person } from 'wildebeest/backend/src/activitypub/actors'
+import { getActorById, Person } from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { deliverFollowers, deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
 import {
 	Document,
+	getApId,
 	getObjectByMastodonId,
 	isDocument,
+	originalActorIdSymbol,
 	originalObjectIdSymbol,
 } from 'wildebeest/backend/src/activitypub/objects'
 import { newMention } from 'wildebeest/backend/src/activitypub/objects/mention'
@@ -24,6 +26,7 @@ import { getMentions, toMastodonStatusFromObject } from 'wildebeest/backend/src/
 import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
 import { ContextData, DeliverMessageBody, Env, Queue, Visibility } from 'wildebeest/backend/src/types'
 import { cors, myz, readBody } from 'wildebeest/backend/src/utils'
+import { PartialProps } from 'wildebeest/backend/src/utils/type'
 import { z } from 'zod'
 
 const headers = {
@@ -118,7 +121,7 @@ export async function handleRequest(
 		for (const id of [...params.media_ids]) {
 			const document = await getObjectByMastodonId(db, id)
 			if (document === null) {
-				console.warn('object attachement not found: ' + id)
+				console.warn('object attachment not found: ' + id)
 				continue
 			}
 			if (!isDocument(document)) {
@@ -149,20 +152,37 @@ export async function handleRequest(
 	}
 
 	const mentions = await getMentions(params.status, domain, db)
-	if (mentions.length > 0) {
-		extraProperties.tag = mentions.map((actor) => newMention(actor, domain))
+	if (mentions.size > 0) {
+		extraProperties.tag = [...mentions].map((actor) => newMention(actor, domain))
 	}
 
-	const content = enrichStatus(params.status, mentions)
+	const content = enrichStatus(params.status, [...mentions])
 
-	let note
+	let createFn
 	if (params.visibility === 'public') {
-		note = await createPublicNote(domain, db, content, connectedActor, mediaAttachments, extraProperties)
+		createFn = createPublicNote
+	} else if (params.visibility === 'unlisted') {
+		createFn = createPublicNote
 	} else if (params.visibility === 'direct') {
-		note = await createDirectNote(domain, db, content, connectedActor, mentions, mediaAttachments, extraProperties)
+		createFn = createDirectNote
 	} else {
 		return validationError(`status with visibility: ${params.visibility}`)
 	}
+
+	const toActorId =
+		inReplyToObject && inReplyToObject[originalActorIdSymbol] ? inReplyToObject[originalActorIdSymbol] : undefined
+	const toActor = toActorId ? (await getActorById(db, toActorId)) ?? undefined : undefined
+	const note = await createFn(
+		domain,
+		db,
+		content,
+		connectedActor,
+		toActor,
+		// ignore the toActor from mentions(cc)
+		[...mentions].filter((actor) => (toActorId ? getApId(actor).toString() !== toActorId : true)),
+		mediaAttachments,
+		extraProperties
+	)
 
 	const hashtags = getHashtags(params.status)
 	if (hashtags.length > 0) {
@@ -175,30 +195,20 @@ export async function handleRequest(
 	}
 
 	const activity = createCreateActivity(domain, connectedActor, note)
-	await deliverFollowers(db, userKEK, connectedActor, activity, queue)
 
-	if (params.visibility === 'public') {
-		await addObjectInOutbox(db, connectedActor, note)
+	const to = Array.isArray(activity.to) ? activity.to : [activity.to]
+	for (const target of to) {
+		await addObjectInOutbox(db, connectedActor, note, note.published, getApId(target).toString())
+	}
 
-		// A public note is sent to the public group URL and cc'ed any mentioned
-		// actors.
-		for (const targetActor of mentions) {
-			if (Array.isArray(note.cc)) {
-				note.cc.push(targetActor.id)
-			} else {
-				note.cc = [note.cc, targetActor.id]
-			}
-		}
-	} else if (params.visibility === 'direct') {
-		//  A direct note is sent to mentioned people only
-		for (const targetActor of mentions) {
-			await addObjectInOutbox(db, connectedActor, note, undefined, targetActor.id.toString())
-		}
+	const cc = Array.isArray(activity.cc) ? activity.cc : [activity.cc]
+	const followersUrl = connectedActor.followers.toString()
+	if (cc.includes(followersUrl) || to.includes(followersUrl)) {
+		await deliverFollowers(db, userKEK, connectedActor, activity, queue)
 	}
 
 	// If the status is mentioning other persons, we need to delivery it to them.
 	for (const targetActor of mentions) {
-		const activity = createCreateActivity(domain, connectedActor, note)
 		const signingKey = await getSigningKey(userKEK, db, connectedActor)
 		await deliverToActor(signingKey, connectedActor, targetActor, activity, domain)
 	}
@@ -209,6 +219,6 @@ export async function handleRequest(
 
 	await timeline.pregenerateTimelines(domain, db, cache, connectedActor)
 
-	const res = await toMastodonStatusFromObject(db, note, domain)
+	const res = await toMastodonStatusFromObject(db, note, domain, mentions)
 	return new Response(JSON.stringify(res), { headers })
 }
