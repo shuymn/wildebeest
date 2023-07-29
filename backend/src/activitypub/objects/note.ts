@@ -33,36 +33,26 @@ export function isNote(obj: objects.ApObject): obj is Note {
 	return obj.type === NOTE
 }
 
+type ExtraProperties = PartialProps<
+	Pick<Note, 'source' | 'sensitive' | 'inReplyTo' | 'tag' | 'spoiler_text'>,
+	'inReplyTo' | 'tag' | 'spoiler_text'
+>
+
 export async function createPublicNote(
 	domain: string,
 	db: Database,
 	content: string,
 	actor: Actor,
-	toActor: Actor | undefined,
-	ccActors: Actor[],
+	ccActors: Set<Actor>,
 	attachment: objects.ApObject[] = [],
-	extraProperties: PartialProps<Pick<Note, 'source' | 'sensitive' | 'inReplyTo' | 'tag'>, 'inReplyTo' | 'tag'>
+	extraProperties: ExtraProperties
 ) {
-	const actorId = new URL(actor.id)
+	const cc =
+		ccActors.size > 0
+			? [actor.followers.toString(), ...Array.from(ccActors).map((a) => a.id.toString())]
+			: [actor.followers.toString()]
 
-	const properties: Omit<Note, 'id'> = {
-		type: NOTE,
-		attributedTo: actorId,
-		content,
-		to: toActor ? [PUBLIC_GROUP, toActor.id.toString()] : [PUBLIC_GROUP],
-		cc:
-			ccActors.length > 0
-				? [actor.followers.toString(), ...ccActors.map((a) => a.id.toString())]
-				: [actor.followers.toString()],
-
-		sensitive: extraProperties.sensitive,
-		tag: extraProperties.tag ?? [],
-		attachment,
-		inReplyTo: extraProperties.inReplyTo ?? null,
-		source: extraProperties.source,
-	}
-
-	return await objects.createObject(domain, db, NOTE, properties, actorId, true)
+	return await createNote(domain, db, content, actor, [PUBLIC_GROUP], cc, attachment, extraProperties)
 }
 
 export async function createUnlistedNote(
@@ -70,28 +60,13 @@ export async function createUnlistedNote(
 	db: Database,
 	content: string,
 	actor: Actor,
-	toActor: Actor | undefined,
-	ccActors: Actor[],
+	ccActors: Set<Actor>,
 	attachment: objects.ApObject[] = [],
-	extraProperties: PartialProps<Pick<Note, 'source' | 'sensitive' | 'inReplyTo' | 'tag'>, 'inReplyTo' | 'tag'>
+	extraProperties: ExtraProperties
 ) {
-	const actorId = new URL(actor.id)
+	const cc = ccActors.size > 0 ? [PUBLIC_GROUP, ...Array.from(ccActors).map((a) => a.id.toString())] : [PUBLIC_GROUP]
 
-	const properties: Omit<Note, 'id'> = {
-		type: NOTE,
-		attributedTo: actorId,
-		content,
-		to: toActor ? [actor.followers.toString(), toActor.id.toString()] : [actor.followers.toString()],
-		cc: ccActors.length > 0 ? [PUBLIC_GROUP, ...ccActors.map((a) => a.id.toString())] : [PUBLIC_GROUP],
-
-		sensitive: extraProperties.sensitive,
-		tag: extraProperties.tag ?? [],
-		attachment,
-		inReplyTo: extraProperties.inReplyTo ?? null,
-		source: extraProperties.source,
-	}
-
-	return await objects.createObject(domain, db, NOTE, properties, actorId, true)
+	return await createNote(domain, db, content, actor, [actor.followers.toString()], cc, attachment, extraProperties)
 }
 
 export async function createPrivateNote(
@@ -99,28 +74,13 @@ export async function createPrivateNote(
 	db: Database,
 	content: string,
 	actor: Actor,
-	toActor: Actor | undefined,
-	ccActors: Actor[],
+	ccActors: Set<Actor>,
 	attachment: objects.ApObject[] = [],
-	extraProperties: PartialProps<Pick<Note, 'source' | 'sensitive' | 'inReplyTo' | 'tag'>, 'inReplyTo' | 'tag'>
+	extraProperties: ExtraProperties
 ) {
-	const actorId = new URL(actor.id)
+	const cc = ccActors.size > 0 ? Array.from(ccActors).map((a) => a.id.toString()) : []
 
-	const properties: Omit<Note, 'id'> = {
-		type: NOTE,
-		attributedTo: actorId,
-		content,
-		to: toActor ? [actor.followers.toString(), toActor.id.toString()] : [actor.followers.toString()],
-		cc: ccActors.length > 0 ? [...ccActors.map((a) => a.id.toString())] : [],
-
-		sensitive: extraProperties.sensitive,
-		tag: extraProperties.tag ?? [],
-		attachment,
-		inReplyTo: extraProperties.inReplyTo ?? null,
-		source: extraProperties.source,
-	}
-
-	return await objects.createObject(domain, db, NOTE, properties, actorId, true)
+	return await createNote(domain, db, content, actor, [actor.followers.toString()], cc, attachment, extraProperties)
 }
 
 export async function createDirectNote(
@@ -128,26 +88,42 @@ export async function createDirectNote(
 	db: Database,
 	content: string,
 	actor: Actor,
-	toActor: Actor | undefined,
-	ccActors: Actor[],
+	toActors: Set<Actor>,
 	attachment: objects.ApObject[] = [],
-	extraProperties: PartialProps<Pick<Note, 'source' | 'sensitive' | 'inReplyTo' | 'tag'>, 'inReplyTo' | 'tag'>
+	extraProperties: ExtraProperties
+) {
+	const to = toActors.size > 0 ? Array.from(toActors).map((a) => a.id.toString()) : []
+
+	return await createNote(domain, db, content, actor, to, [], attachment, extraProperties)
+}
+
+async function createNote(
+	domain: string,
+	db: Database,
+	content: string,
+	actor: Actor,
+	to: string[],
+	cc: string[],
+	attachment: objects.ApObject[] = [],
+	extraProperties: ExtraProperties
 ) {
 	const actorId = new URL(actor.id)
+	return await objects.createObject<Note>(
+		domain,
+		db,
+		NOTE,
+		{
+			attributedTo: actorId,
+			content,
+			to,
+			cc,
 
-	const properties: Omit<Note, 'id'> = {
-		type: NOTE,
-		attributedTo: actorId,
-		content,
-		to: toActor ? [toActor.id.toString()] : [],
-		cc: ccActors.length > 0 ? [...ccActors.map((a) => a.id.toString())] : [],
-
-		sensitive: extraProperties.sensitive,
-		tag: extraProperties.tag ?? [],
-		attachment,
-		inReplyTo: extraProperties.inReplyTo ?? null,
-		source: extraProperties.source,
-	}
-
-	return await objects.createObject(domain, db, NOTE, properties, actorId, true)
+			tag: extraProperties.tag ?? [],
+			attachment,
+			inReplyTo: extraProperties.inReplyTo ?? null,
+			...extraProperties,
+		},
+		actorId,
+		true
+	)
 }

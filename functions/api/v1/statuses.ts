@@ -170,20 +170,7 @@ export async function handleRequest(
 		return validationError(`status with visibility: ${params.visibility}`)
 	}
 
-	const toActorId =
-		inReplyToObject && inReplyToObject[originalActorIdSymbol] ? inReplyToObject[originalActorIdSymbol] : undefined
-	const toActor = toActorId ? (await getActorById(db, toActorId)) ?? undefined : undefined
-	const note = await createFn(
-		domain,
-		db,
-		content,
-		connectedActor,
-		toActor,
-		// ignore the toActor from mentions(cc)
-		[...mentions].filter((actor) => (toActorId ? getApId(actor).toString() !== toActorId : true)),
-		mediaAttachments,
-		extraProperties
-	)
+	const note = await createFn(domain, db, content, connectedActor, mentions, mediaAttachments, extraProperties)
 
 	const hashtags = getHashtags(params.status)
 	if (hashtags.length > 0) {
