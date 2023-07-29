@@ -19,9 +19,9 @@ export type Note = RequiredProps<objects.ApObject, 'cc' | 'to'> & {
 		content: string
 		mediaType: string
 	}
-	attributedTo: objects.ApObjectId
+	attributedTo?: objects.ApObjectId
 	attachment: Array<objects.ApObject>
-	tag: Array<Link>
+	tag?: Array<Link>
 	spoiler_text?: string
 	sensitive: boolean
 	replies?: objects.ApObjectOrId

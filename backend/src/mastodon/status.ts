@@ -99,7 +99,7 @@ export async function toMastodonStatusFromObject(
 			mentions.push(actorToMention(domain, actor))
 		}
 	} else {
-		for (const link of obj.tag) {
+		for (const link of obj.tag ?? []) {
 			if (link.type === 'Mention') {
 				const actor = await getActorById(db, link.href)
 				if (actor) {
@@ -379,7 +379,7 @@ function detectVisibility({ to, cc, attributedTo }: Pick<Note, 'to' | 'cc' | 'at
 	if (to.includes(PUBLIC_GROUP)) {
 		return 'public'
 	}
-	if (to.includes(attributedTo.toString() + '/followers')) {
+	if (attributedTo && to.includes(attributedTo.toString() + '/followers')) {
 		if (cc.includes(PUBLIC_GROUP)) {
 			return 'unlisted'
 		}
