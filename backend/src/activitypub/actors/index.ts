@@ -11,7 +11,7 @@ import {
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
 import { MastodonId } from 'wildebeest/backend/src/types'
-import { Handle, handleToUrl, RemoteHandle } from 'wildebeest/backend/src/utils/handle'
+import { Handle, handleToMastodonUrl, handleToPleromaUrl, RemoteHandle } from 'wildebeest/backend/src/utils/handle'
 import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
 import { generateUserKey } from 'wildebeest/backend/src/utils/key-ops'
 import { defaultImages } from 'wildebeest/config/accounts'
@@ -173,6 +173,7 @@ export async function getPersonByEmail(db: Database, email: string): Promise<Per
 
 type ActorProperties = Pick<
 	Remote<Actor>,
+	| 'url'
 	| 'name'
 	| 'summary'
 	| 'icon'
@@ -361,8 +362,8 @@ export async function getActorById(db: Database, id: Actor['id']): Promise<Actor
 
 export async function getActorByRemoteHandle(db: Database, handle: RemoteHandle): Promise<Actor | null> {
 	const { results } = await db
-		.prepare(`SELECT * FROM actors WHERE ${db.qb.jsonExtract('properties', 'url')} = ?`)
-		.bind(handleToUrl(handle).toString())
+		.prepare(`SELECT * FROM actors WHERE ${db.qb.jsonExtract('properties', 'url')} IN (?1, ?2)`)
+		.bind(handleToMastodonUrl(handle).toString(), handleToPleromaUrl(handle).toString())
 		.all<{
 			id: string
 			type: Actor['type']
@@ -417,7 +418,7 @@ export function actorFromRow<T extends Actor>(row: ActorRow<T>) {
 		id: new URL(row.id + '#image'),
 	}
 
-	const preferredUsername = properties.preferredUsername
+	const { preferredUsername } = properties
 	const name = properties.name ?? preferredUsername
 
 	let publicKey = null
@@ -429,34 +430,31 @@ export function actorFromRow<T extends Actor>(row: ActorRow<T>) {
 	}
 
 	const id = new URL(row.id)
-
-	let domain = id.hostname
-	if (row.original_actor_id) {
-		domain = getApId(row.original_actor_id).hostname
-	}
-
 	// Old local actors weren't created with inbox/outbox/etc properties, so add
 	// them if missing.
 	if (properties.inbox === undefined) {
 		properties.inbox = new URL(id + '/inbox')
 	}
-
 	if (properties.outbox === undefined) {
 		properties.outbox = new URL(id + '/outbox')
 	}
-
 	if (properties.following === undefined) {
 		properties.following = new URL(id + '/following')
 	}
-
 	if (properties.followers === undefined) {
 		properties.followers = new URL(id + '/followers')
+	}
+	if (properties.url === undefined) {
+		properties.url = handleToMastodonUrl({
+			localPart: preferredUsername ?? name ?? 'unnamed',
+			domain: (row.original_actor_id ? getApId(row.original_actor_id) : id).hostname,
+		})
 	}
 
 	return {
 		type: row.type,
 		id,
-		url: handleToUrl({ localPart: preferredUsername ?? name ?? 'unnamed', domain }),
+		url: properties.url,
 		published: new Date(row.cdate).toISOString(),
 		icon,
 		image,

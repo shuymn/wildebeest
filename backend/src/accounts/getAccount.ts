@@ -18,7 +18,8 @@ import { adjustLocalHostDomain } from 'wildebeest/backend/src/utils/adjustLocalH
 import {
 	actorToHandle,
 	Handle,
-	handleToUrl,
+	handleToMastodonUrl,
+	handleToPleromaUrl,
 	isLocalHandle,
 	LocalHandle,
 	parseHandle,
@@ -77,8 +78,8 @@ export async function getMastodonIdByHandle(domain: string, db: Database, handle
 	}
 
 	const { results } = await db
-		.prepare(`SELECT id, mastodon_id FROM actors WHERE ${db.qb.jsonExtract('properties', 'url')} = ?1`)
-		.bind(handleToUrl(handle).toString())
+		.prepare(`SELECT id, mastodon_id FROM actors WHERE ${db.qb.jsonExtract('properties', 'url')} IN (?1, ?2)`)
+		.bind(handleToMastodonUrl(handle).toString(), handleToPleromaUrl(handle).toString())
 		.all<{ id: string; mastodon_id: string | null }>()
 	if (!results || results.length === 0) {
 		return null
