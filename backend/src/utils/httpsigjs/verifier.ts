@@ -29,7 +29,9 @@ export async function fetchKey(parsedSignature: ParsedSignature): Promise<Crypto
 		},
 	})
 	if (!res.ok) {
-		console.warn(`failed to fetch keys from "${url}", returned ${res.status}.`)
+		if (res.status !== 410) {
+			console.warn(`failed to fetch keys from "${url}", returned ${res.status}.`)
+		}
 		return null
 	}
 
