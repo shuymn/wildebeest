@@ -1,5 +1,6 @@
 import { type Database } from 'wildebeest/backend/src/database'
 import { handleToAcct, RemoteHandle } from 'wildebeest/backend/src/utils/handle'
+import { UA } from 'wildebeest/config/ua'
 
 import type { Actor } from '../activitypub/actors'
 import * as actors from '../activitypub/actors'
@@ -12,6 +13,7 @@ export type WebFingerResponse = {
 
 const headers = {
 	accept: 'application/jrd+json',
+	'user-agent': UA,
 }
 
 export async function queryAcct(handle: RemoteHandle, db: Database): Promise<Actor | null> {
