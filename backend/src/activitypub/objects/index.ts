@@ -4,6 +4,7 @@ import type { MastodonId } from 'wildebeest/backend/src/types'
 import { isUUID } from 'wildebeest/backend/src/utils'
 import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
 import { Intersect, RequiredProps, SingleOrArray } from 'wildebeest/backend/src/utils/type'
+import { UA } from 'wildebeest/config/ua'
 
 export const originalActorIdSymbol = Symbol()
 export const originalObjectIdSymbol = Symbol()
@@ -152,6 +153,7 @@ export async function createObject<T extends ApObject>(
 export async function get<T>(url: URL): Promise<T> {
 	const headers = {
 		accept: 'application/activity+json',
+		'User-Agent': UA,
 	}
 	const res = await fetch(url, { headers })
 	if (!res.ok) {

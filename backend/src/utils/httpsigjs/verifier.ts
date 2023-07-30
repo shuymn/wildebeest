@@ -1,3 +1,5 @@
+import { UA } from 'wildebeest/config/ua'
+
 import { importPublicKey, str2ab } from '../key-ops'
 import { ParsedSignature } from './parser'
 
@@ -21,7 +23,10 @@ export async function verifySignature(parsedSignature: ParsedSignature, key: Cry
 export async function fetchKey(parsedSignature: ParsedSignature): Promise<CryptoKey | null> {
 	const url = parsedSignature.keyId
 	const res = await fetch(url, {
-		headers: { Accept: 'application/activity+json' },
+		headers: {
+			Accept: 'application/activity+json',
+			'User-Agent': UA,
+		},
 	})
 	if (!res.ok) {
 		console.warn(`failed to fetch keys from "${url}", returned ${res.status}.`)

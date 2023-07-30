@@ -1,4 +1,5 @@
 import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
+import { UA } from 'wildebeest/config/ua'
 
 export interface Collection<T> extends ApObject {
 	totalItems: number
@@ -17,6 +18,7 @@ export interface OrderedCollectionPage<T> extends ApObject {
 
 const headers = {
 	accept: 'application/activity+json',
+	'User-Agent': UA,
 }
 
 export async function getMetadata<T>(url: URL): Promise<OrderedCollection<T>> {
