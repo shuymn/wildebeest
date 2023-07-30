@@ -15,6 +15,7 @@ import { Handle, handleToMastodonUrl, handleToPleromaUrl, RemoteHandle } from 'w
 import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
 import { generateUserKey } from 'wildebeest/backend/src/utils/key-ops'
 import { defaultImages } from 'wildebeest/config/accounts'
+import { UA } from 'wildebeest/config/ua'
 
 const isTesting = typeof jest !== 'undefined'
 
@@ -57,6 +58,7 @@ export interface Person extends Actor {
 export async function fetchActor(url: string | URL): Promise<Remote<Actor>> {
 	const headers = {
 		accept: 'application/activity+json',
+		'User-Agent': UA,
 	}
 	const res = await fetch(url, { headers })
 	if (!res.ok) {
