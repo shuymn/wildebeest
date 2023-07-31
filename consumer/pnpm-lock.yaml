@@ -427,7 +427,7 @@ packages:
     dependencies:
       '@sentry/types': 7.60.0
       '@sentry/utils': 7.60.0
-      tslib: 1.14.1
+      tslib: 2.6.1
     dev: true
 
   /@sentry/integrations@7.60.0:
@@ -437,7 +437,7 @@ packages:
       '@sentry/types': 7.60.0
       '@sentry/utils': 7.60.0
       localforage: 1.10.0
-      tslib: 1.14.1
+      tslib: 2.6.1
     dev: true
 
   /@sentry/types@7.60.0:
@@ -450,17 +450,17 @@ packages:
     engines: {node: '>=8'}
     dependencies:
       '@sentry/types': 7.60.0
-      tslib: 1.14.1
+      tslib: 2.6.1
     dev: true
 
   /@types/better-sqlite3@7.6.4:
     resolution: {integrity: sha512-dzrRZCYPXIXfSR1/surNbJ/grU3scTaygS0OMzjlGf71i9sc2fGyHPXXiXmEvNIoE0cGwsanEFMVJxPXmco9Eg==}
     dependencies:
-      '@types/node': 20.4.4
+      '@types/node': 20.4.5
     dev: true
 
-  /@types/node@20.4.4:
-    resolution: {integrity: sha512-CukZhumInROvLq3+b5gLev+vgpsIqC2D0deQr/yS1WnxvmYLlJXZpaQrQiseMY+6xusl79E04UjWoqyr+t1/Ew==}
+  /@types/node@20.4.5:
+    resolution: {integrity: sha512-rt40Nk13II9JwQBdeYqmbn2Q6IVTA5uPhvSO+JVqdXw/6/4glI6oR9ezty/A9Hg5u7JH4OmYmuQ+XvjKm0Datg==}
     dev: true
 
   /@types/stack-trace@0.0.29:
@@ -951,8 +951,8 @@ packages:
       '@sentry/utils': 7.60.0
     dev: true
 
-  /tslib@1.14.1:
-    resolution: {integrity: sha512-Xni35NKzjgMrwevysHTCArtLDpPvye8zV/0E4EyYn43P7/7qvQwPh9BGkHewbMulVntbigmcT7rdX3BNo9wRJg==}
+  /tslib@2.6.1:
+    resolution: {integrity: sha512-t0hLfiEKfMUoqhG+U1oid7Pva4bbDPHYfJNiB7BiIjRkj1pyC++4N3huJfqY6aRH6VTB0rvtzQwjM4K6qpfOig==}
     dev: true
 
   /typescript@5.1.6:
