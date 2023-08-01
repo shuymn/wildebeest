@@ -5,7 +5,9 @@ import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
 import {
 	ensureObjectMastodonId,
+	getObjectById,
 	getObjectByOriginalId,
+	isLocalObject,
 	mastodonIdSymbol,
 	originalActorIdSymbol,
 } from 'wildebeest/backend/src/activitypub/objects'
@@ -105,7 +107,9 @@ WHERE actor_notifications.id=? AND actor_notifications.actor_id=?
 		let inReplyToId: string | null = null
 		let inReplyToAccountId: string | null = null
 		if (properties.inReplyTo) {
-			const replied = await getObjectByOriginalId(db, properties.inReplyTo)
+			const replied = isLocalObject(domain, properties.inReplyTo)
+				? await getObjectById(db, properties.inReplyTo)
+				: await getObjectByOriginalId(db, properties.inReplyTo)
 			if (replied) {
 				inReplyToId = replied[mastodonIdSymbol]
 				try {

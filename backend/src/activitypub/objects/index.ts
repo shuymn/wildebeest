@@ -480,3 +480,8 @@ export async function deleteObject<T extends ApObject>(db: Database, note: T) {
 		}
 	}
 }
+
+export function isLocalObject(domain: string, id: string | URL): boolean {
+	const apId = getApId(id)
+	return apId.hostname === domain
+}
