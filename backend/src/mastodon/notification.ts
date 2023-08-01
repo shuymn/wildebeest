@@ -341,7 +341,10 @@ LIMIT 20
 				card: null,
 				language: null,
 				text: null,
-				// muted, bookmarked, pinned, filtered
+				muted: false,
+				bookmarked: false,
+				pinned: false,
+				// filtered
 			}
 		}
 

@@ -159,7 +159,10 @@ export async function toMastodonStatusFromObject(
 		card: null,
 		language: null,
 		text: null,
-		// muted, bookmarked, pinned, filtered
+		muted: false,
+		bookmarked: false,
+		pinned: false,
+		// filtered
 	}
 }
 
@@ -361,7 +364,10 @@ export async function toMastodonStatusesFromRowsWithActor(
 					card: null,
 					language: null,
 					text: null,
-					// muted, bookmarked, pinned, filtered
+					muted: false,
+					bookmarked: false,
+					pinned: false,
+					// filtered
 				},
 				poll: null,
 				card: null,
@@ -403,7 +409,10 @@ export async function toMastodonStatusesFromRowsWithActor(
 				card: null,
 				language: null,
 				text: null,
-				// muted, bookmarked, pinned, filtered
+				muted: false,
+				bookmarked: false,
+				pinned: false,
+				// filtered
 			}
 		}
 
@@ -549,7 +558,10 @@ export async function toMastodonStatusFromRow(
 				card: null,
 				language: null,
 				text: null,
-				// muted, bookmarked, pinned, filtered
+				muted: false,
+				bookmarked: false,
+				pinned: false,
+				// filtered
 			},
 			poll: null,
 			card: null,
@@ -591,7 +603,10 @@ export async function toMastodonStatusFromRow(
 			card: null,
 			language: null,
 			text: null,
-			// muted, bookmarked, pinned, filtered
+			muted: false,
+			bookmarked: false,
+			pinned: false,
+			// filtered
 		}
 	}
 

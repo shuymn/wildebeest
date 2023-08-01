@@ -158,7 +158,10 @@ WHERE actor_notifications.id=? AND actor_notifications.actor_id=?
 			card: null,
 			language: null,
 			text: null,
-			// muted, bookmarked, pinned, filtered
+			muted: false,
+			bookmarked: false,
+			pinned: false,
+			// filtered
 		}
 	}
 
