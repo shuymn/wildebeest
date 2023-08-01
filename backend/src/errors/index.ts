@@ -66,6 +66,10 @@ export function resourceNotFound(name: string, id: string) {
 	return makeErrorResponse('Resource not found', 404, `${name} "${id}" not found`)
 }
 
+export function recordNotFound(detail?: string) {
+	return makeErrorResponse('Record not found', 404, detail)
+}
+
 export function validationError(detail: string) {
 	return makeErrorResponse('Validation failed', 422, detail)
 }
