@@ -12,6 +12,7 @@ import {
 	ensureObjectMastodonId,
 	getApId,
 	getObjectByMastodonId,
+	getObjectByOriginalId,
 	mastodonIdSymbol,
 	originalActorIdSymbol,
 } from 'wildebeest/backend/src/activitypub/objects'
@@ -105,6 +106,21 @@ export async function toMastodonStatusFromObject(
 			}
 		}
 	}
+	let inReplyToId: string | null = null
+	let inReplyToAccountId: string | null = null
+	if (obj.inReplyTo) {
+		const replied = await getObjectByOriginalId(db, obj.inReplyTo)
+		if (replied) {
+			inReplyToId = replied[mastodonIdSymbol]
+			try {
+				const author = await getAndCache(new URL(replied[originalActorIdSymbol]), db)
+				inReplyToAccountId = author[mastodonIdSymbol]
+			} catch (err) {
+				console.warn('failed to get author of reply', err)
+				inReplyToId = null
+			}
+		}
+	}
 
 	return {
 		id: await ensureObjectMastodonId(db, obj[mastodonIdSymbol], obj.published ?? new Date().toISOString()),
@@ -128,8 +144,8 @@ export async function toMastodonStatusFromObject(
 		// FIXME: stub values
 		emojis: [],
 		tags: [],
-		in_reply_to_id: null,
-		in_reply_to_account_id: null,
+		in_reply_to_id: inReplyToId,
+		in_reply_to_account_id: inReplyToAccountId,
 		reblogs_count: reblogs.length,
 		favourites_count: favourites.length,
 		replies_count: 0,
@@ -234,14 +250,36 @@ export async function toMastodonStatusesFromRowsWithActor(
 				const targetId = link.href.toString()
 				let target = actorPool.get(targetId) ?? null
 				if (target === null) {
-					target = await getActorById(db, link.href)
-					if (target === null) {
-						continue
+					try {
+						target = await getAndCache(link.href, db)
+						actorPool.set(targetId, target)
+					} catch (err) {
+						console.warn('failed to get actor', err)
 					}
-					actorPool.set(targetId, target)
 				}
 				if (target) {
 					mentions.push(actorToMention(domain, target))
+				}
+			}
+		}
+		let inReplyToId: string | null = null
+		let inReplyToAccountId: string | null = null
+		if (properties.inReplyTo) {
+			const replied = await getObjectByOriginalId(db, properties.inReplyTo)
+			if (replied) {
+				inReplyToId = replied[mastodonIdSymbol]
+				let author = actorPool.get(replied[originalActorIdSymbol]) ?? null
+				if (author === null) {
+					try {
+						author = await getAndCache(new URL(replied[originalActorIdSymbol]), db)
+						actorPool.set(replied[originalActorIdSymbol], author)
+					} catch (err) {
+						console.warn('failed to get author of reply', err)
+						inReplyToId = null
+					}
+				}
+				if (author) {
+					inReplyToAccountId = author[mastodonIdSymbol]
 				}
 			}
 		}
@@ -307,12 +345,12 @@ export async function toMastodonStatusesFromRowsWithActor(
 					edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 					favourited: row.favourited === 1,
 					reblogged: row.reblogged === 1,
+					in_reply_to_id: inReplyToId,
+					in_reply_to_account_id: inReplyToAccountId,
 
 					// FIXME: stub values
 					tags: [],
 					emojis: [],
-					in_reply_to_id: null,
-					in_reply_to_account_id: null,
 					poll: null,
 					card: null,
 					language: null,
@@ -349,12 +387,12 @@ export async function toMastodonStatusesFromRowsWithActor(
 				edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 				favourited: row.favourited === 1,
 				reblogged: row.reblogged === 1,
+				in_reply_to_id: inReplyToId,
+				in_reply_to_account_id: inReplyToAccountId,
 
 				// FIXME: stub values
 				emojis: [],
 				tags: [],
-				in_reply_to_id: null,
-				in_reply_to_account_id: null,
 				poll: null,
 				card: null,
 				language: null,
@@ -421,6 +459,22 @@ export async function toMastodonStatusFromRow(
 		}
 	}
 
+	let inReplyToId: string | null = null
+	let inReplyToAccountId: string | null = null
+	if (properties.inReplyTo) {
+		const replied = await getObjectByOriginalId(db, properties.inReplyTo)
+		if (replied) {
+			inReplyToId = replied[mastodonIdSymbol]
+			try {
+				const author = await getAndCache(new URL(replied[originalActorIdSymbol]), db)
+				inReplyToAccountId = author[mastodonIdSymbol]
+			} catch (err) {
+				console.warn('failed to get author of reply', err)
+				inReplyToId = null
+			}
+		}
+	}
+
 	row.mastodon_id = await ensureObjectMastodonId(db, row.mastodon_id, row.cdate)
 
 	let status: MastodonStatus
@@ -477,12 +531,12 @@ export async function toMastodonStatusFromRow(
 				edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 				favourited: row.favourited === 1,
 				reblogged: row.reblogged === 1,
+				in_reply_to_id: inReplyToId,
+				in_reply_to_account_id: inReplyToAccountId,
 
 				// FIXME: stub values
 				tags: [],
 				emojis: [],
-				in_reply_to_id: null,
-				in_reply_to_account_id: null,
 				poll: null,
 				card: null,
 				language: null,
@@ -519,12 +573,12 @@ export async function toMastodonStatusFromRow(
 			edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 			favourited: row.favourited === 1,
 			reblogged: row.reblogged === 1,
+			in_reply_to_id: inReplyToId,
+			in_reply_to_account_id: inReplyToAccountId,
 
 			// FIXME: stub values
 			emojis: [],
 			tags: [],
-			in_reply_to_id: null,
-			in_reply_to_account_id: null,
 			poll: null,
 			card: null,
 			language: null,

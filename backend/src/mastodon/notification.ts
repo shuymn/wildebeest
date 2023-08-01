@@ -2,7 +2,14 @@ import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
-import { type ApObject, ensureObjectMastodonId, getApUrl } from 'wildebeest/backend/src/activitypub/objects'
+import {
+	type ApObject,
+	ensureObjectMastodonId,
+	getApUrl,
+	getObjectByOriginalId,
+	mastodonIdSymbol,
+	originalActorIdSymbol,
+} from 'wildebeest/backend/src/activitypub/objects'
 import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import type { Cache } from 'wildebeest/backend/src/cache'
 import { type Database } from 'wildebeest/backend/src/database'
@@ -267,6 +274,22 @@ LIMIT 20
 				? properties.attachment.map((doc) => fromObject(doc))
 				: []
 
+			let inReplyToId: string | null = null
+			let inReplyToAccountId: string | null = null
+			if (properties.inReplyTo) {
+				const replied = await getObjectByOriginalId(db, properties.inReplyTo)
+				if (replied) {
+					inReplyToId = replied[mastodonIdSymbol]
+					try {
+						const author = await actors.getAndCache(new URL(replied[originalActorIdSymbol]), db)
+						inReplyToAccountId = author[mastodonIdSymbol]
+					} catch (err) {
+						console.warn('failed to get author of reply', err)
+						inReplyToId = null
+					}
+				}
+			}
+
 			const actorId = new URL(result.original_actor_id)
 			const actor = await actors.getAndCache(actorId, db)
 			const handle = actorToHandle(actor)
@@ -308,8 +331,8 @@ LIMIT 20
 				emojis: [],
 				favourited: false,
 				reblogged: false,
-				in_reply_to_id: null,
-				in_reply_to_account_id: null,
+				in_reply_to_id: inReplyToId,
+				in_reply_to_account_id: inReplyToAccountId,
 				poll: null,
 				card: null,
 				language: null,

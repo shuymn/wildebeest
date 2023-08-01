@@ -2,8 +2,13 @@
 
 import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
-import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
-import { ensureObjectMastodonId } from 'wildebeest/backend/src/activitypub/objects'
+import { getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
+import {
+	ensureObjectMastodonId,
+	getObjectByOriginalId,
+	mastodonIdSymbol,
+	originalActorIdSymbol,
+} from 'wildebeest/backend/src/activitypub/objects'
 import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { statusNotFound } from 'wildebeest/backend/src/errors'
@@ -97,6 +102,22 @@ WHERE actor_notifications.id=? AND actor_notifications.actor_id=?
 			}
 		}
 
+		let inReplyToId: string | null = null
+		let inReplyToAccountId: string | null = null
+		if (properties.inReplyTo) {
+			const replied = await getObjectByOriginalId(db, properties.inReplyTo)
+			if (replied) {
+				inReplyToId = replied[mastodonIdSymbol]
+				try {
+					const author = await getAndCache(new URL(replied[originalActorIdSymbol]), db)
+					inReplyToAccountId = author[mastodonIdSymbol]
+				} catch (err) {
+					console.warn('failed to get author of reply', err)
+					inReplyToId = null
+				}
+			}
+		}
+
 		out.status = {
 			id: row.mastodon_id,
 			uri: new URL(row.id),
@@ -118,6 +139,8 @@ WHERE actor_notifications.id=? AND actor_notifications.actor_id=?
 				: new URL(row.id),
 			reblog: null,
 			edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
+			in_reply_to_id: inReplyToId,
+			in_reply_to_account_id: inReplyToAccountId,
 
 			// TODO: stub values
 			reblogs_count: 0,
@@ -127,8 +150,6 @@ WHERE actor_notifications.id=? AND actor_notifications.actor_id=?
 			emojis: [],
 			favourited: false,
 			reblogged: false,
-			in_reply_to_id: null,
-			in_reply_to_account_id: null,
 			poll: null,
 			card: null,
 			language: null,
