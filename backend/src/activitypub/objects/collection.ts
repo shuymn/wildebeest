@@ -4,8 +4,8 @@ import { UA } from 'wildebeest/config/ua'
 export interface Collection<T> extends ApObject {
 	totalItems: number
 	current?: string
-	first: URL
-	last: URL
+	first: string | URL | OrderedCollectionPage<T>
+	last: string | URL | OrderedCollectionPage<T>
 	items: Array<T>
 }
 
@@ -31,8 +31,19 @@ export async function getMetadata<T>(url: URL): Promise<OrderedCollection<T>> {
 }
 
 export async function loadItems<T>(collection: OrderedCollection<T>, limit: number): Promise<Array<T>> {
+	const totalItems = collection.totalItems
 	const items = []
-	let pageUrl = collection.first
+
+	let pageUrl: string
+	if (typeof collection.first === 'object') {
+		if (collection.first instanceof URL) {
+			pageUrl = collection.first.toString()
+		} else {
+			pageUrl = collection.first.id.toString()
+		}
+	} else {
+		pageUrl = collection.first
+	}
 
 	while (true) {
 		const page = await loadPage<T>(pageUrl)
@@ -40,18 +51,18 @@ export async function loadItems<T>(collection: OrderedCollection<T>, limit: numb
 			return items
 		}
 		items.push(...page.orderedItems)
-		if (limit && items.length >= limit) {
+		if (items.length >= limit || items.length >= totalItems) {
 			return items.slice(0, limit)
 		}
 		if (page.next) {
-			pageUrl = new URL(page.next)
+			pageUrl = page.next
 		} else {
 			return items
 		}
 	}
 }
 
-export async function loadPage<T>(url: URL): Promise<null | OrderedCollectionPage<T>> {
+export async function loadPage<T>(url: string | URL): Promise<null | OrderedCollectionPage<T>> {
 	const res = await fetch(url, { headers })
 	if (!res.ok) {
 		console.warn(`${url} return ${res.status}`)
