@@ -3,7 +3,7 @@ import { reblogs, replies, statuses } from 'wildebeest/frontend/src/dummyData'
 import type { Account, MastodonStatus } from 'wildebeest/frontend/src/types'
 import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { createReblog } from 'wildebeest/backend/src/mastodon/reblog'
-import { createReply as createReplyInBackend, createStatus } from 'wildebeest/backend/test/shared.utils'
+import { createReply as createReplyInBackend, createPublicStatus } from 'wildebeest/backend/test/shared.utils'
 import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database } from 'wildebeest/backend/src/database'
 import { upsertRule } from 'wildebeest/backend/src/config/rules'
@@ -16,7 +16,7 @@ export async function init(domain: string, db: Database) {
 	const loadedStatuses: { status: MastodonStatus; note: Note }[] = []
 	for (const status of statuses) {
 		const actor = await getOrCreatePerson(domain, db, status.account)
-		const note = await createStatus(
+		const note = await createPublicStatus(
 			domain,
 			db,
 			actor,
@@ -34,7 +34,7 @@ export async function init(domain: string, db: Database) {
 		if (reblogStatus?.id) {
 			const noteToReblog = loadedStatuses.find(({ status: { id } }) => id === reblogStatus.id)?.note
 			if (noteToReblog) {
-				await createReblog(db, reblogger, noteToReblog)
+				await createReblog(db, reblogger, noteToReblog, noteToReblog)
 			}
 		}
 	}

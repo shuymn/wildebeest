@@ -2,19 +2,18 @@ import { strict as assert } from 'node:assert/strict'
 
 import * as activities from 'wildebeest/backend/src/activitypub/activities'
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
-import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { getObjectByMastodonId, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
-import { createPublicNote, type Note } from 'wildebeest/backend/src/activitypub/objects/note'
+import { type Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { cacheFromEnv } from 'wildebeest/backend/src/cache'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { insertLike } from 'wildebeest/backend/src/mastodon/like'
-import { insertReblog } from 'wildebeest/backend/src/mastodon/reblog'
+import { createReblog } from 'wildebeest/backend/src/mastodon/reblog'
 import { getMentions } from 'wildebeest/backend/src/mastodon/status'
 import * as timelines from 'wildebeest/backend/src/mastodon/timeline'
 import { MastodonStatus } from 'wildebeest/backend/src/types'
 import { MessageType } from 'wildebeest/backend/src/types'
-import { createReply, createStatus } from 'wildebeest/backend/test/shared.utils'
+import { createPublicStatus, createReply } from 'wildebeest/backend/test/shared.utils'
 import * as statuses from 'wildebeest/functions/api/v1/statuses'
 import * as statuses_id from 'wildebeest/functions/api/v1/statuses/[id]'
 import * as statuses_context from 'wildebeest/functions/api/v1/statuses/[id]/context'
@@ -452,7 +451,20 @@ describe('Mastodon APIs', () => {
 				.bind(
 					'https://example.com/object1',
 					'Note',
-					JSON.stringify({ content: 'my first status' }),
+					JSON.stringify({
+						attributedTo: actor.id.toString(),
+						id: '1',
+						type: 'Note',
+						content: 'my first status',
+						source: {
+							content: 'my first status',
+							mediaType: 'text/markdown',
+						},
+						to: [activities.PUBLIC_GROUP],
+						cc: [],
+						attachment: [],
+						sensitive: false,
+					} satisfies Note),
 					actor.id.toString(),
 					originalObjectId,
 					'mastodonid1'
@@ -484,10 +496,7 @@ describe('Mastodon APIs', () => {
 		test('favourite records in db', async () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const note = await createPublicNote(domain, db, 'my first status', actor, new Set(), [], {
-				sensitive: false,
-				source: { content: 'my first status', mediaType: 'text/markdown' },
-			})
+			const note = await createPublicStatus(domain, db, actor, 'my first status')
 
 			const connectedActor = actor
 
@@ -638,10 +647,7 @@ describe('Mastodon APIs', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
-			const note = await createPublicNote(domain, db, 'my first status', actor, new Set(), [], {
-				sensitive: false,
-				source: { content: 'my first status', mediaType: 'text/markdown' },
-			})
+			const note = await createPublicStatus(domain, db, actor, 'my first status')
 
 			await insertLike(db, actor2, note)
 			await insertLike(db, actor3, note)
@@ -660,10 +666,7 @@ describe('Mastodon APIs', () => {
 
 			const properties = { url: 'https://example.com/image.jpg' }
 			const mediaAttachments = [await createImage(domain, db, actor, properties)]
-			const note = await createPublicNote(domain, db, 'my first status', actor, new Set(), mediaAttachments, {
-				sensitive: false,
-				source: { content: 'my first status', mediaType: 'text/markdown' },
-			})
+			const note = await createPublicStatus(domain, db, actor, 'my first status', mediaAttachments)
 
 			const res = await statuses_id.handleRequestGet(db, note[mastodonIdSymbol]!, domain, actor)
 			await assertStatus(res, 200)
@@ -679,7 +682,7 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-			const note = await createStatus(domain, db, actor, 'a post', [], { sensitive: false })
+			const note = await createPublicStatus(domain, db, actor, 'a post', [], { sensitive: false })
 			await sleep(10)
 
 			await createReply(domain, db, actor, note, 'a reply')
@@ -699,13 +702,18 @@ describe('Mastodon APIs', () => {
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 				const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
-				const note = await createPublicNote(domain, db, 'my first status', actor, new Set(), [], {
-					sensitive: false,
-					source: { content: 'my first status', mediaType: 'text/markdown' },
-				})
+				const note = await createPublicStatus(domain, db, actor, 'my first status')
 
-				await insertReblog(db, actor2, note)
-				await insertReblog(db, actor3, note)
+				await createReblog(db, actor2, note, {
+					to: [activities.PUBLIC_GROUP],
+					cc: [],
+					id: 'https://example.com/activity1',
+				})
+				await createReblog(db, actor3, note, {
+					to: [activities.PUBLIC_GROUP],
+					cc: [],
+					id: 'https://example.com/activity2',
+				})
 
 				const res = await statuses_id.handleRequestGet(db, note[mastodonIdSymbol]!, domain, actor)
 				await assertStatus(res, 200)
@@ -719,10 +727,7 @@ describe('Mastodon APIs', () => {
 				const db = await makeDB()
 				const queue = makeQueue()
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-				const note = await createPublicNote(domain, db, 'my first status', actor, new Set(), [], {
-					sensitive: false,
-					source: { content: 'my first status', mediaType: 'text/markdown' },
-				})
+				const note = await createPublicStatus(domain, db, actor, 'my first status')
 
 				const connectedActor = actor
 
@@ -732,7 +737,8 @@ describe('Mastodon APIs', () => {
 					connectedActor,
 					userKEK,
 					queue,
-					domain
+					domain,
+					{ visibility: 'public' }
 				)
 				await assertStatus(res, 200)
 
@@ -749,10 +755,7 @@ describe('Mastodon APIs', () => {
 				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const queue = makeQueue()
 
-				const note = await createPublicNote(domain, db, 'my first status', actor, new Set(), [], {
-					sensitive: false,
-					source: { content: 'my first status', mediaType: 'text/markdown' },
-				})
+				const note = await createPublicStatus(domain, db, actor, 'my first status')
 
 				const connectedActor = actor
 
@@ -762,7 +765,8 @@ describe('Mastodon APIs', () => {
 					connectedActor,
 					userKEK,
 					queue,
-					domain
+					domain,
+					{ visibility: 'public' }
 				)
 				await assertStatus(res, 200)
 
@@ -787,7 +791,20 @@ describe('Mastodon APIs', () => {
 					.bind(
 						'https://example.com/object1',
 						'Note',
-						JSON.stringify({ content: 'my first status' }),
+						JSON.stringify({
+							attributedTo: actor.id.toString(),
+							id: '1',
+							type: 'Note',
+							content: 'my first status',
+							source: {
+								content: 'my first status',
+								mediaType: 'text/markdown',
+							},
+							to: [activities.PUBLIC_GROUP],
+							cc: [],
+							attachment: [],
+							sensitive: false,
+						} satisfies Note),
 						actor.id.toString(),
 						originalObjectId,
 						'mastodonid1'
@@ -808,7 +825,9 @@ describe('Mastodon APIs', () => {
 
 				const connectedActor = actor
 
-				const res = await statuses_reblog.handleRequest(db, 'mastodonid1', connectedActor, userKEK, queue, domain)
+				const res = await statuses_reblog.handleRequest(db, 'mastodonid1', connectedActor, userKEK, queue, domain, {
+					visibility: 'public',
+				})
 				await assertStatus(res, 200)
 
 				assert(deliveredActivity)
@@ -852,10 +871,7 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const queue = makeQueue()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const note = await createPublicNote(domain, db, 'my first status', actor, new Set(), [], {
-				sensitive: false,
-				source: { content: 'my first status', mediaType: 'text/markdown' },
-			})
+			const note = await createPublicStatus(domain, db, actor, 'my first status')
 
 			const body = {
 				status: 'my reply',
@@ -990,10 +1006,7 @@ describe('Mastodon APIs', () => {
 			const queue = makeQueue()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			const note = await createPublicNote(domain, db, 'note from actor2', actor2, new Set(), [], {
-				sensitive: false,
-				source: { content: 'my first status', mediaType: 'text/markdown' },
-			})
+			const note = await createPublicStatus(domain, db, actor2, 'note from actor2')
 
 			const res = await statuses_id.handleRequestDelete(
 				db,
@@ -1011,11 +1024,7 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const queue = makeQueue()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const note = await createPublicNote(domain, db, 'note from actor', actor, new Set(), [], {
-				sensitive: false,
-				source: { content: 'my first status', mediaType: 'text/markdown' },
-			})
-			await addObjectInOutbox(db, actor, note)
+			const note = await createPublicStatus(domain, db, actor, 'note from actor')
 
 			const res = await statuses_id.handleRequestDelete(
 				db,
@@ -1043,11 +1052,7 @@ describe('Mastodon APIs', () => {
 			const queue = makeQueue()
 			const cache = makeCache()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const note = await createPublicNote(domain, db, 'note from actor', actor, new Set(), [], {
-				sensitive: false,
-				source: { content: 'my first status', mediaType: 'text/markdown' },
-			})
-			await addObjectInOutbox(db, actor, note)
+			const note = await createPublicStatus(domain, db, actor, 'note from actor')
 
 			// Poison the timeline
 			await cache.put(actor.id.toString() + '/timeline/home', 'funny value')
@@ -1076,10 +1081,7 @@ describe('Mastodon APIs', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
-			const note = await createPublicNote(domain, db, 'note from actor', actor, new Set(), [], {
-				sensitive: false,
-				source: { content: 'my first status', mediaType: 'text/markdown' },
-			})
+			const note = await createPublicStatus(domain, db, actor, 'note from actor')
 
 			await addFollowing(domain, db, actor2, actor)
 			await acceptFollowing(db, actor2, actor)
@@ -1305,7 +1307,7 @@ describe('Mastodon APIs', () => {
 			assert.equal(deliveredActivity1.cc.length, 0)
 
 			// ensure that the private note doesn't show up in public timeline
-			const timeline = await timelines.getPublicTimeline(domain, db, timelines.LocalPreference.NotSet)
+			const timeline = await timelines.getPublicTimeline(domain, db, timelines.LocalPreference.NotSet, false, 20)
 			assert.equal(timeline.length, 0)
 		})
 

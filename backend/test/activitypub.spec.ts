@@ -2,14 +2,12 @@ import { strict as assert } from 'node:assert/strict'
 
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
-import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import { cacheObject } from 'wildebeest/backend/src/activitypub/objects/'
 import { loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
-import { createDirectNote, createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
 import { MessageType } from 'wildebeest/backend/src/types'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
-import { createStatus } from 'wildebeest/backend/test/shared.utils'
+import { createDirectStatus, createPublicStatus } from 'wildebeest/backend/test/shared.utils'
 import * as ap_objects from 'wildebeest/functions/ap/o/[id]'
 import * as ap_users from 'wildebeest/functions/ap/users/[id]'
 import * as ap_inbox from 'wildebeest/functions/ap/users/[id]/inbox'
@@ -121,8 +119,8 @@ describe('ActivityPub', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-			await createStatus(domain, db, actor, 'my first status')
-			await createStatus(domain, db, actor, 'my second status')
+			await createPublicStatus(domain, db, actor, 'my first status')
+			await createPublicStatus(domain, db, actor, 'my second status')
 
 			const res = await ap_outbox.handleRequest(domain, db, 'sven', userKEK)
 			await assertStatus(res, 200)
@@ -136,9 +134,9 @@ describe('ActivityPub', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-			await createStatus(domain, db, actor, 'my first status')
+			await createPublicStatus(domain, db, actor, 'my first status')
 			await sleep(10)
-			await createStatus(domain, db, actor, 'my second status')
+			await createPublicStatus(domain, db, actor, 'my second status')
 
 			const res = await ap_outbox_page.handleRequest(domain, db, 'sven')
 			await assertStatus(res, 200)
@@ -155,11 +153,7 @@ describe('ActivityPub', () => {
 			const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 			const actorB = await createPerson(domain, db, userKEK, 'b@cloudflare.com')
 
-			const note = await createDirectNote(domain, db, 'DM', actorA, new Set([actorB]), [], {
-				sensitive: false,
-				source: { content: 'DM', mediaType: 'text/plain' },
-			})
-			await addObjectInOutbox(db, actorA, note, undefined, actorB.id.toString())
+			await createDirectStatus(domain, db, actorA, 'DM', [], { to: [actorB] })
 
 			{
 				const res = await ap_outbox_page.handleRequest(domain, db, 'a')
@@ -183,11 +177,7 @@ describe('ActivityPub', () => {
 			const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 			const actorB = await createPerson(domain, db, userKEK, 'target@cloudflare.com')
 
-			const note = await createDirectNote(domain, db, 'DM', actorA, new Set([actorB]), [], {
-				sensitive: false,
-				source: { content: 'DM', mediaType: 'text/plain' },
-			})
-			await addObjectInOutbox(db, actorA, note)
+			await createDirectStatus(domain, db, actorA, 'DM', [], { to: [actorB] })
 
 			const res = await ap_outbox_page.handleRequest(domain, db, 'target')
 			await assertStatus(res, 200)
@@ -338,10 +328,7 @@ describe('ActivityPub', () => {
 		test('serve object', async () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
-			const note = await createPublicNote(domain, db, 'content', actor, new Set(), [], {
-				sensitive: false,
-				source: { content: 'content', mediaType: 'text/plain' },
-			})
+			const note = await createPublicStatus(domain, db, actor, 'content')
 
 			const uuid = note.id.toString().replace('https://' + domain + '/ap/o/', '')
 			const res = await ap_objects.handleRequest(domain, db, uuid)

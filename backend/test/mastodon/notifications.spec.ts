@@ -2,13 +2,13 @@ import { strict as assert } from 'node:assert/strict'
 
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
 import { createNotification, insertFollowNotification } from 'wildebeest/backend/src/mastodon/notification'
 import { sendLikeNotification } from 'wildebeest/backend/src/mastodon/notification'
 import { getNotifications } from 'wildebeest/backend/src/mastodon/notification'
 import { createSubscription } from 'wildebeest/backend/src/mastodon/subscription'
 import { arrayBufferToBase64 } from 'wildebeest/backend/src/utils/key-ops'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
+import { createPublicStatus } from 'wildebeest/backend/test/shared.utils'
 import * as notifications from 'wildebeest/functions/api/v1/notifications'
 import * as notifications_get from 'wildebeest/functions/api/v1/notifications/[id]'
 
@@ -50,10 +50,7 @@ describe('Mastodon APIs', () => {
 			const fromActor = await createPerson(domain, db, userKEK, 'from@cloudflare.com')
 
 			const connectedActor = actor
-			const note = await createPublicNote(domain, db, 'my first status', connectedActor, new Set(), [], {
-				sensitive: false,
-				source: { content: 'my first status', mediaType: 'text/markdown' },
-			})
+			const note = await createPublicStatus(domain, db, connectedActor, 'my first status')
 			await insertFollowNotification(db, connectedActor, fromActor)
 			await sleep(10)
 			await createNotification(db, 'favourite', connectedActor, fromActor, note)
@@ -80,10 +77,7 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const fromActor = await createPerson(domain, db, userKEK, 'from@cloudflare.com')
-			const note = await createPublicNote(domain, db, 'my first status', actor, new Set(), [], {
-				sensitive: false,
-				source: { content: 'my first status', mediaType: 'text/markdown' },
-			})
+			const note = await createPublicStatus(domain, db, actor, 'my first status')
 			await createNotification(db, 'favourite', actor, fromActor, note)
 
 			const res = await notifications_get.handleRequest(domain, '1', db, actor)

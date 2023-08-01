@@ -6,9 +6,9 @@ navigationVias.forEach((via) =>
 	test(`Navigation to and view of an individual toot via ${via}`, async ({ page }) => {
 		await page.goto('http://127.0.0.1:8788/explore')
 		if (via === 'time link') {
-			await page.locator('article').filter({ hasText: 'Ben, just Ben' }).locator('i.fa-globe + span').click()
+			await page.locator('article').filter({ hasText: 'Ben, just Ben' }).locator('i.fa-globe + span').nth(1).click()
 		} else {
-			await page.getByText('A very simple update: all good!').click()
+			await page.getByText('A very simple update: all good!').nth(1).click()
 		}
 		await expect(page.getByRole('button', { name: 'Back' })).toBeVisible()
 		await expect(page.getByRole('link', { name: 'Avatar of Ben, just Ben' })).toBeVisible()

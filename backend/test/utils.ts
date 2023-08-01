@@ -4,6 +4,7 @@ import { D1Database, D1DatabaseAPI } from '@miniflare/d1'
 import * as SQLiteDatabase from 'better-sqlite3'
 import { promises as fs } from 'fs'
 import * as path from 'path'
+import { ApObjectId } from 'wildebeest/backend/src/activitypub/objects'
 import type { Cache } from 'wildebeest/backend/src/cache'
 import { type Database } from 'wildebeest/backend/src/database'
 import d1 from 'wildebeest/backend/src/database/d1'
@@ -173,4 +174,9 @@ export function hexToBytes(hex: string): Uint8Array {
 		bytes[i] = parseInt(hex.substring(start, start + 2), 16)
 	}
 	return bytes
+}
+
+export function createActivityId(domain: string): ApObjectId {
+	const id = crypto.randomUUID()
+	return new URL('/ap/a/' + id, 'https://' + domain)
 }

@@ -50,7 +50,7 @@ test.describe('Presence of appropriate SEO metadata across the application', () 
 		})
 
 		await page.goto('http://127.0.0.1:8788/explore')
-		await page.locator('article').filter({ hasText: 'Ben, just Ben' }).locator('i.fa-globe + span').click()
+		await page.locator('article').filter({ hasText: 'Ben, just Ben' }).locator('i.fa-globe + span').nth(1).click()
 		await checkPageSeoData(page, {
 			title: 'Ben, just Ben: A very simple update: all good… - Wildebeest',
 			description: 'A very simple update: all good!',
