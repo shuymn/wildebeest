@@ -11,8 +11,10 @@ import {
 import {
 	ensureObjectMastodonId,
 	getApId,
+	getObjectById,
 	getObjectByMastodonId,
 	getObjectByOriginalId,
+	isLocalObject,
 	mastodonIdSymbol,
 	originalActorIdSymbol,
 } from 'wildebeest/backend/src/activitypub/objects'
@@ -109,7 +111,9 @@ export async function toMastodonStatusFromObject(
 	let inReplyToId: string | null = null
 	let inReplyToAccountId: string | null = null
 	if (obj.inReplyTo) {
-		const replied = await getObjectByOriginalId(db, obj.inReplyTo)
+		const replied = isLocalObject(domain, obj.inReplyTo)
+			? await getObjectById(db, obj.inReplyTo)
+			: await getObjectByOriginalId(db, obj.inReplyTo)
 		if (replied) {
 			inReplyToId = replied[mastodonIdSymbol]
 			try {
@@ -265,7 +269,9 @@ export async function toMastodonStatusesFromRowsWithActor(
 		let inReplyToId: string | null = null
 		let inReplyToAccountId: string | null = null
 		if (properties.inReplyTo) {
-			const replied = await getObjectByOriginalId(db, properties.inReplyTo)
+			const replied = isLocalObject(domain, properties.inReplyTo)
+				? await getObjectById(db, properties.inReplyTo)
+				: await getObjectByOriginalId(db, properties.inReplyTo)
 			if (replied) {
 				inReplyToId = replied[mastodonIdSymbol]
 				let author = actorPool.get(replied[originalActorIdSymbol]) ?? null
@@ -462,7 +468,9 @@ export async function toMastodonStatusFromRow(
 	let inReplyToId: string | null = null
 	let inReplyToAccountId: string | null = null
 	if (properties.inReplyTo) {
-		const replied = await getObjectByOriginalId(db, properties.inReplyTo)
+		const replied = isLocalObject(domain, properties.inReplyTo)
+			? await getObjectById(db, properties.inReplyTo)
+			: await getObjectByOriginalId(db, properties.inReplyTo)
 		if (replied) {
 			inReplyToId = replied[mastodonIdSymbol]
 			try {
