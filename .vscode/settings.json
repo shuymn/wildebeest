@@ -2,6 +2,7 @@
 	"cSpell.words": [
 		"activitypub",
 		"cdate",
+		"favourite",
 		"favourited",
 		"favourites",
 		"idempotency",
@@ -9,7 +10,9 @@
 		"reblog",
 		"reblogged",
 		"reblogger",
-		"reblogs"
+		"reblogs",
+		"webfinger",
+		"webpush"
 	],
 	"typescript.preferences.importModuleSpecifier": "non-relative",
 	"editor.codeActionsOnSave": ["source.addMissingImports", "source.fixAll.eslint"]
