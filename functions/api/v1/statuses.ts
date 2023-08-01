@@ -6,7 +6,6 @@ import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/out
 import { deliverFollowers, deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
 import {
 	Document,
-	getApId,
 	getObjectByMastodonId,
 	isDocument,
 	originalObjectIdSymbol,
@@ -172,6 +171,9 @@ export async function handleRequest(
 	} else if (params.visibility === 'private') {
 		createFn = createPrivateNote
 	} else if (params.visibility === 'direct') {
+		if (mentions.size === 0) {
+			return validationError('direct messages must have at least one mention')
+		}
 		createFn = createDirectNote
 	} else {
 		return validationError(`status with visibility: ${params.visibility}`)
@@ -189,14 +191,12 @@ export async function handleRequest(
 		await insertReply(db, connectedActor, note, inReplyToObject)
 	}
 
-	const activity = createCreateActivity(domain, connectedActor, note)
+	const activity = await createCreateActivity(db, domain, connectedActor, note)
 
 	const to = Array.isArray(activity.to) ? activity.to : [activity.to]
-	for (const target of to) {
-		await addObjectInOutbox(db, connectedActor, note, note.published, getApId(target).toString())
-	}
-
 	const cc = Array.isArray(activity.cc) ? activity.cc : [activity.cc]
+	await addObjectInOutbox(db, connectedActor, note, activity.to, activity.cc, note.published)
+
 	const followersUrl = connectedActor.followers.toString()
 	if (cc.includes(followersUrl) || to.includes(followersUrl)) {
 		await deliverFollowers(db, userKEK, connectedActor, activity, queue)

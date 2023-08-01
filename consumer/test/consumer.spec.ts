@@ -1,9 +1,9 @@
 import { strict as assert } from 'node:assert/strict'
 
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
-import { createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
 import type { DeliverMessageBody } from 'wildebeest/backend/src/types'
 import { MessageType } from 'wildebeest/backend/src/types'
+import { createPublicStatus } from 'wildebeest/backend/test/shared.utils'
 import { makeDB } from 'wildebeest/backend/test/utils'
 
 import { Env } from '../src'
@@ -46,10 +46,7 @@ describe('Consumer', () => {
 			}
 
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const note = await createPublicNote(domain, db, 'my first status', actor, new Set(), [], {
-				sensitive: false,
-				source: { content: 'my first status', mediaType: 'text/plain' },
-			})
+			const note = await createPublicStatus(domain, db, actor, 'my first status')
 
 			const activity: any = {
 				type: 'Create',

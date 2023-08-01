@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { Activity, createActivityId, FollowActivity } from 'wildebeest/backend/src/activitypub/activities'
+import { Activity, FollowActivity } from 'wildebeest/backend/src/activitypub/activities'
 import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { getApId } from 'wildebeest/backend/src/activitypub/objects'
@@ -11,7 +11,7 @@ import * as ap_followers_page from 'wildebeest/functions/ap/users/[id]/followers
 import * as ap_following from 'wildebeest/functions/ap/users/[id]/following'
 import * as ap_following_page from 'wildebeest/functions/ap/users/[id]/following/page'
 
-import { assertStatus, makeDB } from '../utils'
+import { assertStatus, createActivityId, makeDB } from '../utils'
 
 const userKEK = 'test_kek10'
 const domain = 'cloudflare.com'

@@ -25,7 +25,7 @@ export async function addAlias(db: Database, alias: string, connectedActor: Acto
 	// For Mastodon to deliver the Move Activity we need to be following the
 	// "moving from" actor.
 	{
-		const activity = createFollowActivity(domain, connectedActor, actor)
+		const activity = await createFollowActivity(db, domain, connectedActor, actor)
 		const signingKey = await getSigningKey(userKEK, db, connectedActor)
 		await deliverToActor(signingKey, connectedActor, actor, activity, domain)
 	}

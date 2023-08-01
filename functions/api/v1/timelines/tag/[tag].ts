@@ -11,23 +11,25 @@ const headers = {
 
 export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request, env, params }) => {
 	const url = new URL(request.url)
-	const { searchParams } = url
-	const offset = Number.parseInt(searchParams.get('offset') ?? '0')
-	return handleRequest(await getDatabase(env), request, getDomain(url), params.tag as string, offset)
+	return handleRequest(await getDatabase(env), request, getDomain(url), params.tag as string)
 }
 
-export async function handleRequest(
-	db: Database,
-	request: Request,
-	domain: string,
-	tag: string,
-	offset = 0
-): Promise<Response> {
+export async function handleRequest(db: Database, request: Request, domain: string, tag: string): Promise<Response> {
+	// FIXME: handle query params
 	const url = new URL(request.url)
 	if (url.searchParams.has('max_id')) {
 		return new Response(JSON.stringify([]), { headers })
 	}
 
-	const timeline = await timelines.getPublicTimeline(domain, db, timelines.LocalPreference.NotSet, offset, tag)
+	const timeline = await timelines.getPublicTimeline(
+		domain,
+		db,
+		timelines.LocalPreference.NotSet,
+		false,
+		20,
+		undefined,
+		undefined,
+		tag
+	)
 	return new Response(JSON.stringify(timeline), { headers })
 }

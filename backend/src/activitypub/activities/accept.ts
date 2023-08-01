@@ -1,8 +1,8 @@
 import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import {
 	AcceptActivity,
-	createActivityId,
 	getActivityObject,
+	insertActivity,
 	isFollowActivity,
 } from 'wildebeest/backend/src/activitypub/activities'
 import { Actor, getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
@@ -11,14 +11,18 @@ import { Database } from 'wildebeest/backend/src/database'
 import { acceptFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 
-export function createAcceptActivity(domain: string, actor: Actor, object: ApObject): AcceptActivity {
-	return {
+export async function createAcceptActivity(
+	db: Database,
+	domain: string,
+	actor: Actor,
+	object: ApObject
+): Promise<AcceptActivity> {
+	return await insertActivity(db, domain, actor, {
 		'@context': 'https://www.w3.org/ns/activitystreams',
 		type: 'Accept',
-		id: createActivityId(domain),
 		actor: actor.id,
 		object,
-	}
+	})
 }
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-accept

@@ -43,7 +43,7 @@ export async function handleRequest(
 			return new Response(`target Actor ${obj[originalActorIdSymbol]} not found`, { status: 404 })
 		}
 
-		const activity = createLikeActivity(domain, connectedActor, new URL(obj[originalObjectIdSymbol]))
+		const activity = await createLikeActivity(db, domain, connectedActor, new URL(obj[originalObjectIdSymbol]))
 		const signingKey = await getSigningKey(userKEK, db, connectedActor)
 		await deliverToActor(signingKey, connectedActor, targetActor, activity, domain)
 	}

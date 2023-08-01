@@ -5,19 +5,20 @@ import {
 	getActivityObject,
 	isAnnounceActivity,
 	isCreateActivity,
+	PUBLIC_GROUP,
 } from 'wildebeest/backend/src/activitypub/activities'
 import { createPerson, getActorById } from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInOutbox, get } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { getApId, getObjectById, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
-import { createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
+import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { insertLike } from 'wildebeest/backend/src/mastodon/like'
-import { createReblog, insertReblog } from 'wildebeest/backend/src/mastodon/reblog'
+import { createReblog } from 'wildebeest/backend/src/mastodon/reblog'
 import { MessageType } from 'wildebeest/backend/src/types'
 import { isUUID } from 'wildebeest/backend/src/utils'
 import { queryAcct } from 'wildebeest/backend/src/webfinger'
-import { createReply, createStatus } from 'wildebeest/backend/test/shared.utils'
+import { createPublicStatus, createReply } from 'wildebeest/backend/test/shared.utils'
 import * as accounts_get from 'wildebeest/functions/api/v1/accounts/[id]'
 import * as accounts_featured_tags from 'wildebeest/functions/api/v1/accounts/[id]/featured_tags'
 import * as accounts_follow from 'wildebeest/functions/api/v1/accounts/[id]/follow'
@@ -347,7 +348,7 @@ describe('Mastodon APIs', () => {
 			await addFollowing(domain, db, actor3, actor)
 			await acceptFollowing(db, actor3, actor)
 
-			await createStatus(domain, db, actor, 'my first status')
+			await createPublicStatus(domain, db, actor, 'my first status')
 
 			const res = await lookup.handleRequest({ domain, db }, 'sven')
 			await assertStatus(res, 200)
@@ -472,7 +473,7 @@ describe('Mastodon APIs', () => {
 			await addFollowing(domain, db, actor3, actor)
 			await acceptFollowing(db, actor3, actor)
 
-			await createStatus(domain, db, actor, 'my first status')
+			await createPublicStatus(domain, db, actor, 'my first status')
 
 			const res = await accounts_get.handleRequest({ domain, db }, actor[mastodonIdSymbol])
 			await assertStatus(res, 200)
@@ -491,11 +492,12 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-			const firstNote = await createStatus(domain, db, actor, 'my first status')
+			const firstNote = await createPublicStatus(domain, db, actor, 'my first status')
 			await insertLike(db, actor, firstNote)
-			await sleep(10)
-			const secondNote = await createStatus(domain, db, actor, 'my second status')
-			await insertReblog(db, actor, secondNote)
+			await sleep(5)
+			const secondNote = await createPublicStatus(domain, db, actor, 'my second status')
+			await sleep(5)
+			await createReblog(db, actor, secondNote, { to: [PUBLIC_GROUP], cc: [], id: 'https://example.com/activity' })
 
 			const res = await accounts_statuses.onRequestGet({
 				request: new Request('https://' + domain),
@@ -512,29 +514,38 @@ describe('Mastodon APIs', () => {
 					account: { acct: unknown }
 					favourites_count: unknown
 					reblogs_count: unknown
+					reblog: Record<string, unknown>
 					uri: string
 					url: string
 				}[]
 			>()
-			assert.equal(data.length, 2)
+			assert.equal(data.length, 3)
 
 			assert(!isUUID(data[0].id) && !isNaN(Number(data[0].id)), data[0].id)
-			assert.equal(data[0].content, 'my second status')
+			assert.equal(data[0].content, '')
 			assert.equal(data[0].account.acct, 'sven')
 			assert.equal(data[0].favourites_count, 0)
-			assert.equal(data[0].reblogs_count, 1)
-			assert.equal(new URL(data[0].url).pathname, '/@sven/' + data[0].id)
+			assert.equal(data[0].reblogs_count, 0)
+			assert.equal(data[0].uri, 'https://example.com/activity')
+			assert.equal(data[0].reblog.content, 'my second status')
 
 			assert(!isUUID(data[1].id) && !isNaN(Number(data[1].id)), data[1].id)
-			assert.equal(data[1].content, 'my first status')
-			assert.equal(data[1].favourites_count, 1)
-			assert.equal(data[1].reblogs_count, 0)
+			assert.equal(data[1].content, 'my second status')
+			assert.equal(data[1].account.acct, 'sven')
+			assert.equal(data[1].favourites_count, 0)
+			assert.equal(data[1].reblogs_count, 1)
+			assert.equal(new URL(data[1].url).pathname, '/@sven/' + data[1].id)
+
+			assert(!isUUID(data[2].id) && !isNaN(Number(data[2].id)), data[2].id)
+			assert.equal(data[2].content, 'my first status')
+			assert.equal(data[2].favourites_count, 1)
+			assert.equal(data[2].reblogs_count, 0)
 		})
 
 		test("get local actor statuses doesn't include replies", async () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const note = await createStatus(domain, db, actor, 'a post')
+			const note = await createPublicStatus(domain, db, actor, 'a post')
 			await sleep(10)
 			await createReply(domain, db, actor, note, 'a reply')
 
@@ -558,7 +569,7 @@ describe('Mastodon APIs', () => {
 
 			const properties = { url: 'https://example.com/image.jpg', type: 'Image' as const }
 			const mediaAttachments = [await createImage(domain, db, actor, properties)]
-			await createStatus(domain, db, actor, 'status from actor', mediaAttachments)
+			await createPublicStatus(domain, db, actor, 'status from actor', mediaAttachments)
 
 			const res = await accounts_statuses.onRequestGet({
 				request: new Request('https://' + domain),
@@ -604,12 +615,24 @@ describe('Mastodon APIs', () => {
 				.bind('https://example.com/object2', 'Note', JSON.stringify({ content: 'my second status' }))
 				.run()
 			await db
-				.prepare('INSERT INTO outbox_objects (id, actor_id, object_id, cdate) VALUES (?, ?, ?, ?)')
-				.bind('outbox1', actor.id.toString(), 'https://example.com/object1', '2022-12-16 08:14:48')
+				.prepare('INSERT INTO outbox_objects (id, actor_id, object_id, cdate, [to]) VALUES (?, ?, ?, ?, ?)')
+				.bind(
+					'outbox1',
+					actor.id.toString(),
+					'https://example.com/object1',
+					'2022-12-16 08:14:48',
+					JSON.stringify([PUBLIC_GROUP])
+				)
 				.run()
 			await db
-				.prepare('INSERT INTO outbox_objects (id, actor_id, object_id, cdate) VALUES (?, ?, ?, ?)')
-				.bind('outbox2', actor.id.toString(), 'https://example.com/object2', '2022-12-16 10:14:48')
+				.prepare('INSERT INTO outbox_objects (id, actor_id, object_id, cdate, [to]) VALUES (?, ?, ?, ?, ?)')
+				.bind(
+					'outbox2',
+					actor.id.toString(),
+					'https://example.com/object2',
+					'2022-12-16 10:14:48',
+					JSON.stringify([PUBLIC_GROUP])
+				)
 				.run()
 
 			{
@@ -660,10 +683,7 @@ describe('Mastodon APIs', () => {
 
 			const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 
-			const note = await createPublicNote(domain, db, 'my localnote status', actorA, new Set(), [], {
-				sensitive: false,
-				source: { content: 'my localnote status', mediaType: 'text/plain' },
-			})
+			const note = await createPublicStatus(domain, db, actorA, 'my localnote status')
 
 			globalThis.fetch = async (input: RequestInfo) => {
 				if (input instanceof URL || typeof input === 'string') {
@@ -709,6 +729,7 @@ describe('Mastodon APIs', () => {
 										type: 'Create',
 										actor: 'https://social.com/users/someone',
 										published: '2022-12-10T23:48:38Z',
+										to: [PUBLIC_GROUP],
 										object: {
 											id: 'https://example.com/object1',
 											type: 'Note',
@@ -740,6 +761,7 @@ describe('Mastodon APIs', () => {
 										type: 'Announce',
 										actor: 'https://social.com/users/someone',
 										published: '2022-12-10T23:48:38Z',
+										to: [PUBLIC_GROUP],
 										object: note.id,
 									},
 								],
@@ -761,13 +783,13 @@ describe('Mastodon APIs', () => {
 					const res = await cacheActivityObject(domain, getActivityObject(item), db, getApId(item.actor), objectId)
 					assert.ok(res)
 					// Date in the past to create the order
-					await addObjectInOutbox(db, actorB, res.object, '2022-12-10T23:48:38Z')
+					await addObjectInOutbox(db, actorB, res.object, item.to, item.cc, '2022-12-10T23:48:38Z')
 				}
 				if (isAnnounceActivity(item)) {
 					const objectId = getApId(item.object)
-					const obj = await getObjectById(db, objectId)
+					const obj = await getObjectById<Note>(db, objectId)
 					assert.ok(obj)
-					await createReblog(db, actorB, obj)
+					await createReblog(db, actorB, obj, item)
 				}
 			}
 

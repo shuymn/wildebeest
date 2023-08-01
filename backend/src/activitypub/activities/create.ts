@@ -2,8 +2,8 @@ import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import {
 	cacheActivityObject,
 	CreateActivity,
-	createActivityId,
 	getActivityObject,
+	insertActivity,
 } from 'wildebeest/backend/src/activitypub/activities'
 import { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { actorURL, getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
@@ -18,8 +18,13 @@ import { parseHandle } from 'wildebeest/backend/src/utils/handle'
 import { RequiredProps } from 'wildebeest/backend/src/utils/type'
 import { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
-export function createCreateActivity(domain: string, actor: Actor, object: RequiredProps<Note, 'published'>) {
-	return {
+export async function createCreateActivity(
+	db: Database,
+	domain: string,
+	actor: Actor,
+	object: RequiredProps<Note, 'published'>
+): Promise<RequiredProps<CreateActivity, 'to' | 'cc' | 'published'>> {
+	return await insertActivity(db, domain, actor, {
 		'@context': [
 			'https://www.w3.org/ns/activitystreams',
 			{
@@ -32,14 +37,13 @@ export function createCreateActivity(domain: string, actor: Actor, object: Requi
 				votersCount: 'toot:votersCount',
 			},
 		],
-		id: createActivityId(domain),
 		type: 'Create',
 		actor: actor.id,
 		object,
 		to: object.to,
 		cc: object.cc,
 		published: object.published,
-	} satisfies CreateActivity
+	})
 }
 
 function extractID(domain: string, s: string | URL): string {
@@ -56,17 +60,24 @@ export async function handleCreateActivity(
 ) {
 	// FIXME: download any attachment Objects
 
-	const recipients: URL[] = []
-	const targets: string[] = []
+	const recipients = new Map<string, URL>()
 
 	const to = activity.to === undefined ? [] : Array.isArray(activity.to) ? activity.to : [activity.to]
 	if (to.length > 0) {
-		recipients.push(...to.map(getApId))
-		targets.push(...to.map((s) => getApId(s).toString()))
+		for (const target of to) {
+			const targetId = getApId(target)
+			const targetIdStr = targetId.toString()
+			recipients.set(targetIdStr, targetId)
+		}
 	}
+
 	const cc = activity.cc === undefined ? [] : Array.isArray(activity.cc) ? activity.cc : [activity.cc]
 	if (cc.length > 0) {
-		recipients.push(...cc.map(getApId))
+		for (const target of cc) {
+			const targetId = getApId(target)
+			const targetIdStr = targetId.toString()
+			recipients.set(targetIdStr, targetId)
+		}
 	}
 
 	activity.object = getActivityObject(activity)
@@ -104,11 +115,9 @@ export async function handleCreateActivity(
 	const fromActor = await getAndCache(actorId, db)
 	// Add the object in the originating actor's outbox, allowing other
 	// actors on this instance to see the note in their timelines.
-	for (const t of targets) {
-		await addObjectInOutbox(db, fromActor, obj, activity.published, t)
-	}
+	await addObjectInOutbox(db, fromActor, obj, activity.to ?? obj.to, activity.cc ?? obj.cc, activity.published)
 
-	for (const url of recipients) {
+	for (const url of recipients.values()) {
 		if (url.hostname !== domain) {
 			continue
 		}

@@ -3,7 +3,7 @@ import { type Database } from 'wildebeest/backend/src/database'
 import type { MastodonId } from 'wildebeest/backend/src/types'
 import { isUUID } from 'wildebeest/backend/src/utils'
 import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
-import { Intersect, RequiredProps, SingleOrArray } from 'wildebeest/backend/src/utils/type'
+import { AwaitedOnce, Intersect, RequiredProps, SingleOrArray } from 'wildebeest/backend/src/utils/type'
 import { UA } from 'wildebeest/config/ua'
 
 export const originalActorIdSymbol = Symbol()
@@ -117,7 +117,19 @@ export async function createObject<T extends ApObject>(
 	const now = new Date()
 	const mastodonId = await generateMastodonId(db, 'objects', now)
 	const apId = uri(domain, crypto.randomUUID())
-	properties = await sanitizeObjectProperties({ id: apId, type, ...properties })
+
+	const parts = originalActorId.pathname.split('/')
+	if (parts.length === 0) {
+		throw new Error('malformed URL')
+	}
+	const username = parts[parts.length - 1]
+
+	properties = await sanitizeObjectProperties({
+		id: apId,
+		url: local ? new URL(`/@${username}/${mastodonId}`, 'https://' + domain) : undefined,
+		type,
+		...properties,
+	})
 
 	const { success, error } = await db
 		.prepare(
@@ -163,9 +175,9 @@ export async function get<T>(url: URL): Promise<T> {
 	return res.json<T>()
 }
 
-type CacheObjectRes<T extends ApObject> = {
+type CacheObjectResult<T extends ApObject> = {
 	created: boolean
-	object: T
+	object: Exclude<AwaitedOnce<ReturnType<typeof getObjectBy<T>>>, null>
 }
 
 export async function cacheObject<T extends ApObject>(
@@ -175,7 +187,7 @@ export async function cacheObject<T extends ApObject>(
 	originalActorId: URL,
 	originalObjectId: URL,
 	local: boolean
-): Promise<CacheObjectRes<T>> {
+): Promise<CacheObjectResult<T>> {
 	const sanitizedProperties = await sanitizeObjectProperties(properties)
 
 	const cachedObject = await getObjectBy<T>(db, ObjectByKey.originalObjectId, originalObjectId.toString())
@@ -190,7 +202,7 @@ export async function cacheObject<T extends ApObject>(
 	const mastodonId = await generateMastodonId(db, 'objects', now)
 	const apId = uri(domain, crypto.randomUUID()).toString()
 
-	const row: any = await db
+	const row = await db
 		.prepare(
 			'INSERT INTO objects(id, type, properties, original_actor_id, original_object_id, local, mastodon_id, cdate) VALUES(?, ?, ?, ?, ?, ?, ?, ?) RETURNING *'
 		)
@@ -204,7 +216,15 @@ export async function cacheObject<T extends ApObject>(
 			mastodonId,
 			now.toISOString()
 		)
-		.first()
+		.first<{
+			properties: string | object
+			cdate: string
+			type: string
+			id: string
+			mastodon_id: string
+			original_actor_id: string
+			original_object_id: string
+		}>()
 
 	// Add peer
 	{
@@ -222,19 +242,20 @@ export async function cacheObject<T extends ApObject>(
 			// D1 uses a string for JSON properties
 			properties = JSON.parse(row.properties)
 		}
-		const object = {
-			published: new Date(row.cdate).toISOString(),
-			...properties,
+		return {
+			created: true,
+			object: {
+				...properties,
+				published: new Date(row.cdate).toISOString(),
 
-			type: row.type,
-			id: new URL(row.id),
+				type: row.type,
+				id: new URL(row.id),
 
-			[mastodonIdSymbol]: row.mastodon_id,
-			[originalActorIdSymbol]: row.original_actor_id,
-			[originalObjectIdSymbol]: row.original_object_id,
-		} as any
-
-		return { object, created: true }
+				[mastodonIdSymbol]: row.mastodon_id,
+				[originalActorIdSymbol]: row.original_actor_id,
+				[originalObjectIdSymbol]: row.original_object_id,
+			},
+		}
 	}
 }
 
@@ -275,15 +296,15 @@ export async function ensureObjectMastodonId(db: Database, mastodonId: MastodonI
 	return newMastodonId
 }
 
-export async function getObjectById<T extends ApObject>(db: Database, id: string | URL): Promise<T | null> {
+export async function getObjectById<T extends ApObject>(db: Database, id: string | URL) {
 	return getObjectBy<T>(db, ObjectByKey.id, id.toString())
 }
 
-export async function getObjectByOriginalId<T extends ApObject>(db: Database, id: string | URL): Promise<T | null> {
-	return getObjectBy(db, ObjectByKey.originalObjectId, id.toString())
+export async function getObjectByOriginalId<T extends ApObject>(db: Database, id: string | URL) {
+	return getObjectBy<T>(db, ObjectByKey.originalObjectId, id.toString())
 }
 
-export async function getObjectByMastodonId<T extends ApObject>(db: Database, id: MastodonId): Promise<T | null> {
+export async function getObjectByMastodonId<T extends ApObject>(db: Database, id: MastodonId) {
 	return getObjectBy<T>(db, ObjectByKey.mastodonId, id)
 }
 
@@ -299,7 +320,7 @@ export async function getObjectBy<T extends ApObject>(
 	db: Database,
 	key: ObjectByKey,
 	value: string
-): Promise<T | null> {
+): Promise<(T & { published: string; [mastodonIdSymbol]: string; [originalActorIdSymbol]: string }) | null> {
 	if (!allowedObjectByKeysSet.has(key)) {
 		throw new Error('getObjectBy run with invalid key: ' + key)
 	}
@@ -331,23 +352,23 @@ export async function getObjectBy<T extends ApObject>(
 	if (typeof result.properties === 'object') {
 		// neon uses JSONB for properties which is returned as a deserialized
 		// object.
-		properties = result.properties
+		properties = result.properties as T
 	} else {
 		// D1 uses a string for JSON properties
-		properties = JSON.parse(result.properties)
+		properties = JSON.parse(result.properties) as T
 	}
 
 	return {
-		published: new Date(result.cdate).toISOString(),
 		...properties,
+		published: new Date(result.cdate).toISOString(),
 
 		type: result.type,
 		id: new URL(result.id),
 
 		[mastodonIdSymbol]: await ensureObjectMastodonId(db, result.mastodon_id, result.cdate),
 		[originalActorIdSymbol]: result.original_actor_id,
-		[originalObjectIdSymbol]: result.original_object_id,
-	} as T
+		[originalObjectIdSymbol]: result.original_object_id ?? undefined,
+	}
 }
 
 /** Is the given `value` an ActivityPub Object? */

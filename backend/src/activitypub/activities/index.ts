@@ -1,11 +1,8 @@
-import {
-	type ApObject,
-	ApObjectId,
-	type ApObjectOrId,
-	cacheObject,
-	getApType,
-} from 'wildebeest/backend/src/activitypub/objects'
+import { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import { type ApObject, type ApObjectOrId, cacheObject, getApType } from 'wildebeest/backend/src/activitypub/objects'
+import { isNote } from 'wildebeest/backend/src/activitypub/objects/note'
 import { Database } from 'wildebeest/backend/src/database'
+import { PartialProps } from 'wildebeest/backend/src/utils/type'
 
 export const PUBLIC_GROUP = 'https://www.w3.org/ns/activitystreams#Public'
 
@@ -84,12 +81,6 @@ export function isMoveActivity(obj: ApObject): obj is MoveActivity {
 	return getApType(obj) === 'Move'
 }
 
-// Generate a unique ID. Note that currently the generated URL aren't routable.
-export function createActivityId(domain: string): ApObjectId {
-	const id = crypto.randomUUID()
-	return new URL('/ap/a/' + id, 'https://' + domain)
-}
-
 export function getActivityObject(activity: Activity): ApObject {
 	if (typeof activity.object === 'string' || activity.object instanceof URL) {
 		throw new Error('`activity.object` must be of type object')
@@ -97,21 +88,41 @@ export function getActivityObject(activity: Activity): ApObject {
 	return activity.object
 }
 
-export async function cacheActivityObject(
+export async function cacheActivityObject<T extends ApObject>(
 	domain: string,
-	obj: ApObject,
+	obj: T,
 	db: Database,
 	originalActorId: URL,
 	originalObjectId: URL
-): Promise<ReturnType<typeof cacheObject> | null> {
-	switch (obj.type) {
-		case 'Note': {
-			return cacheObject(domain, db, obj, originalActorId, originalObjectId, false)
-		}
-
-		default: {
-			console.warn(`Unsupported Create object: ${obj.type}`)
-			return null
-		}
+) {
+	if (isNote(obj)) {
+		return cacheObject(domain, db, obj, originalActorId, originalObjectId, false)
 	}
+	console.warn(`Unsupported Create object: ${obj.type}`)
+	return null
+}
+
+export async function insertActivity<T extends Activity>(
+	db: Database,
+	domain: string,
+	actor: Actor,
+	activity: PartialProps<T, 'id'>
+): Promise<T> {
+	// Generate a unique ID. Note that currently the generated URL aren't routable.
+	const id = crypto.randomUUID()
+	activity.id = new URL('/ap/a/' + id, 'https://' + domain)
+
+	const result = await db
+		.prepare(
+			`
+INSERT INTO actor_activities (id, actor_id, activity)
+VALUES (?, ?, ?)
+  `
+		)
+		.bind(id, actor.id.toString(), JSON.stringify(activity))
+		.run()
+	if (!result.success) {
+		throw new Error('SQL error: ' + result.error)
+	}
+	return activity as T
 }

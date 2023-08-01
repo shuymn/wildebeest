@@ -8,3 +8,5 @@ export type Intersect<T, U> = Exclude<keyof T, keyof U> extends never
 		? never
 		: { [P in Exclude<keyof U, keyof T>]: U[P] }
 	: { [P in Exclude<keyof T, keyof U>]: T[P] }
+
+export type AwaitedOnce<T> = T extends Promise<infer U> ? U : T

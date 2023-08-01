@@ -119,7 +119,7 @@ export async function handleRequest(
 		}
 
 		// send updates
-		const activity = createUpdateActivity(domain, connectedActor, actor)
+		const activity = await createUpdateActivity(db, domain, connectedActor, actor)
 		await deliverFollowers(db, userKEK, connectedActor, activity, queue)
 
 		return new Response(JSON.stringify(res), { headers })

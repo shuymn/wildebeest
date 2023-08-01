@@ -54,7 +54,7 @@ export async function handleRequest(
 	}
 
 	if (await isFollowingOrFollowingRequested(db, connectedActor, targetActor)) {
-		const activity = createUnfollowActivity(domain, connectedActor, targetActor)
+		const activity = await createUnfollowActivity(db, domain, connectedActor, targetActor)
 		const signingKey = await getSigningKey(userKEK, db, connectedActor)
 		await deliverToActor<UndoActivity>(signingKey, connectedActor, targetActor, activity, domain)
 		await removeFollowing(db, connectedActor, targetActor)

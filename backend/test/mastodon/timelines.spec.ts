@@ -1,15 +1,15 @@
 import { strict as assert } from 'node:assert/strict'
 
+import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
+import { createAnnounceActivity } from 'wildebeest/backend/src/activitypub/activities/announce'
 import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
-import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
-import { createDirectNote, createPublicNote } from 'wildebeest/backend/src/activitypub/objects/note'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { insertHashtags } from 'wildebeest/backend/src/mastodon/hashtag'
 import { insertLike } from 'wildebeest/backend/src/mastodon/like'
-import { createReblog, insertReblog } from 'wildebeest/backend/src/mastodon/reblog'
+import { createReblog } from 'wildebeest/backend/src/mastodon/reblog'
 import * as timelines from 'wildebeest/backend/src/mastodon/timeline'
-import { createReply, createStatus } from 'wildebeest/backend/test/shared.utils'
+import { createDirectStatus, createPublicStatus, createReply } from 'wildebeest/backend/test/shared.utils'
 import * as timelines_home from 'wildebeest/functions/api/v1/timelines/home'
 import * as timelines_public from 'wildebeest/functions/api/v1/timelines/public'
 
@@ -32,27 +32,38 @@ describe('Mastodon APIs', () => {
 			await acceptFollowing(db, actor, actor2)
 
 			// Actor 2 is posting
-			const firstNoteFromActor2 = await createStatus(domain, db, actor2, 'first status from actor2')
-			await sleep(10)
-			await createStatus(domain, db, actor2, 'second status from actor2')
-			await sleep(10)
-			await createStatus(domain, db, actor3, 'first status from actor3')
-			await sleep(10)
+			const firstNoteFromActor2 = await createPublicStatus(domain, db, actor2, 'first status from actor2', [], {
+				published: '2021-01-01T00:00:00.000Z',
+			})
+			await createPublicStatus(domain, db, actor2, 'second status from actor2', [], {
+				published: '2021-01-01T00:00:00.001Z',
+			})
+			await createPublicStatus(domain, db, actor3, 'first status from actor3', [], {
+				published: '2021-01-01T00:00:00.002Z',
+			})
 
 			await insertLike(db, actor, firstNoteFromActor2)
-			await insertReblog(db, actor, firstNoteFromActor2)
+			await createReblog(db, actor, firstNoteFromActor2, {
+				to: [PUBLIC_GROUP],
+				cc: [],
+				id: 'https://example.com/activity',
+			})
 
 			// Actor should only see posts from actor2 in the timeline
 			const connectedActor: any = actor
 			const data = await timelines.getHomeTimeline(domain, db, connectedActor)
-			assert.equal(data.length, 2)
+			assert.equal(data.length, 3)
 			assert(data[0].id)
-			assert.equal(data[0].content, 'second status from actor2')
-			assert.equal(data[0].account.username, 'sven2')
-			assert.equal(data[1].content, 'first status from actor2')
+			assert.equal(data[0].content, '')
+			assert.equal(data[0].account.username, 'sven')
+			assert.equal(data[0].reblog?.content, 'first status from actor2')
+			assert.equal(data[0].reblog?.account.username, 'sven2')
+			assert.equal(data[1].content, 'second status from actor2')
 			assert.equal(data[1].account.username, 'sven2')
-			assert.equal(data[1].favourites_count, 1)
-			assert.equal(data[1].reblogs_count, 1)
+			assert.equal(data[2].content, 'first status from actor2')
+			assert.equal(data[2].account.username, 'sven2')
+			assert.equal(data[2].favourites_count, 1)
+			assert.equal(data[2].reblogs_count, 1)
 		})
 
 		test("home doesn't show private Notes from followed actors", async () => {
@@ -68,11 +79,7 @@ describe('Mastodon APIs', () => {
 			await acceptFollowing(db, actor3, actor2)
 
 			// actor2 sends a DM to actor1
-			const note = await createDirectNote(domain, db, 'DM', actor2, new Set([actor1]), [], {
-				sensitive: false,
-				source: { content: 'DM', mediaType: 'text/markdown' },
-			})
-			await addObjectInOutbox(db, actor2, note, undefined, actor1.id.toString())
+			await createDirectStatus(domain, db, actor2, 'DM', [], { to: [actor1] })
 
 			// actor3 shouldn't see the private note
 			const data = await timelines.getHomeTimeline(domain, db, actor3)
@@ -89,11 +96,7 @@ describe('Mastodon APIs', () => {
 			await acceptFollowing(db, actor, actor2)
 
 			// Actor 2 is posting
-			const note = await createPublicNote(domain, db, 'test post', actor2, new Set(), [], {
-				sensitive: false,
-				source: { content: 'test post', mediaType: 'text/markdown' },
-			})
-			await addObjectInOutbox(db, actor2, note, undefined, actor2.followers.toString())
+			await createPublicStatus(domain, db, actor2, 'test post')
 
 			// Actor should only see posts from actor2 in the timeline
 			const data = await timelines.getHomeTimeline(domain, db, actor)
@@ -107,13 +110,9 @@ describe('Mastodon APIs', () => {
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 
 			// actor2 sends a DM to actor1
-			const note = await createDirectNote(domain, db, 'DM', actor2, new Set([actor1]), [], {
-				sensitive: false,
-				source: { content: 'DM', mediaType: 'text/markdown' },
-			})
-			await addObjectInOutbox(db, actor2, note, undefined, actor1.id.toString())
+			await createDirectStatus(domain, db, actor2, 'DM', [], { to: [actor1] })
 
-			const data = await timelines.getPublicTimeline(domain, db, timelines.LocalPreference.NotSet)
+			const data = await timelines.getPublicTimeline(domain, db, timelines.LocalPreference.NotSet, false, 20)
 			assert.equal(data.length, 0)
 		})
 
@@ -122,7 +121,7 @@ describe('Mastodon APIs', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 			// Actor is posting
-			await createStatus(domain, db, actor, 'status from myself')
+			await createPublicStatus(domain, db, actor, 'status from myself')
 
 			// Actor should only see posts from actor2 in the timeline
 			const connectedActor = actor
@@ -160,34 +159,53 @@ describe('Mastodon APIs', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 
-			const statusFromActor = await createStatus(domain, db, actor, 'status from actor')
+			const statusFromActor = await createPublicStatus(domain, db, actor, 'status from actor', [], {
+				published: '2021-01-01T00:00:00.000Z',
+			})
 			await sleep(10)
-			await createStatus(domain, db, actor2, 'status from actor2')
+			await createPublicStatus(domain, db, actor2, 'status from actor2', [], { published: '2021-01-01T00:00:00.001Z' })
 
 			await insertLike(db, actor, statusFromActor)
-			await insertReblog(db, actor, statusFromActor)
+			await createReblog(db, actor, statusFromActor, {
+				to: [PUBLIC_GROUP],
+				cc: [],
+				id: 'https://example.com/activity',
+			})
 
-			const res = await timelines_public.handleRequest(domain, db)
+			const res = await timelines_public.handleRequest(
+				{ domain, db },
+				{ local: false, remote: false, only_media: false, limit: 20 }
+			)
 			await assertStatus(res, 200)
 			assertJSON(res)
 			assertCORS(res)
 
 			const data = await res.json<any>()
-			assert.equal(data.length, 2)
+			assert.equal(data.length, 3)
 			assert(data[0].id)
-			assert.equal(data[0].content, 'status from actor2')
-			assert.equal(data[0].account.username, 'sven2')
-			assert.equal(data[1].content, 'status from actor')
-			assert.equal(data[1].account.username, 'sven')
-			assert.equal(data[1].favourites_count, 1)
-			assert.equal(data[1].reblogs_count, 1)
+			assert.equal(data[0].content, '')
+			assert.equal(data[0].account.username, 'sven')
+			assert.equal(data[0].reblog.content, 'status from actor')
+			assert.equal(data[0].reblog.account.username, 'sven')
+
+			assert.equal(data[1].content, 'status from actor2')
+			assert.equal(data[1].account.username, 'sven2')
+
+			assert.equal(data[2].content, 'status from actor')
+			assert.equal(data[2].account.username, 'sven')
+			assert.equal(data[2].favourites_count, 1)
+			assert.equal(data[2].reblogs_count, 1)
 
 			// if we request only remote objects nothing should be returned
-			const remoteRes = await timelines_public.handleRequest(domain, db, {
-				local: false,
-				remote: true,
-				only_media: false,
-			})
+			const remoteRes = await timelines_public.handleRequest(
+				{ domain, db },
+				{
+					local: false,
+					remote: true,
+					only_media: false,
+					limit: 20,
+				}
+			)
 			assert.equal(remoteRes.status, 200)
 			assertJSON(remoteRes)
 			assertCORS(remoteRes)
@@ -201,9 +219,12 @@ describe('Mastodon APIs', () => {
 
 			const properties = { url: 'https://example.com/image.jpg' }
 			const mediaAttachments = [await createImage(domain, db, actor, properties)]
-			await createStatus(domain, db, actor, 'status from actor', mediaAttachments)
+			await createPublicStatus(domain, db, actor, 'status from actor', mediaAttachments)
 
-			const res = await timelines_public.handleRequest(domain, db)
+			const res = await timelines_public.handleRequest(
+				{ domain, db },
+				{ local: false, remote: false, only_media: false, limit: 20 }
+			)
 			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
@@ -217,23 +238,14 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-			const note1 = await createPublicNote(domain, db, 'note1', actor, new Set(), [], {
-				sensitive: false,
-				source: { content: 'note1', mediaType: 'text/markdown' },
-			})
-			const note2 = await createPublicNote(domain, db, 'note2', actor, new Set(), [], {
-				sensitive: false,
-				source: { content: 'note2', mediaType: 'text/markdown' },
-			})
-			const note3 = await createPublicNote(domain, db, 'note3', actor, new Set(), [], {
-				sensitive: false,
-				source: { content: 'note3', mediaType: 'text/markdown' },
-			})
-			await addObjectInOutbox(db, actor, note1, '2022-12-10T23:48:38Z')
-			await addObjectInOutbox(db, actor, note2, '2000-12-10T23:48:38Z')
-			await addObjectInOutbox(db, actor, note3, '2048-12-10T23:48:38Z')
+			await createPublicStatus(domain, db, actor, 'note1', [], { published: '2021-01-01T00:00:00.001Z' })
+			await createPublicStatus(domain, db, actor, 'note2', [], { published: '2021-01-01T00:00:00.000Z' })
+			await createPublicStatus(domain, db, actor, 'note3', [], { published: '2021-01-01T00:00:00.002Z' })
 
-			const res = await timelines_public.handleRequest(domain, db)
+			const res = await timelines_public.handleRequest(
+				{ domain, db },
+				{ local: false, remote: false, only_media: false, limit: 20 }
+			)
 			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
@@ -242,11 +254,11 @@ describe('Mastodon APIs', () => {
 			assert.equal(data[2].content, 'note2')
 		})
 
-		test('timelines hides and counts replies', async () => {
+		test('home timelines do not hides and counts public replies', async () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-			const note = await createStatus(domain, db, actor, 'a post')
+			const note = await createPublicStatus(domain, db, actor, 'a post')
 
 			await sleep(10)
 
@@ -256,13 +268,15 @@ describe('Mastodon APIs', () => {
 
 			{
 				const data = await timelines.getHomeTimeline(domain, db, connectedActor)
-				assert.equal(data.length, 1)
-				assert.equal(data[0].content, 'a post')
-				assert.equal(data[0].replies_count, 1)
+				assert.equal(data.length, 2)
+				assert.equal(data[0].content, 'a reply')
+				assert.equal(data[0].replies_count, 0)
+				assert.equal(data[1].content, 'a post')
+				assert.equal(data[1].replies_count, 1)
 			}
 
 			{
-				const data = await timelines.getPublicTimeline(domain, db, timelines.LocalPreference.NotSet)
+				const data = await timelines.getPublicTimeline(domain, db, timelines.LocalPreference.NotSet, false, 20)
 				assert.equal(data.length, 1)
 				assert.equal(data[0].content, 'a post')
 				assert.equal(data[0].replies_count, 1)
@@ -273,21 +287,25 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-			const note = await createStatus(domain, db, actor, 'a post')
-			await insertReblog(db, actor, note)
+			const note = await createPublicStatus(domain, db, actor, 'a post', [], { published: '2021-01-01T00:00:00.000Z' })
+			await createReblog(db, actor, note, {
+				to: [PUBLIC_GROUP],
+				cc: [],
+				id: 'https://example.com/activity',
+			})
 
 			const connectedActor: any = actor
 
 			const data = await timelines.getHomeTimeline(domain, db, connectedActor)
-			assert.equal(data.length, 1)
-			assert.equal(data[0].reblogged, true)
+			assert.equal(data.length, 2)
+			assert.equal(data[1].reblogged, true)
 		})
 
 		test('show status favourited', async () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
-			const note = await createStatus(domain, db, actor, 'a post')
+			const note = await createPublicStatus(domain, db, actor, 'a post')
 			await insertLike(db, actor, note)
 
 			const connectedActor: any = actor
@@ -297,22 +315,24 @@ describe('Mastodon APIs', () => {
 			assert.equal(data[0].favourited, true)
 		})
 
-		test('show unique Notes', async () => {
+		test('show reblogs as independent notes', async () => {
 			const db = await makeDB()
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const actorA = await createPerson(domain, db, userKEK, 'svenA@cloudflare.com')
 			const actorB = await createPerson(domain, db, userKEK, 'svenB@cloudflare.com')
 
 			// Actor posts
-			const note = await createStatus(domain, db, actor, 'a post')
+			const note = await createPublicStatus(domain, db, actor, 'a post')
+
+			const activityA = await createAnnounceActivity(db, domain, actorA, note.id, new Set([PUBLIC_GROUP]), new Set())
+			const activityB = await createAnnounceActivity(db, domain, actorB, note.id, new Set([PUBLIC_GROUP]), new Set())
 
 			// ActorA and B reblog the post
-			await createReblog(db, actorA, note)
-			await createReblog(db, actorB, note)
+			await createReblog(db, actorA, note, activityA, activityA.published)
+			await createReblog(db, actorB, note, activityB, activityB.published)
 
-			const data = await timelines.getPublicTimeline(domain, db, timelines.LocalPreference.NotSet)
-			assert.equal(data.length, 1)
-			assert.equal(data[0].content, 'a post')
+			const data = await timelines.getPublicTimeline(domain, db, timelines.LocalPreference.NotSet, false, 20)
+			assert.equal(data.length, 3)
 		})
 
 		test('timeline with non exitent tag', async () => {
@@ -322,7 +342,8 @@ describe('Mastodon APIs', () => {
 				domain,
 				db,
 				timelines.LocalPreference.NotSet,
-				0,
+				false,
+				20,
 				'non-existent-tag'
 			)
 			assert.equal(data.length, 0)
@@ -333,24 +354,44 @@ describe('Mastodon APIs', () => {
 			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 			{
-				const note = await createStatus(domain, db, actor, 'test 1')
+				const note = await createPublicStatus(domain, db, actor, 'test 1', [], {
+					published: '2021-01-01T00:00:00.000Z',
+				})
 				await insertHashtags(db, note, ['test', 'a'])
 			}
 			await sleep(10)
 			{
-				const note = await createStatus(domain, db, actor, 'test 2')
+				const note = await createPublicStatus(domain, db, actor, 'test 2')
 				await insertHashtags(db, note, ['test', 'b'])
 			}
 
 			{
-				const data = await timelines.getPublicTimeline(domain, db, timelines.LocalPreference.NotSet, 0, 'test')
+				const data = await timelines.getPublicTimeline(
+					domain,
+					db,
+					timelines.LocalPreference.NotSet,
+					false,
+					20,
+					undefined,
+					undefined,
+					'test'
+				)
 				assert.equal(data.length, 2)
 				assert.equal(data[0].content, 'test 2')
 				assert.equal(data[1].content, 'test 1')
 			}
 
 			{
-				const data = await timelines.getPublicTimeline(domain, db, timelines.LocalPreference.NotSet, 0, 'a')
+				const data = await timelines.getPublicTimeline(
+					domain,
+					db,
+					timelines.LocalPreference.NotSet,
+					false,
+					20,
+					undefined,
+					undefined,
+					'a'
+				)
 				assert.equal(data.length, 1)
 				assert.equal(data[0].content, 'test 1')
 			}

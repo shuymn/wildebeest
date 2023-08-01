@@ -31,6 +31,7 @@ export interface PreparedStatement {
 export interface QueryBuilder {
 	jsonExtract(obj: string, prop: string): string
 	jsonExtractIsNull(obj: string, prop: string): string
+	jsonArrayLength(array: string): string
 	set(array: string): string
 	epoch(): string
 	insertOrIgnore(q: string): string
