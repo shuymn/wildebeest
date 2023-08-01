@@ -10,6 +10,10 @@ const qb: QueryBuilder = {
 		return `${qb.jsonExtract(obj, prop)} IS NULL`
 	},
 
+	jsonArrayLength(array: string): string {
+		return `json_array_length(${array})`
+	},
+
 	set(array: string): string {
 		return `(SELECT value FROM json_each(${array}))`
 	},

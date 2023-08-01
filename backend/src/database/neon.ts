@@ -19,6 +19,10 @@ const qb: QueryBuilder = {
 		return `${qb.jsonExtract(obj, prop)} = 'null'`
 	},
 
+	jsonArrayLength(array: string): string {
+		return `jsonb_array_length(${array})})`
+	},
+
 	set(array: string): string {
 		return `(SELECT value::text FROM json_array_elements_text(${array}))`
 	},
@@ -77,9 +81,8 @@ export default async function make(env: Pick<Env, 'NEON_DATABASE_URL'>): Promise
 			return results
 		},
 
-		async exec<T = unknown>(query: string): Promise<Result<T>> {
+		async exec<T = unknown>(): Promise<Result<T>> {
 			throw new Error('not implemented')
-			console.log(query)
 		},
 	}
 }
