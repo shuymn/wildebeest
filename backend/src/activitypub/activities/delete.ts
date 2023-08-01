@@ -1,4 +1,4 @@
-import { createActivityId, DeleteActivity } from 'wildebeest/backend/src/activitypub/activities'
+import { DeleteActivity, insertActivity } from 'wildebeest/backend/src/activitypub/activities'
 import { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import {
 	ApObject,
@@ -9,14 +9,18 @@ import {
 } from 'wildebeest/backend/src/activitypub/objects'
 import { Database } from 'wildebeest/backend/src/database'
 
-export function createDeleteActivity(domain: string, actor: Actor, object: ApObject): DeleteActivity {
-	return {
-		'@context': ['https://www.w3.org/ns/activitystreams'],
-		id: createActivityId(domain),
+export async function createDeleteActivity(
+	db: Database,
+	domain: string,
+	actor: Actor,
+	object: ApObject
+): Promise<DeleteActivity> {
+	return await insertActivity(db, domain, actor, {
+		'@context': 'https://www.w3.org/ns/activitystreams',
 		type: 'Delete',
 		actor: actor.id,
 		object,
-	}
+	})
 }
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-delete

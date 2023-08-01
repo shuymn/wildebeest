@@ -80,7 +80,7 @@ export async function handleRequest(
 	}
 
 	if (await isNotFollowing(db, connectedActor, followee)) {
-		const activity = createFollowActivity(domain, connectedActor, followee)
+		const activity = await createFollowActivity(db, domain, connectedActor, followee)
 		const signingKey = await getSigningKey(userKEK, db, connectedActor)
 		await deliverToActor(signingKey, connectedActor, followee, activity, domain)
 		await addFollowing(domain, db, connectedActor, followee)

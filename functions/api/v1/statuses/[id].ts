@@ -79,7 +79,7 @@ export async function handleRequestDelete(
 	queue: Queue<DeliverMessageBody>,
 	cache: Cache
 ): Promise<Response> {
-	const obj = (await getObjectByMastodonId(db, id)) as Note
+	const obj = await getObjectByMastodonId<Note>(db, id)
 	if (obj === null) {
 		return errors.statusNotFound(id)
 	}
@@ -95,7 +95,7 @@ export async function handleRequestDelete(
 	await deleteObject(db, obj)
 
 	// FIXME: deliver a Delete message to our peers
-	const activity = createDeleteActivity(domain, connectedActor, obj)
+	const activity = await createDeleteActivity(db, domain, connectedActor, obj)
 	await deliverFollowers(db, userKEK, connectedActor, activity, queue)
 
 	await timeline.pregenerateTimelines(domain, db, cache, connectedActor)

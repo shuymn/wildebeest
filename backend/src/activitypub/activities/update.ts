@@ -1,4 +1,4 @@
-import { createActivityId, getActivityObject, UpdateActivity } from 'wildebeest/backend/src/activitypub/activities'
+import { getActivityObject, insertActivity, UpdateActivity } from 'wildebeest/backend/src/activitypub/activities'
 import { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import {
 	ApObject,
@@ -10,14 +10,18 @@ import {
 } from 'wildebeest/backend/src/activitypub/objects'
 import { Database } from 'wildebeest/backend/src/database'
 
-export function createUpdateActivity(domain: string, actor: Actor, object: ApObject): UpdateActivity {
-	return {
-		'@context': ['https://www.w3.org/ns/activitystreams'],
-		id: createActivityId(domain),
+export async function createUpdateActivity(
+	db: Database,
+	domain: string,
+	actor: Actor,
+	object: ApObject
+): Promise<UpdateActivity> {
+	return await insertActivity(db, domain, actor, {
+		'@context': 'https://www.w3.org/ns/activitystreams',
 		type: 'Update',
 		actor: actor.id,
 		object,
-	}
+	})
 }
 
 export async function handleUpdateActivity(activity: UpdateActivity, db: Database) {

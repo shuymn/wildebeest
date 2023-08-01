@@ -1,6 +1,6 @@
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-like
 
-import { createActivityId, LikeActivity } from 'wildebeest/backend/src/activitypub/activities'
+import { insertActivity, LikeActivity } from 'wildebeest/backend/src/activitypub/activities'
 import { Actor, getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
 import { getApId, getObjectById, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { Database } from 'wildebeest/backend/src/database'
@@ -8,14 +8,18 @@ import { insertLike } from 'wildebeest/backend/src/mastodon/like'
 import { createNotification, sendLikeNotification } from 'wildebeest/backend/src/mastodon/notification'
 import { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
-export function createLikeActivity(domain: string, actor: Actor, object: URL): LikeActivity {
-	return {
+export async function createLikeActivity(
+	db: Database,
+	domain: string,
+	actor: Actor,
+	object: URL
+): Promise<LikeActivity> {
+	return await insertActivity(db, domain, actor, {
 		'@context': 'https://www.w3.org/ns/activitystreams',
-		id: createActivityId(domain),
 		type: 'Like',
 		actor: actor.id,
 		object,
-	}
+	})
 }
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-like

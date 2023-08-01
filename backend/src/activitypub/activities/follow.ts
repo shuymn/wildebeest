@@ -1,5 +1,5 @@
 import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
-import { createActivityId, FollowActivity } from 'wildebeest/backend/src/activitypub/activities'
+import { FollowActivity, insertActivity } from 'wildebeest/backend/src/activitypub/activities'
 import { createAcceptActivity } from 'wildebeest/backend/src/activitypub/activities/accept'
 import { type Actor, getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
@@ -11,14 +11,18 @@ import { insertFollowNotification, sendFollowNotification } from 'wildebeest/bac
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 import { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
-export function createFollowActivity(domain: string, actor: Actor, object: ApObject): FollowActivity {
-	return {
+export async function createFollowActivity(
+	db: Database,
+	domain: string,
+	actor: Actor,
+	object: ApObject
+): Promise<FollowActivity> {
+	return await insertActivity(db, domain, actor, {
 		'@context': 'https://www.w3.org/ns/activitystreams',
-		id: createActivityId(domain),
 		type: 'Follow',
 		actor: actor.id,
 		object: object.id,
-	}
+	})
 }
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-follow
@@ -48,7 +52,7 @@ export async function handleFollowActivity(
 
 	// Automatically send the Accept reply
 	await acceptFollowing(db, follower, followee)
-	const reply = createAcceptActivity(domain, followee, activity)
+	const reply = await createAcceptActivity(db, domain, followee, activity)
 	const signingKey = await getSigningKey(userKEK, db, followee)
 	await deliverToActor(signingKey, followee, follower, reply, domain)
 

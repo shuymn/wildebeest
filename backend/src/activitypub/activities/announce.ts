@@ -1,22 +1,30 @@
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-announce
 
-import { AnnounceActivity, cacheActivityObject, createActivityId } from 'wildebeest/backend/src/activitypub/activities'
+import { AnnounceActivity, cacheActivityObject, insertActivity } from 'wildebeest/backend/src/activitypub/activities'
 import { Actor, getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
 import { get, getApId, getObjectById, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
+import { isNote, Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { Database } from 'wildebeest/backend/src/database'
 import { createNotification, sendReblogNotification } from 'wildebeest/backend/src/mastodon/notification'
-import { createReblog, hasReblog } from 'wildebeest/backend/src/mastodon/reblog'
+import { createReblog, hasReblog, reblogNotAllowed } from 'wildebeest/backend/src/mastodon/reblog'
 import { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
-export function createAnnounceActivity(domain: string, actor: Actor, object: URL): AnnounceActivity {
-	return {
+export async function createAnnounceActivity(
+	db: Database,
+	domain: string,
+	actor: Actor,
+	object: URL,
+	to: Set<string>,
+	cc: Set<string>
+): Promise<AnnounceActivity> {
+	return await insertActivity(db, domain, actor, {
 		'@context': 'https://www.w3.org/ns/activitystreams',
-		id: createActivityId(domain),
 		type: 'Announce',
 		actor: actor.id,
 		object,
-	}
+		to: Array.from(to),
+		cc: Array.from(cc),
+	})
 }
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-announce
@@ -30,10 +38,9 @@ export async function handleAnnounceActivity(
 	const objectId = getApId(activity.object)
 	const actorId = getApId(activity.actor)
 
-	let obj: any = null
-
-	const localObject = await getObjectById(db, objectId)
-	if (localObject === null) {
+	// Object already exists locally, we can just use it.
+	let obj = await getObjectById(db, objectId)
+	if (obj === null) {
 		try {
 			// Object doesn't exists locally, we'll need to download it.
 			const remoteObject = await get<Note>(objectId)
@@ -47,30 +54,36 @@ export async function handleAnnounceActivity(
 			console.warn(`failed to retrieve object ${objectId}: ${err.message}`)
 			return
 		}
-	} else {
-		// Object already exists locally, we can just use it.
-		obj = localObject
 	}
 
-	const fromActor = await getAndCache(actorId, db)
+	if (!isNote(obj)) {
+		console.warn(`object ${objectId} is not a note`)
+		return
+	}
 
-	if (await hasReblog(db, fromActor, obj)) {
-		// A reblog already exists. To avoid dulicated reblog we ignore.
+	const rebloggingActor = await getAndCache(actorId, db)
+	if (reblogNotAllowed(rebloggingActor, obj, activity)) {
+		console.warn(`reblog not allowed for object ${objectId}`)
+		return
+	}
+
+	if (await hasReblog(db, rebloggingActor, obj)) {
+		// A reblog already exists. To avoid duplicated reblog we ignore.
 		console.warn('probably duplicated Announce message')
 		return
 	}
 
 	// notify the user
-	const targetActor = await getActorById(db, new URL(obj[originalActorIdSymbol]))
-	if (targetActor === null) {
+	const rebloggedActor = await getActorById(db, new URL(obj[originalActorIdSymbol]))
+	if (rebloggedActor === null) {
 		console.warn('object actor not found')
 		return
 	}
 
-	const notifId = await createNotification(db, 'reblog', targetActor, fromActor, obj)
+	const notifId = await createNotification(db, 'reblog', rebloggedActor, rebloggingActor, obj)
 
 	await Promise.all([
-		createReblog(db, fromActor, obj),
-		sendReblogNotification(db, fromActor, targetActor, notifId, adminEmail, vapidKeys),
+		createReblog(db, rebloggingActor, obj, activity, activity.published),
+		sendReblogNotification(db, rebloggingActor, rebloggedActor, notifId, adminEmail, vapidKeys),
 	])
 }

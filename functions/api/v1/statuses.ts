@@ -189,7 +189,7 @@ export async function handleRequest(
 		await insertReply(db, connectedActor, note, inReplyToObject)
 	}
 
-	const activity = createCreateActivity(domain, connectedActor, note)
+	const activity = await createCreateActivity(db, domain, connectedActor, note)
 
 	const to = Array.isArray(activity.to) ? activity.to : [activity.to]
 	for (const target of to) {
