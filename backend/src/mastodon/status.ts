@@ -18,6 +18,7 @@ import {
 import { type Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database } from 'wildebeest/backend/src/database'
 import { loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import { ensureReblogMastodonId } from 'wildebeest/backend/src/mastodon/reblog'
 import * as media from 'wildebeest/backend/src/media/'
 import type { MastodonId, MastodonStatus, Visibility } from 'wildebeest/backend/src/types'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
@@ -57,7 +58,7 @@ export async function getMentions(input: string, instanceDomain: string, db: Dat
 	return actors
 }
 
-function actorToMention(domain: string, actor: Actor): MastodonStatus['mentions'][number] {
+export function actorToMention(domain: string, actor: Actor): MastodonStatus['mentions'][number] {
 	return {
 		id: actor[mastodonIdSymbol],
 		username: actor.preferredUsername ?? actor.name ?? '',
@@ -68,7 +69,7 @@ function actorToMention(domain: string, actor: Actor): MastodonStatus['mentions'
 
 export async function toMastodonStatusFromObject(
 	db: Database,
-	obj: Note,
+	obj: Note & { published: string; [mastodonIdSymbol]: string },
 	domain: string,
 	targetActors?: Set<Actor>
 ): Promise<MastodonStatus | null> {
@@ -87,48 +88,66 @@ export async function toMastodonStatusFromObject(
 	// const favourites = await getLikes(db, obj)
 	// const reblogs = await getReblogs(db, obj)
 
-	let mediaAttachments: Array<MediaAttachment> = []
-
-	if (Array.isArray(obj.attachment)) {
-		mediaAttachments = obj.attachment.map(media.fromObject)
-	}
+	const mediaAttachments: Array<MediaAttachment> = obj.attachment.map((doc) => media.fromObject(doc))
 
 	const mentions = []
 	if (targetActors) {
-		for (const actor of targetActors) {
-			mentions.push(actorToMention(domain, actor))
+		for (const target of targetActors) {
+			mentions.push(actorToMention(domain, target))
 		}
 	} else {
 		for (const link of obj.tag ?? []) {
 			if (link.type === 'Mention') {
-				const actor = await getActorById(db, link.href)
-				if (actor) {
-					mentions.push(actorToMention(domain, actor))
+				const target = actor.id.toString() === link.href.toString() ? actor : await getActorById(db, link.href)
+				if (target) {
+					mentions.push(actorToMention(domain, target))
 				}
 			}
 		}
 	}
 
 	return {
-		// Default values
+		id: await ensureObjectMastodonId(db, obj[mastodonIdSymbol], obj.published ?? new Date().toISOString()),
+		uri: getApId(obj.id),
+		created_at: new Date(obj.published).toISOString(),
+		account: await loadMastodonAccount(db, domain, actor, handle),
+		content: obj.content ?? '',
+		visibility: detectVisibility({ to: obj.to, cc: obj.cc, followers: actor.followers }),
+		sensitive: obj.sensitive,
+		spoiler_text: obj.spoiler_text ?? '',
+		media_attachments: mediaAttachments,
+		mentions,
+		url: obj.url
+			? new URL(obj.url)
+			: isLocalAccount(domain, handle)
+			? new URL(`/@${handleToAcct(handle, domain)}/${obj[mastodonIdSymbol]}`, 'https://' + domain)
+			: new URL(obj.id),
+		reblog: null,
+		edited_at: obj.updated ? new Date(obj.updated).toISOString() : null,
+
+		// FIXME: stub values
 		emojis: [],
 		tags: [],
-		mentions,
-		spoiler_text: obj.spoiler_text ?? '',
-
-		visibility: detectVisibility(obj),
-
-		media_attachments: mediaAttachments,
-		content: obj.content || '',
-		id: obj[mastodonIdSymbol] || '',
-		uri: getApId(obj.id),
-		url: new URL(`/@${handleToAcct(handle, domain)}/${obj[mastodonIdSymbol]}`, 'https://' + domain),
-		created_at: obj.published || '',
-		account: await loadMastodonAccount(db, domain, actor, handle),
-
-		favourites_count: favourites.length,
+		in_reply_to_id: null,
+		in_reply_to_account_id: null,
 		reblogs_count: reblogs.length,
+		favourites_count: favourites.length,
+		replies_count: 0,
+		favourited: false,
+		reblogged: false,
+		poll: null,
+		card: null,
+		language: null,
+		text: null,
+		// muted, bookmarked, pinned, filtered
 	}
+}
+
+type ReblogRow = {
+	reblog_id: string
+	reblog_mastodon_id: string
+	publisher_actor_id: string
+	publisher_published: string
 }
 
 type MastodonStatusRow = {
@@ -148,29 +167,39 @@ type MastodonStatusRow = {
 	favourited?: 1 | 0
 
 	publisher_actor_id?: string
+	publisher_published?: string
+	publisher_to: string
+	publisher_cc: string
+
 	favourites_count?: number
 	reblogs_count?: number
 	replies_count?: number
+} & (ReblogRow | { reblog_id: null })
+
+type MastodonStatusRowWithoutActor = Omit<
+	MastodonStatusRow,
+	| 'actor_id'
+	| 'actor_type'
+	| 'actor_pubkey'
+	| 'actor_cdate'
+	| 'actor_properties'
+	| 'actor_is_admin'
+	| 'actor_mastodon_id'
+>
+
+function isReblogRow(row: MastodonStatusRowWithoutActor): row is MastodonStatusRowWithoutActor & ReblogRow {
+	return row.reblog_id !== null
 }
 
 export async function toMastodonStatusesFromRowsWithActor(
 	domain: string,
 	db: Database,
 	actor: Actor,
-	rows: Omit<
-		MastodonStatusRow,
-		| 'actor_id'
-		| 'actor_type'
-		| 'actor_pubkey'
-		| 'actor_cdate'
-		| 'actor_properties'
-		| 'actor_is_admin'
-		| 'actor_mastodon_id'
-	>[]
+	rows: MastodonStatusRowWithoutActor[]
 ): Promise<MastodonStatus[]> {
 	const actorPool = new Map<string, Actor>()
-	const account = await loadMastodonAccount(db, domain, actor, actorToHandle(actor))
-	const acct = actorToAcct(actor, domain)
+	const handle = actorToHandle(actor)
+	const account = await loadMastodonAccount(db, domain, actor, handle)
 
 	const statuses: MastodonStatus[] = []
 	for (const row of rows) {
@@ -180,6 +209,7 @@ export async function toMastodonStatusesFromRowsWithActor(
 			console.warn('missing `row.publisher_actor_id`')
 			continue
 		}
+
 		if (row.favourites_count === undefined || row.reblogs_count === undefined || row.replies_count === undefined) {
 			throw new Error('logic error; missing fields.')
 		}
@@ -188,80 +218,151 @@ export async function toMastodonStatusesFromRowsWithActor(
 		if (typeof row.properties === 'object') {
 			// neon uses JSONB for properties which is returned as a deserialized
 			// object.
-			properties = row.properties as Partial<Note>
+			properties = row.properties as Note
 		} else {
 			// D1 uses a string for JSON properties
-			properties = JSON.parse(row.properties) as Partial<Note>
+			properties = JSON.parse(row.properties) as Note
 		}
 
-		const mediaAttachments: MediaAttachment[] = []
-		if (Array.isArray(properties.attachment)) {
-			for (const document of properties.attachment) {
-				mediaAttachments.push(media.fromObject(document))
-			}
-		}
+		const mediaAttachments = Array.isArray(properties.attachment)
+			? properties.attachment.map((doc) => media.fromObject(doc))
+			: []
 
 		const mentions = []
 		for (const link of properties.tag ?? []) {
 			if (link.type === 'Mention') {
-				const actorId = link.href.toString()
-				let actor = actorPool.get(actorId) ?? null
-				if (actor === undefined) {
-					actor = await getActorById(db, link.href)
-					if (actor === null) {
+				const targetId = link.href.toString()
+				let target = actorPool.get(targetId) ?? null
+				if (target === null) {
+					target = await getActorById(db, link.href)
+					if (target === null) {
 						continue
 					}
-					actorPool.set(actorId, actor)
+					actorPool.set(targetId, target)
 				}
-				if (actor) {
-					mentions.push({
-						id: actor[mastodonIdSymbol],
-						username: actor.preferredUsername ?? actor.name ?? '',
-						url: actor.url?.toString() ?? '',
-						acct: actorToAcct(actor, domain),
-					})
+				if (target) {
+					mentions.push(actorToMention(domain, target))
 				}
 			}
 		}
 
-		const status: MastodonStatus = {
-			id: row.mastodon_id,
-			url: new URL(`/@${acct}/${row.mastodon_id}`, 'https://' + domain),
-			uri: new URL(row.id),
-			created_at: new Date(row.cdate).toISOString(),
-			media_attachments: mediaAttachments,
-			mentions: mentions,
-			account,
-			spoiler_text: properties.spoiler_text ?? '',
-			visibility: detectVisibility({
-				to: properties.to ?? [PUBLIC_GROUP],
-				cc: properties.cc ?? [],
-				attributedTo: properties.attributedTo ?? '',
-			}),
-			content: properties.content ?? '',
-			favourites_count: row.favourites_count,
-			reblogs_count: row.reblogs_count,
-			replies_count: row.replies_count,
-			reblogged: row.reblogged === 1,
-			favourited: row.favourited === 1,
+		let status: MastodonStatus
+		if (isReblogRow(row)) {
+			const actorId = properties.attributedTo.toString()
+			let statusAuthor = actorPool.get(actorId) ?? null
+			if (statusAuthor === null) {
+				statusAuthor = await getAndCache(new URL(actorId), db)
+				if (statusAuthor === null) {
+					continue
+				}
+				actorPool.set(actorId, statusAuthor)
+			}
+			const statusAuthorHandle = actorToHandle(statusAuthor)
 
-			// FIXME: stub values
-			emojis: [],
-			tags: [],
-		}
+			const reblogVisibility = detectVisibility({
+				to: JSON.parse(row.publisher_to) as string[],
+				cc: JSON.parse(row.publisher_cc) as string[],
+				followers: actor.followers,
+			})
 
-		if (properties.updated) {
-			status.edited_at = new Date(properties.updated).toISOString()
-		}
-		if (properties.attributedTo && properties.attributedTo !== row.publisher_actor_id) {
-			const actorId = new URL(properties.attributedTo)
-			const author = await getAndCache(actorId, db)
+			status = {
+				id: await ensureReblogMastodonId(db, row.reblog_mastodon_id, row.publisher_published),
+				uri: new URL(row.reblog_id),
+				created_at: new Date(row.publisher_published).toISOString(),
+				account,
+				content: '',
+				visibility: reblogVisibility,
+				sensitive: false,
+				spoiler_text: '',
+				media_attachments: [],
+				mentions: [],
+				tags: [],
+				emojis: [],
+				reblogs_count: 0,
+				favourites_count: 0,
+				replies_count: 0,
+				url: null,
+				in_reply_to_id: null,
+				in_reply_to_account_id: null,
+				reblog: {
+					id: row.mastodon_id,
+					uri: new URL(properties.id),
+					created_at: new Date(properties.published ?? row.cdate).toISOString(),
+					account: await loadMastodonAccount(db, domain, statusAuthor, actorToHandle(statusAuthor)),
+					content: properties.content ?? '',
+					visibility: detectVisibility({ to: properties.to, cc: properties.cc, followers: statusAuthor.followers }),
+					sensitive: properties.sensitive,
+					spoiler_text: properties.spoiler_text ?? '',
+					media_attachments: mediaAttachments,
+					mentions,
+					reblogs_count: row.reblogs_count,
+					favourites_count: row.favourites_count,
+					replies_count: row.replies_count,
+					url: properties.url
+						? new URL(properties.url)
+						: isLocalAccount(domain, statusAuthorHandle)
+						? new URL(`/@${handleToAcct(statusAuthorHandle, domain)}/${row.mastodon_id}`, 'https://' + domain)
+						: new URL(row.id),
+					reblog: null,
+					edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
+					favourited: row.favourited === 1,
+					reblogged: row.reblogged === 1,
 
-			status.reblog = {
-				...status,
-				account: await loadMastodonAccount(db, domain, author, actorToHandle(author)),
+					// FIXME: stub values
+					tags: [],
+					emojis: [],
+					in_reply_to_id: null,
+					in_reply_to_account_id: null,
+					poll: null,
+					card: null,
+					language: null,
+					text: null,
+					// muted, bookmarked, pinned, filtered
+				},
+				poll: null,
+				card: null,
+				language: null,
+				text: null,
+				edited_at: null,
+			}
+		} else {
+			status = {
+				id: await ensureObjectMastodonId(db, row.mastodon_id, row.cdate),
+				uri: new URL(row.id),
+				created_at: new Date(properties.published ?? row.cdate).toISOString(),
+				account,
+				content: properties.content ?? '',
+				visibility: detectVisibility({ to: properties.to, cc: properties.cc, followers: actor.followers }),
+				sensitive: properties.sensitive,
+				spoiler_text: properties.spoiler_text ?? '',
+				media_attachments: mediaAttachments,
+				mentions,
+				reblogs_count: row.reblogs_count,
+				favourites_count: row.favourites_count,
+				replies_count: row.replies_count,
+				url: properties.url
+					? new URL(properties.url)
+					: isLocalAccount(domain, handle)
+					? new URL(`/@${handleToAcct(handle, domain)}/${row.mastodon_id}`, 'https://' + domain)
+					: new URL(row.id),
+				reblog: null,
+				edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
+				favourited: row.favourited === 1,
+				reblogged: row.reblogged === 1,
+
+				// FIXME: stub values
+				emojis: [],
+				tags: [],
+				in_reply_to_id: null,
+				in_reply_to_account_id: null,
+				poll: null,
+				card: null,
+				language: null,
+				text: null,
+				// muted, bookmarked, pinned, filtered
 			}
 		}
+
 		statuses.push(status)
 	}
 	return statuses
@@ -279,15 +380,24 @@ export async function toMastodonStatusFromRow(
 		console.warn('missing `row.publisher_actor_id`')
 		return null
 	}
+	if (row.favourites_count === undefined || row.reblogs_count === undefined || row.replies_count === undefined) {
+		throw new Error('logic error; missing fields.')
+	}
+
 	let properties
 	if (typeof row.properties === 'object') {
 		// neon uses JSONB for properties which is returned as a deserialized
 		// object.
-		properties = row.properties as Partial<Note>
+		properties = row.properties as Note
 	} else {
 		// D1 uses a string for JSON properties
-		properties = JSON.parse(row.properties) as Partial<Note>
+		properties = JSON.parse(row.properties) as Note
 	}
+
+	const mediaAttachments = Array.isArray(properties.attachment)
+		? properties.attachment.map((doc) => media.fromObject(doc))
+		: []
+
 	const author = actorFromRow({
 		id: row.actor_id,
 		type: row.actor_type,
@@ -298,62 +408,128 @@ export async function toMastodonStatusFromRow(
 		mastodon_id: row.actor_mastodon_id,
 	})
 
-	if (row.favourites_count === undefined || row.reblogs_count === undefined || row.replies_count === undefined) {
-		throw new Error('logic error; missing fields.')
-	}
+	const handle = actorToHandle(author)
+	const account = await loadMastodonAccount(db, domain, author, handle)
 
-	const mediaAttachments: Array<MediaAttachment> = []
-
-	if (Array.isArray(properties.attachment)) {
-		for (let i = 0, len = properties.attachment.length; i < len; i++) {
-			const document = properties.attachment[i]
-			mediaAttachments.push(media.fromObject(document))
+	const mentions = []
+	for (const link of properties.tag ?? []) {
+		if (link.type === 'Mention') {
+			const target = author.id.toString() === link.href.toString() ? author : await getActorById(db, link.href)
+			if (target) {
+				mentions.push(actorToMention(domain, target))
+			}
 		}
 	}
 
-	const handle = actorToHandle(author)
-	const status: MastodonStatus = {
-		id: row.mastodon_id,
-		url: new URL(`/@${handleToAcct(handle, domain)}/${row.mastodon_id}`, 'https://' + domain),
-		uri: new URL(row.id),
-		created_at: new Date(row.cdate).toISOString(),
-		emojis: [],
-		media_attachments: mediaAttachments,
-		tags: [],
-		mentions: [],
-		account: await loadMastodonAccount(db, domain, author, handle),
-		spoiler_text: properties.spoiler_text ?? '',
+	row.mastodon_id = await ensureObjectMastodonId(db, row.mastodon_id, row.cdate)
 
-		visibility: detectVisibility({
-			to: properties.to ?? [PUBLIC_GROUP],
-			cc: properties.cc ?? [],
-			attributedTo: properties.attributedTo ?? '',
-		}),
+	let status: MastodonStatus
+	if (isReblogRow(row)) {
+		const actorId = new URL(properties.attributedTo.toString())
+		const statusAuthor = await getAndCache(actorId, db)
+		const statusAuthorHandle = actorToHandle(statusAuthor)
 
-		content: properties.content ?? '',
-		favourites_count: row.favourites_count,
-		reblogs_count: row.reblogs_count,
-		replies_count: row.replies_count,
-		reblogged: row.reblogged === 1,
-		favourited: row.favourited === 1,
-	}
+		const reblogVisibility = detectVisibility({
+			to: JSON.parse(row.publisher_to) as string[],
+			cc: JSON.parse(row.publisher_cc) as string[],
+			followers: author.followers,
+		})
 
-	if (properties.updated) {
-		status.edited_at = new Date(properties.updated).toISOString()
-	}
+		status = {
+			id: await ensureReblogMastodonId(db, row.reblog_mastodon_id, row.publisher_published),
+			uri: new URL(row.reblog_id),
+			created_at: new Date(row.publisher_published).toISOString(),
+			account,
+			content: '',
+			visibility: reblogVisibility,
+			sensitive: false,
+			spoiler_text: '',
+			media_attachments: [],
+			mentions: [],
+			tags: [],
+			emojis: [],
+			reblogs_count: 0,
+			favourites_count: 0,
+			replies_count: 0,
+			url: null,
+			in_reply_to_id: null,
+			in_reply_to_account_id: null,
+			reblog: {
+				id: row.mastodon_id,
+				uri: new URL(properties.id),
+				created_at: new Date(properties.published ?? row.cdate).toISOString(),
+				account: await loadMastodonAccount(db, domain, statusAuthor, actorToHandle(statusAuthor)),
+				content: properties.content ?? '',
+				visibility: detectVisibility({ to: properties.to, cc: properties.cc, followers: statusAuthor.followers }),
+				sensitive: properties.sensitive,
+				spoiler_text: properties.spoiler_text ?? '',
+				media_attachments: mediaAttachments,
+				mentions,
+				reblogs_count: row.reblogs_count,
+				favourites_count: row.favourites_count,
+				replies_count: row.replies_count,
+				url: properties.url
+					? new URL(properties.url)
+					: isLocalAccount(domain, statusAuthorHandle)
+					? new URL(`/@${handleToAcct(statusAuthorHandle, domain)}/${row.mastodon_id}`, 'https://' + domain)
+					: new URL(row.id),
+				reblog: null,
+				edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
+				favourited: row.favourited === 1,
+				reblogged: row.reblogged === 1,
 
-	// FIXME: add unit tests for reblog
-	if (properties.attributedTo && properties.attributedTo !== row.publisher_actor_id) {
-		// The actor that introduced the Object in the instance isn't the same
-		// as the object has been attributed to. Likely means it's a reblog.
+				// FIXME: stub values
+				tags: [],
+				emojis: [],
+				in_reply_to_id: null,
+				in_reply_to_account_id: null,
+				poll: null,
+				card: null,
+				language: null,
+				text: null,
+				// muted, bookmarked, pinned, filtered
+			},
+			poll: null,
+			card: null,
+			language: null,
+			text: null,
+			edited_at: null,
+		}
+	} else {
+		status = {
+			id: row.mastodon_id,
+			uri: new URL(row.id),
+			created_at: new Date(properties.published ?? row.cdate).toISOString(),
+			account,
+			content: properties.content ?? '',
+			visibility: detectVisibility({ to: properties.to, cc: properties.cc, followers: author.followers }),
+			sensitive: properties.sensitive,
+			spoiler_text: properties.spoiler_text ?? '',
+			media_attachments: mediaAttachments,
+			mentions,
+			reblogs_count: row.reblogs_count,
+			favourites_count: row.favourites_count,
+			replies_count: row.replies_count,
+			url: properties.url
+				? new URL(properties.url)
+				: isLocalAccount(domain, handle)
+				? new URL(`/@${handleToAcct(handle, domain)}/${row.mastodon_id}`, 'https://' + domain)
+				: new URL(row.id),
+			reblog: null,
+			edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
+			favourited: row.favourited === 1,
+			reblogged: row.reblogged === 1,
 
-		const actorId = new URL(properties.attributedTo)
-		const author = await getAndCache(actorId, db)
-
-		// Restore reblogged status
-		status.reblog = {
-			...status,
-			account: await loadMastodonAccount(db, domain, author, actorToHandle(author)),
+			// FIXME: stub values
+			emojis: [],
+			tags: [],
+			in_reply_to_id: null,
+			in_reply_to_account_id: null,
+			poll: null,
+			card: null,
+			language: null,
+			text: null,
+			// muted, bookmarked, pinned, filtered
 		}
 	}
 
@@ -372,14 +548,18 @@ export async function getMastodonStatusById(
 	return toMastodonStatusFromObject(db, obj, domain)
 }
 
-function detectVisibility({ to, cc, attributedTo }: Pick<Note, 'to' | 'cc' | 'attributedTo'>): Visibility {
+export function detectVisibility({
+	to,
+	cc,
+	followers,
+}: Pick<Note, 'to' | 'cc'> & Pick<Actor, 'followers'>): Visibility {
 	to = Array.isArray(to) ? to : [to]
 	cc = Array.isArray(cc) ? cc : [cc]
 
 	if (to.includes(PUBLIC_GROUP)) {
 		return 'public'
 	}
-	if (attributedTo && to.includes(attributedTo.toString() + '/followers')) {
+	if (to.includes(followers.toString())) {
 		if (cc.includes(PUBLIC_GROUP)) {
 			return 'unlisted'
 		}

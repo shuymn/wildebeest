@@ -48,7 +48,8 @@ FROM outbox_objects
 INNER JOIN objects ON objects.id = outbox_objects.object_id
 WHERE outbox_objects.actor_id = ?1
       AND objects.type = 'Note'
-      AND outbox_objects.target = '${PUBLIC_GROUP}'
+      AND (EXISTS(SELECT 1 FROM json_each(outbox_objects.'to') WHERE json_each.value = '${PUBLIC_GROUP}')
+            OR EXISTS(SELECT 1 FROM json_each(outbox_objects.cc) WHERE json_each.value = '${PUBLIC_GROUP}'))
 ORDER BY ${db.qb.timeNormalize('outbox_objects.cdate')} DESC
 LIMIT ?2
 `
@@ -99,7 +100,7 @@ LIMIT ?2
 			// append the additional path
 			activityId.pathname += 'activity'
 
-			const activity = createCreateActivity(domain, actor, note)
+			const activity = await createCreateActivity(db, domain, actor, note)
 			items.push({
 				id: activityId,
 				type: activity.type,

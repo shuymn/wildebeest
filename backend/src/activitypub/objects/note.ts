@@ -19,7 +19,7 @@ export type Note = RequiredProps<objects.ApObject, 'cc' | 'to'> & {
 		content: string
 		mediaType: string
 	}
-	attributedTo?: objects.ApObjectId
+	attributedTo: objects.ApObjectId
 	attachment: Array<objects.ApObject>
 	tag?: Array<Link>
 	spoiler_text?: string
@@ -49,7 +49,7 @@ export async function createPublicNote(
 ) {
 	const cc =
 		ccActors.size > 0
-			? [actor.followers.toString(), ...Array.from(ccActors).map((a) => a.id.toString())]
+			? [actor.followers.toString(), ...[...ccActors].map((a) => a.id.toString())]
 			: [actor.followers.toString()]
 
 	return await createNote(domain, db, content, actor, [PUBLIC_GROUP], cc, attachment, extraProperties)
@@ -92,9 +92,20 @@ export async function createDirectNote(
 	attachment: objects.ApObject[] = [],
 	extraProperties: ExtraProperties
 ) {
-	const to = toActors.size > 0 ? Array.from(toActors).map((a) => a.id.toString()) : []
+	if (toActors.size === 0) {
+		throw new Error('toActors must not be empty')
+	}
 
-	return await createNote(domain, db, content, actor, to, [], attachment, extraProperties)
+	return await createNote(
+		domain,
+		db,
+		content,
+		actor,
+		Array.from(toActors).map((a) => a.id.toString()),
+		[],
+		attachment,
+		extraProperties
+	)
 }
 
 async function createNote(

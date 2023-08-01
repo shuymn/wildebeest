@@ -1,11 +1,15 @@
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
 import { type ApObject, ensureObjectMastodonId, getApUrl } from 'wildebeest/backend/src/activitypub/objects'
+import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import type { Cache } from 'wildebeest/backend/src/cache'
 import { type Database } from 'wildebeest/backend/src/database'
 import { loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import { actorToMention, detectVisibility } from 'wildebeest/backend/src/mastodon/status'
 import { getSubscriptionForAllClients } from 'wildebeest/backend/src/mastodon/subscription'
+import { fromObject } from 'wildebeest/backend/src/media'
 import type {
 	Notification,
 	NotificationsQueryResult,
@@ -198,18 +202,18 @@ async function sendNotification(db: Database, actor: Actor, message: WebPushMess
 
 export async function getNotifications(db: Database, actor: Actor, domain: string): Promise<Array<Notification>> {
 	const query = `
-    SELECT
-        objects.*,
-        actor_notifications.type,
-        actor_notifications.actor_id,
-        actor_notifications.from_actor_id as notif_from_actor_id,
-        actor_notifications.cdate as notif_cdate,
-        actor_notifications.id as notif_id
-    FROM actor_notifications
-    LEFT JOIN objects ON objects.id=actor_notifications.object_id
-    WHERE actor_id=?
-    ORDER BY actor_notifications.cdate DESC
-    LIMIT 20
+SELECT
+  objects.*,
+  actor_notifications.type as notif_type,
+  actor_notifications.actor_id as notif_actor_id,
+  actor_notifications.from_actor_id as notif_from_actor_id,
+  actor_notifications.cdate as notif_cdate,
+  actor_notifications.id as notif_id
+FROM actor_notifications
+LEFT JOIN objects ON objects.id=actor_notifications.object_id
+WHERE actor_id=?
+ORDER BY actor_notifications.cdate DESC
+LIMIT 20
   `
 
 	const stmt = db.prepare(query).bind(actor.id.toString())
@@ -223,19 +227,7 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 		return []
 	}
 
-	for (let i = 0, len = results.length; i < len; i++) {
-		const result = results[i]
-		result.mastodon_id = await ensureObjectMastodonId(db, result.mastodon_id, result.cdate)
-
-		let properties
-		if (typeof result.properties === 'object') {
-			// neon uses JSONB for properties which is returned as a deserialized
-			// object.
-			properties = result.properties
-		} else {
-			// D1 uses a string for JSON properties
-			properties = JSON.parse(result.properties)
-		}
+	for (const result of results) {
 		const notifFromActorId = new URL(result.notif_from_actor_id)
 
 		const notifFromActor = await getActorById(db, notifFromActorId)
@@ -248,35 +240,81 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 
 		const notif: Notification = {
 			id: result.notif_id.toString(),
-			type: result.type,
+			type: result.notif_type,
 			created_at: new Date(result.notif_cdate).toISOString(),
 			account: notifFromAccount,
 		}
 
-		if (result.type === 'mention' || result.type === 'favourite') {
+		if (result.notif_type === 'mention' || result.notif_type === 'favourite') {
+			if (result.id === null || result.type !== 'Note') {
+				console.warn('notification object is null')
+				continue
+			}
+
+			result.mastodon_id = await ensureObjectMastodonId(db, result.mastodon_id, result.cdate)
+
+			let properties
+			if (typeof result.properties === 'object') {
+				// neon uses JSONB for properties which is returned as a deserialized
+				// object.
+				properties = result.properties as Note
+			} else {
+				// D1 uses a string for JSON properties
+				properties = JSON.parse(result.properties) as Note
+			}
+
+			const mediaAttachments = Array.isArray(properties.attachment)
+				? properties.attachment.map((doc) => fromObject(doc))
+				: []
+
 			const actorId = new URL(result.original_actor_id)
 			const actor = await actors.getAndCache(actorId, db)
 			const handle = actorToHandle(actor)
 
+			const mentions = []
+			for (const link of properties.tag ?? []) {
+				if (link.type === 'Mention') {
+					const target = actor.id.toString() === link.href.toString() ? actor : await getActorById(db, link.href)
+					if (target) {
+						mentions.push(actorToMention(domain, target))
+					}
+				}
+			}
+
 			notif.status = {
 				id: result.mastodon_id,
-				content: properties.content,
-				uri: result.id,
-				url: new URL(`/@${handleToAcct(handle, domain)}/${result.mastodon_id}`, 'https://' + domain),
-				created_at: new Date(result.cdate).toISOString(),
-
+				uri: new URL(result.id),
+				created_at: new Date(properties.published ?? result.cdate).toISOString(),
 				account: await loadMastodonAccount(db, domain, actor, handle),
+				content: properties.content,
+				visibility: detectVisibility({ to: properties.to, cc: properties.cc, followers: actor.followers }),
+				sensitive: properties.sensitive,
+				spoiler_text: properties.spoiler_text ?? '',
+				media_attachments: mediaAttachments,
+				mentions,
+				url: properties.url
+					? new URL(properties.url)
+					: isLocalAccount(domain, handle)
+					? new URL(`/@${handleToAcct(handle, domain)}/${result.mastodon_id}`, 'https://' + domain)
+					: new URL(result.id),
+				reblog: null,
+				edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 
 				// TODO: stub values
-				emojis: [],
-				media_attachments: [],
-				tags: [],
-				mentions: [],
-				replies_count: 0,
 				reblogs_count: 0,
 				favourites_count: 0,
-				visibility: 'public',
-				spoiler_text: '',
+				replies_count: 0,
+				tags: [],
+				emojis: [],
+				favourited: false,
+				reblogged: false,
+				in_reply_to_id: null,
+				in_reply_to_account_id: null,
+				poll: null,
+				card: null,
+				language: null,
+				text: null,
+				// muted, bookmarked, pinned, filtered
 			}
 		}
 

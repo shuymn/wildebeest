@@ -23,7 +23,7 @@ export const statusesLoader = loader$<
 		const db = await getDatabase(platform)
 		mastodonId = await getMastodonIdByHandle(url.hostname, db, handle)
 		if (mastodonId) {
-			const response = await handleRequest({ domain: url.hostname, db }, mastodonId, {
+			const response = await handleRequest({ domain: url.hostname, db, connectedActor: undefined }, mastodonId, {
 				exclude_replies: true,
 
 				// default values

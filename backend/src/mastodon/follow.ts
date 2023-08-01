@@ -181,3 +181,14 @@ export async function isNotFollowing(db: Database, actor: Actor, target: Actor):
 
 	return following === 0
 }
+
+export async function isFollowing(db: Database, actor: Actor, target: Actor): Promise<boolean> {
+	const { following } = await db
+		.prepare(
+			'SELECT COUNT(*) > 0 as following FROM actor_following WHERE actor_id = ?1 AND target_actor_id = ?2 AND state = ?3'
+		)
+		.bind(actor.id.toString(), target.id.toString(), STATE_ACCEPTED)
+		.first<{ following: 1 | 0 }>()
+
+	return following === 1
+}
