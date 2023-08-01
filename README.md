@@ -1,3 +1,11 @@
+> # Please Read: Notes on This Wildebeest Fork
+>
+> This repository is a fork of [cloudflare/wildebeest](https://github.com/cloudflare/wildebeest). It contains several bug fixes and feature additions from the original.
+>
+> Using Wildebeest comes with numerous bugs, half-baked implementations, unimplemented features, and incompatible implementations, so use it at your own risk. If you wish to fork this repository and run Wildebeest, we will not object, but we will not be responsible for any harm that may result.
+>
+> Please post any bug reports or feature requests in the Issues section. Keep in mind, however, that this is only a fork for personal use, so I cannot guarantee that I will be able to address your request.
+
 # Wildebeest
 
 ![wildebeest illustration](https://imagedelivery.net/NkfPDviynOyTAOI79ar_GQ/3654789b-089c-493a-85b4-be3f8f594c00/header)
