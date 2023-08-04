@@ -1,16 +1,19 @@
-CREATE TABLE new_actor_reblogs (
-  id TEXT NOT NULL PRIMARY KEY,
-  mastodon_id TEXT UNIQUE NOT NULL,
-  actor_id TEXT NOT NULL,
-  object_id TEXT NOT NULL,
-  outbox_object_id TEXT UNIQUE NOT NULL,
-  cdate DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
+PRAGMA foreign_keys = false;
 
-  UNIQUE(actor_id, object_id),
-  FOREIGN KEY(actor_id)  REFERENCES actors(id) ON DELETE CASCADE,
-  FOREIGN KEY(object_id) REFERENCES objects(id) ON DELETE CASCADE,
-  FOREIGN KEY(outbox_object_id) REFERENCES outbox_objects(id) ON DELETE CASCADE
+CREATE TABLE "new_actor_reblogs" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "mastodon_id" TEXT UNIQUE NOT NULL,
+  "actor_id" TEXT NOT NULL,
+  "object_id" TEXT NOT NULL,
+  "outbox_object_id" TEXT UNIQUE NOT NULL,
+  "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
+
+  CONSTRAINT "actor_reblogs_actor_id_fkey" FOREIGN KEY ("actor_id")  REFERENCES "actors" ("id") ON DELETE CASCADE,
+  CONSTRAINT "actor_reblogs_object_id_fkey" FOREIGN KEY ("object_id") REFERENCES "objects" ("id") ON DELETE CASCADE,
+  CONSTRAINT "actor_reblogs_outbox_object_id_fkey" FOREIGN KEY ("outbox_object_id") REFERENCES "outbox_objects" ("id") ON DELETE CASCADE
 );
+
+CREATE UNIQUE INDEX "unique_actor_reblogs" ON "new_actor_reblogs" ("actor_id", "object_id");
 
 -- D1 does not support transactions, so between the execution of the migration and
 -- the deployment of the Workers, it will not be possible to receive or post reblogs.
@@ -36,3 +39,8 @@ INNER JOIN (
 	FROM outbox_objects
 ) tmp ON tmp.actor_id = actor_reblogs.actor_id AND tmp.object_id = actor_reblogs.object_id
 WHERE tmp.rn = 1;
+
+DROP TABLE actor_reblogs;
+ALTER TABLE new_actor_reblogs RENAME TO actor_reblogs;
+
+PRAGMA foreign_keys = true;
