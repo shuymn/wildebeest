@@ -1,4 +1,4 @@
-PRAGMA foreign_keys = false;
+PRAGMA defer_foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS "new_actors" (
   "id" TEXT NOT NULL PRIMARY KEY,
@@ -33,7 +33,6 @@ CREATE INDEX "actors_mastodon_id" ON "actors" ("mastodon_id");
 CREATE INDEX "actors_username" ON "actors" ("username");
 CREATE INDEX "actors_domain" ON "actors" ("domain");
 
-
 CREATE TRIGGER "actors_search_fts_insert" AFTER INSERT ON "actors"
 BEGIN
     INSERT INTO "search_fts" ("rowid", "type", "name", "preferredUsername")
@@ -57,5 +56,3 @@ BEGIN
             json_extract("new"."properties", '$.name'),
             json_extract("new"."properties", '$.preferredUsername'));
 END;
-
-PRAGMA foreign_keys = true;
