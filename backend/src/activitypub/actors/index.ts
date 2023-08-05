@@ -35,11 +35,13 @@ export interface Actor extends ApObject {
 	outbox: URL
 	following: URL
 	followers: URL
+	featured?: URL
 	discoverable: boolean
 	manuallyApprovesFollowers?: boolean
 	alsoKnownAs?: string[]
 	publicKey?: {
 		id: string
+		owner?: string
 		publicKeyPem: string
 	}
 
