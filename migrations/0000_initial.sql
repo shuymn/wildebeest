@@ -1,7 +1,5 @@
 -- Migration number: 0000 	 2022-12-05T20:27:34.391Z
 
-PRAGMA foreign_keys = ON;
-
 CREATE TABLE "actors" (
   "id" TEXT PRIMARY KEY,
   "type" TEXT NOT NULL,
