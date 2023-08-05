@@ -14,10 +14,8 @@ CREATE TABLE "new_outbox_objects" (
 INSERT INTO new_outbox_objects (id, actor_id, object_id, cdate, published_date, `to`)
 SELECT id, actor_id, object_id, cdate, published_date, json_array(target) FROM outbox_objects;
 
-PRAGMA foreign_keys = false;
 DROP TABLE outbox_objects;
 ALTER TABLE new_outbox_objects RENAME TO outbox_objects;
-PRAGMA foreign_keys = true;
 
 CREATE INDEX "outbox_objects_actor_id" ON "outbox_objects" ("actor_id");
 CREATE INDEX "outbox_objects_to" ON "outbox_objects" ("to");

@@ -1,5 +1,3 @@
-PRAGMA foreign_keys = false;
-
 CREATE TABLE "new_actor_reblogs" (
   "id" TEXT NOT NULL PRIMARY KEY,
   "mastodon_id" TEXT UNIQUE NOT NULL,
@@ -42,5 +40,3 @@ WHERE tmp.rn = 1;
 
 DROP TABLE actor_reblogs;
 ALTER TABLE new_actor_reblogs RENAME TO actor_reblogs;
-
-PRAGMA foreign_keys = true;
