@@ -98,12 +98,10 @@ jobs:
         uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
+          command: --version
           preCommands: |
             echo "*** pre commands ***"
             apt-get update && apt-get -y install jq
-            echo "******"
-          postCommands: |
-            echo "*** post commands ***"
             alpha_exists=$(d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}" and .version == "alpha") | .name')
             beta_exists=$(d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1" and .version == "beta") | .name')
             [[ -n "$alpha_exists" && -z "$beta_exists"]] && echo "Error: There is an alpha version of D1 but no corresponding beta version." && exit 1
