@@ -94,10 +94,25 @@ jobs:
               }' \
               -H 'Authorization: Bearer ${{ secrets.CF_API_TOKEN }}'
 
+      - name: Check D1 database
+        uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
+        with:
+          command: |
+            alpha_exists=$(d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}" and .version == "alpha") | .name')
+            beta_exists=$(d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1" and .version == "beta") | .name')
+            [[ -n "$alpha_exists" && -z "$beta_exists"]] && echo "Error: There is an alpha version of D1 but no corresponding beta version." && exit 1
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          preCommands: |
+            echo "*** pre commands ***"
+            apt-get update && apt-get -y install jq
+            echo "******"
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+
       - name: Create D1 database
         uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
-          command: d1 create wildebeest-${{ env.NAME_SUFFIX }}
+          command: d1 create wildebeest-${{ env.NAME_SUFFIX }}-v1
           apiToken: ${{ secrets.CF_API_TOKEN }}
         continue-on-error: true
         env:
@@ -106,7 +121,7 @@ jobs:
       - name: retrieve D1 database
         uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
-          command: d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}") | .uuid' | awk '{print "d1_id="$1}' >> $GITHUB_ENV
+          command: d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1" and .version == "beta") | .uuid' | awk '{print "d1_id="$1}' >> $GITHUB_ENV
           apiToken: ${{ secrets.CF_API_TOKEN }}
           preCommands: |
             echo "*** pre commands ***"
@@ -118,11 +133,11 @@ jobs:
       - name: migrate D1 database
         uses: cloudflare/wrangler-action@4c10c1822abba527d820b29e6333e7f5dac2cabd # 2.0.0
         with:
-          command: d1 migrations apply wildebeest-${{ env.NAME_SUFFIX }}
+          command: d1 migrations apply wildebeest-${{ env.NAME_SUFFIX }}-v1
           apiToken: ${{ secrets.CF_API_TOKEN }}
           preCommands: |
             echo "*** pre commands ***"
-            echo -e "[[d1_databases]]\nbinding=\"DATABASE\"\ndatabase_name=\"wildebeest-${{ env.NAME_SUFFIX }}\"\ndatabase_id=\"${{ env.d1_id }}\"" >> wrangler.toml
+            echo -e "[[d1_databases]]\nbinding=\"DATABASE\"\ndatabase_name=\"wildebeest-${{ env.NAME_SUFFIX }}-v1\"\ndatabase_id=\"${{ env.d1_id }}\"" >> wrangler.toml
             echo "******"
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
@@ -271,7 +286,7 @@ jobs:
             echo -e "max_retries = 10\n" >> consumer/wrangler.toml
             echo -e "queue = \"wildebeest-${{ env.NAME_SUFFIX }}\"\n" >> consumer/wrangler.toml
 
-            echo -e "[[d1_databases]]\nbinding=\"DATABASE\"\ndatabase_name=\"wildebeest-${{ env.NAME_SUFFIX }}\"\ndatabase_id=\"${{ env.d1_id }}\"\n" >> consumer/wrangler.toml
+            echo -e "[[d1_databases]]\nbinding=\"DATABASE\"\ndatabase_name=\"wildebeest-${{ env.NAME_SUFFIX }}-v1\"\ndatabase_id=\"${{ env.d1_id }}\"\n" >> consumer/wrangler.toml
 
             echo -e "[durable_objects]\n" >> consumer/wrangler.toml
             echo -e "bindings=[" >> consumer/wrangler.toml
