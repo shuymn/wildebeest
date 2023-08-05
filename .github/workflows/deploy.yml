@@ -101,7 +101,6 @@ jobs:
           command: --version
           preCommands: |
             echo "*** pre commands ***"
-            apt-get update && apt-get -y install jq
             alpha_exists=$(wrangler d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}" and .version == "alpha") | .name')
             beta_exists=$(wrangler d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1" and .version == "beta") | .name')
             [[ -n "$alpha_exists" && -z "$beta_exists" ]] && echo "Error: There is an alpha version of D1 but no corresponding beta version." && exit 1 || exit 0
@@ -123,10 +122,6 @@ jobs:
         with:
           command: d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1" and .version == "beta") | .uuid' | awk '{print "d1_id="$1}' >> $GITHUB_ENV
           apiToken: ${{ secrets.CF_API_TOKEN }}
-          preCommands: |
-            echo "*** pre commands ***"
-            apt-get update && apt-get -y install jq
-            echo "******"
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
@@ -153,10 +148,6 @@ jobs:
         with:
           command: kv:namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv="$1}' >> $GITHUB_ENV
           apiToken: ${{ secrets.CF_API_TOKEN }}
-          preCommands: |
-            echo "*** pre commands ***"
-            apt-get update && apt-get -y install jq
-            echo "******"
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
@@ -182,10 +173,6 @@ jobs:
         with:
           command: kv:key get --namespace-id=${{ env.tfstate_kv }} vapid_jwk | jq . > ./tf/vapid_jwk
           apiToken: ${{ secrets.CF_API_TOKEN }}
-          preCommands: |
-            echo "*** pre commands ***"
-            apt-get update && apt-get -y install jq
-            echo "******"
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         continue-on-error: true
@@ -239,10 +226,6 @@ jobs:
         with:
           command: kv:namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv="$1}' >> $GITHUB_ENV
           apiToken: ${{ secrets.CF_API_TOKEN }}
-          preCommands: |
-            echo "*** pre commands ***"
-            apt-get update && apt-get -y install jq
-            echo "******"
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         if: ${{ env.tfstate_kv == '' }}
