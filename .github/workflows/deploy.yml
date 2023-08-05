@@ -105,7 +105,7 @@ jobs:
 
       - name: Create D1 database
         continue-on-error: true
-        run: npx wrangler d1 create wildebeest-${{ env.NAME_SUFFIX }}-v1 --experimental-backend
+        run: npx wrangler d1 create wildebeest-${{ env.NAME_SUFFIX }}-v1
 
       - name: retrieve D1 database
         run: npx wrangler d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1" and .version == "beta") | .uuid' | awk '{print "d1_id="$1}' >> $GITHUB_ENV
@@ -113,7 +113,7 @@ jobs:
       - name: migrate D1 database
         run: |
           echo -e "[[d1_databases]]\nbinding=\"DATABASE\"\ndatabase_name=\"wildebeest-${{ env.NAME_SUFFIX }}-v1\"\ndatabase_id=\"${{ env.d1_id }}\"" >> wrangler.toml
-          npx wrangler d1 migrations apply wildebeest-${{ env.NAME_SUFFIX }}-v1 --experimental-backend
+          npx wrangler d1 migrations apply wildebeest-${{ env.NAME_SUFFIX }}-v1
 
       - name: retrieve Zero Trust organization
         run: |
