@@ -8,6 +8,7 @@ import {
 	PERSON,
 	Person,
 } from 'wildebeest/backend/src/activitypub/actors'
+import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { loadExternalMastodonAccount, loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import type { Env } from 'wildebeest/backend/src/types'
@@ -42,24 +43,20 @@ export async function handleRequest(db: Database, request: Request): Promise<Res
 
 	const useWebFinger = url.searchParams.get('resolve') === 'true'
 
-	const out: SearchResult = {
-		accounts: [],
-		statuses: [],
-		hashtags: [],
-	}
-
 	let query: Handle
-
 	try {
 		query = parseHandle(url.searchParams.get('q') || '')
 	} catch {
 		return new Response('', { status: 400 })
 	}
 
+	const accounts = new Map<string, MastodonAccount>()
+
 	if (useWebFinger && !isLocalAccount(domain, query)) {
 		const res = await queryAcct(query, db)
 		if (res !== null) {
-			out.accounts.push(await loadExternalMastodonAccount(db, res, query))
+			const account = await loadExternalMastodonAccount(db, res, query)
+			accounts.set(account.id, account)
 		}
 	}
 
@@ -91,13 +88,17 @@ WHERE rowid IN (SELECT rowid FROM search_fts WHERE (preferredUsername MATCH ?1 O
 			}
 
 			if (results !== undefined) {
-				for (let i = 0, len = results.length; i < len; i++) {
+				for (const result of results) {
 					const row: ActorRow<Person> = {
-						...results[i],
-						mastodon_id: await ensureActorMastodonId(db, results[i].mastodon_id, results[i].cdate),
+						...result,
+						mastodon_id: await ensureActorMastodonId(db, result.mastodon_id, result.cdate),
 					}
 					const actor = actorFromRow(row)
-					out.accounts.push(await loadMastodonAccount(db, domain, actor, actorToHandle(actor)))
+					if (accounts.has(actor[mastodonIdSymbol])) {
+						continue
+					}
+					const account = await loadMastodonAccount(db, domain, actor, actorToHandle(actor))
+					accounts.set(account.id, account)
 				}
 			}
 		} catch (err: any) {
@@ -105,10 +106,18 @@ WHERE rowid IN (SELECT rowid FROM search_fts WHERE (preferredUsername MATCH ?1 O
 		}
 	} else {
 		const actor = await getActorByRemoteHandle(db, query)
-		if (actor !== null) {
-			out.accounts.push(await loadMastodonAccount(db, domain, actor, actorToHandle(actor)))
+		if (actor !== null && !accounts.has(actor[mastodonIdSymbol])) {
+			const account = await loadMastodonAccount(db, domain, actor, actorToHandle(actor))
+			accounts.set(account.id, account)
 		}
 	}
 
-	return new Response(JSON.stringify(out), { headers })
+	return new Response(
+		JSON.stringify({
+			accounts: [...accounts.values()],
+			statuses: [],
+			hashtags: [],
+		} satisfies SearchResult),
+		{ headers }
+	)
 }
