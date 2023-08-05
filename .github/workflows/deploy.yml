@@ -104,7 +104,7 @@ jobs:
             apt-get update && apt-get -y install jq
             alpha_exists=$(wrangler d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}" and .version == "alpha") | .name')
             beta_exists=$(wrangler d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1" and .version == "beta") | .name')
-            [[ -n "$alpha_exists" && -z "$beta_exists" ]] && echo "Error: There is an alpha version of D1 but no corresponding beta version." && exit 1
+            [[ -n "$alpha_exists" && -z "$beta_exists" ]] && echo "Error: There is an alpha version of D1 but no corresponding beta version." && exit 1 || exit 0
             echo "******"
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
