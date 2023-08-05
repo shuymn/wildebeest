@@ -84,11 +84,3 @@ export function handleToAcct(handle: Handle, domain?: string): string {
 	}
 	return `${handle.localPart}@${handle.domain}`
 }
-
-export function handleToMastodonUrl(handle: RemoteHandle): URL {
-	return new URL('@' + handle.localPart, 'https://' + handle.domain)
-}
-
-export function handleToPleromaUrl(handle: RemoteHandle): URL {
-	return new URL('users/' + handle.localPart, 'https://' + handle.domain)
-}
