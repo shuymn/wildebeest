@@ -1,5 +1,5 @@
+import { getUserId } from 'wildebeest/backend/src/accounts'
 import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
-import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import { isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
@@ -22,7 +22,7 @@ export async function handleRequest(domain: string, db: Database, id: string, us
 		return new Response('', { status: 403 })
 	}
 
-	const actorId = actorURL(domain, handle)
+	const actorId = getUserId(domain, handle)
 	const actor = await getActorById(db, actorId)
 	if (actor === null) {
 		return new Response('', { status: 404 })

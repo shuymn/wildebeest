@@ -1,4 +1,4 @@
-import { createPerson, getPersonByEmail, type Person } from 'wildebeest/backend/src/activitypub/actors'
+import { type Person } from 'wildebeest/backend/src/activitypub/actors'
 import { reblogs, replies, statuses } from 'wildebeest/frontend/src/dummyData'
 import type { Account, MastodonStatus } from 'wildebeest/frontend/src/types'
 import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
@@ -8,6 +8,7 @@ import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database } from 'wildebeest/backend/src/database'
 import { upsertRule } from 'wildebeest/backend/src/config/rules'
 import { upsertServerSettings } from 'wildebeest/backend/src/config/server'
+import { createUser, getUserByEmail } from 'wildebeest/backend/src/accounts'
 
 /**
  * Run helper commands to initialize the database with actors, statuses, etc.
@@ -15,7 +16,7 @@ import { upsertServerSettings } from 'wildebeest/backend/src/config/server'
 export async function init(domain: string, db: Database) {
 	const loadedStatuses: { status: MastodonStatus; note: Note }[] = []
 	for (const status of statuses) {
-		const actor = await getOrCreatePerson(domain, db, status.account)
+		const actor = await getOrCreateUser(domain, db, status.account)
 		const note = await createPublicStatus(
 			domain,
 			db,
@@ -29,7 +30,7 @@ export async function init(domain: string, db: Database) {
 
 	for (const reblog of reblogs) {
 		const rebloggerAccount = reblog.account
-		const reblogger = await getOrCreatePerson(domain, db, rebloggerAccount)
+		const reblogger = await getOrCreateUser(domain, db, rebloggerAccount)
 		const reblogStatus = reblog.reblog
 		if (reblogStatus?.id) {
 			const noteToReblog = loadedStatuses.find(({ status: { id } }) => id === reblogStatus.id)?.note
@@ -77,30 +78,31 @@ async function createReply(
 		return
 	}
 
-	const actor = await getOrCreatePerson(domain, db, reply.account)
+	const actor = await getOrCreateUser(domain, db, reply.account)
 	await createReplyInBackend(domain, db, actor, originalStatus.note, reply.content)
 }
 
-async function getOrCreatePerson(
+async function getOrCreateUser(
 	domain: string,
 	db: Database,
 	{ username, avatar, display_name }: Account
 ): Promise<Person> {
 	const isAdmin = username === 'george'
 	const email = `${username}@test.email`
-	const person = await getPersonByEmail(db, email)
-	if (person) return person
-	const newPerson = await createPerson(
+	const person = await getUserByEmail(db, email)
+	if (person) {
+		return person
+	}
+	const newPerson = await createUser({
 		domain,
 		db,
-		'test-kek',
+		userKEK: 'test-kek',
 		email,
-		{
-			icon: { type: 'Image', id: avatar, url: avatar },
-			name: display_name,
-		},
-		isAdmin
-	)
+		preferredUsername: username,
+		name: display_name,
+		admin: isAdmin,
+		icon: { type: 'Image', id: avatar, url: avatar },
+	})
 	if (!newPerson) {
 		throw new Error('Could not create Actor ' + username)
 	}

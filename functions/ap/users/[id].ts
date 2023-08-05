@@ -1,5 +1,4 @@
-import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
-import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
+import { getUserId, isLocalAccount } from 'wildebeest/backend/src/accounts'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import type { Env } from 'wildebeest/backend/src/types'
@@ -24,7 +23,7 @@ export async function handleRequest(domain: string, db: Database, id: string): P
 		return new Response('', { status: 403 })
 	}
 
-	const person = await actors.getActorById(db, actorURL(domain, handle))
+	const person = await actors.getActorById(db, getUserId(domain, handle))
 	if (person === null) {
 		return new Response('', { status: 404 })
 	}

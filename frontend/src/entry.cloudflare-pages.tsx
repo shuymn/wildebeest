@@ -15,14 +15,13 @@ import { parse } from 'cookie'
 import * as access from 'wildebeest/backend/src/access'
 import { getJwtEmail } from 'wildebeest/backend/src/utils/auth/getJwtEmail'
 import * as errors from 'wildebeest/backend/src/errors'
-import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { getDatabase } from 'wildebeest/backend/src/database'
-import type { Person } from 'wildebeest/backend/src/activitypub/actors'
+import { User, getUserByEmail } from 'wildebeest/backend/src/accounts'
 
 const qwikHandler = createQwikCity({ render, qwikCityPlan })
 
 type QwikContextData = {
-	connectedActor: Person | null
+	connectedActor: User | null
 }
 
 // eslint-disable-next-line
@@ -50,11 +49,11 @@ export const onRequest: PagesFunction<Env, any, ContextData> = async (ctx) => {
 		}
 
 		const db = await getDatabase(ctx.env)
-		data.connectedActor = await actors.getPersonByEmail(db, email)
+		data.connectedActor = await getUserByEmail(db, email)
 	}
 
-	// eslint-disable-next-line
-	;(ctx.env as any).data = data
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	ctx.env = { ...ctx.env, data } as any
 
 	return qwikHandler(ctx)
 }

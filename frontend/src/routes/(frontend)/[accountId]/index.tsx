@@ -5,7 +5,7 @@ import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
 import type { MastodonStatus } from '~/types'
 import { StatusesPanel } from '~/components/StatusesPanel/StatusesPanel'
 import { parseHandle } from 'wildebeest/backend/src/utils/handle'
-import { getMastodonIdByHandle } from 'wildebeest/backend/src/accounts/getAccount'
+import { getMastodonIdByRemoteHandle } from 'wildebeest/backend/src/accounts/account'
 import { getNotFoundHtml } from '~/utils/getNotFoundHtml/getNotFoundHtml'
 import { handleRequest } from 'wildebeest/functions/api/v1/accounts/[id]/statuses'
 
@@ -21,7 +21,10 @@ export const statusesLoader = loader$<
 		const url = new URL(request.url)
 		const handle = parseHandle(url.pathname.split('/')[1])
 		const db = await getDatabase(platform)
-		mastodonId = await getMastodonIdByHandle(url.hostname, db, handle)
+		mastodonId = await getMastodonIdByRemoteHandle(db, {
+			localPart: handle.localPart,
+			domain: handle.domain ?? url.hostname,
+		})
 		if (mastodonId) {
 			const response = await handleRequest({ domain: url.hostname, db, connectedActor: undefined }, mastodonId, {
 				exclude_replies: true,

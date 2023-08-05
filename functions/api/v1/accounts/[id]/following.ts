@@ -1,6 +1,6 @@
 // https://docs.joinmastodon.org/methods/accounts/#following
 
-import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
+import { isLocalAccount } from 'wildebeest/backend/src/accounts'
 import { Actor, getActorByMastodonId, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
 import { getFollowing, loadActors } from 'wildebeest/backend/src/activitypub/actors/follow'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'

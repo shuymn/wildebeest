@@ -1,7 +1,6 @@
-import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
+import { getUserId, isLocalAccount } from 'wildebeest/backend/src/accounts'
 import type { Activity } from 'wildebeest/backend/src/activitypub/activities'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
-import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
 import { getVAPIDKeys } from 'wildebeest/backend/src/config'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import type { Env, InboxMessageBody } from 'wildebeest/backend/src/types'
@@ -64,7 +63,7 @@ export async function handleRequest(
 	if (!isLocalAccount(domain, handle)) {
 		return new Response('', { status: 403 })
 	}
-	const actorId = actorURL(domain, handle)
+	const actorId = getUserId(domain, handle)
 
 	const actor = await actors.getActorById(db, actorId)
 	if (actor === null) {
