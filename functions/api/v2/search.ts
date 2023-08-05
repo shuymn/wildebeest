@@ -1,20 +1,13 @@
 // https://docs.joinmastodon.org/methods/search/#v2
-import { isLocalAccount } from 'wildebeest/backend/src/accounts'
-import {
-	actorFromRow,
-	ActorRow,
-	ensureActorMastodonId,
-	getActorByRemoteHandle,
-	PERSON,
-	Person,
-} from 'wildebeest/backend/src/activitypub/actors'
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
+import { actorFromRow, ActorRow, PERSON, Person, setActorMastodonId } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { loadExternalMastodonAccount, loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import type { Env } from 'wildebeest/backend/src/types'
 import { MastodonAccount } from 'wildebeest/backend/src/types/account'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import type { Handle } from 'wildebeest/backend/src/utils/handle'
-import { actorToHandle, isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
+import { actorToHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
 import { queryAcct } from 'wildebeest/backend/src/webfinger'
 
 const headers = {
@@ -24,11 +17,11 @@ const headers = {
 
 type SearchResult = {
 	accounts: Array<MastodonAccount>
-	statuses: Array<unknown>
-	hashtags: Array<unknown>
+	statuses: Array<any>
+	hashtags: Array<any>
 }
 
-export const onRequest: PagesFunction<Env> = async ({ request, env }) => {
+export const onRequest: PagesFunction<Env, any> = async ({ request, env }) => {
 	return handleRequest(await getDatabase(env), request)
 }
 
@@ -52,7 +45,7 @@ export async function handleRequest(db: Database, request: Request): Promise<Res
 
 	try {
 		query = parseHandle(url.searchParams.get('q') || '')
-	} catch {
+	} catch (err: any) {
 		return new Response('', { status: 400 })
 	}
 
@@ -63,15 +56,9 @@ export async function handleRequest(db: Database, request: Request): Promise<Res
 		}
 	}
 
-	if (isLocalHandle(query)) {
+	if (isLocalAccount(domain, query)) {
 		const sql = `
-SELECT
-  actors.id,
-  actors.mastodon_id,
-  actors.type,
-  actors.properties,
-  actors.cdate
-FROM actors
+SELECT actors.* FROM actors
 WHERE rowid IN (SELECT rowid FROM search_fts WHERE (preferredUsername MATCH ?1 OR name MATCH ?1) AND type=?2 ORDER BY rank LIMIT 10)
         `
 
@@ -81,10 +68,12 @@ WHERE rowid IN (SELECT rowid FROM search_fts WHERE (preferredUsername MATCH ?1 O
 				.bind(query.localPart + '*', PERSON)
 				.all<{
 					id: string
-					mastodon_id: string
 					type: typeof PERSON
-					properties: string
+					pubkey: string | null
 					cdate: string
+					properties: string
+					is_admin: 1 | null
+					mastodon_id: string | null
 				}>()
 			if (!success) {
 				throw new Error('SQL error: ' + error)
@@ -94,7 +83,7 @@ WHERE rowid IN (SELECT rowid FROM search_fts WHERE (preferredUsername MATCH ?1 O
 				for (let i = 0, len = results.length; i < len; i++) {
 					const row: ActorRow<Person> = {
 						...results[i],
-						mastodon_id: await ensureActorMastodonId(db, results[i].mastodon_id, results[i].cdate),
+						mastodon_id: results[i].mastodon_id ?? (await setActorMastodonId(db, results[i].id, results[i].cdate)),
 					}
 					const actor = actorFromRow(row)
 					out.accounts.push(await loadMastodonAccount(db, domain, actor, actorToHandle(actor)))
@@ -102,11 +91,6 @@ WHERE rowid IN (SELECT rowid FROM search_fts WHERE (preferredUsername MATCH ?1 O
 			}
 		} catch (err: any) {
 			console.warn(`failed to search: ${err.stack}`)
-		}
-	} else {
-		const actor = await getActorByRemoteHandle(db, query)
-		if (actor !== null) {
-			out.accounts.push(await loadMastodonAccount(db, domain, actor, actorToHandle(actor)))
 		}
 	}
 

@@ -2,17 +2,11 @@
 // especially)
 import { parse } from 'cookie'
 import * as access from 'wildebeest/backend/src/access'
-import { createUser } from 'wildebeest/backend/src/accounts'
+import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import { getJwtEmail } from 'wildebeest/backend/src/utils/auth/getJwtEmail'
-import { z } from 'zod'
-
-const schema = z.object({
-	username: z.string().min(1).max(30).nonempty(),
-	name: z.string().min(1).max(30).nonempty(),
-})
 
 export const onRequestPost: PagesFunction<Env, any, ContextData> = async ({ request, env }) => {
 	return handlePostRequest(request, await getDatabase(env), env.userKEK, env.ACCESS_AUTH_DOMAIN, env.ACCESS_AUD)
@@ -44,27 +38,21 @@ export async function handlePostRequest(
 	const domain = url.hostname
 
 	const formData = await request.formData()
+	const properties: Record<string, string> = {}
 
-	let username: string | null = null
 	if (formData.has('username')) {
-		username = formData.get('username') as string | null
+		properties.preferredUsername = (formData.get('username') as string) || ''
 	}
 
-	let name: string | null = null
 	if (formData.has('name')) {
-		name = formData.get('name') as string | null
+		properties.name = (formData.get('name') as string) || ''
 	}
 
-	const result = schema.safeParse({ username, name })
-	if (!result.success) {
-		return new Response('', { status: 400 })
-	}
+	await createPerson(domain, db, userKEK, email, properties)
 
 	if (!url.searchParams.has('redirect_uri')) {
 		return new Response('', { status: 400 })
 	}
-
-	await createUser({ domain, db, userKEK, email, preferredUsername: result.data.username, name: result.data.name })
 
 	let redirect_uri = decodeURIComponent(url.searchParams.get('redirect_uri') || '')
 	if (redirect_uri.startsWith('/')) {

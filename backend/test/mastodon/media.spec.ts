@@ -1,12 +1,13 @@
 import { strict as assert } from 'node:assert/strict'
 
+import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import * as objects from 'wildebeest/backend/src/activitypub/objects'
 import { mastodonIdSymbol, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { createImage, Image } from 'wildebeest/backend/src/activitypub/objects/image'
 import * as media from 'wildebeest/functions/api/v2/media'
 import * as media_id from 'wildebeest/functions/api/v2/media/[id]'
 
-import { assertJSON, assertStatus, createTestUser, isUrlValid, makeDB } from '../utils'
+import { assertJSON, assertStatus, isUrlValid, makeDB } from '../utils'
 
 const userKEK = 'test_kek10'
 const CF_ACCOUNT_ID = 'testaccountid'
@@ -33,7 +34,7 @@ describe('Mastodon APIs', () => {
 			}
 
 			const db = await makeDB()
-			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const file = new File(['abc'], 'image.jpeg', { type: 'image/jpeg' })
 
@@ -62,7 +63,7 @@ describe('Mastodon APIs', () => {
 
 		test('update image description', async () => {
 			const db = await makeDB()
-			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const image = await createImage(domain, db, connectedActor, {
 				url: 'https://cloudflare.com/image.jpg',
 				description: 'foo bar',

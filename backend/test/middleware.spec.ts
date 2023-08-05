@@ -1,9 +1,10 @@
 import { strict as assert } from 'node:assert/strict'
 
+import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import * as middleware_main from 'wildebeest/backend/src/middleware/main'
 
 import { ACCESS_CERTS, TEST_JWT } from './test-data'
-import { assertCORS, assertStatus, createTestUser, isUrlValid, makeDB } from './utils'
+import { assertCORS, assertStatus, isUrlValid, makeDB } from './utils'
 
 const userKEK = 'test_kek12'
 const domain = 'cloudflare.com'
@@ -116,7 +117,7 @@ describe('middleware', () => {
 		}
 
 		const db = await makeDB()
-		await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const headers = { authorization: 'Bearer APPID.' + TEST_JWT }
 		const request = new Request('https://example.com', { headers })

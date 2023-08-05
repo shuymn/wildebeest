@@ -2,7 +2,7 @@ import { useSignal, useTask$ } from '@builder.io/qwik'
 import { Account } from '~/types'
 import { useDomain } from './useDomain'
 import { parseHandle } from 'wildebeest/backend/src/utils/handle'
-import { isLocalAccount } from 'wildebeest/backend/src/accounts'
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 
 /**
  * Hook to get a url to use for links for the provided account.

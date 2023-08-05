@@ -11,8 +11,8 @@ import { getDocumentHead } from '~/utils/getDocumentHead'
 import { instanceLoader } from '../layout'
 import { loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import { AccountCard } from '~/components/AccountCard/AccountCard'
+import { getAdminByEmail } from 'wildebeest/backend/src/utils/auth/getAdmins'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
-import { getAdminByEmail } from 'wildebeest/backend/src/accounts'
 
 type AboutInfo = {
 	image: string

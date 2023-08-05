@@ -17,7 +17,7 @@ export async function getHomeTimeline(domain: string, db: Database, actor: Actor
 			`
 SELECT
 	actor_following.target_actor_id AS following_id,
-  json_extract(actors.properties, '$.followers') AS actor_followers_url
+  ${db.qb.jsonExtract('actors.properties', 'followers')} AS actor_followers_url
 FROM
 	actor_following
 	INNER JOIN actors ON actors.id = actor_following.target_actor_id
@@ -55,10 +55,12 @@ SELECT
   objects.properties,
 
   actors.id as actor_id,
-  actors.mastodon_id as actor_mastodon_id,
   actors.type as actor_type,
-  actors.properties as actor_properties,
+  actors.pubkey as actor_pubkey,
   actors.cdate as actor_cdate,
+  actors.properties as actor_properties,
+  actors.is_admin as actor_is_admin,
+  actors.mastodon_id as actor_mastodon_id,
 
   outbox_objects.actor_id as publisher_actor_id,
   outbox_objects.published_date as publisher_published,
@@ -113,10 +115,12 @@ LIMIT ?4
 				properties: string
 
 				actor_id: string
-				actor_mastodon_id: string
 				actor_type: Actor['type']
-				actor_properties: string
+				actor_pubkey: string | null
 				actor_cdate: string
+				actor_properties: string
+				actor_is_admin: 1 | null
+				actor_mastodon_id: string
 
 				publisher_actor_id: string
 				publisher_published: string
@@ -185,10 +189,12 @@ SELECT
   objects.properties,
 
   actors.id as actor_id,
-  actors.mastodon_id as actor_mastodon_id,
   actors.type as actor_type,
-  actors.properties as actor_properties,
+  actors.pubkey as actor_pubkey,
   actors.cdate as actor_cdate,
+  actors.properties as actor_properties,
+  actors.is_admin as actor_is_admin,
+  actors.mastodon_id as actor_mastodon_id,
 
   outbox_objects.actor_id as publisher_actor_id,
   outbox_objects.published_date as publisher_published,
@@ -253,10 +259,12 @@ LIMIT ?1
 				properties: string
 
 				actor_id: string
-				actor_mastodon_id: string
 				actor_type: Actor['type']
-				actor_properties: string
+				actor_pubkey: string | null
 				actor_cdate: string
+				actor_properties: string
+				actor_is_admin: 1 | null
+				actor_mastodon_id: string
 
 				publisher_actor_id: string
 				publisher_published: string

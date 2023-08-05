@@ -1,5 +1,6 @@
 import { strict as assert } from 'node:assert/strict'
 
+import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { createNotification, insertFollowNotification } from 'wildebeest/backend/src/mastodon/notification'
 import { sendLikeNotification } from 'wildebeest/backend/src/mastodon/notification'
@@ -11,7 +12,7 @@ import { createPublicStatus } from 'wildebeest/backend/test/shared.utils'
 import * as notifications from 'wildebeest/functions/api/v1/notifications'
 import * as notifications_get from 'wildebeest/functions/api/v1/notifications/[id]'
 
-import { assertJSON, assertStatus, createTestClient, createTestUser, makeCache, makeDB } from '../utils'
+import { assertJSON, assertStatus, createTestClient, makeCache, makeDB } from '../utils'
 
 const userKEK = 'test_kek15'
 const domain = 'cloudflare.com'
@@ -33,7 +34,7 @@ describe('Mastodon APIs', () => {
 	describe('notifications', () => {
 		test('returns notifications stored in KV cache', async () => {
 			const db = await makeDB()
-			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 			const cache = makeCache()
 
 			await cache.put(connectedActor.id + '/notifications', 12345)
@@ -45,8 +46,8 @@ describe('Mastodon APIs', () => {
 
 		test('returns notifications stored in db', async () => {
 			const db = await makeDB()
-			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
-			const fromActor = await createTestUser(domain, db, userKEK, 'from@cloudflare.com')
+			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const fromActor = await createPerson(domain, db, userKEK, 'from@cloudflare.com')
 
 			const connectedActor = actor
 			const note = await createPublicStatus(domain, db, connectedActor, 'my first status')
@@ -74,8 +75,8 @@ describe('Mastodon APIs', () => {
 
 		test('get single favourite notification', async () => {
 			const db = await makeDB()
-			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
-			const fromActor = await createTestUser(domain, db, userKEK, 'from@cloudflare.com')
+			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const fromActor = await createPerson(domain, db, userKEK, 'from@cloudflare.com')
 			const note = await createPublicStatus(domain, db, actor, 'my first status')
 			await createNotification(db, 'favourite', actor, fromActor, note)
 
@@ -93,8 +94,8 @@ describe('Mastodon APIs', () => {
 
 		test('get single follow notification', async () => {
 			const db = await makeDB()
-			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
-			const fromActor = await createTestUser(domain, db, userKEK, 'from@cloudflare.com')
+			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const fromActor = await createPerson(domain, db, userKEK, 'from@cloudflare.com')
 			await insertFollowNotification(db, actor, fromActor)
 
 			const res = await notifications_get.handleRequest(domain, '1', db, actor)
@@ -142,7 +143,7 @@ describe('Mastodon APIs', () => {
 			}
 
 			const client = await createTestClient(db)
-			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const p256dh = arrayBufferToBase64((await crypto.subtle.exportKey('raw', clientKeys.publicKey)) as ArrayBuffer)
 			const auth = arrayBufferToBase64(crypto.getRandomValues(new Uint8Array(16)))
@@ -161,7 +162,7 @@ describe('Mastodon APIs', () => {
 				},
 			})
 
-			const fromActor = await createTestUser(domain, db, userKEK, 'from@cloudflare.com')
+			const fromActor = await createPerson(domain, db, userKEK, 'from@cloudflare.com')
 			await sendLikeNotification(db, fromActor, actor, 'notifid', 'admin@example.com', vapidKeys)
 		})
 	})

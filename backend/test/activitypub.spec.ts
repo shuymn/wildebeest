@@ -1,18 +1,20 @@
 import { strict as assert } from 'node:assert/strict'
 
+import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
-import { getApId, Remote } from 'wildebeest/backend/src/activitypub/objects'
+import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import { cacheObject } from 'wildebeest/backend/src/activitypub/objects/'
 import { loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
 import { MessageType } from 'wildebeest/backend/src/types'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 import { createDirectStatus, createPublicStatus } from 'wildebeest/backend/test/shared.utils'
-import { assertStatus, createTestUser, isUrlValid, makeDB } from 'wildebeest/backend/test/utils'
 import * as ap_objects from 'wildebeest/functions/ap/o/[id]'
 import * as ap_users from 'wildebeest/functions/ap/users/[id]'
 import * as ap_inbox from 'wildebeest/functions/ap/users/[id]/inbox'
 import * as ap_outbox from 'wildebeest/functions/ap/users/[id]/outbox'
 import * as ap_outbox_page from 'wildebeest/functions/ap/users/[id]/outbox/page'
+
+import { assertStatus, isUrlValid, makeDB } from './utils'
 
 const userKEK = 'test_kek5'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -30,28 +32,19 @@ describe('ActivityPub', () => {
 
 		test('fetch user by id', async () => {
 			const db = await makeDB()
-			const properties: Remote<actors.Actor> = {
-				id: `https://${domain}/ap/users/sven`,
-				url: `https://${domain}/@sven`,
-				type: 'Person',
-				preferredUsername: 'sven',
+			const properties = {
 				discoverable: true,
 				summary: 'test summary',
-				inbox: new URL('https://example.com/inbox'),
-				outbox: new URL('https://example.com/outbox'),
-				following: new URL('https://example.com/following'),
-				followers: new URL('https://example.com/followers'),
-				featured: new URL('https://example.com/featured'),
-				publicKey: {
-					id: 'https://example.com/publicKey',
-					publicKeyPem:
-						'-----BEGIN PUBLIC KEY-----MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEApnI8FHJQXqqAdM87YwVseRUqbNLiw8nQ0zHBUyLylzaORhI4LfW4ozguiw8cWYgMbCufXMoITVmdyeTMGbQ3Q1sfQEcEjOZZXEeCCocmnYjK6MFSspjFyNw6GP0a5A/tt1tAcSlgALv8sg1RqMhSE5Kv+6lSblAYXcIzff7T2jh9EASnimaoAAJMaRH37+HqSNrouCxEArcOFhmFETadXsv+bHZMozEFmwYSTugadr4WD3tZd+ONNeimX7XZ3+QinMzFGOW19ioVHyjt3yCDU1cPvZIDR17dyEjByNvx/4N4Zly7puwBn6Ixy/GkIh5BWtL5VOFDJm/S+zcf1G1WsOAXMwKL4Nc5UWKfTB7Wd6voId7vF7nI1QYcOnoyh0GqXWhTPMQrzie4nVnUrBedxW0s/0vRXeR63vTnh5JrTVu06JGiU2pq2kvwqoui5VU6rtdImITybJ8xRkAQ2jo4FbbkS6t49PORIuivxjS9wPl7vWYazZtDVa5g/5eL7PnxOG3HsdIJWbGEh1CsG83TU9burHIepxXuQ+JqaSiKdCVc8CUiO++acUqKp7lmbYR9E/wRmvxXDFkxCZzA0UL2mRoLLLOe4aHvRSTsqiHC5Wwxyew5bb+eseJz3wovid9ZSt/tfeMAkCDmaCxEK+LGEbJ9Ik8ihis8Esm21N0A54sCAwEAAQ==-----END PUBLIC KEY-----',
-				},
+				inbox: 'https://example.com/inbox',
+				outbox: 'https://example.com/outbox',
+				following: 'https://example.com/following',
+				followers: 'https://example.com/followers',
 			}
-
+			const pubKey =
+				'-----BEGIN PUBLIC KEY-----MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEApnI8FHJQXqqAdM87YwVseRUqbNLiw8nQ0zHBUyLylzaORhI4LfW4ozguiw8cWYgMbCufXMoITVmdyeTMGbQ3Q1sfQEcEjOZZXEeCCocmnYjK6MFSspjFyNw6GP0a5A/tt1tAcSlgALv8sg1RqMhSE5Kv+6lSblAYXcIzff7T2jh9EASnimaoAAJMaRH37+HqSNrouCxEArcOFhmFETadXsv+bHZMozEFmwYSTugadr4WD3tZd+ONNeimX7XZ3+QinMzFGOW19ioVHyjt3yCDU1cPvZIDR17dyEjByNvx/4N4Zly7puwBn6Ixy/GkIh5BWtL5VOFDJm/S+zcf1G1WsOAXMwKL4Nc5UWKfTB7Wd6voId7vF7nI1QYcOnoyh0GqXWhTPMQrzie4nVnUrBedxW0s/0vRXeR63vTnh5JrTVu06JGiU2pq2kvwqoui5VU6rtdImITybJ8xRkAQ2jo4FbbkS6t49PORIuivxjS9wPl7vWYazZtDVa5g/5eL7PnxOG3HsdIJWbGEh1CsG83TU9burHIepxXuQ+JqaSiKdCVc8CUiO++acUqKp7lmbYR9E/wRmvxXDFkxCZzA0UL2mRoLLLOe4aHvRSTsqiHC5Wwxyew5bb+eseJz3wovid9ZSt/tfeMAkCDmaCxEK+LGEbJ9Ik8ihis8Esm21N0A54sCAwEAAQ==-----END PUBLIC KEY-----'
 			await db
-				.prepare('INSERT INTO actors (id, mastodon_id, domain, properties) VALUES (?, ?, ?, ?)')
-				.bind(`https://${domain}/ap/users/sven`, '12345', 'cloudflare.com', JSON.stringify(properties))
+				.prepare('INSERT INTO actors (id, email, type, properties, pubkey) VALUES (?, ?, ?, ?, ?)')
+				.bind(`https://${domain}/ap/users/sven`, 'sven@cloudflare.com', 'Person', JSON.stringify(properties), pubKey)
 				.run()
 
 			const res = await ap_users.handleRequest(domain, db, 'sven')
@@ -67,8 +60,7 @@ describe('ActivityPub', () => {
 			assert(isUrlValid(data.outbox))
 			assert(isUrlValid(data.following))
 			assert(isUrlValid(data.followers))
-			assert(isUrlValid(data.featured))
-			assert.equal(data.publicKey.publicKeyPem, properties.publicKey?.publicKeyPem)
+			assert.equal(data.publicKey.publicKeyPem, pubKey)
 		})
 
 		test('sanitize Actor properties', async () => {
@@ -125,7 +117,7 @@ describe('ActivityPub', () => {
 	describe('Outbox', () => {
 		test('return outbox', async () => {
 			const db = await makeDB()
-			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 			await createPublicStatus(domain, db, actor, 'my first status')
 			await createPublicStatus(domain, db, actor, 'my second status')
@@ -140,7 +132,7 @@ describe('ActivityPub', () => {
 
 		test('return outbox page', async () => {
 			const db = await makeDB()
-			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 			await createPublicStatus(domain, db, actor, 'my first status')
 			await sleep(10)
@@ -158,8 +150,8 @@ describe('ActivityPub', () => {
 
 		test("doesn't show private notes to anyone", async () => {
 			const db = await makeDB()
-			const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
-			const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
+			const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
+			const actorB = await createPerson(domain, db, userKEK, 'b@cloudflare.com')
 
 			await createDirectStatus(domain, db, actorA, 'DM', [], { to: [actorB] })
 
@@ -182,8 +174,8 @@ describe('ActivityPub', () => {
 
 		test("doesn't show private note in target outbox", async () => {
 			const db = await makeDB()
-			const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
-			const actorB = await createTestUser(domain, db, userKEK, 'target@cloudflare.com')
+			const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
+			const actorB = await createPerson(domain, db, userKEK, 'target@cloudflare.com')
 
 			await createDirectStatus(domain, db, actorA, 'DM', [], { to: [actorB] })
 
@@ -287,7 +279,7 @@ describe('ActivityPub', () => {
 		test('cacheObject deduplicates object', async () => {
 			const db = await makeDB()
 			const properties: any = { type: 'Note', a: 1, b: 2 }
-			const actor = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
+			const actor = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 			const originalObjectId = new URL('https://example.com/object1')
 
 			let result: any
@@ -317,7 +309,7 @@ describe('ActivityPub', () => {
 		test('cacheObject adds peer', async () => {
 			const db = await makeDB()
 			const properties: any = { type: 'Note', a: 1, b: 2 }
-			const actor = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
+			const actor = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 			const originalObjectId = new URL('https://example.com/object1')
 
 			await cacheObject(domain, db, properties, getApId(actor), originalObjectId, false)
@@ -335,7 +327,7 @@ describe('ActivityPub', () => {
 
 		test('serve object', async () => {
 			const db = await makeDB()
-			const actor = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
+			const actor = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 			const note = await createPublicStatus(domain, db, actor, 'content')
 
 			const uuid = note.id.toString().replace('https://' + domain + '/ap/o/', '')
@@ -367,7 +359,7 @@ describe('ActivityPub', () => {
 
 		test('send activity sends message in queue', async () => {
 			const db = await makeDB()
-			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 			let msg: any = null
 
