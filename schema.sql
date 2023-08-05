@@ -1,8 +1,8 @@
 CREATE TABLE "actors" (
   "id" TEXT NOT NULL PRIMARY KEY,
   "mastodon_id" TEXT,
-  "type" TEXT NOT NULL GENERATED ALWAYS AS (json_extract("properties", '$.type')) VIRTUAL,
-  "username" TEXT NOT NULL GENERATED ALWAYS AS (lower(json_extract("properties", '$.preferredUsername'))) VIRTUAL,
+  "type" TEXT,
+  "username" TEXT,
   "domain" TEXT,
   "properties" TEXT NOT NULL,
   "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'))
