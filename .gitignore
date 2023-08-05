@@ -1,5 +1,5 @@
 node_modules/
-.wrangler/state/d1/*.sqlite3
+.wrangler/state/v3/**/*.sqlite*
 .DS_Store
 .dev.vars
 /test-results/
