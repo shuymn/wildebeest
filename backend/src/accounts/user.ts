@@ -119,7 +119,7 @@ export async function createUser({
 	{
 		const result = await db
 			.prepare(
-				'INSERT INTO actors (id, mastodon_id, domain, properties, cdate, type, username) VALUES(?, ?, ?, ?, ?, ?, ?)'
+				'INSERT INTO actors (id, mastodon_id, domain, properties, cdate, type, username) VALUES(?, ?, ?, ?, ?, ?, lower(?))'
 			)
 			.bind(
 				id,

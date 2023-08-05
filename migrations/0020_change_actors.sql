@@ -6,7 +6,7 @@ CREATE INDEX "actors_username" ON "actors" ("username");
 CREATE INDEX "actors_domain" ON "actors" ("domain");
 
 UPDATE actors SET domain = substr(substr(id, instr(id, '//') + 2), 0, instr(substr(id, instr(id, '//') + 2), '/'));
-UPDATE actors SET username = json_extract(properties, '$.preferredUsername');
+UPDATE actors SET username = lower(json_extract(properties, '$.preferredUsername'));
 
 UPDATE actors SET mastodon_id = printf('%s-%s-%s-%s-%s', lower(hex(randomblob(4))), lower(hex(randomblob(2))), lower(hex(randomblob(2))), lower(hex(randomblob(2))), lower(hex(randomblob(6)))) WHERE mastodon_id IS NULL;
 UPDATE actors SET `type` = json_extract(properties, '$.type');

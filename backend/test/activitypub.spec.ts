@@ -50,7 +50,9 @@ describe('ActivityPub', () => {
 			}
 
 			await db
-				.prepare('INSERT INTO actors (id, mastodon_id, domain, properties, type, username) VALUES (?, ?, ?, ?, ?, ?)')
+				.prepare(
+					'INSERT INTO actors (id, mastodon_id, domain, properties, type, username) VALUES (?, ?, ?, ?, ?, lower(?))'
+				)
 				.bind(
 					`https://${domain}/ap/users/sven`,
 					'12345',

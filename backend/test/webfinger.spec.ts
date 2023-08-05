@@ -40,7 +40,9 @@ describe('WebFinger', () => {
 	test('query remote existing account', async () => {
 		const db = await makeDB()
 		await db
-			.prepare('INSERT INTO actors (id, mastodon_id, domain, properties, type, username) VALUES (?, ?, ?, ?, ?, ?)')
+			.prepare(
+				'INSERT INTO actors (id, mastodon_id, domain, properties, type, username) VALUES (?, ?, ?, ?, ?, lower(?))'
+			)
 			.bind(
 				'https://example.com/ap/users/sven',
 				'12345',

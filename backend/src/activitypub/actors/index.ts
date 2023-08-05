@@ -125,7 +125,7 @@ export async function getAndCache(url: URL, db: Database): Promise<Actor> {
 		.prepare(
 			`
 INSERT INTO actors (id, mastodon_id, domain, properties, cdate, type, username)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, lower(?))
 RETURNING type
     `
 		)
