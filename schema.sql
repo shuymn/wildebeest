@@ -1,9 +1,9 @@
 CREATE TABLE "actors" (
   "id" TEXT NOT NULL PRIMARY KEY,
-  "mastodon_id" TEXT NOT NULL,
-  "type" TEXT NOT NULL GENERATED ALWAYS AS (json_extract("properties", '$.type')) STORED,
-  "username" TEXT NOT NULL GENERATED ALWAYS AS (lower(json_extract("properties", '$.preferredUsername'))) STORED,
-  "domain" TEXT NOT NULL,
+  "mastodon_id" TEXT,
+  "type" TEXT NOT NULL GENERATED ALWAYS AS (json_extract("properties", '$.type')) VIRTUAL,
+  "username" TEXT NOT NULL GENERATED ALWAYS AS (lower(json_extract("properties", '$.preferredUsername'))) VIRTUAL,
+  "domain" TEXT,
   "properties" TEXT NOT NULL,
   "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'))
 );
@@ -18,7 +18,7 @@ BEGIN
     VALUES ("new"."rowid",
             "new"."type",
             json_extract("new"."properties", '$.name'),
-            json_extract("new"."properties", '$.preferredUsername'));
+            "new"."username");
 END;
 
 CREATE TRIGGER "actors_search_fts_delete" AFTER DELETE ON "actors"
@@ -33,7 +33,7 @@ BEGIN
     VALUES ("new"."rowid",
             "new"."type",
             json_extract("new"."properties", '$.name'),
-            json_extract("new"."properties", '$.preferredUsername'));
+            "new"."username");
 END;
 
 CREATE TABLE "actor_following" (
