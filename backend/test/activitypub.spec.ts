@@ -50,8 +50,15 @@ describe('ActivityPub', () => {
 			}
 
 			await db
-				.prepare('INSERT INTO actors (id, mastodon_id, domain, properties) VALUES (?, ?, ?, ?)')
-				.bind(`https://${domain}/ap/users/sven`, '12345', 'cloudflare.com', JSON.stringify(properties))
+				.prepare('INSERT INTO actors (id, mastodon_id, domain, properties, type, username) VALUES (?, ?, ?, ?, ?, ?)')
+				.bind(
+					`https://${domain}/ap/users/sven`,
+					'12345',
+					'cloudflare.com',
+					JSON.stringify(properties),
+					properties.type,
+					properties.preferredUsername ?? null
+				)
 				.run()
 
 			const res = await ap_users.handleRequest(domain, db, 'sven')

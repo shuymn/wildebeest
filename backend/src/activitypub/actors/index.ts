@@ -124,12 +124,20 @@ export async function getAndCache(url: URL, db: Database): Promise<Actor> {
 	const row = await db
 		.prepare(
 			`
-INSERT INTO actors (id, mastodon_id, domain, properties, cdate)
-VALUES (?, ?, ?, ?, ?)
+INSERT INTO actors (id, mastodon_id, domain, properties, cdate, type, username)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 RETURNING type
     `
 		)
-		.bind(actorId.toString(), mastodonId, actorId.hostname, JSON.stringify(properties), now.toISOString())
+		.bind(
+			actorId.toString(),
+			mastodonId,
+			actorId.hostname,
+			JSON.stringify(properties),
+			now.toISOString(),
+			properties.type,
+			properties.preferredUsername ?? null
+		)
 		.first<{ type: Actor['type'] }>()
 
 	// Add peer

@@ -118,8 +118,18 @@ export async function createUser({
 
 	{
 		const result = await db
-			.prepare('INSERT INTO actors (id, mastodon_id, domain, properties, cdate) VALUES(?, ?, ?, ?, ?)')
-			.bind(id, mastodonId, domain, JSON.stringify(properties), now.toISOString())
+			.prepare(
+				'INSERT INTO actors (id, mastodon_id, domain, properties, cdate, type, username) VALUES(?, ?, ?, ?, ?, ?, ?)'
+			)
+			.bind(
+				id,
+				mastodonId,
+				domain,
+				JSON.stringify(properties),
+				now.toISOString(),
+				properties.type,
+				properties.preferredUsername
+			)
 			.run()
 		if (!result.success) {
 			console.error('SQL error: ', result.error)
