@@ -40,8 +40,16 @@ describe('WebFinger', () => {
 	test('query remote existing account', async () => {
 		const db = await makeDB()
 		await db
-			.prepare('INSERT INTO actors (id, email, type) VALUES (?, ?, ?)')
-			.bind('https://example.com/ap/users/sven', 'sven@cloudflare.com', 'Person')
+			.prepare('INSERT INTO actors (id, mastodon_id, domain, properties) VALUES (?, ?, ?, ?)')
+			.bind(
+				'https://example.com/ap/users/sven',
+				'12345',
+				'cloudflare.com',
+				JSON.stringify({
+					type: 'Person',
+					preferredUsername: 'sven',
+				})
+			)
 			.run()
 
 		const req = new Request('https://example.com/.well-known/webfinger?resource=acct:sven@example.com')

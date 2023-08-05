@@ -1,7 +1,6 @@
 import { strict as assert } from 'node:assert/strict'
 
 import * as activities from 'wildebeest/backend/src/activitypub/activities'
-import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { getObjectByMastodonId, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
 import { type Note } from 'wildebeest/backend/src/activitypub/objects/note'
@@ -23,6 +22,7 @@ import * as statuses_reblog from 'wildebeest/functions/api/v1/statuses/[id]/rebl
 import {
 	assertJSON,
 	assertStatus,
+	createTestUser,
 	isUrlValid,
 	makeCache,
 	makeDB,
@@ -56,7 +56,7 @@ describe('Mastodon APIs', () => {
 		test('create new status creates Note', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const body = {
 				status: 'my status <script>evil</script>',
@@ -118,7 +118,7 @@ describe('Mastodon APIs', () => {
 		test('create new status regenerates the timeline and contains post', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const body = {
 				status: 'my status',
@@ -155,7 +155,7 @@ describe('Mastodon APIs', () => {
 		test("create new status adds to Actor's outbox", async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const body = {
 				status: 'my status',
@@ -189,9 +189,9 @@ describe('Mastodon APIs', () => {
 			const queue = makeQueue()
 			const db = await makeDB()
 
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const followerA = await createPerson(domain, db, userKEK, 'followerA@cloudflare.com')
-			const followerB = await createPerson(domain, db, userKEK, 'followerB@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const followerA = await createTestUser(domain, db, userKEK, 'followerA@cloudflare.com')
+			const followerB = await createTestUser(domain, db, userKEK, 'followerB@cloudflare.com')
 
 			await addFollowing(domain, db, followerA, actor)
 			await sleep(10)
@@ -258,6 +258,7 @@ describe('Mastodon APIs', () => {
 								id: 'https://social.com/users/sven',
 								type: 'Person',
 								inbox: 'https://social.com/sven/inbox',
+								preferredUsername: 'sven',
 							})
 						)
 					}
@@ -289,7 +290,7 @@ describe('Mastodon APIs', () => {
 
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const body = {
 				status: '@sven@remote.com my status',
@@ -330,7 +331,7 @@ describe('Mastodon APIs', () => {
 		test('create new status with mention add tags on Note', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			globalThis.fetch = async (input: RequestInfo) => {
 				if (input instanceof URL || typeof input === 'string') {
@@ -401,7 +402,7 @@ describe('Mastodon APIs', () => {
 		test('create new status with image', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const image = await createImage(domain, db, connectedActor, {
 				url: 'https://example.com/image.jpg',
@@ -441,7 +442,7 @@ describe('Mastodon APIs', () => {
 			let deliveredActivity: any = null
 
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 			const originalObjectId = 'https://example.com/note123'
 
 			await db
@@ -495,7 +496,7 @@ describe('Mastodon APIs', () => {
 
 		test('favourite records in db', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 			const note = await createPublicStatus(domain, db, actor, 'my first status')
 
 			const connectedActor = actor
@@ -513,7 +514,7 @@ describe('Mastodon APIs', () => {
 
 		test('get mentions from status', async () => {
 			const db = await makeDB()
-			await createPerson(domain, db, userKEK, 'sven@example.com')
+			await createTestUser(domain, db, userKEK, 'sven@example.com')
 
 			globalThis.fetch = async (input: RequestInfo) => {
 				if (input instanceof URL || typeof input === 'string') {
@@ -567,6 +568,7 @@ describe('Mastodon APIs', () => {
 							JSON.stringify({
 								id: 'https://instance.horse/users/sven',
 								type: 'Person',
+								preferredUsername: 'sven',
 							})
 						)
 					}
@@ -575,6 +577,7 @@ describe('Mastodon APIs', () => {
 							JSON.stringify({
 								id: 'https://example.com/users/a',
 								type: 'Person',
+								preferredUsername: 'a',
 							})
 						)
 					}
@@ -583,6 +586,7 @@ describe('Mastodon APIs', () => {
 							JSON.stringify({
 								id: 'https://example.com/users/b',
 								type: 'Person',
+								preferredUsername: 'b',
 							})
 						)
 					}
@@ -644,9 +648,9 @@ describe('Mastodon APIs', () => {
 
 		test('get status count likes', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
 			const note = await createPublicStatus(domain, db, actor, 'my first status')
 
 			await insertLike(db, actor2, note)
@@ -662,7 +666,7 @@ describe('Mastodon APIs', () => {
 
 		test('get status with image', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const properties = { url: 'https://example.com/image.jpg' }
 			const mediaAttachments = [await createImage(domain, db, actor, properties)]
@@ -680,7 +684,7 @@ describe('Mastodon APIs', () => {
 
 		test('status context shows descendants', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const note = await createPublicStatus(domain, db, actor, 'a post', [], { sensitive: false })
 			await sleep(10)
@@ -699,9 +703,9 @@ describe('Mastodon APIs', () => {
 		describe('reblog', () => {
 			test('get status count reblogs', async () => {
 				const db = await makeDB()
-				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-				const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-				const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
+				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+				const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+				const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
 				const note = await createPublicStatus(domain, db, actor, 'my first status')
 
 				await createReblog(db, actor2, note, {
@@ -726,7 +730,7 @@ describe('Mastodon APIs', () => {
 			test('reblog records in db', async () => {
 				const db = await makeDB()
 				const queue = makeQueue()
-				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 				const note = await createPublicStatus(domain, db, actor, 'my first status')
 
 				const connectedActor = actor
@@ -752,7 +756,7 @@ describe('Mastodon APIs', () => {
 
 			test('reblog status adds in actor outbox', async () => {
 				const db = await makeDB()
-				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 				const queue = makeQueue()
 
 				const note = await createPublicStatus(domain, db, actor, 'my first status')
@@ -781,7 +785,7 @@ describe('Mastodon APIs', () => {
 
 				const db = await makeDB()
 				const queue = makeQueue()
-				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 				const originalObjectId = 'https://example.com/note123'
 
 				await db
@@ -840,7 +844,7 @@ describe('Mastodon APIs', () => {
 		test('create new status in reply to non existing status', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const body = {
 				status: 'my reply',
@@ -870,7 +874,7 @@ describe('Mastodon APIs', () => {
 		test('create new status in reply to', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 			const note = await createPublicStatus(domain, db, actor, 'my first status')
 
 			const body = {
@@ -928,7 +932,7 @@ describe('Mastodon APIs', () => {
 		test('create new status with too many image', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const body = {
 				status: 'my status',
@@ -960,7 +964,7 @@ describe('Mastodon APIs', () => {
 		test('create new status sending multipart and too many image', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const body = new FormData()
 			body.append('status', 'my status')
@@ -995,7 +999,7 @@ describe('Mastodon APIs', () => {
 		test('delete non-existing status', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 			const mastodonId = 'abcd'
 			const res = await statuses_id.handleRequestDelete(db, mastodonId, actor, domain, userKEK, queue, cache)
 			await assertStatus(res, 404)
@@ -1004,8 +1008,8 @@ describe('Mastodon APIs', () => {
 		test('delete status from a different actor', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 			const note = await createPublicStatus(domain, db, actor2, 'note from actor2')
 
 			const res = await statuses_id.handleRequestDelete(
@@ -1023,7 +1027,7 @@ describe('Mastodon APIs', () => {
 		test('delete status remove DB rows', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 			const note = await createPublicStatus(domain, db, actor, 'note from actor')
 
 			const res = await statuses_id.handleRequestDelete(
@@ -1051,7 +1055,7 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const queue = makeQueue()
 			const cache = makeCache()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 			const note = await createPublicStatus(domain, db, actor, 'note from actor')
 
 			// Poison the timeline
@@ -1078,9 +1082,9 @@ describe('Mastodon APIs', () => {
 		test('delete status sends to followers', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
 			const note = await createPublicStatus(domain, db, actor, 'note from actor')
 
 			await addFollowing(domain, db, actor2, actor)
@@ -1111,7 +1115,7 @@ describe('Mastodon APIs', () => {
 		test('create duplicate statuses idempotency', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const idempotencyKey = 'abcd'
 
@@ -1170,7 +1174,7 @@ describe('Mastodon APIs', () => {
 		test('hashtag in status adds in note_hashtags table', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const body = {
 				status: 'hey #hi #car',
@@ -1214,7 +1218,7 @@ describe('Mastodon APIs', () => {
 		test('reject statuses exceeding limits', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const body = {
 				status: 'a'.repeat(501),
@@ -1244,9 +1248,9 @@ describe('Mastodon APIs', () => {
 		test('create status with direct visibility', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor1 = await createPerson(domain, db, userKEK, 'actor1@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'actor2@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor1 = await createTestUser(domain, db, userKEK, 'actor1@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'actor2@cloudflare.com')
 
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			let deliveredActivity1: any = null
@@ -1314,7 +1318,7 @@ describe('Mastodon APIs', () => {
 		test('create status with unlisted visibility', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const body = {
 				status: 'something nice',
@@ -1377,7 +1381,7 @@ describe('Mastodon APIs', () => {
 		test('create status with private visibility', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const body = {
 				status: 'something nice',

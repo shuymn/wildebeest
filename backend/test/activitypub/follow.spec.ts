@@ -2,7 +2,6 @@ import { strict as assert } from 'node:assert/strict'
 
 import { Activity, FollowActivity } from 'wildebeest/backend/src/activitypub/activities'
 import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
-import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
@@ -11,7 +10,7 @@ import * as ap_followers_page from 'wildebeest/functions/ap/users/[id]/followers
 import * as ap_following from 'wildebeest/functions/ap/users/[id]/following'
 import * as ap_following_page from 'wildebeest/functions/ap/users/[id]/following/page'
 
-import { assertStatus, createActivityId, makeDB } from '../utils'
+import { assertStatus, createActivityId, createTestUser, makeDB } from '../utils'
 
 const userKEK = 'test_kek10'
 const domain = 'cloudflare.com'
@@ -40,8 +39,8 @@ describe('ActivityPub', () => {
 
 		test('Receive follow with Accept reply', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 
 			const activity: Activity = {
 				'@context': 'https://www.w3.org/ns/activitystreams',
@@ -76,9 +75,9 @@ describe('ActivityPub', () => {
 
 		test('list actor following', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
 			await addFollowing(domain, db, actor, actor2)
 			await acceptFollowing(db, actor, actor2)
 			await addFollowing(domain, db, actor, actor3)
@@ -94,9 +93,9 @@ describe('ActivityPub', () => {
 
 		test('list actor following page', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
 			await addFollowing(domain, db, actor, actor2)
 			await acceptFollowing(db, actor, actor2)
 			await addFollowing(domain, db, actor, actor3)
@@ -113,8 +112,8 @@ describe('ActivityPub', () => {
 
 		test('list actor follower', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 			await addFollowing(domain, db, actor2, actor)
 			await acceptFollowing(db, actor2, actor)
 
@@ -128,8 +127,8 @@ describe('ActivityPub', () => {
 
 		test('list actor follower page', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 			await addFollowing(domain, db, actor2, actor)
 			await acceptFollowing(db, actor2, actor)
 
@@ -143,8 +142,8 @@ describe('ActivityPub', () => {
 
 		test('creates a notification', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 
 			const activity: Activity = {
 				'@context': 'https://www.w3.org/ns/activitystreams',
@@ -168,8 +167,8 @@ describe('ActivityPub', () => {
 
 		test('ignore when trying to follow multiple times', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 
 			const activity: Activity = {
 				'@context': 'https://www.w3.org/ns/activitystreams',
