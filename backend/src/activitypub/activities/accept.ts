@@ -1,4 +1,4 @@
-import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
+import { isLocalAccount } from 'wildebeest/backend/src/accounts'
 import {
 	AcceptActivity,
 	getActivityObject,

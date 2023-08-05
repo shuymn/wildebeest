@@ -1,5 +1,5 @@
 // https://docs.joinmastodon.org/methods/search/#v2
-import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
+import { isLocalAccount } from 'wildebeest/backend/src/accounts'
 import { actorFromRow, ActorRow, PERSON, Person, setActorMastodonId } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { loadExternalMastodonAccount, loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'

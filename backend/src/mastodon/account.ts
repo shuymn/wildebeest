@@ -1,4 +1,4 @@
-import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
+import { isLocalAccount } from 'wildebeest/backend/src/accounts'
 import { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { countFollowers, countFollowing } from 'wildebeest/backend/src/activitypub/actors/follow'
 import { countStatuses } from 'wildebeest/backend/src/activitypub/actors/outbox'
