@@ -1,4 +1,4 @@
-import type { Person } from 'wildebeest/backend/src/activitypub/actors'
+import { User } from 'wildebeest/backend/src/accounts'
 
 export type Identity = {
 	email: string
@@ -6,7 +6,7 @@ export type Identity = {
 
 export type ContextData = {
 	// ActivityPub Person object of the logged in user
-	connectedActor: Person
+	connectedActor: User
 
 	// Object returned by Cloudflare Access' provider
 	identity: Identity

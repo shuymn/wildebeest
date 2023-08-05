@@ -1,4 +1,4 @@
-import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
+import { getUserId, isLocalAccount } from 'wildebeest/backend/src/accounts'
 import {
 	cacheActivityObject,
 	CreateActivity,
@@ -6,7 +6,7 @@ import {
 	insertActivity,
 } from 'wildebeest/backend/src/activitypub/activities'
 import { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { actorURL, getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
+import { getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInInbox } from 'wildebeest/backend/src/activitypub/actors/inbox'
 import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { cacheObject, get, getApId, getObjectByOriginalId } from 'wildebeest/backend/src/activitypub/objects'
@@ -128,7 +128,7 @@ export async function handleCreateActivity(
 			continue
 		}
 
-		const person = await getActorById(db, actorURL(domain, handle))
+		const person = await getActorById(db, getUserId(domain, handle))
 		if (person === null) {
 			console.warn(`person ${url} not found`)
 			continue
