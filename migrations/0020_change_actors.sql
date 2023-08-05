@@ -20,6 +20,9 @@ UPDATE actors SET properties = json_set(properties, '$.featured', id || '/featur
 UPDATE actors SET properties = json_set(properties, '$.publicKey', json_patch(json_object('id', id || '#main-key'), json_object('publicKeyPem', pubkey)))
   WHERE json_extract(properties, '$.publicKey') IS NULL AND email IS NOT NULL;
 
+UPDATE actors SET properties = json_set(properties, '$.url', 'https://' || domain || '/@' || username)
+  WHERE json_extract(properties, '$.url') IS NULL AND email IS NOT NULL;
+
 DROP INDEX `actors_email`;
 ALTER TABLE `actors` DROP COLUMN `email`;
 ALTER TABLE `actors` DROP COLUMN `pubkey`;
