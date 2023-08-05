@@ -1,17 +1,16 @@
 CREATE TABLE "actors" (
-  "id" TEXT PRIMARY KEY,
-  "type" TEXT NOT NULL,
-  "email" TEXT,
-  "privkey" BLOB,
-  "privkey_salt" BLOB,
-  "pubkey" TEXT,
-  "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
-  "properties" TEXT NOT NULL DEFAULT (json_object()),
-  "is_admin" INTEGER,
-  "mastodon_id" TEXT
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "mastodon_id" TEXT NOT NULL,
+  "type" TEXT NOT NULL GENERATED ALWAYS AS (json_extract("properties", '$.type')) STORED,
+  "username" TEXT NOT NULL GENERATED ALWAYS AS (lower(json_extract("properties", '$.preferredUsername'))) STORED,
+  "domain" TEXT NOT NULL,
+  "properties" TEXT NOT NULL,
+  "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'))
 );
 
-CREATE INDEX "actors_email" ON "actors" ("email");
+CREATE INDEX "actors_mastodon_id" ON "actors" ("mastodon_id");
+CREATE INDEX "actors_username" ON "actors" ("username");
+CREATE INDEX "actors_domain" ON "actors" ("domain");
 
 CREATE TRIGGER "actors_search_fts_insert" AFTER INSERT ON "actors"
 BEGIN
@@ -293,3 +292,18 @@ CREATE UNIQUE INDEX "unique_actor_reblogs" ON "actor_reblogs" ("actor_id", "obje
 
 CREATE INDEX "actor_reblogs_actor_id" ON "actor_reblogs" ("actor_id");
 CREATE INDEX "actor_reblogs_object_id" ON "actor_reblogs" ("object_id");
+
+CREATE TABLE "users" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "actor_id" TEXT UNIQUE NOT NULL,
+  "email" TEXT UNIQUE NOT NULL,
+  "privkey" BLOB UNIQUE NOT NULL,
+  "privkey_salt" BLOB UNIQUE NOT NULL,
+  "pubkey" TEXT NOT NULL,
+  "is_admin" INTEGER NOT NULL DEFAULT 0,
+  "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
+
+  CONSTRAINT "users_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON DELETE RESTRICT
+);
+
+CREATE INDEX "users_email" ON "users" ("email");
