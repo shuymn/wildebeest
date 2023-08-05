@@ -4,11 +4,11 @@ import { getClientById } from 'wildebeest/backend/src/mastodon/client'
 import { DocumentHead, loader$ } from '@builder.io/qwik-city'
 import { WildebeestLogo } from '~/components/MastodonLogo'
 import { Avatar } from '~/components/avatar'
+import { getPersonByEmail } from 'wildebeest/backend/src/activitypub/actors'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
 import { buildRedirect } from 'wildebeest/functions/oauth/authorize'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { getJwtEmail } from 'wildebeest/backend/src/utils/auth/getJwtEmail'
-import { getUserByEmail } from 'wildebeest/backend/src/accounts'
 
 export const clientLoader = loader$<Promise<Client>>(async ({ platform, query, html }) => {
 	const client_id = query.get('client_id') || ''
@@ -36,7 +36,7 @@ export const userLoader = loader$<Promise<{ email: string; avatar: URL; name: st
 			throw html(500, getErrorHtml((e as Error)?.message))
 		}
 
-		const person = await getUserByEmail(await getDatabase(platform), email)
+		const person = await getPersonByEmail(await getDatabase(platform), email)
 		if (person === null) {
 			const isFirstLogin = true
 			/* eslint-disable-next-line @typescript-eslint/no-non-null-assertion

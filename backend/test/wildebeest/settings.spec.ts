@@ -1,10 +1,10 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { addAlias } from 'wildebeest/backend/src/accounts'
-import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
+import * as alias from 'wildebeest/backend/src/accounts/alias'
+import { createPerson, getActorById } from 'wildebeest/backend/src/activitypub/actors'
 import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 
-import { createTestUser, makeDB } from '../utils'
+import { makeDB } from '../utils'
 
 const domain = 'cloudflare.com'
 const userKEK = 'test_kek22'
@@ -13,7 +13,7 @@ describe('Wildebeest', () => {
 	describe('Settings', () => {
 		test('add account alias', async () => {
 			const db = await makeDB()
-			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 			let receivedActivity: any = null
 
@@ -39,7 +39,6 @@ describe('Wildebeest', () => {
 								id: 'https://social.com/someone',
 								type: 'Person',
 								inbox: 'https://social.com/someone/inbox',
-								preferredUsername: 'someone',
 							})
 						)
 					}
@@ -60,7 +59,7 @@ describe('Wildebeest', () => {
 				}
 			}
 
-			await addAlias(db, 'test@example.com', actor, userKEK, domain)
+			await alias.addAlias(db, 'test@example.com', actor, userKEK, domain)
 
 			// Ensure the actor has the alias set
 			const newActor = await getActorById(db, getApId(actor))

@@ -1,5 +1,5 @@
 import * as access from 'wildebeest/backend/src/access'
-import { getUserByEmail } from 'wildebeest/backend/src/accounts'
+import { actorFromRow, ActorRow, PERSON, Person, setActorMastodonId } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import type { ContextData, Env } from 'wildebeest/backend/src/types'
@@ -11,11 +11,40 @@ async function loadContextData(
 	email: string,
 	ctx: { data: Partial<ContextData> }
 ): Promise<boolean> {
-	const actor = await getUserByEmail(db, email)
-	if (actor === null) {
+	const query = `
+        SELECT *
+        FROM actors
+        WHERE email=? AND type='Person'
+    `
+	const { results, success, error } = await db.prepare(query).bind(email).all<{
+		id: string
+		type: typeof PERSON
+		pubkey: string
+		cdate: string
+		properties: string
+		is_admin: 1 | null
+		mastodon_id: string | null
+	}>()
+	if (!success) {
+		throw new Error('SQL error: ' + error)
+	}
+
+	if (!results || results.length === 0) {
+		console.warn('no results')
+		return false
+	}
+
+	const row: ActorRow<Person> = {
+		...results[0],
+		mastodon_id: results[0].mastodon_id || (await setActorMastodonId(db, results[0].id, results[0].cdate)),
+	}
+
+	if (!row.id) {
 		console.warn('person not found')
 		return false
 	}
+
+	const actor = actorFromRow(row)
 
 	ctx.data.connectedActor = actor
 	ctx.data.identity = { email }

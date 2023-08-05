@@ -1,4 +1,4 @@
-import { isLocalAccount } from 'wildebeest/backend/src/accounts'
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { getActorById } from 'wildebeest/backend/src/activitypub/actors'

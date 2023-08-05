@@ -1,4 +1,4 @@
-import { isLocalAccount } from 'wildebeest/backend/src/accounts'
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import { FollowActivity, insertActivity } from 'wildebeest/backend/src/activitypub/activities'
 import { createAcceptActivity } from 'wildebeest/backend/src/activitypub/activities/accept'
 import { type Actor, getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'

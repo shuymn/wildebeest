@@ -1,10 +1,13 @@
 import { strict as assert } from 'node:assert/strict'
 
+import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { myz, readBody } from 'wildebeest/backend/src/utils'
 import {
 	actorToAcct,
 	actorToHandle,
 	handleToAcct,
+	handleToMastodonUrl,
+	handleToPleromaUrl,
 	isLocalHandle,
 	parseHandle,
 	toRemoteHandle,
@@ -17,7 +20,7 @@ import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
 import { generateUserKey, importPublicKey, unwrapPrivateKey } from 'wildebeest/backend/src/utils/key-ops'
 import { z } from 'zod'
 
-import { createTestUser, hexToBytes, makeDB } from './utils'
+import { hexToBytes, makeDB } from './utils'
 
 describe('utils', () => {
 	test('user key lifecycle', async () => {
@@ -78,11 +81,11 @@ describe('utils', () => {
 		const userKEK = 'userkey'
 		const db = await makeDB()
 
-		let actor = await createTestUser(domain, db, userKEK, 'alice1@cloudflare.com')
+		let actor = await createPerson(domain, db, userKEK, 'alice@cloudflare.com')
 		let res = actorToAcct(actor, domain)
-		assert.equal(res, 'alice1')
+		assert.equal(res, 'alice')
 
-		actor = await createTestUser(domain, db, userKEK, 'alice2@cloudflare.com', { preferredUsername: 'bob' })
+		actor = await createPerson(domain, db, userKEK, 'alice@cloudflare.com', { preferredUsername: 'bob' })
 		res = actorToAcct(actor, 'cloudflare.com')
 		assert.equal(res, 'bob@example.com')
 	})
@@ -93,14 +96,14 @@ describe('utils', () => {
 		const db = await makeDB()
 
 		{
-			const actor = await createTestUser(domain, db, userKEK, 'alice1@cloudflare.com')
+			const actor = await createPerson(domain, db, userKEK, 'alice@cloudflare.com')
 			const handle = actorToHandle(actor)
-			assert.equal(handle.localPart, 'alice1')
+			assert.equal(handle.localPart, 'alice')
 			assert.equal(handle.domain, 'example.com')
 		}
 
 		{
-			const actor = await createTestUser(domain, db, userKEK, 'alice2@cloudflare.com', { preferredUsername: 'bob' })
+			const actor = await createPerson(domain, db, userKEK, 'alice@cloudflare.com', { preferredUsername: 'bob' })
 			const res = actorToHandle(actor)
 			assert.equal(res.localPart, 'bob')
 			assert.equal(res.domain, 'example.com')
@@ -131,6 +134,12 @@ describe('utils', () => {
 	test('handle to acct', () => {
 		const handle = { localPart: 'a', domain: 'b' }
 		assert.equal(handleToAcct(handle), 'a@b')
+	})
+
+	test('handle to url', () => {
+		const handle = { localPart: 'a', domain: 'b' }
+		assert.equal(handleToMastodonUrl(handle).toString(), 'https://b/@a')
+		assert.equal(handleToPleromaUrl(handle).toString(), 'https://b/users/a')
 	})
 
 	test('read body handles empty body', async () => {

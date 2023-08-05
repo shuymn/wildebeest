@@ -1,16 +1,17 @@
 import { strict as assert } from 'node:assert/strict'
 
+import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { moveFollowers } from 'wildebeest/backend/src/mastodon/follow'
 import { enrichStatus } from 'wildebeest/backend/src/mastodon/microformats'
 import type { Env } from 'wildebeest/backend/src/types'
-import { InstanceConfig, InstanceConfigV2 } from 'wildebeest/backend/src/types/configs'
 import * as blocks from 'wildebeest/functions/api/v1/blocks'
 import * as custom_emojis from 'wildebeest/functions/api/v1/custom_emojis'
 import * as v1_instance from 'wildebeest/functions/api/v1/instance'
 import * as mutes from 'wildebeest/functions/api/v1/mutes'
 import * as v2_instance from 'wildebeest/functions/api/v2/instance'
 
-import { assertCache, assertCORS, assertJSON, assertStatus, createTestUser, makeDB } from './utils'
+import { InstanceConfig, InstanceConfigV2 } from '../src/types/configs'
+import { assertCache, assertCORS, assertJSON, assertStatus, makeDB } from './utils'
 
 const userKEK = 'test_kek23'
 const domain = 'cloudflare.com'
@@ -25,7 +26,7 @@ describe('Mastodon APIs', () => {
 			} as Env
 
 			const db = await makeDB()
-			await createTestUser(domain, db, userKEK, env.ADMIN_EMAIL, undefined, true)
+			await createPerson(domain, db, userKEK, env.ADMIN_EMAIL, undefined, true)
 
 			const res = await v1_instance.handleRequest(domain, db, env)
 			await assertStatus(res, 200)
@@ -106,7 +107,7 @@ describe('Mastodon APIs', () => {
 			} as Env
 
 			const db = await makeDB()
-			await createTestUser(domain, db, userKEK, env.ADMIN_EMAIL, undefined, true)
+			await createPerson(domain, db, userKEK, env.ADMIN_EMAIL, undefined, true)
 
 			const res = await v2_instance.handleRequest(domain, db, env)
 			await assertStatus(res, 200)
@@ -327,24 +328,18 @@ describe('Mastodon APIs', () => {
 	describe('Follow', () => {
 		test('move followers', async () => {
 			const db = await makeDB()
-			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 			globalThis.fetch = async (input: RequestInfo) => {
 				if (input instanceof URL || typeof input === 'string') {
 					if (input.toString() === 'https://example.com/user/a') {
-						return new Response(
-							JSON.stringify({ id: 'https://example.com/user/a', type: 'Actor', preferredUsername: 'a' })
-						)
+						return new Response(JSON.stringify({ id: 'https://example.com/user/a', type: 'Actor' }))
 					}
 					if (input.toString() === 'https://example.com/user/b') {
-						return new Response(
-							JSON.stringify({ id: 'https://example.com/user/b', type: 'Actor', preferredUsername: 'b' })
-						)
+						return new Response(JSON.stringify({ id: 'https://example.com/user/b', type: 'Actor' }))
 					}
 					if (input.toString() === 'https://example.com/user/c') {
-						return new Response(
-							JSON.stringify({ id: 'https://example.com/user/c', type: 'Actor', preferredUsername: 'c' })
-						)
+						return new Response(JSON.stringify({ id: 'https://example.com/user/c', type: 'Actor' }))
 					}
 					throw new Error(`unexpected request to "${input.toString()}"`)
 				}

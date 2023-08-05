@@ -1,10 +1,11 @@
 import { strict as assert } from 'node:assert/strict'
 
+import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { insertHashtags } from 'wildebeest/backend/src/mastodon/hashtag'
 import { createPublicStatus } from 'wildebeest/backend/test/shared.utils'
 import * as tag_id from 'wildebeest/functions/api/v1/tags/[tag]'
 
-import { assertCORS, assertStatus, createTestUser, isUrlValid, makeDB } from '../utils'
+import { assertCORS, assertStatus, isUrlValid, makeDB } from '../utils'
 
 const domain = 'cloudflare.com'
 const userKEK = 'test_kek20'
@@ -20,7 +21,7 @@ describe('Mastodon APIs', () => {
 
 		test('return tag', async () => {
 			const db = await makeDB()
-			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const note = await createPublicStatus(domain, db, actor, 'my localnote status')
 			await insertHashtags(db, note, ['test'])

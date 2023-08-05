@@ -1,8 +1,8 @@
-import { getUserId } from 'wildebeest/backend/src/accounts'
 import type { Activity } from 'wildebeest/backend/src/activitypub/activities'
 import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import { createCreateActivity } from 'wildebeest/backend/src/activitypub/activities/create'
 import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
+import { actorURL } from 'wildebeest/backend/src/activitypub/actors'
 import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
@@ -33,7 +33,7 @@ export async function handleRequest(domain: string, db: Database, id: string): P
 		return new Response('', { status: 403 })
 	}
 
-	const actorId = getUserId(domain, handle)
+	const actorId = actorURL(domain, handle)
 	const actor = await getActorById(db, actorId)
 	if (actor === null) {
 		return new Response('', { status: 404 })

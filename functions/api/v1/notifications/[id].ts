@@ -1,6 +1,6 @@
 // https://docs.joinmastodon.org/methods/notifications/#get-one
 
-import { isLocalAccount } from 'wildebeest/backend/src/accounts'
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
 import {

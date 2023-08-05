@@ -1,8 +1,9 @@
-import { getUserId, isLocalAccount } from 'wildebeest/backend/src/accounts'
+import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
 import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import {
 	type Actor,
 	actorFromRow,
+	actorURL,
 	getActorById,
 	getActorByRemoteHandle,
 	getAndCache,
@@ -46,7 +47,7 @@ export async function getMentions(input: string, instanceDomain: string, db: Dat
 			}
 			const handle = parseHandle(buffer)
 			const targetActor = isLocalAccount(instanceDomain, handle)
-				? await getActorById(db, getUserId(instanceDomain, handle))
+				? await getActorById(db, actorURL(instanceDomain, handle))
 				: (await getActorByRemoteHandle(db, handle)) ?? (await queryAcct(handle, db))
 			if (targetActor === null) {
 				console.warn(`actor ${buffer} not found`)
@@ -174,10 +175,12 @@ type ReblogRow = {
 
 type MastodonStatusRow = {
 	actor_id: string
-	actor_mastodon_id: string
 	actor_type: Actor['type']
-	actor_properties: string
+	actor_pubkey: string | null
 	actor_cdate: string
+	actor_properties: string
+	actor_is_admin: 1 | null
+	actor_mastodon_id: string
 
 	mastodon_id: string
 	id: string
@@ -451,8 +454,10 @@ export async function toMastodonStatusFromRow(
 	const author = actorFromRow({
 		id: row.actor_id,
 		type: row.actor_type,
+		pubkey: row.actor_pubkey,
 		cdate: row.actor_cdate,
 		properties: row.actor_properties,
+		is_admin: row.actor_is_admin,
 		mastodon_id: row.actor_mastodon_id,
 	})
 

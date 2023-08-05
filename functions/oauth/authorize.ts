@@ -1,7 +1,7 @@
 // https://docs.joinmastodon.org/methods/oauth/#authorize
 
 import * as access from 'wildebeest/backend/src/access'
-import { getUserByEmail } from 'wildebeest/backend/src/accounts'
+import { getPersonByEmail } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import { getClientById } from 'wildebeest/backend/src/mastodon/client'
@@ -89,10 +89,7 @@ export async function handleRequestPost(
 	}
 
 	const identity = await access.getIdentity({ jwt, domain: accessDomain })
-	if (!identity) {
-		return new Response('', { status: 401 })
-	}
-	const isFirstLogin = (await getUserByEmail(db, identity.email)) === null
+	const isFirstLogin = (await getPersonByEmail(db, identity!.email)) === null
 
 	return buildRedirect(db, request, isFirstLogin, jwt)
 }

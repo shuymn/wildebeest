@@ -1,6 +1,5 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { getUserId } from 'wildebeest/backend/src/accounts'
 import {
 	AcceptActivity,
 	AnnounceActivity,
@@ -12,6 +11,7 @@ import {
 	UpdateActivity,
 } from 'wildebeest/backend/src/activitypub/activities'
 import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
+import { actorURL, createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { ApObject, getApId, originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { cacheObject, getObjectById } from 'wildebeest/backend/src/activitypub/objects/'
 import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
@@ -25,7 +25,7 @@ import {
 	createUnlistedStatus,
 } from 'wildebeest/backend/test/shared.utils'
 
-import { createActivityId, createTestUser, makeDB } from '../utils'
+import { createActivityId, makeDB } from '../utils'
 
 const adminEmail = 'admin@example.com'
 const domain = 'cloudflare.com'
@@ -37,8 +37,8 @@ describe('ActivityPub', () => {
 		describe('Announce', () => {
 			test('records reblog in db', async () => {
 				const db = await makeDB()
-				const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
-				const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
+				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
+				const actorB = await createPerson(domain, db, userKEK, 'b@cloudflare.com')
 
 				const note = await createPublicStatus(domain, db, actorA, 'my first status')
 
@@ -60,8 +60,8 @@ describe('ActivityPub', () => {
 
 			test('creates notification', async () => {
 				const db = await makeDB()
-				const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
-				const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
+				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
+				const actorB = await createPerson(domain, db, userKEK, 'b@cloudflare.com')
 
 				const note = await createPublicStatus(domain, db, actorA, 'my first status')
 
@@ -88,8 +88,8 @@ describe('ActivityPub', () => {
 		describe('Like', () => {
 			test('records like in db', async () => {
 				const db = await makeDB()
-				const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
-				const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
+				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
+				const actorB = await createPerson(domain, db, userKEK, 'b@cloudflare.com')
 
 				const note = await createPublicStatus(domain, db, actorA, 'my first status')
 
@@ -108,8 +108,8 @@ describe('ActivityPub', () => {
 
 			test('creates notification', async () => {
 				const db = await makeDB()
-				const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
-				const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
+				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
+				const actorB = await createPerson(domain, db, userKEK, 'b@cloudflare.com')
 
 				const note = await createPublicStatus(domain, db, actorA, 'my first status')
 
@@ -133,8 +133,8 @@ describe('ActivityPub', () => {
 
 			test('records like in db', async () => {
 				const db = await makeDB()
-				const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
-				const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
+				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
+				const actorB = await createPerson(domain, db, userKEK, 'b@cloudflare.com')
 
 				const note = await createPublicStatus(domain, db, actorA, 'my first status')
 
@@ -167,19 +167,19 @@ describe('ActivityPub', () => {
 
 			test('Accept follow request stores in db', async () => {
 				const db = await makeDB()
-				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
-				const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+				const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 				await addFollowing(domain, db, actor, actor2)
 
 				const activity: AcceptActivity = {
 					'@context': 'https://www.w3.org/ns/activitystreams',
 					id: createActivityId(domain),
 					type: 'Accept',
-					actor: getUserId(domain, actorToHandle(actor2)),
+					actor: actorURL(domain, actorToHandle(actor2)),
 					object: {
 						type: 'Follow',
 						actor: actor.id,
-						object: getUserId(domain, actorToHandle(actor)),
+						object: actorURL(domain, actorToHandle(actor)),
 					} as FollowActivity,
 				}
 
@@ -199,7 +199,7 @@ describe('ActivityPub', () => {
 
 			test('Object must be an object', async () => {
 				const db = await makeDB()
-				await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+				await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				const activity: any = {
@@ -218,7 +218,7 @@ describe('ActivityPub', () => {
 		describe('Create', () => {
 			test('Object must be an object', async () => {
 				const db = await makeDB()
-				await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+				await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				const activity: any = {
@@ -235,7 +235,7 @@ describe('ActivityPub', () => {
 
 			test('Note to inbox stores in DB', async () => {
 				const db = await makeDB()
-				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 				const activity: CreateActivity = {
 					type: 'Create',
@@ -268,7 +268,6 @@ describe('ActivityPub', () => {
 								JSON.stringify({
 									id: remoteActorId,
 									type: 'Person',
-									preferredUsername: 'actor',
 								})
 							)
 						}
@@ -278,7 +277,7 @@ describe('ActivityPub', () => {
 				}
 
 				const db = await makeDB()
-				await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+				await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 				const activity: CreateActivity = {
 					type: 'Create',
@@ -303,8 +302,8 @@ describe('ActivityPub', () => {
 
 			test('local actor sends Note with mention create notification', async () => {
 				const db = await makeDB()
-				const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
-				const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
+				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
+				const actorB = await createPerson(domain, db, userKEK, 'b@cloudflare.com')
 
 				const activity: CreateActivity = {
 					type: 'Create',
@@ -333,7 +332,7 @@ describe('ActivityPub', () => {
 
 			test('Note records reply', async () => {
 				const db = await makeDB()
-				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 				{
 					const activity: CreateActivity = {
@@ -384,7 +383,7 @@ describe('ActivityPub', () => {
 
 			test('preserve Note sent with `to`', async () => {
 				const db = await makeDB()
-				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 				const activity: CreateActivity = {
 					type: 'Create',
@@ -407,7 +406,7 @@ describe('ActivityPub', () => {
 
 			test('Object props get sanitized', async () => {
 				const db = await makeDB()
-				const person = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+				const person = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 				const activity: CreateActivity = {
 					'@context': 'https://www.w3.org/ns/activitystreams',
@@ -474,7 +473,7 @@ describe('ActivityPub', () => {
 
 			test('Object must have the same origin', async () => {
 				const db = await makeDB()
-				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const object: ApObject = {
 					id: getApId('https://example.com/note2'),
 					type: 'Note',
@@ -499,7 +498,7 @@ describe('ActivityPub', () => {
 
 			test('Object is updated', async () => {
 				const db = await makeDB()
-				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 				const object = {
 					id: 'https://example.com/note2',
 					type: 'Note',
@@ -547,7 +546,6 @@ describe('ActivityPub', () => {
 									id: remoteActorId,
 									icon: { url: 'https://img.com' },
 									type: 'Person',
-									preferredUsername: 'actor',
 								})
 							)
 						}
@@ -577,7 +575,7 @@ describe('ActivityPub', () => {
 				}
 
 				const db = await makeDB()
-				await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+				await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 				const activity: AnnounceActivity = {
 					type: 'Announce',
@@ -725,7 +723,7 @@ describe('ActivityPub', () => {
 					},
 				])('$title', async ({ createStatusFn, to, cc, allowed }) => {
 					const db = await makeDB()
-					const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+					const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 					const note = await createStatusFn(domain, db, actor, 'my first status')
 
@@ -774,8 +772,8 @@ describe('ActivityPub', () => {
 
 			test('Even if followed, reblogging of private posts is not permitted', async () => {
 				const db = await makeDB()
-				const actorA = await createTestUser(domain, db, userKEK, 'sven1@cloudflare.com')
-				const actorB = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+				const actorA = await createPerson(domain, db, userKEK, 'sven1@cloudflare.com')
+				const actorB = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
 				await addFollowing(domain, db, actorB, actorA)
 				await acceptFollowing(db, actorA, actorB)
 
@@ -818,7 +816,7 @@ describe('ActivityPub', () => {
 					},
 				])('$title', async ({ visibility, allowed }) => {
 					const db = await makeDB()
-					const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+					const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 					const note = await createPrivateStatus(domain, db, actor, 'my first status')
 
@@ -883,7 +881,7 @@ describe('ActivityPub', () => {
 					},
 				])('$title', async ({ visibility, allowed }) => {
 					const db = await makeDB()
-					const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+					const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 					const note = await createDirectStatus(domain, db, actor, 'my first status')
 
@@ -928,7 +926,6 @@ describe('ActivityPub', () => {
 									id: remoteActorId,
 									icon: { url: 'https://img.com' },
 									type: 'Person',
-									preferredUsername: 'actor',
 								})
 							)
 						}
@@ -958,7 +955,7 @@ describe('ActivityPub', () => {
 				}
 
 				const db = await makeDB()
-				await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+				await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
 
 				const activity: AnnounceActivity = {
 					type: 'Announce',
@@ -982,7 +979,7 @@ describe('ActivityPub', () => {
 		describe('Delete', () => {
 			test('delete Note', async () => {
 				const db = await makeDB()
-				const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
+				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 				const originalObjectId = 'https://example.com/note123'
 
 				await db
@@ -1016,7 +1013,7 @@ describe('ActivityPub', () => {
 
 			test('delete Tombstone', async () => {
 				const db = await makeDB()
-				const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
+				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 				const originalObjectId = 'https://example.com/note456'
 
 				await db
@@ -1053,8 +1050,8 @@ describe('ActivityPub', () => {
 
 			test('reject Note deletion from another Actor', async () => {
 				const db = await makeDB()
-				const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
-				const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
+				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
+				const actorB = await createPerson(domain, db, userKEK, 'b@cloudflare.com')
 
 				const originalObjectId = 'https://example.com/note123'
 
@@ -1091,7 +1088,7 @@ describe('ActivityPub', () => {
 
 			test('ignore deletion of an Actor', async () => {
 				const db = await makeDB()
-				const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
+				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 
 				const activity: DeleteActivity = {
 					type: 'Delete',
@@ -1114,7 +1111,7 @@ describe('ActivityPub', () => {
 				// (ie ActivityPub client-to-server).
 
 				const db = await makeDB()
-				const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
+				const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
 
 				const note = await createPublicStatus(domain, db, actorA, 'my first status')
 
