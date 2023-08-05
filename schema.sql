@@ -122,15 +122,36 @@ CREATE VIRTUAL TABLE "search_fts" USING "fts5" (
     "status"
 );
 
-CREATE TABLE 'search_fts_data'(id INTEGER PRIMARY KEY, block BLOB);
+CREATE TABLE "search_fts_data" (
+  "id" INTEGER PRIMARY KEY,
+  "block" BLOB
+);
 
-CREATE TABLE 'search_fts_idx'(segid, term, pgno, PRIMARY KEY(segid, term)) WITHOUT ROWID;
+CREATE TABLE "search_fts_idx"(
+  "segid",
+  "term",
+  "pgno",
 
-CREATE TABLE 'search_fts_content'(id INTEGER PRIMARY KEY, c0, c1, c2, c3);
+  PRIMARY KEY("segid", "term")
+) WITHOUT ROWID;
 
-CREATE TABLE 'search_fts_docsize'(id INTEGER PRIMARY KEY, sz BLOB);
+CREATE TABLE "search_fts_content" (
+  "id" INTEGER PRIMARY KEY,
+  "c0",
+  "c1",
+  "c2",
+  "c3"
+);
 
-CREATE TABLE 'search_fts_config'(k PRIMARY KEY, v) WITHOUT ROWID;
+CREATE TABLE "search_fts_docsize" (
+  "id" INTEGER PRIMARY KEY,
+  "sz" BLOB
+);
+
+CREATE TABLE "search_fts_config" (
+  "k" PRIMARY KEY,
+  "v"
+) WITHOUT ROWID;
 
 CREATE TABLE "actor_replies" (
   "id" TEXT PRIMARY KEY,
