@@ -1,4 +1,4 @@
-import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
+import { isLocalAccount } from 'wildebeest/backend/src/accounts'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 
@@ -83,12 +83,4 @@ export function handleToAcct(handle: Handle, domain?: string): string {
 		return handle.localPart
 	}
 	return `${handle.localPart}@${handle.domain}`
-}
-
-export function handleToMastodonUrl(handle: RemoteHandle): URL {
-	return new URL('@' + handle.localPart, 'https://' + handle.domain)
-}
-
-export function handleToPleromaUrl(handle: RemoteHandle): URL {
-	return new URL('users/' + handle.localPart, 'https://' + handle.domain)
 }

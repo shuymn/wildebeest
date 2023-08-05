@@ -1,6 +1,6 @@
 import { loader$ } from '@builder.io/qwik-city'
-import { isAdminSymbol } from 'wildebeest/backend/src/activitypub/actors'
 import { getErrorHtml } from './getErrorHtml/getErrorHtml'
+import { isAdminSymbol } from 'wildebeest/backend/src/accounts'
 
 export const adminLoader = loader$(async ({ platform, html }) => {
 	const isAuthorized = platform.data.connectedActor !== null
