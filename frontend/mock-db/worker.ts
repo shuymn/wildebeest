@@ -2,6 +2,7 @@ import { init } from './init'
 import { type Database } from 'wildebeest/backend/src/database'
 
 interface Env {
+	DOMAIN?: string
 	DATABASE: Database
 }
 
@@ -9,10 +10,9 @@ interface Env {
  * A Cloudflare Worker that will run helpers against a D1 database to populate it with mock data.
  */
 const handler: ExportedHandler<Env> = {
-	async fetch(req, { DATABASE }) {
-		const domain = new URL(req.url).hostname
+	async fetch(_, { DOMAIN, DATABASE }) {
 		try {
-			await init(domain, DATABASE)
+			await init(DOMAIN ?? '0.0.0.0', DATABASE)
 			// eslint-disable-next-line no-console
 			console.log('Database initialized.')
 		} catch (e) {

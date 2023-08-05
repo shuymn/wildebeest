@@ -151,7 +151,7 @@ jobs:
           fi
 
       - name: Publish DO
-        run: npx wrangler publish --config do/wrangler.toml
+        run: npx wrangler deploy --config do/wrangler.toml
 
       - name: Retrieve DO namespace
         run: |
@@ -217,7 +217,7 @@ jobs:
           corepack pnpm install
           corepack pnpm --dir consumer install
           echo "******"
-          npx wrangler publish --config consumer/wrangler.toml
+          npx wrangler deploy --config consumer/wrangler.toml
 
       - name: add Queue producer to Pages
         run: |
@@ -253,4 +253,4 @@ jobs:
           # remove folder that aren't needed in Pages before we upload
           rm -rf ./tf ./scripts ./.github ./.npm ./consumer ./do ./*.md ./.cache ./.local ./.pnpm-store
           echo "******"
-          npx wrangler pages publish --project-name=wildebeest-${{ env.NAME_SUFFIX }} .
+          npx wrangler pages deploy --project-name=wildebeest-${{ env.NAME_SUFFIX }} .
