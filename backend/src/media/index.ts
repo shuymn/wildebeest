@@ -18,7 +18,8 @@ export function fromObject(obj: ApObject): MediaAttachment {
 	throw new Error(`unsupported media type ${obj.type}: ${JSON.stringify(obj)}`)
 }
 
-const imageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+const imageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic']
+
 export function fromObjectDocument(obj: Document): MediaAttachment {
 	if (obj.mediaType !== undefined) {
 		if (imageTypes.includes(obj.mediaType)) {
