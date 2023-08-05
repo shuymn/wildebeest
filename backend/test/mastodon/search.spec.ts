@@ -1,10 +1,9 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { defaultImages } from 'wildebeest/config/accounts'
 import * as search from 'wildebeest/functions/api/v2/search'
 
-import { assertCORS, assertJSON, assertStatus, makeDB } from '../utils'
+import { assertCORS, assertJSON, assertStatus, createTestUser, makeDB } from '../utils'
 
 const userKEK = 'test_kek11'
 const domain = 'cloudflare.com'
@@ -152,8 +151,8 @@ describe('Mastodon APIs', () => {
 
 		test('search local actors', async () => {
 			const db = await makeDB()
-			await createPerson(domain, db, userKEK, 'username@cloudflare.com', { name: 'foo' })
-			await createPerson(domain, db, userKEK, 'username2@cloudflare.com', { name: 'bar' })
+			await createTestUser(domain, db, userKEK, 'username@cloudflare.com', { name: 'foo' })
+			await createTestUser(domain, db, userKEK, 'username2@cloudflare.com', { name: 'bar' })
 
 			{
 				const req = new Request('https://example.com/api/v2/search?q=foo&resolve=false')

@@ -7,7 +7,7 @@ import {
 	isCreateActivity,
 	PUBLIC_GROUP,
 } from 'wildebeest/backend/src/activitypub/activities'
-import { createPerson, getActorById } from 'wildebeest/backend/src/activitypub/actors'
+import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInOutbox, get } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { getApId, getObjectById, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
@@ -34,7 +34,7 @@ import * as accounts_verify_creds from 'wildebeest/functions/api/v1/accounts/ver
 import * as filters from 'wildebeest/functions/api/v1/filters'
 import * as preferences from 'wildebeest/functions/api/v1/preferences'
 
-import { assertCORS, assertJSON, assertStatus, isUrlValid, makeDB, makeQueue } from '../utils'
+import { assertCORS, assertJSON, assertStatus, createTestUser, isUrlValid, makeDB, makeQueue } from '../utils'
 
 const userKEK = 'test_kek2'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -97,7 +97,7 @@ describe('Mastodon APIs', () => {
 
 		test('verify the credentials', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 			const connectedActor = actor
 
 			const context: any = { data: { connectedActor }, env: { DATABASE: db } }
@@ -117,7 +117,7 @@ describe('Mastodon APIs', () => {
 		test('update credentials', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const updates = new FormData()
 			updates.set('display_name', 'newsven')
@@ -151,8 +151,8 @@ describe('Mastodon APIs', () => {
 		test('update credentials sends update to follower', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
-			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 			await addFollowing(domain, db, actor2, connectedActor)
 			await acceptFollowing(db, actor2, connectedActor)
 
@@ -207,7 +207,7 @@ describe('Mastodon APIs', () => {
 
 			const db = await makeDB()
 			const queue = makeQueue()
-			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const updates = new FormData()
 			updates.set('avatar', new File(['bytes'], 'selfie.jpg', { type: 'image/jpeg' }))
@@ -338,9 +338,9 @@ describe('Mastodon APIs', () => {
 
 		test('lookup local actor', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
 			await addFollowing(domain, db, actor, actor2)
 			await acceptFollowing(db, actor, actor2)
 			await addFollowing(domain, db, actor, actor3)
@@ -463,9 +463,9 @@ describe('Mastodon APIs', () => {
 
 		test('get local actor by id', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
 			await addFollowing(domain, db, actor, actor2)
 			await acceptFollowing(db, actor, actor2)
 			await addFollowing(domain, db, actor, actor3)
@@ -490,7 +490,7 @@ describe('Mastodon APIs', () => {
 
 		test('get local actor statuses', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const firstNote = await createPublicStatus(domain, db, actor, 'my first status')
 			await insertLike(db, actor, firstNote)
@@ -544,7 +544,7 @@ describe('Mastodon APIs', () => {
 
 		test("get local actor statuses doesn't include replies", async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 			const note = await createPublicStatus(domain, db, actor, 'a post')
 			await sleep(10)
 			await createReply(domain, db, actor, note, 'a reply')
@@ -565,7 +565,7 @@ describe('Mastodon APIs', () => {
 
 		test('get local actor statuses includes media attachements', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const properties = { url: 'https://example.com/image.jpg', type: 'Image' as const }
 			const mediaAttachments = [await createImage(domain, db, actor, properties)]
@@ -589,7 +589,7 @@ describe('Mastodon APIs', () => {
 
 		test('get pinned statuses', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const res = await accounts_statuses.onRequestGet({
 				request: new Request(`https://${domain}?pinned=true`),
@@ -605,7 +605,7 @@ describe('Mastodon APIs', () => {
 
 		test('get local actor statuses with max_id', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 			await db
 				.prepare("INSERT INTO objects (id, type, properties, local, mastodon_id) VALUES (?, ?, ?, 1, 'mastodon_id')")
 				.bind('https://example.com/object1', 'Note', JSON.stringify({ content: 'my first status' }))
@@ -668,7 +668,7 @@ describe('Mastodon APIs', () => {
 
 		test('get local actor statuses with max_id poiting to unknown id', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 			const res = await accounts_statuses.onRequestGet({
 				request: new Request(`https://${domain}?max_id=object1`),
 				env: { DATABASE: db },
@@ -681,7 +681,7 @@ describe('Mastodon APIs', () => {
 		test('get remote actor statuses', async () => {
 			const db = await makeDB()
 
-			const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
+			const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 
 			const note = await createPublicStatus(domain, db, actorA, 'my localnote status')
 
@@ -820,7 +820,7 @@ describe('Mastodon APIs', () => {
 
 		test('get remote actor followers', async () => {
 			const db = await makeDB()
-			const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
+			const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 
 			globalThis.fetch = async (input: RequestInfo) => {
 				if (input instanceof URL || typeof input === 'string') {
@@ -843,6 +843,7 @@ describe('Mastodon APIs', () => {
 							JSON.stringify({
 								id: 'https://example.com/users/sven',
 								type: 'Person',
+								preferredUsername: 'sven',
 								followers: 'https://example.com/users/sven/followers',
 							})
 						)
@@ -881,6 +882,7 @@ describe('Mastodon APIs', () => {
 							JSON.stringify({
 								id: 'https://example.com/users/b',
 								type: 'Person',
+								preferredUsername: 'b',
 							})
 						)
 					}
@@ -925,8 +927,8 @@ describe('Mastodon APIs', () => {
 			}
 
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 			await addFollowing(domain, db, actor2, actor)
 			await acceptFollowing(db, actor2, actor)
 
@@ -959,8 +961,8 @@ describe('Mastodon APIs', () => {
 			}
 
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 			await addFollowing(domain, db, actor, actor2)
 			await acceptFollowing(db, actor, actor2)
 
@@ -978,7 +980,7 @@ describe('Mastodon APIs', () => {
 
 		test('get remote actor following', async () => {
 			const db = await makeDB()
-			const actorA = await createPerson(domain, db, userKEK, 'a@cloudflare.com')
+			const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 
 			globalThis.fetch = async (input: RequestInfo) => {
 				if (input instanceof URL || typeof input === 'string') {
@@ -1002,6 +1004,7 @@ describe('Mastodon APIs', () => {
 								id: 'https://example.com/users/sven',
 								type: 'Person',
 								following: 'https://example.com/users/sven/following',
+								preferredUsername: 'sven',
 							})
 						)
 					}
@@ -1039,6 +1042,7 @@ describe('Mastodon APIs', () => {
 							JSON.stringify({
 								id: 'https://example.com/users/b',
 								type: 'Person',
+								preferredUsername: 'b',
 							})
 						)
 					}
@@ -1081,7 +1085,7 @@ describe('Mastodon APIs', () => {
 		describe('relationships', () => {
 			test('relationships missing ids', async () => {
 				const db = await makeDB()
-				const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+				const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 				const req = new Request('https://mastodon.example/api/v1/accounts/relationships')
 				const res = await accounts_relationships.onRequestGet({
 					request: req,
@@ -1095,7 +1099,7 @@ describe('Mastodon APIs', () => {
 			test('relationships with ids', async () => {
 				const db = await makeDB()
 				const req = new Request('https://mastodon.example/api/v1/accounts/relationships?id[]=first&id[]=second')
-				const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+				const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 				const res = await accounts_relationships.onRequestGet({
 					request: req,
 					env: { DATABASE: db },
@@ -1117,7 +1121,7 @@ describe('Mastodon APIs', () => {
 			test('relationships with one id', async () => {
 				const db = await makeDB()
 				const req = new Request('https://mastodon.example/api/v1/accounts/relationships?id[]=first')
-				const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+				const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 				const res = await accounts_relationships.onRequestGet({
 					request: req,
 					env: { DATABASE: db },
@@ -1136,8 +1140,8 @@ describe('Mastodon APIs', () => {
 
 			test('relationships following', async () => {
 				const db = await makeDB()
-				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-				const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
+				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+				const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 				await addFollowing(domain, db, actor, actor2)
 				await acceptFollowing(db, actor, actor2)
 
@@ -1159,8 +1163,8 @@ describe('Mastodon APIs', () => {
 
 			test('relationships following request', async () => {
 				const db = await makeDB()
-				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-				const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
+				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+				const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 				await addFollowing(domain, db, actor, actor2)
 
 				const req = new Request(
@@ -1183,8 +1187,8 @@ describe('Mastodon APIs', () => {
 
 		test('follow local account', async () => {
 			const db = await makeDB()
-			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const targetActor = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const targetActor = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 
 			const res = await accounts_follow.handleRequest(
 				{ domain, db, connectedActor, userKEK },
@@ -1222,6 +1226,7 @@ describe('Mastodon APIs', () => {
 								id: `https://example.com/ap/users/actor`,
 								type: 'Person',
 								inbox: `https://example.com/ap/users/actor/inbox`,
+								preferredUsername: 'actor',
 							})
 						)
 					}
@@ -1238,7 +1243,7 @@ describe('Mastodon APIs', () => {
 
 			test('follow account', async () => {
 				const db = await makeDB()
-				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 				const connectedActor = actor
 
 				const followee = await queryAcct({ localPart: 'actor', domain: 'example.com' }, db)
@@ -1271,7 +1276,7 @@ describe('Mastodon APIs', () => {
 
 			test('unfollow account', async () => {
 				const db = await makeDB()
-				const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 				const followee = await queryAcct({ localPart: 'actor', domain: 'example.com' }, db)
 				assert.ok(followee)
 				await addFollowing(domain, db, actor, followee)
@@ -1309,7 +1314,7 @@ describe('Mastodon APIs', () => {
 
 		test('preferences', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'alice@example.com')
+			const actor = await createTestUser(domain, db, userKEK, 'alice@example.com')
 			const connectedActor = actor
 
 			const context: any = { data: { connectedActor }, env: { DATABASE: db } }

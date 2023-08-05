@@ -1,11 +1,11 @@
 // https://www.rfc-editor.org/rfc/rfc7033
 
-import { getActorById, actorURL } from 'wildebeest/backend/src/activitypub/actors'
+import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
 import type { Env } from 'wildebeest/backend/src/types'
 import type { WebFingerResponse } from 'wildebeest/backend/src/webfinger'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { handleToAcct, isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
-import { isLocalAccount } from 'wildebeest/backend/src/accounts/getAccount'
+import { getUserId, isLocalAccount } from 'wildebeest/backend/src/accounts'
 
 export const onRequest: PagesFunction<Env, any> = async ({ request, env }) => {
 	return handleRequest(request, await getDatabase(env))
@@ -37,7 +37,7 @@ export async function handleRequest(request: Request, db: Database): Promise<Res
 		return new Response('', { status: 404 })
 	}
 
-	const actor = await getActorById(db, actorURL(domain, handle))
+	const actor = await getActorById(db, getUserId(domain, handle))
 	if (actor === null) {
 		return new Response('', { status: 404 })
 	}

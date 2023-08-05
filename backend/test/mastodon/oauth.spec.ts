@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert/strict'
 
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
 import { MastodonError } from 'wildebeest/backend/src/errors'
 import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
 import { getClientByClientCredential } from 'wildebeest/backend/src/mastodon/client'
@@ -171,17 +171,22 @@ describe('Mastodon APIs', () => {
 			const location = res.headers.get('location')
 			assert.equal(location, 'https://redirect.com/a')
 
-			const actor = await db
-				.prepare('SELECT * FROM actors')
-				.first<{ properties: string; email: string; id: string } & Actor>()
-			const properties = JSON.parse(actor.properties)
+			const row = await db
+				.prepare(
+					'SELECT actors.properties, users.email, actors.id FROM actors INNER JOIN users ON users.actor_id = actors.id'
+				)
+				.first<{ properties: string; email: string; id: string }>()
+			const properties = JSON.parse(row.properties)
 
-			assert.equal(actor.email, 'sven@cloudflare.com')
+			assert.equal(row.email, 'sven@cloudflare.com')
 			assert.equal(properties.preferredUsername, 'username')
 			assert.equal(properties.name, 'name')
-			assert(isUrlValid(actor.id))
+			assert(isUrlValid(row.id))
+
 			// ensure that we generate a correct key pairs for the user
-			assert((await getSigningKey(userKEK, db, actor as Actor)) instanceof CryptoKey)
+			const actor = await getActorById(db, row.id)
+			assert.ok(actor)
+			assert((await getSigningKey(userKEK, db, actor)) instanceof CryptoKey)
 		})
 
 		test('first login redirect relative URLs', async () => {

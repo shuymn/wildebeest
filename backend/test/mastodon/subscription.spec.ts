@@ -1,10 +1,9 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import * as subscription from 'wildebeest/functions/api/v1/push/subscription'
 
 import { createSubscription } from '../../src/mastodon/subscription'
-import { assertCORS, assertStatus, createTestClient, generateVAPIDKeys, makeDB } from '../utils'
+import { assertCORS, assertStatus, createTestClient, createTestUser, generateVAPIDKeys, makeDB } from '../utils'
 
 const userKEK = 'test_kek21'
 const domain = 'cloudflare.com'
@@ -16,7 +15,7 @@ describe('Mastodon APIs', () => {
 			const vapidKeys = await generateVAPIDKeys()
 			const req = new Request('https://example.com')
 			const client = await createTestClient(db)
-			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const res = await subscription.handleGetRequest(db, req, connectedActor, client.id, vapidKeys)
 			await assertStatus(res, 404)
@@ -28,7 +27,7 @@ describe('Mastodon APIs', () => {
 			const vapidKeys = await generateVAPIDKeys()
 			const req = new Request('https://example.com')
 			const client = await createTestClient(db)
-			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const data: any = {
 				subscription: {
@@ -67,7 +66,7 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const vapidKeys = await generateVAPIDKeys()
 			const client = await createTestClient(db)
-			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const data: any = {
 				subscription: {
@@ -112,7 +111,7 @@ describe('Mastodon APIs', () => {
 			const db = await makeDB()
 			const vapidKeys = await generateVAPIDKeys()
 			const client = await createTestClient(db)
-			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const data: any = {
 				subscription: {
@@ -143,7 +142,7 @@ describe('Mastodon APIs', () => {
 
 		test('subscriptions auto increment', async () => {
 			const db = await makeDB()
-			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const data: any = {
 				subscription: {

@@ -1,6 +1,6 @@
 // https://docs.joinmastodon.org/methods/accounts/#get
 
-import { getAccountByMastodonId } from 'wildebeest/backend/src/accounts/getAccount'
+import { getAccountByMastodonId } from 'wildebeest/backend/src/accounts'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { resourceNotFound } from 'wildebeest/backend/src/errors'
 import type { ContextData } from 'wildebeest/backend/src/types'

@@ -2,7 +2,6 @@ import { strict as assert } from 'node:assert/strict'
 
 import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import { createAnnounceActivity } from 'wildebeest/backend/src/activitypub/activities/announce'
-import { createPerson } from 'wildebeest/backend/src/activitypub/actors'
 import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { insertHashtags } from 'wildebeest/backend/src/mastodon/hashtag'
@@ -13,7 +12,7 @@ import { createDirectStatus, createPublicStatus, createReply } from 'wildebeest/
 import * as timelines_home from 'wildebeest/functions/api/v1/timelines/home'
 import * as timelines_public from 'wildebeest/functions/api/v1/timelines/public'
 
-import { assertCORS, assertJSON, assertStatus, makeCache, makeDB } from '../utils'
+import { assertCORS, assertJSON, assertStatus, createTestUser, makeCache, makeDB } from '../utils'
 
 const userKEK = 'test_kek6'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -23,9 +22,9 @@ describe('Mastodon APIs', () => {
 	describe('timelines', () => {
 		test('home returns Notes in following Actors', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
 
 			// Actor is following actor2, but not actor3.
 			await addFollowing(domain, db, actor, actor2)
@@ -68,9 +67,9 @@ describe('Mastodon APIs', () => {
 
 		test("home doesn't show private Notes from followed actors", async () => {
 			const db = await makeDB()
-			const actor1 = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
-			const actor3 = await createPerson(domain, db, userKEK, 'sven3@cloudflare.com')
+			const actor1 = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
 
 			// actor3 follows actor1 and actor2
 			await addFollowing(domain, db, actor3, actor1)
@@ -88,8 +87,8 @@ describe('Mastodon APIs', () => {
 
 		test("home returns Notes sent to Actor's followers", async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 
 			// Actor is following actor2
 			await addFollowing(domain, db, actor, actor2)
@@ -106,8 +105,8 @@ describe('Mastodon APIs', () => {
 
 		test("public doesn't show private Notes", async () => {
 			const db = await makeDB()
-			const actor1 = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor1 = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 
 			// actor2 sends a DM to actor1
 			await createDirectStatus(domain, db, actor2, 'DM', [], { to: [actor1] })
@@ -118,7 +117,7 @@ describe('Mastodon APIs', () => {
 
 		test('home returns Notes from ourself', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			// Actor is posting
 			await createPublicStatus(domain, db, actor, 'status from myself')
@@ -134,7 +133,7 @@ describe('Mastodon APIs', () => {
 
 		test('home returns cache', async () => {
 			const db = await makeDB()
-			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 			const cache = makeCache()
 			await cache.put(connectedActor.id + '/timeline/home', 12345)
 
@@ -145,7 +144,7 @@ describe('Mastodon APIs', () => {
 
 		test('home returns empty if not in cache', async () => {
 			const db = await makeDB()
-			const connectedActor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 			const cache = makeCache()
 			const req = new Request('https://' + domain)
 			const data = await timelines_home.handleRequest(req, cache, connectedActor)
@@ -156,8 +155,8 @@ describe('Mastodon APIs', () => {
 
 		test('public returns Notes', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actor2 = await createPerson(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 
 			const statusFromActor = await createPublicStatus(domain, db, actor, 'status from actor', [], {
 				published: '2021-01-01T00:00:00.000Z',
@@ -215,7 +214,7 @@ describe('Mastodon APIs', () => {
 
 		test('public includes attachment', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const properties = { url: 'https://example.com/image.jpg' }
 			const mediaAttachments = [await createImage(domain, db, actor, properties)]
@@ -236,7 +235,7 @@ describe('Mastodon APIs', () => {
 
 		test('public timeline uses published_date', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			await createPublicStatus(domain, db, actor, 'note1', [], { published: '2021-01-01T00:00:00.001Z' })
 			await createPublicStatus(domain, db, actor, 'note2', [], { published: '2021-01-01T00:00:00.000Z' })
@@ -256,7 +255,7 @@ describe('Mastodon APIs', () => {
 
 		test('home timelines do not hides and counts public replies', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const note = await createPublicStatus(domain, db, actor, 'a post')
 
@@ -285,7 +284,7 @@ describe('Mastodon APIs', () => {
 
 		test('show status reblogged', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const note = await createPublicStatus(domain, db, actor, 'a post', [], { published: '2021-01-01T00:00:00.000Z' })
 			await createReblog(db, actor, note, {
@@ -303,7 +302,7 @@ describe('Mastodon APIs', () => {
 
 		test('show status favourited', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const note = await createPublicStatus(domain, db, actor, 'a post')
 			await insertLike(db, actor, note)
@@ -317,9 +316,9 @@ describe('Mastodon APIs', () => {
 
 		test('show reblogs as independent notes', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
-			const actorA = await createPerson(domain, db, userKEK, 'svenA@cloudflare.com')
-			const actorB = await createPerson(domain, db, userKEK, 'svenB@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actorA = await createTestUser(domain, db, userKEK, 'svenA@cloudflare.com')
+			const actorB = await createTestUser(domain, db, userKEK, 'svenB@cloudflare.com')
 
 			// Actor posts
 			const note = await createPublicStatus(domain, db, actor, 'a post')
@@ -351,7 +350,7 @@ describe('Mastodon APIs', () => {
 
 		test('timeline tag', async () => {
 			const db = await makeDB()
-			const actor = await createPerson(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			{
 				const note = await createPublicStatus(domain, db, actor, 'test 1', [], {
