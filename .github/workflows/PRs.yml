@@ -26,36 +26,43 @@ jobs:
   test-api:
     timeout-minutes: 10
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        shard: [1/3, 2/3, 3/3]
     steps:
-      - name: Checkout
-        uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3
-      - name: Setup node
-        uses: actions/setup-node@e33196f7422957bea03ed53f6fbb155025ffc7b8 # v3
+      - uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3
+      - uses: pnpm/action-setup@v2
         with:
-          node-version: 18
+          version: 8
+      - uses: actions/setup-node@e33196f7422957bea03ed53f6fbb155025ffc7b8 # v3
+        with:
+          node-version-file: .node-version
+          cache: pnpm
 
       - name: Install
-        run: corepack pnpm install
+        run: pnpm install
 
       - name: Build
         run: npm run build
 
       - name: Run API tests
-        run: npm run test
+        run: npm run test -- --shard ${{ matrix.shard }}
 
   lint:
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3
-      - name: Setup node
-        uses: actions/setup-node@e33196f7422957bea03ed53f6fbb155025ffc7b8 # v3
+      - uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3
+      - uses: pnpm/action-setup@v2
         with:
-          node-version: 18
+          version: 8
+      - uses: actions/setup-node@e33196f7422957bea03ed53f6fbb155025ffc7b8 # v3
+        with:
+          node-version-file: .node-version
+          cache: pnpm
 
       - name: Install
-        run: corepack pnpm install && corepack pnpm --dir frontend install
+        run: pnpm install && pnpm --dir frontend install
 
       - name: Check formatting
         run: npm run pretty
@@ -73,7 +80,8 @@ jobs:
         run: npm run lint:frontend
 
       - name: Check frontend types
-        run: npm --prefix frontend run types-check
+        working-directory: frontend
+        run: npm run types-check
 
       - name: Checkout shuymn/sqldef
         uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3
@@ -107,20 +115,41 @@ jobs:
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3
-      - name: Setup node
-        uses: actions/setup-node@e33196f7422957bea03ed53f6fbb155025ffc7b8 # v3
+      - uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3
+      - uses: pnpm/action-setup@v2
         with:
-          node-version: 18
+          version: 8
+      - uses: actions/setup-node@e33196f7422957bea03ed53f6fbb155025ffc7b8 # v3
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
       - name: Install dependencies
-        run: corepack pnpm install
+        run: pnpm install
+
       - name: Run App in the background
         run: npm run ci-dev-test-ui &
-      - name: Install Playwright Browsers
+
+      - name: Store Playwright version
+        run: |
+          PLAYWRIGHT_VERSION=$(pnpm ls @playwright/test --json | jq --exit-status --raw-output 'first | .devDependencies["@playwright/test"].version')
+          echo "Playwright version: ${PLAYWRIGHT_VERSION}"
+          echo "PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION}" >> $GITHUB_ENV
+
+      - name: Cache Playwright
+        id: cache-playwright-browsers
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ env.PLAYWRIGHT_VERSION }}
+
+      - name: Download Playwright browsers
+        if: steps.cache-playwright-browsers.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps
+
       - name: Run Playwright tests
         run: npx playwright test
+
       - uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3
         if: always()
         with:
