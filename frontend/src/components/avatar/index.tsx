@@ -3,7 +3,7 @@ import { Link } from '@builder.io/qwik-city'
 import type { Account } from '~/types'
 import { useAccountUrl } from '~/utils/useAccountUrl'
 
-export type AvatarDetails = Partial<Pick<Account, 'id'>> & Pick<Account, 'display_name' | 'avatar' | 'url'>
+export type AvatarDetails = Pick<Account, 'display_name' | 'avatar' | 'url' | 'acct'>
 
 type Props = {
 	primary: AvatarDetails
@@ -13,7 +13,6 @@ type Props = {
 
 export const Avatar = component$<Props>(({ primary, secondary, withLinks }) => {
 	const primaryUrl = useAccountUrl(primary)
-	const secondaryUrl = useAccountUrl(secondary)
 
 	// eslint-disable-next-line qwik/single-jsx-root
 	const primaryImg = <img class="rounded h-12 w-12" src={primary.avatar} alt={`Avatar of ${primary.display_name}`} />
@@ -29,7 +28,7 @@ export const Avatar = component$<Props>(({ primary, secondary, withLinks }) => {
 	return (
 		<div class={`relative ${secondary && 'pr-2 pb-2'}`}>
 			{withLinks ? <Link href={primaryUrl}>{primaryImg}</Link> : primaryImg}
-			{secondary && (withLinks ? <Link href={secondaryUrl}>{secondaryImg}</Link> : secondaryImg)}
+			{secondary && (withLinks ? <Link href={useAccountUrl(secondary)}>{secondaryImg}</Link> : secondaryImg)}
 		</div>
 	)
 })

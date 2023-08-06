@@ -8,6 +8,7 @@ import { getDisplayNameElement } from '~/utils/getDisplayNameElement'
 import { AccountCard } from '../AccountCard/AccountCard'
 import { HtmlContent } from '../HtmlContent/HtmlContent'
 import { StatusInfoTray } from '../StatusInfoTray/StatusInfoTray'
+import { useStatusUrl } from '~/utils/useStatusUrl'
 
 type Props = {
 	status: MastodonStatus
@@ -21,10 +22,7 @@ export default component$((props: Props) => {
 
 	const status = props.status.reblog ?? props.status
 	const reblogger = props.status.reblog && props.status.account
-
-	const accountUrl = useAccountUrl(status.account)
-	const statusUrl = `${accountUrl}/${status.id}`
-
+	const statusUrl = useStatusUrl(status)
 	const showContent = useSignal(!status.spoiler_text)
 
 	const handleContentClick = $(() => props.contentClickable && nav(statusUrl))
@@ -84,14 +82,12 @@ export default component$((props: Props) => {
 })
 
 export const RebloggerLink = component$(({ account }: { account: Account | null }) => {
-	const accountUrl = useAccountUrl(account)
-
 	return (
 		account && (
 			<div class="flex text-wildebeest-500 py-3">
 				<p>
 					<i class="fa fa-retweet mr-3 w-4 inline-block" />
-					<a class="no-underline" href={accountUrl}>
+					<a class="no-underline" href={useAccountUrl(account)}>
 						{getDisplayNameElement(account)}
 					</a>
 					&nbsp;boosted

@@ -1,8 +1,5 @@
-import { useSignal, useTask$ } from '@builder.io/qwik'
 import { Account } from '~/types'
-import { useDomain } from './useDomain'
-import { parseHandle } from 'wildebeest/backend/src/utils/handle'
-import { isLocalAccount } from 'wildebeest/backend/src/accounts'
+import { useAccountIsLocal } from '~/utils/useAccountIsLocal'
 
 /**
  * Hook to get a url to use for links for the provided account.
@@ -13,35 +10,11 @@ import { isLocalAccount } from 'wildebeest/backend/src/accounts'
  * @param account the target account or null
  * @returns url to be used for the target account (or undefined if)
  */
-export function useAccountUrl(
-	account: (Partial<Pick<Account, 'id'>> & Pick<Account, 'url'>) | null
-): string | undefined {
-	if (!account?.id) {
-		return account?.url
-	}
-
-	const isLocal = useAccountIsLocal(account?.id)
-
-	if (account && isLocal.value) {
+export function useAccountUrl(account: Pick<Account, 'acct' | 'url'>): string {
+	const { value: isLocal } = useAccountIsLocal(account.acct)
+	if (isLocal) {
 		const url = new URL(account.url)
 		return url.pathname
 	}
-
-	return account?.url
-}
-
-function useAccountIsLocal(accountId: string | undefined) {
-	const domain = useDomain()
-	const isLocal = useSignal(false)
-
-	useTask$(({ track }) => {
-		track(() => accountId)
-
-		if (accountId) {
-			const handle = parseHandle(accountId)
-			isLocal.value = isLocalAccount(domain, handle)
-		}
-	})
-
-	return isLocal
+	return account.url
 }
