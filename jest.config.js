@@ -9,4 +9,5 @@ export default {
 	// `wrangler.toml` files by default, but you can pass any additional Miniflare
 	// API options here:
 	testEnvironmentOptions: {},
+	cacheDirectory: 'node_modules/.cache/jest',
 }
