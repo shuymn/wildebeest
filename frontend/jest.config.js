@@ -2,6 +2,7 @@
 export default {
 	preset: 'ts-jest',
 	verbose: true,
-	testMatch: ["<rootDir>/test/**/(*.)+(spec|test).[jt]s?(x)"],
-	testTimeout:15000,
+	testMatch: ['<rootDir>/test/**/(*.)+(spec|test).[jt]s?(x)'],
+	testTimeout: 15000,
+	cacheDirectory: 'node_modules/.cache/jest',
 }
