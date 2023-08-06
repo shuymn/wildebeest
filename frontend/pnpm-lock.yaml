@@ -12,7 +12,7 @@ dependencies:
 devDependencies:
   '@builder.io/qwik':
     specifier: 0.21.0
-    version: 0.21.0(undici@5.22.1)
+    version: 0.21.0(undici@5.23.0)
   '@builder.io/qwik-city':
     specifier: 0.4.0
     version: 0.4.0(@builder.io/qwik@0.21.0)
@@ -74,8 +74,8 @@ devDependencies:
     specifier: 5.1.6
     version: 5.1.6
   undici:
-    specifier: 5.22.1
-    version: 5.22.1
+    specifier: 5.23.0
+    version: 5.23.0
   vite:
     specifier: 4.4.8
     version: 4.4.8(@types/node@18.17.2)(sass@1.64.2)
@@ -440,7 +440,7 @@ packages:
     peerDependencies:
       '@builder.io/qwik': '>=0.19.0'
     dependencies:
-      '@builder.io/qwik': 0.21.0(undici@5.22.1)
+      '@builder.io/qwik': 0.21.0(undici@5.23.0)
       '@mdx-js/mdx': 2.3.0
       '@types/mdx': 2.0.3
       source-map: 0.7.4
@@ -450,14 +450,14 @@ packages:
       - supports-color
     dev: true
 
-  /@builder.io/qwik@0.21.0(undici@5.22.1):
+  /@builder.io/qwik@0.21.0(undici@5.23.0):
     resolution: {integrity: sha512-YDQcCSGPgXLQkY260N4XvYavxPNHewzIzIjqbl9hvnnk7a1s4EkcCrkudbGCl6VkkiQsDKMYPsemy4sFpKlafg==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     hasBin: true
     peerDependencies:
       undici: ^5.14.0
     dependencies:
-      undici: 5.22.1
+      undici: 5.23.0
     dev: true
 
   /@cush/relative@1.0.0:
@@ -4416,8 +4416,8 @@ packages:
     resolution: {integrity: sha512-WxONCrssBM8TSPRqN5EmsjVrsv4A8X12J4ArBiiayv3DyyG3ZlIg6yysuuSYdZsVz3TKcTg2fd//Ujd4CHV1iA==}
     dev: true
 
-  /undici@5.22.1:
-    resolution: {integrity: sha512-Ji2IJhFXZY0x/0tVBXeQwgPlLWw13GVzpsWPQ3rV50IFMMof2I55PZZxtm4P6iNq+L5znYN9nSTAq0ZyE6lSJw==}
+  /undici@5.23.0:
+    resolution: {integrity: sha512-1D7w+fvRsqlQ9GscLBwcAJinqcZGHUKjbOmXdlE/v8BvEGXjeWAax+341q44EuTcHXXnfyKNbKRq4Lg7OzhMmg==}
     engines: {node: '>=14.0'}
     dependencies:
       busboy: 1.6.0
