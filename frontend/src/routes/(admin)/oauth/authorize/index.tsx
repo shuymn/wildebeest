@@ -26,7 +26,7 @@ export const clientLoader = loader$<Promise<Client>>(async ({ platform, query, h
 	return client
 })
 
-export const userLoader = loader$<Promise<{ email: string; avatar: URL; name: string; url: URL }>>(
+export const userLoader = loader$<Promise<{ email: string; avatar: URL; name: string; url: URL; acct: string }>>(
 	async ({ cookie, platform, html, request, redirect, text }) => {
 		const jwt = cookie.get('CF_Authorization')
 		let email = ''
@@ -50,11 +50,11 @@ export const userLoader = loader$<Promise<{ email: string; avatar: URL; name: st
 			}
 		}
 
-		const name = person.name
+		const { name, preferredUsername: acct } = person
 		let avatar = person.icon?.url
 		let url = person.url
 
-		if (!name || !avatar || !url) {
+		if (!name || !avatar || !url || !acct) {
 			throw html(500, getErrorHtml("The person associated with the Access JWT doesn't include a name or avatar"))
 		}
 		if (typeof avatar === 'string') {
@@ -64,13 +64,13 @@ export const userLoader = loader$<Promise<{ email: string; avatar: URL; name: st
 			url = new URL(url)
 		}
 
-		return { email, avatar, name, url }
+		return { email, avatar, name, url, acct }
 	}
 )
 
 export default component$(() => {
 	const client = clientLoader().value
-	const { email, avatar, name: display_name, url } = userLoader().value
+	const { email, avatar, name: display_name, url, acct } = userLoader().value
 	return (
 		<div class="flex flex-col p-4 items-center">
 			<h1 class="text-center mt-3 mb-5 flex items-center">
@@ -83,6 +83,7 @@ export default component$(() => {
 						<div class="row-span-2 mr-4">
 							<Avatar
 								primary={{
+									acct,
 									avatar: avatar.toString(),
 									display_name,
 									url: url.toString(),

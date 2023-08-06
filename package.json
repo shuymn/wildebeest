@@ -40,8 +40,11 @@
 		"pages": "NO_D1_WARNING=true wrangler pages",
 		"database:migrate": "npm run d1 -- migrations apply DATABASE",
 		"database:create-mock": "rm -f .wrangler/state/v3/d1/83821907-97fd-44b4-8f21-e3d6b736e7ef/db.sqlite && CI=true npm run database:migrate -- --local && node ./frontend/mock-db/run.mjs",
+		"predev": "mv .dev.vars.bak .dev.vars || true",
 		"dev": "export COMMIT_HASH=$(git rev-parse HEAD) && npm run build && npm run database:migrate -- --local && npm run pages -- dev frontend/dist --compatibility-date=2022-12-20 --live-reload",
+		"preci-dev-test-ui": "mv .dev.vars .dev.vars.bak || true",
 		"ci-dev-test-ui": "npm run build && npm run database:create-mock && npm run pages -- dev frontend/dist --binding 'DOMAIN=0.0.0.0' 'INSTANCE_TITLE=Test Wildebeest' 'INSTANCE_DESCR=My Wildebeest Instance' 'ACCESS_AUTH_DOMAIN=0.0.0.0.cloudflareaccess.com' 'ACCESS_AUD=DEV_AUD' 'ADMIN_EMAIL=george@test.email' --compatibility-date=2022-12-20",
+		"postci-dev-test-ui": "mv .dev.vars.bak .dev.vars || true",
 		"deploy:init": "npm run pages -- project create wildebeest && npm run d1 -- create wildebeest",
 		"deploy": "npm run build && npm run database:migrate && npm run pages -- deploy frontend/dist --project-name=wildebeest"
 	},

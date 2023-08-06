@@ -63,7 +63,7 @@ test.describe('Presence of appropriate SEO metadata across the application', () 
 	test('in account page', async ({ page }) => {
 		await page.goto('http://127.0.0.1:8788/@Ben')
 		await checkPageSeoData(page, {
-			title: 'Ben, just Ben (@Ben@0.0.0.0) - Wildebeest',
+			title: 'Ben, just Ben (Ben@0.0.0.0) - Wildebeest',
 			description: 'Ben, just Ben account page - Wildebeest',
 			ogType: 'article',
 			ogUrl: 'https://0.0.0.0/@Ben',

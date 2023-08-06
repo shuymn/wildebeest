@@ -2,6 +2,7 @@ node_modules/
 .wrangler/state/v3/**/*.sqlite*
 .DS_Store
 .dev.vars
+.dev.vars.bak
 /test-results/
 /playwright-report/
 /playwright/.cache/
