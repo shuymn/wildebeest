@@ -134,7 +134,7 @@ jobs:
 
       - name: Cache Playwright
         id: cache-playwright-browsers
-        uses: actions/cache@v3
+        uses: actions/cache@88522ab9f39a2ea568f7027eddc7d8d8bc9d59c8 # v3
         with:
           path: /home/runner/.cache/ms-playwright
           key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ env.PLAYWRIGHT_VERSION }}
