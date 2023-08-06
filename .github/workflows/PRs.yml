@@ -93,23 +93,19 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@fac708d6674e30b6ba41289acaab6d4b75aa0753 # v4
         with:
-          go-version: '1.20'
+          cache-dependency-path: sqldef/go.sum
+          go-version-file: sqldef/go.mod
 
-      - name: Build sqldef
+      - name: Build sqlite3def
         working-directory: sqldef
-        run: |
-          make deps
-          make build
+        run: go build -o ../sqlite3def ./cmd/sqlite3def
 
       - name: Check DB schema
         run: |
+          DB_ID=$(yq --output-format json wrangler.toml | jq --raw-output --exit-status '.d1_databases | first | .database_id')
           npm run database:migrate -- --local
-          ./sqldef/build/linux-amd64/sqlite3def \
-            --enable-drop-table \
-            --config sqldef.yml \
-            --dry-run \
-            .wrangler/state/v3/d1/83821907-97fd-44b4-8f21-e3d6b736e7ef/db.sqlite \
-            < schema.sql | head -n 1 | grep -E '^-- Nothing is modified --$'
+          ./sqlite3def --enable-drop-table --config sqldef.yml --dry-run \
+            ".wrangler/state/v3/d1/${DB_ID:?}/db.sqlite" < schema.sql | head -n 1 | grep -E '^-- Nothing is modified --$'
 
   test-ui:
     timeout-minutes: 10
@@ -140,11 +136,10 @@ jobs:
         id: cache-playwright-browsers
         uses: actions/cache@v3
         with:
-          path: ~/.cache/ms-playwright
-          key: playwright-browsers-${{ runner.os }}-${{ env.PLAYWRIGHT_VERSION }}
+          path: /home/runner/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ env.PLAYWRIGHT_VERSION }}
 
       - name: Download Playwright browsers
-        if: steps.cache-playwright-browsers.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps
 
       - name: Run Playwright tests
