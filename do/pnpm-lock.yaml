@@ -623,7 +623,7 @@ packages:
       set-cookie-parser: 2.6.0
       source-map-support: 0.5.21
       stoppable: 1.1.0
-      undici: 5.20.0
+      undici: 5.23.0
       workerd: 1.20230724.0
       ws: 8.13.0
       youch: 3.2.3
@@ -898,9 +898,9 @@ packages:
     hasBin: true
     dev: true
 
-  /undici@5.20.0:
-    resolution: {integrity: sha512-J3j60dYzuo6Eevbawwp1sdg16k5Tf768bxYK4TUJRH7cBM4kFCbf3mOnM/0E3vQYXvpxITbbWmBafaDbxLDz3g==}
-    engines: {node: '>=12.18'}
+  /undici@5.23.0:
+    resolution: {integrity: sha512-1D7w+fvRsqlQ9GscLBwcAJinqcZGHUKjbOmXdlE/v8BvEGXjeWAax+341q44EuTcHXXnfyKNbKRq4Lg7OzhMmg==}
+    engines: {node: '>=14.0'}
     dependencies:
       busboy: 1.6.0
     dev: true
