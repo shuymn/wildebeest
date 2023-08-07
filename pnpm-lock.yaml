@@ -15,8 +15,8 @@ dependencies:
     specifier: 0.5.0
     version: 0.5.0
   http-message-signatures:
-    specifier: 0.1.2
-    version: 0.1.2
+    specifier: 1.0.0
+    version: 1.0.0
   toucan-js:
     specifier: 3.2.1
     version: 3.2.1
@@ -2687,8 +2687,10 @@ packages:
     resolution: {integrity: sha512-er295DKPVsV82j5kw1Gjt+ADA/XYHsajl82cGNQG2eyoPkvgUhX+nDIyelzhIWbbsXP39EHcI6l5tYs2FYqYXQ==}
     dev: true
 
-  /http-message-signatures@0.1.2:
-    resolution: {integrity: sha512-gjJYDgFBy+xnlAs2G0gIWpiorCv9Xi7pIlOnnd91zHAK7BtkLxonmm/JAtd5e6CakOuW03IwEuJzj2YMy8lfWQ==}
+  /http-message-signatures@1.0.0:
+    resolution: {integrity: sha512-bBuFle0wXHbxBeBwf4Lzqi5Lm3B5MY55k5zEZ/4ixkUhZLp3AIgbsEbq1QwNlN3MmSpR2m7utg3IZc1MZMwK4A==}
+    dependencies:
+      structured-headers: 0.5.0
     dev: false
 
   /human-signals@2.1.0:
@@ -4454,6 +4456,10 @@ packages:
     resolution: {integrity: sha512-6fPc+R4ihwqP6N/aIv2f1gMH8lOVtWQHoqC4yK6oSDVVocumAsfCqjkXnqiYMhmMwS/mEHLp7Vehlt3ql6lEig==}
     engines: {node: '>=8'}
     dev: true
+
+  /structured-headers@0.5.0:
+    resolution: {integrity: sha512-oLnmXSsjhud+LxRJpvokwP8ImEB2wTg8sg30buwfVViKMuluTv3BlOJHUX9VW9pJ2nQOxmx87Z0kB86O4cphag==}
+    dev: false
 
   /supports-color@5.5.0:
     resolution: {integrity: sha512-QjVjwdXIt408MIiAqCX4oUKsgU2EqAGzs2Ppkm4aQYbjm+ZEWEcW4SfFNTr4uMNZma0ey4f5lgLrkB0aX0QMow==}
