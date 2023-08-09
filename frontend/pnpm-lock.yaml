@@ -77,11 +77,11 @@ devDependencies:
     specifier: 5.23.0
     version: 5.23.0
   vite:
-    specifier: 4.4.8
-    version: 4.4.8(@types/node@18.17.3)(sass@1.64.2)
+    specifier: 4.4.9
+    version: 4.4.9(@types/node@18.17.3)(sass@1.64.2)
   vite-tsconfig-paths:
     specifier: 3.6.0
-    version: 3.6.0(vite@4.4.8)
+    version: 3.6.0(vite@4.4.9)
 
 packages:
 
@@ -4542,7 +4542,7 @@ packages:
       vfile-message: 3.1.4
     dev: true
 
-  /vite-tsconfig-paths@3.6.0(vite@4.4.8):
+  /vite-tsconfig-paths@3.6.0(vite@4.4.9):
     resolution: {integrity: sha512-UfsPYonxLqPD633X8cWcPFVuYzx/CMNHAjZTasYwX69sXpa4gNmQkR0XCjj82h7zhLGdTWagMjC1qfb9S+zv0A==}
     peerDependencies:
       vite: '>2.0.0-0'
@@ -4551,13 +4551,13 @@ packages:
       globrex: 0.1.2
       recrawl-sync: 2.2.3
       tsconfig-paths: 4.2.0
-      vite: 4.4.8(@types/node@18.17.3)(sass@1.64.2)
+      vite: 4.4.9(@types/node@18.17.3)(sass@1.64.2)
     transitivePeerDependencies:
       - supports-color
     dev: true
 
-  /vite@4.4.8(@types/node@18.17.3)(sass@1.64.2):
-    resolution: {integrity: sha512-LONawOUUjxQridNWGQlNizfKH89qPigK36XhMI7COMGztz8KNY0JHim7/xDd71CZwGT4HtSRgI7Hy+RlhG0Gvg==}
+  /vite@4.4.9(@types/node@18.17.3)(sass@1.64.2):
+    resolution: {integrity: sha512-2mbUn2LlUmNASWwSCNSJ/EG2HuSRTnVNaydp6vMCm5VIqJsjMfbIWtbH2kDuwUVW5mMUKKZvGPX/rqeqVvv1XA==}
     engines: {node: ^14.18.0 || >=16.0.0}
     hasBin: true
     peerDependencies:
