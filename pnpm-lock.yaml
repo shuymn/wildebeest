@@ -14,9 +14,6 @@ dependencies:
   cookie:
     specifier: 0.5.0
     version: 0.5.0
-  http-message-signatures:
-    specifier: 0.1.2
-    version: 0.1.2
   toucan-js:
     specifier: 3.2.1
     version: 3.2.1
@@ -2686,10 +2683,6 @@ packages:
   /http-cache-semantics@4.1.1:
     resolution: {integrity: sha512-er295DKPVsV82j5kw1Gjt+ADA/XYHsajl82cGNQG2eyoPkvgUhX+nDIyelzhIWbbsXP39EHcI6l5tYs2FYqYXQ==}
     dev: true
-
-  /http-message-signatures@0.1.2:
-    resolution: {integrity: sha512-gjJYDgFBy+xnlAs2G0gIWpiorCv9Xi7pIlOnnd91zHAK7BtkLxonmm/JAtd5e6CakOuW03IwEuJzj2YMy8lfWQ==}
-    dev: false
 
   /human-signals@2.1.0:
     resolution: {integrity: sha512-B4FFZ6q/T2jhhksgkbEW3HBvWIfDW85snkQgawt07S7J5QXTk6BkNV+0yAeZrM5QpMAdYlocGoljn0sJ/WQkFw==}
