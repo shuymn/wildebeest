@@ -4,12 +4,8 @@ import { createCreateActivity } from 'wildebeest/backend/src/activitypub/activit
 import { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { deliverFollowers, deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
-import {
-	Document,
-	getObjectByMastodonId,
-	isDocument,
-	originalObjectIdSymbol,
-} from 'wildebeest/backend/src/activitypub/objects'
+import { getObjectByMastodonId, originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import { Image, isImage } from 'wildebeest/backend/src/activitypub/objects/image'
 import { newMention } from 'wildebeest/backend/src/activitypub/objects/mention'
 import {
 	createDirectNote,
@@ -120,7 +116,7 @@ export async function handleRequest(
 		}
 	}
 
-	const mediaAttachments: Document[] = []
+	const mediaAttachments: Image[] = []
 	if (params.media_ids && params.media_ids.length > 0) {
 		for (const id of [...params.media_ids]) {
 			const document = await getObjectByMastodonId(db, id)
@@ -128,8 +124,8 @@ export async function handleRequest(
 				console.warn('object attachment not found: ' + id)
 				continue
 			}
-			if (!isDocument(document)) {
-				console.warn('object is not a document: ' + id)
+			if (!isImage(document)) {
+				console.warn('object is not a image: ' + id)
 				continue
 			}
 			mediaAttachments.push(document)
