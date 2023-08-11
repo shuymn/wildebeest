@@ -10,7 +10,8 @@ export const originalActorIdSymbol = Symbol()
 export const originalObjectIdSymbol = Symbol()
 export const mastodonIdSymbol = Symbol()
 
-export type Remote<T extends ApObject> = Omit<ApObject & Partial<Intersect<ApObject, T>>, symbol>
+export type Remote<T extends ApObject> = Omit<ApObject, symbol> &
+	Partial<Intersect<Omit<ApObject, symbol>, Omit<T, symbol>>>
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#object-types
 export interface ApObject {
