@@ -314,17 +314,17 @@ describe('utils', () => {
 
 		const id1 = await generateMastodonId(db, 'test', new Date('2022-12-18T14:42:59.001Z'))
 		assert.equal(id1, '109535204409443108')
-		const { value: first } = await db
+		const first = await db
 			.prepare(`SELECT value FROM id_sequences WHERE key = 'test_id_seq'`)
 			.first<{ value: number }>()
-		assert.equal(first, 1)
+		assert.equal(first?.value, 1)
 
 		const id2 = await generateMastodonId(db, 'test', new Date('2022-12-18T14:42:59.002Z'))
 		assert.equal(id2, '109535204409475804')
-		const { value: second } = await db
+		const second = await db
 			.prepare(`SELECT value FROM id_sequences WHERE key = 'test_id_seq'`)
 			.first<{ value: number }>()
-		assert.equal(second, 2)
+		assert.equal(second?.value, 2)
 
 		const id3 = await generateMastodonId(db, 'test', new Date('2022-12-18T14:42:59.002Z'))
 		assert.ok(id3 !== id2)

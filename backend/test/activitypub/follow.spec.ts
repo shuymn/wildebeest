@@ -160,6 +160,7 @@ describe('ActivityPub', () => {
 				actor_id: string
 				from_actor_id: string
 			}>()
+			assert.ok(entry)
 			assert.equal(entry.type, 'follow')
 			assert.equal(entry.actor_id.toString(), actor.id.toString())
 			assert.equal(entry.from_actor_id.toString(), actor2.id.toString())
@@ -183,7 +184,13 @@ describe('ActivityPub', () => {
 			await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
 			// Even if we followed multiple times, only one row should be present.
-			const { count } = await db.prepare(`SELECT count(*) as count FROM actor_following`).first<{ count: number }>()
+			const { count } = await db
+				.prepare(`SELECT count(*) as count FROM actor_following`)
+				.first<{ count: number }>()
+				.then((row) => {
+					assert.ok(row)
+					return row
+				})
 			assert.equal(count, 1)
 		})
 	})

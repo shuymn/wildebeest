@@ -110,6 +110,7 @@ describe('Mastodon APIs', () => {
         `
 				)
 				.first<{ content: string; original_actor_id: URL; original_object_id: unknown }>()
+			assert.ok(row)
 			assert.equal(row.content, '<p>my status <p>evil</p></p>') // note the sanitization
 			assert.equal(row.original_actor_id.toString(), actor.id.toString())
 			assert.equal(row.original_object_id, null)
@@ -182,6 +183,7 @@ describe('Mastodon APIs', () => {
 			await assertStatus(res, 200)
 
 			const row = await db.prepare(`SELECT count(*) as count FROM outbox_objects`).first<{ count: number }>()
+			assert.ok(row)
 			assert.equal(row.count, 1)
 		})
 
@@ -508,6 +510,7 @@ describe('Mastodon APIs', () => {
 			assert.equal(data.favourited, true)
 
 			const row = await db.prepare(`SELECT * FROM actor_favourites`).first<{ actor_id: string; object_id: string }>()
+			assert.ok(row)
 			assert.equal(row.actor_id, actor.id.toString())
 			assert.equal(row.object_id, note.id.toString())
 		})
@@ -750,6 +753,7 @@ describe('Mastodon APIs', () => {
 				assert.equal(data.reblogged, true)
 
 				const row = await db.prepare(`SELECT * FROM actor_reblogs`).first<{ actor_id: string; object_id: string }>()
+				assert.ok(row)
 				assert.equal(row.actor_id, actor.id.toString())
 				assert.equal(row.object_id, note.id.toString())
 			})
@@ -775,6 +779,7 @@ describe('Mastodon APIs', () => {
 				await assertStatus(res, 200)
 
 				const row = await db.prepare(`SELECT * FROM outbox_objects`).first<{ actor_id: string; object_id: string }>()
+				assert.ok(row)
 				assert.equal(row.actor_id, actor.id.toString())
 				assert.equal(row.object_id, note.id.toString())
 			})
@@ -914,7 +919,7 @@ describe('Mastodon APIs', () => {
 					)
 					.bind(data.id)
 					.first<{ inReplyTo: string }>()
-				assert(row !== undefined)
+				assert.ok(row)
 				assert.equal(row.inReplyTo, note.id.toString())
 			}
 
@@ -923,7 +928,7 @@ describe('Mastodon APIs', () => {
 					actor_id: string
 					in_reply_to_object_id: string
 				}>()
-				assert(row !== undefined)
+				assert.ok(row)
 				assert.equal(row.actor_id, actor.id.toString())
 				assert.equal(row.in_reply_to_object_id, note.id.toString())
 			}
@@ -1042,12 +1047,12 @@ describe('Mastodon APIs', () => {
 			await assertStatus(res, 200)
 
 			{
-				const { count } = await db.prepare(`SELECT count(*) as count FROM outbox_objects`).first<{ count: number }>()
-				assert.equal(count, 0)
+				const row = await db.prepare(`SELECT count(*) as count FROM outbox_objects`).first<{ count: number }>()
+				assert.equal(row?.count, 0)
 			}
 			{
-				const { count } = await db.prepare(`SELECT count(*) as count FROM objects`).first<{ count: number }>()
-				assert.equal(count, 0)
+				const row = await db.prepare(`SELECT count(*) as count FROM objects`).first<{ count: number }>()
+				assert.equal(row?.count, 0)
 			}
 		})
 
@@ -1162,12 +1167,12 @@ describe('Mastodon APIs', () => {
 
 			{
 				const row = await db.prepare(`SELECT count(*) as count FROM objects`).first<{ count: number }>()
-				assert.equal(row.count, 1)
+				assert.equal(row?.count, 1)
 			}
 
 			{
 				const row = await db.prepare(`SELECT count(*) as count FROM idempotency_keys`).first<{ count: number }>()
-				assert.equal(row.count, 1)
+				assert.equal(row?.count, 1)
 			}
 		})
 
@@ -1371,6 +1376,7 @@ describe('Mastodon APIs', () => {
       `
 				)
 				.first<{ content: string; to: string; cc: string; original_actor_id: string; original_object_id: string }>()
+			assert.ok(row)
 			assert.equal((row.original_actor_id as string).toString(), actor.id.toString())
 			assert.equal(row.original_object_id, null)
 			assert.equal(row.content, '<p>something nice</p>') // note the sanitization
@@ -1434,6 +1440,7 @@ describe('Mastodon APIs', () => {
       `
 				)
 				.first<{ content: string; to: string; cc: string; original_actor_id: string; original_object_id: string }>()
+			assert.ok(row)
 			assert.equal((row.original_actor_id as string).toString(), actor.id.toString())
 			assert.equal(row.original_object_id, null)
 			assert.equal(row.content, '<p>something nice</p>') // note the sanitization

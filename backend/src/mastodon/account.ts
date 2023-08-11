@@ -143,6 +143,9 @@ SELECT
 		following_count: number
 		last_status_at: string | null
 	}>()
+	if (!row) {
+		throw new Error('row is undefined')
+	}
 
 	return {
 		...account,
@@ -155,7 +158,12 @@ SELECT
 
 export async function getSigningKey(instanceKey: string, db: Database, actor: Actor): Promise<CryptoKey> {
 	const stmt = db.prepare('SELECT privkey, privkey_salt FROM users WHERE actor_id=?').bind(actor.id.toString())
-	const { privkey, privkey_salt } = await stmt.first<{ privkey: any; privkey_salt: any }>()
+	const { privkey, privkey_salt } = await stmt.first<{ privkey: any; privkey_salt: any }>().then((row) => {
+		if (!row) {
+			throw new Error('res is undefined')
+		}
+		return row
+	})
 
 	if (privkey.buffer && privkey_salt.buffer) {
 		// neon.tech

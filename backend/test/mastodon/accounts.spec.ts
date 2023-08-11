@@ -814,8 +814,14 @@ describe('Mastodon APIs', () => {
 
 			// Statuses were imported locally and once was a reblog of an already
 			// existing local object.
-			const row: { count: number } = await db.prepare(`SELECT count(*) as count FROM objects`).first()
-			assert.equal(row.count, 2)
+			const { count } = await db
+				.prepare(`SELECT count(*) as count FROM objects`)
+				.first<{ count: number }>()
+				.then((row) => {
+					assert.ok(row)
+					return row
+				})
+			assert.equal(count, 2)
 		})
 
 		test('get remote actor followers', async () => {
@@ -1260,15 +1266,14 @@ describe('Mastodon APIs', () => {
 				assert(receivedActivity)
 				assert.equal(receivedActivity.type, 'Follow')
 
-				const row: {
-					target_actor_acct: string
-					target_actor_id: string
-					state: string
-				} = await db
+				const row = await db
 					.prepare(`SELECT target_actor_acct, target_actor_id, state FROM actor_following WHERE actor_id=?`)
 					.bind(actor.id.toString())
-					.first()
-				assert(row)
+					.first<{ target_actor_acct: string; target_actor_id: string; state: string }>()
+					.then((row) => {
+						assert.ok(row)
+						return row
+					})
 				assert.equal(row.target_actor_acct, 'actor@example.com')
 				assert.equal(row.target_actor_id, `https://example.com/ap/users/actor`)
 				assert.equal(row.state, 'pending')

@@ -124,8 +124,9 @@ describe('Mastodon APIs', () => {
 			)
 
 			// actor isn't created yet
-			const { count } = await db.prepare('SELECT count(*) as count FROM actors').first<{ count: number }>()
-			assert.equal(count, 0)
+			const row = await db.prepare('SELECT count(*) as count FROM actors').first<{ count: number }>()
+			assert.ok(row)
+			assert.equal(row.count, 0)
 		})
 
 		test('first login is protected by Access', async () => {
@@ -176,6 +177,7 @@ describe('Mastodon APIs', () => {
 					'SELECT actors.properties, users.email, actors.id FROM actors INNER JOIN users ON users.actor_id = actors.id'
 				)
 				.first<{ properties: string; email: string; id: string }>()
+			assert.ok(row)
 			const properties = JSON.parse(row.properties)
 
 			assert.equal(row.email, 'sven@cloudflare.com')

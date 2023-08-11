@@ -87,7 +87,6 @@ WHERE
             FROM objects WHERE objects.original_actor_id IN ${db.qb.set('?2')}))
   AND (EXISTS(SELECT 1 FROM json_each(outbox_objects.'to') WHERE json_each.value IN ${db.qb.set('?3')})
         OR EXISTS(SELECT 1 FROM json_each(outbox_objects.cc) WHERE json_each.value IN ${db.qb.set('?3')}))
-${db.qb.psqlOnly('GROUP BY actors.id, outbox_objects.actor_id, outbox_objects.published_date')}
 ORDER BY ${db.qb.timeNormalize('outbox_objects.published_date')} DESC
 LIMIT ?4
 `
@@ -215,9 +214,7 @@ WHERE
   ${maxId && minId ? 'AND ' + db.qb.timeNormalize('outbox_objects.cdate') + ' > ?3' : ''}
   ${hashtag ? 'AND note_hashtags.value = ' + (maxId && minId ? '?4' : '?3') : ''}
   ${onlyMedia ? `AND ${db.qb.jsonArrayLength(db.qb.jsonExtract('objects.properties', 'attachment'))} != 0` : ''}
-GROUP BY outbox_objects.id ${db.qb.psqlOnly(
-		', actors.cdate, actors.properties, outbox_objects.actor_id, outbox_objects.published_date'
-	)}
+GROUP BY outbox_objects.id
 ORDER BY ${db.qb.timeNormalize('outbox_objects.published_date')} DESC
 LIMIT ?1
 `

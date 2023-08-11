@@ -54,6 +54,7 @@ describe('ActivityPub', () => {
 					actor_id: URL
 					object_id: URL
 				}>()
+				assert.ok(entry)
 				assert.equal(entry.actor_id.toString(), actorB.id.toString())
 				assert.equal(entry.object_id.toString(), note.id.toString())
 			})
@@ -102,6 +103,7 @@ describe('ActivityPub', () => {
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
 				const entry = await db.prepare('SELECT * FROM actor_favourites').first<{ actor_id: URL; object_id: URL }>()
+				assert.ok(entry)
 				assert.equal(entry.actor_id.toString(), actorB.id.toString())
 				assert.equal(entry.object_id.toString(), note.id.toString())
 			})
@@ -126,6 +128,7 @@ describe('ActivityPub', () => {
 					actor_id: URL
 					from_actor_id: URL
 				}>()
+				assert.ok(entry)
 				assert.equal(entry.type, 'favourite')
 				assert.equal(entry.actor_id.toString(), actorA.id.toString())
 				assert.equal(entry.from_actor_id.toString(), actorB.id.toString())
@@ -150,6 +153,7 @@ describe('ActivityPub', () => {
 					actor_id: URL
 					object_id: URL
 				}>()
+				assert.ok(entry)
 				assert.equal(entry.actor_id.toString(), actorB.id.toString())
 				assert.equal(entry.object_id.toString(), note.id.toString())
 			})
@@ -254,6 +258,7 @@ describe('ActivityPub', () => {
 				const entry = await db
 					.prepare('SELECT objects.* FROM inbox_objects INNER JOIN objects ON objects.id=inbox_objects.object_id')
 					.first<{ properties: string }>()
+				assert.ok(entry)
 				const properties = JSON.parse(entry.properties)
 				assert.equal(properties.content, 'test note')
 			})
@@ -298,6 +303,7 @@ describe('ActivityPub', () => {
 					.prepare('SELECT * FROM outbox_objects WHERE actor_id=?')
 					.bind(remoteActorId)
 					.first<{ actor_id: string }>()
+				assert.ok(entry)
 				assert.equal(entry.actor_id, remoteActorId)
 			})
 
@@ -371,6 +377,7 @@ describe('ActivityPub', () => {
 					object_id: string
 					in_reply_to_object_id: string
 				}>()
+				assert.ok(entry)
 				assert.equal(entry.actor_id, actor.id.toString().toString())
 
 				const obj = await getObjectById(db, entry.object_id)
@@ -401,6 +408,7 @@ describe('ActivityPub', () => {
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
 				const row = await db.prepare('SELECT `to`, cc FROM outbox_objects').first<{ to: string; cc: string }>()
+				assert.ok(row)
 				assert.equal(row.to, '["https://example.com/some-actor"]')
 				assert.equal(row.cc, '[]')
 			})
@@ -426,6 +434,7 @@ describe('ActivityPub', () => {
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
 				const row = await db.prepare(`SELECT * from objects`).first<{ properties: string }>()
+				assert.ok(row)
 				const { content, name } = JSON.parse(row.properties)
 				assert.equal(
 					content,
@@ -974,7 +983,13 @@ describe('ActivityPub', () => {
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
 				// Ensure only one reblog is kept
-				const { count } = await db.prepare('SELECT count(*) as count FROM outbox_objects').first<{ count: number }>()
+				const { count } = await db
+					.prepare('SELECT count(*) as count FROM outbox_objects')
+					.first<{ count: number }>()
+					.then((row) => {
+						assert.ok(row)
+						return row
+					})
 				assert.equal(count, 1)
 			})
 		})
@@ -1010,7 +1025,13 @@ describe('ActivityPub', () => {
 
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
-				const { count } = await db.prepare('SELECT count(*) as count FROM objects').first<{ count: number }>()
+				const { count } = await db
+					.prepare('SELECT count(*) as count FROM objects')
+					.first<{ count: number }>()
+					.then((row) => {
+						assert.ok(row)
+						return row
+					})
 				assert.equal(count, 0)
 			})
 
@@ -1047,7 +1068,13 @@ describe('ActivityPub', () => {
 
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
-				const { count } = await db.prepare('SELECT count(*) as count FROM objects').first<{ count: number }>()
+				const { count } = await db
+					.prepare('SELECT count(*) as count FROM objects')
+					.first<{ count: number }>()
+					.then((row) => {
+						assert.ok(row)
+						return row
+					})
 				assert.equal(count, 0)
 			})
 
@@ -1085,7 +1112,13 @@ describe('ActivityPub', () => {
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
 				// Ensure that we didn't actually delete the object
-				const { count } = await db.prepare('SELECT count(*) as count FROM objects').first<{ count: number }>()
+				const { count } = await db
+					.prepare('SELECT count(*) as count FROM objects')
+					.first<{ count: number }>()
+					.then((row) => {
+						assert.ok(row)
+						return row
+					})
 				assert.equal(count, 1)
 			})
 
@@ -1105,7 +1138,13 @@ describe('ActivityPub', () => {
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
 				// Ensure that we didn't actually delete the actor
-				const { count } = await db.prepare('SELECT count(*) as count FROM actors').first<{ count: number }>()
+				const { count } = await db
+					.prepare('SELECT count(*) as count FROM actors')
+					.first<{ count: number }>()
+					.then((row) => {
+						assert.ok(row)
+						return row
+					})
 				assert.equal(count, 1)
 			})
 
@@ -1129,7 +1168,13 @@ describe('ActivityPub', () => {
 
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
-				const { count } = await db.prepare('SELECT count(*) as count FROM objects').first<{ count: number }>()
+				const { count } = await db
+					.prepare('SELECT count(*) as count FROM objects')
+					.first<{ count: number }>()
+					.then((row) => {
+						assert.ok(row)
+						return row
+					})
 				assert.equal(count, 1)
 			})
 		})

@@ -73,7 +73,16 @@ export async function hasReblog(db: Database, actor: Actor, obj: Note): Promise<
 		SELECT count(*) as count FROM actor_reblogs WHERE object_id=?1 AND actor_id=?2
 	`
 
-	const { count } = await db.prepare(query).bind(obj.id.toString(), actor.id.toString()).first<{ count: number }>()
+	const { count } = await db
+		.prepare(query)
+		.bind(obj.id.toString(), actor.id.toString())
+		.first<{ count: number }>()
+		.then((row) => {
+			if (!row) {
+				throw new Error('row is undefined')
+			}
+			return row
+		})
 	return count > 0
 }
 

@@ -139,6 +139,9 @@ RETURNING type
 			properties.preferredUsername ?? null
 		)
 		.first<{ type: Actor['type'] }>()
+	if (!row) {
+		throw new Error('failed to insert actor')
+	}
 
 	// Add peer
 	await addPeer(db, getApId(actor.id).host)
@@ -183,24 +186,12 @@ export async function updateActorProperty(db: Database, actorId: URL, key: strin
 }
 
 export async function setActorAlias(db: Database, actorId: URL, alias: URL) {
-	if (db.client === 'neon') {
-		const { success, error } = await db
-			.prepare(`UPDATE actors SET properties=${db.qb.jsonSet('properties', 'alsoKnownAs,0', '?1')} WHERE id=?2`)
-			.bind('"' + alias.toString() + '"', actorId.toString())
-			.run()
-		if (!success) {
-			throw new Error('SQL error: ' + error)
-		}
-	} else {
-		const { success, error } = await db
-			.prepare(
-				`UPDATE actors SET properties=${db.qb.jsonSet('properties', 'alsoKnownAs', 'json_array(?1)')} WHERE id=?2`
-			)
-			.bind(alias.toString(), actorId.toString())
-			.run()
-		if (!success) {
-			throw new Error('SQL error: ' + error)
-		}
+	const { success, error } = await db
+		.prepare(`UPDATE actors SET properties=${db.qb.jsonSet('properties', 'alsoKnownAs', 'json_array(?1)')} WHERE id=?2`)
+		.bind(alias.toString(), actorId.toString())
+		.run()
+	if (!success) {
+		throw new Error('SQL error: ' + error)
 	}
 }
 

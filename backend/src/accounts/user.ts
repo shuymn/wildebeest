@@ -82,7 +82,7 @@ export async function createUser({
 	// Since D1 and better-sqlite3 behaviors don't exactly match, presumable
 	// because Buffer support is different in Node/Worker. We have to transform
 	// the values depending on the platform.
-	if (isTesting || db.client === 'neon') {
+	if (isTesting) {
 		privkey = Buffer.from(userKeyPair.wrappedPrivKey)
 		salt = Buffer.from(userKeyPair.salt)
 	} else {
