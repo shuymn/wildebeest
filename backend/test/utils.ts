@@ -7,8 +7,7 @@ import * as path from 'path'
 import { createUser, User } from 'wildebeest/backend/src/accounts'
 import { ApObjectId } from 'wildebeest/backend/src/activitypub/objects'
 import type { Cache } from 'wildebeest/backend/src/cache'
-import { type Database } from 'wildebeest/backend/src/database'
-import d1 from 'wildebeest/backend/src/database/d1'
+import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import type { Client } from 'wildebeest/backend/src/mastodon/client'
 import { createClient } from 'wildebeest/backend/src/mastodon/client'
 import type { Queue } from 'wildebeest/backend/src/types'
@@ -37,7 +36,7 @@ export async function makeDB(): Promise<Database> {
 	}
 
 	const env = { DATABASE: db2 } as any
-	return d1(env)
+	return getDatabase(env)
 }
 
 export function assertCORS(response: Response) {
