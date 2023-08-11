@@ -35,10 +35,10 @@ devDependencies:
     specifier: 1.36.2
     version: 1.36.2
   '@types/better-sqlite3':
-    specifier: ^7.6.4
+    specifier: 7.6.4
     version: 7.6.4
   '@types/cookie':
-    specifier: ^0.5.1
+    specifier: 0.5.1
     version: 0.5.1
   '@types/jest':
     specifier: 29.5.3
