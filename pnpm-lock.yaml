@@ -6,11 +6,8 @@ settings:
 
 dependencies:
   '@neondatabase/serverless':
-    specifier: 0.5.6
-    version: 0.5.6
-  '@types/cookie':
-    specifier: 0.5.1
-    version: 0.5.1
+    specifier: ^0.5.7
+    version: 0.5.7
   cookie:
     specifier: 0.5.0
     version: 0.5.0
@@ -37,6 +34,12 @@ devDependencies:
   '@playwright/test':
     specifier: 1.36.2
     version: 1.36.2
+  '@types/better-sqlite3':
+    specifier: ^7.6.4
+    version: 7.6.4
+  '@types/cookie':
+    specifier: ^0.5.1
+    version: 0.5.1
   '@types/jest':
     specifier: 29.5.3
     version: 29.5.3
@@ -1204,8 +1207,8 @@ packages:
       - utf-8-validate
     dev: true
 
-  /@neondatabase/serverless@0.5.6:
-    resolution: {integrity: sha512-Ru0lG6W/nQtHRkDFVQFF+1PJYx8wd3jereln0Ep0YkiHey50hjTLVUycQoE4X977605pXMuFWORweuktzph+Xg==}
+  /@neondatabase/serverless@0.5.7:
+    resolution: {integrity: sha512-pIcgFWueCn5WQvtwHxji1EBpo1iGnlnPs/K02qmy7P150oHiohvgH5C4gWMTW52fqiMpPvK9kAdV9D07oJsd7w==}
     dependencies:
       '@types/pg': 8.6.6
     dev: false
@@ -1327,7 +1330,7 @@ packages:
 
   /@types/cookie@0.5.1:
     resolution: {integrity: sha512-COUnqfB2+ckwXXSFInsFdOAWQzCCx+a5hq2ruyj+Vjund94RJQd4LG2u9hnvJrTgunKAaax7ancBYlDrNYxA0g==}
-    dev: false
+    dev: true
 
   /@types/graceful-fs@4.1.6:
     resolution: {integrity: sha512-Sig0SNORX9fdW+bQuTEovKj3uHcUL6LQKbCrrqb1X7J6/ReAbhCXRAhc+SMejhLELFj2QcyuxmUooZ4bt5ReSw==}

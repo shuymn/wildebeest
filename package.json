@@ -9,6 +9,8 @@
 		"@databases/split-sql-query": "1.0.4",
 		"@databases/sql": "3.3.0",
 		"@playwright/test": "1.36.2",
+		"@types/better-sqlite3": "^7.6.4",
+		"@types/cookie": "^0.5.1",
 		"@types/jest": "29.5.3",
 		"@types/node": "18.17.4",
 		"@typescript-eslint/eslint-plugin": "6.3.0",
@@ -49,8 +51,7 @@
 		"deploy": "npm run build && npm run database:migrate && npm run pages -- deploy frontend/dist --project-name=wildebeest"
 	},
 	"dependencies": {
-		"@neondatabase/serverless": "0.5.6",
-		"@types/cookie": "0.5.1",
+		"@neondatabase/serverless": "^0.5.7",
 		"cookie": "0.5.0",
 		"toucan-js": "3.2.1",
 		"zod": "3.21.4"
