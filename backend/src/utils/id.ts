@@ -31,7 +31,7 @@ function bytesToHex(bytes: Uint8Array): string {
 
 async function nextval(db: Database, table: string): Promise<number> {
 	const key = table + '_id_seq'
-	const row = await db
+	const { value } = await db
 		.prepare(
 			`
 INSERT INTO id_sequences (key, value)
@@ -42,6 +42,12 @@ RETURNING value;
 		)
 		.bind(key)
 		.first<{ value: number }>()
+		.then((row) => {
+			if (!row) {
+				throw new Error('row is undefined')
+			}
+			return row
+		})
 
-	return row.value
+	return value
 }

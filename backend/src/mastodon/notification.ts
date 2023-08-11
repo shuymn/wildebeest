@@ -47,6 +47,9 @@ export async function createNotification(
 		.prepare(query)
 		.bind(type, actor.id.toString(), fromActor.id.toString(), obj.id.toString())
 		.first<{ id: string }>()
+	if (!row) {
+		throw new Error('returned row is null')
+	}
 	return row.id
 }
 
@@ -59,6 +62,9 @@ export async function insertFollowNotification(db: Database, actor: Actor, fromA
           RETURNING id
 `
 	const row = await db.prepare(query).bind(type, actor.id.toString(), fromActor.id.toString()).first<{ id: string }>()
+	if (!row) {
+		throw new Error('returned row is null')
+	}
 	return row.id
 }
 

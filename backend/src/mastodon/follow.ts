@@ -167,6 +167,12 @@ export async function isFollowingOrFollowingRequested(db: Database, actor: Actor
 		)
 		.bind(actor.id.toString(), target.id.toString(), STATE_ACCEPTED, STATE_PENDING)
 		.first<{ yes: 1 | 0 }>()
+		.then((row) => {
+			if (!row) {
+				throw new Error('row is undefined')
+			}
+			return row
+		})
 
 	return yes === 1
 }
@@ -178,6 +184,12 @@ export async function isNotFollowing(db: Database, actor: Actor, target: Actor):
 		)
 		.bind(actor.id.toString(), target.id.toString(), STATE_ACCEPTED)
 		.first<{ following: 1 | 0 }>()
+		.then((row) => {
+			if (!row) {
+				throw new Error('row is undefined')
+			}
+			return row
+		})
 
 	return following === 0
 }
@@ -189,6 +201,12 @@ export async function isFollowing(db: Database, actor: Actor, target: Actor): Pr
 		)
 		.bind(actor.id.toString(), target.id.toString(), STATE_ACCEPTED)
 		.first<{ following: 1 | 0 }>()
+		.then((row) => {
+			if (!row) {
+				throw new Error('row is undefined')
+			}
+			return row
+		})
 
 	return following === 1
 }

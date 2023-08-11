@@ -225,6 +225,9 @@ export async function cacheObject<T extends ApObject>(
 			original_actor_id: string
 			original_object_id: string
 		}>()
+	if (!row) {
+		throw new Error('failed to insert object')
+	}
 
 	// Add peer
 	{
