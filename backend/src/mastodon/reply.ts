@@ -2,22 +2,23 @@ import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { type ApObject } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database } from 'wildebeest/backend/src/database'
+import * as query from 'wildebeest/backend/src/database/d1/querier'
 import { toMastodonStatusFromRow } from 'wildebeest/backend/src/mastodon/status'
 import type { MastodonStatus } from 'wildebeest/backend/src/types/status'
 
-export async function insertReply(db: Database, actor: Actor, obj: ApObject, inReplyToObj: ApObject) {
+export async function insertReply(
+	db: Database,
+	actor: Pick<Actor, 'id'>,
+	obj: Pick<ApObject, 'id'>,
+	inReplyToObj: Pick<ApObject, 'id'>
+): Promise<void> {
 	const id = crypto.randomUUID()
-	const query = `
-        INSERT INTO actor_replies (id, actor_id, object_id, in_reply_to_object_id)
-        VALUES (?, ?, ?, ?)
-    `
-	const { success, error } = await db
-		.prepare(query)
-		.bind(id, actor.id.toString(), obj.id.toString(), inReplyToObj.id.toString())
-		.run()
-	if (!success) {
-		throw new Error('SQL error: ' + error)
-	}
+	await query.insertReply(db, {
+		id: id.toString(),
+		actorId: actor.id.toString(),
+		objectId: obj.id.toString(),
+		inReplyToObjectId: inReplyToObj.id.toString(),
+	})
 }
 
 export async function getReplies(domain: string, db: Database, obj: ApObject): Promise<Array<MastodonStatus>> {

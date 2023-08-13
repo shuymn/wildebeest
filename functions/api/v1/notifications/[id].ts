@@ -2,23 +2,23 @@
 
 import { isLocalAccount } from 'wildebeest/backend/src/accounts'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
-import { getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
+import { getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
 import {
 	ensureObjectMastodonId,
-	getObjectById,
 	getObjectByOriginalId,
-	isLocalObject,
 	mastodonIdSymbol,
 	originalActorIdSymbol,
 } from 'wildebeest/backend/src/activitypub/objects'
 import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import * as query from 'wildebeest/backend/src/database/d1/querier'
 import { statusNotFound } from 'wildebeest/backend/src/errors'
 import { loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import { actorToMention, detectVisibility } from 'wildebeest/backend/src/mastodon/status'
 import { fromObject } from 'wildebeest/backend/src/media'
 import type { ContextData, Env } from 'wildebeest/backend/src/types'
-import type { Notification, NotificationsQueryResult } from 'wildebeest/backend/src/types/notification'
+import { isNotificationType, type Notification } from 'wildebeest/backend/src/types/notification'
+import { HTTPS } from 'wildebeest/backend/src/utils'
 import { actorToHandle, handleToAcct } from 'wildebeest/backend/src/utils/handle'
 
 const headers = {
@@ -39,26 +39,16 @@ export async function handleRequest(
 	db: Database,
 	connectedActor: Person
 ): Promise<Response> {
-	const query = `
-SELECT
-  objects.*,
-  actor_notifications.type as notif_type,
-  actor_notifications.actor_id as notif_actor_id,
-  actor_notifications.from_actor_id as notif_from_actor_id,
-  actor_notifications.cdate as notif_cdate,
-  actor_notifications.id as notif_id
-FROM actor_notifications
-LEFT JOIN objects ON objects.id=actor_notifications.object_id
-WHERE actor_notifications.id=? AND actor_notifications.actor_id=?
-    `
-
-	const row = await db.prepare(query).bind(id, connectedActor.id.toString()).first<NotificationsQueryResult>()
+	const row = await query.selectNotificationsByIdAndActorId(db, {
+		id: parseInt(id, 10),
+		actorId: connectedActor.id.toString(),
+	})
 	if (!row) {
 		return statusNotFound('notification')
 	}
 
-	const from_actor_id = new URL(row.notif_from_actor_id)
-	const fromActor = await getActorById(db, from_actor_id)
+	const fromActorId = new URL(row.notificationFromActorId)
+	const fromActor = await getActorById(db, fromActorId)
 	if (!fromActor) {
 		throw new Error('unknown from actor')
 	}
@@ -66,19 +56,23 @@ WHERE actor_notifications.id=? AND actor_notifications.actor_id=?
 	const fromHandle = actorToHandle(fromActor)
 	const fromAccount = await loadMastodonAccount(db, domain, fromActor, fromHandle)
 
+	const { notificationType } = row
+	if (!isNotificationType(notificationType)) {
+		throw new Error(`unknown notification type ${notificationType}`)
+	}
 	const out: Notification = {
-		id: row.notif_id.toString(),
-		type: row.notif_type,
-		created_at: new Date(row.notif_cdate).toISOString(),
+		id: row.notificationId.toString(),
+		type: notificationType,
+		created_at: new Date(row.notificationCdate).toISOString(),
 		account: fromAccount,
 	}
 
-	if (row.notif_type === 'mention' || row.notif_type === 'favourite') {
+	if (notificationType === 'mention' || notificationType === 'favourite') {
 		if (row.id === null || row.type !== 'Note') {
 			throw new Error('notification object is null')
 		}
 
-		row.mastodon_id = await ensureObjectMastodonId(db, row.mastodon_id, row.cdate)
+		row.mastodonId = await ensureObjectMastodonId(db, row.mastodonId, row.cdate)
 
 		let properties
 		if (typeof row.properties === 'object') {
@@ -110,18 +104,20 @@ WHERE actor_notifications.id=? AND actor_notifications.actor_id=?
 			const replied = await getObjectByOriginalId(domain, db, properties.inReplyTo)
 			if (replied) {
 				inReplyToId = replied[mastodonIdSymbol]
-				try {
-					const author = await getAndCache(new URL(replied[originalActorIdSymbol]), db)
-					inReplyToAccountId = author[mastodonIdSymbol]
-				} catch (err) {
+				const author = await getAndCacheActor(new URL(replied[originalActorIdSymbol]), db).catch((err) => {
 					console.warn('failed to get author of reply', err)
+					return null
+				})
+				if (author) {
+					inReplyToAccountId = author[mastodonIdSymbol]
+				} else {
 					inReplyToId = null
 				}
 			}
 		}
 
 		out.status = {
-			id: row.mastodon_id,
+			id: row.mastodonId,
 			uri: new URL(row.id),
 			created_at: new Date(properties.published ?? row.cdate).toISOString(),
 			// TODO: a shortcut has been taken. We assume that the actor
@@ -137,7 +133,7 @@ WHERE actor_notifications.id=? AND actor_notifications.actor_id=?
 			url: properties.url
 				? new URL(properties.url)
 				: isLocalAccount(domain, fromHandle)
-				? new URL(`/@${handleToAcct(fromHandle, domain)}/${row.mastodon_id}`, 'https://' + domain)
+				? new URL(`/@${handleToAcct(fromHandle, domain)}/${row.mastodonId}`, HTTPS + domain)
 				: new URL(row.id),
 			reblog: null,
 			edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,

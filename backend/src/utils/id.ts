@@ -1,4 +1,5 @@
 import type { Database } from 'wildebeest/backend/src/database'
+import { insertIdSequence } from 'wildebeest/backend/src/database/d1/querier'
 import { MastodonId } from 'wildebeest/backend/src/types'
 
 export async function generateMastodonId(db: Database, table: string, now: Date): Promise<MastodonId> {
@@ -30,24 +31,6 @@ function bytesToHex(bytes: Uint8Array): string {
 }
 
 async function nextval(db: Database, table: string): Promise<number> {
-	const key = table + '_id_seq'
-	const { value } = await db
-		.prepare(
-			`
-INSERT INTO id_sequences (key, value)
-VALUES (?1, COALESCE((SELECT value FROM id_sequences WHERE key = ?1), 0) + 1)
-ON CONFLICT(key) DO UPDATE SET value = excluded.value
-RETURNING value;
-`
-		)
-		.bind(key)
-		.first<{ value: number }>()
-		.then((row) => {
-			if (!row) {
-				throw new Error('row is undefined')
-			}
-			return row
-		})
-
+	const { value } = (await insertIdSequence(db, { key: table + '_id_seq' })) as { value: number }
 	return value
 }
