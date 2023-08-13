@@ -77,7 +77,7 @@ devDependencies:
     specifier: 2.9.0
     version: 2.9.0
   sql-formatter:
-    specifier: ^12.2.4
+    specifier: 12.2.4
     version: 12.2.4
   ts-jest:
     specifier: 29.1.1
