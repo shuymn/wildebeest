@@ -17,6 +17,7 @@ import { handleFollowActivity } from 'wildebeest/backend/src/activitypub/activit
 import { handleLikeActivity } from 'wildebeest/backend/src/activitypub/activities/like'
 import { handleMoveActivity } from 'wildebeest/backend/src/activitypub/activities/move'
 import { handleUpdateActivity } from 'wildebeest/backend/src/activitypub/activities/update'
+import { getApId, isLocalObject } from 'wildebeest/backend/src/activitypub/objects'
 import { Database } from 'wildebeest/backend/src/database'
 import { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
@@ -28,6 +29,12 @@ export async function handle(
 	adminEmail: string,
 	vapidKeys: JWK
 ) {
+	if (isLocalObject(domain, getApId(activity.actor))) {
+		// ignore local activities
+		console.warn('ignore the local activity', activity)
+		return
+	}
+
 	if (isUpdateActivity(activity)) {
 		return await handleUpdateActivity(domain, activity, db)
 	}
