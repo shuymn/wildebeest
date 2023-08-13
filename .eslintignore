@@ -30,3 +30,4 @@ dist
 tsconfig.tsbuildinfo
 vite.config.ts
 .eslintrc.cjs
+backend/src/database/d1/*.ts

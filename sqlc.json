@@ -1,0 +1,26 @@
+{
+	"version": "2",
+	"plugins": [
+		{
+			"name": "ts-d1",
+			"wasm": {
+				"url": "https://github.com/orisano/sqlc-gen-ts-d1/releases/download/v0.0.0-a/sqlc-gen-ts-d1.wasm",
+				"sha256": "f7c093b8d9e7ce8b1ecf83c8d956d668fd91e881a4901b0c213b0736ea585439"
+			}
+		}
+	],
+	"sql": [
+		{
+			"schema": "schema.sql",
+			"queries": "backend/src/database/sql/",
+			"engine": "sqlite",
+			"codegen": [
+				{
+					"out": "backend/src/database/d1",
+					"plugin": "ts-d1",
+					"options": "workers-types="
+				}
+			]
+		}
+	]
+}
