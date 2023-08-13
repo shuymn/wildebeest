@@ -15,5 +15,8 @@
 		"webpush"
 	],
 	"typescript.preferences.importModuleSpecifier": "non-relative",
-	"editor.codeActionsOnSave": ["source.addMissingImports", "source.fixAll.eslint"]
+	"editor.codeActionsOnSave": ["source.addMissingImports", "source.fixAll.eslint"],
+	"SQL-Formatter-VSCode.SQLFlavourOverride": "sqlite",
+	"SQL-Formatter-VSCode.keywordCase": "upper",
+	"SQL-Formatter-VSCode.expressionWidth": 120
 }
