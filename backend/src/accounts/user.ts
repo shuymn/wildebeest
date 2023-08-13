@@ -2,14 +2,15 @@ import { Buffer } from 'buffer'
 import {
 	Actor,
 	actorFromRow,
-	ActorRow,
 	ensureActorMastodonId,
+	isActorRowLike,
 	PERSON,
 	Person,
 } from 'wildebeest/backend/src/activitypub/actors'
 import { Remote } from 'wildebeest/backend/src/activitypub/objects'
 import { Image } from 'wildebeest/backend/src/activitypub/objects/image'
 import { type Database } from 'wildebeest/backend/src/database'
+import * as query from 'wildebeest/backend/src/database/d1/querier'
 import { HTTPS } from 'wildebeest/backend/src/utils'
 import { Handle, LocalHandle } from 'wildebeest/backend/src/utils/handle'
 import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
@@ -116,47 +117,37 @@ export async function createUser({
 		icon,
 	}
 
-	{
-		const result = await db
-			.prepare(
-				'INSERT INTO actors (id, mastodon_id, domain, properties, cdate, type, username) VALUES(?, ?, ?, ?, ?, ?, lower(?))'
-			)
-			.bind(
-				id,
-				mastodonId,
-				domain,
-				JSON.stringify(properties),
-				now.toISOString(),
-				properties.type,
-				properties.preferredUsername
-			)
-			.run()
-		if (!result.success) {
-			console.error('SQL error: ', result.error)
-			throw new Error(`Failed to insert actor ${id} into database`)
-		}
-	}
+	await query.insertActor(db, {
+		id,
+		mastodonId,
+		domain,
+		properties: JSON.stringify(properties),
+		cdate: now.toISOString(),
+		type: properties.type,
+		username: properties.preferredUsername.toLowerCase(),
+	})
 
-	{
-		const results = await db.batch([
-			db.prepare('INSERT INTO actor_preferences(id) VALUES(?)').bind(id),
-			db
-				.prepare(
-					'INSERT INTO users(id, actor_id, email, privkey, privkey_salt, pubkey, is_admin, cdate) VALUES(?, ?, ?, ?, ?, ?, ?, ?)'
-				)
-				.bind(crypto.randomUUID(), id, email, privkey, salt, userKeyPair.pubKey, admin ? 1 : 0, now.toISOString()),
-		])
-		for (const result of results) {
-			if (result.success) {
-				continue
-			}
-			console.error('SQL error: ', result.error)
-			const recovery = await db.prepare('DELETE FROM actors WHERE id=?').bind(id).run()
-			if (!recovery.success) {
-				console.error(`faield to delete actor ${id} from database`)
-				console.error('SQL error: ', recovery.error)
-			}
-			throw new Error(`Failed to insert user ${id} into database`)
+	const queries = [
+		query.insertActorPreferences(db, { id }),
+		query.insertUser(db, {
+			id: crypto.randomUUID(),
+			actorId: id,
+			email,
+			privkey,
+			privkeySalt: salt,
+			pubkey: userKeyPair.pubKey,
+			isAdmin: admin ? 1 : 0,
+			cdate: now.toISOString(),
+		}),
+	]
+	for (const q of queries) {
+		try {
+			await q
+		} catch (err) {
+			await query.deleteActor(db, { id }).catch((delErr) => {
+				console.error(`failed to delete actor ${id} after failed creation: ${delErr}`)
+			})
+			throw err
 		}
 	}
 
@@ -165,7 +156,7 @@ export async function createUser({
 		type: PERSON,
 		cdate: now.toISOString(),
 		properties: properties,
-		mastodon_id: mastodonId,
+		mastodonId: mastodonId,
 	})
 
 	return {
@@ -175,80 +166,30 @@ export async function createUser({
 }
 
 export async function getUserByEmail(db: Database, email: string): Promise<User | null> {
-	const stmt = db
-		.prepare(
-			`
-SELECT
-	actors.id,
-	actors.mastodon_id,
-	actors.type,
-	users.pubkey,
-	actors.cdate,
-	actors.properties,
-	users.is_admin
-FROM actors
-INNER JOIN users ON users.actor_id = actors.id
-WHERE email = ?1;
-`
-		)
-		.bind(email)
-
-	const { results } = await stmt.all<{
-		id: string
-		type: typeof PERSON
-		pubkey: string
-		cdate: string
-		properties: string
-		is_admin: 1 | 0
-		mastodon_id: string
-	}>()
-	if (!results || results.length === 0) {
+	const row = await query.selectUserByEmail(db, { email })
+	if (!row || !isActorRowLike(row)) {
 		return null
 	}
-	const row: ActorRow<Person> = {
-		...results[0],
-		mastodon_id: await ensureActorMastodonId(db, results[0].mastodon_id, results[0].cdate),
-	}
-	const actor = actorFromRow(row)
-	if (actor === null) {
-		return null
-	}
+	const actor = actorFromRow<Person>({
+		...row,
+		mastodonId: await ensureActorMastodonId(db, row.mastodonId, row.cdate),
+		type: 'Person',
+	})
 	return {
 		...actor,
-		[isAdminSymbol]: results[0].is_admin === 1,
+		[isAdminSymbol]: row.isAdmin === 1,
 	}
 }
 
 export async function getAdminByEmail(db: Database, email: string): Promise<User | null> {
-	const stmt = db
-		.prepare(
-			`
-SELECT
-  actors.id,
-  actors.mastodon_id,
-  actors.type,
-  users.pubkey,
-  actors.cdate,
-  actors.properties
-FROM actors
-INNER JOIN users ON users.actor_id = actors.id
-WHERE
-  users.is_admin=1
-  AND users.email=?1
-`
-		)
-		.bind(email)
-	const { results } = await stmt.all<{
-		id: string
-		type: typeof PERSON
-		pubkey: string
-		cdate: string
-		properties: string
-		mastodon_id: string
-	}>()
-	if (!results || results.length === 0) {
+	const row = await query.selectUserByEmail(db, { email })
+	if (!row || !isActorRowLike(row)) {
 		return null
 	}
-	const row: ActorRow<Person> = results[0]
-	return { ...actorFromRow(row), [isAdminSymbol]: true }
+	const actor = actorFromRow<Person>({
+		...row,
+		mastodonId: await ensureActorMastodonId(db, row.mastodonId, row.cdate),
+		type: 'Person',
+	})
+	return { ...actor, [isAdminSymbol]: true }
 }
