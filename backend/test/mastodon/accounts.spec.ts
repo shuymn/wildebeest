@@ -7,11 +7,11 @@ import {
 	isCreateActivity,
 	PUBLIC_GROUP,
 } from 'wildebeest/backend/src/activitypub/activities'
-import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
+import { getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInOutbox, get } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { getApId, getObjectById, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
-import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
+import { isNote, Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { insertLike } from 'wildebeest/backend/src/mastodon/like'
 import { createReblog } from 'wildebeest/backend/src/mastodon/reblog'
@@ -736,25 +736,29 @@ describe('Mastodon APIs', () => {
 											content: '<p>p</p>',
 											attachment: [
 												{
+													id: '',
 													type: 'Document',
 													mediaType: 'image/jpeg',
 													url: 'https://example.com/image',
-													name: null,
 													blurhash: 'U48;V;_24mx[_1~p.7%MW9?a-;xtxvWBt6ad',
 													width: 1080,
 													height: 894,
 												},
 												{
+													id: '',
 													type: 'Document',
 													mediaType: 'video/mp4',
 													url: 'https://example.com/video',
-													name: null,
 													blurhash: 'UB9jfvtT0gO^N5tSX4XV9uR%^Ni]D%Rj$*nf',
 													width: 1080,
 													height: 616,
 												},
 											],
-										},
+											to: [],
+											cc: [],
+											attributedTo: 'https://social.com/users/someone',
+											sensitive: false,
+										} satisfies Note,
 									},
 									{
 										id: 'https://mastodon.social/users/c/statuses/d/activity',
@@ -779,16 +783,19 @@ describe('Mastodon APIs', () => {
 			const collection = await get(actorB)
 			for (const item of collection.items) {
 				if (isCreateActivity(item)) {
-					const objectId = getApId(item.object)
-					const res = await cacheActivityObject(domain, getActivityObject(item), db, getApId(item.actor), objectId)
+					const actor = await getAndCacheActor(getApId(item.actor), db)
+					assert.ok(actor)
+					const res = await cacheActivityObject(domain, db, getActivityObject(item), actor)
 					assert.ok(res)
+					assert.ok(res.object)
 					// Date in the past to create the order
 					await addObjectInOutbox(db, actorB, res.object, item.to, item.cc, '2022-12-10T23:48:38Z')
 				}
 				if (isAnnounceActivity(item)) {
 					const objectId = getApId(item.object)
-					const obj = await getObjectById<Note>(db, objectId)
+					const obj = await getObjectById<Note>(domain, db, objectId)
 					assert.ok(obj)
+					assert.ok(isNote(obj))
 					await createReblog(db, actorB, obj, item)
 				}
 			}

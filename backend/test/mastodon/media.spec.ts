@@ -53,7 +53,7 @@ describe('Mastodon APIs', () => {
 			assert(isUrlValid(data.url))
 			assert(isUrlValid(data.preview_url))
 
-			const obj = await objects.getObjectByMastodonId(db, data.id)
+			const obj = await objects.getObjectByMastodonId(domain, db, data.id)
 			assert(obj)
 			assert(obj[mastodonIdSymbol])
 			assert.equal(obj.type, 'Image')
@@ -87,7 +87,7 @@ describe('Mastodon APIs', () => {
 			const data = await res.json<{ description: unknown }>()
 			assert.equal(data.description, 'new foo bar')
 
-			const newImage = await objects.getObjectByMastodonId(db, image[mastodonIdSymbol]!)
+			const newImage = await objects.getObjectByMastodonId(domain, db, image[mastodonIdSymbol]!)
 			assert.ok(newImage)
 			assert.equal((newImage as Image).description, 'new foo bar')
 		})

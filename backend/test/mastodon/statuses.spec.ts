@@ -103,17 +103,18 @@ describe('Mastodon APIs', () => {
 				.prepare(
 					`
           SELECT
+              id,
               ${db.qb.jsonExtract('properties', 'content')} as content,
               original_actor_id,
               original_object_id
           FROM objects
         `
 				)
-				.first<{ content: string; original_actor_id: URL; original_object_id: unknown }>()
+				.first<{ id: string; content: string; original_actor_id: URL; original_object_id: unknown }>()
 			assert.ok(row)
 			assert.equal(row.content, '<p>my status <p>evil</p></p>') // note the sanitization
 			assert.equal(row.original_actor_id.toString(), actor.id.toString())
-			assert.equal(row.original_object_id, null)
+			assert.equal(row.original_object_id, row.id)
 		})
 
 		test('create new status regenerates the timeline and contains post', async () => {
@@ -395,7 +396,8 @@ describe('Mastodon APIs', () => {
 
 			const data = await res.json<{ id: string }>()
 
-			const note = (await getObjectByMastodonId(db, data.id)) as unknown as Note
+			const note = await getObjectByMastodonId<Note>(domain, db, data.id)
+			assert.ok(note)
 			assert.equal(note.tag?.length, 1)
 			assert.equal(note.tag[0].href, actor.id.toString())
 			assert.equal(note.tag[0].name, 'sven@' + domain)
@@ -1215,7 +1217,8 @@ describe('Mastodon APIs', () => {
 			assert.equal(results[0].value, 'hi')
 			assert.equal(results[1].value, 'car')
 
-			const note = (await getObjectByMastodonId(db, data.id)) as unknown as Note
+			const note = await getObjectByMastodonId(domain, db, data.id)
+			assert.ok(note)
 			assert.equal(results[0].object_id, note.id.toString())
 			assert.equal(results[1].object_id, note.id.toString())
 		})
@@ -1367,6 +1370,7 @@ describe('Mastodon APIs', () => {
 				.prepare(
 					`
         SELECT
+            id,
             ${db.qb.jsonExtract('properties', 'content')} as content,
             ${db.qb.jsonExtract('properties', 'to')} as 'to',
             ${db.qb.jsonExtract('properties', 'cc')} as 'cc',
@@ -1375,10 +1379,17 @@ describe('Mastodon APIs', () => {
         FROM objects
       `
 				)
-				.first<{ content: string; to: string; cc: string; original_actor_id: string; original_object_id: string }>()
+				.first<{
+					id: string
+					content: string
+					to: string
+					cc: string
+					original_actor_id: string
+					original_object_id: string
+				}>()
 			assert.ok(row)
 			assert.equal((row.original_actor_id as string).toString(), actor.id.toString())
-			assert.equal(row.original_object_id, null)
+			assert.equal(row.original_object_id, row.id)
 			assert.equal(row.content, '<p>something nice</p>') // note the sanitization
 			assert.deepEqual(JSON.parse(row.to), ['https://' + domain + '/ap/users/sven/followers'])
 			assert.deepEqual(JSON.parse(row.cc), [activities.PUBLIC_GROUP])
@@ -1431,6 +1442,7 @@ describe('Mastodon APIs', () => {
 				.prepare(
 					`
         SELECT
+            id,
             ${db.qb.jsonExtract('properties', 'content')} as content,
             ${db.qb.jsonExtract('properties', 'to')} as 'to',
             ${db.qb.jsonExtract('properties', 'cc')} as 'cc',
@@ -1439,10 +1451,17 @@ describe('Mastodon APIs', () => {
         FROM objects
       `
 				)
-				.first<{ content: string; to: string; cc: string; original_actor_id: string; original_object_id: string }>()
+				.first<{
+					id: string
+					content: string
+					to: string
+					cc: string
+					original_actor_id: string
+					original_object_id: string
+				}>()
 			assert.ok(row)
 			assert.equal((row.original_actor_id as string).toString(), actor.id.toString())
-			assert.equal(row.original_object_id, null)
+			assert.equal(row.original_object_id, row.id)
 			assert.equal(row.content, '<p>something nice</p>') // note the sanitization
 			assert.deepEqual(JSON.parse(row.to), ['https://' + domain + '/ap/users/sven/followers'])
 			assert.deepEqual(JSON.parse(row.cc), [])

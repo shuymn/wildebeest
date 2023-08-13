@@ -1,9 +1,9 @@
 import { strict as assert } from 'node:assert/strict'
 
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
-import { getApId, Remote } from 'wildebeest/backend/src/activitypub/objects'
-import { cacheObject } from 'wildebeest/backend/src/activitypub/objects/'
+import { ApObject, getAndCacheObject, originalObjectIdSymbol, Remote } from 'wildebeest/backend/src/activitypub/objects'
 import { loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
+import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { MessageType } from 'wildebeest/backend/src/types'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 import { createDirectStatus, createPublicStatus } from 'wildebeest/backend/test/shared.utils'
@@ -100,6 +100,7 @@ describe('ActivityPub', () => {
 			}
 
 			const actor = await actors.fetchActor('https://example.com/actor')
+			assert.ok(actor)
 			assert.equal(actor.summary, "it's me, Mario. <p>alert(1)</p>")
 			assert.equal(actor.name, 'hi hey')
 			assert.equal(actor.preferredUsername, 'sven alert(1)')
@@ -125,6 +126,7 @@ describe('ActivityPub', () => {
 			}
 
 			const actor = await actors.fetchActor('https://example.com/actor')
+			assert.ok(actor)
 			assert.equal(actor.summary, 'a'.repeat(500))
 			assert.equal(actor.name, 'b'.repeat(30))
 			assert.equal(actor.preferredUsername, 'c'.repeat(30))
@@ -231,7 +233,7 @@ describe('ActivityPub', () => {
 
 			const db = await makeDB()
 
-			await actors.getAndCache(actorId, db)
+			await actors.getAndCacheActor(actorId, db)
 
 			const { results } = (await db.prepare('SELECT domain from peers').all()) as any
 			assert.equal(results.length, 1)
@@ -283,7 +285,7 @@ describe('ActivityPub', () => {
 
 			const db = await makeDB()
 
-			await actors.getAndCache(actorId, db)
+			await actors.getAndCacheActor(actorId, db)
 
 			const { results } = (await db.prepare('SELECT * FROM actors').all()) as any
 			assert.equal(results.length, 1)
@@ -295,27 +297,36 @@ describe('ActivityPub', () => {
 	describe('Objects', () => {
 		test('cacheObject deduplicates object', async () => {
 			const db = await makeDB()
-			const properties: any = { type: 'Note', a: 1, b: 2 }
+			const properties: Remote<Note> = {
+				type: 'Note',
+				id: 'https://example.com/id/object1',
+				url: 'https://example.com/url/object1',
+			}
 			const actor = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
-			const originalObjectId = new URL('https://example.com/object1')
 
 			let result: any
 
 			// Cache object once adds it to the database
-			const res1: any = await cacheObject(domain, db, properties, getApId(actor), originalObjectId, false)
-			assert.equal(res1.object.a, 1)
-			assert.equal(res1.object.b, 2)
+			const res1 = await getAndCacheObject(domain, db, properties, actor)
+			assert.ok(res1)
+			assert.ok(res1.object)
+			assert.ok(res1.created)
+			assert.equal(res1.object[originalObjectIdSymbol], 'https://example.com/id/object1')
+			assert.equal(res1.object.url?.toString(), 'https://example.com/url/object1')
 			assert(res1.created)
 
 			result = await db.prepare('SELECT count(*) as count from objects').first()
 			assert.equal(result.count, 1)
 
 			// Cache object second time updates the first one
-			properties.a = 3
-			const res2: any = await cacheObject(domain, db, properties, getApId(actor), originalObjectId, false)
+			properties.url = 'https://example.com/url/object2'
+			const res2 = await getAndCacheObject(domain, db, properties, actor)
 			// The creation date and properties don't change
-			assert.equal(res1.object.a, res2.object.a)
-			assert.equal(res1.object.b, res2.object.b)
+			assert.ok(res2)
+			assert.ok(res2.object)
+			assert.ok(!res2.created)
+			assert.equal(res1.object.id.toString(), res2.object.id.toString())
+			assert.equal(res1.object.url.toString(), res2.object.url?.toString())
 			assert.equal(res1.object.published, res2.object.published)
 			assert(!res2.created)
 
@@ -325,11 +336,14 @@ describe('ActivityPub', () => {
 
 		test('cacheObject adds peer', async () => {
 			const db = await makeDB()
-			const properties: any = { type: 'Note', a: 1, b: 2 }
+			const properties: ApObject = {
+				type: 'Note',
+				id: 'https://example.com/id/object1',
+				url: 'https://example.com/url/object1',
+			}
 			const actor = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
-			const originalObjectId = new URL('https://example.com/object1')
 
-			await cacheObject(domain, db, properties, getApId(actor), originalObjectId, false)
+			await getAndCacheObject(domain, db, properties, actor)
 
 			const { results } = (await db.prepare('SELECT domain from peers').all()) as any
 			assert.equal(results.length, 1)
