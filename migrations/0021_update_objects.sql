@@ -6,7 +6,7 @@ WHERE
 
 UPDATE objects
 SET
-  original_object_id = JSON_EXTRACT(properties, '$.id')
+  original_object_id = id
 WHERE
   original_object_id IS NULL;
 
