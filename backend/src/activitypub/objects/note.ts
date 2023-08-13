@@ -29,9 +29,24 @@ export type Note = RequiredProps<ApObject, 'cc' | 'to'> & {
 	updated?: string
 }
 
-export function isNote(obj: objects.ApObject): obj is Note {
-	// FIXME: terrible implementation just to fool the type checker
-	return obj.type === NOTE
+export function isNote(obj: Record<string, unknown>): obj is Note {
+	if (obj.type !== NOTE) {
+		return false
+	}
+
+	if (typeof obj.content !== 'string') {
+		return false
+	}
+
+	if (!(typeof obj.attributedTo === 'string' || obj.attributedTo instanceof URL)) {
+		return false
+	}
+
+	if (!Array.isArray(obj.attachment)) {
+		return false
+	}
+
+	return true
 }
 
 type ExtraProperties = PartialProps<
