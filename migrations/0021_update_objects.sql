@@ -170,3 +170,10 @@ WHERE
 UPDATE objects
 SET
   reply_to_object_id = JSON_EXTRACT(properties, '$.inReplyTo');
+
+UPDATE objects
+SET
+  original_actor_id = JSON_EXTRACT(properties, '$.attributedTo')
+WHERE
+  type = 'Note'
+  AND JSON_EXTRACT(properties, '$.attributedTo') != original_actor_id;
