@@ -1,6 +1,5 @@
 import {
 	type ApObject,
-	ApObjectId,
 	getApId,
 	getTextContent,
 	mastodonIdSymbol,
@@ -9,8 +8,9 @@ import {
 } from 'wildebeest/backend/src/activitypub/objects'
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
+import * as query from 'wildebeest/backend/src/database/d1/querier'
 import { MastodonId } from 'wildebeest/backend/src/types'
-import { isUUID } from 'wildebeest/backend/src/utils'
+import { isGone, isNotFound, isUUID } from 'wildebeest/backend/src/utils'
 import { adjustLocalHostDomain } from 'wildebeest/backend/src/utils/adjustLocalHostDomain'
 import { RemoteHandle } from 'wildebeest/backend/src/utils/handle'
 import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
@@ -19,9 +19,11 @@ import { UA } from 'wildebeest/config/ua'
 
 export const isAdminSymbol = Symbol()
 
+const actorTypes = ['Person', 'Service', 'Organization', 'Group', 'Application'] as const
+
 // https://www.w3.org/TR/activitystreams-vocabulary/#actor-types
 export interface Actor extends ApObject {
-	type: 'Person' | 'Service' | 'Organization' | 'Group' | 'Application'
+	type: (typeof actorTypes)[number]
 	inbox: URL
 	outbox: URL
 	following: URL
@@ -45,6 +47,15 @@ export const PERSON = 'Person'
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-person
 export interface Person extends Actor {
 	type: typeof PERSON
+}
+
+function isActorType(type: string): type is Actor['type'] {
+	for (const actorType of actorTypes) {
+		if (actorType === type) {
+			return true
+		}
+	}
+	return false
 }
 
 export async function fetchActor(url: string | URL): Promise<Remote<Actor> | null> {
@@ -106,54 +117,48 @@ export async function fetchActor(url: string | URL): Promise<Remote<Actor> | nul
 }
 
 // Get and cache the Actor locally
-export async function getAndCache(url: URL, db: Database): Promise<Actor> {
+export async function getAndCacheActor(url: URL, db: Database): Promise<Actor | null> {
 	{
 		const actor = await getActorById(db, url)
-		if (actor !== null) {
+		if (actor) {
 			return actor
 		}
 	}
 
 	const actor = await fetchActor(url)
-	if (!actor.type || !actor.id) {
+	if (!actor) {
+		return null
+	}
+	if (!actor.type || !actor.id || !actor.preferredUsername) {
 		throw new Error('missing fields on Actor')
 	}
 
-	const properties = actor
+	const { type } = actor
+	if (!isActorType(type)) {
+		throw new Error(`invalid actor type: ${type}`)
+	}
 
 	const now = new Date()
 	const mastodonId = await generateMastodonId(db, 'actors', now)
 	const actorId = getApId(actor.id)
 
-	const row = await db
-		.prepare(
-			`
-INSERT INTO actors (id, mastodon_id, domain, properties, cdate, type, username)
-VALUES (?, ?, ?, ?, ?, ?, lower(?))
-RETURNING type
-    `
-		)
-		.bind(
-			actorId.toString(),
-			mastodonId,
-			actorId.hostname,
-			JSON.stringify(properties),
-			now.toISOString(),
-			properties.type,
-			properties.preferredUsername ?? null
-		)
-		.first<{ type: Actor['type'] }>()
-	if (!row) {
-		throw new Error('failed to insert actor')
-	}
+	await query.insertActor(db, {
+		id: actorId.toString(),
+		mastodonId,
+		type: actor.type,
+		username: actor.preferredUsername?.toLowerCase() ?? null,
+		domain: actorId.hostname,
+		properties: JSON.stringify(actor),
+		cdate: now.toISOString(),
+	})
 
 	// Add peer
-	await addPeer(db, getApId(actor.id).host)
+	await addPeer(db, actorId.hostname)
 
 	return actorFromRow({
 		id: actorId.toString(),
-		mastodon_id: mastodonId,
-		type: row.type,
+		mastodonId,
+		type,
 		properties: actor,
 		cdate: now.toISOString(),
 	})
@@ -220,6 +225,10 @@ type ActorRowLike = {
 	type: Actor['type']
 	properties: string
 	cdate: string
+}
+
+export function isActorRowLike(row: query.SelectActorRow): row is ActorRowLike {
+	return !!row.mastodonId && !!row.type
 }
 
 export async function getActorByMastodonId(db: Database, id: MastodonId): Promise<Actor | null> {
@@ -296,11 +305,10 @@ WHERE username=lower(?1) AND domain=?2
 
 export type ActorRow<T extends Actor> = {
 	id: string
-	mastodon_id: string
+	mastodonId: string
 	type: T['type']
 	properties: ActorProperties | string
 	cdate: string
-	original_actor_id?: ApObjectId
 }
 
 export function actorFromRow<T extends Actor>(row: ActorRow<T>) {
