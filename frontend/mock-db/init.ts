@@ -4,11 +4,12 @@ import type { Account, MastodonStatus } from 'wildebeest/frontend/src/types'
 import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { createReblog } from 'wildebeest/backend/src/mastodon/reblog'
 import { createReply as createReplyInBackend, createPublicStatus } from 'wildebeest/backend/test/shared.utils'
-import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database } from 'wildebeest/backend/src/database'
 import { upsertRule } from 'wildebeest/backend/src/config/rules'
 import { upsertServerSettings } from 'wildebeest/backend/src/config/server'
 import { createUser, getUserByEmail } from 'wildebeest/backend/src/accounts'
+import { Document } from 'wildebeest/backend/src/activitypub/objects'
+import { Image } from 'wildebeest/backend/src/activitypub/objects/image'
 
 /**
  * Run helper commands to initialize the database with actors, statuses, etc.
@@ -22,7 +23,7 @@ export async function init(domain: string, db: Database) {
 			db,
 			actor,
 			status.content,
-			status.media_attachments as unknown as ApObject[],
+			status.media_attachments as unknown as (Document | Image)[],
 			{ spoiler_text: status.spoiler_text }
 		)
 		loadedStatuses.push({ status, note })
