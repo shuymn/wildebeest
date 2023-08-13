@@ -323,8 +323,22 @@ describe('Mastodon APIs', () => {
 			// Actor posts
 			const note = await createPublicStatus(domain, db, actor, 'a post')
 
-			const activityA = await createAnnounceActivity(db, domain, actorA, note.id, new Set([PUBLIC_GROUP]), new Set())
-			const activityB = await createAnnounceActivity(db, domain, actorB, note.id, new Set([PUBLIC_GROUP]), new Set())
+			const activityA = await createAnnounceActivity(
+				db,
+				domain,
+				actorA,
+				new URL(note.id.toString()),
+				new Set([PUBLIC_GROUP]),
+				new Set()
+			)
+			const activityB = await createAnnounceActivity(
+				db,
+				domain,
+				actorB,
+				new URL(note.id.toString()),
+				new Set([PUBLIC_GROUP]),
+				new Set()
+			)
 
 			// ActorA and B reblog the post
 			await createReblog(db, actorA, note, activityA, activityA.published)

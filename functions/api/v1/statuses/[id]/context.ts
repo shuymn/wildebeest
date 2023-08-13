@@ -18,7 +18,7 @@ const headers = {
 }
 
 export async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
-	const obj = await getObjectByMastodonId(db, id)
+	const obj = await getObjectByMastodonId(domain, db, id)
 	if (obj === null) {
 		return new Response('', { status: 404 })
 	}

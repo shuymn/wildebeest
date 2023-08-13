@@ -91,7 +91,7 @@ WHERE rowid IN (SELECT rowid FROM search_fts WHERE (preferredUsername MATCH ?1 O
 				for (const result of results) {
 					const row: ActorRow<Person> = {
 						...result,
-						mastodon_id: await ensureActorMastodonId(db, result.mastodon_id, result.cdate),
+						mastodonId: await ensureActorMastodonId(db, result.mastodon_id, result.cdate),
 					}
 					const actor = actorFromRow(row)
 					if (accounts.has(actor[mastodonIdSymbol])) {

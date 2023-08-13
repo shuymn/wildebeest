@@ -119,7 +119,7 @@ export async function handleRequest(
 	const mediaAttachments: Image[] = []
 	if (params.media_ids && params.media_ids.length > 0) {
 		for (const id of [...params.media_ids]) {
-			const document = await getObjectByMastodonId(db, id)
+			const document = await getObjectByMastodonId(domain, db, id)
 			if (document === null) {
 				console.warn('object attachment not found: ' + id)
 				continue
@@ -134,7 +134,7 @@ export async function handleRequest(
 
 	let inReplyToObject
 	if (params.in_reply_to_id) {
-		inReplyToObject = await getObjectByMastodonId<Note>(db, params.in_reply_to_id)
+		inReplyToObject = await getObjectByMastodonId<Note>(domain, db, params.in_reply_to_id)
 		if (inReplyToObject === null) {
 			return statusNotFound(params.in_reply_to_id)
 		}

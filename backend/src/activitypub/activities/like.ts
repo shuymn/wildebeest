@@ -1,7 +1,7 @@
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-like
 
 import { insertActivity, LikeActivity } from 'wildebeest/backend/src/activitypub/activities'
-import { Actor, getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
+import { Actor, getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
 import { getApId, getObjectById, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { Database } from 'wildebeest/backend/src/database'
 import { insertLike } from 'wildebeest/backend/src/mastodon/like'
@@ -23,17 +23,27 @@ export async function createLikeActivity(
 }
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-like
-export async function handleLikeActivity(activity: LikeActivity, db: Database, adminEmail: string, vapidKeys: JWK) {
+export async function handleLikeActivity(
+	domain: string,
+	activity: LikeActivity,
+	db: Database,
+	adminEmail: string,
+	vapidKeys: JWK
+) {
 	const objectId = getApId(activity.object)
 	const actorId = getApId(activity.actor)
 
-	const obj = await getObjectById(db, objectId)
+	const obj = await getObjectById(domain, db, objectId)
 	if (obj === null || !obj[originalActorIdSymbol]) {
 		console.warn('unknown object')
 		return
 	}
 
-	const fromActor = await getAndCache(actorId, db)
+	const fromActor = await getAndCacheActor(actorId, db)
+	if (fromActor === null) {
+		console.warn('actor not found: ', actorId.toString())
+		return
+	}
 	const targetActor = await getActorById(db, new URL(obj[originalActorIdSymbol]))
 	if (targetActor === null) {
 		console.warn('object actor not found')

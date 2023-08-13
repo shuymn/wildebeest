@@ -1,3 +1,5 @@
+import { SingleOrArray } from 'wildebeest/backend/src/utils/type'
+
 import * as myz from './zod'
 
 export { myz }
@@ -10,4 +12,8 @@ export function isUUID(str: string): boolean {
 
 export function unique<T>(arr: T[]): T[] {
 	return [...new Set(arr)]
+}
+
+export function toArray<T>(v: SingleOrArray<T>): T[] {
+	return Array.isArray(v) ? v : [v]
 }

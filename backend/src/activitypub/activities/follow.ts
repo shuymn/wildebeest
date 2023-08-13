@@ -1,7 +1,7 @@
 import { isLocalAccount } from 'wildebeest/backend/src/accounts'
 import { FollowActivity, insertActivity } from 'wildebeest/backend/src/activitypub/activities'
 import { createAcceptActivity } from 'wildebeest/backend/src/activitypub/activities/accept'
-import { type Actor, getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
+import { type Actor, getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
 import { type ApObject, getApId } from 'wildebeest/backend/src/activitypub/objects'
 import { Database } from 'wildebeest/backend/src/database'
@@ -37,7 +37,7 @@ export async function handleFollowActivity(
 	const followeeId = getApId(activity.object)
 	const followee = await getActorById(db, followeeId)
 	if (followee === null) {
-		console.warn(`actor ${followee} not found`)
+		console.warn(`actor ${followeeId} not found`)
 		return
 	}
 	// activity.object must be a local user
@@ -46,7 +46,11 @@ export async function handleFollowActivity(
 	}
 
 	const followerId = getApId(activity.actor)
-	const follower = await getAndCache(followerId, db)
+	const follower = await getAndCacheActor(followerId, db)
+	if (follower === null) {
+		console.warn(`actor ${followerId} not found`)
+		return
+	}
 
 	await addFollowing(domain, db, follower, followee)
 

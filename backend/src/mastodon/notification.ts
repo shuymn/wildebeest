@@ -1,29 +1,23 @@
 import { isLocalAccount } from 'wildebeest/backend/src/accounts'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import * as actors from 'wildebeest/backend/src/activitypub/actors'
-import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
+import { getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
 import {
 	type ApObject,
 	ensureObjectMastodonId,
 	getApUrl,
-	getObjectById,
 	getObjectByOriginalId,
-	isLocalObject,
 	mastodonIdSymbol,
 	originalActorIdSymbol,
 } from 'wildebeest/backend/src/activitypub/objects'
 import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import type { Cache } from 'wildebeest/backend/src/cache'
 import { type Database } from 'wildebeest/backend/src/database'
+import * as query from 'wildebeest/backend/src/database/d1/querier'
 import { loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import { actorToMention, detectVisibility } from 'wildebeest/backend/src/mastodon/status'
 import { getSubscriptionForAllClients } from 'wildebeest/backend/src/mastodon/subscription'
 import { fromObject } from 'wildebeest/backend/src/media'
-import type {
-	Notification,
-	NotificationsQueryResult,
-	NotificationType,
-} from 'wildebeest/backend/src/types/notification'
+import { isNotificationType, type Notification, type NotificationType } from 'wildebeest/backend/src/types/notification'
 import { actorToHandle, handleToAcct } from 'wildebeest/backend/src/utils/handle'
 import { generateWebPushMessage } from 'wildebeest/backend/src/webpush'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
@@ -216,57 +210,48 @@ async function sendNotification(db: Database, actor: Actor, message: WebPushMess
 }
 
 export async function getNotifications(db: Database, actor: Actor, domain: string): Promise<Array<Notification>> {
-	const query = `
-SELECT
-  objects.*,
-  actor_notifications.type as notif_type,
-  actor_notifications.actor_id as notif_actor_id,
-  actor_notifications.from_actor_id as notif_from_actor_id,
-  actor_notifications.cdate as notif_cdate,
-  actor_notifications.id as notif_id
-FROM actor_notifications
-LEFT JOIN objects ON objects.id=actor_notifications.object_id
-WHERE actor_id=?
-ORDER BY actor_notifications.cdate DESC
-LIMIT 20
-  `
+	const { results } = await query.selectNotificationsByActorId(db, { actorId: actor.id.toString(), limit: 20 })
 
-	const stmt = db.prepare(query).bind(actor.id.toString())
-	const { results, success, error } = await stmt.all<NotificationsQueryResult>()
-	if (!success) {
-		throw new Error('SQL error: ' + error)
-	}
-
-	const out: Array<Notification> = []
+	const out: Notification[] = []
 	if (!results || results.length === 0) {
 		return []
 	}
 
 	for (const result of results) {
-		const notifFromActorId = new URL(result.notif_from_actor_id)
+		const notifFromActorId = new URL(result.notificationFromActorId)
 
 		const notifFromActor = await getActorById(db, notifFromActorId)
 		if (!notifFromActor) {
-			console.warn('unknown actor')
+			console.warn('unknown actor: ', notifFromActorId)
 			continue
 		}
 
 		const notifFromAccount = await loadMastodonAccount(db, domain, notifFromActor, actorToHandle(notifFromActor))
 
+		const { notificationType, originalActorId } = result
+		if (!isNotificationType(notificationType)) {
+			console.warn('unknown notification type: ', notificationType)
+			continue
+		}
+
 		const notif: Notification = {
-			id: result.notif_id.toString(),
-			type: result.notif_type,
-			created_at: new Date(result.notif_cdate).toISOString(),
+			id: result.notificationId.toString(),
+			type: notificationType,
+			created_at: new Date(result.notificationCdate).toISOString(),
 			account: notifFromAccount,
 		}
 
-		if (result.notif_type === 'mention' || result.notif_type === 'favourite') {
+		if (notificationType === 'mention' || notificationType === 'favourite') {
+			if (!originalActorId) {
+				console.warn('unknown original_actor_id', JSON.stringify(result))
+				continue
+			}
 			if (result.id === null || result.type !== 'Note') {
 				console.warn('notification object is null')
 				continue
 			}
 
-			result.mastodon_id = await ensureObjectMastodonId(db, result.mastodon_id, result.cdate)
+			result.mastodonId = await ensureObjectMastodonId(db, result.mastodonId, result.cdate)
 
 			let properties
 			if (typeof result.properties === 'object') {
@@ -285,23 +270,27 @@ LIMIT 20
 			let inReplyToId: string | null = null
 			let inReplyToAccountId: string | null = null
 			if (properties.inReplyTo) {
-				const replied = isLocalObject(domain, properties.inReplyTo)
-					? await getObjectById(db, properties.inReplyTo)
-					: await getObjectByOriginalId(db, properties.inReplyTo)
+				const replied = await getObjectByOriginalId(domain, db, properties.inReplyTo)
 				if (replied) {
 					inReplyToId = replied[mastodonIdSymbol]
-					try {
-						const author = await actors.getAndCache(new URL(replied[originalActorIdSymbol]), db)
-						inReplyToAccountId = author[mastodonIdSymbol]
-					} catch (err) {
+					const author = await getAndCacheActor(new URL(replied[originalActorIdSymbol]), db).catch((err) => {
 						console.warn('failed to get author of reply', err)
+						return null
+					})
+					if (!author) {
 						inReplyToId = null
+					} else {
+						inReplyToAccountId = author[mastodonIdSymbol]
 					}
 				}
 			}
 
-			const actorId = new URL(result.original_actor_id)
-			const actor = await actors.getAndCache(actorId, db)
+			const actorId = new URL(originalActorId)
+			const actor = await getAndCacheActor(actorId, db)
+			if (!actor) {
+				console.warn('unknown actor: ', actorId)
+				continue
+			}
 			const handle = actorToHandle(actor)
 
 			const mentions = []
@@ -315,7 +304,7 @@ LIMIT 20
 			}
 
 			notif.status = {
-				id: result.mastodon_id,
+				id: result.mastodonId,
 				uri: new URL(result.id),
 				created_at: new Date(properties.published ?? result.cdate).toISOString(),
 				account: await loadMastodonAccount(db, domain, actor, handle),
@@ -328,7 +317,7 @@ LIMIT 20
 				url: properties.url
 					? new URL(properties.url)
 					: isLocalAccount(domain, handle)
-					? new URL(`/@${handleToAcct(handle, domain)}/${result.mastodon_id}`, 'https://' + domain)
+					? new URL(`/@${handleToAcct(handle, domain)}/${result.mastodonId}`, 'https://' + domain)
 					: new URL(result.id),
 				reblog: null,
 				edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,

@@ -45,10 +45,9 @@ describe('Mastodon APIs', () => {
 
 		test('returns notifications stored in db', async () => {
 			const db = await makeDB()
-			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 			const fromActor = await createTestUser(domain, db, userKEK, 'from@cloudflare.com')
 
-			const connectedActor = actor
 			const note = await createPublicStatus(domain, db, connectedActor, 'my first status')
 			await insertFollowNotification(db, connectedActor, fromActor)
 			await sleep(10)

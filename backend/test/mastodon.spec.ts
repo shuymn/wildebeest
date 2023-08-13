@@ -333,17 +333,17 @@ describe('Mastodon APIs', () => {
 				if (input instanceof URL || typeof input === 'string') {
 					if (input.toString() === 'https://example.com/user/a') {
 						return new Response(
-							JSON.stringify({ id: 'https://example.com/user/a', type: 'Actor', preferredUsername: 'a' })
+							JSON.stringify({ id: 'https://example.com/user/a', type: 'Person', preferredUsername: 'a' })
 						)
 					}
 					if (input.toString() === 'https://example.com/user/b') {
 						return new Response(
-							JSON.stringify({ id: 'https://example.com/user/b', type: 'Actor', preferredUsername: 'b' })
+							JSON.stringify({ id: 'https://example.com/user/b', type: 'Person', preferredUsername: 'b' })
 						)
 					}
 					if (input.toString() === 'https://example.com/user/c') {
 						return new Response(
-							JSON.stringify({ id: 'https://example.com/user/c', type: 'Actor', preferredUsername: 'c' })
+							JSON.stringify({ id: 'https://example.com/user/c', type: 'Person', preferredUsername: 'c' })
 						)
 					}
 					throw new Error(`unexpected request to "${input.toString()}"`)

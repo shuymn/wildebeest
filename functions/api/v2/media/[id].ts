@@ -33,16 +33,22 @@ export const onRequestPut: PagesFunction<Env, 'id', ContextData> = async ({ para
 	}
 	const result = await readBody(request, schema)
 	if (result.success) {
-		return handleRequestPut(await getDatabase(env), id, result.data)
+		const domain = new URL(request.url).hostname
+		return handleRequestPut(domain, await getDatabase(env), id, result.data)
 	}
 	const [issue] = result.error.issues
 	return unprocessableEntity(`${issue?.path.join('.')}: ${issue?.message}`)
 }
 
-export async function handleRequestPut(db: Database, id: MastodonId, params: Parameters): Promise<Response> {
+export async function handleRequestPut(
+	domain: string,
+	db: Database,
+	id: MastodonId,
+	params: Parameters
+): Promise<Response> {
 	// Update the image properties
 	{
-		const image = (await getObjectByMastodonId(db, id)) as Image
+		const image = (await getObjectByMastodonId(domain, db, id)) as Image
 		if (image === null) {
 			return mediaNotFound(id)
 		}
@@ -53,7 +59,7 @@ export async function handleRequestPut(db: Database, id: MastodonId, params: Par
 	}
 
 	// reload the image for fresh state
-	const image = (await getObjectByMastodonId(db, id)) as Image
+	const image = (await getObjectByMastodonId(domain, db, id)) as Image
 	const imageUrl = getApUrl(image)
 
 	const res: MediaAttachment = {

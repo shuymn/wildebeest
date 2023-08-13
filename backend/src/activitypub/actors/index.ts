@@ -1,6 +1,5 @@
 import {
 	type ApObject,
-	ApObjectId,
 	getApId,
 	getTextContent,
 	mastodonIdSymbol,
@@ -9,8 +8,9 @@ import {
 } from 'wildebeest/backend/src/activitypub/objects'
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
+import * as query from 'wildebeest/backend/src/database/d1/querier'
 import { MastodonId } from 'wildebeest/backend/src/types'
-import { isUUID } from 'wildebeest/backend/src/utils'
+import { isGone, isNotFound, isUUID } from 'wildebeest/backend/src/utils'
 import { adjustLocalHostDomain } from 'wildebeest/backend/src/utils/adjustLocalHostDomain'
 import { RemoteHandle } from 'wildebeest/backend/src/utils/handle'
 import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
@@ -19,9 +19,11 @@ import { UA } from 'wildebeest/config/ua'
 
 export const isAdminSymbol = Symbol()
 
+const actorTypes = ['Person', 'Service', 'Organization', 'Group', 'Application'] as const
+
 // https://www.w3.org/TR/activitystreams-vocabulary/#actor-types
 export interface Actor extends ApObject {
-	type: 'Person' | 'Service' | 'Organization' | 'Group' | 'Application'
+	type: (typeof actorTypes)[number]
 	inbox: URL
 	outbox: URL
 	following: URL
@@ -47,13 +49,26 @@ export interface Person extends Actor {
 	type: typeof PERSON
 }
 
-export async function fetchActor(url: string | URL): Promise<Remote<Actor>> {
-	const headers = {
-		accept: 'application/activity+json',
-		'User-Agent': UA,
+function isActorType(type: string): type is Actor['type'] {
+	for (const actorType of actorTypes) {
+		if (actorType === type) {
+			return true
+		}
 	}
-	const res = await fetch(url, { headers })
+	return false
+}
+
+export async function fetchActor(url: string | URL): Promise<Remote<Actor> | null> {
+	const res = await fetch(url, {
+		headers: {
+			accept: 'application/activity+json',
+			'User-Agent': UA,
+		},
+	})
 	if (!res.ok) {
+		if (isNotFound(res) || isGone(res)) {
+			return null
+		}
 		throw new Error(`${url.toString()} returned: ${res.status}`)
 	}
 
@@ -102,54 +117,48 @@ export async function fetchActor(url: string | URL): Promise<Remote<Actor>> {
 }
 
 // Get and cache the Actor locally
-export async function getAndCache(url: URL, db: Database): Promise<Actor> {
+export async function getAndCacheActor(url: URL, db: Database): Promise<Actor | null> {
 	{
 		const actor = await getActorById(db, url)
-		if (actor !== null) {
+		if (actor) {
 			return actor
 		}
 	}
 
 	const actor = await fetchActor(url)
-	if (!actor.type || !actor.id) {
+	if (!actor) {
+		return null
+	}
+	if (!actor.type || !actor.id || !actor.preferredUsername) {
 		throw new Error('missing fields on Actor')
 	}
 
-	const properties = actor
+	const { type } = actor
+	if (!isActorType(type)) {
+		throw new Error(`invalid actor type: ${type}`)
+	}
 
 	const now = new Date()
 	const mastodonId = await generateMastodonId(db, 'actors', now)
 	const actorId = getApId(actor.id)
 
-	const row = await db
-		.prepare(
-			`
-INSERT INTO actors (id, mastodon_id, domain, properties, cdate, type, username)
-VALUES (?, ?, ?, ?, ?, ?, lower(?))
-RETURNING type
-    `
-		)
-		.bind(
-			actorId.toString(),
-			mastodonId,
-			actorId.hostname,
-			JSON.stringify(properties),
-			now.toISOString(),
-			properties.type,
-			properties.preferredUsername ?? null
-		)
-		.first<{ type: Actor['type'] }>()
-	if (!row) {
-		throw new Error('failed to insert actor')
-	}
+	await query.insertActor(db, {
+		id: actorId.toString(),
+		mastodonId,
+		type: actor.type,
+		username: actor.preferredUsername?.toLowerCase() ?? null,
+		domain: actorId.hostname,
+		properties: JSON.stringify(actor),
+		cdate: now.toISOString(),
+	})
 
 	// Add peer
-	await addPeer(db, getApId(actor.id).host)
+	await addPeer(db, actorId.hostname)
 
 	return actorFromRow({
 		id: actorId.toString(),
-		mastodon_id: mastodonId,
-		type: row.type,
+		mastodonId,
+		type,
 		properties: actor,
 		cdate: now.toISOString(),
 	})
@@ -176,23 +185,14 @@ export type ActorProperties = Pick<
 >
 
 export async function updateActorProperty(db: Database, actorId: URL, key: string, value: string) {
-	const { success, error } = await db
+	await db
 		.prepare(`UPDATE actors SET properties=${db.qb.jsonSet('properties', key, '?1')} WHERE id=?2`)
 		.bind(value, actorId.toString())
 		.run()
-	if (!success) {
-		throw new Error('SQL error: ' + error)
-	}
 }
 
 export async function setActorAlias(db: Database, actorId: URL, alias: URL) {
-	const { success, error } = await db
-		.prepare(`UPDATE actors SET properties=${db.qb.jsonSet('properties', 'alsoKnownAs', 'json_array(?1)')} WHERE id=?2`)
-		.bind(alias.toString(), actorId.toString())
-		.run()
-	if (!success) {
-		throw new Error('SQL error: ' + error)
-	}
+	await query.updateActorAlias(db, { alias: alias.toString(), id: actorId.toString() })
 }
 
 export async function ensureActorMastodonId(db: Database, mastodonId: string, cdate: string): Promise<MastodonId> {
@@ -200,123 +200,79 @@ export async function ensureActorMastodonId(db: Database, mastodonId: string, cd
 		return mastodonId
 	}
 	const newMastodonId = await generateMastodonId(db, 'actors', new Date(cdate))
-	const { success, error } = await db
-		.prepare(`UPDATE actors SET mastodon_id=?1 WHERE mastodon_id=?2`)
-		.bind(newMastodonId, mastodonId)
-		.run()
-	if (!success) {
-		throw new Error('SQL error: ' + error)
-	}
+	await query.updateActorMastodonIdByMastodonId(db, {
+		next: newMastodonId,
+		current: mastodonId,
+	})
 	return newMastodonId
 }
 
 type ActorRowLike = {
 	id: string
-	mastodon_id: string
+	mastodonId: string
 	type: Actor['type']
 	properties: string
 	cdate: string
 }
 
+export function isActorRowLike(row: query.SelectActorRow): row is ActorRowLike {
+	return !!row.mastodonId && !!row.type
+}
+
 export async function getActorByMastodonId(db: Database, id: MastodonId): Promise<Actor | null> {
-	const { results } = await db
-		.prepare(
-			`
-SELECT
-  id,
-  mastodon_id,
-  type,
-  properties,
-  cdate
-FROM actors
-WHERE mastodon_id=?1
-`
-		)
-		.bind(id)
-		.all<ActorRowLike>()
-	if (!results || results.length === 0) {
+	const row = await query.selectActorByMastodonId(db, { mastodonId: id })
+	if (!row || !isActorRowLike(row)) {
 		return null
 	}
-	return actorFromRow(results[0])
+	row.mastodonId = await ensureActorMastodonId(db, row.mastodonId, row.cdate)
+	return actorFromRow(row)
 }
 
 export async function getActorById(db: Database, id: Actor['id']): Promise<Actor | null> {
-	const stmt = db
-		.prepare(
-			`
-SELECT
-  id,
-  mastodon_id,
-  type,
-  properties,
-  cdate
-FROM actors
-WHERE id=?1
-  `
-		)
-		.bind(id.toString())
-	const { results } = await stmt.all<ActorRowLike>()
-	if (!results || results.length === 0) {
+	const row = await query.selectActor(db, { id: id.toString() })
+	if (!row || !isActorRowLike(row)) {
 		return null
 	}
-	return actorFromRow({
-		...results[0],
-		mastodon_id: await ensureActorMastodonId(db, results[0].mastodon_id, results[0].cdate),
-	})
+	row.mastodonId = await ensureActorMastodonId(db, row.mastodonId, row.cdate)
+	return actorFromRow(row)
 }
 
 export async function getActorByRemoteHandle(db: Database, handle: RemoteHandle): Promise<Actor | null> {
-	const { results } = await db
-		.prepare(
-			`
-SELECT
-  id,
-  mastodon_id,
-  type,
-  properties,
-  cdate
-FROM actors
-WHERE username=lower(?1) AND domain=?2
-`
-		)
-		.bind(handle.localPart, adjustLocalHostDomain(handle.domain))
-		.all<ActorRowLike>()
-	if (!results || results.length === 0) {
+	const row = await query.selectActorByUsernameAndDomain(db, {
+		username: handle.localPart,
+		domain: adjustLocalHostDomain(handle.domain),
+	})
+
+	if (!row || !isActorRowLike(row)) {
 		return null
 	}
-	return actorFromRow({
-		...results[0],
-		mastodon_id: await ensureActorMastodonId(db, results[0].mastodon_id, results[0].cdate),
-	})
+	row.mastodonId = await ensureActorMastodonId(db, row.mastodonId, row.cdate)
+	return actorFromRow(row)
 }
 
 export type ActorRow<T extends Actor> = {
 	id: string
-	mastodon_id: string
+	mastodonId: string
 	type: T['type']
 	properties: ActorProperties | string
 	cdate: string
-	original_actor_id?: ApObjectId
 }
 
 export function actorFromRow<T extends Actor>(row: ActorRow<T>) {
-	let properties
+	let properties: ActorProperties
 	if (typeof row.properties === 'object') {
-		// neon uses JSONB for properties which is returned as a deserialized
-		// object.
 		properties = row.properties
 	} else {
-		// D1 uses a string for JSON properties
 		properties = JSON.parse(row.properties) as ActorProperties
 	}
 
 	const { preferredUsername } = properties
 	const name = properties.name ?? preferredUsername
 
-	let publicKey
-	if (properties.publicKey !== undefined && properties.publicKey.publicKeyPem !== undefined) {
+	let publicKey: ActorProperties['publicKey']
+	if (properties.publicKey && properties.publicKey.publicKeyPem) {
 		publicKey = {
-			id: properties.publicKey.id ?? new URL(row.id + '#main-key'),
+			id: properties.publicKey.id ?? new URL(row.id + '#main-key').toString(),
 			publicKeyPem: properties.publicKey.publicKeyPem,
 		}
 	}
@@ -372,6 +328,6 @@ export function actorFromRow<T extends Actor>(row: ActorRow<T>) {
 		sensitive: properties.sensitive ?? undefined,
 
 		// Hidden values
-		[mastodonIdSymbol]: row.mastodon_id,
+		[mastodonIdSymbol]: row.mastodonId,
 	}
 }

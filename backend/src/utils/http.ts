@@ -3,6 +3,9 @@ import { output, SafeParseReturnType, SomeZodObject, z, ZodObject, ZodRawShape, 
 
 export const HTTPS = 'https://'
 
+export const isNotFound = (resp: Response): boolean => resp.status === 404
+export const isGone = (resp: Response): boolean => resp.status === 410
+
 export type JsonResponse<T> = Response & {
 	_T: T
 }

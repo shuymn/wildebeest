@@ -1,9 +1,7 @@
+import { Actor, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database } from 'wildebeest/backend/src/database'
 import { handleToAcct, RemoteHandle } from 'wildebeest/backend/src/utils/handle'
 import { UA } from 'wildebeest/config/ua'
-
-import type { Actor } from '../activitypub/actors'
-import * as actors from '../activitypub/actors'
 
 export type WebFingerResponse = {
 	subject: string
@@ -21,7 +19,7 @@ export async function queryAcct(handle: RemoteHandle, db: Database): Promise<Act
 	if (url === null) {
 		return null
 	}
-	return actors.getAndCache(url, db)
+	return getAndCacheActor(url, db)
 }
 
 export async function queryAcctLink(handle: RemoteHandle): Promise<URL | null> {

@@ -12,8 +12,13 @@ import {
 	UpdateActivity,
 } from 'wildebeest/backend/src/activitypub/activities'
 import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
-import { ApObject, getApId, originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { cacheObject, getObjectById } from 'wildebeest/backend/src/activitypub/objects/'
+import {
+	ApObject,
+	getAndCacheObject,
+	getApId,
+	originalObjectIdSymbol,
+} from 'wildebeest/backend/src/activitypub/objects'
+import { getObjectById } from 'wildebeest/backend/src/activitypub/objects/'
 import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
@@ -221,6 +226,22 @@ describe('ActivityPub', () => {
 
 		describe('Create', () => {
 			test('Object must be an object', async () => {
+				globalThis.fetch = async (input: RequestInfo) => {
+					if (input instanceof URL || typeof input === 'string') {
+						if (input.toString() === 'https://example.com/actor') {
+							return new Response(
+								JSON.stringify({
+									id: 'https://example.com/actor',
+									type: 'Person',
+									preferredUsername: 'actor',
+								})
+							)
+						}
+						throw new Error('unexpected request to ' + input.toString())
+					}
+					throw new Error('unexpected request to ' + input.url)
+				}
+
 				const db = await makeDB()
 				await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
@@ -241,7 +262,7 @@ describe('ActivityPub', () => {
 				const db = await makeDB()
 				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
-				const activity: CreateActivity = {
+				const activity: CreateActivity<Note> = {
 					type: 'Create',
 					id: createActivityId(domain),
 					actor: actor.id,
@@ -251,6 +272,11 @@ describe('ActivityPub', () => {
 						id: getApId('https://example.com/note1'),
 						type: 'Note',
 						content: 'test note',
+						attributedTo: actor.id,
+						attachment: [],
+						to: [actor.id],
+						cc: [],
+						sensitive: false,
 					},
 				}
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
@@ -285,7 +311,7 @@ describe('ActivityPub', () => {
 				const db = await makeDB()
 				await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
-				const activity: CreateActivity = {
+				const activity: CreateActivity<Note> = {
 					type: 'Create',
 					id: createActivityId(domain),
 					actor: getApId(remoteActorId),
@@ -295,6 +321,11 @@ describe('ActivityPub', () => {
 						id: getApId('https://example.com/note1'),
 						type: 'Note',
 						content: 'test note',
+						attributedTo: getApId(remoteActorId),
+						attachment: [],
+						to: [PUBLIC_GROUP],
+						cc: [],
+						sensitive: false,
 					},
 				}
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
@@ -312,7 +343,7 @@ describe('ActivityPub', () => {
 				const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 				const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
 
-				const activity: CreateActivity = {
+				const activity: CreateActivity<Note> = {
 					type: 'Create',
 					id: createActivityId(domain),
 					actor: actorB.id,
@@ -322,6 +353,11 @@ describe('ActivityPub', () => {
 						id: getApId('https://example.com/note2'),
 						type: 'Note',
 						content: 'test note',
+						attributedTo: actorB.id,
+						to: [actorA.id],
+						cc: [],
+						attachment: [],
+						sensitive: false,
 					},
 				}
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
@@ -342,7 +378,7 @@ describe('ActivityPub', () => {
 				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 				{
-					const activity: CreateActivity = {
+					const activity: CreateActivity<Note> = {
 						type: 'Create',
 						id: createActivityId(domain),
 						actor: actor.id,
@@ -351,22 +387,32 @@ describe('ActivityPub', () => {
 							id: getApId('https://example.com/note1'),
 							type: 'Note',
 							content: 'post',
+							attributedTo: actor.id,
+							to: [actor.id],
+							cc: [],
+							attachment: [],
+							sensitive: false,
 						},
 					}
 					await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 				}
 
 				{
-					const activity: CreateActivity = {
+					const activity: CreateActivity<Note> = {
 						type: 'Create',
 						id: createActivityId(domain),
 						actor: actor.id,
 						to: [actor.id],
 						object: {
-							inReplyTo: 'https://example.com/note1',
 							id: getApId('https://example.com/note2'),
 							type: 'Note',
 							content: 'reply',
+							inReplyTo: 'https://example.com/note1',
+							attributedTo: actor.id,
+							to: [actor.id],
+							cc: [],
+							attachment: [],
+							sensitive: false,
 						},
 					}
 					await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
@@ -380,11 +426,11 @@ describe('ActivityPub', () => {
 				assert.ok(entry)
 				assert.equal(entry.actor_id, actor.id.toString().toString())
 
-				const obj = await getObjectById(db, entry.object_id)
+				const obj = await getObjectById(domain, db, entry.object_id)
 				assert(obj)
 				assert.equal(obj[originalObjectIdSymbol], 'https://example.com/note2')
 
-				const inReplyTo = await getObjectById(db, entry.in_reply_to_object_id)
+				const inReplyTo = await getObjectById(domain, db, entry.in_reply_to_object_id)
 				assert(inReplyTo)
 				assert.equal(inReplyTo[originalObjectIdSymbol], 'https://example.com/note1')
 			})
@@ -393,7 +439,7 @@ describe('ActivityPub', () => {
 				const db = await makeDB()
 				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
-				const activity: CreateActivity = {
+				const activity: CreateActivity<Note> = {
 					type: 'Create',
 					id: createActivityId(domain),
 					actor: actor.id,
@@ -403,6 +449,11 @@ describe('ActivityPub', () => {
 						id: getApId('https://example.com/note1'),
 						type: 'Note',
 						content: 'test note',
+						attributedTo: actor.id,
+						to: [getApId('https://example.com/some-actor')],
+						cc: [],
+						attachment: [],
+						sensitive: false,
 					},
 				}
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
@@ -417,7 +468,7 @@ describe('ActivityPub', () => {
 				const db = await makeDB()
 				const person = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
-				const activity: CreateActivity = {
+				const activity: CreateActivity<Note> = {
 					'@context': 'https://www.w3.org/ns/activitystreams',
 					id: createActivityId(domain),
 					type: 'Create',
@@ -428,6 +479,11 @@ describe('ActivityPub', () => {
 						name: '<script>Dr Evil</script>',
 						content:
 							'<div><span class="bad h-10 p-100\tu-22\r\ndt-xi e-bam mention hashtag ellipsis invisible o-bad">foo</span><br/><p><a href="blah"><b>bold</b></a></p><script>alert("evil")</script></div>',
+						attributedTo: person.id,
+						to: [person],
+						cc: [],
+						attachment: [],
+						sensitive: false,
 					},
 				}
 
@@ -490,7 +546,7 @@ describe('ActivityPub', () => {
 					content: 'test note',
 				}
 
-				const obj = await cacheObject(domain, db, object, getApId(actor), getApId(object.id), false)
+				const obj = await getAndCacheObject(domain, db, object, actor)
 				assert.notEqual(obj, null, 'could not create object')
 
 				const activity: UpdateActivity = {
@@ -515,7 +571,7 @@ describe('ActivityPub', () => {
 					content: 'test note',
 				}
 
-				const obj = await cacheObject(domain, db, object, getApId(actor), getApId(object.id), false)
+				const obj = await getAndCacheObject(domain, db, object, actor)
 				assert.notEqual(obj, null, 'could not create object')
 
 				const newObject: ApObject = {
@@ -1007,7 +1063,16 @@ describe('ActivityPub', () => {
 					.bind(
 						'https://example.com/object1',
 						'Note',
-						JSON.stringify({ content: 'my first status' }),
+						JSON.stringify({
+							id: originalObjectId,
+							type: 'Note',
+							content: 'my first status',
+							to: [PUBLIC_GROUP],
+							cc: [],
+							attributedTo: actorA.id.toString(),
+							attachment: [],
+							sensitive: false,
+						} satisfies Note),
 						actorA.id.toString(),
 						originalObjectId,
 						'mastodonid1'
@@ -1018,8 +1083,6 @@ describe('ActivityPub', () => {
 					type: 'Delete',
 					id: createActivityId(domain),
 					actor: actorA.id,
-					to: [],
-					cc: [],
 					object: getApId(originalObjectId),
 				}
 
@@ -1047,7 +1110,16 @@ describe('ActivityPub', () => {
 					.bind(
 						'https://example.com/object1',
 						'Note',
-						JSON.stringify({ content: 'my first status' }),
+						JSON.stringify({
+							id: originalObjectId,
+							type: 'Note',
+							content: 'my first status',
+							to: [PUBLIC_GROUP],
+							cc: [],
+							attributedTo: actorA.id.toString(),
+							attachment: [],
+							sensitive: false,
+						} satisfies Note),
 						actorA.id.toString(),
 						originalObjectId,
 						'mastodonid1'
@@ -1058,8 +1130,6 @@ describe('ActivityPub', () => {
 					type: 'Delete',
 					id: createActivityId(domain),
 					actor: actorA.id,
-					to: [],
-					cc: [],
 					object: {
 						type: 'Tombstone',
 						id: getApId(originalObjectId),
@@ -1093,7 +1163,16 @@ describe('ActivityPub', () => {
 					.bind(
 						'https://example.com/object1',
 						'Note',
-						JSON.stringify({ content: 'my first status' }),
+						JSON.stringify({
+							id: originalObjectId,
+							type: 'Note',
+							content: 'my first status',
+							to: [PUBLIC_GROUP],
+							cc: [],
+							attributedTo: actorB.id.toString(),
+							attachment: [],
+							sensitive: false,
+						} satisfies Note),
 						actorB.id.toString(),
 						originalObjectId,
 						'mastodonid1'
@@ -1104,8 +1183,6 @@ describe('ActivityPub', () => {
 					type: 'Delete',
 					id: createActivityId(domain),
 					actor: actorA.id, // ActorA attempts to delete
-					to: [],
-					cc: [],
 					object: actorA.id,
 				}
 
@@ -1130,8 +1207,6 @@ describe('ActivityPub', () => {
 					type: 'Delete',
 					id: createActivityId(domain),
 					actor: actorA.id,
-					to: [],
-					cc: [],
 					object: actorA.id,
 				}
 
@@ -1161,8 +1236,6 @@ describe('ActivityPub', () => {
 					type: 'Delete',
 					id: createActivityId(domain),
 					actor: actorA.id,
-					to: [],
-					cc: [],
 					object: note.id,
 				}
 

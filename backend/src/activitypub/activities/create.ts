@@ -6,14 +6,14 @@ import {
 	insertActivity,
 } from 'wildebeest/backend/src/activitypub/activities'
 import { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
+import { getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInInbox } from 'wildebeest/backend/src/activitypub/actors/inbox'
 import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
-import { cacheObject, get, getApId, getObjectByOriginalId } from 'wildebeest/backend/src/activitypub/objects'
+import { ApObject, getApId } from 'wildebeest/backend/src/activitypub/objects'
 import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { Database } from 'wildebeest/backend/src/database'
 import { createNotification, sendMentionNotification } from 'wildebeest/backend/src/mastodon/notification'
-import { insertReply } from 'wildebeest/backend/src/mastodon/reply'
+import { toArray, unique } from 'wildebeest/backend/src/utils'
 import { parseHandle } from 'wildebeest/backend/src/utils/handle'
 import { RequiredProps } from 'wildebeest/backend/src/utils/type'
 import { JWK } from 'wildebeest/backend/src/webpush/jwk'
@@ -50,6 +50,22 @@ function extractID(domain: string, s: string | URL): string {
 	return s.toString().replace(`https://${domain}/ap/users/`, '')
 }
 
+function isRecipientMatch(
+	activity: Required<Pick<CreateActivity, 'to' | 'cc'>>,
+	obj: Required<Pick<ApObject, 'to' | 'cc'>>
+): boolean {
+	const [actTo, actCc, objTo, objCc] = [activity.to, activity.cc, obj.to, obj.cc]
+		.map(toArray)
+		.map(unique)
+		.map((arr) => arr.map((obj) => getApId(obj).toString()))
+
+	if (actTo.length !== objTo.length || actCc.length !== objCc.length) {
+		return false
+	}
+
+	return actTo.every((to) => objTo.includes(to)) && actCc.every((cc) => objCc.includes(cc))
+}
+
 // https://www.w3.org/TR/activitypub/#create-activity-inbox
 export async function handleCreateActivity(
 	domain: string,
@@ -60,9 +76,32 @@ export async function handleCreateActivity(
 ) {
 	// FIXME: download any attachment Objects
 
+	const actorId = getApId(activity.actor)
+	const actor = await getAndCacheActor(actorId, db)
+	if (!actor) {
+		console.warn(`actor ${actorId} not found`)
+		return
+	}
+
+	const res = await cacheActivityObject(domain, db, getActivityObject(activity), actor)
+	if (!res?.created) {
+		// Object already existed in our database. Probably a duplicated
+		// message
+		return
+	}
+	const obj = res.object
+
+	if (!isRecipientMatch({ to: activity.to ?? [], cc: activity.cc ?? [] }, { to: obj.to ?? [], cc: obj.cc ?? [] })) {
+		console.warn('activity recipients do not match object recipients.', {
+			activity: { to: activity.to, cc: activity.cc },
+			object: { to: obj.to, cc: obj.cc },
+		})
+		return
+	}
+
 	const recipients = new Map<string, URL>()
 
-	const to = activity.to === undefined ? [] : Array.isArray(activity.to) ? activity.to : [activity.to]
+	const to = activity.to === undefined ? (obj.to === undefined ? [] : toArray(obj.to)) : toArray(activity.to)
 	if (to.length > 0) {
 		for (const target of to) {
 			const targetId = getApId(target)
@@ -71,7 +110,7 @@ export async function handleCreateActivity(
 		}
 	}
 
-	const cc = activity.cc === undefined ? [] : Array.isArray(activity.cc) ? activity.cc : [activity.cc]
+	const cc = activity.cc === undefined ? (obj.cc === undefined ? [] : toArray(obj.cc)) : toArray(activity.cc)
 	if (cc.length > 0) {
 		for (const target of cc) {
 			const targetId = getApId(target)
@@ -80,49 +119,16 @@ export async function handleCreateActivity(
 		}
 	}
 
-	activity.object = getActivityObject(activity)
-	const actorId = getApId(activity.actor)
-	const objectId = getApId(activity.object)
-	const res = await cacheActivityObject(domain, activity.object, db, actorId, objectId)
-	if (res === null) {
-		return
-	}
-
-	if (!res.created) {
-		// Object already existed in our database. Probably a duplicated
-		// message
-		return
-	}
-	const obj = res.object
-
-	const actor = await getAndCache(actorId, db)
-
-	// This note is actually a reply to another one, record it in the replies
-	// table.
-	if (obj.type === 'Note' && obj.inReplyTo) {
-		const inReplyToObjectId = getApId(obj.inReplyTo)
-		let inReplyToObject = await getObjectByOriginalId(db, inReplyToObjectId)
-
-		if (inReplyToObject === null) {
-			const remoteObject = await get<Note>(inReplyToObjectId)
-			const res = await cacheObject<Note>(domain, db, remoteObject, actorId, inReplyToObjectId, false)
-			inReplyToObject = res.object
-		}
-
-		await insertReply(db, actor, obj, inReplyToObject)
-	}
-
-	const fromActor = await getAndCache(actorId, db)
 	// Add the object in the originating actor's outbox, allowing other
 	// actors on this instance to see the note in their timelines.
-	await addObjectInOutbox(db, fromActor, obj, activity.to ?? obj.to, activity.cc ?? obj.cc, activity.published)
+	await addObjectInOutbox(db, actor, obj, activity.to ?? obj.to, activity.cc ?? obj.cc, activity.published)
 
-	for (const url of recipients.values()) {
-		if (url.hostname !== domain) {
+	for (const rec of recipients.values()) {
+		if (!rec.toString().startsWith(`https://${domain}/ap/users/`)) {
 			continue
 		}
 
-		const handle = parseHandle(extractID(domain, url))
+		const handle = parseHandle(extractID(domain, rec))
 		if (!isLocalAccount(domain, handle)) {
 			console.warn('activity not for current instance')
 			continue
@@ -130,18 +136,18 @@ export async function handleCreateActivity(
 
 		const person = await getActorById(db, getUserId(domain, handle))
 		if (person === null) {
-			console.warn(`person ${url} not found`)
+			console.warn(`person ${rec} not found`)
 			continue
 		}
 		if (person.type !== 'Person') {
-			console.warn(`person ${url} is not a Person`)
+			console.warn(`person ${rec} is not a Person`)
 			continue
 		}
 
-		const notifId = await createNotification(db, 'mention', person, fromActor, obj)
+		const notifId = await createNotification(db, 'mention', person, actor, obj)
 		await Promise.all([
 			await addObjectInInbox(db, person, obj),
-			await sendMentionNotification(db, fromActor, person, notifId, adminEmail, vapidKeys),
+			await sendMentionNotification(db, actor, person, notifId, adminEmail, vapidKeys),
 		])
 	}
 }

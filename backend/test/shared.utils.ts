@@ -4,7 +4,8 @@
  * building.
  */
 
-import { ApObject } from 'wildebeest/backend/src/activitypub/objects'
+import { Document } from 'wildebeest/backend/src/activitypub/objects'
+import { Image } from 'wildebeest/backend/src/activitypub/objects/image'
 import { type Database } from 'wildebeest/backend/src/database'
 
 import { type Actor, getActorById, type Person } from '../src/activitypub/actors'
@@ -65,7 +66,7 @@ export async function createPublicStatus(
 	db: Database,
 	actor: Person,
 	content: string,
-	attachments?: ApObject[],
+	attachments?: (Document | Image)[],
 	extraProperties?: Record<string, any>
 ) {
 	const note = await createPublicNote(
@@ -90,7 +91,7 @@ export async function createUnlistedStatus(
 	db: Database,
 	actor: Person,
 	content: string,
-	attachments?: ApObject[],
+	attachments?: (Document | Image)[],
 	extraProperties?: Record<string, any>
 ) {
 	const note = await createUnlistedNote(
@@ -111,7 +112,7 @@ export async function createPrivateStatus(
 	db: Database,
 	actor: Person,
 	content: string,
-	attachments?: ApObject[],
+	attachments?: (Document | Image)[],
 	extraProperties?: Record<string, any>
 ) {
 	const note = await createPrivateNote(
@@ -132,7 +133,7 @@ export async function createDirectStatus(
 	db: Database,
 	actor: Person,
 	content: string,
-	attachments?: ApObject[],
+	attachments?: (Document | Image)[],
 	extraProperties?: Record<string, any>
 ) {
 	const to = extraProperties?.to ?? [actor]

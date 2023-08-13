@@ -1,7 +1,7 @@
 // https://docs.joinmastodon.org/methods/accounts/#followers
 
 import { isLocalAccount } from 'wildebeest/backend/src/accounts'
-import { Actor, getActorByMastodonId, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
+import { Actor, getActorByMastodonId, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
 import { getFollowers, loadActors } from 'wildebeest/backend/src/activitypub/actors/follow'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { resourceNotFound } from 'wildebeest/backend/src/errors'
@@ -64,15 +64,12 @@ async function get(
 		const followerIds = await getFollowerIds(db, actor, params.limit)
 		const promises: Promise<MastodonAccount>[] = []
 		for (const id of followerIds) {
-			try {
-				const follower = await getAndCache(new URL(id), db)
-				promises.push(loadMastodonAccount(db, domain, follower, actorToHandle(follower)))
-			} catch (err) {
-				if (err instanceof Error) {
-					console.warn(`failed to retrieve follower (${id}): ${err.message}`)
-				}
-				throw err
+			const follower = await getAndCacheActor(new URL(id), db)
+			if (!follower) {
+				console.warn(`failed to load follower ${id}`)
+				continue
 			}
+			promises.push(loadMastodonAccount(db, domain, follower, actorToHandle(follower)))
 		}
 
 		return makeJsonResponse(await Promise.all(promises), { headers })

@@ -1,9 +1,13 @@
+import { Actor, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
+import { isNote, Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
 import { type Database } from 'wildebeest/backend/src/database'
+import * as query from 'wildebeest/backend/src/database/d1/querier'
+import { insertReply } from 'wildebeest/backend/src/mastodon/reply'
 import type { MastodonId } from 'wildebeest/backend/src/types'
-import { isUUID } from 'wildebeest/backend/src/utils'
+import { HTTPS, isGone, isNotFound, isUUID } from 'wildebeest/backend/src/utils'
 import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
-import { AwaitedOnce, Intersect, RequiredProps, SingleOrArray } from 'wildebeest/backend/src/utils/type'
+import { Intersect, RequiredProps, SingleOrArray } from 'wildebeest/backend/src/utils/type'
 import { UA } from 'wildebeest/config/ua'
 
 export const originalActorIdSymbol = Symbol()
@@ -30,23 +34,23 @@ export interface ApObject {
 	name?: string
 	mediaType?: string
 	content?: string
-	inReplyTo?: string | null
 	cc?: SingleOrArray<ApObjectOrId>
 	to?: SingleOrArray<ApObjectOrId>
 
 	// Extension
 	preferredUsername?: string
 	sensitive?: boolean
+
 	// Internal
 	[originalActorIdSymbol]?: string
 	[originalObjectIdSymbol]?: string
 	[mastodonIdSymbol]?: MastodonId
 }
 
-export type ApObjectId = ApObject['id']
-export type ApObjectUrl = NonNullable<ApObject['url']>
-export type ApObjectOrId = ApObject | ApObjectId
-export type ApObjectOrUrl = ApObject | ApObjectUrl
+export type ApObjectId<T extends ApObject = ApObject> = T['id']
+export type ApObjectUrl<T extends ApObject = ApObject> = NonNullable<T['url']>
+export type ApObjectOrId<T extends ApObject = ApObject> = T | ApObjectId<T>
+export type ApObjectOrUrl<T extends ApObject = ApObject> = T | ApObjectUrl<T>
 
 function parseUrl(value: string): URL {
 	try {
@@ -97,192 +101,254 @@ export function getApType(obj: ApObject): string {
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-document
 export type Document = RequiredProps<ApObject, 'url'> & {
 	type: 'Document'
+	description?: string
+	blurhash?: string
+	width?: number
+	height?: number
 }
 
 export function isDocument(object: ApObject): object is Document {
 	return object.type === 'Document'
 }
 
-export function uri(domain: string, id: string): URL {
-	return new URL('/ap/o/' + id, 'https://' + domain)
+export function getObjectUrl(domain: string, id: string): URL {
+	return new URL('/ap/o/' + id, HTTPS + domain)
 }
 
 export async function createObject<T extends ApObject>(
 	domain: string,
 	db: Database,
 	type: T['type'],
-	properties: Omit<T, 'id' | 'type'>,
-	originalActorId: URL,
-	local: boolean
-) {
+	raw: Omit<T, 'id' | 'type'>,
+	actorId: URL
+): Promise<LocalObject<T>> {
 	const now = new Date()
 	const mastodonId = await generateMastodonId(db, 'objects', now)
-	const apId = uri(domain, crypto.randomUUID())
+	const apId = getObjectUrl(domain, crypto.randomUUID())
 
-	const parts = originalActorId.pathname.split('/')
+	const parts = actorId.pathname.split('/')
 	if (parts.length === 0) {
 		throw new Error('malformed URL')
 	}
 	const username = parts[parts.length - 1]
 
-	properties = await sanitizeObjectProperties({
+	const sanitized = await sanitizeObjectProperties({
+		...raw,
 		id: apId,
-		url: local ? new URL(`/@${username}/${mastodonId}`, 'https://' + domain) : undefined,
 		type,
-		...properties,
+		url: raw.url ?? new URL(`/@${username}/${mastodonId}`, HTTPS + domain),
 	})
 
-	const { success, error } = await db
-		.prepare(
-			`INSERT INTO objects(id, type, properties, original_actor_id, local, mastodon_id, cdate, reply_to_object_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-		)
-		.bind(
-			apId.toString(),
-			type,
-			JSON.stringify(properties),
-			originalActorId.toString(),
-			local ? 1 : 0,
-			mastodonId,
-			now.toISOString(),
-			properties.inReplyTo ? properties.inReplyTo.toString() : null
-		)
-		.run()
-	if (!success) {
-		throw new Error('SQL error: ' + error)
+	let replyToObjectId: string | null = null
+	if (isNote(sanitized) && sanitized.inReplyTo) {
+		const id = await cacheReply(domain, db, sanitized.inReplyTo, sanitized.attributedTo.toString(), 1)
+		if (id) {
+			replyToObjectId = id
+		}
 	}
 
-	return {
-		...properties,
+	await query.insertLocalObject(db, {
+		id: sanitized.id.toString(),
+		mastodonId,
 		type,
-		id: apId,
+		cdate: now.toISOString(),
+		originalActorId: actorId.toString(),
+		replyToObjectId,
+		properties: JSON.stringify(sanitized),
+	})
+
+	return {
+		...sanitized,
 		published: now.toISOString(),
 
 		[mastodonIdSymbol]: mastodonId,
-		[originalActorIdSymbol]: originalActorId.toString(),
-	}
+		[originalActorIdSymbol]: actorId.toString(),
+		[originalObjectIdSymbol]: sanitized.id.toString(),
+	} as LocalObject<T>
 }
 
-export async function get<T>(url: URL): Promise<T> {
-	const headers = {
-		accept: 'application/activity+json',
-		'User-Agent': UA,
-	}
-	const res = await fetch(url, { headers })
+async function fetchObject<T extends ApObject>(url: URL): Promise<Remote<T> | null> {
+	const res = await fetch(url, {
+		headers: {
+			accept: 'application/activity+json',
+			'User-Agent': UA,
+		},
+	})
 	if (!res.ok) {
+		if (isNotFound(res) || isGone(res)) {
+			return null
+		}
 		throw new Error(`${url} returned: ${res.status}`)
 	}
 
 	return res.json<T>()
 }
 
-type CacheObjectResult<T extends ApObject> = {
-	created: boolean
-	object: Exclude<AwaitedOnce<ReturnType<typeof getObjectBy<T>>>, null>
+export type LocalObject<T extends ApObject> = T & {
+	published: string
+	[mastodonIdSymbol]: string
+	[originalActorIdSymbol]: string
+	[originalObjectIdSymbol]: string
 }
 
-export async function cacheObject<T extends ApObject>(
+export type RemoteObject<T extends ApObject> = Remote<T> & {
+	published: string
+	[mastodonIdSymbol]: string
+	[originalActorIdSymbol]: string
+	[originalObjectIdSymbol]: string
+}
+
+type CacheResult<T extends ApObject> =
+	| { created: true; object: RemoteObject<T> }
+	| { created: false; object: RemoteObject<T> | null }
+
+export async function getAndCacheObject<T extends ApObject>(
 	domain: string,
 	db: Database,
-	properties: T,
-	originalActorId: URL,
-	originalObjectId: URL,
-	local: boolean
-): Promise<CacheObjectResult<T>> {
-	const sanitizedProperties = await sanitizeObjectProperties(properties)
-
-	const cachedObject = await getObjectBy<T>(db, ObjectByKey.originalObjectId, originalObjectId.toString())
-	if (cachedObject !== null) {
-		return {
-			created: false,
-			object: cachedObject,
+	obj: Remote<T> | string | URL,
+	actor: Actor | string | URL,
+	depth = 2
+): Promise<CacheResult<T>> {
+	{
+		const cached = await getObjectByOriginalId<T>(domain, db, getApId(obj))
+		if (cached) {
+			return { created: false, object: cached }
 		}
 	}
+	{
+		const cached = await cacheObject<T>(domain, db, obj, actor, depth)
+		if (cached) {
+			return { created: true, object: cached }
+		}
+		return { created: false, object: null }
+	}
+}
+
+async function cacheReply(
+	domain: string,
+	db: Database,
+	objectId: string,
+	actorId: string,
+	depth: number
+): Promise<string | null> {
+	const row = await query.selectObjectByOriginalObjectId(db, { originalObjectId: objectId })
+	if (row) {
+		return row.id
+	}
+
+	const note = await cacheObject<Note>(domain, db, new URL(objectId), new URL(actorId), depth)
+	return note?.id.toString() ?? null
+}
+
+async function cacheObject<T extends ApObject>(
+	domain: string,
+	db: Database,
+	obj: Remote<T> | string | URL,
+	actor: Actor | string | URL,
+	depth: number
+): Promise<RemoteObject<T> | null> {
+	if (depth < 1) {
+		return null
+	}
+
+	let actorId: URL
+	if (isApObject(actor)) {
+		actorId = getApId(actor)
+	} else {
+		let actorUrl: URL
+		if (typeof actor !== 'string') {
+			actorUrl = actor
+		} else {
+			actorUrl = new URL(actor)
+		}
+
+		const actr = await getAndCacheActor(actorUrl, db)
+		if (!actr) {
+			console.warn('actor not found: ' + actorUrl.toString())
+			return null
+		}
+
+		actorId = actorUrl
+	}
+
+	let remoteObject: Remote<T>
+	if (isApObject(obj)) {
+		remoteObject = obj
+	} else {
+		let remoteObjectUrl: URL
+		if (typeof obj !== 'string') {
+			remoteObjectUrl = obj
+		} else {
+			remoteObjectUrl = new URL(obj)
+		}
+		const remoteObj = await fetchObject<T>(remoteObjectUrl)
+		if (!remoteObj) {
+			console.warn('object not found: ' + remoteObjectUrl)
+			return null
+		}
+		remoteObject = remoteObj
+	}
+
+	const properties = await sanitizeObjectProperties(remoteObject)
+	const originalObjectId = getApId(properties)
+
+	const { inReplyTo, attributedTo } =
+		isNote(properties) && properties.inReplyTo ? properties : { inReplyTo: null, attributedTo: null }
 
 	const now = new Date()
 	const mastodonId = await generateMastodonId(db, 'objects', now)
-	const apId = uri(domain, crypto.randomUUID()).toString()
 
-	const row = await db
-		.prepare(
-			'INSERT INTO objects(id, type, properties, original_actor_id, original_object_id, local, mastodon_id, cdate) VALUES(?, ?, ?, ?, ?, ?, ?, ?) RETURNING *'
-		)
-		.bind(
-			apId,
-			sanitizedProperties.type,
-			JSON.stringify(sanitizedProperties),
-			originalActorId.toString(),
-			originalObjectId.toString(),
-			local ? 1 : 0,
-			mastodonId,
-			now.toISOString()
-		)
-		.first<{
-			properties: string | object
-			cdate: string
-			type: string
-			id: string
-			mastodon_id: string
-			original_actor_id: string
-			original_object_id: string
-		}>()
-	if (!row) {
-		throw new Error('failed to insert object')
+	const apId = getObjectUrl(domain, crypto.randomUUID())
+
+	await query.insertRemoteObject(db, {
+		id: apId.toString(),
+		mastodonId: mastodonId,
+		type: properties.type,
+		cdate: now.toISOString(),
+		originalActorId: actorId.toString(),
+		originalObjectId: originalObjectId.toString(),
+		replyToObjectId: inReplyTo ?? null,
+		properties: JSON.stringify(properties),
+	})
+
+	// add reply
+	if (inReplyTo && attributedTo) {
+		const localObjectId = await cacheReply(domain, db, inReplyTo, attributedTo.toString(), depth - 1).catch((err) => {
+			console.warn('failed to cache reply: ' + err)
+			return null
+		})
+		if (localObjectId) {
+			await insertReply(db, { id: actorId }, { id: apId }, { id: localObjectId }).catch((err) => {
+				console.warn('failed to insert reply: ' + err)
+			})
+		}
 	}
 
-	// Add peer
-	{
-		const domain = originalObjectId.host
-		await addPeer(db, domain)
-	}
+	// add peer
+	await addPeer(db, originalObjectId.hostname).catch((err) => {
+		console.warn('failed to add peer: ' + err)
+	})
 
-	{
-		let properties
-		if (typeof row.properties === 'object') {
-			// neon uses JSONB for properties which is returned as a deserialized
-			// object.
-			properties = row.properties
-		} else {
-			// D1 uses a string for JSON properties
-			properties = JSON.parse(row.properties)
-		}
-		return {
-			created: true,
-			object: {
-				...properties,
-				published: new Date(row.cdate).toISOString(),
+	return {
+		...properties,
+		id: apId,
+		published: now.toISOString(),
 
-				type: row.type,
-				id: new URL(row.id),
-
-				[mastodonIdSymbol]: row.mastodon_id,
-				[originalActorIdSymbol]: row.original_actor_id,
-				[originalObjectIdSymbol]: row.original_object_id,
-			},
-		}
+		[mastodonIdSymbol]: mastodonId,
+		[originalActorIdSymbol]: actorId.toString(),
+		[originalObjectIdSymbol]: originalObjectId.toString(),
 	}
 }
 
-export async function updateObject<T>(db: Database, properties: T, id: URL): Promise<boolean> {
-	// eslint-disable-next-line unused-imports/no-unused-vars
-	const res: any = await db
-		.prepare('UPDATE objects SET properties = ? WHERE id = ?')
-		.bind(JSON.stringify(properties), id.toString())
-		.run()
-
-	// TODO: D1 doesn't return changes at the moment
-	// return res.changes === 1
-	return true
+export async function updateObject<T>(db: Database, properties: T, id: URL): Promise<void> {
+	await query.updateObjectProperties(db, { properties: JSON.stringify(properties), id: id.toString() })
 }
 
 export async function updateObjectProperty(db: Database, obj: ApObject, key: string, value: string) {
-	const { success, error } = await db
+	await db
 		.prepare(`UPDATE objects SET properties=${db.qb.jsonSet('properties', key, '?1')} WHERE id=?2`)
 		.bind(value, obj.id.toString())
 		.run()
-	if (!success) {
-		throw new Error('SQL error: ' + error)
-	}
 }
 
 export async function ensureObjectMastodonId(db: Database, mastodonId: MastodonId, cdate: string): Promise<MastodonId> {
@@ -290,26 +356,38 @@ export async function ensureObjectMastodonId(db: Database, mastodonId: MastodonI
 		return mastodonId
 	}
 	const newMastodonId = await generateMastodonId(db, 'objects', new Date(cdate))
-	const { success, error } = await db
-		.prepare(`UPDATE objects SET mastodon_id=?1 WHERE mastodon_id=?2`)
-		.bind(newMastodonId, mastodonId)
-		.run()
-	if (!success) {
-		throw new Error('SQL error: ' + error)
-	}
+	await query.updateObjectMastodonIdByMastodonId(db, {
+		next: newMastodonId,
+		current: mastodonId,
+	})
 	return newMastodonId
 }
 
-export async function getObjectById<T extends ApObject>(db: Database, id: string | URL) {
-	return getObjectBy<T>(db, ObjectByKey.id, id.toString())
+export async function getObjectById<T extends ApObject>(
+	domain: string,
+	db: Database,
+	id: string | URL
+): Promise<RemoteObject<T> | null> {
+	const row = await query.selectObject(db, { id: id.toString() })
+	return getObjectBy<T>(domain, db, ObjectByKey.id, row)
 }
 
-export async function getObjectByOriginalId<T extends ApObject>(db: Database, id: string | URL) {
-	return getObjectBy<T>(db, ObjectByKey.originalObjectId, id.toString())
+export async function getObjectByOriginalId<T extends ApObject>(
+	domain: string,
+	db: Database,
+	id: string | URL
+): Promise<RemoteObject<T> | null> {
+	const row = await query.selectObjectByOriginalObjectId(db, { originalObjectId: id.toString() })
+	return getObjectBy<T>(domain, db, ObjectByKey.originalObjectId, row)
 }
 
-export async function getObjectByMastodonId<T extends ApObject>(db: Database, id: MastodonId) {
-	return getObjectBy<T>(db, ObjectByKey.mastodonId, id)
+export async function getObjectByMastodonId<T extends ApObject>(
+	domain: string,
+	db: Database,
+	id: MastodonId
+): Promise<RemoteObject<T> | null> {
+	const row = await query.selectObjectByMastodonId(db, { mastodonId: id })
+	return getObjectBy<T>(domain, db, ObjectByKey.mastodonId, row)
 }
 
 export enum ObjectByKey {
@@ -320,64 +398,39 @@ export enum ObjectByKey {
 
 const allowedObjectByKeysSet = new Set(Object.values(ObjectByKey))
 
-export async function getObjectBy<T extends ApObject>(
+async function getObjectBy<T extends ApObject>(
+	domain: string,
 	db: Database,
 	key: ObjectByKey,
-	value: string
-): Promise<(T & { published: string; [mastodonIdSymbol]: string; [originalActorIdSymbol]: string }) | null> {
+	row: query.SelectObjectRow | null
+): Promise<RemoteObject<T> | null> {
 	if (!allowedObjectByKeysSet.has(key)) {
 		throw new Error('getObjectBy run with invalid key: ' + key)
 	}
-	const query = `
-		SELECT *
-		FROM objects
-		WHERE objects.${key}=?
-	`
-	const { results, success, error } = await db.prepare(query).bind(value).all<{
-		id: string
-		mastodon_id: string
-		type: string
-		cdate: string
-		original_actor_id: string
-		original_object_id: string | null
-		reply_to_object_id: string | null
-		properties: string | object
-		local: 1 | 0
-	}>()
-	if (!success) {
-		throw new Error('SQL error: ' + error)
-	}
-	if (!results || results.length === 0) {
+	if (!row || !row.originalActorId || !row.originalObjectId) {
 		return null
 	}
 
-	const [result] = results
-	let properties
-	if (typeof result.properties === 'object') {
-		// neon uses JSONB for properties which is returned as a deserialized
-		// object.
-		properties = result.properties as T
-	} else {
-		// D1 uses a string for JSON properties
-		properties = JSON.parse(result.properties) as T
+	const properties = JSON.parse(row.properties) as Remote<T>
+
+	if (isNote(properties) && properties.inReplyTo) {
+		await cacheReply(domain, db, properties.inReplyTo, properties.attributedTo.toString(), 1)
 	}
 
 	return {
 		...properties,
-		published: new Date(result.cdate).toISOString(),
+		id: new URL(row.id),
+		published: new Date(row.cdate).toISOString(),
 
-		type: result.type,
-		id: new URL(result.id),
-
-		[mastodonIdSymbol]: await ensureObjectMastodonId(db, result.mastodon_id, result.cdate),
-		[originalActorIdSymbol]: result.original_actor_id,
-		[originalObjectIdSymbol]: result.original_object_id ?? undefined,
+		[mastodonIdSymbol]: await ensureObjectMastodonId(db, row.mastodonId, row.cdate),
+		[originalActorIdSymbol]: row.originalActorId,
+		[originalObjectIdSymbol]: row.originalObjectId,
 	}
 }
 
 /** Is the given `value` an ActivityPub Object? */
-export function isApObject(value: unknown): value is ApObject {
-	return value !== null && typeof value === 'object'
+export function isApObject(value: unknown): value is Remote<ApObject> {
+	return value !== null && typeof value === 'object' && 'id' in value && 'type' in value
 }
 
 /** Sanitizes the ActivityPub Object `properties` prior to being stored in the DB. */
@@ -385,16 +438,13 @@ export async function sanitizeObjectProperties<T extends ApObject>(properties: T
 	if (!isApObject(properties)) {
 		throw new Error('Invalid object properties. Expected an object but got ' + JSON.stringify(properties))
 	}
-	const sanitized: T = {
-		...properties,
+	if (properties.content) {
+		properties.content = await sanitizeContent(properties.content)
 	}
-	if ('content' in properties) {
-		sanitized.content = await sanitizeContent(properties.content as string)
+	if (properties.name) {
+		properties.name = await getTextContent(properties.name)
 	}
-	if ('name' in properties) {
-		sanitized.name = await getTextContent(properties.name as string)
-	}
-	return sanitized
+	return properties
 }
 
 /**
@@ -485,7 +535,6 @@ export async function deleteObject<T extends ApObject>(db: Database, note: T) {
 	}
 }
 
-export function isLocalObject(domain: string, id: string | URL): boolean {
-	const apId = getApId(id)
-	return apId.hostname === domain
+export function isLocalObject(domain: string, id: URL): boolean {
+	return id.hostname === domain
 }

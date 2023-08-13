@@ -37,7 +37,13 @@ export async function createReblog(
 	await insertReblog(db, actor, obj, activity.id.toString(), outboxObjectId)
 }
 
-async function insertReblog(db: Database, actor: Actor, obj: Note, activityId: string, outboxObjectId: string) {
+async function insertReblog(
+	db: Database,
+	actor: Pick<Actor, 'id'>,
+	obj: Pick<Note, 'id'>,
+	activityId: string,
+	outboxObjectId: string
+) {
 	const query = `
 		INSERT INTO actor_reblogs (id, actor_id, object_id, outbox_object_id, mastodon_id)
 		VALUES (?, ?, ?, ?, ?)
@@ -86,7 +92,11 @@ export async function hasReblog(db: Database, actor: Actor, obj: Note): Promise<
 	return count > 0
 }
 
-export function reblogNotAllowed(actor: Actor, note: Note, activity: AnnounceActivity): boolean {
+export function reblogNotAllowed(
+	actor: Pick<Actor, 'id' | 'followers'>,
+	note: Pick<Note, 'to' | 'cc' | 'attributedTo'>,
+	activity: AnnounceActivity
+): boolean {
 	const noteTo = (Array.isArray(note.to) ? note.to : [note.to]).map((to) => getApId(to).toString())
 	const noteCc = (Array.isArray(note.cc) ? note.cc : [note.cc]).map((cc) => getApId(cc).toString())
 

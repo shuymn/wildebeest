@@ -24,6 +24,7 @@
 		"npm-run-all": "4.1.5",
 		"prettier": "3.0.1",
 		"simple-git-hooks": "2.9.0",
+		"sql-formatter": "^12.2.4",
 		"ts-jest": "29.1.1",
 		"typescript": "5.1.6",
 		"wrangler": "3.4.0"
@@ -42,6 +43,7 @@
 		"pages": "NO_D1_WARNING=true wrangler pages",
 		"database:migrate": "npm run d1 -- migrations apply DATABASE",
 		"database:create-mock": "rm -f .wrangler/state/v3/d1/83821907-97fd-44b4-8f21-e3d6b736e7ef/db.sqlite && CI=true npm run database:migrate -- --local && node ./frontend/mock-db/run.mjs",
+		"database:generate-query": "sqlc generate",
 		"predev": "mv .dev.vars.bak .dev.vars || true",
 		"dev": "export COMMIT_HASH=$(git rev-parse HEAD) && npm run build && npm run database:migrate -- --local && npm run pages -- dev frontend/dist --compatibility-date=2022-12-20 --live-reload",
 		"preci-dev-test-ui": "mv .dev.vars .dev.vars.bak || true",
