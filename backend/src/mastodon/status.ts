@@ -14,6 +14,7 @@ import {
 	getObjectByOriginalId,
 	mastodonIdSymbol,
 	originalActorIdSymbol,
+	originalObjectIdSymbol,
 	RemoteObject,
 } from 'wildebeest/backend/src/activitypub/objects'
 import { type Note } from 'wildebeest/backend/src/activitypub/objects/note'
@@ -145,7 +146,7 @@ export async function toMastodonStatusFromObject(
 			? new URL(obj.url)
 			: isLocalAccount(domain, handle)
 			? new URL(`/@${handleToAcct(handle, domain)}/${obj[mastodonIdSymbol]}`, 'https://' + domain)
-			: new URL(obj.id),
+			: new URL(obj[originalObjectIdSymbol]),
 		reblog: null,
 		edited_at: obj.updated ? new Date(obj.updated).toISOString() : null,
 
@@ -352,7 +353,7 @@ export async function toMastodonStatusesFromRowsWithActor(
 						? new URL(properties.url)
 						: isLocalAccount(domain, statusAuthorHandle)
 						? new URL(`/@${handleToAcct(statusAuthorHandle, domain)}/${row.mastodon_id}`, 'https://' + domain)
-						: new URL(row.id),
+						: new URL(properties.id),
 					reblog: null,
 					edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 					favourited: row.favourited === 1,
@@ -397,7 +398,7 @@ export async function toMastodonStatusesFromRowsWithActor(
 					? new URL(properties.url)
 					: isLocalAccount(domain, handle)
 					? new URL(`/@${handleToAcct(handle, domain)}/${row.mastodon_id}`, 'https://' + domain)
-					: new URL(row.id),
+					: new URL(properties.id),
 				reblog: null,
 				edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 				favourited: row.favourited === 1,
@@ -547,7 +548,7 @@ export async function toMastodonStatusFromRow(
 					? new URL(properties.url)
 					: isLocalAccount(domain, statusAuthorHandle)
 					? new URL(`/@${handleToAcct(statusAuthorHandle, domain)}/${row.mastodon_id}`, 'https://' + domain)
-					: new URL(row.id),
+					: new URL(properties.id),
 				reblog: null,
 				edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 				favourited: row.favourited === 1,
@@ -592,7 +593,7 @@ export async function toMastodonStatusFromRow(
 				? new URL(properties.url)
 				: isLocalAccount(domain, handle)
 				? new URL(`/@${handleToAcct(handle, domain)}/${row.mastodon_id}`, 'https://' + domain)
-				: new URL(row.id),
+				: new URL(properties.id),
 			reblog: null,
 			edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 			favourited: row.favourited === 1,
