@@ -1,7 +1,7 @@
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-like
 
 import { insertActivity, LikeActivity } from 'wildebeest/backend/src/activitypub/activities'
-import { Actor, getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
+import { Actor, getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
 import { getApId, getObjectById, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { Database } from 'wildebeest/backend/src/database'
 import { insertLike } from 'wildebeest/backend/src/mastodon/like'
@@ -39,7 +39,11 @@ export async function handleLikeActivity(
 		return
 	}
 
-	const fromActor = await getAndCache(actorId, db)
+	const fromActor = await getAndCacheActor(actorId, db)
+	if (fromActor === null) {
+		console.warn('actor not found: ', actorId.toString())
+		return
+	}
 	const targetActor = await getActorById(db, new URL(obj[originalActorIdSymbol]))
 	if (targetActor === null) {
 		console.warn('object actor not found')

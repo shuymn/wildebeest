@@ -1,5 +1,4 @@
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import * as actors from 'wildebeest/backend/src/activitypub/actors'
+import { type Actor, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database } from 'wildebeest/backend/src/database'
 import { MastodonId } from 'wildebeest/backend/src/types'
 import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
@@ -10,12 +9,7 @@ const STATE_PENDING = 'pending'
 const STATE_ACCEPTED = 'accepted'
 
 // During a migration we move the followers from the old Actor to the new
-export async function moveFollowers(
-	domain: string,
-	db: Database,
-	actor: Actor,
-	followers: Array<string>
-): Promise<void> {
+export async function moveFollowers(domain: string, db: Database, actor: Actor, followers: string[]): Promise<void> {
 	const batch = []
 	const stmt = db.prepare(
 		db.qb.insertOrIgnore(`
@@ -27,9 +21,13 @@ export async function moveFollowers(
 	const actorId = actor.id.toString()
 	const actorAcct = actorToAcct(actor, domain)
 
-	for (let i = 0; i < followers.length; i++) {
-		const follower = new URL(followers[i])
-		const followActor = await actors.getAndCache(follower, db)
+	for (const follower of followers) {
+		const followerId = new URL(follower)
+		const followActor = await getAndCacheActor(followerId, db)
+		if (followActor === null) {
+			console.warn(`actor ${follower} not found`)
+			continue
+		}
 
 		const id = crypto.randomUUID()
 		batch.push(stmt.bind(id, followActor.id.toString(), actorId, actorAcct))
@@ -42,7 +40,7 @@ export async function moveFollowing(
 	domain: string,
 	db: Database,
 	actor: Actor,
-	followingActors: Array<string>
+	followingActors: string[]
 ): Promise<void> {
 	const batch = []
 	const stmt = db.prepare(
@@ -54,9 +52,13 @@ export async function moveFollowing(
 
 	const actorId = actor.id.toString()
 
-	for (let i = 0; i < followingActors.length; i++) {
-		const following = new URL(followingActors[i])
-		const followingActor = await actors.getAndCache(following, db)
+	for (const following of followingActors) {
+		const followingId = new URL(following)
+		const followingActor = await getAndCacheActor(followingId, db)
+		if (followingActor === null) {
+			console.warn(`actor ${following} not found`)
+			continue
+		}
 		const actorAcc = actorToAcct(followingActor, domain)
 
 		const id = crypto.randomUUID()

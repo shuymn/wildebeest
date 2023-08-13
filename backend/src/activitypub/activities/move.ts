@@ -1,5 +1,5 @@
 import { MoveActivity } from 'wildebeest/backend/src/activitypub/activities'
-import { getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
+import { getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
 import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import { getMetadata, loadItems, OrderedCollection } from 'wildebeest/backend/src/activitypub/objects/collection'
 import { Database } from 'wildebeest/backend/src/database'
@@ -15,7 +15,11 @@ export async function handleMoveActivity(domain: string, activity: MoveActivity,
 		return
 	}
 
-	const fromActor = await getAndCache(fromActorId, db)
+	const fromActor = await getAndCacheActor(fromActorId, db)
+	if (fromActor === null) {
+		console.warn(`actor ${fromActorId} not found`)
+		return
+	}
 
 	const localActor = await getActorById(db, targetId)
 	if (localActor === null) {

@@ -5,7 +5,7 @@ import {
 	insertActivity,
 	isFollowActivity,
 } from 'wildebeest/backend/src/activitypub/activities'
-import { Actor, getActorById, getAndCache } from 'wildebeest/backend/src/activitypub/actors'
+import { Actor, getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
 import { ApObject, getApId, getApType } from 'wildebeest/backend/src/activitypub/objects'
 import { Database } from 'wildebeest/backend/src/database'
 import { acceptFollowing } from 'wildebeest/backend/src/mastodon/follow'
@@ -40,10 +40,17 @@ export async function handleAcceptActivity(domain: string, activity: AcceptActiv
 		console.warn(`actor ${followerId} not found`)
 		return
 	}
+
 	// activity.actor must be a local user
 	if (!isLocalAccount(domain, actorToHandle(follower))) {
 		return
 	}
-	const followee = await getAndCache(getApId(activity.actor), db)
+
+	const followeeId = getApId(activity.actor)
+	const followee = await getAndCacheActor(followeeId, db)
+	if (followee === null) {
+		console.warn(`actor ${followeeId} not found`)
+		return
+	}
 	await acceptFollowing(db, follower, followee)
 }
