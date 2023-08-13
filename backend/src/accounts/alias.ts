@@ -17,7 +17,7 @@ export async function addAlias(db: Database, alias: string, connectedActor: Acto
 
 	const actor = await queryAcct(handle, db)
 	if (actor === null) {
-		throw new Error('actor not found')
+		throw new Error('actor not found: ' + alias)
 	}
 
 	await setActorAlias(db, getApId(connectedActor.id), getApId(actor.id))
