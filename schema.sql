@@ -6,7 +6,7 @@ CREATE TABLE
     "username" TEXT,
     "domain" TEXT,
     "properties" TEXT NOT NULL,
-    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME ('%Y-%m-%d %H:%M:%f', 'NOW'))
+    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'))
   );
 
 CREATE INDEX "actors_mastodon_id" ON "actors" ("mastodon_id");
@@ -19,12 +19,7 @@ CREATE TRIGGER "actors_search_fts_insert" AFTER INSERT ON "actors" BEGIN
 INSERT INTO
   "search_fts" ("rowid", "type", "name", "preferredUsername")
 VALUES
-  (
-    "new"."rowid",
-    "new"."type",
-    json_extract ("new"."properties", '$.name'),
-    "new"."username"
-  );
+  ("new"."rowid", "new"."type", JSON_EXTRACT("new"."properties", '$.name'), "new"."username");
 
 END;
 
@@ -44,12 +39,7 @@ WHERE
 INSERT INTO
   "search_fts" ("rowid", "type", "name", "preferredUsername")
 VALUES
-  (
-    "new"."rowid",
-    "new"."type",
-    json_extract ("new"."properties", '$.name'),
-    "new"."username"
-  );
+  ("new"."rowid", "new"."type", JSON_EXTRACT("new"."properties", '$.name'), "new"."username");
 
 END;
 
@@ -60,7 +50,7 @@ CREATE TABLE
     "target_actor_id" TEXT NOT NULL,
     "target_actor_acct" TEXT NOT NULL,
     "state" TEXT NOT NULL DEFAULT 'pending',
-    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME ('%Y-%m-%d %H:%M:%f', 'NOW')),
+    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
     CONSTRAINT "actor_following_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id"),
     CONSTRAINT "actor_following_target_actor_id_fkey" FOREIGN KEY ("target_actor_id") REFERENCES "actors" ("id")
   );
@@ -76,11 +66,11 @@ CREATE TABLE
     "id" TEXT PRIMARY KEY,
     "mastodon_id" TEXT UNIQUE NOT NULL,
     "type" TEXT NOT NULL,
-    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME ('%Y-%m-%d %H:%M:%f', 'NOW')),
+    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
     "original_actor_id" TEXT,
     "original_object_id" TEXT UNIQUE,
     "reply_to_object_id" TEXT,
-    "properties" TEXT NOT NULL DEFAULT (json_object ()),
+    "properties" TEXT NOT NULL DEFAULT (JSON_OBJECT()),
     "local" INTEGER NOT NULL
   );
 
@@ -89,7 +79,7 @@ CREATE TABLE
     "id" TEXT PRIMARY KEY,
     "actor_id" TEXT NOT NULL,
     "object_id" TEXT NOT NULL,
-    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME ('%Y-%m-%d %H:%M:%f', 'NOW')),
+    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
     CONSTRAINT "inbox_objects_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id"),
     CONSTRAINT "inbox_objects_object_id_fkey" FOREIGN KEY ("object_id") REFERENCES "objects" ("id")
   );
@@ -101,7 +91,7 @@ CREATE TABLE
     "actor_id" TEXT NOT NULL,
     "from_actor_id" TEXT NOT NULL,
     "object_id" TEXT,
-    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME ('%Y-%m-%d %H:%M:%f', 'NOW')),
+    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
     CONSTRAINT "actor_notifications_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id"),
     CONSTRAINT "actor_notifications_from_actor_id_fkey" FOREIGN KEY ("from_actor_id") REFERENCES "actors" ("id"),
     CONSTRAINT "actor_notifications_object_id_fkey" FOREIGN KEY ("object_id") REFERENCES "objects" ("id")
@@ -114,7 +104,7 @@ CREATE TABLE
     "id" TEXT PRIMARY KEY,
     "actor_id" TEXT NOT NULL,
     "object_id" TEXT NOT NULL,
-    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME ('%Y-%m-%d %H:%M:%f', 'NOW')),
+    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
     CONSTRAINT "actor_favourites_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id"),
     CONSTRAINT "actor_favourites_object_id_fkey" FOREIGN KEY ("object_id") REFERENCES "objects" ("id")
   );
@@ -131,7 +121,7 @@ CREATE TABLE
     "redirect_uris" TEXT NOT NULL,
     "website" TEXT,
     "scopes" TEXT,
-    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME ('%Y-%m-%d %H:%M:%f', 'NOW'))
+    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'))
   );
 
 CREATE VIRTUAL TABLE search_fts USING "fts5" ("type", "name", "preferredUsername", "status");
@@ -140,12 +130,7 @@ CREATE TABLE
   search_fts_data ("id" INTEGER PRIMARY KEY, "block" BLOB);
 
 CREATE TABLE
-  search_fts_idx (
-    "segid",
-    "term",
-    "pgno",
-    PRIMARY KEY ("segid", "term")
-  ) WITHOUT ROWID;
+  search_fts_idx ("segid", "term", "pgno", PRIMARY KEY ("segid", "term")) WITHOUT ROWID;
 
 CREATE TABLE
   search_fts_content ("id" INTEGER PRIMARY KEY, "c0", "c1", "c2", "c3");
@@ -162,7 +147,7 @@ CREATE TABLE
     "actor_id" TEXT NOT NULL,
     "object_id" TEXT NOT NULL,
     "in_reply_to_object_id" TEXT NOT NULL,
-    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME ('%Y-%m-%d %H:%M:%f', 'NOW')),
+    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
     CONSTRAINT "actor_replies_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id"),
     CONSTRAINT "actor_replies_object_id_fkey" FOREIGN KEY ("object_id") REFERENCES "objects" ("id"),
     CONSTRAINT "actor_replies_in_reply_to_object_id_fkey" FOREIGN KEY ("in_reply_to_object_id") REFERENCES "objects" ("id")
@@ -185,7 +170,7 @@ CREATE TABLE
   note_hashtags (
     "value" TEXT NOT NULL,
     "object_id" TEXT NOT NULL,
-    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME ('%Y-%m-%d %H:%M:%f', 'NOW')),
+    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
     CONSTRAINT "note_hashtags_object_id_fkey" FOREIGN KEY ("object_id") REFERENCES "objects" ("id")
   );
 
@@ -208,7 +193,7 @@ CREATE TABLE
     "alert_admin_sign_up" INTEGER NOT NULL,
     "alert_admin_report" INTEGER NOT NULL,
     "policy" TEXT NOT NULL,
-    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME ('%Y-%m-%d %H:%M:%f', 'NOW')),
+    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
     CONSTRAINT "subscriptions_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id"),
     CONSTRAINT "subscriptions_client_id_fkey" FOREIGN KEY ("client_id") REFERENCES "clients" ("id")
   );
@@ -216,16 +201,10 @@ CREATE TABLE
 CREATE UNIQUE INDEX "unique_subscriptions" ON "subscriptions" ("actor_id", "client_id");
 
 CREATE TABLE
-  server_settings (
-    "setting_name" TEXT UNIQUE NOT NULL,
-    "setting_value" TEXT NOT NULL
-  );
+  server_settings ("setting_name" TEXT UNIQUE NOT NULL, "setting_value" TEXT NOT NULL);
 
 CREATE TABLE
-  server_rules (
-    "id" INTEGER PRIMARY KEY AUTOINCREMENT,
-    "text" TEXT NOT NULL
-  );
+  server_rules ("id" INTEGER PRIMARY KEY AUTOINCREMENT, "text" TEXT NOT NULL);
 
 CREATE TABLE
   actor_preferences (
@@ -239,10 +218,7 @@ CREATE TABLE
   );
 
 CREATE TABLE
-  id_sequences (
-    "key" TEXT PRIMARY KEY,
-    "value" INTEGER NOT NULL DEFAULT 0
-  );
+  id_sequences ("key" TEXT PRIMARY KEY, "value" INTEGER NOT NULL DEFAULT 0);
 
 CREATE TABLE
   client_credentials (
@@ -250,7 +226,7 @@ CREATE TABLE
     "client_id" TEXT NOT NULL,
     "access_token" TEXT NOT NULL,
     "scopes" TEXT NOT NULL,
-    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME ('%Y-%m-%d %H:%M:%f', 'NOW')),
+    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
     CONSTRAINT "client_credentials_client_id_fkey" FOREIGN KEY ("client_id") REFERENCES "clients" ("id") ON DELETE CASCADE
   );
 
@@ -258,8 +234,8 @@ CREATE TABLE
   actor_activities (
     "id" TEXT NOT NULL PRIMARY KEY,
     "actor_id" TEXT NOT NULL,
-    "type" TEXT NOT NULL GENERATED ALWAYS AS (json_extract (activity, '$.type')) STORED,
-    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME ('%Y-%m-%d %H:%M:%f', 'NOW')),
+    "type" TEXT NOT NULL GENERATED ALWAYS AS (JSON_EXTRACT(activity, '$.type')) STORED,
+    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
     "activity" TEXT NOT NULL,
     CONSTRAINT "actor_activities_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON DELETE CASCADE
   );
@@ -269,10 +245,10 @@ CREATE TABLE
     "id" TEXT NOT NULL PRIMARY KEY,
     "actor_id" TEXT NOT NULL,
     "object_id" TEXT NOT NULL,
-    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME ('%Y-%m-%d %H:%M:%f', 'NOW')),
-    "published_date" DATETIME NOT NULL DEFAULT (STRFTIME ('%Y-%m-%d %H:%M:%f', 'NOW')),
-    "to" TEXT NOT NULL DEFAULT (json_array ()),
-    "cc" TEXT NOT NULL DEFAULT (json_array ()),
+    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
+    "published_date" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
+    "to" TEXT NOT NULL DEFAULT (JSON_ARRAY()),
+    "cc" TEXT NOT NULL DEFAULT (JSON_ARRAY()),
     CONSTRAINT "outbox_objects_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON DELETE CASCADE,
     CONSTRAINT "outbox_objects_object_id_fkey" FOREIGN KEY ("object_id") REFERENCES "objects" ("id") ON DELETE CASCADE
   );
@@ -290,7 +266,7 @@ CREATE TABLE
     "actor_id" TEXT NOT NULL,
     "object_id" TEXT NOT NULL,
     "outbox_object_id" TEXT UNIQUE NOT NULL,
-    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME ('%Y-%m-%d %H:%M:%f', 'NOW')),
+    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
     CONSTRAINT "actor_reblogs_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON DELETE CASCADE,
     CONSTRAINT "actor_reblogs_object_id_fkey" FOREIGN KEY ("object_id") REFERENCES "objects" ("id") ON DELETE CASCADE,
     CONSTRAINT "actor_reblogs_outbox_object_id_fkey" FOREIGN KEY ("outbox_object_id") REFERENCES "outbox_objects" ("id") ON DELETE CASCADE
@@ -311,7 +287,7 @@ CREATE TABLE
     "privkey_salt" BLOB UNIQUE NOT NULL,
     "pubkey" TEXT NOT NULL,
     "is_admin" INTEGER NOT NULL DEFAULT 0,
-    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME ('%Y-%m-%d %H:%M:%f', 'NOW')),
+    "cdate" DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
     CONSTRAINT "users_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON DELETE RESTRICT
   );
 
