@@ -47,13 +47,17 @@ export interface Person extends Actor {
 	type: typeof PERSON
 }
 
-export async function fetchActor(url: string | URL): Promise<Remote<Actor>> {
-	const headers = {
-		accept: 'application/activity+json',
-		'User-Agent': UA,
-	}
-	const res = await fetch(url, { headers })
+export async function fetchActor(url: string | URL): Promise<Remote<Actor> | null> {
+	const res = await fetch(url, {
+		headers: {
+			accept: 'application/activity+json',
+			'User-Agent': UA,
+		},
+	})
 	if (!res.ok) {
+		if (isNotFound(res) || isGone(res)) {
+			return null
+		}
 		throw new Error(`${url.toString()} returned: ${res.status}`)
 	}
 

@@ -163,13 +163,17 @@ export async function createObject<T extends ApObject>(
 	}
 }
 
-export async function get<T>(url: URL): Promise<T> {
-	const headers = {
-		accept: 'application/activity+json',
-		'User-Agent': UA,
-	}
-	const res = await fetch(url, { headers })
+async function fetchObject<T extends ApObject>(url: URL): Promise<Remote<T> | null> {
+	const res = await fetch(url, {
+		headers: {
+			accept: 'application/activity+json',
+			'User-Agent': UA,
+		},
+	})
 	if (!res.ok) {
+		if (isNotFound(res) || isGone(res)) {
+			return null
+		}
 		throw new Error(`${url} returned: ${res.status}`)
 	}
 
