@@ -6,7 +6,13 @@ import { RequiredProps } from 'wildebeest/backend/src/utils/type'
 export const IMAGE = 'Image'
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-image
-export type Image = RequiredProps<ApObject, 'url'> & { type: typeof IMAGE; description?: string }
+export type Image = RequiredProps<ApObject, 'url'> & {
+	type: typeof IMAGE
+	description?: string
+	blurhash?: string
+	width?: number
+	height?: number
+}
 
 export function isImage(object: ApObject): object is Image {
 	return object.type === IMAGE
@@ -19,5 +25,5 @@ export async function createImage(
 	properties: Omit<Image, 'id' | 'type'>
 ): Promise<Image> {
 	const actorId = new URL(actor.id)
-	return await createObject<Image>(domain, db, IMAGE, properties, actorId, true)
+	return await createObject<Image>(domain, db, IMAGE, properties, actorId)
 }
