@@ -1,51 +1,57 @@
 import { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { type ApObject, type ApObjectOrId, cacheObject, getApType } from 'wildebeest/backend/src/activitypub/objects'
-import { isNote } from 'wildebeest/backend/src/activitypub/objects/note'
+import {
+	type ApObject,
+	type ApObjectOrId,
+	getAndCacheObject,
+	getApType,
+	Remote,
+} from 'wildebeest/backend/src/activitypub/objects'
+import { isNote, Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { Database } from 'wildebeest/backend/src/database'
+import { HTTPS } from 'wildebeest/backend/src/utils'
 import { PartialProps } from 'wildebeest/backend/src/utils/type'
 
 export const PUBLIC_GROUP = 'https://www.w3.org/ns/activitystreams#Public'
 
-export interface Activity extends ApObject {
-	actor: ApObjectOrId
-	object: ApObjectOrId
-	target?: ApObjectOrId
+export type Activity<O extends ApObject = ApObject> = ApObject & {
+	actor: ApObjectOrId<Actor>
+	object: ApObjectOrId<O>
 }
 
-export interface UpdateActivity extends Activity {
+export type UpdateActivity<O extends ApObject = ApObject> = Activity<O> & {
 	type: 'Update'
 }
 
-export interface CreateActivity extends Activity {
+export type CreateActivity<O extends ApObject = ApObject> = Activity<O> & {
 	type: 'Create'
 }
 
-export interface AcceptActivity extends Activity {
+export type AcceptActivity<O extends ApObject = ApObject> = Activity<O> & {
 	type: 'Accept'
 }
 
-export interface FollowActivity extends Activity {
+export type FollowActivity<O extends ApObject = ApObject> = Activity<O> & {
 	type: 'Follow'
 }
 
-export interface AnnounceActivity extends Activity {
+export type AnnounceActivity<O extends ApObject = ApObject> = Activity<O> & {
 	type: 'Announce'
 }
 
-export interface LikeActivity extends Activity {
+export type LikeActivity<O extends ApObject = ApObject> = Activity<O> & {
 	type: 'Like'
 }
 
-export interface DeleteActivity extends Activity {
+export type DeleteActivity<O extends ApObject = ApObject> = Activity<O> & {
 	type: 'Delete'
 }
 
-export interface MoveActivity extends Activity {
+export type MoveActivity<O extends ApObject = ApObject, T extends ApObject = ApObject> = Activity<O> & {
 	type: 'Move'
-	target: ApObjectOrId
+	target: ApObjectOrId<T>
 }
 
-export interface UndoActivity extends Activity {
+export type UndoActivity<O extends ApObject = ApObject> = Activity<O> & {
 	type: 'Undo'
 }
 
@@ -101,6 +107,10 @@ export async function cacheActivityObject<T extends ApObject>(
 	return null
 }
 
+function getActivityUrl(domain: string, id: string): URL {
+	return new URL('/ap/a/' + id, HTTPS + domain)
+}
+
 export async function insertActivity<T extends Activity>(
 	db: Database,
 	domain: string,
@@ -109,7 +119,7 @@ export async function insertActivity<T extends Activity>(
 ): Promise<T> {
 	// Generate a unique ID. Note that currently the generated URL aren't routable.
 	const id = crypto.randomUUID()
-	activity.id = new URL('/ap/a/' + id, 'https://' + domain)
+	activity.id = getActivityUrl(domain, id)
 
 	const result = await db
 		.prepare(
