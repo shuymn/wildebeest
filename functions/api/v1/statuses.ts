@@ -200,6 +200,9 @@ export async function handleRequest(
 
 	// If the status is mentioning other persons, we need to delivery it to them.
 	for (const targetActor of mentions) {
+		if (targetActor.id.toString() === connectedActor.id.toString()) {
+			continue
+		}
 		const signingKey = await getSigningKey(userKEK, db, connectedActor)
 		await deliverToActor(signingKey, connectedActor, targetActor, activity, domain)
 	}
