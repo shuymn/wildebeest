@@ -285,9 +285,7 @@ LIMIT 20
 			let inReplyToId: string | null = null
 			let inReplyToAccountId: string | null = null
 			if (properties.inReplyTo) {
-				const replied = isLocalObject(domain, properties.inReplyTo)
-					? await getObjectById(db, properties.inReplyTo)
-					: await getObjectByOriginalId(db, properties.inReplyTo)
+				const replied = await getObjectByOriginalId(domain, db, properties.inReplyTo)
 				if (replied) {
 					inReplyToId = replied[mastodonIdSymbol]
 					try {

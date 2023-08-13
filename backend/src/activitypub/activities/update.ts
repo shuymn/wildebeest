@@ -3,8 +3,7 @@ import { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import {
 	ApObject,
 	getApId,
-	getObjectBy,
-	ObjectByKey,
+	getObjectByOriginalId,
 	originalActorIdSymbol,
 	updateObject,
 } from 'wildebeest/backend/src/activitypub/objects'
@@ -24,7 +23,7 @@ export async function createUpdateActivity(
 	})
 }
 
-export async function handleUpdateActivity(activity: UpdateActivity, db: Database) {
+export async function handleUpdateActivity(domain: string, activity: UpdateActivity, db: Database) {
 	activity.object = getActivityObject(activity)
 
 	const actorId = getApId(activity.actor)
@@ -36,7 +35,7 @@ export async function handleUpdateActivity(activity: UpdateActivity, db: Databas
 	}
 
 	// check current object
-	const obj = await getObjectBy(db, ObjectByKey.originalObjectId, objectId.toString())
+	const obj = await getObjectByOriginalId(domain, db, objectId)
 	if (obj === null) {
 		throw new Error(`object ${objectId} does not exist`)
 	}
@@ -45,8 +44,5 @@ export async function handleUpdateActivity(activity: UpdateActivity, db: Databas
 		throw new Error('actor.id mismatch when updating object')
 	}
 
-	const updated = await updateObject(db, activity.object, getApId(obj))
-	if (!updated) {
-		throw new Error('could not update object in database')
-	}
+	await updateObject(db, activity.object, getApId(obj))
 }

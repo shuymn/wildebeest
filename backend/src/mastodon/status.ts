@@ -71,7 +71,7 @@ export function actorToMention(domain: string, actor: Actor): MastodonStatus['me
 
 export async function toMastodonStatusFromObject(
 	db: Database,
-	obj: Note & { published: string; [mastodonIdSymbol]: string },
+	obj: RemoteObject<Note>,
 	domain: string,
 	targetActors?: Set<Actor>
 ): Promise<MastodonStatus | null> {
@@ -90,7 +90,9 @@ export async function toMastodonStatusFromObject(
 	// const favourites = await getLikes(db, obj)
 	// const reblogs = await getReblogs(db, obj)
 
-	const mediaAttachments: Array<MediaAttachment> = obj.attachment.map((doc) => media.fromObject(doc))
+	const mediaAttachments: Array<MediaAttachment> = obj.attachment
+		? obj.attachment.map((doc) => media.fromObject(doc))
+		: []
 
 	const mentions = []
 	if (targetActors) {
@@ -110,9 +112,7 @@ export async function toMastodonStatusFromObject(
 	let inReplyToId: string | null = null
 	let inReplyToAccountId: string | null = null
 	if (obj.inReplyTo) {
-		const replied = isLocalObject(domain, obj.inReplyTo)
-			? await getObjectById(db, obj.inReplyTo)
-			: await getObjectByOriginalId(db, obj.inReplyTo)
+		const replied = await getObjectByOriginalId(domain, db, obj.inReplyTo)
 		if (replied) {
 			inReplyToId = replied[mastodonIdSymbol]
 			try {
@@ -131,8 +131,8 @@ export async function toMastodonStatusFromObject(
 		created_at: new Date(obj.published).toISOString(),
 		account: await loadMastodonAccount(db, domain, actor, handle),
 		content: obj.content ?? '',
-		visibility: detectVisibility({ to: obj.to, cc: obj.cc, followers: actor.followers }),
-		sensitive: obj.sensitive,
+		visibility: detectVisibility({ to: obj.to ?? [], cc: obj.cc ?? [], followers: actor.followers }),
+		sensitive: obj.sensitive ?? false,
 		spoiler_text: obj.spoiler_text ?? '',
 		media_attachments: mediaAttachments,
 		mentions,
@@ -269,9 +269,7 @@ export async function toMastodonStatusesFromRowsWithActor(
 		let inReplyToId: string | null = null
 		let inReplyToAccountId: string | null = null
 		if (properties.inReplyTo) {
-			const replied = isLocalObject(domain, properties.inReplyTo)
-				? await getObjectById(db, properties.inReplyTo)
-				: await getObjectByOriginalId(db, properties.inReplyTo)
+			const replied = await getObjectByOriginalId(domain, db, properties.inReplyTo)
 			if (replied) {
 				inReplyToId = replied[mastodonIdSymbol]
 				let author = actorPool.get(replied[originalActorIdSymbol]) ?? null
@@ -453,7 +451,7 @@ export async function toMastodonStatusFromRow(
 		type: row.actor_type,
 		cdate: row.actor_cdate,
 		properties: row.actor_properties,
-		mastodon_id: row.actor_mastodon_id,
+		mastodonId: row.actor_mastodon_id,
 	})
 
 	const handle = actorToHandle(author)
@@ -472,9 +470,7 @@ export async function toMastodonStatusFromRow(
 	let inReplyToId: string | null = null
 	let inReplyToAccountId: string | null = null
 	if (properties.inReplyTo) {
-		const replied = isLocalObject(domain, properties.inReplyTo)
-			? await getObjectById(db, properties.inReplyTo)
-			: await getObjectByOriginalId(db, properties.inReplyTo)
+		const replied = await getObjectByOriginalId(domain, db, properties.inReplyTo)
 		if (replied) {
 			inReplyToId = replied[mastodonIdSymbol]
 			try {
@@ -613,7 +609,7 @@ export async function getMastodonStatusById(
 	id: MastodonId,
 	domain: string
 ): Promise<MastodonStatus | null> {
-	const obj = await getObjectByMastodonId<Note>(db, id)
+	const obj = await getObjectByMastodonId<Note>(domain, db, id)
 	if (obj === null) {
 		return null
 	}

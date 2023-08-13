@@ -29,7 +29,7 @@ export async function handle(
 	vapidKeys: JWK
 ) {
 	if (isUpdateActivity(activity)) {
-		return await handleUpdateActivity(activity, db)
+		return await handleUpdateActivity(domain, activity, db)
 	}
 	if (isCreateActivity(activity)) {
 		return await handleCreateActivity(domain, activity, db, adminEmail, vapidKeys)
@@ -44,10 +44,10 @@ export async function handle(
 		return await handleAnnounceActivity(domain, activity, db, adminEmail, vapidKeys)
 	}
 	if (isLikeActivity(activity)) {
-		return await handleLikeActivity(activity, db, adminEmail, vapidKeys)
+		return await handleLikeActivity(domain, activity, db, adminEmail, vapidKeys)
 	}
 	if (isDeleteActivity(activity)) {
-		return await handleDeleteActivity(activity, db)
+		return await handleDeleteActivity(domain, activity, db)
 	}
 	if (isMoveActivity(activity)) {
 		return await handleMoveActivity(domain, activity, db)

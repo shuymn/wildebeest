@@ -1,12 +1,11 @@
 // https://docs.joinmastodon.org/methods/statuses/#boost
 import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import { createAnnounceActivity } from 'wildebeest/backend/src/activitypub/activities/announce'
-import type { Person } from 'wildebeest/backend/src/activitypub/actors'
-import * as actors from 'wildebeest/backend/src/activitypub/actors'
+import { getAndCacheActor, type Person } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverFollowers, deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
-import { getApId, getObjectByMastodonId } from 'wildebeest/backend/src/activitypub/objects'
+import { getApId, getObjectByMastodonId, isLocalObject } from 'wildebeest/backend/src/activitypub/objects'
 import { originalActorIdSymbol, originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
+import { isNote, type Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { recordNotFound } from 'wildebeest/backend/src/errors'
 import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
@@ -61,8 +60,14 @@ export async function handleRequest(
 	domain: string,
 	{ visibility }: Parameters
 ): Promise<Response> {
-	const obj = await getObjectByMastodonId<Note>(db, id)
-	if (obj === null || reblogNotAllowed(connectedActor, obj, visibility)) {
+	const obj = await getObjectByMastodonId<Note>(domain, db, id)
+	if (obj === null) {
+		return recordNotFound(`object ${id} not found`)
+	}
+	if (!isNote(obj)) {
+		return recordNotFound(`object ${id} not found`)
+	}
+	if (reblogNotAllowed(connectedActor, obj, visibility)) {
 		return recordNotFound(`object ${id} not found`)
 	}
 
@@ -93,9 +98,11 @@ export async function handleRequest(
 	}
 
 	let activity
-	if (obj[originalObjectIdSymbol]) {
+	if (isLocalObject(domain, getApId(obj))) {
+		activity = await createAnnounceActivity(db, domain, connectedActor, new URL(obj.id), to, cc)
+	} else {
 		// Reblogging an external object delivers the announce activity to the post author.
-		const targetActor = await actors.getAndCache(new URL(obj[originalActorIdSymbol]), db)
+		const targetActor = await getAndCacheActor(new URL(obj[originalActorIdSymbol]), db)
 		if (targetActor === null) {
 			return recordNotFound(`target Actor ${obj[originalActorIdSymbol]} not found`)
 		}
@@ -109,8 +116,6 @@ export async function handleRequest(
 			// Share reblogged by delivering the announce activity to followers
 			deliverFollowers(db, userKEK, connectedActor, activity, queue),
 		])
-	} else {
-		activity = await createAnnounceActivity(db, domain, connectedActor, new URL(obj.id), to, cc)
 	}
 
 	await createReblog(db, connectedActor, obj, activity, activity.published ?? new Date().toISOString())
@@ -119,7 +124,11 @@ export async function handleRequest(
 	return new Response(JSON.stringify(status), { headers })
 }
 
-function reblogNotAllowed(actor: Person, obj: Note, visibility: Visibility): boolean {
+function reblogNotAllowed(
+	actor: Person,
+	obj: Pick<Note, 'to' | 'cc' | 'attributedTo'>,
+	visibility: Visibility
+): boolean {
 	const to = (Array.isArray(obj.to) ? obj.to : [obj.to]).map((target) => getApId(target).toString())
 	const cc = (Array.isArray(obj.cc) ? obj.cc : [obj.cc]).map((target) => getApId(target).toString())
 

@@ -5,6 +5,7 @@ import {
 	deleteObject,
 	getApId,
 	getObjectByOriginalId,
+	isLocalObject,
 	originalActorIdSymbol,
 } from 'wildebeest/backend/src/activitypub/objects'
 import { Database } from 'wildebeest/backend/src/database'
@@ -24,11 +25,16 @@ export async function createDeleteActivity(
 }
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-delete
-export async function handleDeleteActivity(activity: DeleteActivity, db: Database) {
+export async function handleDeleteActivity(domain: string, activity: DeleteActivity, db: Database) {
 	const objectId = getApId(activity.object)
 	const actorId = getApId(activity.actor)
 
-	const obj = await getObjectByOriginalId(db, objectId)
+	// ignore if object is local
+	if (isLocalObject(domain, objectId)) {
+		return
+	}
+
+	const obj = await getObjectByOriginalId(domain, db, objectId)
 	if (obj === null || !obj[originalActorIdSymbol]) {
 		console.warn('unknown object or missing originalActorId')
 		return
@@ -39,7 +45,7 @@ export async function handleDeleteActivity(activity: DeleteActivity, db: Databas
 		return
 	}
 
-	if (!['Note'].includes(obj.type)) {
+	if (obj.type !== 'Note') {
 		console.warn('unsupported Update for Object type: ' + obj.type)
 		return
 	}

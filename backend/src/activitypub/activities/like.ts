@@ -23,11 +23,17 @@ export async function createLikeActivity(
 }
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-like
-export async function handleLikeActivity(activity: LikeActivity, db: Database, adminEmail: string, vapidKeys: JWK) {
+export async function handleLikeActivity(
+	domain: string,
+	activity: LikeActivity,
+	db: Database,
+	adminEmail: string,
+	vapidKeys: JWK
+) {
 	const objectId = getApId(activity.object)
 	const actorId = getApId(activity.actor)
 
-	const obj = await getObjectById(db, objectId)
+	const obj = await getObjectById(domain, db, objectId)
 	if (obj === null || !obj[originalActorIdSymbol]) {
 		console.warn('unknown object')
 		return

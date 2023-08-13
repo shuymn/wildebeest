@@ -1,4 +1,4 @@
-import * as objects from 'wildebeest/backend/src/activitypub/objects'
+import { getObjectById, getObjectUrl } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import type { Env } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
@@ -14,7 +14,7 @@ const headers = {
 }
 
 export async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
-	const obj = await objects.getObjectById(db, objects.uri(domain, id))
+	const obj = await getObjectById(domain, db, getObjectUrl(domain, id))
 	if (obj === null) {
 		return new Response('', { status: 404 })
 	}

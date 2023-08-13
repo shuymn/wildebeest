@@ -79,7 +79,7 @@ export async function handleRequestDelete(
 	queue: Queue<DeliverMessageBody>,
 	cache: Cache
 ): Promise<Response> {
-	const obj = await getObjectByMastodonId<Note>(db, id)
+	const obj = await getObjectByMastodonId<Note>(domain, db, id)
 	if (obj === null) {
 		return errors.statusNotFound(id)
 	}

@@ -1,10 +1,9 @@
 // https://docs.joinmastodon.org/methods/statuses/#favourite
 
 import { createLikeActivity } from 'wildebeest/backend/src/activitypub/activities/like'
-import type { Person } from 'wildebeest/backend/src/activitypub/actors'
-import * as actors from 'wildebeest/backend/src/activitypub/actors'
+import { getAndCacheActor, type Person } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
-import { getObjectByMastodonId } from 'wildebeest/backend/src/activitypub/objects'
+import { getApId, getObjectByMastodonId, isLocalObject } from 'wildebeest/backend/src/activitypub/objects'
 import { originalActorIdSymbol, originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
@@ -26,7 +25,7 @@ export async function handleRequest(
 	userKEK: string,
 	domain: string
 ): Promise<Response> {
-	const obj = await getObjectByMastodonId<Note>(db, id)
+	const obj = await getObjectByMastodonId<Note>(domain, db, id)
 	if (obj === null) {
 		return new Response('', { status: 404 })
 	}
@@ -36,9 +35,9 @@ export async function handleRequest(
 		return new Response('', { status: 404 })
 	}
 
-	if (obj[originalObjectIdSymbol] && obj[originalActorIdSymbol]) {
+	if (!isLocalObject(domain, getApId(obj.id))) {
 		// Liking an external object delivers the like activity
-		const targetActor = await actors.getAndCache(new URL(obj[originalActorIdSymbol]), db)
+		const targetActor = await getAndCacheActor(new URL(obj[originalActorIdSymbol]), db)
 		if (!targetActor) {
 			return new Response(`target Actor ${obj[originalActorIdSymbol]} not found`, { status: 404 })
 		}
