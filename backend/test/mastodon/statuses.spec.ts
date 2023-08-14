@@ -1003,6 +1003,166 @@ describe('Mastodon APIs', () => {
 			assert(data.error.includes('Limit exceeded'))
 		})
 
+		test('update non-existing status', async () => {
+			const db = await makeDB()
+			const queue = makeQueue()
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const mastodonId = 'abcd'
+			const res = await statuses_id.handleRequestPut(
+				{ db, domain, userKEK, queue, cache, connectedActor },
+				mastodonId,
+				{}
+			)
+			await assertStatus(res, 404)
+		})
+
+		test('update status from a different actor', async () => {
+			const db = await makeDB()
+			const queue = makeQueue()
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+			const note = await createPublicStatus(domain, db, actor2, 'note from actor2')
+
+			const res = await statuses_id.handleRequestPut(
+				{ db, domain, userKEK, queue, cache, connectedActor },
+				note[mastodonIdSymbol],
+				{}
+			)
+			await assertStatus(res, 404)
+		})
+
+		test('update status update DB rows', async () => {
+			const db = await makeDB()
+			const queue = makeQueue()
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const note = await createPublicStatus(domain, db, connectedActor, 'note from actor')
+			{
+				const row = await db
+					.prepare(
+						`SELECT
+              json_extract(properties, '$.content') as content,
+              json_extract(properties, '$.source.content') as source_content,
+              json_extract(properties, '$.tag') as tag,
+              json_extract(properties, '$.spoiler_text') as spoiler_text,
+              json_extract(properties, '$.sensitive') as sensitive,
+              json_extract(properties, '$.updated') as updated
+            FROM objects WHERE id = ?`
+					)
+					.bind(note.id.toString())
+					.first<{
+						content: string
+						source_content: string
+						tag: string
+						spoiler_text: string | null
+						sensitive: 0 | 1
+						updated: string | null
+					}>()
+				assert.equal(row?.content, 'note from actor')
+				assert.equal(row?.source_content, 'note from actor')
+				assert.equal(row?.tag, '[]')
+				assert.equal(row?.spoiler_text, null)
+				assert.equal(row?.sensitive, 0)
+				assert.equal(row?.updated, null)
+			}
+			const res = await statuses_id.handleRequestPut(
+				{ db, domain, userKEK, queue, cache, connectedActor },
+				note[mastodonIdSymbol],
+				{
+					status: '@sven new status',
+					spoiler_text: 'new spoiler',
+					sensitive: true,
+					// TODO: test media_ids
+				}
+			)
+			await assertStatus(res, 200)
+			{
+				const row = await db
+					.prepare(
+						`SELECT
+              json_extract(properties, '$.content') as content,
+              json_extract(properties, '$.source.content') as source_content,
+              json_extract(properties, '$.tag') as tag,
+              json_extract(properties, '$.spoiler_text') as spoiler_text,
+              json_extract(properties, '$.sensitive') as sensitive,
+              json_extract(properties, '$.updated') as updated
+            FROM objects WHERE id = ?`
+					)
+					.bind(note.id.toString())
+					.first<{
+						content: string
+						source_content: string
+						tag: string
+						spoiler_text: string | null
+						sensitive: 0 | 1
+						updated: string | null
+					}>()
+				assert.equal(row?.content, '<p>@sven new status</p>')
+				assert.equal(row?.source_content, '@sven new status')
+				assert.equal(
+					row?.tag,
+					JSON.stringify([{ type: 'Mention', href: 'https://cloudflare.com/ap/users/sven', name: 'sven' }])
+				)
+				assert.equal(row?.spoiler_text, 'new spoiler')
+				assert.equal(row?.sensitive, 1)
+				assert.ok(row?.updated)
+			}
+		})
+
+		test('update status regenerates the timeline', async () => {
+			const db = await makeDB()
+			const queue = makeQueue()
+			const cache = makeCache()
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const note = await createPublicStatus(domain, db, connectedActor, 'note from actor')
+
+			// Poison the timeline
+			await cache.put(connectedActor.id.toString() + '/timeline/home', 'funny value')
+
+			const res = await statuses_id.handleRequestPut(
+				{ db, domain, userKEK, queue, cache, connectedActor },
+				note[mastodonIdSymbol],
+				{ status: 'new status' }
+			)
+			await assertStatus(res, 200)
+
+			// ensure that timeline has been regenerated after the update
+			const timeline = await cache.get<MastodonStatus[]>(connectedActor.id.toString() + '/timeline/home')
+			assert.ok(timeline)
+			assert.equal(timeline.length, 1)
+			assert.equal(timeline[0].content, '<p>new status</p>')
+		})
+
+		test('update status sends to followers', async () => {
+			const db = await makeDB()
+			const queue = makeQueue()
+			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+			const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
+			const note = await createPublicStatus(domain, db, actor, 'note from actor')
+
+			await addFollowing(domain, db, actor2, actor)
+			await acceptFollowing(db, actor2, actor)
+			await addFollowing(domain, db, actor3, actor)
+			await acceptFollowing(db, actor3, actor)
+
+			const res = await statuses_id.handleRequestPut(
+				{ db, domain, userKEK, queue, cache, connectedActor: actor },
+				note[mastodonIdSymbol],
+				{ status: 'new status' }
+			)
+			await assertStatus(res, 200)
+
+			assert.equal(queue.messages.length, 2)
+			assert.equal(queue.messages[0].activity.type, 'Update')
+			assert.equal(queue.messages[0].actorId, actor.id.toString())
+			assert.equal(queue.messages[0].toActorId, actor2.id.toString())
+			assert.equal(queue.messages[0].activity.object.content, '<p>new status</p>')
+			assert.equal(queue.messages[1].activity.type, 'Update')
+			assert.equal(queue.messages[1].actorId, actor.id.toString())
+			assert.equal(queue.messages[1].toActorId, actor3.id.toString())
+			assert.equal(queue.messages[1].activity.object.content, '<p>new status</p>')
+		})
+
 		test('delete non-existing status', async () => {
 			const db = await makeDB()
 			const queue = makeQueue()
