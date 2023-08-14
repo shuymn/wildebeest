@@ -27,6 +27,9 @@ import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 import { actorToAcct, actorToHandle, handleToAcct, parseHandle } from 'wildebeest/backend/src/utils/handle'
 import { queryAcct } from 'wildebeest/backend/src/webfinger'
 
+export const MAX_STATUS_LENGTH = 500
+export const MAX_MEDIA_ATTACHMENTS = 4
+
 export async function getMentions(input: string, instanceDomain: string, db: Database): Promise<Set<Actor>> {
 	const actors = new Set<Actor>()
 	const mentions = new Set<string>()
