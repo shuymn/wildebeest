@@ -88,6 +88,11 @@ export const onRequestPut: PagesFunction<Env, 'id', ContextData> = async ({
 			result.data
 		)
 	}
+	const { issues } = result.error
+	if (issues.length > 0) {
+		const [issue] = issues
+		return errors.validationError(`Validation failed: ${issue.path[0]} ${issue.code}`)
+	}
 	return new Response('', { status: 400 })
 }
 
