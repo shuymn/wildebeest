@@ -8,7 +8,7 @@
 		"@cloudflare/workers-types": "4.20230807.0",
 		"@databases/split-sql-query": "1.0.4",
 		"@databases/sql": "3.3.0",
-		"@playwright/test": "1.36.2",
+		"@playwright/test": "1.37.0",
 		"@types/better-sqlite3": "7.6.4",
 		"@types/cookie": "0.5.1",
 		"@types/jest": "29.5.3",
