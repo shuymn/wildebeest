@@ -340,7 +340,7 @@ async function cacheObject<T extends ApObject>(
 	}
 }
 
-export async function updateObject<T>(db: Database, properties: T, id: URL): Promise<void> {
+export async function updateObject<T extends ApObject>(db: Database, properties: T, id: URL): Promise<void> {
 	await query.updateObjectProperties(db, { properties: JSON.stringify(properties), id: id.toString() })
 }
 
