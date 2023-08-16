@@ -284,6 +284,28 @@ export async function updateActorMastodonIdByMastodonId(
     .run();
 }
 
+const updateActorPropertiesQuery = `-- name: UpdateActorProperties :exec
+UPDATE actors
+SET
+  properties = ?
+WHERE
+  id = ?`;
+
+export type UpdateActorPropertiesParams = {
+  properties: string;
+  id: string;
+};
+
+export async function updateActorProperties(
+  d1: D1Database,
+  args: UpdateActorPropertiesParams
+): Promise<D1Result> {
+  return await d1
+    .prepare(updateActorPropertiesQuery)
+    .bind(args.properties, args.id)
+    .run();
+}
+
 const selectActorQuery = `-- name: SelectActor :one
 SELECT
   "id",
@@ -491,6 +513,53 @@ export async function insertIdSequence(
     .prepare(insertIdSequenceQuery)
     .bind(args.key)
     .first<InsertIdSequenceRow | null>();
+}
+
+const selectObjectRevisionsByObjectIDQuery = `-- name: SelectObjectRevisionsByObjectID :many
+SELECT
+  properties
+FROM
+  object_revisions
+WHERE
+  object_id = ?`;
+
+export type SelectObjectRevisionsByObjectIDParams = {
+  objectId: string;
+};
+
+export type SelectObjectRevisionsByObjectIDRow = {
+  properties: string;
+};
+
+export async function selectObjectRevisionsByObjectID(
+  d1: D1Database,
+  args: SelectObjectRevisionsByObjectIDParams
+): Promise<D1Result<SelectObjectRevisionsByObjectIDRow>> {
+  return await d1
+    .prepare(selectObjectRevisionsByObjectIDQuery)
+    .bind(args.objectId)
+    .all<SelectObjectRevisionsByObjectIDRow>();
+}
+
+const insertObjectRevisionQuery = `-- name: InsertObjectRevision :exec
+INSERT INTO
+  object_revisions ("object_id", "properties")
+VALUES
+  (?, ?)`;
+
+export type InsertObjectRevisionParams = {
+  objectId: string;
+  properties: string;
+};
+
+export async function insertObjectRevision(
+  d1: D1Database,
+  args: InsertObjectRevisionParams
+): Promise<D1Result> {
+  return await d1
+    .prepare(insertObjectRevisionQuery)
+    .bind(args.objectId, args.properties)
+    .run();
 }
 
 const insertRemoteObjectQuery = `-- name: InsertRemoteObject :exec
