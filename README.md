@@ -6,7 +6,7 @@
 >
 > Please post any bug reports or feature requests in the Issues section. Keep in mind, however, that this is only a fork for personal use, so I cannot guarantee that I will be able to address your request.
 
-# Wildebeest
+# Wildebeest [![codecov](https://codecov.io/gh/shuymn/wildebeest/graph/badge.svg?token=XW744B3TZA)](https://codecov.io/gh/shuymn/wildebeest)
 
 ![wildebeest illustration](https://imagedelivery.net/NkfPDviynOyTAOI79ar_GQ/3654789b-089c-493a-85b4-be3f8f594c00/header)
 
