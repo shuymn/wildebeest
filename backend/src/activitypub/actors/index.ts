@@ -49,7 +49,7 @@ export interface Person extends Actor {
 	type: typeof PERSON
 }
 
-function isActorType(type: string): type is Actor['type'] {
+export function isActorType(type: string): type is Actor['type'] {
 	for (const actorType of actorTypes) {
 		if (actorType === type) {
 			return true
@@ -73,7 +73,13 @@ export async function fetchActor(url: string | URL): Promise<Remote<Actor> | nul
 	}
 
 	const actor = await res.json<Remote<Actor>>()
-	actor.id = new URL(actor.id)
+	return sanitizeActor(actor)
+}
+
+export async function sanitizeActor(actor: Remote<Actor>): Promise<Remote<Actor>> {
+	if (typeof actor.id === 'string') {
+		actor.id = new URL(actor.id)
+	}
 
 	if (actor.summary) {
 		actor.summary = await sanitizeContent(actor.summary)
@@ -183,6 +189,10 @@ export type ActorProperties = Pick<
 	| 'manuallyApprovesFollowers'
 	| 'sensitive'
 >
+
+export async function updateActorProperties(db: Database, actorId: URL, properties: ActorProperties) {
+	await query.updateActorProperties(db, { properties: JSON.stringify(properties), id: actorId.toString() })
+}
 
 export async function updateActorProperty(db: Database, actorId: URL, key: string, value: string) {
 	await db

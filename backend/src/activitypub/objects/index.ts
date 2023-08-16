@@ -340,10 +340,6 @@ async function cacheObject<T extends ApObject>(
 	}
 }
 
-export async function updateObject<T>(db: Database, properties: T, id: URL): Promise<void> {
-	await query.updateObjectProperties(db, { properties: JSON.stringify(properties), id: id.toString() })
-}
-
 export async function updateObjectProperty(db: Database, obj: ApObject, key: string, value: string) {
 	await db
 		.prepare(`UPDATE objects SET properties=${db.qb.jsonSet('properties', key, '?1')} WHERE id=?2`)
@@ -523,6 +519,7 @@ export async function deleteObject<T extends ApObject>(db: Database, note: T) {
 		db.prepare('DELETE FROM actor_replies WHERE object_id=?1 OR in_reply_to_object_id=?1').bind(nodeId),
 		db.prepare('DELETE FROM idempotency_keys WHERE object_id=?').bind(nodeId),
 		db.prepare('DELETE FROM note_hashtags WHERE object_id=?').bind(nodeId),
+		db.prepare('DELETE FROM object_revisions WHERE object_id=?').bind(nodeId),
 		db.prepare('DELETE FROM objects WHERE id=?').bind(nodeId),
 	]
 

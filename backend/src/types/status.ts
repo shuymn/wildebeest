@@ -127,3 +127,16 @@ export type Context = {
 	ancestors: MastodonStatus[]
 	descendants: MastodonStatus[]
 }
+
+export type MastodonStatusEdit = {
+	content: string
+	spoiler_text: string
+	sensitive: boolean
+	created_at: string
+	account: MastodonAccount
+	poll?: {
+		options: { title: string }[]
+	}
+	media_attachments: MediaAttachment[]
+	emojis: CustomEmoji[]
+}

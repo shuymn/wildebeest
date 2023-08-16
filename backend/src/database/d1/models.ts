@@ -211,3 +211,11 @@ export type Users = {
   cdate: string;
 };
 
+export type ObjectRevisions = {
+  id: number;
+  type: string;
+  objectId: string;
+  properties: string;
+  cdate: string;
+};
+

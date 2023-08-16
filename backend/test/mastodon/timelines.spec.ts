@@ -55,11 +55,11 @@ describe('Mastodon APIs', () => {
 			assert(data[0].id)
 			assert.equal(data[0].content, '')
 			assert.equal(data[0].account.username, 'sven')
-			assert.equal(data[0].reblog?.content, 'first status from actor2')
+			assert.equal(data[0].reblog?.content, '<p>first status from actor2</p>')
 			assert.equal(data[0].reblog?.account.username, 'sven2')
-			assert.equal(data[1].content, 'second status from actor2')
+			assert.equal(data[1].content, '<p>second status from actor2</p>')
 			assert.equal(data[1].account.username, 'sven2')
-			assert.equal(data[2].content, 'first status from actor2')
+			assert.equal(data[2].content, '<p>first status from actor2</p>')
 			assert.equal(data[2].account.username, 'sven2')
 			assert.equal(data[2].favourites_count, 1)
 			assert.equal(data[2].reblogs_count, 1)
@@ -100,7 +100,7 @@ describe('Mastodon APIs', () => {
 			// Actor should only see posts from actor2 in the timeline
 			const data = await timelines.getHomeTimeline(domain, db, actor)
 			assert.equal(data.length, 1)
-			assert.equal(data[0].content, 'test post')
+			assert.equal(data[0].content, '<p>test post</p>')
 		})
 
 		test("public doesn't show private Notes", async () => {
@@ -127,7 +127,7 @@ describe('Mastodon APIs', () => {
 			const data = await timelines.getHomeTimeline(domain, db, connectedActor)
 			assert.equal(data.length, 1)
 			assert(data[0].id)
-			assert.equal(data[0].content, 'status from myself')
+			assert.equal(data[0].content, '<p>status from myself</p>')
 			assert.equal(data[0].account.username, 'sven')
 		})
 
@@ -184,13 +184,13 @@ describe('Mastodon APIs', () => {
 			assert(data[0].id)
 			assert.equal(data[0].content, '')
 			assert.equal(data[0].account.username, 'sven')
-			assert.equal(data[0].reblog.content, 'status from actor')
+			assert.equal(data[0].reblog.content, '<p>status from actor</p>')
 			assert.equal(data[0].reblog.account.username, 'sven')
 
-			assert.equal(data[1].content, 'status from actor2')
+			assert.equal(data[1].content, '<p>status from actor2</p>')
 			assert.equal(data[1].account.username, 'sven2')
 
-			assert.equal(data[2].content, 'status from actor')
+			assert.equal(data[2].content, '<p>status from actor</p>')
 			assert.equal(data[2].account.username, 'sven')
 			assert.equal(data[2].favourites_count, 1)
 			assert.equal(data[2].reblogs_count, 1)
@@ -248,9 +248,9 @@ describe('Mastodon APIs', () => {
 			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
-			assert.equal(data[0].content, 'note3')
-			assert.equal(data[1].content, 'note1')
-			assert.equal(data[2].content, 'note2')
+			assert.equal(data[0].content, '<p>note3</p>')
+			assert.equal(data[1].content, '<p>note1</p>')
+			assert.equal(data[2].content, '<p>note2</p>')
 		})
 
 		test('home timelines do not hides and counts public replies', async () => {
@@ -261,23 +261,26 @@ describe('Mastodon APIs', () => {
 
 			await sleep(10)
 
-			await createReply(domain, db, actor, note, 'a reply')
+			await createReply(domain, db, actor, note, '@sven@cloudflare.com a reply')
 
 			const connectedActor: any = actor
 
 			{
 				const data = await timelines.getHomeTimeline(domain, db, connectedActor)
 				assert.equal(data.length, 2)
-				assert.equal(data[0].content, 'a reply')
+				assert.equal(
+					data[0].content,
+					'<p><span class="h-card"><a href="https://cloudflare.com/@sven" class="u-url mention">@<span>sven</span></a></span> a reply</p>'
+				)
 				assert.equal(data[0].replies_count, 0)
-				assert.equal(data[1].content, 'a post')
+				assert.equal(data[1].content, '<p>a post</p>')
 				assert.equal(data[1].replies_count, 1)
 			}
 
 			{
 				const data = await timelines.getPublicTimeline(domain, db, timelines.LocalPreference.NotSet, false, 20)
 				assert.equal(data.length, 1)
-				assert.equal(data[0].content, 'a post')
+				assert.equal(data[0].content, '<p>a post</p>')
 				assert.equal(data[0].replies_count, 1)
 			}
 		})
@@ -390,8 +393,8 @@ describe('Mastodon APIs', () => {
 					'test'
 				)
 				assert.equal(data.length, 2)
-				assert.equal(data[0].content, 'test 2')
-				assert.equal(data[1].content, 'test 1')
+				assert.equal(data[0].content, '<p>test 2</p>')
+				assert.equal(data[1].content, '<p>test 1</p>')
 			}
 
 			{
@@ -406,7 +409,7 @@ describe('Mastodon APIs', () => {
 					'a'
 				)
 				assert.equal(data.length, 1)
-				assert.equal(data[0].content, 'test 1')
+				assert.equal(data[0].content, '<p>test 1</p>')
 			}
 		})
 	})

@@ -12,15 +12,18 @@ import {
 	UpdateActivity,
 } from 'wildebeest/backend/src/activitypub/activities'
 import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
+import { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import {
 	ApObject,
 	getAndCacheObject,
 	getApId,
+	mastodonIdSymbol,
 	originalObjectIdSymbol,
 } from 'wildebeest/backend/src/activitypub/objects'
 import { getObjectById } from 'wildebeest/backend/src/activitypub/objects/'
 import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
+import { MastodonStatusEdit } from 'wildebeest/backend/src/types'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 import {
@@ -29,8 +32,9 @@ import {
 	createPublicStatus,
 	createUnlistedStatus,
 } from 'wildebeest/backend/test/shared.utils'
+import * as statuses_history from 'wildebeest/functions/api/v1/statuses/[id]/history'
 
-import { createActivityId, createTestUser, makeDB } from '../utils'
+import { assertStatus, createActivityId, createTestUser, makeDB } from '../utils'
 
 const adminEmail = 'admin@example.com'
 const domain = 'cloudflare.com'
@@ -562,22 +566,84 @@ describe('ActivityPub', () => {
 				})
 			})
 
-			test('Object is updated', async () => {
+			test('Object(Note) is updated', async () => {
 				const db = await makeDB()
 				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
-				const object = {
+
+				const note: Note = {
 					id: 'https://example.com/note2',
 					type: 'Note',
-					content: 'test note',
+					attributedTo: actor.id,
+					attachment: [],
+					content: 'test note<script>alert("evil")</script>',
+					to: [PUBLIC_GROUP],
+					cc: [],
+					sensitive: false,
 				}
 
-				const obj = await getAndCacheObject(domain, db, object, actor)
-				assert.notEqual(obj, null, 'could not create object')
+				const { object: obj } = await getAndCacheObject(domain, db, note, actor)
+				assert.ok(obj, 'could not create object')
 
-				const newObject: ApObject = {
-					id: getApId('https://example.com/note2'),
-					type: 'Note',
-					content: 'new test note',
+				const now = new Date('2023-08-16T16:22:14.190Z').toISOString()
+				const newNote: Note = {
+					...note,
+					content: 'new test note<script>alert("evil")</script>',
+					updated: now,
+				}
+
+				const activity: UpdateActivity = {
+					'@context': 'https://www.w3.org/ns/activitystreams',
+					id: createActivityId(domain),
+					type: 'Update',
+					actor: actor.id,
+					object: newNote,
+				}
+
+				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
+
+				const updatedObject = await db
+					.prepare('SELECT id, properties FROM objects WHERE original_object_id=?')
+					.bind(note.id.toString())
+					.first<{ id: string; properties: string }>()
+				assert(updatedObject)
+				assert.equal(JSON.parse(updatedObject.properties).content, newNote.content)
+
+				{
+					const res = await statuses_history.onRequestGet({
+						request: new Request('https://' + domain),
+						env: { DATABASE: db },
+						params: { id: obj[mastodonIdSymbol] },
+						data: { connectedActor: actor },
+						// eslint-disable-next-line @typescript-eslint/no-explicit-any
+					} as any)
+					await assertStatus(res, 200)
+
+					const data = await res.json<MastodonStatusEdit[]>()
+					assert.equal(data.length, 2)
+					assert.equal(data[0].content, 'test note<p>alert("evil")</p>')
+					assert.equal(data[1].content, 'new test note<p>alert("evil")</p>')
+					assert.notEqual(data[0].created_at, data[1].created_at)
+				}
+
+				{
+					// duplicate update
+					await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
+					const res = await db
+						.prepare('SELECT count(*) as count FROM object_revisions WHERE object_id=?')
+						.bind(updatedObject.id)
+						.first<{ count: number }>()
+					assert.ok(res)
+					assert.equal(res.count, 1)
+				}
+			})
+
+			test('Object(Actor) is updated', async () => {
+				const db = await makeDB()
+				const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+
+				const newObject: Actor = {
+					...actor,
+					summary: 'new summary',
 				}
 
 				const activity: UpdateActivity = {
@@ -591,10 +657,10 @@ describe('ActivityPub', () => {
 				await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
 				const updatedObject = await db
-					.prepare('SELECT * FROM objects WHERE original_object_id=?')
-					.bind(object.id)
+					.prepare('SELECT properties FROM actors WHERE id=?')
+					.bind(actor.id.toString())
 					.first<{ properties: string }>()
-				assert(updatedObject)
+				assert.ok(updatedObject)
 				assert.equal(JSON.parse(updatedObject.properties).content, newObject.content)
 			})
 		})

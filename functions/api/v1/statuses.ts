@@ -22,7 +22,12 @@ import { getHashtags, insertHashtags } from 'wildebeest/backend/src/mastodon/has
 import * as idempotency from 'wildebeest/backend/src/mastodon/idempotency'
 import { enrichStatus } from 'wildebeest/backend/src/mastodon/microformats'
 import { insertReply } from 'wildebeest/backend/src/mastodon/reply'
-import { getMentions, toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
+import {
+	getMentions,
+	MAX_MEDIA_ATTACHMENTS,
+	MAX_STATUS_LENGTH,
+	toMastodonStatusFromObject,
+} from 'wildebeest/backend/src/mastodon/status'
 import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
 import { ContextData, DeliverMessageBody, Env, Queue, Visibility } from 'wildebeest/backend/src/types'
 import { cors, myz, readBody } from 'wildebeest/backend/src/utils'
@@ -33,9 +38,6 @@ const headers = {
 	...cors(),
 	'content-type': 'application/json; charset=utf-8',
 }
-
-const MAX_STATUS_LENGTH = 500
-const MAX_MEDIA_ATTACHMENTS = 4
 
 const schema = z.object({
 	// TODO: check server settings for max length

@@ -26,6 +26,13 @@ SET
 WHERE
   mastodon_id = @current;
 
+-- name: UpdateActorProperties :exec
+UPDATE actors
+SET
+  properties = ?
+WHERE
+  id = ?;
+
 -- name: SelectActor :one
 SELECT
   "id",

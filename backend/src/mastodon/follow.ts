@@ -88,26 +88,26 @@ export async function addFollowing(domain: string, db: Database, follower: Actor
 }
 
 // Accept the pending following request
-export async function acceptFollowing(db: Database, actor: Actor, target: Actor) {
+export async function acceptFollowing(db: Database, follower: Actor, followee: Actor) {
 	const query = `
 		UPDATE actor_following SET state=? WHERE actor_id=? AND target_actor_id=? AND state=?
 	`
 
 	const out = await db
 		.prepare(query)
-		.bind(STATE_ACCEPTED, actor.id.toString(), target.id.toString(), STATE_PENDING)
+		.bind(STATE_ACCEPTED, follower.id.toString(), followee.id.toString(), STATE_PENDING)
 		.run()
 	if (!out.success) {
 		throw new Error('SQL error: ' + out.error)
 	}
 }
 
-export async function removeFollowing(db: Database, actor: Actor, target: Actor) {
+export async function removeFollowing(db: Database, follower: Actor, followee: Actor) {
 	const query = `
 		DELETE FROM actor_following WHERE actor_id=? AND target_actor_id=?
 	`
 
-	const out = await db.prepare(query).bind(actor.id.toString(), target.id.toString()).run()
+	const out = await db.prepare(query).bind(follower.id.toString(), followee.id.toString()).run()
 	if (!out.success) {
 		throw new Error('SQL error: ' + out.error)
 	}

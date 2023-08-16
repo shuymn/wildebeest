@@ -2,10 +2,21 @@
 
 import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { ApObject, ApObjectId, ApObjectOrId, createObject, Document } from 'wildebeest/backend/src/activitypub/objects'
+import {
+	ApObject,
+	ApObjectId,
+	ApObjectOrId,
+	createObject,
+	Document,
+	getApId,
+	Remote,
+	RemoteObject,
+	sanitizeObjectProperties,
+} from 'wildebeest/backend/src/activitypub/objects'
 import { Image } from 'wildebeest/backend/src/activitypub/objects/image'
 import type { Link } from 'wildebeest/backend/src/activitypub/objects/link'
 import { type Database } from 'wildebeest/backend/src/database'
+import * as query from 'wildebeest/backend/src/database/d1/querier'
 import { PartialProps, RequiredProps } from 'wildebeest/backend/src/utils/type'
 
 const NOTE = 'Note'
@@ -47,6 +58,10 @@ export function isNote(obj: Record<string, unknown>): obj is Note {
 	}
 
 	return true
+}
+
+export function isNoteType(type: string): type is Note['type'] {
+	return type === NOTE
 }
 
 type ExtraProperties = PartialProps<
@@ -152,4 +167,28 @@ async function createNote(
 		},
 		actorId
 	)
+}
+
+export async function updateNote(
+	db: Database,
+	updatedNote: Remote<Note>,
+	currentNote: RemoteObject<Note>
+): Promise<void> {
+	if (!updatedNote.updated) {
+		updatedNote.updated = new Date().toISOString()
+	}
+	if (
+		currentNote.updated &&
+		new Date(updatedNote.updated).toISOString() === new Date(currentNote.updated).toISOString()
+	) {
+		return
+	}
+	const noteId = getApId(currentNote.id).toString()
+	await query.updateObjectProperties(db, {
+		properties: JSON.stringify(await sanitizeObjectProperties(updatedNote)),
+		id: noteId,
+	})
+	await query.insertObjectRevision(db, { objectId: noteId, properties: JSON.stringify(currentNote) }).catch((err) => {
+		console.error('failed to insert object revision: ' + err)
+	})
 }

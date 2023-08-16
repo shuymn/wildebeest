@@ -1,12 +1,18 @@
 import { getActivityObject, insertActivity, UpdateActivity } from 'wildebeest/backend/src/activitypub/activities'
-import { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import {
+	Actor,
+	getActorById,
+	isActorType,
+	sanitizeActor,
+	updateActorProperties,
+} from 'wildebeest/backend/src/activitypub/actors'
 import {
 	ApObject,
 	getApId,
 	getObjectByOriginalId,
 	originalActorIdSymbol,
-	updateObject,
 } from 'wildebeest/backend/src/activitypub/objects'
+import { isNoteType, updateNote } from 'wildebeest/backend/src/activitypub/objects/note'
 import { Database } from 'wildebeest/backend/src/database'
 
 export async function createUpdateActivity(
@@ -29,20 +35,32 @@ export async function handleUpdateActivity(domain: string, activity: UpdateActiv
 	const actorId = getApId(activity.actor)
 	const objectId = getApId(activity.object)
 
-	if (!['Note', 'Person', 'Service'].includes(activity.object.type)) {
+	if (isActorType(activity.object.type)) {
+		const actor = await getActorById(db, objectId)
+		if (actor === null) {
+			throw new Error(`actor ${objectId} does not exist`)
+		}
+
+		if (actorId.toString() !== getApId(actor.id).toString()) {
+			throw new Error('actor.id mismatch when updating actor')
+		}
+
+		const sanitized = await sanitizeActor(activity.object)
+		await updateActorProperties(db, actorId, sanitized)
+	} else if (isNoteType(activity.object.type)) {
+		// check current object
+		const obj = await getObjectByOriginalId(domain, db, objectId)
+		if (obj === null) {
+			throw new Error(`object ${objectId} does not exist`)
+		}
+
+		if (actorId.toString() !== obj[originalActorIdSymbol]) {
+			throw new Error('actor.id mismatch when updating object')
+		}
+
+		await updateNote(db, activity.object, obj)
+	} else {
 		console.warn('unsupported Update for Object type: ' + JSON.stringify(activity.object.type))
 		return
 	}
-
-	// check current object
-	const obj = await getObjectByOriginalId(domain, db, objectId)
-	if (obj === null) {
-		throw new Error(`object ${objectId} does not exist`)
-	}
-
-	if (actorId.toString() !== obj[originalActorIdSymbol]) {
-		throw new Error('actor.id mismatch when updating object')
-	}
-
-	await updateObject(db, activity.object, getApId(obj))
 }
