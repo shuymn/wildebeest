@@ -527,17 +527,17 @@ describe('Mastodon APIs', () => {
 			assert.equal(data[0].favourites_count, 0)
 			assert.equal(data[0].reblogs_count, 0)
 			assert.equal(data[0].uri, 'https://example.com/activity')
-			assert.equal(data[0].reblog.content, 'my second status')
+			assert.equal(data[0].reblog.content, '<p>my second status</p>')
 
 			assert(!isUUID(data[1].id) && !isNaN(Number(data[1].id)), data[1].id)
-			assert.equal(data[1].content, 'my second status')
+			assert.equal(data[1].content, '<p>my second status</p>')
 			assert.equal(data[1].account.acct, 'sven')
 			assert.equal(data[1].favourites_count, 0)
 			assert.equal(data[1].reblogs_count, 1)
 			assert.equal(new URL(data[1].url).pathname, '/@sven/' + data[1].id)
 
 			assert(!isUUID(data[2].id) && !isNaN(Number(data[2].id)), data[2].id)
-			assert.equal(data[2].content, 'my first status')
+			assert.equal(data[2].content, '<p>my first status</p>')
 			assert.equal(data[2].favourites_count, 1)
 			assert.equal(data[2].reblogs_count, 0)
 		})
@@ -547,7 +547,7 @@ describe('Mastodon APIs', () => {
 			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 			const note = await createPublicStatus(domain, db, actor, 'a post')
 			await sleep(10)
-			await createReply(domain, db, actor, note, 'a reply')
+			await createReply(domain, db, actor, note, '@sven@cloudflare.com a reply')
 
 			const res = await accounts_statuses.onRequestGet({
 				request: new Request(`https://${domain}?exclude_replies=true`),

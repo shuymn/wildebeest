@@ -24,7 +24,8 @@ export async function init(domain: string, db: Database) {
 			actor,
 			status.content,
 			status.media_attachments as unknown as (Document | Image)[],
-			{ spoiler_text: status.spoiler_text }
+			{ spoiler_text: status.spoiler_text },
+			true
 		)
 		loadedStatuses.push({ status, note })
 	}

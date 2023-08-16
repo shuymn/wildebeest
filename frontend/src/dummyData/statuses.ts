@@ -63,8 +63,8 @@ export const statuses: MastodonStatus[] = mastodonRawStatuses.map((rawStatus) =>
 }))
 
 export const replies: MastodonStatus[] = [
-	generateDummyStatus({ content: '<p>Yes we did! 🎉</p>', account: zak, inReplyTo: statuses[1].id }),
-	generateDummyStatus({ content: '<p> Yes you guys did it! </p>', account: penny, inReplyTo: statuses[1].id }),
+	generateDummyStatus({ content: '@george Yes we did! 🎉', account: zak, inReplyTo: statuses[1].id }),
+	generateDummyStatus({ content: '@george Yes you guys did it!', account: penny, inReplyTo: statuses[1].id }),
 ]
 
 export const reblogs: MastodonStatus[] = [generateDummyStatus({ account: george, reblog: statuses[2] })]

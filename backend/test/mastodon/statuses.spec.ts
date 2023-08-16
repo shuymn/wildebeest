@@ -10,13 +10,14 @@ import { insertLike } from 'wildebeest/backend/src/mastodon/like'
 import { createReblog } from 'wildebeest/backend/src/mastodon/reblog'
 import { getMentions } from 'wildebeest/backend/src/mastodon/status'
 import * as timelines from 'wildebeest/backend/src/mastodon/timeline'
-import { MastodonStatus } from 'wildebeest/backend/src/types'
+import { MastodonStatus, MastodonStatusEdit } from 'wildebeest/backend/src/types'
 import { MessageType } from 'wildebeest/backend/src/types'
-import { createPublicStatus, createReply } from 'wildebeest/backend/test/shared.utils'
+import { createPrivateStatus, createPublicStatus, createReply } from 'wildebeest/backend/test/shared.utils'
 import * as statuses from 'wildebeest/functions/api/v1/statuses'
 import * as statuses_id from 'wildebeest/functions/api/v1/statuses/[id]'
 import * as statuses_context from 'wildebeest/functions/api/v1/statuses/[id]/context'
 import * as statuses_favourite from 'wildebeest/functions/api/v1/statuses/[id]/favourite'
+import * as statuses_history from 'wildebeest/functions/api/v1/statuses/[id]/history'
 import * as statuses_reblog from 'wildebeest/functions/api/v1/statuses/[id]/reblog'
 
 import {
@@ -694,7 +695,7 @@ describe('Mastodon APIs', () => {
 			const note = await createPublicStatus(domain, db, actor, 'a post', [], { sensitive: false })
 			await sleep(10)
 
-			await createReply(domain, db, actor, note, 'a reply')
+			await createReply(domain, db, actor, note, '@sven@cloudflare.com a reply')
 
 			const res = await statuses_context.handleRequest(domain, db, note[mastodonIdSymbol]!)
 			await assertStatus(res, 200)
@@ -702,7 +703,10 @@ describe('Mastodon APIs', () => {
 			const data = await res.json<{ ancestors: unknown[]; descendants: Array<{ content: unknown }> }>()
 			assert.equal(data.ancestors.length, 0)
 			assert.equal(data.descendants.length, 1)
-			assert.equal(data.descendants[0].content, 'a reply')
+			assert.equal(
+				data.descendants[0].content,
+				'<p><span class="h-card"><a href="https://cloudflare.com/@sven" class="u-url mention">@<span>sven</span></a></span> a reply</p>'
+			)
 		})
 
 		describe('reblog', () => {
@@ -1057,7 +1061,7 @@ describe('Mastodon APIs', () => {
 						sensitive: 0 | 1
 						updated: string | null
 					}>()
-				assert.equal(row?.content, 'note from actor')
+				assert.equal(row?.content, '<p>note from actor</p>')
 				assert.equal(row?.source_content, 'note from actor')
 				assert.equal(row?.tag, '[]')
 				assert.equal(row?.spoiler_text, null)
@@ -1625,6 +1629,107 @@ describe('Mastodon APIs', () => {
 			assert.equal(row.content, '<p>something nice</p>') // note the sanitization
 			assert.deepEqual(JSON.parse(row.to), ['https://' + domain + '/ap/users/sven/followers'])
 			assert.deepEqual(JSON.parse(row.cc), [])
+		})
+
+		test('statuses_history: 404 if status does not exist', async () => {
+			const db = await makeDB()
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const res = await statuses_history.onRequestGet({
+				request: new Request('https://' + domain),
+				env: { DATABASE: db },
+				params: { id: '1' },
+				data: { connectedActor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 404)
+		})
+
+		test('statuses_history: should only be generated for Note objects', async () => {
+			const db = await makeDB()
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+
+			const obj = await createImage(domain, db, connectedActor, { url: 'https://example.com/image.jpg' })
+			const mastodonId = obj[mastodonIdSymbol]
+			assert.ok(mastodonId)
+
+			const row = await getObjectByMastodonId(domain, db, mastodonId)
+			assert.ok(row)
+
+			const res = await statuses_history.onRequestGet({
+				request: new Request('https://' + domain),
+				env: { DATABASE: db },
+				params: { id: mastodonId },
+				data: { connectedActor },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			} as any)
+			await assertStatus(res, 404)
+		})
+
+		test('statuses_history: should not be visible to users without view permissions', async () => {
+			const db = await makeDB()
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+
+			const author = await createTestUser(domain, db, userKEK, 'actor1@cloudflare.com')
+			const note = await createPrivateStatus(domain, db, author, 'my first status')
+
+			{
+				const res = await statuses_history.onRequestGet({
+					request: new Request('https://' + domain),
+					env: { DATABASE: db },
+					params: { id: note[mastodonIdSymbol] },
+					data: { connectedActor },
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				} as any)
+				await assertStatus(res, 404)
+			}
+
+			await addFollowing(domain, db, connectedActor, author)
+			await acceptFollowing(db, connectedActor, author)
+
+			{
+				const res = await statuses_history.onRequestGet({
+					request: new Request('https://' + domain),
+					env: { DATABASE: db },
+					params: { id: note[mastodonIdSymbol] },
+					data: { connectedActor },
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				} as any)
+				await assertStatus(res, 200)
+			}
+		})
+
+		test('statuses_history: updating the status creates revisions', async () => {
+			const db = await makeDB()
+			const queue = makeQueue()
+			const cache = makeCache()
+			const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+			const note = await createPublicStatus(domain, db, connectedActor, 'note from actor')
+
+			{
+				const res = await statuses_id.handleRequestPut(
+					{ db, domain, userKEK, queue, cache, connectedActor },
+					note[mastodonIdSymbol],
+					{ status: 'new status' }
+				)
+				await assertStatus(res, 200)
+			}
+
+			{
+				const res = await statuses_history.onRequestGet({
+					request: new Request('https://' + domain),
+					env: { DATABASE: db },
+					params: { id: note[mastodonIdSymbol] },
+					data: { connectedActor },
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				} as any)
+				await assertStatus(res, 200)
+
+				const data = await res.json<MastodonStatusEdit[]>()
+				assert.equal(data.length, 2)
+				assert.equal(data[0].content, '<p>note from actor</p>')
+				assert.equal(data[1].content, '<p>new status</p>')
+				assert.notEqual(data[0].created_at, data[1].created_at)
+			}
 		})
 	})
 })

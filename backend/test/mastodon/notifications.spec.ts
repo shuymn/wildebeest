@@ -87,7 +87,7 @@ describe('Mastodon APIs', () => {
 			assert.equal(data.id, '1')
 			assert.equal(data.type, 'favourite')
 			assert.equal(data.account.acct, 'from')
-			assert.equal(data.status.content, 'my first status')
+			assert.equal(data.status.content, '<p>my first status</p>')
 		})
 
 		test('get single follow notification', async () => {

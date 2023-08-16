@@ -6,9 +6,12 @@
 
 import { Document } from 'wildebeest/backend/src/activitypub/objects'
 import { Image } from 'wildebeest/backend/src/activitypub/objects/image'
+import { newMention } from 'wildebeest/backend/src/activitypub/objects/mention'
 import { type Database } from 'wildebeest/backend/src/database'
+import { enrichStatus } from 'wildebeest/backend/src/mastodon/microformats'
+import { getMentions } from 'wildebeest/backend/src/mastodon/status'
 
-import { type Actor, getActorById, type Person } from '../src/activitypub/actors'
+import { type Actor, type Person } from '../src/activitypub/actors'
 import { addObjectInOutbox } from '../src/activitypub/actors/outbox'
 import {
 	createDirectNote,
@@ -24,30 +27,41 @@ import { insertReply } from '../src/mastodon/reply'
  *
  * @param domain the domain to use
  * @param db Database
- * @param actor Author of the reply
+ * @param author Author of the reply
  * @param originalNote The original note
- * @param replyContent content of the reply
+ * @param rawContent content of the reply
  */
 export async function createReply(
 	domain: string,
 	db: Database,
-	actor: Actor,
+	author: Actor,
 	originalNote: Note,
-	replyContent: string,
+	rawContent: string,
 	sensitive: boolean = false
 ) {
-	const inReplyTo = originalNote.id.toString()
-	const repliedActor = await getActorById(db, originalNote.attributedTo.toString())
-	if (!repliedActor) {
+	const extraProperties: Record<string, any> = {
+		inReplyTo: originalNote.id.toString(),
+		sensitive,
+		source: { content: rawContent, mediaType: 'text/plain' },
+	}
+
+	const mentions = await getMentions(rawContent, domain, db)
+	if (mentions.size === 0) {
 		throw new Error('replied actor not found')
 	}
-	const replyNote = await createPublicNote(domain, db, replyContent, actor, new Set([repliedActor]), [], {
-		inReplyTo,
-		sensitive,
-		source: { content: replyContent, mediaType: 'text/plain' },
-	})
-	await addObjectInOutbox(db, actor, replyNote)
-	await insertReply(db, actor, replyNote, originalNote)
+	extraProperties.tag = [...mentions].map((actor) => newMention(actor, domain))
+
+	const replyNote = await createPublicNote(
+		domain,
+		db,
+		enrichStatus(rawContent, mentions),
+		author,
+		mentions,
+		[],
+		extraProperties as any
+	)
+	await addObjectInOutbox(db, author, replyNote)
+	await insertReply(db, author, replyNote, originalNote)
 }
 
 /**
@@ -55,7 +69,7 @@ export async function createReply(
  *
  * @param domain the domain to use
  * @param db Database
- * @param actor Author of the reply
+ * @param author Author of the reply
  * @param content content of the reply
  * @param attachments optional attachments for the status
  * @param extraProperties optional extra properties for the status
@@ -64,24 +78,33 @@ export async function createReply(
 export async function createPublicStatus(
 	domain: string,
 	db: Database,
-	actor: Person,
-	content: string,
+	author: Person,
+	rawContent: string,
 	attachments?: (Document | Image)[],
-	extraProperties?: Record<string, any>
+	extraProperties: Record<string, any> = {},
+	skipEnrich: boolean = false
 ) {
+	const mentions = await getMentions(rawContent, domain, db)
+	if (mentions.size > 0) {
+		extraProperties.tag = [...mentions].map((actor) => newMention(actor, domain))
+	}
 	const note = await createPublicNote(
 		domain,
 		db,
-		content,
-		actor,
-		new Set(),
+		skipEnrich ? rawContent : enrichStatus(rawContent, mentions),
+		author,
+		mentions,
 		attachments,
-		(extraProperties as any) ?? { sensitive: false, source: { content, mediaType: 'text/plain' } }
+		{
+			sensitive: false,
+			source: { content: rawContent, mediaType: 'text/plain' },
+			...extraProperties,
+		}
 	)
 	if (extraProperties?.published) {
-		await addObjectInOutbox(db, actor, note, note.to, note.cc, extraProperties.published)
+		await addObjectInOutbox(db, author, note, note.to, note.cc, extraProperties.published)
 	} else {
-		await addObjectInOutbox(db, actor, note)
+		await addObjectInOutbox(db, author, note)
 	}
 	return note
 }
@@ -89,63 +112,75 @@ export async function createPublicStatus(
 export async function createUnlistedStatus(
 	domain: string,
 	db: Database,
-	actor: Person,
-	content: string,
+	author: Person,
+	rawContent: string,
 	attachments?: (Document | Image)[],
-	extraProperties?: Record<string, any>
+	extraProperties: Record<string, any> = {}
 ) {
+	const mentions = await getMentions(rawContent, domain, db)
+	if (mentions.size > 0) {
+		extraProperties.tag = [...mentions].map((actor) => newMention(actor, domain))
+	}
 	const note = await createUnlistedNote(
 		domain,
 		db,
-		content,
-		actor,
+		enrichStatus(rawContent, mentions),
+		author,
 		new Set(),
 		attachments,
-		(extraProperties as any) ?? { sensitive: false, source: { content, mediaType: 'text/plain' } }
+		{
+			sensitive: false,
+			source: { content: rawContent, mediaType: 'text/plain' },
+			...extraProperties,
+		}
 	)
-	await addObjectInOutbox(db, actor, note)
+	await addObjectInOutbox(db, author, note)
 	return note
 }
 
 export async function createPrivateStatus(
 	domain: string,
 	db: Database,
-	actor: Person,
-	content: string,
+	author: Person,
+	rawContent: string,
 	attachments?: (Document | Image)[],
-	extraProperties?: Record<string, any>
+	extraProperties: Record<string, any> = {}
 ) {
-	const note = await createPrivateNote(
-		domain,
-		db,
-		content,
-		actor,
-		new Set(),
-		attachments,
-		(extraProperties as any) ?? { sensitive: false, source: { content, mediaType: 'text/plain' } }
-	)
-	await addObjectInOutbox(db, actor, note)
+	const mentions = await getMentions(rawContent, domain, db)
+	if (mentions.size > 0) {
+		extraProperties.tag = [...mentions].map((actor) => newMention(actor, domain))
+	}
+	const note = await createPrivateNote(domain, db, enrichStatus(rawContent, mentions), author, new Set(), attachments, {
+		sensitive: false,
+		source: { content: rawContent, mediaType: 'text/plain' },
+		...extraProperties,
+	})
+	await addObjectInOutbox(db, author, note)
 	return note
 }
 
 export async function createDirectStatus(
 	domain: string,
 	db: Database,
-	actor: Person,
-	content: string,
+	author: Person,
+	rawContent: string,
 	attachments?: (Document | Image)[],
-	extraProperties?: Record<string, any>
+	extraProperties: Record<string, any> = {}
 ) {
-	const to = extraProperties?.to ?? [actor]
+	const mentions = await getMentions(rawContent, domain, db)
+	if (mentions.size > 0) {
+		extraProperties.tag = [...mentions].map((actor) => newMention(actor, domain))
+	}
+	const to = extraProperties?.to ?? [author]
 	const note = await createDirectNote(
 		domain,
 		db,
-		content,
-		actor,
+		enrichStatus(rawContent, mentions),
+		author,
 		new Set([...to]),
 		attachments,
-		(extraProperties as any) ?? { sensitive: false, source: { content, mediaType: 'text/plain' } }
+		{ sensitive: false, source: { content: rawContent, mediaType: 'text/plain' }, ...extraProperties }
 	)
-	await addObjectInOutbox(db, actor, note)
+	await addObjectInOutbox(db, author, note)
 	return note
 }
