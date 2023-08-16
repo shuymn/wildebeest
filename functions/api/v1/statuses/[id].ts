@@ -4,16 +4,10 @@ import { createDeleteActivity } from 'wildebeest/backend/src/activitypub/activit
 import { createUpdateActivity } from 'wildebeest/backend/src/activitypub/activities/update'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverFollowers } from 'wildebeest/backend/src/activitypub/deliver'
-import {
-	deleteObject,
-	getApId,
-	getObjectByMastodonId,
-	originalActorIdSymbol,
-	updateObject,
-} from 'wildebeest/backend/src/activitypub/objects'
+import { deleteObject, getObjectByMastodonId, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { Image, isImage } from 'wildebeest/backend/src/activitypub/objects/image'
 import { newMention } from 'wildebeest/backend/src/activitypub/objects/mention'
-import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
+import { Note, updateNote } from 'wildebeest/backend/src/activitypub/objects/note'
 import { Cache, cacheFromEnv } from 'wildebeest/backend/src/cache'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
@@ -145,17 +139,17 @@ export async function handleRequestPut(
 	id: MastodonId,
 	params: PutParameters
 ): Promise<Response> {
-	const obj = await getObjectByMastodonId<Note>(domain, db, id)
-	if (obj === null) {
+	const currentObj = await getObjectByMastodonId<Note>(domain, db, id)
+	if (currentObj === null) {
 		return errors.statusNotFound(id)
 	}
 
-	if (obj[originalActorIdSymbol] !== connectedActor.id.toString()) {
+	if (currentObj[originalActorIdSymbol] !== connectedActor.id.toString()) {
 		return errors.statusNotFound(id)
 	}
 
 	let updated = false
-	const updatedObj = obj
+	const updatedObj = { ...currentObj }
 
 	if (params.media_ids && params.media_ids.length > 0) {
 		const mediaAttachments: Image[] = []
@@ -200,7 +194,7 @@ export async function handleRequestPut(
 	if (updated) {
 		updatedObj.updated = new Date().toISOString()
 
-		await updateObject(db, updatedObj, getApId(obj.id))
+		await updateNote(db, updatedObj, currentObj)
 
 		const activity = await createUpdateActivity(db, domain, connectedActor, updatedObj)
 		await deliverFollowers(db, userKEK, connectedActor, activity, queue)
