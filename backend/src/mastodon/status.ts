@@ -17,13 +17,22 @@ import {
 	originalObjectIdSymbol,
 	RemoteObject,
 } from 'wildebeest/backend/src/activitypub/objects'
-import { type Note } from 'wildebeest/backend/src/activitypub/objects/note'
+import { isNote, type Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database } from 'wildebeest/backend/src/database'
+import { selectObjectRevisionsByObjectID } from 'wildebeest/backend/src/database/d1/querier'
 import { loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
+import { isFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { ensureReblogMastodonId } from 'wildebeest/backend/src/mastodon/reblog'
 import * as media from 'wildebeest/backend/src/media/'
-import type { MastodonId, MastodonStatus, Visibility } from 'wildebeest/backend/src/types'
+import type {
+	MastodonAccount,
+	MastodonId,
+	MastodonStatus,
+	MastodonStatusEdit,
+	Visibility,
+} from 'wildebeest/backend/src/types'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
+import { toArray } from 'wildebeest/backend/src/utils'
 import { actorToAcct, actorToHandle, handleToAcct, parseHandle } from 'wildebeest/backend/src/utils/handle'
 import { queryAcct } from 'wildebeest/backend/src/webfinger'
 
@@ -651,4 +660,69 @@ export function detectVisibility({
 		return 'private'
 	}
 	return 'direct'
+}
+
+export async function isVisible(db: Database, author: Actor, viewer: Actor, note: Note): Promise<boolean> {
+	const visibility = detectVisibility({ to: note.to, cc: note.cc, followers: author.followers })
+	if (visibility === 'public' || visibility === 'unlisted') {
+		return true
+	}
+	if (visibility === 'private') {
+		return isFollowing(db, viewer, author)
+	}
+	const viewerId = getApId(viewer.id).toString()
+	return toArray(note.to).some((target) => getApId(target).toString() === viewerId)
+}
+
+export async function getStatusRevisions(
+	domain: string,
+	db: Database,
+	author: Actor,
+	latestObj: RemoteObject<Note>
+): Promise<MastodonStatusEdit[]> {
+	const account = await loadMastodonAccount(db, domain, author, actorToHandle(author))
+	const latest = toMastodonStatusEditFromObject(latestObj, account)
+
+	const { results } = await selectObjectRevisionsByObjectID(db, { objectId: getApId(latestObj.id).toString() })
+	if (results.length === 0) {
+		return [latest]
+	}
+
+	const revisions = results.map((row) => toMastodonStatusEditFromRow(row.properties, latestObj.published, account))
+	revisions.push(latest)
+	return revisions
+}
+
+function toMastodonStatusEditFromObject(
+	obj: Omit<RemoteObject<Note>, symbol>,
+	account: MastodonAccount
+): MastodonStatusEdit {
+	let createdAt: Date
+	if (obj.updated) {
+		createdAt = new Date(obj.updated)
+	} else {
+		createdAt = new Date(obj.published)
+	}
+
+	return {
+		content: obj.content ?? '',
+		spoiler_text: obj.spoiler_text ?? '',
+		sensitive: obj.sensitive ?? false,
+		created_at: createdAt.toISOString(),
+		account,
+		media_attachments: Array.isArray(obj.attachment) ? obj.attachment.map((doc) => media.fromObject(doc)) : [],
+		emojis: [], // FIXME: stub value
+	}
+}
+
+function toMastodonStatusEditFromRow(
+	properties: string,
+	published: string,
+	account: MastodonAccount
+): MastodonStatusEdit {
+	const obj = JSON.parse(properties)
+	if (!isNote(obj)) {
+		throw new Error(`not a note: ${properties}`)
+	}
+	return toMastodonStatusEditFromObject({ ...obj, published }, account)
 }
