@@ -1,5 +1,7 @@
 // https://docs.joinmastodon.org/methods/accounts/#followers
 
+import { z } from 'zod'
+
 import { isLocalAccount } from 'wildebeest/backend/src/accounts'
 import { Actor, getActorByMastodonId, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
 import { getFollowers, loadActors } from 'wildebeest/backend/src/activitypub/actors/follow'
@@ -11,7 +13,6 @@ import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import { MastodonAccount } from 'wildebeest/backend/src/types/account'
 import { cors, makeJsonResponse, MastodonApiResponse, readParams } from 'wildebeest/backend/src/utils'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
-import { z } from 'zod'
 
 const schema = z.object({
 	limit: z.coerce.number().int().min(1).max(80).catch(40),

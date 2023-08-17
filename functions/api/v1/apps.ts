@@ -1,5 +1,7 @@
 // https://docs.joinmastodon.org/methods/apps/#create
 
+import { z } from 'zod'
+
 import { getVAPIDKeys } from 'wildebeest/backend/src/config'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { unprocessableEntity } from 'wildebeest/backend/src/errors'
@@ -10,7 +12,6 @@ import type { Env } from 'wildebeest/backend/src/types'
 import { makeJsonResponse, MastodonApiResponse, readBody } from 'wildebeest/backend/src/utils'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
-import { z } from 'zod'
 
 // Parameter validation according to https://github.com/mastodon/mastodon/blob/main/app/lib/application_extension.rb
 const schema = z.object({

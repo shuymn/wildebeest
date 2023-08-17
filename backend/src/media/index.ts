@@ -1,5 +1,4 @@
-import type { Document } from 'wildebeest/backend/src/activitypub/objects'
-import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
+import type { Document, ApObject } from 'wildebeest/backend/src/activitypub/objects'
 import { isDocument, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { type Image, isImage } from 'wildebeest/backend/src/activitypub/objects/image'
 import { isVideo, Video } from 'wildebeest/backend/src/activitypub/objects/video'

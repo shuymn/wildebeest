@@ -1,13 +1,14 @@
 // Screen after the first login to let the user configure the account (username
 // especially)
 import { parse } from 'cookie'
+import { z } from 'zod'
+
 import * as access from 'wildebeest/backend/src/access'
 import { createUser } from 'wildebeest/backend/src/accounts'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import { getJwtEmail } from 'wildebeest/backend/src/utils/auth/getJwtEmail'
-import { z } from 'zod'
 
 const schema = z.object({
 	username: z.string().min(1).max(30).nonempty(),

@@ -19,8 +19,8 @@ import {
 	getApId,
 	mastodonIdSymbol,
 	originalObjectIdSymbol,
+	getObjectById,
 } from 'wildebeest/backend/src/activitypub/objects'
-import { getObjectById } from 'wildebeest/backend/src/activitypub/objects/'
 import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { MastodonStatusEdit } from 'wildebeest/backend/src/types'

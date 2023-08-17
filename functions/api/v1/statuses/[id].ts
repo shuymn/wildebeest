@@ -1,5 +1,7 @@
 // https://docs.joinmastodon.org/methods/statuses/#get
 
+import { z } from 'zod'
+
 import { createDeleteActivity } from 'wildebeest/backend/src/activitypub/activities/delete'
 import { createUpdateActivity } from 'wildebeest/backend/src/activitypub/activities/update'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
@@ -23,7 +25,6 @@ import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
 import type { ContextData, DeliverMessageBody, Env, MastodonId, Queue } from 'wildebeest/backend/src/types'
 import { myz, readBody } from 'wildebeest/backend/src/utils'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import { z } from 'zod'
 
 const headers = {
 	...cors(),

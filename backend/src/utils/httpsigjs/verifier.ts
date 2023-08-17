@@ -1,7 +1,6 @@
+import { ParsedSignature } from 'wildebeest/backend/src/utils/httpsigjs/parser'
+import { str2ab, importPublicKey } from 'wildebeest/backend/src/utils/key-ops'
 import { UA } from 'wildebeest/config/ua'
-
-import { importPublicKey, str2ab } from '../key-ops'
-import { ParsedSignature } from './parser'
 
 interface Profile {
 	publicKey: {
@@ -35,6 +34,6 @@ export async function fetchKey(parsedSignature: ParsedSignature): Promise<Crypto
 		return null
 	}
 
-	const parsedResponse = (await res.json()) as Profile
+	const parsedResponse = await res.json<Profile>()
 	return importPublicKey(parsedResponse.publicKey.publicKeyPem)
 }

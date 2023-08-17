@@ -1,9 +1,10 @@
 import { strict as assert } from 'node:assert/strict'
+import * as fs from 'node:fs/promises'
+import * as path from 'node:path'
 
 import { D1Database, D1DatabaseAPI } from '@miniflare/d1'
 import * as SQLiteDatabase from 'better-sqlite3'
-import { promises as fs } from 'fs'
-import * as path from 'path'
+
 import { createUser, User } from 'wildebeest/backend/src/accounts'
 import { ApObjectId } from 'wildebeest/backend/src/activitypub/objects'
 import type { Cache } from 'wildebeest/backend/src/cache'

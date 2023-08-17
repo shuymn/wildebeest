@@ -1,5 +1,7 @@
 // https://docs.joinmastodon.org/methods/statuses/#create
 
+import { z } from 'zod'
+
 import { createCreateActivity } from 'wildebeest/backend/src/activitypub/activities/create'
 import { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
@@ -32,7 +34,6 @@ import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
 import { ContextData, DeliverMessageBody, Env, Queue, Visibility } from 'wildebeest/backend/src/types'
 import { cors, myz, readBody } from 'wildebeest/backend/src/utils'
 import { PartialProps } from 'wildebeest/backend/src/utils/type'
-import { z } from 'zod'
 
 const headers = {
 	...cors(),

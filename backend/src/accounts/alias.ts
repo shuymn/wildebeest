@@ -1,7 +1,7 @@
 import { isLocalAccount } from 'wildebeest/backend/src/accounts'
 import { createFollowActivity } from 'wildebeest/backend/src/activitypub/activities/follow'
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { setActorAlias } from 'wildebeest/backend/src/activitypub/actors'
+import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
 import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database } from 'wildebeest/backend/src/database'

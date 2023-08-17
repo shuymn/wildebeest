@@ -1,8 +1,7 @@
 import type { Activity } from 'wildebeest/backend/src/activitypub/activities'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { type ApObject, ApObjectOrId } from 'wildebeest/backend/src/activitypub/objects'
-import type { OrderedCollection } from 'wildebeest/backend/src/activitypub/objects/collection'
-import { getMetadata, loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
+import { OrderedCollection, getMetadata, loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
 import { type Database } from 'wildebeest/backend/src/database'
 import { unique } from 'wildebeest/backend/src/utils'
 

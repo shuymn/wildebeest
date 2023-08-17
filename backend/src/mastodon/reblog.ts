@@ -2,15 +2,14 @@
 
 import { AnnounceActivity, PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database } from 'wildebeest/backend/src/database'
+import { getResultsField } from 'wildebeest/backend/src/mastodon/utils'
 import { MastodonId } from 'wildebeest/backend/src/types'
 import { isUUID } from 'wildebeest/backend/src/utils'
 import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
-
-import { addObjectInOutbox } from '../activitypub/actors/outbox'
-import { getResultsField } from './utils'
 
 /**
  * Creates a reblog and inserts it in the reblog author's outbox

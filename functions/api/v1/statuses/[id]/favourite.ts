@@ -3,8 +3,13 @@
 import { createLikeActivity } from 'wildebeest/backend/src/activitypub/activities/like'
 import { getAndCacheActor, type Person } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
-import { getApId, getObjectByMastodonId, isLocalObject } from 'wildebeest/backend/src/activitypub/objects'
-import { originalActorIdSymbol, originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import {
+	getApId,
+	getObjectByMastodonId,
+	isLocalObject,
+	originalActorIdSymbol,
+	originalObjectIdSymbol,
+} from 'wildebeest/backend/src/activitypub/objects'
 import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'

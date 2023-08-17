@@ -1,4 +1,5 @@
 import { Toucan } from 'toucan-js'
+
 import type { Env } from 'wildebeest/backend/src/types'
 
 export function initSentry(request: Request, env: Env, context: { waitUntil: ExecutionContext['waitUntil'] }) {
