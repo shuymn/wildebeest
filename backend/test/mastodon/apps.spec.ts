@@ -31,9 +31,8 @@ describe('Mastodon APIs', () => {
 			assertJSON(res)
 
 			// eslint-disable-next-line unused-imports/no-unused-vars
-			const { name, website, redirect_uri, client_id, client_secret, vapid_key, id, ...rest } = await res.json<
-				Record<string, string>
-			>()
+			const { name, website, redirect_uri, client_id, client_secret, vapid_key, id, ...rest } =
+				await res.json<Record<string, string>>()
 
 			assert.equal(name, 'Mastodon for iOS')
 			assert.equal(website, 'https://app.joinmastodon.org/ios')
@@ -63,9 +62,8 @@ describe('Mastodon APIs', () => {
 			assertJSON(res)
 
 			// eslint-disable-next-line unused-imports/no-unused-vars
-			const { name, redirect_uri, client_id, client_secret, vapid_key, id, ...rest } = await res.json<
-				Record<string, string>
-			>()
+			const { name, redirect_uri, client_id, client_secret, vapid_key, id, ...rest } =
+				await res.json<Record<string, string>>()
 
 			assert.equal(name, 'Example mastodon client')
 			assert.equal(redirect_uri, 'mastodon://example.com/oauth')

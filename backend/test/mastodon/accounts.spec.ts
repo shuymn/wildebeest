@@ -808,9 +808,8 @@ describe('Mastodon APIs', () => {
 			} as any)
 			await assertStatus(res, 200)
 
-			const data = await res.json<
-				{ content: unknown; account: { username: unknown }; media_attachments: { type: unknown }[] }[]
-			>()
+			const data =
+				await res.json<{ content: unknown; account: { username: unknown }; media_attachments: { type: unknown }[] }[]>()
 			assert.equal(data.length, 2)
 			assert.equal(data[1].content, '<p>p</p>')
 			assert.equal(data[1].account.username, 'someone')
