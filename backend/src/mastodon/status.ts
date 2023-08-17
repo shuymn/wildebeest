@@ -662,10 +662,13 @@ export function detectVisibility({
 	return 'direct'
 }
 
-export async function isVisible(db: Database, author: Actor, viewer: Actor, note: Note): Promise<boolean> {
+export async function isVisible(db: Database, author: Actor, viewer: Actor | undefined, note: Note): Promise<boolean> {
 	const visibility = detectVisibility({ to: note.to, cc: note.cc, followers: author.followers })
 	if (visibility === 'public' || visibility === 'unlisted') {
 		return true
+	}
+	if (!viewer) {
+		throw new Error('viewer is required')
 	}
 	if (visibility === 'private') {
 		return isFollowing(db, viewer, author)

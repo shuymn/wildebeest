@@ -4,7 +4,7 @@ import { Actor, getActorById } from 'wildebeest/backend/src/activitypub/actors'
 import { getObjectByMastodonId, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { isNote, Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { Database, getDatabase } from 'wildebeest/backend/src/database'
-import { recordNotFound, statusNotFound } from 'wildebeest/backend/src/errors'
+import { notAuthorized, recordNotFound, statusNotFound } from 'wildebeest/backend/src/errors'
 import { getStatusRevisions, isVisible } from 'wildebeest/backend/src/mastodon/status'
 import { ContextData, Env, MastodonId, MastodonStatusEdit } from 'wildebeest/backend/src/types'
 import { cors, makeJsonResponse, MastodonApiResponse } from 'wildebeest/backend/src/utils'
@@ -17,10 +17,10 @@ const headers = {
 type Dependencies = {
 	domain: string
 	db: Database
-	connectedActor: Actor
+	connectedActor?: Actor
 }
 
-export const onRequestGet: PagesFunction<Env, 'id', ContextData> = async ({
+export const onRequestGet: PagesFunction<Env, 'id', Partial<ContextData>> = async ({
 	request,
 	env,
 	params: { id },
@@ -55,9 +55,18 @@ async function handleRequestGet(
 	if (author === null) {
 		return recordNotFound(id)
 	}
-	const visible = await isVisible(db, author, connectedActor, obj)
-	if (!visible) {
-		return statusNotFound(id)
+	try {
+		const visible = await isVisible(db, author, connectedActor, obj)
+		if (!visible) {
+			return statusNotFound(id)
+		}
+	} catch (err) {
+		if (err instanceof Error) {
+			if (err.message === 'viewer is required') {
+				return notAuthorized('missing authorization')
+			}
+		}
+		throw err
 	}
 	return makeJsonResponse(await getStatusRevisions(domain, db, author, obj), { headers })
 }
