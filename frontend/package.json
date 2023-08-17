@@ -30,7 +30,7 @@
 		"lorem-ipsum": "2.0.8",
 		"node-fetch": "3.3.2",
 		"nodemon": "3.0.1",
-		"postcss": "8.4.27",
+		"postcss": "8.4.28",
 		"prettier": "3.0.1",
 		"sass": "1.65.1",
 		"tailwindcss": "3.3.3",
