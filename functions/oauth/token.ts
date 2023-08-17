@@ -1,12 +1,13 @@
 // https://docs.joinmastodon.org/methods/oauth/#token
 
+import { z } from 'zod'
+
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { clientUnknown, notAuthorized } from 'wildebeest/backend/src/errors'
 import { Token } from 'wildebeest/backend/src/mastodon'
 import { createClientCredential, getClientById } from 'wildebeest/backend/src/mastodon/client'
 import type { Env } from 'wildebeest/backend/src/types'
 import { cors, makeJsonResponse, MastodonApiResponse, readBody } from 'wildebeest/backend/src/utils'
-import { z } from 'zod'
 
 const schema = z
 	.object({

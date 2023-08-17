@@ -1,9 +1,12 @@
 import { strict as assert } from 'node:assert/strict'
 
 import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { createNotification, insertFollowNotification } from 'wildebeest/backend/src/mastodon/notification'
-import { sendLikeNotification } from 'wildebeest/backend/src/mastodon/notification'
-import { getNotifications } from 'wildebeest/backend/src/mastodon/notification'
+import {
+	createNotification,
+	insertFollowNotification,
+	sendLikeNotification,
+	getNotifications,
+} from 'wildebeest/backend/src/mastodon/notification'
 import { createSubscription } from 'wildebeest/backend/src/mastodon/subscription'
 import { arrayBufferToBase64 } from 'wildebeest/backend/src/utils/key-ops'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'

@@ -3,8 +3,7 @@
 import { getAccountByMastodonId } from 'wildebeest/backend/src/accounts'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { resourceNotFound } from 'wildebeest/backend/src/errors'
-import type { ContextData } from 'wildebeest/backend/src/types'
-import type { Env } from 'wildebeest/backend/src/types'
+import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
 const headers = {

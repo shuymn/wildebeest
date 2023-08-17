@@ -1,11 +1,12 @@
 // https://docs.joinmastodon.org/methods/accounts/#relationships
 
+import { z } from 'zod'
+
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { getFollowingMastodonIds, getFollowingRequestedMastodonIds } from 'wildebeest/backend/src/mastodon/follow'
 import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import { cors, readParams } from 'wildebeest/backend/src/utils'
-import { z } from 'zod'
 
 const headers = {
 	...cors(),

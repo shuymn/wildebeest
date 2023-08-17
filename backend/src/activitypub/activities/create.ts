@@ -5,8 +5,7 @@ import {
 	getActivityObject,
 	insertActivity,
 } from 'wildebeest/backend/src/activitypub/activities'
-import { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
+import { Actor, getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInInbox } from 'wildebeest/backend/src/activitypub/actors/inbox'
 import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
 import { ApObject, getApId } from 'wildebeest/backend/src/activitypub/objects'

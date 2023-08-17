@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 import { isLocalAccount } from 'wildebeest/backend/src/accounts'
 import { createFollowActivity } from 'wildebeest/backend/src/activitypub/activities/follow'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
@@ -12,7 +14,6 @@ import type { Relationship } from 'wildebeest/backend/src/types/account'
 import { myz, readBody } from 'wildebeest/backend/src/utils'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
-import { z } from 'zod'
 
 type Dependencies = {
 	domain: string

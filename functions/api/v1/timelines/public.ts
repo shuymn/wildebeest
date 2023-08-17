@@ -1,9 +1,10 @@
+import { z } from 'zod'
+
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { resourceNotFound } from 'wildebeest/backend/src/errors'
 import { getPublicTimeline, getStatusRange, LocalPreference } from 'wildebeest/backend/src/mastodon/timeline'
 import type { ContextData, Env } from 'wildebeest/backend/src/types'
 import { cors, myz, readParams } from 'wildebeest/backend/src/utils'
-import { z } from 'zod'
 
 const headers = {
 	...cors(),

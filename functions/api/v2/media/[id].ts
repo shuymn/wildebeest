@@ -1,5 +1,7 @@
 // https://docs.joinmastodon.org/methods/media/#update
 
+import { z } from 'zod'
+
 import {
 	getApUrl,
 	getObjectByMastodonId,
@@ -9,12 +11,9 @@ import {
 import type { Image } from 'wildebeest/backend/src/activitypub/objects/image'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { mediaNotFound, unprocessableEntity } from 'wildebeest/backend/src/errors'
-import type { MastodonId } from 'wildebeest/backend/src/types'
-import type { ContextData } from 'wildebeest/backend/src/types'
-import type { Env } from 'wildebeest/backend/src/types'
+import type { MastodonId, ContextData, Env } from 'wildebeest/backend/src/types'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 import { cors, readBody } from 'wildebeest/backend/src/utils'
-import { z } from 'zod'
 
 const headers = {
 	...cors(),

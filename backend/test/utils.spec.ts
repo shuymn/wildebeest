@@ -1,5 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
+import { z } from 'zod'
+
 import { myz, readBody } from 'wildebeest/backend/src/utils'
 import {
 	actorToAcct,
@@ -15,7 +17,6 @@ import { parseRequest } from 'wildebeest/backend/src/utils/httpsigjs/parser'
 import { verifySignature } from 'wildebeest/backend/src/utils/httpsigjs/verifier'
 import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
 import { generateUserKey, importPublicKey, unwrapPrivateKey } from 'wildebeest/backend/src/utils/key-ops'
-import { z } from 'zod'
 
 import { createTestUser, hexToBytes, makeDB } from './utils'
 

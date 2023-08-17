@@ -79,6 +79,9 @@ jobs:
       - name: Check consumer linting
         run: npm run lint:consumer
 
+      - name: Check do linting
+        run: npm run lint:do
+
       - name: Check functions linting
         run: npm run lint:functions
 

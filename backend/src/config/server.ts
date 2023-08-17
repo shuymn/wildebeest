@@ -1,4 +1,5 @@
 import { type Database } from 'wildebeest/backend/src/database'
+// eslint-disable-next-line import/no-restricted-paths
 import { type ServerSettingsData } from 'wildebeest/frontend/src/routes/(admin)/settings/(admin)/server-settings/layout'
 
 export async function getSettings(db: Database): Promise<ServerSettingsData> {

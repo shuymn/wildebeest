@@ -1,10 +1,17 @@
 // https://docs.joinmastodon.org/methods/statuses/#boost
+import { z } from 'zod'
+
 import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import { createAnnounceActivity } from 'wildebeest/backend/src/activitypub/activities/announce'
 import { getAndCacheActor, type Person } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverFollowers, deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
-import { getApId, getObjectByMastodonId, isLocalObject } from 'wildebeest/backend/src/activitypub/objects'
-import { originalActorIdSymbol, originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import {
+	getApId,
+	getObjectByMastodonId,
+	isLocalObject,
+	originalActorIdSymbol,
+	originalObjectIdSymbol,
+} from 'wildebeest/backend/src/activitypub/objects'
 import { isNote, type Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { recordNotFound } from 'wildebeest/backend/src/errors'
@@ -14,7 +21,6 @@ import { toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/stat
 import type { ContextData, DeliverMessageBody, Env, Queue, Visibility } from 'wildebeest/backend/src/types'
 import { readBody } from 'wildebeest/backend/src/utils'
 import { cors } from 'wildebeest/backend/src/utils/cors'
-import { z } from 'zod'
 
 const schema = z.object({
 	visibility: z

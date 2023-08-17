@@ -1,5 +1,6 @@
-import { MastodonError } from 'wildebeest/backend/src/errors'
 import { output, SafeParseReturnType, SomeZodObject, z, ZodObject, ZodRawShape, ZodTypeAny } from 'zod'
+
+import { MastodonError } from 'wildebeest/backend/src/errors'
 
 export const HTTPS = 'https://'
 
