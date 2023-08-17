@@ -22,12 +22,6 @@ devDependencies:
   '@cloudflare/workers-types':
     specifier: 4.20230807.0
     version: 4.20230807.0
-  '@databases/split-sql-query':
-    specifier: 1.0.4
-    version: 1.0.4(@databases/sql@3.3.0)
-  '@databases/sql':
-    specifier: 3.3.0
-    version: 3.3.0
   '@playwright/test':
     specifier: 1.37.0
     version: 1.37.0
@@ -70,6 +64,9 @@ devDependencies:
   npm-run-all:
     specifier: 4.1.5
     version: 4.1.5
+  playwright-core:
+    specifier: 1.37.0
+    version: 1.37.0
   prettier:
     specifier: 3.0.1
     version: 3.0.1
@@ -490,18 +487,6 @@ packages:
 
   /@cloudflare/workers-types@4.20230807.0:
     resolution: {integrity: sha512-gQczWuGE2rxmpzOCNn0zLbx8Xz0gqspdE9S7tu4Xax39q1csgO/E9flcS+KG3GHB522ugOh84inmABDhpeJnvQ==}
-    dev: true
-
-  /@databases/split-sql-query@1.0.4(@databases/sql@3.3.0):
-    resolution: {integrity: sha512-lDqDQvH34NNjLs0knaDvL6HKgPtishQlDYHfOkvbAd5VQOEhcDvvmG2zbBuFvS2HQAz5NsyLj5erGaxibkxhvQ==}
-    peerDependencies:
-      '@databases/sql': '*'
-    dependencies:
-      '@databases/sql': 3.3.0
-    dev: true
-
-  /@databases/sql@3.3.0:
-    resolution: {integrity: sha512-vj9huEy4mjJ48GS1Z8yvtMm4BYAnFYACUds25ym6Gd/gsnngkJ17fo62a6mmbNNwCBS/8467PmZR01Zs/06TjA==}
     dev: true
 
   /@esbuild-plugins/node-globals-polyfill@0.1.1(esbuild@0.16.3):
