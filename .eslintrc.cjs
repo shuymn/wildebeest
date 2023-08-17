@@ -57,7 +57,7 @@ module.exports = {
 						target: './backend/src/**/*',
 					},
 					{
-						from: './!(backend|config|node_modules|frontend/server)/**/*',
+						from: './!(backend|config|node_modules)/**/*',
 						target: './functions/**/*',
 					},
 					{
