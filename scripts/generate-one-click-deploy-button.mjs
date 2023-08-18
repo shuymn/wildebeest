@@ -1,4 +1,4 @@
-const PROJECT_URL = 'https://github.com/cloudflare/wildebeest'
+const PROJECT_URL = 'https://github.com/shuymn/wildebeest'
 const ONE_CLICK_BASE_URL = 'https://deploy.workers.cloudflare.com'
 const FIELDS = [
 	{
