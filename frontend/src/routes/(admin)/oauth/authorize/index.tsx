@@ -1,7 +1,7 @@
 import { component$ } from '@builder.io/qwik'
 import type { Client } from 'wildebeest/backend/src/mastodon/client'
 import { getClientById } from 'wildebeest/backend/src/mastodon/client'
-import { DocumentHead, loader$ } from '@builder.io/qwik-city'
+import { DocumentHead, routeLoader$ } from '@builder.io/qwik-city'
 import { WildebeestLogo } from '~/components/MastodonLogo'
 import { Avatar } from '~/components/avatar'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
@@ -10,7 +10,7 @@ import { getDatabase } from 'wildebeest/backend/src/database'
 import { getJwtEmail } from 'wildebeest/backend/src/utils/auth/getJwtEmail'
 import { getUserByEmail } from 'wildebeest/backend/src/accounts'
 
-export const clientLoader = loader$<Promise<Client>>(async ({ platform, query, html }) => {
+export const useClient = routeLoader$(async ({ platform, query, html }): Promise<Client> => {
 	const client_id = query.get('client_id') || ''
 	let client: Client | null = null
 	try {
@@ -26,8 +26,15 @@ export const clientLoader = loader$<Promise<Client>>(async ({ platform, query, h
 	return client
 })
 
-export const userLoader = loader$<Promise<{ email: string; avatar: URL; name: string; url: URL; acct: string }>>(
-	async ({ cookie, platform, html, request, redirect, text }) => {
+export const useUser = routeLoader$(
+	async ({
+		cookie,
+		platform,
+		html,
+		request,
+		redirect,
+		text,
+	}): Promise<{ email: string; avatar: URL; name: string; url: URL; acct: string }> => {
 		const jwt = cookie.get('CF_Authorization')
 		let email = ''
 		try {
@@ -69,8 +76,9 @@ export const userLoader = loader$<Promise<{ email: string; avatar: URL; name: st
 )
 
 export default component$(() => {
-	const client = clientLoader().value
-	const { email, avatar, name: display_name, url, acct } = userLoader().value
+	const client = useClient()
+	const user = useUser()
+
 	return (
 		<div class="flex flex-col p-4 items-center">
 			<h1 class="text-center mt-3 mb-5 flex items-center">
@@ -83,17 +91,17 @@ export default component$(() => {
 						<div class="row-span-2 mr-4">
 							<Avatar
 								primary={{
-									acct,
-									avatar: avatar.toString(),
-									display_name,
-									url: url.toString(),
+									acct: user.value.acct,
+									avatar: user.value.avatar.toString(),
+									display_name: user.value.name,
+									url: user.value.url.toString(),
 								}}
 								secondary={null}
 								withLinks={true}
 							/>
 						</div>
 						<p class="col-start-2">Signed in as:</p>
-						<p class="col-start-2 font-bold">{email}</p>
+						<p class="col-start-2 font-bold">{user.value.email}</p>
 					</div>
 					<a
 						class="no-underline col-start-3 row-span-full ml-auto"
@@ -107,7 +115,7 @@ export default component$(() => {
 				</div>
 				<h2 class="text text-xl font-semibold mb-5">Authorization required</h2>
 				<p class="mb-10">
-					<strong class="text-[1rem]">{client.name}</strong>
+					<strong class="text-[1rem]">{client.value.name}</strong>
 					<span class="text-wildebeest-400">
 						{' '}
 						would like permission to access your account. It is a third-party application.

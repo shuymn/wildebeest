@@ -2,13 +2,13 @@ import { $, component$ } from '@builder.io/qwik'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { MastodonStatus } from '~/types'
 import * as timelines from 'wildebeest/functions/api/v1/timelines/public'
-import { DocumentHead, loader$ } from '@builder.io/qwik-city'
+import { DocumentHead, routeLoader$ } from '@builder.io/qwik-city'
 import StickyHeader from '~/components/StickyHeader/StickyHeader'
 import { getDocumentHead } from '~/utils/getDocumentHead'
 import { StatusesPanel } from '~/components/StatusesPanel/StatusesPanel'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
 
-export const statusesLoader = loader$<Promise<MastodonStatus[]>>(async ({ platform, html }) => {
+export const useTimeline = routeLoader$(async ({ platform, html }): Promise<MastodonStatus[]> => {
 	try {
 		// TODO: use the "trending" API endpoint here.
 		const response = await timelines.handleRequest(
@@ -26,7 +26,7 @@ export const statusesLoader = loader$<Promise<MastodonStatus[]>>(async ({ platfo
 })
 
 export default component$(() => {
-	const statuses = statusesLoader().value
+	const statuses = useTimeline()
 	return (
 		<>
 			<StickyHeader>
@@ -36,29 +36,29 @@ export default component$(() => {
 				</div>
 			</StickyHeader>
 			<StatusesPanel
-				initialStatuses={statuses}
+				initialStatuses={statuses.value}
 				fetchMoreStatuses={$(async (maxId: string) => {
-					let statuses: MastodonStatus[] = []
+					let ss: MastodonStatus[] = []
 					try {
 						const response = await fetch(`/api/v1/timelines/public?local=true&max_id=${maxId}`)
 						if (response.ok) {
 							const results = await response.text()
-							statuses = JSON.parse(results)
+							ss = JSON.parse(results)
 						}
 					} catch {
 						/* empty */
 					}
-					return statuses
+					return ss
 				})}
 			/>
 		</>
 	)
 })
 
-export const requestUrlLoader = loader$(async ({ request }) => request.url)
+export const useRequestUrl = routeLoader$(async ({ request }) => request.url)
 
 export const head: DocumentHead = ({ resolveValue }) => {
-	const url = resolveValue(requestUrlLoader)
+	const url = resolveValue(useRequestUrl)
 	return getDocumentHead({
 		title: 'Local timeline - Wildebeest',
 		og: {

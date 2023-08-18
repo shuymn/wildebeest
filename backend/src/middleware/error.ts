@@ -11,11 +11,13 @@ export async function errorHandling(context: EventContext<Env, string, unknown>)
 
 	try {
 		return await context.next()
-	} catch (err: any) {
+	} catch (err) {
 		if (sentry !== null) {
 			sentry.captureException(err)
 		}
-		console.error(err.stack, err.cause)
+		if (err instanceof Error) {
+			console.error(err.stack, err.cause)
+		}
 		return internalServerError()
 	}
 }

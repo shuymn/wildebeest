@@ -1,5 +1,5 @@
 import { component$, Slot, useStyles$ } from '@builder.io/qwik'
-import { type DocumentHead, loader$, useLocation, Link } from '@builder.io/qwik-city'
+import { type DocumentHead, routeLoader$, useLocation, Link } from '@builder.io/qwik-city'
 import { MastodonAccount } from 'wildebeest/backend/src/types'
 import StickyHeader from '~/components/StickyHeader/StickyHeader'
 import { formatDateTime } from '~/utils/dateTime'
@@ -13,53 +13,58 @@ import * as statusAPI from 'wildebeest/functions/api/v1/statuses/[id]'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { Person } from 'wildebeest/backend/src/activitypub/actors'
 
-export const accountPageLoader = loader$<
-	Promise<{ account: MastodonAccount; accountHandle: string; isValidStatus: boolean }>
->(async ({ platform, params, request, html }) => {
-	const domain = platform.DOMAIN
+export const useStatuses = routeLoader$(
+	async ({
+		platform,
+		params,
+		request,
+		html,
+	}): Promise<{ account: MastodonAccount; accountHandle: string; isValidStatus: boolean }> => {
+		const domain = platform.DOMAIN
 
-	let isValidStatus = false
-	let account: MastodonAccount | null = null
-	try {
-		const url = new URL(request.url)
-		const acct = url.pathname.split('/')[1]
-
+		let isValidStatus = false
+		let account: MastodonAccount | null = null
 		try {
-			const statusResponse = await statusAPI.handleRequestGet(
-				await getDatabase(platform),
-				params.statusId,
-				domain,
-				null as unknown as Person
-			)
-			const statusText = await statusResponse.text()
-			isValidStatus = !!statusText
+			const url = new URL(request.url)
+			const acct = url.pathname.split('/')[1]
+
+			try {
+				const statusResponse = await statusAPI.handleRequestGet(
+					await getDatabase(platform),
+					params.statusId,
+					domain,
+					null as unknown as Person
+				)
+				const statusText = await statusResponse.text()
+				isValidStatus = !!statusText
+			} catch {
+				isValidStatus = false
+			}
+
+			account = await getAccount(domain, await getDatabase(platform), acct)
 		} catch {
-			isValidStatus = false
+			throw html(
+				500,
+				getErrorHtml(`An error happened when trying to retrieve the account's details, please try again later`)
+			)
 		}
 
-		account = await getAccount(domain, await getDatabase(platform), acct)
-	} catch {
-		throw html(
-			500,
-			getErrorHtml(`An error happened when trying to retrieve the account's details, please try again later`)
-		)
+		if (!account) {
+			throw html(404, getNotFoundHtml())
+		}
+
+		const isLocal = new URL(account.url).hostname === domain
+		const accountHandle = isLocal ? `${account.acct}@${domain}` : account.acct
+
+		return { account, accountHandle, isValidStatus }
 	}
-
-	if (!account) {
-		throw html(404, getNotFoundHtml())
-	}
-
-	const isLocal = new URL(account.url).hostname === domain
-	const accountHandle = isLocal ? `${account.acct}@${domain}` : account.acct
-
-	return { account, accountHandle, isValidStatus }
-})
+)
 
 export default component$(() => {
 	useStyles$(styles)
 
-	const pageDetails = accountPageLoader().value
-	const showAccountInfo = !pageDetails.isValidStatus
+	const pageDetails = useStatuses()
+	const showAccountInfo = !pageDetails.value.isValidStatus
 
 	const location = useLocation()
 	const currentPath = location.pathname.replace(/\/$/, '')
@@ -67,27 +72,27 @@ export default component$(() => {
 	const fields = [
 		{
 			name: 'Joined',
-			value: formatDateTime(pageDetails.account.created_at, false),
+			value: formatDateTime(pageDetails.value.account.created_at, false),
 		},
-		...pageDetails.account.fields,
+		...pageDetails.value.account.fields,
 	]
 
 	const stats = [
 		{
 			name: 'Posts',
-			value: formatRoundedNumber(pageDetails.account.statuses_count),
+			value: formatRoundedNumber(pageDetails.value.account.statuses_count),
 		},
 		{
 			name: 'Following',
-			value: formatRoundedNumber(pageDetails.account.following_count),
+			value: formatRoundedNumber(pageDetails.value.account.following_count),
 		},
 		{
 			name: 'Followers',
-			value: formatRoundedNumber(pageDetails.account.followers_count),
+			value: formatRoundedNumber(pageDetails.value.account.followers_count),
 		},
 	]
 
-	const accountUrl = `/@${pageDetails.account.acct}`
+	const accountUrl = `/@${pageDetails.value.account.acct}`
 
 	const tabLinks = [
 		{
@@ -108,20 +113,20 @@ export default component$(() => {
 					<div data-testid="account-info">
 						<div class="relative mb-16">
 							<img
-								src={pageDetails.account.header}
-								alt={`Header of ${pageDetails.account.display_name}`}
+								src={pageDetails.value.account.header}
+								alt={`Header of ${pageDetails.value.account.display_name}`}
 								class="w-full h-40 object-cover bg-wildebeest-500"
 							/>
 							<img
 								class="rounded h-24 w-24 absolute bottom-[-3rem] left-5 border-2 border-wildebeest-600"
-								src={pageDetails.account.avatar}
-								alt={`Avatar of ${pageDetails.account.display_name}`}
+								src={pageDetails.value.account.avatar}
+								alt={`Avatar of ${pageDetails.value.account.display_name}`}
 							/>
 						</div>
 						<div class="px-5">
-							<h2 class="font-bold">{pageDetails.account.display_name}</h2>
-							<span class="block my-1 text-wildebeest-400">{pageDetails.accountHandle}</span>
-							<div class="inner-html-content my-5" dangerouslySetInnerHTML={pageDetails.account.note} />
+							<h2 class="font-bold">{pageDetails.value.account.display_name}</h2>
+							<span class="block my-1 text-wildebeest-400">{pageDetails.value.accountHandle}</span>
+							<div class="inner-html-content my-5" dangerouslySetInnerHTML={pageDetails.value.account.note} />
 							<dl class="mb-6 flex flex-col bg-wildebeest-800 border border-wildebeest-600 rounded-md">
 								{fields.map(({ name, value }) => (
 									<div class="border-b border-wildebeest-600 p-3 text-sm" key={name}>
@@ -166,7 +171,7 @@ export function getAccountDomain(account: MastodonAccount): string | null {
 }
 
 export const head: DocumentHead = ({ resolveValue, head }) => {
-	const { account, accountHandle } = resolveValue(accountPageLoader)
+	const { account, accountHandle } = resolveValue(useStatuses)
 
 	return getDocumentHead(
 		{

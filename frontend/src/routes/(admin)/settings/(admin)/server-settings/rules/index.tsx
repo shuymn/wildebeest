@@ -1,5 +1,5 @@
 import { component$ } from '@builder.io/qwik'
-import { action$, Form, Link, loader$, z, zod$ } from '@builder.io/qwik-city'
+import { routeAction$, Form, Link, routeLoader$, z, zod$ } from '@builder.io/qwik-city'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { getRules, deleteRule, upsertRule } from 'wildebeest/backend/src/config/rules'
 import { TextArea } from '~/components/Settings/TextArea'
@@ -7,7 +7,7 @@ import { SubmitButton } from '~/components/Settings/SubmitButton'
 
 export type ServerSettingsData = { rules: string[] }
 
-export const addAction = action$(
+export const useUpdateRule = routeAction$(
 	async (data, { platform }) => {
 		let success = false
 		try {
@@ -26,7 +26,7 @@ export const addAction = action$(
 	})
 )
 
-export const deleteAction = action$(
+export const useDeleteRule = routeAction$(
 	async (data, { platform }) => {
 		let success = false
 
@@ -46,16 +46,16 @@ export const deleteAction = action$(
 	})
 )
 
-export const rulesLoader = loader$<Promise<{ id: number; text: string }[]>>(async ({ platform }) => {
+export const useRules = routeLoader$(async ({ platform }): Promise<{ id: number; text: string }[]> => {
 	const database = await getDatabase(platform)
 	const rules = await getRules(database)
 	return JSON.parse(JSON.stringify(rules))
 })
 
 export default component$(() => {
-	const rules = rulesLoader()
-	const addActionObj = addAction()
-	const deleteActionObj = deleteAction()
+	const rules = useRules()
+	const addActionObj = useUpdateRule()
+	const deleteActionObj = useDeleteRule()
 
 	return (
 		<>

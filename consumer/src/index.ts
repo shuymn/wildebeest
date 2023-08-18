@@ -41,14 +41,17 @@ export default {
 						break
 					}
 					default:
-						throw new Error('unsupported message type: ' + message.body.type)
+						throw new Error(`unsupported message type: ${JSON.stringify(message.body)}`)
 				}
 			}
-		} catch (err: any) {
+		} catch (err) {
 			if (sentry !== null) {
 				sentry.captureException(err)
 			}
-			console.error(err.stack, err.cause)
+			if (err instanceof Error) {
+				console.error(err.stack, err.cause)
+			}
+			throw err
 		}
 	},
 }

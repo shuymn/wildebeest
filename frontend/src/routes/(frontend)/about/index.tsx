@@ -1,5 +1,5 @@
 import { component$ } from '@builder.io/qwik'
-import { DocumentHead, loader$ } from '@builder.io/qwik-city'
+import { DocumentHead, routeLoader$ } from '@builder.io/qwik-city'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { getDomain } from 'wildebeest/backend/src/utils/getDomain'
 import { getSettings } from 'wildebeest/backend/src/config/server'
@@ -8,7 +8,7 @@ import { Accordion } from '~/components/Accordion/Accordion'
 import { HtmlContent } from '~/components/HtmlContent/HtmlContent'
 import { Account } from '~/types'
 import { getDocumentHead } from '~/utils/getDocumentHead'
-import { instanceLoader } from '../layout'
+import { useInstance } from '../layout'
 import { loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import { AccountCard } from '~/components/AccountCard/AccountCard'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
@@ -24,9 +24,9 @@ type AboutInfo = {
 	}
 }
 
-export const aboutInfoLoader = loader$<Promise<AboutInfo>>(async ({ resolveValue, request, platform }) => {
+export const useAccountInfo = routeLoader$(async ({ resolveValue, request, platform }): Promise<AboutInfo> => {
 	// TODO: fetching the instance for the thumbnail, but that should be part of the settings
-	const instance = await resolveValue(instanceLoader)
+	const instance = await resolveValue(useInstance)
 	const database = await getDatabase(platform)
 	const brandingData = await getSettings(database)
 	const rules = await getRules(database)
@@ -56,15 +56,15 @@ export const aboutInfoLoader = loader$<Promise<AboutInfo>>(async ({ resolveValue
 })
 
 export default component$(() => {
-	const aboutInfo = aboutInfoLoader().value
+	const aboutInfo = useAccountInfo()
 
 	return (
 		<>
 			<div class="bg-wildebeest-900 sticky top-[3.9rem] xl:top-0 xl:pt-2.5 z-10">
 				<div class="flex flex-col items-center bg-wildebeest-600 xl:rounded-t overflow-hidden p-5">
-					<img class="rounded w-full aspect-[1.9] mb-5" src={aboutInfo.image} alt="" />
+					<img class="rounded w-full aspect-[1.9] mb-5" src={aboutInfo.value.image} alt="" />
 					<h2 data-testid="domain-text" class="my-4 text-2xl font-semibold">
-						{aboutInfo.domain}
+						{aboutInfo.value.domain}
 					</h2>
 					<p data-testid="social-text" class="mb-6 text-wildebeest-500">
 						<span>
@@ -83,15 +83,15 @@ export default component$(() => {
 						class="rounded bg-wildebeest-700 flex flex-col md:flex-row p-2 w-full my-5 overflow-auto"
 						data-testid="contact"
 					>
-						{!!aboutInfo.admin.account && (
+						{!!aboutInfo.value.admin.account && (
 							<div class="flex-1 p-4 border-wildebeest-500 border-solid border-b md:border-b-0 md:border-r">
 								<span class="block uppercase text-wildebeest-500 font-semibold mb-5">Administered by:</span>
-								<AccountCard account={aboutInfo.admin.account} subText="username" />
+								<AccountCard account={aboutInfo.value.admin.account} subText="username" />
 							</div>
 						)}
 						<div class="flex-1 p-4 pt-6 md:pt-4 md:pl-6 min-w-max">
 							<span class="block uppercase text-wildebeest-500 font-semibold mb-5">Contact:</span>
-							<span>{aboutInfo.admin.email}</span>
+							<span>{aboutInfo.value.admin.email}</span>
 						</div>
 					</div>
 
@@ -99,14 +99,14 @@ export default component$(() => {
 						<div class="my-1">
 							<Accordion title="About">
 								<div class="p-6">
-									<HtmlContent html={aboutInfo.extended_description.content} />
+									<HtmlContent html={aboutInfo.value.extended_description.content} />
 								</div>
 							</Accordion>
 						</div>
 						<div class="my-1">
 							<Accordion title="Server rules">
 								<ol class="list-none flex flex-col gap-1 my-5 px-6">
-									{aboutInfo.rules.map(({ id, text }, idx) => (
+									{aboutInfo.value.rules.map(({ id, text }, idx) => (
 										<li key={id} class="flex items-center border-wildebeest-700 border-b last-of-type:border-b-0 py-2">
 											<span class="bg-wildebeest-vibrant-400 text-wildebeest-900 mr-4 my-1 p-4 rounded-full w-5 h-5 grid place-content-center">
 												{idx + 1}
@@ -125,7 +125,7 @@ export default component$(() => {
 })
 
 export const head: DocumentHead = ({ resolveValue, head }) => {
-	const instance = resolveValue(instanceLoader)
+	const instance = resolveValue(useInstance)
 
 	return getDocumentHead(
 		{

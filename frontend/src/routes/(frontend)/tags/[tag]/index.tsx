@@ -1,5 +1,5 @@
 import { $, component$ } from '@builder.io/qwik'
-import { DocumentHead, loader$ } from '@builder.io/qwik-city'
+import { DocumentHead, routeLoader$ } from '@builder.io/qwik-city'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { getDomain } from 'wildebeest/backend/src/utils/getDomain'
 import { handleRequest } from 'wildebeest/functions/api/v1/timelines/tag/[tag]'
@@ -8,8 +8,8 @@ import StickyHeader from '~/components/StickyHeader/StickyHeader'
 import { MastodonStatus } from '~/types'
 import { getDocumentHead } from '~/utils/getDocumentHead'
 
-export const loader = loader$<Promise<{ tag: string; statuses: MastodonStatus[] }>>(
-	async ({ request, platform, params }) => {
+export const useTimelinesTag = routeLoader$(
+	async ({ request, platform, params }): Promise<{ tag: string; statuses: MastodonStatus[] }> => {
 		const tag = params.tag
 		const response = await handleRequest(await getDatabase(platform), request, getDomain(request.url), tag)
 		const results = await response.text()
@@ -19,7 +19,7 @@ export const loader = loader$<Promise<{ tag: string; statuses: MastodonStatus[] 
 )
 
 export default component$(() => {
-	const loaderData = loader()
+	const loaderData = useTimelinesTag()
 
 	return (
 		<>
@@ -52,11 +52,11 @@ export default component$(() => {
 	)
 })
 
-export const requestUrlLoader = loader$(async ({ request }) => request.url)
+export const useRequestUrl = routeLoader$(async ({ request }) => request.url)
 
 export const head: DocumentHead = ({ resolveValue }) => {
-	const { tag } = resolveValue(loader)
-	const url = resolveValue(requestUrlLoader)
+	const { tag } = resolveValue(useTimelinesTag)
+	const url = resolveValue(useRequestUrl)
 
 	return getDocumentHead({
 		title: `#${tag} - Wildebeest`,

@@ -1,20 +1,20 @@
 import { component$ } from '@builder.io/qwik'
-import { action$, Form, Link, z, zod$ } from '@builder.io/qwik-city'
+import { routeAction$, Form, Link, z, zod$ } from '@builder.io/qwik-city'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { updateSettings } from 'wildebeest/backend/src/config/server'
 import { TextArea } from '~/components/Settings/TextArea'
-import { serverSettingsLoader } from '../layout'
+import { useSettings } from '../layout'
 import { SubmitButton } from '~/components/Settings/SubmitButton'
 import ResultMessage from '~/components/ResultMessage'
 
-const zodSchema = zod$({
+const zodSchema = z.object({
 	'extended description': z.string().min(1),
 	'privacy policy': z.string().optional(),
 })
 
-export type ServerAboutData = Awaited<typeof zodSchema>['_type']
+export type ServerAboutData = z.infer<typeof zodSchema>
 
-export const action = action$(async (data, { platform }) => {
+export const useUpdateSettings = routeAction$(async (data, { platform }) => {
 	const db = await getDatabase(platform)
 	let success = false
 	try {
@@ -27,11 +27,11 @@ export const action = action$(async (data, { platform }) => {
 	return {
 		success,
 	}
-}, zodSchema)
+}, zod$(zodSchema))
 
 export default component$(() => {
-	const existingSettings = serverSettingsLoader()
-	const saveAction = action()
+	const existingSettings = useSettings()
+	const saveAction = useUpdateSettings()
 
 	const showSuccessfulResult = !!saveAction.value?.success
 	const showUnsuccessfulResult = !!saveAction.value && !saveAction.value.success

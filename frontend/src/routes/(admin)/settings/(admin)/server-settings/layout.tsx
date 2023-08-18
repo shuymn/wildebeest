@@ -1,15 +1,13 @@
 import { component$, Slot } from '@builder.io/qwik'
-import { Link, loader$, useLocation } from '@builder.io/qwik-city'
+import { Link, routeLoader$, useLocation } from '@builder.io/qwik-city'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { getSettings } from 'wildebeest/backend/src/config/server'
 import { ServerAboutData } from './about'
 import { ServerBrandingData } from './branding'
 
-export { adminLoader } from '~/utils/adminLoader'
-
 export type ServerSettingsData = ServerBrandingData & ServerAboutData
 
-export const serverSettingsLoader = loader$<Promise<Partial<ServerSettingsData>>>(async ({ platform }) => {
+export const useSettings = routeLoader$(async ({ platform }): Promise<Partial<ServerSettingsData>> => {
 	const database = await getDatabase(platform)
 
 	const settings = await getSettings(database)

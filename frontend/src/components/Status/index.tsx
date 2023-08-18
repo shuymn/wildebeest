@@ -1,7 +1,7 @@
 import { component$, $, useSignal } from '@builder.io/qwik'
 import { Link, useNavigate } from '@builder.io/qwik-city'
 import { formatTimeAgo } from '~/utils/dateTime'
-import type { Account, MastodonStatus } from '~/types'
+import type { MastodonStatus } from '~/types'
 import { MediaGallery } from '../MediaGallery.tsx'
 import { useAccountUrl } from '~/utils/useAccountUrl'
 import { getDisplayNameElement } from '~/utils/getDisplayNameElement'
@@ -22,6 +22,7 @@ export default component$((props: Props) => {
 
 	const status = props.status.reblog ?? props.status
 	const reblogger = props.status.reblog && props.status.account
+	const rebloggerUrl = useAccountUrl(reblogger)
 	const statusUrl = useStatusUrl(status)
 	const showContent = useSignal(!status.spoiler_text)
 
@@ -29,7 +30,17 @@ export default component$((props: Props) => {
 
 	return (
 		<article class="p-4 border-t border-wildebeest-700 break-words">
-			<RebloggerLink account={reblogger}></RebloggerLink>
+			{reblogger && (
+				<div class="flex text-wildebeest-500 py-3">
+					<p>
+						<i class="fa fa-retweet mr-3 w-4 inline-block" />
+						<a class="no-underline" href={rebloggerUrl}>
+							{getDisplayNameElement(reblogger)}
+						</a>
+						&nbsp;boosted
+					</p>
+				</div>
+			)}
 			<div class="flex justify-between mb-3 flex-wrap">
 				<AccountCard account={status.account} subText={props.accountSubText} secondaryAvatar={reblogger} />
 				<Link class="no-underline ml-auto" href={statusUrl}>
@@ -78,21 +89,5 @@ export default component$((props: Props) => {
 
 			{props.showInfoTray && <StatusInfoTray status={status} />}
 		</article>
-	)
-})
-
-export const RebloggerLink = component$(({ account }: { account: Account | null }) => {
-	return (
-		account && (
-			<div class="flex text-wildebeest-500 py-3">
-				<p>
-					<i class="fa fa-retweet mr-3 w-4 inline-block" />
-					<a class="no-underline" href={useAccountUrl(account)}>
-						{getDisplayNameElement(account)}
-					</a>
-					&nbsp;boosted
-				</p>
-			</div>
-		)
 	)
 })
