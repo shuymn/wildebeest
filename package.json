@@ -27,7 +27,7 @@
 		"sql-formatter": "12.2.4",
 		"ts-jest": "29.1.1",
 		"typescript": "5.1.6",
-		"wrangler": "3.4.0"
+		"wrangler": "3.5.1"
 	},
 	"private": true,
 	"scripts": {
