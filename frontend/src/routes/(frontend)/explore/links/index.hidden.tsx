@@ -17,7 +17,7 @@ export default component$(() => {
 				onResolved={(links) => (
 					<>
 						{links.map((link, idx) => (
-							<a key={idx} href={link.url} class="no-underline" target="_blank">
+							<a key={idx} href={link.url} class="no-underline" target="_blank" rel="noopener noreferrer">
 								<div class="p-4 flex justify-between border-b border-wildebeest-600 hover:bg-wildebeest-700">
 									<div class="mr-6">
 										<div class="my-2 text-sm text-wildebeest-400">{link.provider_name}</div>
