@@ -39,7 +39,7 @@ export const MediaGallery = component$<Props>(({ medias }) => {
 					class={`media-gallery overflow-hidden grid gap-1 h-52 md:h-60 lg:h-72 xl:h-80`}
 				>
 					{medias.map((media) => (
-						<div class="w-full flex items-center justify-center overflow-hidden bg-black">
+						<div key={media.id} class="w-full flex items-center justify-center overflow-hidden bg-black">
 							{media.type === 'image' && <Image mediaAttachment={media} onOpenImagesModal$={onOpenImagesModal} />}
 							{media.type === 'video' && <Video mediaAttachment={media} />}
 						</div>

@@ -1,14 +1,14 @@
 import { component$, useStore, $ } from '@builder.io/qwik'
 import { getDatabase } from 'wildebeest/backend/src/database'
-import { action$, Form, zod$, z } from '@builder.io/qwik-city'
+import { routeAction$, Form, zod$, z } from '@builder.io/qwik-city'
 import { addAlias } from 'wildebeest/backend/src/accounts/alias'
 import ResultMessage from '~/components/ResultMessage'
 
-const zodSchema = zod$({
+const zodSchema = z.object({
 	alias: z.string().min(1),
 })
 
-export const action = action$(async (data, { platform, json, request }) => {
+export const useAddAlias = routeAction$(async (data, { platform, json, request }) => {
 	const url = new URL(request.url)
 	const domain = url.hostname
 	const db = await getDatabase(platform)
@@ -28,7 +28,7 @@ export const action = action$(async (data, { platform, json, request }) => {
 	return {
 		success: true,
 	}
-}, zodSchema)
+}, zod$(zodSchema))
 
 export default component$(() => {
 	const state = useStore({ alias: '' })
@@ -37,7 +37,7 @@ export default component$(() => {
 		state.alias = (event.target as HTMLInputElement).value
 	})
 
-	const saveAction = action()
+	const saveAction = useAddAlias()
 
 	return (
 		<Form class="login-form" action={saveAction}>

@@ -1,11 +1,11 @@
 import { component$ } from '@builder.io/qwik'
-import { loader$ } from '@builder.io/qwik-city'
+import { routeLoader$ } from '@builder.io/qwik-city'
 
-export const loader = loader$(({ redirect }) => {
+export const useRedirect = routeLoader$(({ redirect }) => {
 	redirect(303, '/explore')
 })
 
 export default component$(() => {
-	loader()
+	useRedirect()
 	return <></>
 })

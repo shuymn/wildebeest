@@ -14,7 +14,6 @@ export default component$<{ withBackButton?: boolean; backButtonPlacement?: 'sta
 		})
 
 		const backButton = !withBackButton ? (
-			// eslint-disable-next-line qwik/single-jsx-root
 			<></>
 		) : (
 			<div class="flex justify-between items-center bg-wildebeest-700">

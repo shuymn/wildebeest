@@ -1,5 +1,5 @@
 import { component$ } from '@builder.io/qwik'
-import { action$, Form, loader$, useNavigate, z, zod$ } from '@builder.io/qwik-city'
+import { routeAction$, Form, routeLoader$, useNavigate, z, zod$ } from '@builder.io/qwik-city'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { getRules, upsertRule } from 'wildebeest/backend/src/config/rules'
 import { TextArea } from '~/components/Settings/TextArea'
@@ -8,7 +8,7 @@ import { SubmitButton } from '~/components/Settings/SubmitButton'
 
 export type ServerSettingsData = { rules: string[] }
 
-export const editAction = action$(
+export const useUpdateRule = routeAction$(
 	async (data, { platform }) => {
 		let success = false
 		try {
@@ -31,7 +31,7 @@ export const editAction = action$(
 	})
 )
 
-export const ruleLoader = loader$<Promise<{ id: number; text: string }>>(async ({ params, platform, html }) => {
+export const useRules = routeLoader$(async ({ params, platform, html }): Promise<{ id: number; text: string }> => {
 	const database = await getDatabase(platform)
 	const rules = await getRules(database)
 
@@ -45,8 +45,8 @@ export const ruleLoader = loader$<Promise<{ id: number; text: string }>>(async (
 })
 
 export default component$(() => {
-	const rule = ruleLoader()
-	const editActionObj = editAction()
+	const rule = useRules()
+	const editActionObj = useUpdateRule()
 
 	const nav = useNavigate()
 

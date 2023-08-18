@@ -1,6 +1,6 @@
 import { component$, Slot, useContextProvider } from '@builder.io/qwik'
 import type { Env } from 'wildebeest/backend/src/types'
-import { DocumentHead, Link, loader$ } from '@builder.io/qwik-city'
+import { DocumentHead, Link, routeLoader$ } from '@builder.io/qwik-city'
 import * as instance from 'wildebeest/functions/api/v1/instance'
 import type { InstanceConfig } from 'wildebeest/backend/src/types/configs'
 import LeftColumn from '~/components/layout/LeftColumn/LeftColumn'
@@ -12,7 +12,7 @@ import { getDocumentHead } from '~/utils/getDocumentHead'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
 import { getDatabase } from 'wildebeest/backend/src/database'
 
-export const instanceLoader = loader$<Promise<InstanceConfig>>(async ({ platform, html }) => {
+export const useInstance = routeLoader$(async ({ platform, html }): Promise<InstanceConfig> => {
 	const env = {
 		INSTANCE_DESCR: platform.INSTANCE_DESCR,
 		INSTANCE_TITLE: platform.INSTANCE_TITLE,
@@ -33,7 +33,7 @@ export const instanceLoader = loader$<Promise<InstanceConfig>>(async ({ platform
 })
 
 export default component$(() => {
-	useContextProvider(InstanceConfigContext, instanceLoader().value)
+	useContextProvider(InstanceConfigContext, useInstance())
 	const commitHash = getCommitHash()
 
 	return (
@@ -68,7 +68,7 @@ export default component$(() => {
 })
 
 export const head: DocumentHead = ({ resolveValue, head }) => {
-	const instance = resolveValue(instanceLoader)
+	const instance = resolveValue(useInstance)
 
 	return getDocumentHead(
 		{

@@ -14,8 +14,8 @@ export default component$(() => {
 				<a href="https://github.com/cloudflare/wildebeest">Wildebeest</a>.
 			</p>
 			<div>
-				<img class="w-full" src={config.thumbnail} alt="Wildebeest instance thumbnail" />
-				<p>{config.description}</p>
+				<img class="w-full" src={config.value.thumbnail} alt="Wildebeest instance thumbnail" />
+				<p>{config.value.description}</p>
 			</div>
 			<Link
 				class="block text-wildebeest-500 border border-current my-4 p-2 text-center rounded-md no-underline"

@@ -10,7 +10,11 @@ import { useAccountIsLocal } from '~/utils/useAccountIsLocal'
  * @param account the target account or null
  * @returns url to be used for the target account (or undefined if)
  */
-export function useAccountUrl(account: Pick<Account, 'acct' | 'url'>): string {
+export function useAccountUrl(account: Pick<Account, 'acct' | 'url'> | null): string | undefined {
+	if (!account) {
+		return undefined
+	}
+
 	const { value: isLocal } = useAccountIsLocal(account.acct)
 	if (isLocal) {
 		const url = new URL(account.url)
