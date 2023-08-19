@@ -1,7 +1,7 @@
 import { type Database } from 'wildebeest/backend/src/database'
 import type { MessageBody, Queue } from 'wildebeest/backend/src/types'
 
-export interface Env {
+export type Env = {
 	DATABASE: Database
 	// FIXME: shouldn't it be USER_KEY?
 	userKEK: string
