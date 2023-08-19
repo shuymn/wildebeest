@@ -1,7 +1,7 @@
 import { MastodonStatus } from '~/types'
 import { useAccountIsLocal } from '~/utils/useAccountIsLocal'
 
-export function useStatusUrl(status: Pick<MastodonStatus, 'url' | 'account'>): string {
+export const useStatusUrl = (status: Pick<MastodonStatus, 'url' | 'account'>): string => {
 	const { value: isLocal } = useAccountIsLocal(status.account.acct)
 	if (isLocal) {
 		const url = new URL(status.url)

@@ -67,7 +67,7 @@ export default component$(() => {
 	const showAccountInfo = !pageDetails.value.isValidStatus
 
 	const location = useLocation()
-	const currentPath = location.pathname.replace(/\/$/, '')
+	const currentPath = location.url.pathname.replace(/\/$/, '')
 
 	const fields = [
 		{

@@ -33,7 +33,8 @@ export const useInstance = routeLoader$(async ({ platform, html }): Promise<Inst
 })
 
 export default component$(() => {
-	useContextProvider(InstanceConfigContext, useInstance())
+	const instance = useInstance()
+	useContextProvider(InstanceConfigContext, instance)
 	const commitHash = getCommitHash()
 
 	return (

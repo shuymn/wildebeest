@@ -93,7 +93,7 @@ export default component$(() => {
 								<button
 									onClick$={() => {
 										if (confirm('Are you sure?')) {
-											deleteActionObj.run({ id })
+											deleteActionObj.submit({ id })
 										}
 									}}
 								>

@@ -15,9 +15,9 @@ export default component$(() => {
 	const location = useLocation()
 
 	const renderNavLink = ({ iconName, linkText, linkTarget, linkActiveRegex }: LinkConfig) => {
-		let classList = 'mx-4 my-5 h-5 flex no-underline text-semi max-w-max ' + location.pathname
+		let classList = 'mx-4 my-5 h-5 flex no-underline text-semi max-w-max ' + location.url.pathname
 
-		if (linkActiveRegex.test(location.pathname)) {
+		if (linkActiveRegex.test(location.url.pathname)) {
 			classList += ' text-wildebeest-vibrant-400'
 		} else {
 			classList += ' hover:text-white focus:text-white'

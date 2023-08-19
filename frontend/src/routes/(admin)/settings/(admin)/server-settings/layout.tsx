@@ -34,7 +34,7 @@ export default component$(() => {
 		},
 	] as const
 
-	const currentPath = useLocation().url.pathname.replace(/\/$/, '')
+	const currentPath = useLocation()
 
 	return (
 		<div class="max-w-4xl py-14 px-8">
@@ -42,7 +42,7 @@ export default component$(() => {
 
 			<ul class="flex gap-4 mb-6">
 				{sectionLinks.map(({ text, faIcon, path }) => {
-					const isActive = currentPath.endsWith(path)
+					const isActive = currentPath.url.pathname.replace(/\/$/, '').endsWith(path)
 					return (
 						<Link
 							key={text}
