@@ -1,6 +1,8 @@
 /** @type {import('ts-jest').JestConfigWithTsJest} */
 export default {
-	preset: 'ts-jest',
+	transform: {
+		'^.+\\.(t|j)sx?$': '@swc/jest',
+	},
 	verbose: true,
 	testMatch: [
 		'<rootDir>/(backend|consumer)/test/**/(*.)+(spec|test).ts',

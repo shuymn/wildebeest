@@ -3,12 +3,13 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 
 import { D1Database, D1DatabaseAPI } from '@miniflare/d1'
-import * as SQLiteDatabase from 'better-sqlite3'
+// eslint-disable-next-line import/no-named-as-default
+import Database from 'better-sqlite3'
 
 import { createUser, User } from 'wildebeest/backend/src/accounts'
 import { ApObjectId } from 'wildebeest/backend/src/activitypub/objects'
 import type { Cache } from 'wildebeest/backend/src/cache'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import { type Database as DB, getDatabase } from 'wildebeest/backend/src/database'
 import type { Client } from 'wildebeest/backend/src/mastodon/client'
 import { createClient } from 'wildebeest/backend/src/mastodon/client'
 import type { Queue } from 'wildebeest/backend/src/types'
@@ -24,8 +25,8 @@ export function isUrlValid(s: string) {
 	return url.protocol === 'https:'
 }
 
-export async function makeDB(): Promise<Database> {
-	const db = new SQLiteDatabase(':memory:')
+export async function makeDB(): Promise<DB> {
+	const db = new Database(':memory:')
 	const db2 = new D1Database(new D1DatabaseAPI(db))
 
 	// Manually run our migrations since @miniflare/d1 doesn't support it (yet).
@@ -79,7 +80,7 @@ export async function streamToArrayBuffer(stream: ReadableStream) {
 }
 
 export async function createTestClient(
-	db: Database,
+	db: DB,
 	redirectUri = 'https://localhost',
 	scopes = 'read follow'
 ): Promise<Client> {
@@ -184,7 +185,7 @@ export function createActivityId(domain: string): ApObjectId {
 
 export function createTestUser(
 	domain: string,
-	db: Database,
+	db: DB,
 	userKEK: string,
 	email: string,
 	{ preferredUsername, name }: { preferredUsername?: string; name?: string } = {},
