@@ -3,7 +3,7 @@ import { isLocalAccount } from 'wildebeest/backend/src/accounts'
 import { parseHandle } from 'wildebeest/backend/src/utils/handle'
 import { useDomain } from '~/utils/useDomain'
 
-export function useAccountIsLocal(acct: string | undefined) {
+export const useAccountIsLocal = (acct: string | undefined) => {
 	const domain = useDomain()
 	const isLocal = useSignal(false)
 

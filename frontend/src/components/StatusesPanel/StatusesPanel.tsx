@@ -1,4 +1,4 @@
-import { $, component$, useClientEffect$, useSignal, type QRL } from '@builder.io/qwik'
+import { $, component$, useSignal, type QRL, useVisibleTask$ } from '@builder.io/qwik'
 import { type MastodonStatus } from '~/types'
 import Status from '../Status'
 
@@ -25,7 +25,7 @@ export const StatusesPanel = component$(({ initialStatuses, fetchMoreStatuses: f
 		statuses.value = [...statuses.value, ...newStatuses]
 	})
 
-	useClientEffect$(({ track }) => {
+	useVisibleTask$(({ track }) => {
 		track(() => lastStatusRef.value)
 		if (lastStatusRef.value) {
 			const observer = new IntersectionObserver(
