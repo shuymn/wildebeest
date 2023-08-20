@@ -1,20 +1,26 @@
 // https://docs.joinmastodon.org/methods/oauth/#authorize
 
+import { Hono } from 'hono'
+
 import * as access from 'wildebeest/backend/src/access'
 import { getUserByEmail } from 'wildebeest/backend/src/accounts'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import { getClientById } from 'wildebeest/backend/src/mastodon/client'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import { corsMiddleware } from 'wildebeest/backend/src/middleware'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { isUserAuthenticated } from 'wildebeest/backend/src/utils/auth/isUserAuthenticated'
-import { cors } from 'wildebeest/backend/src/utils/cors'
 
 // Extract the JWT token sent by Access (running before us).
 const extractJWTFromRequest = (request: Request) => request.headers.get('Cf-Access-Jwt-Assertion') || ''
 
-export const onRequestPost: PagesFunction<Env, any, ContextData> = async ({ request, env }) => {
+export const app = new Hono<HonoEnv>()
+
+app.options(corsMiddleware(), (c) => c.json({}))
+
+app.post(async ({ req: { raw: request }, env }) => {
 	return handleRequestPost(request, await getDatabase(env), env.userKEK, env.ACCESS_AUTH_DOMAIN, env.ACCESS_AUD)
-}
+})
 
 export async function buildRedirect(
 	db: Database,
@@ -73,14 +79,6 @@ export async function handleRequestPost(
 	accessDomain: string,
 	accessAud: string
 ): Promise<Response> {
-	if (request.method === 'OPTIONS') {
-		const headers = {
-			...cors(),
-			'content-type': 'application/json',
-		}
-		return new Response('', { headers })
-	}
-
 	const jwt = extractJWTFromRequest(request)
 	const isAuthenticated = await isUserAuthenticated(request, jwt, accessDomain, accessAud)
 

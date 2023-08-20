@@ -1,13 +1,15 @@
 // https://docs.joinmastodon.org/methods/oauth/#token
 
+import { Hono } from 'hono'
 import { z } from 'zod'
 
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { clientUnknown, notAuthorized } from 'wildebeest/backend/src/errors'
 import { Token } from 'wildebeest/backend/src/mastodon'
 import { createClientCredential, getClientById } from 'wildebeest/backend/src/mastodon/client'
-import type { Env } from 'wildebeest/backend/src/types'
-import { cors, makeJsonResponse, MastodonApiResponse, readBody } from 'wildebeest/backend/src/utils'
+import { corsMiddleware } from 'wildebeest/backend/src/middleware'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
+import { makeJsonResponse, MastodonApiResponse, readBody } from 'wildebeest/backend/src/utils'
 
 const schema = z
 	.object({
@@ -27,22 +29,19 @@ const schema = z
 
 type Parameters = z.infer<typeof schema>
 
-const headers = {
-	...cors(),
-	'content-type': 'application/json; charset=utf-8',
-}
+export const app = new Hono<HonoEnv>()
 
-export const onRequestOptions: PagesFunction<Env, ''> = () => {
-	return new Response('', { headers })
-}
+app.use(corsMiddleware())
 
-export const onRequestPost: PagesFunction<Env, ''> = async ({ request, env }) => {
+app.options((c) => c.json({}))
+
+app.post(async ({ req: { raw: request }, env }) => {
 	const result = await readBody(request, schema)
 	if (result.success) {
 		return handleRequest(await getDatabase(env), result.data)
 	}
 	return notAuthorized('missing authorization')
-}
+})
 
 export async function handleRequest(db: Database, params: Parameters): Promise<MastodonApiResponse<Token>> {
 	const clientId = params.code?.split('.')[0] ?? params.client_id
@@ -68,13 +67,10 @@ export async function handleRequest(db: Database, params: Parameters): Promise<M
 		? [params.code, Date.now()]
 		: await createClientCredential(db, clientId, params.scope)
 
-	return makeJsonResponse(
-		{
-			access_token: secret,
-			token_type: 'Bearer',
-			scope: params.scope,
-			created_at: (created / 1000) | 0,
-		} satisfies Token,
-		{ headers }
-	)
+	return makeJsonResponse({
+		access_token: secret,
+		token_type: 'Bearer',
+		scope: params.scope,
+		created_at: (created / 1000) | 0,
+	} satisfies Token)
 }
