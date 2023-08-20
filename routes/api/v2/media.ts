@@ -1,21 +1,35 @@
+import { Hono } from 'hono'
+
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { getApUrl, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import { notAuthorized } from 'wildebeest/backend/src/errors'
 import * as media from 'wildebeest/backend/src/media/image'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import { privateMiddleware } from 'wildebeest/backend/src/middleware'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
-export const onRequestPost: PagesFunction<Env, any, ContextData> = async ({ request, env, data }) => {
-	return handleRequestPost(request, await getDatabase(env), data.connectedActor, env.CF_ACCOUNT_ID, env.CF_API_TOKEN)
-}
+export const app = new Hono<HonoEnv>()
+
+app.post(privateMiddleware(), async ({ req: { raw: request }, env }) => {
+	if (!env.data.connectedActor) {
+		return notAuthorized('not authorized')
+	}
+	return handleRequestPost(
+		request,
+		await getDatabase(env),
+		env.data.connectedActor,
+		env.CF_ACCOUNT_ID,
+		env.CF_API_TOKEN
+	)
+})
 
 export async function handleRequestPost(
 	request: Request,
 	db: Database,
 	connectedActor: Person,
-
 	accountId: string,
 	apiToken: string
 ): Promise<Response> {

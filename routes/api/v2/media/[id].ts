@@ -1,5 +1,6 @@
 // https://docs.joinmastodon.org/methods/media/#update
 
+import { Hono } from 'hono'
 import { z } from 'zod'
 
 import {
@@ -11,7 +12,8 @@ import {
 import type { Image } from 'wildebeest/backend/src/activitypub/objects/image'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { mediaNotFound, unprocessableEntity } from 'wildebeest/backend/src/errors'
-import type { MastodonId, ContextData, Env } from 'wildebeest/backend/src/types'
+import { privateMiddleware } from 'wildebeest/backend/src/middleware'
+import type { MastodonId, HonoEnv } from 'wildebeest/backend/src/types'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 import { cors, readBody } from 'wildebeest/backend/src/utils'
 
@@ -26,18 +28,18 @@ const schema = z.object({
 
 type Parameters = z.infer<typeof schema>
 
-export const onRequestPut: PagesFunction<Env, 'id', ContextData> = async ({ params: { id }, env, request }) => {
-	if (typeof id !== 'string') {
-		return mediaNotFound(String(id))
-	}
-	const result = await readBody(request, schema)
+export const app = new Hono<HonoEnv>()
+
+app.put<'/:id'>(privateMiddleware(), async ({ req, env }) => {
+	const id = req.param('id')
+	const result = await readBody(req.raw, schema)
 	if (result.success) {
-		const domain = new URL(request.url).hostname
+		const domain = new URL(req.raw.url).hostname
 		return handleRequestPut(domain, await getDatabase(env), id, result.data)
 	}
 	const [issue] = result.error.issues
 	return unprocessableEntity(`${issue?.path.join('.')}: ${issue?.message}`)
-}
+})
 
 export async function handleRequestPut(
 	domain: string,

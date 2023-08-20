@@ -1,4 +1,7 @@
 // https://docs.joinmastodon.org/methods/search/#v2
+
+import { Hono } from 'hono'
+
 import { isLocalAccount } from 'wildebeest/backend/src/accounts'
 import {
 	actorFromRow,
@@ -11,7 +14,8 @@ import {
 import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { loadExternalMastodonAccount, loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import type { Env } from 'wildebeest/backend/src/types'
+import { privateMiddleware } from 'wildebeest/backend/src/middleware'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { MastodonAccount } from 'wildebeest/backend/src/types/account'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import type { Handle } from 'wildebeest/backend/src/utils/handle'
@@ -29,9 +33,11 @@ type SearchResult = {
 	hashtags: Array<unknown>
 }
 
-export const onRequest: PagesFunction<Env> = async ({ request, env }) => {
+export const app = new Hono<HonoEnv>()
+
+app.get(privateMiddleware(), async ({ req: { raw: request }, env }) => {
 	return handleRequest(await getDatabase(env), request)
-}
+})
 
 export async function handleRequest(db: Database, request: Request): Promise<Response> {
 	const url = new URL(request.url)
