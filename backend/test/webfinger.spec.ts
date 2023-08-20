@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert/strict'
 
-import * as webfinger from 'wildebeest/functions/.well-known/webfinger'
+import * as webfinger from 'wildebeest/routes/.well-known/webfinger'
 
 import { assertCache, assertStatus, makeDB } from './utils'
 

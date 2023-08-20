@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert/strict'
 
-import * as subscription from 'wildebeest/functions/api/v1/push/subscription'
+import * as subscription from 'wildebeest/routes/api/v1/push/subscription'
 
 import { createSubscription } from '../../src/mastodon/subscription'
 import { assertCORS, assertStatus, createTestClient, createTestUser, generateVAPIDKeys, makeDB } from '../utils'

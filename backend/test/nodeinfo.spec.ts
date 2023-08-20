@@ -1,8 +1,8 @@
 import { strict as assert } from 'node:assert/strict'
 
-import * as nodeinfo from 'wildebeest/functions/.well-known/nodeinfo'
-import * as nodeinfo_20 from 'wildebeest/functions/nodeinfo/2.0'
-import * as nodeinfo_21 from 'wildebeest/functions/nodeinfo/2.1'
+import * as nodeinfo from 'wildebeest/routes/.well-known/nodeinfo'
+import * as nodeinfo_20 from 'wildebeest/routes/nodeinfo/2.0'
+import * as nodeinfo_21 from 'wildebeest/routes/nodeinfo/2.1'
 
 import { assertCORS, assertStatus } from './utils'
 

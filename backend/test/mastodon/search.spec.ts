@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
 import { defaultImages } from 'wildebeest/config/accounts'
-import * as search from 'wildebeest/functions/api/v2/search'
+import * as search from 'wildebeest/routes/api/v2/search'
 
 import { assertCORS, assertJSON, assertStatus, createTestUser, makeDB } from '../utils'
 

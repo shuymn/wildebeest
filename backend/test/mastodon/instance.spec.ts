@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
 import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
-import * as peers from 'wildebeest/functions/api/v1/instance/peers'
+import * as peers from 'wildebeest/routes/api/v1/instance/peers'
 
 import { assertStatus, makeDB } from '../utils'
 

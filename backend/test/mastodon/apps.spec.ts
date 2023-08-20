@@ -2,8 +2,8 @@ import { strict as assert } from 'node:assert/strict'
 
 import { createClientCredential } from 'wildebeest/backend/src/mastodon/client'
 import { VAPIDPublicKey } from 'wildebeest/backend/src/mastodon/subscription'
-import * as apps from 'wildebeest/functions/api/v1/apps'
-import * as verify_app from 'wildebeest/functions/api/v1/apps/verify_credentials'
+import * as apps from 'wildebeest/routes/api/v1/apps'
+import * as verify_app from 'wildebeest/routes/api/v1/apps/verify_credentials'
 
 import { TEST_JWT } from '../test-data'
 import { assertCORS, assertJSON, assertStatus, createTestClient, generateVAPIDKeys, makeDB } from '../utils'

@@ -32,7 +32,7 @@ import {
 	createPublicStatus,
 	createUnlistedStatus,
 } from 'wildebeest/backend/test/shared.utils'
-import * as statuses_history from 'wildebeest/functions/api/v1/statuses/[id]/history'
+import * as statuses_history from 'wildebeest/routes/api/v1/statuses/[id]/history'
 
 import { assertStatus, createActivityId, createTestUser, makeDB } from '../utils'
 

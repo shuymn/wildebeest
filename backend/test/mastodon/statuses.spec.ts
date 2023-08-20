@@ -12,12 +12,12 @@ import { getMentions } from 'wildebeest/backend/src/mastodon/status'
 import * as timelines from 'wildebeest/backend/src/mastodon/timeline'
 import { MastodonStatus, MastodonStatusEdit, MessageType } from 'wildebeest/backend/src/types'
 import { createPrivateStatus, createPublicStatus, createReply } from 'wildebeest/backend/test/shared.utils'
-import * as statuses from 'wildebeest/functions/api/v1/statuses'
-import * as statuses_id from 'wildebeest/functions/api/v1/statuses/[id]'
-import * as statuses_context from 'wildebeest/functions/api/v1/statuses/[id]/context'
-import * as statuses_favourite from 'wildebeest/functions/api/v1/statuses/[id]/favourite'
-import * as statuses_history from 'wildebeest/functions/api/v1/statuses/[id]/history'
-import * as statuses_reblog from 'wildebeest/functions/api/v1/statuses/[id]/reblog'
+import * as statuses from 'wildebeest/routes/api/v1/statuses'
+import * as statuses_id from 'wildebeest/routes/api/v1/statuses/[id]'
+import * as statuses_context from 'wildebeest/routes/api/v1/statuses/[id]/context'
+import * as statuses_favourite from 'wildebeest/routes/api/v1/statuses/[id]/favourite'
+import * as statuses_history from 'wildebeest/routes/api/v1/statuses/[id]/history'
+import * as statuses_reblog from 'wildebeest/routes/api/v1/statuses/[id]/reblog'
 
 import {
 	assertJSON,

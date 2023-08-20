@@ -2,7 +2,7 @@ import { strict as assert } from 'node:assert/strict'
 
 import { insertHashtags } from 'wildebeest/backend/src/mastodon/hashtag'
 import { createPublicStatus } from 'wildebeest/backend/test/shared.utils'
-import * as tag_id from 'wildebeest/functions/api/v1/tags/[tag]'
+import * as tag_id from 'wildebeest/routes/api/v1/tags/[tag]'
 
 import { assertCORS, assertStatus, createTestUser, isUrlValid, makeDB } from '../utils'
 

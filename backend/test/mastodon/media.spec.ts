@@ -3,8 +3,8 @@ import { strict as assert } from 'node:assert/strict'
 import * as objects from 'wildebeest/backend/src/activitypub/objects'
 import { mastodonIdSymbol, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { createImage, Image } from 'wildebeest/backend/src/activitypub/objects/image'
-import * as media from 'wildebeest/functions/api/v2/media'
-import * as media_id from 'wildebeest/functions/api/v2/media/[id]'
+import * as media from 'wildebeest/routes/api/v2/media'
+import * as media_id from 'wildebeest/routes/api/v2/media/[id]'
 
 import { assertJSON, assertStatus, createTestUser, isUrlValid, makeDB } from '../utils'
 

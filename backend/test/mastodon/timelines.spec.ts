@@ -9,8 +9,8 @@ import { insertLike } from 'wildebeest/backend/src/mastodon/like'
 import { createReblog } from 'wildebeest/backend/src/mastodon/reblog'
 import * as timelines from 'wildebeest/backend/src/mastodon/timeline'
 import { createDirectStatus, createPublicStatus, createReply } from 'wildebeest/backend/test/shared.utils'
-import * as timelines_home from 'wildebeest/functions/api/v1/timelines/home'
-import * as timelines_public from 'wildebeest/functions/api/v1/timelines/public'
+import * as timelines_home from 'wildebeest/routes/api/v1/timelines/home'
+import * as timelines_public from 'wildebeest/routes/api/v1/timelines/public'
 
 import { assertCORS, assertJSON, assertStatus, createTestUser, makeCache, makeDB } from '../utils'
 

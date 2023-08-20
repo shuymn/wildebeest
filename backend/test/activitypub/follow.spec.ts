@@ -5,10 +5,10 @@ import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/
 import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
-import * as ap_followers from 'wildebeest/functions/ap/users/[id]/followers'
-import * as ap_followers_page from 'wildebeest/functions/ap/users/[id]/followers/page'
-import * as ap_following from 'wildebeest/functions/ap/users/[id]/following'
-import * as ap_following_page from 'wildebeest/functions/ap/users/[id]/following/page'
+import * as ap_followers from 'wildebeest/routes/ap/users/[id]/followers'
+import * as ap_followers_page from 'wildebeest/routes/ap/users/[id]/followers/page'
+import * as ap_following from 'wildebeest/routes/ap/users/[id]/following'
+import * as ap_following_page from 'wildebeest/routes/ap/users/[id]/following/page'
 
 import { assertStatus, createActivityId, createTestUser, makeDB } from '../utils'
 

@@ -11,8 +11,8 @@ import { createSubscription } from 'wildebeest/backend/src/mastodon/subscription
 import { arrayBufferToBase64 } from 'wildebeest/backend/src/utils/key-ops'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 import { createPublicStatus } from 'wildebeest/backend/test/shared.utils'
-import * as notifications from 'wildebeest/functions/api/v1/notifications'
-import * as notifications_get from 'wildebeest/functions/api/v1/notifications/[id]'
+import * as notifications from 'wildebeest/routes/api/v1/notifications'
+import * as notifications_get from 'wildebeest/routes/api/v1/notifications/[id]'
 
 import { assertJSON, assertStatus, createTestClient, createTestUser, makeCache, makeDB } from '../utils'
 
