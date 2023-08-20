@@ -1,13 +1,14 @@
 // Screen after the first login to let the user configure the account (username
 // especially)
 import { parse } from 'cookie'
+import { Hono } from 'hono'
 import { z } from 'zod'
 
 import * as access from 'wildebeest/backend/src/access'
 import { createUser } from 'wildebeest/backend/src/accounts'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { getJwtEmail } from 'wildebeest/backend/src/utils/auth/getJwtEmail'
 
 const schema = z.object({
@@ -15,9 +16,11 @@ const schema = z.object({
 	name: z.string().min(1).max(30).nonempty(),
 })
 
-export const onRequestPost: PagesFunction<Env, any, ContextData> = async ({ request, env }) => {
+export const app = new Hono<HonoEnv>()
+
+app.post(async ({ req: { raw: request }, env }) => {
 	return handlePostRequest(request, await getDatabase(env), env.userKEK, env.ACCESS_AUTH_DOMAIN, env.ACCESS_AUD)
-}
+})
 
 export async function handlePostRequest(
 	request: Request,
@@ -48,12 +51,12 @@ export async function handlePostRequest(
 
 	let username: string | null = null
 	if (formData.has('username')) {
-		username = formData.get('username') as string | null
+		username = formData.get('username')
 	}
 
 	let name: string | null = null
 	if (formData.has('name')) {
-		name = formData.get('name') as string | null
+		name = formData.get('name')
 	}
 
 	const result = schema.safeParse({ username, name })

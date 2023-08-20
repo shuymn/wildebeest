@@ -1,5 +1,6 @@
 import { type Database } from 'wildebeest/backend/src/database'
-import type { MessageBody, Queue } from 'wildebeest/backend/src/types'
+import type { ContextData, MessageBody, Queue } from 'wildebeest/backend/src/types'
+import { Nullable } from 'wildebeest/backend/src/utils/type'
 
 export type Env = {
 	DATABASE: Database
@@ -25,4 +26,13 @@ export type Env = {
 	SENTRY_DSN: string
 	SENTRY_ACCESS_CLIENT_ID: string
 	SENTRY_ACCESS_CLIENT_SECRET: string
+}
+
+export type HonoEnv = {
+	Bindings: Env & {
+		ASSETS: {
+			fetch: (req: Request) => Response
+		}
+		data: Nullable<Pick<ContextData, 'connectedActor'>> & Partial<Omit<ContextData, 'connectedActor'>>
+	}
 }
