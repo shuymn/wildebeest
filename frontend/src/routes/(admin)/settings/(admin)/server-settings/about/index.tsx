@@ -14,7 +14,7 @@ const zodSchema = z.object({
 
 export type ServerAboutData = z.infer<typeof zodSchema>
 
-export const useUpdateSettings = routeAction$(async (data, { platform }) => {
+export const useUpdateSettings = routeAction$(async (data, { platform: { env: platform } }) => {
 	const db = await getDatabase(platform)
 	let success = false
 	try {

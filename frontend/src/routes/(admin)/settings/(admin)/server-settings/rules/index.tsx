@@ -8,7 +8,7 @@ import { SubmitButton } from '~/components/Settings/SubmitButton'
 export type ServerSettingsData = { rules: string[] }
 
 export const useUpdateRule = routeAction$(
-	async (data, { platform }) => {
+	async (data, { platform: { env: platform } }) => {
 		let success = false
 		try {
 			const result = await upsertRule(await getDatabase(platform), data.text)
@@ -27,7 +27,7 @@ export const useUpdateRule = routeAction$(
 )
 
 export const useDeleteRule = routeAction$(
-	async (data, { platform }) => {
+	async (data, { platform: { env: platform } }) => {
 		let success = false
 
 		try {
@@ -46,11 +46,13 @@ export const useDeleteRule = routeAction$(
 	})
 )
 
-export const useRules = routeLoader$(async ({ platform }): Promise<{ id: number; text: string }[]> => {
-	const database = await getDatabase(platform)
-	const rules = await getRules(database)
-	return JSON.parse(JSON.stringify(rules))
-})
+export const useRules = routeLoader$(
+	async ({ platform: { env: platform } }): Promise<{ id: number; text: string }[]> => {
+		const database = await getDatabase(platform)
+		const rules = await getRules(database)
+		return JSON.parse(JSON.stringify(rules))
+	}
+)
 
 export default component$(() => {
 	const rules = useRules()

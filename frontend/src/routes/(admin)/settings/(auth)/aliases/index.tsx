@@ -8,7 +8,7 @@ const zodSchema = z.object({
 	alias: z.string().min(1),
 })
 
-export const useAddAlias = routeAction$(async (data, { platform, json, request }) => {
+export const useAddAlias = routeAction$(async (data, { platform: { env: platform }, json, request }) => {
 	const url = new URL(request.url)
 	const domain = url.hostname
 	const db = await getDatabase(platform)

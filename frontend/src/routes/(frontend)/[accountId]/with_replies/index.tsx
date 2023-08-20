@@ -4,7 +4,7 @@ import styles from '../../../../utils/innerHtmlContent.scss?inline'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
 import type { MastodonStatus } from '~/types'
 import { StatusesPanel } from '~/components/StatusesPanel/StatusesPanel'
-import { handleRequest } from 'wildebeest/functions/api/v1/accounts/[id]/statuses'
+import { handleRequest } from 'wildebeest/routes/api/v1/accounts/[id]/statuses'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { getMastodonIdByRemoteHandle } from 'wildebeest/backend/src/accounts/account'
 import { parseHandle } from 'wildebeest/backend/src/utils/handle'
@@ -12,7 +12,7 @@ import { getNotFoundHtml } from '~/utils/getNotFoundHtml/getNotFoundHtml'
 
 export const useStatuses = routeLoader$(
 	async ({
-		platform,
+		platform: { env: platform },
 		request,
 		html,
 	}): Promise<{
