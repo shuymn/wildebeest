@@ -1,18 +1,15 @@
-import { cors } from 'wildebeest/backend/src/utils/cors'
+import { Hono } from 'hono'
+import { cache } from 'hono/cache'
+import { corsMiddleware } from 'wildebeest/backend/src/middleware'
+import { HonoEnv } from 'wildebeest/backend/src/types'
 
-const headers = {
-	...cors(),
-	'content-type': 'application/json',
-	'cache-control': 'max-age=259200, public',
-}
+export const app = new Hono<HonoEnv>()
 
-export const onRequest: PagesFunction<unknown, any> = async ({ request }) => {
-	const domain = new URL(request.url).hostname
-	return handleRequest(domain)
-}
+app.options(corsMiddleware(), (c) => c.json({}))
+app.get(corsMiddleware(), cache({ cacheName: 'wildebeest', cacheControl: 'max-age=259200, public' }), (c) => {
+	const domain = new URL(c.req.raw.url).hostname
 
-export async function handleRequest(domain: string): Promise<Response> {
-	const res = {
+	return c.json({
 		links: [
 			{
 				rel: 'http://nodeinfo.diaspora.software/ns/schema/2.0',
@@ -23,7 +20,5 @@ export async function handleRequest(domain: string): Promise<Response> {
 				href: `https://${domain}/nodeinfo/2.1`,
 			},
 		],
-	}
-
-	return new Response(JSON.stringify(res), { headers })
-}
+	})
+})

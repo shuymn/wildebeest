@@ -1,15 +1,19 @@
 // https://www.rfc-editor.org/rfc/rfc7033
 
+import { Hono } from 'hono'
+
 import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
-import type { Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import type { WebFingerResponse } from 'wildebeest/backend/src/webfinger'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { handleToAcct, isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
 import { getUserId, isLocalAccount } from 'wildebeest/backend/src/accounts'
 
-export const onRequest: PagesFunction<Env, any> = async ({ request, env }) => {
-	return handleRequest(request, await getDatabase(env))
-}
+export const app = new Hono<HonoEnv>()
+
+app.get(async (c) => {
+	return handleRequest(c.req.raw, await getDatabase(c.env))
+})
 
 const headers = {
 	'content-type': 'application/jrd+json',
