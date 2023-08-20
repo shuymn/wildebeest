@@ -57,8 +57,8 @@ module.exports = {
 						target: './backend/src/**/*',
 					},
 					{
-						from: './!(backend|config|node_modules)/**/*',
-						target: './functions/**/*',
+						from: './!(backend|config|node_modules|routes)/**/*',
+						target: './routes/**/*',
 					},
 					{
 						from: './!(backend|do|node_modules)/**/*',
@@ -74,7 +74,7 @@ module.exports = {
 					},
 					{
 						from: './node_modules/@types/better-sqlite3',
-						target: './functions/**/*',
+						target: './routes/**/*',
 					},
 					{
 						from: './node_modules/@types/better-sqlite3',
