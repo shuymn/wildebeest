@@ -5,16 +5,12 @@ import baseConfig from '../../vite.config'
 export default extendConfig(baseConfig, () => {
 	return {
 		build: {
+			sourcemap: process.env.NODE_ENV === 'dev',
 			ssr: true,
 			rollupOptions: {
 				input: ['src/entry.cloudflare-pages.tsx', '@qwik-city-plan'],
 			},
 		},
-		plugins: [
-			cloudflarePagesAdapter({
-				// Do not SSG as the D1 database is not available at build time, I think.
-				// staticGenerate: true,
-			}),
-		],
+		plugins: [cloudflarePagesAdapter()],
 	}
 })
