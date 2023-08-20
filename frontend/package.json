@@ -10,7 +10,7 @@
 		"pretypes-check": "npm run build",
 		"types-check": "tsc",
 		"lint": "eslint src mock-db adaptors",
-		"build": "vite build && vite build -c adaptors/cloudflare-pages/vite.config.ts",
+		"build": "vite build && vite build --config adaptors/cloudflare-pages/vite.config.ts",
 		"dev": "vite --mode ssr",
 		"watch": "nodemon -w ./src --ext tsx,ts --exec npm run build"
 	},
