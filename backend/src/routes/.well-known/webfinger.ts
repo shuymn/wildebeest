@@ -2,14 +2,14 @@
 
 import { Hono } from 'hono'
 
-import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import type { WebFingerResponse } from 'wildebeest/backend/src/webfinger'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { handleToAcct, isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
 import { getUserId, isLocalAccount } from 'wildebeest/backend/src/accounts'
+import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
+import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
+import { handleToAcct, isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
+import type { WebFingerResponse } from 'wildebeest/backend/src/webfinger'
 
-export const app = new Hono<HonoEnv>()
+const app = new Hono<HonoEnv>()
 
 app.get(async (c) => {
 	return handleRequest(c.req.raw, await getDatabase(c.env))
@@ -62,3 +62,5 @@ export async function handleRequest(request: Request, db: Database): Promise<Res
 
 	return new Response(JSON.stringify(res), { headers })
 }
+
+export default app

@@ -11,7 +11,7 @@ import type { HonoEnv } from 'wildebeest/backend/src/types'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
-export const app = new Hono<HonoEnv>()
+const app = new Hono<HonoEnv>()
 
 app.post(privateMiddleware(), async ({ req: { raw: request }, env }) => {
 	if (!env.data.connectedActor) {
@@ -82,3 +82,5 @@ export async function handleRequestPost(
 	}
 	return new Response(JSON.stringify(res), { headers })
 }
+
+export default app

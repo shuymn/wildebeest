@@ -28,7 +28,7 @@ const schema = z.object({
 
 type Parameters = z.infer<typeof schema>
 
-export const app = new Hono<HonoEnv>()
+const app = new Hono<HonoEnv>()
 
 app.put<'/:id'>(privateMiddleware(), async ({ req, env }) => {
 	const id = req.param('id')
@@ -92,3 +92,5 @@ export async function handleRequestPut(
 
 	return new Response(JSON.stringify(res), { headers })
 }
+
+export default app

@@ -16,7 +16,7 @@ const schema = z.object({
 	name: z.string().min(1).max(30).nonempty(),
 })
 
-export const app = new Hono<HonoEnv>()
+const app = new Hono<HonoEnv>()
 
 app.post(async ({ req: { raw: request }, env }) => {
 	return handlePostRequest(request, await getDatabase(env), env.userKEK, env.ACCESS_AUTH_DOMAIN, env.ACCESS_AUD)
@@ -77,3 +77,5 @@ export async function handlePostRequest(
 	}
 	return Response.redirect(redirect_uri, 302)
 }
+
+export default app

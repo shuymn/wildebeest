@@ -33,7 +33,7 @@ type SearchResult = {
 	hashtags: Array<unknown>
 }
 
-export const app = new Hono<HonoEnv>()
+const app = new Hono<HonoEnv>()
 
 app.get(privateMiddleware(), async ({ req: { raw: request }, env }) => {
 	return handleRequest(await getDatabase(env), request)
@@ -127,3 +127,5 @@ WHERE rowid IN (SELECT rowid FROM search_fts WHERE (preferredUsername MATCH ?1 O
 		{ headers }
 	)
 }
+
+export default app

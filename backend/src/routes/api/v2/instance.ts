@@ -12,7 +12,7 @@ import { cors } from 'wildebeest/backend/src/utils/cors'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 import { getVersion } from 'wildebeest/config/versions'
 
-export const app = new Hono<HonoEnv>()
+const app = new Hono<HonoEnv>()
 
 app.get(async ({ req: { raw: request }, env }) => {
 	const domain = new URL(request.url).hostname
@@ -90,3 +90,5 @@ export async function handleRequest(domain: string, db: Database, env: Env) {
 
 	return new Response(JSON.stringify(res), { headers })
 }
+
+export default app

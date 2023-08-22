@@ -4,7 +4,7 @@ import { Hono } from 'hono'
 
 import * as access from 'wildebeest/backend/src/access'
 import { getUserByEmail } from 'wildebeest/backend/src/accounts'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import { getDatabase, type Database } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import { getClientById } from 'wildebeest/backend/src/mastodon/client'
 import { corsMiddleware } from 'wildebeest/backend/src/middleware'
@@ -14,7 +14,7 @@ import { isUserAuthenticated } from 'wildebeest/backend/src/utils/auth/isUserAut
 // Extract the JWT token sent by Access (running before us).
 const extractJWTFromRequest = (request: Request) => request.headers.get('Cf-Access-Jwt-Assertion') || ''
 
-export const app = new Hono<HonoEnv>()
+const app = new Hono<HonoEnv>()
 
 app.options(corsMiddleware(), (c) => c.json({}))
 
@@ -103,3 +103,5 @@ function URLsafeRedirect(location: string): Response {
 	const headers = { location }
 	return new Response(`redirect to ${location}.`, { status: 302, headers })
 }
+
+export default app

@@ -29,13 +29,11 @@ const schema = z
 
 type Parameters = z.infer<typeof schema>
 
-export const app = new Hono<HonoEnv>()
+const app = new Hono<HonoEnv>()
 
-app.use(corsMiddleware())
+app.options(corsMiddleware(), (c) => c.json({}))
 
-app.options((c) => c.json({}))
-
-app.post(async ({ req: { raw: request }, env }) => {
+app.post(corsMiddleware(), async ({ req: { raw: request }, env }) => {
 	const result = await readBody(request, schema)
 	if (result.success) {
 		return handleRequest(await getDatabase(env), result.data)
@@ -74,3 +72,5 @@ export async function handleRequest(db: Database, params: Parameters): Promise<M
 		created_at: (created / 1000) | 0,
 	} satisfies Token)
 }
+
+export default app
