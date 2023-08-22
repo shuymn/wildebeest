@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { buildRoute, Route } from './main'
+import { buildRoute, Route } from './hono'
 
 describe('buildRoute', () => {
 	test.each([

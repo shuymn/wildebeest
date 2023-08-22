@@ -6,14 +6,13 @@ import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { notAuthorized } from 'wildebeest/backend/src/errors'
 import * as media from 'wildebeest/backend/src/media/image'
-import { privateMiddleware } from 'wildebeest/backend/src/middleware'
 import type { HonoEnv } from 'wildebeest/backend/src/types'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
 const app = new Hono<HonoEnv>()
 
-app.post(privateMiddleware(), async ({ req: { raw: request }, env }) => {
+app.post(async ({ req: { raw: request }, env }) => {
 	if (!env.data.connectedActor) {
 		return notAuthorized('not authorized')
 	}

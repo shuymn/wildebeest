@@ -14,7 +14,6 @@ import {
 import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { loadExternalMastodonAccount, loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import { privateMiddleware } from 'wildebeest/backend/src/middleware'
 import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { MastodonAccount } from 'wildebeest/backend/src/types/account'
 import { cors } from 'wildebeest/backend/src/utils/cors'
@@ -35,7 +34,7 @@ type SearchResult = {
 
 const app = new Hono<HonoEnv>()
 
-app.get(privateMiddleware(), async ({ req: { raw: request }, env }) => {
+app.get(async ({ req: { raw: request }, env }) => {
 	return handleRequest(await getDatabase(env), request)
 })
 

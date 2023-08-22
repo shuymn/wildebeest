@@ -5,7 +5,7 @@ export { myz }
 export * from './cors'
 export * from './file'
 export * from './http'
-export * from './hono'
+export { createApp } from './hono'
 
 export function isUUID(str: string): boolean {
 	return /^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(str)

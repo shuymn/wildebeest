@@ -12,7 +12,6 @@ import {
 import type { Image } from 'wildebeest/backend/src/activitypub/objects/image'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { mediaNotFound, unprocessableEntity } from 'wildebeest/backend/src/errors'
-import { privateMiddleware } from 'wildebeest/backend/src/middleware'
 import type { MastodonId, HonoEnv } from 'wildebeest/backend/src/types'
 import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
 import { cors, readBody } from 'wildebeest/backend/src/utils'
@@ -30,7 +29,7 @@ type Parameters = z.infer<typeof schema>
 
 const app = new Hono<HonoEnv>()
 
-app.put<'/:id'>(privateMiddleware(), async ({ req, env }) => {
+app.put<'/:id'>(async ({ req, env }) => {
 	const id = req.param('id')
 	const result = await readBody(req.raw, schema)
 	if (result.success) {
