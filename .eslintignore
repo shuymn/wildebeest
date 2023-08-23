@@ -1,6 +1,5 @@
 **/*.log
 **/.DS_Store
-*.
 .vscode/settings.json
 .history
 .yarn
@@ -31,4 +30,3 @@ tsconfig.tsbuildinfo
 vite.config.ts
 .eslintrc.cjs
 backend/src/database/d1/*.ts
-functions/\[\[path\]\].ts

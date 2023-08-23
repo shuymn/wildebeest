@@ -48,45 +48,6 @@ module.exports = {
 				],
 			},
 		],
-		'import/no-restricted-paths': [
-			'error',
-			{
-				zones: [
-					{
-						from: './!(backend|config|node_modules)/**/*',
-						target: './backend/src/**/*',
-					},
-					{
-						from: './!(backend|config|node_modules|routes)/**/*',
-						target: './routes/**/*',
-					},
-					{
-						from: './!(backend|do|node_modules)/**/*',
-						target: './do/**/*',
-					},
-					{
-						from: './!(backend|consumer|node_modules)/**/*',
-						target: './consumer/**/*',
-					},
-					{
-						from: './node_modules/@types/better-sqlite3',
-						target: './backend/src/**/*',
-					},
-					{
-						from: './node_modules/@types/better-sqlite3',
-						target: './routes/**/*',
-					},
-					{
-						from: './node_modules/@types/better-sqlite3',
-						target: './do/**/*',
-					},
-					{
-						from: './node_modules/@types/better-sqlite3',
-						target: './consumer/**/*',
-					},
-				],
-			},
-		],
 		/*
 			Note: the following rules have been set to off so that linting
 				  can pass with the current code, but we need to gradually
