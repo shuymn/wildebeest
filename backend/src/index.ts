@@ -12,6 +12,8 @@ base.use('*', errorMiddleware())
 
 const app = createApp({ app: base })
 
-app.showRoutes()
+if (import.meta.env.DEV) {
+	app.showRoutes()
+}
 
 export default app
