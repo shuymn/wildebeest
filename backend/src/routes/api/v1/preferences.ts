@@ -1,9 +1,11 @@
 // https://docs.joinmastodon.org/methods/preferences/#get
 
+import { Hono } from 'hono'
+
 import { getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import { getPreference } from 'wildebeest/backend/src/mastodon/account'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { Privacy, ReadingExpandMedia } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
@@ -15,12 +17,14 @@ type PreferenceResponse = {
 	'reading:expand:spoilers': boolean
 }
 
-export const onRequest: PagesFunction<Env, any, ContextData> = async ({ data, env }) => {
-	if (!data.connectedActor) {
+const app = new Hono<HonoEnv>()
+
+app.get(async ({ env }) => {
+	if (!env.data.connectedActor) {
 		return errors.notAuthorized('no connected user')
 	}
 
-	const preference = await getPreference(await getDatabase(env), data.connectedActor)
+	const preference = await getPreference(await getDatabase(env), env.data.connectedActor)
 	const res: PreferenceResponse = {
 		'posting:default:visibility': preference.posting_default_visibility,
 		'posting:default:sensitive': preference.posting_default_sensitive,
@@ -35,4 +39,6 @@ export const onRequest: PagesFunction<Env, any, ContextData> = async ({ data, en
 	}
 
 	return new Response(JSON.stringify(res), { headers })
-}
+})
+
+export default app

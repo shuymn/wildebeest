@@ -1,5 +1,6 @@
 // https://docs.joinmastodon.org/methods/statuses/#get
 
+import { Hono } from 'hono'
 import { z } from 'zod'
 
 import { createDeleteActivity } from 'wildebeest/backend/src/activitypub/activities/delete'
@@ -22,7 +23,7 @@ import {
 	toMastodonStatusFromObject,
 } from 'wildebeest/backend/src/mastodon/status'
 import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
-import type { ContextData, DeliverMessageBody, Env, MastodonId, Queue } from 'wildebeest/backend/src/types'
+import type { DeliverMessageBody, HonoEnv, MastodonId, Queue } from 'wildebeest/backend/src/types'
 import { myz, readBody } from 'wildebeest/backend/src/utils'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
@@ -31,13 +32,15 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
-export const onRequestGet: PagesFunction<Env, 'id', ContextData> = async ({ params: { id }, env, request, data }) => {
-	if (typeof id !== 'string') {
-		return errors.statusNotFound(String(id))
+const app = new Hono<HonoEnv>()
+
+app.get<'/:id'>(async ({ req, env }) => {
+	if (!env.data.connectedActor) {
+		return errors.notAuthorized('not authorized')
 	}
-	const domain = new URL(request.url).hostname
-	return handleRequestGet(await getDatabase(env), id, domain, data.connectedActor)
-}
+	const domain = new URL(req.url).hostname
+	return handleRequestGet(await getDatabase(env), req.param('id'), domain, env.data.connectedActor)
+})
 
 const schema = z.object({
 	status: z.string().max(MAX_STATUS_LENGTH).optional(),
@@ -58,28 +61,24 @@ type PutDependencies = {
 	cache: Cache
 }
 
-export const onRequestPut: PagesFunction<Env, 'id', ContextData> = async ({
-	params: { id },
-	env,
-	request,
-	data: { connectedActor },
-}) => {
-	if (typeof id !== 'string') {
-		return errors.statusNotFound(String(id))
+app.put<'/:id'>(async ({ req, env }) => {
+	if (!env.data.connectedActor) {
+		return errors.notAuthorized('not authorized')
 	}
-	const result = await readBody(request, schema)
+
+	const result = await readBody(req.raw, schema)
 	if (result.success) {
-		const url = new URL(request.url)
+		const url = new URL(req.url)
 		return handleRequestPut(
 			{
 				domain: url.hostname,
 				db: await getDatabase(env),
-				connectedActor,
+				connectedActor: env.data.connectedActor,
 				userKEK: env.userKEK,
 				queue: env.QUEUE,
 				cache: cacheFromEnv(env),
 			},
-			id,
+			req.param('id'),
 			result.data
 		)
 	}
@@ -89,28 +88,24 @@ export const onRequestPut: PagesFunction<Env, 'id', ContextData> = async ({
 		return errors.validationError(`Validation failed: ${issue.path[0]} ${issue.code}`)
 	}
 	return new Response('', { status: 400 })
-}
+})
 
-export const onRequestDelete: PagesFunction<Env, 'id', ContextData> = async ({
-	params: { id },
-	env,
-	request,
-	data,
-}) => {
-	if (typeof id !== 'string') {
-		return errors.statusNotFound(String(id))
+app.delete<'/:id'>(async ({ req, env }) => {
+	if (!env.data.connectedActor) {
+		return errors.notAuthorized('not authorized')
 	}
-	const domain = new URL(request.url).hostname
+
+	const domain = new URL(req.url).hostname
 	return handleRequestDelete(
 		await getDatabase(env),
-		id,
-		data.connectedActor,
+		req.param('id'),
+		env.data.connectedActor,
 		domain,
 		env.userKEK,
 		env.QUEUE,
 		cacheFromEnv(env)
 	)
-}
+})
 
 export async function handleRequestGet(
 	db: Database,
@@ -244,3 +239,5 @@ export async function handleRequestDelete(
 
 	return new Response(JSON.stringify(status), { headers })
 }
+
+export default app

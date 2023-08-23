@@ -1,14 +1,22 @@
 // https://docs.joinmastodon.org/methods/notifications/#get
 
+import { Hono } from 'hono'
+
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import type { Cache } from 'wildebeest/backend/src/cache'
 import { cacheFromEnv } from 'wildebeest/backend/src/cache'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import { notAuthorized } from 'wildebeest/backend/src/errors'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
-export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request, env, data }) => {
-	return handleRequest(request, cacheFromEnv(env), data.connectedActor)
-}
+const app = new Hono<HonoEnv>()
+
+app.get(async ({ req, env }) => {
+	if (!env.data.connectedActor) {
+		return notAuthorized('not authorized')
+	}
+	return handleRequest(req.raw, cacheFromEnv(env), env.data.connectedActor)
+})
 
 const headers = {
 	...cors(),
@@ -30,3 +38,5 @@ export async function handleRequest(request: Request, cache: Cache, connectedAct
 	}
 	return new Response(JSON.stringify(notifications), { headers })
 }
+
+export default app

@@ -1,23 +1,32 @@
 // https://docs.joinmastodon.org/methods/accounts/#verify_credentials
 
+import { Hono } from 'hono'
+
 import { getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import { getPreference, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import type { CredentialAccount } from 'wildebeest/backend/src/types/account'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 
-export const onRequest: PagesFunction<Env, any, ContextData> = async ({ data, env }) => {
-	if (!data.connectedActor) {
+const headers = {
+	...cors(),
+	'content-type': 'application/json; charset=utf-8',
+}
+
+const app = new Hono<HonoEnv>()
+
+app.get(async ({ env }) => {
+	if (!env.data.connectedActor) {
 		return errors.notAuthorized('no connected user')
 	}
 	const db = await getDatabase(env)
-	const user = await loadLocalMastodonAccount(db, data.connectedActor, {
-		...actorToHandle(data.connectedActor),
+	const user = await loadLocalMastodonAccount(db, env.data.connectedActor, {
+		...actorToHandle(env.data.connectedActor),
 		domain: null,
 	})
-	const preference = await getPreference(db, data.connectedActor)
+	const preference = await getPreference(db, env.data.connectedActor)
 
 	const res: CredentialAccount = {
 		...user,
@@ -41,9 +50,7 @@ export const onRequest: PagesFunction<Env, any, ContextData> = async ({ data, en
 		},
 	}
 
-	const headers = {
-		...cors(),
-		'content-type': 'application/json; charset=utf-8',
-	}
 	return new Response(JSON.stringify(res), { headers })
-}
+})
+
+export default app

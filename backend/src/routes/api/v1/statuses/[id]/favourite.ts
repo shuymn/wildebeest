@@ -1,5 +1,7 @@
 // https://docs.joinmastodon.org/methods/statuses/#favourite
 
+import { Hono } from 'hono'
+
 import { createLikeActivity } from 'wildebeest/backend/src/activitypub/activities/like'
 import { getAndCacheActor, type Person } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
@@ -12,15 +14,26 @@ import {
 } from 'wildebeest/backend/src/activitypub/objects'
 import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import { notAuthorized } from 'wildebeest/backend/src/errors'
 import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
 import { insertLike } from 'wildebeest/backend/src/mastodon/like'
 import { toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
-export const onRequest: PagesFunction<Env, any, ContextData> = async ({ env, data, params, request }) => {
-	const domain = new URL(request.url).hostname
-	return handleRequest(await getDatabase(env), params.id as string, data.connectedActor, env.userKEK, domain)
+const app = new Hono<HonoEnv>()
+
+app.get<'/:id/favourite'>(async ({ req, env }) => {
+	if (!env.data.connectedActor) {
+		return notAuthorized('not authorized')
+	}
+	const domain = new URL(req.url).hostname
+	return handleRequest(await getDatabase(env), req.param('id'), env.data.connectedActor, env.userKEK, domain)
+})
+
+const headers = {
+	...cors(),
+	'content-type': 'application/json; charset=utf-8',
 }
 
 export async function handleRequest(
@@ -55,9 +68,7 @@ export async function handleRequest(
 	await insertLike(db, connectedActor, obj)
 	status.favourited = true
 
-	const headers = {
-		...cors(),
-		'content-type': 'application/json; charset=utf-8',
-	}
 	return new Response(JSON.stringify(status), { headers })
 }
+
+export default app

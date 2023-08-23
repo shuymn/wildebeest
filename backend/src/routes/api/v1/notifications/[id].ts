@@ -1,5 +1,7 @@
 // https://docs.joinmastodon.org/methods/notifications/#get-one
 
+import { Hono } from 'hono'
+
 import { isLocalAccount } from 'wildebeest/backend/src/accounts'
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
@@ -16,7 +18,7 @@ import { statusNotFound } from 'wildebeest/backend/src/errors'
 import { loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import { actorToMention, detectVisibility } from 'wildebeest/backend/src/mastodon/status'
 import { fromObject } from 'wildebeest/backend/src/media'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { isNotificationType, type Notification } from 'wildebeest/backend/src/types/notification'
 import { HTTPS } from 'wildebeest/backend/src/utils'
 import { actorToHandle, handleToAcct } from 'wildebeest/backend/src/utils/handle'
@@ -25,13 +27,15 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
-export const onRequest: PagesFunction<Env, 'id', ContextData> = async ({ data, request, env, params: { id } }) => {
-	if (typeof id !== 'string') {
-		return statusNotFound('id')
+const app = new Hono<HonoEnv>()
+
+app.get<'/:id'>(async ({ req, env }) => {
+	if (!env.data.connectedActor) {
+		return statusNotFound('not authorized')
 	}
-	const domain = new URL(request.url).hostname
-	return handleRequest(domain, id, await getDatabase(env), data.connectedActor)
-}
+	const domain = new URL(req.url).hostname
+	return handleRequest(domain, req.param('id'), await getDatabase(env), env.data.connectedActor)
+})
 
 export async function handleRequest(
 	domain: string,
@@ -161,3 +165,5 @@ export async function handleRequest(
 
 	return new Response(JSON.stringify(out), { headers })
 }
+
+export default app

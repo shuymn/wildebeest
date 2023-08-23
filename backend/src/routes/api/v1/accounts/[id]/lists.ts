@@ -1,18 +1,13 @@
 // https://docs.joinmastodon.org/methods/accounts/#lists
 
-import { resourceNotFound } from 'wildebeest/backend/src/errors'
-import { ContextData, Env } from 'wildebeest/backend/src/types'
-import { cors } from 'wildebeest/backend/src/utils/cors'
+import { Hono } from 'hono'
 
-const headers = {
-	...cors(),
-	'content-type': 'application/json; charset=utf-8',
-}
+import { corsMiddleware } from 'wildebeest/backend/src/middleware'
+import { HonoEnv } from 'wildebeest/backend/src/types'
+
+const app = new Hono<HonoEnv>()
 
 // TODO: implement
-export const onRequestGet: PagesFunction<Env, 'id', ContextData> = async ({ params: { id } }) => {
-	if (typeof id !== 'string') {
-		return resourceNotFound('id', String(id))
-	}
-	return new Response(JSON.stringify([]), { headers })
-}
+app.get<'/:id/lists'>(corsMiddleware(), (c) => c.json([]))
+
+export default app

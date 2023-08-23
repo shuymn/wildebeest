@@ -1,8 +1,10 @@
-const headers = {
-	'content-type': 'application/json; charset=utf-8',
-}
+import { Hono } from 'hono'
 
-export const onRequest = async () => {
-	const out: Array<any> = []
-	return new Response(JSON.stringify(out), { headers })
-}
+import { HonoEnv } from 'wildebeest/backend/src/types'
+
+const app = new Hono<HonoEnv>()
+
+// TODO: implement
+app.get((c) => c.json([]))
+
+export default app

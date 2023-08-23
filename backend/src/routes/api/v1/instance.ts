@@ -1,25 +1,29 @@
+import { Hono } from 'hono'
+
 import { getAdminByEmail } from 'wildebeest/backend/src/accounts'
 import { DEFAULT_THUMBNAIL } from 'wildebeest/backend/src/config'
 import { getRules } from 'wildebeest/backend/src/config/rules'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import type { Env } from 'wildebeest/backend/src/types'
+import type { Env, HonoEnv } from 'wildebeest/backend/src/types'
 import type { InstanceConfig } from 'wildebeest/backend/src/types/configs'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
 import { getVersion } from 'wildebeest/config/versions'
 
-export const onRequest: PagesFunction<Env, any> = async ({ env, request }) => {
-	const domain = new URL(request.url).hostname
+const app = new Hono<HonoEnv>()
+
+app.get(async ({ req, env }) => {
+	const domain = new URL(req.url).hostname
 	return handleRequest(domain, await getDatabase(env), env)
+})
+
+const headers = {
+	...cors(),
+	'content-type': 'application/json; charset=utf-8',
 }
 
 export async function handleRequest(domain: string, db: Database, env: Env) {
-	const headers = {
-		...cors(),
-		'content-type': 'application/json; charset=utf-8',
-	}
-
 	// TODO: make it more configurable
 	const res: InstanceConfig = {
 		uri: domain,
@@ -78,3 +82,5 @@ export async function handleRequest(domain: string, db: Database, env: Env) {
 
 	return new Response(JSON.stringify(res), { headers })
 }
+
+export default app

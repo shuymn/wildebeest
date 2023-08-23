@@ -1,12 +1,14 @@
+import { Hono } from 'hono'
+
 import { UndoActivity } from 'wildebeest/backend/src/activitypub/activities'
 import { createUnfollowActivity } from 'wildebeest/backend/src/activitypub/activities/undo'
 import { getActorByMastodonId, type Person } from 'wildebeest/backend/src/activitypub/actors'
 import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { resourceNotFound } from 'wildebeest/backend/src/errors'
+import { notAuthorized, resourceNotFound } from 'wildebeest/backend/src/errors'
 import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
 import { isFollowingOrFollowingRequested, removeFollowing } from 'wildebeest/backend/src/mastodon/follow'
-import type { ContextData, Env, MastodonId } from 'wildebeest/backend/src/types'
+import type { HonoEnv, MastodonId } from 'wildebeest/backend/src/types'
 import type { Relationship } from 'wildebeest/backend/src/types/account'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import { actorToHandle, isLocalHandle } from 'wildebeest/backend/src/utils/handle'
@@ -23,18 +25,18 @@ type Dependencies = {
 	userKEK: string
 }
 
-export const onRequestPost: PagesFunction<Env, 'id', ContextData> = async ({
-	request,
-	env,
-	params: { id },
-	data: { connectedActor },
-}) => {
-	if (typeof id !== 'string') {
-		return resourceNotFound('id', String(id))
+const app = new Hono<HonoEnv>()
+
+app.post<'/:id/unfollow'>(async ({ req, env }) => {
+	if (!env.data.connectedActor) {
+		return notAuthorized('not authorized')
 	}
-	const url = new URL(request.url)
-	return handleRequest({ domain: url.hostname, db: await getDatabase(env), connectedActor, userKEK: env.userKEK }, id)
-}
+	const url = new URL(req.url)
+	return handleRequest(
+		{ domain: url.hostname, db: await getDatabase(env), connectedActor: env.data.connectedActor, userKEK: env.userKEK },
+		req.param('id')
+	)
+})
 
 export async function handleRequest(
 	{ domain, db, connectedActor, userKEK }: Dependencies,
@@ -78,3 +80,5 @@ export async function handleRequest(
 	}
 	return new Response(JSON.stringify(res), { headers })
 }
+
+export default app

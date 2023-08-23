@@ -1,9 +1,10 @@
+import { Hono } from 'hono'
 import { z } from 'zod'
 
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { resourceNotFound } from 'wildebeest/backend/src/errors'
 import { getPublicTimeline, getStatusRange, LocalPreference } from 'wildebeest/backend/src/mastodon/timeline'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { cors, myz, readParams } from 'wildebeest/backend/src/utils'
 
 const headers = {
@@ -28,13 +29,15 @@ type Dependencies = {
 	db: Database
 }
 
-export const onRequest: PagesFunction<Env, '', ContextData> = async ({ request, env }) => {
-	const result = await readParams(request, schema)
+const app = new Hono<HonoEnv>()
+
+app.get(async ({ req, env }) => {
+	const result = await readParams(req.raw, schema)
 	if (result.success) {
-		return handleRequest({ domain: new URL(request.url).hostname, db: await getDatabase(env) }, result.data)
+		return handleRequest({ domain: new URL(req.url).hostname, db: await getDatabase(env) }, result.data)
 	}
 	return new Response('', { status: 400 })
-}
+})
 
 export async function handleRequest({ domain, db }: Dependencies, params: Parameters): Promise<Response> {
 	const localPreference = params.local
@@ -65,3 +68,5 @@ export async function handleRequest({ domain, db }: Dependencies, params: Parame
 	)
 	return new Response(JSON.stringify(statuses), { headers })
 }
+
+export default app

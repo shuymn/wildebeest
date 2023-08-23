@@ -1,9 +1,13 @@
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import { Hono } from 'hono'
 
-export const onRequestGet: PagesFunction<Env, any, ContextData> = async ({ env }) => {
+import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
+
+const app = new Hono<HonoEnv>()
+
+app.get(async ({ env }) => {
 	return handleRequestGet(await getDatabase(env))
-}
+})
 
 export async function handleRequestGet(db: Database) {
 	const query = `SELECT * from server_rules;`
@@ -15,3 +19,5 @@ export async function handleRequestGet(db: Database) {
 
 	return new Response(JSON.stringify(result.results ?? []), { status: 200 })
 }
+
+export default app

@@ -1,5 +1,6 @@
 // https://docs.joinmastodon.org/methods/statuses/#create
 
+import { Hono } from 'hono'
 import { z } from 'zod'
 
 import { createCreateActivity } from 'wildebeest/backend/src/activitypub/activities/create'
@@ -18,7 +19,7 @@ import {
 } from 'wildebeest/backend/src/activitypub/objects/note'
 import { Cache, cacheFromEnv } from 'wildebeest/backend/src/cache'
 import { Database, getDatabase } from 'wildebeest/backend/src/database'
-import { exceededLimit, statusNotFound, validationError } from 'wildebeest/backend/src/errors'
+import { exceededLimit, notAuthorized, statusNotFound, validationError } from 'wildebeest/backend/src/errors'
 import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
 import { getHashtags, insertHashtags } from 'wildebeest/backend/src/mastodon/hashtag'
 import * as idempotency from 'wildebeest/backend/src/mastodon/idempotency'
@@ -31,7 +32,7 @@ import {
 	toMastodonStatusFromObject,
 } from 'wildebeest/backend/src/mastodon/status'
 import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
-import { ContextData, DeliverMessageBody, Env, Queue, Visibility } from 'wildebeest/backend/src/types'
+import { DeliverMessageBody, HonoEnv, Queue, Visibility } from 'wildebeest/backend/src/types'
 import { cors, myz, readBody } from 'wildebeest/backend/src/utils'
 import { PartialProps } from 'wildebeest/backend/src/utils/type'
 
@@ -66,25 +67,27 @@ type Dependencies = {
 	cache: Cache
 }
 
-export const onRequestPost: PagesFunction<Env, '', ContextData> = async ({
-	request,
-	env,
-	data: { connectedActor },
-}) => {
-	const result = await readBody(request, schema)
+const app = new Hono<HonoEnv>()
+
+app.post(async ({ req, env }) => {
+	if (!env.data.connectedActor) {
+		return notAuthorized('not authorized')
+	}
+
+	const result = await readBody(req.raw, schema)
 	if (result.success) {
-		const url = new URL(request.url)
+		const url = new URL(req.url)
 		return handleRequest(
 			{
 				domain: url.hostname,
 				db: await getDatabase(env),
-				connectedActor,
+				connectedActor: env.data.connectedActor,
 				userKEK: env.userKEK,
 				queue: env.QUEUE,
 				cache: cacheFromEnv(env),
 			},
 			result.data,
-			request.headers.get('Idempotency-Key')
+			req.headers.get('Idempotency-Key')
 		)
 	}
 	const { issues } = result.error
@@ -103,7 +106,7 @@ export const onRequestPost: PagesFunction<Env, '', ContextData> = async ({
 		}
 	}
 	return new Response('', { status: 400 })
-}
+})
 
 // FIXME: add tests for delivery to followers and mentions to a specific Actor.
 export async function handleRequest(
@@ -219,3 +222,5 @@ export async function handleRequest(
 	const res = await toMastodonStatusFromObject(db, note, domain, mentions)
 	return new Response(JSON.stringify(res), { headers })
 }
+
+export default app

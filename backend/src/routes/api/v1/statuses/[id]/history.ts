@@ -1,12 +1,14 @@
 // https://docs.joinmastodon.org/methods/statuses/#history
 
+import { Hono } from 'hono'
+
 import { Actor, getActorById } from 'wildebeest/backend/src/activitypub/actors'
 import { getObjectByMastodonId, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { isNote, Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { Database, getDatabase } from 'wildebeest/backend/src/database'
 import { notAuthorized, recordNotFound, statusNotFound } from 'wildebeest/backend/src/errors'
 import { getStatusRevisions, isVisible } from 'wildebeest/backend/src/mastodon/status'
-import { ContextData, Env, MastodonId, MastodonStatusEdit } from 'wildebeest/backend/src/types'
+import { HonoEnv, MastodonId, MastodonStatusEdit } from 'wildebeest/backend/src/types'
 import { cors, makeJsonResponse, MastodonApiResponse } from 'wildebeest/backend/src/utils'
 
 const headers = {
@@ -20,25 +22,23 @@ type Dependencies = {
 	connectedActor?: Actor
 }
 
-export const onRequestGet: PagesFunction<Env, 'id', Partial<ContextData>> = async ({
-	request,
-	env,
-	params: { id },
-	data: { connectedActor },
-}) => {
-	if (typeof id !== 'string') {
-		return statusNotFound(String(id))
+const app = new Hono<HonoEnv>()
+
+app.get<'/:id/history'>(async ({ req, env }) => {
+	if (!env.data.connectedActor) {
+		return notAuthorized('not authorized')
 	}
-	const url = new URL(request.url)
+
+	const url = new URL(req.url)
 	return handleRequestGet(
 		{
 			domain: url.hostname,
 			db: await getDatabase(env),
-			connectedActor,
+			connectedActor: env.data.connectedActor,
 		},
-		id
+		req.param('id')
 	)
-}
+})
 
 async function handleRequestGet(
 	{ domain, db, connectedActor }: Dependencies,
@@ -70,3 +70,5 @@ async function handleRequestGet(
 	}
 	return makeJsonResponse(await getStatusRevisions(domain, db, author, obj), { headers })
 }
+
+export default app

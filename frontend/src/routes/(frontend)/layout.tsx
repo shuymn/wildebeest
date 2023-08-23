@@ -1,7 +1,7 @@
 import { component$, Slot, useContextProvider } from '@builder.io/qwik'
 import type { Env } from 'wildebeest/backend/src/types'
 import { DocumentHead, Link, routeLoader$ } from '@builder.io/qwik-city'
-import * as instance from 'wildebeest/routes/api/v1/instance'
+import * as instance from 'wildebeest/backend/src/routes/api/v1/instance'
 import type { InstanceConfig } from 'wildebeest/backend/src/types/configs'
 import LeftColumn from '~/components/layout/LeftColumn/LeftColumn'
 import RightColumn from '~/components/layout/RightColumn/RightColumn'

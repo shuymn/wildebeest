@@ -9,7 +9,7 @@ import { getAccount } from 'wildebeest/backend/src/accounts/account'
 import { getNotFoundHtml } from '~/utils/getNotFoundHtml/getNotFoundHtml'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
 import { getDocumentHead } from '~/utils/getDocumentHead'
-import * as statusAPI from 'wildebeest/routes/api/v1/statuses/[id]'
+import * as statusAPI from 'wildebeest/backend/src/routes/api/v1/statuses/[id]'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { Person } from 'wildebeest/backend/src/activitypub/actors'
 

@@ -1,16 +1,20 @@
 // https://docs.joinmastodon.org/methods/statuses/#context
 
+import { Hono } from 'hono'
+
 import { getObjectByMastodonId } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { getReplies } from 'wildebeest/backend/src/mastodon/reply'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import type { Context } from 'wildebeest/backend/src/types/status'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
-export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request, env, params }) => {
-	const domain = new URL(request.url).hostname
-	return handleRequest(domain, await getDatabase(env), params.id as string)
-}
+const app = new Hono<HonoEnv>()
+
+app.get<'/:id/context'>(async ({ req, env }) => {
+	const domain = new URL(req.url).hostname
+	return handleRequest(domain, await getDatabase(env), req.param('id'))
+})
 
 const headers = {
 	...cors(),
@@ -31,3 +35,5 @@ export async function handleRequest(domain: string, db: Database, id: string): P
 
 	return new Response(JSON.stringify(out), { headers })
 }
+
+export default app

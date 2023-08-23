@@ -1,5 +1,7 @@
 // https://docs.joinmastodon.org/methods/accounts/#update_credentials
 
+import { Hono } from 'hono'
+
 import { createUpdateActivity } from 'wildebeest/backend/src/activitypub/activities/update'
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
@@ -10,7 +12,7 @@ import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import * as errors from 'wildebeest/backend/src/errors'
 import { getPreference, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import * as images from 'wildebeest/backend/src/media/image'
-import type { ContextData, DeliverMessageBody, Env, Queue } from 'wildebeest/backend/src/types'
+import type { DeliverMessageBody, HonoEnv, Queue } from 'wildebeest/backend/src/types'
 import type { CredentialAccount } from 'wildebeest/backend/src/types/account'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
@@ -20,17 +22,22 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
-export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request, data, env }) => {
+const app = new Hono<HonoEnv>()
+
+app.patch(async ({ req, env }) => {
+	if (!env.data.connectedActor) {
+		return errors.notAuthorized('no connected user')
+	}
 	return handleRequest(
 		await getDatabase(env),
-		request,
-		data.connectedActor,
+		req.raw,
+		env.data.connectedActor,
 		env.CF_ACCOUNT_ID,
 		env.CF_API_TOKEN,
 		env.userKEK,
 		env.QUEUE
 	)
-}
+})
 
 export async function handleRequest(
 	db: Database,
@@ -43,14 +50,6 @@ export async function handleRequest(
 	userKEK: string,
 	queue: Queue<DeliverMessageBody>
 ): Promise<Response> {
-	if (!connectedActor) {
-		return new Response('', { status: 401 })
-	}
-
-	if (request.method !== 'PATCH') {
-		return new Response('', { headers, status: 400 })
-	}
-
 	const domain = new URL(request.url).hostname
 	const actorId = getApId(connectedActor)
 
@@ -60,12 +59,12 @@ export async function handleRequest(
 
 		if (formData.has('display_name')) {
 			const value = formData.get('display_name')!
-			await updateActorProperty(db, actorId, 'name', value as string)
+			await updateActorProperty(db, actorId, 'name', value)
 		}
 
 		if (formData.has('note')) {
 			const value = formData.get('note')!
-			await updateActorProperty(db, actorId, 'summary', value as string)
+			await updateActorProperty(db, actorId, 'summary', value)
 		}
 
 		if (formData.has('avatar')) {
@@ -125,3 +124,5 @@ export async function handleRequest(
 		return new Response(JSON.stringify(res), { headers })
 	}
 }
+
+export default app

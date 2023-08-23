@@ -1,10 +1,10 @@
-// https://docs.joinmastodon.org/methods/trends/#links
+import { Hono } from 'hono'
 
-const headers = {
-	'content-type': 'application/json; charset=utf-8',
-}
+import { HonoEnv } from 'wildebeest/backend/src/types'
 
-export const onRequest = async () => {
-	const out: Array<any> = []
-	return new Response(JSON.stringify(out), { headers })
-}
+const app = new Hono<HonoEnv>()
+
+// TODO: implement
+app.get((c) => c.json([]))
+
+export default app

@@ -1,3 +1,4 @@
+import { Hono } from 'hono'
 import { z } from 'zod'
 
 import { isLocalAccount } from 'wildebeest/backend/src/accounts'
@@ -6,10 +7,10 @@ import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { resourceNotFound, unprocessableEntity } from 'wildebeest/backend/src/errors'
+import { notAuthorized, resourceNotFound, unprocessableEntity } from 'wildebeest/backend/src/errors'
 import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
 import { addFollowing, isNotFollowing } from 'wildebeest/backend/src/mastodon/follow'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import type { Relationship } from 'wildebeest/backend/src/types/account'
 import { myz, readBody } from 'wildebeest/backend/src/utils'
 import { cors } from 'wildebeest/backend/src/utils/cors'
@@ -35,18 +36,15 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
+const app = new Hono<HonoEnv>()
+
 // TODO: support request form parameters
-export const onRequestPost: PagesFunction<Env, 'id', ContextData> = async ({
-	request,
-	env,
-	params: { id },
-	data: { connectedActor },
-}) => {
-	if (typeof id !== 'string') {
-		return resourceNotFound('id', String(id))
+app.post<'/:id/follow'>(async ({ req, env }) => {
+	if (!env.data.connectedActor) {
+		return notAuthorized('not authorized')
 	}
 
-	const result = await readBody(request, schema)
+	const result = await readBody(req.raw, schema)
 	if (!result.success) {
 		const [issue] = result.error.issues
 		return unprocessableEntity(`${issue?.path.join('.')}: ${issue?.message}`)
@@ -54,15 +52,15 @@ export const onRequestPost: PagesFunction<Env, 'id', ContextData> = async ({
 
 	return handleRequest(
 		{
-			domain: new URL(request.url).hostname,
+			domain: new URL(req.url).hostname,
 			db: await getDatabase(env),
-			connectedActor,
+			connectedActor: env.data.connectedActor,
 			userKEK: env.userKEK,
 		},
-		id,
+		req.param('id'),
 		result.data
 	)
-}
+})
 
 export async function handleRequest(
 	{ domain, db, connectedActor, userKEK }: Dependencies,
@@ -106,3 +104,5 @@ export async function handleRequest(
 	}
 	return new Response(JSON.stringify(res), { headers })
 }
+
+export default app

@@ -1,7 +1,7 @@
 import { $, component$ } from '@builder.io/qwik'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { MastodonStatus } from '~/types'
-import * as timelines from 'wildebeest/routes/api/v1/timelines/public'
+import * as timelines from 'wildebeest/backend/src/routes/api/v1/timelines/public'
 import { DocumentHead, routeLoader$ } from '@builder.io/qwik-city'
 import StickyHeader from '~/components/StickyHeader/StickyHeader'
 import { getDocumentHead } from '~/utils/getDocumentHead'

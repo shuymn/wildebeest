@@ -1,12 +1,10 @@
-// https://docs.joinmastodon.org/methods/trends/#statuses
+import { Hono } from 'hono'
 
-import type { MastodonStatus } from 'wildebeest/backend/src/types'
+import { HonoEnv } from 'wildebeest/backend/src/types'
 
-const headers = {
-	'content-type': 'application/json; charset=utf-8',
-}
+const app = new Hono<HonoEnv>()
 
-export const onRequest = async () => {
-	const out: Array<MastodonStatus> = []
-	return new Response(JSON.stringify(out), { headers })
-}
+// TODO: implement
+app.get((c) => c.json([]))
+
+export default app

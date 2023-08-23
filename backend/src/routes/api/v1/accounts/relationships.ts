@@ -1,11 +1,13 @@
 // https://docs.joinmastodon.org/methods/accounts/#relationships
 
+import { Hono } from 'hono'
 import { z } from 'zod'
 
 import type { Person } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
+import { notAuthorized } from 'wildebeest/backend/src/errors'
 import { getFollowingMastodonIds, getFollowingRequestedMastodonIds } from 'wildebeest/backend/src/mastodon/follow'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { cors, readParams } from 'wildebeest/backend/src/utils'
 
 const headers = {
@@ -24,13 +26,19 @@ type Dependencies = {
 	connectedActor: Person
 }
 
-export const onRequestGet: PagesFunction<Env, '', ContextData> = async ({ request, env, data: { connectedActor } }) => {
-	const result = await readParams(request, schema)
+const app = new Hono<HonoEnv>()
+
+app.get(async ({ req, env }) => {
+	if (!env.data.connectedActor) {
+		return notAuthorized('not authorized')
+	}
+
+	const result = await readParams(req.raw, schema)
 	if (!result.success) {
 		return new Response('', { status: 400 })
 	}
-	return handleRequest({ db: await getDatabase(env), connectedActor }, result.data)
-}
+	return handleRequest({ db: await getDatabase(env), connectedActor: env.data.connectedActor }, result.data)
+})
 
 export async function handleRequest({ db, connectedActor }: Dependencies, params: Parameters): Promise<Response> {
 	const ids = Array.isArray(params.id) ? params.id : [params.id]
@@ -59,3 +67,5 @@ export async function handleRequest({ db, connectedActor }: Dependencies, params
 		{ headers }
 	)
 }
+
+export default app

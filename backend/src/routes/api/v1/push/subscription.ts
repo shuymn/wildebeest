@@ -1,3 +1,5 @@
+import { Hono } from 'hono'
+
 import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
 import { getVAPIDKeys } from 'wildebeest/backend/src/config'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
@@ -5,30 +7,38 @@ import * as errors from 'wildebeest/backend/src/errors'
 import { getClientById } from 'wildebeest/backend/src/mastodon/client'
 import type { CreateRequest } from 'wildebeest/backend/src/mastodon/subscription'
 import { createSubscription, getSubscription, VAPIDPublicKey } from 'wildebeest/backend/src/mastodon/subscription'
-import { ContextData, Env } from 'wildebeest/backend/src/types'
+import { HonoEnv } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
-export const onRequestGet: PagesFunction<Env, any, ContextData> = async ({ request, env, data }) => {
-	return handleGetRequest(await getDatabase(env), request, data.connectedActor, data.clientId, getVAPIDKeys(env))
-}
+const app = new Hono<HonoEnv>()
 
-export const onRequestPost: PagesFunction<Env, any, ContextData> = async ({ request, env, data }) => {
-	return handlePostRequest(await getDatabase(env), request, data.connectedActor, data.clientId, getVAPIDKeys(env))
-}
+app.get(async ({ env }) => {
+	if (!env.data.connectedActor || !env.data.clientId) {
+		return errors.notAuthorized('not authorized')
+	}
+	return handleGetRequest(await getDatabase(env), env.data.connectedActor, env.data.clientId, getVAPIDKeys(env))
+})
+
+app.post(async ({ req, env }) => {
+	if (!env.data.connectedActor || !env.data.clientId) {
+		return errors.notAuthorized('not authorized')
+	}
+	return handlePostRequest(
+		await getDatabase(env),
+		req.raw,
+		env.data.connectedActor,
+		env.data.clientId,
+		getVAPIDKeys(env)
+	)
+})
 
 const headers = {
 	...cors(),
 	'content-type': 'application/json; charset=utf-8',
 }
 
-export async function handleGetRequest(
-	db: Database,
-	request: Request,
-	connectedActor: Actor,
-	clientId: string,
-	vapidKeys: JWK
-) {
+export async function handleGetRequest(db: Database, connectedActor: Actor, clientId: string, vapidKeys: JWK) {
 	const client = await getClientById(db, clientId)
 	if (client === null) {
 		return errors.notAuthorized('the access token is invalid')
@@ -85,3 +95,5 @@ export async function handlePostRequest(
 
 	return new Response(JSON.stringify(res), { headers })
 }
+
+export default app

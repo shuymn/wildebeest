@@ -1,4 +1,5 @@
 // https://docs.joinmastodon.org/methods/statuses/#boost
+import { Hono } from 'hono'
 import { z } from 'zod'
 
 import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
@@ -14,11 +15,11 @@ import {
 } from 'wildebeest/backend/src/activitypub/objects'
 import { isNote, type Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { recordNotFound } from 'wildebeest/backend/src/errors'
+import { notAuthorized, recordNotFound } from 'wildebeest/backend/src/errors'
 import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
 import { createReblog } from 'wildebeest/backend/src/mastodon/reblog'
 import { toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
-import type { ContextData, DeliverMessageBody, Env, Queue, Visibility } from 'wildebeest/backend/src/types'
+import type { DeliverMessageBody, HonoEnv, Queue, Visibility } from 'wildebeest/backend/src/types'
 import { readBody } from 'wildebeest/backend/src/utils'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
@@ -35,27 +36,29 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
-export const onRequest: PagesFunction<Env, 'id', ContextData> = async ({ env, data, params: { id }, request }) => {
-	if (typeof id !== 'string') {
-		return new Response('', { status: 400 })
+const app = new Hono<HonoEnv>()
+
+app.post<'/:id/reblog'>(async ({ req, env }) => {
+	if (!env.data.connectedActor) {
+		return notAuthorized('not authorized')
 	}
 
-	const result = await readBody(request, schema)
+	const result = await readBody(req.raw, schema)
 	if (!result.success) {
 		return new Response('', { status: 400 })
 	}
 
-	const url = new URL(request.url)
+	const url = new URL(req.url)
 	return handleRequest(
 		await getDatabase(env),
-		id,
-		data.connectedActor,
+		req.param('id'),
+		env.data.connectedActor,
 		env.userKEK,
 		env.QUEUE,
 		url.hostname,
 		result.data
 	)
-}
+})
 
 export async function handleRequest(
 	db: Database,
@@ -156,3 +159,5 @@ function reblogNotAllowed(
 
 	return visibility === 'direct'
 }
+
+export default app

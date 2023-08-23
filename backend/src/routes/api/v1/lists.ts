@@ -1,11 +1,10 @@
-import { cors } from 'wildebeest/backend/src/utils'
+import { Hono } from 'hono'
 
-const headers = {
-	...cors(),
-	'content-type': 'application/json; charset=utf-8',
-}
+import { HonoEnv } from 'wildebeest/backend/src/types'
+
+const app = new Hono<HonoEnv>()
 
 // TODO: implement
-export const onRequestGet = async () => {
-	return new Response(JSON.stringify([]), { headers })
-}
+app.get((c) => c.json([]))
+
+export default app

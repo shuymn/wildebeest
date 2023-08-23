@@ -1,5 +1,6 @@
 // https://docs.joinmastodon.org/methods/accounts/#followers
 
+import { Hono } from 'hono'
 import { z } from 'zod'
 
 import { isLocalAccount } from 'wildebeest/backend/src/accounts'
@@ -9,7 +10,7 @@ import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { resourceNotFound } from 'wildebeest/backend/src/errors'
 import { loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
 import { getFollowerIds } from 'wildebeest/backend/src/mastodon/follow'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { MastodonAccount } from 'wildebeest/backend/src/types/account'
 import { cors, makeJsonResponse, MastodonApiResponse, readParams } from 'wildebeest/backend/src/utils'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
@@ -30,18 +31,17 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
+const app = new Hono<HonoEnv>()
+
 // TODO: support pagination
-export const onRequestGet: PagesFunction<Env, 'id', ContextData> = async ({ params: { id }, request, env }) => {
-	if (typeof id !== 'string') {
-		return resourceNotFound('id', String(id))
-	}
-	const result = await readParams(request, schema)
+app.get<'/:id/followers'>(async ({ req, env }) => {
+	const result = await readParams(req.raw, schema)
 	if (!result.success) {
 		throw new Error('failed to read params')
 	}
-	const url = new URL(request.url)
-	return handleRequest({ domain: url.hostname, db: await getDatabase(env) }, id, result.data)
-}
+	const url = new URL(req.url)
+	return handleRequest({ domain: url.hostname, db: await getDatabase(env) }, req.param('id'), result.data)
+})
 
 export async function handleRequest(
 	{ domain, db }: Dependencies,
@@ -82,3 +82,5 @@ async function get(
 	})
 	return makeJsonResponse(await Promise.all(promises), { headers })
 }
+
+export default app

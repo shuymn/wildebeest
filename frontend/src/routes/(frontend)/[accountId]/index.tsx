@@ -7,7 +7,7 @@ import { StatusesPanel } from '~/components/StatusesPanel/StatusesPanel'
 import { parseHandle } from 'wildebeest/backend/src/utils/handle'
 import { getMastodonIdByRemoteHandle } from 'wildebeest/backend/src/accounts/account'
 import { getNotFoundHtml } from '~/utils/getNotFoundHtml/getNotFoundHtml'
-import { handleRequest } from 'wildebeest/routes/api/v1/accounts/[id]/statuses'
+import { handleRequest } from 'wildebeest/backend/src/routes/api/v1/accounts/[id]/statuses'
 
 export const useStatuses = routeLoader$(
 	async ({

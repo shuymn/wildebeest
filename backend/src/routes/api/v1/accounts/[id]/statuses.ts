@@ -1,5 +1,6 @@
 // https://docs.joinmastodon.org/methods/accounts/#statuses
 
+import { Hono } from 'hono'
 import { z } from 'zod'
 
 import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
@@ -9,7 +10,7 @@ import { resourceNotFound } from 'wildebeest/backend/src/errors'
 import { isFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { toMastodonStatusesFromRowsWithActor } from 'wildebeest/backend/src/mastodon/status'
 import { getStatusRange } from 'wildebeest/backend/src/mastodon/timeline'
-import type { ContextData, Env, MastodonId } from 'wildebeest/backend/src/types'
+import type { HonoEnv, MastodonId } from 'wildebeest/backend/src/types'
 import { cors, myz, readParams } from 'wildebeest/backend/src/utils'
 
 const headers = {
@@ -52,26 +53,20 @@ type Dependencies = {
 
 type Parameters = z.infer<typeof schema>
 
-export const onRequestGet: PagesFunction<Env, 'id', Partial<ContextData>> = async ({
-	request,
-	env,
-	params: { id },
-	data,
-}) => {
-	if (typeof id !== 'string') {
-		return resourceNotFound('id', String(id))
-	}
-	const result = await readParams(request, schema)
+const app = new Hono<HonoEnv>()
+
+app.get<'/:id/statuses'>(async ({ req, env }) => {
+	const result = await readParams(req.raw, schema)
 	if (!result.success) {
 		return new Response('', { status: 400 })
 	}
-	const url = new URL(request.url)
+	const url = new URL(req.url)
 	return handleRequest(
-		{ domain: url.hostname, db: await getDatabase(env), connectedActor: data?.connectedActor },
-		id,
+		{ domain: url.hostname, db: await getDatabase(env), connectedActor: env.data.connectedActor ?? undefined },
+		req.param('id'),
 		result.data
 	)
-}
+})
 
 export async function handleRequest(deps: Dependencies, id: MastodonId, params: Parameters): Promise<Response> {
 	const actor = await getActorByMastodonId(deps.db, id)
@@ -186,3 +181,5 @@ LIMIT ?4
 	const statuses = await toMastodonStatusesFromRowsWithActor(domain, db, actor, results)
 	return new Response(JSON.stringify(statuses), { headers })
 }
+
+export default app

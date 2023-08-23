@@ -1,12 +1,14 @@
 // https://docs.joinmastodon.org/methods/apps/#verify_credentials
 
+import { Hono } from 'hono'
+
 import { getVAPIDKeys } from 'wildebeest/backend/src/config'
 import { type Database } from 'wildebeest/backend/src/database'
 import { notAuthorized } from 'wildebeest/backend/src/errors'
 import { Application } from 'wildebeest/backend/src/mastodon'
 import { getClientByClientCredential, getClientById } from 'wildebeest/backend/src/mastodon/client'
 import { VAPIDPublicKey } from 'wildebeest/backend/src/mastodon/subscription'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import { makeJsonResponse, MastodonApiResponse } from 'wildebeest/backend/src/utils/http'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
@@ -21,13 +23,15 @@ type Dependencies = {
 	vapidKeys: JWK
 }
 
-export const onRequestGet: PagesFunction<Env, '', ContextData> = async ({ request, env }) => {
-	const token = request.headers.get('Authorization')?.replace('Bearer ', '')
+const app = new Hono<HonoEnv>()
+
+app.get(async ({ req, env }) => {
+	const token = req.headers.get('Authorization')?.replace('Bearer ', '')
 	if (token) {
 		return handleRequest({ db: env.DATABASE, vapidKeys: getVAPIDKeys(env) }, token)
 	}
 	return notAuthorized('the access token is invalid')
-}
+})
 
 export async function handleRequest(
 	{ db, vapidKeys }: Dependencies,
@@ -42,3 +46,5 @@ export async function handleRequest(
 		{ headers }
 	)
 }
+
+export default app

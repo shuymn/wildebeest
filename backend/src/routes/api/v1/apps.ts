@@ -1,5 +1,6 @@
 // https://docs.joinmastodon.org/methods/apps/#create
 
+import { Hono } from 'hono'
 import { z } from 'zod'
 
 import { getVAPIDKeys } from 'wildebeest/backend/src/config'
@@ -8,7 +9,7 @@ import { unprocessableEntity } from 'wildebeest/backend/src/errors'
 import { Application } from 'wildebeest/backend/src/mastodon'
 import { createClient } from 'wildebeest/backend/src/mastodon/client'
 import { VAPIDPublicKey } from 'wildebeest/backend/src/mastodon/subscription'
-import type { Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { makeJsonResponse, MastodonApiResponse, readBody } from 'wildebeest/backend/src/utils'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
@@ -64,13 +65,15 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
-export const onRequestPost: PagesFunction<Env, ''> = async ({ request, env }) => {
-	const result = await readBody(request, schema)
+const app = new Hono<HonoEnv>()
+
+app.post(async ({ req, env }) => {
+	const result = await readBody(req.raw, schema)
 	if (result.success) {
 		return handleRequest(await getDatabase(env), getVAPIDKeys(env), result.data)
 	}
 	return unprocessableEntity(result.error.issues[0]?.message)
-}
+})
 
 export async function handleRequest(
 	db: Database,
@@ -96,3 +99,5 @@ export async function handleRequest(
 		{ headers }
 	)
 }
+
+export default app
