@@ -12,8 +12,8 @@ dependencies:
     specifier: 3.2.2
     version: 3.2.2
   zod:
-    specifier: 3.22.1
-    version: 3.22.1
+    specifier: 3.22.2
+    version: 3.22.2
 
 devDependencies:
   '@cloudflare/pages-plugin-cloudflare-access':
@@ -4041,7 +4041,7 @@ packages:
       workerd: 1.20230724.0
       ws: 8.13.0
       youch: 3.2.3
-      zod: 3.22.1
+      zod: 3.22.2
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -5338,5 +5338,5 @@ packages:
       stacktracey: 2.1.8
     dev: true
 
-  /zod@3.22.1:
-    resolution: {integrity: sha512-+qUhAMl414+Elh+fRNtpU+byrwjDFOS1N7NioLY+tSlcADTx4TkCUua/hxJvxwDXcV4397/nZ420jy4n4+3WUg==}
+  /zod@3.22.2:
+    resolution: {integrity: sha512-wvWkphh5WQsJbVk1tbx1l1Ly4yg+XecD+Mq280uBGt9wa5BKSWf4Mhp6GmrkPixhMxmabYY7RbzlwVP32pbGCg==}
