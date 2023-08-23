@@ -1,13 +1,17 @@
+import { Hono } from 'hono'
+
 import { getUserId } from 'wildebeest/backend/src/accounts'
 import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
 
-export const onRequest: PagesFunction<Env, any, ContextData> = async ({ request, env, params }) => {
-	const domain = new URL(request.url).hostname
-	return handleRequest(domain, await getDatabase(env), params.id as string, env.userKEK)
-}
+const app = new Hono<HonoEnv>()
+
+app.get<'/:id/outbox'>(async ({ req, env }) => {
+	const domain = new URL(req.url).hostname
+	return handleRequest(domain, await getDatabase(env), req.param('id'), env.userKEK)
+})
 
 const headers = {
 	'content-type': 'application/json; charset=utf-8',
@@ -52,3 +56,5 @@ WHERE outbox_objects.actor_id = ? AND objects.type = 'Note'
 	}
 	return new Response(JSON.stringify(out), { headers })
 }
+
+export default app

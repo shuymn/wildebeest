@@ -1,17 +1,21 @@
+import { Hono } from 'hono'
+
 import { getUserId } from 'wildebeest/backend/src/accounts'
-import * as actors from 'wildebeest/backend/src/activitypub/actors'
+import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { getFollowingId } from 'wildebeest/backend/src/mastodon/follow'
-import type { Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
+
+const app = new Hono<HonoEnv>()
+
+app.get<'/:id/following/page'>(async ({ req, env }) => {
+	const domain = new URL(req.url).hostname
+	return handleRequest(domain, await getDatabase(env), req.param('id'))
+})
 
 const headers = {
 	'content-type': 'application/json; charset=utf-8',
-}
-
-export const onRequest: PagesFunction<Env, any> = async ({ params, request, env }) => {
-	const domain = new URL(request.url).hostname
-	return handleRequest(domain, await getDatabase(env), params.id as string)
 }
 
 export async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
@@ -22,7 +26,7 @@ export async function handleRequest(domain: string, db: Database, id: string): P
 	}
 
 	const actorId = getUserId(domain, handle)
-	const actor = await actors.getActorById(db, actorId)
+	const actor = await getActorById(db, actorId)
 	if (actor === null) {
 		return new Response('', { status: 404 })
 	}
@@ -30,12 +34,16 @@ export async function handleRequest(domain: string, db: Database, id: string): P
 	const following = await getFollowingId(db, actor)
 
 	const out = {
-		'@context': 'https://www.w3.org/ns/activitystreams',
-		id: actor.following,
-		type: 'OrderedCollection',
-		totalItems: following.length,
-		first: new URL(actor.following + '/page'),
-		last: new URL(actor.following + '/page?min_id=0'),
+		'@context': ['https://www.w3.org/ns/activitystreams'],
+		id: new URL(actor.following.toString() + '/page'),
+		type: 'OrderedCollectionPage',
+		partOf: actor.following,
+		orderedItems: following,
+
+		// FIXME: stub values
+		prev: 'https://example.com/todo',
 	}
 	return new Response(JSON.stringify(out), { headers })
 }
+
+export default app

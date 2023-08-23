@@ -1,17 +1,21 @@
+import { Hono } from 'hono'
+
 import { getUserId } from 'wildebeest/backend/src/accounts'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { getFollowerIds } from 'wildebeest/backend/src/mastodon/follow'
-import type { Env } from 'wildebeest/backend/src/types'
+import { getFollowingId } from 'wildebeest/backend/src/mastodon/follow'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
+
+const app = new Hono<HonoEnv>()
+
+app.get<'/:id/following'>(async ({ req, env }) => {
+	const domain = new URL(req.url).hostname
+	return handleRequest(domain, await getDatabase(env), req.param('id'))
+})
 
 const headers = {
 	'content-type': 'application/json; charset=utf-8',
-}
-
-export const onRequest: PagesFunction<Env, any> = async ({ params, request, env }) => {
-	const domain = new URL(request.url).hostname
-	return handleRequest(domain, await getDatabase(env), params.id as string)
 }
 
 export async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
@@ -27,15 +31,17 @@ export async function handleRequest(domain: string, db: Database, id: string): P
 		return new Response('', { status: 404 })
 	}
 
-	const followers = await getFollowerIds(db, actor)
+	const following = await getFollowingId(db, actor)
 
 	const out = {
 		'@context': 'https://www.w3.org/ns/activitystreams',
-		id: actor.followers,
+		id: actor.following,
 		type: 'OrderedCollection',
-		totalItems: followers.length,
-		first: new URL(actor.followers + '/page'),
-		last: new URL(actor.followers + '/page?min_id=0'),
+		totalItems: following.length,
+		first: new URL(actor.following.toString() + '/page'),
+		last: new URL(actor.following.toString() + '/page?min_id=0'),
 	}
 	return new Response(JSON.stringify(out), { headers })
 }
+
+export default app

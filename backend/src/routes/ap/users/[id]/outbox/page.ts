@@ -1,3 +1,5 @@
+import { Hono } from 'hono'
+
 import { getUserId } from 'wildebeest/backend/src/accounts'
 import type { Activity } from 'wildebeest/backend/src/activitypub/activities'
 import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
@@ -6,18 +8,16 @@ import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
 import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { resourceNotFound } from 'wildebeest/backend/src/errors'
-import type { ContextData, Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import { isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
 
-export const onRequest: PagesFunction<Env, 'id', ContextData> = async ({ request, env, params: { id } }) => {
-	if (typeof id !== 'string') {
-		return resourceNotFound('id', String(id))
-	}
-	const domain = new URL(request.url).hostname
-	return handleRequest(domain, await getDatabase(env), id)
-}
+const app = new Hono<HonoEnv>()
+
+app.get<'/:id/outbox/page'>(async ({ req, env }) => {
+	const domain = new URL(req.url).hostname
+	return handleRequest(domain, await getDatabase(env), req.param('id'))
+})
 
 const headers = {
 	...cors(),
@@ -65,18 +65,18 @@ LIMIT ?2
 
 	if (results && results.length > 0) {
 		for (const result of results) {
-			const properties =
-				typeof result.properties === 'string' ? JSON.parse(result.properties) : (result.properties as Partial<Note>)
+			let properties: Note
+			if (typeof result.properties === 'string') {
+				properties = JSON.parse(result.properties) as Note
+			} else {
+				properties = result.properties as Note
+			}
 
 			const note = {
-				id: new URL(result.id),
 				atomUri: new URL(result.id),
-				type: 'Note',
 				published: new Date(result.cdate).toISOString(),
 
 				// FIXME: stub
-				sensitive: properties.sensitive ?? false,
-				attachment: [],
 				tag: [],
 				replies: {
 					first: {
@@ -126,7 +126,7 @@ LIMIT ?2
 				votersCount: 'toot:votersCount',
 			},
 		],
-		id: new URL(actor.outbox + '/page'),
+		id: new URL(actor.outbox.toString() + '/page'),
 		type: 'OrderedCollectionPage',
 		partOf: actor.outbox,
 		orderedItems: items,
@@ -136,3 +136,5 @@ LIMIT ?2
 	}
 	return new Response(JSON.stringify(out), { headers })
 }
+
+export default app

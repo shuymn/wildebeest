@@ -1,19 +1,23 @@
+import { Hono } from 'hono'
+
 import { getObjectById, getObjectUrl } from 'wildebeest/backend/src/activitypub/objects'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import type { Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 
-export const onRequest: PagesFunction<Env, any> = async ({ params, request, env }) => {
-	const domain = new URL(request.url).hostname
-	return handleRequest(domain, await getDatabase(env), params.id as string)
-}
+const app = new Hono<HonoEnv>()
+
+app.get<'/:id'>(async ({ req, env }) => {
+	const domain = new URL(req.url).hostname
+	return handleRequest(domain, await getDatabase(env), req.param('id'))
+})
 
 const headers = {
 	...cors(),
 	'content-type': 'application/activity+json; charset=utf-8',
 }
 
-export async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
+async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
 	const obj = await getObjectById(domain, db, getObjectUrl(domain, id))
 	if (obj === null) {
 		return new Response('', { status: 404 })
@@ -39,3 +43,5 @@ export async function handleRequest(domain: string, db: Database, id: string): P
 
 	return new Response(JSON.stringify(res), { status: 200, headers })
 }
+
+export default app

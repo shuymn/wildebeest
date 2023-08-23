@@ -1,14 +1,18 @@
+import { Hono } from 'hono'
+
 import { getUserId, isLocalAccount } from 'wildebeest/backend/src/accounts'
 import * as actors from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import type { Env } from 'wildebeest/backend/src/types'
+import type { HonoEnv } from 'wildebeest/backend/src/types'
 import { cors } from 'wildebeest/backend/src/utils/cors'
 import { parseHandle } from 'wildebeest/backend/src/utils/handle'
 
-export const onRequest: PagesFunction<Env, 'id'> = async ({ params, request, env }) => {
-	const domain = new URL(request.url).hostname
-	return handleRequest(domain, await getDatabase(env), params.id as string)
-}
+const app = new Hono<HonoEnv>()
+
+app.get<'/:id'>(async ({ req, env }) => {
+	const domain = new URL(req.url).hostname
+	return handleRequest(domain, await getDatabase(env), req.param('id'))
+})
 
 const headers = {
 	...cors(),
@@ -48,3 +52,5 @@ export async function handleRequest(domain: string, db: Database, id: string): P
 
 	return new Response(JSON.stringify(res), { status: 200, headers })
 }
+
+export default app
