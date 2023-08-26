@@ -36,7 +36,6 @@
 		"lint": "run-p lint:* --print-label",
 		"lint:frontend": "npm --prefix frontend run lint",
 		"lint:backend": "npx eslint backend --quiet",
-		"lint:routes": "npx eslint routes --quiet",
 		"lint:consumer": "npx eslint consumer --quiet",
 		"lint:do": "npx eslint do --quiet",
 		"build": "corepack pnpm --dir frontend install && npm --prefix frontend run build",
