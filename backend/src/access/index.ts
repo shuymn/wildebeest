@@ -2,7 +2,7 @@
 // - uses the Authorization header to find the Access JWT (instead os Cf-Access-Jwt-Assertion).
 // - prevents loosing the Response.status value across Pages middleware
 
-const isTesting = typeof jest !== 'undefined'
+const isTesting = typeof vitest !== 'undefined'
 
 const textDecoder = new TextDecoder('utf-8')
 

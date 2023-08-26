@@ -8,7 +8,13 @@
 		"paths": {
 			"wildebeest/*": ["./*"]
 		},
-		"types": ["@cloudflare/workers-types", "jest", "vite/client"],
+		"types": [
+			"@cloudflare/workers-types",
+			"vite/client",
+			"vitest/globals",
+			"vitest/importMeta",
+			"vitest-environment-miniflare/globals"
+		],
 		"resolveJsonModule": true,
 		"allowJs": true,
 		"checkJs": false,

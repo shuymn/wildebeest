@@ -17,7 +17,7 @@ import { Handle, LocalHandle } from 'wildebeest/backend/src/utils/handle'
 import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
 import { generateUserKey } from 'wildebeest/backend/src/utils/key-ops'
 
-const isTesting = typeof jest !== 'undefined'
+const isTesting = typeof vitest !== 'undefined'
 
 export function getUserId(domain: string, obj: { preferredUsername: string } | Pick<Handle, 'localPart'>): URL {
 	if ('preferredUsername' in obj) {
