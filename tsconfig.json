@@ -25,6 +25,6 @@
 		"strict": true,
 		"skipLibCheck": true
 	},
-	"exclude": ["node_modules", "./frontend", "./do", "./consumer"],
+	"exclude": ["node_modules", "./frontend"],
 	"include": ["./**/*.ts", "./backend/src/routes/.well-known/*.ts"]
 }
