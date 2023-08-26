@@ -2,12 +2,11 @@
 
 import { Hono } from 'hono'
 
-import { getUserId, isLocalAccount } from 'wildebeest/backend/src/accounts'
-import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
+import { getActorByRemoteHandle } from 'wildebeest/backend/src/activitypub/actors'
 import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { handleToAcct, isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
-import type { WebFingerResponse } from 'wildebeest/backend/src/webfinger'
+import { HonoEnv } from 'wildebeest/backend/src/types'
+import { parseHandle, actorToAcct } from 'wildebeest/backend/src/utils/handle'
+import { WebFingerResponse } from 'wildebeest/backend/src/webfinger'
 
 const app = new Hono<HonoEnv>()
 
@@ -34,14 +33,14 @@ export async function handleRequest(request: Request, db: Database): Promise<Res
 	}
 
 	const handle = parseHandle(parts[1])
-	if (isLocalHandle(handle)) {
+	if (handle.domain === null) {
 		return new Response('', { status: 400 })
 	}
-	if (!isLocalAccount(domain, handle)) {
+	if (handle.domain !== domain) {
 		return new Response('', { status: 404 })
 	}
 
-	const actor = await getActorById(db, getUserId(domain, handle))
+	const actor = await getActorByRemoteHandle(db, handle)
 	if (actor === null) {
 		return new Response('', { status: 404 })
 	}
@@ -49,7 +48,7 @@ export async function handleRequest(request: Request, db: Database): Promise<Res
 	const jsonLink = actor.id.toString()
 
 	const res: WebFingerResponse = {
-		subject: `acct:${handleToAcct(handle)}`,
+		subject: `acct:${actorToAcct(actor)}`,
 		aliases: [jsonLink],
 		links: [
 			{
