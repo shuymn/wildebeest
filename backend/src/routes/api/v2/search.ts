@@ -74,20 +74,17 @@ SELECT
   actors.properties,
   actors.cdate
 FROM actors
-WHERE rowid IN (SELECT rowid FROM search_fts WHERE (preferredUsername MATCH ?1 OR name MATCH ?1) AND type=?2 ORDER BY rank LIMIT 10)
+WHERE rowid IN (SELECT rowid FROM search_fts WHERE (preferredUsername MATCH ?1 OR name MATCH ?1) AND type= ?2 ORDER BY rank LIMIT 10)
         `
 
 		try {
-			const { results, success, error } = await db
-				.prepare(sql)
-				.bind(query.localPart + '*', PERSON)
-				.all<{
-					id: string
-					mastodon_id: string
-					type: typeof PERSON
-					properties: string
-					cdate: string
-				}>()
+			const { results, success, error } = await db.prepare(sql).bind(`"${query.localPart}"*`, PERSON).all<{
+				id: string
+				mastodon_id: string
+				type: typeof PERSON
+				properties: string
+				cdate: string
+			}>()
 			if (!success) {
 				throw new Error('SQL error: ' + error)
 			}
@@ -106,8 +103,13 @@ WHERE rowid IN (SELECT rowid FROM search_fts WHERE (preferredUsername MATCH ?1 O
 					accounts.set(account.id, account)
 				}
 			}
-		} catch (err: any) {
-			console.warn(`failed to search: ${err.stack}`)
+		} catch (err) {
+			if (err instanceof Error) {
+				console.warn(query)
+				console.warn(`failed to search: ${err.stack}`)
+			} else {
+				throw err
+			}
 		}
 	} else {
 		const actor = await getActorByRemoteHandle(db, query)
