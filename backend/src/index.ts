@@ -12,7 +12,7 @@ base.use('*', errorMiddleware())
 
 const app = createApp({ app: base })
 
-if (import.meta.env.DEV) {
+if (import.meta.env.DEV && import.meta.env.NODE_ENV !== 'test') {
 	app.showRoutes()
 }
 
