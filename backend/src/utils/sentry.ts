@@ -3,7 +3,7 @@ import { Toucan } from 'toucan-js'
 import type { Env } from 'wildebeest/backend/src/types'
 
 export function initSentry(request: Request, env: Env, context: { waitUntil: ExecutionContext['waitUntil'] }) {
-	if (env.SENTRY_DSN === '') {
+	if (!env?.SENTRY_DSN) {
 		return null
 	}
 
