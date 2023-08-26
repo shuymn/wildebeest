@@ -34,3 +34,33 @@ async function nextval(db: Database, table: string): Promise<number> {
 	const { value } = (await insertIdSequence(db, { key: table + '_id_seq' })) as { value: number }
 	return value
 }
+
+if (import.meta.vitest) {
+	const { makeDB } = await import('wildebeest/backend/test/utils')
+	test('generateMastodonId', async () => {
+		const db = await makeDB()
+
+		// @ts-expect-error for testing
+		randomBytes = () => '0123456789abcdef0123456789abcdef'
+
+		const id1 = await generateMastodonId(db, 'test', new Date('2022-12-18T14:42:59.001Z'))
+		expect(id1).toBe('109535204409443108')
+		const first = await db
+			.prepare(`SELECT value FROM id_sequences WHERE key = 'test_id_seq'`)
+			.first<{ value: number }>()
+		expect(first?.value).toBe(1)
+
+		const id2 = await generateMastodonId(db, 'test', new Date('2022-12-18T14:42:59.002Z'))
+		expect(id2).toBe('109535204409475804')
+		const second = await db
+			.prepare(`SELECT value FROM id_sequences WHERE key = 'test_id_seq'`)
+			.first<{ value: number }>()
+		expect(second?.value).toBe(2)
+
+		const id3 = await generateMastodonId(db, 'test', new Date('2022-12-18T14:42:59.002Z'))
+		expect(id3 !== id2).toBe(true)
+
+		const id4 = await generateMastodonId(db, 'test', new Date('2022-12-18T14:42:59.003Z'))
+		expect(id4 > id3).toBe(true)
+	})
+}

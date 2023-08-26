@@ -7,15 +7,8 @@ import { getUserByEmail } from 'wildebeest/backend/src/accounts'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { notAuthorized } from 'wildebeest/backend/src/errors'
 import { HonoEnv } from 'wildebeest/backend/src/types'
-import { unique } from 'wildebeest/backend/src/utils'
 
 import { filePathToPath, groupByDirectory } from './file'
-
-export type Route = {
-	method?: '*' | 'GET'
-	path: string
-	dynamic?: boolean
-}
 
 // public routes
 const routes = buildRoute([
@@ -49,7 +42,11 @@ const regExp = new RegExp(`^${root}`)
 
 export const createApp = (options: { app?: Hono<HonoEnv> }): Hono<HonoEnv> => {
 	const ROUTES = import.meta.glob<true, string, { default: Hono }>(
-		['../routes/**/[a-z0-9[-][a-z0-9.[_-]*.ts', '../routes/.well-known/[a-z0-9[-][a-z0-9.[_-]*.ts'],
+		[
+			'../routes/**/[a-z0-9[-][a-z0-9.[_-]*.ts',
+			'../routes/.well-known/[a-z0-9[-][a-z0-9.[_-]*.ts',
+			'!../routes/**/*.test.ts',
+		],
 		{
 			eager: true,
 		}
@@ -96,9 +93,27 @@ export const createApp = (options: { app?: Hono<HonoEnv> }): Hono<HonoEnv> => {
 
 const publicMiddleware = (): MiddlewareHandler<HonoEnv> => {
 	return async (c, next) => {
+		if (import.meta.env.NODE_ENV === 'test') {
+			if (!(c as { env?: { data?: { connectedActor?: unknown } } }).env?.data?.connectedActor) {
+				c.env = {
+					...c.env,
+					data: {
+						connectedActor: null,
+					},
+				}
+			}
+			return next()
+		}
+
 		const authorization = c.req.headers.get('Authorization') || ''
 		const token = authorization.replace('Bearer ', '')
 		if (token === '') {
+			c.env = {
+				...c.env,
+				data: {
+					connectedActor: null,
+				},
+			}
 			return next()
 		}
 		return authorize(c, next, token)
@@ -107,6 +122,13 @@ const publicMiddleware = (): MiddlewareHandler<HonoEnv> => {
 
 const privateMiddleware = (): MiddlewareHandler<HonoEnv> => {
 	return async (c, next) => {
+		if (import.meta.env.NODE_ENV === 'test') {
+			if ((c as { env?: { data?: { connectedActor?: unknown } } }).env?.data?.connectedActor) {
+				return next()
+			}
+			return notAuthorized('missing authorization')
+		}
+
 		const authorization = c.req.headers.get('Authorization') || ''
 		const token = authorization.replace('Bearer ', '')
 		if (token === '') {
@@ -173,10 +195,16 @@ const authorize = async (c: Context<HonoEnv>, next: Next, token: string) => {
 	}
 }
 
-export function buildRoute(routes: Route[]): Map<Required<Route>['method'], RegExp> {
+type Route = {
+	method?: '*' | 'GET'
+	path: string
+	dynamic?: boolean
+}
+
+function buildRoute(routes: Route[]): Map<Required<Route>['method'], RegExp> {
 	const smap = new Map<Required<Route>['method'], string[]>()
 
-	const methods = unique(routes.map((route) => route.method ?? '*'))
+	const methods = [...new Set(routes.map((route) => route.method ?? '*'))]
 	for (const method of methods) {
 		smap.set(method, [])
 	}
@@ -197,4 +225,244 @@ export function buildRoute(routes: Route[]): Map<Required<Route>['method'], RegE
 		remap.set(method, new RegExp(ss.join('|')))
 	}
 	return remap
+}
+
+if (import.meta.vitest) {
+	const { ACCESS_CERTS, TEST_JWT } = await import('wildebeest/backend/test/test-data')
+	const { assertStatus, makeDB, createTestUser, isUrlValid } = await import('wildebeest/backend/test/utils')
+
+	describe('buildRoute', () => {
+		test.each([
+			{
+				title: 'static path, all methods',
+				input: { path: '/foo/bar' } satisfies Route,
+				expect: { key: '*', ok: ['/foo/bar'], ng: ['/', '/foo', '/foo/barbar', '/foo/bar/', '/foo/bar/piyo'] } as const,
+			},
+			{
+				title: 'static path, GET',
+				input: { method: 'GET', path: '/foo/bar' } satisfies Route,
+				expect: {
+					key: 'GET',
+					ok: ['/foo/bar'],
+					ng: ['/', '/foo', '/foo/barbar', '/foo/bar/', '/foo/bar/piyo'],
+				} as const,
+			},
+			{
+				title: 'dynamic path, prefix, all methods',
+				input: { path: '/foo/bar/*', dynamic: true } satisfies Route,
+				expect: {
+					key: '*',
+					ok: ['/foo/bar/piyo', '/foo/bar/a/b/c/d/e/f/g/h'],
+					ng: ['/', '/foo', '/foo/barbar', '/foo/bar/', '/foo/piyo/bar'],
+				} as const,
+			},
+			{
+				title: 'dynamic path, prefix, GET',
+				input: { method: 'GET', path: '/foo/bar/*', dynamic: true } satisfies Route,
+				expect: {
+					key: 'GET',
+					ok: ['/foo/bar/piyo', '/foo/bar/a/b/c/d/e/f/g/h'],
+					ng: ['/', '/foo', '/foo/barbar', '/foo/bar/', '/foo/piyo/bar'],
+				} as const,
+			},
+			{
+				title: 'dynamic path, param, all methods',
+				input: { path: '/foo/bar/:id/piyo', dynamic: true } satisfies Route,
+				expect: {
+					key: '*',
+					ok: ['/foo/bar/a-b-c-d/piyo', '/foo/bar/123/piyo'],
+					ng: [
+						'/',
+						'/foo',
+						'/foo/barbar',
+						'/foo/bar/',
+						'/foo/piyo/bar',
+						'/foo/bar/a/b/c/d/e/f/g/h',
+						'/foo/bar',
+						'/foo/bar/piyo',
+					],
+				} as const,
+			},
+			{
+				title: 'dynamic path, param, GET',
+				input: { method: 'GET', path: '/foo/bar/:id/piyo', dynamic: true } satisfies Route,
+				expect: {
+					key: 'GET',
+					ok: ['/foo/bar/a-b-c-d/piyo', '/foo/bar/123/piyo'],
+					ng: [
+						'/',
+						'/foo',
+						'/foo/barbar',
+						'/foo/bar/',
+						'/foo/piyo/bar',
+						'/foo/bar/a/b/c/d/e/f/g/h',
+						'/foo/bar',
+						'/foo/bar/piyo',
+					],
+				} as const,
+			},
+			{
+				title: 'dynamic path, end with param, all methods',
+				input: { path: '/foo/bar/:id', dynamic: true } satisfies Route,
+				expect: {
+					key: '*',
+					ok: ['/foo/bar/p-i-y-o', '/foo/bar/123'],
+					ng: [
+						'/',
+						'/foo',
+						'/foo/barbar',
+						'/foo/bar/',
+						'/foo/piyo/bar',
+						'/foo/bar/a/b/c/d/e/f/g/h',
+						'/foo/bar/piyo/piyo',
+					],
+				} as const,
+			},
+			{
+				title: 'dynamic path, end with param, GET',
+				input: { method: 'GET', path: '/foo/bar/:id', dynamic: true } satisfies Route,
+				expect: {
+					key: 'GET',
+					ok: ['/foo/bar/p-i-y-o', '/foo/bar/123'],
+					ng: [
+						'/',
+						'/foo',
+						'/foo/barbar',
+						'/foo/bar/',
+						'/foo/piyo/bar',
+						'/foo/bar/a/b/c/d/e/f/g/h',
+						'/foo/bar/piyo/piyo',
+					],
+				} as const,
+			},
+		])('$title', ({ input, expect: { key, ok, ng } }) => {
+			const routes = buildRoute([input])
+			const actual = routes.get(key)
+			expect(actual).toBeDefined()
+			for (const path of ok) {
+				expect(actual!.test(path), String(actual)).toBe(true)
+			}
+			for (const path of ng) {
+				expect(actual!.test(path), path).toBe(false)
+			}
+		})
+	})
+
+	describe('middleware', () => {
+		const userKEK = 'test_kek12'
+		const domain = 'cloudflare.com'
+		const accessDomain = 'access.com'
+		const accessAud = 'abcd'
+
+		test('test no identity', async () => {
+			globalThis.fetch = async (input: RequestInfo) => {
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/certs') {
+						return new Response(JSON.stringify(ACCESS_CERTS))
+					}
+
+					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/get-identity') {
+						return new Response('', { status: 404 })
+					}
+				}
+
+				if (input instanceof URL || typeof input === 'string') {
+					throw new Error('unexpected request to ' + input.toString())
+				} else {
+					throw new Error('unexpected request to ' + input.url)
+				}
+			}
+
+			const db = await makeDB()
+
+			const app = new Hono<HonoEnv>()
+			app.use(privateMiddleware())
+
+			const headers = { authorization: 'Bearer APPID.' + TEST_JWT }
+			const request = new Request('https://example.com', { headers })
+
+			const res = await app.fetch(request, { DATABASE: db })
+			await assertStatus(res, 401)
+		})
+
+		test('test user not found', async () => {
+			globalThis.fetch = async (input: RequestInfo) => {
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/certs') {
+						return new Response(JSON.stringify(ACCESS_CERTS))
+					}
+
+					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/get-identity') {
+						return new Response(
+							JSON.stringify({
+								email: 'some@cloudflare.com',
+							})
+						)
+					}
+				}
+
+				if (input instanceof URL || typeof input === 'string') {
+					throw new Error('unexpected request to ' + input.toString())
+				} else {
+					throw new Error('unexpected request to ' + input.url)
+				}
+			}
+
+			const db = await makeDB()
+
+			const app = new Hono<HonoEnv>()
+			app.use(privateMiddleware())
+
+			const headers = { authorization: 'Bearer APPID.' + TEST_JWT }
+			const request = new Request('https://example.com', { headers })
+
+			const res = await app.fetch(request, { DATABASE: db })
+			await assertStatus(res, 401)
+		})
+
+		test('success passes data and calls next', async () => {
+			globalThis.fetch = async (input: RequestInfo) => {
+				if (input instanceof URL || typeof input === 'string') {
+					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/certs') {
+						return new Response(JSON.stringify(ACCESS_CERTS))
+					}
+
+					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/get-identity') {
+						return new Response(
+							JSON.stringify({
+								email: 'sven@cloudflare.com',
+							})
+						)
+					}
+				}
+
+				if (input instanceof URL || typeof input === 'string') {
+					throw new Error('unexpected request to ' + input.toString())
+				} else {
+					throw new Error('unexpected request to ' + input.url)
+				}
+			}
+
+			const db = await makeDB()
+			await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+
+			const app = new Hono<HonoEnv>()
+			app.get(privateMiddleware(), (c) => {
+				expect(c.env.data.connectedActor).toBeDefined()
+				expect(isUrlValid(c.env.data.connectedActor!.id.toString())).toBe(true)
+				expect(c.env.data.identity).toStrictEqual({ email: 'sven@cloudflare.com' })
+				expect(c.env.data.clientId).toBe('APPID')
+				return c.text('')
+			})
+
+			const headers = { authorization: 'Bearer APPID.' + TEST_JWT }
+			const request = new Request('https://example.com', { headers })
+
+			vi.stubEnv('NODE_ENV', 'not-test')
+			const res = await app.fetch(request, { DATABASE: db, ACCESS_AUD: accessAud, ACCESS_AUTH_DOMAIN: accessDomain })
+			vi.unstubAllEnvs()
+
+			await assertStatus(res, 200)
+		})
+	})
 }
