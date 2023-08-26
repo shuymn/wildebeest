@@ -291,16 +291,16 @@ export function actorFromRow<T extends Actor>(row: ActorRow<T>) {
 	// Old local actors weren't created with inbox/outbox/etc properties, so add
 	// them if missing.
 	if (properties.inbox === undefined) {
-		properties.inbox = new URL(id + '/inbox')
+		properties.inbox = new URL(id.toString() + '/inbox')
 	}
 	if (properties.outbox === undefined) {
-		properties.outbox = new URL(id + '/outbox')
+		properties.outbox = new URL(id.toString() + '/outbox')
 	}
 	if (properties.following === undefined) {
-		properties.following = new URL(id + '/following')
+		properties.following = new URL(id.toString() + '/following')
 	}
 	if (properties.followers === undefined) {
-		properties.followers = new URL(id + '/followers')
+		properties.followers = new URL(id.toString() + '/followers')
 	}
 
 	return {

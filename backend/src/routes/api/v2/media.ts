@@ -25,6 +25,11 @@ app.post(async ({ req: { raw: request }, env }) => {
 	)
 })
 
+const headers = {
+	...cors(),
+	'content-type': 'application/json; charset=utf-8',
+}
+
 export async function handleRequestPost(
 	request: Request,
 	db: Database,
@@ -40,13 +45,9 @@ export async function handleRequestPost(
 	const config = { accountId, apiToken }
 	const url = await media.uploadUserContent(request, config)
 
-	const properties = {
-		url,
-	}
 	const domain = new URL(request.url).hostname
-	const image = await createImage(domain, db, connectedActor, properties)
+	const image = await createImage(domain, db, connectedActor, { url })
 	const imageUrl = getApUrl(image)
-	console.log({ image })
 
 	const res: MediaAttachment = {
 		id: image[mastodonIdSymbol]!,
@@ -75,10 +76,6 @@ export async function handleRequestPost(
 		blurhash: 'UFBWY:8_0Jxv4mx]t8t64.%M-:IUWGWAt6M}',
 	}
 
-	const headers = {
-		...cors(),
-		'content-type': 'application/json; charset=utf-8',
-	}
 	return new Response(JSON.stringify(res), { headers })
 }
 
