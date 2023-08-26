@@ -1,7 +1,5 @@
 import { SingleOrArray } from './type'
-import * as myz from './zod'
 
-export { myz }
 export * from './cors'
 export * from './file'
 export * from './http'

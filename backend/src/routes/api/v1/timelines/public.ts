@@ -5,7 +5,8 @@ import { type Database, getDatabase } from 'wildebeest/backend/src/database'
 import { resourceNotFound } from 'wildebeest/backend/src/errors'
 import { getPublicTimeline, getStatusRange, LocalPreference } from 'wildebeest/backend/src/mastodon/timeline'
 import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { cors, myz, readParams } from 'wildebeest/backend/src/utils'
+import { cors, readParams } from 'wildebeest/backend/src/utils'
+import myz from 'wildebeest/backend/src/utils/zod'
 
 const headers = {
 	...cors(),

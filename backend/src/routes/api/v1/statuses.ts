@@ -33,8 +33,9 @@ import {
 } from 'wildebeest/backend/src/mastodon/status'
 import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
 import { DeliverMessageBody, HonoEnv, Queue, Visibility } from 'wildebeest/backend/src/types'
-import { cors, myz, readBody } from 'wildebeest/backend/src/utils'
+import { readBody, cors } from 'wildebeest/backend/src/utils'
 import { PartialProps } from 'wildebeest/backend/src/utils/type'
+import myz from 'wildebeest/backend/src/utils/zod'
 
 const headers = {
 	...cors(),

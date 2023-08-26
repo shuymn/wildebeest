@@ -11,7 +11,8 @@ import { isFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import { toMastodonStatusesFromRowsWithActor } from 'wildebeest/backend/src/mastodon/status'
 import { getStatusRange } from 'wildebeest/backend/src/mastodon/timeline'
 import type { HonoEnv, MastodonId } from 'wildebeest/backend/src/types'
-import { cors, myz, readParams } from 'wildebeest/backend/src/utils'
+import { cors, readParams } from 'wildebeest/backend/src/utils'
+import myz from 'wildebeest/backend/src/utils/zod'
 
 const headers = {
 	...cors(),

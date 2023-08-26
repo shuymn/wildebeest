@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 const emptyString = z.literal('').transform(() => undefined)
 
-export function logical() {
+function logical() {
 	return z.preprocess((value) => {
 		const result = z
 			.union([emptyString, z.string().transform((value) => value === 'true' || value === '1')])
@@ -11,7 +11,7 @@ export function logical() {
 	}, z.boolean()) as z.ZodEffects<z.ZodBoolean, boolean, boolean>
 }
 
-export function numeric() {
+function numeric() {
 	return z.preprocess((value) => {
 		const result = z
 			.union([
@@ -25,3 +25,5 @@ export function numeric() {
 		return result.success ? result.data : value
 	}, z.number()) as z.ZodEffects<z.ZodNumber, number, number>
 }
+
+export default { logical, numeric }

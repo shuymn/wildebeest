@@ -12,9 +12,9 @@ import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
 import { addFollowing, isNotFollowing } from 'wildebeest/backend/src/mastodon/follow'
 import type { HonoEnv } from 'wildebeest/backend/src/types'
 import type { Relationship } from 'wildebeest/backend/src/types/account'
-import { myz, readBody } from 'wildebeest/backend/src/utils'
-import { cors } from 'wildebeest/backend/src/utils/cors'
+import { readBody, cors } from 'wildebeest/backend/src/utils'
 import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
+import myz from 'wildebeest/backend/src/utils/zod'
 
 type Dependencies = {
 	domain: string
