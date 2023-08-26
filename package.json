@@ -9,12 +9,12 @@
 		"@playwright/test": "1.37.1",
 		"@types/better-sqlite3": "7.6.4",
 		"@types/cookie": "0.5.1",
-		"@typescript-eslint/eslint-plugin": "6.4.0",
-		"@typescript-eslint/parser": "6.4.0",
+		"@typescript-eslint/eslint-plugin": "6.4.1",
+		"@typescript-eslint/parser": "6.4.1",
 		"better-sqlite3": "8.5.1",
 		"eslint": "8.45.0",
 		"eslint-import-resolver-typescript": "3.6.0",
-		"eslint-plugin-import": "2.28.0",
+		"eslint-plugin-import": "2.28.1",
 		"eslint-plugin-unused-imports": "3.0.0",
 		"hono": "3.4.3",
 		"npm-run-all": "4.1.5",
@@ -55,7 +55,7 @@
 	"dependencies": {
 		"cookie": "0.5.0",
 		"toucan-js": "3.2.2",
-		"zod": "3.22.1"
+		"zod": "3.22.2"
 	},
 	"simple-git-hooks": {
 		"pre-commit": "npm exec --package npm-run-all -- run-p lint pretty"
