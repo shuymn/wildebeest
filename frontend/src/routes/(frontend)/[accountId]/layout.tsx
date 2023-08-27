@@ -9,9 +9,8 @@ import { getAccount } from 'wildebeest/backend/src/accounts/account'
 import { getNotFoundHtml } from '~/utils/getNotFoundHtml/getNotFoundHtml'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
 import { getDocumentHead } from '~/utils/getDocumentHead'
-import * as statusAPI from 'wildebeest/backend/src/routes/api/v1/statuses/[id]'
 import { getDatabase } from 'wildebeest/backend/src/database'
-import { Person } from 'wildebeest/backend/src/activitypub/actors'
+import { fetchApi } from '~/utils/fetchApi'
 
 export const useStatuses = routeLoader$(
 	async ({
@@ -19,22 +18,17 @@ export const useStatuses = routeLoader$(
 		params,
 		request,
 		html,
+		url,
 	}): Promise<{ account: MastodonAccount; accountHandle: string; isValidStatus: boolean }> => {
 		const domain = platform.DOMAIN
 
 		let isValidStatus = false
 		let account: MastodonAccount | null = null
 		try {
-			const url = new URL(request.url)
 			const acct = url.pathname.split('/')[1]
 
 			try {
-				const statusResponse = await statusAPI.handleRequestGet(
-					await getDatabase(platform),
-					params.statusId,
-					domain,
-					null as unknown as Person
-				)
+				const statusResponse = await fetchApi(request, url, `/api/v1/statuses/${params.statusId}`)
 				const statusText = await statusResponse.text()
 				isValidStatus = !!statusText
 			} catch {

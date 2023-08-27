@@ -7,13 +7,14 @@ import { StatusesPanel } from '~/components/StatusesPanel/StatusesPanel'
 import { parseHandle } from 'wildebeest/backend/src/utils/handle'
 import { getMastodonIdByRemoteHandle } from 'wildebeest/backend/src/accounts/account'
 import { getNotFoundHtml } from '~/utils/getNotFoundHtml/getNotFoundHtml'
-import { handleRequest } from 'wildebeest/backend/src/routes/api/v1/accounts/[id]/statuses'
+import { fetchApi } from '~/utils/fetchApi'
 
 export const useStatuses = routeLoader$(
 	async ({
 		platform: { env: platform },
 		request,
 		html,
+		url,
 	}): Promise<{
 		mastodonId: string
 		statuses: MastodonStatus[]
@@ -21,7 +22,6 @@ export const useStatuses = routeLoader$(
 		let statuses: MastodonStatus[] = []
 		let mastodonId: string | null = null
 		try {
-			const url = new URL(request.url)
 			const handle = parseHandle(url.pathname.split('/')[1])
 			const db = await getDatabase(platform)
 			mastodonId = await getMastodonIdByRemoteHandle(db, {
@@ -29,15 +29,7 @@ export const useStatuses = routeLoader$(
 				domain: handle.domain ?? url.hostname,
 			})
 			if (mastodonId) {
-				const response = await handleRequest({ domain: url.hostname, db, connectedActor: undefined }, mastodonId, {
-					exclude_replies: true,
-
-					// default values
-					limit: 20,
-					only_media: false,
-					exclude_reblogs: false,
-					pinned: false,
-				})
+				const response = await fetchApi(request, url, `/api/v1/accounts/${mastodonId}/statuses?exclude_replies=true`)
 				statuses = await response.json<MastodonStatus[]>()
 			}
 		} catch {

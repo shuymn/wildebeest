@@ -1,7 +1,5 @@
 import { component$, Slot, useContextProvider } from '@builder.io/qwik'
-import type { Env } from 'wildebeest/backend/src/types'
 import { DocumentHead, Link, routeLoader$ } from '@builder.io/qwik-city'
-import * as instance from 'wildebeest/backend/src/routes/api/v1/instance'
 import type { InstanceConfig } from 'wildebeest/backend/src/types/configs'
 import LeftColumn from '~/components/layout/LeftColumn/LeftColumn'
 import RightColumn from '~/components/layout/RightColumn/RightColumn'
@@ -10,18 +8,11 @@ import { getCommitHash } from '~/utils/getCommitHash'
 import { InstanceConfigContext } from '~/utils/instanceConfig'
 import { getDocumentHead } from '~/utils/getDocumentHead'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
-import { getDatabase } from 'wildebeest/backend/src/database'
+import { fetchApi } from '~/utils/fetchApi'
 
-export const useInstance = routeLoader$(async ({ platform: { env: platform }, html }): Promise<InstanceConfig> => {
-	const env = {
-		INSTANCE_DESCR: platform.INSTANCE_DESCR,
-		INSTANCE_TITLE: platform.INSTANCE_TITLE,
-		ADMIN_EMAIL: platform.ADMIN_EMAIL,
-		DOMAIN: platform.DOMAIN,
-	} as Env
+export const useInstance = routeLoader$(async ({ html, request, url }): Promise<InstanceConfig> => {
 	try {
-		const database = await getDatabase(platform)
-		const response = await instance.handleRequest(env.DOMAIN, database, env)
+		const response = await fetchApi(request, url, `/api/v1/instance`)
 		const results = await response.text()
 		const json = JSON.parse(results) as InstanceConfig
 		return json

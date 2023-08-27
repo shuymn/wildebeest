@@ -1,35 +1,30 @@
 import { component$ } from '@builder.io/qwik'
-import { getDatabase } from 'wildebeest/backend/src/database'
 import { MastodonStatus, StatusContext } from '~/types'
 import Status from '~/components/Status'
-import * as statusAPI from 'wildebeest/backend/src/routes/api/v1/statuses/[id]'
-import * as contextAPI from 'wildebeest/backend/src/routes/api/v1/statuses/[id]/context'
 import { DocumentHead, routeLoader$ } from '@builder.io/qwik-city'
 import { getNotFoundHtml } from '~/utils/getNotFoundHtml/getNotFoundHtml'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
 import { getTextContent } from 'wildebeest/backend/src/activitypub/objects'
 import { getDocumentHead } from '~/utils/getDocumentHead'
-import { Person } from 'wildebeest/backend/src/activitypub/actors'
+import { fetchApi } from '~/utils/fetchApi'
 
 export const useStatus = routeLoader$(
 	async ({
+		url,
 		html,
-		platform: { env: platform },
 		params,
+		request,
 	}): Promise<{ status: MastodonStatus; statusTextContent: string; context: StatusContext }> => {
-		const domain = platform.DOMAIN
 		let statusText = ''
 		try {
-			const statusResponse = await statusAPI.handleRequestGet(
-				await getDatabase(platform),
-				params.statusId,
-				domain,
-				{} as Person
-			)
+			const statusResponse = await fetchApi(request, url, `/api/v1/statuses/${params.statusId}`)
 			statusText = await statusResponse.text()
-		} catch (e: unknown) {
-			const error = e as { stack: string; cause: string }
-			console.warn(error.stack, error.cause)
+		} catch (err) {
+			if (err instanceof Error) {
+				console.warn(err.stack, err.cause)
+			} else {
+				console.warn(err)
+			}
 			throw html(500, getErrorHtml('An error occurred whilst retrieving the status data, please try again later'))
 		}
 		if (!statusText) {
@@ -39,7 +34,7 @@ export const useStatus = routeLoader$(
 		const statusTextContent = await getTextContent(status.content)
 
 		try {
-			const contextResponse = await contextAPI.handleRequest(domain, await getDatabase(platform), params.statusId)
+			const contextResponse = await fetch(`${url.origin}/api/v1/statuses/${params.statusId}/context`)
 			const contextText = await contextResponse.text()
 			const context = JSON.parse(contextText ?? null) as StatusContext | null
 			if (!context) {
