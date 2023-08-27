@@ -1,4 +1,4 @@
-import { $, component$, useStyles$ } from '@builder.io/qwik'
+import { component$, useStyles$ } from '@builder.io/qwik'
 import { routeLoader$ } from '@builder.io/qwik-city'
 import styles from '../../../../utils/innerHtmlContent.scss?inline'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
@@ -68,7 +68,7 @@ export default component$(() => {
 		<div data-testid="account-posts-and-replies">
 			<StatusesPanel
 				initialStatuses={statuses.value.statuses}
-				fetchMoreStatuses={$(async (maxId: string) => {
+				fetchMoreStatuses$={async (maxId: string) => {
 					let ss: MastodonStatus[] = []
 					try {
 						const response = await fetch(`/api/v1/accounts/${statuses.value.mastodonId}/statuses?max_id=${maxId}`)
@@ -80,7 +80,7 @@ export default component$(() => {
 						/* empty */
 					}
 					return ss
-				})}
+				}}
 			/>
 		</div>
 	)

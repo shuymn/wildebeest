@@ -1,4 +1,4 @@
-import { $, component$ } from '@builder.io/qwik'
+import { component$ } from '@builder.io/qwik'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { routeLoader$ } from '@builder.io/qwik-city'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
@@ -62,7 +62,7 @@ export default component$(() => {
 		<div data-testid="account-posts">
 			<StatusesPanel
 				initialStatuses={statuses.value.statuses}
-				fetchMoreStatuses={$(async (maxId: string) => {
+				fetchMoreStatuses$={async (maxId: string) => {
 					let ss: MastodonStatus[] = []
 					try {
 						const response = await fetch(
@@ -76,7 +76,7 @@ export default component$(() => {
 						/* empty */
 					}
 					return ss
-				})}
+				}}
 			/>
 		</div>
 	)

@@ -1,4 +1,4 @@
-import { $, component$ } from '@builder.io/qwik'
+import { component$ } from '@builder.io/qwik'
 import { DocumentHead, routeLoader$ } from '@builder.io/qwik-city'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { getDomain } from 'wildebeest/backend/src/utils/getDomain'
@@ -32,7 +32,7 @@ export default component$(() => {
 				</StickyHeader>
 				<StatusesPanel
 					initialStatuses={loaderData.value.statuses}
-					fetchMoreStatuses={$(async (maxId: string) => {
+					fetchMoreStatuses$={async (maxId: string) => {
 						let statuses: MastodonStatus[] = []
 						try {
 							// FIXME: this endpoint does not have max_id parameter
@@ -45,7 +45,7 @@ export default component$(() => {
 							/* empty */
 						}
 						return statuses
-					})}
+					}}
 				/>
 			</div>
 		</>

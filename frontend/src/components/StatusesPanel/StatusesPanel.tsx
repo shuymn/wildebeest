@@ -1,17 +1,17 @@
-import { $, component$, useSignal, type QRL, useVisibleTask$ } from '@builder.io/qwik'
+import { $, component$, useSignal, useVisibleTask$, PropFunction } from '@builder.io/qwik'
 import { type MastodonStatus } from '~/types'
 import Status from '../Status'
 
 type Props = {
 	initialStatuses: MastodonStatus[]
-	fetchMoreStatuses: QRL<(maxId: string) => Promise<MastodonStatus[]>>
+	fetchMoreStatuses$: PropFunction<(maxId: string) => Promise<MastodonStatus[]>>
 }
 
-export const StatusesPanel = component$(({ initialStatuses, fetchMoreStatuses: fetchMoreStatusesFn }: Props) => {
+export const StatusesPanel = component$(({ initialStatuses, fetchMoreStatuses$ }: Props) => {
 	const fetchingMoreStatuses = useSignal(false)
 	const noMoreStatusesAvailable = useSignal(false)
 	const lastStatusRef = useSignal<HTMLDivElement>()
-	const statuses = useSignal<MastodonStatus[]>(initialStatuses)
+	const statuses = useSignal(initialStatuses)
 
 	const fetchMoreStatuses = $(async () => {
 		if (fetchingMoreStatuses.value || noMoreStatusesAvailable.value) {
@@ -19,7 +19,7 @@ export const StatusesPanel = component$(({ initialStatuses, fetchMoreStatuses: f
 		}
 		fetchingMoreStatuses.value = true
 		const newStatuses =
-			statuses.value.length === 0 ? [] : await fetchMoreStatusesFn(statuses.value[statuses.value.length - 1].id)
+			statuses.value.length === 0 ? [] : await fetchMoreStatuses$(statuses.value[statuses.value.length - 1].id)
 		fetchingMoreStatuses.value = false
 		noMoreStatusesAvailable.value = newStatuses.length === 0
 		statuses.value = [...statuses.value, ...newStatuses]

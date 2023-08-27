@@ -1,4 +1,4 @@
-import { $, component$ } from '@builder.io/qwik'
+import { component$ } from '@builder.io/qwik'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { DocumentHead, routeLoader$ } from '@builder.io/qwik-city'
 import * as timelines from 'wildebeest/backend/src/routes/api/v1/timelines/public'
@@ -22,9 +22,10 @@ export const useStatuses = routeLoader$(async ({ platform: { env: platform }, ht
 		const results = await response.text()
 		// Manually parse the JSON to ensure that Qwik finds the resulting objects serializable.
 		return JSON.parse(results) as MastodonStatus[]
-	} catch (e: unknown) {
-		const error = e as { stack: string; cause: string }
-		console.error(error.stack, error.cause)
+	} catch (err) {
+		if (err instanceof Error) {
+			console.error(err.stack, err.cause)
+		}
 		throw html(500, getErrorHtml('The timeline is unavailable, please try again later'))
 	}
 })
@@ -34,7 +35,7 @@ export default component$(() => {
 	return (
 		<StatusesPanel
 			initialStatuses={statuses.value}
-			fetchMoreStatuses={$(async (maxId: string) => {
+			fetchMoreStatuses$={async (maxId: string) => {
 				let ss: MastodonStatus[] = []
 				try {
 					const response = await fetch(`/api/v1/timelines/public?max_id=${maxId}`)
@@ -46,7 +47,7 @@ export default component$(() => {
 					/* empty */
 				}
 				return ss
-			})}
+			}}
 		/>
 	)
 })

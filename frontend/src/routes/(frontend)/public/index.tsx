@@ -1,4 +1,4 @@
-import { $, component$ } from '@builder.io/qwik'
+import { component$ } from '@builder.io/qwik'
 import { MastodonStatus } from '~/types'
 import * as timelines from 'wildebeest/backend/src/routes/api/v1/timelines/public'
 import { DocumentHead, routeLoader$ } from '@builder.io/qwik-city'
@@ -43,7 +43,7 @@ export default component$(() => {
 			</StickyHeader>
 			<StatusesPanel
 				initialStatuses={statuses.value}
-				fetchMoreStatuses={$(async (maxId: string) => {
+				fetchMoreStatuses$={async (maxId: string) => {
 					let ss: MastodonStatus[] = []
 					try {
 						const response = await fetch(`/api/v1/timelines/public?max_id=${maxId}`)
@@ -55,7 +55,7 @@ export default component$(() => {
 						/* empty */
 					}
 					return ss
-				})}
+				}}
 			/>
 		</>
 	)
