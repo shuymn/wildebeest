@@ -68,9 +68,9 @@ export const Sparkline = component$((props: Props) => {
 	const lineStyle = {
 		stroke: color,
 		strokeWidth: '1',
-		strokeLinejoin: 'round',
-		strokeLinecap: 'round',
 		fill: 'none',
+		'--stroke-linejoin': 'round',
+		'--stroke-linecap': 'round',
 	}
 	const fillStyle = {
 		stroke: 'none',
