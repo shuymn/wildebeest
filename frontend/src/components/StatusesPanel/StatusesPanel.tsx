@@ -27,17 +27,18 @@ export const StatusesPanel = component$(({ initialStatuses, fetchMoreStatuses: f
 
 	useVisibleTask$(({ track }) => {
 		track(() => lastStatusRef.value)
-		if (lastStatusRef.value) {
+		const ref = lastStatusRef.value
+		if (ref) {
 			const observer = new IntersectionObserver(
 				async ([lastStatus]) => {
 					if (lastStatus.isIntersecting) {
 						await fetchMoreStatuses()
-						observer.disconnect()
 					}
 				},
 				{ rootMargin: '250px' }
 			)
-			observer.observe(lastStatusRef.value)
+			observer.observe(ref)
+			return () => observer.disconnect()
 		}
 	})
 
