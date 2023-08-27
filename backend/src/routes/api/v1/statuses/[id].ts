@@ -25,6 +25,7 @@ import {
 import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
 import type { DeliverMessageBody, HonoEnv, MastodonId, Queue } from 'wildebeest/backend/src/types'
 import { cors, readBody } from 'wildebeest/backend/src/utils'
+import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
 import myz from 'wildebeest/backend/src/utils/zod'
 
 const headers = {
@@ -35,9 +36,6 @@ const headers = {
 const app = new Hono<HonoEnv>()
 
 app.get<'/:id'>(async ({ req, env }) => {
-	if (!env.data.connectedActor) {
-		return errors.notAuthorized('not authorized')
-	}
 	const domain = new URL(req.url).hostname
 	return handleRequestGet(await getDatabase(env), req.param('id'), domain, env.data.connectedActor)
 })
@@ -111,22 +109,20 @@ async function handleRequestGet(
 	db: Database,
 	id: MastodonId,
 	domain: string,
-	// To be used when we implement private statuses
-	// eslint-disable-next-line unused-imports/no-unused-vars
-	connectedActor: Person
+	connectedActor: Person | null
 ): Promise<Response> {
 	const status = await getMastodonStatusById(db, id, domain)
 	if (status === null) {
 		return new Response('', { status: 404 })
 	}
 
-	// future validation for private statuses
-	/*
-	if (status.private && status.account.id !== actorToHandle(connectedActor)) {
+	if (status.visibility === 'public' || status.visibility === 'unlisted') {
+		return new Response(JSON.stringify(status), { headers })
+	}
+
+	if (!connectedActor || status.account.acct !== actorToAcct(connectedActor, domain)) {
 		return errors.notAuthorized('status is private')
 	}
-	*/
-
 	return new Response(JSON.stringify(status), { headers })
 }
 
