@@ -20,8 +20,8 @@ devDependencies:
     specifier: 1.0.3
     version: 1.0.3
   '@cloudflare/workers-types':
-    specifier: 4.20230814.0
-    version: 4.20230814.0
+    specifier: 4.20230821.0
+    version: 4.20230821.0
   '@playwright/test':
     specifier: 1.37.1
     version: 1.37.1
@@ -166,8 +166,8 @@ packages:
     dev: true
     optional: true
 
-  /@cloudflare/workers-types@4.20230814.0:
-    resolution: {integrity: sha512-+jHiGjZg2UpULZSSHmHLqUG45TLg1s+uppSMlGvMn0u/xyFsRX9HX6b8Ydg/oHSp3jfSuPtX05GSvtgRAmrWTg==}
+  /@cloudflare/workers-types@4.20230821.0:
+    resolution: {integrity: sha512-lVQSyr5E4CEkQw7WIdsrMTj+kHjsm28mJ0B5AhNFByKR+16KTFsU/RW/nGLKHHW2jxT5lvYI+HjNQMzC9QR8Ng==}
     dev: true
 
   /@esbuild-plugins/node-globals-polyfill@0.1.1(esbuild@0.16.3):
@@ -775,7 +775,7 @@ packages:
     resolution: {integrity: sha512-Iarxqo9hR4Gi6i7iF/hXJbHuPCXTZbA4z91Gwhet8dhK6c0zWGU3xi7zjr5XTaawd/cuR1g6bi0cwt/10bAEsg==}
     engines: {node: '>=16.13'}
     dependencies:
-      '@cloudflare/workers-types': 4.20230814.0
+      '@cloudflare/workers-types': 4.20230821.0
       '@miniflare/cache': 2.14.0
       '@miniflare/core': 2.14.0
       '@miniflare/d1': 2.14.0
