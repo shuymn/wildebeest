@@ -18,5 +18,6 @@
 	"editor.codeActionsOnSave": ["source.addMissingImports", "source.fixAll.eslint"],
 	"SQL-Formatter-VSCode.SQLFlavourOverride": "sqlite",
 	"SQL-Formatter-VSCode.keywordCase": "upper",
-	"SQL-Formatter-VSCode.expressionWidth": 120
+	"SQL-Formatter-VSCode.expressionWidth": 120,
+	"vitest.include": ["backend/**/*.test.ts"]
 }
