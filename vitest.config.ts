@@ -9,5 +9,9 @@ export default defineConfig({
 		testTimeout: 30 * 1000,
 		include: ['./backend/{src,test}/**/*.test.ts'],
 		includeSource: ['./backend/src/**/*.ts'],
+		coverage: {
+			provider: 'v8',
+			reporter: ['json'],
+		},
 	},
 })
