@@ -11,6 +11,7 @@ import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
 import { getDocumentHead } from '~/utils/getDocumentHead'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { fetchApi } from '~/utils/fetchApi'
+import { getDomain } from 'wildebeest/backend/src/utils/getDomain'
 
 export const useStatuses = routeLoader$(
 	async ({
@@ -20,21 +21,24 @@ export const useStatuses = routeLoader$(
 		html,
 		url,
 	}): Promise<{ account: MastodonAccount; accountHandle: string; isValidStatus: boolean }> => {
-		const domain = platform.DOMAIN
+		const domain = getDomain(url)
 
 		let isValidStatus = false
-		let account: MastodonAccount | null = null
-		try {
-			const acct = url.pathname.split('/')[1]
-
+		if (params.statusId) {
 			try {
 				const statusResponse = await fetchApi(request, url, `/api/v1/statuses/${params.statusId}`)
-				const statusText = await statusResponse.text()
-				isValidStatus = !!statusText
+				if (statusResponse.ok) {
+					const statusText = await statusResponse.text()
+					isValidStatus = !!statusText
+				}
 			} catch {
 				isValidStatus = false
 			}
+		}
 
+		let account: MastodonAccount | null = null
+		try {
+			const acct = url.pathname.split('/')[1]
 			account = await getAccount(domain, await getDatabase(platform), acct)
 		} catch {
 			throw html(

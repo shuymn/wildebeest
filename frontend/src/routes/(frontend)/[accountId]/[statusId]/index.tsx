@@ -18,7 +18,9 @@ export const useStatus = routeLoader$(
 		let statusText = ''
 		try {
 			const statusResponse = await fetchApi(request, url, `/api/v1/statuses/${params.statusId}`)
-			statusText = await statusResponse.text()
+			if (statusResponse.ok) {
+				statusText = await statusResponse.text()
+			}
 		} catch (err) {
 			if (err instanceof Error) {
 				console.warn(err.stack, err.cause)

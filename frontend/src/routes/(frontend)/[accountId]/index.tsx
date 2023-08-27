@@ -30,7 +30,9 @@ export const useStatuses = routeLoader$(
 			})
 			if (mastodonId) {
 				const response = await fetchApi(request, url, `/api/v1/accounts/${mastodonId}/statuses?exclude_replies=true`)
-				statuses = await response.json<MastodonStatus[]>()
+				if (response.ok) {
+					statuses = await response.json<MastodonStatus[]>()
+				}
 			}
 		} catch {
 			throw html(

@@ -9,6 +9,9 @@ import { fetchApi } from '~/utils/fetchApi'
 export const useTimelinesTag = routeLoader$(
 	async ({ request, params: { tag }, url }): Promise<{ tag: string; statuses: MastodonStatus[] }> => {
 		const response = await fetchApi(request, url, `/api/v1/timelines/tag/${tag}`)
+		if (!response.ok) {
+			return { tag, statuses: [] }
+		}
 		const results = await response.text()
 		const statuses: MastodonStatus[] = JSON.parse(results)
 		return { tag, statuses }

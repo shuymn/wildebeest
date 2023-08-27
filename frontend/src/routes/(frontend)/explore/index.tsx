@@ -10,6 +10,9 @@ export const useStatuses = routeLoader$(async ({ url, html, request }): Promise<
 	try {
 		// TODO: use the "trending" API endpoint here.
 		const response = await fetchApi(request, url, `/api/v1/timelines/public`)
+		if (!response.ok) {
+			return []
+		}
 		const results = await response.text()
 		// Manually parse the JSON to ensure that Qwik finds the resulting objects serializable.
 		return JSON.parse(results) as MastodonStatus[]
