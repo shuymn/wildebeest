@@ -43,7 +43,7 @@ app.get<'/:id/following'>(async ({ req, env }) => {
 	return handleRequest({ domain: url.hostname, db: await getDatabase(env) }, req.param('id'), result.data)
 })
 
-export async function handleRequest(
+async function handleRequest(
 	{ domain, db }: Dependencies,
 	id: string,
 	params: Parameters

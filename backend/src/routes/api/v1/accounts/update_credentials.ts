@@ -39,7 +39,7 @@ app.patch(async ({ req, env }) => {
 	)
 })
 
-export async function handleRequest(
+async function handleRequest(
 	db: Database,
 	request: Request,
 	connectedActor: Actor,

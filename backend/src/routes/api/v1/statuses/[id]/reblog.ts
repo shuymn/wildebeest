@@ -60,7 +60,7 @@ app.post<'/:id/reblog'>(async ({ req, env }) => {
 	)
 })
 
-export async function handleRequest(
+async function handleRequest(
 	db: Database,
 	id: string,
 	connectedActor: Person,

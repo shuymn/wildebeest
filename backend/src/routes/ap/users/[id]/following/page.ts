@@ -18,7 +18,7 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
-export async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
+async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
 	const handle = parseHandle(id)
 
 	if (!isLocalHandle(handle)) {

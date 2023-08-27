@@ -40,12 +40,7 @@ app.put<'/:id'>(async ({ req, env }) => {
 	return unprocessableEntity(`${issue?.path.join('.')}: ${issue?.message}`)
 })
 
-export async function handleRequestPut(
-	domain: string,
-	db: Database,
-	id: MastodonId,
-	params: Parameters
-): Promise<Response> {
+async function handleRequestPut(domain: string, db: Database, id: MastodonId, params: Parameters): Promise<Response> {
 	// Update the image properties
 	{
 		const image = (await getObjectByMastodonId(domain, db, id)) as Image

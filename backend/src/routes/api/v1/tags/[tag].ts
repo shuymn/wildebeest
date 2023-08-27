@@ -20,7 +20,7 @@ app.get<'/:tag'>(async ({ req, env }) => {
 	return handleRequestGet(await getDatabase(env), domain, req.param('tag'))
 })
 
-export async function handleRequestGet(db: Database, domain: string, value: string): Promise<Response> {
+async function handleRequestGet(db: Database, domain: string, value: string): Promise<Response> {
 	const tag = await getTag(db, domain, value)
 	if (tag === null) {
 		return errors.tagNotFound(value)

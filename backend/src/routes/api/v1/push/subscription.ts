@@ -38,7 +38,7 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
-export async function handleGetRequest(db: Database, connectedActor: Actor, clientId: string, vapidKeys: JWK) {
+async function handleGetRequest(db: Database, connectedActor: Actor, clientId: string, vapidKeys: JWK) {
 	const client = await getClientById(db, clientId)
 	if (client === null) {
 		return errors.notAuthorized('the access token is invalid')
@@ -63,7 +63,7 @@ export async function handleGetRequest(db: Database, connectedActor: Actor, clie
 	return new Response(JSON.stringify(res), { headers })
 }
 
-export async function handlePostRequest(
+async function handlePostRequest(
 	db: Database,
 	request: Request,
 	connectedActor: Actor,

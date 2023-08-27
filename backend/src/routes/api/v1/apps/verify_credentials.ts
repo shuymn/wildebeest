@@ -33,7 +33,7 @@ app.get(async ({ req, env }) => {
 	return notAuthorized('the access token is invalid')
 })
 
-export async function handleRequest(
+async function handleRequest(
 	{ db, vapidKeys }: Dependencies,
 	token: string
 ): Promise<MastodonApiResponse<Omit<Application, 'client_id' | 'client_secret'>>> {

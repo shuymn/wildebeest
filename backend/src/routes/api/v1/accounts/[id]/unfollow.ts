@@ -38,10 +38,7 @@ app.post<'/:id/unfollow'>(async ({ req, env }) => {
 	)
 })
 
-export async function handleRequest(
-	{ domain, db, connectedActor, userKEK }: Dependencies,
-	id: MastodonId
-): Promise<Response> {
+async function handleRequest({ domain, db, connectedActor, userKEK }: Dependencies, id: MastodonId): Promise<Response> {
 	const targetActor = await getActorByMastodonId(db, id)
 	if (!targetActor) {
 		return resourceNotFound('id', id)

@@ -62,7 +62,7 @@ app.post<'/:id/follow'>(async ({ req, env }) => {
 	)
 })
 
-export async function handleRequest(
+async function handleRequest(
 	{ domain, db, connectedActor, userKEK }: Dependencies,
 	id: string,
 	params: Parameters

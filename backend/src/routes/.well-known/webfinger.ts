@@ -19,7 +19,7 @@ const headers = {
 	'cache-control': 'max-age=3600, public',
 }
 
-export async function handleRequest(request: Request, db: Database): Promise<Response> {
+async function handleRequest(request: Request, db: Database): Promise<Response> {
 	const url = new URL(request.url)
 	const domain = url.hostname
 	const resource = url.searchParams.get('resource')

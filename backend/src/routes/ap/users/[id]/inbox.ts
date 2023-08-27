@@ -57,7 +57,7 @@ app.all<'/:id/inbox'>(async ({ req, env }) => {
 	)
 })
 
-export async function handleRequest(
+async function handleRequest(
 	domain: string,
 	db: Database,
 	id: string,

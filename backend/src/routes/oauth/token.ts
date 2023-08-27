@@ -41,7 +41,7 @@ app.post(corsMiddleware(), async ({ req: { raw: request }, env }) => {
 	return notAuthorized('missing authorization')
 })
 
-export async function handleRequest(db: Database, params: Parameters): Promise<MastodonApiResponse<Token>> {
+async function handleRequest(db: Database, params: Parameters): Promise<MastodonApiResponse<Token>> {
 	const clientId = params.code?.split('.')[0] ?? params.client_id
 	const client = await getClientById(db, clientId)
 	if (

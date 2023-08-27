@@ -31,7 +31,7 @@ export const onRequest: PagesFunction<Env, 'id', ContextData> = async ({ request
 	return handleRequest({ domain: new URL(request.url).hostname, db: await getDatabase(env) }, id)
 }
 
-export async function handleRequest({ domain, db }: Dependencies, id: string): Promise<Response> {
+async function handleRequest({ domain, db }: Dependencies, id: string): Promise<Response> {
 	const account = await getAccountByMastodonId(domain, db, id)
 
 	if (account) {

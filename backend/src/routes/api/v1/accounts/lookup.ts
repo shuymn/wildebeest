@@ -27,7 +27,7 @@ app.get(async ({ req, env }) => {
 	return handleRequest({ domain: url.hostname, db: await getDatabase(env) }, acct)
 })
 
-export async function handleRequest({ domain, db }: Dependencies, acct: string): Promise<Response> {
+async function handleRequest({ domain, db }: Dependencies, acct: string): Promise<Response> {
 	const account = await getAccount(domain, db, acct)
 	if (account === null) {
 		return resourceNotFound('acct', acct)

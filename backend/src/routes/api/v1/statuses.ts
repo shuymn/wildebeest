@@ -110,7 +110,7 @@ app.post(async ({ req, env }) => {
 })
 
 // FIXME: add tests for delivery to followers and mentions to a specific Actor.
-export async function handleRequest(
+async function handleRequest(
 	{ domain, db, connectedActor, userKEK, queue, cache }: Dependencies,
 	params: Parameters,
 	idempotencyKey: string | null

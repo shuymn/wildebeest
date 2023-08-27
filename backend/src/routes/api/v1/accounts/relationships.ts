@@ -40,7 +40,7 @@ app.get(async ({ req, env }) => {
 	return handleRequest({ db: await getDatabase(env), connectedActor: env.data.connectedActor }, result.data)
 })
 
-export async function handleRequest({ db, connectedActor }: Dependencies, params: Parameters): Promise<Response> {
+async function handleRequest({ db, connectedActor }: Dependencies, params: Parameters): Promise<Response> {
 	const ids = Array.isArray(params.id) ? params.id : [params.id]
 	const following = await getFollowingMastodonIds(db, connectedActor)
 	const followingRequested = await getFollowingRequestedMastodonIds(db, connectedActor)

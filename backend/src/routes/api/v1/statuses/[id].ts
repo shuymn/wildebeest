@@ -107,7 +107,7 @@ app.delete<'/:id'>(async ({ req, env }) => {
 	)
 })
 
-export async function handleRequestGet(
+async function handleRequestGet(
 	db: Database,
 	id: MastodonId,
 	domain: string,
@@ -130,7 +130,7 @@ export async function handleRequestGet(
 	return new Response(JSON.stringify(status), { headers })
 }
 
-export async function handleRequestPut(
+async function handleRequestPut(
 	{ domain, db, connectedActor, userKEK, queue, cache }: PutDependencies,
 	id: MastodonId,
 	params: PutParameters
@@ -206,7 +206,7 @@ export async function handleRequestPut(
 	return new Response(JSON.stringify(status), { headers })
 }
 
-export async function handleRequestDelete(
+async function handleRequestDelete(
 	db: Database,
 	id: MastodonId,
 	connectedActor: Person,

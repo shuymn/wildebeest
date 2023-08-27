@@ -23,7 +23,7 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
-export async function handleRequest(request: Request, cache: Cache, connectedActor: Person): Promise<Response> {
+async function handleRequest(request: Request, cache: Cache, connectedActor: Person): Promise<Response> {
 	const url = new URL(request.url)
 	if (url.searchParams.has('max_id')) {
 		// We just return the pregenerated notifications, without any filter for
