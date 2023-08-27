@@ -40,7 +40,7 @@ app.get(async ({ req, env }) => {
 	return new Response('', { status: 400 })
 })
 
-export async function handleRequest({ domain, db }: Dependencies, params: Parameters): Promise<Response> {
+async function handleRequest({ domain, db }: Dependencies, params: Parameters): Promise<Response> {
 	const localPreference = params.local
 		? LocalPreference.OnlyLocal
 		: params.remote

@@ -1,8 +1,8 @@
 import { strict as assert } from 'node:assert/strict'
 
-import * as actors from 'wildebeest/backend/src/activitypub/actors'
+import app from 'wildebeest/backend/src'
+import { Actor, fetchActor, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
 import { Remote } from 'wildebeest/backend/src/activitypub/objects'
-import * as ap_users from 'wildebeest/backend/src/routes/ap/users/[id]'
 import { assertStatus, isUrlValid, makeDB } from 'wildebeest/backend/test/utils'
 
 const domain = 'cloudflare.com'
@@ -11,13 +11,14 @@ describe('Actors', () => {
 	test('fetch non-existant user by id', async () => {
 		const db = await makeDB()
 
-		const res = await ap_users.handleRequest(domain, db, 'nonexisting')
+		const req = new Request(`https://${domain}/ap/users/nonexisting`)
+		const res = await app.fetch(req, { DATABASE: db })
 		await assertStatus(res, 404)
 	})
 
 	test('fetch user by id', async () => {
 		const db = await makeDB()
-		const properties: Remote<actors.Actor> = {
+		const properties: Remote<Actor> = {
 			id: `https://${domain}/ap/users/sven`,
 			url: `https://${domain}/@sven`,
 			type: 'Person',
@@ -50,7 +51,8 @@ describe('Actors', () => {
 			)
 			.run()
 
-		const res = await ap_users.handleRequest(domain, db, 'sven')
+		const req = new Request(`https://${domain}/ap/users/sven`)
+		const res = await app.fetch(req, { DATABASE: db })
 		await assertStatus(res, 200)
 
 		const data = await res.json<any>()
@@ -86,7 +88,7 @@ describe('Actors', () => {
 			throw new Error('unexpected request to ' + input.url)
 		}
 
-		const actor = await actors.fetchActor('https://example.com/actor')
+		const actor = await fetchActor('https://example.com/actor')
 		assert.ok(actor)
 		assert.equal(actor.summary, "it's me, Mario. <p>alert(1)</p>")
 		assert.equal(actor.name, 'hi hey')
@@ -112,7 +114,7 @@ describe('Actors', () => {
 			throw new Error('unexpected request to ' + input.url)
 		}
 
-		const actor = await actors.fetchActor('https://example.com/actor')
+		const actor = await fetchActor('https://example.com/actor')
 		assert.ok(actor)
 		assert.equal(actor.summary, 'a'.repeat(500))
 		assert.equal(actor.name, 'b'.repeat(30))
@@ -145,7 +147,7 @@ describe('Actors', () => {
 
 		const db = await makeDB()
 
-		await actors.getAndCacheActor(actorId, db)
+		await getAndCacheActor(actorId, db)
 
 		const { results } = (await db.prepare('SELECT domain from peers').all()) as any
 		assert.equal(results.length, 1)
@@ -197,7 +199,7 @@ describe('Actors', () => {
 
 		const db = await makeDB()
 
-		await actors.getAndCacheActor(actorId, db)
+		await getAndCacheActor(actorId, db)
 
 		const { results } = (await db.prepare('SELECT * FROM actors').all()) as any
 		assert.equal(results.length, 1)

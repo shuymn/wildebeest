@@ -30,7 +30,7 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
-export async function handleRequestPost(
+async function handleRequestPost(
 	request: Request,
 	db: Database,
 	connectedActor: Person,

@@ -20,7 +20,7 @@ app.get(async ({ req, env }) => {
 	return handleRequest(req.raw, cacheFromEnv(env), env.data.connectedActor)
 })
 
-export async function handleRequest(request: Request, cache: Cache, actor: Actor): Promise<Response> {
+async function handleRequest(request: Request, cache: Cache, actor: Actor): Promise<Response> {
 	const url = new URL(request.url)
 	if (url.searchParams.has('max_id')) {
 		// We just return the pregenerated notifications, without any filter for

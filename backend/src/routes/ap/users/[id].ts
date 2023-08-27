@@ -20,7 +20,7 @@ const headers = {
 	'Cache-Control': 'max-age=180, public',
 }
 
-export async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
+async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
 	const handle = parseHandle(id)
 
 	if (!isLocalAccount(domain, handle)) {

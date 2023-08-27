@@ -9,7 +9,7 @@ app.get(async ({ env }) => {
 	return handleRequestGet(await getDatabase(env))
 })
 
-export async function handleRequestGet(db: Database) {
+async function handleRequestGet(db: Database) {
 	const query = `SELECT * from server_rules;`
 	const result = await db.prepare(query).all<{ id: string; text: string }>()
 

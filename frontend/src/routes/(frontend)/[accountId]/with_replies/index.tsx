@@ -4,17 +4,18 @@ import styles from '../../../../utils/innerHtmlContent.scss?inline'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
 import type { MastodonStatus } from '~/types'
 import { StatusesPanel } from '~/components/StatusesPanel/StatusesPanel'
-import { handleRequest } from 'wildebeest/backend/src/routes/api/v1/accounts/[id]/statuses'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { getMastodonIdByRemoteHandle } from 'wildebeest/backend/src/accounts/account'
 import { parseHandle } from 'wildebeest/backend/src/utils/handle'
 import { getNotFoundHtml } from '~/utils/getNotFoundHtml/getNotFoundHtml'
+import { fetchApi } from '~/utils/fetchApi'
 
 export const useStatuses = routeLoader$(
 	async ({
-		platform: { env: platform },
+		platform: { env },
 		request,
 		html,
+		url,
 	}): Promise<{
 		mastodonId: string
 		statuses: MastodonStatus[]
@@ -22,27 +23,17 @@ export const useStatuses = routeLoader$(
 		let statuses: MastodonStatus[] = []
 		let mastodonId: string | null = ''
 		try {
-			const url = new URL(request.url)
 			const handle = parseHandle(url.pathname.split('/')[1])
-			const db = await getDatabase(platform)
+			const db = await getDatabase(env)
 			mastodonId = await getMastodonIdByRemoteHandle(db, {
 				localPart: handle.localPart,
 				domain: handle.domain ?? url.hostname,
 			})
 			if (mastodonId) {
-				const response = await handleRequest(
-					{ domain: url.hostname, db: await getDatabase(platform), connectedActor: undefined },
-					mastodonId,
-					{
-						// default values
-						limit: 20,
-						only_media: false,
-						exclude_replies: false,
-						exclude_reblogs: false,
-						pinned: false,
-					}
-				)
-				statuses = await response.json<Array<MastodonStatus>>()
+				const response = await fetchApi(request, url, `/api/v1/accounts/${mastodonId}/statuses`)
+				if (response.ok) {
+					statuses = await response.json<MastodonStatus[]>()
+				}
 			}
 		} catch {
 			throw html(
@@ -61,7 +52,6 @@ export const useStatuses = routeLoader$(
 
 export default component$(() => {
 	useStyles$(styles)
-
 	const statuses = useStatuses()
 
 	return (

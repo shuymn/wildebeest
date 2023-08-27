@@ -18,7 +18,7 @@ app.get<'/:tag'>(async ({ req, env }) => {
 	return handleRequest(await getDatabase(env), req.raw, getDomain(url), req.param('tag'))
 })
 
-export async function handleRequest(db: Database, request: Request, domain: string, tag: string): Promise<Response> {
+async function handleRequest(db: Database, request: Request, domain: string, tag: string): Promise<Response> {
 	// FIXME: handle query params
 	const url = new URL(request.url)
 	if (url.searchParams.has('max_id')) {

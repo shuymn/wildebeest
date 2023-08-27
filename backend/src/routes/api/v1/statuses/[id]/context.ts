@@ -21,7 +21,7 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
-export async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
+async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
 	const obj = await getObjectByMastodonId(domain, db, id)
 	if (obj === null) {
 		return new Response('', { status: 404 })

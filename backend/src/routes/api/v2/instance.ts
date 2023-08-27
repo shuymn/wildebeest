@@ -19,7 +19,7 @@ app.get(async ({ req: { raw: request }, env }) => {
 	return handleRequest(domain, await getDatabase(env), env)
 })
 
-export async function handleRequest(domain: string, db: Database, env: Env) {
+async function handleRequest(domain: string, db: Database, env: Env) {
 	const headers = {
 		...cors(),
 		'content-type': 'application/json; charset=utf-8',

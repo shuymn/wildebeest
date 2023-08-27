@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert/strict'
 
-import * as v1_instance from 'wildebeest/backend/src/routes/api/v1/instance'
+import app from 'wildebeest/backend/src'
 import type { Env } from 'wildebeest/backend/src/types'
 import { InstanceConfig } from 'wildebeest/backend/src/types/configs'
 import { makeDB, createTestUser, assertStatus, assertCORS, assertJSON } from 'wildebeest/backend/test/utils'
@@ -19,7 +19,8 @@ describe('instance', () => {
 		const db = await makeDB()
 		await createTestUser(domain, db, userKEK, env.ADMIN_EMAIL, undefined, true)
 
-		const res = await v1_instance.handleRequest(domain, db, env)
+		const req = new Request(`https://${domain}/api/v1/instance`)
+		const res = await app.fetch(req, { ...env, DATABASE: db })
 		await assertStatus(res, 200)
 		assertCORS(res)
 		assertJSON(res)
@@ -81,7 +82,8 @@ describe('instance', () => {
 			ADMIN_EMAIL: 'b',
 		} as Env
 
-		const res = await v1_instance.handleRequest(domain, db, env)
+		const req = new Request(`https://${domain}/api/v1/instance`)
+		const res = await app.fetch(req, { ...env, DATABASE: db })
 		await assertStatus(res, 200)
 
 		{

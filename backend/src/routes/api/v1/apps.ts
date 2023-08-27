@@ -75,7 +75,7 @@ app.post(async ({ req, env }) => {
 	return unprocessableEntity(result.error.issues[0]?.message)
 })
 
-export async function handleRequest(
+async function handleRequest(
 	db: Database,
 	vapidKeys: JWK,
 	params: Parameters

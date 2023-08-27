@@ -1,9 +1,9 @@
 import { strict as assert } from 'node:assert/strict'
 
-import * as activities from 'wildebeest/backend/src/activitypub/activities'
+import app from 'wildebeest/backend/src'
+import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
 import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
 import { type Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import * as statuses_favourite from 'wildebeest/backend/src/routes/api/v1/statuses/[id]/favourite'
 import { createPublicStatus } from 'wildebeest/backend/test/shared.utils'
 import { makeDB, createTestUser, assertStatus } from 'wildebeest/backend/test/utils'
 
@@ -35,7 +35,7 @@ describe('/api/v1/statuses/[id]/favourite', () => {
 						content: 'my first status',
 						mediaType: 'text/markdown',
 					},
-					to: [activities.PUBLIC_GROUP],
+					to: [PUBLIC_GROUP],
 					cc: [],
 					attachment: [],
 					sensitive: false,
@@ -60,7 +60,8 @@ describe('/api/v1/statuses/[id]/favourite', () => {
 
 		const connectedActor = actor
 
-		const res = await statuses_favourite.handleRequest(db, 'mastodonid1', connectedActor, userKEK, domain)
+		const req = new Request(`https://${domain}/api/v1/statuses/mastodonid1/favourite`)
+		const res = await app.fetch(req, { DATABASE: db, userKEK, data: { connectedActor } })
 		await assertStatus(res, 200)
 
 		assert(deliveredActivity)
@@ -75,7 +76,8 @@ describe('/api/v1/statuses/[id]/favourite', () => {
 
 		const connectedActor = actor
 
-		const res = await statuses_favourite.handleRequest(db, note[mastodonIdSymbol]!, connectedActor, userKEK, domain)
+		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}/favourite`)
+		const res = await app.fetch(req, { DATABASE: db, userKEK, data: { connectedActor } })
 		await assertStatus(res, 200)
 
 		const data = await res.json<{ favourited: boolean }>()

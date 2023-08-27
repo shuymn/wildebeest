@@ -1,25 +1,19 @@
 import { component$ } from '@builder.io/qwik'
 import { MastodonStatus } from '~/types'
-import * as timelines from 'wildebeest/backend/src/routes/api/v1/timelines/public'
 import { DocumentHead, routeLoader$ } from '@builder.io/qwik-city'
 import StickyHeader from '~/components/StickyHeader/StickyHeader'
 import { getDocumentHead } from '~/utils/getDocumentHead'
 import { StatusesPanel } from '~/components/StatusesPanel/StatusesPanel'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
-import { getDatabase } from 'wildebeest/backend/src/database'
+import { fetchApi } from '~/utils/fetchApi'
 
-export const useStatuses = routeLoader$(async ({ platform: { env: platform }, html }): Promise<MastodonStatus[]> => {
+export const useStatuses = routeLoader$(async ({ html, request, url }): Promise<MastodonStatus[]> => {
 	try {
 		// TODO: use the "trending" API endpoint here.
-		const response = await timelines.handleRequest(
-			{ domain: platform.DOMAIN, db: await getDatabase(platform) },
-			{
-				local: false,
-				remote: false,
-				only_media: false,
-				limit: 20,
-			}
-		)
+		const response = await fetchApi(request, url, `/api/v1/timelines/public`)
+		if (!response.ok) {
+			return []
+		}
 		const results = await response.text()
 		// Manually parse the JSON to ensure that Qwik finds the resulting objects serializable.
 		return JSON.parse(results) as MastodonStatus[]

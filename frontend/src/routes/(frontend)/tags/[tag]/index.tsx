@@ -1,17 +1,17 @@
 import { component$ } from '@builder.io/qwik'
 import { DocumentHead, routeLoader$ } from '@builder.io/qwik-city'
-import { getDatabase } from 'wildebeest/backend/src/database'
-import { getDomain } from 'wildebeest/backend/src/utils/getDomain'
-import { handleRequest } from 'wildebeest/backend/src/routes/api/v1/timelines/tag/[tag]'
 import { StatusesPanel } from '~/components/StatusesPanel/StatusesPanel'
 import StickyHeader from '~/components/StickyHeader/StickyHeader'
 import { MastodonStatus } from '~/types'
 import { getDocumentHead } from '~/utils/getDocumentHead'
+import { fetchApi } from '~/utils/fetchApi'
 
 export const useTimelinesTag = routeLoader$(
-	async ({ request, platform: { env: platform }, params }): Promise<{ tag: string; statuses: MastodonStatus[] }> => {
-		const tag = params.tag
-		const response = await handleRequest(await getDatabase(platform), request, getDomain(request.url), tag)
+	async ({ request, params: { tag }, url }): Promise<{ tag: string; statuses: MastodonStatus[] }> => {
+		const response = await fetchApi(request, url, `/api/v1/timelines/tag/${tag}`)
+		if (!response.ok) {
+			return { tag, statuses: [] }
+		}
 		const results = await response.text()
 		const statuses: MastodonStatus[] = JSON.parse(results)
 		return { tag, statuses }

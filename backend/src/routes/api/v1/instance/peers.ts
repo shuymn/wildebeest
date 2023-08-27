@@ -16,7 +16,7 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
-export async function handleRequest(db: Database): Promise<Response> {
+async function handleRequest(db: Database): Promise<Response> {
 	const peers = await getPeers(db)
 	return new Response(JSON.stringify(peers), { headers })
 }

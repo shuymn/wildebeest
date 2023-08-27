@@ -23,7 +23,7 @@ const headers = {
 	'content-type': 'application/json; charset=utf-8',
 }
 
-export async function handleRequest(domain: string, db: Database, env: Env) {
+async function handleRequest(domain: string, db: Database, env: Env) {
 	// TODO: make it more configurable
 	const res: InstanceConfig = {
 		uri: domain,

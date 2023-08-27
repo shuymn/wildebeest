@@ -19,7 +19,7 @@ const headers = {
 
 // TODO: use userKEK
 // eslint-disable-next-line unused-imports/no-unused-vars
-export async function handleRequest(domain: string, db: Database, id: string, userKEK: string): Promise<Response> {
+async function handleRequest(domain: string, db: Database, id: string, userKEK: string): Promise<Response> {
 	const handle = parseHandle(id)
 
 	if (!isLocalHandle(handle)) {

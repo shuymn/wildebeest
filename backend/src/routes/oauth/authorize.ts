@@ -72,7 +72,7 @@ export async function buildRedirect(
 	return URLsafeRedirect(redirect)
 }
 
-export async function handleRequestPost(
+async function handleRequestPost(
 	request: Request,
 	db: Database,
 	userKEK: string,

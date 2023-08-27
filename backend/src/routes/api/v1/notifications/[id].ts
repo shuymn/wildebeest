@@ -37,12 +37,7 @@ app.get<'/:id'>(async ({ req, env }) => {
 	return handleRequest(domain, req.param('id'), await getDatabase(env), env.data.connectedActor)
 })
 
-export async function handleRequest(
-	domain: string,
-	id: string,
-	db: Database,
-	connectedActor: Person
-): Promise<Response> {
+async function handleRequest(domain: string, id: string, db: Database, connectedActor: Person): Promise<Response> {
 	const row = await query.selectNotificationsByIdAndActorId(db, {
 		id: parseInt(id, 10),
 		actorId: connectedActor.id.toString(),

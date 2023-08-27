@@ -25,7 +25,7 @@ app.get(async ({ req, env }) => {
 	)
 })
 
-export async function handleRequestPost(
+async function handleRequestPost(
 	request: Request,
 	db: Database,
 	connectedActor: Person,

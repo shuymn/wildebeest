@@ -57,5 +57,5 @@ export function getDocumentHead(data: DocumentHeadData, head?: DocumentHeadValue
 		}
 	}
 
-	return result
+	return result as DocumentHeadValue
 }

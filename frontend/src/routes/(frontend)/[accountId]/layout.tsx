@@ -9,9 +9,9 @@ import { getAccount } from 'wildebeest/backend/src/accounts/account'
 import { getNotFoundHtml } from '~/utils/getNotFoundHtml/getNotFoundHtml'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
 import { getDocumentHead } from '~/utils/getDocumentHead'
-import * as statusAPI from 'wildebeest/backend/src/routes/api/v1/statuses/[id]'
 import { getDatabase } from 'wildebeest/backend/src/database'
-import { Person } from 'wildebeest/backend/src/activitypub/actors'
+import { fetchApi } from '~/utils/fetchApi'
+import { getDomain } from 'wildebeest/backend/src/utils/getDomain'
 
 export const useStatuses = routeLoader$(
 	async ({
@@ -19,28 +19,26 @@ export const useStatuses = routeLoader$(
 		params,
 		request,
 		html,
+		url,
 	}): Promise<{ account: MastodonAccount; accountHandle: string; isValidStatus: boolean }> => {
-		const domain = platform.DOMAIN
+		const domain = getDomain(url)
 
 		let isValidStatus = false
-		let account: MastodonAccount | null = null
-		try {
-			const url = new URL(request.url)
-			const acct = url.pathname.split('/')[1]
-
+		if (params.statusId) {
 			try {
-				const statusResponse = await statusAPI.handleRequestGet(
-					await getDatabase(platform),
-					params.statusId,
-					domain,
-					null as unknown as Person
-				)
-				const statusText = await statusResponse.text()
-				isValidStatus = !!statusText
+				const statusResponse = await fetchApi(request, url, `/api/v1/statuses/${params.statusId}`)
+				if (statusResponse.ok) {
+					const statusText = await statusResponse.text()
+					isValidStatus = !!statusText
+				}
 			} catch {
 				isValidStatus = false
 			}
+		}
 
+		let account: MastodonAccount | null = null
+		try {
+			const acct = url.pathname.split('/')[1]
 			account = await getAccount(domain, await getDatabase(platform), acct)
 		} catch {
 			throw html(

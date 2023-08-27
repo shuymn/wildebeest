@@ -38,7 +38,7 @@ app.get(async ({ req: { raw: request }, env }) => {
 	return handleRequest(await getDatabase(env), request)
 })
 
-export async function handleRequest(db: Database, request: Request): Promise<Response> {
+async function handleRequest(db: Database, request: Request): Promise<Response> {
 	const url = new URL(request.url)
 	const domain = url.hostname
 

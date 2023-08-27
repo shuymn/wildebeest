@@ -22,7 +22,7 @@ app.post(async ({ req: { raw: request }, env }) => {
 	return handlePostRequest(request, await getDatabase(env), env.userKEK, env.ACCESS_AUTH_DOMAIN, env.ACCESS_AUD)
 })
 
-export async function handlePostRequest(
+async function handlePostRequest(
 	request: Request,
 	db: Database,
 	userKEK: string,

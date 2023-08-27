@@ -69,7 +69,7 @@ app.get<'/:id/statuses'>(async ({ req, env }) => {
 	)
 })
 
-export async function handleRequest(deps: Dependencies, id: MastodonId, params: Parameters): Promise<Response> {
+async function handleRequest(deps: Dependencies, id: MastodonId, params: Parameters): Promise<Response> {
 	const actor = await getActorByMastodonId(deps.db, id)
 	if (actor) {
 		return await getStatuses(deps, actor, params)
