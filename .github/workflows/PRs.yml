@@ -82,9 +82,6 @@ jobs:
       - name: Check do linting
         run: npm run lint:do
 
-      - name: Check functions linting
-        run: npm run lint:functions
-
       - name: Check frontend linting
         run: npm run lint:frontend
 
