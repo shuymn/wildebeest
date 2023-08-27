@@ -244,8 +244,5 @@ jobs:
         run: |
           echo "*** pre commands ***"
           pnpm build
-          cp -rv ./frontend/dist/* .
-          # remove folder that aren't needed in Pages before we upload
-          rm -rf ./tf ./scripts ./.github ./.npm ./consumer ./do ./*.md ./.cache ./.local ./.pnpm-store
           echo "******"
-          npx wrangler pages deploy --project-name=wildebeest-${{ env.NAME_SUFFIX }} .
+          npx wrangler pages deploy --project-name=wildebeest-${{ env.NAME_SUFFIX }} frontend/dist
