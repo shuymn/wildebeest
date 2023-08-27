@@ -1,13 +1,10 @@
 import { strict as assert } from 'node:assert/strict'
 
+import app from 'wildebeest/backend/src'
 import { Activity, FollowActivity } from 'wildebeest/backend/src/activitypub/activities'
 import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
 import { getApId } from 'wildebeest/backend/src/activitypub/objects'
 import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
-import * as ap_followers from 'wildebeest/backend/src/routes/ap/users/[id]/followers'
-import * as ap_followers_page from 'wildebeest/backend/src/routes/ap/users/[id]/followers/page'
-import * as ap_following from 'wildebeest/backend/src/routes/ap/users/[id]/following'
-import * as ap_following_page from 'wildebeest/backend/src/routes/ap/users/[id]/following/page'
 import { JWK } from 'wildebeest/backend/src/webpush/jwk'
 import { assertStatus, createActivityId, createTestUser, makeDB } from 'wildebeest/backend/test/utils'
 
@@ -81,7 +78,8 @@ describe('Follow', () => {
 		await addFollowing(domain, db, actor, actor3)
 		await acceptFollowing(db, actor, actor3)
 
-		const res = await ap_following.handleRequest(domain, db, 'sven')
+		const req = new Request(`https://${domain}/ap/users/sven/following`)
+		const res = await app.fetch(req, { DATABASE: db })
 		await assertStatus(res, 200)
 
 		const data = await res.json<any>()
@@ -99,7 +97,8 @@ describe('Follow', () => {
 		await addFollowing(domain, db, actor, actor3)
 		await acceptFollowing(db, actor, actor3)
 
-		const res = await ap_following_page.handleRequest(domain, db, 'sven')
+		const req = new Request(`https://${domain}/ap/users/sven/following/page`)
+		const res = await app.fetch(req, { DATABASE: db })
 		await assertStatus(res, 200)
 
 		const data = await res.json<any>()
@@ -115,7 +114,8 @@ describe('Follow', () => {
 		await addFollowing(domain, db, actor2, actor)
 		await acceptFollowing(db, actor2, actor)
 
-		const res = await ap_followers.handleRequest(domain, db, 'sven')
+		const req = new Request(`https://${domain}/ap/users/sven/followers`)
+		const res = await app.fetch(req, { DATABASE: db })
 		await assertStatus(res, 200)
 
 		const data = await res.json<any>()
@@ -130,7 +130,8 @@ describe('Follow', () => {
 		await addFollowing(domain, db, actor2, actor)
 		await acceptFollowing(db, actor2, actor)
 
-		const res = await ap_followers_page.handleRequest(domain, db, 'sven')
+		const req = new Request(`https://${domain}/ap/users/sven/followers/page`)
+		const res = await app.fetch(req, { DATABASE: db })
 		await assertStatus(res, 200)
 
 		const data = await res.json<any>()

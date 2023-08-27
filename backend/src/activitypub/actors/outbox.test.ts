@@ -1,7 +1,6 @@
 import { strict as assert } from 'node:assert/strict'
 
-import * as ap_outbox from 'wildebeest/backend/src/routes/ap/users/[id]/outbox'
-import * as ap_outbox_page from 'wildebeest/backend/src/routes/ap/users/[id]/outbox/page'
+import app from 'wildebeest/backend/src'
 import { createDirectStatus, createPublicStatus } from 'wildebeest/backend/test/shared.utils'
 import { assertStatus, createTestUser, makeDB } from 'wildebeest/backend/test/utils'
 
@@ -17,7 +16,8 @@ describe('Outbox', () => {
 		await createPublicStatus(domain, db, actor, 'my first status')
 		await createPublicStatus(domain, db, actor, 'my second status')
 
-		const res = await ap_outbox.handleRequest(domain, db, 'sven', userKEK)
+		const req = new Request(`https://${domain}/ap/users/sven/outbox`)
+		const res = await app.fetch(req, { DATABASE: db, userKEK })
 		await assertStatus(res, 200)
 
 		const data = await res.json<any>()
@@ -33,7 +33,8 @@ describe('Outbox', () => {
 		await sleep(10)
 		await createPublicStatus(domain, db, actor, 'my second status')
 
-		const res = await ap_outbox_page.handleRequest(domain, db, 'sven')
+		const req = new Request(`https://${domain}/ap/users/sven/outbox/page`)
+		const res = await app.fetch(req, { DATABASE: db })
 		await assertStatus(res, 200)
 
 		const data = await res.json<any>()
@@ -51,7 +52,8 @@ describe('Outbox', () => {
 		await createDirectStatus(domain, db, actorA, 'DM', [], { to: [actorB] })
 
 		{
-			const res = await ap_outbox_page.handleRequest(domain, db, 'a')
+			const req = new Request(`https://${domain}/ap/users/a/outbox/page`)
+			const res = await app.fetch(req, { DATABASE: db })
 			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
@@ -59,7 +61,8 @@ describe('Outbox', () => {
 		}
 
 		{
-			const res = await ap_outbox_page.handleRequest(domain, db, 'b')
+			const req = new Request(`https://${domain}/ap/users/b/outbox/page`)
+			const res = await app.fetch(req, { DATABASE: db })
 			await assertStatus(res, 200)
 
 			const data = await res.json<any>()
@@ -74,7 +77,8 @@ describe('Outbox', () => {
 
 		await createDirectStatus(domain, db, actorA, 'DM', [], { to: [actorB] })
 
-		const res = await ap_outbox_page.handleRequest(domain, db, 'target')
+		const req = new Request(`https://${domain}/ap/users/target/outbox/page`)
+		const res = await app.fetch(req, { DATABASE: db })
 		await assertStatus(res, 200)
 
 		const data = await res.json<any>()
