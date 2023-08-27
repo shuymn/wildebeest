@@ -1,10 +1,10 @@
-import { $, component$, useStyles$ } from '@builder.io/qwik'
+import { component$, useStyles$ } from '@builder.io/qwik'
 import { routeLoader$ } from '@builder.io/qwik-city'
 import styles from '../../../../utils/innerHtmlContent.scss?inline'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
 import type { MastodonStatus } from '~/types'
 import { StatusesPanel } from '~/components/StatusesPanel/StatusesPanel'
-import { handleRequest } from 'wildebeest/functions/api/v1/accounts/[id]/statuses'
+import { handleRequest } from 'wildebeest/backend/src/routes/api/v1/accounts/[id]/statuses'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { getMastodonIdByRemoteHandle } from 'wildebeest/backend/src/accounts/account'
 import { parseHandle } from 'wildebeest/backend/src/utils/handle'
@@ -12,7 +12,7 @@ import { getNotFoundHtml } from '~/utils/getNotFoundHtml/getNotFoundHtml'
 
 export const useStatuses = routeLoader$(
 	async ({
-		platform,
+		platform: { env: platform },
 		request,
 		html,
 	}): Promise<{
@@ -68,7 +68,7 @@ export default component$(() => {
 		<div data-testid="account-posts-and-replies">
 			<StatusesPanel
 				initialStatuses={statuses.value.statuses}
-				fetchMoreStatuses={$(async (maxId: string) => {
+				fetchMoreStatuses$={async (maxId: string) => {
 					let ss: MastodonStatus[] = []
 					try {
 						const response = await fetch(`/api/v1/accounts/${statuses.value.mastodonId}/statuses?max_id=${maxId}`)
@@ -80,7 +80,7 @@ export default component$(() => {
 						/* empty */
 					}
 					return ss
-				})}
+				}}
 			/>
 		</div>
 	)

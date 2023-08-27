@@ -9,7 +9,7 @@ import { SubmitButton } from '~/components/Settings/SubmitButton'
 export type ServerSettingsData = { rules: string[] }
 
 export const useUpdateRule = routeAction$(
-	async (data, { platform }) => {
+	async (data, { platform: { env: platform } }) => {
 		let success = false
 		try {
 			const result = await upsertRule(await getDatabase(platform), {
@@ -31,18 +31,20 @@ export const useUpdateRule = routeAction$(
 	})
 )
 
-export const useRules = routeLoader$(async ({ params, platform, html }): Promise<{ id: number; text: string }> => {
-	const database = await getDatabase(platform)
-	const rules = await getRules(database)
+export const useRules = routeLoader$(
+	async ({ params, platform: { env: platform }, html }): Promise<{ id: number; text: string }> => {
+		const database = await getDatabase(platform)
+		const rules = await getRules(database)
 
-	const rule: { id: string; text: string } | undefined = rules.find((r) => r.id === params['id'])
+		const rule: { id: string; text: string } | undefined = rules.find((r) => r.id === params['id'])
 
-	if (!rule) {
-		throw html(404, getErrorHtml('The selected rule could not be found'))
+		if (!rule) {
+			throw html(404, getErrorHtml('The selected rule could not be found'))
+		}
+
+		return JSON.parse(JSON.stringify(rule))
 	}
-
-	return JSON.parse(JSON.stringify(rule))
-})
+)
 
 export default component$(() => {
 	const rule = useRules()

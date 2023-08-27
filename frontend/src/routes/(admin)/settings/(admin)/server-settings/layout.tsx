@@ -7,13 +7,15 @@ import { ServerBrandingData } from './branding'
 
 export type ServerSettingsData = ServerBrandingData & ServerAboutData
 
-export const useSettings = routeLoader$(async ({ platform }): Promise<Partial<ServerSettingsData>> => {
-	const database = await getDatabase(platform)
+export const useSettings = routeLoader$(
+	async ({ platform: { env: platform } }): Promise<Partial<ServerSettingsData>> => {
+		const database = await getDatabase(platform)
 
-	const settings = await getSettings(database)
+		const settings = await getSettings(database)
 
-	return JSON.parse(JSON.stringify(settings))
-})
+		return JSON.parse(JSON.stringify(settings))
+	}
+)
 
 export default component$(() => {
 	const sectionLinks = [

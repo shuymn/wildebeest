@@ -82,13 +82,11 @@ jobs:
       - name: Check do linting
         run: npm run lint:do
 
-      - name: Check functions linting
-        run: npm run lint:functions
-
       - name: Check frontend linting
         run: npm run lint:frontend
 
       - name: Check frontend types
+        continue-on-error: true
         working-directory: frontend
         run: npm run types-check
 

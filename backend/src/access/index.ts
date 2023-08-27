@@ -2,7 +2,7 @@
 // - uses the Authorization header to find the Access JWT (instead os Cf-Access-Jwt-Assertion).
 // - prevents loosing the Response.status value across Pages middleware
 
-const isTesting = typeof jest !== 'undefined'
+const isTesting = typeof vitest !== 'undefined'
 
 const textDecoder = new TextDecoder('utf-8')
 
@@ -94,13 +94,7 @@ export const generateValidator =
 
 		const certsURL = new URL('/cdn-cgi/access/certs', 'https://' + domain)
 		const certsResponse = await fetch(certsURL.toString())
-		const { keys } = (await certsResponse.json()) as {
-			keys: ({
-				kid: string
-			} & JsonWebKey)[]
-			public_cert: { kid: string; cert: string }
-			public_certs: { kid: string; cert: string }[]
-		}
+		const { keys } = await certsResponse.json<{ keys?: any[] }>()
 		if (!keys) {
 			throw new Error('Could not fetch signing keys.')
 		}

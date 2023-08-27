@@ -1,6 +1,11 @@
 import { type Database } from 'wildebeest/backend/src/database'
-// eslint-disable-next-line import/no-restricted-paths
-import { type ServerSettingsData } from 'wildebeest/frontend/src/routes/(admin)/settings/(admin)/server-settings/layout'
+
+type ServerSettingsData = {
+	'server name': string
+	'server description': string
+	'extended description': string
+	'privacy policy'?: string
+}
 
 export async function getSettings(db: Database): Promise<ServerSettingsData> {
 	const query = `SELECT * from server_settings`

@@ -1,7 +1,7 @@
 import { component$, Slot, useContextProvider } from '@builder.io/qwik'
 import type { Env } from 'wildebeest/backend/src/types'
 import { DocumentHead, Link, routeLoader$ } from '@builder.io/qwik-city'
-import * as instance from 'wildebeest/functions/api/v1/instance'
+import * as instance from 'wildebeest/backend/src/routes/api/v1/instance'
 import type { InstanceConfig } from 'wildebeest/backend/src/types/configs'
 import LeftColumn from '~/components/layout/LeftColumn/LeftColumn'
 import RightColumn from '~/components/layout/RightColumn/RightColumn'
@@ -12,7 +12,7 @@ import { getDocumentHead } from '~/utils/getDocumentHead'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
 import { getDatabase } from 'wildebeest/backend/src/database'
 
-export const useInstance = routeLoader$(async ({ platform, html }): Promise<InstanceConfig> => {
+export const useInstance = routeLoader$(async ({ platform: { env: platform }, html }): Promise<InstanceConfig> => {
 	const env = {
 		INSTANCE_DESCR: platform.INSTANCE_DESCR,
 		INSTANCE_TITLE: platform.INSTANCE_TITLE,

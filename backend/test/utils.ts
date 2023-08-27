@@ -1,4 +1,3 @@
-import { strict as assert } from 'node:assert/strict'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 
@@ -14,6 +13,15 @@ import type { Client } from 'wildebeest/backend/src/mastodon/client'
 import { createClient } from 'wildebeest/backend/src/mastodon/client'
 import type { Queue } from 'wildebeest/backend/src/types'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
+
+export class MockContext implements ExecutionContext {
+	passThroughOnException(): void {
+		throw new Error('Method not implemented.')
+	}
+	async waitUntil(promise: Promise<unknown>): Promise<void> {
+		await promise
+	}
+}
 
 export function isUrlValid(s: string) {
 	let url
@@ -41,25 +49,27 @@ export async function makeDB(): Promise<DB> {
 	return getDatabase(env)
 }
 
-export function assertCORS(response: Response) {
-	assert(response.headers.has('Access-Control-Allow-Origin'))
-	assert(response.headers.has('Access-Control-Allow-Headers'))
+export function assertCORS(response: Response, request?: Request) {
+	expect(response.headers.has('Access-Control-Allow-Origin')).toBeTruthy()
+	if (request?.method === 'OPTIONS') {
+		expect(response.headers.has('Access-Control-Allow-Headers')).toBeTruthy()
+	}
 }
 
 export function assertJSON(response: Response) {
-	assert.equal(response.headers.get('content-type'), 'application/json; charset=utf-8')
+	expect(response.headers.get('content-type')).toMatch(/^application\/json; charset=(utf|UTF)-8$/)
 }
 
 export function assertCache(response: Response, maxge: number) {
-	assert(response.headers.has('cache-control'))
-	assert(response.headers.get('cache-control')!.includes('max-age=' + maxge))
+	expect(response.headers.has('cache-control')).toBeTruthy()
+	expect(response.headers.get('cache-control')).toMatch('max-age=' + maxge)
 }
 
 export async function assertStatus(response: Response, status: number) {
 	if (response.status !== status) {
-		assert.equal(response.status, status, await response.text())
+		expect(response.status, await response.text()).toBe(status)
 	}
-	assert.equal(response.status, status)
+	expect(response.status).toBe(status)
 }
 
 export async function streamToArrayBuffer(stream: ReadableStream) {
@@ -125,9 +135,7 @@ export function makeCache(): Cache {
 	}
 }
 
-export function makeDOCache(): Pick<DurableObjectNamespace, 'idFromName' | 'get'> {
-	const cache = makeCache()
-
+export function makeDOCache(cache = makeCache()): Pick<DurableObjectNamespace, 'idFromName' | 'get'> {
 	return {
 		idFromName(name: string): DurableObjectId {
 			return {

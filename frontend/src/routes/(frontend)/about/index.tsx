@@ -24,36 +24,38 @@ type AboutInfo = {
 	}
 }
 
-export const useAccountInfo = routeLoader$(async ({ resolveValue, request, platform }): Promise<AboutInfo> => {
-	// TODO: fetching the instance for the thumbnail, but that should be part of the settings
-	const instance = await resolveValue(useInstance)
-	const database = await getDatabase(platform)
-	const brandingData = await getSettings(database)
-	const rules = await getRules(database)
-	const adminPerson = await getAdminByEmail(database, platform.ADMIN_EMAIL)
-	let adminAccount: Account | null = null
+export const useAccountInfo = routeLoader$(
+	async ({ resolveValue, request, platform: { env: platform } }): Promise<AboutInfo> => {
+		// TODO: fetching the instance for the thumbnail, but that should be part of the settings
+		const instance = await resolveValue(useInstance)
+		const database = await getDatabase(platform)
+		const brandingData = await getSettings(database)
+		const rules = await getRules(database)
+		const adminPerson = await getAdminByEmail(database, platform.ADMIN_EMAIL)
+		let adminAccount: Account | null = null
 
-	if (adminPerson) {
-		try {
-			adminAccount = (await loadLocalMastodonAccount(database, adminPerson, {
-				...actorToHandle(adminPerson),
-				domain: null,
-			})) as Account
-		} catch {
-			/* empty */
+		if (adminPerson) {
+			try {
+				adminAccount = (await loadLocalMastodonAccount(database, adminPerson, {
+					...actorToHandle(adminPerson),
+					domain: null,
+				})) as Account
+			} catch {
+				/* empty */
+			}
+		}
+
+		return {
+			image: instance.thumbnail,
+			domain: getDomain(request.url),
+			admin: { account: JSON.parse(JSON.stringify(adminAccount)), email: platform.ADMIN_EMAIL },
+			rules: JSON.parse(JSON.stringify(rules.sort(({ id: idA }, { id: idB }) => parseInt(idA) - parseInt(idB)))),
+			extended_description: {
+				content: brandingData?.['extended description'] ?? '',
+			},
 		}
 	}
-
-	return {
-		image: instance.thumbnail,
-		domain: getDomain(request.url),
-		admin: { account: JSON.parse(JSON.stringify(adminAccount)), email: platform.ADMIN_EMAIL },
-		rules: JSON.parse(JSON.stringify(rules.sort(({ id: idA }, { id: idB }) => parseInt(idA) - parseInt(idB)))),
-		extended_description: {
-			content: brandingData?.['extended description'] ?? '',
-		},
-	}
-})
+)
 
 export default component$(() => {
 	const aboutInfo = useAccountInfo()

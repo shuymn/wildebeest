@@ -1,4 +1,4 @@
-import { $, component$ } from '@builder.io/qwik'
+import { component$ } from '@builder.io/qwik'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { routeLoader$ } from '@builder.io/qwik-city'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
@@ -7,11 +7,11 @@ import { StatusesPanel } from '~/components/StatusesPanel/StatusesPanel'
 import { parseHandle } from 'wildebeest/backend/src/utils/handle'
 import { getMastodonIdByRemoteHandle } from 'wildebeest/backend/src/accounts/account'
 import { getNotFoundHtml } from '~/utils/getNotFoundHtml/getNotFoundHtml'
-import { handleRequest } from 'wildebeest/functions/api/v1/accounts/[id]/statuses'
+import { handleRequest } from 'wildebeest/backend/src/routes/api/v1/accounts/[id]/statuses'
 
 export const useStatuses = routeLoader$(
 	async ({
-		platform,
+		platform: { env: platform },
 		request,
 		html,
 	}): Promise<{
@@ -62,7 +62,7 @@ export default component$(() => {
 		<div data-testid="account-posts">
 			<StatusesPanel
 				initialStatuses={statuses.value.statuses}
-				fetchMoreStatuses={$(async (maxId: string) => {
+				fetchMoreStatuses$={async (maxId: string) => {
 					let ss: MastodonStatus[] = []
 					try {
 						const response = await fetch(
@@ -76,7 +76,7 @@ export default component$(() => {
 						/* empty */
 					}
 					return ss
-				})}
+				}}
 			/>
 		</div>
 	)

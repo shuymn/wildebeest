@@ -1,14 +1,14 @@
-import { $, component$ } from '@builder.io/qwik'
+import { component$ } from '@builder.io/qwik'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { MastodonStatus } from '~/types'
-import * as timelines from 'wildebeest/functions/api/v1/timelines/public'
+import * as timelines from 'wildebeest/backend/src/routes/api/v1/timelines/public'
 import { DocumentHead, routeLoader$ } from '@builder.io/qwik-city'
 import StickyHeader from '~/components/StickyHeader/StickyHeader'
 import { getDocumentHead } from '~/utils/getDocumentHead'
 import { StatusesPanel } from '~/components/StatusesPanel/StatusesPanel'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
 
-export const useTimeline = routeLoader$(async ({ platform, html }): Promise<MastodonStatus[]> => {
+export const useTimeline = routeLoader$(async ({ platform: { env: platform }, html }): Promise<MastodonStatus[]> => {
 	try {
 		// TODO: use the "trending" API endpoint here.
 		const response = await timelines.handleRequest(
@@ -37,7 +37,7 @@ export default component$(() => {
 			</StickyHeader>
 			<StatusesPanel
 				initialStatuses={statuses.value}
-				fetchMoreStatuses={$(async (maxId: string) => {
+				fetchMoreStatuses$={async (maxId: string) => {
 					let ss: MastodonStatus[] = []
 					try {
 						const response = await fetch(`/api/v1/timelines/public?local=true&max_id=${maxId}`)
@@ -49,7 +49,7 @@ export default component$(() => {
 						/* empty */
 					}
 					return ss
-				})}
+				}}
 			/>
 		</>
 	)

@@ -5,12 +5,12 @@ import { DocumentHead, routeLoader$ } from '@builder.io/qwik-city'
 import { WildebeestLogo } from '~/components/MastodonLogo'
 import { Avatar } from '~/components/avatar'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
-import { buildRedirect } from 'wildebeest/functions/oauth/authorize'
+import { buildRedirect } from 'wildebeest/backend/src/routes/oauth/authorize'
 import { getDatabase } from 'wildebeest/backend/src/database'
 import { getJwtEmail } from 'wildebeest/backend/src/utils/auth/getJwtEmail'
 import { getUserByEmail } from 'wildebeest/backend/src/accounts'
 
-export const useClient = routeLoader$(async ({ platform, query, html }): Promise<Client> => {
+export const useClient = routeLoader$(async ({ platform: { env: platform }, query, html }): Promise<Client> => {
 	const client_id = query.get('client_id') || ''
 	let client: Client | null = null
 	try {
@@ -29,7 +29,7 @@ export const useClient = routeLoader$(async ({ platform, query, html }): Promise
 export const useUser = routeLoader$(
 	async ({
 		cookie,
-		platform,
+		platform: { env: platform },
 		html,
 		request,
 		redirect,

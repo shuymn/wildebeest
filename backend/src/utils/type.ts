@@ -3,6 +3,7 @@ export type RequiredProps<T, K extends keyof T> = Omit<T, K> & Required<Pick<T, 
 export type NonNullableProps<T, K extends keyof T> = Omit<T, K> & { [P in K]: NonNullable<T[P]> }
 export type PartialProps<T, K extends keyof T> = Omit<T, K> & { [P in K]?: T[P] }
 export type AwaitedOnce<T> = T extends Promise<infer U> ? U : T
+export type Nullable<T> = { [P in keyof T]: T[P] | null }
 
 export type Intersect<T, U> = Exclude<keyof T, keyof U> extends never
 	? Exclude<keyof U, keyof T> extends never

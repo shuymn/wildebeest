@@ -8,7 +8,7 @@ import {
 import { Actor, getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
 import { addObjectInInbox } from 'wildebeest/backend/src/activitypub/actors/inbox'
 import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
-import { ApObject, getApId } from 'wildebeest/backend/src/activitypub/objects'
+import { ApObject, LocalObject, getApId } from 'wildebeest/backend/src/activitypub/objects'
 import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
 import { Database } from 'wildebeest/backend/src/database'
 import { createNotification, sendMentionNotification } from 'wildebeest/backend/src/mastodon/notification'
@@ -21,7 +21,7 @@ export async function createCreateActivity(
 	db: Database,
 	domain: string,
 	actor: Actor,
-	object: RequiredProps<Note, 'published'>
+	object: Omit<LocalObject<Note>, symbol>
 ): Promise<RequiredProps<CreateActivity, 'to' | 'cc' | 'published'>> {
 	return await insertActivity(db, domain, actor, {
 		'@context': [
@@ -78,7 +78,7 @@ export async function handleCreateActivity(
 	const actorId = getApId(activity.actor)
 	const actor = await getAndCacheActor(actorId, db)
 	if (!actor) {
-		console.warn(`actor ${actorId} not found`)
+		console.warn(`actor ${actorId.toString()} not found`)
 		return
 	}
 
@@ -135,11 +135,11 @@ export async function handleCreateActivity(
 
 		const person = await getActorById(db, getUserId(domain, handle))
 		if (person === null) {
-			console.warn(`person ${rec} not found`)
+			console.warn(`person ${rec.toString()} not found`)
 			continue
 		}
 		if (person.type !== 'Person') {
-			console.warn(`person ${rec} is not a Person`)
+			console.warn(`person ${rec.toString()} is not a Person`)
 			continue
 		}
 

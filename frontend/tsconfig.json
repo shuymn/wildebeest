@@ -16,11 +16,11 @@
 		"isolatedModules": true,
 		"outDir": "tmp",
 		"noEmit": true,
-		"types": ["node", "vite/client", "jest", "@cloudflare/workers-types"],
+		"types": ["node", "vite/client", "@cloudflare/workers-types"],
 		"paths": {
 			"~/*": ["./src/*"],
 			"wildebeest/*": ["../*"]
 		}
 	},
-	"include": ["src", "mock-db", "test", "adaptors", "../backend/src", "../config", "../functions"]
+	"include": ["src", "mock-db", "test", "adapters", "../backend/src", "../config"]
 }

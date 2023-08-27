@@ -18,7 +18,7 @@ async function main() {
 		persist: true,
 		config: resolve(__dirname, '../../wrangler.toml'),
 		tsconfig: resolve(__dirname, '../../tsconfig.json'),
-		define: ['jest:{}'],
+		define: ['import.meta.vitest:false', 'vitest:{}'],
 	}
 	const workerPath = resolve(__dirname, './worker.ts')
 	const worker = await unstable_dev(workerPath, { ...options, experimental: { disableExperimentalWarning: true } })
