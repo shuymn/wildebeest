@@ -22,5 +22,5 @@
 			"wildebeest/*": ["../*"]
 		}
 	},
-	"include": ["src", "mock-db", "test", "adaptors", "../backend/src", "../config"]
+	"include": ["src", "mock-db", "test", "adapters", "../backend/src", "../config"]
 }
