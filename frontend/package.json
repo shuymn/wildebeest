@@ -22,7 +22,7 @@
 		"autoprefixer": "10.4.15",
 		"eslint": "8.45.0",
 		"eslint-plugin-qwik": "1.2.8",
-		"hono": "3.4.3",
+		"hono": "3.5.4",
 		"lorem-ipsum": "2.0.8",
 		"postcss": "8.4.28",
 		"prettier": "3.0.2",
