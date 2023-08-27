@@ -1,5 +1,5 @@
 import { component$, $, useSignal } from '@builder.io/qwik'
-import { Link, useNavigate } from '@builder.io/qwik-city'
+import { useNavigate } from '@builder.io/qwik-city'
 import { formatTimeAgo } from '~/utils/dateTime'
 import type { MastodonStatus } from '~/types'
 import { MediaGallery } from '../MediaGallery.tsx'
@@ -43,12 +43,12 @@ export default component$((props: Props) => {
 			)}
 			<div class="flex justify-between mb-3 flex-wrap">
 				<AccountCard account={status.account} subText={props.accountSubText} secondaryAvatar={reblogger} />
-				<Link class="no-underline ml-auto" href={statusUrl}>
+				<a class="no-underline ml-auto" href={statusUrl}>
 					<div class="text-wildebeest-500 flex items-baseline">
 						<i style={{ height: '0.75rem', width: '0.75rem' }} class="fa fa-xs fa-globe w-3 h-3" />
 						<span class="ml-2 text-sm hover:underline min-w-max">{formatTimeAgo(new Date(status.created_at))}</span>
 					</div>
-				</Link>
+				</a>
 			</div>
 
 			{status.spoiler_text && (
