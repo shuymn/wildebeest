@@ -19,7 +19,7 @@ const schema = z.object({
 const app = new Hono<HonoEnv>()
 
 app.post(async ({ req: { raw: request }, env }) => {
-	return handlePostRequest(request, await getDatabase(env), env.userKEK, env.ACCESS_AUTH_DOMAIN, env.ACCESS_AUD)
+	return handlePostRequest(request, getDatabase(env), env.userKEK, env.ACCESS_AUTH_DOMAIN, env.ACCESS_AUD)
 })
 
 async function handlePostRequest(

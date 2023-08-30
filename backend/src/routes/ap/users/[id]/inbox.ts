@@ -46,15 +46,7 @@ app.all<'/:id/inbox'>(async ({ req, env }) => {
 
 	const activity = JSON.parse(body) as Activity
 	const domain = new URL(req.url).hostname
-	return handleRequest(
-		domain,
-		await getDatabase(env),
-		req.param('id'),
-		activity,
-		env.QUEUE,
-		env.userKEK,
-		getVAPIDKeys(env)
-	)
+	return handleRequest(domain, getDatabase(env), req.param('id'), activity, env.QUEUE, env.userKEK, getVAPIDKeys(env))
 })
 
 async function handleRequest(

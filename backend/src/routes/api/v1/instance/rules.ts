@@ -6,7 +6,7 @@ import type { HonoEnv } from 'wildebeest/backend/src/types'
 const app = new Hono<HonoEnv>()
 
 app.get(async ({ env }) => {
-	return handleRequestGet(await getDatabase(env))
+	return handleRequestGet(getDatabase(env))
 })
 
 async function handleRequestGet(db: Database) {

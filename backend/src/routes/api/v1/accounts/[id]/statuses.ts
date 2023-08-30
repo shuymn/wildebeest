@@ -63,7 +63,7 @@ app.get<'/:id/statuses'>(async ({ req, env }) => {
 	}
 	const url = new URL(req.url)
 	return handleRequest(
-		{ domain: url.hostname, db: await getDatabase(env), connectedActor: env.data.connectedActor ?? undefined },
+		{ domain: url.hostname, db: getDatabase(env), connectedActor: env.data.connectedActor ?? undefined },
 		req.param('id'),
 		result.data
 	)

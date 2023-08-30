@@ -11,7 +11,7 @@ export const useUpdateRule = routeAction$(
 	async (data, { platform: { env: platform } }) => {
 		let success = false
 		try {
-			const result = await upsertRule(await getDatabase(platform), data.text)
+			const result = await upsertRule(getDatabase(platform), data.text)
 			success = result.success
 		} catch (e: unknown) {
 			success = false
@@ -31,7 +31,7 @@ export const useDeleteRule = routeAction$(
 		let success = false
 
 		try {
-			const result = await deleteRule(await getDatabase(platform), data.id)
+			const result = await deleteRule(getDatabase(platform), data.id)
 			success = result.success
 		} catch (e: unknown) {
 			success = false
@@ -48,7 +48,7 @@ export const useDeleteRule = routeAction$(
 
 export const useRules = routeLoader$(
 	async ({ platform: { env: platform } }): Promise<{ id: number; text: string }[]> => {
-		const database = await getDatabase(platform)
+		const database = getDatabase(platform)
 		const rules = await getRules(database)
 		return JSON.parse(JSON.stringify(rules))
 	}

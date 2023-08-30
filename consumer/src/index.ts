@@ -21,7 +21,7 @@ export type Env = {
 export default {
 	async queue(batch: MessageBatch<MessageBody>, env: Env, ctx: ExecutionContext) {
 		const sentry = initSentryQueue(env, ctx)
-		const db = await getDatabase(env)
+		const db = getDatabase(env)
 
 		try {
 			for (const message of batch.messages) {

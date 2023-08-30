@@ -35,7 +35,7 @@ type SearchResult = {
 const app = new Hono<HonoEnv>()
 
 app.get(async ({ req: { raw: request }, env }) => {
-	return handleRequest(await getDatabase(env), request)
+	return handleRequest(getDatabase(env), request)
 })
 
 async function handleRequest(db: Database, request: Request): Promise<Response> {

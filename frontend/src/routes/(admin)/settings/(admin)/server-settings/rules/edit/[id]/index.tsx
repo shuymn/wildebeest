@@ -12,7 +12,7 @@ export const useUpdateRule = routeAction$(
 	async (data, { platform: { env: platform } }) => {
 		let success = false
 		try {
-			const result = await upsertRule(await getDatabase(platform), {
+			const result = await upsertRule(getDatabase(platform), {
 				id: +data.id,
 				text: data.text,
 			})
@@ -33,7 +33,7 @@ export const useUpdateRule = routeAction$(
 
 export const useRules = routeLoader$(
 	async ({ params, platform: { env: platform }, html }): Promise<{ id: number; text: string }> => {
-		const database = await getDatabase(platform)
+		const database = getDatabase(platform)
 		const rules = await getRules(database)
 
 		const rule: { id: string; text: string } | undefined = rules.find((r) => r.id === params['id'])

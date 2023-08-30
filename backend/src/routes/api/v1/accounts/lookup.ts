@@ -24,7 +24,7 @@ app.get(async ({ req, env }) => {
 	if (acct === null || acct === '') {
 		return resourceNotFound('acct', '')
 	}
-	return handleRequest({ domain: url.hostname, db: await getDatabase(env) }, acct)
+	return handleRequest({ domain: url.hostname, db: getDatabase(env) }, acct)
 })
 
 async function handleRequest({ domain, db }: Dependencies, acct: string): Promise<Response> {

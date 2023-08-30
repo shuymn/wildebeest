@@ -19,5 +19,6 @@
 	"SQL-Formatter-VSCode.SQLFlavourOverride": "sqlite",
 	"SQL-Formatter-VSCode.keywordCase": "upper",
 	"SQL-Formatter-VSCode.expressionWidth": 120,
-	"vitest.include": ["backend/**/*.test.ts"]
+	"vitest.include": ["backend/**/*.test.ts"],
+	"typescript.tsdk": "./node_modules/typescript/lib"
 }

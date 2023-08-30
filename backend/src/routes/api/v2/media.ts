@@ -16,13 +16,7 @@ app.post(async ({ req: { raw: request }, env }) => {
 	if (!env.data.connectedActor) {
 		return notAuthorized('not authorized')
 	}
-	return handleRequestPost(
-		request,
-		await getDatabase(env),
-		env.data.connectedActor,
-		env.CF_ACCOUNT_ID,
-		env.CF_API_TOKEN
-	)
+	return handleRequestPost(request, getDatabase(env), env.data.connectedActor, env.CF_ACCOUNT_ID, env.CF_API_TOKEN)
 })
 
 const headers = {

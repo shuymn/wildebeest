@@ -36,7 +36,7 @@ app.options(corsMiddleware(), (c) => c.json({}))
 app.post(corsMiddleware(), async ({ req: { raw: request }, env }) => {
 	const result = await readBody(request, schema)
 	if (result.success) {
-		return handleRequest(await getDatabase(env), result.data)
+		return handleRequest(getDatabase(env), result.data)
 	}
 	return notAuthorized('missing authorization')
 })

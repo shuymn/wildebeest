@@ -75,6 +75,7 @@ export async function assertStatus(response: Response, status: number) {
 export async function streamToArrayBuffer(stream: ReadableStream) {
 	let result = new Uint8Array(0)
 	const reader = stream.getReader()
+	// eslint-disable-next-line no-constant-condition
 	while (true) {
 		const { done, value } = await reader.read()
 		if (done) {
@@ -107,12 +108,14 @@ export function makeQueue(): TestQueue {
 
 		async send(msg: any) {
 			messages.push(msg)
+			return Promise.resolve()
 		},
 
 		async sendBatch(batch: Array<{ body: any }>) {
 			for (let i = 0, len = batch.length; i < len; i++) {
 				messages.push(batch[i].body)
 			}
+			return Promise.resolve()
 		},
 	}
 }
@@ -123,14 +126,15 @@ export function makeCache(): Cache {
 	return {
 		async get<T>(key: string): Promise<T | null> {
 			if (cache[key]) {
-				return cache[key] as T
+				return Promise.resolve(cache[key] as T)
 			} else {
-				return null
+				return Promise.resolve(null)
 			}
 		},
 
 		async put<T>(key: string, value: T): Promise<void> {
 			cache[key] = value
+			return Promise.resolve()
 		},
 	}
 }

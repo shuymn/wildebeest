@@ -21,14 +21,14 @@ type Dependencies = {
 const app = new Hono<HonoEnv>()
 
 app.get<'/:id'>(async ({ req, env }) => {
-	return handleRequest({ domain: new URL(req.url).hostname, db: await getDatabase(env) }, req.param('id'))
+	return handleRequest({ domain: new URL(req.url).hostname, db: getDatabase(env) }, req.param('id'))
 })
 
 export const onRequest: PagesFunction<Env, 'id', ContextData> = async ({ request, env, params: { id } }) => {
 	if (typeof id !== 'string') {
 		return resourceNotFound('id', String(id))
 	}
-	return handleRequest({ domain: new URL(request.url).hostname, db: await getDatabase(env) }, id)
+	return handleRequest({ domain: new URL(request.url).hostname, db: getDatabase(env) }, id)
 }
 
 async function handleRequest({ domain, db }: Dependencies, id: string): Promise<Response> {

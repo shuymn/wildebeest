@@ -35,7 +35,7 @@ const app = new Hono<HonoEnv>()
 app.get(async ({ req, env }) => {
 	const result = await readParams(req.raw, schema)
 	if (result.success) {
-		return handleRequest({ domain: new URL(req.url).hostname, db: await getDatabase(env) }, result.data)
+		return handleRequest({ domain: new URL(req.url).hostname, db: getDatabase(env) }, result.data)
 	}
 	return new Response('', { status: 400 })
 })

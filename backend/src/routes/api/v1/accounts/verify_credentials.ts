@@ -21,7 +21,7 @@ app.get(async ({ env }) => {
 	if (!env.data.connectedActor) {
 		return errors.notAuthorized('no connected user')
 	}
-	const db = await getDatabase(env)
+	const db = getDatabase(env)
 	const user = await loadLocalMastodonAccount(db, env.data.connectedActor, {
 		...actorToHandle(env.data.connectedActor),
 		domain: null,

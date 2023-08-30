@@ -34,7 +34,7 @@ app.get<'/:id'>(async ({ req, env }) => {
 		return statusNotFound('not authorized')
 	}
 	const domain = new URL(req.url).hostname
-	return handleRequest(domain, req.param('id'), await getDatabase(env), env.data.connectedActor)
+	return handleRequest(domain, req.param('id'), getDatabase(env), env.data.connectedActor)
 })
 
 async function handleRequest(domain: string, id: string, db: Database, connectedActor: Person): Promise<Response> {

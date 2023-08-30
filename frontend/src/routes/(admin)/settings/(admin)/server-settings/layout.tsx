@@ -9,7 +9,7 @@ export type ServerSettingsData = ServerBrandingData & ServerAboutData
 
 export const useSettings = routeLoader$(
 	async ({ platform: { env: platform } }): Promise<Partial<ServerSettingsData>> => {
-		const database = await getDatabase(platform)
+		const database = getDatabase(platform)
 
 		const settings = await getSettings(database)
 

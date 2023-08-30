@@ -28,7 +28,7 @@ app.get<'/:id/favourite'>(async ({ req, env }) => {
 		return notAuthorized('not authorized')
 	}
 	const domain = new URL(req.url).hostname
-	return handleRequest(await getDatabase(env), req.param('id'), env.data.connectedActor, env.userKEK, domain)
+	return handleRequest(getDatabase(env), req.param('id'), env.data.connectedActor, env.userKEK, domain)
 })
 
 const headers = {

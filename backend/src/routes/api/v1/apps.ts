@@ -70,7 +70,7 @@ const app = new Hono<HonoEnv>()
 app.post(async ({ req, env }) => {
 	const result = await readBody(req.raw, schema)
 	if (result.success) {
-		return handleRequest(await getDatabase(env), getVAPIDKeys(env), result.data)
+		return handleRequest(getDatabase(env), getVAPIDKeys(env), result.data)
 	}
 	return unprocessableEntity(result.error.issues[0]?.message)
 })

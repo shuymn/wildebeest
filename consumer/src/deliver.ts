@@ -8,12 +8,12 @@ import type { Env } from './'
 
 export async function handleDeliverMessage(env: Env, actor: Actor, message: DeliverMessageBody) {
 	const toActorId = new URL(message.toActorId)
-	const targetActor = await getAndCacheActor(toActorId, await getDatabase(env))
+	const targetActor = await getAndCacheActor(toActorId, getDatabase(env))
 	if (targetActor === null) {
 		console.warn(`actor ${toActorId} not found`)
 		return
 	}
 
-	const signingKey = await getSigningKey(message.userKEK, await getDatabase(env), actor)
+	const signingKey = await getSigningKey(message.userKEK, getDatabase(env), actor)
 	await deliverToActor(signingKey, actor, targetActor, message.activity, env.DOMAIN)
 }

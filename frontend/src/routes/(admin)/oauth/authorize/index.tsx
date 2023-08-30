@@ -14,7 +14,7 @@ export const useClient = routeLoader$(async ({ platform: { env: platform }, quer
 	const client_id = query.get('client_id') || ''
 	let client: Client | null = null
 	try {
-		client = await getClientById(await getDatabase(platform), client_id)
+		client = await getClientById(getDatabase(platform), client_id)
 	} catch (e: unknown) {
 		const error = e as { stack: string; cause: string }
 		console.warn(error.stack, error.cause)
@@ -43,13 +43,13 @@ export const useUser = routeLoader$(
 			throw html(500, getErrorHtml((e as Error)?.message))
 		}
 
-		const person = await getUserByEmail(await getDatabase(platform), email)
+		const person = await getUserByEmail(getDatabase(platform), email)
 		if (person === null) {
 			const isFirstLogin = true
 			/* eslint-disable-next-line @typescript-eslint/no-non-null-assertion
 				-- jwt is defined otherwise getJwtEmail would have thrown
 			*/
-			const res = await buildRedirect(await getDatabase(platform), request as Request, isFirstLogin, jwt!.value)
+			const res = await buildRedirect(getDatabase(platform), request as Request, isFirstLogin, jwt!.value)
 			if (res.status === 302) {
 				throw redirect(302, res.headers.get('location') || '')
 			} else {

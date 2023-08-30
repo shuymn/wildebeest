@@ -19,7 +19,7 @@ const app = new Hono<HonoEnv>()
 app.options(corsMiddleware(), (c) => c.json({}))
 
 app.post(async ({ req: { raw: request }, env }) => {
-	return handleRequestPost(request, await getDatabase(env), env.userKEK, env.ACCESS_AUTH_DOMAIN, env.ACCESS_AUD)
+	return handleRequestPost(request, getDatabase(env), env.userKEK, env.ACCESS_AUTH_DOMAIN, env.ACCESS_AUD)
 })
 
 export async function buildRedirect(

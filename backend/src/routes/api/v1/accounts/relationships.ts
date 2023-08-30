@@ -37,7 +37,7 @@ app.get(async ({ req, env }) => {
 	if (!result.success) {
 		return new Response('', { status: 400 })
 	}
-	return handleRequest({ db: await getDatabase(env), connectedActor: env.data.connectedActor }, result.data)
+	return handleRequest({ db: getDatabase(env), connectedActor: env.data.connectedActor }, result.data)
 })
 
 async function handleRequest({ db, connectedActor }: Dependencies, params: Parameters): Promise<Response> {
