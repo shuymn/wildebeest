@@ -55,7 +55,7 @@
 	},
 	"dependencies": {
 		"cookie": "0.5.0",
-		"toucan-js": "3.2.2",
+		"toucan-js": "3.2.3",
 		"zod": "3.22.2"
 	},
 	"simple-git-hooks": {
