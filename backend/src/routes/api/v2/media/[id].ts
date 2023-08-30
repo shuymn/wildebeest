@@ -34,7 +34,7 @@ app.put<'/:id'>(async ({ req, env }) => {
 	const result = await readBody(req.raw, schema)
 	if (result.success) {
 		const domain = new URL(req.raw.url).hostname
-		return handleRequestPut(domain, await getDatabase(env), id, result.data)
+		return handleRequestPut(domain, getDatabase(env), id, result.data)
 	}
 	const [issue] = result.error.issues
 	return unprocessableEntity(`${issue?.path.join('.')}: ${issue?.message}`)

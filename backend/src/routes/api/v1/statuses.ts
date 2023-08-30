@@ -81,7 +81,7 @@ app.post(async ({ req, env }) => {
 		return handleRequest(
 			{
 				domain: url.hostname,
-				db: await getDatabase(env),
+				db: getDatabase(env),
 				connectedActor: env.data.connectedActor,
 				userKEK: env.userKEK,
 				queue: env.QUEUE,

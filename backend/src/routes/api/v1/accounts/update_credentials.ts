@@ -29,7 +29,7 @@ app.patch(async ({ req, env }) => {
 		return errors.notAuthorized('no connected user')
 	}
 	return handleRequest(
-		await getDatabase(env),
+		getDatabase(env),
 		req.raw,
 		env.data.connectedActor,
 		env.CF_ACCOUNT_ID,

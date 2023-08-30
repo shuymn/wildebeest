@@ -23,7 +23,7 @@ export const useStatuses = routeLoader$(
 		let mastodonId: string | null = null
 		try {
 			const handle = parseHandle(url.pathname.split('/')[1])
-			const db = await getDatabase(platform)
+			const db = getDatabase(platform)
 			mastodonId = await getMastodonIdByRemoteHandle(db, {
 				localPart: handle.localPart,
 				domain: handle.domain ?? url.hostname,

@@ -16,7 +16,7 @@ const app = new Hono<HonoEnv>()
 
 app.get(async ({ req: { raw: request }, env }) => {
 	const domain = new URL(request.url).hostname
-	return handleRequest(domain, await getDatabase(env), env)
+	return handleRequest(domain, getDatabase(env), env)
 })
 
 async function handleRequest(domain: string, db: Database, env: Env) {

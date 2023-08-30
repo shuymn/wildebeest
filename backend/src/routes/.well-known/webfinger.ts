@@ -11,7 +11,7 @@ import { WebFingerResponse } from 'wildebeest/backend/src/webfinger'
 const app = new Hono<HonoEnv>()
 
 app.get(async (c) => {
-	return handleRequest(c.req.raw, await getDatabase(c.env))
+	return handleRequest(c.req.raw, getDatabase(c.env))
 })
 
 const headers = {

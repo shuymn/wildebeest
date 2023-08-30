@@ -8,7 +8,7 @@ import { cors } from 'wildebeest/backend/src/utils/cors'
 const app = new Hono<HonoEnv>()
 
 app.get(async ({ env }) => {
-	return handleRequest(await getDatabase(env))
+	return handleRequest(getDatabase(env))
 })
 
 const headers = {

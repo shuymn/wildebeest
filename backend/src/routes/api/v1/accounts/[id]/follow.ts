@@ -53,7 +53,7 @@ app.post<'/:id/follow'>(async ({ req, env }) => {
 	return handleRequest(
 		{
 			domain: new URL(req.url).hostname,
-			db: await getDatabase(env),
+			db: getDatabase(env),
 			connectedActor: env.data.connectedActor,
 			userKEK: env.userKEK,
 		},

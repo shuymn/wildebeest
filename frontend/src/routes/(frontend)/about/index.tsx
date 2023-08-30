@@ -28,7 +28,7 @@ export const useAccountInfo = routeLoader$(
 	async ({ resolveValue, request, platform: { env: platform } }): Promise<AboutInfo> => {
 		// TODO: fetching the instance for the thumbnail, but that should be part of the settings
 		const instance = await resolveValue(useInstance)
-		const database = await getDatabase(platform)
+		const database = getDatabase(platform)
 		const brandingData = await getSettings(database)
 		const rules = await getRules(database)
 		const adminPerson = await getAdminByEmail(database, platform.ADMIN_EMAIL)

@@ -9,7 +9,7 @@ const app = new Hono<HonoEnv>()
 
 app.get<'/:id'>(async ({ req, env }) => {
 	const domain = new URL(req.url).hostname
-	return handleRequest(domain, await getDatabase(env), req.param('id'))
+	return handleRequest(domain, getDatabase(env), req.param('id'))
 })
 
 const headers = {

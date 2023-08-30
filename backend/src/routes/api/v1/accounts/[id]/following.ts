@@ -40,7 +40,7 @@ app.get<'/:id/following'>(async ({ req, env }) => {
 		throw new Error('failed to read params')
 	}
 	const url = new URL(req.url)
-	return handleRequest({ domain: url.hostname, db: await getDatabase(env) }, req.param('id'), result.data)
+	return handleRequest({ domain: url.hostname, db: getDatabase(env) }, req.param('id'), result.data)
 })
 
 async function handleRequest(

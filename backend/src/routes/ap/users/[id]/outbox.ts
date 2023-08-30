@@ -10,7 +10,7 @@ const app = new Hono<HonoEnv>()
 
 app.get<'/:id/outbox'>(async ({ req, env }) => {
 	const domain = new URL(req.url).hostname
-	return handleRequest(domain, await getDatabase(env), req.param('id'), env.userKEK)
+	return handleRequest(domain, getDatabase(env), req.param('id'), env.userKEK)
 })
 
 const headers = {

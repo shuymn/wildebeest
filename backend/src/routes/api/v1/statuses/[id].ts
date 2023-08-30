@@ -37,7 +37,7 @@ const app = new Hono<HonoEnv>()
 
 app.get<'/:id'>(async ({ req, env }) => {
 	const domain = new URL(req.url).hostname
-	return handleRequestGet(await getDatabase(env), req.param('id'), domain, env.data.connectedActor)
+	return handleRequestGet(getDatabase(env), req.param('id'), domain, env.data.connectedActor)
 })
 
 const schema = z.object({
@@ -70,7 +70,7 @@ app.put<'/:id'>(async ({ req, env }) => {
 		return handleRequestPut(
 			{
 				domain: url.hostname,
-				db: await getDatabase(env),
+				db: getDatabase(env),
 				connectedActor: env.data.connectedActor,
 				userKEK: env.userKEK,
 				queue: env.QUEUE,
@@ -95,7 +95,7 @@ app.delete<'/:id'>(async ({ req, env }) => {
 
 	const domain = new URL(req.url).hostname
 	return handleRequestDelete(
-		await getDatabase(env),
+		getDatabase(env),
 		req.param('id'),
 		env.data.connectedActor,
 		domain,

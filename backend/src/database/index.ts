@@ -58,7 +58,7 @@ const qb: QueryBuilder = {
 	},
 }
 
-export async function getDatabase({ DATABASE }: Pick<Env, 'DATABASE'>): Promise<Database> {
+export function getDatabase({ DATABASE }: Pick<Env, 'DATABASE'>): Database {
 	const db = DATABASE
 
 	return {

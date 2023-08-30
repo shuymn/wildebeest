@@ -45,6 +45,7 @@ export async function loadItems<T>(collection: OrderedCollection<T>, limit: numb
 		pageUrl = collection.first
 	}
 
+	// eslint-disable-next-line no-constant-condition
 	while (true) {
 		const page = await loadPage<T>(pageUrl)
 		if (page === null) {

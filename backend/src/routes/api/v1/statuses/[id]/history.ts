@@ -33,7 +33,7 @@ app.get<'/:id/history'>(async ({ req, env }) => {
 	return handleRequestGet(
 		{
 			domain: url.hostname,
-			db: await getDatabase(env),
+			db: getDatabase(env),
 			connectedActor: env.data.connectedActor,
 		},
 		req.param('id')

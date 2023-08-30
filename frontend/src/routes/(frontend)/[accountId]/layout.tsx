@@ -39,7 +39,7 @@ export const useStatuses = routeLoader$(
 		let account: MastodonAccount | null = null
 		try {
 			const acct = url.pathname.split('/')[1]
-			account = await getAccount(domain, await getDatabase(platform), acct)
+			account = await getAccount(domain, getDatabase(platform), acct)
 		} catch {
 			throw html(
 				500,

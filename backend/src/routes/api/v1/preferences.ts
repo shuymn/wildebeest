@@ -24,7 +24,7 @@ app.get(async ({ env }) => {
 		return errors.notAuthorized('no connected user')
 	}
 
-	const preference = await getPreference(await getDatabase(env), env.data.connectedActor)
+	const preference = await getPreference(getDatabase(env), env.data.connectedActor)
 	const res: PreferenceResponse = {
 		'posting:default:visibility': preference.posting_default_visibility,
 		'posting:default:sensitive': preference.posting_default_sensitive,

@@ -16,13 +16,7 @@ app.get(async ({ req, env }) => {
 	if (!env.data.connectedActor) {
 		return notAuthorized('not authorized')
 	}
-	return handleRequestPost(
-		req.raw,
-		await getDatabase(env),
-		env.data.connectedActor,
-		env.CF_ACCOUNT_ID,
-		env.CF_API_TOKEN
-	)
+	return handleRequestPost(req.raw, getDatabase(env), env.data.connectedActor, env.CF_ACCOUNT_ID, env.CF_API_TOKEN)
 })
 
 async function handleRequestPost(

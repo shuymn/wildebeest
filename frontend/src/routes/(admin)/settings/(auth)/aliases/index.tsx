@@ -11,7 +11,7 @@ const zodSchema = z.object({
 export const useAddAlias = routeAction$(async (data, { platform: { env: platform }, json, request }) => {
 	const url = new URL(request.url)
 	const domain = url.hostname
-	const db = await getDatabase(platform)
+	const db = getDatabase(platform)
 	const connectedActor = platform.data.connectedActor
 	if (connectedActor === null) {
 		throw json(500, { error: 'user not present in context' })

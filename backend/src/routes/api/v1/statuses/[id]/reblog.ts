@@ -50,7 +50,7 @@ app.post<'/:id/reblog'>(async ({ req, env }) => {
 
 	const url = new URL(req.url)
 	return handleRequest(
-		await getDatabase(env),
+		getDatabase(env),
 		req.param('id'),
 		env.data.connectedActor,
 		env.userKEK,

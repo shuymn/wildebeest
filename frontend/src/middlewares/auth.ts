@@ -30,7 +30,7 @@ export const authMiddleware = (): MiddlewareHandler<HonoEnv> => {
 				return notAuthorized((e as Error)?.message)
 			}
 
-			const db = await getDatabase(c.env)
+			const db = getDatabase(c.env)
 			const actor = await getUserByEmail(db, email)
 			if (actor) {
 				setConnectedActor(c, actor)

@@ -19,7 +19,7 @@ type mKeyPair = {
 	privateKey: CryptoKey
 }
 
-async function generateSalt(): Promise<Uint8Array> {
+function generateSalt(): Uint8Array {
 	return crypto.getRandomValues(new Uint8Array(16))
 }
 
@@ -138,7 +138,7 @@ export async function generateAESGCMEncryptedMessage(
 	salt: string
 	publicServerKey: string
 }> {
-	const salt = await generateSalt()
+	const salt = generateSalt()
 	const serverKeys = await generateServerKey()
 	const exportedServerKey = (await crypto.subtle.exportKey('jwk', serverKeys.publicKey)) as unknown as JWK
 	const encryptionKeys = await generateEncryptionKeys(subscription, salt, serverKeys)

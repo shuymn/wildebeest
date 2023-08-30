@@ -15,7 +15,7 @@ const app = new Hono<HonoEnv>()
 
 app.get<'/:tag'>(async ({ req, env }) => {
 	const url = new URL(req.url)
-	return handleRequest(await getDatabase(env), req.raw, getDomain(url), req.param('tag'))
+	return handleRequest(getDatabase(env), req.raw, getDomain(url), req.param('tag'))
 })
 
 async function handleRequest(db: Database, request: Request, domain: string, tag: string): Promise<Response> {

@@ -158,7 +158,7 @@ const authorize = async (c: Context<HonoEnv>, next: Next, token: string) => {
 		// configuration, which are used to verify the JWT.
 		// TODO: since we don't load the instance configuration anymore, we
 		// don't need to load the user before anymore.
-		const db = await getDatabase(c.env)
+		const db = getDatabase(c.env)
 		const actor = await getUserByEmail(db, email)
 		if (actor === null) {
 			console.warn('person not found')
@@ -358,18 +358,18 @@ if (import.meta.vitest) {
 			globalThis.fetch = async (input: RequestInfo) => {
 				if (input instanceof URL || typeof input === 'string') {
 					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/certs') {
-						return new Response(JSON.stringify(ACCESS_CERTS))
+						return Promise.resolve(new Response(JSON.stringify(ACCESS_CERTS)))
 					}
 
 					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/get-identity') {
-						return new Response('', { status: 404 })
+						return Promise.resolve(new Response('', { status: 404 }))
 					}
 				}
 
 				if (input instanceof URL || typeof input === 'string') {
-					throw new Error('unexpected request to ' + input.toString())
+					return Promise.reject(new Error('unexpected request to ' + input.toString()))
 				} else {
-					throw new Error('unexpected request to ' + input.url)
+					return Promise.reject(new Error('unexpected request to ' + input.url))
 				}
 			}
 
@@ -386,25 +386,27 @@ if (import.meta.vitest) {
 		})
 
 		test('test user not found', async () => {
-			globalThis.fetch = async (input: RequestInfo) => {
+			globalThis.fetch = (input: RequestInfo) => {
 				if (input instanceof URL || typeof input === 'string') {
 					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/certs') {
-						return new Response(JSON.stringify(ACCESS_CERTS))
+						return Promise.resolve(new Response(JSON.stringify(ACCESS_CERTS)))
 					}
 
 					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/get-identity') {
-						return new Response(
-							JSON.stringify({
-								email: 'some@cloudflare.com',
-							})
+						return Promise.resolve(
+							new Response(
+								JSON.stringify({
+									email: 'some@cloudflare.com',
+								})
+							)
 						)
 					}
 				}
 
 				if (input instanceof URL || typeof input === 'string') {
-					throw new Error('unexpected request to ' + input.toString())
+					return Promise.reject(new Error('unexpected request to ' + input.toString()))
 				} else {
-					throw new Error('unexpected request to ' + input.url)
+					return Promise.reject(new Error('unexpected request to ' + input.url))
 				}
 			}
 
@@ -421,25 +423,27 @@ if (import.meta.vitest) {
 		})
 
 		test('success passes data and calls next', async () => {
-			globalThis.fetch = async (input: RequestInfo) => {
+			globalThis.fetch = (input: RequestInfo) => {
 				if (input instanceof URL || typeof input === 'string') {
 					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/certs') {
-						return new Response(JSON.stringify(ACCESS_CERTS))
+						return Promise.resolve(new Response(JSON.stringify(ACCESS_CERTS)))
 					}
 
 					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/get-identity') {
-						return new Response(
-							JSON.stringify({
-								email: 'sven@cloudflare.com',
-							})
+						return Promise.resolve(
+							new Response(
+								JSON.stringify({
+									email: 'sven@cloudflare.com',
+								})
+							)
 						)
 					}
 				}
 
 				if (input instanceof URL || typeof input === 'string') {
-					throw new Error('unexpected request to ' + input.toString())
+					return Promise.reject(new Error('unexpected request to ' + input.toString()))
 				} else {
-					throw new Error('unexpected request to ' + input.url)
+					return Promise.reject(new Error('unexpected request to ' + input.url))
 				}
 			}
 

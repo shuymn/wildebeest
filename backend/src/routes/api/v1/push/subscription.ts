@@ -17,20 +17,14 @@ app.get(async ({ env }) => {
 	if (!env.data.connectedActor || !env.data.clientId) {
 		return errors.notAuthorized('not authorized')
 	}
-	return handleGetRequest(await getDatabase(env), env.data.connectedActor, env.data.clientId, getVAPIDKeys(env))
+	return handleGetRequest(getDatabase(env), env.data.connectedActor, env.data.clientId, getVAPIDKeys(env))
 })
 
 app.post(async ({ req, env }) => {
 	if (!env.data.connectedActor || !env.data.clientId) {
 		return errors.notAuthorized('not authorized')
 	}
-	return handlePostRequest(
-		await getDatabase(env),
-		req.raw,
-		env.data.connectedActor,
-		env.data.clientId,
-		getVAPIDKeys(env)
-	)
+	return handlePostRequest(getDatabase(env), req.raw, env.data.connectedActor, env.data.clientId, getVAPIDKeys(env))
 })
 
 const headers = {

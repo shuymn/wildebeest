@@ -33,7 +33,7 @@ app.post<'/:id/unfollow'>(async ({ req, env }) => {
 	}
 	const url = new URL(req.url)
 	return handleRequest(
-		{ domain: url.hostname, db: await getDatabase(env), connectedActor: env.data.connectedActor, userKEK: env.userKEK },
+		{ domain: url.hostname, db: getDatabase(env), connectedActor: env.data.connectedActor, userKEK: env.userKEK },
 		req.param('id')
 	)
 })
