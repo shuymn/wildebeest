@@ -1,15 +1,14 @@
 module.exports = {
 	extends: [
 		'eslint:recommended',
-		'plugin:@typescript-eslint/recommended',
-		'plugin:@typescript-eslint/recommended-requiring-type-checking',
+		'plugin:@typescript-eslint/recommended-type-checked',
 		'plugin:import/recommended',
 		'plugin:import/typescript',
 	],
 	parser: '@typescript-eslint/parser',
 	parserOptions: {
 		tsconfigRootDir: __dirname,
-		project: ['./tsconfig.json'],
+		project: true,
 	},
 	plugins: ['@typescript-eslint', 'unused-imports', 'import'],
 	root: true,
@@ -20,34 +19,31 @@ module.exports = {
 		},
 	},
 	rules: {
-		'prefer-const': 'error',
-		'no-var': 'error',
-		'@typescript-eslint/no-unsafe-return': 'error',
-		'unused-imports/no-unused-imports': 'error',
-		'unused-imports/no-unused-vars': ['error'],
-		'no-console': 'off',
-		'no-constant-condition': 'off',
-		'@typescript-eslint/require-await': 'off',
-		'@typescript-eslint/no-unsafe-call': 'error',
-		'@typescript-eslint/await-thenable': 'error',
-		'@typescript-eslint/no-misused-promises': 'error',
-		'@typescript-eslint/no-unused-vars': 'off',
+		'@typescript-eslint/no-unused-vars': 'off', // for unused imports
 		'import/no-duplicates': 'error',
 		'import/order': [
 			'error',
 			{
+				alphabetize: {
+					caseInsensitive: true,
+					order: 'asc',
+				},
 				groups: ['builtin', 'external', 'internal'],
 				'newlines-between': 'always',
-				pathGroupsExcludedImportTypes: ['builtin'],
-				alphabetize: { order: 'asc', caseInsensitive: true },
 				pathGroups: [
 					{
 						pattern: 'wildebeest/**',
 						group: 'internal',
 					},
 				],
+				pathGroupsExcludedImportTypes: ['builtin'],
 			},
 		],
+		'no-var': 'error',
+		'prefer-const': 'error',
+		'prefer-spread': 'error',
+		'unused-imports/no-unused-imports': 'error',
+		'unused-imports/no-unused-vars': 'warn',
 		/*
 			Note: the following rules have been set to off so that linting
 				  can pass with the current code, but we need to gradually
@@ -61,4 +57,12 @@ module.exports = {
 		'@typescript-eslint/no-unnecessary-type-assertion': 'warn',
 		'@typescript-eslint/no-explicit-any': 'warn',
 	},
+	overrides: [
+		{
+			files: ['*.test.ts'],
+			rules: {
+				'@typescript-eslint/require-await': 'warn',
+			},
+		},
+	],
 }
