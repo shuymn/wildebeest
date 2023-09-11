@@ -20,7 +20,7 @@
 		"@typescript-eslint/eslint-plugin": "6.6.0",
 		"@typescript-eslint/parser": "6.6.0",
 		"autoprefixer": "10.4.15",
-		"eslint": "8.48.0",
+		"eslint": "8.49.0",
 		"eslint-plugin-qwik": "1.2.10",
 		"hono": "3.5.8",
 		"lorem-ipsum": "2.0.8",
