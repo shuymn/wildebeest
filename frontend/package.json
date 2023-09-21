@@ -13,15 +13,15 @@
 		"build": "vite build && vite build --config adapters/cloudflare-pages/vite.config.ts"
 	},
 	"devDependencies": {
-		"@builder.io/qwik": "1.2.11",
-		"@builder.io/qwik-city": "1.2.11",
+		"@builder.io/qwik": "1.2.12",
+		"@builder.io/qwik-city": "1.2.12",
 		"@types/eslint": "8.44.2",
 		"@types/node": "18.17.17",
 		"@typescript-eslint/eslint-plugin": "6.7.0",
 		"@typescript-eslint/parser": "6.7.0",
 		"autoprefixer": "10.4.15",
 		"eslint": "8.49.0",
-		"eslint-plugin-qwik": "1.2.11",
+		"eslint-plugin-qwik": "1.2.12",
 		"hono": "3.6.3",
 		"lorem-ipsum": "2.0.8",
 		"postcss": "8.4.29",
