@@ -26,7 +26,7 @@
 		"lorem-ipsum": "2.0.8",
 		"postcss": "8.4.30",
 		"prettier": "3.0.3",
-		"sass": "1.67.0",
+		"sass": "1.68.0",
 		"tailwindcss": "3.3.3",
 		"typescript": "5.2.2",
 		"undici": "5.24.0",
