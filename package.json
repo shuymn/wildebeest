@@ -11,7 +11,7 @@
 		"@types/cookie": "0.5.2",
 		"@typescript-eslint/eslint-plugin": "6.7.3",
 		"@typescript-eslint/parser": "6.7.3",
-		"@vitest/coverage-v8": "0.34.5",
+		"@vitest/coverage-v8": "0.34.6",
 		"better-sqlite3": "8.6.0",
 		"eslint": "8.50.0",
 		"eslint-import-resolver-typescript": "3.6.1",
@@ -26,7 +26,7 @@
 		"typescript": "5.2.2",
 		"vite": "4.4.9",
 		"vite-tsconfig-paths": "4.2.0",
-		"vitest": "0.34.5",
+		"vitest": "0.34.6",
 		"vitest-environment-miniflare": "2.14.1",
 		"wrangler": "3.4.0"
 	},
