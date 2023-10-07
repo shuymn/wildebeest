@@ -11,11 +11,11 @@ dependencies:
 
 devDependencies:
   '@builder.io/qwik':
-    specifier: 1.2.12
-    version: 1.2.12(undici@5.25.4)
+    specifier: 1.2.13
+    version: 1.2.13(undici@5.25.4)
   '@builder.io/qwik-city':
-    specifier: 1.2.12
-    version: 1.2.12
+    specifier: 1.2.13
+    version: 1.2.13
   '@types/eslint':
     specifier: 8.44.3
     version: 8.44.3
@@ -35,8 +35,8 @@ devDependencies:
     specifier: 8.50.0
     version: 8.50.0
   eslint-plugin-qwik:
-    specifier: 1.2.12
-    version: 1.2.12(eslint@8.50.0)
+    specifier: 1.2.13
+    version: 1.2.13(eslint@8.50.0)
   hono:
     specifier: 3.7.3
     version: 3.7.3
@@ -80,8 +80,8 @@ packages:
     engines: {node: '>=10'}
     dev: true
 
-  /@builder.io/qwik-city@1.2.12:
-    resolution: {integrity: sha512-gi8QXd9TohBDjG+xsIdkln+6iMjUFWO6PXe3CTNTpqacTcX0vN7mQkPUcPWj5alo8aSE+Mog8xnZYHx3qsQzwg==}
+  /@builder.io/qwik-city@1.2.13:
+    resolution: {integrity: sha512-RiNHnxGYeovQ4roa61z/FHDXizDHY2ewK02Hj+8syZsAAOoeaMm0ze05mBYBYBAJxk3exDwl6IFYR9eUvprBjg==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     dependencies:
       '@mdx-js/mdx': 2.3.0
@@ -96,8 +96,8 @@ packages:
       - supports-color
     dev: true
 
-  /@builder.io/qwik@1.2.12(undici@5.25.4):
-    resolution: {integrity: sha512-17dwM9BR0NJtrWLPlDygdYMlRkBAMEp8nkPIhhApSH5c/ESQMlbVg7Rm665WkBTf87+Epd+b7cC7Ky+8iYGjmA==}
+  /@builder.io/qwik@1.2.13(undici@5.25.4):
+    resolution: {integrity: sha512-JVBBfkoFNGDd6BZzuk8k2rS+Td9SLngZWk0j6lJCQNPj548vA4DdERlUM+iHe3BYq2q7A3oMo63vUF74h42gDw==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     hasBin: true
     peerDependencies:
@@ -1271,8 +1271,8 @@ packages:
     engines: {node: '>=10'}
     dev: true
 
-  /eslint-plugin-qwik@1.2.12(eslint@8.50.0):
-    resolution: {integrity: sha512-BdwXm3UcBlufWOvOFJSoqxImHa9LcM3k44/oTshcuNa4+iOuiR8FFb/pFn7kk5BcugH7gUOsOyhQlvpKauOqXw==}
+  /eslint-plugin-qwik@1.2.13(eslint@8.50.0):
+    resolution: {integrity: sha512-Pw7628tbS5hif39Ca1oPvK3Qut5sX67FJTMsz/NsrEOOlxtQQApW/LlB1u5KM8bbamAdPKM+RJs/vtTD4iENKQ==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     peerDependencies:
       eslint: ^8.45.0
