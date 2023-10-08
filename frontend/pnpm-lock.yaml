@@ -38,8 +38,8 @@ devDependencies:
     specifier: 1.2.13
     version: 1.2.13(eslint@8.50.0)
   hono:
-    specifier: 3.7.3
-    version: 3.7.3
+    specifier: 3.7.5
+    version: 3.7.5
   lorem-ipsum:
     specifier: 2.0.8
     version: 2.0.8
@@ -1703,8 +1703,8 @@ packages:
     resolution: {integrity: sha512-nAxA0v8+vXSBDt3AnRUNjyRIQ0rD+ntpbAp4LnPkumc5M9yUbSMa4XDU9Q6etY4f1Wp4bNgvc1yjiZtsTTrSng==}
     dev: true
 
-  /hono@3.7.3:
-    resolution: {integrity: sha512-BQHdLPXb30hQ9k+04byeSi4QMHk20U1GUq0nT5kGUCGZtxeYhAS7mUJ1wgjn4SCvgiw1rcc6oBOAlwJQ7jQymA==}
+  /hono@3.7.5:
+    resolution: {integrity: sha512-ZaaqAul84HHLXZKwwfH+eMInidwvRj9IdyOoI5Ze0v+WUOAAtQruml3QaUUWkOuI2Myt6IZAiUqkYklLK77k4g==}
     engines: {node: '>=16.0.0'}
     dev: true
 
