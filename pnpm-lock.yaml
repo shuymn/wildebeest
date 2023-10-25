@@ -71,8 +71,8 @@ devDependencies:
     specifier: 2.9.0
     version: 2.9.0
   sql-formatter:
-    specifier: 13.0.0
-    version: 13.0.0
+    specifier: 13.0.1
+    version: 13.0.1
   typescript:
     specifier: 5.2.2
     version: 5.2.2
@@ -3447,8 +3447,8 @@ packages:
     resolution: {integrity: sha512-lpT8hSQp9jAKp9mhtBU4Xjon8LPGBvLIuBiSVhMEtmLecTh2mO0tlqrAMp47tBXzMr13NJMQ2lf7RpQGLJ3HsQ==}
     dev: true
 
-  /sql-formatter@13.0.0:
-    resolution: {integrity: sha512-V21cVvge4rhn9Fa7K/fTKcmPM+x1yee6Vhq8ZwgaWh3VPBqApgsaoFB5kLAhiqRo5AmSaRyLU7LIdgnNwH01/w==}
+  /sql-formatter@13.0.1:
+    resolution: {integrity: sha512-/tM0H1O2kto6DKv1YuaZa75PMr1J9vTHj5aMu3GF0coKskWUNNcHCvtE1YBHpoFEuKnGUqxAwEpeAH+BAcZcEQ==}
     hasBin: true
     dependencies:
       argparse: 2.0.1
