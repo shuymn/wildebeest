@@ -12,7 +12,7 @@ dependencies:
 devDependencies:
   '@builder.io/qwik':
     specifier: 1.2.16
-    version: 1.2.16(@types/node@18.18.8)(sass@1.69.5)(undici@5.27.0)
+    version: 1.2.16(@types/node@18.18.8)(sass@1.69.5)(undici@5.27.1)
   '@builder.io/qwik-city':
     specifier: 1.2.16
     version: 1.2.16(@types/node@18.18.8)(sass@1.69.5)
@@ -59,8 +59,8 @@ devDependencies:
     specifier: 5.2.2
     version: 5.2.2
   undici:
-    specifier: 5.27.0
-    version: 5.27.0
+    specifier: 5.27.1
+    version: 5.27.1
   vite:
     specifier: 4.5.0
     version: 4.5.0(@types/node@18.18.8)(sass@1.69.5)
@@ -88,7 +88,7 @@ packages:
       '@types/mdx': 2.0.9
       source-map: 0.7.4
       svgo: 3.0.2
-      undici: 5.27.0
+      undici: 5.27.1
       vfile: 6.0.1
       vite: 4.5.0(@types/node@18.18.8)(sass@1.69.5)
       vite-imagetools: 5.1.2
@@ -105,7 +105,7 @@ packages:
       - terser
     dev: true
 
-  /@builder.io/qwik@1.2.16(@types/node@18.18.8)(sass@1.69.5)(undici@5.27.0):
+  /@builder.io/qwik@1.2.16(@types/node@18.18.8)(sass@1.69.5)(undici@5.27.1):
     resolution: {integrity: sha512-ZadMArtIZpdeHeH2Qw5HEbGurCnKJ22i8fvZDlKybPercD8Obf6xk5ox1XcTsliodQWH3O0UJChvXArCrJR0LQ==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     hasBin: true
@@ -113,7 +113,7 @@ packages:
       undici: ^5.14.0
     dependencies:
       csstype: 3.1.2
-      undici: 5.27.0
+      undici: 5.27.1
       vite: 4.5.0(@types/node@18.18.8)(sass@1.69.5)
     transitivePeerDependencies:
       - '@types/node'
@@ -3380,8 +3380,8 @@ packages:
     resolution: {integrity: sha512-JlCMO+ehdEIKqlFxk6IfVoAUVmgz7cU7zD/h9XZ0qzeosSHmUJVOzSQvvYSYWXkFXC+IfLKSIffhv0sVZup6pA==}
     dev: true
 
-  /undici@5.27.0:
-    resolution: {integrity: sha512-l3ydWhlhOJzMVOYkymLykcRRXqbUaQriERtR70B9LzNkZ4bX52Fc8wbTDneMiwo8T+AemZXvXaTx+9o5ROxrXg==}
+  /undici@5.27.1:
+    resolution: {integrity: sha512-h0P6HVTlbcvF6wiX88+aoouMOuiKJ2TEGfcr+tEbr96OIizJaM4BhXJs/wxdDN/RD0F2yZCV/ylCVJy9PjQJIg==}
     engines: {node: '>=14.0'}
     dependencies:
       '@fastify/busboy': 2.0.0
