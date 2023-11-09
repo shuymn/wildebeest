@@ -26,8 +26,8 @@ devDependencies:
     specifier: 1.39.0
     version: 1.39.0
   '@types/better-sqlite3':
-    specifier: 7.6.6
-    version: 7.6.6
+    specifier: 7.6.7
+    version: 7.6.7
   '@types/cookie':
     specifier: 0.5.3
     version: 0.5.3
@@ -797,7 +797,7 @@ packages:
     resolution: {integrity: sha512-73GnLtWn5iP936ctE6ZJrMqGu134KOoIIveq5Yd/B+NnbFfzpuzjCpkLrnqjkDdsxDbruXSb5eTR/SmAdpJxZQ==}
     engines: {node: '>=16.13'}
     dependencies:
-      '@types/better-sqlite3': 7.6.6
+      '@types/better-sqlite3': 7.6.7
       kleur: 4.1.5
       npx-import: 1.1.4
       picomatch: 2.3.1
@@ -910,8 +910,8 @@ packages:
     resolution: {integrity: sha512-+Fj43pSMwJs4KRrH/938Uf+uAELIgVBmQzg/q1YG10djyfA3TnrU8N8XzqCh/okZdszqBQTZf96idMfE5lnwTA==}
     dev: true
 
-  /@types/better-sqlite3@7.6.6:
-    resolution: {integrity: sha512-nuFAptzt0hZYBvyLzKQCbuCCK+RN9PHH4ezar5EJLIg2qpVhwQ/uLvLO/K8A9O7N8DafawgFupiyXQSs0U48Ng==}
+  /@types/better-sqlite3@7.6.7:
+    resolution: {integrity: sha512-+c2YGPWY5831v3uj2/X0HRTK94u1GXU3sCnLqu7AKlxlSfawswnAiJR//TFzSL5azWsLQkG/uS+YnnqHtuZxPw==}
     dependencies:
       '@types/node': 20.6.3
     dev: true
