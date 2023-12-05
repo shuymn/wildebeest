@@ -16,7 +16,7 @@
 		"@builder.io/qwik": "1.2.19",
 		"@builder.io/qwik-city": "1.2.19",
 		"@types/eslint": "8.44.7",
-		"@types/node": "18.18.9",
+		"@types/node": "18.19.1",
 		"@typescript-eslint/eslint-plugin": "6.10.0",
 		"@typescript-eslint/parser": "6.10.0",
 		"autoprefixer": "10.4.16",
