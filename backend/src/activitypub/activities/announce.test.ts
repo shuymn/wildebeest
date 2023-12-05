@@ -430,8 +430,8 @@ describe('Announce', () => {
 					visibility === 'public'
 						? [PUBLIC_GROUP]
 						: visibility !== 'direct'
-						? [actor.followers.toString()]
-						: [actor.id.toString()],
+						  ? [actor.followers.toString()]
+						  : [actor.id.toString()],
 				cc: visibility === 'unlisted' ? [PUBLIC_GROUP] : [],
 				object: getApId(note.id),
 			}

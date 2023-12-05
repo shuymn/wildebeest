@@ -317,8 +317,8 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 				url: properties.url
 					? new URL(properties.url)
 					: isLocalAccount(domain, handle)
-					? new URL(`/@${handleToAcct(handle, domain)}/${result.mastodonId}`, 'https://' + domain)
-					: new URL(result.id),
+					  ? new URL(`/@${handleToAcct(handle, domain)}/${result.mastodonId}`, 'https://' + domain)
+					  : new URL(result.id),
 				reblog: null,
 				edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 
