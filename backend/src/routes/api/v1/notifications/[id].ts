@@ -132,8 +132,8 @@ async function handleRequest(domain: string, id: string, db: Database, connected
 			url: properties.url
 				? new URL(properties.url)
 				: isLocalAccount(domain, fromHandle)
-				? new URL(`/@${handleToAcct(fromHandle, domain)}/${row.mastodonId}`, HTTPS + domain)
-				: new URL(row.id),
+				  ? new URL(`/@${handleToAcct(fromHandle, domain)}/${row.mastodonId}`, HTTPS + domain)
+				  : new URL(row.id),
 			reblog: null,
 			edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 			in_reply_to_id: inReplyToId,

@@ -56,6 +56,7 @@ module.exports = {
 		'@typescript-eslint/restrict-template-expressions': 'warn',
 		'@typescript-eslint/no-unnecessary-type-assertion': 'warn',
 		'@typescript-eslint/no-explicit-any': 'warn',
+		'no-mixed-spaces-and-tabs': 'off',
 	},
 	overrides: [
 		{
