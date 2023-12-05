@@ -44,8 +44,8 @@ devDependencies:
     specifier: 0.34.6
     version: 0.34.6(vitest@0.34.6)
   better-sqlite3:
-    specifier: 9.1.1
-    version: 9.1.1
+    specifier: 9.2.0
+    version: 9.2.0
   eslint:
     specifier: 8.55.0
     version: 8.55.0
@@ -1320,8 +1320,8 @@ packages:
       prebuild-install: 7.1.1
     dev: true
 
-  /better-sqlite3@9.1.1:
-    resolution: {integrity: sha512-FhW7bS7cXwkB2SFnPJrSGPmQerVSCzwBgmQ1cIRcYKxLsyiKjljzCbyEqqhYXo5TTBqt5BISiBj2YE2Sy2ynaA==}
+  /better-sqlite3@9.2.0:
+    resolution: {integrity: sha512-MEm49nfxCU6Yn5rTyXJhnTmjuom0YFrU76/7AC+7PMcftAwIVJ2VtBF6HSPRwQ/WWXw/sSbnPRPUSZ6vMXMniQ==}
     requiresBuild: true
     dependencies:
       bindings: 1.5.0
