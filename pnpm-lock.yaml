@@ -29,8 +29,8 @@ devDependencies:
     specifier: 7.6.8
     version: 7.6.8
   '@types/cookie':
-    specifier: 0.5.4
-    version: 0.5.4
+    specifier: 0.6.0
+    version: 0.6.0
   '@types/node':
     specifier: 20.8.3
     version: 20.8.3
@@ -934,8 +934,8 @@ packages:
     resolution: {integrity: sha512-qQR1dr2rGIHYlJulmr8Ioq3De0Le9E4MJ5AiaeAETJJpndT1uUNHsGFK3L/UIu+rbkQSdj8J/w2bCsBZc/Y5fQ==}
     dev: true
 
-  /@types/cookie@0.5.4:
-    resolution: {integrity: sha512-7z/eR6O859gyWIAjuvBWFzNURmf2oPBmJlfVWkwehU5nzIyjwBsTh7WMmEEV4JFnHuQ3ex4oyTvfKzcyJVDBNA==}
+  /@types/cookie@0.6.0:
+    resolution: {integrity: sha512-4Kh9a6B2bQciAhf7FSuMRRkUWecJgJu9nPnx3yzpsfXX/c50REIqpHY4C82bXP90qrLtXtkDxTZosYO3UpOwlA==}
     dev: true
 
   /@types/istanbul-lib-coverage@2.0.6:
