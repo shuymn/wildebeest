@@ -96,7 +96,7 @@ jobs:
           go-version: stable
 
       - name: Install sqlite3def
-        run: go install github.com/k0kubun/sqldef/cmd/sqlite3def@latest
+        run: go install github.com/sqldef/sqldef/cmd/sqlite3def@v0.16.13
 
       - name: Check DB schema
         run: |
