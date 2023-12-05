@@ -56,8 +56,8 @@ devDependencies:
     specifier: 3.0.0
     version: 3.0.0(@typescript-eslint/eslint-plugin@6.10.0)(eslint@8.53.0)
   hono:
-    specifier: 3.9.2
-    version: 3.9.2
+    specifier: 3.10.4
+    version: 3.10.4
   npm-run-all:
     specifier: 4.1.5
     version: 4.1.5
@@ -2318,8 +2318,8 @@ packages:
       function-bind: 1.1.2
     dev: true
 
-  /hono@3.9.2:
-    resolution: {integrity: sha512-180NOiMadqU3lGmN6ajPDZvZPWus3a9mtVaAUR9uG0SImngBwRLA8vbnV0oUfUAgFT4nX55sGV9dVA06OuikHA==}
+  /hono@3.10.4:
+    resolution: {integrity: sha512-2LJd+a3qyvSuyFlyJSRN1CeH5wg6/Rjua/5L5gdT1W+4U7EUZtnHph74klbyysGg69sfZNXsIrR7PJWSjf2Vww==}
     engines: {node: '>=16.0.0'}
     dev: true
 
