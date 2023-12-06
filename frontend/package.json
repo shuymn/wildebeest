@@ -30,7 +30,7 @@
 		"tailwindcss": "3.3.5",
 		"typescript": "5.3.2",
 		"undici": "5.28.2",
-		"vite": "4.5.1",
+		"vite": "5.0.4",
 		"vite-tsconfig-paths": "3.6.0"
 	},
 	"dependencies": {
