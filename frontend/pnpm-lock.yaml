@@ -12,7 +12,7 @@ dependencies:
 devDependencies:
   '@builder.io/qwik':
     specifier: 1.2.19
-    version: 1.2.19(@types/node@20.10.2)(sass@1.69.5)(undici@5.28.2)
+    version: 1.2.19(@types/node@20.10.2)(sass@1.69.5)(undici@6.0.1)
   '@builder.io/qwik-city':
     specifier: 1.2.19
     version: 1.2.19(@types/node@20.10.2)(sass@1.69.5)
@@ -59,8 +59,8 @@ devDependencies:
     specifier: 5.3.3
     version: 5.3.3
   undici:
-    specifier: 5.28.2
-    version: 5.28.2
+    specifier: 6.0.1
+    version: 6.0.1
   vite:
     specifier: 5.0.7
     version: 5.0.7(@types/node@20.10.2)(sass@1.69.5)
@@ -105,7 +105,7 @@ packages:
       - terser
     dev: true
 
-  /@builder.io/qwik@1.2.19(@types/node@20.10.2)(sass@1.69.5)(undici@5.28.2):
+  /@builder.io/qwik@1.2.19(@types/node@20.10.2)(sass@1.69.5)(undici@6.0.1):
     resolution: {integrity: sha512-nmext30MPih1vSgsNpdx2jzBbeBKpsWjsLFI0Shs9+ec3z2QUrE9NJO+2P7cduxNt87hyul+twJ3UlJJ6pKxUQ==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     hasBin: true
@@ -113,7 +113,7 @@ packages:
       undici: ^5.14.0
     dependencies:
       csstype: 3.1.2
-      undici: 5.28.2
+      undici: 6.0.1
       vite: 4.5.1(@types/node@20.10.2)(sass@1.69.5)
     transitivePeerDependencies:
       - '@types/node'
@@ -3744,6 +3744,13 @@ packages:
   /undici@5.28.2:
     resolution: {integrity: sha512-wh1pHJHnUeQV5Xa8/kyQhO7WFa8M34l026L5P/+2TYiakvGy5Rdc8jWZVyG7ieht/0WgJLEd3kcU5gKx+6GC8w==}
     engines: {node: '>=14.0'}
+    dependencies:
+      '@fastify/busboy': 2.1.0
+    dev: true
+
+  /undici@6.0.1:
+    resolution: {integrity: sha512-eZFYQLeS9BiXpsU0cuFhCwfeda2MnC48EVmmOz/eCjsTgmyTdaHdVsPSC/kwC2GtW2e0uH0HIPbadf3/bRWSxw==}
+    engines: {node: '>=18.0'}
     dependencies:
       '@fastify/busboy': 2.1.0
     dev: true
