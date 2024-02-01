@@ -11,11 +11,11 @@ dependencies:
 
 devDependencies:
   '@builder.io/qwik':
-    specifier: 1.4.2
-    version: 1.4.2(@types/node@20.10.2)(sass@1.70.0)(undici@6.4.0)
+    specifier: 1.4.3
+    version: 1.4.3(@types/node@20.10.2)(sass@1.70.0)(undici@6.4.0)
   '@builder.io/qwik-city':
-    specifier: 1.4.2
-    version: 1.4.2(@types/node@20.10.2)(sass@1.70.0)
+    specifier: 1.4.3
+    version: 1.4.3(@types/node@20.10.2)(sass@1.70.0)
   '@types/eslint':
     specifier: 8.44.8
     version: 8.44.8
@@ -35,8 +35,8 @@ devDependencies:
     specifier: 8.55.0
     version: 8.55.0
   eslint-plugin-qwik:
-    specifier: 1.4.2
-    version: 1.4.2(eslint@8.55.0)
+    specifier: 1.4.3
+    version: 1.4.3(eslint@8.55.0)
   hono:
     specifier: 3.11.4
     version: 3.11.4
@@ -80,8 +80,8 @@ packages:
     engines: {node: '>=10'}
     dev: true
 
-  /@builder.io/qwik-city@1.4.2(@types/node@20.10.2)(sass@1.70.0):
-    resolution: {integrity: sha512-qN+QVkMzMpep8itP2TA02Vy/uGxT5n+aJZZeLuZv77+CbdQvqhQYUzy/Qrhga95btGc23DChRfuHOEHUwSuGjg==}
+  /@builder.io/qwik-city@1.4.3(@types/node@20.10.2)(sass@1.70.0):
+    resolution: {integrity: sha512-BVeTUIE07T1yG4PMTYCj/dMQj2GcjUMhM0CnkKQarUIs6EfKS2sxteQp2ar3bONzBlpBXT7oJVDfHcYGAdfIdg==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     dependencies:
       '@mdx-js/mdx': 2.3.0
@@ -105,8 +105,8 @@ packages:
       - terser
     dev: true
 
-  /@builder.io/qwik@1.4.2(@types/node@20.10.2)(sass@1.70.0)(undici@6.4.0):
-    resolution: {integrity: sha512-DqDrcqhcUrQpSFbZ4FsokYM6Wb8PP9dDkutWxH0jhNLHG/C0SAUuqquaPl89fuiDJAj4nlXNKIG0GeZaUVYE6A==}
+  /@builder.io/qwik@1.4.3(@types/node@20.10.2)(sass@1.70.0)(undici@6.4.0):
+    resolution: {integrity: sha512-rZwBJjZAVGxGb/jUCGAK5q+Yb3X9AOPJ4toDVj8dR1s28BH1h0vLUHeonv+DE0qEhoJrzqwtimGxR3IcXlmIvg==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     hasBin: true
     peerDependencies:
@@ -1608,8 +1608,8 @@ packages:
     engines: {node: '>=10'}
     dev: true
 
-  /eslint-plugin-qwik@1.4.2(eslint@8.55.0):
-    resolution: {integrity: sha512-A5uVRaNDRgbi0+eE9ZF+V9uiGIklBFW+lXVlF9wzweNPNbWeLPNRP2d1Es0ZjEqC69boZq9FRfcFvwysEO0poQ==}
+  /eslint-plugin-qwik@1.4.3(eslint@8.55.0):
+    resolution: {integrity: sha512-AxXWpfAr1MQfPzn6slPsggvoaFNKVFJD6p7zLas7iMd1Z2pC7+jsd6yF7jzl89XOtQS05dTgLIWvit0nVagPPA==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     peerDependencies:
       eslint: ^8.56.0
