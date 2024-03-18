@@ -31,7 +31,7 @@
 		"typescript": "5.3.3",
 		"undici": "6.6.2",
 		"vite": "5.1.4",
-		"vite-tsconfig-paths": "3.6.0"
+		"vite-tsconfig-paths": "4.3.2"
 	},
 	"dependencies": {
 		"modern-normalize": "2.0.0"
