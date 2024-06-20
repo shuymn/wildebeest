@@ -12,10 +12,10 @@ dependencies:
 devDependencies:
   '@builder.io/qwik':
     specifier: 1.4.5
-    version: 1.4.5(@types/node@20.10.2)(sass@1.70.0)(undici@6.6.2)
+    version: 1.4.5(@types/node@20.10.2)(sass@1.77.6)(undici@6.6.2)
   '@builder.io/qwik-city':
     specifier: 1.4.5
-    version: 1.4.5(@types/node@20.10.2)(sass@1.70.0)
+    version: 1.4.5(@types/node@20.10.2)(sass@1.77.6)
   '@types/eslint':
     specifier: 8.44.8
     version: 8.44.8
@@ -50,8 +50,8 @@ devDependencies:
     specifier: 3.1.0
     version: 3.1.0
   sass:
-    specifier: 1.70.0
-    version: 1.70.0
+    specifier: 1.77.6
+    version: 1.77.6
   tailwindcss:
     specifier: 3.4.1
     version: 3.4.1
@@ -63,7 +63,7 @@ devDependencies:
     version: 6.6.2
   vite:
     specifier: 5.1.7
-    version: 5.1.7(@types/node@20.10.2)(sass@1.70.0)
+    version: 5.1.7(@types/node@20.10.2)(sass@1.77.6)
   vite-tsconfig-paths:
     specifier: 3.6.0
     version: 3.6.0(vite@5.1.7)
@@ -80,7 +80,7 @@ packages:
     engines: {node: '>=10'}
     dev: true
 
-  /@builder.io/qwik-city@1.4.5(@types/node@20.10.2)(sass@1.70.0):
+  /@builder.io/qwik-city@1.4.5(@types/node@20.10.2)(sass@1.77.6):
     resolution: {integrity: sha512-M9hr82u49Um8VdRDZGva66VB3E5yhXj5Q9cCe2URj/wDgLdKSbsGYER20ivp6GvkVwPy6MSr8krgzqolUUGB0Q==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     dependencies:
@@ -90,7 +90,7 @@ packages:
       svgo: 3.2.0
       undici: 6.6.2
       vfile: 6.0.1
-      vite: 5.1.7(@types/node@20.10.2)(sass@1.70.0)
+      vite: 5.1.7(@types/node@20.10.2)(sass@1.77.6)
       vite-imagetools: 6.2.9
       zod: 3.22.4
     transitivePeerDependencies:
@@ -105,7 +105,7 @@ packages:
       - terser
     dev: true
 
-  /@builder.io/qwik@1.4.5(@types/node@20.10.2)(sass@1.70.0)(undici@6.6.2):
+  /@builder.io/qwik@1.4.5(@types/node@20.10.2)(sass@1.77.6)(undici@6.6.2):
     resolution: {integrity: sha512-Z9bm2SGEHCW8HPZyIdWwF4WIAi7/Az2VQFFqsaeu4/O3pBFGYO2qBD+A6EwdJZhyijz8rSWsp48/zR4Nagm1Uw==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     hasBin: true
@@ -114,7 +114,7 @@ packages:
     dependencies:
       csstype: 3.1.3
       undici: 6.6.2
-      vite: 5.1.7(@types/node@20.10.2)(sass@1.70.0)
+      vite: 5.1.7(@types/node@20.10.2)(sass@1.77.6)
     transitivePeerDependencies:
       - '@types/node'
       - less
@@ -3263,8 +3263,8 @@ packages:
       is-regex: 1.1.4
     dev: true
 
-  /sass@1.70.0:
-    resolution: {integrity: sha512-uUxNQ3zAHeAx5nRFskBnrWzDUJrrvpCPD5FNAoRvTi0WwremlheES3tg+56PaVtCs5QDRX5CBLxxKMDJMEa1WQ==}
+  /sass@1.77.6:
+    resolution: {integrity: sha512-ByXE1oLD79GVq9Ht1PeHWCPMPB8XHpBuz1r85oByKHjZY6qV6rWnQovQzXJXuQ/XyE1Oj3iPk3lo28uzaRA2/Q==}
     engines: {node: '>=14.0.0'}
     hasBin: true
     dependencies:
@@ -3825,12 +3825,12 @@ packages:
       globrex: 0.1.2
       recrawl-sync: 2.2.3
       tsconfig-paths: 4.2.0
-      vite: 5.1.7(@types/node@20.10.2)(sass@1.70.0)
+      vite: 5.1.7(@types/node@20.10.2)(sass@1.77.6)
     transitivePeerDependencies:
       - supports-color
     dev: true
 
-  /vite@5.1.7(@types/node@20.10.2)(sass@1.70.0):
+  /vite@5.1.7(@types/node@20.10.2)(sass@1.77.6):
     resolution: {integrity: sha512-sgnEEFTZYMui/sTlH1/XEnVNHMujOahPLGMxn1+5sIT45Xjng1Ec1K78jRP15dSmVgg5WBin9yO81j3o9OxofA==}
     engines: {node: ^18.0.0 || >=20.0.0}
     hasBin: true
@@ -3862,7 +3862,7 @@ packages:
       esbuild: 0.19.12
       postcss: 8.4.35
       rollup: 4.10.0
-      sass: 1.70.0
+      sass: 1.77.6
     optionalDependencies:
       fsevents: 2.3.3
     dev: true
