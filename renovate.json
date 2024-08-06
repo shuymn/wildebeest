@@ -22,14 +22,15 @@
 		{
 			"groupName": "linters",
 			"extends": ["packages:linters"],
-			"matchPackageNames": ["prettier"],
-			"matchPackagePatterns": ["^@typescript-eslint/"],
-			"excludePackageNames": ["eslint-plugin-qwik"]
+			"matchPackageNames": [
+				"prettier",
+				"/^@typescript-eslint//",
+				"!eslint-plugin-qwik"
+			]
 		},
 		{
 			"groupName": "qwik",
-			"matchPackagePatterns": ["^@builder.io/qwik"],
-			"matchPackageNames": ["eslint-plugin-qwik"]
+			"matchPackageNames": ["eslint-plugin-qwik", "/^@builder.io/qwik/"]
 		}
 	]
 }
