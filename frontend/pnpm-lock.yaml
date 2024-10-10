@@ -12,16 +12,16 @@ dependencies:
 devDependencies:
   '@builder.io/qwik':
     specifier: 1.4.5
-    version: 1.4.5(@types/node@20.10.2)(sass@1.70.0)(undici@6.6.2)
+    version: 1.4.5(@types/node@20.16.11)(sass@1.70.0)(undici@6.6.2)
   '@builder.io/qwik-city':
     specifier: 1.4.5
-    version: 1.4.5(@types/node@20.10.2)(sass@1.70.0)
+    version: 1.4.5(@types/node@20.16.11)(sass@1.70.0)
   '@types/eslint':
     specifier: 8.44.8
     version: 8.44.8
   '@types/node':
-    specifier: 20.10.2
-    version: 20.10.2
+    specifier: 20.16.11
+    version: 20.16.11
   '@typescript-eslint/eslint-plugin':
     specifier: 6.13.2
     version: 6.13.2(@typescript-eslint/parser@6.13.2)(eslint@8.55.0)(typescript@5.3.3)
@@ -63,7 +63,7 @@ devDependencies:
     version: 6.6.2
   vite:
     specifier: 5.1.7
-    version: 5.1.7(@types/node@20.10.2)(sass@1.70.0)
+    version: 5.1.7(@types/node@20.16.11)(sass@1.70.0)
   vite-tsconfig-paths:
     specifier: 3.6.0
     version: 3.6.0(vite@5.1.7)
@@ -80,7 +80,7 @@ packages:
     engines: {node: '>=10'}
     dev: true
 
-  /@builder.io/qwik-city@1.4.5(@types/node@20.10.2)(sass@1.70.0):
+  /@builder.io/qwik-city@1.4.5(@types/node@20.16.11)(sass@1.70.0):
     resolution: {integrity: sha512-M9hr82u49Um8VdRDZGva66VB3E5yhXj5Q9cCe2URj/wDgLdKSbsGYER20ivp6GvkVwPy6MSr8krgzqolUUGB0Q==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     dependencies:
@@ -90,7 +90,7 @@ packages:
       svgo: 3.2.0
       undici: 6.6.2
       vfile: 6.0.1
-      vite: 5.1.7(@types/node@20.10.2)(sass@1.70.0)
+      vite: 5.1.7(@types/node@20.16.11)(sass@1.70.0)
       vite-imagetools: 6.2.9
       zod: 3.22.4
     transitivePeerDependencies:
@@ -105,7 +105,7 @@ packages:
       - terser
     dev: true
 
-  /@builder.io/qwik@1.4.5(@types/node@20.10.2)(sass@1.70.0)(undici@6.6.2):
+  /@builder.io/qwik@1.4.5(@types/node@20.16.11)(sass@1.70.0)(undici@6.6.2):
     resolution: {integrity: sha512-Z9bm2SGEHCW8HPZyIdWwF4WIAi7/Az2VQFFqsaeu4/O3pBFGYO2qBD+A6EwdJZhyijz8rSWsp48/zR4Nagm1Uw==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     hasBin: true
@@ -114,7 +114,7 @@ packages:
     dependencies:
       csstype: 3.1.3
       undici: 6.6.2
-      vite: 5.1.7(@types/node@20.10.2)(sass@1.70.0)
+      vite: 5.1.7(@types/node@20.16.11)(sass@1.70.0)
     transitivePeerDependencies:
       - '@types/node'
       - less
@@ -864,10 +864,10 @@ packages:
     resolution: {integrity: sha512-nG96G3Wp6acyAgJqGasjODb+acrI7KltPiRxzHPXnP3NgI28bpQDRv53olbqGXbfcgF5aiiHmO3xpwEpS5Ld9g==}
     dev: true
 
-  /@types/node@20.10.2:
-    resolution: {integrity: sha512-37MXfxkb0vuIlRKHNxwCkb60PNBpR94u4efQuN4JgIAm66zfCDXGSAFCef9XUWFovX2R1ok6Z7MHhtdVXXkkIw==}
+  /@types/node@20.16.11:
+    resolution: {integrity: sha512-y+cTCACu92FyA5fgQSAI8A1H429g7aSK2HsO7K4XYUWc4dY5IUz55JSDIYT6/VsOLfGy8vmvQYC2hfb0iF16Uw==}
     dependencies:
-      undici-types: 5.26.5
+      undici-types: 6.19.8
     dev: true
 
   /@types/semver@7.5.7:
@@ -3664,8 +3664,8 @@ packages:
       which-boxed-primitive: 1.0.2
     dev: true
 
-  /undici-types@5.26.5:
-    resolution: {integrity: sha512-JlCMO+ehdEIKqlFxk6IfVoAUVmgz7cU7zD/h9XZ0qzeosSHmUJVOzSQvvYSYWXkFXC+IfLKSIffhv0sVZup6pA==}
+  /undici-types@6.19.8:
+    resolution: {integrity: sha512-ve2KP6f/JnbPBFyobGHuerC9g1FYGn/F8n1LWTwNxCEzd6IfqTwUQcNXgEtmmQ6DlRrC1hrSrBnCZPokRrDHjw==}
     dev: true
 
   /undici@6.6.2:
@@ -3825,12 +3825,12 @@ packages:
       globrex: 0.1.2
       recrawl-sync: 2.2.3
       tsconfig-paths: 4.2.0
-      vite: 5.1.7(@types/node@20.10.2)(sass@1.70.0)
+      vite: 5.1.7(@types/node@20.16.11)(sass@1.70.0)
     transitivePeerDependencies:
       - supports-color
     dev: true
 
-  /vite@5.1.7(@types/node@20.10.2)(sass@1.70.0):
+  /vite@5.1.7(@types/node@20.16.11)(sass@1.70.0):
     resolution: {integrity: sha512-sgnEEFTZYMui/sTlH1/XEnVNHMujOahPLGMxn1+5sIT45Xjng1Ec1K78jRP15dSmVgg5WBin9yO81j3o9OxofA==}
     engines: {node: ^18.0.0 || >=20.0.0}
     hasBin: true
@@ -3858,7 +3858,7 @@ packages:
       terser:
         optional: true
     dependencies:
-      '@types/node': 20.10.2
+      '@types/node': 20.16.11
       esbuild: 0.19.12
       postcss: 8.4.35
       rollup: 4.10.0
