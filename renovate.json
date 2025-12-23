@@ -1,36 +1,68 @@
 {
-	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
-	"extends": ["config:recommended", "config:best-practices"],
-	"labels": ["dependencies"],
-	"lockFileMaintenance": {
-		"enabled": true
-	},
-	"major": {
-		"minimumReleaseAge": "5 days"
-	},
-	"minor": {
-		"minimumReleaseAge": "3 days"
-	},
-	"patch": {
-		"minimumReleaseAge": "2 days"
-	},
-	"packageRules": [
-		{
-			"matchUpdateTypes": ["patch", "pin"],
-			"automerge": true
-		},
-		{
-			"groupName": "linters",
-			"extends": ["packages:linters"],
-			"matchPackageNames": [
-				"prettier",
-				"/^@typescript-eslint//",
-				"!eslint-plugin-qwik"
-			]
-		},
-		{
-			"groupName": "qwik",
-			"matchPackageNames": ["eslint-plugin-qwik", "/^@builder.io/qwik/"]
-		}
-	]
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:best-practices",
+    ":timezone(Asia/Tokyo)"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "prHourlyLimit": 0,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true
+  },
+  "major": {
+    "minimumReleaseAge": "5 days"
+  },
+  "minor": {
+    "minimumReleaseAge": "3 days"
+  },
+  "patch": {
+    "minimumReleaseAge": "2 days"
+  },
+  "assignAutomerge": true,
+  "internalChecksAsSuccess": true,
+  "reviewersFromCodeOwners": true,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github\\/workflows\\/.PRs\\.yml$/"
+      ],
+      "matchStrings": [
+        "SQLDEF_VERSION: (?<currentValue>v?\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "sqldef/sqldef"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "matchCurrentVersion": ">=1.0.0",
+      "automerge": true
+    },
+    {
+      "groupName": "linters",
+      "extends": [
+        "packages:linters"
+      ],
+      "matchPackageNames": [
+        "prettier",
+        "/^@typescript-eslint//",
+        "!eslint-plugin-qwik"
+      ]
+    },
+    {
+      "groupName": "qwik",
+      "matchPackageNames": [
+        "eslint-plugin-qwik",
+        "/^@builder.io/qwik/"
+      ]
+    }
+  ]
 }
