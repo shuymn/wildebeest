@@ -51,7 +51,7 @@ jobs:
           GH_OWNER: ${{ github.repository_owner }}
           OVERRIDE_NAME_SUFFIX: ${{ vars.OVERRIDE_NAME_SUFFIX }}
 
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: hashicorp/setup-terraform@a1502cd9e758c50496cc9ac5308c4843bcd56d36 # v3
 
       - uses: pnpm/action-setup@v2
