@@ -23,7 +23,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SQLDEF_VERSION: v0.17.32
+  SQLDEF_VERSION: v3.8.13
 
 jobs:
   test-api:
