@@ -24,7 +24,7 @@
 		"eslint-plugin-qwik": "1.4.5",
 		"hono": "3.11.4",
 		"lorem-ipsum": "2.0.8",
-		"postcss": "8.4.35",
+		"postcss": "8.5.6",
 		"prettier": "3.1.0",
 		"sass": "1.97.1",
 		"tailwindcss": "3.4.19",
