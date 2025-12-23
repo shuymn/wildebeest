@@ -4,23 +4,26 @@ on:
     branches:
       - main
     paths-ignore:
-      - '.github/workflows/**'
-      - '!.github/workflows/PRs.yml'
-      - '*.md'
-      - 'docs/**'
-      - 'renovate.json'
+      - ".github/workflows/**"
+      - "!.github/workflows/PRs.yml"
+      - "*.md"
+      - "docs/**"
+      - "renovate.json"
   pull_request:
     paths-ignore:
-      - '.github/workflows/**'
-      - '!.github/workflows/PRs.yml'
-      - '*.md'
-      - 'docs/**'
-      - 'renovate.json'
+      - ".github/workflows/**"
+      - "!.github/workflows/PRs.yml"
+      - "*.md"
+      - "docs/**"
+      - "renovate.json"
 
 # This allows a subsequently queued workflow run to interrupt previous runs
 concurrency:
-  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
+
+env:
+  SQLDEF_VERSION: v0.16.13
 
 jobs:
   test-api:
@@ -96,7 +99,7 @@ jobs:
           go-version: stable
 
       - name: Install sqlite3def
-        run: go install github.com/sqldef/sqldef/cmd/sqlite3def@v0.16.13
+        run: go install github.com/sqldef/sqldef/cmd/sqlite3def@${{ env.SQLDEF_VERSION }}
 
       - name: Check DB schema
         run: |
