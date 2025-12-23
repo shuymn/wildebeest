@@ -24,7 +24,7 @@
 		"prettier": "3.1.0",
 		"simple-git-hooks": "2.13.1",
 		"sql-formatter": "15.2.0",
-		"typescript": "5.3.3",
+		"typescript": "5.9.3",
 		"vite": "5.4.21",
 		"vite-tsconfig-paths": "4.3.2",
 		"vitest": "1.6.1",
