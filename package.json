@@ -57,7 +57,7 @@
 	"dependencies": {
 		"cookie": "0.7.2",
 		"toucan-js": "3.4.0",
-		"zod": "3.22.4"
+		"zod": "3.25.76"
 	},
 	"simple-git-hooks": {
 		"pre-commit": "npm exec --package npm-run-all -- run-p lint pretty"
