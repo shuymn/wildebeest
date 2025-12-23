@@ -93,13 +93,14 @@ jobs:
         working-directory: frontend
         run: npm run types-check
 
-      - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version: stable
-
       - name: Install sqlite3def
-        run: go install github.com/sqldef/sqldef/cmd/sqlite3def@${{ env.SQLDEF_VERSION }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo sqldef/sqldef --pattern "sqlite3def_linux_amd64.tar.gz" "${{ env.SQLDEF_VERSION }}" --output - | tar -xzf -
+          mv sqlite3def /usr/local/bin/sqlite3def
+          chmod +x /usr/local/bin/sqlite3def
+          sqlite3def --version
 
       - name: Check DB schema
         run: |
