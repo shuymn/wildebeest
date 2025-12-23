@@ -11,8 +11,8 @@ dependencies:
 
 devDependencies:
   '@builder.io/qwik':
-    specifier: 1.4.5
-    version: 1.4.5(@types/node@20.10.2)(sass@1.70.0)(undici@6.6.2)
+    specifier: 1.7.3
+    version: 1.7.3(@types/node@20.10.2)(sass@1.70.0)
   '@builder.io/qwik-city':
     specifier: 1.4.5
     version: 1.4.5(@types/node@20.10.2)(sass@1.70.0)
@@ -101,15 +101,12 @@ packages:
       - terser
     dev: true
 
-  /@builder.io/qwik@1.4.5(@types/node@20.10.2)(sass@1.70.0)(undici@6.6.2):
-    resolution: {integrity: sha512-Z9bm2SGEHCW8HPZyIdWwF4WIAi7/Az2VQFFqsaeu4/O3pBFGYO2qBD+A6EwdJZhyijz8rSWsp48/zR4Nagm1Uw==}
+  /@builder.io/qwik@1.7.3(@types/node@20.10.2)(sass@1.70.0):
+    resolution: {integrity: sha512-lVRT4j9redY4X+iOy26U2vhychJgX24aaleu3IuBlEwD8MjCU5k46ApHq+cGqI24/kbqjirPH3SIxtVSByEG/A==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     hasBin: true
-    peerDependencies:
-      undici: '*'
     dependencies:
       csstype: 3.2.3
-      undici: 6.6.2
       vite: 5.4.20(@types/node@20.10.2)(sass@1.70.0)
     transitivePeerDependencies:
       - '@types/node'
