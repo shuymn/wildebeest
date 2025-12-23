@@ -52,7 +52,7 @@ jobs:
         run: npm run test -- --shard ${{ matrix.shard }}/${{ strategy.job-total }} --coverage
 
       - name: Upload coverage
-        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
+        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage/coverage-final.json
