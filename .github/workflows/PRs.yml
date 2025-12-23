@@ -106,7 +106,7 @@ jobs:
         run: |
           DB_ID=$(yq --output-format json wrangler.toml | jq --raw-output --exit-status '.d1_databases | first | .database_id')
           npm run database:migrate -- --local
-          sqlite3def --enable-drop-table --config sqldef.yml --dry-run \
+          sqlite3def --enable-drop --config sqldef.yml --dry-run \
             ".wrangler/state/v3/d1/${DB_ID:?}/db.sqlite" < schema.sql | head -n 1 | grep -E '^-- Nothing is modified --$'
 
   test-ui:
