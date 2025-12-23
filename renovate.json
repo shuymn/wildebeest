@@ -28,7 +28,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/^\\.github\\/workflows\\/.PRs\\.yml$/"
+        "/^\\.github/workflows/PRs\\.yml$/"
       ],
       "matchStrings": [
         "SQLDEF_VERSION: (?<currentValue>v?\\d+\\.\\d+\\.\\d+)"
