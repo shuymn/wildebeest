@@ -98,18 +98,12 @@ jobs:
               }' \
               -H 'Authorization: Bearer ${{ secrets.CF_API_TOKEN }}'
 
-      - name: Check D1 database
-        run: |
-          alpha_exists=$(npx wrangler d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}" and .version == "alpha") | .name')
-          beta_exists=$(npx wrangler d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1" and .version == "beta") | .name')
-          [[ -n "$alpha_exists" && -z "$beta_exists" ]] && echo "Error: There is an alpha version of D1 but no corresponding beta version." && exit 1 || exit 0
-
       - name: Create D1 database
         continue-on-error: true
         run: npx wrangler d1 create wildebeest-${{ env.NAME_SUFFIX }}-v1
 
       - name: retrieve D1 database
-        run: npx wrangler d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1" and .version == "beta") | .uuid' | awk '{print "d1_id="$1}' >> $GITHUB_ENV
+        run: npx wrangler d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1") | .uuid' | awk '{print "d1_id="$1}' >> $GITHUB_ENV
 
       - name: migrate D1 database
         run: |
