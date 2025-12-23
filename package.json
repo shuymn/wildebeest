@@ -4,7 +4,7 @@
 	"type": "module",
 	"author": "Sven Sauleau <sven@cloudflare.com>",
 	"devDependencies": {
-		"@cloudflare/pages-plugin-cloudflare-access": "1.0.3",
+		"@cloudflare/pages-plugin-cloudflare-access": "1.0.5",
 		"@cloudflare/workers-types": "4.20240208.0",
 		"@playwright/test": "1.57.0",
 		"@types/better-sqlite3": "7.6.13",

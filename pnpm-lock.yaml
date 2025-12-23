@@ -17,8 +17,8 @@ dependencies:
 
 devDependencies:
   '@cloudflare/pages-plugin-cloudflare-access':
-    specifier: 1.0.3
-    version: 1.0.3
+    specifier: 1.0.5
+    version: 1.0.5
   '@cloudflare/workers-types':
     specifier: 4.20240208.0
     version: 4.20240208.0
@@ -141,8 +141,8 @@ packages:
       mime: 3.0.0
     dev: true
 
-  /@cloudflare/pages-plugin-cloudflare-access@1.0.3:
-    resolution: {integrity: sha512-hnKhUMvhMIFkLxwYO+b1Hw58nG5CJjCm5YVMJ5073NKxm8pHTk7gGUhy39ugvaXDJ0pAeb07axoyJb0L/4xIyg==}
+  /@cloudflare/pages-plugin-cloudflare-access@1.0.5:
+    resolution: {integrity: sha512-EGVSaUoFLxKfds2tgLWGzIk/xXLO2RqwZDUKsH/olXdNOckOMr4ShR8Pt1AJpZrakCDNiDVXmfLDJYTufxuQRw==}
     dev: true
 
   /@cloudflare/workerd-darwin-64@1.20230724.0:
