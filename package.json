@@ -7,7 +7,7 @@
 		"@cloudflare/pages-plugin-cloudflare-access": "1.0.3",
 		"@cloudflare/workers-types": "4.20240208.0",
 		"@playwright/test": "1.57.0",
-		"@types/better-sqlite3": "7.6.9",
+		"@types/better-sqlite3": "7.6.13",
 		"@types/cookie": "0.6.0",
 		"@types/node": "20.8.3",
 		"@typescript-eslint/eslint-plugin": "6.13.2",
