@@ -23,7 +23,7 @@
 		"playwright-core": "1.57.0",
 		"prettier": "3.1.0",
 		"simple-git-hooks": "2.13.1",
-		"sql-formatter": "15.2.0",
+		"sql-formatter": "15.6.12",
 		"typescript": "5.9.3",
 		"vite": "5.4.21",
 		"vite-tsconfig-paths": "4.3.2",
