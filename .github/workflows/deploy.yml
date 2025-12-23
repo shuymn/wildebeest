@@ -108,7 +108,7 @@ jobs:
       - name: migrate D1 database
         run: |
           echo -e "[[d1_databases]]\nbinding=\"DATABASE\"\ndatabase_name=\"wildebeest-${{ env.NAME_SUFFIX }}-v1\"\ndatabase_id=\"${{ env.d1_id }}\"" >> wrangler.toml
-          npx wrangler d1 migrations apply wildebeest-${{ env.NAME_SUFFIX }}-v1
+          npx wrangler d1 migrations apply --remote wildebeest-${{ env.NAME_SUFFIX }}-v1
 
       - name: retrieve Zero Trust organization
         run: |
