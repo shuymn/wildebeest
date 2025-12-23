@@ -59,8 +59,8 @@ devDependencies:
     specifier: 5.9.3
     version: 5.9.3
   undici:
-    specifier: 6.22.0
-    version: 6.22.0
+    specifier: 7.16.0
+    version: 7.16.0
   vite:
     specifier: 5.4.21
     version: 5.4.21(@types/node@20.10.2)(sass@1.97.1)
@@ -83,7 +83,7 @@ packages:
       '@types/mdx': 2.0.13
       source-map: 0.7.6
       svgo: 3.3.2
-      undici: 6.22.0
+      undici: 7.16.0
       valibot: 1.2.0(typescript@5.9.3)
       vfile: 6.0.3
       vite: 5.4.21(@types/node@20.10.2)(sass@1.97.1)
@@ -4298,9 +4298,9 @@ packages:
     resolution: {integrity: sha512-JlCMO+ehdEIKqlFxk6IfVoAUVmgz7cU7zD/h9XZ0qzeosSHmUJVOzSQvvYSYWXkFXC+IfLKSIffhv0sVZup6pA==}
     dev: true
 
-  /undici@6.22.0:
-    resolution: {integrity: sha512-hU/10obOIu62MGYjdskASR3CUAiYaFTtC9Pa6vHyf//mAipSvSQg6od2CnJswq7fvzNS3zJhxoRkgNVaHurWKw==}
-    engines: {node: '>=18.17'}
+  /undici@7.16.0:
+    resolution: {integrity: sha512-QEg3HPMll0o3t2ourKwOeUAZ159Kn9mx5pnzHRQO8+Wixmh88YdZRiIwat0iNzNNXn0yoEtXJqFpyW7eM8BV7g==}
+    engines: {node: '>=20.18.1'}
     dev: true
 
   /unified@11.0.5:
