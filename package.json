@@ -26,7 +26,7 @@
 		"sql-formatter": "15.2.0",
 		"typescript": "5.3.3",
 		"vite": "5.4.21",
-		"vite-tsconfig-paths": "4.2.0",
+		"vite-tsconfig-paths": "4.3.2",
 		"vitest": "1.6.1",
 		"vitest-environment-miniflare": "2.14.2",
 		"wrangler": "3.4.0"
