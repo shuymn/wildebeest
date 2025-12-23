@@ -42,7 +42,7 @@ export const ImagesModal = component$<Props>(({ images, idxOfCurrentImage: initi
 			)}
 			<button
 				data-testid="close-btn"
-				class="cursor-pointer absolute top-7 right-7 text-4xl opacity-60 hover:opacity-90 focus-visible:opacity-90"
+				class="cursor-pointer absolute top-7 right-7 z-10 text-4xl opacity-60 hover:opacity-90 focus-visible:opacity-90"
 				onClick$={() => onCloseImagesModal$()}
 			>
 				<i class="fa-solid fa-xmark"></i>
