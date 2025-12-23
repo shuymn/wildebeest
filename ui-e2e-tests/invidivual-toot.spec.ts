@@ -87,7 +87,9 @@ test("Navigation to and view of a toot's replies", async ({ page }) => {
 test("Correctly hides and displays the toot's content based on the spoiler text", async ({ page }) => {
 	await page.goto('http://127.0.0.1:8788/explore')
 
-	await page.getByText('who am I?').click()
+	// Use the same navigation pattern as other tests to avoid flaky clicks
+	// when sticky headers or other elements intercept the click
+	await page.locator('article').filter({ hasText: 'who am I?' }).locator('i.fa-globe + span').click()
 
 	await expect(page.getByRole('button', { name: 'Back' })).toBeVisible()
 

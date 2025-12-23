@@ -23,8 +23,8 @@ devDependencies:
     specifier: 4.20240208.0
     version: 4.20240208.0
   '@playwright/test':
-    specifier: 1.41.2
-    version: 1.41.2
+    specifier: 1.57.0
+    version: 1.57.0
   '@types/better-sqlite3':
     specifier: 7.6.9
     version: 7.6.9
@@ -65,8 +65,8 @@ devDependencies:
     specifier: 6.1.2
     version: 6.1.2
   playwright-core:
-    specifier: 1.41.2
-    version: 1.41.2
+    specifier: 1.57.0
+    version: 1.57.0
   prettier:
     specifier: 3.1.0
     version: 3.1.0
@@ -912,12 +912,12 @@ packages:
       fastq: 1.17.1
     dev: true
 
-  /@playwright/test@1.41.2:
-    resolution: {integrity: sha512-qQB9h7KbibJzrDpkXkYvsmiDJK14FULCCZgEcoe2AvFAS64oCirWTwzTlAYEbKaRxWs5TFesE1Na6izMv3HfGg==}
-    engines: {node: '>=16'}
+  /@playwright/test@1.57.0:
+    resolution: {integrity: sha512-6TyEnHgd6SArQO8UO2OMTxshln3QMWBtPGrOCgs3wVEmQmwyuNtB10IZMfmYDE0riwNR1cu4q+pPcxMVtaG3TA==}
+    engines: {node: '>=18'}
     hasBin: true
     dependencies:
-      playwright: 1.41.2
+      playwright: 1.57.0
     dev: true
 
   /@rollup/rollup-android-arm-eabi@4.10.0:
@@ -3198,18 +3198,18 @@ packages:
       pathe: 1.1.2
     dev: true
 
-  /playwright-core@1.41.2:
-    resolution: {integrity: sha512-VaTvwCA4Y8kxEe+kfm2+uUUw5Lubf38RxF7FpBxLPmGe5sdNkSg5e3ChEigaGrX7qdqT3pt2m/98LiyvU2x6CA==}
-    engines: {node: '>=16'}
+  /playwright-core@1.57.0:
+    resolution: {integrity: sha512-agTcKlMw/mjBWOnD6kFZttAAGHgi/Nw0CZ2o6JqWSbMlI219lAFLZZCyqByTsvVAJq5XA5H8cA6PrvBRpBWEuQ==}
+    engines: {node: '>=18'}
     hasBin: true
     dev: true
 
-  /playwright@1.41.2:
-    resolution: {integrity: sha512-v0bOa6H2GJChDL8pAeLa/LZC4feoAMbSQm1/jF/ySsWWoaNItvrMP7GEkvEEFyCTUYKMxjQKaTSg5up7nR6/8A==}
-    engines: {node: '>=16'}
+  /playwright@1.57.0:
+    resolution: {integrity: sha512-ilYQj1s8sr2ppEJ2YVadYBN0Mb3mdo9J0wQ+UuDhzYqURwSoW4n1Xs5vs7ORwgDGmyEh33tRMeS8KhdkMoLXQw==}
+    engines: {node: '>=18'}
     hasBin: true
     dependencies:
-      playwright-core: 1.41.2
+      playwright-core: 1.57.0
     optionalDependencies:
       fsevents: 2.3.2
     dev: true
