@@ -6,8 +6,8 @@ settings:
 
 devDependencies:
   '@cloudflare/workers-types':
-    specifier: 4.20240208.0
-    version: 4.20240208.0
+    specifier: 4.20251220.0
+    version: 4.20251220.0
   toucan-js:
     specifier: 3.3.1
     version: 3.3.1
@@ -71,8 +71,8 @@ packages:
     dev: true
     optional: true
 
-  /@cloudflare/workers-types@4.20240208.0:
-    resolution: {integrity: sha512-MVGTTjZpJu4kJONvai5SdJzWIhOJbuweVZ3goI7FNyG+JdoQH41OoB+nMhLsX626vPLZVWGPIWsiSo/WZHzgQw==}
+  /@cloudflare/workers-types@4.20251220.0:
+    resolution: {integrity: sha512-TiWnrGblN9IOa0Hg8+D0EOkYTjMVcz3E+NhZnXCHLWh+JGNjx4Dp4mgBEVj1Cyu4rg9mzfEpKE0WG4gDawH55A==}
     dev: true
 
   /@esbuild-plugins/node-globals-polyfill@0.1.1(esbuild@0.16.3):
