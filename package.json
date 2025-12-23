@@ -25,7 +25,7 @@
 		"simple-git-hooks": "2.9.0",
 		"sql-formatter": "15.2.0",
 		"typescript": "5.3.3",
-		"vite": "5.4.20",
+		"vite": "5.4.21",
 		"vite-tsconfig-paths": "4.2.0",
 		"vitest": "1.6.1",
 		"vitest-environment-miniflare": "2.14.2",
