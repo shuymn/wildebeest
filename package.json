@@ -9,7 +9,7 @@
 		"@playwright/test": "1.57.0",
 		"@types/better-sqlite3": "7.6.13",
 		"@types/cookie": "0.6.0",
-		"@types/node": "20.19.27",
+		"@types/node": "24.10.4",
 		"@typescript-eslint/eslint-plugin": "6.13.2",
 		"@typescript-eslint/parser": "6.13.2",
 		"@vitest/coverage-v8": "2.1.9",
