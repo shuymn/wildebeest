@@ -16,7 +16,7 @@ export default defineWorkersProject(async () => {
 			include: ['./backend/{src,test}/**/*.test.ts'],
 			includeSource: ['./backend/src/**/*.ts'],
 			coverage: {
-				provider: 'v8',
+				provider: 'istanbul',
 				reporter: ['json'],
 			},
 			setupFiles: ['./backend/test/apply-migrations.ts'],
