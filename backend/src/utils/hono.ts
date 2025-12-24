@@ -68,21 +68,26 @@ export const createApp = (options: { app?: Hono<HonoEnv> }): Hono<HonoEnv> => {
 			const subPath = filePathToPath(filename)
 			const path = rootPath.replace(/\/$/, '') + subPath
 
+			// Create a wrapped Hono app with middleware and route handler together
+			// This is necessary because in Hono v4+, a middleware-only Hono app
+			// mounted via .route() will not have its middleware invoked if it has no handlers
+			const wrappedApp = new Hono<HonoEnv>()
+
 			if (routeGET?.test(path)) {
-				subApp.route(
-					subPath,
-					new Hono<HonoEnv>().use((c, next) => {
-						const middleware = c.req.method === 'GET' ? publicMiddleware() : privateMiddleware()
-						return middleware(c, next)
-					})
-				)
+				wrappedApp.use((c, next) => {
+					const middleware = c.req.method === 'GET' ? publicMiddleware() : privateMiddleware()
+					return middleware(c, next)
+				})
 			} else if (routeALL?.test(path)) {
-				subApp.route(subPath, new Hono<HonoEnv>().use(publicMiddleware()))
+				wrappedApp.use(publicMiddleware())
 			} else if (filename !== 'index.ts') {
-				subApp.route(subPath, new Hono<HonoEnv>().use(privateMiddleware()))
+				wrappedApp.use(privateMiddleware())
 			}
 
-			subApp.route(subPath, routeDefault)
+			// Mount the route handler inside the wrapped app
+			// With correct directory ordering (child directories first), the path stripping works correctly
+			wrappedApp.route('/', routeDefault)
+			subApp.route(subPath, wrappedApp)
 		}
 
 		app.route(rootPath, subApp)
@@ -93,7 +98,7 @@ export const createApp = (options: { app?: Hono<HonoEnv> }): Hono<HonoEnv> => {
 
 const publicMiddleware = (): MiddlewareHandler<HonoEnv> => {
 	return async (c, next) => {
-		if (import.meta.env.NODE_ENV === 'test') {
+		if (import.meta.env.MODE === 'test') {
 			if (!(c as { env?: { data?: { connectedActor?: unknown } } }).env?.data?.connectedActor) {
 				c.env = {
 					...c.env,
@@ -105,7 +110,7 @@ const publicMiddleware = (): MiddlewareHandler<HonoEnv> => {
 			return next()
 		}
 
-		const authorization = c.req.headers.get('Authorization') || ''
+		const authorization = c.req.header('Authorization') || ''
 		const token = authorization.replace('Bearer ', '')
 		if (token === '') {
 			c.env = {
@@ -122,14 +127,14 @@ const publicMiddleware = (): MiddlewareHandler<HonoEnv> => {
 
 const privateMiddleware = (): MiddlewareHandler<HonoEnv> => {
 	return async (c, next) => {
-		if (import.meta.env.NODE_ENV === 'test') {
+		if (import.meta.env.MODE === 'test') {
 			if ((c as { env?: { data?: { connectedActor?: unknown } } }).env?.data?.connectedActor) {
 				return next()
 			}
 			return notAuthorized('missing authorization')
 		}
 
-		const authorization = c.req.headers.get('Authorization') || ''
+		const authorization = c.req.header('Authorization') || ''
 		const token = authorization.replace('Bearer ', '')
 		if (token === '') {
 			return notAuthorized('missing authorization')
@@ -462,7 +467,7 @@ if (import.meta.vitest) {
 			const headers = { authorization: 'Bearer APPID.' + TEST_JWT }
 			const request = new Request('https://example.com', { headers })
 
-			vi.stubEnv('NODE_ENV', 'not-test')
+			vi.stubEnv('MODE', 'not-test')
 			const res = await app.fetch(request, { DATABASE: db, ACCESS_AUD: accessAud, ACCESS_AUTH_DOMAIN: accessDomain })
 			vi.unstubAllEnvs()
 
