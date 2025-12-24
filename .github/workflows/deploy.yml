@@ -106,7 +106,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: retrieve D1 database
-        run: npx wrangler d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1") | .uuid' | awk '{print "d1_id=" $1}' >> "$GITHUB_ENV"
+        run: npx wrangler d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1") | .uuid' | awk '{print "d1_id="$1}' >> "$GITHUB_ENV"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
@@ -130,7 +130,7 @@ jobs:
 
       - name: retrieve Terraform state KV namespace
         run: |
-          npx wrangler kv:namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv=" $1}' >> "$GITHUB_ENV"
+          npx wrangler kv:namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv="$1}' >> "$GITHUB_ENV"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
@@ -178,7 +178,7 @@ jobs:
         run: |
           curl "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CF_ACCOUNT_ID }}/workers/durable_objects/namespaces" \
               -H "Authorization: Bearer ${{ secrets.CF_API_TOKEN }}" \
-              | jq -r '.result[] | select( .script == "wildebeest-do" ) | .id' | awk '{print "do_cache_id=" $1}' >> "$GITHUB_ENV"
+              | jq -r '.result[] | select( .script == "wildebeest-do" ) | .id' | awk '{print "do_cache_id="$1}' >> "$GITHUB_ENV"
 
       - name: Configure
         run: terraform plan && terraform apply -auto-approve
@@ -201,7 +201,7 @@ jobs:
 
       - name: retrieve Terraform state KV namespace
         if: ${{ env.tfstate_kv == '' }}
-        run: npx wrangler kv:namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv=" $1}' >> "$GITHUB_ENV"
+        run: npx wrangler kv:namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv="$1}' >> "$GITHUB_ENV"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
