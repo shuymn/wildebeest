@@ -128,7 +128,7 @@ jobs:
         run: |
           PLAYWRIGHT_VERSION=$(pnpm ls @playwright/test --json | jq --exit-status --raw-output 'first | .devDependencies["@playwright/test"].version')
           echo "Playwright version: ${PLAYWRIGHT_VERSION}"
-          echo "PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION}" >> $GITHUB_ENV
+          echo "PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION}" >> "$GITHUB_ENV"
 
       - name: Cache Playwright
         id: cache-playwright-browsers

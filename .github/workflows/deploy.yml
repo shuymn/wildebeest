@@ -43,9 +43,9 @@ jobs:
         run: |
           if [ -z "$OVERRIDE_NAME_SUFFIX" ]
           then
-              echo $GH_OWNER | awk '{ print "NAME_SUFFIX=" tolower($0) }' >> ${GITHUB_ENV}
+              echo "$GH_OWNER" | awk '{ print "NAME_SUFFIX=" tolower($0) }' >> "$GITHUB_ENV"
           else
-              echo $OVERRIDE_NAME_SUFFIX | awk '{ print "NAME_SUFFIX=" tolower($0) }' >> ${GITHUB_ENV}
+              echo "$OVERRIDE_NAME_SUFFIX" | awk '{ print "NAME_SUFFIX=" tolower($0) }' >> "$GITHUB_ENV"
           fi
         env:
           GH_OWNER: ${{ github.repository_owner }}
@@ -65,7 +65,7 @@ jobs:
 
       - name: Configure Cloudflare Images variants
         run: |
-          curl -XPOST https://api.cloudflare.com/client/v4/accounts/${{ secrets.CF_ACCOUNT_ID }}/images/v1/variants \
+          curl -XPOST "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CF_ACCOUNT_ID }}/images/v1/variants" \
               -d '{
                   "id": "avatar",
                   "options": {
@@ -74,9 +74,9 @@ jobs:
                       "height": 400
                   }
               }' \
-              -H 'Authorization: Bearer ${{ secrets.CF_API_TOKEN }}'
+              -H "Authorization: Bearer ${{ secrets.CF_API_TOKEN }}"
 
-          curl -XPOST https://api.cloudflare.com/client/v4/accounts/${{ secrets.CF_ACCOUNT_ID }}/images/v1/variants \
+          curl -XPOST "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CF_ACCOUNT_ID }}/images/v1/variants" \
               -d '{
                   "id": "header",
                   "options": {
@@ -85,23 +85,23 @@ jobs:
                       "height": 500
                   }
               }' \
-              -H 'Authorization: Bearer ${{ secrets.CF_API_TOKEN }}'
+              -H "Authorization: Bearer ${{ secrets.CF_API_TOKEN }}"
 
-          curl -XPOST https://api.cloudflare.com/client/v4/accounts/${{ secrets.CF_ACCOUNT_ID }}/images/v1/variants \
+          curl -XPOST "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CF_ACCOUNT_ID }}/images/v1/variants" \
               -d '{
                   "id": "usercontent",
                   "options": {
                       "metadata": "copyright"
                   }
               }' \
-              -H 'Authorization: Bearer ${{ secrets.CF_API_TOKEN }}'
+              -H "Authorization: Bearer ${{ secrets.CF_API_TOKEN }}"
 
       - name: Create D1 database
         continue-on-error: true
         run: npx wrangler d1 create wildebeest-${{ env.NAME_SUFFIX }}-v1
 
       - name: retrieve D1 database
-        run: npx wrangler d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1") | .uuid' | awk '{print "d1_id="$1}' >> $GITHUB_ENV
+        run: npx wrangler d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1") | .uuid' | awk '{print "d1_id=" $1}' >> "$GITHUB_ENV"
 
       - name: migrate D1 database
         run: |
@@ -113,13 +113,13 @@ jobs:
 
       - name: retrieve Zero Trust organization
         run: |
-          auth_domain=$(curl https://api.cloudflare.com/client/v4/accounts/${{ secrets.CF_ACCOUNT_ID }}/access/organizations \
-              -H 'Authorization: Bearer ${{ secrets.CF_API_TOKEN }}' | jq -r '.result.auth_domain')
-          printf "auth_domain=$auth_domain" >> $GITHUB_ENV
+          auth_domain=$(curl "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CF_ACCOUNT_ID }}/access/organizations" \
+              -H "Authorization: Bearer ${{ secrets.CF_API_TOKEN }}" | jq -r '.result.auth_domain')
+          printf "auth_domain=%s\n" "$auth_domain" >> "$GITHUB_ENV"
 
       - name: retrieve Terraform state KV namespace
         run: |
-          npx wrangler kv:namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv="$1}' >> $GITHUB_ENV
+          npx wrangler kv:namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv=" $1}' >> "$GITHUB_ENV"
 
       - name: Init
         run: terraform init
@@ -128,13 +128,13 @@ jobs:
       - name: download Terraform state
         if: ${{ env.tfstate_kv != '' }}
         run: |
-          npx wrangler kv:key get --namespace-id=${{ env.tfstate_kv }} terraform.tfstate > ./tf/terraform.tfstate
+          npx wrangler kv:key get --namespace-id="${{ env.tfstate_kv }}" terraform.tfstate > ./tf/terraform.tfstate
           chmod 777 ./tf/terraform.tfstate
 
       - name: download VAPID keys
         if: ${{ env.tfstate_kv != '' }}
         continue-on-error: true
-        run: npx wrangler kv:key get --namespace-id=${{ env.tfstate_kv }} vapid_jwk | jq . > ./tf/vapid_jwk
+        run: npx wrangler kv:key get --namespace-id="${{ env.tfstate_kv }}" vapid_jwk | jq . > ./tf/vapid_jwk
 
       - name: generate VAPID keys if needed
         run: |
@@ -148,14 +148,14 @@ jobs:
 
       - name: Publish DO
         run: |
-          pnpm --dir do install
+          pnpm --dir "do" install
           npx wrangler deploy --config do/wrangler.toml
 
       - name: Retrieve DO namespace
         run: |
-          curl https://api.cloudflare.com/client/v4/accounts/${{ secrets.CF_ACCOUNT_ID }}/workers/durable_objects/namespaces \
-              -H 'Authorization: Bearer ${{ secrets.CF_API_TOKEN }}' \
-              | jq -r '.result[] | select( .script == "wildebeest-do" ) | .id' | awk '{print "do_cache_id="$1}' >> $GITHUB_ENV
+          curl "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CF_ACCOUNT_ID }}/workers/durable_objects/namespaces" \
+              -H "Authorization: Bearer ${{ secrets.CF_API_TOKEN }}" \
+              | jq -r '.result[] | select( .script == "wildebeest-do" ) | .id' | awk '{print "do_cache_id=" $1}' >> "$GITHUB_ENV"
 
       - name: Configure
         run: terraform plan && terraform apply -auto-approve
@@ -178,13 +178,13 @@ jobs:
 
       - name: retrieve Terraform state KV namespace
         if: ${{ env.tfstate_kv == '' }}
-        run: npx wrangler kv:namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv="$1}' >> $GITHUB_ENV
+        run: npx wrangler kv:namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv=" $1}' >> "$GITHUB_ENV"
 
       - name: store VAPID keys state
-        run: npx wrangler kv:key put --namespace-id=${{ env.tfstate_kv }} vapid_jwk --path=./tf/vapid_jwk
+        run: npx wrangler kv:key put --namespace-id="${{ env.tfstate_kv }}" vapid_jwk --path=./tf/vapid_jwk
 
       - name: store Terraform state
-        run: npx wrangler kv:key put --namespace-id=${{ env.tfstate_kv }} terraform.tfstate --path=./tf/terraform.tfstate
+        run: npx wrangler kv:key put --namespace-id="${{ env.tfstate_kv }}" terraform.tfstate --path=./tf/terraform.tfstate
 
       - name: Create Queue
         continue-on-error: true
@@ -193,24 +193,29 @@ jobs:
       - name: Publish consumer
         run: |
           echo "*** pre commands ***"
-          echo -e "name = \"wildebeest-consumer-${{ env.NAME_SUFFIX }}\"\n" >> consumer/wrangler.toml
+          cat <<EOF >> consumer/wrangler.toml
+          name = "wildebeest-consumer-${{ env.NAME_SUFFIX }}"
 
-          echo -e "[[queues.consumers]]\n" >> consumer/wrangler.toml
-          echo -e "max_batch_size = 10\n" >> consumer/wrangler.toml
-          echo -e "max_batch_timeout = 30\n" >> consumer/wrangler.toml
-          echo -e "max_retries = 10\n" >> consumer/wrangler.toml
-          echo -e "queue = \"wildebeest-${{ env.NAME_SUFFIX }}\"\n" >> consumer/wrangler.toml
+          [[queues.consumers]]
+          max_batch_size = 10
+          max_batch_timeout = 30
+          max_retries = 10
+          queue = "wildebeest-${{ env.NAME_SUFFIX }}"
 
-          echo -e "[[d1_databases]]\nbinding=\"DATABASE\"\ndatabase_name=\"wildebeest-${{ env.NAME_SUFFIX }}-v1\"\ndatabase_id=\"${{ env.d1_id }}\"\n" >> consumer/wrangler.toml
+          [[d1_databases]]
+          binding="DATABASE"
+          database_name="wildebeest-${{ env.NAME_SUFFIX }}-v1"
+          database_id="${{ env.d1_id }}"
 
-          echo -e "[durable_objects]\n" >> consumer/wrangler.toml
-          echo -e "bindings=[" >> consumer/wrangler.toml
-          echo -e "{name=\"DO_CACHE\",class_name=\"WildebeestCache\",script_name=\"wildebeest-do\"}," >> consumer/wrangler.toml
-          echo -e "]" >> consumer/wrangler.toml
+          [durable_objects]
+          bindings=[
+          {name="DO_CACHE",class_name="WildebeestCache",script_name="wildebeest-do"},
+          ]
 
-          echo -e "[vars]\n" >> consumer/wrangler.toml
-          echo -e "DOMAIN=\"${{ vars.CF_DEPLOY_DOMAIN }}\"\n" >> consumer/wrangler.toml
-          echo -e "ADMIN_EMAIL=\"${{ vars.ADMIN_EMAIL }}\"\n" >> consumer/wrangler.toml
+          [vars]
+          DOMAIN="${{ vars.CF_DEPLOY_DOMAIN }}"
+          ADMIN_EMAIL="${{ vars.ADMIN_EMAIL }}"
+          EOF
 
           pnpm --dir consumer install
           echo "******"
@@ -218,9 +223,9 @@ jobs:
 
       - name: add Queue producer to Pages
         run: |
-          curl https://api.cloudflare.com/client/v4/accounts/${{ secrets.CF_ACCOUNT_ID }}/pages/projects/wildebeest-${{ env.NAME_SUFFIX }} \
+          curl "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CF_ACCOUNT_ID }}/pages/projects/wildebeest-${{ env.NAME_SUFFIX }}" \
               -XPATCH \
-              -H 'Authorization: Bearer ${{ secrets.CF_API_TOKEN }}' \
+              -H "Authorization: Bearer ${{ secrets.CF_API_TOKEN }}" \
               -d  '{
                   "deployment_configs": {
                     "production": {
