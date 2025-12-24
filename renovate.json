@@ -76,7 +76,8 @@
         "npm"
       ],
       "matchPackageNames": [
-        "@cloudflare/vitest-pool-workers"
+        "@vitest/coverage-istanbul",
+        "vitest"
       ],
       "matchUpdateTypes": [
         "major"
