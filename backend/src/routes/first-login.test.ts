@@ -36,7 +36,7 @@ describe('/first-login', () => {
 	})
 
 	test('first login is protected by Access', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		const params = new URLSearchParams({
 			redirect_uri: 'https://redirect.com/a',
@@ -55,7 +55,7 @@ describe('/first-login', () => {
 	})
 
 	test('first login creates the user and redirects', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		const params = new URLSearchParams({
 			redirect_uri: 'https://redirect.com/a',
@@ -98,7 +98,7 @@ describe('/first-login', () => {
 	})
 
 	test('first login redirect relative URLs', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		const params = new URLSearchParams({
 			redirect_uri: '/a',

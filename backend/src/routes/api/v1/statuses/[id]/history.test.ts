@@ -13,7 +13,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/statuses/[id]/history', () => {
 	test('statuses_history: 404 if status does not exist', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const req = new Request(`https://${domain}/api/v1/statuses/1/history`)
@@ -22,7 +22,7 @@ describe('/api/v1/statuses/[id]/history', () => {
 	})
 
 	test('statuses_history: should only be generated for Note objects', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const obj = await createImage(domain, db, connectedActor, { url: 'https://example.com/image.jpg' })
@@ -38,7 +38,7 @@ describe('/api/v1/statuses/[id]/history', () => {
 	})
 
 	test('statuses_history: should not be visible to users without view permissions', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const author = await createTestUser(domain, db, userKEK, 'actor1@cloudflare.com')
@@ -61,7 +61,7 @@ describe('/api/v1/statuses/[id]/history', () => {
 	})
 
 	test('statuses_history: updating the status creates revisions', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const doCache = makeDOCache()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')

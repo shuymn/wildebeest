@@ -6,7 +6,7 @@ import { makeDB, assertStatus } from 'wildebeest/backend/test/utils'
 
 describe('/api/v1/instance/peers', () => {
 	test('returns peers', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		await addPeer(db, 'a')
 		await addPeer(db, 'b')
 

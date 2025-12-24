@@ -5,7 +5,7 @@ import { makeDB, generateVAPIDKeys, assertStatus, assertCORS, assertJSON } from 
 
 describe('/api/v1/apps', () => {
 	test('POST /apps registers client', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const vapidKeys = await generateVAPIDKeys()
 		const req = new Request('https://example.com/api/v1/apps', {
 			method: 'POST',
@@ -32,7 +32,7 @@ describe('/api/v1/apps', () => {
 	})
 
 	test('POST /apps registers client without website', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const vapidKeys = await generateVAPIDKeys()
 		const req = new Request('https://example.com/api/v1/apps', {
 			method: 'POST',
@@ -59,7 +59,7 @@ describe('/api/v1/apps', () => {
 
 	test('POST /apps returns 422 for malformed requests', async () => {
 		// client_name and redirect_uris are required according to https://docs.joinmastodon.org/methods/apps/#form-data-parameters
-		const db = await makeDB()
+		const db = makeDB()
 		const vapidKeys = await generateVAPIDKeys()
 		const headers = { 'content-type': 'application/json' }
 

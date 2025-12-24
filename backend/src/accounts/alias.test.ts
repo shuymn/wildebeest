@@ -10,7 +10,7 @@ const userKEK = 'test_kek22'
 
 describe('Settings', () => {
 	test('add account alias', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		let receivedActivity: any = null

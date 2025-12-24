@@ -14,7 +14,7 @@ const domain = 'cloudflare.com'
 
 describe('Inbox', () => {
 	test('send Note to non existent user', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 
 		globalThis.fetch = async (input: RequestInfo) => {
@@ -51,7 +51,7 @@ describe('Inbox', () => {
 	})
 
 	test('send activity sends message in queue', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		globalThis.fetch = async (input: RequestInfo) => {

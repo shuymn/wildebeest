@@ -12,7 +12,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/accounts/update_credentials', () => {
 	test('update credentials', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
@@ -45,7 +45,7 @@ describe('/api/v1/accounts/update_credentials', () => {
 	})
 
 	test('update credentials sends update to follower', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
@@ -100,7 +100,7 @@ describe('/api/v1/accounts/update_credentials', () => {
 			throw new Error('unexpected request to ' + input.url)
 		}
 
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 

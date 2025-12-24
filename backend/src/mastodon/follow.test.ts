@@ -8,7 +8,7 @@ const domain = 'cloudflare.com'
 
 describe('Follow', () => {
 	test('move followers', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		globalThis.fetch = async (input: RequestInfo) => {

@@ -17,7 +17,7 @@ const vapidKeys = {} as JWK
 
 describe('Update', () => {
 	test('Object must be an object', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const activity: any = {
@@ -33,7 +33,7 @@ describe('Update', () => {
 	})
 
 	test('Object must exist', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		const activity: UpdateActivity = {
 			'@context': 'https://www.w3.org/ns/activitystreams',
@@ -53,7 +53,7 @@ describe('Update', () => {
 	})
 
 	test('Object must have the same origin', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const object: ApObject = {
 			id: getApId('https://example.com/note2'),
@@ -78,7 +78,7 @@ describe('Update', () => {
 	})
 
 	test('Object(Note) is updated', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const note: Note = {
@@ -146,7 +146,7 @@ describe('Update', () => {
 	})
 
 	test('Object(Actor) is updated', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const newObject: Actor = {

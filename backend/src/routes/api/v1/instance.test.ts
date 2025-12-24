@@ -16,7 +16,7 @@ describe('instance', () => {
 			INSTANCE_DESCR: 'c',
 		} as Env
 
-		const db = await makeDB()
+		const db = makeDB()
 		await createTestUser(domain, db, userKEK, env.ADMIN_EMAIL, undefined, true)
 
 		const req = new Request(`https://${domain}/api/v1/instance`)
@@ -75,7 +75,7 @@ describe('instance', () => {
 	})
 
 	test('adds a short_description if missing v1', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		const env = {
 			INSTANCE_DESCR: 'c',

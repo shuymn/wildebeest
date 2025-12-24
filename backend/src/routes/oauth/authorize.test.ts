@@ -34,7 +34,7 @@ describe('/oauth/authorize', () => {
 	})
 
 	test('authorize missing params', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		{
 			const req = new Request('https://example.com/oauth/authorize', { method: 'POST' })
@@ -75,7 +75,7 @@ describe('/oauth/authorize', () => {
 	})
 
 	test('authorize unsupported response_type', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		const headers = {
 			'Cf-Access-Jwt-Assertion': TEST_JWT,
@@ -98,7 +98,7 @@ describe('/oauth/authorize', () => {
 	})
 
 	test("authorize redirect_uri doesn't match client redirect_uris", async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const client = await createTestClient(db, 'https://redirect.com')
 
 		const params = new URLSearchParams({
@@ -123,7 +123,7 @@ describe('/oauth/authorize', () => {
 	})
 
 	test('authorize redirects with code on success and show first login', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const client = await createTestClient(db)
 
 		const params = new URLSearchParams({
@@ -160,7 +160,7 @@ describe('/oauth/authorize', () => {
 	})
 
 	test('authorize returns CORS', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const req = new Request('https://example.com/oauth/authorize', {
 			method: 'OPTIONS',
 		})

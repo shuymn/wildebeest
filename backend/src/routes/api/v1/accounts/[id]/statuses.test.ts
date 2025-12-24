@@ -26,7 +26,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/accounts/[id]/statuses', () => {
 	test('get local actor statuses', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const firstNote = await createPublicStatus(domain, db, actor, 'my first status')
@@ -76,7 +76,7 @@ describe('/api/v1/accounts/[id]/statuses', () => {
 	})
 
 	test("get local actor statuses doesn't include replies", async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const note = await createPublicStatus(domain, db, actor, 'a post')
 		await sleep(10)
@@ -95,7 +95,7 @@ describe('/api/v1/accounts/[id]/statuses', () => {
 	})
 
 	test('get local actor statuses includes media attachements', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const properties = { url: 'https://example.com/image.jpg', type: 'Image' as const }
@@ -115,7 +115,7 @@ describe('/api/v1/accounts/[id]/statuses', () => {
 	})
 
 	test('get pinned statuses', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const req = new Request(`https://${domain}/api/v1/accounts/${actor[mastodonIdSymbol]}/statuses?pinned=true`)
@@ -127,7 +127,7 @@ describe('/api/v1/accounts/[id]/statuses', () => {
 	})
 
 	test('get local actor statuses with max_id', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		await db
 			.prepare("INSERT INTO objects (id, type, properties, local, mastodon_id) VALUES (?, ?, ?, 1, 'mastodon_id')")
@@ -186,7 +186,7 @@ describe('/api/v1/accounts/[id]/statuses', () => {
 	})
 
 	test('get local actor statuses with max_id poiting to unknown id', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const req = new Request(`https://${domain}/api/v1/accounts/${actor[mastodonIdSymbol]}/statuses?max_id=object1`)
@@ -195,7 +195,7 @@ describe('/api/v1/accounts/[id]/statuses', () => {
 	})
 
 	test('get remote actor statuses', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 

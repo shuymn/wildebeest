@@ -31,7 +31,7 @@ function parseCryptoKey(s: string): any {
 
 describe('mastodon/notification', () => {
 	test('returns notifications stored in db', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const fromActor = await createTestUser(domain, db, userKEK, 'from@cloudflare.com')
 
@@ -59,7 +59,7 @@ describe('mastodon/notification', () => {
 	})
 
 	test('send like notification', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		const clientKeys = (await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, [
 			'sign',

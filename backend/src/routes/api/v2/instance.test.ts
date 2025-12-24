@@ -16,7 +16,7 @@ describe('/api/v2/instance', () => {
 			INSTANCE_DESCR: 'c',
 		} as Env
 
-		const db = await makeDB()
+		const db = makeDB()
 		await createTestUser(domain, db, userKEK, env.ADMIN_EMAIL, undefined, true)
 
 		const req = new Request(`https://${domain}/api/v2/instance`)

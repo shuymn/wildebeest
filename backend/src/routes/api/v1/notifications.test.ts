@@ -8,7 +8,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/notifications', () => {
 	test('returns notifications stored in KV cache', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const cache = makeCache()

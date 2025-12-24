@@ -13,7 +13,7 @@ const vapidKeys = {} as JWK
 
 describe('Like', () => {
 	test('records like in db', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 		const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
 
@@ -34,7 +34,7 @@ describe('Like', () => {
 	})
 
 	test('creates notification', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 		const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
 
@@ -60,7 +60,7 @@ describe('Like', () => {
 	})
 
 	test('records like in db', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 		const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
 

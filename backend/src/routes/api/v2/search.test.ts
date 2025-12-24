@@ -77,7 +77,7 @@ describe('/api/v2/search', () => {
 	})
 
 	test('no query returns an error', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 
 		const req = new Request('https://example.com/api/v2/search')
@@ -86,7 +86,7 @@ describe('/api/v2/search', () => {
 	})
 
 	test('empty results', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 
 		const req = new Request('https://example.com/api/v2/search?q=non-existing-local-user')
@@ -102,7 +102,7 @@ describe('/api/v2/search', () => {
 	})
 
 	test('queries WebFinger when remote account', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 
 		const req = new Request('https://example.com/api/v2/search?q=@sven@remote.com&resolve=true')
@@ -123,7 +123,7 @@ describe('/api/v2/search', () => {
 	})
 
 	test('queries WebFinger when remote account with default avatar / header', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 
 		const req = new Request('https://example.com/api/v2/search?q=@default-avatar-and-header@remote.com&resolve=true')
@@ -147,7 +147,7 @@ describe('/api/v2/search', () => {
 			throw new Error('unreachable')
 		}
 
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 
 		const req = new Request('https://example.com/api/v2/search?q=@sven@remote.com&resolve=false')
@@ -158,7 +158,7 @@ describe('/api/v2/search', () => {
 	})
 
 	test('search local actors', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 
 		await createTestUser(domain, db, userKEK, 'username@cloudflare.com', { name: 'foo' })
@@ -187,7 +187,7 @@ describe('/api/v2/search', () => {
 	})
 
 	test('empty results for invalid handle', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 
 		const req = new Request('https://example.com/api/v2/search?q=    ')

@@ -31,7 +31,7 @@ describe('/api/v2/media', () => {
 			throw new Error('unexpected request to ' + request.url)
 		}
 
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const file = new File(['abc'], 'image.jpeg', { type: 'image/jpeg' })

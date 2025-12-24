@@ -10,7 +10,7 @@ const userKEK = 'test_kek20'
 
 describe('/api/v1/tags/[tag]', () => {
 	test('return 404 when non existent tag', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const req = new Request(`https://${domain}/api/v1/tags/non-existent-tag`)
 		const res = await app.fetch(req, { DATABASE: db })
 		await assertStatus(res, 404)
@@ -18,7 +18,7 @@ describe('/api/v1/tags/[tag]', () => {
 	})
 
 	test('return tag', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const note = await createPublicStatus(domain, db, actor, 'my localnote status')

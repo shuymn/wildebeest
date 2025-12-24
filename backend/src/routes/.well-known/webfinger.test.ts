@@ -5,7 +5,7 @@ import { makeDB, assertStatus, assertCache } from 'wildebeest/backend/test/utils
 
 describe('WebFinger', () => {
 	test('no resource queried', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		const req = new Request('https://example.com/.well-known/webfinger')
 		const res = await app.fetch(req, { DATABASE: db })
@@ -13,7 +13,7 @@ describe('WebFinger', () => {
 	})
 
 	test('invalid resource', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		const req = new Request('https://example.com/.well-known/webfinger?resource=hein:a')
 		const res = await app.fetch(req, { DATABASE: db })
@@ -21,7 +21,7 @@ describe('WebFinger', () => {
 	})
 
 	test('query local account', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		const req = new Request('https://example.com/.well-known/webfinger?resource=acct:sven')
 		const res = await app.fetch(req, { DATABASE: db })
@@ -29,7 +29,7 @@ describe('WebFinger', () => {
 	})
 
 	test('query remote non-existing account', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		const req = new Request('https://example.com/.well-known/webfinger?resource=acct:sven@example.com')
 		const res = await app.fetch(req, { DATABASE: db })
@@ -37,7 +37,7 @@ describe('WebFinger', () => {
 	})
 
 	test('query remote existing account', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		await db
 			.prepare(
 				'INSERT INTO actors (id, mastodon_id, domain, properties, type, username) VALUES (?, ?, ?, ?, ?, lower(?))'

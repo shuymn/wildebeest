@@ -49,7 +49,7 @@ describe('/api/v1/accounts/[id]/unfollow', () => {
 			throw new Error('unexpected request to ' + request.url)
 		}
 
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const followee = await queryAcct({ localPart: 'actor', domain: 'example.com' }, db)
 		assert.ok(followee)

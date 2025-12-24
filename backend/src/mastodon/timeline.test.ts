@@ -17,7 +17,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 describe('mastodon/timeline', () => {
 	test('home returns Notes in following Actors', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 		const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
@@ -62,7 +62,7 @@ describe('mastodon/timeline', () => {
 	})
 
 	test("home doesn't show private Notes from followed actors", async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor1 = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 		const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
@@ -82,7 +82,7 @@ describe('mastodon/timeline', () => {
 	})
 
 	test("home returns Notes sent to Actor's followers", async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 
@@ -100,7 +100,7 @@ describe('mastodon/timeline', () => {
 	})
 
 	test("public doesn't show private Notes", async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor1 = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 
@@ -112,7 +112,7 @@ describe('mastodon/timeline', () => {
 	})
 
 	test('home returns Notes from ourself', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		// Actor is posting
@@ -128,7 +128,7 @@ describe('mastodon/timeline', () => {
 	})
 
 	test('home timelines do not hides and counts public replies', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const note = await createPublicStatus(domain, db, actor, 'a post')
@@ -160,7 +160,7 @@ describe('mastodon/timeline', () => {
 	})
 
 	test('show status reblogged', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const note = await createPublicStatus(domain, db, actor, 'a post', [], { published: '2021-01-01T00:00:00.000Z' })
@@ -178,7 +178,7 @@ describe('mastodon/timeline', () => {
 	})
 
 	test('show status favourited', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const note = await createPublicStatus(domain, db, actor, 'a post')
@@ -192,7 +192,7 @@ describe('mastodon/timeline', () => {
 	})
 
 	test('show reblogs as independent notes', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actorA = await createTestUser(domain, db, userKEK, 'svenA@cloudflare.com')
 		const actorB = await createTestUser(domain, db, userKEK, 'svenB@cloudflare.com')
@@ -226,14 +226,14 @@ describe('mastodon/timeline', () => {
 	})
 
 	test('timeline with non exitent tag', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		const data = await getPublicTimeline(domain, db, LocalPreference.NotSet, false, 20, 'non-existent-tag')
 		assert.equal(data.length, 0)
 	})
 
 	test('timeline tag', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		{

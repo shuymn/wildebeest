@@ -84,7 +84,7 @@ describe('/api/v1/accounts/[id]', () => {
 			throw new Error('unexpected request to ' + input.url)
 		}
 
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 		const actor = await queryAcct({ localPart: 'sven', domain: 'social.com' }, db)
 		assert.ok(actor)
@@ -108,7 +108,7 @@ describe('/api/v1/accounts/[id]', () => {
 	})
 
 	test('get unknown actor by id', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 		const req = new Request(`https://${domain}/api/v1/accounts/123456789`)
 		const res = await app.fetch(req, { DATABASE: db, data: { connectedActor } })
@@ -116,7 +116,7 @@ describe('/api/v1/accounts/[id]', () => {
 	})
 
 	test('get local actor by id', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 		const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')

@@ -1,5 +1,3 @@
-import type { Env } from 'wildebeest/backend/src/types'
-
 export interface Database extends D1Database {
 	prepare(query: string): PreparedStatement
 	dump(): Promise<ArrayBuffer>
@@ -58,14 +56,13 @@ const qb: QueryBuilder = {
 	},
 }
 
-export function getDatabase({ DATABASE }: Pick<Env, 'DATABASE'>): Database {
-	const db = DATABASE
-
+export function getDatabase({ DATABASE: db }: { DATABASE: D1Database }): Database {
 	return {
 		prepare: (query: string) => db.prepare(query),
 		dump: () => db.dump(),
 		batch: <T = unknown>(statements: PreparedStatement[]) => db.batch<T>(statements),
 		exec: (query: string) => db.exec(query),
+		withSession: (constraintOrBookmark?: D1SessionBookmark) => db.withSession(constraintOrBookmark),
 		qb,
 	}
 }

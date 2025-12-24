@@ -8,7 +8,7 @@ const domain = 'cloudflare.com'
 
 describe('mastodon/subscription', () => {
 	test('subscriptions auto increment', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const data: any = {

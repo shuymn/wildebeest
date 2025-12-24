@@ -25,7 +25,7 @@ describe('Accept', () => {
 	})
 
 	test('Accept follow request stores in db', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 		await addFollowing(domain, db, actor, actor2)
@@ -57,7 +57,7 @@ describe('Accept', () => {
 	})
 
 	test('Object must be an object', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any

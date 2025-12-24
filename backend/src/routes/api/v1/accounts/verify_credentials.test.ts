@@ -24,7 +24,7 @@ describe('/api/v1/accounts/verify_credentials', () => {
 	})
 
 	test('verify the credentials', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const connectedActor = actor
 

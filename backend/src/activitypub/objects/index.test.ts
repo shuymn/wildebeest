@@ -9,7 +9,7 @@ const domain = 'cloudflare.com'
 
 describe('Objects', () => {
 	test('cacheObject deduplicates object', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const properties: Remote<Note> = {
 			type: 'Note',
 			id: 'https://example.com/id/object1',
@@ -48,7 +48,7 @@ describe('Objects', () => {
 	})
 
 	test('cacheObject adds peer', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const properties: ApObject = {
 			type: 'Note',
 			id: 'https://example.com/id/object1',

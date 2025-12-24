@@ -17,6 +17,10 @@ module.exports = {
 			typescript: true,
 			node: true,
 		},
+  // Treat 'cloudflare:test' as a built-in module to prevent import/no-unresolved errors.
+  // This virtual module is provided by @cloudflare/vitest-pool-workers and cannot be resolved
+  // through standard module resolution.
+  'import/core-modules': ['cloudflare:test'],
 	},
 	rules: {
 		'@typescript-eslint/no-unused-vars': 'off', // for unused imports

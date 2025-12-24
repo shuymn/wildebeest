@@ -11,7 +11,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/statuses/[id]/context', () => {
 	test('status context shows descendants', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const note = await createPublicStatus(domain, db, actor, 'a post', [], { sensitive: false })

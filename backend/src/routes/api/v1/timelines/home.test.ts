@@ -8,7 +8,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/timelines/home', () => {
 	test('home returns cache', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const cache = makeCache()
 		const doCache = makeDOCache(cache)
 
@@ -21,7 +21,7 @@ describe('/api/v1/timelines/home', () => {
 	})
 
 	test('home returns empty if not in cache', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const cache = makeCache()
 		const doCache = makeDOCache(cache)
 

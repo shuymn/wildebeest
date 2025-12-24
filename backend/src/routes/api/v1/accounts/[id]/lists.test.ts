@@ -6,7 +6,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/accounts/[id]/lists', () => {
 	test('get remote actor lists', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 
 		const req = new Request(`https://${domain}/api/v1/accounts/1/lists`)

@@ -10,7 +10,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v2/media/[id]', () => {
 	test('update image description', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const image = await createImage(domain, db, connectedActor, {
 			url: 'https://cloudflare.com/image.jpg',
