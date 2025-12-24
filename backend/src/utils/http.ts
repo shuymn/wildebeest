@@ -48,8 +48,8 @@ const isAllPropsOptional = (input: ZodTypeAny): boolean => {
 type ParsedData<T extends ZodRawShape | ZodTypeAny> = T extends ZodTypeAny
 	? output<T>
 	: T extends ZodRawShape
-	  ? output<ZodObject<T>>
-	  : never
+		? output<ZodObject<T>>
+		: never
 
 // The following type is taken from the zodix library (https://github.com/rileytomasek/zodix)
 // Copyright (c) 2022 Riley Tomasek
@@ -57,8 +57,8 @@ type ParsedData<T extends ZodRawShape | ZodTypeAny> = T extends ZodTypeAny
 type SafeParsedData<T extends ZodRawShape | ZodTypeAny> = T extends ZodTypeAny
 	? SafeParseReturnType<z.infer<T>, ParsedData<T>>
 	: T extends ZodRawShape
-	  ? SafeParseReturnType<ZodObject<T>, ParsedData<T>>
-	  : never
+		? SafeParseReturnType<ZodObject<T>, ParsedData<T>>
+		: never
 
 // The following type is taken from the zodix library (https://github.com/rileytomasek/zodix)
 // Copyright (c) 2022 Riley Tomasek

@@ -12,7 +12,7 @@ export async function getRules(db: Database): Promise<Array<{ id: string; text: 
 }
 
 export async function upsertRule(db: Database, rule: { id?: number; text: string } | string) {
-	const id = typeof rule === 'string' ? null : rule.id ?? null
+	const id = typeof rule === 'string' ? null : (rule.id ?? null)
 	const text = typeof rule === 'string' ? rule : rule.text
 	return await db
 		.prepare(

@@ -44,8 +44,8 @@ async function handleRequest({ domain, db }: Dependencies, params: Parameters): 
 	const localPreference = params.local
 		? LocalPreference.OnlyLocal
 		: params.remote
-		  ? LocalPreference.OnlyRemote
-		  : LocalPreference.NotSet
+			? LocalPreference.OnlyRemote
+			: LocalPreference.NotSet
 
 	const [max, min] = await getStatusRange(db, params.max_id, params.since_id ?? params.min_id)
 	if (params.max_id && max === null) {
