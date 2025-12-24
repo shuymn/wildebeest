@@ -52,11 +52,11 @@ Wrap the given key.
 async function wrapCryptoKey(
 	keyToWrap: CryptoKey,
 	userKEK: string
-): Promise<{ wrappedPrivKey: ArrayBuffer; salt: Uint8Array }> {
+): Promise<{ wrappedPrivKey: ArrayBuffer; salt: Uint8Array<ArrayBuffer> }> {
 	// get the key encryption key
 	const keyMaterial = await getKeyMaterial(userKEK)
 	const salt = crypto.getRandomValues(new Uint8Array(16))
-	const wrappingKey = await getKey(keyMaterial, salt)
+	const wrappingKey = await getKey(keyMaterial, salt.buffer)
 	const bytesToWrap = await crypto.subtle.exportKey('pkcs8', keyToWrap)
 	const wrappedPrivKey = await crypto.subtle.encrypt(
 		{
@@ -75,7 +75,7 @@ Generate a new wrapped user key
 */
 export async function generateUserKey(
 	userKEK: string
-): Promise<{ wrappedPrivKey: ArrayBuffer; salt: Uint8Array; pubKey: string }> {
+): Promise<{ wrappedPrivKey: ArrayBuffer; salt: Uint8Array<ArrayBuffer>; pubKey: string }> {
 	const keyPair = await crypto.subtle.generateKey(
 		{
 			name: 'RSASSA-PKCS1-v1_5',
@@ -101,10 +101,10 @@ Unwrap and import private key
 export async function unwrapPrivateKey(
 	userKEK: string,
 	wrappedPrivKey: ArrayBuffer,
-	salt: Uint8Array
+	salt: Uint8Array<ArrayBuffer>
 ): Promise<CryptoKey> {
 	const keyMaterial = await getKeyMaterial(userKEK)
-	const wrappingKey = await getKey(keyMaterial, salt)
+	const wrappingKey = await getKey(keyMaterial, salt.buffer)
 	const keyBytes = await crypto.subtle.decrypt(
 		{
 			name: 'AES-GCM',
