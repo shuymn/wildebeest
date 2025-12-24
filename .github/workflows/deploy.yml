@@ -228,29 +228,29 @@ jobs:
       - name: Publish consumer
         run: |
           echo "*** pre commands ***"
-          cat <<EOF >> consumer/wrangler.toml
-          name = "wildebeest-consumer-${{ env.NAME_SUFFIX }}"
-
-          [[queues.consumers]]
-          max_batch_size = 10
-          max_batch_timeout = 30
-          max_retries = 10
-          queue = "wildebeest-${{ env.NAME_SUFFIX }}"
-
-          [[d1_databases]]
-          binding="DATABASE"
-          database_name="wildebeest-${{ env.NAME_SUFFIX }}-v1"
-          database_id="${{ env.d1_id }}"
-
-          [durable_objects]
-          bindings=[
-          {name="DO_CACHE",class_name="WildebeestCache",script_name="wildebeest-do"},
-          ]
-
-          [vars]
-          DOMAIN="${{ vars.CF_DEPLOY_DOMAIN }}"
-          ADMIN_EMAIL="${{ vars.ADMIN_EMAIL }}"
-          EOF
+          {
+            echo "name = \"wildebeest-consumer-${{ env.NAME_SUFFIX }}\""
+            echo ""
+            echo "[[queues.consumers]]"
+            echo "max_batch_size = 10"
+            echo "max_batch_timeout = 30"
+            echo "max_retries = 10"
+            echo "queue = \"wildebeest-${{ env.NAME_SUFFIX }}\""
+            echo ""
+            echo "[[d1_databases]]"
+            echo "binding = \"DATABASE\""
+            echo "database_name = \"wildebeest-${{ env.NAME_SUFFIX }}-v1\""
+            echo "database_id = \"${{ env.d1_id }}\""
+            echo ""
+            echo "[durable_objects]"
+            echo "bindings = ["
+            echo "  { name = \"DO_CACHE\", class_name = \"WildebeestCache\", script_name = \"wildebeest-do\" },"
+            echo "]"
+            echo ""
+            echo "[vars]"
+            echo "DOMAIN = \"${{ vars.CF_DEPLOY_DOMAIN }}\""
+            echo "ADMIN_EMAIL = \"${{ vars.ADMIN_EMAIL }}\""
+          } >> consumer/wrangler.toml
 
           pnpm --dir consumer install
           echo "******"
