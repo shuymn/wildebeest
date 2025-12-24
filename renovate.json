@@ -63,6 +63,25 @@
         "eslint-plugin-qwik",
         "/^@builder.io/qwik/"
       ]
+    },
+    {
+      "groupName": "vitest",
+      "matchPackageNames": [
+        "@vitest/coverage-istanbul",
+        "vitest"
+      ]
+    },
+    {
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "@cloudflare/vitest-pool-workers"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "prCreation": "status-success"
     }
   ]
 }
