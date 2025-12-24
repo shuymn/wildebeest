@@ -152,8 +152,8 @@ LIMIT ?4
 			...(max && min
 				? [actor.id.toString(), JSON.stringify(targets), max, params.limit, min]
 				: min
-				  ? [actor.id.toString(), JSON.stringify(targets), max ?? db.qb.epoch(), params.limit, min]
-				  : [actor.id.toString(), JSON.stringify(targets), max ?? db.qb.epoch(), params.limit])
+					? [actor.id.toString(), JSON.stringify(targets), max ?? db.qb.epoch(), params.limit, min]
+					: [actor.id.toString(), JSON.stringify(targets), max ?? db.qb.epoch(), params.limit])
 		)
 		.all<{
 			id: string
