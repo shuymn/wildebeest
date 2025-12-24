@@ -9,7 +9,10 @@ import { createApp } from 'wildebeest/backend/src/utils'
 const base = new Hono<HonoEnv>()
 
 base.use('*', logger())
-base.use('*', errorMiddleware())
+
+if (import.meta.env.PROD) {
+	base.use('*', errorMiddleware())
+}
 
 const app = createApp({ app: base })
 
