@@ -24,7 +24,7 @@ export async function hasKey<T extends ApObject>(db: Database, key: string) {
         SELECT objects.*
         FROM idempotency_keys
         INNER JOIN objects ON objects.id = idempotency_keys.object_id
-        WHERE idempotency_keys.key = ?1 AND expires_at >= datetime() 
+        WHERE idempotency_keys.key = ?1 AND expires_at >= datetime()
     `
 
 	const { results, success, error } = await db.prepare(query).bind(key).all<{
