@@ -21,7 +21,7 @@ export const useUpdateSettings = routeAction$(async (data, { platform: { env: pl
 	try {
 		await updateSettings(db, data)
 		success = true
-	} catch (e: unknown) {
+	} catch {
 		success = false
 	}
 

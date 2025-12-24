@@ -9,20 +9,11 @@ import { createClient } from 'wildebeest/backend/src/mastodon/client'
 import type { Queue } from 'wildebeest/backend/src/types'
 import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
 
-export class MockContext implements ExecutionContext {
-	passThroughOnException(): void {
-		throw new Error('Method not implemented.')
-	}
-	async waitUntil(promise: Promise<unknown>): Promise<void> {
-		await promise
-	}
-}
-
 export function isUrlValid(s: string) {
 	let url
 	try {
 		url = new URL(s)
-	} catch (err) {
+	} catch {
 		return false
 	}
 	return url.protocol === 'https:'

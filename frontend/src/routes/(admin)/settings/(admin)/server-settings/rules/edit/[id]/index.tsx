@@ -17,7 +17,7 @@ export const useUpdateRule = routeAction$(
 				text: data.text,
 			})
 			success = result.success
-		} catch (e: unknown) {
+		} catch {
 			success = false
 		}
 
