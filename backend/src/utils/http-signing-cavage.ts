@@ -31,7 +31,7 @@ export function extractHeader({ headers }: Request, header: string): string {
 	if (!key) {
 		throw new Error(`Unable to extract header "${header}" from message`)
 	}
-	let val = key ? headers.get(key) ?? '' : ''
+	let val = key ? (headers.get(key) ?? '') : ''
 	if (Array.isArray(val)) {
 		val = val.join(', ')
 	}
