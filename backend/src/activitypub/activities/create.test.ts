@@ -30,7 +30,7 @@ describe('Create', () => {
 			throw new Error('unexpected request to ' + input.url)
 		}
 
-		const db = await makeDB()
+		const db = makeDB()
 		await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -47,7 +47,7 @@ describe('Create', () => {
 	})
 
 	test('Note to inbox stores in DB', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const activity: CreateActivity<Note> = {
@@ -96,7 +96,7 @@ describe('Create', () => {
 			throw new Error('unexpected request to ' + input.url)
 		}
 
-		const db = await makeDB()
+		const db = makeDB()
 		await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const activity: CreateActivity<Note> = {
@@ -127,7 +127,7 @@ describe('Create', () => {
 	})
 
 	test('local actor sends Note with mention create notification', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 		const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
 
@@ -162,7 +162,7 @@ describe('Create', () => {
 	})
 
 	test('Note records reply', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		{
@@ -224,7 +224,7 @@ describe('Create', () => {
 	})
 
 	test('preserve Note sent with `to`', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const activity: CreateActivity<Note> = {
@@ -253,7 +253,7 @@ describe('Create', () => {
 	})
 
 	test('Object props get sanitized', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const person = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const activity: CreateActivity<Note> = {

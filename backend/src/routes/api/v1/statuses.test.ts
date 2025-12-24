@@ -30,7 +30,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 describe('/api/v1/statuses', () => {
 	test('create new status missing params', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const req = new Request('https://example.com/api/v1/statuses', {
@@ -44,7 +44,7 @@ describe('/api/v1/statuses', () => {
 	})
 
 	test('create new status creates Note', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
@@ -105,7 +105,7 @@ describe('/api/v1/statuses', () => {
 	})
 
 	test('create new status regenerates the timeline and contains post', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
@@ -138,7 +138,7 @@ describe('/api/v1/statuses', () => {
 	})
 
 	test("create new status adds to Actor's outbox", async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
@@ -170,7 +170,7 @@ describe('/api/v1/statuses', () => {
 
 	test('create new status delivers to followers via Queue', async () => {
 		const queue = makeQueue()
-		const db = await makeDB()
+		const db = makeDB()
 
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const followerA = await createTestUser(domain, db, userKEK, 'followerA@cloudflare.com')
@@ -267,7 +267,7 @@ describe('/api/v1/statuses', () => {
 			}
 		}
 
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const connectedActor = actor
@@ -304,7 +304,7 @@ describe('/api/v1/statuses', () => {
 	})
 
 	test('create new status with mention add tags on Note', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const connectedActor = actor
@@ -370,7 +370,7 @@ describe('/api/v1/statuses', () => {
 	})
 
 	test('create new status with image', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
@@ -404,7 +404,7 @@ describe('/api/v1/statuses', () => {
 	})
 
 	test('create new status in reply to', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const note = await createPublicStatus(domain, db, actor, 'my first status')
@@ -458,7 +458,7 @@ describe('/api/v1/statuses', () => {
 	})
 
 	test('create new status with too many image', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
@@ -486,7 +486,7 @@ describe('/api/v1/statuses', () => {
 	})
 
 	test('create new status sending multipart and too many image', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
@@ -517,7 +517,7 @@ describe('/api/v1/statuses', () => {
 	})
 
 	test('create new status in reply to non existing status', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
@@ -543,7 +543,7 @@ describe('/api/v1/statuses', () => {
 	})
 
 	test('create duplicate statuses idempotency', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
@@ -594,7 +594,7 @@ describe('/api/v1/statuses', () => {
 	})
 
 	test('hashtag in status adds in note_hashtags table', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
@@ -635,7 +635,7 @@ describe('/api/v1/statuses', () => {
 	})
 
 	test('reject statuses exceeding limits', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
@@ -661,7 +661,7 @@ describe('/api/v1/statuses', () => {
 	})
 
 	test('create status with direct visibility', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor1 = await createTestUser(domain, db, userKEK, 'actor1@cloudflare.com')
@@ -727,7 +727,7 @@ describe('/api/v1/statuses', () => {
 	})
 
 	test('create status with unlisted visibility', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
@@ -795,7 +795,7 @@ describe('/api/v1/statuses', () => {
 	})
 
 	test('create status with private visibility', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 

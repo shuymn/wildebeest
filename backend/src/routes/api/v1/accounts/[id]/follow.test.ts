@@ -10,7 +10,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/accounts/[id]/follow', () => {
 	test('follow local account', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const targetActor = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 
@@ -60,7 +60,7 @@ describe('/api/v1/accounts/[id]/follow', () => {
 			throw new Error('unexpected request to ' + request.url)
 		}
 
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const connectedActor = actor
 

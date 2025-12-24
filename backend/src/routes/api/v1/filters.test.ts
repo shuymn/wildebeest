@@ -8,7 +8,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/filters', () => {
 	test('view filters return empty array', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'alice@example.com')
 
 		const req = new Request(`https://${domain}/api/v1/filters`)

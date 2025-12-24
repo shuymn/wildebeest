@@ -19,7 +19,7 @@ const userKEK = 'test-kek'
 
 describe('/api/v1/apps/verify_credentials', () => {
 	test('GET /verify_credentials returns public VAPID key for known clients', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 
 		const testScope = 'test abcd'
@@ -58,7 +58,7 @@ describe('/api/v1/apps/verify_credentials', () => {
 	})
 
 	test('GET /verify_credentials returns 401 for unauthorized clients', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 
 		const vapidKeys = await generateVAPIDKeys()

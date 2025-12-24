@@ -14,7 +14,7 @@ const userKEK = 'test_kek25'
 describe('Consumer', () => {
 	describe('Deliver', () => {
 		test('deliver to target Actor', async () => {
-			const db = await makeDB()
+			const db = makeDB()
 
 			let receivedActivity: any = null
 

@@ -1,3 +1,4 @@
+import { fetchMock } from 'cloudflare:test'
 import { strict as assert } from 'node:assert/strict'
 
 import app from 'wildebeest/backend/src'
@@ -5,16 +6,14 @@ import { MastodonError } from 'wildebeest/backend/src/errors'
 import { getClientByClientCredential } from 'wildebeest/backend/src/mastodon/client'
 import { makeDB, assertStatus, createTestClient, assertCORS, assertJSON } from 'wildebeest/backend/test/utils'
 
-const describe = setupMiniflareIsolatedStorage()
-
 describe('/oauth/token', () => {
 	beforeEach(() => {
-		const fetchMock = getMiniflareFetchMock()
+		fetchMock.activate()
 		fetchMock.disableNetConnect()
 	})
 
 	test('token error on unknown client', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		const req = new Request('https://example.com/oauth/token', {
 			method: 'POST',
@@ -36,7 +35,7 @@ describe('/oauth/token', () => {
 	})
 
 	test('token returns auth infos', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const testScope = 'test abcd'
 		const client = await createTestClient(db, 'https://localhost', testScope)
 
@@ -90,7 +89,7 @@ describe('/oauth/token', () => {
 	})
 
 	test('token handles empty code', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const body = new URLSearchParams({ code: '' })
 
 		const req = new Request('https://example.com/oauth/token', {
@@ -114,7 +113,7 @@ describe('/oauth/token', () => {
 	})
 
 	test('token handles code in URL', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const client = await createTestClient(db, 'https://localhost')
 
 		const code = client.id + '.a'

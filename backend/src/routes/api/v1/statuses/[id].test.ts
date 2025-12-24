@@ -16,7 +16,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/statuses/[id]', () => {
 	test('get status count likes', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 		const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
@@ -35,7 +35,7 @@ describe('/api/v1/statuses/[id]', () => {
 	})
 
 	test('get status with image', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const properties = { url: 'https://example.com/image.jpg' }
@@ -54,7 +54,7 @@ describe('/api/v1/statuses/[id]', () => {
 	})
 
 	test('get status count reblogs', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 		const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
@@ -81,7 +81,7 @@ describe('/api/v1/statuses/[id]', () => {
 	})
 
 	test('update non-existing status', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const doCache = makeDOCache()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
@@ -99,7 +99,7 @@ describe('/api/v1/statuses/[id]', () => {
 	})
 
 	test('update status from a different actor', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const doCache = makeDOCache()
 
@@ -119,7 +119,7 @@ describe('/api/v1/statuses/[id]', () => {
 	})
 
 	test('update status update DB rows', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const doCache = makeDOCache()
 
@@ -207,7 +207,7 @@ describe('/api/v1/statuses/[id]', () => {
 	})
 
 	test('update status regenerates the timeline', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const cache = makeCache()
 		const doCache = makeDOCache(cache)
@@ -240,7 +240,7 @@ describe('/api/v1/statuses/[id]', () => {
 	})
 
 	test('update status sends to followers', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const doCache = makeDOCache()
 
@@ -280,7 +280,7 @@ describe('/api/v1/statuses/[id]', () => {
 	})
 
 	test('delete non-existing status', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const doCache = makeDOCache()
 
@@ -299,7 +299,7 @@ describe('/api/v1/statuses/[id]', () => {
 	})
 
 	test('delete status from a different actor', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const doCache = makeDOCache()
 
@@ -319,7 +319,7 @@ describe('/api/v1/statuses/[id]', () => {
 	})
 
 	test('delete status remove DB rows', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const doCache = makeDOCache()
 
@@ -347,7 +347,7 @@ describe('/api/v1/statuses/[id]', () => {
 	})
 
 	test('delete status regenerates the timeline', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const cache = makeCache()
 		const doCache = makeDOCache(cache)
@@ -376,7 +376,7 @@ describe('/api/v1/statuses/[id]', () => {
 	})
 
 	test('delete status sends to followers', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 		const doCache = makeDOCache()
 

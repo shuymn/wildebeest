@@ -10,7 +10,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/accounts/relationships', () => {
 	test('relationships missing ids', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const req = new Request('https://mastodon.example/api/v1/accounts/relationships')
@@ -19,7 +19,7 @@ describe('/api/v1/accounts/relationships', () => {
 	})
 
 	test('relationships with ids', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const req = new Request('https://mastodon.example/api/v1/accounts/relationships?id[]=first&id[]=second')
@@ -37,7 +37,7 @@ describe('/api/v1/accounts/relationships', () => {
 	})
 
 	test('relationships with one id', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const req = new Request('https://mastodon.example/api/v1/accounts/relationships?id[]=first')
@@ -53,7 +53,7 @@ describe('/api/v1/accounts/relationships', () => {
 	})
 
 	test('relationships following', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 		await addFollowing(domain, db, actor, actor2)
@@ -69,7 +69,7 @@ describe('/api/v1/accounts/relationships', () => {
 	})
 
 	test('relationships following request', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 		await addFollowing(domain, db, actor, actor2)

@@ -15,7 +15,7 @@ const vapidKeys = {} as JWK
 
 describe('Delete', () => {
 	test('delete Note', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 		const originalObjectId = 'https://example.com/note123'
 
@@ -62,7 +62,7 @@ describe('Delete', () => {
 	})
 
 	test('delete Tombstone', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 		const originalObjectId = 'https://example.com/note456'
 
@@ -112,7 +112,7 @@ describe('Delete', () => {
 	})
 
 	test('reject Note deletion from another Actor', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 		const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
 
@@ -163,7 +163,7 @@ describe('Delete', () => {
 	})
 
 	test('ignore deletion of an Actor', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 
 		const activity: DeleteActivity = {
@@ -190,7 +190,7 @@ describe('Delete', () => {
 		// Deletion of local Note should only be done using Mastodon API
 		// (ie ActivityPub client-to-server).
 
-		const db = await makeDB()
+		const db = makeDB()
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 
 		const note = await createPublicStatus(domain, db, actorA, 'my first status')

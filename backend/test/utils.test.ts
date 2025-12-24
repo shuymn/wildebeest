@@ -77,7 +77,7 @@ describe('utils', () => {
 	test('actor to acct', async () => {
 		const domain = 'example.com'
 		const userKEK = 'userkey'
-		const db = await makeDB()
+		const db = makeDB()
 
 		let actor = await createTestUser(domain, db, userKEK, 'alice1@cloudflare.com')
 		let res = actorToAcct(actor, domain)
@@ -91,7 +91,7 @@ describe('utils', () => {
 	test('actor to handle', async () => {
 		const domain = 'example.com'
 		const userKEK = 'userkey'
-		const db = await makeDB()
+		const db = makeDB()
 
 		{
 			const actor = await createTestUser(domain, db, userKEK, 'alice1@cloudflare.com')

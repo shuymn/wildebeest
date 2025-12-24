@@ -9,7 +9,7 @@ const domain = 'cloudflare.com'
 
 describe('Actors', () => {
 	test('fetch non-existant user by id', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		const req = new Request(`https://${domain}/ap/users/nonexisting`)
 		const res = await app.fetch(req, { DATABASE: db })
@@ -17,7 +17,7 @@ describe('Actors', () => {
 	})
 
 	test('fetch user by id', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const properties: Remote<Actor> = {
 			id: `https://${domain}/ap/users/sven`,
 			url: `https://${domain}/@sven`,
@@ -145,7 +145,7 @@ describe('Actors', () => {
 			throw new Error('unexpected request to ' + input.url)
 		}
 
-		const db = await makeDB()
+		const db = makeDB()
 
 		await getAndCacheActor(actorId, db)
 
@@ -197,7 +197,7 @@ describe('Actors', () => {
 			throw new Error('unexpected request to ' + input.url)
 		}
 
-		const db = await makeDB()
+		const db = makeDB()
 
 		await getAndCacheActor(actorId, db)
 

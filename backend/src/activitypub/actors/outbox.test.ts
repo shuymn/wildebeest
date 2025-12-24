@@ -10,7 +10,7 @@ const domain = 'cloudflare.com'
 
 describe('Outbox', () => {
 	test('return outbox', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		await createPublicStatus(domain, db, actor, 'my first status')
@@ -26,7 +26,7 @@ describe('Outbox', () => {
 	})
 
 	test('return outbox page', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		await createPublicStatus(domain, db, actor, 'my first status')
@@ -45,7 +45,7 @@ describe('Outbox', () => {
 	})
 
 	test("doesn't show private notes to anyone", async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 		const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
 
@@ -71,7 +71,7 @@ describe('Outbox', () => {
 	})
 
 	test("doesn't show private note in target outbox", async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 		const actorB = await createTestUser(domain, db, userKEK, 'target@cloudflare.com')
 

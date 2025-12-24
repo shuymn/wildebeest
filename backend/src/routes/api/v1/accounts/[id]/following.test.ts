@@ -26,7 +26,7 @@ describe('/api/v1/accounts/[id]/following', () => {
 			throw new Error('unexpected request to ' + input.url)
 		}
 
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
@@ -42,7 +42,7 @@ describe('/api/v1/accounts/[id]/following', () => {
 	})
 
 	test('get remote actor following', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 

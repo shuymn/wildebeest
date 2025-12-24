@@ -21,7 +21,7 @@ const vapidKeys = {} as JWK
 
 describe('Announce', () => {
 	test('records reblog in db', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 		const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
 
@@ -45,7 +45,7 @@ describe('Announce', () => {
 	})
 
 	test('creates notification', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 		const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
 
@@ -111,7 +111,7 @@ describe('Announce', () => {
 			throw new Error('unexpected request to ' + input.url)
 		}
 
-		const db = await makeDB()
+		const db = makeDB()
 		await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const activity: AnnounceActivity = {
@@ -259,7 +259,7 @@ describe('Announce', () => {
 				allowed: false,
 			},
 		])('$title', async ({ createStatusFn, to, cc, allowed }) => {
-			const db = await makeDB()
+			const db = makeDB()
 			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const note = await createStatusFn(domain, db, actor, 'my first status')
@@ -308,7 +308,7 @@ describe('Announce', () => {
 	})
 
 	test('Even if followed, reblogging of private posts is not permitted', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actorA = await createTestUser(domain, db, userKEK, 'sven1@cloudflare.com')
 		const actorB = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 		await addFollowing(domain, db, actorB, actorA)
@@ -352,7 +352,7 @@ describe('Announce', () => {
 				allowed: true,
 			},
 		])('$title', async ({ visibility, allowed }) => {
-			const db = await makeDB()
+			const db = makeDB()
 			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const note = await createPrivateStatus(domain, db, actor, 'my first status')
@@ -417,7 +417,7 @@ describe('Announce', () => {
 				allowed: true,
 			},
 		])('$title', async ({ visibility, allowed }) => {
-			const db = await makeDB()
+			const db = makeDB()
 			const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const note = await createDirectStatus(domain, db, actor, 'my first status')
@@ -492,7 +492,7 @@ describe('Announce', () => {
 			throw new Error('unexpected request to ' + input.url)
 		}
 
-		const db = await makeDB()
+		const db = makeDB()
 		await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const activity: AnnounceActivity = {

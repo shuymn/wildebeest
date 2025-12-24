@@ -33,7 +33,7 @@ describe('Follow', () => {
 	})
 
 	test('Receive follow with Accept reply', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 
@@ -69,7 +69,7 @@ describe('Follow', () => {
 	})
 
 	test('list actor following', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 		const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
@@ -88,7 +88,7 @@ describe('Follow', () => {
 	})
 
 	test('list actor following page', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 		const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
@@ -108,7 +108,7 @@ describe('Follow', () => {
 	})
 
 	test('list actor follower', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 		await addFollowing(domain, db, actor2, actor)
@@ -124,7 +124,7 @@ describe('Follow', () => {
 	})
 
 	test('list actor follower page', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 		await addFollowing(domain, db, actor2, actor)
@@ -140,7 +140,7 @@ describe('Follow', () => {
 	})
 
 	test('creates a notification', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 
@@ -166,7 +166,7 @@ describe('Follow', () => {
 	})
 
 	test('ignore when trying to follow multiple times', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 

@@ -14,7 +14,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/timelines/public', () => {
 	test('public returns Notes', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 
@@ -68,7 +68,7 @@ describe('/api/v1/timelines/public', () => {
 	})
 
 	test('public includes attachment', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		const properties = { url: 'https://example.com/image.jpg' }
@@ -87,7 +87,7 @@ describe('/api/v1/timelines/public', () => {
 	})
 
 	test('public timeline uses published_date', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 		await createPublicStatus(domain, db, actor, 'note1', [], { published: '2021-01-01T00:00:00.001Z' })

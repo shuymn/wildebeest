@@ -1,6 +1,7 @@
 node_modules/
 .wrangler/state/v3/*
 .wrangler/tmp
+/.worktrees/
 .DS_Store
 .dev.vars
 .dev.vars.bak

@@ -15,7 +15,7 @@ describe('/api/v1/statuses/[id]/favourite', () => {
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		let deliveredActivity: any = null
 
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const originalObjectId = 'https://example.com/note123'
 
@@ -70,7 +70,7 @@ describe('/api/v1/statuses/[id]/favourite', () => {
 	})
 
 	test('favourite records in db', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const note = await createPublicStatus(domain, db, actor, 'my first status')
 

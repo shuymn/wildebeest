@@ -5,6 +5,7 @@
 	"author": "Sven Sauleau <sven@cloudflare.com>",
 	"devDependencies": {
 		"@cloudflare/pages-plugin-cloudflare-access": "1.0.5",
+		"@cloudflare/vitest-pool-workers": "0.11.1",
 		"@cloudflare/workers-types": "4.20251221.0",
 		"@playwright/test": "1.57.0",
 		"@types/better-sqlite3": "7.6.13",
@@ -12,7 +13,7 @@
 		"@types/node": "24.10.4",
 		"@typescript-eslint/eslint-plugin": "6.13.2",
 		"@typescript-eslint/parser": "6.13.2",
-		"@vitest/coverage-v8": "2.1.9",
+		"@vitest/coverage-istanbul": "3.2.4",
 		"better-sqlite3": "12.5.0",
 		"eslint": "8.55.0",
 		"eslint-import-resolver-typescript": "3.6.1",
@@ -27,7 +28,7 @@
 		"typescript": "5.9.3",
 		"vite": "5.4.21",
 		"vite-tsconfig-paths": "4.3.2",
-		"vitest": "2.1.9",
+		"vitest": "3.2.4",
 		"vitest-environment-miniflare": "2.14.4",
 		"wrangler": "3.114.16"
 	},

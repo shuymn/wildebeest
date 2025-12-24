@@ -12,7 +12,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/statuses/[id]/reblog', () => {
 	test('reblog records in db', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
@@ -36,7 +36,7 @@ describe('/api/v1/statuses/[id]/reblog', () => {
 	})
 
 	test('reblog status adds in actor outbox', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
@@ -60,7 +60,7 @@ describe('/api/v1/statuses/[id]/reblog', () => {
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		let deliveredActivity: any = null
 
-		const db = await makeDB()
+		const db = makeDB()
 		const queue = makeQueue()
 
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')

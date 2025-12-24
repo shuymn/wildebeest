@@ -378,13 +378,14 @@ if (import.meta.vitest) {
 				}
 			}
 
-			const db = await makeDB()
+			const db = makeDB()
 
 			const app = new Hono<HonoEnv>()
 			app.use(privateMiddleware())
+			app.get('/foo', (c) => c.text('foo'))
 
 			const headers = { authorization: 'Bearer APPID.' + TEST_JWT }
-			const request = new Request('https://example.com', { headers })
+			const request = new Request('https://example.com/foo', { headers })
 
 			const res = await app.fetch(request, { DATABASE: db })
 			await assertStatus(res, 401)
@@ -415,7 +416,7 @@ if (import.meta.vitest) {
 				}
 			}
 
-			const db = await makeDB()
+			const db = makeDB()
 
 			const app = new Hono<HonoEnv>()
 			app.use(privateMiddleware())
@@ -452,7 +453,7 @@ if (import.meta.vitest) {
 				}
 			}
 
-			const db = await makeDB()
+			const db = makeDB()
 			await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
 			const app = new Hono<HonoEnv>()
@@ -463,9 +464,10 @@ if (import.meta.vitest) {
 				expect(c.env.data.clientId).toBe('APPID')
 				return c.text('')
 			})
+			app.get('/foo', (c) => c.text('foo'))
 
 			const headers = { authorization: 'Bearer APPID.' + TEST_JWT }
-			const request = new Request('https://example.com', { headers })
+			const request = new Request('https://example.com/foo', { headers })
 
 			vi.stubEnv('MODE', 'not-test')
 			const res = await app.fetch(request, { DATABASE: db, ACCESS_AUD: accessAud, ACCESS_AUTH_DOMAIN: accessDomain })

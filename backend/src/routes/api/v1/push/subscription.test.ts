@@ -16,7 +16,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/push/subscription', () => {
 	test('get non existing subscription', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const vapidKeys = await generateVAPIDKeys()
 		const client = await createTestClient(db)
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
@@ -32,7 +32,7 @@ describe('/api/v1/push/subscription', () => {
 	})
 
 	test('get existing subscription', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const vapidKeys = await generateVAPIDKeys()
 		const client = await createTestClient(db)
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
@@ -76,7 +76,7 @@ describe('/api/v1/push/subscription', () => {
 	})
 
 	test('create subscription', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const vapidKeys = await generateVAPIDKeys()
 		const client = await createTestClient(db)
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
@@ -125,7 +125,7 @@ describe('/api/v1/push/subscription', () => {
 	})
 
 	test('create subscriptions only creates one', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const vapidKeys = await generateVAPIDKeys()
 		const client = await createTestClient(db)
 		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')

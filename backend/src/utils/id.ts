@@ -38,7 +38,7 @@ async function nextval(db: Database, table: string): Promise<number> {
 if (import.meta.vitest) {
 	const { makeDB } = await import('wildebeest/backend/test/utils')
 	test('generateMastodonId', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 
 		// @ts-expect-error for testing
 		randomBytes = () => '0123456789abcdef0123456789abcdef'

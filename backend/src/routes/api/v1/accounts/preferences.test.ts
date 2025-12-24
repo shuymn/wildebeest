@@ -8,7 +8,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/preferences', () => {
 	test('preferences', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'alice@example.com')
 		const connectedActor = actor
 

@@ -1,9 +1,4 @@
-import * as fs from 'node:fs/promises'
-import * as path from 'node:path'
-
-import { D1Database, D1DatabaseAPI } from '@miniflare/d1'
-// eslint-disable-next-line import/no-named-as-default
-import Database from 'better-sqlite3'
+import { env } from 'cloudflare:test'
 
 import { createUser, User } from 'wildebeest/backend/src/accounts'
 import { ApObjectId } from 'wildebeest/backend/src/activitypub/objects'
@@ -33,19 +28,7 @@ export function isUrlValid(s: string) {
 	return url.protocol === 'https:'
 }
 
-export async function makeDB(): Promise<DB> {
-	const db = new Database(':memory:')
-	const db2 = new D1Database(new D1DatabaseAPI(db))
-
-	// Manually run our migrations since @miniflare/d1 doesn't support it (yet).
-	const migrations = await fs.readdir('./migrations/')
-
-	for (let i = 0, len = migrations.length; i < len; i++) {
-		const content = await fs.readFile(path.join('migrations', migrations[i]), 'utf-8')
-		db.exec(content)
-	}
-
-	const env = { DATABASE: db2 } as any
+export function makeDB(): DB {
 	return getDatabase(env)
 }
 

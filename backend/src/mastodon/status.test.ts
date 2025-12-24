@@ -8,7 +8,7 @@ const domain = 'cloudflare.com'
 
 describe('mastodon/status', () => {
 	test('get mentions from status', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		await createTestUser(domain, db, userKEK, 'sven@example.com')
 
 		globalThis.fetch = async (input: RequestInfo) => {

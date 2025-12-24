@@ -11,14 +11,14 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/accounts/lookup', () => {
 	test('lookup unknown remote actor', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const req = new Request(`https://${domain}/api/v1/accounts/lookup?acct=sven@social.com`)
 		const res = await app.fetch(req, { DATABASE: db })
 		await assertStatus(res, 404)
 	})
 
 	test('lookup unknown local actor', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const req = new Request(`https://${domain}/api/v1/accounts/lookup?acct=sven`)
 		const res = await app.fetch(req, { DATABASE: db })
 		await assertStatus(res, 404)
@@ -97,7 +97,7 @@ describe('/api/v1/accounts/lookup', () => {
 			throw new Error('unexpected request to ' + input.url)
 		}
 
-		const db = await makeDB()
+		const db = makeDB()
 		await queryAcct({ localPart: 'someone', domain: 'social.com' }, db)
 
 		const req = new Request(`https://${domain}/api/v1/accounts/lookup?acct=someone@social.com`)
@@ -118,7 +118,7 @@ describe('/api/v1/accounts/lookup', () => {
 	})
 
 	test('lookup local actor', async () => {
-		const db = await makeDB()
+		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 		const actor3 = await createTestUser(domain, db, userKEK, 'sven3@cloudflare.com')
