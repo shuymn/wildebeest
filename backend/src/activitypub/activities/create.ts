@@ -145,8 +145,8 @@ export async function handleCreateActivity(
 
 		const notifId = await createNotification(db, 'mention', person, actor, obj)
 		await Promise.all([
-			await addObjectInInbox(db, person, obj),
-			await sendMentionNotification(db, actor, person, notifId, adminEmail, vapidKeys),
+			addObjectInInbox(db, person, obj),
+			sendMentionNotification(db, actor, person, notifId, adminEmail, vapidKeys),
 		])
 	}
 }

@@ -13,7 +13,7 @@ export const useUpdateRule = routeAction$(
 		try {
 			const result = await upsertRule(getDatabase(platform), data.text)
 			success = result.success
-		} catch (e: unknown) {
+		} catch {
 			success = false
 		}
 
@@ -33,7 +33,7 @@ export const useDeleteRule = routeAction$(
 		try {
 			const result = await deleteRule(getDatabase(platform), data.id)
 			success = result.success
-		} catch (e: unknown) {
+		} catch {
 			success = false
 		}
 

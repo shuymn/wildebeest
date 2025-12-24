@@ -11,6 +11,7 @@ export type InstanceConfig = {
 	urls: {
 		// TODO: implement streaming
 		// streaming_api: string
+		[key: string]: never
 	}
 	stats: {
 		user_count: number
@@ -75,6 +76,7 @@ export type InstanceConfigV2 = {
 		urls: {
 			// TODO: implement streaming
 			// streaming: string
+			[key: string]: never
 		}
 		accounts: {
 			max_featured_tags: number
