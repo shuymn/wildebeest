@@ -9,7 +9,7 @@
 		"@cloudflare/workers-types": "4.20251221.0",
 		"@playwright/test": "1.57.0",
 		"@types/better-sqlite3": "7.6.13",
-		"@types/cookie": "0.6.0",
+		"@types/cookie": "1.0.0",
 		"@types/node": "24.10.4",
 		"@typescript-eslint/eslint-plugin": "6.13.2",
 		"@typescript-eslint/parser": "6.13.2",
@@ -56,7 +56,7 @@
 		"deploy": "npm run build && npm run database:migrate && npm run pages -- deploy frontend/dist --project-name=wildebeest"
 	},
 	"dependencies": {
-		"cookie": "0.7.2",
+		"cookie": "1.1.1",
 		"toucan-js": "4.1.1",
 		"zod": "3.25.76"
 	},
