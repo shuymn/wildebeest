@@ -15,10 +15,10 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     env:
       NO_D1_WARNING: true
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
     steps:
       - name: Ensure CF_DEPLOY_DOMAIN and CF_ZONE_ID are defined
         run: |
@@ -52,6 +52,8 @@ jobs:
           OVERRIDE_NAME_SUFFIX: ${{ vars.OVERRIDE_NAME_SUFFIX }}
 
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
       - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
 
       - uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
@@ -99,9 +101,15 @@ jobs:
       - name: Create D1 database
         continue-on-error: true
         run: npx wrangler d1 create wildebeest-${{ env.NAME_SUFFIX }}-v1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: retrieve D1 database
         run: npx wrangler d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1") | .uuid' | awk '{print "d1_id=" $1}' >> "$GITHUB_ENV"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: migrate D1 database
         run: |
@@ -110,6 +118,9 @@ jobs:
             -e 's/^database_id = ".*"/database_id = "${{ env.d1_id }}"/' \
             wrangler.toml
           npx wrangler d1 migrations apply --remote wildebeest-${{ env.NAME_SUFFIX }}-v1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: retrieve Zero Trust organization
         run: |
@@ -120,6 +131,9 @@ jobs:
       - name: retrieve Terraform state KV namespace
         run: |
           npx wrangler kv:namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv=" $1}' >> "$GITHUB_ENV"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: Init
         run: terraform init
@@ -130,11 +144,17 @@ jobs:
         run: |
           npx wrangler kv:key get --namespace-id="${{ env.tfstate_kv }}" terraform.tfstate > ./tf/terraform.tfstate
           chmod 777 ./tf/terraform.tfstate
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: download VAPID keys
         if: ${{ env.tfstate_kv != '' }}
         continue-on-error: true
         run: npx wrangler kv:key get --namespace-id="${{ env.tfstate_kv }}" vapid_jwk | jq . > ./tf/vapid_jwk
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: generate VAPID keys if needed
         run: |
@@ -150,6 +170,9 @@ jobs:
         run: |
           pnpm --dir "do" install
           npx wrangler deploy --config do/wrangler.toml
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: Retrieve DO namespace
         run: |
@@ -179,16 +202,28 @@ jobs:
       - name: retrieve Terraform state KV namespace
         if: ${{ env.tfstate_kv == '' }}
         run: npx wrangler kv:namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv=" $1}' >> "$GITHUB_ENV"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: store VAPID keys state
         run: npx wrangler kv:key put --namespace-id="${{ env.tfstate_kv }}" vapid_jwk --path=./tf/vapid_jwk
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: store Terraform state
         run: npx wrangler kv:key put --namespace-id="${{ env.tfstate_kv }}" terraform.tfstate --path=./tf/terraform.tfstate
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: Create Queue
         continue-on-error: true
         run: npx wrangler queues create wildebeest-${{ env.NAME_SUFFIX }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: Publish consumer
         run: |
@@ -220,6 +255,9 @@ jobs:
           pnpm --dir consumer install
           echo "******"
           npx wrangler deploy --config consumer/wrangler.toml
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: add Queue producer to Pages
         run: |
@@ -241,6 +279,8 @@ jobs:
       - name: Publish
         env:
           COMMIT_HASH: ${{ github.sha }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         run: |
           echo "*** pre commands ***"
           pnpm build
