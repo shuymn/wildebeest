@@ -37,7 +37,7 @@ app.all<'/:id/inbox'>(async ({ req, env }) => {
 
 	const body = await req.text()
 	if (req.method == 'POST') {
-		const digest = req.headers.get('digest')
+		const digest = req.header('digest')
 		const generatedDigest = await generateDigestHeader(body)
 		if (digest != generatedDigest) {
 			return new Response('invalid digest', { status: 401 })

@@ -9,7 +9,7 @@ import { getJwtEmail } from 'wildebeest/backend/src/utils/auth/getJwtEmail'
 
 export const authMiddleware = (): MiddlewareHandler<HonoEnv> => {
 	return async (c, next) => {
-		const cookie = parse(c.req.raw.headers.get('Cookie') || '')
+		const cookie = parse(c.req.header('Cookie') || '')
 		const jwt = cookie['CF_Authorization']
 
 		// initialize

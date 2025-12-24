@@ -42,5 +42,11 @@ export const groupByDirectory = <T = unknown>(files: Record<string, T>) => {
 		organizedFiles[directory] = Object.fromEntries(sortedEntries)
 	}
 
-	return organizedFiles
+	// Sort directories by path length (longest first) so more specific routes are registered first
+	// This ensures /api/v1/statuses/:id is registered before /api/v1/statuses
+	const sortedEntries = Object.entries(organizedFiles).sort(([dirA], [dirB]) => {
+		return dirB.length - dirA.length
+	})
+
+	return Object.fromEntries(sortedEntries)
 }

@@ -88,7 +88,7 @@ app.post(async ({ req, env }) => {
 				cache: cacheFromEnv(env),
 			},
 			result.data,
-			req.headers.get('Idempotency-Key')
+			req.header('Idempotency-Key') ?? null
 		)
 	}
 	const { issues } = result.error

@@ -26,7 +26,7 @@ type Dependencies = {
 const app = new Hono<HonoEnv>()
 
 app.get(async ({ req, env }) => {
-	const token = req.headers.get('Authorization')?.replace('Bearer ', '')
+	const token = req.header('Authorization')?.replace('Bearer ', '')
 	if (token) {
 		return handleRequest({ db: env.DATABASE, vapidKeys: getVAPIDKeys(env) }, token)
 	}
