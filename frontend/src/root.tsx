@@ -13,7 +13,11 @@ export default component$(() => {
 			<head>
 				<meta charSet="utf-8" />
 				<link rel="manifest" href="/manifest.json" />
-				<script src="https://kit.fontawesome.com/e3d907997f.js" crossOrigin="anonymous"></script>
+				<link
+					rel="stylesheet"
+					href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
+					crossOrigin="anonymous"
+				/>
 				<RouterHead />
 			</head>
 			<body lang="en" class="flex flex-col bg-wildebeest-900 text-white min-w-min min-h-screen">
