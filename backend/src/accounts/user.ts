@@ -1,5 +1,3 @@
-import { Buffer } from 'buffer'
-
 import {
 	Actor,
 	actorFromRow,
@@ -16,8 +14,6 @@ import { HTTPS } from 'wildebeest/backend/src/utils'
 import { Handle, LocalHandle } from 'wildebeest/backend/src/utils/handle'
 import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
 import { generateUserKey } from 'wildebeest/backend/src/utils/key-ops'
-
-const isTesting = typeof vitest !== 'undefined'
 
 export function getUserId(domain: string, obj: { preferredUsername: string } | Pick<Handle, 'localPart'>): URL {
 	if ('preferredUsername' in obj) {
@@ -80,17 +76,8 @@ export async function createUser({
 }: CreateUserParams): Promise<User> {
 	const userKeyPair = await generateUserKey(userKEK)
 
-	let privkey, salt
-	// Since D1 and better-sqlite3 behaviors don't exactly match, presumable
-	// because Buffer support is different in Node/Worker. We have to transform
-	// the values depending on the platform.
-	if (isTesting) {
-		privkey = Buffer.from(userKeyPair.wrappedPrivKey)
-		salt = Buffer.from(userKeyPair.salt)
-	} else {
-		privkey = userKeyPair.wrappedPrivKey
-		salt = userKeyPair.salt.buffer
-	}
+	const privkey = userKeyPair.wrappedPrivKey
+	const salt = userKeyPair.salt.buffer
 
 	const id = getUserId(domain, { preferredUsername }).toString()
 
