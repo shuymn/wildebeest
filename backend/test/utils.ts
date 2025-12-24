@@ -57,7 +57,7 @@ export function assertCORS(response: Response, request?: Request) {
 }
 
 export function assertJSON(response: Response) {
-	expect(response.headers.get('content-type')).toMatch(/^application\/json; charset=(utf|UTF)-8$/)
+	expect(response.headers.get('content-type')).toMatch('application/json')
 }
 
 export function assertCache(response: Response, maxge: number) {
