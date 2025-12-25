@@ -1,8 +1,8 @@
-import { type Actor, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
-import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
-import { getDatabase } from 'wildebeest/backend/src/database'
-import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
-import type { DeliverMessageBody } from 'wildebeest/backend/src/types'
+import { type Actor, getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
+import { deliverToActor } from '@wildebeest/backend/activitypub/deliver'
+import { getDatabase } from '@wildebeest/backend/database'
+import { getSigningKey } from '@wildebeest/backend/mastodon/account'
+import type { DeliverMessageBody } from '@wildebeest/backend/types'
 
 import type { Env } from './'
 

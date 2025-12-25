@@ -1,10 +1,10 @@
-import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { cacheFromEnv } from 'wildebeest/backend/src/cache'
-import { getDatabase } from 'wildebeest/backend/src/database'
-import * as notification from 'wildebeest/backend/src/mastodon/notification'
-import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
-import type { InboxMessageBody } from 'wildebeest/backend/src/types'
+import * as activityHandler from '@wildebeest/backend/activitypub/activities/handle'
+import type { Actor } from '@wildebeest/backend/activitypub/actors'
+import { cacheFromEnv } from '@wildebeest/backend/cache'
+import { getDatabase } from '@wildebeest/backend/database'
+import * as notification from '@wildebeest/backend/mastodon/notification'
+import * as timeline from '@wildebeest/backend/mastodon/timeline'
+import type { InboxMessageBody } from '@wildebeest/backend/types'
 
 import type { Env } from './'
 
