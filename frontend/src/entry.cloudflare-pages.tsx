@@ -2,9 +2,9 @@ import qwikCityPlan from '@qwik-city-plan'
 import { manifest } from '@qwik-client-manifest'
 import render from './entry.ssr'
 import { qwikHandler, authMiddleware } from './middlewares'
-import app from 'wildebeest/backend/src'
+import app from '@wildebeest/backend'
 import { PlatformCloudflarePages } from '@builder.io/qwik-city/middleware/cloudflare-pages'
-import { HonoEnv } from 'wildebeest/backend/src/types'
+import { HonoEnv } from '@wildebeest/backend/types'
 
 declare global {
 	type QwikCityPlatform = Omit<PlatformCloudflarePages, 'env'> & {
