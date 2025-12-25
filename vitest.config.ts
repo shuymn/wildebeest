@@ -22,7 +22,6 @@ export default defineWorkersProject(async () => {
 			setupFiles: ['./backend/test/apply-migrations.ts'],
 			poolOptions: {
 				workers: {
-					main: 'backend/src/index.ts',
 					singleWorker: true,
 					wrangler: { configPath: './wrangler.toml' },
 					miniflare: {
