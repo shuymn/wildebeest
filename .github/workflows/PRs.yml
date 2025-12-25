@@ -48,10 +48,10 @@ jobs:
         run: pnpm install
 
       - name: Build
-        run: npm run build
+        run: pnpm run build
 
       - name: Run API tests
-        run: npm run test -- --shard ${{ matrix.shard }}/${{ strategy.job-total }} --coverage
+        run: pnpm run test --shard ${{ matrix.shard }}/${{ strategy.job-total }} --coverage
 
       - name: Upload coverage
         uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5.5.2
@@ -75,27 +75,27 @@ jobs:
           cache: pnpm
 
       - name: Install
-        run: pnpm install && pnpm --dir frontend install
+        run: pnpm install
 
       - name: Check formatting
-        run: npm run pretty
+        run: pnpm run pretty
 
       - name: Check backend linting
-        run: npm run lint:backend
+        run: pnpm run lint:backend
 
       - name: Check consumer linting
-        run: npm run lint:consumer
+        run: pnpm run lint:consumer
 
       - name: Check do linting
-        run: npm run lint:do
+        run: pnpm run lint:do
 
       - name: Check frontend linting
-        run: npm run lint:frontend
+        run: pnpm run lint:frontend
 
       - name: Check frontend types
         continue-on-error: true
         working-directory: frontend
-        run: npm run types-check
+        run: pnpm run types-check
 
       - name: Install sqlite3def
         env:
@@ -108,7 +108,7 @@ jobs:
 
       - name: Check DB schema
         run: |
-          npm run database:migrate -- --local
+          pnpm run database:migrate --local
           DB_FILE=$(find .wrangler/state/v3/d1/miniflare-D1DatabaseObject -name "*.sqlite" -type f | head -n 1)
           # Drop Cloudflare internal table to avoid sqlite3def parser error with 'key' column
           sqlite3 "${DB_FILE:?}" "DROP TABLE IF EXISTS _cf_KV;"
@@ -134,7 +134,7 @@ jobs:
         run: pnpm install
 
       - name: Run App in the background
-        run: npm run ci-dev-test-ui &
+        run: pnpm run ci-dev-test-ui &
 
       - name: Store Playwright version
         run: |

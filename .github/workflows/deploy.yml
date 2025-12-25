@@ -168,7 +168,7 @@ jobs:
 
       - name: Publish DO
         run: |
-          pnpm --dir "do" install
+          pnpm install
           npx wrangler deploy --config do/wrangler.toml
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
@@ -252,7 +252,7 @@ jobs:
             echo "ADMIN_EMAIL = \"${{ vars.ADMIN_EMAIL }}\""
           } >> consumer/wrangler.toml
 
-          pnpm --dir consumer install
+          pnpm install
           echo "******"
           npx wrangler deploy --config consumer/wrangler.toml
         env:
