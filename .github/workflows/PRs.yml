@@ -137,6 +137,7 @@ jobs:
         run: pnpm run ci-dev-test-ui &
 
       - name: Store Playwright version
+        working-directory: backend
         run: |
           PLAYWRIGHT_VERSION=$(pnpm ls @playwright/test --json | jq --exit-status --raw-output 'first | .devDependencies["@playwright/test"].version')
           echo "Playwright version: ${PLAYWRIGHT_VERSION}"
