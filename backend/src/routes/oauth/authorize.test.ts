@@ -1,8 +1,8 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { ACCESS_CERTS, TEST_JWT } from 'wildebeest/backend/test/test-data'
-import { makeDB, assertStatus, createTestClient, assertCORS } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { ACCESS_CERTS, TEST_JWT } from '@wildebeest/backend/test/test-data'
+import { makeDB, assertStatus, createTestClient, assertCORS } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek3'
 const accessDomain = 'access.com'

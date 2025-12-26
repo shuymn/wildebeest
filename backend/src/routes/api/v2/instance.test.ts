@@ -1,9 +1,9 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import type { Env } from 'wildebeest/backend/src/types'
-import { InstanceConfigV2 } from 'wildebeest/backend/src/types/configs'
-import { makeDB, createTestUser, assertStatus, assertCORS, assertJSON } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { makeDB, createTestUser, assertStatus, assertCORS, assertJSON } from '@wildebeest/backend/test/utils'
+import type { Env } from '@wildebeest/backend/types'
+import { InstanceConfigV2 } from '@wildebeest/backend/types/configs'
 
 const userKEK = 'test_kek23'
 const domain = 'cloudflare.com'

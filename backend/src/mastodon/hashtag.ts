@@ -1,6 +1,6 @@
-import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import { type Database } from 'wildebeest/backend/src/database'
-import type { Tag } from 'wildebeest/backend/src/types/tag'
+import type { Note } from '@wildebeest/backend/activitypub/objects/note'
+import { type Database } from '@wildebeest/backend/database'
+import type { Tag } from '@wildebeest/backend/types/tag'
 
 export type Hashtag = string
 

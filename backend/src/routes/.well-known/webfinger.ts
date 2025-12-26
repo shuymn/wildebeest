@@ -2,11 +2,11 @@
 
 import { Hono } from 'hono'
 
-import { getActorByRemoteHandle } from 'wildebeest/backend/src/activitypub/actors'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { HonoEnv } from 'wildebeest/backend/src/types'
-import { parseHandle, actorToAcct } from 'wildebeest/backend/src/utils/handle'
-import { WebFingerResponse } from 'wildebeest/backend/src/webfinger'
+import { getActorByRemoteHandle } from '@wildebeest/backend/activitypub/actors'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import { HonoEnv } from '@wildebeest/backend/types'
+import { parseHandle, actorToAcct } from '@wildebeest/backend/utils/handle'
+import { WebFingerResponse } from '@wildebeest/backend/webfinger'
 
 const app = new Hono<HonoEnv>()
 

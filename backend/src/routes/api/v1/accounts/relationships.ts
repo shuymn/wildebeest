@@ -3,12 +3,12 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 
-import type { Person } from 'wildebeest/backend/src/activitypub/actors'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { notAuthorized } from 'wildebeest/backend/src/errors'
-import { getFollowingMastodonIds, getFollowingRequestedMastodonIds } from 'wildebeest/backend/src/mastodon/follow'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { cors, readParams } from 'wildebeest/backend/src/utils'
+import type { Person } from '@wildebeest/backend/activitypub/actors'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import { notAuthorized } from '@wildebeest/backend/errors'
+import { getFollowingMastodonIds, getFollowingRequestedMastodonIds } from '@wildebeest/backend/mastodon/follow'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { cors, readParams } from '@wildebeest/backend/utils'
 
 const headers = {
 	...cors(),

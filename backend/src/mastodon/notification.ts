@@ -1,6 +1,6 @@
-import { isLocalAccount } from 'wildebeest/backend/src/accounts'
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
+import { isLocalAccount } from '@wildebeest/backend/accounts'
+import type { Actor } from '@wildebeest/backend/activitypub/actors'
+import { getActorById, getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
 import {
 	type ApObject,
 	ensureObjectMastodonId,
@@ -8,22 +8,22 @@ import {
 	getObjectByOriginalId,
 	mastodonIdSymbol,
 	originalActorIdSymbol,
-} from 'wildebeest/backend/src/activitypub/objects'
-import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import type { Cache } from 'wildebeest/backend/src/cache'
-import { type Database } from 'wildebeest/backend/src/database'
-import * as query from 'wildebeest/backend/src/database/d1/querier'
-import { loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import { actorToMention, detectVisibility } from 'wildebeest/backend/src/mastodon/status'
-import { getSubscriptionForAllClients } from 'wildebeest/backend/src/mastodon/subscription'
-import { fromObject } from 'wildebeest/backend/src/media'
-import { isNotificationType, type Notification, type NotificationType } from 'wildebeest/backend/src/types/notification'
-import { actorToHandle, handleToAcct } from 'wildebeest/backend/src/utils/handle'
-import { generateWebPushMessage } from 'wildebeest/backend/src/webpush'
-import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
-import type { WebPushInfos, WebPushMessage } from 'wildebeest/backend/src/webpush/webpushinfos'
-import { WebPushResult } from 'wildebeest/backend/src/webpush/webpushinfos'
-import { defaultImages } from 'wildebeest/config/accounts'
+} from '@wildebeest/backend/activitypub/objects'
+import { Note } from '@wildebeest/backend/activitypub/objects/note'
+import type { Cache } from '@wildebeest/backend/cache'
+import { defaultImages } from '@wildebeest/backend/config/accounts'
+import { type Database } from '@wildebeest/backend/database'
+import * as query from '@wildebeest/backend/database/d1/querier'
+import { loadMastodonAccount } from '@wildebeest/backend/mastodon/account'
+import { actorToMention, detectVisibility } from '@wildebeest/backend/mastodon/status'
+import { getSubscriptionForAllClients } from '@wildebeest/backend/mastodon/subscription'
+import { fromObject } from '@wildebeest/backend/media'
+import { isNotificationType, type Notification, type NotificationType } from '@wildebeest/backend/types/notification'
+import { actorToHandle, handleToAcct } from '@wildebeest/backend/utils/handle'
+import { generateWebPushMessage } from '@wildebeest/backend/webpush'
+import type { JWK } from '@wildebeest/backend/webpush/jwk'
+import type { WebPushInfos, WebPushMessage } from '@wildebeest/backend/webpush/webpushinfos'
+import { WebPushResult } from '@wildebeest/backend/webpush/webpushinfos'
 
 export async function createNotification(
 	db: Database,

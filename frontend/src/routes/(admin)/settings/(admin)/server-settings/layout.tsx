@@ -1,7 +1,7 @@
 import { component$, Slot } from '@builder.io/qwik'
 import { Link, routeLoader$, useLocation } from '@builder.io/qwik-city'
-import { getDatabase } from 'wildebeest/backend/src/database'
-import { getSettings } from 'wildebeest/backend/src/config/server'
+import { getDatabase } from '@wildebeest/backend/database'
+import { getSettings } from '@wildebeest/backend/config/server'
 import { ServerAboutData } from './about'
 import { ServerBrandingData } from './branding'
 

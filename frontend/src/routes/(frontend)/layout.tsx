@@ -1,6 +1,6 @@
 import { component$, Slot, useContextProvider } from '@builder.io/qwik'
 import { DocumentHead, Link, routeLoader$ } from '@builder.io/qwik-city'
-import type { InstanceConfig } from 'wildebeest/backend/src/types/configs'
+import type { InstanceConfig } from '@wildebeest/backend/types/configs'
 import LeftColumn from '~/components/layout/LeftColumn/LeftColumn'
 import RightColumn from '~/components/layout/RightColumn/RightColumn'
 import { WildebeestLogo } from '~/components/MastodonLogo'

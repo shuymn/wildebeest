@@ -4,7 +4,7 @@ import Status from '~/components/Status'
 import { DocumentHead, routeLoader$ } from '@builder.io/qwik-city'
 import { getNotFoundHtml } from '~/utils/getNotFoundHtml/getNotFoundHtml'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
-import { getTextContent } from 'wildebeest/backend/src/activitypub/objects'
+import { getTextContent } from '@wildebeest/backend/activitypub/objects'
 import { getDocumentHead } from '~/utils/getDocumentHead'
 import { fetchApi } from '~/utils/fetchApi'
 

@@ -1,8 +1,8 @@
-import type { Document, ApObject } from 'wildebeest/backend/src/activitypub/objects'
-import { isDocument, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { type Image, isImage } from 'wildebeest/backend/src/activitypub/objects/image'
-import { isVideo, Video } from 'wildebeest/backend/src/activitypub/objects/video'
-import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
+import type { Document, ApObject } from '@wildebeest/backend/activitypub/objects'
+import { isDocument, mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { type Image, isImage } from '@wildebeest/backend/activitypub/objects/image'
+import { isVideo, Video } from '@wildebeest/backend/activitypub/objects/video'
+import type { MediaAttachment } from '@wildebeest/backend/types/media'
 
 export function fromObject(obj: ApObject): MediaAttachment {
 	if (isImage(obj)) {

@@ -1,5 +1,5 @@
-import type { Activity } from 'wildebeest/backend/src/activitypub/activities'
-import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
+import type { Activity } from '@wildebeest/backend/activitypub/activities'
+import type { JWK } from '@wildebeest/backend/webpush/jwk'
 
 export enum MessageType {
 	Inbox = 1,

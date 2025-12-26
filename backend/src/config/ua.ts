@@ -1,4 +1,4 @@
-import { MASTODON_API_VERSION, WILDEBEEST_VERSION } from 'wildebeest/config/versions'
+import { MASTODON_API_VERSION, WILDEBEEST_VERSION } from './versions'
 
 export function getFederationUA(domain: string): string {
 	return `Wildebeest/${WILDEBEEST_VERSION} (Mastodon/${MASTODON_API_VERSION}; +${domain})`

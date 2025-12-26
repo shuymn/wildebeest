@@ -1,9 +1,9 @@
 import { Hono } from 'hono'
 
-import { getPeers } from 'wildebeest/backend/src/activitypub/peers'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { cors } from 'wildebeest/backend/src/utils/cors'
+import { getPeers } from '@wildebeest/backend/activitypub/peers'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { cors } from '@wildebeest/backend/utils/cors'
 
 const app = new Hono<HonoEnv>()
 

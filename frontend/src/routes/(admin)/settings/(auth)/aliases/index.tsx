@@ -1,7 +1,7 @@
 import { component$, useStore, $ } from '@builder.io/qwik'
-import { getDatabase } from 'wildebeest/backend/src/database'
+import { getDatabase } from '@wildebeest/backend/database'
 import { routeAction$, Form, zod$, z } from '@builder.io/qwik-city'
-import { addAlias } from 'wildebeest/backend/src/accounts/alias'
+import { addAlias } from '@wildebeest/backend/accounts/alias'
 import ResultMessage from '~/components/ResultMessage'
 
 const zodSchema = z.object({

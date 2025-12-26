@@ -1,7 +1,7 @@
-import { type Actor, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
-import { type Database } from 'wildebeest/backend/src/database'
-import { MastodonId } from 'wildebeest/backend/src/types'
-import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
+import { type Actor, getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
+import { type Database } from '@wildebeest/backend/database'
+import { MastodonId } from '@wildebeest/backend/types'
+import { actorToAcct } from '@wildebeest/backend/utils/handle'
 
 import { getResultsField } from './utils'
 

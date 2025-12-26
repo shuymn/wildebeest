@@ -3,39 +3,39 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 
-import { createCreateActivity } from 'wildebeest/backend/src/activitypub/activities/create'
-import { Person } from 'wildebeest/backend/src/activitypub/actors'
-import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
-import { deliverFollowers, deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
-import { getObjectByMastodonId, originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { Image, isImage } from 'wildebeest/backend/src/activitypub/objects/image'
-import { newMention } from 'wildebeest/backend/src/activitypub/objects/mention'
+import { createCreateActivity } from '@wildebeest/backend/activitypub/activities/create'
+import { Person } from '@wildebeest/backend/activitypub/actors'
+import { addObjectInOutbox } from '@wildebeest/backend/activitypub/actors/outbox'
+import { deliverFollowers, deliverToActor } from '@wildebeest/backend/activitypub/deliver'
+import { getObjectByMastodonId, originalObjectIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { Image, isImage } from '@wildebeest/backend/activitypub/objects/image'
+import { newMention } from '@wildebeest/backend/activitypub/objects/mention'
 import {
 	createDirectNote,
 	createPrivateNote,
 	createPublicNote,
 	createUnlistedNote,
 	Note,
-} from 'wildebeest/backend/src/activitypub/objects/note'
-import { Cache, cacheFromEnv } from 'wildebeest/backend/src/cache'
-import { Database, getDatabase } from 'wildebeest/backend/src/database'
-import { exceededLimit, notAuthorized, statusNotFound, validationError } from 'wildebeest/backend/src/errors'
-import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
-import { getHashtags, insertHashtags } from 'wildebeest/backend/src/mastodon/hashtag'
-import * as idempotency from 'wildebeest/backend/src/mastodon/idempotency'
-import { enrichStatus } from 'wildebeest/backend/src/mastodon/microformats'
-import { insertReply } from 'wildebeest/backend/src/mastodon/reply'
+} from '@wildebeest/backend/activitypub/objects/note'
+import { Cache, cacheFromEnv } from '@wildebeest/backend/cache'
+import { Database, getDatabase } from '@wildebeest/backend/database'
+import { exceededLimit, notAuthorized, statusNotFound, validationError } from '@wildebeest/backend/errors'
+import { getSigningKey } from '@wildebeest/backend/mastodon/account'
+import { getHashtags, insertHashtags } from '@wildebeest/backend/mastodon/hashtag'
+import * as idempotency from '@wildebeest/backend/mastodon/idempotency'
+import { enrichStatus } from '@wildebeest/backend/mastodon/microformats'
+import { insertReply } from '@wildebeest/backend/mastodon/reply'
 import {
 	getMentions,
 	MAX_MEDIA_ATTACHMENTS,
 	MAX_STATUS_LENGTH,
 	toMastodonStatusFromObject,
-} from 'wildebeest/backend/src/mastodon/status'
-import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
-import { DeliverMessageBody, HonoEnv, Queue, Visibility } from 'wildebeest/backend/src/types'
-import { readBody, cors } from 'wildebeest/backend/src/utils'
-import { PartialProps } from 'wildebeest/backend/src/utils/type'
-import myz from 'wildebeest/backend/src/utils/zod'
+} from '@wildebeest/backend/mastodon/status'
+import * as timeline from '@wildebeest/backend/mastodon/timeline'
+import { DeliverMessageBody, HonoEnv, Queue, Visibility } from '@wildebeest/backend/types'
+import { readBody, cors } from '@wildebeest/backend/utils'
+import { PartialProps } from '@wildebeest/backend/utils/type'
+import myz from '@wildebeest/backend/utils/zod'
 
 const headers = {
 	...cors(),

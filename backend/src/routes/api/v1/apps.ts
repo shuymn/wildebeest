@@ -3,16 +3,16 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 
-import { getVAPIDKeys } from 'wildebeest/backend/src/config'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { unprocessableEntity } from 'wildebeest/backend/src/errors'
-import { Application } from 'wildebeest/backend/src/mastodon'
-import { createClient } from 'wildebeest/backend/src/mastodon/client'
-import { VAPIDPublicKey } from 'wildebeest/backend/src/mastodon/subscription'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { makeJsonResponse, MastodonApiResponse, readBody } from 'wildebeest/backend/src/utils'
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
+import { getVAPIDKeys } from '@wildebeest/backend/config'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import { unprocessableEntity } from '@wildebeest/backend/errors'
+import { Application } from '@wildebeest/backend/mastodon'
+import { createClient } from '@wildebeest/backend/mastodon/client'
+import { VAPIDPublicKey } from '@wildebeest/backend/mastodon/subscription'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { makeJsonResponse, MastodonApiResponse, readBody } from '@wildebeest/backend/utils'
+import { cors } from '@wildebeest/backend/utils/cors'
+import type { JWK } from '@wildebeest/backend/webpush/jwk'
 
 // Parameter validation according to https://github.com/mastodon/mastodon/blob/main/app/lib/application_extension.rb
 const schema = z.object({

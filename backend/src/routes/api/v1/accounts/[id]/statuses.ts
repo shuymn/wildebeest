@@ -3,16 +3,16 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 
-import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
-import { Actor, getActorByMastodonId, Person } from 'wildebeest/backend/src/activitypub/actors'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { resourceNotFound } from 'wildebeest/backend/src/errors'
-import { isFollowing } from 'wildebeest/backend/src/mastodon/follow'
-import { toMastodonStatusesFromRowsWithActor } from 'wildebeest/backend/src/mastodon/status'
-import { getStatusRange } from 'wildebeest/backend/src/mastodon/timeline'
-import type { HonoEnv, MastodonId } from 'wildebeest/backend/src/types'
-import { cors, readParams } from 'wildebeest/backend/src/utils'
-import myz from 'wildebeest/backend/src/utils/zod'
+import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
+import { Actor, getActorByMastodonId, Person } from '@wildebeest/backend/activitypub/actors'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import { resourceNotFound } from '@wildebeest/backend/errors'
+import { isFollowing } from '@wildebeest/backend/mastodon/follow'
+import { toMastodonStatusesFromRowsWithActor } from '@wildebeest/backend/mastodon/status'
+import { getStatusRange } from '@wildebeest/backend/mastodon/timeline'
+import type { HonoEnv, MastodonId } from '@wildebeest/backend/types'
+import { cors, readParams } from '@wildebeest/backend/utils'
+import myz from '@wildebeest/backend/utils/zod'
 
 const headers = {
 	...cors(),

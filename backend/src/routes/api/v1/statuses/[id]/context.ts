@@ -2,12 +2,12 @@
 
 import { Hono } from 'hono'
 
-import { getObjectByMastodonId } from 'wildebeest/backend/src/activitypub/objects'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { getReplies } from 'wildebeest/backend/src/mastodon/reply'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import type { Context } from 'wildebeest/backend/src/types/status'
-import { cors } from 'wildebeest/backend/src/utils/cors'
+import { getObjectByMastodonId } from '@wildebeest/backend/activitypub/objects'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import { getReplies } from '@wildebeest/backend/mastodon/reply'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import type { Context } from '@wildebeest/backend/types/status'
+import { cors } from '@wildebeest/backend/utils/cors'
 
 const app = new Hono<HonoEnv>()
 

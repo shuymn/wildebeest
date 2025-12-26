@@ -2,26 +2,26 @@
 
 import { Hono } from 'hono'
 
-import { isLocalAccount } from 'wildebeest/backend/src/accounts'
-import type { Person } from 'wildebeest/backend/src/activitypub/actors'
-import { getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
+import { isLocalAccount } from '@wildebeest/backend/accounts'
+import type { Person } from '@wildebeest/backend/activitypub/actors'
+import { getActorById, getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
 import {
 	ensureObjectMastodonId,
 	getObjectByOriginalId,
 	mastodonIdSymbol,
 	originalActorIdSymbol,
-} from 'wildebeest/backend/src/activitypub/objects'
-import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import * as query from 'wildebeest/backend/src/database/d1/querier'
-import { statusNotFound } from 'wildebeest/backend/src/errors'
-import { loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import { actorToMention, detectVisibility } from 'wildebeest/backend/src/mastodon/status'
-import { fromObject } from 'wildebeest/backend/src/media'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { isNotificationType, type Notification } from 'wildebeest/backend/src/types/notification'
-import { HTTPS } from 'wildebeest/backend/src/utils'
-import { actorToHandle, handleToAcct } from 'wildebeest/backend/src/utils/handle'
+} from '@wildebeest/backend/activitypub/objects'
+import { Note } from '@wildebeest/backend/activitypub/objects/note'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import * as query from '@wildebeest/backend/database/d1/querier'
+import { statusNotFound } from '@wildebeest/backend/errors'
+import { loadMastodonAccount } from '@wildebeest/backend/mastodon/account'
+import { actorToMention, detectVisibility } from '@wildebeest/backend/mastodon/status'
+import { fromObject } from '@wildebeest/backend/media'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { isNotificationType, type Notification } from '@wildebeest/backend/types/notification'
+import { HTTPS } from '@wildebeest/backend/utils'
+import { actorToHandle, handleToAcct } from '@wildebeest/backend/utils/handle'
 
 const headers = {
 	'content-type': 'application/json; charset=utf-8',

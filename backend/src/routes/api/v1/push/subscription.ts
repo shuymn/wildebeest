@@ -1,15 +1,15 @@
 import { Hono } from 'hono'
 
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { getVAPIDKeys } from 'wildebeest/backend/src/config'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import * as errors from 'wildebeest/backend/src/errors'
-import { getClientById } from 'wildebeest/backend/src/mastodon/client'
-import type { CreateRequest } from 'wildebeest/backend/src/mastodon/subscription'
-import { createSubscription, getSubscription, VAPIDPublicKey } from 'wildebeest/backend/src/mastodon/subscription'
-import { HonoEnv } from 'wildebeest/backend/src/types'
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
+import type { Actor } from '@wildebeest/backend/activitypub/actors'
+import { getVAPIDKeys } from '@wildebeest/backend/config'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import * as errors from '@wildebeest/backend/errors'
+import { getClientById } from '@wildebeest/backend/mastodon/client'
+import type { CreateRequest } from '@wildebeest/backend/mastodon/subscription'
+import { createSubscription, getSubscription, VAPIDPublicKey } from '@wildebeest/backend/mastodon/subscription'
+import { HonoEnv } from '@wildebeest/backend/types'
+import { cors } from '@wildebeest/backend/utils/cors'
+import type { JWK } from '@wildebeest/backend/webpush/jwk'
 
 const app = new Hono<HonoEnv>()
 

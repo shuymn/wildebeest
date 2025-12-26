@@ -1,16 +1,16 @@
 import { Hono } from 'hono'
 
-import { getUserId } from 'wildebeest/backend/src/accounts'
-import type { Activity } from 'wildebeest/backend/src/activitypub/activities'
-import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
-import { createCreateActivity } from 'wildebeest/backend/src/activitypub/activities/create'
-import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
-import { getApId } from 'wildebeest/backend/src/activitypub/objects'
-import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import { isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
+import { getUserId } from '@wildebeest/backend/accounts'
+import type { Activity } from '@wildebeest/backend/activitypub/activities'
+import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
+import { createCreateActivity } from '@wildebeest/backend/activitypub/activities/create'
+import { getActorById } from '@wildebeest/backend/activitypub/actors'
+import { getApId } from '@wildebeest/backend/activitypub/objects'
+import type { Note } from '@wildebeest/backend/activitypub/objects/note'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { cors } from '@wildebeest/backend/utils/cors'
+import { isLocalHandle, parseHandle } from '@wildebeest/backend/utils/handle'
 
 const app = new Hono<HonoEnv>()
 

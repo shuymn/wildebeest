@@ -1,6 +1,6 @@
-import { type Database } from 'wildebeest/backend/src/database'
-import type { ContextData, MessageBody, Queue } from 'wildebeest/backend/src/types'
-import { Nullable } from 'wildebeest/backend/src/utils/type'
+import { type Database } from '@wildebeest/backend/database'
+import type { ContextData, MessageBody, Queue } from '@wildebeest/backend/types'
+import { Nullable } from '@wildebeest/backend/utils/type'
 
 export type Env = {
 	DATABASE: Database

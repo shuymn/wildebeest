@@ -1,9 +1,9 @@
-import { MoveActivity } from 'wildebeest/backend/src/activitypub/activities'
-import { getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
-import { getApId } from 'wildebeest/backend/src/activitypub/objects'
-import { getMetadata, loadItems, OrderedCollection } from 'wildebeest/backend/src/activitypub/objects/collection'
-import { Database } from 'wildebeest/backend/src/database'
-import { moveFollowers, moveFollowing } from 'wildebeest/backend/src/mastodon/follow'
+import { MoveActivity } from '@wildebeest/backend/activitypub/activities'
+import { getActorById, getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
+import { getApId } from '@wildebeest/backend/activitypub/objects'
+import { getMetadata, loadItems, OrderedCollection } from '@wildebeest/backend/activitypub/objects/collection'
+import { Database } from '@wildebeest/backend/database'
+import { moveFollowers, moveFollowing } from '@wildebeest/backend/mastodon/follow'
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-move
 export async function handleMoveActivity(domain: string, activity: MoveActivity, db: Database) {

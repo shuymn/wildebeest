@@ -5,15 +5,15 @@ import {
 	isActorRowLike,
 	PERSON,
 	Person,
-} from 'wildebeest/backend/src/activitypub/actors'
-import { Remote } from 'wildebeest/backend/src/activitypub/objects'
-import { Image } from 'wildebeest/backend/src/activitypub/objects/image'
-import { type Database } from 'wildebeest/backend/src/database'
-import * as query from 'wildebeest/backend/src/database/d1/querier'
-import { HTTPS } from 'wildebeest/backend/src/utils'
-import { Handle, LocalHandle } from 'wildebeest/backend/src/utils/handle'
-import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
-import { generateUserKey } from 'wildebeest/backend/src/utils/key-ops'
+} from '@wildebeest/backend/activitypub/actors'
+import { Remote } from '@wildebeest/backend/activitypub/objects'
+import { Image } from '@wildebeest/backend/activitypub/objects/image'
+import { type Database } from '@wildebeest/backend/database'
+import * as query from '@wildebeest/backend/database/d1/querier'
+import { HTTPS } from '@wildebeest/backend/utils'
+import { Handle, LocalHandle } from '@wildebeest/backend/utils/handle'
+import { generateMastodonId } from '@wildebeest/backend/utils/id'
+import { generateUserKey } from '@wildebeest/backend/utils/key-ops'
 
 export function getUserId(domain: string, obj: { preferredUsername: string } | Pick<Handle, 'localPart'>): URL {
 	if ('preferredUsername' in obj) {

@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { makeDB, assertStatus, assertCache } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { makeDB, assertStatus, assertCache } from '@wildebeest/backend/test/utils'
 
 describe('WebFinger', () => {
 	test('no resource queried', async () => {

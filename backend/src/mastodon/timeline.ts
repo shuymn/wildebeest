@@ -1,10 +1,10 @@
-import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors/'
-import type { Cache } from 'wildebeest/backend/src/cache'
-import { type Database } from 'wildebeest/backend/src/database'
-import { toMastodonStatusFromRow } from 'wildebeest/backend/src/mastodon/status'
-import { MastodonId } from 'wildebeest/backend/src/types'
-import type { MastodonStatus } from 'wildebeest/backend/src/types/status'
+import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
+import type { Actor } from '@wildebeest/backend/activitypub/actors/'
+import type { Cache } from '@wildebeest/backend/cache'
+import { type Database } from '@wildebeest/backend/database'
+import { toMastodonStatusFromRow } from '@wildebeest/backend/mastodon/status'
+import { MastodonId } from '@wildebeest/backend/types'
+import type { MastodonStatus } from '@wildebeest/backend/types/status'
 
 export async function pregenerateTimelines(domain: string, db: Database, cache: Cache, actor: Actor) {
 	const timeline = await getHomeTimeline(domain, db, actor)

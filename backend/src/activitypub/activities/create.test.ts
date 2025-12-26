@@ -1,11 +1,11 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { CreateActivity, PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
-import * as activityHandler from 'wildebeest/backend/src/activitypub/activities/handle'
-import { getApId, getObjectById, originalObjectIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
-import { makeDB, createTestUser, createActivityId } from 'wildebeest/backend/test/utils'
+import { CreateActivity, PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
+import * as activityHandler from '@wildebeest/backend/activitypub/activities/handle'
+import { getApId, getObjectById, originalObjectIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { Note } from '@wildebeest/backend/activitypub/objects/note'
+import { makeDB, createTestUser, createActivityId } from '@wildebeest/backend/test/utils'
+import type { JWK } from '@wildebeest/backend/webpush/jwk'
 
 const adminEmail = 'admin@example.com'
 const domain = 'cloudflare.com'

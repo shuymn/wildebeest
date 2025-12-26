@@ -1,5 +1,5 @@
-import { DeleteActivity, insertActivity } from 'wildebeest/backend/src/activitypub/activities'
-import { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import { DeleteActivity, insertActivity } from '@wildebeest/backend/activitypub/activities'
+import { Actor } from '@wildebeest/backend/activitypub/actors'
 import {
 	ApObject,
 	deleteObject,
@@ -7,8 +7,8 @@ import {
 	getObjectByOriginalId,
 	isLocalObject,
 	originalActorIdSymbol,
-} from 'wildebeest/backend/src/activitypub/objects'
-import { Database } from 'wildebeest/backend/src/database'
+} from '@wildebeest/backend/activitypub/objects'
+import { Database } from '@wildebeest/backend/database'
 
 export async function createDeleteActivity(
 	db: Database,

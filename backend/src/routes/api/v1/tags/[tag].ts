@@ -2,11 +2,11 @@
 
 import { Hono } from 'hono'
 
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import * as errors from 'wildebeest/backend/src/errors'
-import { getTag } from 'wildebeest/backend/src/mastodon/hashtag'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { cors } from 'wildebeest/backend/src/utils/cors'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import * as errors from '@wildebeest/backend/errors'
+import { getTag } from '@wildebeest/backend/mastodon/hashtag'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { cors } from '@wildebeest/backend/utils/cors'
 
 const headers = {
 	...cors(),

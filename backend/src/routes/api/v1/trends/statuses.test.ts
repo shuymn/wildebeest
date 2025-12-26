@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { assertStatus, assertJSON } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { assertStatus, assertJSON } from '@wildebeest/backend/test/utils'
 
 describe('/api/v1/trends/statuses', () => {
 	test('trending statuses return empty array', async () => {

@@ -1,4 +1,4 @@
-import * as access from 'wildebeest/backend/src/access'
+import * as access from '@wildebeest/backend/access'
 
 export function getJwtEmail(jwtCookie: string) {
 	let payload: access.JWTPayload

@@ -1,7 +1,7 @@
-import { type Actor, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
-import type { OrderedCollection } from 'wildebeest/backend/src/activitypub/objects/collection'
-import { getMetadata, loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
-import { type Database } from 'wildebeest/backend/src/database'
+import { type Actor, getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
+import type { OrderedCollection } from '@wildebeest/backend/activitypub/objects/collection'
+import { getMetadata, loadItems } from '@wildebeest/backend/activitypub/objects/collection'
+import { type Database } from '@wildebeest/backend/database'
 
 export async function countFollowing(actor: Actor): Promise<number> {
 	const collection = await getMetadata(actor.following)

@@ -1,8 +1,8 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { ApObject, getAndCacheObject, originalObjectIdSymbol, Remote } from 'wildebeest/backend/src/activitypub/objects'
-import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import { createTestUser, makeDB } from 'wildebeest/backend/test/utils'
+import { ApObject, getAndCacheObject, originalObjectIdSymbol, Remote } from '@wildebeest/backend/activitypub/objects'
+import { Note } from '@wildebeest/backend/activitypub/objects/note'
+import { createTestUser, makeDB } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek5'
 const domain = 'cloudflare.com'

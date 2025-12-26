@@ -2,16 +2,16 @@
 
 import { Hono } from 'hono'
 
-import { getVAPIDKeys } from 'wildebeest/backend/src/config'
-import { type Database } from 'wildebeest/backend/src/database'
-import { notAuthorized } from 'wildebeest/backend/src/errors'
-import { Application } from 'wildebeest/backend/src/mastodon'
-import { getClientByClientCredential, getClientById } from 'wildebeest/backend/src/mastodon/client'
-import { VAPIDPublicKey } from 'wildebeest/backend/src/mastodon/subscription'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import { makeJsonResponse, MastodonApiResponse } from 'wildebeest/backend/src/utils/http'
-import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
+import { getVAPIDKeys } from '@wildebeest/backend/config'
+import { type Database } from '@wildebeest/backend/database'
+import { notAuthorized } from '@wildebeest/backend/errors'
+import { Application } from '@wildebeest/backend/mastodon'
+import { getClientByClientCredential, getClientById } from '@wildebeest/backend/mastodon/client'
+import { VAPIDPublicKey } from '@wildebeest/backend/mastodon/subscription'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { cors } from '@wildebeest/backend/utils/cors'
+import { makeJsonResponse, MastodonApiResponse } from '@wildebeest/backend/utils/http'
+import type { JWK } from '@wildebeest/backend/webpush/jwk'
 
 const headers = {
 	...cors(),

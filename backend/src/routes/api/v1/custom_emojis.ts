@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 
-import { HonoEnv } from 'wildebeest/backend/src/types'
-import { cors } from 'wildebeest/backend/src/utils'
+import { HonoEnv } from '@wildebeest/backend/types'
+import { cors } from '@wildebeest/backend/utils'
 
 const headers = {
 	...cors(),

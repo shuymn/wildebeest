@@ -1,10 +1,10 @@
 import { fetchMock } from 'cloudflare:test'
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { MastodonError } from 'wildebeest/backend/src/errors'
-import { getClientByClientCredential } from 'wildebeest/backend/src/mastodon/client'
-import { makeDB, assertStatus, createTestClient, assertCORS, assertJSON } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { MastodonError } from '@wildebeest/backend/errors'
+import { getClientByClientCredential } from '@wildebeest/backend/mastodon/client'
+import { makeDB, assertStatus, createTestClient, assertCORS, assertJSON } from '@wildebeest/backend/test/utils'
 
 describe('/oauth/token', () => {
 	beforeEach(() => {

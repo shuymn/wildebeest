@@ -1,7 +1,7 @@
-import { Actor, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
-import { type Database } from 'wildebeest/backend/src/database'
-import { handleToAcct, RemoteHandle } from 'wildebeest/backend/src/utils/handle'
-import { UA } from 'wildebeest/config/ua'
+import { Actor, getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
+import { UA } from '@wildebeest/backend/config/ua'
+import { type Database } from '@wildebeest/backend/database'
+import { handleToAcct, RemoteHandle } from '@wildebeest/backend/utils/handle'
 
 export type WebFingerResponse = {
 	subject: string

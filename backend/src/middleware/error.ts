@@ -1,7 +1,7 @@
 import { MiddlewareHandler } from 'hono'
 
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { initSentry } from 'wildebeest/backend/src/utils/sentry'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { initSentry } from '@wildebeest/backend/utils/sentry'
 
 import { internalServerError } from '../errors'
 

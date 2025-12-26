@@ -1,8 +1,8 @@
 import { Hono } from 'hono'
 import { cache } from 'hono/cache'
 
-import { corsMiddleware } from 'wildebeest/backend/src/middleware'
-import { HonoEnv } from 'wildebeest/backend/src/types'
+import { corsMiddleware } from '@wildebeest/backend/middleware'
+import { HonoEnv } from '@wildebeest/backend/types'
 
 const app = new Hono<HonoEnv>()
 

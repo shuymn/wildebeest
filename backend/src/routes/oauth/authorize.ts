@@ -2,14 +2,14 @@
 
 import { Hono } from 'hono'
 
-import * as access from 'wildebeest/backend/src/access'
-import { getUserByEmail } from 'wildebeest/backend/src/accounts'
-import { getDatabase, type Database } from 'wildebeest/backend/src/database'
-import * as errors from 'wildebeest/backend/src/errors'
-import { getClientById } from 'wildebeest/backend/src/mastodon/client'
-import { corsMiddleware } from 'wildebeest/backend/src/middleware'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { isUserAuthenticated } from 'wildebeest/backend/src/utils/auth/isUserAuthenticated'
+import * as access from '@wildebeest/backend/access'
+import { getUserByEmail } from '@wildebeest/backend/accounts'
+import { getDatabase, type Database } from '@wildebeest/backend/database'
+import * as errors from '@wildebeest/backend/errors'
+import { getClientById } from '@wildebeest/backend/mastodon/client'
+import { corsMiddleware } from '@wildebeest/backend/middleware'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { isUserAuthenticated } from '@wildebeest/backend/utils/auth/isUserAuthenticated'
 
 // Extract the JWT token sent by Access (running before us).
 const extractJWTFromRequest = (request: Request) => request.headers.get('Cf-Access-Jwt-Assertion') || ''

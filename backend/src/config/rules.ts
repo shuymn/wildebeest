@@ -1,4 +1,4 @@
-import { type Database } from 'wildebeest/backend/src/database'
+import { type Database } from '@wildebeest/backend/database'
 
 export async function getRules(db: Database): Promise<Array<{ id: string; text: string }>> {
 	const query = `SELECT * from server_rules;`

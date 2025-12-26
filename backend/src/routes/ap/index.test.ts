@@ -1,5 +1,5 @@
-import app from 'wildebeest/backend/src'
-import { assertStatus, assertCORS } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { assertStatus, assertCORS } from '@wildebeest/backend/test/utils'
 
 test('CORS on OPTIONS', async () => {
 	const request = new Request('https://example.com/ap/o/unknown-id', { method: 'OPTIONS' })

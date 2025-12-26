@@ -1,12 +1,12 @@
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-like
 
-import { insertActivity, LikeActivity } from 'wildebeest/backend/src/activitypub/activities'
-import { Actor, getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
-import { getApId, getObjectById, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { Database } from 'wildebeest/backend/src/database'
-import { insertLike } from 'wildebeest/backend/src/mastodon/like'
-import { createNotification, sendLikeNotification } from 'wildebeest/backend/src/mastodon/notification'
-import { JWK } from 'wildebeest/backend/src/webpush/jwk'
+import { insertActivity, LikeActivity } from '@wildebeest/backend/activitypub/activities'
+import { Actor, getActorById, getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
+import { getApId, getObjectById, originalActorIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { Database } from '@wildebeest/backend/database'
+import { insertLike } from '@wildebeest/backend/mastodon/like'
+import { createNotification, sendLikeNotification } from '@wildebeest/backend/mastodon/notification'
+import { JWK } from '@wildebeest/backend/webpush/jwk'
 
 export async function createLikeActivity(
 	db: Database,

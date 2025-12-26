@@ -4,23 +4,23 @@
  * building.
  */
 
-import { Document } from 'wildebeest/backend/src/activitypub/objects'
-import { Image } from 'wildebeest/backend/src/activitypub/objects/image'
-import { newMention } from 'wildebeest/backend/src/activitypub/objects/mention'
-import { type Database } from 'wildebeest/backend/src/database'
-import { enrichStatus } from 'wildebeest/backend/src/mastodon/microformats'
-import { getMentions } from 'wildebeest/backend/src/mastodon/status'
+import { Document } from '@wildebeest/backend/activitypub/objects'
+import { Image } from '@wildebeest/backend/activitypub/objects/image'
+import { newMention } from '@wildebeest/backend/activitypub/objects/mention'
+import { type Database } from '@wildebeest/backend/database'
+import { enrichStatus } from '@wildebeest/backend/mastodon/microformats'
+import { getMentions } from '@wildebeest/backend/mastodon/status'
 
-import { type Actor, type Person } from '../src/activitypub/actors'
-import { addObjectInOutbox } from '../src/activitypub/actors/outbox'
+import { type Actor, type Person } from '../activitypub/actors'
+import { addObjectInOutbox } from '../activitypub/actors/outbox'
 import {
 	createDirectNote,
 	createPrivateNote,
 	createPublicNote,
 	createUnlistedNote,
 	type Note,
-} from '../src/activitypub/objects/note'
-import { insertReply } from '../src/mastodon/reply'
+} from '../activitypub/objects/note'
+import { insertReply } from '../mastodon/reply'
 
 /**
  * Creates a reply and inserts it in the reply author's outbox

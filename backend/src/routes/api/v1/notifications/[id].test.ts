@@ -1,9 +1,9 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { createNotification, insertFollowNotification } from 'wildebeest/backend/src/mastodon/notification'
-import { createPublicStatus } from 'wildebeest/backend/test/shared.utils'
-import { makeDB, createTestUser, assertStatus, assertJSON } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { createNotification, insertFollowNotification } from '@wildebeest/backend/mastodon/notification'
+import { createPublicStatus } from '@wildebeest/backend/test/shared.utils'
+import { makeDB, createTestUser, assertStatus, assertJSON } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek15'
 const domain = 'cloudflare.com'

@@ -1,4 +1,4 @@
-import { cors, makeJsonResponse } from 'wildebeest/backend/src/utils'
+import { cors, makeJsonResponse } from '@wildebeest/backend/utils'
 
 export type MastodonError = {
 	error: string

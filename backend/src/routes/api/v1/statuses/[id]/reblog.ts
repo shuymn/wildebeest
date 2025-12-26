@@ -2,26 +2,26 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 
-import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
-import { createAnnounceActivity } from 'wildebeest/backend/src/activitypub/activities/announce'
-import { getAndCacheActor, type Person } from 'wildebeest/backend/src/activitypub/actors'
-import { deliverFollowers, deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
+import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
+import { createAnnounceActivity } from '@wildebeest/backend/activitypub/activities/announce'
+import { getAndCacheActor, type Person } from '@wildebeest/backend/activitypub/actors'
+import { deliverFollowers, deliverToActor } from '@wildebeest/backend/activitypub/deliver'
 import {
 	getApId,
 	getObjectByMastodonId,
 	isLocalObject,
 	originalActorIdSymbol,
 	originalObjectIdSymbol,
-} from 'wildebeest/backend/src/activitypub/objects'
-import { isNote, type Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { notAuthorized, recordNotFound } from 'wildebeest/backend/src/errors'
-import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
-import { createReblog } from 'wildebeest/backend/src/mastodon/reblog'
-import { toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
-import type { DeliverMessageBody, HonoEnv, Queue, Visibility } from 'wildebeest/backend/src/types'
-import { readBody } from 'wildebeest/backend/src/utils'
-import { cors } from 'wildebeest/backend/src/utils/cors'
+} from '@wildebeest/backend/activitypub/objects'
+import { isNote, type Note } from '@wildebeest/backend/activitypub/objects/note'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import { notAuthorized, recordNotFound } from '@wildebeest/backend/errors'
+import { getSigningKey } from '@wildebeest/backend/mastodon/account'
+import { createReblog } from '@wildebeest/backend/mastodon/reblog'
+import { toMastodonStatusFromObject } from '@wildebeest/backend/mastodon/status'
+import type { DeliverMessageBody, HonoEnv, Queue, Visibility } from '@wildebeest/backend/types'
+import { readBody } from '@wildebeest/backend/utils'
+import { cors } from '@wildebeest/backend/utils/cors'
 
 const schema = z.object({
 	visibility: z

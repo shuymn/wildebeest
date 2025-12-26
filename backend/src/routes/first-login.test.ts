@@ -1,10 +1,10 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
-import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
-import { ACCESS_CERTS, TEST_JWT } from 'wildebeest/backend/test/test-data'
-import { makeDB, assertStatus, isUrlValid } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { getActorById } from '@wildebeest/backend/activitypub/actors'
+import { getSigningKey } from '@wildebeest/backend/mastodon/account'
+import { ACCESS_CERTS, TEST_JWT } from '@wildebeest/backend/test/test-data'
+import { makeDB, assertStatus, isUrlValid } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek3'
 const accessDomain = 'access.com'

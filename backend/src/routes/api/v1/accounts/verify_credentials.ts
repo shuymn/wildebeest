@@ -2,13 +2,13 @@
 
 import { Hono } from 'hono'
 
-import { getDatabase } from 'wildebeest/backend/src/database'
-import * as errors from 'wildebeest/backend/src/errors'
-import { getPreference, loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import type { CredentialAccount } from 'wildebeest/backend/src/types/account'
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
+import { getDatabase } from '@wildebeest/backend/database'
+import * as errors from '@wildebeest/backend/errors'
+import { getPreference, loadLocalMastodonAccount } from '@wildebeest/backend/mastodon/account'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import type { CredentialAccount } from '@wildebeest/backend/types/account'
+import { cors } from '@wildebeest/backend/utils/cors'
+import { actorToHandle } from '@wildebeest/backend/utils/handle'
 
 const headers = {
 	...cors(),

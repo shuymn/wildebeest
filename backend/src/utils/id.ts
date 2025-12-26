@@ -1,6 +1,6 @@
-import type { Database } from 'wildebeest/backend/src/database'
-import { insertIdSequence } from 'wildebeest/backend/src/database/d1/querier'
-import { MastodonId } from 'wildebeest/backend/src/types'
+import type { Database } from '@wildebeest/backend/database'
+import { insertIdSequence } from '@wildebeest/backend/database/d1/querier'
+import { MastodonId } from '@wildebeest/backend/types'
 
 export async function generateMastodonId(db: Database, table: string, now: Date): Promise<MastodonId> {
 	if (now === undefined) {
@@ -36,7 +36,7 @@ async function nextval(db: Database, table: string): Promise<number> {
 }
 
 if (import.meta.vitest) {
-	const { makeDB } = await import('wildebeest/backend/test/utils')
+	const { makeDB } = await import('@wildebeest/backend/test/utils')
 	test('generateMastodonId', async () => {
 		const db = makeDB()
 

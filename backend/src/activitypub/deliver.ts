@@ -1,12 +1,12 @@
 // https://www.w3.org/TR/activitypub/#delivery
 
-import { type Database } from 'wildebeest/backend/src/database'
-import { getFollowerIds } from 'wildebeest/backend/src/mastodon/follow'
-import type { DeliverMessageBody, MessageSendRequest, Queue } from 'wildebeest/backend/src/types'
-import { MessageType } from 'wildebeest/backend/src/types'
-import { signRequest } from 'wildebeest/backend/src/utils/http-signing'
-import { generateDigestHeader } from 'wildebeest/backend/src/utils/http-signing-cavage'
-import { getFederationUA } from 'wildebeest/config/ua'
+import { getFederationUA } from '@wildebeest/backend/config/ua'
+import { type Database } from '@wildebeest/backend/database'
+import { getFollowerIds } from '@wildebeest/backend/mastodon/follow'
+import type { DeliverMessageBody, MessageSendRequest, Queue } from '@wildebeest/backend/types'
+import { MessageType } from '@wildebeest/backend/types'
+import { signRequest } from '@wildebeest/backend/utils/http-signing'
+import { generateDigestHeader } from '@wildebeest/backend/utils/http-signing-cavage'
 
 import type { Activity } from './activities'
 import type { Actor } from './actors'

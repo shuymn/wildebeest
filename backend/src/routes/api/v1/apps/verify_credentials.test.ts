@@ -1,9 +1,9 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { createClientCredential } from 'wildebeest/backend/src/mastodon/client'
-import { VAPIDPublicKey } from 'wildebeest/backend/src/mastodon/subscription'
-import { TEST_JWT } from 'wildebeest/backend/test/test-data'
+import app from '@wildebeest/backend'
+import { createClientCredential } from '@wildebeest/backend/mastodon/client'
+import { VAPIDPublicKey } from '@wildebeest/backend/mastodon/subscription'
+import { TEST_JWT } from '@wildebeest/backend/test/test-data'
 import {
 	makeDB,
 	generateVAPIDKeys,
@@ -12,7 +12,7 @@ import {
 	assertJSON,
 	createTestClient,
 	createTestUser,
-} from 'wildebeest/backend/test/utils'
+} from '@wildebeest/backend/test/utils'
 
 const domain = 'example.com'
 const userKEK = 'test-kek'

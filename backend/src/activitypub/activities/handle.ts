@@ -8,17 +8,17 @@ import {
 	isLikeActivity,
 	isMoveActivity,
 	isUpdateActivity,
-} from 'wildebeest/backend/src/activitypub/activities'
-import { handleAcceptActivity } from 'wildebeest/backend/src/activitypub/activities/accept'
-import { handleAnnounceActivity } from 'wildebeest/backend/src/activitypub/activities/announce'
-import { handleCreateActivity } from 'wildebeest/backend/src/activitypub/activities/create'
-import { handleDeleteActivity } from 'wildebeest/backend/src/activitypub/activities/delete'
-import { handleFollowActivity } from 'wildebeest/backend/src/activitypub/activities/follow'
-import { handleLikeActivity } from 'wildebeest/backend/src/activitypub/activities/like'
-import { handleMoveActivity } from 'wildebeest/backend/src/activitypub/activities/move'
-import { handleUpdateActivity } from 'wildebeest/backend/src/activitypub/activities/update'
-import { Database } from 'wildebeest/backend/src/database'
-import { JWK } from 'wildebeest/backend/src/webpush/jwk'
+} from '@wildebeest/backend/activitypub/activities'
+import { handleAcceptActivity } from '@wildebeest/backend/activitypub/activities/accept'
+import { handleAnnounceActivity } from '@wildebeest/backend/activitypub/activities/announce'
+import { handleCreateActivity } from '@wildebeest/backend/activitypub/activities/create'
+import { handleDeleteActivity } from '@wildebeest/backend/activitypub/activities/delete'
+import { handleFollowActivity } from '@wildebeest/backend/activitypub/activities/follow'
+import { handleLikeActivity } from '@wildebeest/backend/activitypub/activities/like'
+import { handleMoveActivity } from '@wildebeest/backend/activitypub/activities/move'
+import { handleUpdateActivity } from '@wildebeest/backend/activitypub/activities/update'
+import { Database } from '@wildebeest/backend/database'
+import { JWK } from '@wildebeest/backend/webpush/jwk'
 
 export async function handle(
 	domain: string,

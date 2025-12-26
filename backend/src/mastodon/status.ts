@@ -1,12 +1,12 @@
-import { getUserId, isLocalAccount } from 'wildebeest/backend/src/accounts'
-import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
+import { getUserId, isLocalAccount } from '@wildebeest/backend/accounts'
+import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
 import {
 	type Actor,
 	actorFromRow,
 	getActorById,
 	getActorByRemoteHandle,
 	getAndCacheActor,
-} from 'wildebeest/backend/src/activitypub/actors'
+} from '@wildebeest/backend/activitypub/actors'
 import {
 	ensureObjectMastodonId,
 	getApId,
@@ -16,25 +16,25 @@ import {
 	originalActorIdSymbol,
 	originalObjectIdSymbol,
 	RemoteObject,
-} from 'wildebeest/backend/src/activitypub/objects'
-import { isNote, type Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import { type Database } from 'wildebeest/backend/src/database'
-import { selectObjectRevisionsByObjectID } from 'wildebeest/backend/src/database/d1/querier'
-import { loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import { isFollowing } from 'wildebeest/backend/src/mastodon/follow'
-import { ensureReblogMastodonId } from 'wildebeest/backend/src/mastodon/reblog'
-import * as media from 'wildebeest/backend/src/media/'
+} from '@wildebeest/backend/activitypub/objects'
+import { isNote, type Note } from '@wildebeest/backend/activitypub/objects/note'
+import { type Database } from '@wildebeest/backend/database'
+import { selectObjectRevisionsByObjectID } from '@wildebeest/backend/database/d1/querier'
+import { loadMastodonAccount } from '@wildebeest/backend/mastodon/account'
+import { isFollowing } from '@wildebeest/backend/mastodon/follow'
+import { ensureReblogMastodonId } from '@wildebeest/backend/mastodon/reblog'
+import * as media from '@wildebeest/backend/media/'
 import type {
 	MastodonAccount,
 	MastodonId,
 	MastodonStatus,
 	MastodonStatusEdit,
 	Visibility,
-} from 'wildebeest/backend/src/types'
-import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
-import { toArray } from 'wildebeest/backend/src/utils'
-import { actorToAcct, actorToHandle, handleToAcct, parseHandle } from 'wildebeest/backend/src/utils/handle'
-import { queryAcct } from 'wildebeest/backend/src/webfinger'
+} from '@wildebeest/backend/types'
+import type { MediaAttachment } from '@wildebeest/backend/types/media'
+import { toArray } from '@wildebeest/backend/utils'
+import { actorToAcct, actorToHandle, handleToAcct, parseHandle } from '@wildebeest/backend/utils/handle'
+import { queryAcct } from '@wildebeest/backend/webfinger'
 
 export const MAX_STATUS_LENGTH = 500
 export const MAX_MEDIA_ATTACHMENTS = 4

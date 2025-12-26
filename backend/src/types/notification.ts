@@ -1,5 +1,5 @@
-import type { MastodonAccount } from 'wildebeest/backend/src/types/account'
-import type { MastodonStatus } from 'wildebeest/backend/src/types/status'
+import type { MastodonAccount } from '@wildebeest/backend/types/account'
+import type { MastodonStatus } from '@wildebeest/backend/types/status'
 
 const notificationTypes = [
 	'mention',

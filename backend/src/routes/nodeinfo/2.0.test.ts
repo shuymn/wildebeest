@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { assertStatus, assertCORS } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { assertStatus, assertCORS } from '@wildebeest/backend/test/utils'
 
 const domain = 'example.com'
 

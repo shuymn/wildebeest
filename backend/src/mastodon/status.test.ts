@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { getMentions } from 'wildebeest/backend/src/mastodon/status'
-import { makeDB, createTestUser } from 'wildebeest/backend/test/utils'
+import { getMentions } from '@wildebeest/backend/mastodon/status'
+import { makeDB, createTestUser } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek4'
 const domain = 'cloudflare.com'

@@ -1,12 +1,8 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import {
-	getObjectByMastodonId,
-	mastodonIdSymbol,
-	originalActorIdSymbol,
-} from 'wildebeest/backend/src/activitypub/objects'
-import { makeDB, createTestUser, assertStatus, assertJSON, isUrlValid } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { getObjectByMastodonId, mastodonIdSymbol, originalActorIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { makeDB, createTestUser, assertStatus, assertJSON, isUrlValid } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek10'
 const CF_ACCOUNT_ID = 'testaccountid'

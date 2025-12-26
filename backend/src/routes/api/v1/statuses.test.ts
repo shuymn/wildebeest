@@ -1,14 +1,13 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
-import { getObjectByMastodonId, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
-import { type Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
-import { getPublicTimeline, LocalPreference } from 'wildebeest/backend/src/mastodon/timeline'
-import { MastodonStatus, MessageType } from 'wildebeest/backend/src/types'
-import { createPublicStatus } from 'wildebeest/backend/test/shared.utils'
+import app from '@wildebeest/backend'
+import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
+import { getObjectByMastodonId, mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { createImage } from '@wildebeest/backend/activitypub/objects/image'
+import { type Note } from '@wildebeest/backend/activitypub/objects/note'
+import { acceptFollowing, addFollowing } from '@wildebeest/backend/mastodon/follow'
+import { getPublicTimeline, LocalPreference } from '@wildebeest/backend/mastodon/timeline'
+import { createPublicStatus } from '@wildebeest/backend/test/shared.utils'
 import {
 	makeDOCache,
 	assertStatus,
@@ -19,7 +18,8 @@ import {
 	isUrlValid,
 	streamToArrayBuffer,
 	makeCache,
-} from 'wildebeest/backend/test/utils'
+} from '@wildebeest/backend/test/utils'
+import { MastodonStatus, MessageType } from '@wildebeest/backend/types'
 
 const userKEK = 'test_kek4'
 const domain = 'cloudflare.com'

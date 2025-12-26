@@ -4,15 +4,15 @@ import {
 	ensureActorMastodonId,
 	getActorByMastodonId,
 	getActorByRemoteHandle,
-} from 'wildebeest/backend/src/activitypub/actors'
-import { type Database } from 'wildebeest/backend/src/database'
+} from '@wildebeest/backend/activitypub/actors'
+import { type Database } from '@wildebeest/backend/database'
 import {
 	loadExternalMastodonAccount,
 	loadLocalMastodonAccount,
 	loadMastodonAccount,
-} from 'wildebeest/backend/src/mastodon/account'
-import { MastodonAccount, MastodonId } from 'wildebeest/backend/src/types'
-import { adjustLocalHostDomain } from 'wildebeest/backend/src/utils/adjustLocalHostDomain'
+} from '@wildebeest/backend/mastodon/account'
+import { MastodonAccount, MastodonId } from '@wildebeest/backend/types'
+import { adjustLocalHostDomain } from '@wildebeest/backend/utils/adjustLocalHostDomain'
 import {
 	actorToHandle,
 	Handle,
@@ -20,7 +20,7 @@ import {
 	LocalHandle,
 	parseHandle,
 	RemoteHandle,
-} from 'wildebeest/backend/src/utils/handle'
+} from '@wildebeest/backend/utils/handle'
 
 export function isLocalAccount(domain: string, handle: Handle): handle is LocalHandle {
 	return isLocalHandle(handle) || handle.domain === domain

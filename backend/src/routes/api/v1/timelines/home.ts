@@ -1,10 +1,10 @@
 import { Hono } from 'hono'
 
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { cacheFromEnv, type Cache } from 'wildebeest/backend/src/cache'
-import { notAuthorized } from 'wildebeest/backend/src/errors'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { cors } from 'wildebeest/backend/src/utils'
+import type { Actor } from '@wildebeest/backend/activitypub/actors'
+import { cacheFromEnv, type Cache } from '@wildebeest/backend/cache'
+import { notAuthorized } from '@wildebeest/backend/errors'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { cors } from '@wildebeest/backend/utils'
 
 const headers = {
 	...cors(),

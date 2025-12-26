@@ -1,9 +1,9 @@
-import type { Activity } from 'wildebeest/backend/src/activitypub/activities'
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { type ApObject, ApObjectOrId } from 'wildebeest/backend/src/activitypub/objects'
-import { OrderedCollection, getMetadata, loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
-import { type Database } from 'wildebeest/backend/src/database'
-import { unique } from 'wildebeest/backend/src/utils'
+import type { Activity } from '@wildebeest/backend/activitypub/activities'
+import type { Actor } from '@wildebeest/backend/activitypub/actors'
+import { type ApObject, ApObjectOrId } from '@wildebeest/backend/activitypub/objects'
+import { OrderedCollection, getMetadata, loadItems } from '@wildebeest/backend/activitypub/objects/collection'
+import { type Database } from '@wildebeest/backend/database'
+import { unique } from '@wildebeest/backend/utils'
 
 export async function addObjectInOutbox<T extends ApObject>(
 	db: Database,

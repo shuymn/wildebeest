@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { enrichStatus } from 'wildebeest/backend/src/mastodon/microformats'
+import { enrichStatus } from '@wildebeest/backend/mastodon/microformats'
 
 describe('Microformats', () => {
 	test('convert mentions to HTML', async () => {

@@ -1,11 +1,11 @@
 import { Hono } from 'hono'
 
-import { getUserId, isLocalAccount } from 'wildebeest/backend/src/accounts'
-import * as actors from 'wildebeest/backend/src/activitypub/actors'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import { parseHandle } from 'wildebeest/backend/src/utils/handle'
+import { getUserId, isLocalAccount } from '@wildebeest/backend/accounts'
+import * as actors from '@wildebeest/backend/activitypub/actors'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { cors } from '@wildebeest/backend/utils/cors'
+import { parseHandle } from '@wildebeest/backend/utils/handle'
 
 const app = new Hono<HonoEnv>()
 

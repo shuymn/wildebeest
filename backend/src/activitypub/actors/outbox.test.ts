@@ -1,8 +1,8 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { createDirectStatus, createPublicStatus } from 'wildebeest/backend/test/shared.utils'
-import { assertStatus, createTestUser, makeDB } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { createDirectStatus, createPublicStatus } from '@wildebeest/backend/test/shared.utils'
+import { assertStatus, createTestUser, makeDB } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek5'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

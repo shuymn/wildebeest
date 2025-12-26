@@ -1,12 +1,12 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
-import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
-import { insertLike } from 'wildebeest/backend/src/mastodon/like'
-import { createReblog } from 'wildebeest/backend/src/mastodon/reblog'
-import { createPublicStatus } from 'wildebeest/backend/test/shared.utils'
-import { makeDB, createTestUser, assertStatus, assertJSON, assertCORS } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
+import { createImage } from '@wildebeest/backend/activitypub/objects/image'
+import { insertLike } from '@wildebeest/backend/mastodon/like'
+import { createReblog } from '@wildebeest/backend/mastodon/reblog'
+import { createPublicStatus } from '@wildebeest/backend/test/shared.utils'
+import { makeDB, createTestUser, assertStatus, assertJSON, assertCORS } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek6'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

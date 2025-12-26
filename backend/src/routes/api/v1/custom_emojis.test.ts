@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { assertStatus, assertJSON, assertCORS, assertCache } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { assertStatus, assertJSON, assertCORS, assertCache } from '@wildebeest/backend/test/utils'
 
 describe('/api/v1/custom_emojis', () => {
 	test('returns an empty array', async () => {

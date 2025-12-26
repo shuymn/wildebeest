@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import type { HonoEnv } from '@wildebeest/backend/types'
 
 const app = new Hono<HonoEnv>()
 

@@ -2,7 +2,7 @@ import { strict as assert } from 'node:assert/strict'
 
 import { z } from 'zod'
 
-import { readBody } from 'wildebeest/backend/src/utils'
+import { readBody } from '@wildebeest/backend/utils'
 import {
 	actorToAcct,
 	actorToHandle,
@@ -10,13 +10,13 @@ import {
 	isLocalHandle,
 	parseHandle,
 	toRemoteHandle,
-} from 'wildebeest/backend/src/utils/handle'
-import { signRequest } from 'wildebeest/backend/src/utils/http-signing'
-import { generateDigestHeader } from 'wildebeest/backend/src/utils/http-signing-cavage'
-import { parseRequest } from 'wildebeest/backend/src/utils/httpsigjs/parser'
-import { verifySignature } from 'wildebeest/backend/src/utils/httpsigjs/verifier'
-import { generateUserKey, importPublicKey, unwrapPrivateKey } from 'wildebeest/backend/src/utils/key-ops'
-import myz from 'wildebeest/backend/src/utils/zod'
+} from '@wildebeest/backend/utils/handle'
+import { signRequest } from '@wildebeest/backend/utils/http-signing'
+import { generateDigestHeader } from '@wildebeest/backend/utils/http-signing-cavage'
+import { parseRequest } from '@wildebeest/backend/utils/httpsigjs/parser'
+import { verifySignature } from '@wildebeest/backend/utils/httpsigjs/verifier'
+import { generateUserKey, importPublicKey, unwrapPrivateKey } from '@wildebeest/backend/utils/key-ops'
+import myz from '@wildebeest/backend/utils/zod'
 
 import { createTestUser, makeDB } from './utils'
 

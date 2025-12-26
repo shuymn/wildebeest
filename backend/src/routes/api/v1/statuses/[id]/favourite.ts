@@ -2,24 +2,24 @@
 
 import { Hono } from 'hono'
 
-import { createLikeActivity } from 'wildebeest/backend/src/activitypub/activities/like'
-import { getAndCacheActor, type Person } from 'wildebeest/backend/src/activitypub/actors'
-import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
+import { createLikeActivity } from '@wildebeest/backend/activitypub/activities/like'
+import { getAndCacheActor, type Person } from '@wildebeest/backend/activitypub/actors'
+import { deliverToActor } from '@wildebeest/backend/activitypub/deliver'
 import {
 	getApId,
 	getObjectByMastodonId,
 	isLocalObject,
 	originalActorIdSymbol,
 	originalObjectIdSymbol,
-} from 'wildebeest/backend/src/activitypub/objects'
-import type { Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { notAuthorized } from 'wildebeest/backend/src/errors'
-import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
-import { insertLike } from 'wildebeest/backend/src/mastodon/like'
-import { toMastodonStatusFromObject } from 'wildebeest/backend/src/mastodon/status'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { cors } from 'wildebeest/backend/src/utils/cors'
+} from '@wildebeest/backend/activitypub/objects'
+import type { Note } from '@wildebeest/backend/activitypub/objects/note'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import { notAuthorized } from '@wildebeest/backend/errors'
+import { getSigningKey } from '@wildebeest/backend/mastodon/account'
+import { insertLike } from '@wildebeest/backend/mastodon/like'
+import { toMastodonStatusFromObject } from '@wildebeest/backend/mastodon/status'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { cors } from '@wildebeest/backend/utils/cors'
 
 const app = new Hono<HonoEnv>()
 
