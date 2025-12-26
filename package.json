@@ -36,5 +36,5 @@
 	"simple-git-hooks": {
 		"pre-commit": "npm exec --package npm-run-all -- run-p lint pretty"
 	},
-	"packageManager": "pnpm@10.26.1"
+	"packageManager": "pnpm@10.26.2"
 }
