@@ -1,4 +1,4 @@
-import { Env } from 'wildebeest/backend/src/types'
+import { Env } from '@wildebeest/backend/types'
 
 const CACHE_DO_NAME = 'cachev1'
 

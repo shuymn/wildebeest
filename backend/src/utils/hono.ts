@@ -2,11 +2,11 @@
 
 import { Context, Hono, MiddlewareHandler, Next } from 'hono'
 
-import { getPayload, generateValidator, getIdentity } from 'wildebeest/backend/src/access'
-import { getUserByEmail } from 'wildebeest/backend/src/accounts'
-import { getDatabase } from 'wildebeest/backend/src/database'
-import { notAuthorized } from 'wildebeest/backend/src/errors'
-import { HonoEnv } from 'wildebeest/backend/src/types'
+import { getPayload, generateValidator, getIdentity } from '@wildebeest/backend/access'
+import { getUserByEmail } from '@wildebeest/backend/accounts'
+import { getDatabase } from '@wildebeest/backend/database'
+import { notAuthorized } from '@wildebeest/backend/errors'
+import { HonoEnv } from '@wildebeest/backend/types'
 
 import { filePathToPath, groupByDirectory } from './file'
 
@@ -233,8 +233,8 @@ function buildRoute(routes: Route[]): Map<Required<Route>['method'], RegExp> {
 }
 
 if (import.meta.vitest) {
-	const { ACCESS_CERTS, TEST_JWT } = await import('wildebeest/backend/test/test-data')
-	const { assertStatus, makeDB, createTestUser, isUrlValid } = await import('wildebeest/backend/test/utils')
+	const { ACCESS_CERTS, TEST_JWT } = await import('@wildebeest/backend/test/test-data')
+	const { assertStatus, makeDB, createTestUser, isUrlValid } = await import('@wildebeest/backend/test/utils')
 
 	describe('buildRoute', () => {
 		test.each([

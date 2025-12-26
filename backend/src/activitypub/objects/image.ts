@@ -1,7 +1,7 @@
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { ApObject, createObject } from 'wildebeest/backend/src/activitypub/objects'
-import { type Database } from 'wildebeest/backend/src/database'
-import { RequiredProps } from 'wildebeest/backend/src/utils/type'
+import type { Actor } from '@wildebeest/backend/activitypub/actors'
+import { ApObject, createObject } from '@wildebeest/backend/activitypub/objects'
+import { type Database } from '@wildebeest/backend/database'
+import { RequiredProps } from '@wildebeest/backend/utils/type'
 
 export const IMAGE = 'Image'
 

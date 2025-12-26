@@ -1,9 +1,9 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { insertHashtags } from 'wildebeest/backend/src/mastodon/hashtag'
-import { createPublicStatus } from 'wildebeest/backend/test/shared.utils'
-import { makeDB, assertStatus, assertCORS, createTestUser, isUrlValid } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { insertHashtags } from '@wildebeest/backend/mastodon/hashtag'
+import { createPublicStatus } from '@wildebeest/backend/test/shared.utils'
+import { makeDB, assertStatus, assertCORS, createTestUser, isUrlValid } from '@wildebeest/backend/test/utils'
 
 const domain = 'cloudflare.com'
 const userKEK = 'test_kek20'

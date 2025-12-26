@@ -1,24 +1,24 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
+import app from '@wildebeest/backend'
 import {
 	cacheActivityObject,
 	getActivityObject,
 	isAnnounceActivity,
 	isCreateActivity,
 	PUBLIC_GROUP,
-} from 'wildebeest/backend/src/activitypub/activities'
-import { getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
-import { addObjectInOutbox, get } from 'wildebeest/backend/src/activitypub/actors/outbox'
-import { getApId, getObjectById, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
-import { isNote, Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import { insertLike } from 'wildebeest/backend/src/mastodon/like'
-import { createReblog } from 'wildebeest/backend/src/mastodon/reblog'
-import { isUUID } from 'wildebeest/backend/src/utils'
-import { queryAcct } from 'wildebeest/backend/src/webfinger'
-import { createPublicStatus, createReply } from 'wildebeest/backend/test/shared.utils'
-import { makeDB, createTestUser, assertStatus } from 'wildebeest/backend/test/utils'
+} from '@wildebeest/backend/activitypub/activities'
+import { getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
+import { addObjectInOutbox, get } from '@wildebeest/backend/activitypub/actors/outbox'
+import { getApId, getObjectById, mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { createImage } from '@wildebeest/backend/activitypub/objects/image'
+import { isNote, Note } from '@wildebeest/backend/activitypub/objects/note'
+import { insertLike } from '@wildebeest/backend/mastodon/like'
+import { createReblog } from '@wildebeest/backend/mastodon/reblog'
+import { createPublicStatus, createReply } from '@wildebeest/backend/test/shared.utils'
+import { makeDB, createTestUser, assertStatus } from '@wildebeest/backend/test/utils'
+import { isUUID } from '@wildebeest/backend/utils'
+import { queryAcct } from '@wildebeest/backend/webfinger'
 
 const userKEK = 'test_kek2'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

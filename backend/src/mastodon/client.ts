@@ -1,5 +1,5 @@
-import { type Database } from 'wildebeest/backend/src/database'
-import { arrayBufferToBase64 } from 'wildebeest/backend/src/utils/key-ops'
+import { type Database } from '@wildebeest/backend/database'
+import { arrayBufferToBase64 } from '@wildebeest/backend/utils/key-ops'
 
 export interface Client {
 	id: string

@@ -8,13 +8,13 @@ import {
 	getObjectByMastodonId,
 	mastodonIdSymbol,
 	updateObjectProperty,
-} from 'wildebeest/backend/src/activitypub/objects'
-import type { Image } from 'wildebeest/backend/src/activitypub/objects/image'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { mediaNotFound, unprocessableEntity } from 'wildebeest/backend/src/errors'
-import type { MastodonId, HonoEnv } from 'wildebeest/backend/src/types'
-import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
-import { cors, readBody } from 'wildebeest/backend/src/utils'
+} from '@wildebeest/backend/activitypub/objects'
+import type { Image } from '@wildebeest/backend/activitypub/objects/image'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import { mediaNotFound, unprocessableEntity } from '@wildebeest/backend/errors'
+import type { MastodonId, HonoEnv } from '@wildebeest/backend/types'
+import type { MediaAttachment } from '@wildebeest/backend/types/media'
+import { cors, readBody } from '@wildebeest/backend/utils'
 
 const headers = {
 	...cors(),

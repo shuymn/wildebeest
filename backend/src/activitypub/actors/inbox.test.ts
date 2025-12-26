@@ -1,12 +1,12 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
-import { MessageType } from 'wildebeest/backend/src/types'
-import { signRequest } from 'wildebeest/backend/src/utils/http-signing'
-import { generateDigestHeader } from 'wildebeest/backend/src/utils/http-signing-cavage'
-import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
-import { assertStatus, createTestUser, makeDB } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { getSigningKey } from '@wildebeest/backend/mastodon/account'
+import { assertStatus, createTestUser, makeDB } from '@wildebeest/backend/test/utils'
+import { MessageType } from '@wildebeest/backend/types'
+import { signRequest } from '@wildebeest/backend/utils/http-signing'
+import { generateDigestHeader } from '@wildebeest/backend/utils/http-signing-cavage'
+import type { JWK } from '@wildebeest/backend/webpush/jwk'
 
 const userKEK = 'test_kek5'
 const vapidKeys = {} as JWK

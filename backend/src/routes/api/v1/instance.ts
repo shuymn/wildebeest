@@ -1,15 +1,15 @@
 import { Hono } from 'hono'
 
-import { getAdminByEmail } from 'wildebeest/backend/src/accounts'
-import { DEFAULT_THUMBNAIL } from 'wildebeest/backend/src/config'
-import { getRules } from 'wildebeest/backend/src/config/rules'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { loadLocalMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import type { Env, HonoEnv } from 'wildebeest/backend/src/types'
-import type { InstanceConfig } from 'wildebeest/backend/src/types/configs'
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
-import { getVersion } from 'wildebeest/config/versions'
+import { getAdminByEmail } from '@wildebeest/backend/accounts'
+import { DEFAULT_THUMBNAIL } from '@wildebeest/backend/config'
+import { getRules } from '@wildebeest/backend/config/rules'
+import { getVersion } from '@wildebeest/backend/config/versions'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import { loadLocalMastodonAccount } from '@wildebeest/backend/mastodon/account'
+import type { Env, HonoEnv } from '@wildebeest/backend/types'
+import type { InstanceConfig } from '@wildebeest/backend/types/configs'
+import { cors } from '@wildebeest/backend/utils/cors'
+import { actorToHandle } from '@wildebeest/backend/utils/handle'
 
 const app = new Hono<HonoEnv>()
 

@@ -2,11 +2,11 @@
 
 import { Hono } from 'hono'
 
-import { getAccountByMastodonId } from 'wildebeest/backend/src/accounts'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { resourceNotFound } from 'wildebeest/backend/src/errors'
-import type { ContextData, Env, HonoEnv } from 'wildebeest/backend/src/types'
-import { cors } from 'wildebeest/backend/src/utils/cors'
+import { getAccountByMastodonId } from '@wildebeest/backend/accounts'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import { resourceNotFound } from '@wildebeest/backend/errors'
+import type { ContextData, Env, HonoEnv } from '@wildebeest/backend/types'
+import { cors } from '@wildebeest/backend/utils/cors'
 
 const headers = {
 	...cors(),

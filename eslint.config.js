@@ -96,10 +96,6 @@ export default [
 							pattern: '@wildebeest/**',
 							group: 'internal',
 						},
-						{
-							pattern: 'wildebeest/**',
-							group: 'internal',
-						},
 					],
 					pathGroupsExcludedImportTypes: ['builtin'],
 				},

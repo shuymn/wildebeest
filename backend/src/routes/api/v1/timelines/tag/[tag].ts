@@ -1,10 +1,10 @@
 import { Hono } from 'hono'
 
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import * as timelines from 'wildebeest/backend/src/mastodon/timeline'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import { getDomain } from 'wildebeest/backend/src/utils/getDomain'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import * as timelines from '@wildebeest/backend/mastodon/timeline'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { cors } from '@wildebeest/backend/utils/cors'
+import { getDomain } from '@wildebeest/backend/utils/getDomain'
 
 const headers = {
 	...cors(),

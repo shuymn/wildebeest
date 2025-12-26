@@ -1,4 +1,4 @@
-import type { MastodonId } from 'wildebeest/backend/src/types'
+import type { MastodonId } from '@wildebeest/backend/types'
 
 import type { CustomEmoji, MastodonAccount } from './account'
 import type { MediaAttachment } from './media'

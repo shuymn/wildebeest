@@ -2,7 +2,7 @@
 
 import { Hono } from 'hono'
 
-import { isLocalAccount } from 'wildebeest/backend/src/accounts'
+import { isLocalAccount } from '@wildebeest/backend/accounts'
 import {
 	actorFromRow,
 	ActorRow,
@@ -10,16 +10,16 @@ import {
 	getActorByRemoteHandle,
 	PERSON,
 	Person,
-} from 'wildebeest/backend/src/activitypub/actors'
-import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { loadExternalMastodonAccount, loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { MastodonAccount } from 'wildebeest/backend/src/types/account'
-import { cors } from 'wildebeest/backend/src/utils/cors'
-import type { Handle } from 'wildebeest/backend/src/utils/handle'
-import { actorToHandle, isLocalHandle, parseHandle } from 'wildebeest/backend/src/utils/handle'
-import { queryAcct } from 'wildebeest/backend/src/webfinger'
+} from '@wildebeest/backend/activitypub/actors'
+import { mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import { loadExternalMastodonAccount, loadMastodonAccount } from '@wildebeest/backend/mastodon/account'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { MastodonAccount } from '@wildebeest/backend/types/account'
+import { cors } from '@wildebeest/backend/utils/cors'
+import type { Handle } from '@wildebeest/backend/utils/handle'
+import { actorToHandle, isLocalHandle, parseHandle } from '@wildebeest/backend/utils/handle'
+import { queryAcct } from '@wildebeest/backend/webfinger'
 
 const headers = {
 	...cors(),

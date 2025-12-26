@@ -3,30 +3,30 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 
-import { createDeleteActivity } from 'wildebeest/backend/src/activitypub/activities/delete'
-import { createUpdateActivity } from 'wildebeest/backend/src/activitypub/activities/update'
-import type { Person } from 'wildebeest/backend/src/activitypub/actors'
-import { deliverFollowers } from 'wildebeest/backend/src/activitypub/deliver'
-import { deleteObject, getObjectByMastodonId, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { Image, isImage } from 'wildebeest/backend/src/activitypub/objects/image'
-import { newMention } from 'wildebeest/backend/src/activitypub/objects/mention'
-import { Note, updateNote } from 'wildebeest/backend/src/activitypub/objects/note'
-import { Cache, cacheFromEnv } from 'wildebeest/backend/src/cache'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import * as errors from 'wildebeest/backend/src/errors'
-import { enrichStatus } from 'wildebeest/backend/src/mastodon/microformats'
+import { createDeleteActivity } from '@wildebeest/backend/activitypub/activities/delete'
+import { createUpdateActivity } from '@wildebeest/backend/activitypub/activities/update'
+import type { Person } from '@wildebeest/backend/activitypub/actors'
+import { deliverFollowers } from '@wildebeest/backend/activitypub/deliver'
+import { deleteObject, getObjectByMastodonId, originalActorIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { Image, isImage } from '@wildebeest/backend/activitypub/objects/image'
+import { newMention } from '@wildebeest/backend/activitypub/objects/mention'
+import { Note, updateNote } from '@wildebeest/backend/activitypub/objects/note'
+import { Cache, cacheFromEnv } from '@wildebeest/backend/cache'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import * as errors from '@wildebeest/backend/errors'
+import { enrichStatus } from '@wildebeest/backend/mastodon/microformats'
 import {
 	getMastodonStatusById,
 	getMentions,
 	MAX_MEDIA_ATTACHMENTS,
 	MAX_STATUS_LENGTH,
 	toMastodonStatusFromObject,
-} from 'wildebeest/backend/src/mastodon/status'
-import * as timeline from 'wildebeest/backend/src/mastodon/timeline'
-import type { DeliverMessageBody, HonoEnv, MastodonId, Queue } from 'wildebeest/backend/src/types'
-import { cors, readBody } from 'wildebeest/backend/src/utils'
-import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
-import myz from 'wildebeest/backend/src/utils/zod'
+} from '@wildebeest/backend/mastodon/status'
+import * as timeline from '@wildebeest/backend/mastodon/timeline'
+import type { DeliverMessageBody, HonoEnv, MastodonId, Queue } from '@wildebeest/backend/types'
+import { cors, readBody } from '@wildebeest/backend/utils'
+import { actorToAcct } from '@wildebeest/backend/utils/handle'
+import myz from '@wildebeest/backend/utils/zod'
 
 const headers = {
 	...cors(),

@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { createSubscription } from 'wildebeest/backend/src/mastodon/subscription'
+import app from '@wildebeest/backend'
+import { createSubscription } from '@wildebeest/backend/mastodon/subscription'
 import {
 	makeDB,
 	generateVAPIDKeys,
@@ -9,7 +9,7 @@ import {
 	createTestUser,
 	assertStatus,
 	assertCORS,
-} from 'wildebeest/backend/test/utils'
+} from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek21'
 const domain = 'cloudflare.com'

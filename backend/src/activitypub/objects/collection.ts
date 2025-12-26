@@ -1,5 +1,5 @@
-import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
-import { UA } from 'wildebeest/config/ua'
+import type { ApObject } from '@wildebeest/backend/activitypub/objects'
+import { UA } from '@wildebeest/backend/config/ua'
 
 export interface Collection<T> extends ApObject {
 	totalItems: number

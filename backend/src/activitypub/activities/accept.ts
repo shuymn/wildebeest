@@ -1,15 +1,15 @@
-import { isLocalAccount } from 'wildebeest/backend/src/accounts'
+import { isLocalAccount } from '@wildebeest/backend/accounts'
 import {
 	AcceptActivity,
 	getActivityObject,
 	insertActivity,
 	isFollowActivity,
-} from 'wildebeest/backend/src/activitypub/activities'
-import { Actor, getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
-import { ApObject, getApId, getApType } from 'wildebeest/backend/src/activitypub/objects'
-import { Database } from 'wildebeest/backend/src/database'
-import { acceptFollowing } from 'wildebeest/backend/src/mastodon/follow'
-import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
+} from '@wildebeest/backend/activitypub/activities'
+import { Actor, getActorById, getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
+import { ApObject, getApId, getApType } from '@wildebeest/backend/activitypub/objects'
+import { Database } from '@wildebeest/backend/database'
+import { acceptFollowing } from '@wildebeest/backend/mastodon/follow'
+import { actorToHandle } from '@wildebeest/backend/utils/handle'
 
 export async function createAcceptActivity(
 	db: Database,

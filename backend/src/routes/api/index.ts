@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 
-import { corsMiddleware } from 'wildebeest/backend/src/middleware'
+import { corsMiddleware } from '@wildebeest/backend/middleware'
 
 const app = new Hono()
 

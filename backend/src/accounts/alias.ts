@@ -1,13 +1,13 @@
-import { isLocalAccount } from 'wildebeest/backend/src/accounts'
-import { createFollowActivity } from 'wildebeest/backend/src/activitypub/activities/follow'
-import { setActorAlias } from 'wildebeest/backend/src/activitypub/actors'
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { deliverToActor } from 'wildebeest/backend/src/activitypub/deliver'
-import { getApId } from 'wildebeest/backend/src/activitypub/objects'
-import { type Database } from 'wildebeest/backend/src/database'
-import { getSigningKey } from 'wildebeest/backend/src/mastodon/account'
-import { parseHandle } from 'wildebeest/backend/src/utils/handle'
-import { queryAcct } from 'wildebeest/backend/src/webfinger'
+import { isLocalAccount } from '@wildebeest/backend/accounts'
+import { createFollowActivity } from '@wildebeest/backend/activitypub/activities/follow'
+import { setActorAlias } from '@wildebeest/backend/activitypub/actors'
+import type { Actor } from '@wildebeest/backend/activitypub/actors'
+import { deliverToActor } from '@wildebeest/backend/activitypub/deliver'
+import { getApId } from '@wildebeest/backend/activitypub/objects'
+import { type Database } from '@wildebeest/backend/database'
+import { getSigningKey } from '@wildebeest/backend/mastodon/account'
+import { parseHandle } from '@wildebeest/backend/utils/handle'
+import { queryAcct } from '@wildebeest/backend/webfinger'
 
 export async function addAlias(db: Database, alias: string, connectedActor: Actor, userKEK: string, domain: string) {
 	const handle = parseHandle(alias)

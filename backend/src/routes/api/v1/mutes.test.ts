@@ -1,5 +1,5 @@
-import mutes from 'wildebeest/backend/src/routes/api/v1/mutes'
-import { assertStatus, assertJSON } from 'wildebeest/backend/test/utils'
+import mutes from '@wildebeest/backend/routes/api/v1/mutes'
+import { assertStatus, assertJSON } from '@wildebeest/backend/test/utils'
 
 describe('/api/v1/mutes', () => {
 	test('mutes returns an empty array', async () => {

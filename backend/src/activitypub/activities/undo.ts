@@ -1,8 +1,8 @@
-import { insertActivity, UndoActivity } from 'wildebeest/backend/src/activitypub/activities'
-import { createFollowActivity } from 'wildebeest/backend/src/activitypub/activities/follow'
-import { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { ApObject } from 'wildebeest/backend/src/activitypub/objects'
-import { Database } from 'wildebeest/backend/src/database'
+import { insertActivity, UndoActivity } from '@wildebeest/backend/activitypub/activities'
+import { createFollowActivity } from '@wildebeest/backend/activitypub/activities/follow'
+import { Actor } from '@wildebeest/backend/activitypub/actors'
+import { ApObject } from '@wildebeest/backend/activitypub/objects'
+import { Database } from '@wildebeest/backend/database'
 
 export async function createUnfollowActivity(
 	db: Database,

@@ -1,7 +1,7 @@
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { getApId } from 'wildebeest/backend/src/activitypub/objects'
-import type { Link } from 'wildebeest/backend/src/activitypub/objects/link'
-import { actorToAcct } from 'wildebeest/backend/src/utils/handle'
+import type { Actor } from '@wildebeest/backend/activitypub/actors'
+import { getApId } from '@wildebeest/backend/activitypub/objects'
+import type { Link } from '@wildebeest/backend/activitypub/objects/link'
+import { actorToAcct } from '@wildebeest/backend/utils/handle'
 
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-mention
 export type Mention = Link

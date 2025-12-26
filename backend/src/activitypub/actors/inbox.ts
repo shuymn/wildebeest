@@ -1,6 +1,6 @@
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
-import { type Database } from 'wildebeest/backend/src/database'
+import type { Actor } from '@wildebeest/backend/activitypub/actors'
+import type { ApObject } from '@wildebeest/backend/activitypub/objects'
+import { type Database } from '@wildebeest/backend/database'
 
 export async function addObjectInInbox(db: Database, actor: Actor, obj: ApObject) {
 	const id = crypto.randomUUID()

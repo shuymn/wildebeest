@@ -1,11 +1,11 @@
-import type { ApObject } from 'wildebeest/backend/src/activitypub/objects'
+import type { ApObject } from '@wildebeest/backend/activitypub/objects'
 import {
 	ensureObjectMastodonId,
 	mastodonIdSymbol,
 	originalActorIdSymbol,
 	originalObjectIdSymbol,
-} from 'wildebeest/backend/src/activitypub/objects'
-import { type Database } from 'wildebeest/backend/src/database'
+} from '@wildebeest/backend/activitypub/objects'
+import { type Database } from '@wildebeest/backend/database'
 
 export async function insertKey(db: Database, key: string, obj: ApObject): Promise<void> {
 	const query = `

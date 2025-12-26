@@ -2,14 +2,14 @@
 
 import { Hono } from 'hono'
 
-import { Actor, getActorById } from 'wildebeest/backend/src/activitypub/actors'
-import { getObjectByMastodonId, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { isNote, Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import { Database, getDatabase } from 'wildebeest/backend/src/database'
-import { notAuthorized, recordNotFound, statusNotFound } from 'wildebeest/backend/src/errors'
-import { getStatusRevisions, isVisible } from 'wildebeest/backend/src/mastodon/status'
-import { HonoEnv, MastodonId, MastodonStatusEdit } from 'wildebeest/backend/src/types'
-import { cors, makeJsonResponse, MastodonApiResponse } from 'wildebeest/backend/src/utils'
+import { Actor, getActorById } from '@wildebeest/backend/activitypub/actors'
+import { getObjectByMastodonId, originalActorIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { isNote, Note } from '@wildebeest/backend/activitypub/objects/note'
+import { Database, getDatabase } from '@wildebeest/backend/database'
+import { notAuthorized, recordNotFound, statusNotFound } from '@wildebeest/backend/errors'
+import { getStatusRevisions, isVisible } from '@wildebeest/backend/mastodon/status'
+import { HonoEnv, MastodonId, MastodonStatusEdit } from '@wildebeest/backend/types'
+import { cors, makeJsonResponse, MastodonApiResponse } from '@wildebeest/backend/utils'
 
 const headers = {
 	...cors(),

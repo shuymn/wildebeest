@@ -3,13 +3,13 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { clientUnknown, notAuthorized } from 'wildebeest/backend/src/errors'
-import { Token } from 'wildebeest/backend/src/mastodon'
-import { createClientCredential, getClientById } from 'wildebeest/backend/src/mastodon/client'
-import { corsMiddleware } from 'wildebeest/backend/src/middleware'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { makeJsonResponse, MastodonApiResponse, readBody } from 'wildebeest/backend/src/utils'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import { clientUnknown, notAuthorized } from '@wildebeest/backend/errors'
+import { Token } from '@wildebeest/backend/mastodon'
+import { createClientCredential, getClientById } from '@wildebeest/backend/mastodon/client'
+import { corsMiddleware } from '@wildebeest/backend/middleware'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { makeJsonResponse, MastodonApiResponse, readBody } from '@wildebeest/backend/utils'
 
 const schema = z
 	.object({

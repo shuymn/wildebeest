@@ -39,9 +39,6 @@
       ],
       "@wildebeest/frontend/*": [
         "./src/*"
-      ],
-      "wildebeest/*": [
-        "../*"
       ]
     }
   },

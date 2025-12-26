@@ -1,13 +1,13 @@
 // https://www.w3.org/TR/activitystreams-vocabulary/#dfn-announce
 
-import { AnnounceActivity, insertActivity } from 'wildebeest/backend/src/activitypub/activities'
-import { Actor, getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
-import { getAndCacheObject, getApId, originalActorIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { isNote } from 'wildebeest/backend/src/activitypub/objects/note'
-import { Database } from 'wildebeest/backend/src/database'
-import { createNotification, sendReblogNotification } from 'wildebeest/backend/src/mastodon/notification'
-import { createReblog, hasReblog, reblogNotAllowed } from 'wildebeest/backend/src/mastodon/reblog'
-import { JWK } from 'wildebeest/backend/src/webpush/jwk'
+import { AnnounceActivity, insertActivity } from '@wildebeest/backend/activitypub/activities'
+import { Actor, getActorById, getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
+import { getAndCacheObject, getApId, originalActorIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { isNote } from '@wildebeest/backend/activitypub/objects/note'
+import { Database } from '@wildebeest/backend/database'
+import { createNotification, sendReblogNotification } from '@wildebeest/backend/mastodon/notification'
+import { createReblog, hasReblog, reblogNotAllowed } from '@wildebeest/backend/mastodon/reblog'
+import { JWK } from '@wildebeest/backend/webpush/jwk'
 
 export async function createAnnounceActivity(
 	db: Database,

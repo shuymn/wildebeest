@@ -1,6 +1,6 @@
-import { ParsedSignature } from 'wildebeest/backend/src/utils/httpsigjs/parser'
-import { str2ab, importPublicKey } from 'wildebeest/backend/src/utils/key-ops'
-import { UA } from 'wildebeest/config/ua'
+import { UA } from '@wildebeest/backend/config/ua'
+import { ParsedSignature } from '@wildebeest/backend/utils/httpsigjs/parser'
+import { str2ab, importPublicKey } from '@wildebeest/backend/utils/key-ops'
 
 interface Profile {
 	publicKey: {

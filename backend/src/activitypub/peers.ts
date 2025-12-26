@@ -1,5 +1,5 @@
-import { type Database } from 'wildebeest/backend/src/database'
-import { getResultsField } from 'wildebeest/backend/src/mastodon/utils'
+import { type Database } from '@wildebeest/backend/database'
+import { getResultsField } from '@wildebeest/backend/mastodon/utils'
 
 export async function getPeers(db: Database): Promise<Array<string>> {
 	const query = `SELECT domain FROM peers `

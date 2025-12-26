@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { makeDB, createTestUser, makeCache, makeDOCache } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { makeDB, createTestUser, makeCache, makeDOCache } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek15'
 const domain = 'cloudflare.com'

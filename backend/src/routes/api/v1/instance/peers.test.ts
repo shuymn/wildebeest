@@ -1,8 +1,8 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
-import { makeDB, assertStatus } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { addPeer } from '@wildebeest/backend/activitypub/peers'
+import { makeDB, assertStatus } from '@wildebeest/backend/test/utils'
 
 describe('/api/v1/instance/peers', () => {
 	test('returns peers', async () => {

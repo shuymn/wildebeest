@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { moveFollowers } from 'wildebeest/backend/src/mastodon/follow'
-import { makeDB, createTestUser } from 'wildebeest/backend/test/utils'
+import { moveFollowers } from '@wildebeest/backend/mastodon/follow'
+import { makeDB, createTestUser } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek23'
 const domain = 'cloudflare.com'

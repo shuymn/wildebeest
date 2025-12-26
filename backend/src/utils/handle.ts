@@ -1,6 +1,6 @@
-import { isLocalAccount } from 'wildebeest/backend/src/accounts'
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { getApId } from 'wildebeest/backend/src/activitypub/objects'
+import { isLocalAccount } from '@wildebeest/backend/accounts'
+import type { Actor } from '@wildebeest/backend/activitypub/actors'
+import { getApId } from '@wildebeest/backend/activitypub/objects'
 
 export type RemoteHandle = {
 	localPart: string

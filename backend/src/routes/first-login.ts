@@ -4,12 +4,12 @@ import { parse } from 'cookie'
 import { Hono } from 'hono'
 import { z } from 'zod'
 
-import * as access from 'wildebeest/backend/src/access'
-import { createUser } from 'wildebeest/backend/src/accounts'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import * as errors from 'wildebeest/backend/src/errors'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { getJwtEmail } from 'wildebeest/backend/src/utils/auth/getJwtEmail'
+import * as access from '@wildebeest/backend/access'
+import { createUser } from '@wildebeest/backend/accounts'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import * as errors from '@wildebeest/backend/errors'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { getJwtEmail } from '@wildebeest/backend/utils/auth/getJwtEmail'
 
 const schema = z.object({
 	username: z.string().min(1).max(30).nonempty(),

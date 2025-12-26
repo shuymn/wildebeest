@@ -7,8 +7,7 @@
 		"baseUrl": "./",
 		"paths": {
 			"@wildebeest/backend/*": ["./backend/src/*"],
-			"@wildebeest/frontend/*": ["./frontend/src/*"],
-			"wildebeest/*": ["./*"]
+			"@wildebeest/frontend/*": ["./frontend/src/*"]
 		},
 		"types": [
 			"@cloudflare/workers-types",

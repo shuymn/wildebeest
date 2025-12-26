@@ -1,13 +1,13 @@
 import { env } from 'cloudflare:test'
 
-import { createUser, User } from 'wildebeest/backend/src/accounts'
-import { ApObjectId } from 'wildebeest/backend/src/activitypub/objects'
-import type { Cache } from 'wildebeest/backend/src/cache'
-import { type Database as DB, getDatabase } from 'wildebeest/backend/src/database'
-import type { Client } from 'wildebeest/backend/src/mastodon/client'
-import { createClient } from 'wildebeest/backend/src/mastodon/client'
-import type { Queue } from 'wildebeest/backend/src/types'
-import type { JWK } from 'wildebeest/backend/src/webpush/jwk'
+import { createUser, User } from '@wildebeest/backend/accounts'
+import { ApObjectId } from '@wildebeest/backend/activitypub/objects'
+import type { Cache } from '@wildebeest/backend/cache'
+import { type Database as DB, getDatabase } from '@wildebeest/backend/database'
+import type { Client } from '@wildebeest/backend/mastodon/client'
+import { createClient } from '@wildebeest/backend/mastodon/client'
+import type { Queue } from '@wildebeest/backend/types'
+import type { JWK } from '@wildebeest/backend/webpush/jwk'
 
 export function isUrlValid(s: string) {
 	let url

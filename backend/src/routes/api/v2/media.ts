@@ -1,14 +1,14 @@
 import { Hono } from 'hono'
 
-import type { Person } from 'wildebeest/backend/src/activitypub/actors'
-import { getApUrl, mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { createImage } from 'wildebeest/backend/src/activitypub/objects/image'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { notAuthorized } from 'wildebeest/backend/src/errors'
-import * as media from 'wildebeest/backend/src/media/image'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import type { MediaAttachment } from 'wildebeest/backend/src/types/media'
-import { cors } from 'wildebeest/backend/src/utils/cors'
+import type { Person } from '@wildebeest/backend/activitypub/actors'
+import { getApUrl, mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { createImage } from '@wildebeest/backend/activitypub/objects/image'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import { notAuthorized } from '@wildebeest/backend/errors'
+import * as media from '@wildebeest/backend/media/image'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import type { MediaAttachment } from '@wildebeest/backend/types/media'
+import { cors } from '@wildebeest/backend/utils/cors'
 
 const app = new Hono<HonoEnv>()
 

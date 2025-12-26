@@ -1,11 +1,11 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
-import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { type Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import { createPublicStatus } from 'wildebeest/backend/test/shared.utils'
-import { makeDB, makeQueue, createTestUser, assertStatus } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
+import { mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { type Note } from '@wildebeest/backend/activitypub/objects/note'
+import { createPublicStatus } from '@wildebeest/backend/test/shared.utils'
+import { makeDB, makeQueue, createTestUser, assertStatus } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek4'
 const domain = 'cloudflare.com'

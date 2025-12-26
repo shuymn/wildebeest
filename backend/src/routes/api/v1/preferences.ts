@@ -2,12 +2,12 @@
 
 import { Hono } from 'hono'
 
-import { getDatabase } from 'wildebeest/backend/src/database'
-import * as errors from 'wildebeest/backend/src/errors'
-import { getPreference } from 'wildebeest/backend/src/mastodon/account'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { Privacy, ReadingExpandMedia } from 'wildebeest/backend/src/types'
-import { cors } from 'wildebeest/backend/src/utils/cors'
+import { getDatabase } from '@wildebeest/backend/database'
+import * as errors from '@wildebeest/backend/errors'
+import { getPreference } from '@wildebeest/backend/mastodon/account'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { Privacy, ReadingExpandMedia } from '@wildebeest/backend/types'
+import { cors } from '@wildebeest/backend/utils/cors'
 
 type PreferenceResponse = {
 	'posting:default:visibility': Privacy

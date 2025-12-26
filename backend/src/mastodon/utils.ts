@@ -1,4 +1,4 @@
-import { PreparedStatement } from 'wildebeest/backend/src/database'
+import { PreparedStatement } from '@wildebeest/backend/database'
 
 export async function getResultsField(statement: PreparedStatement, fieldName: string): Promise<Array<string>> {
 	const out: D1Result<Record<string, string>> = await statement.all()

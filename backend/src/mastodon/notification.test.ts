@@ -1,17 +1,17 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
+import { mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
 import {
 	insertFollowNotification,
 	createNotification,
 	getNotifications,
 	sendLikeNotification,
-} from 'wildebeest/backend/src/mastodon/notification'
-import { createSubscription } from 'wildebeest/backend/src/mastodon/subscription'
-import { arrayBufferToBase64 } from 'wildebeest/backend/src/utils/key-ops'
-import { JWK } from 'wildebeest/backend/src/webpush/jwk'
-import { createPublicStatus } from 'wildebeest/backend/test/shared.utils'
-import { makeDB, createTestUser, createTestClient } from 'wildebeest/backend/test/utils'
+} from '@wildebeest/backend/mastodon/notification'
+import { createSubscription } from '@wildebeest/backend/mastodon/subscription'
+import { createPublicStatus } from '@wildebeest/backend/test/shared.utils'
+import { makeDB, createTestUser, createTestClient } from '@wildebeest/backend/test/utils'
+import { arrayBufferToBase64 } from '@wildebeest/backend/utils/key-ops'
+import { JWK } from '@wildebeest/backend/webpush/jwk'
 
 const userKEK = 'test_kek15'
 const domain = 'cloudflare.com'

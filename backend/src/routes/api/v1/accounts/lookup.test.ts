@@ -1,10 +1,10 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { acceptFollowing, addFollowing } from 'wildebeest/backend/src/mastodon/follow'
-import { queryAcct } from 'wildebeest/backend/src/webfinger'
-import { createPublicStatus } from 'wildebeest/backend/test/shared.utils'
-import { makeDB, assertStatus, isUrlValid, createTestUser } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { acceptFollowing, addFollowing } from '@wildebeest/backend/mastodon/follow'
+import { createPublicStatus } from '@wildebeest/backend/test/shared.utils'
+import { makeDB, assertStatus, isUrlValid, createTestUser } from '@wildebeest/backend/test/utils'
+import { queryAcct } from '@wildebeest/backend/webfinger'
 
 const userKEK = 'test_kek2'
 const domain = 'cloudflare.com'

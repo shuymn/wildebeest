@@ -3,17 +3,17 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 
-import { isLocalAccount } from 'wildebeest/backend/src/accounts'
-import { Actor, getActorByMastodonId, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
-import { getFollowing, loadActors } from 'wildebeest/backend/src/activitypub/actors/follow'
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { resourceNotFound } from 'wildebeest/backend/src/errors'
-import { loadMastodonAccount } from 'wildebeest/backend/src/mastodon/account'
-import { getFollowingId } from 'wildebeest/backend/src/mastodon/follow'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { MastodonAccount } from 'wildebeest/backend/src/types/account'
-import { cors, makeJsonResponse, MastodonApiResponse, readParams } from 'wildebeest/backend/src/utils'
-import { actorToHandle } from 'wildebeest/backend/src/utils/handle'
+import { isLocalAccount } from '@wildebeest/backend/accounts'
+import { Actor, getActorByMastodonId, getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
+import { getFollowing, loadActors } from '@wildebeest/backend/activitypub/actors/follow'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import { resourceNotFound } from '@wildebeest/backend/errors'
+import { loadMastodonAccount } from '@wildebeest/backend/mastodon/account'
+import { getFollowingId } from '@wildebeest/backend/mastodon/follow'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { MastodonAccount } from '@wildebeest/backend/types/account'
+import { cors, makeJsonResponse, MastodonApiResponse, readParams } from '@wildebeest/backend/utils'
+import { actorToHandle } from '@wildebeest/backend/utils/handle'
 
 const schema = z.object({
 	limit: z.coerce.number().int().min(1).max(80).catch(40),

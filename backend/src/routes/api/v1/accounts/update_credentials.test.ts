@@ -1,11 +1,11 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
-import { getApId } from 'wildebeest/backend/src/activitypub/objects'
-import { addFollowing, acceptFollowing } from 'wildebeest/backend/src/mastodon/follow'
-import { MessageType } from 'wildebeest/backend/src/types'
-import { makeDB, makeQueue, createTestUser, assertStatus } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { getActorById } from '@wildebeest/backend/activitypub/actors'
+import { getApId } from '@wildebeest/backend/activitypub/objects'
+import { addFollowing, acceptFollowing } from '@wildebeest/backend/mastodon/follow'
+import { makeDB, makeQueue, createTestUser, assertStatus } from '@wildebeest/backend/test/utils'
+import { MessageType } from '@wildebeest/backend/types'
 
 const userKEK = 'test_kek2'
 const domain = 'cloudflare.com'

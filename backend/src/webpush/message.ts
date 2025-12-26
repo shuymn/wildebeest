@@ -1,4 +1,4 @@
-import { urlsafeBase64Decode } from 'wildebeest/backend/src/utils/key-ops'
+import { urlsafeBase64Decode } from '@wildebeest/backend/utils/key-ops'
 
 import { hkdfGenerate } from './hkdf'
 import type { JWK } from './jwk'

@@ -5,17 +5,17 @@ import {
 	mastodonIdSymbol,
 	Remote,
 	sanitizeContent,
-} from 'wildebeest/backend/src/activitypub/objects'
-import { addPeer } from 'wildebeest/backend/src/activitypub/peers'
-import { type Database } from 'wildebeest/backend/src/database'
-import * as query from 'wildebeest/backend/src/database/d1/querier'
-import { MastodonId } from 'wildebeest/backend/src/types'
-import { isGone, isNotFound, isUUID } from 'wildebeest/backend/src/utils'
-import { adjustLocalHostDomain } from 'wildebeest/backend/src/utils/adjustLocalHostDomain'
-import { RemoteHandle } from 'wildebeest/backend/src/utils/handle'
-import { generateMastodonId } from 'wildebeest/backend/src/utils/id'
-import { defaultImages } from 'wildebeest/config/accounts'
-import { UA } from 'wildebeest/config/ua'
+} from '@wildebeest/backend/activitypub/objects'
+import { addPeer } from '@wildebeest/backend/activitypub/peers'
+import { defaultImages } from '@wildebeest/backend/config/accounts'
+import { UA } from '@wildebeest/backend/config/ua'
+import { type Database } from '@wildebeest/backend/database'
+import * as query from '@wildebeest/backend/database/d1/querier'
+import { MastodonId } from '@wildebeest/backend/types'
+import { isGone, isNotFound, isUUID } from '@wildebeest/backend/utils'
+import { adjustLocalHostDomain } from '@wildebeest/backend/utils/adjustLocalHostDomain'
+import { RemoteHandle } from '@wildebeest/backend/utils/handle'
+import { generateMastodonId } from '@wildebeest/backend/utils/id'
 
 export const isAdminSymbol = Symbol()
 

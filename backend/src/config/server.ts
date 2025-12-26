@@ -1,4 +1,4 @@
-import { type Database } from 'wildebeest/backend/src/database'
+import { type Database } from '@wildebeest/backend/database'
 
 type ServerSettingsData = {
 	'server name': string

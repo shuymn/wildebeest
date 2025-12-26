@@ -1,4 +1,4 @@
-import * as access from 'wildebeest/backend/src/access'
+import * as access from '@wildebeest/backend/access'
 
 export async function isUserAuthenticated(request: Request, jwt: string, accessAuthDomain: string, accessAud: string) {
 	if (!jwt) return false

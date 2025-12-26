@@ -1,15 +1,15 @@
-import { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import { Actor } from '@wildebeest/backend/activitypub/actors'
 import {
 	type ApObject,
 	type ApObjectOrId,
 	getAndCacheObject,
 	getApType,
 	Remote,
-} from 'wildebeest/backend/src/activitypub/objects'
-import { isNote, Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import { Database } from 'wildebeest/backend/src/database'
-import { HTTPS } from 'wildebeest/backend/src/utils'
-import { PartialProps } from 'wildebeest/backend/src/utils/type'
+} from '@wildebeest/backend/activitypub/objects'
+import { isNote, Note } from '@wildebeest/backend/activitypub/objects/note'
+import { Database } from '@wildebeest/backend/database'
+import { HTTPS } from '@wildebeest/backend/utils'
+import { PartialProps } from '@wildebeest/backend/utils/type'
 
 export const PUBLIC_GROUP = 'https://www.w3.org/ns/activitystreams#Public'
 

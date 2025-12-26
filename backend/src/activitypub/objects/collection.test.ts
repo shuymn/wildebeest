@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { loadItems } from 'wildebeest/backend/src/activitypub/objects/collection'
+import { loadItems } from '@wildebeest/backend/activitypub/objects/collection'
 
 describe('Collection', () => {
 	test('loadItems walks pages', async () => {

@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { makeDB, generateVAPIDKeys, assertStatus, assertCORS, assertJSON } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { makeDB, generateVAPIDKeys, assertStatus, assertCORS, assertJSON } from '@wildebeest/backend/test/utils'
 
 describe('/api/v1/apps', () => {
 	test('POST /apps registers client', async () => {

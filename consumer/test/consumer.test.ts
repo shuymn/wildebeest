@@ -1,9 +1,9 @@
 import { strict as assert } from 'node:assert/strict'
 
-import type { DeliverMessageBody } from 'wildebeest/backend/src/types'
-import { MessageType } from 'wildebeest/backend/src/types'
-import { createPublicStatus } from 'wildebeest/backend/test/shared.utils'
-import { createTestUser, makeDB } from 'wildebeest/backend/test/utils'
+import type { DeliverMessageBody } from '@wildebeest/backend/types'
+import { MessageType } from '@wildebeest/backend/types'
+import { createPublicStatus } from '@wildebeest/backend/test/shared.utils'
+import { createTestUser, makeDB } from '@wildebeest/backend/test/utils'
 
 import { Env } from '../src'
 import { handleDeliverMessage } from '../src/deliver'

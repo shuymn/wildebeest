@@ -1,12 +1,12 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 
-import { type Database, getDatabase } from 'wildebeest/backend/src/database'
-import { resourceNotFound } from 'wildebeest/backend/src/errors'
-import { getPublicTimeline, getStatusRange, LocalPreference } from 'wildebeest/backend/src/mastodon/timeline'
-import type { HonoEnv } from 'wildebeest/backend/src/types'
-import { cors, readParams } from 'wildebeest/backend/src/utils'
-import myz from 'wildebeest/backend/src/utils/zod'
+import { type Database, getDatabase } from '@wildebeest/backend/database'
+import { resourceNotFound } from '@wildebeest/backend/errors'
+import { getPublicTimeline, getStatusRange, LocalPreference } from '@wildebeest/backend/mastodon/timeline'
+import type { HonoEnv } from '@wildebeest/backend/types'
+import { cors, readParams } from '@wildebeest/backend/utils'
+import myz from '@wildebeest/backend/utils/zod'
 
 const headers = {
 	...cors(),

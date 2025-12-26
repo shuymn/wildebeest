@@ -1,17 +1,17 @@
 import { component$, Slot, useStyles$ } from '@builder.io/qwik'
 import { type DocumentHead, routeLoader$, useLocation, Link } from '@builder.io/qwik-city'
-import { MastodonAccount } from 'wildebeest/backend/src/types'
+import { MastodonAccount } from '@wildebeest/backend/types'
 import StickyHeader from '~/components/StickyHeader/StickyHeader'
 import { formatDateTime } from '~/utils/dateTime'
 import { formatRoundedNumber } from '~/utils/numbers'
 import styles from '../../../utils/innerHtmlContent.scss?inline'
-import { getAccount } from 'wildebeest/backend/src/accounts/account'
+import { getAccount } from '@wildebeest/backend/accounts/account'
 import { getNotFoundHtml } from '~/utils/getNotFoundHtml/getNotFoundHtml'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
 import { getDocumentHead } from '~/utils/getDocumentHead'
-import { getDatabase } from 'wildebeest/backend/src/database'
+import { getDatabase } from '@wildebeest/backend/database'
 import { fetchApi } from '~/utils/fetchApi'
-import { getDomain } from 'wildebeest/backend/src/utils/getDomain'
+import { getDomain } from '@wildebeest/backend/utils/getDomain'
 
 export const useStatuses = routeLoader$(
 	async ({

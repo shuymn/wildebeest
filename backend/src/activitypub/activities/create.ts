@@ -1,21 +1,21 @@
-import { getUserId, isLocalAccount } from 'wildebeest/backend/src/accounts'
+import { getUserId, isLocalAccount } from '@wildebeest/backend/accounts'
 import {
 	cacheActivityObject,
 	CreateActivity,
 	getActivityObject,
 	insertActivity,
-} from 'wildebeest/backend/src/activitypub/activities'
-import { Actor, getActorById, getAndCacheActor } from 'wildebeest/backend/src/activitypub/actors'
-import { addObjectInInbox } from 'wildebeest/backend/src/activitypub/actors/inbox'
-import { addObjectInOutbox } from 'wildebeest/backend/src/activitypub/actors/outbox'
-import { ApObject, LocalObject, getApId } from 'wildebeest/backend/src/activitypub/objects'
-import { Note } from 'wildebeest/backend/src/activitypub/objects/note'
-import { Database } from 'wildebeest/backend/src/database'
-import { createNotification, sendMentionNotification } from 'wildebeest/backend/src/mastodon/notification'
-import { toArray, unique } from 'wildebeest/backend/src/utils'
-import { parseHandle } from 'wildebeest/backend/src/utils/handle'
-import { RequiredProps } from 'wildebeest/backend/src/utils/type'
-import { JWK } from 'wildebeest/backend/src/webpush/jwk'
+} from '@wildebeest/backend/activitypub/activities'
+import { Actor, getActorById, getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
+import { addObjectInInbox } from '@wildebeest/backend/activitypub/actors/inbox'
+import { addObjectInOutbox } from '@wildebeest/backend/activitypub/actors/outbox'
+import { ApObject, LocalObject, getApId } from '@wildebeest/backend/activitypub/objects'
+import { Note } from '@wildebeest/backend/activitypub/objects/note'
+import { Database } from '@wildebeest/backend/database'
+import { createNotification, sendMentionNotification } from '@wildebeest/backend/mastodon/notification'
+import { toArray, unique } from '@wildebeest/backend/utils'
+import { parseHandle } from '@wildebeest/backend/utils/handle'
+import { RequiredProps } from '@wildebeest/backend/utils/type'
+import { JWK } from '@wildebeest/backend/webpush/jwk'
 
 export async function createCreateActivity(
 	db: Database,

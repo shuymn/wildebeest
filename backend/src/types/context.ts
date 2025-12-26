@@ -1,4 +1,4 @@
-import { User } from 'wildebeest/backend/src/accounts'
+import { User } from '@wildebeest/backend/accounts'
 
 export type Identity = {
 	email: string

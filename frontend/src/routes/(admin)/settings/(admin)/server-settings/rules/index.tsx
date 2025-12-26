@@ -1,7 +1,7 @@
 import { component$ } from '@builder.io/qwik'
 import { routeAction$, Form, Link, routeLoader$, z, zod$ } from '@builder.io/qwik-city'
-import { getDatabase } from 'wildebeest/backend/src/database'
-import { getRules, deleteRule, upsertRule } from 'wildebeest/backend/src/config/rules'
+import { getDatabase } from '@wildebeest/backend/database'
+import { getRules, deleteRule, upsertRule } from '@wildebeest/backend/config/rules'
 import { TextArea } from '~/components/Settings/TextArea'
 import { SubmitButton } from '~/components/Settings/SubmitButton'
 

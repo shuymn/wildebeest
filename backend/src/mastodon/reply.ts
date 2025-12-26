@@ -1,10 +1,10 @@
-import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
-import { type ApObject } from 'wildebeest/backend/src/activitypub/objects'
-import { type Database } from 'wildebeest/backend/src/database'
-import * as query from 'wildebeest/backend/src/database/d1/querier'
-import { toMastodonStatusFromRow } from 'wildebeest/backend/src/mastodon/status'
-import type { MastodonStatus } from 'wildebeest/backend/src/types/status'
+import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
+import type { Actor } from '@wildebeest/backend/activitypub/actors'
+import { type ApObject } from '@wildebeest/backend/activitypub/objects'
+import { type Database } from '@wildebeest/backend/database'
+import * as query from '@wildebeest/backend/database/d1/querier'
+import { toMastodonStatusFromRow } from '@wildebeest/backend/mastodon/status'
+import type { MastodonStatus } from '@wildebeest/backend/types/status'
 
 export async function insertReply(
 	db: Database,

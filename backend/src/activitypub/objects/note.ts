@@ -1,7 +1,7 @@
 // https://www.w3.org/TR/activitystreams-vocabulary/#object-types
 
-import { PUBLIC_GROUP } from 'wildebeest/backend/src/activitypub/activities'
-import type { Actor } from 'wildebeest/backend/src/activitypub/actors'
+import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
+import type { Actor } from '@wildebeest/backend/activitypub/actors'
 import {
 	ApObject,
 	ApObjectId,
@@ -12,12 +12,12 @@ import {
 	Remote,
 	RemoteObject,
 	sanitizeObjectProperties,
-} from 'wildebeest/backend/src/activitypub/objects'
-import { Image } from 'wildebeest/backend/src/activitypub/objects/image'
-import type { Link } from 'wildebeest/backend/src/activitypub/objects/link'
-import { type Database } from 'wildebeest/backend/src/database'
-import * as query from 'wildebeest/backend/src/database/d1/querier'
-import { PartialProps, RequiredProps } from 'wildebeest/backend/src/utils/type'
+} from '@wildebeest/backend/activitypub/objects'
+import { Image } from '@wildebeest/backend/activitypub/objects/image'
+import type { Link } from '@wildebeest/backend/activitypub/objects/link'
+import { type Database } from '@wildebeest/backend/database'
+import * as query from '@wildebeest/backend/database/d1/querier'
+import { PartialProps, RequiredProps } from '@wildebeest/backend/utils/type'
 
 const NOTE = 'Note'
 

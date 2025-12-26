@@ -1,5 +1,5 @@
-import app from 'wildebeest/backend/src'
-import { assertStatus, createTestUser, makeDB } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { assertStatus, createTestUser, makeDB } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek'
 const domain = 'cloudflare.com'

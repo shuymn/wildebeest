@@ -1,9 +1,9 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { addAlias } from 'wildebeest/backend/src/accounts'
-import { getActorById } from 'wildebeest/backend/src/activitypub/actors'
-import { getApId } from 'wildebeest/backend/src/activitypub/objects'
-import { makeDB, createTestUser } from 'wildebeest/backend/test/utils'
+import { addAlias } from '@wildebeest/backend/accounts'
+import { getActorById } from '@wildebeest/backend/activitypub/actors'
+import { getApId } from '@wildebeest/backend/activitypub/objects'
+import { makeDB, createTestUser } from '@wildebeest/backend/test/utils'
 
 const domain = 'cloudflare.com'
 const userKEK = 'test_kek22'

@@ -1,19 +1,19 @@
-import { getActivityObject, insertActivity, UpdateActivity } from 'wildebeest/backend/src/activitypub/activities'
+import { getActivityObject, insertActivity, UpdateActivity } from '@wildebeest/backend/activitypub/activities'
 import {
 	Actor,
 	getActorById,
 	isActorType,
 	sanitizeActor,
 	updateActorProperties,
-} from 'wildebeest/backend/src/activitypub/actors'
+} from '@wildebeest/backend/activitypub/actors'
 import {
 	ApObject,
 	getApId,
 	getObjectByOriginalId,
 	originalActorIdSymbol,
-} from 'wildebeest/backend/src/activitypub/objects'
-import { isNoteType, updateNote } from 'wildebeest/backend/src/activitypub/objects/note'
-import { Database } from 'wildebeest/backend/src/database'
+} from '@wildebeest/backend/activitypub/objects'
+import { isNoteType, updateNote } from '@wildebeest/backend/activitypub/objects/note'
+import { Database } from '@wildebeest/backend/database'
 
 export async function createUpdateActivity(
 	db: Database,

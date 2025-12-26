@@ -1,8 +1,8 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { makeDB, assertStatus, assertJSON, assertCORS, createTestUser } from 'wildebeest/backend/test/utils'
-import { defaultImages } from 'wildebeest/config/accounts'
+import app from '@wildebeest/backend'
+import { defaultImages } from '@wildebeest/backend/config/accounts'
+import { makeDB, assertStatus, assertJSON, assertCORS, createTestUser } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek11'
 const domain = 'cloudflare.com'

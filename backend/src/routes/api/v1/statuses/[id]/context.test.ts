@@ -1,9 +1,9 @@
 import { strict as assert } from 'node:assert/strict'
 
-import app from 'wildebeest/backend/src'
-import { mastodonIdSymbol } from 'wildebeest/backend/src/activitypub/objects'
-import { createPublicStatus, createReply } from 'wildebeest/backend/test/shared.utils'
-import { makeDB, createTestUser, assertStatus } from 'wildebeest/backend/test/utils'
+import app from '@wildebeest/backend'
+import { mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { createPublicStatus, createReply } from '@wildebeest/backend/test/shared.utils'
+import { makeDB, createTestUser, assertStatus } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek4'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
