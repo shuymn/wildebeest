@@ -14,6 +14,9 @@ const compat = new FlatCompat({
 });
 
 export default [
+	{
+		ignores: ['e2e/**', 'playwright.config.ts', 'eslint.config.js'],
+	},
 	...compat.extends('eslint:recommended', 'plugin:@typescript-eslint/recommended'),
 	...qwikEslint9Plugin.configs.recommended,
 	{

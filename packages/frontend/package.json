@@ -1,40 +1,42 @@
 {
-	"name": "@wildebeest/frontend",
-	"description": "App with Routing built-in (recommended)",
-	"type": "module",
-	"engines": {
-		"node": ">=15.0.0"
-	},
-	"private": true,
-	"scripts": {
-		"pretypes-check": "npm run build",
-		"types-check": "tsc",
-		"lint": "eslint src mock-db adapters",
-		"build": "vite build && vite build --config adapters/cloudflare-pages/vite.config.ts"
-	},
-	"devDependencies": {
-		"@builder.io/qwik": "1.18.0",
-		"@builder.io/qwik-city": "1.18.0",
-		"@types/eslint": "9.6.1",
-		"@types/node": "24.10.4",
-		"@typescript-eslint/eslint-plugin": "8.50.1",
-		"@typescript-eslint/parser": "8.50.1",
-		"autoprefixer": "10.4.23",
-		"eslint": "9.39.2",
-		"eslint-plugin-qwik": "1.18.0",
-		"hono": "4.11.1",
-		"lorem-ipsum": "2.0.8",
-		"postcss": "8.5.6",
-		"prettier": "3.7.4",
-		"sass": "1.97.1",
-		"tailwindcss": "3.4.19",
-		"typescript": "5.9.3",
-		"undici": "7.16.0",
-		"vite": "5.4.21",
-		"vite-tsconfig-paths": "6.0.3"
-	},
-	"dependencies": {
-		"@wildebeest/backend": "workspace:*",
-		"modern-normalize": "3.0.1"
-	}
+  "name": "@wildebeest/frontend",
+  "description": "App with Routing built-in (recommended)",
+  "type": "module",
+  "engines": {
+    "node": ">=15.0.0"
+  },
+  "private": true,
+  "scripts": {
+    "pretypes-check": "npm run build",
+    "types-check": "tsc",
+    "lint": "eslint src mock-db adapters",
+    "build": "vite build && vite build --config adapters/cloudflare-pages/vite.config.ts",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@builder.io/qwik": "1.18.0",
+    "@playwright/test": "1.57.0",
+    "@builder.io/qwik-city": "1.18.0",
+    "@types/eslint": "9.6.1",
+    "@types/node": "24.10.4",
+    "@typescript-eslint/eslint-plugin": "8.50.1",
+    "@typescript-eslint/parser": "8.50.1",
+    "autoprefixer": "10.4.23",
+    "eslint": "9.39.2",
+    "eslint-plugin-qwik": "1.18.0",
+    "hono": "4.11.1",
+    "lorem-ipsum": "2.0.8",
+    "postcss": "8.5.6",
+    "prettier": "3.7.4",
+    "sass": "1.97.1",
+    "tailwindcss": "3.4.19",
+    "typescript": "5.9.3",
+    "undici": "7.16.0",
+    "vite": "5.4.21",
+    "vite-tsconfig-paths": "6.0.3"
+  },
+  "dependencies": {
+    "@wildebeest/backend": "workspace:*",
+    "modern-normalize": "3.0.1"
+  }
 }
