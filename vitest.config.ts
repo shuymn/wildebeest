@@ -13,13 +13,13 @@ export default defineWorkersProject(async () => {
 		test: {
 			globals: true,
 			testTimeout: 30 * 1000,
-			include: ['./backend/src/**/*.test.ts'],
-			includeSource: ['./backend/src/**/*.ts'],
+			include: ['./packages/backend/src/**/*.test.ts'],
+			includeSource: ['./packages/backend/src/**/*.ts'],
 			coverage: {
 				provider: 'istanbul',
 				reporter: ['json'],
 			},
-			setupFiles: ['./backend/src/test/apply-migrations.ts'],
+			setupFiles: ['./packages/backend/src/test/apply-migrations.ts'],
 			poolOptions: {
 				workers: {
 					singleWorker: true,
