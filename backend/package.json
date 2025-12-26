@@ -1,0 +1,45 @@
+{
+	"name": "@wildebeest/backend",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts",
+		"./activitypub/actors": "./src/activitypub/actors/index.ts",
+		"./activitypub/objects": "./src/activitypub/objects/index.ts",
+		"./database": "./src/database/index.ts",
+		"./types": "./src/types/index.ts",
+		"./types/configs": "./src/types/configs.ts"
+	},
+	"scripts": {
+		"lint": "npx eslint src --quiet",
+		"test": "NODE_OPTIONS=--experimental-vm-modules vitest run"
+	},
+	"devDependencies": {
+		"@cloudflare/vitest-pool-workers": "0.11.1",
+		"@cloudflare/workers-types": "4.20251223.0",
+		"@playwright/test": "1.57.0",
+		"@types/cookie": "1.0.0",
+		"@types/node": "24.10.4",
+		"@typescript-eslint/eslint-plugin": "8.50.1",
+		"@typescript-eslint/parser": "8.50.1",
+		"@vitest/coverage-istanbul": "3.2.4",
+		"eslint": "9.39.2",
+		"eslint-import-resolver-typescript": "4.4.4",
+		"eslint-plugin-import": "2.32.0",
+		"eslint-plugin-unused-imports": "4.3.0",
+		"hono": "4.11.1",
+		"simple-git-hooks": "2.13.1",
+		"typescript": "5.9.3",
+		"vite": "5.4.21",
+		"vite-tsconfig-paths": "6.0.3",
+		"vitest": "3.2.4",
+		"wrangler": "3.114.16"
+	},
+	"dependencies": {
+		"cookie": "1.1.1",
+		"toucan-js": "4.1.1",
+		"zod": "3.25.76"
+	}
+}

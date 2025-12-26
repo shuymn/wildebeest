@@ -93,6 +93,10 @@ export default [
 					'newlines-between': 'always',
 					pathGroups: [
 						{
+							pattern: '@wildebeest/**',
+							group: 'internal',
+						},
+						{
 							pattern: 'wildebeest/**',
 							group: 'internal',
 						},

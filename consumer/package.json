@@ -1,5 +1,5 @@
 {
-	"name": "consumer",
+	"name": "@wildebeest/consumer",
 	"version": "0.0.0",
 	"scripts": {
 		"preinstall": "npx only-allow pnpm"
@@ -10,5 +10,8 @@
 		"typescript": "5.9.3",
 		"wrangler": "3.114.16"
 	},
-	"private": true
+	"private": true,
+	"dependencies": {
+		"@wildebeest/backend": "workspace:*"
+	}
 }

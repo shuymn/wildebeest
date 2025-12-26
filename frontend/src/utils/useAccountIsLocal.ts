@@ -1,6 +1,6 @@
 import { useSignal, useTask$ } from '@builder.io/qwik'
-import { isLocalAccount } from 'wildebeest/backend/src/accounts'
-import { parseHandle } from 'wildebeest/backend/src/utils/handle'
+import { isLocalAccount } from '@wildebeest/backend/accounts'
+import { parseHandle } from '@wildebeest/backend/utils/handle'
 import { useDomain } from '~/utils/useDomain'
 
 export const useAccountIsLocal = (acct: string | undefined) => {

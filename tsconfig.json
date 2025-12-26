@@ -6,6 +6,8 @@
 		"moduleResolution": "bundler",
 		"baseUrl": "./",
 		"paths": {
+			"@wildebeest/backend/*": ["./backend/src/*"],
+			"@wildebeest/frontend/*": ["./frontend/src/*"],
 			"wildebeest/*": ["./*"]
 		},
 		"types": [
@@ -25,6 +27,12 @@
 		"strict": true,
 		"skipLibCheck": true
 	},
+	"references": [
+		{ "path": "./backend" },
+		{ "path": "./frontend" },
+		{ "path": "./consumer" },
+		{ "path": "./do" }
+	],
 	"exclude": ["node_modules", "./frontend"],
 	"include": ["./**/*.ts", "./backend/src/routes/.well-known/*.ts"]
 }

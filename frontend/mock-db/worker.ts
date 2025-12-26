@@ -1,5 +1,5 @@
 import { init } from './init'
-import { type Database } from 'wildebeest/backend/src/database'
+import { type Database } from '@wildebeest/backend/database'
 
 interface Env {
 	DOMAIN?: string

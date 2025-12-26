@@ -1,11 +1,11 @@
 import { parse } from 'cookie'
 import { Context, MiddlewareHandler } from 'hono'
-import { generateValidator } from 'wildebeest/backend/src/access'
-import { User, getUserByEmail } from 'wildebeest/backend/src/accounts'
-import { getDatabase } from 'wildebeest/backend/src/database'
-import { notAuthorized } from 'wildebeest/backend/src/errors'
-import { HonoEnv } from 'wildebeest/backend/src/types'
-import { getJwtEmail } from 'wildebeest/backend/src/utils/auth/getJwtEmail'
+import { generateValidator } from '@wildebeest/backend/access'
+import { User, getUserByEmail } from '@wildebeest/backend/accounts'
+import { getDatabase } from '@wildebeest/backend/database'
+import { notAuthorized } from '@wildebeest/backend/errors'
+import { HonoEnv } from '@wildebeest/backend/types'
+import { getJwtEmail } from '@wildebeest/backend/utils/auth/getJwtEmail'
 
 export const authMiddleware = (): MiddlewareHandler<HonoEnv> => {
 	return async (c, next) => {
