@@ -5,7 +5,7 @@ node_modules/
 .DS_Store
 .dev.vars
 .dev.vars.bak
-/test-results/
-/playwright-report/
-/playwright/.cache/
+packages/frontend/test-results/
+packages/frontend/playwright-report/
+packages/frontend/.playwright/
 /coverage/

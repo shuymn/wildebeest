@@ -42,9 +42,6 @@ importers:
       '@cloudflare/workers-types':
         specifier: 4.20251223.0
         version: 4.20251223.0
-      '@playwright/test':
-        specifier: 1.57.0
-        version: 1.57.0
       '@types/cookie':
         specifier: 1.0.0
         version: 1.0.0
@@ -140,6 +137,9 @@ importers:
       '@builder.io/qwik-city':
         specifier: 1.18.0
         version: 1.18.0(@types/node@24.10.4)(rollup@4.54.0)(sass@1.97.1)(typescript@5.9.3)
+      '@playwright/test':
+        specifier: 1.57.0
+        version: 1.57.0
       '@types/eslint':
         specifier: 9.6.1
         version: 9.6.1

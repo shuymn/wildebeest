@@ -1,40 +1,41 @@
 {
-	"name": "wildebeest",
-	"version": "0.1.0",
-	"type": "module",
-	"author": "Sven Sauleau <sven@cloudflare.com>",
-	"devDependencies": {
-		"@cloudflare/pages-plugin-cloudflare-access": "1.0.5",
-		"npm-run-all2": "8.0.4",
-		"prettier": "3.7.4",
-		"sql-formatter": "15.6.12",
-		"wrangler": "3.114.16"
-	},
-	"private": true,
-	"scripts": {
-		"pretty": "npx prettier --list-different './**/*.ts'",
-		"test": "NODE_OPTIONS=--experimental-vm-modules vitest run",
-		"lint": "run-p lint:* --print-label",
-		"lint:frontend": "pnpm --filter @wildebeest/frontend lint",
-		"lint:backend": "pnpm --filter @wildebeest/backend lint",
-		"lint:consumer": "pnpm --filter @wildebeest/consumer lint",
-		"lint:do": "pnpm --filter @wildebeest/do lint",
-		"build": "pnpm --filter @wildebeest/frontend build",
-		"d1": "NO_D1_WARNING=true wrangler d1",
-		"pages": "NO_D1_WARNING=true wrangler pages",
-		"database:migrate": "npm run d1 -- migrations apply DATABASE",
-		"database:create-mock": "rm -f .wrangler/state/v3/d1/miniflare-D1DatabaseObject/*.sqlite* && CI=true npm run database:migrate -- --local && node ./packages/frontend/mock-db/run.mjs",
-		"database:generate-query": "sqlc generate",
-		"predev": "mv .dev.vars.bak .dev.vars || true",
-		"dev": "export COMMIT_HASH=$(git rev-parse HEAD) && npm run build && npm run database:migrate -- --local && npm run pages -- dev packages/frontend/dist --compatibility-date=2022-12-20",
-		"preci-dev-test-ui": "mv .dev.vars .dev.vars.bak || true",
-		"ci-dev-test-ui": "npm run build && npm run database:create-mock && npm run pages -- dev packages/frontend/dist --binding 'DOMAIN=0.0.0.0' 'INSTANCE_TITLE=Test Wildebeest' 'INSTANCE_DESCR=My Wildebeest Instance' 'ACCESS_AUTH_DOMAIN=0.0.0.0.cloudflareaccess.com' 'ACCESS_AUD=DEV_AUD' 'ADMIN_EMAIL=george@test.email' --compatibility-date=2022-12-20",
-		"postci-dev-test-ui": "mv .dev.vars.bak .dev.vars || true",
-		"deploy:init": "npm run pages -- project create wildebeest && npm run d1 -- create wildebeest",
-		"deploy": "npm run build && npm run database:migrate && npm run pages -- deploy packages/frontend/dist --project-name=wildebeest"
-	},
-	"simple-git-hooks": {
-		"pre-commit": "npm exec --package npm-run-all -- run-p lint pretty"
-	},
-	"packageManager": "pnpm@10.26.2"
+  "name": "wildebeest",
+  "version": "0.1.0",
+  "type": "module",
+  "author": "Sven Sauleau <sven@cloudflare.com>",
+  "devDependencies": {
+    "@cloudflare/pages-plugin-cloudflare-access": "1.0.5",
+    "npm-run-all2": "8.0.4",
+    "prettier": "3.7.4",
+    "sql-formatter": "15.6.12",
+    "wrangler": "3.114.16"
+  },
+  "private": true,
+  "scripts": {
+    "pretty": "npx prettier --list-different './**/*.ts'",
+    "test": "NODE_OPTIONS=--experimental-vm-modules vitest run",
+    "lint": "run-p lint:* --print-label",
+    "lint:frontend": "pnpm --filter @wildebeest/frontend lint",
+    "lint:backend": "pnpm --filter @wildebeest/backend lint",
+    "lint:consumer": "pnpm --filter @wildebeest/consumer lint",
+    "lint:do": "pnpm --filter @wildebeest/do lint",
+    "test:ui": "pnpm --filter @wildebeest/frontend test:e2e",
+    "build": "pnpm --filter @wildebeest/frontend build",
+    "d1": "NO_D1_WARNING=true wrangler d1",
+    "pages": "NO_D1_WARNING=true wrangler pages",
+    "database:migrate": "npm run d1 -- migrations apply DATABASE",
+    "database:create-mock": "rm -f .wrangler/state/v3/d1/miniflare-D1DatabaseObject/*.sqlite* && CI=true npm run database:migrate -- --local && node ./packages/frontend/mock-db/run.mjs",
+    "database:generate-query": "sqlc generate",
+    "predev": "mv .dev.vars.bak .dev.vars || true",
+    "dev": "export COMMIT_HASH=$(git rev-parse HEAD) && npm run build && npm run database:migrate -- --local && npm run pages -- dev packages/frontend/dist --compatibility-date=2022-12-20",
+    "preci-dev-test-ui": "mv .dev.vars .dev.vars.bak || true",
+    "ci-dev-test-ui": "npm run build && npm run database:create-mock && npm run pages -- dev packages/frontend/dist --binding 'DOMAIN=0.0.0.0' 'INSTANCE_TITLE=Test Wildebeest' 'INSTANCE_DESCR=My Wildebeest Instance' 'ACCESS_AUTH_DOMAIN=0.0.0.0.cloudflareaccess.com' 'ACCESS_AUD=DEV_AUD' 'ADMIN_EMAIL=george@test.email' --compatibility-date=2022-12-20",
+    "postci-dev-test-ui": "mv .dev.vars.bak .dev.vars || true",
+    "deploy:init": "npm run pages -- project create wildebeest && npm run d1 -- create wildebeest",
+    "deploy": "npm run build && npm run database:migrate && npm run pages -- deploy packages/frontend/dist --project-name=wildebeest"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "npm exec --package npm-run-all -- run-p lint pretty"
+  },
+  "packageManager": "pnpm@10.26.2"
 }
