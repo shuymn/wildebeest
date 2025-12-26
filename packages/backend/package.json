@@ -40,6 +40,6 @@
 	"dependencies": {
 		"cookie": "1.1.1",
 		"toucan-js": "4.1.1",
-		"zod": "3.25.76"
+		"zod": "4.2.1"
 	}
 }
