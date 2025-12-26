@@ -169,7 +169,7 @@ jobs:
       - name: Publish DO
         run: |
           pnpm install
-          npx wrangler deploy --config do/wrangler.toml
+          npx wrangler deploy --config packages/do/wrangler.toml
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
@@ -250,11 +250,11 @@ jobs:
             echo "[vars]"
             echo "DOMAIN = \"${{ vars.CF_DEPLOY_DOMAIN }}\""
             echo "ADMIN_EMAIL = \"${{ vars.ADMIN_EMAIL }}\""
-          } >> consumer/wrangler.toml
+          } >> packages/consumer/wrangler.toml
 
           pnpm install
           echo "******"
-          npx wrangler deploy --config consumer/wrangler.toml
+          npx wrangler deploy --config packages/consumer/wrangler.toml
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
@@ -285,4 +285,4 @@ jobs:
           echo "*** pre commands ***"
           pnpm build
           echo "******"
-          npx wrangler pages deploy --project-name=wildebeest-${{ env.NAME_SUFFIX }} frontend/dist
+          npx wrangler pages deploy --project-name=wildebeest-${{ env.NAME_SUFFIX }} packages/frontend/dist

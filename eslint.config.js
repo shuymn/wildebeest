@@ -47,7 +47,7 @@ export default [
 			'dist',
 			'tsconfig.tsbuildinfo',
 			'vite.config.ts',
-			'backend/src/database/d1/*.ts',
+			'packages/backend/src/database/d1/*.ts',
 		],
 	},
 	...compat.extends(

@@ -1,5 +1,5 @@
 packages:
-  - 'backend'
-  - 'frontend'
-  - 'consumer'
-  - 'do'
+  - 'packages/backend'
+  - 'packages/frontend'
+  - 'packages/consumer'
+  - 'packages/do'

@@ -6,8 +6,8 @@
 		"moduleResolution": "bundler",
 		"baseUrl": "./",
 		"paths": {
-			"@wildebeest/backend/*": ["./backend/src/*"],
-			"@wildebeest/frontend/*": ["./frontend/src/*"]
+			"@wildebeest/backend/*": ["./packages/backend/src/*"],
+			"@wildebeest/frontend/*": ["./packages/frontend/src/*"]
 		},
 		"types": [
 			"@cloudflare/workers-types",
@@ -27,11 +27,11 @@
 		"skipLibCheck": true
 	},
 	"references": [
-		{ "path": "./backend" },
-		{ "path": "./frontend" },
-		{ "path": "./consumer" },
-		{ "path": "./do" }
+		{ "path": "./packages/backend" },
+		{ "path": "./packages/frontend" },
+		{ "path": "./packages/consumer" },
+		{ "path": "./packages/do" }
 	],
-	"exclude": ["node_modules", "./frontend"],
-	"include": ["./**/*.ts", "./backend/src/routes/.well-known/*.ts"]
+	"exclude": ["node_modules", "./packages/frontend"],
+	"include": ["./**/*.ts", "./packages/backend/src/routes/.well-known/*.ts"]
 }

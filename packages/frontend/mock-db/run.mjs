@@ -16,8 +16,8 @@ async function main() {
 	const options = {
 		local: true,
 		persist: true,
-		config: resolve(__dirname, '../../wrangler.toml'),
-		tsconfig: resolve(__dirname, '../../tsconfig.json'),
+		config: resolve(__dirname, '../../../wrangler.toml'),
+		tsconfig: resolve(__dirname, '../../../tsconfig.json'),
 		define: ['import.meta.vitest:false', 'vitest:{}'],
 	}
 	const workerPath = resolve(__dirname, './worker.ts')
