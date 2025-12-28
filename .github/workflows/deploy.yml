@@ -4,11 +4,11 @@ on:
     branches:
       - main
     paths-ignore:
-      - '.github/workflows/**'
-      - '!.github/workflows/deploy.yml'
-      - '*.md'
-      - 'docs/**'
-      - 'renovate.json'
+      - ".github/workflows/**"
+      - "!.github/workflows/deploy.yml"
+      - "*.md"
+      - "docs/**"
+      - "renovate.json"
   repository_dispatch:
 
 jobs:
@@ -117,7 +117,7 @@ jobs:
             -e 's/^database_name = ".*"/database_name = "wildebeest-${{ env.NAME_SUFFIX }}-v1"/' \
             -e 's/^database_id = ".*"/database_id = "${{ env.d1_id }}"/' \
             wrangler.toml
-          npx wrangler d1 migrations apply --remote wildebeest-${{ env.NAME_SUFFIX }}-v1
+          npx wrangler d1 migrations apply --remote DATABASE
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
