@@ -1,0 +1,1439 @@
+openapi: 3.1.0
+
+info:
+  title: Mastodon-Compatible API
+  version: 4.5.0
+  description: |
+    This OpenAPI specification provides a supplemental, non-normative reference for the Mastodon-compatible API.
+
+    For authoritative documentation, refer to the Markdown specification documents in this repository.
+    This file is intended to assist with tooling, client generation, and API exploration.
+  license:
+    name: AGPL-3.0
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+  contact:
+    name: Mastodon
+    url: https://joinmastodon.org
+
+servers:
+  - url: https://{domain}
+    description: Mastodon instance
+    variables:
+      domain:
+        default: mastodon.social
+        description: The domain of the Mastodon instance
+
+tags:
+  - name: discovery
+    description: WebFinger, NodeInfo, and other discovery endpoints
+  - name: oauth
+    description: OAuth 2.0 authentication and authorization
+  - name: accounts
+    description: Account-related operations
+  - name: statuses
+    description: Status (post) operations
+  - name: timelines
+    description: Timeline retrieval
+  - name: notifications
+    description: Notification management
+
+security:
+  - oauth2: []
+  - bearerAuth: []
+
+paths:
+  # ==========================================================================
+  # Discovery Endpoints
+  # ==========================================================================
+
+  /.well-known/webfinger:
+    get:
+      operationId: getWebfinger
+      summary: Look up account information
+      description: |
+        Resolve a user's account via WebFinger protocol.
+        Returns a JRD (JSON Resource Descriptor) document.
+      tags:
+        - discovery
+      security: []
+      parameters:
+        - name: resource
+          in: query
+          required: true
+          description: The resource to look up (e.g., acct:user@domain)
+          schema:
+            type: string
+          example: acct:Gargron@mastodon.social
+      responses:
+        '200':
+          description: WebFinger response
+          content:
+            application/jrd+json:
+              schema:
+                type: object
+                properties:
+                  subject:
+                    type: string
+                  aliases:
+                    type: array
+                    items:
+                      type: string
+                  links:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        rel:
+                          type: string
+                        type:
+                          type: string
+                        href:
+                          type: string
+        '404':
+          description: Account not found
+
+  /.well-known/nodeinfo:
+    get:
+      operationId: getNodeInfoWellKnown
+      summary: Get NodeInfo discovery document
+      description: Returns links to NodeInfo documents for this instance.
+      tags:
+        - discovery
+      security: []
+      responses:
+        '200':
+          description: NodeInfo links
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  links:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        rel:
+                          type: string
+                        href:
+                          type: string
+
+  /nodeinfo/2.0:
+    get:
+      operationId: getNodeInfo
+      summary: Get NodeInfo 2.0 document
+      description: Returns instance metadata in NodeInfo 2.0 format.
+      tags:
+        - discovery
+      security: []
+      responses:
+        '200':
+          description: NodeInfo 2.0 document
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:
+                    type: string
+                  software:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      version:
+                        type: string
+                  protocols:
+                    type: array
+                    items:
+                      type: string
+                  usage:
+                    type: object
+                    properties:
+                      users:
+                        type: object
+                        properties:
+                          total:
+                            type: integer
+                          activeMonth:
+                            type: integer
+                          activeHalfyear:
+                            type: integer
+                      localPosts:
+                        type: integer
+                  openRegistrations:
+                    type: boolean
+
+  /.well-known/oauth-authorization-server:
+    get:
+      operationId: getOAuthAuthorizationServer
+      summary: Get OAuth Authorization Server Metadata
+      description: Returns OAuth 2.0 Authorization Server metadata as per RFC 8414.
+      tags:
+        - discovery
+      security: []
+      responses:
+        '200':
+          description: OAuth Authorization Server Metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  issuer:
+                    type: string
+                  authorization_endpoint:
+                    type: string
+                  token_endpoint:
+                    type: string
+                  revocation_endpoint:
+                    type: string
+                  scopes_supported:
+                    type: array
+                    items:
+                      type: string
+                  response_types_supported:
+                    type: array
+                    items:
+                      type: string
+                  grant_types_supported:
+                    type: array
+                    items:
+                      type: string
+
+  /.well-known/host-meta:
+    get:
+      operationId: getHostMeta
+      summary: Get host-meta document
+      description: Returns the host-meta XRD document for WebFinger discovery.
+      tags:
+        - discovery
+      security: []
+      responses:
+        '200':
+          description: host-meta document
+          content:
+            application/xrd+xml:
+              schema:
+                type: string
+
+  # ==========================================================================
+  # OAuth Endpoints
+  # ==========================================================================
+
+  /api/v1/apps:
+    post:
+      operationId: createApplication
+      summary: Register an application
+      description: Register a new OAuth application to obtain client credentials.
+      tags:
+        - oauth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - client_name
+                - redirect_uris
+              properties:
+                client_name:
+                  type: string
+                  description: Name of the application
+                redirect_uris:
+                  type: string
+                  description: Space-separated list of redirect URIs
+                scopes:
+                  type: string
+                  description: Space-separated list of scopes
+                  default: read
+                website:
+                  type: string
+                  description: URL to the application's website
+      responses:
+        '200':
+          description: Application created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Application'
+        '422':
+          description: Validation error
+
+  /oauth/authorize:
+    get:
+      operationId: authorizeUser
+      summary: Authorize a user
+      description: |
+        Displays an authorization form to the user. On approval, redirects to the
+        application's redirect_uri with an authorization code.
+      tags:
+        - oauth
+      security: []
+      parameters:
+        - name: response_type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - code
+          description: Must be "code"
+        - name: client_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The client ID from app registration
+        - name: redirect_uri
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The redirect URI registered with the application
+        - name: scope
+          in: query
+          schema:
+            type: string
+          description: Space-separated list of scopes
+        - name: state
+          in: query
+          schema:
+            type: string
+          description: Opaque value for CSRF protection
+      responses:
+        '200':
+          description: Authorization form displayed
+        '302':
+          description: Redirect to redirect_uri with code or error
+
+  /oauth/token:
+    post:
+      operationId: obtainToken
+      summary: Obtain an access token
+      description: Exchange an authorization code for an access token.
+      tags:
+        - oauth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - grant_type
+                - client_id
+                - client_secret
+                - redirect_uri
+              properties:
+                grant_type:
+                  type: string
+                  enum:
+                    - authorization_code
+                    - client_credentials
+                  description: The grant type
+                code:
+                  type: string
+                  description: Authorization code (for authorization_code grant)
+                client_id:
+                  type: string
+                  description: The client ID
+                client_secret:
+                  type: string
+                  description: The client secret
+                redirect_uri:
+                  type: string
+                  description: The redirect URI
+                scope:
+                  type: string
+                  description: Requested scopes (for client_credentials grant)
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                  token_type:
+                    type: string
+                  scope:
+                    type: string
+                  created_at:
+                    type: integer
+        '400':
+          description: Invalid request
+        '401':
+          description: Invalid client credentials
+
+  /oauth/revoke:
+    post:
+      operationId: revokeToken
+      summary: Revoke an access token
+      description: Revoke an access token to log out.
+      tags:
+        - oauth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - client_id
+                - client_secret
+                - token
+              properties:
+                client_id:
+                  type: string
+                  description: The client ID
+                client_secret:
+                  type: string
+                  description: The client secret
+                token:
+                  type: string
+                  description: The access token to revoke
+      responses:
+        '200':
+          description: Token revoked
+
+  # ==========================================================================
+  # Core Client Endpoints
+  # ==========================================================================
+
+  /api/v1/instance:
+    get:
+      operationId: getInstance
+      summary: Get instance information (v1)
+      description: Returns information about the instance.
+      tags:
+        - discovery
+      security: []
+      responses:
+        '200':
+          description: Instance information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Instance'
+
+  /api/v2/instance:
+    get:
+      operationId: getInstanceV2
+      summary: Get instance information (v2)
+      description: Returns extended information about the instance.
+      tags:
+        - discovery
+      security: []
+      responses:
+        '200':
+          description: Instance information (extended)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceV2'
+
+  /api/v1/accounts/verify_credentials:
+    get:
+      operationId: verifyCredentials
+      summary: Verify account credentials
+      description: |
+        Test to make sure that the user token works and returns the authenticated user's account.
+      tags:
+        - accounts
+      security:
+        - oauth2:
+            - read:accounts
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The authenticated user's account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialAccount'
+        '401':
+          description: Invalid or missing authorization
+
+  /api/v1/timelines/home:
+    get:
+      operationId: getHomeTimeline
+      summary: Get home timeline
+      description: |
+        View statuses from followed users and hashtags.
+      tags:
+        - timelines
+      security:
+        - oauth2:
+            - read:statuses
+        - bearerAuth: []
+      parameters:
+        - name: max_id
+          in: query
+          description: Return results older than this ID
+          schema:
+            type: string
+        - name: since_id
+          in: query
+          description: Return results newer than this ID
+          schema:
+            type: string
+        - name: min_id
+          in: query
+          description: Return results immediately newer than this ID
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum number of results to return (default 20, max 40)
+          schema:
+            type: integer
+            default: 20
+            maximum: 40
+      responses:
+        '200':
+          description: Array of statuses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Status'
+        '401':
+          description: Invalid or missing authorization
+
+  /api/v1/statuses:
+    post:
+      operationId: createStatus
+      summary: Post a new status
+      description: Publish a new status (post) to the user's account.
+      tags:
+        - statuses
+      security:
+        - oauth2:
+            - write:statuses
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  description: The text content of the status
+                media_ids:
+                  type: array
+                  items:
+                    type: string
+                  description: Array of media attachment IDs
+                poll:
+                  type: object
+                  properties:
+                    options:
+                      type: array
+                      items:
+                        type: string
+                    expires_in:
+                      type: integer
+                    multiple:
+                      type: boolean
+                    hide_totals:
+                      type: boolean
+                in_reply_to_id:
+                  type: string
+                  description: ID of the status being replied to
+                sensitive:
+                  type: boolean
+                  description: Mark status and media as sensitive
+                spoiler_text:
+                  type: string
+                  description: Content warning text
+                visibility:
+                  type: string
+                  enum:
+                    - public
+                    - unlisted
+                    - private
+                    - direct
+                  description: Visibility of the status
+                language:
+                  type: string
+                  description: ISO 639 language code
+                scheduled_at:
+                  type: string
+                  format: date-time
+                  description: Schedule status for future publication
+      responses:
+        '200':
+          description: Status created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+        '401':
+          description: Invalid or missing authorization
+        '422':
+          description: Validation error
+
+  /api/v1/notifications:
+    get:
+      operationId: getNotifications
+      summary: Get notifications
+      description: Retrieve notifications for the authenticated user.
+      tags:
+        - notifications
+      security:
+        - oauth2:
+            - read:notifications
+        - bearerAuth: []
+      parameters:
+        - name: max_id
+          in: query
+          description: Return results older than this ID
+          schema:
+            type: string
+        - name: since_id
+          in: query
+          description: Return results newer than this ID
+          schema:
+            type: string
+        - name: min_id
+          in: query
+          description: Return results immediately newer than this ID
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum number of results to return (default 40, max 80)
+          schema:
+            type: integer
+            default: 40
+            maximum: 80
+        - name: types[]
+          in: query
+          description: Filter by notification types
+          schema:
+            type: array
+            items:
+              type: string
+              enum:
+                - mention
+                - status
+                - reblog
+                - follow
+                - follow_request
+                - favourite
+                - poll
+                - update
+                - admin.sign_up
+                - admin.report
+        - name: exclude_types[]
+          in: query
+          description: Exclude notification types
+          schema:
+            type: array
+            items:
+              type: string
+        - name: account_id
+          in: query
+          description: Return only notifications from this account
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Array of notifications
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Notification'
+        '401':
+          description: Invalid or missing authorization
+
+components:
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      description: OAuth 2.0 authorization
+      flows:
+        authorizationCode:
+          authorizationUrl: /oauth/authorize
+          tokenUrl: /oauth/token
+          scopes:
+            read: Read access to all data
+            write: Write access to all data
+            follow: Follow and unfollow accounts
+            push: Receive push notifications
+            read:accounts: Read account information
+            read:blocks: Read blocks
+            read:bookmarks: Read bookmarks
+            read:favourites: Read favourites
+            read:filters: Read filters
+            read:follows: Read follows
+            read:lists: Read lists
+            read:mutes: Read mutes
+            read:notifications: Read notifications
+            read:search: Read search results
+            read:statuses: Read statuses
+            write:accounts: Modify account information
+            write:blocks: Manage blocks
+            write:bookmarks: Manage bookmarks
+            write:conversations: Manage conversations
+            write:favourites: Manage favourites
+            write:filters: Manage filters
+            write:follows: Manage follows
+            write:lists: Manage lists
+            write:media: Upload media
+            write:mutes: Manage mutes
+            write:notifications: Manage notifications
+            write:reports: Submit reports
+            write:statuses: Publish statuses
+            admin:read: Admin read access
+            admin:write: Admin write access
+
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Bearer token authentication using an OAuth access token
+
+  schemas:
+    Account:
+      type: object
+      description: Represents a user account on Mastodon
+      properties:
+        id:
+          type: string
+          description: The account ID
+        username:
+          type: string
+          description: The username (without domain)
+        acct:
+          type: string
+          description: The webfinger acct: URI (username for local, user@domain for remote)
+        display_name:
+          type: string
+          description: The display name
+        note:
+          type: string
+          description: Biography/description (may contain HTML)
+        url:
+          type: string
+          format: uri
+          description: URL to the account's profile page
+        avatar:
+          type: string
+          format: uri
+          description: URL to the account's avatar image
+        avatar_static:
+          type: string
+          format: uri
+          description: URL to the static avatar image (for animated avatars)
+        header:
+          type: string
+          format: uri
+          description: URL to the account's header image
+        header_static:
+          type: string
+          format: uri
+          description: URL to the static header image
+        locked:
+          type: boolean
+          description: Whether the account requires follow requests
+        fields:
+          type: array
+          description: Custom profile fields
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              value:
+                type: string
+              verified_at:
+                type: string
+                format: date-time
+                nullable: true
+        emojis:
+          type: array
+          description: Custom emoji used in the account's profile
+          items:
+            $ref: '#/components/schemas/CustomEmoji'
+        bot:
+          type: boolean
+          description: Whether the account is a bot
+        group:
+          type: boolean
+          description: Whether the account represents a group
+        discoverable:
+          type: boolean
+          nullable: true
+          description: Whether the account is discoverable
+        created_at:
+          type: string
+          format: date-time
+          description: When the account was created
+        last_status_at:
+          type: string
+          format: date
+          nullable: true
+          description: Date of the last status posted
+        statuses_count:
+          type: integer
+          description: Number of statuses posted
+        followers_count:
+          type: integer
+          description: Number of followers
+        following_count:
+          type: integer
+          description: Number of accounts being followed
+
+    CredentialAccount:
+      allOf:
+        - $ref: '#/components/schemas/Account'
+        - type: object
+          description: The authenticated user's account with additional fields
+          properties:
+            source:
+              type: object
+              description: Source values for editing the account
+              properties:
+                privacy:
+                  type: string
+                  enum:
+                    - public
+                    - unlisted
+                    - private
+                    - direct
+                sensitive:
+                  type: boolean
+                language:
+                  type: string
+                note:
+                  type: string
+                fields:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      value:
+                        type: string
+            role:
+              type: object
+              nullable: true
+              description: The user's role (if any)
+              properties:
+                id:
+                  type: string
+                name:
+                  type: string
+                permissions:
+                  type: string
+                color:
+                  type: string
+                highlighted:
+                  type: boolean
+
+    Status:
+      type: object
+      description: Represents a status (post) on Mastodon
+      properties:
+        id:
+          type: string
+          description: The status ID
+        uri:
+          type: string
+          format: uri
+          description: URI of the status (for federation)
+        created_at:
+          type: string
+          format: date-time
+          description: When the status was created
+        account:
+          $ref: '#/components/schemas/Account'
+        content:
+          type: string
+          description: HTML-formatted content of the status
+        visibility:
+          type: string
+          enum:
+            - public
+            - unlisted
+            - private
+            - direct
+          description: Visibility level of the status
+        sensitive:
+          type: boolean
+          description: Whether media attachments are marked sensitive
+        spoiler_text:
+          type: string
+          description: Content warning text
+        media_attachments:
+          type: array
+          description: Media attached to the status
+          items:
+            $ref: '#/components/schemas/MediaAttachment'
+        application:
+          type: object
+          nullable: true
+          description: Application used to post the status
+          properties:
+            name:
+              type: string
+            website:
+              type: string
+              format: uri
+              nullable: true
+        mentions:
+          type: array
+          description: Accounts mentioned in the status
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              username:
+                type: string
+              acct:
+                type: string
+              url:
+                type: string
+                format: uri
+        tags:
+          type: array
+          description: Hashtags used in the status
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              url:
+                type: string
+                format: uri
+        emojis:
+          type: array
+          description: Custom emoji used in the status
+          items:
+            $ref: '#/components/schemas/CustomEmoji'
+        reblogs_count:
+          type: integer
+          description: Number of boosts
+        favourites_count:
+          type: integer
+          description: Number of favourites
+        replies_count:
+          type: integer
+          description: Number of replies
+        url:
+          type: string
+          format: uri
+          nullable: true
+          description: URL to the status page
+        in_reply_to_id:
+          type: string
+          nullable: true
+          description: ID of the status being replied to
+        in_reply_to_account_id:
+          type: string
+          nullable: true
+          description: ID of the account being replied to
+        reblog:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/Status'
+          description: The boosted status (if this is a boost)
+        poll:
+          nullable: true
+          $ref: '#/components/schemas/Poll'
+        card:
+          nullable: true
+          $ref: '#/components/schemas/PreviewCard'
+        language:
+          type: string
+          nullable: true
+          description: ISO 639 language code
+        text:
+          type: string
+          nullable: true
+          description: Plain-text content (for edit history)
+        edited_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the status was last edited
+        favourited:
+          type: boolean
+          description: Whether the authenticated user has favourited this status
+        reblogged:
+          type: boolean
+          description: Whether the authenticated user has boosted this status
+        muted:
+          type: boolean
+          description: Whether the authenticated user has muted this conversation
+        bookmarked:
+          type: boolean
+          description: Whether the authenticated user has bookmarked this status
+        pinned:
+          type: boolean
+          description: Whether the status is pinned to the account's profile
+
+    MediaAttachment:
+      type: object
+      description: Represents a media attachment
+      properties:
+        id:
+          type: string
+          description: The attachment ID
+        type:
+          type: string
+          enum:
+            - unknown
+            - image
+            - gifv
+            - video
+            - audio
+          description: The type of media
+        url:
+          type: string
+          format: uri
+          description: URL of the full-size media
+        preview_url:
+          type: string
+          format: uri
+          nullable: true
+          description: URL of the preview/thumbnail
+        remote_url:
+          type: string
+          format: uri
+          nullable: true
+          description: URL of the remote media (for federated content)
+        text_url:
+          type: string
+          format: uri
+          nullable: true
+          description: Shortened URL for the media (deprecated)
+        meta:
+          type: object
+          nullable: true
+          description: Metadata about the media
+          properties:
+            original:
+              type: object
+              properties:
+                width:
+                  type: integer
+                height:
+                  type: integer
+                size:
+                  type: string
+                aspect:
+                  type: number
+            small:
+              type: object
+              properties:
+                width:
+                  type: integer
+                height:
+                  type: integer
+                size:
+                  type: string
+                aspect:
+                  type: number
+            focus:
+              type: object
+              properties:
+                x:
+                  type: number
+                y:
+                  type: number
+        description:
+          type: string
+          nullable: true
+          description: Alt text description
+        blurhash:
+          type: string
+          nullable: true
+          description: BlurHash for the media
+
+    Notification:
+      type: object
+      description: Represents a notification
+      properties:
+        id:
+          type: string
+          description: The notification ID
+        type:
+          type: string
+          enum:
+            - mention
+            - status
+            - reblog
+            - follow
+            - follow_request
+            - favourite
+            - poll
+            - update
+            - admin.sign_up
+            - admin.report
+          description: The type of notification
+        created_at:
+          type: string
+          format: date-time
+          description: When the notification was created
+        account:
+          $ref: '#/components/schemas/Account'
+          description: The account that performed the action
+        status:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/Status'
+          description: The status associated with the notification (if applicable)
+        report:
+          type: object
+          nullable: true
+          description: The report associated with admin.report notifications
+
+    Instance:
+      type: object
+      description: Represents instance information (v1 format)
+      properties:
+        uri:
+          type: string
+          description: The domain of the instance
+        title:
+          type: string
+          description: The title of the instance
+        short_description:
+          type: string
+          description: A short description of the instance
+        description:
+          type: string
+          description: A longer description of the instance
+        email:
+          type: string
+          format: email
+          description: Contact email for the instance
+        version:
+          type: string
+          description: The version of Mastodon running on the instance
+        urls:
+          type: object
+          properties:
+            streaming_api:
+              type: string
+              format: uri
+        stats:
+          type: object
+          properties:
+            user_count:
+              type: integer
+            status_count:
+              type: integer
+            domain_count:
+              type: integer
+        thumbnail:
+          type: string
+          format: uri
+          nullable: true
+        languages:
+          type: array
+          items:
+            type: string
+        registrations:
+          type: boolean
+        approval_required:
+          type: boolean
+        invites_enabled:
+          type: boolean
+        configuration:
+          type: object
+          description: Instance configuration limits
+          properties:
+            statuses:
+              type: object
+              properties:
+                max_characters:
+                  type: integer
+                max_media_attachments:
+                  type: integer
+                characters_reserved_per_url:
+                  type: integer
+            media_attachments:
+              type: object
+              properties:
+                supported_mime_types:
+                  type: array
+                  items:
+                    type: string
+                image_size_limit:
+                  type: integer
+                image_matrix_limit:
+                  type: integer
+                video_size_limit:
+                  type: integer
+                video_frame_rate_limit:
+                  type: integer
+                video_matrix_limit:
+                  type: integer
+            polls:
+              type: object
+              properties:
+                max_options:
+                  type: integer
+                max_characters_per_option:
+                  type: integer
+                min_expiration:
+                  type: integer
+                max_expiration:
+                  type: integer
+        contact_account:
+          nullable: true
+          $ref: '#/components/schemas/Account'
+        rules:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              text:
+                type: string
+
+    InstanceV2:
+      type: object
+      description: Represents instance information (v2 format with extended details)
+      properties:
+        domain:
+          type: string
+          description: The domain of the instance
+        title:
+          type: string
+          description: The title of the instance
+        version:
+          type: string
+          description: The version of Mastodon running on the instance
+        source_url:
+          type: string
+          format: uri
+          description: URL to the source code
+        description:
+          type: string
+          description: A description of the instance
+        usage:
+          type: object
+          properties:
+            users:
+              type: object
+              properties:
+                active_month:
+                  type: integer
+        thumbnail:
+          type: object
+          properties:
+            url:
+              type: string
+              format: uri
+            blurhash:
+              type: string
+            versions:
+              type: object
+        languages:
+          type: array
+          items:
+            type: string
+        configuration:
+          type: object
+          description: Instance configuration
+        registrations:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+            approval_required:
+              type: boolean
+            message:
+              type: string
+              nullable: true
+        contact:
+          type: object
+          properties:
+            email:
+              type: string
+              format: email
+            account:
+              $ref: '#/components/schemas/Account'
+        rules:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              text:
+                type: string
+              hint:
+                type: string
+
+    Application:
+      type: object
+      description: Represents an OAuth application
+      properties:
+        id:
+          type: string
+          description: The application ID
+        name:
+          type: string
+          description: The name of the application
+        website:
+          type: string
+          format: uri
+          nullable: true
+          description: The website of the application
+        vapid_key:
+          type: string
+          description: VAPID key for push notifications
+        client_id:
+          type: string
+          description: Client ID for OAuth (only returned on creation)
+        client_secret:
+          type: string
+          description: Client secret for OAuth (only returned on creation)
+
+    CustomEmoji:
+      type: object
+      description: Represents a custom emoji
+      properties:
+        shortcode:
+          type: string
+          description: The emoji shortcode
+        url:
+          type: string
+          format: uri
+          description: URL to the emoji image
+        static_url:
+          type: string
+          format: uri
+          description: URL to the static emoji image
+        visible_in_picker:
+          type: boolean
+          description: Whether the emoji is shown in the picker
+        category:
+          type: string
+          description: Category for the emoji
+
+    Poll:
+      type: object
+      description: Represents a poll
+      properties:
+        id:
+          type: string
+          description: The poll ID
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the poll ends
+        expired:
+          type: boolean
+          description: Whether the poll has ended
+        multiple:
+          type: boolean
+          description: Whether multiple choices are allowed
+        votes_count:
+          type: integer
+          description: Total number of votes
+        voters_count:
+          type: integer
+          nullable: true
+          description: Number of unique voters
+        options:
+          type: array
+          items:
+            type: object
+            properties:
+              title:
+                type: string
+              votes_count:
+                type: integer
+                nullable: true
+        emojis:
+          type: array
+          items:
+            $ref: '#/components/schemas/CustomEmoji'
+        voted:
+          type: boolean
+          description: Whether the authenticated user has voted
+        own_votes:
+          type: array
+          items:
+            type: integer
+          description: Indices of options the authenticated user voted for
+
+    PreviewCard:
+      type: object
+      description: Represents a link preview card
+      properties:
+        url:
+          type: string
+          format: uri
+          description: URL of the linked resource
+        title:
+          type: string
+          description: Title of the linked resource
+        description:
+          type: string
+          description: Description of the linked resource
+        type:
+          type: string
+          enum:
+            - link
+            - photo
+            - video
+            - rich
+          description: Type of preview card
+        author_name:
+          type: string
+          description: Author of the linked resource
+        author_url:
+          type: string
+          format: uri
+          description: URL to the author's profile
+        provider_name:
+          type: string
+          description: Provider of the linked resource
+        provider_url:
+          type: string
+          format: uri
+          description: URL to the provider
+        html:
+          type: string
+          description: HTML for embedding (for video/rich cards)
+        width:
+          type: integer
+          description: Width of the preview image
+        height:
+          type: integer
+          description: Height of the preview image
+        image:
+          type: string
+          format: uri
+          nullable: true
+          description: URL of the preview image
+        embed_url:
+          type: string
+          format: uri
+          description: URL for embedding
+        blurhash:
+          type: string
+          nullable: true
+          description: BlurHash for the preview image
