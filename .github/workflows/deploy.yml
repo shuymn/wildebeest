@@ -4,11 +4,11 @@ on:
     branches:
       - main
     paths-ignore:
-      - '.github/workflows/**'
-      - '!.github/workflows/deploy.yml'
-      - '*.md'
-      - 'docs/**'
-      - 'renovate.json'
+      - ".github/workflows/**"
+      - "!.github/workflows/deploy.yml"
+      - "*.md"
+      - "docs/**"
+      - "renovate.json"
   repository_dispatch:
 
 jobs:
