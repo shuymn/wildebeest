@@ -130,7 +130,7 @@ jobs:
 
       - name: retrieve Terraform state KV namespace
         run: |
-          npx wrangler kv:namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv="$1}' >> "$GITHUB_ENV"
+          npx wrangler kv namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv="$1}' >> "$GITHUB_ENV"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
@@ -142,7 +142,7 @@ jobs:
       - name: download Terraform state
         if: ${{ env.tfstate_kv != '' }}
         run: |
-          npx wrangler kv:key get --remote --namespace-id="${{ env.tfstate_kv }}" terraform.tfstate > ./tf/terraform.tfstate
+          npx wrangler kv key get --remote --namespace-id="${{ env.tfstate_kv }}" terraform.tfstate > ./tf/terraform.tfstate
           chmod 777 ./tf/terraform.tfstate
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
@@ -151,7 +151,7 @@ jobs:
       - name: download VAPID keys
         if: ${{ env.tfstate_kv != '' }}
         continue-on-error: true
-        run: npx wrangler kv:key get --remote --namespace-id="${{ env.tfstate_kv }}" vapid_jwk | jq . > ./tf/vapid_jwk
+        run: npx wrangler kv key get --remote --namespace-id="${{ env.tfstate_kv }}" vapid_jwk | jq . > ./tf/vapid_jwk
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
@@ -201,19 +201,19 @@ jobs:
 
       - name: retrieve Terraform state KV namespace
         if: ${{ env.tfstate_kv == '' }}
-        run: npx wrangler kv:namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv="$1}' >> "$GITHUB_ENV"
+        run: npx wrangler kv namespace list | jq -r '.[] | select( .title == "wildebeest-terraform-${{ env.NAME_SUFFIX }}-state" ) | .id' | awk '{print "tfstate_kv="$1}' >> "$GITHUB_ENV"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: store VAPID keys state
-        run: npx wrangler kv:key put --remote --namespace-id="${{ env.tfstate_kv }}" vapid_jwk --path=./tf/vapid_jwk
+        run: npx wrangler kv key put --remote --namespace-id="${{ env.tfstate_kv }}" vapid_jwk --path=./tf/vapid_jwk
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: store Terraform state
-        run: npx wrangler kv:key put --remote --namespace-id="${{ env.tfstate_kv }}" terraform.tfstate --path=./tf/terraform.tfstate
+        run: npx wrangler kv key put --remote --namespace-id="${{ env.tfstate_kv }}" terraform.tfstate --path=./tf/terraform.tfstate
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
