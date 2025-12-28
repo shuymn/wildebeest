@@ -111,7 +111,7 @@ jobs:
           pnpm run database:migrate --local
           DB_FILE=$(find .wrangler/state/v3/d1/miniflare-D1DatabaseObject -name "*.sqlite" -type f | head -n 1)
           # Drop Cloudflare internal table to avoid sqlite3def parser error with 'key' column
-          sqlite3 "${DB_FILE:?}" "DROP TABLE IF EXISTS _cf_KV;"
+          sqlite3 "${DB_FILE:?}" "DROP TABLE IF EXISTS _cf_KV; DROP TABLE IF EXISTS _cf_METADATA;"
           sqlite3def --enable-drop --config sqldef.yml --dry-run \
             "${DB_FILE:?}" < schema.sql | head -n 1 | grep -E '^-- Nothing is modified --$'
 
