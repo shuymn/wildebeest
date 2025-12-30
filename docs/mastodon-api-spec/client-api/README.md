@@ -42,6 +42,25 @@ Some endpoints MAY be accessed without authentication:
 
 Servers MAY disable unauthenticated API access via the `DISALLOW_UNAUTHENTICATED_API_ACCESS` environment variable.
 
+## Invites
+
+### GET /invite/:invite_code
+
+Retrieve invite information for an invite code.
+
+This endpoint is only served for JSON requests.
+
+**Authentication:** None required
+
+**Response Example:**
+
+```json
+{
+  "invite_code": "abcd1234",
+  "instance_api_url": "https://mastodon.example/api/v2/instance"
+}
+```
+
 ## Common Headers
 
 ### Request Headers
