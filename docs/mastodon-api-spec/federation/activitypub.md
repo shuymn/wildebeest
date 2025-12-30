@@ -68,6 +68,7 @@ Serves the actor's published activities.
 
 ```
 GET /users/{username}/outbox
+GET /actor/outbox
 ```
 
 ### Request
@@ -155,6 +156,26 @@ Returns the ActivityPub actor document.
 
 ```
 GET /users/{username}
+```
+
+### Alternative Actor URL (by ID)
+
+Mastodon also serves the same actor resources under an alternative path using the internal numeric ID.
+
+```
+GET /ap/users/{id}
+POST /ap/users/{id}/inbox
+GET /ap/users/{id}/outbox
+GET /ap/users/{id}/followers
+GET /ap/users/{id}/following
+GET /ap/users/{id}/collections/{id}
+GET /ap/users/{id}/followers_synchronization
+GET /ap/users/{id}/quote_authorizations/{id}
+GET /ap/users/{id}/statuses/{id}
+GET /ap/users/{id}/statuses/{id}/activity
+GET /ap/users/{id}/statuses/{id}/replies
+GET /ap/users/{id}/statuses/{id}/likes
+GET /ap/users/{id}/statuses/{id}/shares
 ```
 
 ### Response
@@ -381,6 +402,49 @@ GET /users/{username}/statuses/{id}/activity
 ```
 
 Returns the `Create` activity that created the status.
+
+### Replies Collection
+
+```
+GET /users/{username}/statuses/{id}/replies
+```
+
+Returns an ActivityPub collection of replies.
+
+### Likes Collection
+
+```
+GET /users/{username}/statuses/{id}/likes
+```
+
+Returns an ActivityPub collection of likes.
+
+### Shares Collection
+
+```
+GET /users/{username}/statuses/{id}/shares
+```
+
+Returns an ActivityPub collection of shares.
+
+### Embedded Status HTML
+
+```
+GET /users/{username}/statuses/{id}/embed
+```
+
+Returns an embeddable HTML representation of the status.
+
+## Context Endpoints
+
+Conversation context endpoints expose a collection of related statuses.
+
+```
+GET /contexts/{id}
+GET /contexts/{id}/items
+```
+
+The `id` parameter is formatted as `{account_id}-{status_id}`.
 
 ## Common Headers
 

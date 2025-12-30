@@ -63,11 +63,22 @@ Actors (users) are represented by their ActivityPub profile URL:
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/users/{username}` | GET | Optional* | Actor profile |
-| `/@{username}/inbox` | POST | Required | Receive activities |
+| `/users/{username}/inbox` | POST | Required | Receive activities (user inbox) |
+| `/actor/inbox` | POST | Required | Receive activities (instance actor inbox) |
+| `/inbox` | POST | Required | Receive activities (shared inbox) |
 | `/users/{username}/outbox` | GET | Optional* | List activities |
+| `/actor/outbox` | GET | Optional* | Instance actor outbox |
 | `/users/{username}/followers` | GET | Optional* | Followers collection |
 | `/users/{username}/following` | GET | Optional* | Following collection |
 | `/users/{username}/collections/featured` | GET | Optional* | Pinned posts |
+| `/users/{username}/collections/tags` | GET | Optional* | Featured tags |
+| `/users/{username}/followers_synchronization` | GET | Required | Followers synchronization (signed) |
+| `/users/{username}/quote_authorizations/{id}` | GET | Optional* | Quote authorization lookup |
+| `/users/{username}/statuses/{id}` | GET | Optional* | Status as ActivityPub `Note` |
+| `/users/{username}/statuses/{id}/activity` | GET | Optional* | Status as ActivityPub `Create` activity |
+| `/users/{username}/statuses/{id}/replies` | GET | Optional* | Replies collection |
+| `/users/{username}/statuses/{id}/likes` | GET | Optional* | Likes collection |
+| `/users/{username}/statuses/{id}/shares` | GET | Optional* | Shares collection |
 
 *Signature required in Authorized Fetch mode
 

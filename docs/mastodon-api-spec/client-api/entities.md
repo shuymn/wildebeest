@@ -393,6 +393,229 @@ Represents a notification of an event.
 
 ---
 
+## NotificationPolicy (v1)
+
+Represents notification filtering policy (v1 format).
+
+**Serializer Reference:** [`app/serializers/rest/v1/notification_policy_serializer.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/serializers/rest/v1/notification_policy_serializer.rb)
+
+### Attributes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `filter_not_following` | Boolean | Filter notifications from accounts you do not follow |
+| `filter_not_followers` | Boolean | Filter notifications from accounts that do not follow you |
+| `filter_new_accounts` | Boolean | Filter notifications from new accounts |
+| `filter_private_mentions` | Boolean | Filter private mention notifications |
+| `summary` | Object | Counts of pending requests/notifications |
+
+---
+
+## NotificationPolicy
+
+Represents notification filtering policy (v2 format).
+
+**Serializer Reference:** [`app/serializers/rest/notification_policy_serializer.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/serializers/rest/notification_policy_serializer.rb)
+
+### Attributes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `for_not_following` | Boolean | Filtering for accounts you do not follow |
+| `for_not_followers` | Boolean | Filtering for accounts that do not follow you |
+| `for_new_accounts` | Boolean | Filtering for new accounts |
+| `for_private_mentions` | Boolean | Filtering for private mentions |
+| `for_limited_accounts` | Boolean | Filtering for limited accounts |
+| `summary` | Object | Counts of pending requests/notifications |
+
+---
+
+## NotificationRequest
+
+Represents a pending notification request.
+
+**Serializer Reference:** [`app/serializers/rest/notification_request_serializer.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/serializers/rest/notification_request_serializer.rb)
+
+### Attributes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | String | Request ID |
+| `created_at` | String | Creation timestamp |
+| `updated_at` | String | Last update timestamp |
+| `notifications_count` | String | Number of notifications in the request |
+| `account` | Account | Requesting account |
+| `last_status` | Status | Most recent status associated with the request |
+
+---
+
+## NotificationGroup
+
+Represents a grouped notification entry (v2 notifications).
+
+**Serializer Reference:** [`app/serializers/rest/notification_group_serializer.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/serializers/rest/notification_group_serializer.rb)
+
+### Attributes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `group_key` | String | Grouping key |
+| `notifications_count` | Integer | Number of notifications in the group |
+| `type` | String | Group type |
+| `most_recent_notification_id` | String | ID of the most recent notification in the group |
+| `sample_account_ids` | Array | Sample account IDs in the group |
+| `status_id` | String | Target status ID (for status-related types, nullable) |
+| `page_min_id` | String | Pagination min ID for the group page (nullable) |
+| `page_max_id` | String | Pagination max ID for the group page (nullable) |
+| `latest_page_notification_at` | String | Timestamp of most recent notification in page (nullable) |
+
+---
+
+## DedupNotificationGroupResponse
+
+Response envelope for grouped notifications (v2 notifications).
+
+**Serializer Reference:** [`app/serializers/rest/dedup_notification_group_serializer.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/serializers/rest/dedup_notification_group_serializer.rb)
+
+### Attributes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `accounts` | Array | Array of [Account entities](#account) |
+| `partial_accounts` | Array | Array of partially expanded accounts (optional) |
+| `statuses` | Array | Array of [Status entities](#status) |
+| `notification_groups` | Array | Array of [NotificationGroup entities](#notificationgroup) |
+
+---
+
+## StatusSource
+
+Represents the source text of a status.
+
+**Serializer Reference:** [`app/serializers/rest/status_source_serializer.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/serializers/rest/status_source_serializer.rb)
+
+### Attributes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | String | Status ID |
+| `text` | String | Source text |
+| `spoiler_text` | String | Source spoiler text |
+
+---
+
+## StatusEdit
+
+Represents a historical edit of a status.
+
+**Serializer Reference:** [`app/serializers/rest/status_edit_serializer.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/serializers/rest/status_edit_serializer.rb)
+
+### Attributes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `created_at` | String | Edit timestamp |
+| `content` | String | HTML content at that revision |
+| `spoiler_text` | String | Spoiler text at that revision |
+| `sensitive` | Boolean | Sensitivity flag |
+| `account` | Account | Editing account |
+| `media_attachments` | Array | Array of [MediaAttachment entities](#mediaattachment) |
+| `emojis` | Array | Array of custom emoji |
+| `poll` | Object | Poll snapshot (optional) |
+| `quote` | Quote | Quote snapshot (optional) |
+
+---
+
+## Translation
+
+Represents a machine translation result for a status.
+
+**Serializer Reference:** [`app/serializers/rest/translation_serializer.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/serializers/rest/translation_serializer.rb)
+
+### Attributes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `detected_source_language` | String | Detected source language |
+| `language` | String | Output language |
+| `provider` | String | Translation provider |
+| `spoiler_text` | String | Translated spoiler text |
+| `content` | String | Translated HTML content |
+| `poll` | Object | Translated poll fields (optional) |
+| `media_attachments` | Array | Media attachment descriptions (optional) |
+
+---
+
+## Filter (v1)
+
+Represents a legacy filter keyword (v1 filters API).
+
+**Serializer Reference:** [`app/serializers/rest/v1/filter_serializer.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/serializers/rest/v1/filter_serializer.rb)
+
+### Attributes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | String | Filter keyword ID |
+| `phrase` | String | Filter phrase |
+| `context` | Array | Filter contexts |
+| `whole_word` | Boolean | Whole-word matching |
+| `expires_at` | String | Expiration time (nullable) |
+| `irreversible` | Boolean | Whether the filter is irreversible |
+
+---
+
+## Filter
+
+Represents a filter category (v2 filters API).
+
+**Serializer Reference:** [`app/serializers/rest/filter_serializer.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/serializers/rest/filter_serializer.rb)
+
+### Attributes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | String | Filter ID |
+| `title` | String | Filter title |
+| `context` | Array | Filter contexts |
+| `expires_at` | String | Expiration time (nullable) |
+| `filter_action` | String | Filter action |
+| `keywords` | Array | Array of [FilterKeyword entities](#filterkeyword) (optional) |
+| `statuses` | Array | Array of [FilterStatus entities](#filterstatus) (optional) |
+
+---
+
+## FilterKeyword
+
+Represents a keyword rule within a filter.
+
+**Serializer Reference:** [`app/serializers/rest/filter_keyword_serializer.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/serializers/rest/filter_keyword_serializer.rb)
+
+### Attributes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | String | Keyword ID |
+| `keyword` | String | Keyword text |
+| `whole_word` | Boolean | Whole-word matching |
+
+---
+
+## FilterStatus
+
+Represents a status-specific rule within a filter.
+
+**Serializer Reference:** [`app/serializers/rest/filter_status_serializer.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/serializers/rest/filter_status_serializer.rb)
+
+### Attributes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | String | Rule ID |
+| `status_id` | String | Status ID |
+
+---
+
 ## Relationship
 
 Represents the relationship between accounts.
@@ -438,6 +661,90 @@ Represents the relationship between accounts.
   "domain_blocking": false,
   "endorsed": false,
   "note": "Met at conference"
+}
+```
+
+---
+
+## List
+
+Represents a user-defined list.
+
+**Serializer Reference:** [`app/serializers/rest/list_serializer.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/serializers/rest/list_serializer.rb)
+
+### Attributes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | String | List ID |
+| `title` | String | List title |
+| `replies_policy` | String | `list`, `followed`, or `none` |
+| `exclusive` | Boolean | Whether the list is exclusive |
+
+### Example
+
+```json
+{
+  "id": "123",
+  "title": "Friends",
+  "replies_policy": "list",
+  "exclusive": false
+}
+```
+
+---
+
+## FeaturedTag
+
+Represents a featured hashtag on a user profile.
+
+**Serializer Reference:** [`app/serializers/rest/featured_tag_serializer.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/serializers/rest/featured_tag_serializer.rb)
+
+### Attributes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | String | Featured tag ID |
+| `name` | String | Tag display name |
+| `url` | String | URL of the account's tag timeline |
+| `statuses_count` | String | Number of statuses using this tag |
+| `last_status_at` | String | Date of most recent status (YYYY-MM-DD, nullable) |
+
+### Example
+
+```json
+{
+  "id": "1",
+  "name": "rails",
+  "url": "https://example.com/@alice/tagged/rails",
+  "statuses_count": "42",
+  "last_status_at": "2024-01-15"
+}
+```
+
+---
+
+## FamiliarFollowers
+
+Represents a list of accounts you follow that also follow a given account.
+
+**Serializer Reference:** [`app/serializers/rest/familiar_followers_serializer.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/serializers/rest/familiar_followers_serializer.rb)
+
+### Attributes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | String | Target account ID |
+| `accounts` | Array | Array of [Account entities](#account) |
+
+### Example
+
+```json
+{
+  "id": "123456",
+  "accounts": [
+    { "id": "999", "username": "bob", "acct": "bob", "display_name": "Bob", "locked": false, "bot": false, "created_at": "2023-01-15T00:00:00.000Z", "note": "", "url": "https://example.com/@bob", "uri": "https://example.com/users/bob", "avatar": "https://example.com/avatars/bob.png", "avatar_static": "https://example.com/avatars/bob.png", "header": "https://example.com/headers/bob.png", "header_static": "https://example.com/headers/bob.png", "followers_count": 0, "following_count": 0, "statuses_count": 0, "last_status_at": null, "hide_collections": false, "emojis": [], "fields": [] }
+  ]
 }
 ```
 

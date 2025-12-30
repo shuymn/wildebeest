@@ -69,6 +69,12 @@ Direct users to the authorization endpoint:
 GET /oauth/authorize
 ```
 
+The authorization UI also submits the approval decision to:
+
+```
+POST /oauth/authorize
+```
+
 **Query Parameters:**
 
 | Parameter | Required | Description |
@@ -271,6 +277,41 @@ Returns 200 OK with empty body on success.
 Token revocation also removes any associated push subscriptions.
 
 **Implementation Reference:** [app/controllers/oauth/tokens_controller.rb](https://github.com/mastodon/mastodon/blob/v4.5.3/app/controllers/oauth/tokens_controller.rb)
+
+---
+
+## UserInfo
+
+### GET /oauth/userinfo
+
+Retrieve basic account information for the authenticated user.
+
+**Authentication:** Bearer token required
+**Scopes:** `profile`
+
+**Response:** UserInfo object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `iss` | String | Issuer (instance root URL) |
+| `sub` | String | Subject (ActivityPub actor URI) |
+| `name` | String | Display name |
+| `preferred_username` | String | Local username |
+| `profile` | String | Profile URL |
+| `picture` | String | Avatar URL |
+
+**Implementation Reference:** [app/controllers/oauth/userinfo_controller.rb](https://github.com/mastodon/mastodon/blob/v4.5.3/app/controllers/oauth/userinfo_controller.rb)
+
+### POST /oauth/userinfo
+
+Servers also support POST for compatibility with OpenID Connect UserInfo semantics.
+
+**Authentication:** Bearer token required
+**Scopes:** `profile`
+
+**Response:** Same as GET.
+
+---
 
 ## Verify Application Credentials
 
