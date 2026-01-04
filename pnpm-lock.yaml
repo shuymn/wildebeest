@@ -33,8 +33,8 @@ importers:
         specifier: 4.1.1
         version: 4.1.1
       zod:
-        specifier: 3.25.76
-        version: 3.25.76
+        specifier: 4.3.4
+        version: 4.3.4
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: 0.11.1
@@ -3626,6 +3626,9 @@ packages:
 
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
+
+  zod@4.3.4:
+    resolution: {integrity: sha512-Zw/uYiiyF6pUT1qmKbZziChgNPRu+ZRneAsMUDU6IwmXdWt5JwcUfy2bvLOCUtz5UniaN/Zx5aFttZYbYc7O/A==}
 
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
@@ -7493,5 +7496,7 @@ snapshots:
   zod@3.25.48: {}
 
   zod@3.25.76: {}
+
+  zod@4.3.4: {}
 
   zwitch@2.0.4: {}
