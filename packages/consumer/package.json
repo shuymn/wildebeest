@@ -5,7 +5,7 @@
 		"preinstall": "npx only-allow pnpm"
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "4.20260101.0",
+		"@cloudflare/workers-types": "4.20260103.0",
 		"toucan-js": "4.1.1",
 		"typescript": "5.9.3",
 		"wrangler": "4.54.0"
