@@ -70,8 +70,8 @@ importers:
         specifier: 4.3.0
         version: 4.3.0(@typescript-eslint/eslint-plugin@8.53.0(@typescript-eslint/parser@8.53.0(eslint@9.39.2(jiti@1.21.7))(typescript@5.9.3))(eslint@9.39.2(jiti@1.21.7))(typescript@5.9.3))(eslint@9.39.2(jiti@1.21.7))
       hono:
-        specifier: 4.11.4
-        version: 4.11.4
+        specifier: 4.11.7
+        version: 4.11.7
       simple-git-hooks:
         specifier: 2.13.1
         version: 2.13.1
@@ -162,8 +162,8 @@ importers:
         specifier: 1.18.0
         version: 1.18.0(eslint@9.39.2(jiti@1.21.7))(typescript@5.9.3)
       hono:
-        specifier: 4.11.4
-        version: 4.11.4
+        specifier: 4.11.7
+        version: 4.11.7
       lorem-ipsum:
         specifier: 2.0.8
         version: 2.0.8
@@ -2318,8 +2318,8 @@ packages:
   hast-util-whitespace@3.0.0:
     resolution: {integrity: sha512-88JUN06ipLwsnv+dVn+OIYOvAuvBMy/Qoi6O7mQHxdPXpjy+Cd6xRkWwux7DKO+4sYILtLBRIKgsdpS2gQc7qw==}
 
-  hono@4.11.4:
-    resolution: {integrity: sha512-U7tt8JsyrxSRKspfhtLET79pU8K+tInj5QZXs1jSugO1Vq5dFj3kmZsRldo29mTBfcjDRVRXrEZ6LS63Cog9ZA==}
+  hono@4.11.7:
+    resolution: {integrity: sha512-l7qMiNee7t82bH3SeyUCt9UF15EVmaBvsppY2zQtrbIhl/yzBTny+YUxsVjSjQ6gaqaeVtZmGocom8TzBlA4Yw==}
     engines: {node: '>=16.9.0'}
 
   html-escaper@2.0.2:
@@ -5770,7 +5770,7 @@ snapshots:
     dependencies:
       '@types/hast': 3.0.4
 
-  hono@4.11.4: {}
+  hono@4.11.7: {}
 
   html-escaper@2.0.2: {}
 
