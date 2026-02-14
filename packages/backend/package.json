@@ -20,7 +20,7 @@
 		"@cloudflare/vitest-pool-workers": "0.12.11",
 		"@cloudflare/workers-types": "4.20260111.0",
 		"@types/cookie": "1.0.0",
-		"@types/node": "24.10.7",
+		"@types/node": "24.10.13",
 		"@typescript-eslint/eslint-plugin": "8.53.0",
 		"@typescript-eslint/parser": "8.53.0",
 		"@vitest/coverage-istanbul": "3.2.4",
