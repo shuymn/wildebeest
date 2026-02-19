@@ -31,7 +31,7 @@
 		"hono": "4.11.9",
 		"simple-git-hooks": "2.13.1",
 		"typescript": "5.9.3",
-		"vite": "5.4.21",
+		"vite": "7.3.1",
 		"vite-tsconfig-paths": "6.1.0",
 		"vitest": "3.2.4",
 		"wrangler": "4.59.1"
