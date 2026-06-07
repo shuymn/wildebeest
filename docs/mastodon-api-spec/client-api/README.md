@@ -191,10 +191,10 @@ The `content` field in statuses and notes contains sanitized HTML. Clients MUST:
 
 Key implementation files in the Mastodon codebase:
 
-- Base controller: [`app/controllers/api/base_controller.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/controllers/api/base_controller.rb)
-- Pagination: [`app/controllers/concerns/api/pagination.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/controllers/concerns/api/pagination.rb)
-- Rate limiting: [`app/controllers/concerns/api/rate_limit_headers.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/controllers/concerns/api/rate_limit_headers.rb)
-- Error handling: [`app/controllers/concerns/api/error_handling.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/controllers/concerns/api/error_handling.rb)
+- Base controller: [`app/controllers/api/base_controller.rb`](https://github.com/mastodon/mastodon/blob/v4.5.11/app/controllers/api/base_controller.rb)
+- Pagination: [`app/controllers/concerns/api/pagination.rb`](https://github.com/mastodon/mastodon/blob/v4.5.11/app/controllers/concerns/api/pagination.rb)
+- Rate limiting: [`app/controllers/concerns/api/rate_limit_headers.rb`](https://github.com/mastodon/mastodon/blob/v4.5.11/app/controllers/concerns/api/rate_limit_headers.rb)
+- Error handling: [`app/controllers/concerns/api/error_handling.rb`](https://github.com/mastodon/mastodon/blob/v4.5.11/app/controllers/concerns/api/error_handling.rb)
 
 ## Related Documents
 

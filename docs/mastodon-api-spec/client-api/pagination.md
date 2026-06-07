@@ -49,7 +49,7 @@ function parseLinkHeader(header) {
 }
 ```
 
-**Implementation Reference:** [`app/controllers/concerns/api/pagination.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/controllers/concerns/api/pagination.rb)
+**Implementation Reference:** [`app/controllers/concerns/api/pagination.rb`](https://github.com/mastodon/mastodon/blob/v4.5.11/app/controllers/concerns/api/pagination.rb)
 
 ## Query Parameters
 
@@ -120,7 +120,7 @@ Request:  ?limit=50
 Applied:  limit=40  (if max is 40)
 ```
 
-**Default Limits Reference:** [`app/controllers/api/base_controller.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/controllers/api/base_controller.rb)
+**Default Limits Reference:** [`app/controllers/api/base_controller.rb`](https://github.com/mastodon/mastodon/blob/v4.5.11/app/controllers/api/base_controller.rb)
 
 ```ruby
 DEFAULT_STATUSES_LIMIT = 20
@@ -287,7 +287,7 @@ Content-Type: application/json
 }
 ```
 
-**Validation Reference:** [`app/controllers/concerns/api/pagination.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/controllers/concerns/api/pagination.rb)
+**Validation Reference:** [`app/controllers/concerns/api/pagination.rb`](https://github.com/mastodon/mastodon/blob/v4.5.11/app/controllers/concerns/api/pagination.rb)
 
 ```ruby
 def require_valid_pagination_options!
@@ -298,10 +298,10 @@ end
 
 ## File References
 
-- Base pagination: [`app/controllers/concerns/api/pagination.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/controllers/concerns/api/pagination.rb)
-- Timeline pagination: [`app/controllers/api/v1/timelines/base_controller.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/controllers/api/v1/timelines/base_controller.rb)
-- Notification pagination: [`app/controllers/api/v1/notifications_controller.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/controllers/api/v1/notifications_controller.rb)
-- Search pagination: [`app/controllers/api/v2/search_controller.rb`](https://github.com/mastodon/mastodon/blob/v4.5.3/app/controllers/api/v2/search_controller.rb)
+- Base pagination: [`app/controllers/concerns/api/pagination.rb`](https://github.com/mastodon/mastodon/blob/v4.5.11/app/controllers/concerns/api/pagination.rb)
+- Timeline pagination: [`app/controllers/api/v1/timelines/base_controller.rb`](https://github.com/mastodon/mastodon/blob/v4.5.11/app/controllers/api/v1/timelines/base_controller.rb)
+- Notification pagination: [`app/controllers/api/v1/notifications_controller.rb`](https://github.com/mastodon/mastodon/blob/v4.5.11/app/controllers/api/v1/notifications_controller.rb)
+- Search pagination: [`app/controllers/api/v2/search_controller.rb`](https://github.com/mastodon/mastodon/blob/v4.5.11/app/controllers/api/v2/search_controller.rb)
 
 ## Examples
 

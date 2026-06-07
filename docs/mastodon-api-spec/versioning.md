@@ -4,7 +4,7 @@ This document defines the version baseline and extension marking conventions for
 
 ## Baseline Version
 
-This specification targets **Mastodon v4.5.x** as the baseline. All MUST and SHOULD requirements are based on this version unless otherwise noted.
+This specification targets **Mastodon v4.5.11** as the baseline. All MUST and SHOULD requirements are based on this version unless otherwise noted.
 
 ## Version Annotations
 

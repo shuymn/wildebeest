@@ -14,7 +14,18 @@ This specification covers:
 
 ## Baseline Version
 
-This specification targets **Mastodon v4.5.x** (latest stable release line). Features introduced in newer versions are marked as optional extensions.
+This specification targets **Mastodon v4.5.11** (pinned reference release). Features introduced in newer versions are marked as optional extensions.
+
+Implementation references link to [`mastodon/mastodon@v4.5.11`](https://github.com/mastodon/mastodon/tree/v4.5.11).
+
+Official API documentation source: [`mastodon/documentation@960eeb05`](https://github.com/mastodon/documentation/commit/960eeb05f61209f2f7e8e97456239a3a8e143c6f) ([docs.joinmastodon.org](https://docs.joinmastodon.org/)).
+
+Local reference clones (developer machine):
+
+| Repository | Path | Pin |
+|------------|------|-----|
+| Mastodon server | `/Users/shuymn/ghq/github.com/mastodon/mastodon` | `v4.5.11` |
+| Mastodon docs | `.../mastodon/documentation` | `960eeb05` |
 
 ## Client Compatibility
 
