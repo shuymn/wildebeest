@@ -32,10 +32,7 @@ app.get<'/:id'>(async ({ req, env }) => {
 	if (!env.data.connectedActor) {
 		return notAuthorized('not authorized')
 	}
-	return handleGet(
-		{ db: getDatabase(env), connectedActorId: env.data.connectedActor.id.toString() },
-		req.param('id')
-	)
+	return handleGet({ db: getDatabase(env), connectedActorId: env.data.connectedActor.id.toString() }, req.param('id'))
 })
 
 app.put<'/:id'>(async ({ req, env }) => {

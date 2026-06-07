@@ -56,10 +56,10 @@ describe('/api/v1/lists', () => {
 		const updated = await updateRes.json<{ title: string }>()
 		assert.equal(updated.title, 'New title')
 
-		const deleteRes = await app.fetch(
-			new Request(`https://${domain}/api/v1/lists/${id}`, { method: 'DELETE' }),
-			{ DATABASE: db, data: { connectedActor } }
-		)
+		const deleteRes = await app.fetch(new Request(`https://${domain}/api/v1/lists/${id}`, { method: 'DELETE' }), {
+			DATABASE: db,
+			data: { connectedActor },
+		})
 		await assertStatus(deleteRes, 200)
 	})
 })

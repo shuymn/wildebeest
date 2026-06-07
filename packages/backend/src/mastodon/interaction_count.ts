@@ -1,10 +1,7 @@
 import type { Database } from '@wildebeest/backend/database'
 
 export async function isLocalActorId(db: Database, actorId: string): Promise<boolean> {
-	const row = await db
-		.prepare('SELECT 1 AS yes FROM users WHERE actor_id = ?')
-		.bind(actorId)
-		.first<{ yes: 1 }>()
+	const row = await db.prepare('SELECT 1 AS yes FROM users WHERE actor_id = ?').bind(actorId).first<{ yes: 1 }>()
 	return row?.yes === 1
 }
 

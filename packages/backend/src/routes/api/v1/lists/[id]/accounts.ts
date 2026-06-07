@@ -5,11 +5,7 @@ import { z } from 'zod'
 
 import { type Database, getDatabase } from '@wildebeest/backend/database'
 import { notAuthorized, resourceNotFound } from '@wildebeest/backend/errors'
-import {
-	addAccountsToList,
-	getListMemberAccounts,
-	removeAccountsFromList,
-} from '@wildebeest/backend/mastodon/list'
+import { addAccountsToList, getListMemberAccounts, removeAccountsFromList } from '@wildebeest/backend/mastodon/list'
 import type { HonoEnv } from '@wildebeest/backend/types'
 import { cors, makeJsonResponse, readBody } from '@wildebeest/backend/utils'
 

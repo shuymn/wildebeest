@@ -367,12 +367,7 @@ LIMIT ?4
 		results: qResults,
 	} = await db
 		.prepare(QUERY)
-		.bind(
-			actor.id.toString(),
-			JSON.stringify(listMemberActorIds),
-			JSON.stringify([...followingFollowersURLs]),
-			limit
-		)
+		.bind(actor.id.toString(), JSON.stringify(listMemberActorIds), JSON.stringify([...followingFollowersURLs]), limit)
 		.all<
 			{
 				id: string

@@ -27,11 +27,7 @@ app.get<'/:id/lists'>(async ({ req, env }) => {
 		return resourceNotFound('id', req.param('id'))
 	}
 
-	const lists = await getListsContainingAccount(
-		db,
-		env.data.connectedActor.id.toString(),
-		target.id.toString()
-	)
+	const lists = await getListsContainingAccount(db, env.data.connectedActor.id.toString(), target.id.toString())
 	return makeJsonResponse(lists, { headers })
 })
 

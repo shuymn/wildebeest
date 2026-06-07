@@ -112,10 +112,7 @@ export async function removeFollowing(db: Database, follower: Actor, followee: A
 		RETURNING state
 	`
 
-	const row = await db
-		.prepare(query)
-		.bind(follower.id.toString(), followee.id.toString())
-		.first<{ state: string }>()
+	const row = await db.prepare(query).bind(follower.id.toString(), followee.id.toString()).first<{ state: string }>()
 	if (row?.state === STATE_ACCEPTED) {
 		await decrementActorInteractionCount(db, followee.id.toString())
 	}

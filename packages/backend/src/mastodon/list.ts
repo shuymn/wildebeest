@@ -37,11 +37,7 @@ ORDER BY title ASC
 	return (results ?? []).map(toMastodonList)
 }
 
-export async function getListById(
-	db: Database,
-	listId: string,
-	ownerAccountId: string
-): Promise<MastodonList | null> {
+export async function getListById(db: Database, listId: string, ownerAccountId: string): Promise<MastodonList | null> {
 	const row = await db
 		.prepare(
 			`
