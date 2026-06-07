@@ -284,6 +284,138 @@ LIMIT ?1
 	return out
 }
 
+export async function getListTimeline(
+	domain: string,
+	db: Database,
+	actor: Actor,
+	listMemberActorIds: string[],
+	limit = 20
+): Promise<Array<MastodonStatus>> {
+	if (listMemberActorIds.length === 0) {
+		return []
+	}
+
+	const followingFollowersURLs = new Set<string>([PUBLIC_GROUP, actor.id.toString()])
+
+	const { results: memberResults } = await db
+		.prepare(
+			`
+SELECT
+	actor_following.target_actor_id AS member_id,
+	json_extract(actors.properties, '$.followers') AS actor_followers_url
+FROM actor_following
+INNER JOIN actors ON actors.id = actor_following.target_actor_id
+WHERE actor_following.actor_id = ?1
+	AND actor_following.state = 'accepted'
+	AND actor_following.target_actor_id IN (SELECT value FROM json_each(?2))
+`
+		)
+		.bind(actor.id.toString(), JSON.stringify(listMemberActorIds))
+		.all<{ member_id: string; actor_followers_url: string | null }>()
+
+	for (const result of memberResults ?? []) {
+		followingFollowersURLs.add(result.actor_followers_url ?? `${result.member_id}/followers`)
+	}
+
+	const QUERY = `
+SELECT
+  objects.id,
+  objects.mastodon_id,
+  objects.cdate,
+  objects.properties,
+
+  actors.id as actor_id,
+  actors.mastodon_id as actor_mastodon_id,
+  actors.type as actor_type,
+  actors.properties as actor_properties,
+  actors.cdate as actor_cdate,
+
+  outbox_objects.actor_id as publisher_actor_id,
+  outbox_objects.published_date as publisher_published,
+  outbox_objects.'to' as publisher_to,
+  outbox_objects.cc as publisher_cc,
+
+  (SELECT count(*) FROM actor_favourites WHERE actor_favourites.object_id=objects.id) as favourites_count,
+  (SELECT count(*) FROM actor_reblogs WHERE actor_reblogs.object_id=objects.id) as reblogs_count,
+  (SELECT count(*) FROM actor_replies WHERE actor_replies.in_reply_to_object_id=objects.id) as replies_count,
+
+  (SELECT count(*) > 0 FROM actor_reblogs WHERE actor_reblogs.object_id=objects.id AND actor_reblogs.actor_id=?1) as reblogged,
+  (SELECT count(*) > 0 FROM actor_favourites WHERE actor_favourites.object_id=objects.id AND actor_favourites.actor_id=?1) as favourited,
+
+  actor_reblogs.id as reblog_id,
+  actor_reblogs.mastodon_id as reblog_mastodon_id
+FROM outbox_objects
+  INNER JOIN objects ON objects.id = outbox_objects.object_id
+  INNER JOIN actors ON actors.id = outbox_objects.actor_id
+  LEFT OUTER JOIN actor_reblogs ON actor_reblogs.outbox_object_id = outbox_objects.id
+WHERE
+  objects.type = 'Note'
+  AND outbox_objects.actor_id IN ${db.qb.set('?2')}
+  AND (${db.qb.jsonExtractIsNull('objects.properties', 'inReplyTo')}
+        OR ${db.qb.jsonExtract('objects.properties', 'inReplyTo')}
+          IN (SELECT ifnull(objects.original_object_id, objects.id)
+            FROM objects WHERE objects.original_actor_id IN ${db.qb.set('?2')}))
+  AND (EXISTS(SELECT 1 FROM json_each(outbox_objects.'to') WHERE json_each.value IN ${db.qb.set('?3')})
+        OR EXISTS(SELECT 1 FROM json_each(outbox_objects.cc) WHERE json_each.value IN ${db.qb.set('?3')}))
+ORDER BY ${db.qb.timeNormalize('outbox_objects.published_date')} DESC
+LIMIT ?4
+`
+
+	const {
+		success,
+		error,
+		results: qResults,
+	} = await db
+		.prepare(QUERY)
+		.bind(
+			actor.id.toString(),
+			JSON.stringify(listMemberActorIds),
+			JSON.stringify([...followingFollowersURLs]),
+			limit
+		)
+		.all<
+			{
+				id: string
+				mastodon_id: string
+				cdate: string
+				properties: string
+
+				actor_id: string
+				actor_mastodon_id: string
+				actor_type: Actor['type']
+				actor_properties: string
+				actor_cdate: string
+
+				publisher_actor_id: string
+				publisher_published: string
+				publisher_to: string
+				publisher_cc: string
+
+				favourites_count: number
+				reblogs_count: number
+				replies_count: number
+
+				reblogged: 1 | 0
+				favourited: 1 | 0
+			} & ({ reblog_id: string; reblog_mastodon_id: string } | { reblog_id: null; reblog_mastodon_id: null })
+		>()
+	if (!success) {
+		throw new Error('SQL error: ' + error)
+	}
+	if (!qResults) {
+		return []
+	}
+
+	const out: Array<MastodonStatus> = []
+	for (const result of qResults) {
+		const status = await toMastodonStatusFromRow(domain, db, result)
+		if (status !== null) {
+			out.push(status)
+		}
+	}
+	return out
+}
+
 export async function getStatusRange(
 	db: Database,
 	maxId?: MastodonId,
