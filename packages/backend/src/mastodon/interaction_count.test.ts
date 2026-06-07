@@ -1,5 +1,10 @@
+import { acceptFollowing, addFollowing, removeFollowing } from '@wildebeest/backend/mastodon/follow'
 import { insertLike } from '@wildebeest/backend/mastodon/like'
-import { makeDB } from '@wildebeest/backend/test/utils'
+import { createPublicStatus } from '@wildebeest/backend/test/shared.utils'
+import { createTestUser, makeDB } from '@wildebeest/backend/test/utils'
+
+const userKEK = 'test_kek_interaction_count'
+const domain = 'cloudflare.com'
 
 describe('interaction_count', () => {
 	test('favourite increments remote object interaction_count', async () => {
@@ -38,5 +43,68 @@ describe('interaction_count', () => {
 			.bind(objectId)
 			.first<{ interaction_count: number }>()
 		expect(row?.interaction_count).toBe(1)
+	})
+
+	test('favourite does not increment local object interaction_count', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'local2@cloudflare.com')
+		const note = await createPublicStatus(domain, db, actor, 'local status')
+
+		await insertLike(db, actor, note)
+
+		const row = await db
+			.prepare('SELECT interaction_count FROM objects WHERE id = ?')
+			.bind(note.id.toString())
+			.first<{ interaction_count: number }>()
+		expect(row?.interaction_count).toBe(0)
+	})
+
+	test('accepting follow increments remote actor interaction_count', async () => {
+		const db = makeDB()
+		const localFollower = await createTestUser(domain, db, userKEK, 'follower@cloudflare.com')
+		const remoteActorId = 'https://example.com/users/remote'
+
+		await db
+			.prepare(
+				`INSERT INTO actors (id, type, username, domain, properties, mastodon_id, interaction_count)
+				VALUES (?, 'Person', 'remote', 'example.com', '{}', '20', 0)`
+			)
+			.bind(remoteActorId)
+			.run()
+
+		const remoteActor = { id: new URL(remoteActorId) }
+		await addFollowing(domain, db, localFollower, remoteActor)
+		await acceptFollowing(db, localFollower, remoteActor)
+
+		const row = await db
+			.prepare('SELECT interaction_count FROM actors WHERE id = ?')
+			.bind(remoteActorId)
+			.first<{ interaction_count: number }>()
+		expect(row?.interaction_count).toBe(1)
+	})
+
+	test('unfollowing decrements remote actor interaction_count', async () => {
+		const db = makeDB()
+		const localFollower = await createTestUser(domain, db, userKEK, 'unfollower@cloudflare.com')
+		const remoteActorId = 'https://example.com/users/remote2'
+
+		await db
+			.prepare(
+				`INSERT INTO actors (id, type, username, domain, properties, mastodon_id, interaction_count)
+				VALUES (?, 'Person', 'remote2', 'example.com', '{}', '21', 0)`
+			)
+			.bind(remoteActorId)
+			.run()
+
+		const remoteActor = { id: new URL(remoteActorId) }
+		await addFollowing(domain, db, localFollower, remoteActor)
+		await acceptFollowing(db, localFollower, remoteActor)
+		await removeFollowing(db, localFollower, remoteActor)
+
+		const row = await db
+			.prepare('SELECT interaction_count FROM actors WHERE id = ?')
+			.bind(remoteActorId)
+			.first<{ interaction_count: number }>()
+		expect(row?.interaction_count).toBe(0)
 	})
 })
