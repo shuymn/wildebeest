@@ -24,7 +24,8 @@ FROM
 WHERE
   actor_notifications.actor_id = ?1
 ORDER BY
-  actor_notifications.cdate DESC
+  actor_notifications.cdate DESC,
+  actor_notifications.id DESC
 LIMIT
   ?2`
 
