@@ -1,6 +1,6 @@
 # Endpoint Inventory
 
-This document is an inventory of endpoints implemented by Mastodon.
+This document is an inventory of endpoints documented by Mastodon. Source: [`mastodon/documentation@960eeb05`](https://github.com/mastodon/documentation/commit/960eeb05f61209f2f7e8e97456239a3a8e143c6f).
 
 ## REST API (Rails) - `/api/**` excluding `/api/v1/streaming/**`
 
@@ -108,6 +108,15 @@ POST /api/v1/apps
 GET /api/v1/apps/verify_credentials
 GET /api/v1/blocks
 GET /api/v1/bookmarks
+POST /api/v1/collections
+GET /api/v1/collections/:id
+PATCH /api/v1/collections/:id
+DELETE /api/v1/collections/:id
+POST /api/v1/collections/:collection_id/items
+DELETE /api/v1/collections/:collection_id/items/:id
+POST /api/v1/collections/:collection_id/items/:id/revoke
+GET /api/v1/accounts/:account_id/collections
+GET /api/v1/accounts/:account_id/in_collections
 GET /api/v1/conversations
 DELETE /api/v1/conversations/:id
 POST /api/v1/conversations/:id/read
@@ -183,6 +192,8 @@ GET /api/v1/peers/search
 GET /api/v1/polls/:id
 POST /api/v1/polls/:id/votes
 GET /api/v1/preferences
+GET /api/v1/profile
+PATCH /api/v1/profile
 DELETE /api/v1/profile/avatar
 DELETE /api/v1/profile/header
 DELETE /api/v1/push/subscription
