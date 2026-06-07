@@ -2,13 +2,67 @@
 
 This document outlines the migration strategy from the current Wildebeest database schema to the new comprehensive schema designed for full Mastodon API compatibility.
 
+## Backward-Compatibility Stance: A (decided 2026-06-08)
+
+This plan is executed under **Stance A**: a few minutes of HTTP 500s or a temporarily-degraded feature is acceptable, but **data loss / corruption is not**.
+
+**This fork is deployed by multiple independent operators** who sync the fork on their own schedule (see `docs/updating.md`). A "version jump" — an operator many releases behind syncing straight to latest — is therefore a **normal, expected event**, not something any operator can be asked to avoid. A downstream sync applies **all** pending migration files in one `wrangler d1 migrations apply` (file-number order), then deploys code. So safety must be **intrinsic to the migration files (all-at-once-safe)** — it cannot depend on deploy timing or on operators performing manual steps. The R1/R2 release split below is the *maintainer's* authoring/verification discipline; it is **not** an action required of downstream operators.
+
+### Decision & alternatives considered
+
+This is the canonical record of the migration backward-compatibility decision; other docs (`TODO.md`, `docs/updating.md`) only summarize and link here.
+
+**Chosen: Stance A** — brief outage acceptable, data loss/corruption not.
+**Rejected: Stance B** — "truly jump-safe even if you skip releases" by making every change *expand-only forever* (never drop anything; do all version-dependent transforms lazily on read indefinitely). Rejected because it accumulates dead columns/tables that are never removed and forces every transform to carry old-shape handling forever — higher permanent complexity than the operator wants, for a guarantee Stance A already provides well enough via intrinsic file safety.
+
+**Key findings that shaped the rules** (each verified against this repo, not assumed):
+
+- **Reblog → status is pure SQL after all.** `actor_reblogs` already carries a stable `id`, `mastodon_id`, and `outbox_object_id` (`schema.sql`), so the conversion *reuses* them — no JS id-minting needed. This removed the one code-dependent step that was also a `DROP` precondition (the original plan's "requires application code" note was wrong; see 3.13).
+- **Fail-fast guards use a `CHECK`-constrained temp insert, not `RAISE()`.** `RAISE(ABORT, …)` is trigger-only in SQLite (errors in a plain statement), verified locally; the portable D1 pattern is `CREATE TEMP TABLE g(ok INT CHECK(ok=1)); INSERT … SELECT CASE WHEN <bad> THEN 0 ELSE 1 END;` which raises `CHECK constraint failed` before the guarded `DROP` runs (Phase 7).
+- **A `d1_migrations` version-floor guard is ineffective on D1** (unlike Mastodon's `pre_migration_check`): wrangler applies all pending files in order, so a behind operator always has the baseline present earlier in the same run. The real enforcement is the data-condition guards + an intact chain (rule 5).
+- **Hidden data-loss risks the original phase plan masked**, now mitigated in this doc: silent purge of remote content whose `interaction_count` was never backfilled (Phase 1.7); `id_sequences` collision if a future migration mints ids in SQL (rule 3 / 3.13); double-insert on re-run of unguarded backfills (rule 1 / 3.6); FTS5 index gaps during `DROP COLUMN` + trigger rebuild.
+
+### Why "updating all at once" can break an instance
+
+The Cloudflare D1 deploy mechanism has hard properties that the original phase plan glossed over:
+
+- `wrangler d1 migrations apply` applies the numbered files in `migrations/` **in order, once each**, tracked in the `d1_migrations` ledger. So **pure, idempotent SQL is safe across an arbitrary version jump** — every pending file still runs in sequence.
+- `deploy` runs **migrate → code** (`package.json`: `database:migrate && pages deploy`). The new schema is live **before** the new Workers code, and **there is no SQL rollback** if the code deploy fails or is reverted.
+- **D1 has no multi-statement transaction.** A file that fails partway leaves earlier statements committed and the file *unrecorded*, so the next apply **re-runs the file from the top**. Re-execution is the default failure mode (see the existing `migrations/0017_change_actor_reblogs.sql` comment for the real-world admission of this).
+- **Nothing aborts a deploy** if a logically-required prior step never ran. No version floor, no preflight, no app-level backfill runner.
+
+Only **two** kinds of step actually break on a jump:
+
+1. **Backfills that require application code** (cannot be expressed as SQL) — they live in no migration file, so a jump silently skips them.
+2. **Order-coupled destructive steps** — a `DROP`/`RENAME` whose safety depends on a *prior* release's code + backfill having run.
+
+### The five rules (mandatory for every migration from now on)
+
+These keep every migration set **all-at-once-safe**, so a downstream operator can sync-and-jump with no manual steps.
+
+1. **Every backfill is pure, idempotent SQL** — `UPDATE ... WHERE <new> IS NULL`, `INSERT OR IGNORE`, or `INSERT ... SELECT ... WHERE NOT EXISTS`. Re-run safety is non-negotiable because re-run is the default on D1.
+2. **No migration may depend on a non-SQL step having run between two files.** A downstream sync collapses any "separate release" boundary into one apply, so a destructive `DROP` must be numbered *after* its pure-SQL backfill, and the new code must tolerate both shapes across the brief migrate-then-code window. Never let a code/lazy step be a hard precondition for a later file. (This generalizes the `0017` lesson.)
+3. **Anything that needs JS does NOT go in a migration** — move it to lazy on-read app code or a one-shot, re-runnable admin script, and make it **degraded-if-absent, never a DROP precondition**. `generateMastodonId()` (`packages/backend/src/utils/id.ts`) mutates the stateful `id_sequences` table and is **not expressible in SQL**, so steps that mint new IDs cannot be migration files. (Reblog → status conversion avoids this by *reusing* the existing `actor_reblogs.id`/`mastodon_id` — see 3.13.)
+4. **Guard every destructive `DROP` with a `CHECK`-based fail-fast** (Phase 7) so an incomplete backfill aborts the deploy *loudly* instead of corrupting silently. A failed deploy is recoverable; silent loss is not.
+5. **Keep the migration chain complete and append-only — never squash or delete old files.** Because `wrangler d1 migrations apply` runs *all* pending files in order, an intact chain is what guarantees a far-behind operator replays every step (including the pure-SQL backfills) before any `DROP`. Append new migrations; never rewrite old ones.
+
+> **Why not a Mastodon-style version-floor guard?** A `d1_migrations`-ledger check ("abort if migration X is absent") is **NOT effective on D1.** Unlike Mastodon's `db:migrate`, wrangler never lets an operator skip individual SQL files — a behind operator simply applies *more* files in order, so a baseline always becomes present earlier in the same run and the check always passes. The real enforcement is **rule 4's data-condition guards** (which check the actual rows, not the ledger) plus an intact chain. A genuine sequential-upgrade gate is only forced in the one case rules 1–3 forbid: a transform with *no* SQL form that a `DROP` then depends on — there a rule-4 data guard would abort until the operator first deploys the intermediate release and lets it run. Document a minimum-from-version if you ever allow that; better, don't.
+
+> **Maintainer obligation (the flip side of "downstream needs no steps"):** the burden moves to *you*. Hold rules 1–3 forever and keep the chain intact (rule 5). The moment a code-dependent backfill becomes a hard precondition for a `DROP`, a far-behind jump can lose data — and rule 4's CHECK data-guard is what turns that into a loud, recoverable deploy failure instead of silent corruption.
+
+### Out of scope for a 1–10 user instance (deliberately skipped)
+
+`CREATE INDEX CONCURRENTLY` / lock-avoidance, batched-chunk backfills, trigger-based concurrent column renames, two-phase `db/post_migrate` machinery, interactive migration countdowns. Tables are kilobytes; a plain `UPDATE`/`CREATE INDEX` finishes instantly and the micro-gap is irrelevant.
+
+---
+
 ## Migration Principles
 
-1. **Backward Compatibility**: Maintain existing API endpoints during migration
-2. **Incremental Migration**: Break into phases to reduce risk
-3. **Data Preservation**: No data loss during migration
-4. **Rollback Capability**: Each phase should be reversible
-5. **Zero Downtime**: Use additive changes where possible
+1. **Backward Compatibility**: Maintain existing API endpoints during migration; every migration must be backward-compatible with the *previous* release's code (expand-only) because migrate runs before code with no SQL rollback.
+2. **All-at-once-safe over staged-release**: a downstream sync applies every pending file in one shot, so correctness comes from **file ordering + guards + lazy-tolerance**, not from operators deploying releases in sequence. The R1/R2 split is the maintainer's own verification cadence.
+3. **Data Preservation**: No data loss. Stance A makes a brief outage the *only* acceptable failure mode.
+4. **Idempotency over Rollback**: D1 cannot roll back. Each backfill must instead be safe to re-run; destructive steps are gated by a fail-fast guard (see Phase 7).
+5. **Additive first**: Use additive changes (`ADD COLUMN`, `CREATE TABLE`) wherever possible.
 
 ---
 
@@ -237,6 +291,37 @@ SET cached_at = NULL,
     interaction_count = 0
 WHERE local = 1;
 ```
+
+### Phase 1.7: Backfill `interaction_count` for existing remote data (Stance A — CRITICAL)
+
+**Why this is mandatory.** The cleanup worker deletes remote rows where `interaction_count = 0` once `expires_at` passes (`cleanup-worker-spec.md`). The increment/decrement code (Phase 5) only maintains the count for interactions that happen *after* it ships. Every remote status/account that local users **already** favourited / bookmarked / reblogged / followed before that code went live would still read `interaction_count = 0` and be **silently purged**. This backfill recomputes the count from the pre-migration interaction tables, so it MUST run before the cleanup worker is ever enabled — and while `actor_favourites` / `actor_reblogs` / `actor_following` still exist (i.e. before Phase 7).
+
+The backfill is pure idempotent SQL (full recompute; safe to re-run). "Interaction" counts only **local** actors (`domain IS NULL`), matching the cleanup contract. `bookmarks` and `mentions` are new tables with no pre-existing rows, so they contribute 0 and are omitted.
+
+```sql
+-- Remote statuses: count local favourites + local reblogs targeting each status
+UPDATE objects
+SET interaction_count =
+  (SELECT COUNT(*) FROM actor_favourites f
+     JOIN actors fa ON f.actor_id = fa.id
+     WHERE f.object_id = objects.id AND fa.domain IS NULL)
+  + (SELECT COUNT(*) FROM actor_reblogs r
+     JOIN actors ra ON r.actor_id = ra.id
+     WHERE r.object_id = objects.id AND ra.domain IS NULL)
+WHERE local = 0;
+
+-- Remote accounts: count local follows targeting each account (accepted only)
+UPDATE actors
+SET interaction_count =
+  (SELECT COUNT(*) FROM actor_following af
+     JOIN actors aa ON af.actor_id = aa.id
+     WHERE af.target_actor_id = actors.id
+       AND aa.domain IS NULL
+       AND af.state = 'accepted')
+WHERE domain IS NOT NULL;
+```
+
+> **Release ordering (Stance A):** ship Phase 1.6 + 1.7 + the `interaction_count` maintenance code (Phase 5) and verify the backfill **before** enabling the cleanup cron in any later release. Never enable cleanup in the same release that introduces the column.
 
 ### Phase 2: Create New Tables
 
@@ -603,12 +688,16 @@ UPDATE actors SET statuses_count = (
 );
 
 -- 3.3: Migrate objects data
+-- NOTE (Stance A, rule 3): `language` is intentionally NOT set here. The source is
+-- `properties.contentMap` (a {lang: text} object); extracting the single language KEY
+-- is not reliably expressible in SQL. Leave `language` NULL and derive it lazily on
+-- read in the Worker (or a one-shot admin script). Do not write the whole map object
+-- into the column.
 UPDATE objects SET
   content = COALESCE(JSON_EXTRACT(properties, '$.content'), ''),
   text = JSON_EXTRACT(properties, '$.source.content'),
   spoiler_text = COALESCE(JSON_EXTRACT(properties, '$.summary'), ''),
   sensitive = COALESCE(JSON_EXTRACT(properties, '$.sensitive'), 0),
-  language = JSON_EXTRACT(properties, '$.contentMap'),  -- Need to extract language key
   url = JSON_EXTRACT(properties, '$.url'),
   account_id = original_actor_id,
   in_reply_to_account_id = (
@@ -647,6 +736,8 @@ UPDATE objects SET favourites_count = (
 );
 
 -- 3.6: Migrate account fields from JSON attachment array
+-- IDEMPOTENT (Stance A, rule 1): the NOT EXISTS guard prevents duplicate rows if this
+-- file is re-run after a partial apply (account_fields has no unique key on account_id+position).
 INSERT INTO account_fields (account_id, position, name, value, verified_at)
 SELECT
   actors.id,
@@ -656,7 +747,11 @@ SELECT
   NULL
 FROM actors, JSON_EACH(JSON_EXTRACT(actors.properties, '$.attachment'))
 WHERE JSON_TYPE(JSON_EXTRACT(actors.properties, '$.attachment')) = 'array'
-  AND JSON_EXTRACT(json_each.value, '$.type') = 'PropertyValue';
+  AND JSON_EXTRACT(json_each.value, '$.type') = 'PropertyValue'
+  AND NOT EXISTS (
+    SELECT 1 FROM account_fields af
+    WHERE af.account_id = actors.id AND af.position = json_each.key
+  );
 
 -- 3.7: Migrate tags from note_hashtags to tags table
 INSERT OR IGNORE INTO tags (name, display_name)
@@ -669,12 +764,18 @@ FROM note_hashtags nh
 JOIN tags t ON LOWER(nh.value) = t.name;
 
 -- 3.9: Extract mentions from object properties
--- This requires parsing the tag array for type='Mention'
--- Implementation depends on JSON structure
+-- NOT A MIGRATION (Stance A, rule 3). Parsing the `tag` array for type='Mention' and
+-- resolving each href to a local account id requires application logic. Do this lazily
+-- on read (populate `mentions` when a status is first served under the new code) or via a
+-- one-shot, re-runnable admin script guarded by `WHERE NOT EXISTS` on (status_id, account_id).
+-- A version jump that skips the release shipping this code simply leaves `mentions` empty
+-- for old rows — degraded, not corrupted (acceptable under Stance A).
 
 -- 3.10: Migrate media attachments from object properties
--- This requires parsing the attachment array
--- Implementation depends on JSON structure and existing media storage
+-- NOT A MIGRATION (Stance A, rule 3). Parsing the `attachment` array and reconciling it
+-- with existing media storage requires application logic + JS-minted `mastodon_id` (see
+-- the id_sequences note in 3.13). Do it lazily on read or via a re-runnable admin script
+-- (`INSERT OR IGNORE` keyed on media_attachments.mastodon_id). Never mint ids in SQL.
 
 -- 3.11: Migrate in_reply_to_id from actor_replies (CRITICAL)
 -- This step MUST complete before actor_replies can be dropped in Phase 7
@@ -730,19 +831,29 @@ UPDATE actor_following SET
 WHERE show_reblogs IS NULL;
 
 -- 3.13: Migrate actor_reblogs to status rows (CRITICAL)
--- This step MUST complete before actor_reblogs can be dropped in Phase 7
--- Reblogs become actual status rows with reblog_of_id set
+-- This step MUST complete before actor_reblogs can be dropped in Phase 7.
+-- Reblogs become actual status rows with reblog_of_id set.
 --
--- Step A: Create status rows for each reblog
--- Note: This requires application code to generate proper IDs and handle
--- the outbox_objects relationship. The SQL below is conceptual.
+-- CORRECTION (Stance A): this is pure idempotent SQL — NOT "requires application code".
+-- The existing `actor_reblogs` row already carries a stable `id` AND `mastodon_id` AND an
+-- `outbox_object_id` (see schema.sql: actor_reblogs has `mastodon_id TEXT UNIQUE NOT NULL`,
+-- `outbox_object_id TEXT UNIQUE NOT NULL`). We REUSE those ids, so NO new id is minted.
+--
+-- ⚠️ id_sequences time-bomb (rule 3): do NOT switch this to MINT new mastodon_ids in SQL.
+-- `generateMastodonId()` mixes a value from the stateful `id_sequences` table (`utils/id.ts`,
+-- `querier.ts` nextval). A SQL-minted id that doesn't advance `id_sequences` can later collide
+-- with a live user's reblog id (the & 0xFFFF tail is only 65,536 wide; `mastodon_id` is UNIQUE
+-- NOT NULL) → a normal reblog throws a UNIQUE-constraint error AFTER migration. Reusing the
+-- already-issued ar.id/ar.mastodon_id sidesteps this entirely.
+--
+-- Step A: Create status rows for each reblog (reuse existing ids; idempotent via NOT EXISTS)
 INSERT INTO objects (
   id, mastodon_id, type, original_actor_id,
   reblog_of_id, account_id, visibility, local, cdate
 )
 SELECT
-  ar.id,                                    -- Use reblog ID as status ID
-  ar.mastodon_id,
+  ar.id,                                    -- REUSE the reblog's existing id (no JS id gen)
+  ar.mastodon_id,                           -- REUSE the reblog's existing mastodon_id
   'Announce',                               -- ActivityPub type for reblogs
   ar.actor_id,
   ar.object_id,                             -- Points to original status
@@ -754,8 +865,12 @@ FROM actor_reblogs ar
 JOIN objects orig ON ar.object_id = orig.id
 JOIN actors a ON ar.actor_id = a.id
 WHERE NOT EXISTS (
-  SELECT 1 FROM objects WHERE reblog_of_id = ar.object_id AND original_actor_id = ar.actor_id
+  SELECT 1 FROM objects o WHERE o.id = ar.id
 );
+
+-- Timeline visibility: the existing `outbox_objects` row referenced by ar.outbox_object_id
+-- stays valid; surfacing the Announce in timelines is handled by the Phase 4 query rewrite
+-- (read reblog_of_id off the new Announce row) — NOT by re-pointing outbox_objects here.
 
 -- Step B: Recalculate reblogs_count using reblog_of_id
 UPDATE objects SET reblogs_count = (
@@ -773,6 +888,8 @@ UPDATE objects SET reblogs_count = (
 ```
 
 ### Phase 4: Application Code Updates
+
+> **Stance A:** this code ships in **R1** and must go live **before** R2 drops the old tables (rule 2). During R1 the code dual-writes (old + new) and switches reads to the new columns, so the Phase 7 `DROP` in R2 lands only after no code path reads `actor_replies`/`actor_reblogs`/`note_hashtags`. The `interaction_count` maintenance code (favourite/bookmark/reblog/follow increment-decrement) also ships here — required before the cleanup worker is enabled.
 
 Update application code to:
 1. Use new columns instead of JSON extraction
@@ -959,6 +1076,10 @@ CREATE VIEW follows AS SELECT * FROM actor_following;
 
 ### Phase 7: Cleanup
 
+> **Stance A — these `DROP`s are protected by file ORDER + the CHECK guards below, NOT by a release boundary (rules 2, 4).** A downstream operator collapses any "separate release" into one apply, so the safety must be intrinsic: the Phase 3 backfills are pure SQL numbered *before* this file, so on any jump they run first and the guards pass; if a backfill is somehow incomplete, the guard aborts the deploy *before* the `DROP` (loud failure, not silent loss). The maintainer should still verify Phase 3/4 in production before merging this file to main (R1 → R2 cadence), but downstream correctness does not depend on operators observing that boundary.
+
+> **The guards below abort by statement ORDER, not by rollback.** D1 has no transaction, so a guard works only because it sits *before* the `DROP` and errors first (nothing after it runs; the file is left unrecorded and re-applies cleanly next time once the precondition holds). `RAISE(ABORT)` is **not** usable here — it is trigger-only in SQLite. The portable D1 fail-fast is a `CHECK`-constrained temp insert (verified): if the precondition is violated it raises `CHECK constraint failed` and the `DROP` never executes.
+
 **Prerequisites before executing Phase 7:**
 
 1. Phase 1.6 (retention columns on `actors`/`objects`) MUST be complete and backfilled
@@ -997,8 +1118,36 @@ CREATE VIEW follows AS SELECT * FROM actor_following;
 
 ```sql
 -- 7.1: Remove redundant tables (ONLY after prerequisites verified)
+-- Each DROP is fronted by a CHECK-guard that aborts the migration (before the DROP runs)
+-- if the corresponding backfill is incomplete. Pattern verified on SQLite/D1: a CHECK(ok=1)
+-- temp insert fed `0` raises "CHECK constraint failed", stopping the file before the DROP.
+
+-- Guard + drop: actor_replies (abort if any reply link is unmigrated)
+CREATE TEMP TABLE IF NOT EXISTS _guard_replies (ok INTEGER CHECK (ok = 1));
+INSERT INTO _guard_replies (ok) SELECT CASE WHEN EXISTS (
+  SELECT 1 FROM actor_replies ar
+  LEFT JOIN objects o ON ar.object_id = o.id
+  WHERE o.in_reply_to_id IS NULL OR o.in_reply_to_id != ar.in_reply_to_object_id
+) THEN 0 ELSE 1 END;
 DROP TABLE IF EXISTS actor_replies;  -- Replaced by objects.in_reply_to_id
+
+-- Guard + drop: actor_reblogs (abort if any reblog lacks its converted Announce row)
+CREATE TEMP TABLE IF NOT EXISTS _guard_reblogs (ok INTEGER CHECK (ok = 1));
+INSERT INTO _guard_reblogs (ok) SELECT CASE WHEN EXISTS (
+  SELECT 1 FROM actor_reblogs ar
+  WHERE NOT EXISTS (SELECT 1 FROM objects o WHERE o.id = ar.id)
+) THEN 0 ELSE 1 END;
 DROP TABLE IF EXISTS actor_reblogs;  -- Replaced by objects.reblog_of_id
+
+-- Guard + drop: note_hashtags (abort if any hashtag is unmigrated to status_tags)
+CREATE TEMP TABLE IF NOT EXISTS _guard_hashtags (ok INTEGER CHECK (ok = 1));
+INSERT INTO _guard_hashtags (ok) SELECT CASE WHEN EXISTS (
+  SELECT 1 FROM note_hashtags nh
+  JOIN tags t ON LOWER(nh.value) = t.name
+  WHERE NOT EXISTS (
+    SELECT 1 FROM status_tags st WHERE st.status_id = nh.object_id AND st.tag_id = t.id
+  )
+) THEN 0 ELSE 1 END;
 DROP TABLE IF EXISTS note_hashtags;  -- Migrated to status_tags
 
 -- 7.2: Remove obsolete columns (optional, after verification)
@@ -1012,6 +1161,8 @@ DROP TABLE IF EXISTS note_hashtags;  -- Migrated to status_tags
 ---
 
 ## Rollback Procedures
+
+> "Rollback" here means **forward-compatible ignoring**, not transactional rollback — D1 cannot roll back a migration. Additive phases are safe because old code ignores the new columns/tables. **Phase 7 (contraction) has no rollback** — that is exactly why it is gated behind verification guards and deferred to its own release.
 
 ### Phase 1 Rollback
 New columns are nullable, so no rollback needed. Can be ignored by existing code.
@@ -1098,51 +1249,57 @@ WHERE id IN (SELECT id FROM actors WHERE display_name IS NULL LIMIT 1000);
 
 ## Timeline
 
-| Phase | Description | Risk | Reversible |
-|-------|-------------|------|------------|
-| 1 | Add columns | Low | Yes (ignore) |
-| 2 | Create tables | Low | Yes (drop) |
-| 3 | Migrate data | Medium | Yes (ignore new) |
-| 4 | Update code | Medium | Yes (deploy old) |
-| 5 | Add constraints | Low | Yes (remove) |
-| 6 | Rename tables | High | Complex |
-| 7 | Cleanup | Medium | No |
+| Phase | Description | Risk | Reversible | Release (Stance A) |
+|-------|-------------|------|------------|--------------------|
+| 1 | Add columns | Low | Yes (ignore) | R1 (expand) |
+| 1.7 | Backfill `interaction_count` | Low | Yes (ignore) | R1 — before cleanup ever enabled |
+| 2 | Create tables | Low | Yes (drop) | R1 (expand) |
+| 3 | Migrate data (SQL only; not 3.3-lang/3.9/3.10/3.13-mint) | Medium | Yes (ignore new) | R1 |
+| 4 | Update code (read new, dual-write, stop reading old) | Medium | Yes (deploy old) | R1 |
+| 5 | Add constraints + `interaction_count` maintenance code | Low | Yes (remove) | R1 |
+| 6 | Rename tables | High | Complex | Skip (use API/domain aliasing) |
+| 7 | Cleanup (`DROP` old tables, guarded) | Medium | **No** | **R2 — separate, later release** |
 
-Recommended approach: Complete phases 1-5 before considering phase 6-7.
+Recommended approach: **R1** ships expand + backfill + code switch (phases 1–5, additive only). The maintainer verifies it in production, then **R2** merges the guarded Phase 7 contraction. R1/R2 is the maintainer's cadence — a downstream operator that jumps across both still ends up safe, because the Phase 3 backfills are file-ordered before the guarded DROPs (all-at-once-safe). What the maintainer must **never** do is let a code/lazy step become a precondition for a DROP (rule 2). Phase 6 stays skipped — alias `actors`/`objects` ↔ `accounts`/`statuses` in the API/domain layer instead.
 
 ---
 
 ## Notes on Cloudflare D1
 
 ### D1-Specific Considerations
-1. D1 uses SQLite, so standard SQLite limitations apply
-2. No support for `ALTER TABLE ... DROP COLUMN`
-3. Limited JSON functions compared to full SQLite
-4. Consider D1's transaction limits for batch operations
-5. Use D1's backup feature before major migrations
+1. D1 uses SQLite, so standard SQLite limitations apply.
+2. `ALTER TABLE ... DROP COLUMN` **is** supported (SQLite ≥ 3.35; migration `0020_change_actors.sql` already uses it) — but it is a destructive table rewrite and irreversible. Defer it like any other contraction (rule 2).
+3. Limited JSON functions vs. full SQLite; anything beyond `json_extract`/`json_set`/`json_each` must move to app code (rule 3).
+4. **No multi-statement transaction.** `wrangler d1 migrations apply` does not wrap a file in `BEGIN…COMMIT`; a mid-file failure leaves earlier statements committed and the file unrecorded, so the next apply re-runs the file from the top. **Design every file to be safe to re-run from the top** (rule 1) and put fail-fast guards before destructive statements (Phase 7).
+5. Take a D1 export/backup before any release containing a contraction or a large backfill — there is no SQL rollback.
+6. `migrations apply` runs against the **remote prod DB during `deploy`, before code ships** — every migration must be backward-compatible with the previous release's code.
 
 ### Migration Execution
+
+Normal schema migrations are **plain `.sql` files in `migrations/`** applied by `wrangler d1 migrations apply` during `deploy` — NOT executed from Worker code. Use `db.batch()` only for the **rule-3 admin-script backfills** (code-dependent transforms that cannot be SQL files). Such a script must be idempotent (re-runnable) since it has no ledger:
+
 ```typescript
-// Using D1 binding in Cloudflare Workers
-async function runMigration(db: D1Database) {
-  await db.batch([
-    db.prepare('ALTER TABLE actors ADD COLUMN display_name TEXT'),
-    db.prepare('ALTER TABLE actors ADD COLUMN note TEXT'),
-    // ... more statements
-  ])
+// One-shot, re-runnable admin backfill (rule 3) — e.g. parse mentions/media from JSON.
+// NOT a schema migration; guard every write so a second run is a no-op.
+async function backfillMentions(db: D1Database) {
+  // ...read rows needing migration (WHERE not-yet-done), parse in JS,
+  // INSERT OR IGNORE keyed on the unique (status_id, account_id)...
+  await db.batch([/* prepared statements */])
 }
 ```
+
+> `db.batch()` is **not** a transaction on D1 — it does not roll back on partial failure. Idempotency, not atomicity, is what makes it safe.
 
 ---
 
 ## Summary
 
-This migration strategy provides a safe, incremental path from the current schema to full Mastodon API compatibility:
+This migration strategy provides a safe, incremental path from the current schema to full Mastodon API compatibility under **Stance A** (brief outage acceptable; data loss is not):
 
-1. **Non-breaking additions** in early phases
-2. **Data preservation** through parallel structures
-3. **Rollback capability** at each phase
-4. **Gradual code updates** with backward compatibility
-5. **Optional cleanup** only after full verification
+1. **Additive first** — expand-only schema changes ship before the code that uses them.
+2. **Idempotency over rollback** — D1 cannot roll back, so every backfill is safe to re-run from the top.
+3. **Two-release contraction** — expand + backfill + code switch in R1; guarded `DROP` in a separate R2.
+4. **No JS in migrations** — code-dependent transforms (language key, mentions, media, id minting) live in lazy on-read code or re-runnable admin scripts, never in a `.sql` file.
+5. **Fail-fast guards + an intact, append-only chain** — destructive steps abort loudly if their backfill is incomplete, and the full migration history lets any downstream operator (however far behind) replay every step in one ordered pass with no manual action.
 
-The hybrid approach maintains the JSON `properties` columns for federation flexibility while providing normalized columns for efficient Mastodon API queries.
+The hybrid approach keeps the JSON `properties` columns for federation flexibility while providing normalized columns for efficient Mastodon API queries. The key risk to remember is the mismatch the original phase plan invited: it *looks* collapsible (Stance B-shaped) but is run with Stance-A tolerance — so the discipline above, not the phase count, is what prevents the silent losses (reblog wipe, `interaction_count=0` purge, double-counted backfills, `mastodon_id` collisions).

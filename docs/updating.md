@@ -8,9 +8,17 @@ The deployment workflow runs automatically every time the main branch changes, s
 
 Once your fork is synchronized with the official repo, the GitHub Actions workflow is triggered and a new build will be deployed.
 
-Updates are incremental and non-destructive. When the GitHub Actions workflow redeploys Wildebeest, we only make the necessary changes to your configuration and nothing else. You don't lose your data; we don't need to delete your existing configurations.
+### How updates are applied
 
-Data loss is not a problem either because D1 supports migrations. If we need to add a new column to a table or a new table, we don't need to destroy the database and create it again; we just apply the necessary SQL to that change.
+On every sync, the deploy runs database migrations first (`wrangler d1 migrations apply`), then deploys the new code. D1 tracks which migrations a database has already applied, so a sync only runs the **pending** ones, **in order** — your data is preserved across schema changes; the database is never destroyed and recreated.
+
+Most changes are additive (new column / new table) and are completely transparent. **Some releases also include cleanup steps that drop an old column or table** once its data has been migrated into the new shape. These are not silent data loss: each destructive step is preceded, in the same ordered run, by the backfill that moves the data, and is gated by a guard that **aborts the deploy** if that backfill is incomplete (a failed deploy you can retry, never a corrupted database).
+
+### Updating after falling behind ("version jumps")
+
+You can safely sync even if you are many releases behind — D1 applies **all** pending migrations in order in one pass, so every intermediate step still runs. Because migrations apply *before* the new code finishes deploying, a large jump may show **a few minutes of errors** while the deploy completes; this clears on its own and **does not lose data**. No manual migration steps are required of you.
+
+> Maintainers of a fork: **never squash or delete old migration files.** The complete, append-only history in `migrations/` is what lets any instance — however far behind — replay every step. Add new migrations; never rewrite old ones.
 
 ![first login](https://imagedelivery.net/NkfPDviynOyTAOI79ar_GQ/51a4767c-5d3d-4075-d17d-b8112432ca00/w=850)
 
