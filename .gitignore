@@ -9,3 +9,4 @@ packages/frontend/test-results/
 packages/frontend/playwright-report/
 packages/frontend/.playwright/
 /coverage/
+lefthook-local.yml

@@ -1,0 +1,18 @@
+pre-commit:
+  skip:
+    - merge
+    - rebase
+  parallel: true
+  jobs:
+    - name: lint
+      run: pnpm run lint
+    - name: pretty
+      run: pnpm run pretty
+
+pre-push:
+  skip:
+    - merge
+    - rebase
+  jobs:
+    - name: test
+      run: pnpm run test

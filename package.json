@@ -5,6 +5,7 @@
   "author": "Sven Sauleau <sven@cloudflare.com>",
   "devDependencies": {
     "@cloudflare/pages-plugin-cloudflare-access": "1.0.5",
+    "lefthook": "2.1.9",
     "npm-run-all2": "8.0.4",
     "prettier": "3.8.0",
     "sql-formatter": "15.6.12",
@@ -32,10 +33,8 @@
     "ci-dev-test-ui": "npm run build && npm run database:create-mock && npm run pages -- dev packages/frontend/dist --binding 'DOMAIN=0.0.0.0' 'INSTANCE_TITLE=Test Wildebeest' 'INSTANCE_DESCR=My Wildebeest Instance' 'ACCESS_AUTH_DOMAIN=0.0.0.0.cloudflareaccess.com' 'ACCESS_AUD=DEV_AUD' 'ADMIN_EMAIL=george@test.email' --compatibility-date=2022-12-20",
     "postci-dev-test-ui": "mv .dev.vars.bak .dev.vars || true",
     "deploy:init": "npm run pages -- project create wildebeest && npm run d1 -- create wildebeest",
-    "deploy": "npm run build && npm run database:migrate && npm run pages -- deploy packages/frontend/dist --project-name=wildebeest"
-  },
-  "simple-git-hooks": {
-    "pre-commit": "npm exec --package npm-run-all -- run-p lint pretty"
+    "deploy": "npm run build && npm run database:migrate && npm run pages -- deploy packages/frontend/dist --project-name=wildebeest",
+    "prepare": "lefthook install"
   },
   "packageManager": "pnpm@10.28.0"
 }
