@@ -2,13 +2,14 @@ import type { Actor } from '@wildebeest/backend/activitypub/actors'
 import type { ApObject } from '@wildebeest/backend/activitypub/objects'
 import { type Database } from '@wildebeest/backend/database'
 
+import { incrementRemoteObjectInteractionCountForLocalActor } from './interaction_count'
 import { getResultsField } from './utils'
 
 export async function insertLike(db: Database, actor: Actor, obj: ApObject) {
 	const id = crypto.randomUUID()
 
 	const query = `
-		INSERT INTO actor_favourites (id, actor_id, object_id)
+		INSERT OR IGNORE INTO actor_favourites (id, actor_id, object_id)
 		VALUES (?, ?, ?)
 	`
 
@@ -16,6 +17,11 @@ export async function insertLike(db: Database, actor: Actor, obj: ApObject) {
 	if (!out.success) {
 		throw new Error('SQL error: ' + out.error)
 	}
+	if (out.meta.changes === 0) {
+		return
+	}
+
+	await incrementRemoteObjectInteractionCountForLocalActor(db, obj.id.toString(), actor.id.toString())
 }
 
 export function getLikes(db: Database, obj: ApObject): Promise<Array<string>> {

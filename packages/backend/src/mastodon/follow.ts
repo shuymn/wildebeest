@@ -3,6 +3,7 @@ import { type Database } from '@wildebeest/backend/database'
 import { MastodonId } from '@wildebeest/backend/types'
 import { actorToAcct } from '@wildebeest/backend/utils/handle'
 
+import { decrementActorInteractionCount, incrementActorInteractionCount } from './interaction_count'
 import { getResultsField } from './utils'
 
 const STATE_PENDING = 'pending'
@@ -100,16 +101,23 @@ export async function acceptFollowing(db: Database, follower: Actor, followee: A
 	if (!out.success) {
 		throw new Error('SQL error: ' + out.error)
 	}
+	if (out.meta.changes > 0) {
+		await incrementActorInteractionCount(db, followee.id.toString())
+	}
 }
 
 export async function removeFollowing(db: Database, follower: Actor, followee: Actor) {
 	const query = `
 		DELETE FROM actor_following WHERE actor_id=? AND target_actor_id=?
+		RETURNING state
 	`
 
-	const out = await db.prepare(query).bind(follower.id.toString(), followee.id.toString()).run()
-	if (!out.success) {
-		throw new Error('SQL error: ' + out.error)
+	const row = await db
+		.prepare(query)
+		.bind(follower.id.toString(), followee.id.toString())
+		.first<{ state: string }>()
+	if (row?.state === STATE_ACCEPTED) {
+		await decrementActorInteractionCount(db, followee.id.toString())
 	}
 }
 

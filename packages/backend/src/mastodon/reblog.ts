@@ -6,6 +6,7 @@ import { addObjectInOutbox } from '@wildebeest/backend/activitypub/actors/outbox
 import { getApId } from '@wildebeest/backend/activitypub/objects'
 import { Note } from '@wildebeest/backend/activitypub/objects/note'
 import { type Database } from '@wildebeest/backend/database'
+import { incrementRemoteObjectInteractionCountForLocalActor } from '@wildebeest/backend/mastodon/interaction_count'
 import { getResultsField } from '@wildebeest/backend/mastodon/utils'
 import { MastodonId } from '@wildebeest/backend/types'
 import { isUUID } from '@wildebeest/backend/utils'
@@ -61,6 +62,8 @@ async function insertReblog(
 	if (!out.success) {
 		throw new Error('SQL error: ' + out.error)
 	}
+
+	await incrementRemoteObjectInteractionCountForLocalActor(db, obj.id.toString(), actor.id.toString())
 }
 
 export function getReblogs(db: Database, obj: Note): Promise<Array<string>> {
