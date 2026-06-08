@@ -5,3 +5,5 @@
 dist
 node_modules
 backend/src/database/d1/*.ts
+.claude
+packages/frontend/server
