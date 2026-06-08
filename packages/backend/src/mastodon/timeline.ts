@@ -12,7 +12,11 @@ export async function pregenerateTimelines(domain: string, db: Database, cache: 
 }
 
 export async function getHomeTimeline(domain: string, db: Database, actor: Actor): Promise<Array<MastodonStatus>> {
-	const { results: q1Results } = await db
+	const {
+		success: q1Success,
+		error: q1Error,
+		results: q1Results,
+	} = await db
 		.prepare(
 			`
 SELECT
@@ -28,6 +32,9 @@ WHERE
 		)
 		.bind(actor.id.toString())
 		.all<{ following_id: string; actor_followers_url: string | null }>()
+	if (!q1Success) {
+		throw new Error('SQL error: ' + q1Error)
+	}
 
 	// follow ourself to see our statuses in the our home timeline
 	const followingIds = new Set<string>([actor.id.toString()])
@@ -137,16 +144,7 @@ LIMIT ?4
 		return []
 	}
 
-	const out: Array<MastodonStatus> = []
-
-	for (const result of q2Results) {
-		const status = await toMastodonStatusFromRow(domain, db, result)
-		if (status !== null) {
-			out.push(status)
-		}
-	}
-
-	return out
+	return rowsToStatuses(domain, db, q2Results)
 }
 
 export enum LocalPreference {
@@ -272,16 +270,7 @@ LIMIT ?1
 		return []
 	}
 
-	const out: Array<MastodonStatus> = []
-
-	for (const result of results) {
-		const status = await toMastodonStatusFromRow(domain, db, result)
-		if (status !== null) {
-			out.push(status)
-		}
-	}
-
-	return out
+	return rowsToStatuses(domain, db, results)
 }
 
 export async function getListTimeline(
@@ -297,7 +286,11 @@ export async function getListTimeline(
 
 	const followingFollowersURLs = new Set<string>([PUBLIC_GROUP, actor.id.toString()])
 
-	const { results: memberResults } = await db
+	const {
+		success: memberSuccess,
+		error: memberError,
+		results: memberResults,
+	} = await db
 		.prepare(
 			`
 SELECT
@@ -312,6 +305,9 @@ WHERE actor_following.actor_id = ?1
 		)
 		.bind(actor.id.toString(), JSON.stringify(listMemberActorIds))
 		.all<{ member_id: string; actor_followers_url: string | null }>()
+	if (!memberSuccess) {
+		throw new Error('SQL error: ' + memberError)
+	}
 
 	for (const result of memberResults ?? []) {
 		followingFollowersURLs.add(result.actor_followers_url ?? `${result.member_id}/followers`)
@@ -401,8 +397,16 @@ LIMIT ?4
 		return []
 	}
 
+	return rowsToStatuses(domain, db, qResults)
+}
+
+async function rowsToStatuses(
+	domain: string,
+	db: Database,
+	results: Array<Parameters<typeof toMastodonStatusFromRow>[2]>
+): Promise<Array<MastodonStatus>> {
 	const out: Array<MastodonStatus> = []
-	for (const result of qResults) {
+	for (const result of results) {
 		const status = await toMastodonStatusFromRow(domain, db, result)
 		if (status !== null) {
 			out.push(status)
@@ -423,29 +427,37 @@ INNER JOIN objects ON objects.id = outbox_objects.object_id
 WHERE objects.mastodon_id = ?1
   `
 	if (maxId) {
-		const { results } = await db.prepare(QUERY).bind(maxId).all<{ cdate: string }>()
-		if (results === undefined || results.length === 0) {
+		const max = await getCdateForMastodonId(db, QUERY, maxId)
+		if (max === null) {
 			return [null, null]
 		}
-		const [{ cdate: max }] = results
 
 		if (minId) {
-			const { results } = await db.prepare(QUERY).bind(minId).all<{ cdate: string }>()
-			if (results === undefined || results.length === 0) {
+			const min = await getCdateForMastodonId(db, QUERY, minId)
+			if (min === null) {
 				return [null, null]
 			}
-			const [{ cdate: min }] = results
 			return [max, min]
 		}
 		return [max, null]
 	}
 	if (minId) {
-		const { results } = await db.prepare(QUERY).bind(minId).all<{ cdate: string }>()
-		if (results === undefined || results.length === 0) {
+		const min = await getCdateForMastodonId(db, QUERY, minId)
+		if (min === null) {
 			return [null, null]
 		}
-		const [{ cdate: min }] = results
 		return [null, min]
 	}
 	return [null, null]
+}
+
+async function getCdateForMastodonId(db: Database, query: string, mastodonId: MastodonId): Promise<string | null> {
+	const { success, error, results } = await db.prepare(query).bind(mastodonId).all<{ cdate: string }>()
+	if (!success) {
+		throw new Error('SQL error: ' + error)
+	}
+	if (results === undefined || results.length === 0) {
+		return null
+	}
+	return results[0].cdate
 }
