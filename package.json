@@ -13,7 +13,7 @@
 	},
 	"private": true,
 	"scripts": {
-		"pretty": "npx prettier --list-different './**/*.ts'",
+		"pretty": "npx prettier --list-different './**/*.{ts,tsx,js,jsx,json,css}'",
 		"test": "NODE_OPTIONS=--experimental-vm-modules vitest run",
 		"lint": "run-p lint:* --print-label",
 		"lint:frontend": "pnpm --filter @wildebeest/frontend lint",
