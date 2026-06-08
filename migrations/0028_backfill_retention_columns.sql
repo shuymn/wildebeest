@@ -9,8 +9,7 @@ UPDATE actors
 SET cached_at = NULL,
     expires_at = NULL,
     interaction_count = 0
-WHERE domain IS NULL
-  AND cached_at IS NULL;
+WHERE domain IS NULL;
 
 UPDATE objects
 SET cached_at = cdate,
@@ -22,5 +21,4 @@ UPDATE objects
 SET cached_at = NULL,
     expires_at = NULL,
     interaction_count = 0
-WHERE local = 1
-  AND cached_at IS NULL;
+WHERE local = 1;
