@@ -46,6 +46,45 @@ CREATE TABLE poll_votes (
 );
 CREATE UNIQUE INDEX "poll_votes_unique" ON "poll_votes" ("poll_id", "poll_option_id", "account_id");
 
+CREATE TRIGGER "poll_votes_single_choice_guard_insert"
+BEFORE INSERT ON "poll_votes"
+FOR EACH ROW
+WHEN EXISTS (
+  SELECT 1
+  FROM "polls" p
+  WHERE p."id" = NEW."poll_id"
+    AND p."multiple" = 0
+)
+AND EXISTS (
+  SELECT 1
+  FROM "poll_votes" pv
+  WHERE pv."poll_id" = NEW."poll_id"
+    AND pv."account_id" = NEW."account_id"
+)
+BEGIN
+  SELECT RAISE(ABORT, 'single-choice poll already voted');
+END;
+
+CREATE TRIGGER "poll_votes_single_choice_guard_update"
+BEFORE UPDATE ON "poll_votes"
+FOR EACH ROW
+WHEN EXISTS (
+  SELECT 1
+  FROM "polls" p
+  WHERE p."id" = NEW."poll_id"
+    AND p."multiple" = 0
+)
+AND EXISTS (
+  SELECT 1
+  FROM "poll_votes" pv
+  WHERE pv."poll_id" = NEW."poll_id"
+    AND pv."account_id" = NEW."account_id"
+    AND pv."id" != NEW."id"
+)
+BEGIN
+  SELECT RAISE(ABORT, 'single-choice poll already voted');
+END;
+
 -- Phase 2.10: Filter tables
 CREATE TABLE filters (
   "id" TEXT NOT NULL PRIMARY KEY,
