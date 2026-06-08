@@ -37,6 +37,7 @@ describe('interaction_count', () => {
 			.run()
 
 		await insertLike(db, { id: new URL(actorId) }, { id: new URL(objectId) })
+		await insertLike(db, { id: new URL(actorId) }, { id: new URL(objectId) })
 
 		const row = await db
 			.prepare('SELECT interaction_count FROM objects WHERE id = ?')
