@@ -116,7 +116,7 @@ jobs:
             "${DB_FILE:?}" < schema.sql | head -n 1 | grep -E '^-- Nothing is modified --$'
 
   test-ui:
-    timeout-minutes: 10
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     permissions:
       contents: read

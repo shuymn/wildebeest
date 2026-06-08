@@ -6,7 +6,12 @@ import { acceptFollowing, addFollowing } from '@wildebeest/backend/mastodon/foll
 import { insertHashtags } from '@wildebeest/backend/mastodon/hashtag'
 import { insertLike } from '@wildebeest/backend/mastodon/like'
 import { createReblog } from '@wildebeest/backend/mastodon/reblog'
-import { LocalPreference, getHomeTimeline, getPublicTimeline } from '@wildebeest/backend/mastodon/timeline'
+import {
+	LocalPreference,
+	getHomeTimeline,
+	getListTimeline,
+	getPublicTimeline,
+} from '@wildebeest/backend/mastodon/timeline'
 import { createDirectStatus, createPublicStatus, createReply } from '@wildebeest/backend/test/shared.utils'
 import { makeDB, createTestUser } from '@wildebeest/backend/test/utils'
 
@@ -230,6 +235,29 @@ describe('mastodon/timeline', () => {
 
 		const data = await getPublicTimeline(domain, db, LocalPreference.NotSet, false, 20, 'non-existent-tag')
 		assert.equal(data.length, 0)
+	})
+
+	test('list timeline returns empty for empty member list', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'list-empty@cloudflare.com')
+
+		const data = await getListTimeline(domain, db, actor, [])
+		assert.equal(data.length, 0)
+	})
+
+	test('list timeline returns only statuses from list members', async () => {
+		const db = makeDB()
+		const owner = await createTestUser(domain, db, userKEK, 'list-owner@cloudflare.com')
+		const member = await createTestUser(domain, db, userKEK, 'list-member@cloudflare.com')
+		const outsider = await createTestUser(domain, db, userKEK, 'list-outsider@cloudflare.com')
+
+		await createPublicStatus(domain, db, member, 'from list member')
+		await createPublicStatus(domain, db, outsider, 'from outsider')
+
+		const data = await getListTimeline(domain, db, owner, [member.id.toString()])
+		assert.equal(data.length, 1)
+		assert.equal(data[0].content, '<p>from list member</p>')
+		assert.equal(data[0].account.username, 'list-member')
 	})
 
 	test('timeline tag', async () => {

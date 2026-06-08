@@ -6,10 +6,11 @@ import { addObjectInOutbox } from '@wildebeest/backend/activitypub/actors/outbox
 import { getApId } from '@wildebeest/backend/activitypub/objects'
 import { Note } from '@wildebeest/backend/activitypub/objects/note'
 import { type Database } from '@wildebeest/backend/database'
-import { getResultsField } from '@wildebeest/backend/mastodon/utils'
 import { MastodonId } from '@wildebeest/backend/types'
 import { isUUID } from '@wildebeest/backend/utils'
 import { generateMastodonId } from '@wildebeest/backend/utils/id'
+
+import { assertBatchSuccess, getResultsField } from './utils'
 
 /**
  * Creates a reblog and inserts it in the reblog author's outbox
@@ -25,15 +26,11 @@ export async function createReblog(
 	activity: Pick<AnnounceActivity, 'id' | 'to' | 'cc'>,
 	published?: string
 ) {
-	const outboxObjectId = await addObjectInOutbox(
-		db,
-		actor,
-		obj,
-		activity.to ?? obj.to,
-		activity.cc ?? obj.cc,
-		published
-	)
-	await insertReblog(db, actor, obj, activity.id.toString(), outboxObjectId)
+	const [outboxObjectId, mastodonId] = await Promise.all([
+		addObjectInOutbox(db, actor, obj, activity.to ?? obj.to, activity.cc ?? obj.cc, published),
+		generateMastodonId(db, 'actor_reblogs', new Date()),
+	])
+	await insertReblog(db, actor, obj, activity.id.toString(), outboxObjectId, mastodonId)
 }
 
 async function insertReblog(
@@ -41,26 +38,32 @@ async function insertReblog(
 	actor: Pick<Actor, 'id'>,
 	obj: Pick<Note, 'id'>,
 	activityId: string,
-	outboxObjectId: string
+	outboxObjectId: string,
+	mastodonId: MastodonId
 ) {
-	const query = `
-		INSERT INTO actor_reblogs (id, actor_id, object_id, outbox_object_id, mastodon_id)
-		VALUES (?, ?, ?, ?, ?)
-	`
-
-	const out = await db
-		.prepare(query)
-		.bind(
-			activityId,
-			actor.id.toString(),
-			obj.id.toString(),
-			outboxObjectId,
-			await generateMastodonId(db, 'actor_reblogs', new Date())
-		)
-		.run()
-	if (!out.success) {
-		throw new Error('SQL error: ' + out.error)
-	}
+	const results = await db.batch([
+		db
+			.prepare(
+				db.qb.insertOrIgnore(`
+INTO actor_reblogs (id, actor_id, object_id, outbox_object_id, mastodon_id)
+VALUES (?, ?, ?, ?, ?)
+`)
+			)
+			.bind(activityId, actor.id.toString(), obj.id.toString(), outboxObjectId, mastodonId),
+		db
+			.prepare(
+				`
+UPDATE objects
+SET interaction_count = interaction_count + 1
+WHERE id = ?
+  AND local = 0
+  AND EXISTS (SELECT 1 FROM users WHERE users.actor_id = ?)
+  AND EXISTS (SELECT 1 FROM actor_reblogs WHERE id = ?)
+`
+			)
+			.bind(obj.id.toString(), actor.id.toString(), activityId),
+	])
+	assertBatchSuccess(results)
 }
 
 export function getReblogs(db: Database, obj: Note): Promise<Array<string>> {

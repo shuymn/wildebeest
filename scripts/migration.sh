@@ -3,16 +3,45 @@ set -Eeu -o pipefail
 
 echo -n 'input migration file name: '
 read -r INPUT
+if [[ ! "${INPUT}" =~ ^[0-9]{4}_[a-z0-9_]+$ ]]; then
+  echo "error: invalid migration file name format (expected: NNNN_description)" >&2
+  exit 1
+fi
 
 SCRIPT_DIR=$(
   cd "$(dirname "$0")" || exit
   pwd
 )
+ROOT_DIR="${SCRIPT_DIR}/.."
 
-sqlite3def \
+DB_FILES=()
+while IFS= read -r -d '' file; do
+  DB_FILES+=("$file")
+done < <(find "${ROOT_DIR}/.wrangler/state/v3/d1/miniflare-D1DatabaseObject" -name "*.sqlite" -type f -print0 2>/dev/null)
+
+if [ "${#DB_FILES[@]}" -eq 0 ]; then
+  DB_FILE="${ROOT_DIR}/.wrangler/state/v3/d1/83821907-97fd-44b4-8f21-e3d6b736e7ef/db.sqlite"
+elif [ "${#DB_FILES[@]}" -eq 1 ]; then
+  DB_FILE="${DB_FILES[0]}"
+else
+  echo "error: multiple local D1 database files found; please clean .wrangler/state" >&2
+  printf '  %s\n' "${DB_FILES[@]}" >&2
+  exit 1
+fi
+if [ ! -f "${DB_FILE}" ]; then
+  echo "error: local D1 database file not found (run pnpm run database:migrate -- --local first)" >&2
+  exit 1
+fi
+
+# Drop Cloudflare internal tables to avoid sqlite3def parser errors.
+sqlite3 "${DB_FILE:?}" "DROP TABLE IF EXISTS _cf_KV; DROP TABLE IF EXISTS _cf_METADATA;"
+
+mise exec -- sqlite3def \
   --enable-drop-table \
-  --config "${SCRIPT_DIR:?}/../sqldef.yml" \
+  --config "${ROOT_DIR}/sqldef.yml" \
   --dry-run \
-  "${SCRIPT_DIR:?}/../.wrangler/state/v3/d1/83821907-97fd-44b4-8f21-e3d6b736e7ef/db.sqlite" \
-  <"${SCRIPT_DIR:?}/../schema.sql" \
-  >"${SCRIPT_DIR:?}/../migrations/${INPUT:?}.sql"
+  "${DB_FILE:?}" \
+  <"${ROOT_DIR}/schema.sql" \
+  >"${ROOT_DIR}/migrations/${INPUT}.sql"
+
+echo "wrote migrations/${INPUT}.sql"

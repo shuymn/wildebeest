@@ -1,6 +1,5 @@
 {
-  "language": "sqlite",
-  "keywordCase": "upper",
-  "expressionWidth": 50
+	"language": "sqlite",
+	"keywordCase": "upper",
+	"expressionWidth": 50
 }
-

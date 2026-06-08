@@ -2,20 +2,36 @@ import type { Actor } from '@wildebeest/backend/activitypub/actors'
 import type { ApObject } from '@wildebeest/backend/activitypub/objects'
 import { type Database } from '@wildebeest/backend/database'
 
-import { getResultsField } from './utils'
+import { assertBatchSuccess, getResultsField } from './utils'
 
 export async function insertLike(db: Database, actor: Actor, obj: ApObject) {
 	const id = crypto.randomUUID()
+	const actorId = actor.id.toString()
+	const objectId = obj.id.toString()
 
-	const query = `
-		INSERT INTO actor_favourites (id, actor_id, object_id)
-		VALUES (?, ?, ?)
-	`
-
-	const out = await db.prepare(query).bind(id, actor.id.toString(), obj.id.toString()).run()
-	if (!out.success) {
-		throw new Error('SQL error: ' + out.error)
-	}
+	const results = await db.batch([
+		db
+			.prepare(
+				db.qb.insertOrIgnore(`
+INTO actor_favourites (id, actor_id, object_id)
+VALUES (?, ?, ?)
+`)
+			)
+			.bind(id, actorId, objectId),
+		db
+			.prepare(
+				`
+UPDATE objects
+SET interaction_count = interaction_count + 1
+WHERE id = ?
+  AND local = 0
+  AND EXISTS (SELECT 1 FROM users WHERE users.actor_id = ?)
+  AND EXISTS (SELECT 1 FROM actor_favourites WHERE id = ?)
+`
+			)
+			.bind(objectId, actorId, id),
+	])
+	assertBatchSuccess(results)
 }
 
 export function getLikes(db: Database, obj: ApObject): Promise<Array<string>> {
