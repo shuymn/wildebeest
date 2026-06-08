@@ -1,9 +1,9 @@
 import { init } from './init'
-import { type Database } from '@wildebeest/backend/database'
+import { getDatabase } from '@wildebeest/backend/database'
 
 interface Env {
 	DOMAIN?: string
-	DATABASE: Database
+	DATABASE: D1Database
 }
 
 /**
@@ -12,7 +12,7 @@ interface Env {
 const handler: ExportedHandler<Env> = {
 	async fetch(_, { DOMAIN, DATABASE }) {
 		try {
-			await init(DOMAIN ?? '0.0.0.0', DATABASE)
+			await init(DOMAIN ?? '0.0.0.0', getDatabase({ DATABASE }))
 			// eslint-disable-next-line no-console
 			console.log('Database initialized.')
 		} catch (e) {
