@@ -82,7 +82,7 @@ async function handleUpdate(
 ): Promise<Response> {
 	const result = await readBody(request, updateSchema)
 	if (!result.success) {
-		return new Response('', { status: 400 })
+		return new Response('', { status: 400, headers })
 	}
 
 	const list = await updateList(db, listId, connectedActorId, result.data)

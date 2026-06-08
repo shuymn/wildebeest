@@ -38,7 +38,7 @@ app.post(async ({ req, env }) => {
 
 	const result = await readBody(req.raw, createSchema)
 	if (!result.success) {
-		return new Response('', { status: 400 })
+		return new Response('', { status: 400, headers })
 	}
 
 	const list = await createList(

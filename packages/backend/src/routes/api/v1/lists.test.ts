@@ -43,6 +43,7 @@ describe('/api/v1/lists', () => {
 			}),
 			{ DATABASE: db, data: { connectedActor } }
 		)
+		await assertStatus(createRes, 200)
 		const { id } = await createRes.json<{ id: string }>()
 
 		const updateRes = await app.fetch(
@@ -76,6 +77,7 @@ describe('/api/v1/lists', () => {
 			}),
 			{ DATABASE: db, data: { connectedActor } }
 		)
+		await assertStatus(createRes, 200)
 		const { id } = await createRes.json<{ id: string }>()
 
 		const getRes = await app.fetch(new Request(`https://${domain}/api/v1/lists/${id}`), {
@@ -101,6 +103,7 @@ describe('/api/v1/lists', () => {
 			}),
 			{ DATABASE: db, data: { connectedActor } }
 		)
+		await assertStatus(createRes, 200)
 		const { id } = await createRes.json<{ id: string }>()
 
 		const addRes = await app.fetch(

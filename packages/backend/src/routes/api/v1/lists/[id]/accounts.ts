@@ -83,17 +83,7 @@ async function handleAdd(
 	listId: string,
 	request: Request
 ): Promise<Response> {
-	const result = await readBody(request, modifySchema)
-	if (!result.success) {
-		return new Response('', { status: 400 })
-	}
-
-	const list = await addAccountsToList(db, listId, connectedActorId, result.data.account_ids)
-	if (!list) {
-		return resourceNotFound('id', listId)
-	}
-	const accounts = await getListMemberAccounts(domain, db, listId, connectedActorId)
-	return makeJsonResponse(accounts, { headers })
+	return handleModifyAccounts({ domain, db, connectedActorId }, listId, request, addAccountsToList)
 }
 
 async function handleRemove(
@@ -101,12 +91,26 @@ async function handleRemove(
 	listId: string,
 	request: Request
 ): Promise<Response> {
+	return handleModifyAccounts({ domain, db, connectedActorId }, listId, request, removeAccountsFromList)
+}
+
+async function handleModifyAccounts(
+	{ domain, db, connectedActorId }: Dependencies,
+	listId: string,
+	request: Request,
+	modify: (
+		db: Database,
+		listId: string,
+		connectedActorId: string,
+		accountIds: string[]
+	) => ReturnType<typeof addAccountsToList>
+): Promise<Response> {
 	const result = await readBody(request, modifySchema)
 	if (!result.success) {
-		return new Response('', { status: 400 })
+		return new Response('', { status: 400, headers })
 	}
 
-	const list = await removeAccountsFromList(db, listId, connectedActorId, result.data.account_ids)
+	const list = await modify(db, listId, connectedActorId, result.data.account_ids)
 	if (!list) {
 		return resourceNotFound('id', listId)
 	}
