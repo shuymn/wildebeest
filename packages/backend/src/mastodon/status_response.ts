@@ -1,6 +1,6 @@
 import type { Actor } from '@wildebeest/backend/activitypub/actors'
 import { getObjectById, getObjectByMastodonId, type RemoteObject } from '@wildebeest/backend/activitypub/objects'
-import type { Note } from '@wildebeest/backend/activitypub/objects/note'
+import { isNote, type Note } from '@wildebeest/backend/activitypub/objects/note'
 import type { Database } from '@wildebeest/backend/database'
 import { setMastodonStatusViewerState, toMastodonStatusFromObject } from '@wildebeest/backend/mastodon/status'
 import { canViewStatus } from '@wildebeest/backend/mastodon/status_visibility'
@@ -13,7 +13,7 @@ export async function loadVisibleStatusObject(
 	viewer: Actor | undefined
 ): Promise<RemoteObject<Note> | null> {
 	const obj = await getObjectByMastodonId<Note>(domain, db, id)
-	if (obj === null) {
+	if (obj === null || !isNote(obj)) {
 		return null
 	}
 	return (await canViewStatus(db, obj, viewer)) ? obj : null
@@ -42,6 +42,9 @@ export async function loadViewerStatusesByObjectIds(
 		objectIds.map(async (objectId) => {
 			const obj = await getObjectById<Note>(domain, db, objectId)
 			if (!obj) {
+				return null
+			}
+			if (!isNote(obj) || !(await canViewStatus(db, obj, viewer))) {
 				return null
 			}
 			return toViewerStatusResponse(db, domain, obj, viewer)

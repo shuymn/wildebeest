@@ -52,7 +52,9 @@ async function handleRequest(
 	await Promise.all([
 		timeline.pregenerateTimelines(domain, db, cache, connectedActor),
 		timeline.pregenerateTimelines(domain, db, cache, target),
-	])
+	]).catch((err) => {
+		console.warn('failed to pregenerate timelines after block', err)
+	})
 
 	const res = await getRelationship(db, connectedActor, id)
 	return new Response(JSON.stringify(res), { headers })

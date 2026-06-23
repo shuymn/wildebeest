@@ -78,6 +78,18 @@ export type FollowOptions = {
 	languages?: string[]
 }
 
+function serializeFollowOptions(options: FollowOptions): {
+	showReblogs: number
+	notify: number
+	languages: string | null
+} {
+	return {
+		showReblogs: (options.reblogs ?? true) ? 1 : 0,
+		notify: (options.notify ?? false) ? 1 : 0,
+		languages: options.languages ? JSON.stringify(options.languages) : null,
+	}
+}
+
 // Add a pending following
 export async function addFollowing(
 	domain: string,
@@ -93,6 +105,7 @@ export async function addFollowing(
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 
+	const optionValues = serializeFollowOptions(options)
 	const out = await db
 		.prepare(query)
 		.bind(
@@ -101,15 +114,55 @@ export async function addFollowing(
 			followee.id.toString(),
 			STATE_PENDING,
 			actorToAcct(followee, domain),
-			(options.reblogs ?? true) ? 1 : 0,
-			(options.notify ?? false) ? 1 : 0,
-			options.languages ? JSON.stringify(options.languages) : null
+			optionValues.showReblogs,
+			optionValues.notify,
+			optionValues.languages
 		)
 		.run()
 	if (!out.success) {
 		throw new Error('SQL error: ' + out.error)
 	}
 	return id
+}
+
+export async function updateFollowingOptions(
+	db: Database,
+	follower: Pick<Actor, 'id'>,
+	followee: Pick<Actor, 'id'>,
+	options: FollowOptions
+): Promise<void> {
+	const updates: string[] = []
+	const values: (number | string | null)[] = []
+	const optionValues = serializeFollowOptions(options)
+	if (options.reblogs !== undefined) {
+		updates.push('show_reblogs = ?')
+		values.push(optionValues.showReblogs)
+	}
+	if (options.notify !== undefined) {
+		updates.push('notify = ?')
+		values.push(optionValues.notify)
+	}
+	if (options.languages !== undefined) {
+		updates.push('languages = ?')
+		values.push(optionValues.languages)
+	}
+	if (updates.length === 0) {
+		return
+	}
+
+	const out = await db
+		.prepare(
+			`
+	UPDATE actor_following
+	SET ${updates.join(', ')}
+	WHERE actor_id = ? AND target_actor_id = ?
+	`
+		)
+		.bind(...values, follower.id.toString(), followee.id.toString())
+		.run()
+	if (!out.success) {
+		throw new Error('SQL error: ' + out.error)
+	}
 }
 
 // Accept the pending following request
@@ -299,10 +352,6 @@ export async function isFollowingOrFollowingRequested(db: Database, actor: Actor
 		})
 
 	return yes === 1
-}
-
-export async function isNotFollowing(db: Database, actor: Actor, target: Actor): Promise<boolean> {
-	return !(await isFollowing(db, actor, target))
 }
 
 export async function isFollowing(db: Database, actor: Actor, target: Actor): Promise<boolean> {

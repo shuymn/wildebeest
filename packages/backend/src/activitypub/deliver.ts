@@ -45,6 +45,14 @@ export async function deliverToActor<T extends Activity>(
 	console.log(`${to.inbox} returned 200`)
 }
 
+export async function deliverSafely(label: string, deliver: () => Promise<unknown>): Promise<void> {
+	try {
+		await deliver()
+	} catch (err) {
+		console.warn(`failed to deliver ${label}:`, err)
+	}
+}
+
 // TODO: eventually move this to the queue worker, the backend can send a message
 // to a collection (followers) and the worker creates the individual messages. More
 // reliable and scalable.

@@ -188,4 +188,62 @@ describe('/api/v1/statuses/[id]/reblog', () => {
 		assert.equal(deliveredActivity.actor, actor.id.toString())
 		assert.equal(deliveredActivity.object, originalObjectId)
 	})
+
+	test('reblog remote status keeps local state when Announce delivery fails', async () => {
+		const db = makeDB()
+		const queue = makeQueue()
+		const actor = await createTestUser(domain, db, userKEK, 'reblog-delivery-failure@cloudflare.com')
+		const originalObjectId = 'https://example.com/failed-announce-note'
+
+		await db
+			.prepare(
+				'INSERT INTO objects (id, type, properties, original_actor_id, original_object_id, mastodon_id, local) VALUES (?, ?, ?, ?, ?, ?, 0)'
+			)
+			.bind(
+				'https://example.com/failed-announce-object',
+				'Note',
+				JSON.stringify({
+					attributedTo: actor.id.toString(),
+					id: 'failed-announce',
+					type: 'Note',
+					content: 'remote status',
+					source: {
+						content: 'remote status',
+						mediaType: 'text/markdown',
+					},
+					to: [PUBLIC_GROUP],
+					cc: [],
+					attachment: [],
+					sensitive: false,
+				} satisfies Note),
+				actor.id.toString(),
+				originalObjectId,
+				'failed-announce-mastodon-id'
+			)
+			.run()
+
+		globalThis.fetch = async (input: RequestInfo) => {
+			const request = new Request(input)
+			if (request.url === actor.id.toString() + '/inbox') {
+				return new Response('temporary failure', { status: 503 })
+			}
+
+			throw new Error('unexpected request to ' + request.url)
+		}
+
+		const req = new Request(`https://${domain}/api/v1/statuses/failed-announce-mastodon-id/reblog`, {
+			method: 'POST',
+			body: JSON.stringify({ visibility: 'public' }),
+		})
+		const res = await app.fetch(req, { DATABASE: db, QUEUE: queue, userKEK, data: { connectedActor: actor } })
+		await assertStatus(res, 200)
+		const data = await res.json<{ reblogged: boolean }>()
+		assert.equal(data.reblogged, true)
+
+		const row = await db
+			.prepare(`SELECT actor_id, object_id FROM actor_reblogs`)
+			.first<{ actor_id: string; object_id: string }>()
+		assert.equal(row?.actor_id, actor.id.toString())
+		assert.equal(row?.object_id, 'https://example.com/failed-announce-object')
+	})
 })

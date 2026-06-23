@@ -74,6 +74,28 @@ describe('/api/v1/blocks', () => {
 		assert.equal(row?.count, 0)
 	})
 
+	test('block returns relationship when timeline regeneration fails', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'cache-failure-blocker@cloudflare.com')
+		const target = await createTestUser(domain, db, userKEK, 'cache-failure-blocked@cloudflare.com')
+		const failingCache = {
+			async get<T>(): Promise<T | null> {
+				return null
+			},
+			async put<T>(_key: string, _value: T): Promise<void> {
+				throw new Error('cache write failed')
+			},
+		}
+
+		const res = await app.fetch(
+			new Request(`https://${domain}/api/v1/accounts/${target[mastodonIdSymbol]}/block`, { method: 'POST' }),
+			{ DATABASE: db, DO_CACHE: makeDOCache(failingCache), data: { connectedActor: actor } }
+		)
+		await assertStatus(res, 200)
+		const relationship = await res.json<{ blocking: boolean }>()
+		assert.equal(relationship.blocking, true)
+	})
+
 	test('block regenerates cached home timeline', async () => {
 		const db = makeDB()
 		const cache = makeCache()
