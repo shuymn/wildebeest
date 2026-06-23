@@ -6,7 +6,8 @@ import { deliverToActor } from '@wildebeest/backend/activitypub/deliver'
 import { type ApObject, getApId } from '@wildebeest/backend/activitypub/objects'
 import { Database } from '@wildebeest/backend/database'
 import { getSigningKey } from '@wildebeest/backend/mastodon/account'
-import { acceptFollowing, addFollowing } from '@wildebeest/backend/mastodon/follow'
+import { hasBlockBetween } from '@wildebeest/backend/mastodon/block'
+import { ensureAcceptedFollowingIfNotBlocked } from '@wildebeest/backend/mastodon/follow'
 import { insertFollowNotification, sendFollowNotification } from '@wildebeest/backend/mastodon/notification'
 import { actorToHandle } from '@wildebeest/backend/utils/handle'
 import { JWK } from '@wildebeest/backend/webpush/jwk'
@@ -46,16 +47,20 @@ export async function handleFollowActivity(
 	}
 
 	const followerId = getApId(activity.actor)
+	if (await hasBlockBetween(db, { id: followerId }, followee)) {
+		return
+	}
+
 	const follower = await getAndCacheActor(followerId, db)
 	if (follower === null) {
 		console.warn(`actor ${followerId} not found`)
 		return
 	}
-
-	await addFollowing(domain, db, follower, followee)
+	if (!(await ensureAcceptedFollowingIfNotBlocked(domain, db, follower, followee))) {
+		return
+	}
 
 	// Automatically send the Accept reply
-	await acceptFollowing(db, follower, followee)
 	const reply = await createAcceptActivity(db, domain, followee, activity)
 	const signingKey = await getSigningKey(userKEK, db, followee)
 	await deliverToActor(signingKey, followee, follower, reply, domain)

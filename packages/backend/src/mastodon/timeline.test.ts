@@ -2,11 +2,13 @@ import { strict as assert } from 'node:assert/strict'
 
 import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
 import { createAnnounceActivity } from '@wildebeest/backend/activitypub/activities/announce'
+import { insertBlock } from '@wildebeest/backend/mastodon/block'
 import { insertBookmark } from '@wildebeest/backend/mastodon/bookmark'
 import { acceptFollowing, addFollowing } from '@wildebeest/backend/mastodon/follow'
 import { insertHashtags } from '@wildebeest/backend/mastodon/hashtag'
 import { insertLike } from '@wildebeest/backend/mastodon/like'
-import { createReblog } from '@wildebeest/backend/mastodon/reblog'
+import { insertMute } from '@wildebeest/backend/mastodon/mute'
+import { createReblog, deleteReblog } from '@wildebeest/backend/mastodon/reblog'
 import {
 	LocalPreference,
 	getHomeTimeline,
@@ -19,7 +21,8 @@ import { makeDB, createTestUser } from '@wildebeest/backend/test/utils'
 const userKEK = 'test_kek6'
 const domain = 'cloudflare.com'
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const getDefaultPublicTimeline = (db: ReturnType<typeof makeDB>, hashtag?: string) =>
+	getPublicTimeline(domain, db, LocalPreference.NotSet, false, 20, undefined, undefined, hashtag)
 
 describe('mastodon/timeline', () => {
 	test('home returns Notes in following Actors', async () => {
@@ -52,8 +55,7 @@ describe('mastodon/timeline', () => {
 		})
 
 		// Actor should only see posts from actor2 in the timeline
-		const connectedActor: any = actor
-		const data = await getHomeTimeline(domain, db, connectedActor)
+		const data = await getHomeTimeline(domain, db, actor)
 		assert.equal(data.length, 3)
 		assert(data[0].id)
 		assert.equal(data[0].content, '')
@@ -68,6 +70,39 @@ describe('mastodon/timeline', () => {
 		assert.equal(data[2].favourites_count, 1)
 		assert.equal(data[2].reblogs_count, 1)
 		assert.equal(data[2].bookmarked, true)
+
+		await deleteReblog(db, actor, firstNoteFromActor2)
+		const dataAfterUnreblog = await getHomeTimeline(domain, db, actor)
+		assert.equal(dataAfterUnreblog.length, 2)
+		assert.equal(dataAfterUnreblog[1].reblogs_count, 0)
+	})
+
+	test('home and list timelines hide blocked and muted accounts', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'filter-owner@cloudflare.com')
+		const blocked = await createTestUser(domain, db, userKEK, 'filter-blocked@cloudflare.com')
+		const muted = await createTestUser(domain, db, userKEK, 'filter-muted@cloudflare.com')
+		const visible = await createTestUser(domain, db, userKEK, 'filter-visible@cloudflare.com')
+
+		for (const target of [blocked, muted, visible]) {
+			await addFollowing(domain, db, actor, target)
+			await acceptFollowing(db, actor, target)
+			await createPublicStatus(domain, db, target, `post from ${target.preferredUsername}`)
+		}
+		await insertBlock(db, actor, blocked)
+		await insertMute(db, actor, muted)
+
+		const home = await getHomeTimeline(domain, db, actor)
+		assert.equal(home.length, 1)
+		assert.equal(home[0].account.username, 'filter-visible')
+
+		const list = await getListTimeline(domain, db, actor, [
+			blocked.id.toString(),
+			muted.id.toString(),
+			visible.id.toString(),
+		])
+		assert.equal(list.length, 1)
+		assert.equal(list[0].account.username, 'filter-visible')
 	})
 
 	test("home doesn't show private Notes from followed actors", async () => {
@@ -116,7 +151,7 @@ describe('mastodon/timeline', () => {
 		// actor2 sends a DM to actor1
 		await createDirectStatus(domain, db, actor2, 'DM', [], { to: [actor1] })
 
-		const data = await getPublicTimeline(domain, db, LocalPreference.NotSet, false, 20)
+		const data = await getDefaultPublicTimeline(db)
 		assert.equal(data.length, 0)
 	})
 
@@ -127,9 +162,7 @@ describe('mastodon/timeline', () => {
 		// Actor is posting
 		await createPublicStatus(domain, db, actor, 'status from myself')
 
-		// Actor should only see posts from actor2 in the timeline
-		const connectedActor = actor
-		const data = await getHomeTimeline(domain, db, connectedActor)
+		const data = await getHomeTimeline(domain, db, actor)
 		assert.equal(data.length, 1)
 		assert(data[0].id)
 		assert.equal(data[0].content, '<p>status from myself</p>')
@@ -140,16 +173,14 @@ describe('mastodon/timeline', () => {
 		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
-		const note = await createPublicStatus(domain, db, actor, 'a post')
-
-		await sleep(10)
+		const note = await createPublicStatus(domain, db, actor, 'a post', [], {
+			published: '2021-01-01T00:00:00.000Z',
+		})
 
 		await createReply(domain, db, actor, note, '@sven@cloudflare.com a reply')
 
-		const connectedActor: any = actor
-
 		{
-			const data = await getHomeTimeline(domain, db, connectedActor)
+			const data = await getHomeTimeline(domain, db, actor)
 			assert.equal(data.length, 2)
 			assert.equal(
 				data[0].content,
@@ -161,7 +192,7 @@ describe('mastodon/timeline', () => {
 		}
 
 		{
-			const data = await getPublicTimeline(domain, db, LocalPreference.NotSet, false, 20)
+			const data = await getDefaultPublicTimeline(db)
 			assert.equal(data.length, 1)
 			assert.equal(data[0].content, '<p>a post</p>')
 			assert.equal(data[0].replies_count, 1)
@@ -179,9 +210,7 @@ describe('mastodon/timeline', () => {
 			id: 'https://example.com/activity',
 		})
 
-		const connectedActor: any = actor
-
-		const data = await getHomeTimeline(domain, db, connectedActor)
+		const data = await getHomeTimeline(domain, db, actor)
 		assert.equal(data.length, 2)
 		assert.equal(data[1].reblogged, true)
 	})
@@ -193,11 +222,28 @@ describe('mastodon/timeline', () => {
 		const note = await createPublicStatus(domain, db, actor, 'a post')
 		await insertLike(db, actor, note)
 
-		const connectedActor: any = actor
-
-		const data = await getHomeTimeline(domain, db, connectedActor)
+		const data = await getHomeTimeline(domain, db, actor)
 		assert.equal(data.length, 1)
 		assert.equal(data[0].favourited, true)
+	})
+
+	test('show status bookmarked in home and list timelines', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'bookmark-owner@cloudflare.com')
+		const member = await createTestUser(domain, db, userKEK, 'bookmark-member@cloudflare.com')
+
+		await addFollowing(domain, db, actor, member)
+		await acceptFollowing(db, actor, member)
+		const note = await createPublicStatus(domain, db, member, 'bookmarked post')
+		await insertBookmark(db, actor, note)
+
+		const home = await getHomeTimeline(domain, db, actor)
+		assert.equal(home.length, 1)
+		assert.equal(home[0].bookmarked, true)
+
+		const list = await getListTimeline(domain, db, actor, [member.id.toString()])
+		assert.equal(list.length, 1)
+		assert.equal(list[0].bookmarked, true)
 	})
 
 	test('show reblogs as independent notes', async () => {
@@ -230,14 +276,14 @@ describe('mastodon/timeline', () => {
 		await createReblog(db, actorA, note, activityA, activityA.published)
 		await createReblog(db, actorB, note, activityB, activityB.published)
 
-		const data = await getPublicTimeline(domain, db, LocalPreference.NotSet, false, 20)
+		const data = await getDefaultPublicTimeline(db)
 		assert.equal(data.length, 3)
 	})
 
 	test('timeline with non exitent tag', async () => {
 		const db = makeDB()
 
-		const data = await getPublicTimeline(domain, db, LocalPreference.NotSet, false, 20, 'non-existent-tag')
+		const data = await getDefaultPublicTimeline(db, 'non-existent-tag')
 		assert.equal(data.length, 0)
 	})
 
@@ -274,21 +320,22 @@ describe('mastodon/timeline', () => {
 			})
 			await insertHashtags(db, note, ['test', 'a'])
 		}
-		await sleep(10)
 		{
-			const note = await createPublicStatus(domain, db, actor, 'test 2')
+			const note = await createPublicStatus(domain, db, actor, 'test 2', [], {
+				published: '2021-01-01T00:00:00.001Z',
+			})
 			await insertHashtags(db, note, ['test', 'b'])
 		}
 
 		{
-			const data = await getPublicTimeline(domain, db, LocalPreference.NotSet, false, 20, undefined, undefined, 'test')
+			const data = await getDefaultPublicTimeline(db, 'test')
 			assert.equal(data.length, 2)
 			assert.equal(data[0].content, '<p>test 2</p>')
 			assert.equal(data[1].content, '<p>test 1</p>')
 		}
 
 		{
-			const data = await getPublicTimeline(domain, db, LocalPreference.NotSet, false, 20, undefined, undefined, 'a')
+			const data = await getDefaultPublicTimeline(db, 'a')
 			assert.equal(data.length, 1)
 			assert.equal(data[0].content, '<p>test 1</p>')
 		}

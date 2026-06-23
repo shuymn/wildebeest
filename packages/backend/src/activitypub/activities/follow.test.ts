@@ -3,8 +3,10 @@ import { strict as assert } from 'node:assert/strict'
 import app from '@wildebeest/backend'
 import { Activity, FollowActivity } from '@wildebeest/backend/activitypub/activities'
 import * as activityHandler from '@wildebeest/backend/activitypub/activities/handle'
+import { type Actor } from '@wildebeest/backend/activitypub/actors'
 import { getApId } from '@wildebeest/backend/activitypub/objects'
-import { acceptFollowing, addFollowing } from '@wildebeest/backend/mastodon/follow'
+import { insertBlock } from '@wildebeest/backend/mastodon/block'
+import { acceptFollowing, addFollowing, isFollowingOrFollowingRequested } from '@wildebeest/backend/mastodon/follow'
 import { assertStatus, createActivityId, createTestUser, makeDB } from '@wildebeest/backend/test/utils'
 import { JWK } from '@wildebeest/backend/webpush/jwk'
 
@@ -13,18 +15,27 @@ const domain = 'cloudflare.com'
 const adminEmail = 'admin@example.com'
 const vapidKeys = {} as JWK
 
+function makeFollowActivity(follower: Pick<Actor, 'id'>, followee: Pick<Actor, 'id'>): FollowActivity {
+	return {
+		'@context': 'https://www.w3.org/ns/activitystreams',
+		id: createActivityId(domain),
+		type: 'Follow',
+		actor: follower.id,
+		object: followee.id,
+	}
+}
+
 describe('Follow', () => {
-	let receivedActivity: Activity | null = null
+	let receivedActivities: Activity[] = []
 
 	beforeEach(() => {
-		receivedActivity = null
+		receivedActivities = []
 
 		globalThis.fetch = async (input: RequestInfo) => {
 			const request = new Request(input)
 			if (request.url === `https://${domain}/ap/users/sven2/inbox`) {
 				assert.equal(request.method, 'POST')
-				const data = await request.json<Activity>()
-				receivedActivity = data
+				receivedActivities.push(await request.json<Activity>())
 				return new Response('')
 			}
 
@@ -37,13 +48,7 @@ describe('Follow', () => {
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 
-		const activity: Activity = {
-			'@context': 'https://www.w3.org/ns/activitystreams',
-			id: createActivityId(domain),
-			type: 'Follow',
-			actor: actor2.id,
-			object: actor.id,
-		}
+		const activity = makeFollowActivity(actor2, actor)
 
 		await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
@@ -58,7 +63,8 @@ describe('Follow', () => {
 		assert.equal(row.target_actor_id, actor.id.toString())
 		assert.equal(row.state, 'accepted')
 
-		assert(receivedActivity)
+		assert.equal(receivedActivities.length, 1)
+		const receivedActivity = receivedActivities[0]
 		assert.equal(receivedActivity.type, 'Accept')
 		assert.equal(getApId(receivedActivity.actor).toString(), actor.id.toString())
 		assert.equal(
@@ -144,13 +150,7 @@ describe('Follow', () => {
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 
-		const activity: Activity = {
-			'@context': 'https://www.w3.org/ns/activitystreams',
-			id: createActivityId(domain),
-			type: 'Follow',
-			actor: actor2.id,
-			object: actor.id,
-		}
+		const activity = makeFollowActivity(actor2, actor)
 
 		await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 
@@ -165,31 +165,42 @@ describe('Follow', () => {
 		assert.equal(entry.from_actor_id.toString(), actor2.id.toString())
 	})
 
-	test('ignore when trying to follow multiple times', async () => {
+	test('ignores blocked follow without accepting it', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'blocked-followee@cloudflare.com')
+		const actor2 = await createTestUser(domain, db, userKEK, 'blocked-follower@cloudflare.com')
+		await insertBlock(db, actor, actor2)
+
+		const activity = makeFollowActivity(actor2, actor)
+
+		await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
+
+		assert.equal(receivedActivities.length, 0)
+		assert.equal(await isFollowingOrFollowingRequested(db, actor2, actor), false)
+		const notification = await db
+			.prepare(`SELECT count(*) as count FROM actor_notifications`)
+			.first<{ count: number }>()
+		assert.equal(notification?.count, 0)
+	})
+
+	test('keeps one following row while accepting repeated follows', async () => {
 		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
 
-		const activity: Activity = {
-			'@context': 'https://www.w3.org/ns/activitystreams',
-			id: createActivityId(domain),
-			type: 'Follow',
-			actor: actor2.id,
-			object: actor.id,
+		const activity = makeFollowActivity(actor2, actor)
+
+		const repeatCount = 3
+		for (let i = 0; i < repeatCount; i++) {
+			await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 		}
 
-		await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
-		await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
-		await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
-
-		// Even if we followed multiple times, only one row should be present.
-		const { count } = await db
-			.prepare(`SELECT count(*) as count FROM actor_following`)
+		const row = await db
+			.prepare(`SELECT count(*) as count FROM actor_following WHERE actor_id = ?1 AND target_actor_id = ?2`)
+			.bind(actor2.id.toString(), actor.id.toString())
 			.first<{ count: number }>()
-			.then((row) => {
-				assert.ok(row)
-				return row
-			})
-		assert.equal(count, 1)
+		assert.ok(row)
+		assert.equal(row.count, 1)
+		assert.equal(receivedActivities.length, repeatCount)
 	})
 })

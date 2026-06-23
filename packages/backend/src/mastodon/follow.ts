@@ -3,6 +3,7 @@ import { type Database } from '@wildebeest/backend/database'
 import { MastodonId } from '@wildebeest/backend/types'
 import { actorToAcct } from '@wildebeest/backend/utils/handle'
 
+import { noBlockBetweenSql } from './block_sql'
 import { assertBatchSuccess, getResultsField } from './utils'
 
 const STATE_PENDING = 'pending'
@@ -123,6 +124,52 @@ export async function addFollowing(
 		throw new Error('SQL error: ' + out.error)
 	}
 	return id
+}
+
+export async function ensureAcceptedFollowingIfNotBlocked(
+	domain: string,
+	db: Database,
+	follower: Pick<Actor, 'id'>,
+	followee: Pick<Actor, 'id' | 'preferredUsername'>
+): Promise<boolean> {
+	const id = crypto.randomUUID()
+	const followerId = follower.id.toString()
+	const followeeId = followee.id.toString()
+
+	const out = await db
+		.prepare(
+			`
+	INSERT INTO actor_following (id, actor_id, target_actor_id, state, target_actor_acct)
+	SELECT ?1, ?2, ?3, ?4, ?5
+	WHERE ${noBlockBetweenSql('?2', '?3')}
+	ON CONFLICT(actor_id, target_actor_id) DO UPDATE SET state = excluded.state
+	WHERE actor_following.state = ?6
+	`
+		)
+		.bind(id, followerId, followeeId, STATE_ACCEPTED, actorToAcct(followee, domain), STATE_PENDING)
+		.run()
+	if (!out.success) {
+		throw new Error('SQL error: ' + out.error)
+	}
+	if (out.meta.changes === 1) {
+		return true
+	}
+
+	const acceptedFollow = await db
+		.prepare(
+			`
+		SELECT 1
+		FROM actor_following
+		WHERE actor_id = ?1
+		  AND target_actor_id = ?2
+		  AND state = ?3
+		  AND ${noBlockBetweenSql('?1', '?2')}
+		LIMIT 1
+		`
+		)
+		.bind(followerId, followeeId, STATE_ACCEPTED)
+		.first()
+	return acceptedFollow !== null
 }
 
 export async function updateFollowingOptions(

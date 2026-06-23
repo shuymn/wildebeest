@@ -13,7 +13,10 @@ import { addObjectInOutbox, get } from '@wildebeest/backend/activitypub/actors/o
 import { getApId, getObjectById, mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
 import { createImage } from '@wildebeest/backend/activitypub/objects/image'
 import { isNote, Note } from '@wildebeest/backend/activitypub/objects/note'
+import { insertBlock } from '@wildebeest/backend/mastodon/block'
+import { insertBookmark } from '@wildebeest/backend/mastodon/bookmark'
 import { insertLike } from '@wildebeest/backend/mastodon/like'
+import { insertMute } from '@wildebeest/backend/mastodon/mute'
 import { createReblog } from '@wildebeest/backend/mastodon/reblog'
 import { createPublicStatus, createReply } from '@wildebeest/backend/test/shared.utils'
 import { makeDB, createTestUser, assertStatus } from '@wildebeest/backend/test/utils'
@@ -73,6 +76,88 @@ describe('/api/v1/accounts/[id]/statuses', () => {
 		assert.equal(data[2].content, '<p>my first status</p>')
 		assert.equal(data[2].favourites_count, 1)
 		assert.equal(data[2].reblogs_count, 0)
+	})
+
+	test('get local actor statuses includes authenticated viewer state', async () => {
+		const db = makeDB()
+		const author = await createTestUser(domain, db, userKEK, 'viewer-state-author@cloudflare.com')
+		const viewer = await createTestUser(domain, db, userKEK, 'viewer-state-viewer@cloudflare.com')
+		const firstNote = await createPublicStatus(domain, db, author, 'viewer state first')
+		await sleep(5)
+		const secondNote = await createPublicStatus(domain, db, author, 'viewer state second')
+		await sleep(5)
+		await createReblog(db, author, secondNote, {
+			to: [PUBLIC_GROUP],
+			cc: [],
+			id: 'https://example.com/viewer-state-boost',
+		})
+		await insertLike(db, viewer, firstNote)
+		await insertBookmark(db, viewer, firstNote)
+		await createReblog(db, viewer, secondNote, {
+			to: [PUBLIC_GROUP],
+			cc: [],
+			id: 'https://example.com/viewer-state-viewer-boost',
+		})
+
+		const req = new Request(`https://${domain}/api/v1/accounts/${author[mastodonIdSymbol]}/statuses`)
+		const res = await app.fetch(req, { DATABASE: db, data: { connectedActor: viewer } })
+		await assertStatus(res, 200)
+
+		const data = await res.json<
+			{
+				content: string
+				favourited: boolean
+				reblogged: boolean
+				bookmarked: boolean
+				reblog: null | { content: string; favourited: boolean; reblogged: boolean; bookmarked: boolean }
+			}[]
+		>()
+		const first = data.find((status) => status.content === '<p>viewer state first</p>')
+		assert.ok(first)
+		assert.equal(first.favourited, true)
+		assert.equal(first.bookmarked, true)
+
+		const second = data.find((status) => status.content === '<p>viewer state second</p>')
+		assert.ok(second)
+		assert.equal(second.reblogged, true)
+
+		const boost = data.find((status) => status.reblog !== null)
+		assert.ok(boost?.reblog)
+		assert.equal(boost.reblog.reblogged, true)
+	})
+
+	test('get local actor statuses filters blocked or muted boosted authors', async () => {
+		const db = makeDB()
+		const viewer = await createTestUser(domain, db, userKEK, 'viewer-filter@cloudflare.com')
+		const reblogger = await createTestUser(domain, db, userKEK, 'reblogger-filter@cloudflare.com')
+		const blocked = await createTestUser(domain, db, userKEK, 'blocked-filter@cloudflare.com')
+		const muted = await createTestUser(domain, db, userKEK, 'muted-filter@cloudflare.com')
+		const visible = await createTestUser(domain, db, userKEK, 'visible-filter@cloudflare.com')
+		const blockedNote = await createPublicStatus(domain, db, blocked, 'blocked boosted status')
+		const mutedNote = await createPublicStatus(domain, db, muted, 'muted boosted status')
+		const visibleNote = await createPublicStatus(domain, db, visible, 'visible boosted status')
+
+		await createReblog(db, reblogger, blockedNote, {
+			to: [PUBLIC_GROUP],
+			cc: [],
+			id: 'https://example.com/blocked-boost',
+		})
+		await createReblog(db, reblogger, mutedNote, { to: [PUBLIC_GROUP], cc: [], id: 'https://example.com/muted-boost' })
+		await createReblog(db, reblogger, visibleNote, {
+			to: [PUBLIC_GROUP],
+			cc: [],
+			id: 'https://example.com/visible-boost',
+		})
+		await insertBlock(db, viewer, blocked)
+		await insertMute(db, viewer, muted)
+
+		const req = new Request(`https://${domain}/api/v1/accounts/${reblogger[mastodonIdSymbol]}/statuses`)
+		const res = await app.fetch(req, { DATABASE: db, data: { connectedActor: viewer } })
+		await assertStatus(res, 200)
+
+		const data = await res.json<Array<{ reblog: { content: string } | null }>>()
+		assert.equal(data.length, 1)
+		assert.equal(data[0].reblog?.content, '<p>visible boosted status</p>')
 	})
 
 	test("get local actor statuses doesn't include replies", async () => {

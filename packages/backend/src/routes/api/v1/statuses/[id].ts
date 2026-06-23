@@ -5,7 +5,7 @@ import { z } from 'zod'
 
 import { createDeleteActivity } from '@wildebeest/backend/activitypub/activities/delete'
 import { createUpdateActivity } from '@wildebeest/backend/activitypub/activities/update'
-import type { Person } from '@wildebeest/backend/activitypub/actors'
+import { type Person } from '@wildebeest/backend/activitypub/actors'
 import { deliverFollowers } from '@wildebeest/backend/activitypub/deliver'
 import { deleteObject, getObjectByMastodonId, originalActorIdSymbol } from '@wildebeest/backend/activitypub/objects'
 import { Image, isImage } from '@wildebeest/backend/activitypub/objects/image'
@@ -16,16 +16,16 @@ import { type Database, getDatabase } from '@wildebeest/backend/database'
 import * as errors from '@wildebeest/backend/errors'
 import { enrichStatus } from '@wildebeest/backend/mastodon/microformats'
 import {
-	getMastodonStatusById,
+	canViewStatus,
 	getMentions,
 	MAX_MEDIA_ATTACHMENTS,
 	MAX_STATUS_LENGTH,
+	setMastodonStatusViewerState,
 	toMastodonStatusFromObject,
 } from '@wildebeest/backend/mastodon/status'
 import * as timeline from '@wildebeest/backend/mastodon/timeline'
 import type { DeliverMessageBody, HonoEnv, MastodonId, Queue } from '@wildebeest/backend/types'
 import { cors, readBody } from '@wildebeest/backend/utils'
-import { actorToAcct } from '@wildebeest/backend/utils/handle'
 import myz from '@wildebeest/backend/utils/zod'
 
 const headers = {
@@ -111,18 +111,22 @@ async function handleRequestGet(
 	domain: string,
 	connectedActor: Person | null
 ): Promise<Response> {
-	const status = await getMastodonStatusById(db, id, domain)
+	const obj = await getObjectByMastodonId<Note>(domain, db, id)
+	if (obj === null) {
+		return new Response('', { status: 404 })
+	}
+	const status = await toMastodonStatusFromObject(db, obj, domain)
 	if (status === null) {
 		return new Response('', { status: 404 })
 	}
 
-	if (status.visibility === 'public' || status.visibility === 'unlisted') {
-		return new Response(JSON.stringify(status), { headers })
+	if (!(await canViewStatus(db, obj, connectedActor ?? undefined))) {
+		return new Response('', { status: 404 })
+	}
+	if (connectedActor) {
+		await setMastodonStatusViewerState(db, status, obj, connectedActor)
 	}
 
-	if (!connectedActor || status.account.acct !== actorToAcct(connectedActor, domain)) {
-		return errors.notAuthorized('status is private')
-	}
 	return new Response(JSON.stringify(status), { headers })
 }
 
