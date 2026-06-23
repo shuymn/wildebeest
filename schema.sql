@@ -137,6 +137,9 @@ CREATE INDEX "objects_original_actor_id" ON "objects" ("original_actor_id");
 
 CREATE INDEX "objects_original_object_id" ON "objects" ("original_object_id");
 
+CREATE INDEX "objects_in_reply_to_id" ON "objects" ("in_reply_to_id")
+  WHERE "in_reply_to_id" IS NOT NULL;
+
 CREATE INDEX "objects_cleanup" ON "objects" ("local", "expires_at", "interaction_count")
   WHERE "local" = 0;
 
@@ -227,6 +230,8 @@ CREATE TABLE
   );
 
 CREATE INDEX "actor_replies_in_reply_to_object_id" ON "actor_replies" ("in_reply_to_object_id");
+
+CREATE UNIQUE INDEX "actor_replies_unique_object_id" ON "actor_replies" ("object_id");
 
 CREATE TABLE
   peers ("domain" TEXT UNIQUE NOT NULL);
@@ -328,6 +333,8 @@ CREATE TABLE
 
 CREATE INDEX "outbox_objects_actor_id" ON "outbox_objects" ("actor_id");
 
+CREATE INDEX "outbox_objects_object_id_published_date" ON "outbox_objects" ("object_id", "published_date");
+
 CREATE INDEX "outbox_objects_to" ON "outbox_objects" ("to");
 
 CREATE INDEX "outbox_objects_cc" ON "outbox_objects" ("cc");
@@ -423,6 +430,8 @@ CREATE TABLE
   );
 
 CREATE UNIQUE INDEX "blocks_unique" ON "blocks" ("account_id", "target_account_id");
+
+CREATE INDEX "blocks_target_account_id_account_id" ON "blocks" ("target_account_id", "account_id");
 
 CREATE TABLE
   mutes (
