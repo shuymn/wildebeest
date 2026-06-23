@@ -17,15 +17,18 @@ type ViewableNote = {
 	cc?: Note['cc']
 }
 
-export function detectVisibility({ to, cc, followers }: VisibilityAddressing): Visibility {
-	to = Array.isArray(to) ? to : [to]
-	cc = Array.isArray(cc) ? cc : [cc]
+function hasAddress(targets: Note['to'] | undefined, id: string): boolean {
+	return toArray(targets ?? []).some((target) => getApId(target).toString() === id)
+}
 
-	if (to.includes(PUBLIC_GROUP)) {
+export function detectVisibility({ to, cc, followers }: VisibilityAddressing): Visibility {
+	if (hasAddress(to, PUBLIC_GROUP)) {
 		return 'public'
 	}
-	if (to.includes(followers.toString())) {
-		if (cc.includes(PUBLIC_GROUP)) {
+
+	const followersId = followers.toString()
+	if (hasAddress(to, followersId)) {
+		if (hasAddress(cc, PUBLIC_GROUP)) {
 			return 'unlisted'
 		}
 		return 'private'
@@ -52,8 +55,7 @@ export async function isVisible(
 	if (visibility === 'private') {
 		return isFollowing(db, viewer, author)
 	}
-	const viewerId = getApId(viewer.id).toString()
-	return toArray(note.to ?? []).some((target) => getApId(target).toString() === viewerId)
+	return hasAddress(note.to, getApId(viewer.id).toString())
 }
 
 export async function canViewStatus(db: Database, note: ViewableNote, viewer: Actor | undefined): Promise<boolean> {

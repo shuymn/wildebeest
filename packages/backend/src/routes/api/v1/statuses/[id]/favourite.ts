@@ -4,7 +4,7 @@ import { Hono } from 'hono'
 
 import { createLikeActivity } from '@wildebeest/backend/activitypub/activities/like'
 import { getAndCacheActor, type Person } from '@wildebeest/backend/activitypub/actors'
-import { deliverToActor } from '@wildebeest/backend/activitypub/deliver'
+import { deliverSafely, deliverToActor } from '@wildebeest/backend/activitypub/deliver'
 import {
 	getApId,
 	isLocalObject,
@@ -57,7 +57,9 @@ async function handleRequest(
 		// Liking an external object delivers the like activity
 		const activity = await createLikeActivity(db, domain, connectedActor, new URL(obj[originalObjectIdSymbol]))
 		const signingKey = await getSigningKey(userKEK, db, connectedActor)
-		await deliverToActor(signingKey, connectedActor, targetActor, activity, domain)
+		await deliverSafely(`Like to ${targetActor.id.toString()}`, () =>
+			deliverToActor(signingKey, connectedActor, targetActor, activity, domain)
+		)
 	}
 
 	const status = await toViewerStatusResponse(db, domain, obj, connectedActor)

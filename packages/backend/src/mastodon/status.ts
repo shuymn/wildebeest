@@ -605,7 +605,7 @@ export async function toMastodonStatusFromRow(
 				language: null,
 				text: null,
 				muted: false,
-				bookmarked: false,
+				bookmarked: row.bookmarked === 1,
 				pinned: false,
 				// filtered
 			},

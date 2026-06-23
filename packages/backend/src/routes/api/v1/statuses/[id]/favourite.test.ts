@@ -71,6 +71,60 @@ describe('/api/v1/statuses/[id]/favourite', () => {
 		assert.equal(deliveredActivities[0].object, originalObjectId)
 	})
 
+	test('favourite keeps local state when Like delivery fails', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'favourite-delivery-failure@cloudflare.com')
+		const originalObjectId = 'https://example.com/failed-like-note'
+
+		await db
+			.prepare(
+				'INSERT INTO objects (id, type, properties, original_actor_id, original_object_id, local, mastodon_id) VALUES (?, ?, ?, ?, ?, 0, ?)'
+			)
+			.bind(
+				'https://example.com/failed-like-object',
+				'Note',
+				JSON.stringify({
+					attributedTo: actor.id.toString(),
+					id: originalObjectId,
+					type: 'Note',
+					content: 'remote status',
+					source: {
+						content: 'remote status',
+						mediaType: 'text/markdown',
+					},
+					to: [PUBLIC_GROUP],
+					cc: [],
+					attachment: [],
+					sensitive: false,
+				} satisfies Note),
+				actor.id.toString(),
+				originalObjectId,
+				'failed-like-mastodon-id'
+			)
+			.run()
+
+		globalThis.fetch = async (input: RequestInfo) => {
+			const request = new Request(input)
+			if (request.url === actor.id.toString() + '/inbox') {
+				return new Response('temporary failure', { status: 503 })
+			}
+
+			throw new Error('unexpected request to ' + request.url)
+		}
+
+		const req = new Request(`https://${domain}/api/v1/statuses/failed-like-mastodon-id/favourite`, { method: 'POST' })
+		const res = await app.fetch(req, { DATABASE: db, userKEK, data: { connectedActor: actor } })
+		await assertStatus(res, 200)
+		const data = await res.json<{ favourited: boolean }>()
+		assert.equal(data.favourited, true)
+
+		const row = await db
+			.prepare(`SELECT actor_id, object_id FROM actor_favourites`)
+			.first<{ actor_id: string; object_id: string }>()
+		assert.equal(row?.actor_id, actor.id.toString())
+		assert.equal(row?.object_id, 'https://example.com/failed-like-object')
+	})
+
 	test('favourite records in db', async () => {
 		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')

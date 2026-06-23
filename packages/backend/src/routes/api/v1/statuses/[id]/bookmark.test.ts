@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert/strict'
 
 import app from '@wildebeest/backend'
 import { mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { insertBlock } from '@wildebeest/backend/mastodon/block'
 import { insertLike } from '@wildebeest/backend/mastodon/like'
 import { createPrivateStatus, createPublicStatus } from '@wildebeest/backend/test/shared.utils'
 import { assertStatus, createTestUser, makeDB } from '@wildebeest/backend/test/utils'
@@ -89,5 +90,28 @@ describe('/api/v1/statuses/[id]/bookmark', () => {
 
 		const row = await db.prepare(`SELECT count(*) as count FROM bookmarks`).first<{ count: number }>()
 		assert.equal(row?.count, 0)
+	})
+
+	test('bookmarks list hides statuses blocked after bookmarking', async () => {
+		const db = makeDB()
+		const viewer = await createTestUser(domain, db, userKEK, 'blocked-bookmark-viewer@cloudflare.com')
+		const author = await createTestUser(domain, db, userKEK, 'blocked-bookmark-author@cloudflare.com')
+		const note = await createPublicStatus(domain, db, author, 'blocked after bookmark')
+
+		const bookmarkRes = await app.fetch(
+			new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}/bookmark`, { method: 'POST' }),
+			{ DATABASE: db, userKEK, data: { connectedActor: viewer } }
+		)
+		await assertStatus(bookmarkRes, 200)
+		await insertBlock(db, author, viewer)
+
+		const res = await app.fetch(new Request(`https://${domain}/api/v1/bookmarks`), {
+			DATABASE: db,
+			userKEK,
+			data: { connectedActor: viewer },
+		})
+		await assertStatus(res, 200)
+		const statuses = await res.json<Array<{ id: string }>>()
+		assert.equal(statuses.length, 0)
 	})
 })

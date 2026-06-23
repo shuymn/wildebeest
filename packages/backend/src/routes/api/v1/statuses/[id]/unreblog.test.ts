@@ -253,4 +253,100 @@ describe('/api/v1/statuses/[id]/unreblog', () => {
 		assert.deepEqual(deliveredActivities[1].to, deliveredActivities[1].object.to)
 		assert.deepEqual(deliveredActivities[1].cc, deliveredActivities[1].object.cc)
 	})
+
+	test('unreblog remote status keeps local state when Undo delivery fails', async () => {
+		let inboxRequests = 0
+		const db = makeDB()
+		const queue = makeQueue()
+		const actor = await createTestUser(domain, db, userKEK, 'remote-unreblog-delivery-failure@cloudflare.com')
+		const remoteActorId = 'https://example.com/users/undo-failure-author'
+		const originalObjectId = 'https://example.com/notes/undo-failure'
+		const localObjectId = 'https://cloudflare.com/ap/o/undo-failure-note'
+
+		await db
+			.prepare(
+				`INSERT INTO actors (id, type, username, domain, properties, mastodon_id)
+					VALUES (?, 'Person', 'undo-failure-author', 'example.com', ?, ?)`
+			)
+			.bind(
+				remoteActorId,
+				JSON.stringify({
+					id: remoteActorId,
+					type: 'Person',
+					preferredUsername: 'undo-failure-author',
+					inbox: `${remoteActorId}/inbox`,
+					outbox: `${remoteActorId}/outbox`,
+					following: `${remoteActorId}/following`,
+					followers: `${remoteActorId}/followers`,
+				}),
+				'undo-failure-author-mastodon-id'
+			)
+			.run()
+
+		await db
+			.prepare(
+				'INSERT INTO objects (id, type, properties, original_actor_id, original_object_id, mastodon_id, local) VALUES (?, ?, ?, ?, ?, ?, 0)'
+			)
+			.bind(
+				localObjectId,
+				'Note',
+				JSON.stringify({
+					id: originalObjectId,
+					type: 'Note',
+					attributedTo: remoteActorId,
+					content: 'remote status',
+					source: {
+						content: 'remote status',
+						mediaType: 'text/markdown',
+					},
+					to: [PUBLIC_GROUP],
+					cc: [],
+					attachment: [],
+					sensitive: false,
+				} satisfies Note),
+				remoteActorId,
+				originalObjectId,
+				'undo-failure-status-mastodon-id'
+			)
+			.run()
+		await addFollowing(domain, db, { id: new URL(remoteActorId) }, actor)
+		await acceptFollowing(db, { id: new URL(remoteActorId) }, actor)
+
+		globalThis.fetch = async (input: Parameters<typeof fetch>[0]) => {
+			const request = new Request(input)
+			if (request.url === `${remoteActorId}/inbox`) {
+				inboxRequests += 1
+				return inboxRequests === 1 ? new Response() : new Response('temporary failure', { status: 503 })
+			}
+
+			throw new Error('unexpected request to ' + request.url)
+		}
+
+		const reblogRes = await app.fetch(
+			new Request(`https://${domain}/api/v1/statuses/undo-failure-status-mastodon-id/reblog`, { method: 'POST' }),
+			{
+				DATABASE: db,
+				QUEUE: queue,
+				userKEK,
+				data: { connectedActor: actor },
+			}
+		)
+		await assertStatus(reblogRes, 200)
+
+		const res = await app.fetch(
+			new Request(`https://${domain}/api/v1/statuses/undo-failure-status-mastodon-id/unreblog`, { method: 'POST' }),
+			{
+				DATABASE: db,
+				DO_CACHE: makeDOCache(),
+				QUEUE: queue,
+				userKEK,
+				data: { connectedActor: actor },
+			}
+		)
+		await assertStatus(res, 200)
+		assert.equal(inboxRequests, 2)
+
+		const row = await db.prepare(`SELECT count(*) as count FROM actor_reblogs`).first<{ count: number }>()
+		assert.equal(row?.count, 0)
+	})
 })

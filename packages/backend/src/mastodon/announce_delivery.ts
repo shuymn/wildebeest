@@ -1,6 +1,6 @@
 import type { AnnounceActivity, UndoActivity } from '@wildebeest/backend/activitypub/activities'
 import { getAndCacheActor, type Actor, type Person } from '@wildebeest/backend/activitypub/actors'
-import { deliverFollowers, deliverToActor } from '@wildebeest/backend/activitypub/deliver'
+import { deliverFollowers, deliverSafely, deliverToActor } from '@wildebeest/backend/activitypub/deliver'
 import {
 	getApId,
 	isLocalObject,
@@ -58,19 +58,27 @@ export async function deliverCreatedAnnounce(
 ): Promise<void> {
 	if (!targetActor) {
 		if (addressesFollowers(activity, actor)) {
-			await deliverFollowers(db, userKEK, actor, activity, queue)
+			await deliverSafely('Announce to followers', () => deliverFollowers(db, userKEK, actor, activity, queue))
 		}
 		return
 	}
 
-	const deliveries: Promise<unknown>[] = []
+	const deliveries: Promise<void>[] = []
 	const targetActorId = targetActor.id.toString()
 	if (addressesActor(activity, targetActorId)) {
 		const signingKey = await getSigningKey(userKEK, db, actor)
-		deliveries.push(deliverToActor(signingKey, actor, targetActor, activity, domain))
+		deliveries.push(
+			deliverSafely(`Announce to ${targetActorId}`, () =>
+				deliverToActor(signingKey, actor, targetActor, activity, domain)
+			)
+		)
 	}
 	if (addressesFollowers(activity, actor)) {
-		deliveries.push(deliverFollowers(db, userKEK, actor, activity, queue, new Set([targetActorId])))
+		deliveries.push(
+			deliverSafely('Announce to followers', () =>
+				deliverFollowers(db, userKEK, actor, activity, queue, new Set([targetActorId]))
+			)
+		)
 	}
 	await Promise.all(deliveries)
 }
@@ -85,7 +93,7 @@ export async function deliverUndoAnnounce(
 	domain: string,
 	targetActor: Actor | undefined
 ): Promise<void> {
-	const deliveries: Promise<unknown>[] = []
+	const deliveries: Promise<void>[] = []
 	const excludeActorIds = new Set<string>()
 
 	if (targetActor) {
@@ -93,11 +101,19 @@ export async function deliverUndoAnnounce(
 		excludeActorIds.add(targetActorId)
 		if (addressesActor(reblogActivity, targetActorId)) {
 			const signingKey = await getSigningKey(userKEK, db, actor)
-			deliveries.push(deliverToActor<UndoActivity>(signingKey, actor, targetActor, undoActivity, domain))
+			deliveries.push(
+				deliverSafely(`Undo Announce to ${targetActorId}`, () =>
+					deliverToActor<UndoActivity>(signingKey, actor, targetActor, undoActivity, domain)
+				)
+			)
 		}
 	}
 	if (addressesFollowers(reblogActivity, actor)) {
-		deliveries.push(deliverFollowers(db, userKEK, actor, undoActivity, queue, excludeActorIds))
+		deliveries.push(
+			deliverSafely('Undo Announce to followers', () =>
+				deliverFollowers(db, userKEK, actor, undoActivity, queue, excludeActorIds)
+			)
+		)
 	}
 
 	await Promise.all(deliveries)
