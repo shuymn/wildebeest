@@ -7,11 +7,12 @@ export async function repairReplyProjection(
 	objectId: string | URL,
 	inReplyToObjectId: string | URL
 ): Promise<void> {
-	await insertReply(db, { id: new URL(actorId) }, { id: new URL(objectId) }, { id: new URL(inReplyToObjectId) }).catch(
-		(err) => {
-			console.warn('failed to repair reply: ' + err)
-		}
-	)
+	try {
+		await insertReply(db, { id: new URL(actorId) }, { id: new URL(objectId) }, { id: new URL(inReplyToObjectId) })
+	} catch (err) {
+		console.warn('failed to repair reply: ' + err)
+		throw err
+	}
 }
 
 export async function getReplyParentId(db: Database, objectId: string): Promise<string | null> {

@@ -10,7 +10,9 @@ UPDATE objects SET in_reply_to_id = (
       ar.in_reply_to_object_id = reply.reply_to_object_id
       OR parent.original_object_id = reply.reply_to_object_id
     )
-  ORDER BY ar.id
+  ORDER BY
+    CASE WHEN ar.in_reply_to_object_id = reply.reply_to_object_id THEN 0 ELSE 1 END,
+    ar.id
   LIMIT 1
 )
 WHERE in_reply_to_id IS NULL
@@ -25,13 +27,21 @@ WHERE in_reply_to_id IS NULL
       )
   );
 
-UPDATE objects SET in_reply_to_id = (
-  SELECT parent.id
-  FROM objects AS parent
-  WHERE parent.id = objects.reply_to_object_id
-     OR parent.original_object_id = objects.reply_to_object_id
-  ORDER BY parent.id
-  LIMIT 1
+UPDATE objects SET in_reply_to_id = COALESCE(
+  (
+    SELECT parent.id
+    FROM objects AS parent
+    WHERE parent.id = objects.reply_to_object_id
+    ORDER BY parent.id
+    LIMIT 1
+  ),
+  (
+    SELECT parent.id
+    FROM objects AS parent
+    WHERE parent.original_object_id = objects.reply_to_object_id
+    ORDER BY parent.id
+    LIMIT 1
+  )
 )
 WHERE in_reply_to_id IS NULL
   AND reply_to_object_id IS NOT NULL
@@ -47,6 +57,9 @@ UPDATE objects SET in_reply_to_account_id = (
 )
 WHERE in_reply_to_id IS NOT NULL
   AND in_reply_to_account_id IS NULL;
+
+CREATE INDEX IF NOT EXISTS "objects_in_reply_to_id" ON "objects" ("in_reply_to_id")
+  WHERE "in_reply_to_id" IS NOT NULL;
 
 UPDATE objects SET replies_count = (
   SELECT COUNT(*) FROM objects AS replies

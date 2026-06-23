@@ -16,12 +16,21 @@ export async function insertReply(
 	const id = crypto.randomUUID()
 	const objectId = obj.id.toString()
 	const inReplyToObjectId = inReplyToObj.id.toString()
-	const oldReply = await db
-		.prepare(`SELECT in_reply_to_id FROM objects WHERE id = ? AND in_reply_to_id IS NOT NULL`)
-		.bind(objectId)
-		.first<{ in_reply_to_id: string }>()
 
 	const results = await db.batch([
+		db
+			.prepare(
+				`
+UPDATE objects
+SET replies_count = (
+  SELECT COUNT(*) - 1 FROM objects AS reply WHERE reply.in_reply_to_id = objects.id
+)
+WHERE id = (
+  SELECT in_reply_to_id FROM objects WHERE id = ? AND in_reply_to_id IS NOT NULL AND in_reply_to_id != ?
+)
+`
+			)
+			.bind(objectId, inReplyToObjectId),
 		db
 			.prepare(
 				`
@@ -59,21 +68,6 @@ WHERE id = ?
 `
 			)
 			.bind(inReplyToObjectId, inReplyToObjectId),
-		...(oldReply && oldReply.in_reply_to_id !== inReplyToObjectId
-			? [
-					db
-						.prepare(
-							`
-UPDATE objects
-SET replies_count = (
-  SELECT COUNT(*) FROM objects AS reply WHERE reply.in_reply_to_id = ?
-)
-WHERE id = ?
-`
-						)
-						.bind(oldReply.in_reply_to_id, oldReply.in_reply_to_id),
-				]
-			: []),
 	])
 	assertBatchSuccess(results)
 }

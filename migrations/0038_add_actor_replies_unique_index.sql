@@ -20,7 +20,12 @@ WHERE id NOT IN (
           canonical.in_reply_to_object_id = json_extract(reply.properties, '$.inReplyTo')
           OR parent.original_object_id = json_extract(reply.properties, '$.inReplyTo')
       )
-      ORDER BY canonical.id
+      ORDER BY
+        CASE
+          WHEN canonical.in_reply_to_object_id = json_extract(reply.properties, '$.inReplyTo') THEN 0
+          ELSE 1
+        END,
+        canonical.id
       LIMIT 1
     ),
     MIN(grouped.id)
