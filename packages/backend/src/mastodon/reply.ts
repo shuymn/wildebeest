@@ -2,9 +2,10 @@ import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
 import type { Actor } from '@wildebeest/backend/activitypub/actors'
 import { type ApObject } from '@wildebeest/backend/activitypub/objects'
 import { type Database } from '@wildebeest/backend/database'
-import * as query from '@wildebeest/backend/database/d1/querier'
 import { toMastodonStatusFromRow } from '@wildebeest/backend/mastodon/status'
 import type { MastodonStatus } from '@wildebeest/backend/types/status'
+
+import { assertBatchSuccess } from './utils'
 
 export async function insertReply(
 	db: Database,
@@ -13,12 +14,62 @@ export async function insertReply(
 	inReplyToObj: Pick<ApObject, 'id'>
 ): Promise<void> {
 	const id = crypto.randomUUID()
-	await query.insertReply(db, {
-		id: id.toString(),
-		actorId: actor.id.toString(),
-		objectId: obj.id.toString(),
-		inReplyToObjectId: inReplyToObj.id.toString(),
-	})
+	const objectId = obj.id.toString()
+	const inReplyToObjectId = inReplyToObj.id.toString()
+
+	const results = await db.batch([
+		db
+			.prepare(
+				`
+UPDATE objects
+SET replies_count = (
+  SELECT COUNT(*) - 1 FROM objects AS reply WHERE reply.in_reply_to_id = objects.id
+)
+WHERE id = (
+  SELECT in_reply_to_id FROM objects WHERE id = ? AND in_reply_to_id IS NOT NULL AND in_reply_to_id != ?
+)
+`
+			)
+			.bind(objectId, inReplyToObjectId),
+		db
+			.prepare(
+				`
+UPDATE actor_replies
+SET actor_id = ?, in_reply_to_object_id = ?
+WHERE object_id = ?
+`
+			)
+			.bind(actor.id.toString(), inReplyToObjectId, objectId),
+		db
+			.prepare(
+				`
+INSERT INTO actor_replies (id, actor_id, object_id, in_reply_to_object_id)
+SELECT ?, ?, ?, ?
+WHERE NOT EXISTS (SELECT 1 FROM actor_replies WHERE object_id = ?)
+`
+			)
+			.bind(id.toString(), actor.id.toString(), objectId, inReplyToObjectId, objectId),
+		db
+			.prepare(
+				`UPDATE objects
+SET in_reply_to_id = ?,
+    in_reply_to_account_id = (SELECT original_actor_id FROM objects AS parent WHERE parent.id = ?)
+WHERE id = ?`
+			)
+			.bind(inReplyToObjectId, inReplyToObjectId, objectId),
+		db
+			.prepare(
+				`
+UPDATE objects
+SET replies_count = (
+  SELECT COUNT(*) FROM objects AS reply WHERE reply.in_reply_to_id = ?
+)
+WHERE id = ?
+`
+			)
+			.bind(inReplyToObjectId, inReplyToObjectId),
+	])
+	assertBatchSuccess(results)
 }
 
 export async function getReplies(domain: string, db: Database, obj: ApObject): Promise<Array<MastodonStatus>> {
@@ -41,15 +92,15 @@ SELECT
   outbox_objects.cc as publisher_cc,
 
   (SELECT count(*) FROM actor_favourites WHERE actor_favourites.object_id=objects.id) as favourites_count,
-  (SELECT count(*) FROM actor_reblogs WHERE actor_reblogs.object_id=objects.id) as reblogs_count,
-  (SELECT count(*) FROM actor_replies WHERE actor_replies.in_reply_to_object_id=objects.id) as replies_count
+  COALESCE(objects.reblogs_count, 0) as reblogs_count,
+  COALESCE(objects.replies_count, 0) as replies_count
 FROM outbox_objects
-  INNER JOIN actor_replies ON actor_replies.object_id = outbox_objects.object_id
-  INNER JOIN objects ON objects.id = actor_replies.object_id
-  INNER JOIN actors ON actors.id = actor_replies.actor_id
+  INNER JOIN objects ON objects.id = outbox_objects.object_id
+  INNER JOIN actors ON actors.id = objects.original_actor_id
 WHERE
   objects.type = 'Note'
-  AND actor_replies.in_reply_to_object_id = ?1
+  AND objects.in_reply_to_id = ?1
+  AND outbox_objects.actor_id = objects.original_actor_id
   AND (EXISTS(SELECT 1 FROM json_each(outbox_objects.'to') WHERE json_each.value IN ${db.qb.set('?3')})
         OR EXISTS(SELECT 1 FROM json_each(outbox_objects.cc) WHERE json_each.value IN ${db.qb.set('?3')}))
 ORDER BY ${db.qb.timeNormalize('outbox_objects.published_date')} DESC

@@ -186,23 +186,6 @@ export async function insertActorPreferences(d1: D1Database, args: InsertActorPr
 	return await d1.prepare(insertActorPreferencesQuery).bind(args.id).run()
 }
 
-const insertReplyQuery = `-- name: InsertReply :exec
-INSERT INTO
-  actor_replies (id, actor_id, object_id, in_reply_to_object_id)
-VALUES
-  (?, ?, ?, ?)`
-
-export type InsertReplyParams = {
-	id: string
-	actorId: string
-	objectId: string
-	inReplyToObjectId: string
-}
-
-export async function insertReply(d1: D1Database, args: InsertReplyParams): Promise<D1Result> {
-	return await d1.prepare(insertReplyQuery).bind(args.id, args.actorId, args.objectId, args.inReplyToObjectId).run()
-}
-
 const insertActorQuery = `-- name: InsertActor :exec
 INSERT INTO
   actors ("id", "mastodon_id", "type", "username", "domain", "properties", "cdate")

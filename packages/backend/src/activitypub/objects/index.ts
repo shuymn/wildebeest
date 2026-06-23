@@ -4,7 +4,12 @@ import { addPeer } from '@wildebeest/backend/activitypub/peers'
 import { UA } from '@wildebeest/backend/config/ua'
 import { type Database } from '@wildebeest/backend/database'
 import * as query from '@wildebeest/backend/database/d1/querier'
-import { insertReply } from '@wildebeest/backend/mastodon/reply'
+import {
+	deleteObjectProjectionStatements,
+	getReplyParentId,
+	refreshRepliesCount,
+	repairReplyProjection,
+} from '@wildebeest/backend/mastodon/reply_projection'
 import type { MastodonId } from '@wildebeest/backend/types'
 import { HTTPS, isGone, isNotFound, isUUID } from '@wildebeest/backend/utils'
 import { generateMastodonId } from '@wildebeest/backend/utils/id'
@@ -318,9 +323,7 @@ async function cacheObject<T extends ApObject>(
 			return null
 		})
 		if (localObjectId) {
-			await insertReply(db, { id: actorId }, { id: apId }, { id: localObjectId }).catch((err) => {
-				console.warn('failed to insert reply: ' + err)
-			})
+			await repairReplyProjection(db, actorId, apId, localObjectId)
 		}
 	}
 
@@ -410,7 +413,10 @@ async function getObjectBy<T extends ApObject>(
 	const properties = JSON.parse(row.properties) as Remote<T>
 
 	if (isNote(properties) && properties.inReplyTo) {
-		await cacheReply(domain, db, properties.inReplyTo, properties.attributedTo.toString(), 1)
+		const inReplyToId = await cacheReply(domain, db, properties.inReplyTo, properties.attributedTo.toString(), 1)
+		if (inReplyToId) {
+			await repairReplyProjection(db, row.originalActorId, row.id, inReplyToId)
+		}
 	}
 
 	return {
@@ -505,23 +511,10 @@ function getTextContentRewriter() {
 	return textContentRewriter
 }
 
-// TODO: eventually use SQLite's `ON DELETE CASCADE` but requires writing the DB
-// schema directly into D1, which D1 disallows at the moment.
-// Some context at: https://stackoverflow.com/questions/13150075/add-on-delete-cascade-behavior-to-an-sqlite3-table-after-it-has-been-created
 export async function deleteObject<T extends ApObject>(db: Database, note: T) {
 	const nodeId = note.id.toString()
-	const batch = [
-		db.prepare('DELETE FROM outbox_objects WHERE object_id=?').bind(nodeId),
-		db.prepare('DELETE FROM inbox_objects WHERE object_id=?').bind(nodeId),
-		db.prepare('DELETE FROM actor_notifications WHERE object_id=?').bind(nodeId),
-		db.prepare('DELETE FROM actor_favourites WHERE object_id=?').bind(nodeId),
-		db.prepare('DELETE FROM actor_reblogs WHERE object_id=?').bind(nodeId),
-		db.prepare('DELETE FROM actor_replies WHERE object_id=?1 OR in_reply_to_object_id=?1').bind(nodeId),
-		db.prepare('DELETE FROM idempotency_keys WHERE object_id=?').bind(nodeId),
-		db.prepare('DELETE FROM note_hashtags WHERE object_id=?').bind(nodeId),
-		db.prepare('DELETE FROM object_revisions WHERE object_id=?').bind(nodeId),
-		db.prepare('DELETE FROM objects WHERE id=?').bind(nodeId),
-	]
+	const replyParentId = await getReplyParentId(db, nodeId)
+	const batch = deleteObjectProjectionStatements(db, nodeId)
 
 	const res = await db.batch(batch)
 
@@ -529,6 +522,10 @@ export async function deleteObject<T extends ApObject>(db: Database, note: T) {
 		if (!res[i].success) {
 			throw new Error('SQL error: ' + res[i].error)
 		}
+	}
+
+	if (replyParentId) {
+		await refreshRepliesCount(db, replyParentId)
 	}
 }
 
