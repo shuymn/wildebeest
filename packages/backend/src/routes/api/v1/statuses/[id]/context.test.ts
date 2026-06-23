@@ -8,7 +8,6 @@ import { createPublicStatus, createReply } from '@wildebeest/backend/test/shared
 import { makeDB, createTestUser, assertStatus } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek4'
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const domain = 'cloudflare.com'
 
 describe('/api/v1/statuses/[id]/context', () => {
@@ -16,12 +15,11 @@ describe('/api/v1/statuses/[id]/context', () => {
 		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
-		const note = await createPublicStatus(domain, db, actor, 'a post', [], { sensitive: false })
-		await sleep(10)
+		const note = await createPublicStatus(domain, db, actor, 'a post')
 
 		await createReply(domain, db, actor, note, '@sven@cloudflare.com a reply')
 
-		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]!}/context`)
+		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}/context`)
 		const res = await app.fetch(req, { DATABASE: db })
 		await assertStatus(res, 200)
 
@@ -39,16 +37,16 @@ describe('/api/v1/statuses/[id]/context', () => {
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const reblogger = await createTestUser(domain, db, userKEK, 'reblogger@cloudflare.com')
 
-		const note = await createPublicStatus(domain, db, actor, 'a post', [], { sensitive: false })
-		await sleep(10)
+		const note = await createPublicStatus(domain, db, actor, 'a post')
 		const reply = await createReply(domain, db, actor, note, '@sven@cloudflare.com a reply')
-		await createReblog(db, reblogger, reply, {
+		const inserted = await createReblog(db, reblogger, reply, {
 			to: [PUBLIC_GROUP],
 			cc: [],
 			id: 'https://example.com/reblogged-reply',
 		})
+		assert.equal(inserted, true)
 
-		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]!}/context`)
+		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}/context`)
 		const res = await app.fetch(req, { DATABASE: db })
 		await assertStatus(res, 200)
 

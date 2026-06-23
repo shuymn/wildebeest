@@ -150,14 +150,14 @@ describe('/api/v1/accounts/[id]/statuses', () => {
 		})
 		await insertBlock(db, viewer, blocked)
 		await insertMute(db, viewer, muted)
-		await insertMute(db, viewer, reblogger)
 
 		const req = new Request(`https://${domain}/api/v1/accounts/${reblogger[mastodonIdSymbol]}/statuses`)
 		const res = await app.fetch(req, { DATABASE: db, data: { connectedActor: viewer } })
 		await assertStatus(res, 200)
 
-		const data = await res.json<unknown[]>()
-		assert.deepEqual(data, [])
+		const data = await res.json<Array<{ reblog: { content: string } | null }>>()
+		assert.equal(data.length, 1)
+		assert.equal(data[0].reblog?.content, '<p>visible boosted status</p>')
 	})
 
 	test("get local actor statuses doesn't include replies", async () => {

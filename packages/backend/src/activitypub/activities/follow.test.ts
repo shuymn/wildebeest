@@ -4,7 +4,8 @@ import app from '@wildebeest/backend'
 import { Activity, FollowActivity } from '@wildebeest/backend/activitypub/activities'
 import * as activityHandler from '@wildebeest/backend/activitypub/activities/handle'
 import { getApId } from '@wildebeest/backend/activitypub/objects'
-import { acceptFollowing, addFollowing } from '@wildebeest/backend/mastodon/follow'
+import { insertBlock } from '@wildebeest/backend/mastodon/block'
+import { acceptFollowing, addFollowing, isFollowingOrFollowingRequested } from '@wildebeest/backend/mastodon/follow'
 import { assertStatus, createActivityId, createTestUser, makeDB } from '@wildebeest/backend/test/utils'
 import { JWK } from '@wildebeest/backend/webpush/jwk'
 
@@ -163,6 +164,30 @@ describe('Follow', () => {
 		assert.equal(entry.type, 'follow')
 		assert.equal(entry.actor_id.toString(), actor.id.toString())
 		assert.equal(entry.from_actor_id.toString(), actor2.id.toString())
+	})
+
+	test('ignores blocked follow without accepting it', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'blocked-followee@cloudflare.com')
+		const actor2 = await createTestUser(domain, db, userKEK, 'blocked-follower@cloudflare.com')
+		await insertBlock(db, actor, actor2)
+
+		const activity: Activity = {
+			'@context': 'https://www.w3.org/ns/activitystreams',
+			id: createActivityId(domain),
+			type: 'Follow',
+			actor: actor2.id,
+			object: actor.id,
+		}
+
+		await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
+
+		assert.equal(receivedActivity, null)
+		assert.equal(await isFollowingOrFollowingRequested(db, actor2, actor), false)
+		const notification = await db
+			.prepare(`SELECT count(*) as count FROM actor_notifications`)
+			.first<{ count: number }>()
+		assert.equal(notification?.count, 0)
 	})
 
 	test('ignore when trying to follow multiple times', async () => {

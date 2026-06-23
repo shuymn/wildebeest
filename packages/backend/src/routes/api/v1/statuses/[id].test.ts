@@ -4,6 +4,7 @@ import app from '@wildebeest/backend'
 import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
 import { mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
 import { createImage } from '@wildebeest/backend/activitypub/objects/image'
+import { insertBlock } from '@wildebeest/backend/mastodon/block'
 import { insertBookmark } from '@wildebeest/backend/mastodon/bookmark'
 import { addFollowing, acceptFollowing } from '@wildebeest/backend/mastodon/follow'
 import { insertLike } from '@wildebeest/backend/mastodon/like'
@@ -142,6 +143,41 @@ describe('/api/v1/statuses/[id]', () => {
 		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}`)
 		const res = await app.fetch(req, { DATABASE: db, data: { connectedActor: recipient } })
 		await assertStatus(res, 200)
+	})
+
+	test('get private status as non-follower returns 404', async () => {
+		const db = makeDB()
+		const author = await createTestUser(domain, db, userKEK, 'private-denied-author@cloudflare.com')
+		const viewer = await createTestUser(domain, db, userKEK, 'private-denied-viewer@cloudflare.com')
+		const note = await createPrivateStatus(domain, db, author, 'private denied status')
+
+		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}`)
+		const res = await app.fetch(req, { DATABASE: db, data: { connectedActor: viewer } })
+		await assertStatus(res, 404)
+	})
+
+	test('get direct status as non-recipient returns 404', async () => {
+		const db = makeDB()
+		const author = await createTestUser(domain, db, userKEK, 'direct-denied-author@cloudflare.com')
+		const recipient = await createTestUser(domain, db, userKEK, 'direct-denied-recipient@cloudflare.com')
+		const viewer = await createTestUser(domain, db, userKEK, 'direct-denied-viewer@cloudflare.com')
+		const note = await createDirectStatus(domain, db, author, 'direct denied status', [], { to: [recipient] })
+
+		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}`)
+		const res = await app.fetch(req, { DATABASE: db, data: { connectedActor: viewer } })
+		await assertStatus(res, 404)
+	})
+
+	test('get status as blocked viewer returns 404', async () => {
+		const db = makeDB()
+		const author = await createTestUser(domain, db, userKEK, 'blocked-status-author@cloudflare.com')
+		const viewer = await createTestUser(domain, db, userKEK, 'blocked-status-viewer@cloudflare.com')
+		const note = await createPublicStatus(domain, db, author, 'blocked status')
+		await insertBlock(db, author, viewer)
+
+		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}`)
+		const res = await app.fetch(req, { DATABASE: db, data: { connectedActor: viewer } })
+		await assertStatus(res, 404)
 	})
 
 	test('update non-existing status', async () => {

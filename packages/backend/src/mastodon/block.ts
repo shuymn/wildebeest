@@ -36,17 +36,24 @@ export function getBlockedByMastodonIds(db: Database, actor: Actor, targetIds: M
 	return getSourceMastodonIdsForTargets(db, 'blocks', actor, targetIds)
 }
 
-export async function hasBlockBetween(db: Database, actor: Actor, target: Actor): Promise<boolean> {
+export async function hasBlockBetween(
+	db: Database,
+	actor: Pick<Actor, 'id'>,
+	target: Pick<Actor, 'id'>
+): Promise<boolean> {
+	const actorId = actor.id.toString()
+	const targetId = target.id.toString()
 	const row = await db
 		.prepare(
-			`SELECT count(*) > 0 as blocked
+			`SELECT 1
 FROM blocks
 WHERE (account_id = ? AND target_account_id = ?)
-   OR (account_id = ? AND target_account_id = ?)`
+   OR (account_id = ? AND target_account_id = ?)
+LIMIT 1`
 		)
-		.bind(actor.id.toString(), target.id.toString(), target.id.toString(), actor.id.toString())
-		.first<{ blocked: 1 | 0 }>()
-	return row?.blocked === 1
+		.bind(actorId, targetId, targetId, actorId)
+		.first()
+	return row !== null
 }
 
 export function isSelfBlock(actor: Actor, target: Actor): boolean {
