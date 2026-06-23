@@ -97,6 +97,7 @@ async function handleRequest(
 		)
 
 		const res = await getRelationship(db, connectedActor, id)
+		// Preserve the existing follow endpoint response while the remote request remains pending.
 		res.following = true
 		res.requested = false
 		res.showing_reblogs = params.reblogs ?? true

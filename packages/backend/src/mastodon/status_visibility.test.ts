@@ -31,5 +31,13 @@ describe('mastodon/status_visibility', () => {
 			}),
 			'private'
 		)
+		assert.equal(
+			detectVisibility({
+				to: [new URL('https://example.com/users/bob')],
+				cc: [],
+				followers,
+			}),
+			'direct'
+		)
 	})
 })

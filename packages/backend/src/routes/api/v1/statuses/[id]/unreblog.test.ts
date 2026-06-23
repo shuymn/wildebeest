@@ -13,6 +13,12 @@ const userKEK = 'test_kek_unreblog'
 const domain = 'cloudflare.com'
 
 describe('/api/v1/statuses/[id]/unreblog', () => {
+	const originalFetch = globalThis.fetch
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch
+	})
+
 	test('unreblog removes reblog', async () => {
 		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'unreblog@cloudflare.com')
