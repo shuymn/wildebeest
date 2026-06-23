@@ -127,6 +127,9 @@ const publicMiddleware = (): MiddlewareHandler<HonoEnv> => {
 
 const privateMiddleware = (): MiddlewareHandler<HonoEnv> => {
 	return async (c, next) => {
+		if (c.req.method === 'OPTIONS') {
+			return next()
+		}
 		if (import.meta.env.MODE === 'test') {
 			if ((c as { env?: { data?: { connectedActor?: unknown } } }).env?.data?.connectedActor) {
 				return next()

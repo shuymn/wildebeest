@@ -5,13 +5,18 @@ import { isLocalAccount } from '@wildebeest/backend/accounts'
 import { createFollowActivity } from '@wildebeest/backend/activitypub/activities/follow'
 import type { Person } from '@wildebeest/backend/activitypub/actors'
 import * as actors from '@wildebeest/backend/activitypub/actors'
-import { deliverToActor } from '@wildebeest/backend/activitypub/deliver'
+import { deliverSafely, deliverToActor } from '@wildebeest/backend/activitypub/deliver'
 import { type Database, getDatabase } from '@wildebeest/backend/database'
 import { notAuthorized, resourceNotFound, unprocessableEntity } from '@wildebeest/backend/errors'
 import { getSigningKey } from '@wildebeest/backend/mastodon/account'
-import { addFollowing, isNotFollowing } from '@wildebeest/backend/mastodon/follow'
+import { hasBlockBetween } from '@wildebeest/backend/mastodon/block'
+import {
+	addFollowing,
+	isFollowingOrFollowingRequested,
+	updateFollowingOptions,
+} from '@wildebeest/backend/mastodon/follow'
+import { getRelationship } from '@wildebeest/backend/mastodon/relationship'
 import type { HonoEnv } from '@wildebeest/backend/types'
-import type { Relationship } from '@wildebeest/backend/types/account'
 import { readBody, cors } from '@wildebeest/backend/utils'
 import { actorToHandle } from '@wildebeest/backend/utils/handle'
 import myz from '@wildebeest/backend/utils/zod'
@@ -78,30 +83,31 @@ async function handleRequest(
 		return new Response('', { status: 403 })
 	}
 
-	if (await isNotFollowing(db, connectedActor, followee)) {
-		const activity = await createFollowActivity(db, domain, connectedActor, followee)
-		const signingKey = await getSigningKey(userKEK, db, connectedActor)
-		await deliverToActor(signingKey, connectedActor, followee, activity, domain)
-		await addFollowing(domain, db, connectedActor, followee)
+	if (await hasBlockBetween(db, connectedActor, followee)) {
+		return new Response('', { status: 403 })
 	}
 
-	const res: Relationship = {
-		id,
-		following: true,
-		// FIXME: stub
-		showing_reblogs: params.reblogs ?? true,
-		notifying: params.notify ?? false,
-		followed_by: false,
-		blocking: false,
-		blocked_by: false,
-		muting: false,
-		muting_notifications: false,
-		requested: false,
-		domain_blocking: false,
-		endorsed: false,
-		note: '',
-		languages: params.languages ?? undefined,
+	const hasExistingFollow = await isFollowingOrFollowingRequested(db, connectedActor, followee)
+	if (!hasExistingFollow) {
+		const activity = await createFollowActivity(db, domain, connectedActor, followee)
+		const signingKey = await getSigningKey(userKEK, db, connectedActor)
+		await addFollowing(domain, db, connectedActor, followee, params)
+		await deliverSafely(`Follow to ${followee.id.toString()}`, () =>
+			deliverToActor(signingKey, connectedActor, followee, activity, domain)
+		)
+
+		const res = await getRelationship(db, connectedActor, id)
+		// Preserve the existing follow endpoint response while the remote request remains pending.
+		res.following = true
+		res.requested = false
+		res.showing_reblogs = params.reblogs ?? true
+		res.notifying = params.notify ?? false
+		res.languages = params.languages ?? undefined
+		return new Response(JSON.stringify(res), { headers })
 	}
+
+	await updateFollowingOptions(db, connectedActor, followee, params)
+	const res = await getRelationship(db, connectedActor, id)
 	return new Response(JSON.stringify(res), { headers })
 }
 

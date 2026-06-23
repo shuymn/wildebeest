@@ -3,13 +3,14 @@
 import { AnnounceActivity, PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
 import type { Actor } from '@wildebeest/backend/activitypub/actors'
 import { addObjectInOutbox } from '@wildebeest/backend/activitypub/actors/outbox'
-import { getApId } from '@wildebeest/backend/activitypub/objects'
+import { getApId, originalObjectIdSymbol } from '@wildebeest/backend/activitypub/objects'
 import { Note } from '@wildebeest/backend/activitypub/objects/note'
 import { type Database } from '@wildebeest/backend/database'
 import { MastodonId } from '@wildebeest/backend/types'
 import { isUUID } from '@wildebeest/backend/utils'
 import { generateMastodonId } from '@wildebeest/backend/utils/id'
 
+import { refreshReblogAndRemoteInteractionCounts } from './interaction_count'
 import { assertBatchSuccess, getResultsField } from './utils'
 
 /**
@@ -25,12 +26,20 @@ export async function createReblog(
 	obj: Note,
 	activity: Pick<AnnounceActivity, 'id' | 'to' | 'cc'>,
 	published?: string
-) {
+): Promise<boolean> {
 	const [outboxObjectId, mastodonId] = await Promise.all([
 		addObjectInOutbox(db, actor, obj, activity.to ?? obj.to, activity.cc ?? obj.cc, published),
 		generateMastodonId(db, 'actor_reblogs', new Date()),
 	])
-	await insertReblog(db, actor, obj, activity.id.toString(), outboxObjectId, mastodonId)
+	const inserted = await insertReblog(db, actor, obj, activity.id.toString(), outboxObjectId, mastodonId)
+	if (!inserted) {
+		const results = await db.batch([
+			db.prepare(`DELETE FROM outbox_objects WHERE id = ?`).bind(outboxObjectId),
+			db.prepare(`DELETE FROM actor_activities WHERE json_extract(activity, '$.id') = ?`).bind(activity.id.toString()),
+		])
+		assertBatchSuccess(results)
+	}
+	return inserted
 }
 
 async function insertReblog(
@@ -40,30 +49,23 @@ async function insertReblog(
 	activityId: string,
 	outboxObjectId: string,
 	mastodonId: MastodonId
-) {
-	const results = await db.batch([
-		db
-			.prepare(
-				db.qb.insertOrIgnore(`
+): Promise<boolean> {
+	const actorId = actor.id.toString()
+	const objectId = obj.id.toString()
+	const insert = await db
+		.prepare(
+			db.qb.insertOrIgnore(`
 INTO actor_reblogs (id, actor_id, object_id, outbox_object_id, mastodon_id)
 VALUES (?, ?, ?, ?, ?)
 `)
-			)
-			.bind(activityId, actor.id.toString(), obj.id.toString(), outboxObjectId, mastodonId),
-		db
-			.prepare(
-				`
-UPDATE objects
-SET interaction_count = interaction_count + 1
-WHERE id = ?
-  AND local = 0
-  AND EXISTS (SELECT 1 FROM users WHERE users.actor_id = ?)
-  AND EXISTS (SELECT 1 FROM actor_reblogs WHERE id = ?)
-`
-			)
-			.bind(obj.id.toString(), actor.id.toString(), activityId),
-	])
-	assertBatchSuccess(results)
+		)
+		.bind(activityId, actorId, objectId, outboxObjectId, mastodonId)
+		.run()
+	if (!insert.success) {
+		throw new Error('SQL error: ' + insert.error)
+	}
+	await refreshReblogAndRemoteInteractionCounts(db, objectId)
+	return insert.meta.changes === 1
 }
 
 export function getReblogs(db: Database, obj: Note): Promise<Array<string>> {
@@ -74,6 +76,75 @@ export function getReblogs(db: Database, obj: Note): Promise<Array<string>> {
 	const statement = db.prepare(query).bind(obj.id.toString())
 
 	return getResultsField(statement, 'actor_id')
+}
+
+export async function getReblogActivity(
+	db: Database,
+	actor: Pick<Actor, 'id'>,
+	obj: Note
+): Promise<AnnounceActivity | null> {
+	const row = await db
+		.prepare(
+			`
+SELECT actor_reblogs.id, outbox_objects.published_date, outbox_objects.'to', outbox_objects.cc
+FROM actor_reblogs
+LEFT JOIN outbox_objects ON outbox_objects.id = actor_reblogs.outbox_object_id
+WHERE actor_reblogs.actor_id = ? AND actor_reblogs.object_id = ?
+`
+		)
+		.bind(actor.id.toString(), obj.id.toString())
+		.first<{ id: string; published_date: string | null; to: string | null; cc: string | null }>()
+
+	if (!row) {
+		return null
+	}
+
+	return {
+		'@context': 'https://www.w3.org/ns/activitystreams',
+		id: row.id,
+		type: 'Announce',
+		actor: actor.id,
+		object: new URL(obj[originalObjectIdSymbol] ?? obj.id.toString()),
+		to: JSON.parse(row.to ?? '[]'),
+		cc: JSON.parse(row.cc ?? '[]'),
+		...(row.published_date ? { published: row.published_date } : {}),
+	}
+}
+
+export async function deleteReblog(db: Database, actor: Pick<Actor, 'id'>, obj: Pick<Note, 'id'>): Promise<boolean> {
+	return deleteReblogWhere(db, actor.id.toString(), 'object_id = ?', obj.id.toString())
+}
+
+export async function deleteReblogByActivityId(
+	db: Database,
+	actor: Pick<Actor, 'id'>,
+	activityId: URL
+): Promise<boolean> {
+	return deleteReblogWhere(db, actor.id.toString(), 'id = ?', activityId.toString())
+}
+
+async function deleteReblogWhere(db: Database, actorId: string, condition: string, value: string): Promise<boolean> {
+	const row = await db
+		.prepare(`SELECT object_id FROM actor_reblogs WHERE actor_id = ? AND ${condition}`)
+		.bind(actorId, value)
+		.first<{ object_id: string }>()
+	if (!row) {
+		return false
+	}
+
+	const objectId = row.object_id
+	const results = await db.batch([
+		db
+			.prepare(
+				`DELETE FROM outbox_objects
+WHERE id = (SELECT outbox_object_id FROM actor_reblogs WHERE actor_id = ? AND ${condition})`
+			)
+			.bind(actorId, value),
+		db.prepare(`DELETE FROM actor_reblogs WHERE actor_id = ? AND ${condition}`).bind(actorId, value),
+	])
+	assertBatchSuccess(results)
+	await refreshReblogAndRemoteInteractionCounts(db, objectId)
+	return true
 }
 
 export async function hasReblog(db: Database, actor: Actor, obj: Note): Promise<boolean> {

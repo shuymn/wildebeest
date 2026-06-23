@@ -4,8 +4,10 @@ import app from '@wildebeest/backend'
 import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
 import { mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
 import { type Note } from '@wildebeest/backend/activitypub/objects/note'
-import { createPublicStatus } from '@wildebeest/backend/test/shared.utils'
+import { acceptFollowing, addFollowing } from '@wildebeest/backend/mastodon/follow'
+import { createDirectStatus, createPublicStatus } from '@wildebeest/backend/test/shared.utils'
 import { makeDB, makeQueue, createTestUser, assertStatus } from '@wildebeest/backend/test/utils'
+import { MessageType } from '@wildebeest/backend/types'
 
 const userKEK = 'test_kek4'
 const domain = 'cloudflare.com'
@@ -26,8 +28,9 @@ describe('/api/v1/statuses/[id]/reblog', () => {
 		const res = await app.fetch(req, { DATABASE: db, QUEUE: queue, userKEK, data: { connectedActor } })
 		await assertStatus(res, 200)
 
-		const data = await res.json<{ reblogged: unknown }>()
+		const data = await res.json<{ reblogged: unknown; reblogs_count: number }>()
 		assert.equal(data.reblogged, true)
+		assert.equal(data.reblogs_count, 1)
 
 		const row = await db.prepare(`SELECT * FROM actor_reblogs`).first<{ actor_id: string; object_id: string }>()
 		assert.ok(row)
@@ -54,6 +57,73 @@ describe('/api/v1/statuses/[id]/reblog', () => {
 		assert.ok(row)
 		assert.equal(row.actor_id, actor.id.toString())
 		assert.equal(row.object_id, note.id.toString())
+	})
+
+	test('reblog local status delivers Announce activity to followers', async () => {
+		const db = makeDB()
+		const queue = makeQueue()
+
+		const actor = await createTestUser(domain, db, userKEK, 'local-reblog@cloudflare.com')
+		const follower = await createTestUser(domain, db, userKEK, 'local-reblog-follower@cloudflare.com')
+		const note = await createPublicStatus(domain, db, actor, 'local reblog status')
+
+		await addFollowing(domain, db, follower, actor)
+		await acceptFollowing(db, follower, actor)
+
+		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}/reblog`, {
+			method: 'POST',
+			body: JSON.stringify({ visibility: 'public' }),
+		})
+		const res = await app.fetch(req, { DATABASE: db, QUEUE: queue, userKEK, data: { connectedActor: actor } })
+		await assertStatus(res, 200)
+
+		assert.equal(queue.messages.length, 1)
+		assert.equal(queue.messages[0].type, MessageType.Deliver)
+		assert.equal(queue.messages[0].toActorId, follower.id.toString())
+		assert.equal(queue.messages[0].activity.type, 'Announce')
+	})
+
+	test.each([
+		{ visibility: 'public', expectedStatus: 404 },
+		{ visibility: 'unlisted', expectedStatus: 404 },
+		{ visibility: 'private', expectedStatus: 404 },
+		{ visibility: 'direct', expectedStatus: 200 },
+	])('self reblog direct status as $visibility', async ({ visibility, expectedStatus }) => {
+		const db = makeDB()
+		const queue = makeQueue()
+		const actor = await createTestUser(domain, db, userKEK, `direct-reblog-${visibility}@cloudflare.com`)
+		const note = await createDirectStatus(domain, db, actor, 'direct reblog status')
+
+		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}/reblog`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ visibility }),
+		})
+		const res = await app.fetch(req, { DATABASE: db, QUEUE: queue, userKEK, data: { connectedActor: actor } })
+		await assertStatus(res, expectedStatus)
+
+		const row = await db.prepare(`SELECT count(*) as count FROM actor_reblogs`).first<{ count: number }>()
+		assert.equal(row?.count, expectedStatus === 200 ? 1 : 0)
+	})
+
+	test('direct reblog does not deliver Announce activity to followers', async () => {
+		const db = makeDB()
+		const queue = makeQueue()
+		const actor = await createTestUser(domain, db, userKEK, 'direct-reblog-no-fanout@cloudflare.com')
+		const follower = await createTestUser(domain, db, userKEK, 'direct-reblog-no-fanout-follower@cloudflare.com')
+		await addFollowing(domain, db, follower, actor)
+		await acceptFollowing(db, follower, actor)
+		const note = await createDirectStatus(domain, db, actor, 'direct reblog status')
+
+		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}/reblog`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ visibility: 'direct' }),
+		})
+		const res = await app.fetch(req, { DATABASE: db, QUEUE: queue, userKEK, data: { connectedActor: actor } })
+		await assertStatus(res, 200)
+
+		assert.equal(queue.messages.length, 0)
 	})
 
 	test('reblog remote status status sends Announce activity to author', async () => {
@@ -117,5 +187,63 @@ describe('/api/v1/statuses/[id]/reblog', () => {
 		assert.equal(deliveredActivity.type, 'Announce')
 		assert.equal(deliveredActivity.actor, actor.id.toString())
 		assert.equal(deliveredActivity.object, originalObjectId)
+	})
+
+	test('reblog remote status keeps local state when Announce delivery fails', async () => {
+		const db = makeDB()
+		const queue = makeQueue()
+		const actor = await createTestUser(domain, db, userKEK, 'reblog-delivery-failure@cloudflare.com')
+		const originalObjectId = 'https://example.com/failed-announce-note'
+
+		await db
+			.prepare(
+				'INSERT INTO objects (id, type, properties, original_actor_id, original_object_id, mastodon_id, local) VALUES (?, ?, ?, ?, ?, ?, 0)'
+			)
+			.bind(
+				'https://example.com/failed-announce-object',
+				'Note',
+				JSON.stringify({
+					attributedTo: actor.id.toString(),
+					id: 'failed-announce',
+					type: 'Note',
+					content: 'remote status',
+					source: {
+						content: 'remote status',
+						mediaType: 'text/markdown',
+					},
+					to: [PUBLIC_GROUP],
+					cc: [],
+					attachment: [],
+					sensitive: false,
+				} satisfies Note),
+				actor.id.toString(),
+				originalObjectId,
+				'failed-announce-mastodon-id'
+			)
+			.run()
+
+		globalThis.fetch = async (input: RequestInfo) => {
+			const request = new Request(input)
+			if (request.url === actor.id.toString() + '/inbox') {
+				return new Response('temporary failure', { status: 503 })
+			}
+
+			throw new Error('unexpected request to ' + request.url)
+		}
+
+		const req = new Request(`https://${domain}/api/v1/statuses/failed-announce-mastodon-id/reblog`, {
+			method: 'POST',
+			body: JSON.stringify({ visibility: 'public' }),
+		})
+		const res = await app.fetch(req, { DATABASE: db, QUEUE: queue, userKEK, data: { connectedActor: actor } })
+		await assertStatus(res, 200)
+		const data = await res.json<{ reblogged: boolean }>()
+		assert.equal(data.reblogged, true)
+
+		const row = await db
+			.prepare(`SELECT actor_id, object_id FROM actor_reblogs`)
+			.first<{ actor_id: string; object_id: string }>()
+		assert.equal(row?.actor_id, actor.id.toString())
+		assert.equal(row?.object_id, 'https://example.com/failed-announce-object')
 	})
 })

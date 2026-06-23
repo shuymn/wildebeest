@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert/strict'
 
 import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
 import { createAnnounceActivity } from '@wildebeest/backend/activitypub/activities/announce'
+import { insertBookmark } from '@wildebeest/backend/mastodon/bookmark'
 import { acceptFollowing, addFollowing } from '@wildebeest/backend/mastodon/follow'
 import { insertHashtags } from '@wildebeest/backend/mastodon/hashtag'
 import { insertLike } from '@wildebeest/backend/mastodon/like'
@@ -43,6 +44,7 @@ describe('mastodon/timeline', () => {
 		})
 
 		await insertLike(db, actor, firstNoteFromActor2)
+		await insertBookmark(db, actor, firstNoteFromActor2)
 		await createReblog(db, actor, firstNoteFromActor2, {
 			to: [PUBLIC_GROUP],
 			cc: [],
@@ -58,12 +60,14 @@ describe('mastodon/timeline', () => {
 		assert.equal(data[0].account.username, 'sven')
 		assert.equal(data[0].reblog?.content, '<p>first status from actor2</p>')
 		assert.equal(data[0].reblog?.account.username, 'sven2')
+		assert.equal(data[0].reblog?.bookmarked, true)
 		assert.equal(data[1].content, '<p>second status from actor2</p>')
 		assert.equal(data[1].account.username, 'sven2')
 		assert.equal(data[2].content, '<p>first status from actor2</p>')
 		assert.equal(data[2].account.username, 'sven2')
 		assert.equal(data[2].favourites_count, 1)
 		assert.equal(data[2].reblogs_count, 1)
+		assert.equal(data[2].bookmarked, true)
 	})
 
 	test("home doesn't show private Notes from followed actors", async () => {

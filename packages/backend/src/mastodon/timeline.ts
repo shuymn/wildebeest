@@ -78,6 +78,7 @@ SELECT
 
   (SELECT count(*) > 0 FROM actor_reblogs WHERE actor_reblogs.object_id=objects.id AND actor_reblogs.actor_id=?1) as reblogged,
   (SELECT count(*) > 0 FROM actor_favourites WHERE actor_favourites.object_id=objects.id AND actor_favourites.actor_id=?1) as favourited,
+  (SELECT count(*) > 0 FROM bookmarks WHERE bookmarks.status_id=objects.id AND bookmarks.account_id=?1) as bookmarked,
 
   actor_reblogs.id as reblog_id,
   actor_reblogs.mastodon_id as reblog_mastodon_id
@@ -135,6 +136,7 @@ LIMIT ?4
 
 				reblogged: 1 | 0
 				favourited: 1 | 0
+				bookmarked: 1 | 0
 			} & ({ reblog_id: string; reblog_mastodon_id: string } | { reblog_id: null; reblog_mastodon_id: null })
 		>()
 	if (!success) {
@@ -337,6 +339,7 @@ SELECT
 
   (SELECT count(*) > 0 FROM actor_reblogs WHERE actor_reblogs.object_id=objects.id AND actor_reblogs.actor_id=?1) as reblogged,
   (SELECT count(*) > 0 FROM actor_favourites WHERE actor_favourites.object_id=objects.id AND actor_favourites.actor_id=?1) as favourited,
+  (SELECT count(*) > 0 FROM bookmarks WHERE bookmarks.status_id=objects.id AND bookmarks.account_id=?1) as bookmarked,
 
   actor_reblogs.id as reblog_id,
   actor_reblogs.mastodon_id as reblog_mastodon_id
@@ -388,6 +391,7 @@ LIMIT ?4
 
 				reblogged: 1 | 0
 				favourited: 1 | 0
+				bookmarked: 1 | 0
 			} & ({ reblog_id: string; reblog_mastodon_id: string } | { reblog_id: null; reblog_mastodon_id: null })
 		>()
 	if (!success) {

@@ -1,5 +1,4 @@
 import { getUserId, isLocalAccount } from '@wildebeest/backend/accounts'
-import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
 import {
 	type Actor,
 	actorFromRow,
@@ -21,20 +20,15 @@ import { isNote, type Note } from '@wildebeest/backend/activitypub/objects/note'
 import { type Database } from '@wildebeest/backend/database'
 import { selectObjectRevisionsByObjectID } from '@wildebeest/backend/database/d1/querier'
 import { loadMastodonAccount } from '@wildebeest/backend/mastodon/account'
-import { isFollowing } from '@wildebeest/backend/mastodon/follow'
 import { ensureReblogMastodonId } from '@wildebeest/backend/mastodon/reblog'
+import { detectVisibility } from '@wildebeest/backend/mastodon/status_visibility'
 import * as media from '@wildebeest/backend/media/'
-import type {
-	MastodonAccount,
-	MastodonId,
-	MastodonStatus,
-	MastodonStatusEdit,
-	Visibility,
-} from '@wildebeest/backend/types'
+import type { MastodonAccount, MastodonId, MastodonStatus, MastodonStatusEdit } from '@wildebeest/backend/types'
 import type { MediaAttachment } from '@wildebeest/backend/types/media'
-import { toArray } from '@wildebeest/backend/utils'
 import { actorToAcct, actorToHandle, handleToAcct, parseHandle } from '@wildebeest/backend/utils/handle'
 import { queryAcct } from '@wildebeest/backend/webfinger'
+
+export { canViewStatus, detectVisibility, isVisible } from '@wildebeest/backend/mastodon/status_visibility'
 
 export const MAX_STATUS_LENGTH = 500
 export const MAX_MEDIA_ATTACHMENTS = 4
@@ -81,6 +75,32 @@ export function actorToMention(domain: string, actor: Actor): MastodonStatus['me
 	}
 }
 
+export async function setMastodonStatusViewerState(
+	db: Database,
+	status: MastodonStatus,
+	obj: Pick<Note, 'id'>,
+	actor: Pick<Actor, 'id'>
+): Promise<MastodonStatus> {
+	const actorId = actor.id.toString()
+	const objectId = obj.id.toString()
+	const row = await db
+		.prepare(
+			`
+SELECT
+  (SELECT count(*) > 0 FROM actor_favourites WHERE actor_id = ? AND object_id = ?) as favourited,
+  (SELECT count(*) > 0 FROM actor_reblogs WHERE actor_id = ? AND object_id = ?) as reblogged,
+  (SELECT count(*) > 0 FROM bookmarks WHERE account_id = ? AND status_id = ?) as bookmarked
+`
+		)
+		.bind(actorId, objectId, actorId, objectId, actorId, objectId)
+		.first<{ favourited: 1 | 0; reblogged: 1 | 0; bookmarked: 1 | 0 }>()
+
+	status.favourited = row?.favourited === 1
+	status.reblogged = row?.reblogged === 1
+	status.bookmarked = row?.bookmarked === 1
+	return status
+}
+
 export async function toMastodonStatusFromObject(
 	db: Database,
 	obj: RemoteObject<Note>,
@@ -100,11 +120,19 @@ export async function toMastodonStatusFromObject(
 	}
 	const handle = actorToHandle(actor)
 
-	// FIXME: temporarily disable favourites and reblogs counts
-	const favourites = []
-	const reblogs = []
-	// const favourites = await getLikes(db, obj)
-	// const reblogs = await getReblogs(db, obj)
+	const counts = await db
+		.prepare(
+			`
+SELECT
+  (SELECT count(*) FROM actor_favourites WHERE actor_favourites.object_id = objects.id) as favourites_count,
+  COALESCE(reblogs_count, 0) as reblogs_count,
+  COALESCE(replies_count, 0) as replies_count
+FROM objects
+WHERE id = ?
+`
+		)
+		.bind(obj.id.toString())
+		.first<{ favourites_count: number; reblogs_count: number; replies_count: number }>()
 
 	const mediaAttachments: Array<MediaAttachment> = obj.attachment
 		? obj.attachment.map((doc) => media.fromObject(doc))
@@ -167,9 +195,9 @@ export async function toMastodonStatusFromObject(
 		tags: [],
 		in_reply_to_id: inReplyToId,
 		in_reply_to_account_id: inReplyToAccountId,
-		reblogs_count: reblogs.length,
-		favourites_count: favourites.length,
-		replies_count: 0,
+		reblogs_count: counts?.reblogs_count ?? 0,
+		favourites_count: counts?.favourites_count ?? 0,
+		replies_count: counts?.replies_count ?? 0,
 		favourited: false,
 		reblogged: false,
 		poll: null,
@@ -203,6 +231,7 @@ type MastodonStatusRow = {
 	properties: string | object
 	reblogged?: 1 | 0
 	favourited?: 1 | 0
+	bookmarked?: 1 | 0
 
 	publisher_actor_id?: string
 	publisher_published?: string
@@ -381,7 +410,7 @@ export async function toMastodonStatusesFromRowsWithActor(
 					language: null,
 					text: null,
 					muted: false,
-					bookmarked: false,
+					bookmarked: row.bookmarked === 1,
 					pinned: false,
 					// filtered
 				},
@@ -426,7 +455,7 @@ export async function toMastodonStatusesFromRowsWithActor(
 				language: null,
 				text: null,
 				muted: false,
-				bookmarked: false,
+				bookmarked: row.bookmarked === 1,
 				pinned: false,
 				// filtered
 			}
@@ -576,7 +605,7 @@ export async function toMastodonStatusFromRow(
 				language: null,
 				text: null,
 				muted: false,
-				bookmarked: false,
+				bookmarked: row.bookmarked === 1,
 				pinned: false,
 				// filtered
 			},
@@ -621,7 +650,7 @@ export async function toMastodonStatusFromRow(
 			language: null,
 			text: null,
 			muted: false,
-			bookmarked: false,
+			bookmarked: row.bookmarked === 1,
 			pinned: false,
 			// filtered
 		}
@@ -640,41 +669,6 @@ export async function getMastodonStatusById(
 		return null
 	}
 	return toMastodonStatusFromObject(db, obj, domain)
-}
-
-export function detectVisibility({
-	to,
-	cc,
-	followers,
-}: Pick<Note, 'to' | 'cc'> & Pick<Actor, 'followers'>): Visibility {
-	to = Array.isArray(to) ? to : [to]
-	cc = Array.isArray(cc) ? cc : [cc]
-
-	if (to.includes(PUBLIC_GROUP)) {
-		return 'public'
-	}
-	if (to.includes(followers.toString())) {
-		if (cc.includes(PUBLIC_GROUP)) {
-			return 'unlisted'
-		}
-		return 'private'
-	}
-	return 'direct'
-}
-
-export async function isVisible(db: Database, author: Actor, viewer: Actor | undefined, note: Note): Promise<boolean> {
-	const visibility = detectVisibility({ to: note.to, cc: note.cc, followers: author.followers })
-	if (visibility === 'public' || visibility === 'unlisted') {
-		return true
-	}
-	if (!viewer) {
-		throw new Error('viewer is required')
-	}
-	if (visibility === 'private') {
-		return isFollowing(db, viewer, author)
-	}
-	const viewerId = getApId(viewer.id).toString()
-	return toArray(note.to).some((target) => getApId(target).toString() === viewerId)
 }
 
 export async function getStatusRevisions(

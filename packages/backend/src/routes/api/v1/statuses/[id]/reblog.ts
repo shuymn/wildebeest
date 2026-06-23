@@ -4,21 +4,23 @@ import { z } from 'zod'
 
 import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
 import { createAnnounceActivity } from '@wildebeest/backend/activitypub/activities/announce'
-import { getAndCacheActor, type Person } from '@wildebeest/backend/activitypub/actors'
-import { deliverFollowers, deliverToActor } from '@wildebeest/backend/activitypub/deliver'
+import { type Person } from '@wildebeest/backend/activitypub/actors'
 import {
 	getApId,
 	getObjectByMastodonId,
-	isLocalObject,
 	originalActorIdSymbol,
 	originalObjectIdSymbol,
 } from '@wildebeest/backend/activitypub/objects'
 import { isNote, type Note } from '@wildebeest/backend/activitypub/objects/note'
 import { type Database, getDatabase } from '@wildebeest/backend/database'
 import { notAuthorized, recordNotFound } from '@wildebeest/backend/errors'
-import { getSigningKey } from '@wildebeest/backend/mastodon/account'
-import { createReblog } from '@wildebeest/backend/mastodon/reblog'
-import { toMastodonStatusFromObject } from '@wildebeest/backend/mastodon/status'
+import { deliverCreatedAnnounce, getRemoteAnnounceTargetActor } from '@wildebeest/backend/mastodon/announce_delivery'
+import { createReblog, hasReblog } from '@wildebeest/backend/mastodon/reblog'
+import {
+	canViewStatus,
+	setMastodonStatusViewerState,
+	toMastodonStatusFromObject,
+} from '@wildebeest/backend/mastodon/status'
 import type { DeliverMessageBody, HonoEnv, Queue, Visibility } from '@wildebeest/backend/types'
 import { readBody } from '@wildebeest/backend/utils'
 import { cors } from '@wildebeest/backend/utils/cors'
@@ -76,13 +78,20 @@ async function handleRequest(
 	if (!isNote(obj)) {
 		return recordNotFound(`object ${id} not found`)
 	}
+	if (!(await canViewStatus(db, obj, connectedActor))) {
+		return recordNotFound(`object ${id} not found`)
+	}
 	if (reblogNotAllowed(connectedActor, obj, visibility)) {
 		return recordNotFound(`object ${id} not found`)
 	}
 
-	const status = await toMastodonStatusFromObject(db, obj, domain)
-	if (status === null) {
-		return recordNotFound(`object ${id} not found`)
+	if (await hasReblog(db, connectedActor, obj)) {
+		const status = await toMastodonStatusFromObject(db, obj, domain)
+		if (status === null) {
+			return recordNotFound(`object ${id} not found`)
+		}
+		await setMastodonStatusViewerState(db, status, obj, connectedActor)
+		return new Response(JSON.stringify(status), { headers })
 	}
 
 	const to = new Set<string>()
@@ -104,31 +113,34 @@ async function handleRequest(
 		if (obj.attributedTo) {
 			cc.add(getApId(obj.attributedTo).toString())
 		}
+	} else if (visibility === 'direct') {
+		to.add(connectedActor.id.toString())
 	}
 
-	let activity
-	if (isLocalObject(domain, getApId(obj))) {
-		activity = await createAnnounceActivity(db, domain, connectedActor, new URL(obj.id), to, cc)
-	} else {
-		// Reblogging an external object delivers the announce activity to the post author.
-		const targetActor = await getAndCacheActor(new URL(obj[originalActorIdSymbol]), db)
-		if (targetActor === null) {
-			return recordNotFound(`target Actor ${obj[originalActorIdSymbol]} not found`)
-		}
-
-		const signingKey = await getSigningKey(userKEK, db, connectedActor)
-		activity = await createAnnounceActivity(db, domain, connectedActor, new URL(obj[originalObjectIdSymbol]), to, cc)
-
-		await Promise.all([
-			// Delivers the announce activity to the post author.
-			deliverToActor(signingKey, connectedActor, targetActor, activity, domain),
-			// Share reblogged by delivering the announce activity to followers
-			deliverFollowers(db, userKEK, connectedActor, activity, queue),
-		])
+	const objectId = new URL(obj[originalObjectIdSymbol] ?? obj.id.toString())
+	const targetActor = await getRemoteAnnounceTargetActor(db, domain, connectedActor, obj, { skipSelf: false })
+	if (targetActor === null) {
+		return recordNotFound(`target Actor ${obj[originalActorIdSymbol]} not found`)
 	}
 
-	await createReblog(db, connectedActor, obj, activity, activity.published ?? new Date().toISOString())
-	status.reblogged = true
+	const activity = await createAnnounceActivity(
+		db,
+		domain,
+		connectedActor,
+		targetActor ? objectId : new URL(obj.id),
+		to,
+		cc
+	)
+	const created = await createReblog(db, connectedActor, obj, activity, activity.published ?? new Date().toISOString())
+	if (created) {
+		await deliverCreatedAnnounce(db, userKEK, connectedActor, activity, queue, domain, targetActor)
+	}
+
+	const status = await toMastodonStatusFromObject(db, obj, domain)
+	if (status === null) {
+		return recordNotFound(`object ${id} not found`)
+	}
+	await setMastodonStatusViewerState(db, status, obj, connectedActor)
 
 	return new Response(JSON.stringify(status), { headers })
 }
@@ -157,7 +169,7 @@ function reblogNotAllowed(
 		return visibility === 'public' || visibility === 'unlisted'
 	}
 
-	return visibility === 'direct'
+	return visibility !== 'direct'
 }
 
 export default app

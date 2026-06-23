@@ -64,6 +64,10 @@ describe('/api/v1/accounts/[id]/unfollow', () => {
 		await assertStatus(res, 200)
 		assertCORS(res, req)
 		assertJSON(res)
+		const data = await res.json<{ following: boolean; showing_reblogs: boolean; notifying: boolean }>()
+		assert.equal(data.following, false)
+		assert.equal(data.showing_reblogs, false)
+		assert.equal(data.notifying, false)
 
 		assert(receivedActivity)
 		assert.equal(receivedActivity.type, 'Undo')

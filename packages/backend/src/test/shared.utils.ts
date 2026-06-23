@@ -62,6 +62,7 @@ export async function createReply(
 	)
 	await addObjectInOutbox(db, author, replyNote)
 	await insertReply(db, author, replyNote, originalNote)
+	return replyNote
 }
 
 /**

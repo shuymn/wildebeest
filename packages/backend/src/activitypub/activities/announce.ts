@@ -77,10 +77,11 @@ export async function handleAnnounceActivity(
 		return
 	}
 
-	const notifId = await createNotification(db, 'reblog', rebloggedActor, actor, obj)
+	const created = await createReblog(db, actor, obj, activity, activity.published)
+	if (!created) {
+		return
+	}
 
-	await Promise.all([
-		createReblog(db, actor, obj, activity, activity.published),
-		sendReblogNotification(db, actor, rebloggedActor, notifId, adminEmail, vapidKeys),
-	])
+	const notifId = await createNotification(db, 'reblog', rebloggedActor, actor, obj)
+	await sendReblogNotification(db, actor, rebloggedActor, notifId, adminEmail, vapidKeys)
 }

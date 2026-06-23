@@ -72,18 +72,52 @@ export async function moveFollowing(
 	}
 }
 
+export type FollowOptions = {
+	reblogs?: boolean
+	notify?: boolean
+	languages?: string[]
+}
+
+function serializeFollowOptions(options: FollowOptions): {
+	showReblogs: number
+	notify: number
+	languages: string | null
+} {
+	return {
+		showReblogs: (options.reblogs ?? true) ? 1 : 0,
+		notify: (options.notify ?? false) ? 1 : 0,
+		languages: options.languages ? JSON.stringify(options.languages) : null,
+	}
+}
+
 // Add a pending following
-export async function addFollowing(domain: string, db: Database, follower: Actor, followee: Actor): Promise<string> {
+export async function addFollowing(
+	domain: string,
+	db: Database,
+	follower: Pick<Actor, 'id'>,
+	followee: Pick<Actor, 'id' | 'preferredUsername'>,
+	options: FollowOptions = {}
+): Promise<string> {
 	const id = crypto.randomUUID()
 
 	const query = db.qb.insertOrIgnore(`
-		INTO actor_following (id, actor_id, target_actor_id, state, target_actor_acct)
-		VALUES (?, ?, ?, ?, ?)
+		INTO actor_following (id, actor_id, target_actor_id, state, target_actor_acct, show_reblogs, notify, languages)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 
+	const optionValues = serializeFollowOptions(options)
 	const out = await db
 		.prepare(query)
-		.bind(id, follower.id.toString(), followee.id.toString(), STATE_PENDING, actorToAcct(followee, domain))
+		.bind(
+			id,
+			follower.id.toString(),
+			followee.id.toString(),
+			STATE_PENDING,
+			actorToAcct(followee, domain),
+			optionValues.showReblogs,
+			optionValues.notify,
+			optionValues.languages
+		)
 		.run()
 	if (!out.success) {
 		throw new Error('SQL error: ' + out.error)
@@ -91,8 +125,48 @@ export async function addFollowing(domain: string, db: Database, follower: Actor
 	return id
 }
 
+export async function updateFollowingOptions(
+	db: Database,
+	follower: Pick<Actor, 'id'>,
+	followee: Pick<Actor, 'id'>,
+	options: FollowOptions
+): Promise<void> {
+	const updates: string[] = []
+	const values: (number | string | null)[] = []
+	const optionValues = serializeFollowOptions(options)
+	if (options.reblogs !== undefined) {
+		updates.push('show_reblogs = ?')
+		values.push(optionValues.showReblogs)
+	}
+	if (options.notify !== undefined) {
+		updates.push('notify = ?')
+		values.push(optionValues.notify)
+	}
+	if (options.languages !== undefined) {
+		updates.push('languages = ?')
+		values.push(optionValues.languages)
+	}
+	if (updates.length === 0) {
+		return
+	}
+
+	const out = await db
+		.prepare(
+			`
+	UPDATE actor_following
+	SET ${updates.join(', ')}
+	WHERE actor_id = ? AND target_actor_id = ?
+	`
+		)
+		.bind(...values, follower.id.toString(), followee.id.toString())
+		.run()
+	if (!out.success) {
+		throw new Error('SQL error: ' + out.error)
+	}
+}
+
 // Accept the pending following request
-export async function acceptFollowing(db: Database, follower: Actor, followee: Actor) {
+export async function acceptFollowing(db: Database, follower: Pick<Actor, 'id'>, followee: Pick<Actor, 'id'>) {
 	const followerId = follower.id.toString()
 	const followeeId = followee.id.toString()
 
@@ -122,7 +196,7 @@ UPDATE actor_following SET state=?1 WHERE actor_id=?2 AND target_actor_id=?3 AND
 	assertBatchSuccess(results)
 }
 
-export async function removeFollowing(db: Database, follower: Actor, followee: Actor) {
+export async function removeFollowing(db: Database, follower: Pick<Actor, 'id'>, followee: Pick<Actor, 'id'>) {
 	const followerId = follower.id.toString()
 	const followeeId = followee.id.toString()
 
@@ -152,22 +226,91 @@ DELETE FROM actor_following WHERE actor_id=?1 AND target_actor_id=?2
 	assertBatchSuccess(results)
 }
 
-export function getFollowingMastodonIds(db: Database, actor: Actor): Promise<MastodonId[]> {
-	return getFollowingMastodonIdsByState(db, actor, STATE_ACCEPTED)
+export type FollowingRelationship = {
+	mastodon_id: MastodonId
+	show_reblogs: number
+	notify: number
+	languages: string | null
 }
 
-export function getFollowingRequestedMastodonIds(db: Database, actor: Actor): Promise<MastodonId[]> {
-	return getFollowingMastodonIdsByState(db, actor, STATE_PENDING)
+export function getFollowingRequestedMastodonIdsForTargets(
+	db: Database,
+	actor: Actor,
+	targetIds: MastodonId[]
+): Promise<MastodonId[]> {
+	return getFollowingMastodonIdsByStateForTargets(db, actor, STATE_PENDING, targetIds)
 }
 
-function getFollowingMastodonIdsByState(db: Database, actor: Actor, state: string): Promise<MastodonId[]> {
+export async function getFollowingRelationshipsForTargets(
+	db: Database,
+	actor: Actor,
+	targetIds: MastodonId[]
+): Promise<FollowingRelationship[]> {
+	if (targetIds.length === 0) {
+		return []
+	}
+
+	const placeholders = targetIds.map(() => '?').join(', ')
+	const { success, error, results } = await db
+		.prepare(
+			`
+SELECT actors.mastodon_id, actor_following.show_reblogs, actor_following.notify, actor_following.languages
+FROM actor_following
+INNER JOIN actors ON actors.id = actor_following.target_actor_id
+WHERE actor_following.actor_id = ?
+  AND actor_following.state = ?
+  AND actors.mastodon_id IN (${placeholders})
+`
+		)
+		.bind(actor.id.toString(), STATE_ACCEPTED, ...targetIds)
+		.all<FollowingRelationship>()
+	if (!success) {
+		throw new Error('SQL error: ' + error)
+	}
+	return results ?? []
+}
+
+export function getFollowerMastodonIdsForTargets(
+	db: Database,
+	actor: Actor,
+	targetIds: MastodonId[]
+): Promise<MastodonId[]> {
+	if (targetIds.length === 0) {
+		return Promise.resolve([])
+	}
+
+	const placeholders = targetIds.map(() => '?').join(', ')
+	const query = `
+SELECT actors.mastodon_id
+FROM actor_following
+INNER JOIN actors ON actors.id = actor_following.actor_id
+WHERE actor_following.target_actor_id = ?
+  AND actor_following.state = ?
+  AND actors.mastodon_id IN (${placeholders})
+`
+	return getResultsField(db.prepare(query).bind(actor.id.toString(), STATE_ACCEPTED, ...targetIds), 'mastodon_id')
+}
+
+function getFollowingMastodonIdsByStateForTargets(
+	db: Database,
+	actor: Actor,
+	state: string,
+	targetIds: MastodonId[]
+): Promise<MastodonId[]> {
+	if (targetIds.length === 0) {
+		return Promise.resolve([])
+	}
+
+	const placeholders = targetIds.map(() => '?').join(', ')
 	const query = `
 SELECT actors.mastodon_id
 FROM actor_following
 INNER JOIN actors ON actors.id = actor_following.target_actor_id
-WHERE actor_following.actor_id=?1 AND actor_following.state=?2
+WHERE actor_following.actor_id = ?
+  AND actor_following.state = ?
+  AND actors.mastodon_id IN (${placeholders})
 `
-	return getResultsField(db.prepare(query).bind(actor.id.toString(), state), 'mastodon_id')
+	return getResultsField(db.prepare(query).bind(actor.id.toString(), state, ...targetIds), 'mastodon_id')
 }
 
 export function getFollowingId(db: Database, actor: Actor, limit?: number): Promise<Array<string>> {
@@ -209,10 +352,6 @@ export async function isFollowingOrFollowingRequested(db: Database, actor: Actor
 		})
 
 	return yes === 1
-}
-
-export async function isNotFollowing(db: Database, actor: Actor, target: Actor): Promise<boolean> {
-	return !(await isFollowing(db, actor, target))
 }
 
 export async function isFollowing(db: Database, actor: Actor, target: Actor): Promise<boolean> {

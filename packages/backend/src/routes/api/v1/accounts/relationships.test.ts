@@ -2,7 +2,9 @@ import { strict as assert } from 'node:assert/strict'
 
 import app from '@wildebeest/backend'
 import { mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { insertBlock } from '@wildebeest/backend/mastodon/block'
 import { acceptFollowing, addFollowing } from '@wildebeest/backend/mastodon/follow'
+import { insertMute } from '@wildebeest/backend/mastodon/mute'
 import { makeDB, createTestUser, assertStatus, assertCORS, assertJSON } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek2'
@@ -56,8 +58,10 @@ describe('/api/v1/accounts/relationships', () => {
 		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
-		await addFollowing(domain, db, actor, actor2)
+		await addFollowing(domain, db, actor, actor2, { reblogs: false, notify: true, languages: ['en'] })
 		await acceptFollowing(db, actor, actor2)
+		await addFollowing(domain, db, actor2, actor)
+		await acceptFollowing(db, actor2, actor)
 
 		const req = new Request('https://mastodon.example/api/v1/accounts/relationships?id[]=' + actor2[mastodonIdSymbol])
 		const res = await app.fetch(req, { DATABASE: db, data: { connectedActor: actor } })
@@ -66,6 +70,10 @@ describe('/api/v1/accounts/relationships', () => {
 		const data = await res.json<any[]>()
 		assert.equal(data.length, 1)
 		assert.equal(data[0].following, true)
+		assert.equal(data[0].followed_by, true)
+		assert.equal(data[0].showing_reblogs, false)
+		assert.equal(data[0].notifying, true)
+		assert.deepEqual(data[0].languages, ['en'])
 	})
 
 	test('relationships following request', async () => {
@@ -82,5 +90,28 @@ describe('/api/v1/accounts/relationships', () => {
 		assert.equal(data.length, 1)
 		assert.equal(data[0].requested, true)
 		assert.equal(data[0].following, false)
+	})
+
+	test('relationships blocking and muting', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'relationship-blocker@cloudflare.com')
+		const blocked = await createTestUser(domain, db, userKEK, 'relationship-blocked@cloudflare.com')
+		const blockedBy = await createTestUser(domain, db, userKEK, 'relationship-blocked-by@cloudflare.com')
+		const muted = await createTestUser(domain, db, userKEK, 'relationship-muted@cloudflare.com')
+		await insertBlock(db, actor, blocked)
+		await insertBlock(db, blockedBy, actor)
+		await insertMute(db, actor, muted)
+
+		const req = new Request(
+			`https://mastodon.example/api/v1/accounts/relationships?id[]=${blocked[mastodonIdSymbol]}&id[]=${blockedBy[mastodonIdSymbol]}&id[]=${muted[mastodonIdSymbol]}`
+		)
+		const res = await app.fetch(req, { DATABASE: db, data: { connectedActor: actor } })
+		await assertStatus(res, 200)
+
+		const data = await res.json<any[]>()
+		assert.equal(data[0].blocking, true)
+		assert.equal(data[1].blocked_by, true)
+		assert.equal(data[2].muting, true)
+		assert.equal(data[2].muting_notifications, true)
 	})
 })

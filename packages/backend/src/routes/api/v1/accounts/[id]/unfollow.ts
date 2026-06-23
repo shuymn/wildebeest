@@ -8,8 +8,8 @@ import { type Database, getDatabase } from '@wildebeest/backend/database'
 import { notAuthorized, resourceNotFound } from '@wildebeest/backend/errors'
 import { getSigningKey } from '@wildebeest/backend/mastodon/account'
 import { isFollowingOrFollowingRequested, removeFollowing } from '@wildebeest/backend/mastodon/follow'
+import { getRelationship } from '@wildebeest/backend/mastodon/relationship'
 import type { HonoEnv, MastodonId } from '@wildebeest/backend/types'
-import type { Relationship } from '@wildebeest/backend/types/account'
 import { cors } from '@wildebeest/backend/utils/cors'
 import { actorToHandle, isLocalHandle } from '@wildebeest/backend/utils/handle'
 
@@ -59,22 +59,8 @@ async function handleRequest({ domain, db, connectedActor, userKEK }: Dependenci
 		await removeFollowing(db, connectedActor, targetActor)
 	}
 
-	const res: Relationship = {
-		id,
-		following: false,
-		// FIXME: stub
-		showing_reblogs: true,
-		notifying: false,
-		followed_by: false,
-		blocking: false,
-		blocked_by: false,
-		muting: false,
-		muting_notifications: false,
-		requested: false,
-		domain_blocking: false,
-		endorsed: false,
-		note: '',
-	}
+	const res = await getRelationship(db, connectedActor, id)
+	res.notifying = false
 	return new Response(JSON.stringify(res), { headers })
 }
 

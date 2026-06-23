@@ -1,0 +1,54 @@
+import type { Actor } from '@wildebeest/backend/activitypub/actors'
+import { mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { type Database } from '@wildebeest/backend/database'
+import type { MastodonId } from '@wildebeest/backend/types'
+
+import {
+	deleteAccountRelationship,
+	getSourceMastodonIdsForTargets,
+	getTargetMastodonIds,
+	insertAccountRelationship,
+} from './account_relationship'
+import { removeFollowing } from './follow'
+
+export async function insertBlock(db: Database, actor: Actor, target: Actor) {
+	await insertAccountRelationship(db, 'blocks', actor, target)
+}
+
+export async function removeBlockRelatedFollows(db: Database, actor: Actor, target: Actor) {
+	await removeFollowing(db, actor, target)
+	await removeFollowing(db, target, actor)
+}
+
+export async function deleteBlock(db: Database, actor: Actor, target: Actor) {
+	await deleteAccountRelationship(db, 'blocks', actor, target)
+}
+
+export function getBlockedMastodonIds(
+	db: Database,
+	actor: Actor,
+	options: { limit: number; maxId?: MastodonId; targetIds?: MastodonId[] } = { limit: 40 }
+): Promise<MastodonId[]> {
+	return getTargetMastodonIds(db, 'blocks', actor, options)
+}
+
+export function getBlockedByMastodonIds(db: Database, actor: Actor, targetIds: MastodonId[]): Promise<MastodonId[]> {
+	return getSourceMastodonIdsForTargets(db, 'blocks', actor, targetIds)
+}
+
+export async function hasBlockBetween(db: Database, actor: Actor, target: Actor): Promise<boolean> {
+	const row = await db
+		.prepare(
+			`SELECT count(*) > 0 as blocked
+FROM blocks
+WHERE (account_id = ? AND target_account_id = ?)
+   OR (account_id = ? AND target_account_id = ?)`
+		)
+		.bind(actor.id.toString(), target.id.toString(), target.id.toString(), actor.id.toString())
+		.first<{ blocked: 1 | 0 }>()
+	return row?.blocked === 1
+}
+
+export function isSelfBlock(actor: Actor, target: Actor): boolean {
+	return actor[mastodonIdSymbol] === target[mastodonIdSymbol]
+}

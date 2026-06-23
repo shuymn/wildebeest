@@ -87,6 +87,10 @@ export function isMoveActivity(obj: ApObject): obj is MoveActivity {
 	return getApType(obj) === 'Move'
 }
 
+export function isUndoActivity(obj: ApObject): obj is UndoActivity {
+	return getApType(obj) === 'Undo'
+}
+
 export function getActivityObject(activity: Activity): ApObject {
 	if (typeof activity.object === 'string' || activity.object instanceof URL) {
 		throw new Error('`activity.object` must be of type object')
