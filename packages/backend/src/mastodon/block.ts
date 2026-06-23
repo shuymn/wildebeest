@@ -9,6 +9,7 @@ import {
 	getTargetMastodonIds,
 	insertAccountRelationship,
 } from './account_relationship'
+import { blockBetweenSql } from './block_sql'
 import { removeFollowing } from './follow'
 
 export async function insertBlock(db: Database, actor: Actor, target: Actor) {
@@ -47,11 +48,10 @@ export async function hasBlockBetween(
 		.prepare(
 			`SELECT 1
 FROM blocks
-WHERE (account_id = ? AND target_account_id = ?)
-   OR (account_id = ? AND target_account_id = ?)
+WHERE ${blockBetweenSql('?1', '?2')}
 LIMIT 1`
 		)
-		.bind(actorId, targetId, targetId, actorId)
+		.bind(actorId, targetId)
 		.first()
 	return row !== null
 }

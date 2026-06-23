@@ -3,6 +3,7 @@ import { type Database } from '@wildebeest/backend/database'
 import { MastodonId } from '@wildebeest/backend/types'
 import { actorToAcct } from '@wildebeest/backend/utils/handle'
 
+import { noBlockBetweenSql } from './block_sql'
 import { assertBatchSuccess, getResultsField } from './utils'
 
 const STATE_PENDING = 'pending'
@@ -125,7 +126,7 @@ export async function addFollowing(
 	return id
 }
 
-export async function addAcceptedFollowingIfNotBlocked(
+export async function ensureAcceptedFollowingIfNotBlocked(
 	domain: string,
 	db: Database,
 	follower: Pick<Actor, 'id'>,
@@ -134,48 +135,41 @@ export async function addAcceptedFollowingIfNotBlocked(
 	const id = crypto.randomUUID()
 	const followerId = follower.id.toString()
 	const followeeId = followee.id.toString()
-	const optionValues = serializeFollowOptions({})
 
-	const results = await db.batch([
-		db
-			.prepare(
-				db.qb.insertOrIgnore(`
-			INTO actor_following (id, actor_id, target_actor_id, state, target_actor_acct, show_reblogs, notify, languages)
-			SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
-			WHERE NOT EXISTS (
-				SELECT 1 FROM blocks
-				WHERE (account_id = ?2 AND target_account_id = ?3)
-				   OR (account_id = ?3 AND target_account_id = ?2)
-			)
-		`)
-			)
-			.bind(
-				id,
-				followerId,
-				followeeId,
-				STATE_ACCEPTED,
-				actorToAcct(followee, domain),
-				optionValues.showReblogs,
-				optionValues.notify,
-				optionValues.languages
-			),
-		db
-			.prepare(
-				`
-	UPDATE actors
-	SET interaction_count = interaction_count + 1
-	WHERE id = ?1
-	  AND NOT EXISTS (SELECT 1 FROM users WHERE users.actor_id = actors.id)
-	  AND EXISTS (
-	    SELECT 1 FROM actor_following
-	    WHERE id = ?2 AND actor_id = ?3 AND target_actor_id = ?1 AND state = ?4
-	  )
+	const out = await db
+		.prepare(
+			`
+	INSERT INTO actor_following (id, actor_id, target_actor_id, state, target_actor_acct)
+	SELECT ?1, ?2, ?3, ?4, ?5
+	WHERE ${noBlockBetweenSql('?2', '?3')}
+	ON CONFLICT(actor_id, target_actor_id) DO UPDATE SET state = excluded.state
+	WHERE actor_following.state = ?6
 	`
-			)
-			.bind(followeeId, id, followerId, STATE_ACCEPTED),
-	])
-	assertBatchSuccess(results)
-	return results[0].meta.changes === 1
+		)
+		.bind(id, followerId, followeeId, STATE_ACCEPTED, actorToAcct(followee, domain), STATE_PENDING)
+		.run()
+	if (!out.success) {
+		throw new Error('SQL error: ' + out.error)
+	}
+	if (out.meta.changes === 1) {
+		return true
+	}
+
+	const acceptedFollow = await db
+		.prepare(
+			`
+		SELECT 1
+		FROM actor_following
+		WHERE actor_id = ?1
+		  AND target_actor_id = ?2
+		  AND state = ?3
+		  AND ${noBlockBetweenSql('?1', '?2')}
+		LIMIT 1
+		`
+		)
+		.bind(followerId, followeeId, STATE_ACCEPTED)
+		.first()
+	return acceptedFollow !== null
 }
 
 export async function updateFollowingOptions(

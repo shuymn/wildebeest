@@ -7,7 +7,7 @@ import { type ApObject, getApId } from '@wildebeest/backend/activitypub/objects'
 import { Database } from '@wildebeest/backend/database'
 import { getSigningKey } from '@wildebeest/backend/mastodon/account'
 import { hasBlockBetween } from '@wildebeest/backend/mastodon/block'
-import { addAcceptedFollowingIfNotBlocked } from '@wildebeest/backend/mastodon/follow'
+import { ensureAcceptedFollowingIfNotBlocked } from '@wildebeest/backend/mastodon/follow'
 import { insertFollowNotification, sendFollowNotification } from '@wildebeest/backend/mastodon/notification'
 import { actorToHandle } from '@wildebeest/backend/utils/handle'
 import { JWK } from '@wildebeest/backend/webpush/jwk'
@@ -56,7 +56,7 @@ export async function handleFollowActivity(
 		console.warn(`actor ${followerId} not found`)
 		return
 	}
-	if (!(await addAcceptedFollowingIfNotBlocked(domain, db, follower, followee))) {
+	if (!(await ensureAcceptedFollowingIfNotBlocked(domain, db, follower, followee))) {
 		return
 	}
 
