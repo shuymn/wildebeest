@@ -2,10 +2,13 @@ import { strict as assert } from 'node:assert/strict'
 
 import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
 import { createAnnounceActivity } from '@wildebeest/backend/activitypub/activities/announce'
+import { insertBlock } from '@wildebeest/backend/mastodon/block'
+import { insertBookmark } from '@wildebeest/backend/mastodon/bookmark'
 import { acceptFollowing, addFollowing } from '@wildebeest/backend/mastodon/follow'
 import { insertHashtags } from '@wildebeest/backend/mastodon/hashtag'
 import { insertLike } from '@wildebeest/backend/mastodon/like'
-import { createReblog } from '@wildebeest/backend/mastodon/reblog'
+import { insertMute } from '@wildebeest/backend/mastodon/mute'
+import { createReblog, deleteReblog } from '@wildebeest/backend/mastodon/reblog'
 import {
 	LocalPreference,
 	getHomeTimeline,
@@ -64,6 +67,39 @@ describe('mastodon/timeline', () => {
 		assert.equal(data[2].account.username, 'sven2')
 		assert.equal(data[2].favourites_count, 1)
 		assert.equal(data[2].reblogs_count, 1)
+
+		await deleteReblog(db, actor, firstNoteFromActor2)
+		const dataAfterUnreblog = await getHomeTimeline(domain, db, connectedActor)
+		assert.equal(dataAfterUnreblog.length, 2)
+		assert.equal(dataAfterUnreblog[1].reblogs_count, 0)
+	})
+
+	test('home and list timelines hide blocked and muted accounts', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'filter-owner@cloudflare.com')
+		const blocked = await createTestUser(domain, db, userKEK, 'filter-blocked@cloudflare.com')
+		const muted = await createTestUser(domain, db, userKEK, 'filter-muted@cloudflare.com')
+		const visible = await createTestUser(domain, db, userKEK, 'filter-visible@cloudflare.com')
+
+		for (const target of [blocked, muted, visible]) {
+			await addFollowing(domain, db, actor, target)
+			await acceptFollowing(db, actor, target)
+			await createPublicStatus(domain, db, target, `post from ${target.preferredUsername}`)
+		}
+		await insertBlock(db, actor, blocked)
+		await insertMute(db, actor, muted)
+
+		const home = await getHomeTimeline(domain, db, actor)
+		assert.equal(home.length, 1)
+		assert.equal(home[0].account.username, 'filter-visible')
+
+		const list = await getListTimeline(domain, db, actor, [
+			blocked.id.toString(),
+			muted.id.toString(),
+			visible.id.toString(),
+		])
+		assert.equal(list.length, 1)
+		assert.equal(list[0].account.username, 'filter-visible')
 	})
 
 	test("home doesn't show private Notes from followed actors", async () => {
@@ -194,6 +230,25 @@ describe('mastodon/timeline', () => {
 		const data = await getHomeTimeline(domain, db, connectedActor)
 		assert.equal(data.length, 1)
 		assert.equal(data[0].favourited, true)
+	})
+
+	test('show status bookmarked in home and list timelines', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'bookmark-owner@cloudflare.com')
+		const member = await createTestUser(domain, db, userKEK, 'bookmark-member@cloudflare.com')
+
+		await addFollowing(domain, db, actor, member)
+		await acceptFollowing(db, actor, member)
+		const note = await createPublicStatus(domain, db, member, 'bookmarked post')
+		await insertBookmark(db, actor, note)
+
+		const home = await getHomeTimeline(domain, db, actor)
+		assert.equal(home.length, 1)
+		assert.equal(home[0].bookmarked, true)
+
+		const list = await getListTimeline(domain, db, actor, [member.id.toString()])
+		assert.equal(list.length, 1)
+		assert.equal(list[0].bookmarked, true)
 	})
 
 	test('show reblogs as independent notes', async () => {

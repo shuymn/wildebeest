@@ -7,6 +7,7 @@ import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
 import { Actor, getActorByMastodonId, Person } from '@wildebeest/backend/activitypub/actors'
 import { type Database, getDatabase } from '@wildebeest/backend/database'
 import { resourceNotFound } from '@wildebeest/backend/errors'
+import { hasBlockBetween } from '@wildebeest/backend/mastodon/block'
 import { isFollowing } from '@wildebeest/backend/mastodon/follow'
 import { toMastodonStatusesFromRowsWithActor } from '@wildebeest/backend/mastodon/status'
 import { getStatusRange } from '@wildebeest/backend/mastodon/timeline'
@@ -88,6 +89,9 @@ async function getStatuses(
 		// to avoid returning statuses that aren't pinned.
 		return new Response(JSON.stringify([]), { headers })
 	}
+	if (connectedActor && (await hasBlockBetween(db, connectedActor, actor))) {
+		return new Response(JSON.stringify([]), { headers })
+	}
 
 	// Client asked to retrieve statuses using max_id or (max_id and since_id) or min_id
 	// As opposed to Mastodon we don't use incremental ID but UUID, we need
@@ -111,6 +115,14 @@ async function getStatuses(
 		}
 	}
 
+	const bindings =
+		max && min
+			? [actor.id.toString(), JSON.stringify(targets), max, params.limit, min]
+			: [actor.id.toString(), JSON.stringify(targets), max ?? db.qb.epoch(), params.limit]
+	if (connectedActor) {
+		bindings.push(connectedActor.id.toString())
+	}
+	const viewerParam = max && min ? '?6' : '?5'
 	const { success, error, results } = await db
 		.prepare(
 			`
@@ -126,8 +138,11 @@ SELECT
   outbox_objects.cc as publisher_cc,
 
   (SELECT count(*) FROM actor_favourites WHERE actor_favourites.object_id=objects.id) as favourites_count,
-  (SELECT count(*) FROM actor_reblogs WHERE actor_reblogs.object_id=objects.id) as reblogs_count,
-  (SELECT count(*) FROM actor_replies WHERE actor_replies.in_reply_to_object_id=objects.id) as replies_count,
+  COALESCE(objects.reblogs_count, 0) as reblogs_count,
+  COALESCE(objects.replies_count, 0) as replies_count,
+  ${connectedActor ? `(SELECT count(*) > 0 FROM actor_reblogs WHERE actor_reblogs.object_id = objects.id AND actor_reblogs.actor_id = ${viewerParam})` : '0'} as reblogged,
+  ${connectedActor ? `(SELECT count(*) > 0 FROM actor_favourites WHERE actor_favourites.object_id = objects.id AND actor_favourites.actor_id = ${viewerParam})` : '0'} as favourited,
+  ${connectedActor ? `(SELECT count(*) > 0 FROM bookmarks WHERE bookmarks.status_id = objects.id AND bookmarks.account_id = ${viewerParam})` : '0'} as bookmarked,
 
   actor_reblogs.id as reblog_id,
 	actor_reblogs.mastodon_id as reblog_mastodon_id
@@ -143,18 +158,29 @@ WHERE
   AND ${db.qb.timeNormalize('outbox_objects.cdate')} ${max ? '<' : '>'} ?3
   ${max && min ? 'AND ' + db.qb.timeNormalize('outbox_objects.cdate') + ' > ?5' : ''}
   ${params.exclude_reblogs ? 'AND actor_reblogs.id IS NULL' : ''}
+  ${
+		connectedActor
+			? `AND NOT EXISTS (
+    SELECT 1 FROM blocks
+    WHERE blocks.account_id = ${viewerParam} AND blocks.target_account_id = objects.original_actor_id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM blocks
+    WHERE blocks.target_account_id = ${viewerParam} AND blocks.account_id = objects.original_actor_id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM mutes
+    WHERE mutes.account_id = ${viewerParam}
+      AND mutes.target_account_id IN (outbox_objects.actor_id, objects.original_actor_id)
+  )`
+			: ''
+	}
   ${params.only_media ? `AND ${db.qb.jsonArrayLength(db.qb.jsonExtract('objects.properties', 'attachment'))} != 0` : ''}
 ORDER BY ${db.qb.timeNormalize('outbox_objects.published_date')} DESC
 LIMIT ?4
   `
 		)
-		.bind(
-			...(max && min
-				? [actor.id.toString(), JSON.stringify(targets), max, params.limit, min]
-				: min
-					? [actor.id.toString(), JSON.stringify(targets), max ?? db.qb.epoch(), params.limit, min]
-					: [actor.id.toString(), JSON.stringify(targets), max ?? db.qb.epoch(), params.limit])
-		)
+		.bind(...bindings)
 		.all<{
 			id: string
 			mastodon_id: string
@@ -169,6 +195,9 @@ LIMIT ?4
 			favourites_count: number
 			reblogs_count: number
 			replies_count: number
+			reblogged: 1 | 0
+			favourited: 1 | 0
+			bookmarked: 1 | 0
 
 			reblog_id: string | null
 			reblog_mastodon_id: string | null

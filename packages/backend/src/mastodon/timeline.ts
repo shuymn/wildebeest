@@ -73,11 +73,12 @@ SELECT
   outbox_objects.cc as publisher_cc,
 
   (SELECT count(*) FROM actor_favourites WHERE actor_favourites.object_id=objects.id) as favourites_count,
-  (SELECT count(*) FROM actor_reblogs WHERE actor_reblogs.object_id=objects.id) as reblogs_count,
-  (SELECT count(*) FROM actor_replies WHERE actor_replies.in_reply_to_object_id=objects.id) as replies_count,
+  COALESCE(objects.reblogs_count, 0) as reblogs_count,
+  COALESCE(objects.replies_count, 0) as replies_count,
 
   (SELECT count(*) > 0 FROM actor_reblogs WHERE actor_reblogs.object_id=objects.id AND actor_reblogs.actor_id=?1) as reblogged,
   (SELECT count(*) > 0 FROM actor_favourites WHERE actor_favourites.object_id=objects.id AND actor_favourites.actor_id=?1) as favourited,
+  (SELECT count(*) > 0 FROM bookmarks WHERE bookmarks.status_id=objects.id AND bookmarks.account_id=?1) as bookmarked,
 
   actor_reblogs.id as reblog_id,
   actor_reblogs.mastodon_id as reblog_mastodon_id
@@ -88,6 +89,18 @@ FROM outbox_objects
 WHERE
   objects.type = 'Note'
   AND outbox_objects.actor_id IN ${db.qb.set('?2')}
+  AND NOT EXISTS (
+    SELECT 1 FROM blocks
+    WHERE blocks.account_id = ?1 AND blocks.target_account_id IN (outbox_objects.actor_id, objects.original_actor_id)
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM blocks
+    WHERE blocks.target_account_id = ?1 AND blocks.account_id IN (outbox_objects.actor_id, objects.original_actor_id)
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM mutes
+    WHERE mutes.account_id = ?1 AND mutes.target_account_id IN (outbox_objects.actor_id, objects.original_actor_id)
+  )
   AND (${db.qb.jsonExtractIsNull('objects.properties', 'inReplyTo')}
         OR ${db.qb.jsonExtract('objects.properties', 'inReplyTo')}
           IN (SELECT ifnull(objects.original_object_id, objects.id)
@@ -135,6 +148,7 @@ LIMIT ?4
 
 				reblogged: 1 | 0
 				favourited: 1 | 0
+				bookmarked: 1 | 0
 			} & ({ reblog_id: string; reblog_mastodon_id: string } | { reblog_id: null; reblog_mastodon_id: null })
 		>()
 	if (!success) {
@@ -193,8 +207,8 @@ SELECT
   outbox_objects.cc as publisher_cc,
 
   (SELECT count(*) FROM actor_favourites WHERE actor_favourites.object_id=objects.id) as favourites_count,
-  (SELECT count(*) FROM actor_reblogs WHERE actor_reblogs.object_id=objects.id) as reblogs_count,
-  (SELECT count(*) FROM actor_replies WHERE actor_replies.in_reply_to_object_id=objects.id) as replies_count,
+  COALESCE(objects.reblogs_count, 0) as reblogs_count,
+  COALESCE(objects.replies_count, 0) as replies_count,
 
   actor_reblogs.id as reblog_id,
   actor_reblogs.mastodon_id as reblog_mastodon_id
@@ -332,11 +346,12 @@ SELECT
   outbox_objects.cc as publisher_cc,
 
   (SELECT count(*) FROM actor_favourites WHERE actor_favourites.object_id=objects.id) as favourites_count,
-  (SELECT count(*) FROM actor_reblogs WHERE actor_reblogs.object_id=objects.id) as reblogs_count,
-  (SELECT count(*) FROM actor_replies WHERE actor_replies.in_reply_to_object_id=objects.id) as replies_count,
+  COALESCE(objects.reblogs_count, 0) as reblogs_count,
+  COALESCE(objects.replies_count, 0) as replies_count,
 
   (SELECT count(*) > 0 FROM actor_reblogs WHERE actor_reblogs.object_id=objects.id AND actor_reblogs.actor_id=?1) as reblogged,
   (SELECT count(*) > 0 FROM actor_favourites WHERE actor_favourites.object_id=objects.id AND actor_favourites.actor_id=?1) as favourited,
+  (SELECT count(*) > 0 FROM bookmarks WHERE bookmarks.status_id=objects.id AND bookmarks.account_id=?1) as bookmarked,
 
   actor_reblogs.id as reblog_id,
   actor_reblogs.mastodon_id as reblog_mastodon_id
@@ -347,6 +362,18 @@ FROM outbox_objects
 WHERE
   objects.type = 'Note'
   AND outbox_objects.actor_id IN ${db.qb.set('?2')}
+  AND NOT EXISTS (
+    SELECT 1 FROM blocks
+    WHERE blocks.account_id = ?1 AND blocks.target_account_id IN (outbox_objects.actor_id, objects.original_actor_id)
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM blocks
+    WHERE blocks.target_account_id = ?1 AND blocks.account_id IN (outbox_objects.actor_id, objects.original_actor_id)
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM mutes
+    WHERE mutes.account_id = ?1 AND mutes.target_account_id IN (outbox_objects.actor_id, objects.original_actor_id)
+  )
   AND (${db.qb.jsonExtractIsNull('objects.properties', 'inReplyTo')}
         OR ${db.qb.jsonExtract('objects.properties', 'inReplyTo')}
           IN (SELECT ifnull(objects.original_object_id, objects.id)
@@ -388,6 +415,7 @@ LIMIT ?4
 
 				reblogged: 1 | 0
 				favourited: 1 | 0
+				bookmarked: 1 | 0
 			} & ({ reblog_id: string; reblog_mastodon_id: string } | { reblog_id: null; reblog_mastodon_id: null })
 		>()
 	if (!success) {
