@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert/strict'
 
-import { AnnounceActivity, PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
+import { AnnounceActivity, PUBLIC_GROUP, UndoActivity } from '@wildebeest/backend/activitypub/activities'
 import * as activityHandler from '@wildebeest/backend/activitypub/activities/handle'
 import { getApId } from '@wildebeest/backend/activitypub/objects'
 import { Note } from '@wildebeest/backend/activitypub/objects/note'
@@ -74,7 +74,7 @@ describe('Announce', () => {
 		const remoteActorId = 'https://example.com/actor'
 		const objectId = 'https://example.com/some-object'
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input: Parameters<typeof fetch>[0]) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === remoteActorId) {
 					return new Response(
@@ -150,7 +150,7 @@ describe('Announce', () => {
 		const remoteActorId = 'https://example.com/actor'
 		const remoteActorFollowers = 'https://example.com/actor/followers'
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input: Parameters<typeof fetch>[0]) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === remoteActorId) {
 					return new Response(
@@ -452,10 +452,251 @@ describe('Announce', () => {
 		})
 	})
 
+	test('undo announce removes reblog', async () => {
+		const remoteActorId = 'https://example.com/actor'
+		const objectId = 'https://example.com/some-object'
+		globalThis.fetch = async (input: Parameters<typeof fetch>[0]) => {
+			if (input instanceof URL || typeof input === 'string') {
+				if (input.toString() === remoteActorId) {
+					return new Response(
+						JSON.stringify({
+							id: remoteActorId,
+							icon: { url: 'https://img.com' },
+							type: 'Person',
+							preferredUsername: 'actor',
+						})
+					)
+				}
+
+				if (input.toString() === objectId) {
+					return new Response(
+						JSON.stringify({
+							id: objectId,
+							type: 'Note',
+							content: 'foo',
+							source: {
+								content: 'foo',
+								mediaType: 'text/plain',
+							},
+							attachment: [],
+							sensitive: false,
+							attributedTo: remoteActorId,
+							to: [PUBLIC_GROUP],
+							cc: [],
+						} satisfies Note)
+					)
+				}
+
+				throw new Error('unexpected request to ' + input.toString())
+			}
+			throw new Error('unexpected request to ' + input.url)
+		}
+
+		const db = makeDB()
+		await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+
+		const announce: AnnounceActivity = {
+			type: 'Announce',
+			id: createActivityId(domain),
+			actor: getApId(remoteActorId),
+			to: [PUBLIC_GROUP],
+			cc: [],
+			object: getApId(objectId),
+		}
+		await activityHandler.handle(domain, announce, db, userKEK, adminEmail, vapidKeys)
+
+		const undo: UndoActivity<AnnounceActivity> = {
+			type: 'Undo',
+			id: createActivityId(domain),
+			actor: getApId(remoteActorId),
+			object: announce,
+		}
+		await activityHandler.handle(domain, undo, db, userKEK, adminEmail, vapidKeys)
+
+		const { count } = await db
+			.prepare('SELECT count(*) as count FROM actor_reblogs')
+			.first<{ count: number }>()
+			.then((row) => {
+				assert.ok(row)
+				return row
+			})
+		assert.equal(count, 0)
+	})
+
+	test('stale embedded undo announce does not remove newer reblog', async () => {
+		const remoteActorId = 'https://example.com/actor'
+		const objectId = 'https://example.com/some-object'
+		globalThis.fetch = async (input: Parameters<typeof fetch>[0]) => {
+			if (input instanceof URL || typeof input === 'string') {
+				if (input.toString() === remoteActorId) {
+					return new Response(
+						JSON.stringify({
+							id: remoteActorId,
+							icon: { url: 'https://img.com' },
+							type: 'Person',
+							preferredUsername: 'actor',
+						})
+					)
+				}
+
+				if (input.toString() === objectId) {
+					return new Response(
+						JSON.stringify({
+							id: objectId,
+							type: 'Note',
+							content: 'foo',
+							source: {
+								content: 'foo',
+								mediaType: 'text/plain',
+							},
+							attachment: [],
+							sensitive: false,
+							attributedTo: remoteActorId,
+							to: [PUBLIC_GROUP],
+							cc: [],
+						} satisfies Note)
+					)
+				}
+
+				throw new Error('unexpected request to ' + input.toString())
+			}
+			throw new Error('unexpected request to ' + input.url)
+		}
+
+		const db = makeDB()
+		await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+
+		const oldAnnounce: AnnounceActivity = {
+			type: 'Announce',
+			id: createActivityId(domain),
+			actor: getApId(remoteActorId),
+			to: [PUBLIC_GROUP],
+			cc: [],
+			object: getApId(objectId),
+		}
+		await activityHandler.handle(domain, oldAnnounce, db, userKEK, adminEmail, vapidKeys)
+		await activityHandler.handle(
+			domain,
+			{
+				type: 'Undo',
+				id: createActivityId(domain),
+				actor: getApId(remoteActorId),
+				object: oldAnnounce.id,
+			} satisfies UndoActivity,
+			db,
+			userKEK,
+			adminEmail,
+			vapidKeys
+		)
+
+		const newAnnounce: AnnounceActivity = {
+			type: 'Announce',
+			id: createActivityId(domain),
+			actor: getApId(remoteActorId),
+			to: [PUBLIC_GROUP],
+			cc: [],
+			object: getApId(objectId),
+		}
+		await activityHandler.handle(domain, newAnnounce, db, userKEK, adminEmail, vapidKeys)
+		await activityHandler.handle(
+			domain,
+			{
+				type: 'Undo',
+				id: createActivityId(domain),
+				actor: getApId(remoteActorId),
+				object: oldAnnounce,
+			} satisfies UndoActivity<AnnounceActivity>,
+			db,
+			userKEK,
+			adminEmail,
+			vapidKeys
+		)
+
+		const { count } = await db
+			.prepare('SELECT count(*) as count FROM actor_reblogs')
+			.first<{ count: number }>()
+			.then((row) => {
+				assert.ok(row)
+				return row
+			})
+		assert.equal(count, 1)
+	})
+
+	test('undo announce by activity id removes reblog', async () => {
+		const remoteActorId = 'https://example.com/actor'
+		const objectId = 'https://example.com/some-object'
+		globalThis.fetch = async (input: Parameters<typeof fetch>[0]) => {
+			if (input instanceof URL || typeof input === 'string') {
+				if (input.toString() === remoteActorId) {
+					return new Response(
+						JSON.stringify({
+							id: remoteActorId,
+							icon: { url: 'https://img.com' },
+							type: 'Person',
+							preferredUsername: 'actor',
+						})
+					)
+				}
+
+				if (input.toString() === objectId) {
+					return new Response(
+						JSON.stringify({
+							id: objectId,
+							type: 'Note',
+							content: 'foo',
+							source: {
+								content: 'foo',
+								mediaType: 'text/plain',
+							},
+							attachment: [],
+							sensitive: false,
+							attributedTo: remoteActorId,
+							to: [PUBLIC_GROUP],
+							cc: [],
+						} satisfies Note)
+					)
+				}
+
+				throw new Error('unexpected request to ' + input.toString())
+			}
+			throw new Error('unexpected request to ' + input.url)
+		}
+
+		const db = makeDB()
+		await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+
+		const announce: AnnounceActivity = {
+			type: 'Announce',
+			id: createActivityId(domain),
+			actor: getApId(remoteActorId),
+			to: [PUBLIC_GROUP],
+			cc: [],
+			object: getApId(objectId),
+		}
+		await activityHandler.handle(domain, announce, db, userKEK, adminEmail, vapidKeys)
+
+		const undo: UndoActivity = {
+			type: 'Undo',
+			id: createActivityId(domain),
+			actor: getApId(remoteActorId),
+			object: announce.id,
+		}
+		await activityHandler.handle(domain, undo, db, userKEK, adminEmail, vapidKeys)
+
+		const { count } = await db
+			.prepare('SELECT count(*) as count FROM actor_reblogs')
+			.first<{ count: number }>()
+			.then((row) => {
+				assert.ok(row)
+				return row
+			})
+		assert.equal(count, 0)
+	})
+
 	test('duplicated announce', async () => {
 		const remoteActorId = 'https://example.com/actor'
 		const objectId = 'https://example.com/some-object'
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input: Parameters<typeof fetch>[0]) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === remoteActorId) {
 					return new Response(

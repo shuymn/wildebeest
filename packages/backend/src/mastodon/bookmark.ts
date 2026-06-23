@@ -5,7 +5,7 @@ import { type Database } from '@wildebeest/backend/database'
 import { refreshRemoteObjectInteractionCount } from './interaction_count'
 import { assertBatchSuccess, getResultsField } from './utils'
 
-export async function insertLike(db: Database, actor: Pick<Actor, 'id'>, obj: Pick<ApObject, 'id'>): Promise<boolean> {
+export async function insertBookmark(db: Database, actor: Pick<Actor, 'id'>, obj: Pick<ApObject, 'id'>) {
 	const id = crypto.randomUUID()
 	const actorId = actor.id.toString()
 	const objectId = obj.id.toString()
@@ -14,7 +14,7 @@ export async function insertLike(db: Database, actor: Pick<Actor, 'id'>, obj: Pi
 		db
 			.prepare(
 				db.qb.insertOrIgnore(`
-INTO actor_favourites (id, actor_id, object_id)
+INTO bookmarks (id, account_id, status_id)
 VALUES (?, ?, ?)
 `)
 			)
@@ -27,17 +27,16 @@ SET interaction_count = interaction_count + 1
 WHERE id = ?
   AND local = 0
   AND EXISTS (SELECT 1 FROM users WHERE users.actor_id = ?)
-  AND EXISTS (SELECT 1 FROM actor_favourites WHERE id = ?)
+  AND EXISTS (SELECT 1 FROM bookmarks WHERE id = ?)
 `
 			)
 			.bind(objectId, actorId, id),
 	])
 	assertBatchSuccess(results)
 	await refreshRemoteObjectInteractionCount(db, objectId)
-	return results[0].meta.changes === 1
 }
 
-export async function deleteLike(db: Database, actor: Pick<Actor, 'id'>, obj: Pick<ApObject, 'id'>) {
+export async function deleteBookmark(db: Database, actor: Pick<Actor, 'id'>, obj: Pick<ApObject, 'id'>) {
 	const actorId = actor.id.toString()
 	const objectId = obj.id.toString()
 
@@ -50,27 +49,17 @@ SET interaction_count = MAX(0, interaction_count - 1)
 WHERE id = ?
   AND local = 0
   AND EXISTS (SELECT 1 FROM users WHERE users.actor_id = ?)
-  AND EXISTS (SELECT 1 FROM actor_favourites WHERE actor_id = ? AND object_id = ?)
+  AND EXISTS (SELECT 1 FROM bookmarks WHERE account_id = ? AND status_id = ?)
 `
 			)
 			.bind(objectId, actorId, actorId, objectId),
-		db.prepare(`DELETE FROM actor_favourites WHERE actor_id = ? AND object_id = ?`).bind(actorId, objectId),
+		db.prepare(`DELETE FROM bookmarks WHERE account_id = ? AND status_id = ?`).bind(actorId, objectId),
 	])
 	assertBatchSuccess(results)
 	await refreshRemoteObjectInteractionCount(db, objectId)
 }
 
-export function getLikes(db: Database, obj: ApObject): Promise<Array<string>> {
-	const query = `
-		SELECT actor_id FROM actor_favourites WHERE object_id=?
-	`
-
-	const statement = db.prepare(query).bind(obj.id.toString())
-
-	return getResultsField(statement, 'actor_id')
-}
-
-export function getFavouritedObjectIds(
+export function getBookmarkedObjectIds(
 	db: Database,
 	actor: Actor,
 	{ limit, maxId }: { limit: number; maxId?: string }
@@ -78,10 +67,10 @@ export function getFavouritedObjectIds(
 	const statement = db
 		.prepare(
 			`
-SELECT object_id
-FROM actor_favourites
-INNER JOIN objects ON objects.id = actor_favourites.object_id
-WHERE actor_favourites.actor_id = ?
+SELECT status_id
+FROM bookmarks
+INNER JOIN objects ON objects.id = bookmarks.status_id
+WHERE bookmarks.account_id = ?
   AND (? IS NULL OR objects.mastodon_id < ?)
 ORDER BY objects.mastodon_id DESC
 LIMIT ?
@@ -89,5 +78,5 @@ LIMIT ?
 		)
 		.bind(actor.id.toString(), maxId ?? null, maxId ?? null, limit)
 
-	return getResultsField(statement, 'object_id')
+	return getResultsField(statement, 'status_id')
 }

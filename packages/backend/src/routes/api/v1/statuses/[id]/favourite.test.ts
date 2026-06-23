@@ -11,9 +11,9 @@ const userKEK = 'test_kek4'
 const domain = 'cloudflare.com'
 
 describe('/api/v1/statuses/[id]/favourite', () => {
-	test('favourite status sends Like activity', async () => {
+	test('favourite status sends Like activity once', async () => {
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		let deliveredActivity: any = null
+		const deliveredActivities: any[] = []
 
 		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
@@ -21,7 +21,7 @@ describe('/api/v1/statuses/[id]/favourite', () => {
 
 		await db
 			.prepare(
-				'INSERT INTO objects (id, type, properties, original_actor_id, original_object_id, local, mastodon_id) VALUES (?, ?, ?, ?, ?, 1, ?)'
+				'INSERT INTO objects (id, type, properties, original_actor_id, original_object_id, local, mastodon_id) VALUES (?, ?, ?, ?, ?, 0, ?)'
 			)
 			.bind(
 				'https://example.com/object1',
@@ -50,8 +50,7 @@ describe('/api/v1/statuses/[id]/favourite', () => {
 			const request = new Request(input)
 			if (request.url === actor.id.toString() + '/inbox') {
 				assert.equal(request.method, 'POST')
-				const body = await request.json()
-				deliveredActivity = body
+				deliveredActivities.push(await request.json())
 				return new Response()
 			}
 
@@ -60,13 +59,16 @@ describe('/api/v1/statuses/[id]/favourite', () => {
 
 		const connectedActor = actor
 
-		const req = new Request(`https://${domain}/api/v1/statuses/mastodonid1/favourite`)
+		const req = new Request(`https://${domain}/api/v1/statuses/mastodonid1/favourite`, { method: 'POST' })
 		const res = await app.fetch(req, { DATABASE: db, userKEK, data: { connectedActor } })
 		await assertStatus(res, 200)
 
-		assert(deliveredActivity)
-		assert.equal(deliveredActivity.type, 'Like')
-		assert.equal(deliveredActivity.object, originalObjectId)
+		const duplicateRes = await app.fetch(req, { DATABASE: db, userKEK, data: { connectedActor } })
+		await assertStatus(duplicateRes, 200)
+
+		assert.equal(deliveredActivities.length, 1)
+		assert.equal(deliveredActivities[0].type, 'Like')
+		assert.equal(deliveredActivities[0].object, originalObjectId)
 	})
 
 	test('favourite records in db', async () => {
@@ -76,7 +78,7 @@ describe('/api/v1/statuses/[id]/favourite', () => {
 
 		const connectedActor = actor
 
-		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}/favourite`)
+		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}/favourite`, { method: 'POST' })
 		const res = await app.fetch(req, { DATABASE: db, userKEK, data: { connectedActor } })
 		await assertStatus(res, 200)
 

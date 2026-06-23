@@ -6,7 +6,7 @@ import { z } from 'zod'
 import type { Person } from '@wildebeest/backend/activitypub/actors'
 import { type Database, getDatabase } from '@wildebeest/backend/database'
 import { notAuthorized } from '@wildebeest/backend/errors'
-import { getFollowingMastodonIds, getFollowingRequestedMastodonIds } from '@wildebeest/backend/mastodon/follow'
+import { getRelationships } from '@wildebeest/backend/mastodon/relationship'
 import type { HonoEnv } from '@wildebeest/backend/types'
 import { cors, readParams } from '@wildebeest/backend/utils'
 
@@ -42,30 +42,7 @@ app.get(async ({ req, env }) => {
 
 async function handleRequest({ db, connectedActor }: Dependencies, params: Parameters): Promise<Response> {
 	const ids = Array.isArray(params.id) ? params.id : [params.id]
-	const following = await getFollowingMastodonIds(db, connectedActor)
-	const followingRequested = await getFollowingRequestedMastodonIds(db, connectedActor)
-
-	return new Response(
-		JSON.stringify(
-			ids.map((id) => ({
-				id,
-				following: following.includes(id),
-				requested: followingRequested.includes(id),
-
-				// FIXME: stub values
-				showing_reblogs: false,
-				notifying: false,
-				followed_by: false,
-				blocking: false,
-				blocked_by: false,
-				muting: false,
-				muting_notifications: false,
-				domain_blocking: false,
-				endorsed: false,
-			}))
-		),
-		{ headers }
-	)
+	return new Response(JSON.stringify(await getRelationships(db, connectedActor, ids)), { headers })
 }
 
 export default app

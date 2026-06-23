@@ -53,9 +53,10 @@ export async function deliverFollowers(
 	userKEK: string,
 	from: Actor,
 	activity: Activity,
-	queue: Queue<DeliverMessageBody>
+	queue: Queue<DeliverMessageBody>,
+	excludeActorIds: Set<string> = new Set()
 ) {
-	const followers = await getFollowerIds(db, from)
+	const followers = (await getFollowerIds(db, from)).filter((id) => !excludeActorIds.has(id))
 	if (followers.length === 0) {
 		// No one is following the user so no updates to send. Sad.
 		return

@@ -7,6 +7,7 @@ import {
 	isFollowActivity,
 	isLikeActivity,
 	isMoveActivity,
+	isUndoActivity,
 	isUpdateActivity,
 } from '@wildebeest/backend/activitypub/activities'
 import { handleAcceptActivity } from '@wildebeest/backend/activitypub/activities/accept'
@@ -16,6 +17,7 @@ import { handleDeleteActivity } from '@wildebeest/backend/activitypub/activities
 import { handleFollowActivity } from '@wildebeest/backend/activitypub/activities/follow'
 import { handleLikeActivity } from '@wildebeest/backend/activitypub/activities/like'
 import { handleMoveActivity } from '@wildebeest/backend/activitypub/activities/move'
+import { handleUndoActivity } from '@wildebeest/backend/activitypub/activities/undo'
 import { handleUpdateActivity } from '@wildebeest/backend/activitypub/activities/update'
 import { Database } from '@wildebeest/backend/database'
 import { JWK } from '@wildebeest/backend/webpush/jwk'
@@ -51,6 +53,9 @@ export async function handle(
 	}
 	if (isMoveActivity(activity)) {
 		return await handleMoveActivity(domain, activity, db)
+	}
+	if (isUndoActivity(activity)) {
+		return await handleUndoActivity(domain, activity, db)
 	}
 	console.warn(`Unsupported activity: ${activity.type}`)
 }

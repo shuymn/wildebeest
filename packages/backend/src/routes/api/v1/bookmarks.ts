@@ -1,18 +1,19 @@
+// https://docs.joinmastodon.org/methods/bookmarks/
+
 import { Hono } from 'hono'
 import { z } from 'zod'
 
-import { getAccountByMastodonId } from '@wildebeest/backend/accounts'
 import { type Database, getDatabase } from '@wildebeest/backend/database'
 import { notAuthorized } from '@wildebeest/backend/errors'
-import { getMutedMastodonIds } from '@wildebeest/backend/mastodon/mute'
-import { HonoEnv } from '@wildebeest/backend/types'
-import type { MastodonAccount } from '@wildebeest/backend/types/account'
+import { getBookmarkedObjectIds } from '@wildebeest/backend/mastodon/bookmark'
+import { loadViewerStatusesByObjectIds } from '@wildebeest/backend/mastodon/status_response'
+import type { HonoEnv } from '@wildebeest/backend/types'
 import { cors, readParams } from '@wildebeest/backend/utils'
 
 const app = new Hono<HonoEnv>()
 
 const schema = z.object({
-	limit: z.coerce.number().int().positive().max(80).default(40),
+	limit: z.coerce.number().int().positive().max(40).default(20),
 	max_id: z.string().optional(),
 })
 
@@ -39,11 +40,9 @@ async function handleRequest(
 	domain: string,
 	params: z.infer<typeof schema>
 ): Promise<Response> {
-	const ids = await getMutedMastodonIds(db, connectedActor, { limit: params.limit, maxId: params.max_id })
-	const accounts = (await Promise.all(ids.map((id) => getAccountByMastodonId(domain, db, id)))).filter(
-		(account): account is MastodonAccount => account !== null
-	)
-	return new Response(JSON.stringify(accounts), { headers })
+	const objectIds = await getBookmarkedObjectIds(db, connectedActor, { limit: params.limit, maxId: params.max_id })
+	const statuses = await loadViewerStatusesByObjectIds(db, domain, objectIds, connectedActor)
+	return new Response(JSON.stringify(statuses), { headers })
 }
 
 export default app

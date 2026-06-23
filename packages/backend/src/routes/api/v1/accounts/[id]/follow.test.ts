@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert/strict'
 
 import app from '@wildebeest/backend'
 import { mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { insertBlock } from '@wildebeest/backend/mastodon/block'
 import { makeDB, createTestUser, assertStatus, assertCORS, assertJSON } from '@wildebeest/backend/test/utils'
 import { queryAcct } from '@wildebeest/backend/webfinger'
 
@@ -17,6 +18,39 @@ describe('/api/v1/accounts/[id]/follow', () => {
 		const req = new Request(`https://${domain}/api/v1/accounts/${targetActor[mastodonIdSymbol]}/follow`, {
 			method: 'POST',
 		})
+		const res = await app.fetch(req, { DATABASE: db, userKEK, data: { connectedActor } })
+		await assertStatus(res, 403)
+	})
+
+	test('follow blocked account is forbidden', async () => {
+		const db = makeDB()
+		const connectedActor = await createTestUser(domain, db, userKEK, 'block-follow@cloudflare.com')
+		const followee = {
+			id: new URL('https://example.com/ap/users/blocked'),
+			type: 'Person',
+			inbox: new URL('https://example.com/ap/users/blocked/inbox'),
+			preferredUsername: 'blocked',
+			mastodonId: 'blocked-remote',
+		}
+
+		await db
+			.prepare(
+				`INSERT INTO actors (id, type, username, domain, properties, mastodon_id) VALUES (?, 'Person', 'blocked', 'example.com', ?, ?)`
+			)
+			.bind(
+				followee.id.toString(),
+				JSON.stringify({
+					id: followee.id.toString(),
+					type: 'Person',
+					inbox: followee.inbox.toString(),
+					preferredUsername: followee.preferredUsername,
+				}),
+				followee.mastodonId
+			)
+			.run()
+		await insertBlock(db, connectedActor, followee as unknown as Parameters<typeof insertBlock>[2])
+
+		const req = new Request(`https://${domain}/api/v1/accounts/${followee.mastodonId}/follow`, { method: 'POST' })
 		const res = await app.fetch(req, { DATABASE: db, userKEK, data: { connectedActor } })
 		await assertStatus(res, 403)
 	})
@@ -74,6 +108,9 @@ describe('/api/v1/accounts/[id]/follow', () => {
 		await assertStatus(res, 200)
 		assertCORS(res, req)
 		assertJSON(res)
+		const data = await res.json<{ following: boolean; requested: boolean }>()
+		assert.equal(data.following, true)
+		assert.equal(data.requested, false)
 
 		assert(receivedActivity)
 		assert.equal(receivedActivity.type, 'Follow')

@@ -9,9 +9,10 @@ import { deliverToActor } from '@wildebeest/backend/activitypub/deliver'
 import { type Database, getDatabase } from '@wildebeest/backend/database'
 import { notAuthorized, resourceNotFound, unprocessableEntity } from '@wildebeest/backend/errors'
 import { getSigningKey } from '@wildebeest/backend/mastodon/account'
+import { hasBlockBetween } from '@wildebeest/backend/mastodon/block'
 import { addFollowing, isNotFollowing } from '@wildebeest/backend/mastodon/follow'
+import { getRelationship } from '@wildebeest/backend/mastodon/relationship'
 import type { HonoEnv } from '@wildebeest/backend/types'
-import type { Relationship } from '@wildebeest/backend/types/account'
 import { readBody, cors } from '@wildebeest/backend/utils'
 import { actorToHandle } from '@wildebeest/backend/utils/handle'
 import myz from '@wildebeest/backend/utils/zod'
@@ -78,30 +79,23 @@ async function handleRequest(
 		return new Response('', { status: 403 })
 	}
 
+	if (await hasBlockBetween(db, connectedActor, followee)) {
+		return new Response('', { status: 403 })
+	}
+
 	if (await isNotFollowing(db, connectedActor, followee)) {
 		const activity = await createFollowActivity(db, domain, connectedActor, followee)
 		const signingKey = await getSigningKey(userKEK, db, connectedActor)
 		await deliverToActor(signingKey, connectedActor, followee, activity, domain)
-		await addFollowing(domain, db, connectedActor, followee)
+		await addFollowing(domain, db, connectedActor, followee, params)
 	}
 
-	const res: Relationship = {
-		id,
-		following: true,
-		// FIXME: stub
-		showing_reblogs: params.reblogs ?? true,
-		notifying: params.notify ?? false,
-		followed_by: false,
-		blocking: false,
-		blocked_by: false,
-		muting: false,
-		muting_notifications: false,
-		requested: false,
-		domain_blocking: false,
-		endorsed: false,
-		note: '',
-		languages: params.languages ?? undefined,
-	}
+	const res = await getRelationship(db, connectedActor, id)
+	res.following = true
+	res.requested = false
+	res.showing_reblogs = params.reblogs ?? true
+	res.notifying = params.notify ?? false
+	res.languages = params.languages ?? undefined
 	return new Response(JSON.stringify(res), { headers })
 }
 
