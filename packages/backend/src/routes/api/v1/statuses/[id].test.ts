@@ -30,8 +30,7 @@ describe('/api/v1/statuses/[id]', () => {
 		await assertStatus(res, 200)
 
 		const data = await res.json<{ favourites_count: unknown }>()
-		// FIXME: temporarly disable favourites counts
-		assert.equal(data.favourites_count, 0)
+		assert.equal(data.favourites_count, 2)
 	})
 
 	test('get status with image', async () => {
@@ -76,8 +75,7 @@ describe('/api/v1/statuses/[id]', () => {
 		await assertStatus(res, 200)
 
 		const data = await res.json<{ reblogs_count: unknown }>()
-		// FIXME: temporarly disable reblogs counts
-		assert.equal(data.reblogs_count, 0)
+		assert.equal(data.reblogs_count, 2)
 	})
 
 	test('update non-existing status', async () => {
