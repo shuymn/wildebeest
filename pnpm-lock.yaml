@@ -165,8 +165,8 @@ importers:
         specifier: 4.12.25
         version: 4.12.25
       lorem-ipsum:
-        specifier: 2.0.8
-        version: 2.0.8
+        specifier: 2.0.10
+        version: 2.0.10
       postcss:
         specifier: 8.5.10
         version: 8.5.10
@@ -2710,8 +2710,8 @@ packages:
   longest-streak@3.1.0:
     resolution: {integrity: sha512-9Ri+o0JYgehTaVBBDoMqIl8GXtbWg711O3srftcHhZ0dqnETqLaoIK0x17fUw9rFSlK/0NlsKe0Ahhyl5pXE2g==}
 
-  lorem-ipsum@2.0.8:
-    resolution: {integrity: sha512-5RIwHuCb979RASgCJH0VKERn9cQo/+NcAi2BMe9ddj+gp7hujl6BI+qdOG4nVsLDpwWEJwTVYXNKP6BGgbcoGA==}
+  lorem-ipsum@2.0.10:
+    resolution: {integrity: sha512-+Vju4QAN6l2SX9tQ4Dm+mg1qgxf8IzqFh35h/dtFLofW+QHKunMjANfuhlx3vO9+LFetGRtqzvOlpw+1ysDeTw==}
     engines: {node: '>= 8.x', npm: '>= 5.x'}
     hasBin: true
 
@@ -6216,7 +6216,7 @@ snapshots:
 
   longest-streak@3.1.0: {}
 
-  lorem-ipsum@2.0.8:
+  lorem-ipsum@2.0.10:
     dependencies:
       commander: 9.5.0
 
