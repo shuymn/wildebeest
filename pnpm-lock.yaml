@@ -21,8 +21,8 @@ importers:
         specifier: 3.8.0
         version: 3.8.0
       sql-formatter:
-        specifier: 15.6.12
-        version: 15.6.12
+        specifier: 15.8.2
+        version: 15.8.2
       wrangler:
         specifier: 4.59.1
         version: 4.59.1(@cloudflare/workers-types@4.20260210.0)
@@ -3306,8 +3306,8 @@ packages:
   space-separated-tokens@2.0.2:
     resolution: {integrity: sha512-PEGlAwrG8yXGXRjW32fGbg66JAlOAwbObuqVoJpv/mRgoWDQfgH1wDPvtzWyUSNAXBGSk8h755YDbbcEy3SH2Q==}
 
-  sql-formatter@15.6.12:
-    resolution: {integrity: sha512-mkpF+RG402P66VMsnQkWewTRzDBWfu9iLbOfxaW/nAKOS/2A9MheQmcU5cmX0D0At9azrorZwpvcBRNNBozACQ==}
+  sql-formatter@15.8.2:
+    resolution: {integrity: sha512-kTYRg5FIcvsDtYUG2Qn9pYT6xKwiLJN5TTIvc5Mur6hIg4pSfdpHu8Yyu5bqESLHnVM3mXzD446cb2+uEaKZXg==}
     hasBin: true
 
   stable-hash-x@0.2.0:
@@ -7082,7 +7082,7 @@ snapshots:
 
   space-separated-tokens@2.0.2: {}
 
-  sql-formatter@15.6.12:
+  sql-formatter@15.8.2:
     dependencies:
       argparse: 2.0.1
       nearley: 2.20.1
