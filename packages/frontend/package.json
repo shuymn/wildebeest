@@ -25,7 +25,7 @@
 		"eslint": "9.39.2",
 		"eslint-plugin-qwik": "1.18.0",
 		"hono": "4.12.25",
-		"lorem-ipsum": "2.0.8",
+		"lorem-ipsum": "2.0.10",
 		"postcss": "8.5.10",
 		"prettier": "3.8.0",
 		"sass": "1.97.1",
