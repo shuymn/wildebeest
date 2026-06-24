@@ -78,7 +78,7 @@ describe('/api/v1/accounts/update_credentials', () => {
 	})
 
 	test('update credentials avatar and header', async () => {
-		globalThis.fetch = async (input: RequestInfo, data: any) => {
+		globalThis.fetch = async (input, data: any) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input === 'https://api.cloudflare.com/client/v4/accounts/CF_ACCOUNT_ID/images/v1') {
 					assert.equal(data.method, 'POST')

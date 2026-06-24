@@ -9,7 +9,7 @@ describe('Collection', () => {
 			first: 'https://example.com/1',
 		} as any
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === 'https://example.com/1') {
 					return new Response(

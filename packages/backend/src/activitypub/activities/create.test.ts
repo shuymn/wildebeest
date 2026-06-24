@@ -14,7 +14,7 @@ const vapidKeys = {} as JWK
 
 describe('Create', () => {
 	test('Object must be an object', async () => {
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === 'https://example.com/actor') {
 					return new Response(
@@ -80,7 +80,7 @@ describe('Create', () => {
 	test("Note adds in remote actor's outbox", async () => {
 		const remoteActorId = 'https://example.com/actor'
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === remoteActorId) {
 					return new Response(

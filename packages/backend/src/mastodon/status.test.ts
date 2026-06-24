@@ -11,7 +11,7 @@ describe('mastodon/status', () => {
 		const db = makeDB()
 		await createTestUser(domain, db, userKEK, 'sven@example.com')
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === 'https://instance.horse/.well-known/webfinger?resource=acct%3Asven%40instance.horse') {
 					return new Response(

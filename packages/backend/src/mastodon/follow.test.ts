@@ -11,7 +11,7 @@ describe('Follow', () => {
 		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === 'https://example.com/user/a') {
 					return new Response(

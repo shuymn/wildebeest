@@ -66,7 +66,7 @@ describe('mastodon/notification', () => {
 			'verify',
 		])) as CryptoKeyPair
 
-		globalThis.fetch = async (input: RequestInfo, data: any) => {
+		globalThis.fetch = async (input, data: any) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === 'https://push.com') {
 					assert((data.headers['Authorization'] as string).includes('WebPush'))

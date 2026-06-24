@@ -15,7 +15,7 @@ describe('/api/v1/accounts/[id]/followers', () => {
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === 'https://example.com/.well-known/webfinger?resource=acct%3Asven%40example.com') {
 					return new Response(
@@ -100,7 +100,7 @@ describe('/api/v1/accounts/[id]/followers', () => {
 	})
 
 	test('get local actor followers', async () => {
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === 'https://' + domain + '/ap/users/sven2') {
 					return new Response(

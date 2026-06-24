@@ -15,7 +15,7 @@ describe('Settings', () => {
 
 		let receivedActivity: any = null
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === 'https://example.com/.well-known/webfinger?resource=acct%3Atest%40example.com') {
 					return new Response(

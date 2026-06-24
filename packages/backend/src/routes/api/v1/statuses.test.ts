@@ -215,7 +215,7 @@ describe('/api/v1/statuses', () => {
 		let deliveredNote: Note | null = null
 
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		globalThis.fetch = async (input: RequestInfo, data: any) => {
+		globalThis.fetch = async (input, data: any) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === 'https://remote.com/.well-known/webfinger?resource=acct%3Asven%40remote.com') {
 					return new Response(
@@ -309,7 +309,7 @@ describe('/api/v1/statuses', () => {
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 		const connectedActor = actor
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === 'https://cloudflare.com/.well-known/webfinger?resource=acct%3Asven%40cloudflare.com') {
 					return new Response(
@@ -672,7 +672,7 @@ describe('/api/v1/statuses', () => {
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		let deliveredActivity2: any = null
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof Request) {
 				if (input.url === actor1.inbox.toString()) {
 					deliveredActivity1 = await input.json()

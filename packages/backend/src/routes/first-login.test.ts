@@ -12,7 +12,7 @@ const accessAud = 'abcd'
 
 describe('/first-login', () => {
 	beforeEach(() => {
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/certs') {
 					return new Response(JSON.stringify(ACCESS_CERTS))
