@@ -363,7 +363,7 @@ if (import.meta.vitest) {
 		const accessAud = 'abcd'
 
 		test('test no identity', async () => {
-			globalThis.fetch = async (input: RequestInfo) => {
+			globalThis.fetch = async (input) => {
 				if (input instanceof URL || typeof input === 'string') {
 					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/certs') {
 						return Promise.resolve(new Response(JSON.stringify(ACCESS_CERTS)))
@@ -395,7 +395,7 @@ if (import.meta.vitest) {
 		})
 
 		test('test user not found', async () => {
-			globalThis.fetch = (input: RequestInfo) => {
+			globalThis.fetch = (input) => {
 				if (input instanceof URL || typeof input === 'string') {
 					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/certs') {
 						return Promise.resolve(new Response(JSON.stringify(ACCESS_CERTS)))
@@ -432,7 +432,7 @@ if (import.meta.vitest) {
 		})
 
 		test('success passes data and calls next', async () => {
-			globalThis.fetch = (input: RequestInfo) => {
+			globalThis.fetch = (input) => {
 				if (input instanceof URL || typeof input === 'string') {
 					if (input.toString() === 'https://' + accessDomain + '/cdn-cgi/access/certs') {
 						return Promise.resolve(new Response(JSON.stringify(ACCESS_CERTS)))

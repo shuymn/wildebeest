@@ -17,7 +17,7 @@ describe('Inbox', () => {
 		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === connectedActor.id.toString()) {
 					return new Response(JSON.stringify({ publicKey: connectedActor.publicKey }))
@@ -54,7 +54,7 @@ describe('Inbox', () => {
 		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === actor.id.toString()) {
 					return new Response(JSON.stringify({ publicKey: actor.publicKey }))

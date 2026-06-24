@@ -59,7 +59,7 @@ describe('/api/v1/accounts/[id]/follow', () => {
 	test('follow account', async () => {
 		let receivedActivity: any = null
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			const request = new Request(input)
 			if (request.url === 'https://example.com/.well-known/webfinger?resource=acct%3Aactor%40example.com') {
 				return new Response(
@@ -132,7 +132,7 @@ describe('/api/v1/accounts/[id]/follow', () => {
 	test('follow keeps local state when remote delivery fails', async () => {
 		let inboxRequests = 0
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			const request = new Request(input)
 			if (request.url === 'https://example.com/.well-known/webfinger?resource=acct%3Afailing%40example.com') {
 				return new Response(
@@ -188,7 +188,7 @@ describe('/api/v1/accounts/[id]/follow', () => {
 	})
 
 	test('follow updates settings for an existing relationship', async () => {
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			const request = new Request(input)
 			throw new Error('unexpected request to ' + request.url)
 		}

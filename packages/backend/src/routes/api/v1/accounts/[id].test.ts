@@ -12,7 +12,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v1/accounts/[id]', () => {
 	test('get remote actor by id', async () => {
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === 'https://social.com/.well-known/webfinger?resource=acct%3Asven%40social.com') {
 					return new Response(

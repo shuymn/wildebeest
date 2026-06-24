@@ -25,7 +25,7 @@ describe('/api/v1/accounts/lookup', () => {
 	})
 
 	test('lookup remote actor', async () => {
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === 'https://social.com/.well-known/webfinger?resource=acct%3Asomeone%40social.com') {
 					return new Response(

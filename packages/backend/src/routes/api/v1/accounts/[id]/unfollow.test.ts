@@ -13,7 +13,7 @@ describe('/api/v1/accounts/[id]/unfollow', () => {
 	test('unfollow account', async () => {
 		let receivedActivity: any = null
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			const request = new Request(input)
 			if (request.url === 'https://example.com/.well-known/webfinger?resource=acct%3Aactor%40example.com') {
 				return new Response(

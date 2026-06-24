@@ -1,6 +1,9 @@
-export function arrayBufferToBase64(buffer: ArrayBuffer): string {
+export function arrayBufferToBase64(buffer: BufferSource): string {
 	let binary = ''
-	const bytes = new Uint8Array(buffer)
+	const bytes =
+		buffer instanceof ArrayBuffer
+			? new Uint8Array(buffer)
+			: new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
 	const len = bytes.byteLength
 	for (let i = 0; i < len; i++) {
 		binary += String.fromCharCode(bytes[i])
@@ -29,9 +32,9 @@ function getKeyMaterial(password: string): Promise<CryptoKey> {
 
 /*
 Given some key material and some random salt
-derive an AES-KW key using PBKDF2.
+derive an AES-GCM key using PBKDF2.
 */
-function getKey(keyMaterial: CryptoKey, salt: ArrayBuffer): Promise<CryptoKey> {
+function getKey(keyMaterial: CryptoKey, salt: BufferSource): Promise<CryptoKey> {
 	return crypto.subtle.deriveKey(
 		{
 			name: 'PBKDF2',
@@ -56,7 +59,7 @@ async function wrapCryptoKey(
 	// get the key encryption key
 	const keyMaterial = await getKeyMaterial(userKEK)
 	const salt = crypto.getRandomValues(new Uint8Array(16))
-	const wrappingKey = await getKey(keyMaterial, salt.buffer)
+	const wrappingKey = await getKey(keyMaterial, salt)
 	const bytesToWrap = await crypto.subtle.exportKey('pkcs8', keyToWrap)
 	const wrappedPrivKey = await crypto.subtle.encrypt(
 		{
@@ -100,11 +103,11 @@ Unwrap and import private key
 */
 export async function unwrapPrivateKey(
 	userKEK: string,
-	wrappedPrivKey: ArrayBuffer,
+	wrappedPrivKey: BufferSource,
 	salt: Uint8Array<ArrayBuffer>
 ): Promise<CryptoKey> {
 	const keyMaterial = await getKeyMaterial(userKEK)
-	const wrappingKey = await getKey(keyMaterial, salt.buffer)
+	const wrappingKey = await getKey(keyMaterial, salt)
 	const keyBytes = await crypto.subtle.decrypt(
 		{
 			name: 'AES-GCM',

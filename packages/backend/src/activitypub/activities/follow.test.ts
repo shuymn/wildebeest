@@ -31,7 +31,7 @@ describe('Follow', () => {
 	beforeEach(() => {
 		receivedActivities = []
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			const request = new Request(input)
 			if (request.url === `https://${domain}/ap/users/sven2/inbox`) {
 				assert.equal(request.method, 'POST')

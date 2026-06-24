@@ -36,7 +36,7 @@ app.get<'/accounts'>(async ({ req, env }) => {
 			db: getDatabase(env),
 			connectedActorId: env.data.connectedActor.id.toString(),
 		},
-		req.param('id')
+		req.param('id') as string
 	)
 })
 
@@ -50,7 +50,7 @@ app.post<'/accounts'>(async ({ req, env }) => {
 			db: getDatabase(env),
 			connectedActorId: env.data.connectedActor.id.toString(),
 		},
-		req.param('id'),
+		req.param('id') as string,
 		req.raw
 	)
 })
@@ -65,7 +65,7 @@ app.delete<'/accounts'>(async ({ req, env }) => {
 			db: getDatabase(env),
 			connectedActorId: env.data.connectedActor.id.toString(),
 		},
-		req.param('id'),
+		req.param('id') as string,
 		req.raw
 	)
 })

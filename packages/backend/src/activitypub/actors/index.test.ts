@@ -70,7 +70,7 @@ describe('Actors', () => {
 	})
 
 	test('sanitize Actor properties', async () => {
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === 'https://example.com/actor') {
 					return new Response(
@@ -96,7 +96,7 @@ describe('Actors', () => {
 	})
 
 	test('Actor properties limits', async () => {
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === 'https://example.com/actor') {
 					return new Response(
@@ -124,7 +124,7 @@ describe('Actors', () => {
 	test('getAndCache adds peer', async () => {
 		const actorId = new URL('https://example.com/user/foo')
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === actorId.toString()) {
 					return new Response(
@@ -162,7 +162,7 @@ describe('Actors', () => {
 
 		const actorId = new URL('https://example.com/user/foo')
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === actorId.toString()) {
 					return new Response(

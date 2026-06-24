@@ -46,7 +46,7 @@ describe('/api/v1/statuses/[id]/favourite', () => {
 			)
 			.run()
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			const request = new Request(input)
 			if (request.url === actor.id.toString() + '/inbox') {
 				assert.equal(request.method, 'POST')
@@ -103,7 +103,7 @@ describe('/api/v1/statuses/[id]/favourite', () => {
 			)
 			.run()
 
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			const request = new Request(input)
 			if (request.url === actor.id.toString() + '/inbox') {
 				return new Response('temporary failure', { status: 503 })

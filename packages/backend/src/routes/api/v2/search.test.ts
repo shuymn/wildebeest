@@ -9,7 +9,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v2/search', () => {
 	beforeEach(() => {
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
 				if (input.toString() === 'https://remote.com/.well-known/webfinger?resource=acct%3Asven%40remote.com') {
 					return new Response(

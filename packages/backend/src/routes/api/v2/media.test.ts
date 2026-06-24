@@ -11,7 +11,7 @@ const domain = 'cloudflare.com'
 
 describe('/api/v2/media', () => {
 	test('upload image creates object', async () => {
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			const request = new Request(input)
 			if (request.url.toString() === 'https://api.cloudflare.com/client/v4/accounts/testaccountid/images/v1') {
 				return new Response(

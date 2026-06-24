@@ -16,7 +16,7 @@ const vapidKeys = {} as JWK
 
 describe('Accept', () => {
 	beforeEach(() => {
-		globalThis.fetch = async (input: RequestInfo) => {
+		globalThis.fetch = async (input) => {
 			if (input instanceof Request) {
 				throw new Error('unexpected request to ' + input.url)
 			}

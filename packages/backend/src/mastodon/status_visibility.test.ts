@@ -17,15 +17,15 @@ describe('mastodon/status_visibility', () => {
 		)
 		assert.equal(
 			detectVisibility({
-				to: [{ id: followers }],
-				cc: [{ id: new URL(PUBLIC_GROUP) }],
+				to: [{ id: followers, type: 'Collection' }],
+				cc: [{ id: new URL(PUBLIC_GROUP), type: 'Collection' }],
 				followers,
 			}),
 			'unlisted'
 		)
 		assert.equal(
 			detectVisibility({
-				to: [{ id: followers }],
+				to: [{ id: followers, type: 'Collection' }],
 				cc: [],
 				followers,
 			}),

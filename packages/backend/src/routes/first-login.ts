@@ -32,9 +32,9 @@ async function handlePostRequest(
 	const url = new URL(request.url)
 	const cookie = parse(request.headers.get('Cookie') || '')
 	let email = ''
-	const jwt = cookie['CF_Authorization']
+	const jwt = cookie['CF_Authorization'] ?? ''
 	try {
-		email = getJwtEmail(jwt ?? '')
+		email = getJwtEmail(jwt)
 	} catch (e) {
 		return errors.notAuthorized((e as Error)?.message)
 	}
