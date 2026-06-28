@@ -38,6 +38,12 @@ async function list(db: Database, connectedActor: User, query = '') {
 	})
 }
 
+function assertPaginationLink(response: Response, maxId: string, minId: string) {
+	const link = response.headers.get('link') ?? ''
+	assert.match(link, new RegExp(`max_id=${maxId}`))
+	assert.match(link, new RegExp(`min_id=${minId}`))
+}
+
 describe('/api/v1/domain_blocks', () => {
 	test('block, list, and unblock a domain', async () => {
 		const db = makeDB()
@@ -163,12 +169,24 @@ VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)
 		const firstPage = await list(db, actor, '?limit=2')
 		await assertStatus(firstPage, 200)
 		assert.deepEqual(await firstPage.json<string[]>(), ['newest.example', 'middle.example'])
-		assert.match(firstPage.headers.get('link') ?? '', /max_id=block-middle/)
-		assert.match(firstPage.headers.get('link') ?? '', /min_id=block-newest/)
+		assertPaginationLink(firstPage, 'block-middle', 'block-newest')
 
 		const nextPage = await list(db, actor, '?limit=2&max_id=block-middle')
 		await assertStatus(nextPage, 200)
 		assert.deepEqual(await nextPage.json<string[]>(), ['oldest.example'])
+		assertPaginationLink(nextPage, 'block-oldest', 'block-oldest')
+
+		const sincePage = await list(db, actor, '?limit=2&since_id=block-oldest')
+		await assertStatus(sincePage, 200)
+		assert.deepEqual(await sincePage.json<string[]>(), ['newest.example', 'middle.example'])
+		assertPaginationLink(sincePage, 'block-middle', 'block-newest')
+		assert.doesNotMatch(sincePage.headers.get('link') ?? '', /since_id=/)
+
+		const minPage = await list(db, actor, '?limit=2&min_id=block-oldest')
+		await assertStatus(minPage, 200)
+		assert.deepEqual(await minPage.json<string[]>(), ['newest.example', 'middle.example'])
+		assertPaginationLink(minPage, 'block-middle', 'block-newest')
+		assert.doesNotMatch(minPage.headers.get('link') ?? '', /min_id=block-oldest/)
 	})
 
 	test('blocking without a domain returns 422', async () => {
