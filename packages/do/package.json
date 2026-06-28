@@ -2,7 +2,7 @@
 	"name": "@wildebeest/do",
 	"version": "0.0.0",
 	"devDependencies": {
-		"@cloudflare/workers-types": "4.20260621.1",
+		"@cloudflare/workers-types": "4.20260625.1",
 		"typescript": "5.9.3",
 		"wrangler": "4.59.1"
 	},
