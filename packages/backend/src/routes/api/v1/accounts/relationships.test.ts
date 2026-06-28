@@ -3,6 +3,7 @@ import { strict as assert } from 'node:assert/strict'
 import app from '@wildebeest/backend'
 import { mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
 import { insertBlock } from '@wildebeest/backend/mastodon/block'
+import { insertDomainBlock } from '@wildebeest/backend/mastodon/domain_block'
 import { acceptFollowing, addFollowing } from '@wildebeest/backend/mastodon/follow'
 import { insertMute } from '@wildebeest/backend/mastodon/mute'
 import { makeDB, createTestUser, assertStatus, assertCORS, assertJSON } from '@wildebeest/backend/test/utils'
@@ -113,5 +114,23 @@ describe('/api/v1/accounts/relationships', () => {
 		assert.equal(data[1].blocked_by, true)
 		assert.equal(data[2].muting, true)
 		assert.equal(data[2].muting_notifications, true)
+	})
+
+	test('relationships domain blocking', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'relationship-domain-blocker@cloudflare.com')
+		const blocked = await createTestUser('blocked.example', db, userKEK, 'blocked@blocked.example')
+		const unblocked = await createTestUser('unblocked.example', db, userKEK, 'unblocked@unblocked.example')
+		await insertDomainBlock(db, actor, 'blocked.example')
+
+		const req = new Request(
+			`https://mastodon.example/api/v1/accounts/relationships?id[]=${blocked[mastodonIdSymbol]}&id[]=${unblocked[mastodonIdSymbol]}`
+		)
+		const res = await app.fetch(req, { DATABASE: db, data: { connectedActor: actor } })
+		await assertStatus(res, 200)
+
+		const data = await res.json<any[]>()
+		assert.equal(data[0].domain_blocking, true)
+		assert.equal(data[1].domain_blocking, false)
 	})
 })
