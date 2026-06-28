@@ -208,7 +208,7 @@ VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)
 		const invalidUnblock = await unblock(db, actor, 'exa mple.com')
 		await assertStatus(invalidUnblock, 422)
 
-		for (const invalidDomain of ['https://example.com', 'example.com/path']) {
+		for (const invalidDomain of ['https://example.com', 'example.com/path', 'localhost', 'com']) {
 			await assertStatus(await block(db, actor, invalidDomain), 422)
 			await assertStatus(await unblock(db, actor, invalidDomain), 422)
 		}

@@ -34,7 +34,7 @@ const modifySchema = z.object({
 })
 
 const domainLabelPattern = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
-const domainPattern = new RegExp(`^(?=.{1,253}$)(?:${domainLabelPattern}\\.)*${domainLabelPattern}$`)
+const domainPattern = new RegExp(`^(?=.{1,253}$)(?:${domainLabelPattern}\\.)+${domainLabelPattern}$`)
 
 app.get(async ({ req, env }) => {
 	if (!env.data.connectedActor) {
