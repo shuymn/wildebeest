@@ -189,6 +189,12 @@ VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)
 
 		const invalidUnblock = await unblock(db, actor, 'exa mple.com')
 		await assertStatus(invalidUnblock, 422)
+
+		for (const invalidDomain of ['https://example.com', 'example.com/path']) {
+			await assertStatus(await block(db, actor, invalidDomain), 422)
+			await assertStatus(await unblock(db, actor, invalidDomain), 422)
+		}
+		assert.deepEqual(await (await list(db, actor)).json<string[]>(), [])
 	})
 
 	test('domain blocks are scoped per account', async () => {

@@ -33,6 +33,9 @@ const modifySchema = z.object({
 	domain: z.string().optional(),
 })
 
+const domainLabelPattern = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
+const domainPattern = new RegExp(`^(?=.{1,253}$)(?:${domainLabelPattern}\\.)*${domainLabelPattern}$`)
+
 app.get(async ({ req, env }) => {
 	if (!env.data.connectedActor) {
 		return notAuthorized('not authorized')
@@ -87,7 +90,7 @@ async function readDomain(request: Request): Promise<{ domain: string } | { erro
 
 	const raw = (result.success ? result.data.domain : undefined) ?? queryDomain
 	const normalized = raw === null ? '' : normalizeDomain(raw)
-	if (normalized === '' || /\s/.test(normalized)) {
+	if (normalized === '' || !domainPattern.test(normalized)) {
 		return { error: unprocessableEntity('domain: required') }
 	}
 	return { domain: normalized }
