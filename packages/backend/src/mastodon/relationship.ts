@@ -4,6 +4,7 @@ import type { MastodonId } from '@wildebeest/backend/types'
 import type { Relationship } from '@wildebeest/backend/types/account'
 
 import { getBlockedByMastodonIds, getBlockedMastodonIds } from './block'
+import { getDomainBlockedMastodonIds } from './domain_block'
 import {
 	getFollowerMastodonIdsForTargets,
 	getFollowingRelationshipsForTargets,
@@ -31,13 +32,14 @@ export function makeRelationship(id: MastodonId, overrides: Partial<Omit<Relatio
 }
 
 export async function getRelationships(db: Database, actor: Actor, ids: MastodonId[]): Promise<Relationship[]> {
-	const [following, followedBy, followingRequested, blocking, blockedBy, muting] = await Promise.all([
+	const [following, followedBy, followingRequested, blocking, blockedBy, muting, domainBlocking] = await Promise.all([
 		getFollowingRelationshipsForTargets(db, actor, ids),
 		getFollowerMastodonIdsForTargets(db, actor, ids),
 		getFollowingRequestedMastodonIdsForTargets(db, actor, ids),
 		getBlockedMastodonIds(db, actor, { limit: ids.length, targetIds: ids }),
 		getBlockedByMastodonIds(db, actor, ids),
 		getMutedMastodonRelationships(db, actor, { limit: ids.length, targetIds: ids }),
+		getDomainBlockedMastodonIds(db, actor, ids),
 	])
 
 	const followingMap = new Map(following.map((follow) => [follow.mastodon_id, follow]))
@@ -46,6 +48,7 @@ export async function getRelationships(db: Database, actor: Actor, ids: Mastodon
 	const blockingSet = new Set(blocking)
 	const blockedBySet = new Set(blockedBy)
 	const mutingMap = new Map(muting.map((mute) => [mute.mastodon_id, mute.hide_notifications !== 0]))
+	const domainBlockingSet = new Set(domainBlocking)
 
 	return ids.map((id) => {
 		const follow = followingMap.get(id)
@@ -60,6 +63,7 @@ export async function getRelationships(db: Database, actor: Actor, ids: Mastodon
 			blocked_by: blockedBySet.has(id),
 			muting: mutingMap.has(id),
 			muting_notifications: mutingMap.get(id) ?? false,
+			domain_blocking: domainBlockingSet.has(id),
 		})
 	})
 }
