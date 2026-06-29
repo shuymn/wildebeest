@@ -1,3 +1,4 @@
+import { env } from 'cloudflare:test'
 import { strict as assert } from 'node:assert/strict'
 
 import app from '@wildebeest/backend'
@@ -14,8 +15,8 @@ import {
 import { assertCORS, assertJSON, assertStatus, createTestUser, makeDB, makeQueue } from '@wildebeest/backend/test/utils'
 import { MessageType } from '@wildebeest/backend/types'
 
-const userKEK = 'test_kek_follow_requests'
-const domain = 'cloudflare.com'
+const userKEK = env.userKEK
+const domain = env.DOMAIN
 
 async function insertRemoteRequester(
 	db: ReturnType<typeof makeDB>,
