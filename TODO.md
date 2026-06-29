@@ -90,7 +90,7 @@ pnpm test
 
 | 優先 | 対象 | 理由 |
 |------|------|------|
-| 🟡 | follow requests / scheduled statuses / conversations / domain blocks 等 | 残る基本 API |
+| 🟡 | scheduled statuses / conversations 等（follow requests ✅、domain blocks ✅） | 残る基本 API |
 | 🟢 | 登録 / 検索 / markers | 新規ユーザー体験 |
 | — | Collections / Profile `[v4.6+]` | Mastodon v4.6 参照まで後回し可 |
 

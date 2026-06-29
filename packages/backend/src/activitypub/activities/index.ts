@@ -30,6 +30,10 @@ export type AcceptActivity<O extends ApObject = ApObject> = Activity<O> & {
 	type: 'Accept'
 }
 
+export type RejectActivity<O extends ApObject = ApObject> = Activity<O> & {
+	type: 'Reject'
+}
+
 export type FollowActivity<O extends ApObject = ApObject> = Activity<O> & {
 	type: 'Follow'
 }
@@ -65,6 +69,10 @@ export function isCreateActivity(obj: ApObject): obj is CreateActivity {
 
 export function isAcceptActivity(obj: ApObject): obj is AcceptActivity {
 	return getApType(obj) === 'Accept'
+}
+
+export function isRejectActivity(obj: ApObject): obj is RejectActivity {
+	return getApType(obj) === 'Reject'
 }
 
 export function isFollowActivity(obj: ApObject): obj is FollowActivity {

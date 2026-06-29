@@ -1,6 +1,8 @@
+import { FollowActivity } from '@wildebeest/backend/activitypub/activities'
 import { type Actor, getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
 import { type Database } from '@wildebeest/backend/database'
 import { MastodonId } from '@wildebeest/backend/types'
+import { HTTPS } from '@wildebeest/backend/utils'
 import { actorToAcct } from '@wildebeest/backend/utils/handle'
 
 import { noBlockBetweenSql } from './block_sql'
@@ -213,7 +215,11 @@ export async function updateFollowingOptions(
 }
 
 // Accept the pending following request
-export async function acceptFollowing(db: Database, follower: Pick<Actor, 'id'>, followee: Pick<Actor, 'id'>) {
+export async function acceptFollowing(
+	db: Database,
+	follower: Pick<Actor, 'id'>,
+	followee: Pick<Actor, 'id'>
+): Promise<boolean> {
 	const followerId = follower.id.toString()
 	const followeeId = followee.id.toString()
 
@@ -227,7 +233,10 @@ WHERE id = ?1
   AND NOT EXISTS (SELECT 1 FROM users WHERE users.actor_id = actors.id)
   AND EXISTS (
     SELECT 1 FROM actor_following
-    WHERE actor_id = ?2 AND target_actor_id = ?1 AND state = ?3
+    WHERE actor_id = ?2
+      AND target_actor_id = ?1
+      AND state = ?3
+      AND ${noBlockBetweenSql('?2', '?1')}
   )
 `
 			)
@@ -235,12 +244,18 @@ WHERE id = ?1
 		db
 			.prepare(
 				`
-UPDATE actor_following SET state=?1 WHERE actor_id=?2 AND target_actor_id=?3 AND state=?4
+UPDATE actor_following
+SET state=?1
+WHERE actor_id=?2
+  AND target_actor_id=?3
+  AND state=?4
+  AND ${noBlockBetweenSql('?2', '?3')}
 `
 			)
 			.bind(STATE_ACCEPTED, followerId, followeeId, STATE_PENDING),
 	])
 	assertBatchSuccess(results)
+	return results[1].meta.changes === 1
 }
 
 export async function removeFollowing(db: Database, follower: Pick<Actor, 'id'>, followee: Pick<Actor, 'id'>) {
@@ -271,6 +286,26 @@ DELETE FROM actor_following WHERE actor_id=?1 AND target_actor_id=?2
 			.bind(followerId, followeeId),
 	])
 	assertBatchSuccess(results)
+}
+
+export async function removePendingFollowing(
+	db: Database,
+	follower: Pick<Actor, 'id'>,
+	followee: Pick<Actor, 'id'>
+): Promise<boolean> {
+	const out = await db
+		.prepare(
+			`
+DELETE FROM actor_following
+WHERE actor_id=?1 AND target_actor_id=?2 AND state=?3
+`
+		)
+		.bind(follower.id.toString(), followee.id.toString(), STATE_PENDING)
+		.run()
+	if (!out.success) {
+		throw new Error('SQL error: ' + out.error)
+	}
+	return out.meta.changes === 1
 }
 
 export type FollowingRelationship = {
@@ -399,6 +434,214 @@ export async function isFollowingOrFollowingRequested(db: Database, actor: Actor
 		})
 
 	return yes === 1
+}
+
+export type FollowRequestRow = {
+	id: string
+	mastodon_id: MastodonId
+	cdate: string
+}
+
+type FollowRequestListOptions = {
+	limit: number
+	maxId?: string
+	sinceId?: string
+	minId?: string
+}
+
+type FollowRequestCursor = {
+	id: string
+	cdate: string
+}
+
+export type PendingInboundFollow = {
+	uri: string | null
+}
+
+async function getFollowRequestCursor(
+	db: Database,
+	followee: Pick<Actor, 'id'>,
+	id: string | undefined
+): Promise<FollowRequestCursor | null> {
+	if (!id) {
+		return null
+	}
+	return db
+		.prepare(
+			`
+SELECT actor_following.id, actor_following.cdate
+FROM actor_following
+WHERE actor_following.target_actor_id = ? AND actor_following.id = ? AND actor_following.state = ?
+`
+		)
+		.bind(followee.id.toString(), id, STATE_PENDING)
+		.first<FollowRequestCursor>()
+}
+
+export async function getFollowRequestedActors(
+	db: Database,
+	followee: Pick<Actor, 'id'>,
+	{ limit, maxId, sinceId, minId }: FollowRequestListOptions
+): Promise<FollowRequestRow[]> {
+	const lowerBoundId = sinceId ?? minId
+	const [max, min] = await Promise.all([
+		getFollowRequestCursor(db, followee, maxId),
+		getFollowRequestCursor(db, followee, lowerBoundId),
+	])
+
+	if ((maxId && max === null) || (lowerBoundId && min === null)) {
+		return []
+	}
+
+	const filters: string[] = []
+	const bindings: Array<string | number> = [followee.id.toString(), STATE_PENDING]
+	if (max) {
+		filters.push(`AND (actor_following.cdate < ? OR (actor_following.cdate = ? AND actor_following.id < ?))`)
+		bindings.push(max.cdate, max.cdate, max.id)
+	}
+	if (min) {
+		filters.push(`AND (actor_following.cdate > ? OR (actor_following.cdate = ? AND actor_following.id > ?))`)
+		bindings.push(min.cdate, min.cdate, min.id)
+	}
+	bindings.push(limit)
+
+	const { success, error, results } = await db
+		.prepare(
+			`
+SELECT actor_following.id, actors.mastodon_id, actor_following.cdate
+FROM actor_following
+INNER JOIN actors ON actors.id = actor_following.actor_id
+WHERE actor_following.target_actor_id = ?
+  AND actor_following.state = ?
+${filters.join('\n')}
+ORDER BY actor_following.cdate DESC, actor_following.id DESC
+LIMIT ?
+`
+		)
+		.bind(...bindings)
+		.all<FollowRequestRow>()
+	if (!success) {
+		throw new Error('SQL error: ' + error)
+	}
+	return results ?? []
+}
+
+export async function getPendingInboundFollow(
+	db: Database,
+	requester: Pick<Actor, 'id'>,
+	followee: Pick<Actor, 'id'>
+): Promise<PendingInboundFollow | null> {
+	return db
+		.prepare(
+			`
+SELECT uri
+FROM actor_following
+WHERE actor_id = ? AND target_actor_id = ? AND state = ?
+`
+		)
+		.bind(requester.id.toString(), followee.id.toString(), STATE_PENDING)
+		.first<PendingInboundFollow>()
+}
+
+export function buildFollowApObject(
+	domain: string,
+	requester: Pick<Actor, 'id'>,
+	followee: Pick<Actor, 'id'>,
+	uri: string | null | undefined
+): FollowActivity {
+	let id: URL | undefined
+	if (uri) {
+		try {
+			id = new URL(uri)
+		} catch (err) {
+			console.warn('invalid Follow activity URI: ' + uri, err)
+		}
+	}
+	id ??= new URL('/ap/a/' + crypto.randomUUID(), HTTPS + domain)
+	return {
+		'@context': 'https://www.w3.org/ns/activitystreams',
+		type: 'Follow',
+		actor: requester.id,
+		object: followee.id,
+		id,
+	}
+}
+
+export type PendingFollowResult = 'created' | 'existing' | 'blocked'
+
+type FollowingStateAndUri = {
+	state: string
+	uri: string | null
+}
+
+async function getFollowingStateAndUri(
+	db: Database,
+	followerId: string,
+	followeeId: string
+): Promise<FollowingStateAndUri | null> {
+	return db
+		.prepare(
+			`
+SELECT state, uri
+FROM actor_following
+WHERE actor_id = ? AND target_actor_id = ?
+`
+		)
+		.bind(followerId, followeeId)
+		.first<FollowingStateAndUri>()
+}
+
+async function backfillPendingFollowUri(
+	db: Database,
+	followerId: string,
+	followeeId: string,
+	followUri: string | undefined,
+	current: FollowingStateAndUri
+) {
+	if (!followUri || current.uri || current.state !== STATE_PENDING) {
+		return
+	}
+	await db
+		.prepare(`UPDATE actor_following SET uri = ? WHERE actor_id = ? AND target_actor_id = ? AND state = ?`)
+		.bind(followUri, followerId, followeeId, STATE_PENDING)
+		.run()
+}
+
+export async function ensurePendingFollowingIfNotBlocked(
+	domain: string,
+	db: Database,
+	follower: Pick<Actor, 'id'>,
+	followee: Pick<Actor, 'id' | 'preferredUsername'>,
+	followUri?: string
+): Promise<PendingFollowResult> {
+	const followerId = follower.id.toString()
+	const followeeId = followee.id.toString()
+
+	const id = crypto.randomUUID()
+	const out = await db
+		.prepare(
+			`
+INSERT INTO actor_following (id, actor_id, target_actor_id, state, target_actor_acct, uri)
+SELECT ?1, ?2, ?3, ?4, ?5, ?6
+WHERE ${noBlockBetweenSql('?2', '?3')}
+ON CONFLICT(actor_id, target_actor_id) DO NOTHING
+`
+		)
+		.bind(id, followerId, followeeId, STATE_PENDING, actorToAcct(followee, domain), followUri ?? null)
+		.run()
+	if (!out.success) {
+		throw new Error('SQL error: ' + out.error)
+	}
+	if (out.meta.changes === 1) {
+		return 'created'
+	}
+
+	const current = await getFollowingStateAndUri(db, followerId, followeeId)
+	if (!current) {
+		return 'blocked'
+	}
+	await backfillPendingFollowUri(db, followerId, followeeId, followUri, current)
+	return 'existing'
 }
 
 export async function isFollowing(db: Database, actor: Actor, target: Actor): Promise<boolean> {
