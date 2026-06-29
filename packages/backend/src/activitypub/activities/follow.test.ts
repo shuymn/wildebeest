@@ -25,6 +25,20 @@ function makeFollowActivity(follower: Pick<Actor, 'id'>, followee: Pick<Actor, '
 	}
 }
 
+async function setManuallyApprovesFollowers(db: ReturnType<typeof makeDB>, actor: Actor) {
+	const row = await db
+		.prepare('SELECT properties FROM actors WHERE id = ?')
+		.bind(actor.id.toString())
+		.first<{ properties: string }>()
+	assert.ok(row)
+	const properties = JSON.parse(row.properties)
+	properties.manuallyApprovesFollowers = true
+	await db
+		.prepare('UPDATE actors SET properties = ? WHERE id = ?')
+		.bind(JSON.stringify(properties), actor.id.toString())
+		.run()
+}
+
 describe('Follow', () => {
 	let receivedActivities: Activity[] = []
 
@@ -72,6 +86,28 @@ describe('Follow', () => {
 			getApId(activity.actor).toString()
 		)
 		assert.equal((receivedActivity.object as FollowActivity).type, activity.type)
+	})
+
+	test('accepts non-locked Follow without activity id', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'no-id-followee@cloudflare.com')
+		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+		const { id: _id, ...activity } = makeFollowActivity(actor2, actor)
+
+		await activityHandler.handle(domain, activity as FollowActivity, db, userKEK, adminEmail, vapidKeys)
+
+		const row = await db
+			.prepare(`SELECT target_actor_id, state FROM actor_following WHERE actor_id=?`)
+			.bind(actor2.id.toString())
+			.first<{
+				target_actor_id: string
+				state: string
+			}>()
+		assert(row)
+		assert.equal(row.target_actor_id, actor.id.toString())
+		assert.equal(row.state, 'accepted')
+		assert.equal(receivedActivities.length, 1)
+		assert.equal(receivedActivities[0].type, 'Accept')
 	})
 
 	test('list actor following', async () => {
@@ -202,5 +238,88 @@ describe('Follow', () => {
 		assert.ok(row)
 		assert.equal(row.count, 1)
 		assert.equal(receivedActivities.length, repeatCount)
+	})
+
+	test('rejects Follow activities with invalid ids before storing pending requests', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'invalid-follow-id-followee@cloudflare.com')
+		const actor2 = await createTestUser(domain, db, userKEK, 'invalid-follow-id-follower@cloudflare.com')
+		await setManuallyApprovesFollowers(db, actor)
+
+		const activity = { ...makeFollowActivity(actor2, actor), id: 'not-a-url' }
+
+		await assert.rejects(() => activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys))
+		assert.equal(await isFollowingOrFollowingRequested(db, actor2, actor), false)
+	})
+
+	test('locked followee receives pending request without Accept reply', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'locked-followee@cloudflare.com')
+		const actor2 = await createTestUser(domain, db, userKEK, 'locked-follower@cloudflare.com')
+		await setManuallyApprovesFollowers(db, actor)
+
+		const activity = makeFollowActivity(actor2, actor)
+		await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
+
+		const row = await db
+			.prepare(`SELECT target_actor_id, state, uri FROM actor_following WHERE actor_id=?`)
+			.bind(actor2.id.toString())
+			.first<{ target_actor_id: string; state: string; uri: string | null }>()
+		assert(row)
+		assert.equal(row.target_actor_id, actor.id.toString())
+		assert.equal(row.state, 'pending')
+		assert.equal(row.uri, activity.id.toString())
+
+		assert.equal(receivedActivities.length, 0)
+
+		const notification = await db
+			.prepare(`SELECT type FROM actor_notifications WHERE actor_id = ? AND from_actor_id = ?`)
+			.bind(actor.id.toString(), actor2.id.toString())
+			.first<{ type: string }>()
+		assert.equal(notification?.type, 'follow_request')
+	})
+
+	test('keeps one following row for repeated follows to locked account', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'locked-repeat@cloudflare.com')
+		const actor2 = await createTestUser(domain, db, userKEK, 'locked-repeat-follower@cloudflare.com')
+		await setManuallyApprovesFollowers(db, actor)
+
+		const activity = makeFollowActivity(actor2, actor)
+		for (let i = 0; i < 3; i++) {
+			await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
+		}
+
+		const row = await db
+			.prepare(`SELECT count(*) as count FROM actor_following WHERE actor_id = ?1 AND target_actor_id = ?2`)
+			.bind(actor2.id.toString(), actor.id.toString())
+			.first<{ count: number }>()
+		assert.equal(row?.count, 1)
+
+		const notifications = await db
+			.prepare(`SELECT count(*) as count FROM actor_notifications WHERE actor_id = ?`)
+			.bind(actor.id.toString())
+			.first<{ count: number }>()
+		assert.equal(notifications?.count, 1)
+		assert.equal(receivedActivities.length, 0)
+	})
+
+	test('resends Accept for already accepted follows to locked account', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'locked-accepted@cloudflare.com')
+		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+		await setManuallyApprovesFollowers(db, actor)
+		await addFollowing(domain, db, actor2, actor)
+		await acceptFollowing(db, actor2, actor)
+
+		await activityHandler.handle(domain, makeFollowActivity(actor2, actor), db, userKEK, adminEmail, vapidKeys)
+
+		assert.equal(receivedActivities.length, 1)
+		assert.equal(receivedActivities[0].type, 'Accept')
+		const notifications = await db
+			.prepare(`SELECT count(*) as count FROM actor_notifications WHERE actor_id = ?`)
+			.bind(actor.id.toString())
+			.first<{ count: number }>()
+		assert.equal(notifications?.count, 0)
 	})
 })

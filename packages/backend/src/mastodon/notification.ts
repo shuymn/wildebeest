@@ -47,9 +47,12 @@ export async function createNotification(
 	return row.id
 }
 
-export async function insertFollowNotification(db: Database, actor: Actor, fromActor: Actor): Promise<string> {
-	const type: NotificationType = 'follow'
-
+async function insertActorNotification(
+	db: Database,
+	type: NotificationType,
+	actor: Actor,
+	fromActor: Actor
+): Promise<string> {
 	const query = `
           INSERT INTO actor_notifications (type, actor_id, from_actor_id)
           VALUES (?, ?, ?)
@@ -62,6 +65,46 @@ export async function insertFollowNotification(db: Database, actor: Actor, fromA
 	return row.id
 }
 
+export async function insertFollowNotification(db: Database, actor: Actor, fromActor: Actor): Promise<string> {
+	return insertActorNotification(db, 'follow', actor, fromActor)
+}
+
+export async function insertFollowRequestNotification(db: Database, actor: Actor, fromActor: Actor): Promise<string> {
+	return insertActorNotification(db, 'follow_request', actor, fromActor)
+}
+
+type ActorPushNotification = {
+	notificationType: NotificationType
+	title: string
+	body: string
+}
+
+function makeActorPushMessage(
+	fromActor: Actor,
+	notificationId: string,
+	adminEmail: string,
+	data: ActorPushNotification
+) {
+	let icon = new URL(defaultImages.avatar)
+	if (fromActor.icon && fromActor.icon.url) {
+		icon = getApUrl(fromActor.icon.url)
+	}
+
+	return {
+		data: JSON.stringify({
+			preferred_locale: 'en',
+			notification_type: data.notificationType,
+			notification_id: notificationId,
+			icon,
+			title: data.title,
+			body: data.body,
+		}),
+		urgency: 'normal',
+		sub: adminEmail,
+		ttl: 60 * 24 * 7,
+	} satisfies WebPushMessage
+}
+
 export async function sendFollowNotification(
 	db: Database,
 	follower: Actor,
@@ -70,27 +113,27 @@ export async function sendFollowNotification(
 	adminEmail: string,
 	vapidKeys: JWK
 ) {
-	let icon = new URL(defaultImages.avatar)
-	if (follower.icon && follower.icon.url) {
-		icon = getApUrl(follower.icon.url)
-	}
-
-	const data = {
-		preferred_locale: 'en',
-		notification_type: 'follow',
-		notification_id: notificationId,
-		icon,
+	const message = makeActorPushMessage(follower, notificationId, adminEmail, {
+		notificationType: 'follow',
 		title: 'New follower',
 		body: `${follower.name} is now following you`,
-	}
+	})
+	return sendNotification(db, actor, message, vapidKeys)
+}
 
-	const message: WebPushMessage = {
-		data: JSON.stringify(data),
-		urgency: 'normal',
-		sub: adminEmail,
-		ttl: 60 * 24 * 7,
-	}
-
+export async function sendFollowRequestNotification(
+	db: Database,
+	follower: Actor,
+	actor: Actor,
+	notificationId: string,
+	adminEmail: string,
+	vapidKeys: JWK
+) {
+	const message = makeActorPushMessage(follower, notificationId, adminEmail, {
+		notificationType: 'follow_request',
+		title: 'New follow request',
+		body: `${follower.name} requested to follow you`,
+	})
 	return sendNotification(db, actor, message, vapidKeys)
 }
 

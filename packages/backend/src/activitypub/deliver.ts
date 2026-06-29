@@ -53,6 +53,22 @@ export async function deliverSafely(label: string, deliver: () => Promise<unknow
 	}
 }
 
+export async function enqueueDelivery(
+	queue: Queue<DeliverMessageBody>,
+	userKEK: string,
+	from: Pick<Actor, 'id'>,
+	to: Pick<Actor, 'id'>,
+	activity: Activity
+): Promise<void> {
+	await queue.send({
+		activity: JSON.parse(JSON.stringify(activity)),
+		actorId: from.id.toString(),
+		toActorId: to.id.toString(),
+		type: MessageType.Deliver,
+		userKEK,
+	})
+}
+
 // TODO: eventually move this to the queue worker, the backend can send a message
 // to a collection (followers) and the worker creates the individual messages. More
 // reliable and scalable.

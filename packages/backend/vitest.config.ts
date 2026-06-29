@@ -21,8 +21,8 @@ export default defineWorkersProject(async () => {
 					singleWorker: true,
 					wrangler: { configPath: path.join(__dirname, '../../wrangler.toml') },
 					miniflare: {
-						// Add a test-only binding for migrations, so we can apply them in a setup file
-						bindings: { TEST_MIGRATIONS: migrations },
+						// Add test-only bindings for migrations and shared test configuration.
+						bindings: { DOMAIN: 'cloudflare.com', TEST_MIGRATIONS: migrations, userKEK: 'test_kek_follow_requests' },
 					},
 				},
 			},

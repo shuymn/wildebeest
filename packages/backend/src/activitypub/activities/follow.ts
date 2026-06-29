@@ -7,8 +7,16 @@ import { type ApObject, getApId } from '@wildebeest/backend/activitypub/objects'
 import { Database } from '@wildebeest/backend/database'
 import { getSigningKey } from '@wildebeest/backend/mastodon/account'
 import { hasBlockBetween } from '@wildebeest/backend/mastodon/block'
-import { ensureAcceptedFollowingIfNotBlocked } from '@wildebeest/backend/mastodon/follow'
-import { insertFollowNotification, sendFollowNotification } from '@wildebeest/backend/mastodon/notification'
+import {
+	ensureAcceptedFollowingIfNotBlocked,
+	ensurePendingFollowingIfNotBlocked,
+} from '@wildebeest/backend/mastodon/follow'
+import {
+	insertFollowNotification,
+	insertFollowRequestNotification,
+	sendFollowNotification,
+	sendFollowRequestNotification,
+} from '@wildebeest/backend/mastodon/notification'
 import { actorToHandle } from '@wildebeest/backend/utils/handle'
 import { JWK } from '@wildebeest/backend/webpush/jwk'
 
@@ -56,7 +64,21 @@ export async function handleFollowActivity(
 		console.warn(`actor ${followerId} not found`)
 		return
 	}
-	if (!(await ensureAcceptedFollowingIfNotBlocked(domain, db, follower, followee))) {
+
+	let shouldNotifyFollow = true
+	if (followee.manuallyApprovesFollowers) {
+		const followUri = activity.id === undefined ? undefined : getApId(activity).toString()
+		const result = await ensurePendingFollowingIfNotBlocked(domain, db, follower, followee, followUri)
+		if (result === 'created') {
+			const notifId = await insertFollowRequestNotification(db, followee, follower)
+			await sendFollowRequestNotification(db, follower, followee, notifId, adminEmail, vapidKeys)
+			return
+		}
+		if (result !== 'accepted') {
+			return
+		}
+		shouldNotifyFollow = false
+	} else if (!(await ensureAcceptedFollowingIfNotBlocked(domain, db, follower, followee))) {
 		return
 	}
 
@@ -66,6 +88,8 @@ export async function handleFollowActivity(
 	await deliverToActor(signingKey, followee, follower, reply, domain)
 
 	// Notify the user
-	const notifId = await insertFollowNotification(db, followee, follower)
-	await sendFollowNotification(db, follower, followee, notifId, adminEmail, vapidKeys)
+	if (shouldNotifyFollow) {
+		const notifId = await insertFollowNotification(db, followee, follower)
+		await sendFollowNotification(db, follower, followee, notifId, adminEmail, vapidKeys)
+	}
 }
