@@ -9,7 +9,7 @@
 		"npm-run-all2": "8.0.4",
 		"prettier": "3.8.4",
 		"sql-formatter": "15.8.2",
-		"wrangler": "4.59.1"
+		"wrangler": "4.105.0"
 	},
 	"private": true,
 	"scripts": {
