@@ -107,6 +107,7 @@ describe('Follow', () => {
 		assert.equal(row.target_actor_id, actor.id.toString())
 		assert.equal(row.state, 'accepted')
 		assert.equal(receivedActivities.length, 1)
+		assert.equal(receivedActivities[0].type, 'Accept')
 	})
 
 	test('list actor following', async () => {
