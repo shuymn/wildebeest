@@ -6,7 +6,11 @@ import { z } from 'zod'
 import { getAccountByMastodonId } from '@wildebeest/backend/accounts'
 import { getDatabase } from '@wildebeest/backend/database'
 import { notAuthorized } from '@wildebeest/backend/errors'
-import { getFollowRequestedActors, type FollowRequestRow } from '@wildebeest/backend/mastodon/follow'
+import {
+	getFollowRequestedActors,
+	makeFollowRequestCursor,
+	type FollowRequestRow,
+} from '@wildebeest/backend/mastodon/follow'
 import type { HonoEnv } from '@wildebeest/backend/types'
 import type { MastodonAccount } from '@wildebeest/backend/types/account'
 import { cors, makeJsonResponse, readParams } from '@wildebeest/backend/utils'
@@ -31,7 +35,7 @@ app.get(async ({ req, env }) => {
 	}
 	const params = await readParams(req.raw, listSchema)
 	if (!params.success) {
-		return new Response('', { status: 400 })
+		return new Response('', { status: 400, headers })
 	}
 	const domain = new URL(req.url).hostname
 	const db = getDatabase(env)
@@ -59,8 +63,8 @@ function makePaginationLink(request: Request, rows: FollowRequestRow[]): string 
 	const first = rows[0]
 	const last = rows[rows.length - 1]
 	return [
-		`<${makePaginationUrl(request, 'max_id', last.id)}>; rel="next"`,
-		`<${makePaginationUrl(request, 'min_id', first.id)}>; rel="prev"`,
+		`<${makePaginationUrl(request, 'max_id', makeFollowRequestCursor(last))}>; rel="next"`,
+		`<${makePaginationUrl(request, 'min_id', makeFollowRequestCursor(first))}>; rel="prev"`,
 	].join(', ')
 }
 

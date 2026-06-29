@@ -43,7 +43,6 @@ export async function handleFollowActivity(
 	adminEmail: string,
 	vapidKeys: JWK
 ) {
-	const activityId = getApId(activity)
 	const followeeId = getApId(activity.object)
 	const followee = await getActorById(db, followeeId)
 	if (followee === null) {
@@ -66,17 +65,20 @@ export async function handleFollowActivity(
 		return
 	}
 
+	let shouldNotifyFollow = true
 	if (followee.manuallyApprovesFollowers) {
-		const result = await ensurePendingFollowingIfNotBlocked(domain, db, follower, followee, activityId.toString())
-		if (result !== 'created') {
+		const followUri = activity.id === undefined ? undefined : getApId(activity).toString()
+		const result = await ensurePendingFollowingIfNotBlocked(domain, db, follower, followee, followUri)
+		if (result === 'created') {
+			const notifId = await insertFollowRequestNotification(db, followee, follower)
+			await sendFollowRequestNotification(db, follower, followee, notifId, adminEmail, vapidKeys)
 			return
 		}
-		const notifId = await insertFollowRequestNotification(db, followee, follower)
-		await sendFollowRequestNotification(db, follower, followee, notifId, adminEmail, vapidKeys)
-		return
-	}
-
-	if (!(await ensureAcceptedFollowingIfNotBlocked(domain, db, follower, followee))) {
+		if (result !== 'accepted') {
+			return
+		}
+		shouldNotifyFollow = false
+	} else if (!(await ensureAcceptedFollowingIfNotBlocked(domain, db, follower, followee))) {
 		return
 	}
 
@@ -86,6 +88,8 @@ export async function handleFollowActivity(
 	await deliverToActor(signingKey, followee, follower, reply, domain)
 
 	// Notify the user
-	const notifId = await insertFollowNotification(db, followee, follower)
-	await sendFollowNotification(db, follower, followee, notifId, adminEmail, vapidKeys)
+	if (shouldNotifyFollow) {
+		const notifId = await insertFollowNotification(db, followee, follower)
+		await sendFollowNotification(db, follower, followee, notifId, adminEmail, vapidKeys)
+	}
 }

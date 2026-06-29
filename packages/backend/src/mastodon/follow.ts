@@ -458,23 +458,39 @@ export type PendingInboundFollow = {
 	uri: string | null
 }
 
+const FOLLOW_REQUEST_CURSOR_SEPARATOR = '::'
+
+export function makeFollowRequestCursor(row: Pick<FollowRequestRow, 'id' | 'cdate'>): string {
+	return `${row.cdate}${FOLLOW_REQUEST_CURSOR_SEPARATOR}${row.id}`
+}
+
 async function getFollowRequestCursor(
 	db: Database,
 	followee: Pick<Actor, 'id'>,
-	id: string | undefined
+	cursor: string | undefined
 ): Promise<FollowRequestCursor | null> {
-	if (!id) {
+	if (!cursor) {
 		return null
 	}
+
+	const separator = cursor.lastIndexOf(FOLLOW_REQUEST_CURSOR_SEPARATOR)
+	if (separator !== -1) {
+		const cdate = cursor.slice(0, separator)
+		const id = cursor.slice(separator + FOLLOW_REQUEST_CURSOR_SEPARATOR.length)
+		if (cdate && id) {
+			return { id, cdate }
+		}
+	}
+
 	return db
 		.prepare(
 			`
 SELECT actor_following.id, actor_following.cdate
 FROM actor_following
-WHERE actor_following.target_actor_id = ? AND actor_following.id = ? AND actor_following.state = ?
+WHERE actor_following.target_actor_id = ? AND actor_following.id = ?
 `
 		)
-		.bind(followee.id.toString(), id, STATE_PENDING)
+		.bind(followee.id.toString(), cursor)
 		.first<FollowRequestCursor>()
 }
 
@@ -567,7 +583,7 @@ export function buildFollowApObject(
 	}
 }
 
-export type PendingFollowResult = 'created' | 'existing' | 'blocked'
+export type PendingFollowResult = 'created' | 'existing' | 'accepted' | 'blocked'
 
 type FollowingStateAndUri = {
 	state: string
@@ -601,10 +617,13 @@ async function backfillPendingFollowUri(
 	if (!followUri || current.uri || current.state !== STATE_PENDING) {
 		return
 	}
-	await db
+	const out = await db
 		.prepare(`UPDATE actor_following SET uri = ? WHERE actor_id = ? AND target_actor_id = ? AND state = ?`)
 		.bind(followUri, followerId, followeeId, STATE_PENDING)
 		.run()
+	if (!out.success) {
+		throw new Error('SQL error: ' + out.error)
+	}
 }
 
 export async function ensurePendingFollowingIfNotBlocked(
@@ -639,6 +658,9 @@ ON CONFLICT(actor_id, target_actor_id) DO NOTHING
 	const current = await getFollowingStateAndUri(db, followerId, followeeId)
 	if (!current) {
 		return 'blocked'
+	}
+	if (current.state === STATE_ACCEPTED) {
+		return 'accepted'
 	}
 	await backfillPendingFollowUri(db, followerId, followeeId, followUri, current)
 	return 'existing'

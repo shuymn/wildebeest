@@ -88,6 +88,27 @@ describe('Follow', () => {
 		assert.equal((receivedActivity.object as FollowActivity).type, activity.type)
 	})
 
+	test('accepts non-locked Follow without activity id', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'no-id-followee@cloudflare.com')
+		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+		const { id: _id, ...activity } = makeFollowActivity(actor2, actor)
+
+		await activityHandler.handle(domain, activity as FollowActivity, db, userKEK, adminEmail, vapidKeys)
+
+		const row = await db
+			.prepare(`SELECT target_actor_id, state FROM actor_following WHERE actor_id=?`)
+			.bind(actor2.id.toString())
+			.first<{
+				target_actor_id: string
+				state: string
+			}>()
+		assert(row)
+		assert.equal(row.target_actor_id, actor.id.toString())
+		assert.equal(row.state, 'accepted')
+		assert.equal(receivedActivities.length, 1)
+	})
+
 	test('list actor following', async () => {
 		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
@@ -280,5 +301,24 @@ describe('Follow', () => {
 			.first<{ count: number }>()
 		assert.equal(notifications?.count, 1)
 		assert.equal(receivedActivities.length, 0)
+	})
+
+	test('resends Accept for already accepted follows to locked account', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'locked-accepted@cloudflare.com')
+		const actor2 = await createTestUser(domain, db, userKEK, 'sven2@cloudflare.com')
+		await setManuallyApprovesFollowers(db, actor)
+		await addFollowing(domain, db, actor2, actor)
+		await acceptFollowing(db, actor2, actor)
+
+		await activityHandler.handle(domain, makeFollowActivity(actor2, actor), db, userKEK, adminEmail, vapidKeys)
+
+		assert.equal(receivedActivities.length, 1)
+		assert.equal(receivedActivities[0].type, 'Accept')
+		const notifications = await db
+			.prepare(`SELECT count(*) as count FROM actor_notifications WHERE actor_id = ?`)
+			.bind(actor.id.toString())
+			.first<{ count: number }>()
+		assert.equal(notifications?.count, 0)
 	})
 })
