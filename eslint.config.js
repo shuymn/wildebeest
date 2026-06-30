@@ -74,10 +74,9 @@ export default [
 				typescript: true,
 				node: true,
 			},
-			// Treat 'cloudflare:test' as a built-in module to prevent import/no-unresolved errors.
-			// This virtual module is provided by @cloudflare/vitest-pool-workers and cannot be resolved
-			// through standard module resolution.
-			'import/core-modules': ['cloudflare:test'],
+			// Treat Cloudflare virtual modules as built-ins to prevent import/no-unresolved errors.
+			// These modules are provided by the Workers test runtime and cannot be resolved through standard module resolution.
+			'import/core-modules': ['cloudflare:test', 'cloudflare:workers'],
 		},
 		rules: {
 			'@typescript-eslint/no-unused-vars': 'off',

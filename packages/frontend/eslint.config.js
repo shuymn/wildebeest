@@ -27,7 +27,7 @@ export default [
 			sourceType: 'module',
 			parserOptions: {
 				tsconfigRootDir: __dirname,
-				project: ['./tsconfig.json'],
+				project: ['./tsconfig.eslint.json'],
 				ecmaFeatures: {
 					jsx: true,
 				},

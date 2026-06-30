@@ -1,4 +1,3 @@
-import { fetchMock } from 'cloudflare:test'
 import { strict as assert } from 'node:assert/strict'
 
 import app from '@wildebeest/backend'
@@ -8,8 +7,17 @@ import { makeDB, assertStatus, createTestClient, assertCORS, assertJSON } from '
 
 describe('/oauth/token', () => {
 	beforeEach(() => {
-		fetchMock.activate()
-		fetchMock.disableNetConnect()
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+				throw new Error(`Unexpected fetch request: ${url}`)
+			})
+		)
+	})
+
+	afterEach(() => {
+		vi.unstubAllGlobals()
 	})
 
 	test('token error on unknown client', async () => {

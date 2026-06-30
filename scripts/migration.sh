@@ -33,11 +33,11 @@ if [ ! -f "${DB_FILE}" ]; then
   exit 1
 fi
 
-# Drop Cloudflare internal tables to avoid sqlite3def parser errors.
-sqlite3 "${DB_FILE:?}" "DROP TABLE IF EXISTS _cf_KV; DROP TABLE IF EXISTS _cf_METADATA;"
+# Drop Cloudflare internal tables to avoid sqlite3def parser errors and drift.
+sqlite3 "${DB_FILE:?}" "DROP TABLE IF EXISTS _cf_KV; DROP TABLE IF EXISTS _cf_METADATA; DROP TABLE IF EXISTS _cf_ALARM;"
 
 mise exec -- sqlite3def \
-  --enable-drop-table \
+  --enable-drop \
   --config "${ROOT_DIR}/sqldef.yml" \
   --dry-run \
   "${DB_FILE:?}" \

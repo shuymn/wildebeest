@@ -46,6 +46,7 @@ export const createApp = (options: { app?: Hono<HonoEnv> }): Hono<HonoEnv> => {
 			'../routes/**/[a-z0-9[-][a-z0-9.[_-]*.ts',
 			'../routes/.well-known/[a-z0-9[-][a-z0-9.[_-]*.ts',
 			'!../routes/**/*.test.ts',
+			'!../routes/.well-known/*.test.ts',
 		],
 		{
 			eager: true,

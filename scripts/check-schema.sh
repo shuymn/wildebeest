@@ -9,6 +9,11 @@ ROOT_DIR="${SCRIPT_DIR}/.."
 
 cd "${ROOT_DIR:?}"
 
+SQLITE3DEF=(sqlite3def)
+if command -v mise >/dev/null 2>&1; then
+  SQLITE3DEF=(mise exec -- sqlite3def)
+fi
+
 echo "Applying migrations to a fresh local D1 database..."
 rm -f .wrangler/state/v3/d1/miniflare-D1DatabaseObject/*.sqlite*
 CI=true pnpm run database:migrate -- --local
@@ -21,23 +26,31 @@ if [ -z "${DB_FILE}" ]; then
   exit 1
 fi
 
-# Drop Cloudflare internal tables to avoid sqlite3def parser errors.
-sqlite3 "${DB_FILE:?}" "DROP TABLE IF EXISTS _cf_KV; DROP TABLE IF EXISTS _cf_METADATA;"
+# Drop Cloudflare internal tables to avoid sqlite3def parser errors and drift.
+sqlite3 "${DB_FILE:?}" "DROP TABLE IF EXISTS _cf_KV; DROP TABLE IF EXISTS _cf_METADATA; DROP TABLE IF EXISTS _cf_ALARM;"
 
+set +e
 DIFF=$(
-  mise exec -- sqlite3def \
+  "${SQLITE3DEF[@]}" \
     --enable-drop \
     --config sqldef.yml \
-    --dry-run \
-    "${DB_FILE:?}" <schema.sql
+    --check \
+    "${DB_FILE:?}" <schema.sql 2>&1
 )
+EXIT_CODE=$?
+set -e
 
-FIRST_LINE=$(printf '%s\n' "${DIFF}" | head -n 1)
-if [ "${FIRST_LINE}" = "-- Nothing is modified --" ]; then
+if [ "${EXIT_CODE}" -eq 0 ]; then
   echo "schema.sql matches migrations"
   exit 0
 fi
 
-echo "error: schema.sql does not match migrations" >&2
+if [ "${EXIT_CODE}" -eq 2 ]; then
+  echo "error: schema.sql does not match migrations" >&2
+  printf '%s\n' "${DIFF}" >&2
+  exit 1
+fi
+
+echo "error: sqlite3def failed (exit ${EXIT_CODE})" >&2
 printf '%s\n' "${DIFF}" >&2
-exit 1
+exit "${EXIT_CODE}"

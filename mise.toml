@@ -3,4 +3,4 @@ idiomatic_version_file_enable_tools = ["node", "pnpm"]
 
 [tools]
 sqlc = "1.31.1"
-sqlite3def = "3.11.11"
+sqlite3def = "3.11.12"

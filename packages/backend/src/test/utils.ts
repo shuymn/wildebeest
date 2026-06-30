@@ -1,4 +1,4 @@
-import { env } from 'cloudflare:test'
+import { env } from 'cloudflare:workers'
 
 import { createUser, User } from '@wildebeest/backend/accounts'
 import { ApObjectId } from '@wildebeest/backend/activitypub/objects'
