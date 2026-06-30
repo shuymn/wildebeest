@@ -30,7 +30,7 @@
 		"eslint-plugin-unused-imports": "4.4.1",
 		"hono": "4.12.27",
 		"typescript": "5.9.3",
-		"vite": "6.4.3",
+		"vite": "8.1.0",
 		"vite-tsconfig-paths": "6.1.1",
 		"vitest": "4.1.9",
 		"wrangler": "4.105.0"
