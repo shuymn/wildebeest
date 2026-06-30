@@ -132,11 +132,11 @@ importers:
         version: 3.0.1
     devDependencies:
       '@builder.io/qwik':
-        specifier: 1.19.2
-        version: 1.19.2(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0))
+        specifier: 1.20.0
+        version: 1.20.0(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0))
       '@builder.io/qwik-city':
-        specifier: 1.19.2
-        version: 1.19.2(@types/node@24.13.2)(jiti@1.21.7)(rollup@4.62.2)(sass@1.101.0)(typescript@5.9.3)
+        specifier: 1.20.0
+        version: 1.20.0(@types/node@24.13.2)(jiti@1.21.7)(rollup@4.62.2)(sass@1.101.0)(typescript@5.9.3)
       '@playwright/test':
         specifier: 1.61.1
         version: 1.61.1
@@ -159,8 +159,8 @@ importers:
         specifier: 9.39.4
         version: 9.39.4(jiti@1.21.7)
       eslint-plugin-qwik:
-        specifier: 1.19.2
-        version: 1.19.2(eslint@9.39.4(jiti@1.21.7))(typescript@5.9.3)
+        specifier: 1.20.0
+        version: 1.20.0(eslint@9.39.4(jiti@1.21.7))(typescript@5.9.3)
       hono:
         specifier: 4.12.26
         version: 4.12.26
@@ -265,12 +265,12 @@ packages:
     resolution: {integrity: sha512-4zBIxpPzowiZpusoFkyGVwakdRJUyuH5PxQ/PrqghfdFWWasvnCdPfQXHrenDai+gyLARulZjZowCOj6fjT4pA==}
     engines: {node: '>=6.9.0'}
 
-  '@builder.io/qwik-city@1.19.2':
-    resolution: {integrity: sha512-RueRitP3EExdvxUTwIukknEkFmvW47/V8p9u3fUMv2S7tUryDC5hopklwBY5pGCohXy2h2WYURvEzN+OOOWeCQ==}
+  '@builder.io/qwik-city@1.20.0':
+    resolution: {integrity: sha512-gvw75M0yMDMelF/v56x4P1sLccEYT7jmfGZeWSV4c9KCrVAbY+Sp/w/R3c7WodGztWFRF37n1APXbbxhLIP6vw==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
 
-  '@builder.io/qwik@1.19.2':
-    resolution: {integrity: sha512-aLQIZm3BdX6jStSR6XdXhT9jQo5JN9bxuYJOD8p5IhZxBNgjQaRwIfZkXksgs6RkzdTsSpXo5+G6lkb/jMZQsg==}
+  '@builder.io/qwik@1.20.0':
+    resolution: {integrity: sha512-mPnENUgyOGYQW9UNGGeGP67hg8rI/hi4WQ0z/rM3PAgQl3UjfreBxyj1njxvSLAz5nei6yD20/W/eywVIxOCIw==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     hasBin: true
     peerDependencies:
@@ -1849,8 +1849,8 @@ packages:
       '@typescript-eslint/parser':
         optional: true
 
-  eslint-plugin-qwik@1.19.2:
-    resolution: {integrity: sha512-P0Xc/jzRmL9rPR1r3dk2zET1yqgnwLwAgMjTUNYIenPXhqgDWbW7bOapwDYhjDrRpVdnLv6jnomIvFGt47ytTQ==}
+  eslint-plugin-qwik@1.20.0:
+    resolution: {integrity: sha512-6XY7cGK5BDvtjHnIRcDp50dXKlr9+jnQCudxl9VrwRaJPzgKUNpVVSbo5tflTZkCJLj6/svulE5MVSn6zTsHYw==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     peerDependencies:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
@@ -3483,7 +3483,7 @@ snapshots:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
 
-  '@builder.io/qwik-city@1.19.2(@types/node@24.13.2)(jiti@1.21.7)(rollup@4.62.2)(sass@1.101.0)(typescript@5.9.3)':
+  '@builder.io/qwik-city@1.20.0(@types/node@24.13.2)(jiti@1.21.7)(rollup@4.62.2)(sass@1.101.0)(typescript@5.9.3)':
     dependencies:
       '@mdx-js/mdx': 3.1.1
       '@types/mdx': 2.0.13
@@ -3511,7 +3511,7 @@ snapshots:
       - typescript
       - yaml
 
-  '@builder.io/qwik@1.19.2(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0))':
+  '@builder.io/qwik@1.20.0(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0))':
     dependencies:
       csstype: 3.2.3
       launch-editor: 2.12.0
@@ -3917,7 +3917,7 @@ snapshots:
 
   '@mdx-js/mdx@3.1.1':
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       '@types/estree-jsx': 1.0.5
       '@types/hast': 3.0.4
       '@types/mdx': 2.0.13
@@ -4043,7 +4043,7 @@ snapshots:
 
   '@rollup/pluginutils@5.3.0(rollup@4.62.2)':
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       estree-walker: 2.0.2
       picomatch: 4.0.3
     optionalDependencies:
@@ -4170,7 +4170,7 @@ snapshots:
 
   '@types/estree-jsx@1.0.5':
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
 
   '@types/estree@1.0.8': {}
 
@@ -4984,7 +4984,7 @@ snapshots:
       - eslint-import-resolver-webpack
       - supports-color
 
-  eslint-plugin-qwik@1.19.2(eslint@9.39.4(jiti@1.21.7))(typescript@5.9.3):
+  eslint-plugin-qwik@1.20.0(eslint@9.39.4(jiti@1.21.7))(typescript@5.9.3):
     dependencies:
       '@typescript-eslint/utils': 8.62.0(eslint@9.39.4(jiti@1.21.7))(typescript@5.9.3)
       eslint: 9.39.4(jiti@1.21.7)
@@ -5069,7 +5069,7 @@ snapshots:
 
   estree-util-attach-comments@3.0.0:
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
 
   estree-util-build-jsx@3.0.1:
     dependencies:
@@ -5082,7 +5082,7 @@ snapshots:
 
   estree-util-scope@1.0.0:
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       devlop: 1.1.0
 
   estree-util-to-js@2.0.0:
@@ -5250,7 +5250,7 @@ snapshots:
 
   hast-util-to-estree@3.1.3:
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       '@types/estree-jsx': 1.0.5
       '@types/hast': 3.0.4
       comma-separated-tokens: 2.0.3
@@ -5271,7 +5271,7 @@ snapshots:
 
   hast-util-to-jsx-runtime@2.3.6:
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       '@types/hast': 3.0.4
       '@types/unist': 3.0.3
       comma-separated-tokens: 2.0.3
@@ -5724,7 +5724,7 @@ snapshots:
 
   micromark-extension-mdx-expression@3.0.1:
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       devlop: 1.1.0
       micromark-factory-mdx-expression: 2.0.3
       micromark-factory-space: 2.0.1
@@ -5735,7 +5735,7 @@ snapshots:
 
   micromark-extension-mdx-jsx@3.0.2:
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       devlop: 1.1.0
       estree-util-is-identifier-name: 3.0.0
       micromark-factory-mdx-expression: 2.0.3
@@ -5752,7 +5752,7 @@ snapshots:
 
   micromark-extension-mdxjs-esm@3.0.0:
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       devlop: 1.1.0
       micromark-core-commonmark: 2.0.3
       micromark-util-character: 2.1.1
@@ -5788,7 +5788,7 @@ snapshots:
 
   micromark-factory-mdx-expression@2.0.3:
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       devlop: 1.1.0
       micromark-factory-space: 2.0.1
       micromark-util-character: 2.1.1
@@ -5852,7 +5852,7 @@ snapshots:
 
   micromark-util-events-to-acorn@2.0.3:
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       '@types/unist': 3.0.3
       devlop: 1.1.0
       estree-util-visit: 2.0.0
@@ -6168,7 +6168,7 @@ snapshots:
 
   recma-build-jsx@1.0.0:
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       estree-util-build-jsx: 3.0.1
       vfile: 6.0.3
 
@@ -6183,14 +6183,14 @@ snapshots:
 
   recma-parse@1.0.0:
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       esast-util-from-js: 2.0.1
       unified: 11.0.5
       vfile: 6.0.3
 
   recma-stringify@1.0.0:
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       estree-util-to-js: 2.0.0
       unified: 11.0.5
       vfile: 6.0.3
@@ -6217,7 +6217,7 @@ snapshots:
 
   rehype-recma@1.0.0:
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       '@types/hast': 3.0.4
       hast-util-to-estree: 3.1.3
     transitivePeerDependencies:
