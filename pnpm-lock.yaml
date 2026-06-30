@@ -82,8 +82,8 @@ importers:
         specifier: 6.4.3
         version: 6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)
       vite-tsconfig-paths:
-        specifier: 6.1.0
-        version: 6.1.0(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0))
+        specifier: 6.1.1
+        version: 6.1.1(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0))
       vitest:
         specifier: 4.1.9
         version: 4.1.9(@types/node@24.13.2)(@vitest/coverage-istanbul@4.1.9)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0))
@@ -189,8 +189,8 @@ importers:
         specifier: 6.4.3
         version: 6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)
       vite-tsconfig-paths:
-        specifier: 6.1.0
-        version: 6.1.0(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0))
+        specifier: 6.1.1
+        version: 6.1.1(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0))
 
 packages:
 
@@ -3209,8 +3209,8 @@ packages:
     resolution: {integrity: sha512-FV5DXw4swU81t+g8JOLT+T7gKuBOXuVsZ0WGhi7y0R182+GfBYkcf6V9/T0Nweu/vn1X0DA2p5ePMnaGZlRl1A==}
     engines: {node: '>=20.0.0'}
 
-  vite-tsconfig-paths@6.1.0:
-    resolution: {integrity: sha512-kpd3sY9glHIDaq4V/Tlc1Y8WaKtutoc3B525GHxEVKWX42FKfQsXvjFOemu1I8VIN8pNbrMLWVTbW79JaRUxKg==}
+  vite-tsconfig-paths@6.1.1:
+    resolution: {integrity: sha512-2cihq7zliibCCZ8P9cKJrQBkfgdvcFkOOc3Y02o3GWUDLgqjWsZudaoiuOwO/gzTzy17cS5F7ZPo4bsnS4DGkg==}
     peerDependencies:
       vite: '*'
 
@@ -6740,7 +6740,7 @@ snapshots:
     transitivePeerDependencies:
       - rollup
 
-  vite-tsconfig-paths@6.1.0(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)):
+  vite-tsconfig-paths@6.1.1(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)):
     dependencies:
       debug: 4.4.3
       globrex: 0.1.2
