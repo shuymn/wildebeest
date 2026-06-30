@@ -104,6 +104,8 @@ resource "cloudflare_pages_project" "wildebeest_pages_project" {
   production_branch = "main"
 
   deployment_configs {
+    preview {}
+
     production {
       environment_variables = {
         CF_ACCOUNT_ID = sensitive(var.cloudflare_account_id)
