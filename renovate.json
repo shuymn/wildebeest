@@ -3,25 +3,24 @@
 	"extends": ["config:best-practices", ":timezone(Asia/Tokyo)"],
 	"labels": ["dependencies"],
 	"prHourlyLimit": 0,
+	"prConcurrentLimit": 0,
 	"lockFileMaintenance": {
 		"enabled": true,
 		"automerge": true
 	},
-	"major": {
-		"minimumReleaseAge": "5 days"
-	},
-	"minor": {
-		"minimumReleaseAge": "3 days"
-	},
-	"patch": {
-		"minimumReleaseAge": "2 days"
-	},
+	"minimumReleaseAge": "3 days",
+	"prCreation": "not-pending",
+	"internalChecksFilter": "strict",
 	"assignAutomerge": true,
 	"internalChecksAsSuccess": true,
 	"reviewersFromCodeOwners": true,
+	"separateMultipleMinor": true,
+	"separateMultipleMajor": true,
+	"separateMinorPatch": true,
 	"customManagers": [
 		{
 			"customType": "regex",
+			"description": "Update SQLDEF_VERSION in PR checks workflow",
 			"managerFilePatterns": ["/^\\.github/workflows/PRs\\.yml$/"],
 			"matchStrings": ["SQLDEF_VERSION: (?<currentValue>v?\\d+\\.\\d+\\.\\d+)"],
 			"datasourceTemplate": "github-releases",
@@ -30,24 +29,29 @@
 	],
 	"packageRules": [
 		{
+			"description": "Automerge minor/patch updates for non-major versions",
 			"matchUpdateTypes": ["minor", "patch"],
-			"matchCurrentVersion": ">=1.0.0",
+			"matchCurrentVersion": "!/^v?0+\\./",
 			"automerge": true
 		},
 		{
+			"description": "Group linter dependencies together",
 			"groupName": "linters",
 			"extends": ["packages:linters"],
 			"matchPackageNames": ["prettier", "/^@typescript-eslint//", "!eslint-plugin-qwik"]
 		},
 		{
+			"description": "Group Qwik runtime, city, and ESLint plugin updates together",
 			"groupName": "qwik",
 			"matchPackageNames": ["eslint-plugin-qwik", "/^@builder.io/qwik/"]
 		},
 		{
+			"description": "Group Vitest packages together",
 			"groupName": "vitest",
 			"matchPackageNames": ["@vitest/coverage-istanbul", "vitest"]
 		},
 		{
+			"description": "Create Vitest major update PRs only after status checks pass",
 			"matchManagers": ["npm"],
 			"matchPackageNames": ["@vitest/coverage-istanbul", "vitest"],
 			"matchUpdateTypes": ["major"],
