@@ -36,5 +36,5 @@
 		"deploy": "bash scripts/deploy.sh",
 		"prepare": "lefthook install"
 	},
-	"packageManager": "pnpm@10.31.0"
+	"packageManager": "pnpm@10.32.1"
 }
