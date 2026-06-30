@@ -3,3 +3,24 @@ packages:
   - 'packages/frontend'
   - 'packages/consumer'
   - 'packages/do'
+
+# Allow dependency build scripts only for reviewed packages.
+onlyBuiltDependencies:
+  - '@parcel/watcher'
+  - esbuild
+  - lefthook
+  - sharp
+  - unrs-resolver
+  - workerd
+
+# Fail installs when an unreviewed dependency build script appears.
+strictDepBuilds: true
+
+# Reject package versions published within the last 3 days.
+minimumReleaseAge: 4320
+
+# Block git/tarball URL sources in transitive dependencies.
+blockExoticSubdeps: true
+
+# Detect package trust/provenance downgrades.
+trustPolicy: no-downgrade
