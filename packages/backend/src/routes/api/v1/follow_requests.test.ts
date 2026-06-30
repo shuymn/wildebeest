@@ -1,4 +1,4 @@
-import { env } from 'cloudflare:test'
+import { env } from 'cloudflare:workers'
 import { strict as assert } from 'node:assert/strict'
 
 import app from '@wildebeest/backend'

@@ -5,6 +5,12 @@ import { qwikCity } from '@builder.io/qwik-city/vite'
 import tsconfigPaths from 'vite-tsconfig-paths'
 
 const commitHash = process.env['COMMIT_HASH']?.slice(0, 7)
+const backendTestModules = [
+	'@wildebeest/backend/test/test-data',
+	'@wildebeest/backend/test/utils',
+	fileURLToPath(new URL('../backend/src/test/test-data.ts', import.meta.url)),
+	fileURLToPath(new URL('../backend/src/test/utils.ts', import.meta.url)),
+]
 
 export default defineConfig(() => {
 	return {
@@ -22,10 +28,7 @@ export default defineConfig(() => {
 		build: {
 			sourcemap: process.env.NODE_ENV === 'dev',
 			rollupOptions: {
-				external: [
-					fileURLToPath(new URL('../backend/test/utils.ts', import.meta.url)),
-					fileURLToPath(new URL('../backend/test/test-data.ts', import.meta.url)),
-				],
+				external: backendTestModules,
 			},
 		},
 		preview: {

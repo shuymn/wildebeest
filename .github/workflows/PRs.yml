@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: .node-version
@@ -68,7 +68,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: .node-version
@@ -107,13 +107,7 @@ jobs:
           sqlite3def --version
 
       - name: Check DB schema
-        run: |
-          pnpm run database:migrate --local
-          DB_FILE=$(find .wrangler/state/v3/d1/miniflare-D1DatabaseObject -name "*.sqlite" -type f | head -n 1)
-          # Drop Cloudflare internal table to avoid sqlite3def parser error with 'key' column
-          sqlite3 "${DB_FILE:?}" "DROP TABLE IF EXISTS _cf_KV; DROP TABLE IF EXISTS _cf_METADATA;"
-          sqlite3def --enable-drop --config sqldef.yml --dry-run \
-            "${DB_FILE:?}" < schema.sql | head -n 1 | grep -E '^-- Nothing is modified --$'
+        run: bash scripts/check-schema.sh
 
   test-ui:
     timeout-minutes: 20
@@ -124,7 +118,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: .node-version
@@ -134,7 +128,9 @@ jobs:
         run: pnpm install
 
       - name: Run App in the background
-        run: pnpm run ci-dev-test-ui &
+        run: |
+          nohup pnpm run ci-dev-test-ui >"${RUNNER_TEMP}/ci-dev-test-ui.log" 2>&1 &
+          echo "$!" >"${RUNNER_TEMP}/ci-dev-test-ui.pid"
 
       - name: Store Playwright version
         working-directory: packages/frontend
@@ -153,6 +149,26 @@ jobs:
       - name: Download Playwright browsers
         working-directory: packages/frontend
         run: npx playwright install --with-deps
+
+      - name: Wait for app readiness
+        run: |
+          APP_LOG="${RUNNER_TEMP}/ci-dev-test-ui.log"
+
+          check_ready() {
+            curl --fail --silent --show-error --connect-timeout 5 --max-time 10 http://127.0.0.1:8788/explore >/dev/null
+          }
+
+          for _ in {1..180}; do
+            if check_ready; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "::group::ci-dev-test-ui log"
+          tail -n 200 "${APP_LOG}" || true
+          echo "::endgroup::"
+          check_ready
 
       - name: Run Playwright tests
         run: pnpm run test:ui

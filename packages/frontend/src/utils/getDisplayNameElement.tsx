@@ -1,7 +1,7 @@
-import { type JSXNode } from '@builder.io/qwik'
+import { type JSXOutput } from '@builder.io/qwik'
 import { type Account } from '~/types'
 
-export function getDisplayNameElement(account: Account): JSXNode {
+export function getDisplayNameElement(account: Account): JSXOutput {
 	return (
 		<>
 			{account.display_name.split(/(:[^\s:]+:)/g).map((str, idx) => {

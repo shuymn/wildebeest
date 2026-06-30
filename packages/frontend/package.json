@@ -3,36 +3,36 @@
 	"description": "App with Routing built-in (recommended)",
 	"type": "module",
 	"engines": {
-		"node": ">=15.0.0"
+		"node": ">=24.17.0"
 	},
 	"private": true,
 	"scripts": {
-		"pretypes-check": "npm run build",
-		"types-check": "tsc",
+		"pretypes-check": "pnpm --dir ../.. --filter @wildebeest/backend exec tsc -b && pnpm run build",
+		"types-check": "tsc --noEmit",
 		"lint": "eslint src mock-db adapters",
 		"build": "vite build && vite build --config adapters/cloudflare-pages/vite.config.ts",
 		"test:e2e": "playwright test"
 	},
 	"devDependencies": {
-		"@builder.io/qwik": "1.18.0",
-		"@playwright/test": "1.61.0",
-		"@builder.io/qwik-city": "1.18.0",
+		"@builder.io/qwik": "1.19.2",
+		"@playwright/test": "1.61.1",
+		"@builder.io/qwik-city": "1.19.2",
 		"@types/eslint": "9.6.1",
-		"@types/node": "24.10.13",
+		"@types/node": "24.13.2",
 		"@typescript-eslint/eslint-plugin": "8.62.0",
 		"@typescript-eslint/parser": "8.62.0",
 		"autoprefixer": "10.5.0",
 		"eslint": "9.39.4",
-		"eslint-plugin-qwik": "1.18.0",
+		"eslint-plugin-qwik": "1.19.2",
 		"hono": "4.12.26",
 		"lorem-ipsum": "2.0.10",
 		"postcss": "8.5.15",
 		"prettier": "3.8.4",
-		"sass": "1.97.1",
+		"sass": "1.101.0",
 		"tailwindcss": "3.4.19",
 		"typescript": "5.9.3",
 		"undici": "7.28.0",
-		"vite": "5.4.21",
+		"vite": "6.4.3",
 		"vite-tsconfig-paths": "6.1.0"
 	},
 	"dependencies": {

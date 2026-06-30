@@ -27,7 +27,7 @@
 			"@wildebeest/frontend/*": ["./src/*"]
 		}
 	},
-	"include": ["src", "mock-db", "adapters", "e2e", "playwright.config.ts"],
+	"include": ["src", "mock-db", "adapters", "e2e", "playwright.config.ts", "vite.config.ts"],
 	"exclude": ["node_modules", "dist", "server", "tmp"],
 	"references": [
 		{
