@@ -34,7 +34,7 @@ find_migrated_d1_database() {
     echo "error: multiple migrated local D1 database files found; please clean .wrangler/state" >&2
     printf '  %s\n' "${matches[@]}" >&2
   else
-    echo "error: migrated local D1 database file not found (run pnpm run database:migrate -- --local first)" >&2
+    echo "error: migrated local D1 database file not found (run pnpm run database:migrate --local first)" >&2
   fi
 
   return 1
@@ -53,7 +53,7 @@ else
   DB_FILE=$(find_migrated_d1_database "${ROOT_DIR}/.wrangler/state/v3/d1/miniflare-D1DatabaseObject")
 fi
 if [ ! -f "${DB_FILE}" ]; then
-  echo "error: migrated local D1 database file not found (run pnpm run database:migrate -- --local first)" >&2
+  echo "error: migrated local D1 database file not found (run pnpm run database:migrate --local first)" >&2
   exit 1
 fi
 

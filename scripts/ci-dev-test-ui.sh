@@ -11,7 +11,8 @@ cd "${ROOT_DIR:?}"
 
 pnpm run build
 pnpm run database:create-mock
-pnpm run pages -- dev packages/frontend/dist \
+pnpm run pages dev packages/frontend/dist \
+  --port 8788 \
   --binding "DOMAIN=0.0.0.0" \
   --binding "INSTANCE_TITLE=Test Wildebeest" \
   --binding "INSTANCE_DESCR=My Wildebeest Instance" \

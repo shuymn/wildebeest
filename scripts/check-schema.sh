@@ -30,7 +30,7 @@ find_d1_database() {
 
 echo "Applying migrations to a fresh local D1 database..."
 rm -f .wrangler/state/v3/d1/miniflare-D1DatabaseObject/*.sqlite*
-CI=true pnpm run database:migrate -- --local
+CI=true pnpm run database:migrate --local
 
 DB_FILE=$(find_d1_database ".wrangler/state/v3/d1/miniflare-D1DatabaseObject" || true)
 if [ -z "${DB_FILE}" ]; then

@@ -13,5 +13,5 @@ export COMMIT_HASH
 COMMIT_HASH=$(git rev-parse HEAD)
 
 pnpm run build
-pnpm run database:migrate -- --local
-pnpm run pages -- dev packages/frontend/dist --compatibility-date=2022-12-20
+pnpm run database:migrate --local
+pnpm run pages dev packages/frontend/dist --compatibility-date=2022-12-20

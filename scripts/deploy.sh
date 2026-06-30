@@ -11,4 +11,4 @@ cd "${ROOT_DIR:?}"
 
 pnpm run build
 pnpm run database:migrate
-pnpm run pages -- deploy packages/frontend/dist --project-name=wildebeest
+pnpm run pages deploy packages/frontend/dist --project-name=wildebeest
