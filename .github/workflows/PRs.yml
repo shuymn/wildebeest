@@ -128,7 +128,9 @@ jobs:
         run: pnpm install
 
       - name: Run App in the background
-        run: pnpm run ci-dev-test-ui &
+        run: |
+          nohup pnpm run ci-dev-test-ui >"${RUNNER_TEMP}/ci-dev-test-ui.log" 2>&1 &
+          echo "$!" >"${RUNNER_TEMP}/ci-dev-test-ui.pid"
 
       - name: Store Playwright version
         working-directory: packages/frontend
@@ -150,6 +152,8 @@ jobs:
 
       - name: Wait for app readiness
         run: |
+          APP_LOG="${RUNNER_TEMP}/ci-dev-test-ui.log"
+
           check_ready() {
             curl --fail --silent --show-error --connect-timeout 5 --max-time 10 http://127.0.0.1:8788/explore >/dev/null
           }
@@ -161,6 +165,9 @@ jobs:
             sleep 2
           done
 
+          echo "::group::ci-dev-test-ui log"
+          tail -n 200 "${APP_LOG}" || true
+          echo "::endgroup::"
           check_ready
 
       - name: Run Playwright tests
