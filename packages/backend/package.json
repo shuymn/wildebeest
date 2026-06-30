@@ -28,7 +28,7 @@
 		"eslint-import-resolver-typescript": "4.4.5",
 		"eslint-plugin-import": "2.32.0",
 		"eslint-plugin-unused-imports": "4.4.1",
-		"hono": "4.12.26",
+		"hono": "4.12.27",
 		"typescript": "5.9.3",
 		"vite": "6.4.3",
 		"vite-tsconfig-paths": "6.1.1",
