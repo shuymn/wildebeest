@@ -24,7 +24,7 @@
 		"@typescript-eslint/eslint-plugin": "8.62.0",
 		"@typescript-eslint/parser": "8.62.0",
 		"@vitest/coverage-istanbul": "4.1.9",
-		"eslint": "9.39.4",
+		"eslint": "10.6.0",
 		"eslint-import-resolver-typescript": "4.4.5",
 		"eslint-plugin-import": "2.32.0",
 		"eslint-plugin-unused-imports": "4.4.1",
