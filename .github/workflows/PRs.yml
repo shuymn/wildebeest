@@ -67,8 +67,8 @@ jobs:
     needs: test-api
     permissions:
       contents: read
-      pull-requests: write
-      actions: write
+      pull-requests: write # for octocov to update PR comments
+      actions: write # for octocov to replace artifact-backed reports
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
