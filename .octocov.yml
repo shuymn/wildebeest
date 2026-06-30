@@ -1,0 +1,18 @@
+coverage:
+  if: true
+  paths:
+    - octocov-1/lcov.info
+    - octocov-2/lcov.info
+    - octocov-3/lcov.info
+diff:
+  datastores:
+    - artifact://${GITHUB_REPOSITORY}
+comment:
+  if: is_pull_request && github.event.pull_request.head.repo.full_name == env.GITHUB_REPOSITORY
+  updatePrevious: true
+summary:
+  if: true
+report:
+  if: is_default_branch
+  datastores:
+    - artifact://${GITHUB_REPOSITORY}

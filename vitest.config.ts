@@ -5,7 +5,7 @@ export default defineConfig({
 		projects: ['packages/backend/vitest.config.ts'],
 		coverage: {
 			provider: 'istanbul',
-			reporter: ['json'],
+			reporter: ['lcovonly'],
 			include: ['packages/backend/src/**/*.ts'],
 		},
 	},
