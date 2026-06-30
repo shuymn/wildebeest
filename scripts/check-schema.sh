@@ -14,15 +14,27 @@ if command -v mise >/dev/null 2>&1; then
   SQLITE3DEF=(mise exec -- sqlite3def)
 fi
 
+find_d1_database() {
+  local database_dir="$1"
+  local candidate
+
+  while IFS= read -r -d '' candidate; do
+    if sqlite3 "${candidate}" "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'actors' LIMIT 1;" | grep -qx 1; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done < <(find "${database_dir}" -name "*.sqlite" -type f -print0 2>/dev/null)
+
+  return 1
+}
+
 echo "Applying migrations to a fresh local D1 database..."
 rm -f .wrangler/state/v3/d1/miniflare-D1DatabaseObject/*.sqlite*
 CI=true pnpm run database:migrate -- --local
 
-DB_FILE=$(
-  find .wrangler/state/v3/d1/miniflare-D1DatabaseObject -name "*.sqlite" -type f | head -n 1
-)
+DB_FILE=$(find_d1_database ".wrangler/state/v3/d1/miniflare-D1DatabaseObject" || true)
 if [ -z "${DB_FILE}" ]; then
-  echo "error: local D1 database file not found" >&2
+  echo "error: migrated local D1 database file not found" >&2
   exit 1
 fi
 

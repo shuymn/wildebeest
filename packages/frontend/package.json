@@ -7,8 +7,8 @@
 	},
 	"private": true,
 	"scripts": {
-		"pretypes-check": "npm run build",
-		"types-check": "tsc",
+		"pretypes-check": "pnpm --dir ../.. --filter @wildebeest/backend exec tsc -b && pnpm run build",
+		"types-check": "tsc --noEmit",
 		"lint": "eslint src mock-db adapters",
 		"build": "vite build && vite build --config adapters/cloudflare-pages/vite.config.ts",
 		"test:e2e": "playwright test"

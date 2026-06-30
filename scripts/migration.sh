@@ -14,6 +14,20 @@ SCRIPT_DIR=$(
 )
 ROOT_DIR="${SCRIPT_DIR}/.."
 
+find_migrated_d1_database() {
+  local database_dir="$1"
+  local candidate
+
+  while IFS= read -r -d '' candidate; do
+    if sqlite3 "${candidate}" "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'actors' LIMIT 1;" | grep -qx 1; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done < <(find "${database_dir}" -name "*.sqlite" -type f -print0 2>/dev/null)
+
+  return 1
+}
+
 DB_FILES=()
 while IFS= read -r -d '' file; do
   DB_FILES+=("$file")
@@ -24,12 +38,10 @@ if [ "${#DB_FILES[@]}" -eq 0 ]; then
 elif [ "${#DB_FILES[@]}" -eq 1 ]; then
   DB_FILE="${DB_FILES[0]}"
 else
-  echo "error: multiple local D1 database files found; please clean .wrangler/state" >&2
-  printf '  %s\n' "${DB_FILES[@]}" >&2
-  exit 1
+  DB_FILE=$(find_migrated_d1_database "${ROOT_DIR}/.wrangler/state/v3/d1/miniflare-D1DatabaseObject" || true)
 fi
 if [ ! -f "${DB_FILE}" ]; then
-  echo "error: local D1 database file not found (run pnpm run database:migrate -- --local first)" >&2
+  echo "error: migrated local D1 database file not found (run pnpm run database:migrate -- --local first)" >&2
   exit 1
 fi
 
