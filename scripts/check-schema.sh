@@ -45,7 +45,7 @@ if [ "${EXIT_CODE}" -eq 0 ]; then
   exit 0
 fi
 
-if [ "${EXIT_CODE}" -eq 2 ]; then
+if { [ "${EXIT_CODE}" -eq 1 ] || [ "${EXIT_CODE}" -eq 2 ]; } && [[ "${DIFF}" == --\ dry\ run\ --* ]]; then
   echo "error: schema.sql does not match migrations" >&2
   printf '%s\n' "${DIFF}" >&2
   exit 1

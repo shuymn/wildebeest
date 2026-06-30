@@ -3,7 +3,7 @@
 	"description": "App with Routing built-in (recommended)",
 	"type": "module",
 	"engines": {
-		"node": ">=15.0.0"
+		"node": ">=24.17.0"
 	},
 	"private": true,
 	"scripts": {

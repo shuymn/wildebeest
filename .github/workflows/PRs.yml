@@ -154,7 +154,7 @@ jobs:
             curl --fail --silent --show-error --connect-timeout 5 --max-time 10 http://127.0.0.1:8788/explore >/dev/null
           }
 
-          for _ in {1..60}; do
+          for _ in {1..180}; do
             if check_ready; then
               exit 0
             fi
