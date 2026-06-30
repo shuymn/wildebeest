@@ -25,6 +25,14 @@
 			"matchStrings": ["SQLDEF_VERSION: (?<currentValue>v?\\d+\\.\\d+\\.\\d+)"],
 			"datasourceTemplate": "github-releases",
 			"depNameTemplate": "sqldef/sqldef"
+		},
+		{
+			"customType": "regex",
+			"description": "Update OCTOCOV_VERSION in PR checks workflow",
+			"managerFilePatterns": ["/^\\.github/workflows/PRs\\.yml$/"],
+			"matchStrings": ["OCTOCOV_VERSION: (?<currentValue>v?\\d+\\.\\d+\\.\\d+)"],
+			"datasourceTemplate": "github-releases",
+			"depNameTemplate": "k1LoW/octocov"
 		}
 	],
 	"packageRules": [

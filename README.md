@@ -1,4 +1,4 @@
-# Wildebeest [![codecov](https://codecov.io/gh/shuymn/wildebeest/graph/badge.svg?token=XW744B3TZA)](https://codecov.io/gh/shuymn/wildebeest)
+# Wildebeest
 
 _A Fork of [cloudflare/wildebeest](https://github.com/cloudflare/wildebeest) by [@shuymn](https://github.com/shuymn)_
 
