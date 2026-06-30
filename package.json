@@ -7,7 +7,7 @@
 		"@cloudflare/pages-plugin-cloudflare-access": "1.0.5",
 		"lefthook": "2.1.9",
 		"npm-run-all2": "9.0.2",
-		"prettier": "3.8.5",
+		"prettier": "3.9.1",
 		"sql-formatter": "15.8.2",
 		"wrangler": "4.105.0"
 	},
