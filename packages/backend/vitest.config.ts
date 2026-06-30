@@ -26,6 +26,8 @@ export default defineConfig({
 			provider: 'istanbul',
 		},
 		globals: true,
+		// Many backend tests replace globalThis.fetch without restoring it.
+		fileParallelism: false,
 		testTimeout: 30 * 1000,
 		include: ['./src/**/*.test.ts'],
 		includeSource: ['./src/**/*.ts'],
