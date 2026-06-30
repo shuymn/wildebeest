@@ -2,7 +2,8 @@
 	"name": "@wildebeest/consumer",
 	"version": "0.0.0",
 	"scripts": {
-		"preinstall": "npx only-allow pnpm"
+		"preinstall": "npx only-allow pnpm",
+		"lint": "eslint src --quiet"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "4.20260627.1",
