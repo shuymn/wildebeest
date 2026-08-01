@@ -24,7 +24,7 @@ concurrency:
 
 env:
   SQLDEF_VERSION: v3.11.12
-  OCTOCOV_VERSION: v0.75.8
+  OCTOCOV_VERSION: v0.75.12
 
 jobs:
   test-api:
