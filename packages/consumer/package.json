@@ -9,7 +9,7 @@
 		"@cloudflare/workers-types": "4.20260627.1",
 		"toucan-js": "4.1.1",
 		"typescript": "5.9.3",
-		"wrangler": "4.105.0"
+		"wrangler": "4.118.0"
 	},
 	"private": true,
 	"dependencies": {
