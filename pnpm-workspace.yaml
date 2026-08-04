@@ -24,3 +24,6 @@ blockExoticSubdeps: true
 
 # Detect package trust/provenance downgrades.
 trustPolicy: no-downgrade
+minimumReleaseAgeExclude:
+  # Renovate security update: undici@8.9.0
+  - undici@8.9.0
