@@ -24,3 +24,6 @@ blockExoticSubdeps: true
 
 # Detect package trust/provenance downgrades.
 trustPolicy: no-downgrade
+minimumReleaseAgeExclude:
+  # Renovate security update: postcss@8.5.23
+  - postcss@8.5.23
