@@ -23,7 +23,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SQLDEF_VERSION: v3.11.12
+  SQLDEF_VERSION: v3.11.20
   OCTOCOV_VERSION: v0.75.8
 
 jobs:
