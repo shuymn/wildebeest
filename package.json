@@ -8,7 +8,7 @@
 		"lefthook": "2.1.9",
 		"npm-run-all2": "9.0.2",
 		"prettier": "3.8.5",
-		"sql-formatter": "15.8.2",
+		"sql-formatter": "15.9.0",
 		"wrangler": "4.105.0"
 	},
 	"private": true,
