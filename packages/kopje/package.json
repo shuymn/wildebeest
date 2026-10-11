@@ -13,12 +13,16 @@
 		"build": "wrangler deploy --dry-run --outdir dist"
 	},
 	"dependencies": {
+		"@fedify/fedify": "2.4.2",
+		"@fedify/vocab": "2.4.2",
 		"hono": "4.12.27",
+		"temporal-polyfill": "1.0.5",
 		"zod": "3.25.76"
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "0.16.20",
 		"@cloudflare/workers-types": "4.20260627.1",
+		"@fedify/testing": "2.4.2",
 		"miniflare": "4.20260625.0",
 		"typescript": "5.9.3",
 		"vitest": "4.1.9",
