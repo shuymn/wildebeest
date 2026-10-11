@@ -164,6 +164,9 @@ importers:
       autoprefixer:
         specifier: 10.5.2
         version: 10.5.2(postcss@8.5.15)
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
       eslint:
         specifier: 9.39.4
         version: 9.39.4(jiti@1.21.7)
@@ -176,6 +179,9 @@ importers:
       lorem-ipsum:
         specifier: 2.0.10
         version: 2.0.10
+      miniflare:
+        specifier: 4.20260625.0
+        version: 4.20260625.0
       postcss:
         specifier: 8.5.15
         version: 8.5.15
