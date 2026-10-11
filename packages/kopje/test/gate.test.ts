@@ -152,6 +152,54 @@ describe('maintenance gate', () => {
 		expect(send).not.toHaveBeenCalled()
 	})
 
+	// A 2 MiB body in 64 KiB chunks that records how much was pulled and whether it was cancelled.
+	function trackedBody() {
+		const chunk = 64 * 1024
+		const tracker = { pulled: 0, cancelled: false }
+		const stream = new ReadableStream<Uint8Array>(
+			{
+				pull(controller) {
+					if (tracker.pulled >= 2 * 1024 * 1024) {
+						controller.close()
+						return
+					}
+					tracker.pulled += chunk
+					controller.enqueue(new Uint8Array(chunk))
+				},
+				cancel() {
+					tracker.cancelled = true
+				},
+			},
+			{ highWaterMark: 0 }
+		)
+		return { stream, tracker }
+	}
+
+	it('refuses an inbox body over 1 MiB by Content-Length without reading it', async () => {
+		const { request, send } = harness(await migratedStore(), { MAINTENANCE: 'readonly' })
+		const { stream, tracker } = trackedBody()
+
+		const response = await request('/inbox', {
+			method: 'POST',
+			headers: { 'content-length': String(2 * 1024 * 1024) },
+			body: stream,
+		})
+		expect(response.status).toBe(413)
+		expect(tracker.pulled).toBe(0)
+		expect(send).not.toHaveBeenCalled()
+	})
+
+	it('stops reading a streamed inbox body as soon as it passes 1 MiB', async () => {
+		const { request, send } = harness(await migratedStore(), { MAINTENANCE: 'readonly' })
+		const { stream, tracker } = trackedBody()
+
+		const response = await request('/inbox', { method: 'POST', body: stream })
+		expect(response.status).toBe(413)
+		expect(tracker.cancelled).toBe(true)
+		expect(tracker.pulled).toBeLessThanOrEqual(1024 * 1024 + 64 * 1024)
+		expect(send).not.toHaveBeenCalled()
+	})
+
 	it('maps a Store version mismatch to spool for inboxes and 503 for everything else', async () => {
 		const { request, send } = harness(await migratedStore(), {}, '0.0.0-other')
 

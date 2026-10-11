@@ -14,10 +14,8 @@ export type SpoolMessage = {
 	spooledAt: number
 }
 
-export async function spoolInbox(request: Request, body: ArrayBuffer, queue: Queue, now: number): Promise<Response> {
-	if (body.byteLength > INBOX_BODY_LIMIT) {
-		return new Response(null, { status: 413 })
-	}
+// The body was already read within INBOX_BODY_LIMIT (app/body.ts).
+export async function spoolInbox(request: Request, body: Uint8Array, queue: Queue, now: number): Promise<Response> {
 	const deflated = await deflate(body)
 	const message: SpoolMessage = {
 		kind: 'spool',
@@ -40,7 +38,7 @@ export async function spoolInbox(request: Request, body: ArrayBuffer, queue: Que
 	return new Response(null, { status: 202 })
 }
 
-async function deflate(body: ArrayBuffer): Promise<Uint8Array> {
+async function deflate(body: Uint8Array): Promise<Uint8Array> {
 	const stream = new Blob([body]).stream().pipeThrough(new CompressionStream('deflate'))
 	return new Uint8Array(await new Response(stream).arrayBuffer())
 }

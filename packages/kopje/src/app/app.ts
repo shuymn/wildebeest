@@ -1,11 +1,12 @@
 import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 
+import { readBoundedBody } from './body'
 import { classifyRequest, decide, type RequestClass } from './gate'
 import { checkHealth } from './health'
 import { INBOX_ROUTES, inboxHandler } from '../federation/inbox'
 import { FEDERATION_PATHS, requireSetup } from '../federation/setup-gate'
-import { spoolInbox } from '../federation/spool'
+import { INBOX_BODY_LIMIT, spoolInbox } from '../federation/spool'
 import { maintenanceError, mastodonError } from '../mastodon/errors'
 import { readConfig } from '../platform/config'
 import { defaultStore, type StoreResolver } from '../platform/store-client'
@@ -18,7 +19,7 @@ export type AppDeps = {
 	store?: StoreResolver
 }
 
-type AppEnv = { Bindings: Env; Variables: { requestClass: RequestClass } }
+type AppEnv = { Bindings: Env; Variables: { requestClass: RequestClass; inboxBody: Uint8Array } }
 
 export function createApp({ build, now, store = defaultStore }: AppDeps) {
 	const app = new Hono<AppEnv>()
@@ -41,8 +42,16 @@ export function createApp({ build, now, store = defaultStore }: AppDeps) {
 		if (decision === 'unavailable') {
 			return maintenanceError()
 		}
-		if (decision === 'spool') {
-			return spoolInbox(c.req.raw, await c.req.arrayBuffer(), c.env.QUEUE, now())
+		if (requestClass === 'inbox') {
+			// Read once, bounded, before anything else: both the handler and a later spool use these bytes.
+			const body = await readBoundedBody(c.req.raw, INBOX_BODY_LIMIT)
+			if (body === 'too-large') {
+				return new Response(null, { status: 413 })
+			}
+			c.set('inboxBody', body)
+			if (decision === 'spool') {
+				return spoolInbox(c.req.raw, body, c.env.QUEUE, now())
+			}
 		}
 		await next()
 	})
@@ -71,8 +80,9 @@ export function createApp({ build, now, store = defaultStore }: AppDeps) {
 
 	app.onError(async (error, c) => {
 		if (error instanceof StoreUnavailableError) {
-			if (c.get('requestClass') === 'inbox') {
-				return spoolInbox(c.req.raw, await c.req.arrayBuffer(), c.env.QUEUE, now())
+			const body = c.get('requestClass') === 'inbox' ? c.get('inboxBody') : undefined
+			if (body !== undefined) {
+				return spoolInbox(c.req.raw, body, c.env.QUEUE, now())
 			}
 			return maintenanceError()
 		}
