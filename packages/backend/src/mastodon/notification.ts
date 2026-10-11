@@ -20,6 +20,7 @@ import { getSubscriptionForAllClients } from '@wildebeest/backend/mastodon/subsc
 import { fromObject } from '@wildebeest/backend/media'
 import { isNotificationType, type Notification, type NotificationType } from '@wildebeest/backend/types/notification'
 import { actorToHandle, handleToAcct } from '@wildebeest/backend/utils/handle'
+import { htmlToText, sanitizeHtml } from '@wildebeest/backend/utils/html'
 import { generateWebPushMessage } from '@wildebeest/backend/webpush'
 import type { JWK } from '@wildebeest/backend/webpush/jwk'
 import type { WebPushInfos, WebPushMessage } from '@wildebeest/backend/webpush/webpushinfos'
@@ -365,10 +366,10 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 				uri: new URL(result.id),
 				created_at: new Date(properties.published ?? result.cdate).toISOString(),
 				account: await loadMastodonAccount(db, domain, actor, handle),
-				content: properties.content,
+				content: sanitizeHtml(properties.content),
 				visibility: detectVisibility({ to: properties.to, cc: properties.cc, followers: actor.followers }),
 				sensitive: properties.sensitive,
-				spoiler_text: properties.spoiler_text ?? '',
+				spoiler_text: htmlToText(properties.spoiler_text ?? ''),
 				media_attachments: mediaAttachments,
 				mentions,
 				url: properties.url

@@ -7,6 +7,7 @@ import { defaultImages } from '@wildebeest/backend/config/accounts'
 import { type Database } from '@wildebeest/backend/database'
 import type { MastodonAccount, Preference } from '@wildebeest/backend/types/account'
 import { Handle, handleToAcct, isLocalHandle, LocalHandle, RemoteHandle } from '@wildebeest/backend/utils/handle'
+import { htmlToText, sanitizeHtml } from '@wildebeest/backend/utils/html'
 import { unwrapPrivateKey } from '@wildebeest/backend/utils/key-ops'
 import { PartialProps } from '@wildebeest/backend/utils/type'
 
@@ -26,11 +27,13 @@ function toMastodonAccount(
 
 	return {
 		id: actor[mastodonIdSymbol],
-		username: actor.preferredUsername ?? actor.name ?? 'unnamed',
+		// `username`, `display_name` and the `fields` names are plain text, `note` and the `fields`
+		// values are HTML. They are sanitized again here because rows may predate the sanitizer.
+		username: htmlToText(actor.preferredUsername ?? actor.name ?? 'unnamed'),
 		acct,
 		url: actor.url ? actor.url.toString() : '',
-		display_name: actor.name ?? actor.preferredUsername ?? '',
-		note: actor.summary ?? '',
+		display_name: htmlToText(actor.name ?? actor.preferredUsername ?? ''),
+		note: sanitizeHtml(actor.summary ?? ''),
 		avatar,
 		avatar_static: avatar,
 		header,

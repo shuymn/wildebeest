@@ -26,6 +26,7 @@ import * as media from '@wildebeest/backend/media/'
 import type { MastodonAccount, MastodonId, MastodonStatus, MastodonStatusEdit } from '@wildebeest/backend/types'
 import type { MediaAttachment } from '@wildebeest/backend/types/media'
 import { actorToAcct, actorToHandle, handleToAcct, parseHandle } from '@wildebeest/backend/utils/handle'
+import { htmlToText, sanitizeHtml } from '@wildebeest/backend/utils/html'
 import { queryAcct } from '@wildebeest/backend/webfinger'
 
 export { canViewStatus, detectVisibility, isVisible } from '@wildebeest/backend/mastodon/status_visibility'
@@ -176,10 +177,10 @@ WHERE id = ?
 		uri: getApId(obj.id),
 		created_at: new Date(obj.published).toISOString(),
 		account: await loadMastodonAccount(db, domain, actor, handle),
-		content: obj.content ?? '',
+		content: sanitizeHtml(obj.content ?? ''),
 		visibility: detectVisibility({ to: obj.to ?? [], cc: obj.cc ?? [], followers: actor.followers }),
 		sensitive: obj.sensitive ?? false,
-		spoiler_text: obj.spoiler_text ?? '',
+		spoiler_text: htmlToText(obj.spoiler_text ?? ''),
 		media_attachments: mediaAttachments,
 		mentions,
 		url: obj.url
@@ -381,10 +382,10 @@ export async function toMastodonStatusesFromRowsWithActor(
 					uri: new URL(properties.id),
 					created_at: new Date(properties.published ?? row.cdate).toISOString(),
 					account: await loadMastodonAccount(db, domain, statusAuthor, actorToHandle(statusAuthor)),
-					content: properties.content ?? '',
+					content: sanitizeHtml(properties.content ?? ''),
 					visibility: detectVisibility({ to: properties.to, cc: properties.cc, followers: statusAuthor.followers }),
 					sensitive: properties.sensitive,
-					spoiler_text: properties.spoiler_text ?? '',
+					spoiler_text: htmlToText(properties.spoiler_text ?? ''),
 					media_attachments: mediaAttachments,
 					mentions,
 					reblogs_count: row.reblogs_count,
@@ -426,10 +427,10 @@ export async function toMastodonStatusesFromRowsWithActor(
 				uri: new URL(row.id),
 				created_at: new Date(properties.published ?? row.cdate).toISOString(),
 				account,
-				content: properties.content ?? '',
+				content: sanitizeHtml(properties.content ?? ''),
 				visibility: detectVisibility({ to: properties.to, cc: properties.cc, followers: actor.followers }),
 				sensitive: properties.sensitive,
-				spoiler_text: properties.spoiler_text ?? '',
+				spoiler_text: htmlToText(properties.spoiler_text ?? ''),
 				media_attachments: mediaAttachments,
 				mentions,
 				reblogs_count: row.reblogs_count,
@@ -576,10 +577,10 @@ export async function toMastodonStatusFromRow(
 				uri: new URL(properties.id),
 				created_at: new Date(properties.published ?? row.cdate).toISOString(),
 				account: await loadMastodonAccount(db, domain, statusAuthor, actorToHandle(statusAuthor)),
-				content: properties.content ?? '',
+				content: sanitizeHtml(properties.content ?? ''),
 				visibility: detectVisibility({ to: properties.to, cc: properties.cc, followers: statusAuthor.followers }),
 				sensitive: properties.sensitive,
-				spoiler_text: properties.spoiler_text ?? '',
+				spoiler_text: htmlToText(properties.spoiler_text ?? ''),
 				media_attachments: mediaAttachments,
 				mentions,
 				reblogs_count: row.reblogs_count,
@@ -621,10 +622,10 @@ export async function toMastodonStatusFromRow(
 			uri: new URL(row.id),
 			created_at: new Date(properties.published ?? row.cdate).toISOString(),
 			account,
-			content: properties.content ?? '',
+			content: sanitizeHtml(properties.content ?? ''),
 			visibility: detectVisibility({ to: properties.to, cc: properties.cc, followers: author.followers }),
 			sensitive: properties.sensitive,
-			spoiler_text: properties.spoiler_text ?? '',
+			spoiler_text: htmlToText(properties.spoiler_text ?? ''),
 			media_attachments: mediaAttachments,
 			mentions,
 			reblogs_count: row.reblogs_count,
@@ -702,8 +703,8 @@ function toMastodonStatusEditFromObject(
 	}
 
 	return {
-		content: obj.content ?? '',
-		spoiler_text: obj.spoiler_text ?? '',
+		content: sanitizeHtml(obj.content ?? ''),
+		spoiler_text: htmlToText(obj.spoiler_text ?? ''),
 		sensitive: obj.sensitive ?? false,
 		created_at: createdAt.toISOString(),
 		account,

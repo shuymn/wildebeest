@@ -22,6 +22,7 @@ import type { HonoEnv } from '@wildebeest/backend/types'
 import { isNotificationType, type Notification } from '@wildebeest/backend/types/notification'
 import { HTTPS } from '@wildebeest/backend/utils'
 import { actorToHandle, handleToAcct } from '@wildebeest/backend/utils/handle'
+import { htmlToText, sanitizeHtml } from '@wildebeest/backend/utils/html'
 
 const headers = {
 	'content-type': 'application/json; charset=utf-8',
@@ -123,10 +124,10 @@ async function handleRequest(domain: string, id: string, db: Database, connected
 			// generating the notification also created the object. In practice
 			// likely true but not guarantee.
 			account: fromAccount,
-			content: properties.content,
+			content: sanitizeHtml(properties.content),
 			visibility: detectVisibility({ to: properties.to, cc: properties.cc, followers: fromActor.followers }),
 			sensitive: properties.sensitive,
-			spoiler_text: properties.spoiler_text ?? '',
+			spoiler_text: htmlToText(properties.spoiler_text ?? ''),
 			media_attachments: mediaAttachments,
 			mentions,
 			url: properties.url
