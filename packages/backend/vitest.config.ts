@@ -29,7 +29,7 @@ export default defineConfig({
 		// Many backend tests replace globalThis.fetch without restoring it.
 		fileParallelism: false,
 		testTimeout: 30 * 1000,
-		include: ['./src/**/*.test.ts'],
+		include: ['./src/**/*.test.ts', '../consumer/test/**/*.test.ts'],
 		includeSource: ['./src/**/*.ts'],
 		setupFiles: ['./src/test/apply-migrations.ts'],
 	},
