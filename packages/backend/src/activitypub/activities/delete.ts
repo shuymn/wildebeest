@@ -39,7 +39,7 @@ export async function createDeleteActivity(
 		type: 'Delete',
 		actor: actor.id,
 		object,
-		...(audience ? { to: audience.to, cc: audience.cc } : {}),
+		...audience,
 	})
 }
 
