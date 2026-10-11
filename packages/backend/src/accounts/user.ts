@@ -29,6 +29,22 @@ export function getUserUrl(domain: string, obj: { preferredUsername: string } | 
 	return new URL(`/@${obj.localPart}`, HTTPS + domain)
 }
 
+// The signature key a local actor publishes is read from the `users` table and
+// its ids are derived from the domain, never from the actor's stored
+// properties: those are remote-controlled for remote actors and a forged
+// `Update` could have overwritten them for a local one.
+export async function getLocalActorPublicKey(db: Database, actorId: URL): Promise<Actor['publicKey'] | null> {
+	const row = await db
+		.prepare('SELECT pubkey FROM users WHERE actor_id=?1')
+		.bind(actorId.toString())
+		.first<{ pubkey: string } | null>()
+	if (!row?.pubkey) {
+		return null
+	}
+	const id = actorId.toString()
+	return { id: id + '#main-key', owner: id, publicKeyPem: row.pubkey }
+}
+
 type CreateUserParams = {
 	domain: string
 	db: Database

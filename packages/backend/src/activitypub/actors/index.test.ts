@@ -51,6 +51,24 @@ describe('Actors', () => {
 			)
 			.run()
 
+		// The served key comes from the `users` table, not from the (possibly
+		// tampered with) stored actor properties.
+		const userPubkey = '-----BEGIN PUBLIC KEY-----users-table-key-----END PUBLIC KEY-----'
+		await db
+			.prepare(
+				'INSERT INTO users (id, actor_id, email, privkey, privkey_salt, pubkey, is_admin, cdate) VALUES (?, ?, ?, ?, ?, ?, 0, ?)'
+			)
+			.bind(
+				crypto.randomUUID(),
+				`https://${domain}/ap/users/sven`,
+				'sven@cloudflare.com',
+				new Uint8Array([1, 2, 3]).buffer,
+				new Uint8Array([4, 5, 6]).buffer,
+				userPubkey,
+				new Date().toISOString()
+			)
+			.run()
+
 		const req = new Request(`https://${domain}/ap/users/sven`)
 		const res = await app.fetch(req, { DATABASE: db })
 		await assertStatus(res, 200)
@@ -66,7 +84,13 @@ describe('Actors', () => {
 		assert(isUrlValid(data.following))
 		assert(isUrlValid(data.followers))
 		assert(isUrlValid(data.featured))
-		assert.equal(data.publicKey.publicKeyPem, properties.publicKey?.publicKeyPem)
+		assert.equal(data.publicKey.publicKeyPem, userPubkey)
+		assert.equal(data.publicKey.id, `https://${domain}/ap/users/sven#main-key`)
+		// The stored collections pointed at another host and must be ignored.
+		assert.equal(data.inbox, `https://${domain}/ap/users/sven/inbox`)
+		assert.equal(data.outbox, `https://${domain}/ap/users/sven/outbox`)
+		assert.equal(data.followers, `https://${domain}/ap/users/sven/followers`)
+		assert.equal(data.following, `https://${domain}/ap/users/sven/following`)
 	})
 
 	test('sanitize Actor properties', async () => {
