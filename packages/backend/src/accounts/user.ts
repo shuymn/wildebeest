@@ -185,6 +185,24 @@ export async function getUserByEmail(db: Database, email: string): Promise<User 
 	}
 }
 
+/**
+ * Whether the connected `user` may administer the instance: either the owner, whose email is
+ * `adminEmail` (`ADMIN_EMAIL`), or a user flagged as admin.
+ */
+export async function isAdminUser(db: Database, adminEmail: string, user: User | null): Promise<boolean> {
+	if (user === null) {
+		return false
+	}
+	if (user[isAdminSymbol]) {
+		return true
+	}
+	if (!adminEmail) {
+		return false
+	}
+	const owner = await getAdminByEmail(db, adminEmail)
+	return owner !== null && owner.id.toString() === user.id.toString()
+}
+
 export async function getAdminByEmail(db: Database, email: string): Promise<User | null> {
 	const row = await query.selectUserByEmail(db, { email })
 	if (!row || !isActorRowLike(row)) {
