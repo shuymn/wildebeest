@@ -7,6 +7,7 @@ import {
 	isFollowActivity,
 	isLikeActivity,
 	isMoveActivity,
+	isRejectActivity,
 	isUndoActivity,
 	isUpdateActivity,
 } from '@wildebeest/backend/activitypub/activities'
@@ -18,6 +19,7 @@ import { handleDeleteActivity } from '@wildebeest/backend/activitypub/activities
 import { handleFollowActivity } from '@wildebeest/backend/activitypub/activities/follow'
 import { handleLikeActivity } from '@wildebeest/backend/activitypub/activities/like'
 import { handleMoveActivity } from '@wildebeest/backend/activitypub/activities/move'
+import { handleRejectActivity } from '@wildebeest/backend/activitypub/activities/reject'
 import { handleUndoActivity } from '@wildebeest/backend/activitypub/activities/undo'
 import { handleUpdateActivity } from '@wildebeest/backend/activitypub/activities/update'
 import { Database } from '@wildebeest/backend/database'
@@ -45,6 +47,9 @@ export async function handle(
 	}
 	if (isAcceptActivity(activity)) {
 		return await handleAcceptActivity(domain, activity, db)
+	}
+	if (isRejectActivity(activity)) {
+		return await handleRejectActivity(domain, activity, db)
 	}
 	if (isFollowActivity(activity)) {
 		return await handleFollowActivity(domain, activity, db, userKEK, adminEmail, vapidKeys)

@@ -47,6 +47,20 @@ export async function createNotification(
 	return row.id
 }
 
+export async function deleteFavouriteNotification(
+	db: Database,
+	fromActor: Pick<Actor, 'id'>,
+	obj: Pick<ApObject, 'id'>
+): Promise<void> {
+	const out = await db
+		.prepare(`DELETE FROM actor_notifications WHERE type = 'favourite' AND from_actor_id = ? AND object_id = ?`)
+		.bind(fromActor.id.toString(), obj.id.toString())
+		.run()
+	if (!out.success) {
+		throw new Error('SQL error: ' + out.error)
+	}
+}
+
 async function insertActorNotification(
 	db: Database,
 	type: NotificationType,
