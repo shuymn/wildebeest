@@ -273,6 +273,8 @@ describe('Create', () => {
 				id: getApId('https://example.com/note2'),
 				type: 'Note',
 				name: '<script>Dr Evil</script>',
+				summary: '<p onclick="alert(1)">cw</p>',
+				spoiler_text: '<b>spoiler</b><img src=x onerror="alert(2)">',
 				content:
 					'<div><span class="bad h-10 p-100\tu-22\r\ndt-xi e-bam mention hashtag ellipsis invisible o-bad">foo</span><br/><p><a href="blah"><b>bold</b></a></p><script>alert("evil")</script></div>',
 				attributedTo: person.id,
@@ -287,11 +289,13 @@ describe('Create', () => {
 
 		const row = await db.prepare(`SELECT * from objects`).first<{ properties: string }>()
 		assert.ok(row)
-		const { content, name } = JSON.parse(row.properties)
+		const { content, name, summary, spoiler_text } = JSON.parse(row.properties)
 		assert.equal(
 			content,
-			'<p><span class="h-10 p-100 u-22 dt-xi e-bam mention hashtag ellipsis invisible">foo</span><br/><p><a href="blah"><p>bold</p></a></p><p>alert("evil")</p></p>'
+			'<p><span class="h-10 p-100 u-22 dt-xi e-bam mention hashtag ellipsis invisible">foo</span><br /></p><p><a href="blah" rel="nofollow noopener noreferrer" target="_blank"><b>bold</b></a></p>'
 		)
-		assert.equal(name, 'Dr Evil')
+		assert.equal(name, '')
+		assert.equal(summary, '<p>cw</p>')
+		assert.equal(spoiler_text, 'spoiler')
 	})
 })

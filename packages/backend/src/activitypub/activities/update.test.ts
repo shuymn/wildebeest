@@ -127,8 +127,8 @@ describe('Update', () => {
 
 			const data = await res.json<MastodonStatusEdit[]>()
 			assert.equal(data.length, 2)
-			assert.equal(data[0].content, 'test note<p>alert("evil")</p>')
-			assert.equal(data[1].content, 'new test note<p>alert("evil")</p>')
+			assert.equal(data[0].content, 'test note')
+			assert.equal(data[1].content, 'new test note')
 			assert.notEqual(data[0].created_at, data[1].created_at)
 		}
 

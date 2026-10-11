@@ -184,7 +184,7 @@ describe('mastodon/timeline', () => {
 			assert.equal(data.length, 2)
 			assert.equal(
 				data[0].content,
-				'<p><span class="h-card"><a href="https://cloudflare.com/@sven" class="u-url mention">@<span>sven</span></a></span> a reply</p>'
+				'<p><span class="h-card"><a href="https://cloudflare.com/@sven" class="u-url mention" rel="nofollow noopener noreferrer" target="_blank">@<span>sven</span></a></span> a reply</p>'
 			)
 			assert.equal(data[0].replies_count, 0)
 			assert.equal(data[1].content, '<p>a post</p>')

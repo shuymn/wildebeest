@@ -99,6 +99,16 @@ export async function sanitizeActor(actor: Remote<Actor>): Promise<Remote<Actor>
 			actor.preferredUsername = actor.preferredUsername.substring(0, 30)
 		}
 	}
+	// profile fields (`PropertyValue`): the name is plain text, the value is HTML
+	const attachment = (actor as { attachment?: unknown }).attachment
+	if (Array.isArray(attachment)) {
+		for (const field of attachment) {
+			if (field !== null && typeof field === 'object' && field.type === 'PropertyValue') {
+				field.name = typeof field.name === 'string' ? await getTextContent(field.name) : ''
+				field.value = typeof field.value === 'string' ? await sanitizeContent(field.value) : ''
+			}
+		}
+	}
 
 	// This is mostly for testing where for convenience not all values
 	// are provided.

@@ -104,6 +104,13 @@ describe('Actors', () => {
 							summary: "it's me, Mario. <script>alert(1)</script>",
 							name: 'hi<br />hey',
 							preferredUsername: 'sven <script>alert(1)</script>',
+							attachment: [
+								{
+									type: 'PropertyValue',
+									name: '<b onclick="alert(2)">site</b>',
+									value: '<a href="javascript:alert(3)" style="x">x</a><a href="https://a.com" class="bad">a.com</a>',
+								},
+							],
 						})
 					)
 				}
@@ -114,9 +121,17 @@ describe('Actors', () => {
 
 		const actor = await fetchActor('https://example.com/actor')
 		assert.ok(actor)
-		assert.equal(actor.summary, "it's me, Mario. <p>alert(1)</p>")
+		assert.equal(actor.summary, "it's me, Mario. ")
 		assert.equal(actor.name, 'hi hey')
-		assert.equal(actor.preferredUsername, 'sven alert(1)')
+		assert.equal(actor.preferredUsername, 'sven')
+		assert.deepEqual((actor as unknown as { attachment: unknown }).attachment, [
+			{
+				type: 'PropertyValue',
+				name: 'site',
+				value:
+					'<a rel="nofollow noopener noreferrer" target="_blank">x</a><a href="https://a.com" rel="nofollow noopener noreferrer" target="_blank">a.com</a>',
+			},
+		])
 	})
 
 	test('Actor properties limits', async () => {

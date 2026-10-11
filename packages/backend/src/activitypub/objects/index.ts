@@ -12,6 +12,7 @@ import {
 } from '@wildebeest/backend/mastodon/reply_projection'
 import type { MastodonId } from '@wildebeest/backend/types'
 import { HTTPS, isGone, isNotFound, isUUID } from '@wildebeest/backend/utils'
+import { htmlToText, sanitizeHtml } from '@wildebeest/backend/utils/html'
 import { generateMastodonId } from '@wildebeest/backend/utils/id'
 import { Intersect, RequiredProps, SingleOrArray } from '@wildebeest/backend/utils/type'
 
@@ -443,8 +444,16 @@ export async function sanitizeObjectProperties<T extends ApObject>(properties: T
 	if (properties.content) {
 		properties.content = await sanitizeContent(properties.content)
 	}
+	if (properties.summary) {
+		properties.summary = await sanitizeContent(properties.summary)
+	}
 	if (properties.name) {
 		properties.name = await getTextContent(properties.name)
+	}
+	// `spoiler_text` is plain text in the Mastodon API
+	const spoilerText = (properties as { spoiler_text?: string }).spoiler_text
+	if (spoilerText) {
+		;(properties as { spoiler_text?: string }).spoiler_text = await getTextContent(spoilerText)
 	}
 	return properties
 }
@@ -452,63 +461,20 @@ export async function sanitizeObjectProperties<T extends ApObject>(properties: T
 /**
  * Sanitizes the given string as ActivityPub Object content.
  *
- * This sanitization follows that of Mastodon
- *  - convert all elements to `<p>` unless they are recognized as one of `<p>`, `<span>`, `<br>` or `<a>`.
- *  - remove all CSS classes that are not micro-formats or semantic.
+ * This sanitization follows that of Mastodon: only an allowlist of tags, attributes, CSS classes and
+ * URL schemes is kept, see {@link sanitizeHtml}.
  *
  * See https://docs.joinmastodon.org/spec/activitypub/#sanitization
  */
-export async function sanitizeContent(unsafeContent: string): Promise<string> {
-	if (unsafeContent === '') {
-		return ''
-	}
-	return await getContentRewriter().transform(new Response(unsafeContent)).text()
+export function sanitizeContent(unsafeContent: string): Promise<string> {
+	return Promise.resolve(sanitizeHtml(unsafeContent))
 }
 
 /**
  * This method removes all HTML elements from the string leaving only the text content.
  */
-export async function getTextContent(unsafeName: string): Promise<string> {
-	if (unsafeName === '') {
-		return ''
-	}
-	const rawContent = getTextContentRewriter().transform(new Response(unsafeName))
-	const text = await rawContent.text()
-	return text.trim()
-}
-
-function getContentRewriter() {
-	const contentRewriter = new HTMLRewriter()
-	contentRewriter.on('*', {
-		element(el) {
-			if (!['p', 'span', 'br', 'a'].includes(el.tagName)) {
-				const element = el as { tagName: string }
-				element.tagName = 'p'
-			}
-
-			if (el.hasAttribute('class')) {
-				const classes = el.getAttribute('class')!.split(/\s+/)
-				const sanitizedClasses = classes.filter((c) =>
-					/^(h|p|u|dt|e)-|^mention$|^hashtag$|^ellipsis$|^invisible$/.test(c)
-				)
-				el.setAttribute('class', sanitizedClasses.join(' '))
-			}
-		},
-	})
-	return contentRewriter
-}
-
-function getTextContentRewriter() {
-	const textContentRewriter = new HTMLRewriter()
-	textContentRewriter.on('*', {
-		element(el) {
-			el.removeAndKeepContent()
-			if (['p', 'br'].includes(el.tagName)) {
-				el.after(' ')
-			}
-		},
-	})
-	return textContentRewriter
+export function getTextContent(unsafeName: string): Promise<string> {
+	return Promise.resolve(htmlToText(unsafeName))
 }
 
 export async function deleteObject<T extends ApObject>(db: Database, note: T) {
