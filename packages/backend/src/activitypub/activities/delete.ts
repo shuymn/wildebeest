@@ -10,17 +10,36 @@ import {
 } from '@wildebeest/backend/activitypub/objects'
 import { Database } from '@wildebeest/backend/database'
 
+export type Tombstone = ApObject & {
+	type: 'Tombstone'
+	atomUri: string
+}
+
+/**
+ * Builds the Tombstone sent in a Delete activity. Only the object id is disclosed, never its
+ * content, as a Delete reaches actors that may no longer be able to see the object.
+ */
+export function newTombstone(objectId: string | URL): Tombstone {
+	const id = objectId.toString()
+	return { id, type: 'Tombstone', atomUri: id }
+}
+
 export async function createDeleteActivity(
 	db: Database,
 	domain: string,
 	actor: Actor,
-	object: ApObject
+	object: ApObject,
+	audience?: Pick<ApObject, 'to' | 'cc'>
 ): Promise<DeleteActivity> {
 	return await insertActivity(db, domain, actor, {
-		'@context': 'https://www.w3.org/ns/activitystreams',
+		'@context': [
+			'https://www.w3.org/ns/activitystreams',
+			{ ostatus: 'http://ostatus.org#', atomUri: 'ostatus:atomUri' },
+		],
 		type: 'Delete',
 		actor: actor.id,
 		object,
+		...(audience ? { to: audience.to, cc: audience.cc } : {}),
 	})
 }
 
