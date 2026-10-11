@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { BUILD, freshStore, migratedStore, testKernel } from './helpers'
-import { allocateLocalId, insertWithFreshId, type RandomInt, remoteId } from '../src/domain/ids'
+import { allocateLocalId, cryptoRandomInt, insertWithFreshId, type RandomInt, remoteId } from '../src/domain/ids'
 import { writeOperation } from '../src/domain/operation'
 
 const NOW = Date.parse('2026-10-12T12:34:56.789Z')
@@ -17,6 +17,15 @@ function timeOf(id: string): number {
 }
 
 describe('ID generator', () => {
+	it('draws crypto random integers only within the requested range', () => {
+		for (const max of [1, 2, 1000, 0x10000]) {
+			for (let i = 0; i < 2000; i++) {
+				const value = cryptoRandomInt(max)
+				expect(Number.isInteger(value) && value >= 0 && value < max).toBe(true)
+			}
+		}
+	})
+
 	it('produces 18-digit decimal remote IDs', () => {
 		for (const id of [
 			remoteId('2018-05-10T00:00:00Z', NOW),

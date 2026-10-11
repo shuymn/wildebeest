@@ -5,9 +5,17 @@ import type { Db } from '../db/sql'
 // Returns an integer in [0, maxExclusive).
 export type RandomInt = (maxExclusive: number) => number
 
+// Masks to the smallest power of two covering the range and draws again when the value falls outside it, so the
+// result stays uniform (modulo would bias it). maxExclusive must be in [1, 2^31].
 export const cryptoRandomInt: RandomInt = (maxExclusive) => {
-	const [value] = crypto.getRandomValues(new Uint32Array(1))
-	return (value ?? 0) % maxExclusive
+	const mask = 2 ** Math.ceil(Math.log2(maxExclusive)) - 1
+	const buffer = new Uint32Array(1)
+	for (;;) {
+		const value = (crypto.getRandomValues(buffer)[0] ?? 0) & mask
+		if (value < maxExclusive) {
+			return value
+		}
+	}
 }
 
 // IDs before this date would have fewer than 18 digits.
