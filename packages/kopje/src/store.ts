@@ -3,25 +3,25 @@ import { DurableObject } from 'cloudflare:workers'
 import { MIGRATIONS } from './db/migrations'
 import { getSetupState } from './domain/setup'
 import { StoreKernel } from './platform/store-kernel'
-import { BUILD_VERSION } from './version'
+import { buildOf, PACKAGE_VERSION } from './version'
 
 // The single source of truth of an instance: one SQLite-backed Durable Object. Every RPC takes the caller's build
-// version. Domain operations run through the kernel's gate; rescue RPCs (health, version, PITR, dump) work in
+// (the Workers version id, see version.ts). Domain operations run through the kernel's gate; rescue RPCs (health, version, PITR, dump) work in
 // every state.
 export class Store extends DurableObject<Env> {
 	readonly #kernel: StoreKernel
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env)
-		this.#kernel = new StoreKernel(ctx, { build: BUILD_VERSION, migrations: MIGRATIONS })
+		this.#kernel = new StoreKernel(ctx, { build: buildOf(env), migrations: MIGRATIONS })
 	}
 
 	health(callerBuild: string) {
 		return this.#kernel.health(callerBuild)
 	}
 
-	version(_callerBuild: string) {
-		return this.#kernel.version()
+	async version(_callerBuild: string) {
+		return { ...(await this.#kernel.version()), version: PACKAGE_VERSION }
 	}
 
 	pitrToBookmark(_callerBuild: string, bookmark: string) {

@@ -14,6 +14,7 @@ const configSchema = z.object({
 	MEDIA: binding<Env['MEDIA']>('MEDIA'),
 	IMAGES: binding<Env['IMAGES']>('IMAGES'),
 	ASSETS: binding<Env['ASSETS']>('ASSETS'),
+	CF_VERSION_METADATA: binding<Env['CF_VERSION_METADATA']>('CF_VERSION_METADATA'),
 	MAINTENANCE: z.enum(MAINTENANCE_MODES).default('off'),
 	SETUP_TOKEN: z.string().min(1).optional(),
 })

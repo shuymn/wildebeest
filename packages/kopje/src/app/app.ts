@@ -11,7 +11,8 @@ import { defaultStore, type StoreResolver } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
 
 export type AppDeps = {
-	build: string
+	// The build identity sent on every Store RPC (the Workers version id in production; tests inject one).
+	build: (env: Env) => string
 	now: () => number
 	store?: StoreResolver
 }
@@ -45,7 +46,7 @@ export function createApp({ build, now, store = defaultStore }: AppDeps) {
 	})
 
 	app.get('/health', async (c) => {
-		const report = await checkHealth(build, readConfig(c.env), () => store(c.env))
+		const report = await checkHealth(build(c.env), readConfig(c.env), () => store(c.env))
 		return c.json(report, report.ok ? 200 : 503)
 	})
 

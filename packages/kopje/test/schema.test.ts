@@ -2,10 +2,9 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { freshStore } from './helpers'
+import { BUILD, freshStore } from './helpers'
 import { MIGRATIONS } from '../src/db/migrations'
 import { StoreKernel } from '../src/platform/store-kernel'
-import { BUILD_VERSION } from '../src/version'
 
 const LOCAL = '100000000000000001'
 const REMOTE = '100000000000000002'
@@ -21,7 +20,7 @@ function count(sql: SqlStorage, table: string): number {
 async function migrated(): Promise<ReturnType<typeof freshStore>> {
 	const store = freshStore()
 	await runInDurableObject(store, (_instance, state) =>
-		new StoreKernel(state, { build: BUILD_VERSION, migrations: MIGRATIONS, log: () => {} }).upgrade()
+		new StoreKernel(state, { build: BUILD, migrations: MIGRATIONS, log: () => {} }).upgrade()
 	)
 	return store
 }

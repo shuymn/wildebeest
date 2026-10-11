@@ -1,10 +1,10 @@
 import { createApp } from './app/app'
 import { handleQueue } from './jobs/queue'
-import { BUILD_VERSION } from './version'
+import { buildOf } from './version'
 
 export { Store } from './store'
 
-const app = createApp({ build: BUILD_VERSION, now: () => Date.now() })
+const app = createApp({ build: buildOf, now: () => Date.now() })
 
 export default {
 	fetch: (request, env, ctx) => app.fetch(request, env, ctx),

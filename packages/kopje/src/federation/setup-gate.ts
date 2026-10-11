@@ -15,9 +15,9 @@ export const FEDERATION_PATHS = [
 	'/inbox',
 ]
 
-export function requireSetup(build: string, store: StoreResolver) {
+export function requireSetup(build: (env: Env) => string, store: StoreResolver) {
 	return createMiddleware<{ Bindings: Env }>(async (c, next) => {
-		const { complete } = await callStore(() => store(c.env).setupState(build))
+		const { complete } = await callStore(() => store(c.env).setupState(build(c.env)))
 		if (!complete) {
 			return c.json({ error: 'This server has not been set up yet' }, 503)
 		}

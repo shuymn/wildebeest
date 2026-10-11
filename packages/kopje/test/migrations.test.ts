@@ -2,12 +2,11 @@ import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { freshStore, rejectionOf, tableNames } from './helpers'
+import { BUILD, freshStore, rejectionOf, tableNames } from './helpers'
 import { MIGRATIONS } from '../src/db/migrations'
 import { readOperation, writeOperation } from '../src/domain/operation'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
 import { type Migration, StoreKernel } from '../src/platform/store-kernel'
-import { BUILD_VERSION } from '../src/version'
 
 const SCHEMA_TABLES = [
 	'accounts',
@@ -55,27 +54,27 @@ function kernel(
 	migrations: readonly Migration[],
 	extra: Partial<{ build: string; transaction: <T>(fn: () => T) => T }> = {}
 ) {
-	return new StoreKernel(state, { build: BUILD_VERSION, migrations, log: () => {}, ...extra })
+	return new StoreKernel(state, { build: BUILD, migrations, log: () => {}, ...extra })
 }
 
 describe('Store migration runner', () => {
 	it('applies the schema on a fresh Store through the alarm, never on construction', async () => {
 		const store = freshStore()
 
-		const before = await store.health(BUILD_VERSION)
+		const before = await store.health(BUILD)
 		expect(before.schema).toMatchObject({ status: 'pending', pending: ['0000_initial'], applied: [] })
 		expect(before.readonly).toBe(true)
 
 		// Detecting the pending file scheduled an immediate alarm; nothing else upgrades the schema.
-		await vi.waitFor(async () => expect((await store.health(BUILD_VERSION)).schema.status).toBe('current'))
+		await vi.waitFor(async () => expect((await store.health(BUILD)).schema.status).toBe('current'))
 		expect(await runDurableObjectAlarm(store)).toBe(false)
 
-		const after = await store.health(BUILD_VERSION)
+		const after = await store.health(BUILD)
 		expect(after.schema).toMatchObject({ status: 'current', applied: ['0000_initial'] })
 		expect(after.readonly).toBe(false)
 		expect(after.lastBookmark).toEqual(expect.any(String))
 		expect(after.databaseSize).toBeGreaterThan(0)
-		expect(await store.setupState(BUILD_VERSION)).toEqual({ complete: false })
+		expect(await store.setupState(BUILD)).toEqual({ complete: false })
 		await runInDurableObject(store, (_instance, state) => {
 			expect(tableNames(state.storage.sql)).toEqual(expect.arrayContaining([...SCHEMA_TABLES, 'kopje_migrations']))
 		})
@@ -105,13 +104,13 @@ describe('Store migration runner', () => {
 			expect(result).toMatchObject({ ok: false, reason: 'upgrade-failed', bookmark: expect.any(String) })
 			expect(bookkeeping(state.storage.sql).map((m) => m.name)).toEqual(['0000_initial'])
 			expect(tableNames(state.storage.sql)).not.toContain('half_done')
-			expect(await k.health(BUILD_VERSION)).toMatchObject({ readonly: true, hold: 'upgrade-failed' })
-			await expect(k.execute(BUILD_VERSION, countSettings, undefined)).rejects.toThrow('schema-pending')
+			expect(await k.health(BUILD)).toMatchObject({ readonly: true, hold: 'upgrade-failed' })
+			await expect(k.execute(BUILD, countSettings, undefined)).rejects.toThrow('schema-pending')
 
 			// The same build does not retry on its own; rescue RPCs keep working.
 			expect(await k.upgrade()).toMatchObject({ ok: false, detail: 'held' })
 			expect(await kernel(state, broken).version()).toEqual({
-				build: BUILD_VERSION,
+				build: BUILD,
 				expected: '0001_broken',
 				applied: '0000_initial',
 			})
@@ -147,9 +146,9 @@ describe('Store migration runner', () => {
 			expect(tableNames(state.storage.sql)).toContain('extra')
 
 			// The schema is complete but the Store stays readonly: reads pass, writes are refused.
-			expect(await k.health(BUILD_VERSION)).toMatchObject({ schema: { status: 'current' }, readonly: true })
-			expect(await k.execute(BUILD_VERSION, countSettings, undefined)).toBe(0)
-			await expect(k.execute(BUILD_VERSION, putSetting, 'domain')).rejects.toThrow('kopje-maintenance: upgrade-failed')
+			expect(await k.health(BUILD)).toMatchObject({ schema: { status: 'current' }, readonly: true })
+			expect(await k.execute(BUILD, countSettings, undefined)).toBe(0)
+			await expect(k.execute(BUILD, putSetting, 'domain')).rejects.toThrow('kopje-maintenance: upgrade-failed')
 		})
 	})
 
@@ -161,7 +160,7 @@ describe('Store migration runner', () => {
 		expect(error).toBeInstanceOf(StoreUnavailableError)
 		expect(error?.reason).toBe('version-mismatch')
 		expect(await store.health('0.0.0-other')).toMatchObject({ versionMatch: false, readonly: false })
-		expect(await store.setupState(BUILD_VERSION)).toEqual({ complete: false })
+		expect(await store.setupState(BUILD)).toEqual({ complete: false })
 	})
 
 	it('goes readonly without an upgrade alarm when an applied file was changed', async () => {
@@ -172,9 +171,9 @@ describe('Store migration runner', () => {
 			const edited = [{ name: '0000_initial', sql: `${MIGRATIONS[0]?.sql}\n-- edited` }]
 			const k = kernel(state, edited)
 
-			expect(await k.health(BUILD_VERSION)).toMatchObject({ schema: { status: 'diverged' }, readonly: true })
+			expect(await k.health(BUILD)).toMatchObject({ schema: { status: 'diverged' }, readonly: true })
 			expect(await state.storage.getAlarm()).toBeNull()
-			await expect(k.execute(BUILD_VERSION, countSettings, undefined)).rejects.toThrow('schema-diverged')
+			await expect(k.execute(BUILD, countSettings, undefined)).rejects.toThrow('schema-diverged')
 		})
 	})
 })
