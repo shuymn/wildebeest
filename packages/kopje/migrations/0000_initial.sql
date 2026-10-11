@@ -1,0 +1,378 @@
+-- Kopje Store schema 0000 (25 tables). Applied by the Store DO; never edit after release (checksummed).
+--
+-- Conventions
+--   IDs      : id is an 18-digit snowflake stored as TEXT (same value as the API ID); uri is the ActivityPub ID.
+--              Never read ids as JS numbers. notifications and edge tables use INTEGER ids (paging cursors only).
+--   Local    : accounts.domain IS NULL marks a local row. Local rows are authoritative in columns and have no raw.
+--              raw (received JSON) exists only on remote copies.
+--   Time     : domain timestamps are ISO 8601 UTC TEXT ('YYYY-MM-DDTHH:MM:SS.sssZ').
+--              Queue-like tables (outbound_activities, deliveries, inbound_retractions, inbound_spool, fedify_kv)
+--              use INTEGER epoch ms.
+--   FKs      : SQLite FKs are always on (foreign_keys = OFF has no effect on D1 or DO). Never rebuild a parent table
+--              (child rows would silently CASCADE away). Every child FK column is indexed, except
+--              outbound_activities.account_id (the table only holds pending rows).
+--              Rows only local users own reference local_accounts, so locality is enforced by the FK.
+--   Legacy   : legacy_id (old API ID) and legacy_ap_o (uuid of an old /ap/o/<uuid>) are filled by migration only.
+
+-- ============================================================
+-- Actors
+-- ============================================================
+
+CREATE TABLE accounts (
+  id TEXT NOT NULL PRIMARY KEY CHECK (length(id) = 18 AND id NOT GLOB '*[^0-9]*'),
+  uri TEXT NOT NULL UNIQUE,                       -- AP actor ID. Local: https://DOMAIN/ap/users/<handle>
+  username TEXT NOT NULL,                         -- preferredUsername, case as received
+  domain TEXT CHECK (domain IS NULL OR domain = lower(domain)),
+  actor_type TEXT NOT NULL DEFAULT 'Person',      -- Person / Service / Group ... (open set, no CHECK)
+  display_name TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',                  -- sanitized HTML
+  url TEXT,                                       -- remote profile URL; derived for local rows
+  avatar_url TEXT,
+  header_url TEXT,
+  locked INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+  discoverable INTEGER CHECK (discoverable IN (0, 1)),
+  inbox_url TEXT,
+  shared_inbox_url TEXT,
+  followers_count INTEGER NOT NULL DEFAULT 0,
+  following_count INTEGER NOT NULL DEFAULT 0,
+  statuses_count INTEGER NOT NULL DEFAULT 0,
+  raw TEXT CHECK (raw IS NULL OR json_valid(raw)),
+  fetched_at TEXT,                                -- last remote fetch (refetched asynchronously after 24h)
+  search_text TEXT,                               -- NFKC, lowercased, whitespace-collapsed; matched with instr
+  legacy_id TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  CHECK (domain IS NOT NULL OR (raw IS NULL AND fetched_at IS NULL))
+);
+
+CREATE INDEX accounts_domain_username ON accounts (domain, lower(username));
+CREATE UNIQUE INDEX accounts_local_username ON accounts (lower(username)) WHERE domain IS NULL;
+CREATE UNIQUE INDEX accounts_legacy_id ON accounts (legacy_id) WHERE legacy_id IS NOT NULL;
+
+CREATE TABLE local_accounts (
+  account_id TEXT NOT NULL PRIMARY KEY REFERENCES accounts (id) ON DELETE RESTRICT,
+  email TEXT NOT NULL UNIQUE,
+  privkey BLOB NOT NULL,                          -- private key wrapped with the KEK
+  privkey_salt BLOB NOT NULL,
+  pubkey TEXT NOT NULL,                           -- authoritative; the actor document's publicKey derives from it
+  also_known_as TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(also_known_as) AND json_type(also_known_as) = 'array'),
+  default_visibility TEXT NOT NULL DEFAULT 'public' CHECK (default_visibility IN ('public', 'unlisted', 'private', 'direct')),
+  default_sensitive INTEGER NOT NULL DEFAULT 0 CHECK (default_sensitive IN (0, 1)),
+  default_language TEXT,
+  suspended_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- ============================================================
+-- Statuses (a boost is a row with reblog_of_id)
+-- ============================================================
+
+CREATE TABLE statuses (
+  id TEXT NOT NULL PRIMARY KEY CHECK (length(id) = 18 AND id NOT GLOB '*[^0-9]*'),
+  uri TEXT NOT NULL UNIQUE,                       -- local: https://DOMAIN/ap/o/<uuid>; remote: original ID; boost: Announce ID
+  url TEXT,
+  account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+  reblog_of_id TEXT REFERENCES statuses (id) ON DELETE CASCADE,
+  in_reply_to_uri TEXT,                           -- kept even while unresolved
+  in_reply_to_id TEXT REFERENCES statuses (id) ON DELETE SET NULL,
+  visibility TEXT NOT NULL CHECK (visibility IN ('public', 'unlisted', 'private', 'direct', 'limited')),  -- full Mastodon set; limited is exposed as private
+  spoiler_text TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',               -- sanitized HTML
+  source_text TEXT,                               -- local only
+  sensitive INTEGER NOT NULL DEFAULT 0 CHECK (sensitive IN (0, 1)),
+  language TEXT,
+  published_at TEXT NOT NULL,
+  edited_at TEXT,
+  replies_count INTEGER NOT NULL DEFAULT 0,
+  reblogs_count INTEGER NOT NULL DEFAULT 0,
+  favourites_count INTEGER NOT NULL DEFAULT 0,
+  client_key TEXT,                                -- Idempotency-Key (local only)
+  raw TEXT CHECK (raw IS NULL OR json_valid(raw)),
+  search_text TEXT,
+  legacy_id TEXT,
+  legacy_ap_o TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),  -- when the row was received (GC age)
+  CHECK (reblog_of_id IS NULL OR (reblog_of_id <> id AND in_reply_to_uri IS NULL AND content = '')),
+  CHECK (in_reply_to_id IS NULL OR in_reply_to_uri IS NOT NULL)
+);
+
+CREATE INDEX statuses_account ON statuses (account_id, id);
+-- feeds; queries repeat the same WHERE expression
+CREATE INDEX statuses_feed ON statuses (account_id, id) WHERE visibility IN ('public', 'unlisted', 'private');
+CREATE UNIQUE INDEX statuses_reblog ON statuses (reblog_of_id, account_id) WHERE reblog_of_id IS NOT NULL;
+CREATE INDEX statuses_in_reply_to ON statuses (in_reply_to_id) WHERE in_reply_to_id IS NOT NULL;
+CREATE INDEX statuses_unresolved_reply ON statuses (in_reply_to_uri) WHERE in_reply_to_id IS NULL AND in_reply_to_uri IS NOT NULL;
+CREATE UNIQUE INDEX statuses_client_key ON statuses (account_id, client_key) WHERE client_key IS NOT NULL;
+CREATE UNIQUE INDEX statuses_legacy_id ON statuses (legacy_id) WHERE legacy_id IS NOT NULL;
+CREATE UNIQUE INDEX statuses_legacy_ap_o ON statuses (legacy_ap_o) WHERE legacy_ap_o IS NOT NULL;
+
+CREATE TABLE status_edits (
+  id INTEGER PRIMARY KEY,
+  status_id TEXT NOT NULL REFERENCES statuses (id) ON DELETE CASCADE,
+  content TEXT NOT NULL DEFAULT '',
+  spoiler_text TEXT NOT NULL DEFAULT '',
+  sensitive INTEGER NOT NULL DEFAULT 0 CHECK (sensitive IN (0, 1)),
+  media_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(media_json)),
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX status_edits_status ON status_edits (status_id, id);
+
+CREATE TABLE media_attachments (
+  id TEXT NOT NULL PRIMARY KEY CHECK (length(id) = 18 AND id NOT GLOB '*[^0-9]*'),
+  account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+  status_id TEXT REFERENCES statuses (id) ON DELETE CASCADE,  -- NULL: uploaded, not attached yet
+  position INTEGER NOT NULL DEFAULT 0,
+  type TEXT NOT NULL CHECK (type IN ('image', 'gifv', 'video', 'audio', 'unknown')),
+  url TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  legacy_ap_o TEXT,                               -- uuid of the old local Image /ap/o/<uuid>
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX media_attachments_status ON media_attachments (status_id, position) WHERE status_id IS NOT NULL;
+CREATE INDEX media_attachments_account ON media_attachments (account_id);
+CREATE UNIQUE INDEX media_attachments_legacy_ap_o ON media_attachments (legacy_ap_o) WHERE legacy_ap_o IS NOT NULL;
+
+CREATE TABLE status_mentions (
+  status_id TEXT NOT NULL REFERENCES statuses (id) ON DELETE CASCADE,
+  account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+  silent INTEGER NOT NULL DEFAULT 0 CHECK (silent IN (0, 1)),  -- addressed but not tagged: used for visibility, hidden from API and notifications
+  PRIMARY KEY (status_id, account_id)
+) WITHOUT ROWID;
+
+CREATE INDEX status_mentions_account ON status_mentions (account_id, status_id);
+
+CREATE TABLE status_tags (
+  status_id TEXT NOT NULL REFERENCES statuses (id) ON DELETE CASCADE,
+  name TEXT NOT NULL,                             -- normalized (NFKC, lowercase)
+  PRIMARY KEY (status_id, name)
+) WITHOUT ROWID;
+
+CREATE INDEX status_tags_name ON status_tags (name, status_id);
+
+-- ============================================================
+-- Edges (federated ones keep the sent/received activity ID in uri)
+-- ============================================================
+
+CREATE TABLE follows (
+  id INTEGER PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+  target_account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'accepted')),
+  uri TEXT,                                       -- Follow activity ID (may be NULL in migrated data)
+  show_reblogs INTEGER NOT NULL DEFAULT 1 CHECK (show_reblogs IN (0, 1)),
+  notify INTEGER NOT NULL DEFAULT 0 CHECK (notify IN (0, 1)),
+  languages TEXT CHECK (languages IS NULL OR json_valid(languages)),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  CHECK (account_id <> target_account_id)
+);
+
+CREATE UNIQUE INDEX follows_pair ON follows (account_id, target_account_id);
+CREATE INDEX follows_target ON follows (target_account_id, state);
+
+CREATE TABLE favourites (
+  id INTEGER PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+  status_id TEXT NOT NULL REFERENCES statuses (id) ON DELETE CASCADE,
+  uri TEXT,                                       -- Like activity ID
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE UNIQUE INDEX favourites_pair ON favourites (status_id, account_id);
+CREATE INDEX favourites_account ON favourites (account_id, id);
+
+CREATE TABLE bookmarks (
+  id INTEGER PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES local_accounts (account_id) ON DELETE CASCADE,
+  status_id TEXT NOT NULL REFERENCES statuses (id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE UNIQUE INDEX bookmarks_pair ON bookmarks (status_id, account_id);
+CREATE INDEX bookmarks_account ON bookmarks (account_id, id);
+
+CREATE TABLE blocks (
+  id INTEGER PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+  target_account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+  uri TEXT,                                       -- Block activity ID
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  CHECK (account_id <> target_account_id)
+);
+
+CREATE UNIQUE INDEX blocks_pair ON blocks (account_id, target_account_id);
+CREATE INDEX blocks_target ON blocks (target_account_id, account_id);
+
+CREATE TABLE mutes (
+  id INTEGER PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES local_accounts (account_id) ON DELETE CASCADE,
+  target_account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+  hide_notifications INTEGER NOT NULL DEFAULT 1 CHECK (hide_notifications IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  CHECK (account_id <> target_account_id)
+);
+
+CREATE UNIQUE INDEX mutes_pair ON mutes (account_id, target_account_id);
+CREATE INDEX mutes_target ON mutes (target_account_id);
+
+CREATE TABLE domain_blocks (
+  id INTEGER PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES local_accounts (account_id) ON DELETE CASCADE,
+  domain TEXT NOT NULL CHECK (domain = lower(domain)),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE UNIQUE INDEX domain_blocks_pair ON domain_blocks (account_id, domain);
+
+CREATE TABLE lists (
+  id TEXT NOT NULL PRIMARY KEY CHECK (length(id) = 18 AND id NOT GLOB '*[^0-9]*'),
+  account_id TEXT NOT NULL REFERENCES local_accounts (account_id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  replies_policy TEXT NOT NULL DEFAULT 'list' CHECK (replies_policy IN ('followed', 'list', 'none')),
+  exclusive INTEGER NOT NULL DEFAULT 0 CHECK (exclusive IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX lists_account ON lists (account_id);
+
+CREATE TABLE list_accounts (
+  list_id TEXT NOT NULL REFERENCES lists (id) ON DELETE CASCADE,
+  account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+  PRIMARY KEY (list_id, account_id)
+) WITHOUT ROWID;
+
+CREATE INDEX list_accounts_account ON list_accounts (account_id, list_id);
+
+-- ============================================================
+-- Notifications
+-- ============================================================
+
+CREATE TABLE notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,           -- keeps migrated ids; clients hold them
+  account_id TEXT NOT NULL REFERENCES local_accounts (account_id) ON DELETE CASCADE,  -- recipient
+  type TEXT NOT NULL,                             -- open set, no CHECK
+  from_account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+  status_id TEXT REFERENCES statuses (id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- natural key: write with INSERT ... ON CONFLICT DO NOTHING RETURNING id; push only when a row is returned
+CREATE UNIQUE INDEX notifications_natural ON notifications (account_id, type, from_account_id, IFNULL(status_id, ''));
+CREATE INDEX notifications_account ON notifications (account_id, id);
+CREATE INDEX notifications_from ON notifications (from_account_id);
+CREATE INDEX notifications_status ON notifications (status_id) WHERE status_id IS NOT NULL;
+
+-- ============================================================
+-- Delivery and inbound
+-- ============================================================
+
+-- Pending outbound activities. Deleted in the same transaction as their last deliveries row.
+CREATE TABLE outbound_activities (
+  id INTEGER PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES local_accounts (account_id) ON DELETE CASCADE,  -- signer
+  body TEXT NOT NULL CHECK (json_valid(body)),
+  created_at INTEGER NOT NULL
+);
+
+-- Per-inbox delivery state. For leased rows next_attempt_at doubles as the lease deadline.
+CREATE TABLE deliveries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,           -- never reused, so a late completion cannot hit another row
+  activity_id INTEGER NOT NULL REFERENCES outbound_activities (id) ON DELETE CASCADE,
+  account_id TEXT NOT NULL,                       -- lane key (sender)
+  inbox_url TEXT NOT NULL,                        -- lane key
+  state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'leased', 'done', 'gave_up')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER NOT NULL,
+  lease_token TEXT,
+  last_status INTEGER,
+  last_error TEXT,
+  updated_at INTEGER NOT NULL,
+  CHECK ((state = 'leased') = (lease_token IS NOT NULL))
+);
+
+CREATE INDEX deliveries_lane ON deliveries (account_id, inbox_url, id) WHERE state IN ('pending', 'leased');
+CREATE INDEX deliveries_due ON deliveries (next_attempt_at) WHERE state IN ('pending', 'leased');
+CREATE INDEX deliveries_activity ON deliveries (activity_id);
+
+-- Retraction records: Undo/Delete targets kept per (actor, ID) for 30 days.
+CREATE TABLE inbound_retractions (
+  actor_uri TEXT NOT NULL,
+  target_uri TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  PRIMARY KEY (actor_uri, target_uri)
+) WITHOUT ROWID;
+
+CREATE INDEX inbound_retractions_expires ON inbound_retractions (expires_at);
+
+-- Parts of inbox requests spooled during maintenance that did not fit one Queue message.
+-- Assembled on replay once all parts are present and deleted with the replay result; incomplete
+-- sets older than the Queue retention are purged by scheduled. A rowid table because fragments are large.
+CREATE TABLE inbound_spool (
+  spool_id TEXT NOT NULL,
+  part INTEGER NOT NULL CHECK (part >= 0),
+  part_count INTEGER NOT NULL CHECK (part_count > 0 AND part < part_count),
+  fragment BLOB NOT NULL,                         -- deflated bytes
+  spooled_at INTEGER NOT NULL,
+  PRIMARY KEY (spool_id, part)
+);
+
+CREATE INDEX inbound_spool_spooled_at ON inbound_spool (spooled_at);
+
+-- Fedify KvStore (key cache, remote documents, activity idempotency).
+CREATE TABLE fedify_kv (
+  key TEXT NOT NULL PRIMARY KEY CHECK (json_valid(key) AND json_type(key) = 'array'),
+  value TEXT NOT NULL CHECK (json_valid(value)),
+  expires_at INTEGER CHECK (expires_at IS NULL OR expires_at > 0)
+) WITHOUT ROWID;
+
+CREATE INDEX fedify_kv_expires_at ON fedify_kv (expires_at) WHERE expires_at IS NOT NULL;
+
+-- ============================================================
+-- Clients and settings
+-- ============================================================
+
+CREATE TABLE oauth_clients (
+  id TEXT NOT NULL PRIMARY KEY,                   -- client_id
+  secret TEXT NOT NULL,
+  name TEXT NOT NULL,
+  redirect_uris TEXT NOT NULL,
+  website TEXT,
+  scopes TEXT NOT NULL DEFAULT 'read',
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- Authorization codes (kind = 'code', 10 minutes, single use via DELETE ... RETURNING) and access tokens.
+-- Only sha256 of the opaque value is stored. An access row with NULL account_id is an app token.
+CREATE TABLE oauth_tokens (
+  token_hash TEXT NOT NULL PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('code', 'access')),
+  client_id TEXT NOT NULL REFERENCES oauth_clients (id) ON DELETE CASCADE,
+  account_id TEXT REFERENCES local_accounts (account_id) ON DELETE CASCADE,
+  scopes TEXT NOT NULL,
+  redirect_uri TEXT,
+  code_challenge TEXT,                            -- optional PKCE, S256 only
+  expires_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  CHECK (kind = 'access' OR (account_id IS NOT NULL AND redirect_uri IS NOT NULL AND expires_at IS NOT NULL))
+) WITHOUT ROWID;
+
+CREATE INDEX oauth_tokens_account ON oauth_tokens (account_id);
+CREATE INDEX oauth_tokens_client ON oauth_tokens (client_id);
+
+-- Web Push subscriptions, one per access token (removed with revoke and suspension).
+CREATE TABLE push_subscriptions (
+  id INTEGER PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE REFERENCES oauth_tokens (token_hash) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL,
+  key_p256dh TEXT NOT NULL,
+  key_auth TEXT NOT NULL,
+  alerts TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(alerts)),
+  policy TEXT NOT NULL DEFAULT 'all' CHECK (policy IN ('all', 'followed', 'follower', 'none')),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- The only settings store; env only supplies defaults. Server rules live at name = 'rules' as a JSON array.
+CREATE TABLE instance_settings (
+  name TEXT NOT NULL PRIMARY KEY,
+  value TEXT NOT NULL
+) WITHOUT ROWID;
