@@ -23,12 +23,13 @@ export default {
 		const sentry = initSentryQueue(env, ctx)
 		const db = getDatabase(env)
 
-		try {
-			for (const message of batch.messages) {
+		for (const message of batch.messages) {
+			try {
 				const actor = await actors.getActorById(db, new URL(message.body.actorId))
 				if (actor === null) {
 					console.warn(`actor ${message.body.actorId} is missing`)
-					return
+					message.ack()
+					continue
 				}
 
 				switch (message.body.type) {
@@ -48,15 +49,16 @@ export default {
 					default:
 						throw new Error(`unsupported message type: ${String(message.body.type)}`)
 				}
+				message.ack()
+			} catch (err) {
+				if (sentry !== null) {
+					sentry.captureException(err)
+				}
+				if (err instanceof Error) {
+					console.error(err.stack, err.cause)
+				}
+				message.retry()
 			}
-		} catch (err) {
-			if (sentry !== null) {
-				sentry.captureException(err)
-			}
-			if (err instanceof Error) {
-				console.error(err.stack, err.cause)
-			}
-			throw err
 		}
 	},
 }
