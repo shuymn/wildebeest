@@ -1,9 +1,10 @@
 import { strict as assert } from 'node:assert/strict'
 
 import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
+import { authorizeInboundActivity } from '@wildebeest/backend/activitypub/activities/authorize'
 import * as activityHandler from '@wildebeest/backend/activitypub/activities/handle'
 import { getActorById, getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
-import { getApId, getObjectById } from '@wildebeest/backend/activitypub/objects'
+import { getApId, getObjectById, isLocalObject } from '@wildebeest/backend/activitypub/objects'
 import type { Database } from '@wildebeest/backend/database'
 import { addFollowing } from '@wildebeest/backend/mastodon/follow'
 import { createPublicStatus } from '@wildebeest/backend/test/shared.utils'
@@ -136,6 +137,59 @@ describe('Inbound activity authorization', () => {
 		)
 
 		assert.equal(await countObjects(db), 1)
+	})
+
+	test('Delete of an object on another port of the signer host is ignored', async () => {
+		const db = makeDB()
+		const actorId = 'https://example.com/actor'
+		const objectId = 'https://example.com:8443/note1'
+
+		// Same hostname as the signer, but another origin.
+		await db
+			.prepare(
+				'INSERT INTO objects (id, type, properties, original_actor_id, original_object_id, local, mastodon_id) VALUES (?, ?, ?, ?, ?, 0, ?)'
+			)
+			.bind(
+				'https://cloudflare.com/ap/o/1',
+				'Note',
+				JSON.stringify({ id: objectId, type: 'Note', content: 'x', to: [PUBLIC_GROUP], cc: [] }),
+				actorId,
+				objectId,
+				'mastodonid1'
+			)
+			.run()
+
+		await activityHandler.handle(
+			domain,
+			{
+				type: 'Delete',
+				id: getApId('https://example.com/activities/3'),
+				actor: getApId(actorId),
+				object: getApId(objectId),
+			},
+			db,
+			userKEK,
+			adminEmail,
+			vapidKeys
+		)
+
+		assert.equal(await countObjects(db), 1)
+	})
+
+	test('Undo of an activity id on another port of the signer host is denied', () => {
+		const result = authorizeInboundActivity(domain, {
+			type: 'Undo',
+			id: getApId('https://example.com/activities/5'),
+			actor: getApId('https://example.com/actor'),
+			object: getApId('https://example.com:8443/activities/1'),
+		})
+		assert.equal(result.authorized, false)
+	})
+
+	test('only the instance origin is local', () => {
+		assert.equal(isLocalObject(domain, new URL('https://cloudflare.com/ap/o/1')), true)
+		assert.equal(isLocalObject(domain, new URL('https://cloudflare.com:8443/ap/o/1')), false)
+		assert.equal(isLocalObject(domain, new URL('http://cloudflare.com/ap/o/1')), false)
 	})
 
 	test('Create whose object is attributed to another actor is ignored', async () => {

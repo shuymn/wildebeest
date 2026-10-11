@@ -48,7 +48,7 @@ function belongsToActor(object: ApObjectOrId, objectId: URL, actorId: URL): Auth
 				: deny(`object is attributed to ${attributedTo.toString()}, not to the signer`)
 		}
 	}
-	return objectId.hostname === actorId.hostname
+	return objectId.origin === actorId.origin
 		? AUTHORIZED
 		: deny(`object ${objectId.toString()} is not from the signer's origin`)
 }
@@ -113,7 +113,7 @@ function authorizeUndo(_domain: string, activity: Activity, actorId: URL): Autho
 	if (objectId === null) {
 		return deny('activity has no object id')
 	}
-	return objectId.hostname === actorId.hostname ? AUTHORIZED : deny('undone activity is not from the signer`s origin')
+	return objectId.origin === actorId.origin ? AUTHORIZED : deny('undone activity is not from the signer`s origin')
 }
 
 // Move of the actor itself.

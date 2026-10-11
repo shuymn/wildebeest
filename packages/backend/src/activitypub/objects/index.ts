@@ -495,6 +495,9 @@ export async function deleteObject<T extends ApObject>(db: Database, note: T) {
 	}
 }
 
+// Local objects are served from the instance origin: `https://${domain}`, on the
+// default port. Comparing the hostname alone would also accept other schemes
+// and ports of the same host.
 export function isLocalObject(domain: string, id: URL): boolean {
-	return id.hostname === domain
+	return id.origin === new URL(HTTPS + domain).origin
 }

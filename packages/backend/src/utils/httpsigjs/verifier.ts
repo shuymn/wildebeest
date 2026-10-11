@@ -63,8 +63,8 @@ function parseUrl(value: string | undefined): URL | null {
 
 // Resolve `keyId` to the actor that owns it and return that actor's key.
 //
-// The owner is only trusted when it is served from the same origin as the
-// `keyId` and when the owner actor itself claims `keyId` as its `publicKey.id`:
+// The owner is only trusted when it is served from the same origin (scheme, host and
+// port) as the `keyId` and when the owner actor itself claims `keyId` as its `publicKey.id`:
 // otherwise any server could claim to hold the key of any actor.
 export async function fetchKeyOwner(parsedSignature: ParsedSignature): Promise<SignatureKeyOwner | null> {
 	const keyId = parsedSignature.keyId
@@ -90,8 +90,8 @@ export async function fetchKeyOwner(parsedSignature: ParsedSignature): Promise<S
 		console.warn(`document at "${keyId}" is neither an actor nor a key with an owner`)
 		return null
 	}
-	if (ownerUrl.hostname !== keyIdUrl.hostname) {
-		console.warn(`key "${keyId}" claims an owner on another host`)
+	if (ownerUrl.origin !== keyIdUrl.origin) {
+		console.warn(`key "${keyId}" claims an owner on another origin`)
 		return null
 	}
 
@@ -112,8 +112,8 @@ async function keyOwnerFromActor(actor: KeyDocument, keyId: string, keyIdUrl: UR
 		console.warn(`actor owning key "${keyId}" has no id`)
 		return null
 	}
-	if (ownerId.hostname !== keyIdUrl.hostname) {
-		console.warn(`key "${keyId}" is not served by the host of its owner`)
+	if (ownerId.origin !== keyIdUrl.origin) {
+		console.warn(`key "${keyId}" is not served by the origin of its owner`)
 		return null
 	}
 	if (actor.publicKey?.id !== keyId) {

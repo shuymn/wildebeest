@@ -181,6 +181,66 @@ describe('Inbox', () => {
 		assert.equal(queue.messages.length, 0)
 	})
 
+	test('actor document served from another port of the same host is rejected', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		const keyId = new URL(`https://${domain}:8443/key`)
+
+		// Same hostname as the actor, but another origin.
+		globalThis.fetch = async (input) => {
+			if (input instanceof URL || typeof input === 'string') {
+				if (input.toString() === keyId.toString()) {
+					return new Response(
+						JSON.stringify({
+							id: actor.id.toString(),
+							type: 'Person',
+							publicKey: { ...actor.publicKey, id: keyId.toString(), owner: actor.id.toString() },
+						})
+					)
+				}
+				throw new Error(`unexpected request to "${input.toString()}"`)
+			}
+			throw new Error('unexpected request to ' + input.url)
+		}
+
+		const queue = makeQueueSpy()
+		const req = await signedInboxRequest(db, actor, 'sven', { type: 'Follow', actor: actor.id.toString() }, { keyId })
+		const res = await app.fetch(req, makeEnv(db, queue))
+		await assertStatus(res, 401)
+		assert.equal(queue.messages.length, 0)
+	})
+
+	test('standalone key document on another port of the owner host is rejected', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		const keyId = new URL(`https://${domain}:8443/key`)
+
+		globalThis.fetch = async (input) => {
+			if (input instanceof URL || typeof input === 'string') {
+				if (input.toString() === keyId.toString()) {
+					return new Response(JSON.stringify({ ...actor.publicKey, id: keyId.toString(), owner: actor.id.toString() }))
+				}
+				if (input.toString() === actor.id.toString()) {
+					return new Response(
+						JSON.stringify({
+							id: actor.id.toString(),
+							type: 'Person',
+							publicKey: { ...actor.publicKey, id: keyId.toString(), owner: actor.id.toString() },
+						})
+					)
+				}
+				throw new Error(`unexpected request to "${input.toString()}"`)
+			}
+			throw new Error('unexpected request to ' + input.url)
+		}
+
+		const queue = makeQueueSpy()
+		const req = await signedInboxRequest(db, actor, 'sven', { type: 'Follow', actor: actor.id.toString() }, { keyId })
+		const res = await app.fetch(req, makeEnv(db, queue))
+		await assertStatus(res, 401)
+		assert.equal(queue.messages.length, 0)
+	})
+
 	test('standalone key document is resolved through its owner', async () => {
 		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
