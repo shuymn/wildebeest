@@ -1,6 +1,8 @@
 import { strict as assert } from 'node:assert/strict'
 
 import app from '@wildebeest/backend'
+import type { Actor } from '@wildebeest/backend/activitypub/actors'
+import type { Database } from '@wildebeest/backend/database'
 import { getSigningKey } from '@wildebeest/backend/mastodon/account'
 import { assertStatus, createTestUser, makeDB } from '@wildebeest/backend/test/utils'
 import { MessageType } from '@wildebeest/backend/types'
@@ -12,85 +14,277 @@ const userKEK = 'test_kek5'
 const vapidKeys = {} as JWK
 const domain = 'cloudflare.com'
 
+function actorDocument(actor: Actor): string {
+	return JSON.stringify({
+		id: actor.id.toString(),
+		type: actor.type,
+		preferredUsername: actor.preferredUsername,
+		publicKey: { ...actor.publicKey, id: `${actor.id.toString()}#main-key`, owner: actor.id.toString() },
+	})
+}
+
+// Serve each actor's own document at its key id, the way Mastodon/Misskey do.
+function mockKeyFetch(...actors: Actor[]): void {
+	globalThis.fetch = async (input) => {
+		if (input instanceof URL || typeof input === 'string') {
+			const url = input.toString()
+			for (const actor of actors) {
+				if (url === `${actor.id.toString()}#main-key` || url === actor.id.toString()) {
+					return new Response(actorDocument(actor))
+				}
+			}
+			throw new Error(`unexpected request to "${url}"`)
+		}
+		throw new Error('unexpected request to ' + input.url)
+	}
+}
+
+type QueueSpy = { messages: any[] } & { send(v: any): Promise<void>; sendBatch(): Promise<void> }
+
+function makeQueueSpy(): QueueSpy {
+	const messages: any[] = []
+	return {
+		messages,
+		async send(v: any) {
+			messages.push(v)
+		},
+		async sendBatch() {
+			throw new Error('unimplemented')
+		},
+	}
+}
+
+async function signedInboxRequest(
+	db: Database,
+	signer: Actor,
+	localHandle: string,
+	activity: unknown,
+	{ keyId, digest }: { keyId?: URL; digest?: string } = {}
+): Promise<Request> {
+	const body = JSON.stringify(activity)
+	const req = new Request(`https://${domain}/ap/users/${localHandle}/inbox`, {
+		method: 'POST',
+		body,
+		headers: { Digest: digest ?? (await generateDigestHeader(body)) },
+	})
+	const signingKey = await getSigningKey(userKEK, db, signer)
+	await signRequest(req, signingKey, keyId ?? new URL(`${signer.id.toString()}#main-key`))
+	return req
+}
+
+function makeEnv(db: Database, queue: unknown) {
+	return { DATABASE: db, QUEUE: queue, userKEK, VAPID_JWK: JSON.stringify(vapidKeys) }
+}
+
 describe('Inbox', () => {
 	test('send Note to non existent user', async () => {
 		const db = makeDB()
 		const connectedActor = await createTestUser(domain, db, userKEK, 'someone@example.com')
+		mockKeyFetch(connectedActor)
 
-		globalThis.fetch = async (input) => {
-			if (input instanceof URL || typeof input === 'string') {
-				if (input.toString() === connectedActor.id.toString()) {
-					return new Response(JSON.stringify({ publicKey: connectedActor.publicKey }))
-				}
-				throw new Error(`unexpected request to "${input.toString()}"`)
-			}
-			throw new Error('unexpected request to ' + input.url)
-		}
-
-		const queue = {
-			async send() {
-				return
-			},
-			async sendBatch() {
-				throw new Error('unimplemented')
-			},
-		}
-
-		const body = JSON.stringify({})
-		const req = new Request(`https://${domain}/ap/users/sven/inbox`, {
-			method: 'POST',
-			body,
-			headers: {
-				Digest: await generateDigestHeader(body),
-			},
-		})
-		const signingKey = await getSigningKey(userKEK, db, connectedActor)
-		await signRequest(req, signingKey, new URL(connectedActor.id))
-		const res = await app.fetch(req, { DATABASE: db, QUEUE: queue, userKEK, VAPID_JWK: JSON.stringify(vapidKeys) })
+		const queue = makeQueueSpy()
+		const req = await signedInboxRequest(db, connectedActor, 'sven', { actor: connectedActor.id.toString() })
+		const res = await app.fetch(req, makeEnv(db, queue))
 		await assertStatus(res, 404)
 	})
 
 	test('send activity sends message in queue', async () => {
 		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		mockKeyFetch(actor)
 
+		const queue = makeQueueSpy()
+		const req = await signedInboxRequest(db, actor, 'sven', {
+			type: 'some activity',
+			actor: actor.id.toString(),
+		})
+		const res = await app.fetch(req, makeEnv(db, queue))
+		await assertStatus(res, 200)
+
+		assert.equal(queue.messages.length, 1)
+		const msg = queue.messages[0]
+		assert.equal(msg.type, MessageType.Inbox)
+		assert.equal(msg.actorId, actor.id.toString())
+		assert.equal(msg.activity.type, 'some activity')
+		// The verified key owner travels with the message.
+		assert.equal(msg.signerId, actor.id.toString())
+	})
+
+	test('activity signed by another actor is rejected', async () => {
+		const db = makeDB()
+		const recipient = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		const signer = await createTestUser(domain, db, userKEK, 'a@cloudflare.com', { preferredUsername: 'a' })
+		const impersonated = await createTestUser(domain, db, userKEK, 'b@cloudflare.com', { preferredUsername: 'b' })
+		mockKeyFetch(recipient, signer, impersonated)
+
+		const queue = makeQueueSpy()
+		// Signed with A's key, but claims to come from B.
+		const req = await signedInboxRequest(db, signer, 'sven', {
+			type: 'Follow',
+			actor: impersonated.id.toString(),
+			object: recipient.id.toString(),
+		})
+		const res = await app.fetch(req, makeEnv(db, queue))
+		await assertStatus(res, 401)
+		assert.equal(queue.messages.length, 0)
+	})
+
+	test('key document whose owner does not list the key is rejected', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		const keyId = new URL(`${actor.id.toString()}#other-key`)
+
+		// The actor document advertises `#main-key`, not the key that signed.
 		globalThis.fetch = async (input) => {
 			if (input instanceof URL || typeof input === 'string') {
-				if (input.toString() === actor.id.toString()) {
-					return new Response(JSON.stringify({ publicKey: actor.publicKey }))
+				if (input.toString() === keyId.toString()) {
+					return new Response(actorDocument(actor))
 				}
 				throw new Error(`unexpected request to "${input.toString()}"`)
 			}
 			throw new Error('unexpected request to ' + input.url)
 		}
 
-		let msg: any = null
+		const queue = makeQueueSpy()
+		const req = await signedInboxRequest(db, actor, 'sven', { type: 'Follow', actor: actor.id.toString() }, { keyId })
+		const res = await app.fetch(req, makeEnv(db, queue))
+		await assertStatus(res, 401)
+		assert.equal(queue.messages.length, 0)
+	})
 
-		const queue = {
-			async send(v: any) {
-				msg = v
-			},
-			async sendBatch() {
-				throw new Error('unimplemented')
-			},
+	test('key served by a host other than its claimed owner is rejected', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		const keyId = new URL('https://evil.example/key')
+
+		// An attacker-controlled key document claiming to belong to a local actor.
+		globalThis.fetch = async (input) => {
+			if (input instanceof URL || typeof input === 'string') {
+				if (input.toString() === keyId.toString()) {
+					return new Response(
+						JSON.stringify({
+							id: actor.id.toString(),
+							type: 'Person',
+							publicKey: { ...actor.publicKey, id: keyId.toString(), owner: actor.id.toString() },
+						})
+					)
+				}
+				throw new Error(`unexpected request to "${input.toString()}"`)
+			}
+			throw new Error('unexpected request to ' + input.url)
 		}
 
-		const body = JSON.stringify({ type: 'some activity' })
-		const req = new Request(`https://${domain}/ap/users/sven/inbox`, {
-			method: 'POST',
-			body,
-			headers: {
-				Digest: await generateDigestHeader(body),
-			},
-		})
-		const signingKey = await getSigningKey(userKEK, db, actor)
-		await signRequest(req, signingKey, new URL(actor.id))
-		const res = await app.fetch(req, { DATABASE: db, QUEUE: queue, userKEK, VAPID_JWK: JSON.stringify(vapidKeys) })
-		await assertStatus(res, 200)
+		const queue = makeQueueSpy()
+		const req = await signedInboxRequest(db, actor, 'sven', { type: 'Follow', actor: actor.id.toString() }, { keyId })
+		const res = await app.fetch(req, makeEnv(db, queue))
+		await assertStatus(res, 401)
+		assert.equal(queue.messages.length, 0)
+	})
 
-		assert(msg)
-		assert.equal(msg.type, MessageType.Inbox)
-		assert.equal(msg.actorId, actor.id.toString())
-		assert.equal(msg.activity.type, 'some activity')
+	test('standalone key document is resolved through its owner', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		const keyId = new URL(`${actor.id.toString()}/main-key`)
+
+		// GoToSocial style: the key lives at its own URL and names its owner.
+		globalThis.fetch = async (input) => {
+			if (input instanceof URL || typeof input === 'string') {
+				if (input.toString() === keyId.toString()) {
+					return new Response(JSON.stringify({ ...actor.publicKey, id: keyId.toString(), owner: actor.id.toString() }))
+				}
+				if (input.toString() === actor.id.toString()) {
+					return new Response(
+						JSON.stringify({
+							id: actor.id.toString(),
+							type: 'Person',
+							publicKey: { ...actor.publicKey, id: keyId.toString(), owner: actor.id.toString() },
+						})
+					)
+				}
+				throw new Error(`unexpected request to "${input.toString()}"`)
+			}
+			throw new Error('unexpected request to ' + input.url)
+		}
+
+		const queue = makeQueueSpy()
+		const req = await signedInboxRequest(
+			db,
+			actor,
+			'sven',
+			{ type: 'some activity', actor: actor.id.toString() },
+			{ keyId }
+		)
+		const res = await app.fetch(req, makeEnv(db, queue))
+		await assertStatus(res, 200)
+		assert.equal(queue.messages.length, 1)
+		assert.equal(queue.messages[0].signerId, actor.id.toString())
+	})
+
+	test('tampered signature is rejected before the queue', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		mockKeyFetch(actor)
+
+		const queue = makeQueueSpy()
+		const req = await signedInboxRequest(db, actor, 'sven', { type: 'Follow', actor: actor.id.toString() })
+		const signature = req.headers.get('signature')
+		assert(signature)
+		req.headers.set('signature', signature.replace(/signature="[^"]+"/, 'signature="aW52YWxpZA=="'))
+
+		const res = await app.fetch(req, makeEnv(db, queue))
+		await assertStatus(res, 401)
+		assert.equal(queue.messages.length, 0)
+	})
+
+	test('tampered body is rejected before the queue', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		mockKeyFetch(actor)
+
+		const queue = makeQueueSpy()
+		const signed = await signedInboxRequest(db, actor, 'sven', { type: 'Follow', actor: actor.id.toString() })
+		const tampered = new Request(signed, { method: 'POST', body: JSON.stringify({ type: 'Delete' }) })
+
+		const res = await app.fetch(tampered, makeEnv(db, queue))
+		await assertStatus(res, 401)
+		assert.equal(await res.text(), 'invalid digest')
+		assert.equal(queue.messages.length, 0)
+	})
+
+	test('invalid digest is rejected before the queue', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		mockKeyFetch(actor)
+
+		const queue = makeQueueSpy()
+		const req = await signedInboxRequest(
+			db,
+			actor,
+			'sven',
+			{ type: 'Follow', actor: actor.id.toString() },
+			{ digest: 'SHA-256=invalid' }
+		)
+
+		const res = await app.fetch(req, makeEnv(db, queue))
+		await assertStatus(res, 401)
+		assert.equal(await res.text(), 'invalid digest')
+		assert.equal(queue.messages.length, 0)
+	})
+
+	test('unsigned signed-header set is rejected', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		mockKeyFetch(actor)
+
+		const queue = makeQueueSpy()
+		const req = await signedInboxRequest(db, actor, 'sven', { type: 'Follow', actor: actor.id.toString() })
+		const signature = req.headers.get('signature')
+		assert(signature)
+		// Drop `digest` from the set of signed headers.
+		req.headers.set('signature', signature.replace('date host digest', 'date host'))
+
+		const res = await app.fetch(req, makeEnv(db, queue))
+		await assertStatus(res, 401)
+		assert.equal(queue.messages.length, 0)
 	})
 })
