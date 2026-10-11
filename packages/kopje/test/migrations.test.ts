@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { BUILD, freshStore, rejectionOf, tableNames } from './helpers'
 import { MIGRATIONS } from '../src/db/migrations'
-import { readOperation, writeOperation } from '../src/domain/operation'
+import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
 import { type Migration, StoreKernel } from '../src/platform/store-kernel'
 
@@ -40,6 +40,10 @@ const countSettings = readOperation<void, number>(
 	(db) => db.first<{ n: number }>('SELECT count(*) AS n FROM instance_settings')?.n ?? 0
 )
 const putSetting = writeOperation<string, void>((db, name) => {
+	db.run('INSERT INTO instance_settings (name, value) VALUES (?, ?)', name, 'x')
+})
+
+const putSession = sessionOperation<string, void>((db, name) => {
 	db.run('INSERT INTO instance_settings (name, value) VALUES (?, ?)', name, 'x')
 })
 
@@ -149,6 +153,21 @@ describe('Store migration runner', () => {
 			expect(await k.health(BUILD)).toMatchObject({ schema: { status: 'current' }, readonly: true })
 			expect(await k.execute(BUILD, countSettings, undefined)).toBe(0)
 			await expect(k.execute(BUILD, putSetting, 'domain')).rejects.toThrow('kopje-maintenance: upgrade-failed')
+		})
+	})
+
+	it('serves read and session operations and refuses writes while held readonly', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			await kernel(state, MIGRATIONS).upgrade()
+			const hold = { reason: 'upgrade-failed', build: BUILD, detail: 'test', at: 0 }
+			state.storage.sql.exec("INSERT INTO kopje_state (name, value) VALUES ('hold', ?)", JSON.stringify(hold))
+			const k = kernel(state, MIGRATIONS)
+
+			await k.execute(BUILD, putSession, 'session')
+			expect(await k.execute(BUILD, countSettings, undefined)).toBe(1)
+			await expect(k.execute(BUILD, putSetting, 'write')).rejects.toThrow('kopje-maintenance: upgrade-failed')
+			expect(await k.execute(BUILD, countSettings, undefined)).toBe(1)
 		})
 	})
 

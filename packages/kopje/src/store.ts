@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers'
 
 import { MIGRATIONS } from './db/migrations'
+import { acceptInbox, type InboxDelivery } from './domain/inbox'
 import { getSetupState } from './domain/setup'
 import { StoreKernel } from './platform/store-kernel'
 import { buildOf, PACKAGE_VERSION } from './version'
@@ -34,6 +35,10 @@ export class Store extends DurableObject<Env> {
 
 	setupState(callerBuild: string) {
 		return this.#kernel.execute(callerBuild, getSetupState, undefined)
+	}
+
+	receiveInbox(callerBuild: string, delivery: InboxDelivery) {
+		return this.#kernel.execute(callerBuild, acceptInbox, delivery)
 	}
 
 	override async alarm(): Promise<void> {

@@ -7,6 +7,11 @@ export function readOperation<I, O>(run: (db: Db, input: I) => O): StoreOperatio
 	return { kind: 'read', run: (sql, input) => run(new Db(sql), input) }
 }
 
+// A login or Web Push registration write: still served while the Store is readonly.
+export function sessionOperation<I, O>(run: (db: Db, input: I) => O): StoreOperation<I, O> {
+	return { kind: 'session', run: (sql, input) => run(new Db(sql), input) }
+}
+
 export function writeOperation<I, O>(run: (db: Db, input: I) => O): StoreOperation<I, O> {
 	return { kind: 'write', run: (sql, input) => run(new Db(sql), input) }
 }

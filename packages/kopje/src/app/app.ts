@@ -3,6 +3,7 @@ import { HTTPException } from 'hono/http-exception'
 
 import { classifyRequest, decide, type RequestClass } from './gate'
 import { checkHealth } from './health'
+import { INBOX_ROUTES, inboxHandler } from '../federation/inbox'
 import { FEDERATION_PATHS, requireSetup } from '../federation/setup-gate'
 import { spoolInbox } from '../federation/spool'
 import { maintenanceError, mastodonError } from '../mastodon/errors'
@@ -22,8 +23,9 @@ type AppEnv = { Bindings: Env; Variables: { requestClass: RequestClass } }
 export function createApp({ build, now, store = defaultStore }: AppDeps) {
 	const app = new Hono<AppEnv>()
 
-	// Maintenance gate. The mode here comes from the MAINTENANCE env var; the Store's own readonly state arrives
-	// as StoreUnavailableError from its RPCs and is handled in onError, which together give max(env, Store).
+	// Maintenance gate, max(env, Store). The env mode (MAINTENANCE) is applied here. The Store applies its own readonly
+	// state to each RPC by operation kind, and a refusal arrives as StoreUnavailableError in onError: inbox requests
+	// are spooled, everything else gets 503.
 	app.use(async (c, next) => {
 		const requestClass = classifyRequest(c.req.method, c.req.path)
 		c.set('requestClass', requestClass)
@@ -53,6 +55,11 @@ export function createApp({ build, now, store = defaultStore }: AppDeps) {
 	const setupGate = requireSetup(build, store)
 	for (const path of FEDERATION_PATHS) {
 		app.use(path, setupGate)
+	}
+
+	const inbox = inboxHandler(build, store, now)
+	for (const path of INBOX_ROUTES) {
+		app.post(path, inbox)
 	}
 
 	app.notFound((c) => {

@@ -2,7 +2,15 @@ import { type MaintenanceReason, storeMaintenanceError } from './store-errors'
 
 export type Migration = { readonly name: string; readonly sql: string }
 
-export type OperationKind = 'read' | 'write'
+// What an operation does, so the Store can apply the maintenance table (design §4) itself:
+//   read    : reads only
+//   session : login and Web Push registration writes, which readonly still lets through
+//   write   : any other write
+export type OperationKind = 'read' | 'session' | 'write'
+
+// The Store's own maintenance state is at most readonly (full is set only through the env). Readonly admits reads and
+// sessions and refuses writes.
+const READONLY_ADMITS: Record<OperationKind, boolean> = { read: true, session: true, write: false }
 
 // One domain operation = one RPC = one transactionSync. It runs synchronously over the Store's SQLite and must not
 // do external I/O. Timestamps and IDs come from the caller (Date.now() does not advance inside one DO request).
@@ -68,20 +76,28 @@ export class StoreKernel {
 		this.#log = options.log ?? ((entry) => console.log(entry))
 	}
 
-	// Runs a domain operation if this Store can serve it: same build as the caller, schema current, and no
-	// readonly hold for writes. Otherwise throws a maintenance error that the Worker maps to spool or 503.
+	// Runs a domain operation if this Store can serve its kind: same build as the caller, schema current, and the
+	// readonly table for a held Store. Otherwise throws a maintenance error that the Worker maps to spool or 503.
+	// The state is checked inside the same transaction that runs the operation.
 	async execute<I, O>(callerBuild: string, operation: StoreOperation<I, O>, input: I): Promise<O> {
 		if (callerBuild !== this.build) {
 			throw storeMaintenanceError('version-mismatch')
 		}
-		const { schema, hold } = await this.#currentState()
+		await this.#currentState()
+		return this.#transaction(() => {
+			this.#admit(operation.kind)
+			return operation.run(this.#sql, input)
+		})
+	}
+
+	#admit(kind: OperationKind): void {
+		const { schema, hold } = this.#state ?? { schema: { status: 'pending', pending: [] }, hold: null }
 		if (schema.status !== 'current') {
 			throw storeMaintenanceError(schema.status === 'pending' ? 'schema-pending' : 'schema-diverged')
 		}
-		if (operation.kind === 'write' && hold !== null) {
+		if (hold !== null && !READONLY_ADMITS[kind]) {
 			throw storeMaintenanceError(hold.reason)
 		}
-		return this.#transaction(() => operation.run(this.#sql, input))
 	}
 
 	// Rescue RPC: available in every state and for any caller build.
