@@ -1,0 +1,171 @@
+import { readOperation, writeOperation } from './operation'
+import type { Db } from '../db/sql'
+import { base64ToBytes } from '../security/key-wrap'
+
+// What the federation layer needs from the Store to publish local actors: profiles, wrapped keys, collections, and
+// usage counts. Ids are derived by the caller from the domain fixed at /setup.
+
+export type LocalActor = {
+	username: string
+	actorType: string
+	displayName: string
+	note: string
+	avatarUrl: string | null
+	headerUrl: string | null
+	locked: boolean
+	discoverable: boolean | null
+	alsoKnownAs: string[]
+	pubkey: string
+	createdAt: string
+}
+
+export type StoredKey = { privkey: Uint8Array; salt: Uint8Array; pubkey: string }
+
+type ActorRow = {
+	username: string
+	actor_type: string
+	display_name: string
+	note: string
+	avatar_url: string | null
+	header_url: string | null
+	locked: number
+	discoverable: number | null
+	also_known_as: string
+	pubkey: string
+	created_at: string
+}
+
+const LOCAL_BY_USERNAME =
+	'FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.domain IS NULL AND lower(a.username) = lower(?)'
+
+export const getInstanceDomain = readOperation<void, string | null>(
+	(db) => db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'domain'")?.value ?? null
+)
+
+// A local actor by username, case-insensitively (local usernames are unique regardless of case).
+export const getLocalActor = readOperation<{ username: string }, LocalActor | null>((db, { username }) => {
+	const row = db.first<ActorRow>(
+		`SELECT a.username, a.actor_type, a.display_name, a.note, a.avatar_url, a.header_url, a.locked, a.discoverable,
+			l.also_known_as, l.pubkey, a.created_at ${LOCAL_BY_USERNAME}`,
+		username
+	)
+	if (row === undefined) {
+		return null
+	}
+	return {
+		username: row.username,
+		actorType: row.actor_type,
+		displayName: row.display_name,
+		note: row.note,
+		avatarUrl: row.avatar_url,
+		headerUrl: row.header_url,
+		locked: row.locked === 1,
+		discoverable: row.discoverable === null ? null : row.discoverable === 1,
+		alsoKnownAs: JSON.parse(row.also_known_as) as string[],
+		pubkey: row.pubkey,
+		createdAt: row.created_at,
+	}
+})
+
+type KeyRow = { username: string; privkey: ArrayBuffer; privkey_salt: ArrayBuffer; pubkey: string }
+
+function storedKey(row: KeyRow): StoredKey {
+	return { privkey: new Uint8Array(row.privkey), salt: new Uint8Array(row.privkey_salt), pubkey: row.pubkey }
+}
+
+export const getLocalKey = readOperation<{ username: string }, StoredKey | null>((db, { username }) => {
+	const row = db.first<KeyRow>(`SELECT a.username, l.privkey, l.privkey_salt, l.pubkey ${LOCAL_BY_USERNAME}`, username)
+	return row === undefined ? null : storedKey(row)
+})
+
+// The instance actor's key pair, wrapped with the KEK, in instance_settings (base64 for the binary parts).
+const INSTANCE_ACTOR_KEY = 'instance_actor_key'
+
+export type EncodedKey = { privkey: string; salt: string; pubkey: string }
+
+function readInstanceKey(db: Db): EncodedKey | null {
+	const row = db.first<{ value: string }>('SELECT value FROM instance_settings WHERE name = ?', INSTANCE_ACTOR_KEY)
+	return row === undefined ? null : (JSON.parse(row.value) as EncodedKey)
+}
+
+export const getInstanceActorKey = readOperation<void, EncodedKey | null>((db) => readInstanceKey(db))
+
+// Stores a freshly generated instance actor key unless one exists, and returns the stored one: two racing first
+// requests agree on a single key.
+export const ensureInstanceActorKey = writeOperation<EncodedKey, EncodedKey>((db, key) => {
+	db.run('INSERT OR IGNORE INTO instance_settings (name, value) VALUES (?, ?)', INSTANCE_ACTOR_KEY, JSON.stringify(key))
+	return readInstanceKey(db) ?? key
+})
+
+// Every key this instance signs with, for the key check of healthReport. owner is the username, or null for the
+// instance actor.
+export const listLocalKeys = readOperation<void, { owner: string | null; key: StoredKey }[]>((db) => {
+	const users = db
+		.all<KeyRow>(
+			'SELECT a.username, l.privkey, l.privkey_salt, l.pubkey FROM local_accounts l JOIN accounts a ON a.id = l.account_id ORDER BY a.username'
+		)
+		.map((row) => ({ owner: row.username, key: storedKey(row) }))
+	const instance = readInstanceKey(db)
+	return instance === null ? users : [...users, { owner: null, key: decodeKey(instance) }]
+})
+
+export function decodeKey(key: EncodedKey): StoredKey {
+	return { privkey: base64ToBytes(key.privkey), salt: base64ToBytes(key.salt), pubkey: key.pubkey }
+}
+
+export type CollectionKind = 'followers' | 'following'
+
+export type CollectionPage = { total: number; items: { uri: string; inbox: string | null }[]; hasNext: boolean }
+
+export const COLLECTION_PAGE_SIZE = 40
+
+// Accepted follows of a local actor, newest first, one page (1-based) at a time. page null asks for the count only.
+export const getCollection = readOperation<
+	{ username: string; kind: CollectionKind; page: number | null },
+	CollectionPage | null
+>((db, { username, kind, page }) => {
+	const owner = db.first<{ id: string }>(`SELECT a.id ${LOCAL_BY_USERNAME}`, username)
+	if (owner === undefined) {
+		return null
+	}
+	const [self, other] = kind === 'followers' ? ['target_account_id', 'account_id'] : ['account_id', 'target_account_id']
+	const total =
+		db.first<{ n: number }>(`SELECT count(*) AS n FROM follows WHERE ${self} = ? AND state = 'accepted'`, owner.id)
+			?.n ?? 0
+	if (page === null) {
+		return { total, items: [], hasNext: false }
+	}
+	const items = db.all<{ uri: string; inbox: string | null }>(
+		`SELECT a.uri, a.inbox_url AS inbox FROM follows f JOIN accounts a ON a.id = f.${other}
+		WHERE f.${self} = ? AND f.state = 'accepted' ORDER BY f.id DESC LIMIT ? OFFSET ?`,
+		owner.id,
+		COLLECTION_PAGE_SIZE + 1,
+		(page - 1) * COLLECTION_PAGE_SIZE
+	)
+	return { total, items: items.slice(0, COLLECTION_PAGE_SIZE), hasNext: items.length > COLLECTION_PAGE_SIZE }
+})
+
+export type NodeInfoUsage = { users: number; activeMonth: number; activeHalfyear: number; localPosts: number }
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+// Usage for NodeInfo. Active means "posted in the window", the only activity the Store records for local users.
+export const getNodeInfoUsage = readOperation<{ now: number }, NodeInfoUsage>((db, { now }) => {
+	const since = (days: number) => new Date(now - days * DAY_MS).toISOString()
+	const active = (days: number) =>
+		db.first<{ n: number }>(
+			`SELECT count(DISTINCT s.account_id) AS n FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id
+			WHERE s.published_at >= ?`,
+			since(days)
+		)?.n ?? 0
+	return {
+		users: db.first<{ n: number }>('SELECT count(*) AS n FROM local_accounts WHERE suspended_at IS NULL')?.n ?? 0,
+		activeMonth: active(30),
+		activeHalfyear: active(180),
+		localPosts:
+			db.first<{ n: number }>(
+				`SELECT count(*) AS n FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id
+				WHERE s.reblog_of_id IS NULL`
+			)?.n ?? 0,
+	}
+})

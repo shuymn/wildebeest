@@ -67,6 +67,12 @@ export type KernelOptions = {
 	log?: (entry: Record<string, unknown>) => void
 }
 
+// A response body kept for the rescue path: the last good actor document, WebFinger or NodeInfo payload. Stored in
+// kopje_state under SNAPSHOT_STATE_PREFIX + key.
+export type Snapshot = { contentType: string; body: string }
+
+export const SNAPSHOT_STATE_PREFIX = 'snapshot:'
+
 type ExpectedMigration = Migration & { checksum: string }
 type AppliedMigration = { name: string; checksum: string }
 
@@ -136,6 +142,19 @@ export class StoreKernel {
 			build: this.build,
 			expected: expected.at(-1)?.name ?? null,
 			applied: this.#readApplied().at(-1)?.name ?? null,
+		}
+	}
+
+	// Rescue RPC: the last good document saved under this key (domain/snapshot.ts), or null. It reads kopje_state
+	// directly, which exists whatever the schema state, so it works for any caller build and while the Store refuses
+	// domain operations.
+	readSnapshot(key: string): Snapshot | null {
+		try {
+			const value = this.#readState(`${SNAPSHOT_STATE_PREFIX}${key}`)
+			return value === null ? null : (JSON.parse(value) as Snapshot)
+		} catch (error) {
+			this.#log({ event: 'kopje.store.snapshot.unreadable', key, error: errorMessage(error) })
+			return null
 		}
 	}
 
@@ -324,7 +343,8 @@ export class StoreKernel {
 		return this.#expected
 	}
 
-	// kopje_state holds the hold, the upgrade marker and bookmark, and last_local_id (domain/ids.ts).
+	// kopje_state holds the hold, the upgrade marker and bookmark, last_local_id (domain/ids.ts), and the rescue
+	// snapshots (domain/snapshot.ts).
 	#ensureBookkeeping(): void {
 		this.#sql.exec(
 			'CREATE TABLE IF NOT EXISTS kopje_migrations (name TEXT NOT NULL PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL) WITHOUT ROWID;' +

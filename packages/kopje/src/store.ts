@@ -1,9 +1,20 @@
 import { DurableObject } from 'cloudflare:workers'
 
 import { MIGRATIONS } from './db/migrations'
+import {
+	ensureInstanceActorKey,
+	getCollection,
+	getInstanceActorKey,
+	getInstanceDomain,
+	getLocalActor,
+	getLocalKey,
+	getNodeInfoUsage,
+	listLocalKeys,
+} from './domain/actors'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import { acceptInbox, type InboxDelivery } from './domain/inbox'
 import { getSetupState } from './domain/setup'
+import { saveSnapshot } from './domain/snapshot'
 import { StoreKernel, type StoreOperation } from './platform/store-kernel'
 import { buildOf, PACKAGE_VERSION } from './version'
 
@@ -67,6 +78,46 @@ export class Store extends DurableObject<Env> {
 
 	kvList(callerBuild: string, input: OperationInput<typeof kvList>) {
 		return this.#kernel.execute(callerBuild, kvList, input)
+	}
+
+	instanceDomain(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, getInstanceDomain, undefined)
+	}
+
+	localActor(callerBuild: string, input: OperationInput<typeof getLocalActor>) {
+		return this.#kernel.execute(callerBuild, getLocalActor, input)
+	}
+
+	localKey(callerBuild: string, input: OperationInput<typeof getLocalKey>) {
+		return this.#kernel.execute(callerBuild, getLocalKey, input)
+	}
+
+	instanceActorKey(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, getInstanceActorKey, undefined)
+	}
+
+	ensureInstanceActorKey(callerBuild: string, input: OperationInput<typeof ensureInstanceActorKey>) {
+		return this.#kernel.execute(callerBuild, ensureInstanceActorKey, input)
+	}
+
+	localKeys(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, listLocalKeys, undefined)
+	}
+
+	collection(callerBuild: string, input: OperationInput<typeof getCollection>) {
+		return this.#kernel.execute(callerBuild, getCollection, input)
+	}
+
+	nodeInfoUsage(callerBuild: string, input: OperationInput<typeof getNodeInfoUsage>) {
+		return this.#kernel.execute(callerBuild, getNodeInfoUsage, input)
+	}
+
+	saveSnapshot(callerBuild: string, input: OperationInput<typeof saveSnapshot>) {
+		return this.#kernel.execute(callerBuild, saveSnapshot, input)
+	}
+
+	rescueSnapshot(_callerBuild: string, key: string) {
+		return this.#kernel.readSnapshot(key)
 	}
 
 	override async alarm(): Promise<void> {
