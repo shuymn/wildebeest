@@ -5,6 +5,9 @@ export const INBOX_BODY_LIMIT = 1024 * 1024
 // Queue messages are limited to 128 KB; keep room for serialization overhead.
 export const SPOOL_MESSAGE_LIMIT = 120 * 1024
 
+// Queue send options of a spool message: v8, so the deflated body travels as bytes.
+export const spoolMessageOptions: QueueSendOptions = { contentType: 'v8' }
+
 export type SpoolMessage = {
 	kind: 'spool'
 	url: string
@@ -30,7 +33,7 @@ export async function spoolInbox(request: Request, body: Uint8Array, queue: Queu
 		return new Response(null, { status: 503 })
 	}
 	try {
-		await queue.send(message, { contentType: 'v8' })
+		await queue.send(message, spoolMessageOptions)
 	} catch (error) {
 		console.error({ event: 'kopje.spool.failed', error: error instanceof Error ? error.message : String(error) })
 		return new Response(null, { status: 503 })

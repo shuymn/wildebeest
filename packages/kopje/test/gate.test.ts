@@ -1,12 +1,15 @@
-import { createMessageBatch, runInDurableObject } from 'cloudflare:test'
+import { runInDurableObject } from 'cloudflare:test'
 
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import { harness, heldStore, migratedStore, NOW } from './app-helpers'
+import { BUILD } from './helpers'
+import { MAX_RETRIES, QueueSim } from './queue-sim'
 import { classifyRequest, decide, type RequestClass } from '../src/app/gate'
 import type { SpoolMessage } from '../src/federation/spool'
-import { handleQueue, QUEUE_RETRY_DELAY_SECONDS } from '../src/jobs/queue'
+import { handleQueue, SPOOL_REQUEUE_DELAY_SECONDS } from '../src/jobs/queue'
 import { maxMode } from '../src/platform/maintenance'
+import type { StoreStub } from '../src/platform/store-client'
 
 describe('request classification', () => {
 	it.each<[string, string, RequestClass]>([
@@ -210,10 +213,63 @@ describe('maintenance gate', () => {
 		expect(await webfinger.json()).toEqual({ error: expect.stringContaining('maintenance') })
 	})
 
-	it('keeps queue messages for later with a delay', () => {
-		const batch = createMessageBatch('kopje', [{ id: '1', timestamp: new Date(NOW), attempts: 1, body: {} }])
-		const retryAll = vi.spyOn(batch, 'retryAll')
-		handleQueue(batch)
-		expect(retryAll).toHaveBeenCalledWith({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
+	it('refuses to send a message over the Queue size limit', async () => {
+		const queue = new QueueSim()
+		await expect(queue.send({ body: new Uint8Array(130_000) })).rejects.toThrow('message too large')
+		await expect(queue.send({ body: new Uint8Array(100_000) })).resolves.toBeUndefined()
+	})
+})
+
+describe('spool consumer', () => {
+	async function spooled(store: StoreStub, overrides: Record<string, unknown> = {}) {
+		const h = harness(store, overrides)
+		const response = await h.request('/ap/users/alice/inbox', { method: 'POST', body: '{"type":"Follow"}' })
+		expect(response.status).toBe(202)
+		expect(h.queue.pending).toHaveLength(1)
+		const consume = (env = h.env, resolve: () => StoreStub = () => store) =>
+			h.queue.deliver((batch) => handleQueue(batch, env, { build: () => BUILD, store: resolve }))
+		return { ...h, consume, original: h.queue.pending[0]!.body as SpoolMessage }
+	}
+
+	it('never exhausts retries while the Store stays held, however long', async () => {
+		const { queue, consume, original } = await spooled(await heldStore())
+
+		for (let cycle = 0; cycle < MAX_RETRIES * 2; cycle++) {
+			await consume()
+		}
+
+		expect(queue.retries).toBe(0)
+		expect(queue.dropped).toEqual([])
+		expect(queue.pending).toHaveLength(1)
+		expect(queue.pending[0]).toMatchObject({ attempts: 1, delaySeconds: SPOOL_REQUEUE_DELAY_SECONDS })
+		expect(queue.pending[0]!.body).toEqual(original)
+		expect(original.spooledAt).toBe(NOW)
+	})
+
+	it('requeues while the env is in maintenance and replays once it is off', async () => {
+		const store = await heldStore()
+		const { queue, consume, env } = await spooled(store, { MAINTENANCE: 'readonly' })
+		for (let cycle = 0; cycle < 3; cycle++) {
+			await consume()
+		}
+		expect(queue.pending).toHaveLength(1)
+
+		// Maintenance is over: the env is off and the Store serves writes again.
+		const healthy = await migratedStore()
+		await runInDurableObject(healthy, (_instance, state) => {
+			state.storage.sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje.test')")
+		})
+		await consume({ ...env, MAINTENANCE: 'off' } as Env, () => healthy)
+		expect(queue.pending).toEqual([])
+		expect(queue.retries).toBe(0)
+	})
+
+	it('retries, and so counts against max_retries, only on real processing errors', async () => {
+		const { queue, consume, env } = await spooled(await heldStore())
+		const broken = { receiveInbox: () => Promise.reject(new Error('boom')) } as unknown as StoreStub
+
+		await consume(env, () => broken)
+		expect(queue.retries).toBe(1)
+		expect(queue.pending).toHaveLength(1)
 	})
 })

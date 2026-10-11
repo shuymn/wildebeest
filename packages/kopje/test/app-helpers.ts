@@ -1,9 +1,8 @@
 import { createExecutionContext, runInDurableObject } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 
-import { vi } from 'vitest'
-
 import { BUILD, freshStore } from './helpers'
+import { QueueSim } from './queue-sim'
 import { createApp } from '../src/app/app'
 import { MIGRATIONS } from '../src/db/migrations'
 import type { StoreStub } from '../src/platform/store-client'
@@ -19,7 +18,6 @@ export async function migratedStore(): Promise<StoreStub> {
 	return store
 }
 
-// The real app over a given Store, with env overrides and a recording queue.
 // Leaves a persisted readonly hold of this build in a Store whose kernel has not loaded its state yet, as a failed
 // upgrade would. Also completes setup so federation routes are reachable.
 export async function heldStore(): Promise<StoreStub> {
@@ -32,11 +30,13 @@ export async function heldStore(): Promise<StoreStub> {
 	return store
 }
 
+// The real app over a given Store, with env overrides and a simulated queue that enforces the platform limits.
 export function harness(store: StoreStub, overrides: Record<string, unknown> = {}, build = BUILD) {
-	const send = vi.fn<(body: unknown, options?: QueueSendOptions) => Promise<void>>(() => Promise.resolve())
-	const testEnv = { ...env, QUEUE: { send }, ...overrides } as unknown as Env
+	const queue = new QueueSim()
+	const send = queue.send
+	const testEnv = { ...env, QUEUE: queue.queue, ...overrides } as unknown as Env
 	const app = createApp({ build: () => build, now: () => NOW, store: () => store })
 	const request = (path: string, init?: RequestInit) =>
 		app.fetch(new Request(`https://kopje.test${path}`, init), testEnv, createExecutionContext())
-	return { app, request, send }
+	return { app, request, send, queue, env: testEnv }
 }

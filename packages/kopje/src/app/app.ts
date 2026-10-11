@@ -63,7 +63,7 @@ export function createApp({ build, now, store = defaultStore }: AppDeps) {
 		app.use(path, setupGate)
 	}
 
-	const inbox = inboxHandler(build, store, now)
+	const inbox = inboxHandler({ build, store }, now)
 	for (const path of INBOX_ROUTES) {
 		app.post(path, inbox)
 	}
