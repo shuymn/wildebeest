@@ -12,6 +12,7 @@ import { getDocumentHead } from '~/utils/getDocumentHead'
 import { getDatabase } from '@wildebeest/backend/database'
 import { fetchApi } from '~/utils/fetchApi'
 import { getDomain } from '@wildebeest/backend/utils/getDomain'
+import { sanitizeHtml } from '@wildebeest/backend/utils/html'
 
 export const useStatuses = routeLoader$(
 	async ({
@@ -124,12 +125,18 @@ export default component$(() => {
 						<div class="px-5">
 							<h2 class="font-bold">{pageDetails.value.account.display_name}</h2>
 							<span class="block my-1 text-wildebeest-400">{pageDetails.value.accountHandle}</span>
-							<div class="inner-html-content my-5" dangerouslySetInnerHTML={pageDetails.value.account.note} />
+							<div
+								class="inner-html-content my-5"
+								dangerouslySetInnerHTML={sanitizeHtml(pageDetails.value.account.note)}
+							/>
 							<dl class="mb-6 flex flex-col bg-wildebeest-800 border border-wildebeest-600 rounded-md">
 								{fields.map(({ name, value }) => (
 									<div class="border-b border-wildebeest-600 p-3 text-sm" key={name}>
 										<dt class="uppercase font-semibold text-wildebeest-500 opacity-80 mb-1">{name}</dt>
-										<dd class="inner-html-content opacity-80 text-wildebeest-200" dangerouslySetInnerHTML={value}></dd>
+										<dd
+											class="inner-html-content opacity-80 text-wildebeest-200"
+											dangerouslySetInnerHTML={sanitizeHtml(value)}
+										></dd>
 									</div>
 								))}
 							</dl>
