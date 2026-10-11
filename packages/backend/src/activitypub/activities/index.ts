@@ -106,14 +106,9 @@ export function getActivityObject(activity: Activity): ApObject {
 	return activity.object
 }
 
-export async function cacheActivityObject<T extends ApObject>(
-	domain: string,
-	db: Database,
-	obj: Remote<T>,
-	actor: Actor
-) {
+export async function cacheActivityObject<T extends ApObject>(domain: string, db: Database, obj: Remote<T>) {
 	if (isNote(obj)) {
-		return getAndCacheObject<Note>(domain, db, obj, actor)
+		return getAndCacheObject<Note>(domain, db, obj)
 	}
 	console.warn(`Unsupported Create object: ${obj.type}`)
 	return null

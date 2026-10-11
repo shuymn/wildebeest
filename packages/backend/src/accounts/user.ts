@@ -29,6 +29,22 @@ export function getUserUrl(domain: string, obj: { preferredUsername: string } | 
 	return new URL(`/@${obj.localPart}`, HTTPS + domain)
 }
 
+// The signature key a local actor publishes is read from the `users` table and
+// its ids are derived from the domain, never from the actor's stored
+// properties: those are remote-controlled for remote actors and a forged
+// `Update` could have overwritten them for a local one.
+export async function getLocalActorPublicKey(db: Database, actorId: URL): Promise<Actor['publicKey'] | null> {
+	const row = await db
+		.prepare('SELECT pubkey FROM users WHERE actor_id=?1')
+		.bind(actorId.toString())
+		.first<{ pubkey: string } | null>()
+	if (!row?.pubkey) {
+		return null
+	}
+	const id = actorId.toString()
+	return { id: id + '#main-key', owner: id, publicKeyPem: row.pubkey }
+}
+
 type CreateUserParams = {
 	domain: string
 	db: Database
@@ -167,6 +183,24 @@ export async function getUserByEmail(db: Database, email: string): Promise<User 
 		...actor,
 		[isAdminSymbol]: row.isAdmin === 1,
 	}
+}
+
+/**
+ * Whether the connected `user` may administer the instance: either the owner, whose email is
+ * `adminEmail` (`ADMIN_EMAIL`), or a user flagged as admin.
+ */
+export async function isAdminUser(db: Database, adminEmail: string, user: User | null): Promise<boolean> {
+	if (user === null) {
+		return false
+	}
+	if (user[isAdminSymbol]) {
+		return true
+	}
+	if (!adminEmail) {
+		return false
+	}
+	const owner = await getAdminByEmail(db, adminEmail)
+	return owner !== null && owner.id.toString() === user.id.toString()
 }
 
 export async function getAdminByEmail(db: Database, email: string): Promise<User | null> {

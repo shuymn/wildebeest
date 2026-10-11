@@ -15,6 +15,11 @@ export interface MessageBody {
 export interface InboxMessageBody extends MessageBody {
 	activity: Activity
 
+	// Id of the actor that owns the HTTP signature key the inbox request was
+	// signed with. Optional only to describe messages enqueued before this
+	// field existed; the consumer drops those.
+	signerId?: string
+
 	// Send secrets as part of the message because it's too complicated
 	// to bind them to the consumer worker.
 	userKEK: string

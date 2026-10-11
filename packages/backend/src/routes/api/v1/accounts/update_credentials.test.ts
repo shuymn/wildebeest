@@ -36,12 +36,48 @@ describe('/api/v1/accounts/update_credentials', () => {
 
 		const data = await res.json<any>()
 		assert.equal(data.display_name, 'newsven')
-		assert.equal(data.note, 'hein')
+		assert.equal(data.note, '<p>hein</p>')
+		assert.equal(data.source.note, 'hein')
 
 		const updatedActor: any = await getActorById(db, getApId(connectedActor))
 		assert(updatedActor)
 		assert.equal(updatedActor.name, 'newsven')
-		assert.equal(updatedActor.summary, 'hein')
+		assert.equal(updatedActor.summary, '<p>hein</p>')
+	})
+
+	test('update credentials does not store HTML from the display name and note', async () => {
+		const db = makeDB()
+		const queue = makeQueue()
+		const connectedActor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+
+		const updates = new FormData()
+		updates.set('display_name', 'sven<img src=x onerror="alert(1)"><script>alert(2)</script>')
+		updates.set('note', '<img src=x onerror="alert(1)">\n<a href="javascript:alert(2)">hi</a>\n\n2nd & last')
+
+		const req = new Request('https://example.com/api/v1/accounts/update_credentials', {
+			method: 'PATCH',
+			body: updates,
+		})
+		const res = await app.fetch(req, {
+			DATABASE: db,
+			CF_ACCOUNT_ID: 'CF_ACCOUNT_ID',
+			CF_API_TOKEN: 'CF_API_TOKEN',
+			userKEK,
+			QUEUE: queue,
+			data: { connectedActor },
+		})
+		await assertStatus(res, 200)
+
+		const expectedNote =
+			'<p>&lt;img src=x onerror=&quot;alert(1)&quot;&gt;<br />&lt;a href=&quot;javascript:alert(2)&quot;&gt;hi&lt;/a&gt;</p><p>2nd &amp; last</p>'
+		const data = await res.json<any>()
+		assert.equal(data.display_name, 'sven')
+		assert.equal(data.note, expectedNote)
+
+		const updatedActor: any = await getActorById(db, getApId(connectedActor))
+		assert(updatedActor)
+		assert.equal(updatedActor.name, 'sven')
+		assert.equal(updatedActor.summary, expectedNote)
 	})
 
 	test('update credentials sends update to follower', async () => {

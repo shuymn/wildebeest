@@ -16,6 +16,7 @@ import type { DeliverMessageBody, HonoEnv, Queue } from '@wildebeest/backend/typ
 import type { CredentialAccount } from '@wildebeest/backend/types/account'
 import { cors } from '@wildebeest/backend/utils/cors'
 import { actorToHandle } from '@wildebeest/backend/utils/handle'
+import { htmlToText, textToHtml } from '@wildebeest/backend/utils/html'
 
 const headers = {
 	...cors(),
@@ -58,12 +59,14 @@ async function handleRequest(
 		const formData = await request.formData()
 
 		if (formData.has('display_name')) {
-			const value = formData.get('display_name')!
+			// the display name is plain text
+			const value = htmlToText(formData.get('display_name')!)
 			await updateActorProperty(db, actorId, 'name', value)
 		}
 
 		if (formData.has('note')) {
-			const value = formData.get('note')!
+			// the note is written as plain text and stored as HTML, like in Mastodon
+			const value = textToHtml(formData.get('note')!)
 			await updateActorProperty(db, actorId, 'summary', value)
 		}
 
@@ -98,7 +101,8 @@ async function handleRequest(
 		const res: CredentialAccount = {
 			...user,
 			source: {
-				note: user.note,
+				// `source.note` is the plain text the note was written as
+				note: htmlToText(user.note),
 				fields: user.fields,
 				privacy: preference.posting_default_visibility,
 				sensitive: preference.posting_default_sensitive,

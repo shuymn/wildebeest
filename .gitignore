@@ -11,3 +11,5 @@ packages/frontend/playwright-report/
 packages/frontend/.playwright/
 /coverage/
 lefthook-local.yml
+/.agents/skills/
+/.claude/skills/

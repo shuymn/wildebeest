@@ -568,7 +568,7 @@ describe('Announce', () => {
 
 		const oldAnnounce: AnnounceActivity = {
 			type: 'Announce',
-			id: createActivityId(domain),
+			id: getApId('https://example.com/activities/old-announce'),
 			actor: getApId(remoteActorId),
 			to: [PUBLIC_GROUP],
 			cc: [],
@@ -591,7 +591,7 @@ describe('Announce', () => {
 
 		const newAnnounce: AnnounceActivity = {
 			type: 'Announce',
-			id: createActivityId(domain),
+			id: getApId('https://example.com/activities/new-announce'),
 			actor: getApId(remoteActorId),
 			to: [PUBLIC_GROUP],
 			cc: [],
@@ -667,7 +667,7 @@ describe('Announce', () => {
 
 		const announce: AnnounceActivity = {
 			type: 'Announce',
-			id: createActivityId(domain),
+			id: getApId('https://example.com/activities/announce'),
 			actor: getApId(remoteActorId),
 			to: [PUBLIC_GROUP],
 			cc: [],
