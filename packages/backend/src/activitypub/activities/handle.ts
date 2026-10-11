@@ -12,6 +12,7 @@ import {
 } from '@wildebeest/backend/activitypub/activities'
 import { handleAcceptActivity } from '@wildebeest/backend/activitypub/activities/accept'
 import { handleAnnounceActivity } from '@wildebeest/backend/activitypub/activities/announce'
+import { authorizeInboundActivity } from '@wildebeest/backend/activitypub/activities/authorize'
 import { handleCreateActivity } from '@wildebeest/backend/activitypub/activities/create'
 import { handleDeleteActivity } from '@wildebeest/backend/activitypub/activities/delete'
 import { handleFollowActivity } from '@wildebeest/backend/activitypub/activities/follow'
@@ -30,6 +31,12 @@ export async function handle(
 	adminEmail: string,
 	vapidKeys: JWK
 ) {
+	const authorization = authorizeInboundActivity(domain, activity)
+	if (!authorization.authorized) {
+		console.warn(`unauthorized ${activity.type} ${String(activity.id)}: ${authorization.reason}`)
+		return
+	}
+
 	if (isUpdateActivity(activity)) {
 		return await handleUpdateActivity(domain, activity, db)
 	}

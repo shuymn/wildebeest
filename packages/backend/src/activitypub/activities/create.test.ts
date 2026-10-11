@@ -41,9 +41,17 @@ describe('Create', () => {
 			object: 'a',
 		}
 
-		await assert.rejects(activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys), {
-			message: '`activity.object` must be of type object',
-		})
+		// Rejected by the inbound authorization table before the handler runs.
+		await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
+
+		const { count } = await db
+			.prepare('SELECT count(*) as count FROM objects')
+			.first<{ count: number }>()
+			.then((row) => {
+				assert.ok(row)
+				return row
+			})
+		assert.equal(count, 0)
 	})
 
 	test('Note to inbox stores in DB', async () => {

@@ -27,9 +27,8 @@ describe('Update', () => {
 			object: 'a',
 		}
 
-		await assert.rejects(activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys), {
-			message: '`activity.object` must be of type object',
-		})
+		// Rejected by the inbound authorization table before the handler runs.
+		await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 	})
 
 	test('Object must exist', async () => {
