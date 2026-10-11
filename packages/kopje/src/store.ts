@@ -1,7 +1,10 @@
 import { DurableObject } from 'cloudflare:workers'
 
 import { MIGRATIONS } from './db/migrations'
+import * as accounts from './domain/accounts'
 import { acceptInbox, type InboxDelivery } from './domain/inbox'
+import { instanceInfo } from './domain/instance'
+import * as oauth from './domain/oauth'
 import { getSetupState } from './domain/setup'
 import { StoreKernel } from './platform/store-kernel'
 import { buildOf, PACKAGE_VERSION } from './version'
@@ -41,6 +44,87 @@ export class Store extends DurableObject<Env> {
 
 	receiveInbox(callerBuild: string, delivery: InboxDelivery) {
 		return this.#kernel.execute(callerBuild, acceptInbox, delivery)
+	}
+
+	// OAuth and the account and instance API (B3).
+
+	registerApp(callerBuild: string, input: oauth.RegisterAppInput) {
+		return this.#kernel.execute(callerBuild, oauth.registerApp, input)
+	}
+
+	authenticate(callerBuild: string, input: { tokenHash: string; now: number }) {
+		return this.#kernel.execute(callerBuild, oauth.authenticate, input)
+	}
+
+	authorizeContext(callerBuild: string, input: { clientId: string }) {
+		return this.#kernel.execute(callerBuild, oauth.authorizeContext, input)
+	}
+
+	accountForLogin(callerBuild: string, input: { email: string }) {
+		return this.#kernel.execute(callerBuild, oauth.accountForLogin, input)
+	}
+
+	issueCode(callerBuild: string, input: oauth.IssueCodeInput) {
+		return this.#kernel.execute(callerBuild, oauth.issueCode, input)
+	}
+
+	exchangeCode(callerBuild: string, input: oauth.ExchangeCodeInput) {
+		return this.#kernel.execute(callerBuild, oauth.exchangeCode, input)
+	}
+
+	issueAppToken(callerBuild: string, input: oauth.AppTokenInput) {
+		return this.#kernel.execute(callerBuild, oauth.issueAppToken, input)
+	}
+
+	revokeToken(callerBuild: string, input: { tokenHash: string; clientId: string; clientSecret: string }) {
+		return this.#kernel.execute(callerBuild, oauth.revokeToken, input)
+	}
+
+	suspendAccount(callerBuild: string, input: { accountId: string; now: number }) {
+		return this.#kernel.execute(callerBuild, oauth.suspendAccount, input)
+	}
+
+	instanceInfo(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, instanceInfo, undefined)
+	}
+
+	getAccount(callerBuild: string, input: { id: string; present: accounts.Present }) {
+		return this.#kernel.execute(callerBuild, accounts.getAccount, input)
+	}
+
+	lookupAccount(callerBuild: string, input: { username: string; domain: string | null; present: accounts.Present }) {
+		return this.#kernel.execute(callerBuild, accounts.lookupAccount, input)
+	}
+
+	verifyCredentials(callerBuild: string, input: { accountId: string; present: accounts.Present }) {
+		return this.#kernel.execute(callerBuild, accounts.verifyCredentials, input)
+	}
+
+	updateCredentials(
+		callerBuild: string,
+		input: { accountId: string; changes: accounts.CredentialChanges; present: accounts.Present }
+	) {
+		return this.#kernel.execute(callerBuild, accounts.updateCredentials, input)
+	}
+
+	relationships(callerBuild: string, input: { viewerId: string; ids: string[] }) {
+		return this.#kernel.execute(callerBuild, accounts.relationships, input)
+	}
+
+	searchAccounts(callerBuild: string, input: accounts.SearchInput) {
+		return this.#kernel.execute(callerBuild, accounts.searchAccounts, input)
+	}
+
+	follow(callerBuild: string, input: accounts.FollowInput) {
+		return this.#kernel.execute(callerBuild, accounts.follow, input)
+	}
+
+	unfollow(callerBuild: string, input: { viewerId: string; target: string }) {
+		return this.#kernel.execute(callerBuild, accounts.unfollow, input)
+	}
+
+	listFollows(callerBuild: string, input: accounts.ListFollowsInput) {
+		return this.#kernel.execute(callerBuild, accounts.listFollows, input)
 	}
 
 	override async alarm(): Promise<void> {
