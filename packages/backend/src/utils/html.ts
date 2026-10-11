@@ -263,7 +263,8 @@ export function htmlToText(unsafe: string): string {
 			}
 			continue
 		}
-		if (name === 'br' || name === 'p' || BLOCK_TAGS.has(name)) {
+		// One space after a line break or a closed block, as the previous HTMLRewriter-based text extraction did.
+		if (name === 'br' || (tag[1] === '/' && (name === 'p' || BLOCK_TAGS.has(name)))) {
 			out += ' '
 		}
 	}

@@ -126,7 +126,7 @@ describe('html sanitization', () => {
 describe('htmlToText', () => {
 	test('returns the text content', () => {
 		assert.equal(htmlToText('hi<br />hey'), 'hi hey')
-		assert.equal(htmlToText('<p>a</p><p>b</p>'), 'a  b')
+		assert.equal(htmlToText('<p>a</p><p>b</p>'), 'a b')
 		assert.equal(htmlToText('a &amp; b'), 'a & b')
 	})
 
