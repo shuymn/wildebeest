@@ -1,3 +1,4 @@
+import { fetchWithIdentity } from '@wildebeest/backend/activitypub/identity'
 import {
 	type ApObject,
 	getApId,
@@ -141,7 +142,7 @@ export async function getAndCacheActor(url: URL, db: Database): Promise<Actor | 
 		}
 	}
 
-	const actor = await fetchActor(url)
+	const actor = await fetchWithIdentity(url, fetchActor)
 	if (!actor) {
 		return null
 	}

@@ -6,7 +6,7 @@ import { getAndCacheObject, type Remote } from '@wildebeest/backend/activitypub/
 import { createImage } from '@wildebeest/backend/activitypub/objects/image'
 import type { Note } from '@wildebeest/backend/activitypub/objects/note'
 import { createDirectStatus, createPrivateStatus, createPublicStatus } from '@wildebeest/backend/test/shared.utils'
-import { assertStatus, createTestUser, makeDB } from '@wildebeest/backend/test/utils'
+import { assertStatus, createTestUser, makeDB, mockRemoteActorFetch } from '@wildebeest/backend/test/utils'
 
 const userKEK = 'test_kek5'
 const domain = 'cloudflare.com'
@@ -52,7 +52,7 @@ test('does not serve a direct object', async () => {
 
 test('does not serve a remote object', async () => {
 	const db = makeDB()
-	const actor = await createTestUser(domain, db, userKEK, 'remote-cache@cloudflare.com')
+	mockRemoteActorFetch('https://example.com/users/remote')
 	const properties: Remote<Note> = {
 		type: 'Note',
 		id: 'https://example.com/id/remote-object',
@@ -62,7 +62,7 @@ test('does not serve a remote object', async () => {
 		to: [PUBLIC_GROUP],
 		cc: [],
 	}
-	const cached = await getAndCacheObject<Note>(domain, db, properties, actor)
+	const cached = await getAndCacheObject<Note>(domain, db, properties)
 	assert.ok(cached?.object)
 
 	const res = await app.fetch(new Request(cached.object.id), { DATABASE: db })

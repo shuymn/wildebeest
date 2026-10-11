@@ -4,13 +4,15 @@ import { CreateActivity, PUBLIC_GROUP } from '@wildebeest/backend/activitypub/ac
 import * as activityHandler from '@wildebeest/backend/activitypub/activities/handle'
 import { getApId, getObjectById, originalObjectIdSymbol } from '@wildebeest/backend/activitypub/objects'
 import { Note } from '@wildebeest/backend/activitypub/objects/note'
-import { makeDB, createTestUser, createActivityId } from '@wildebeest/backend/test/utils'
+import { makeDB, createTestUser, createActivityId, mockRemoteActorFetch } from '@wildebeest/backend/test/utils'
 import type { JWK } from '@wildebeest/backend/webpush/jwk'
 
 const adminEmail = 'admin@example.com'
 const domain = 'cloudflare.com'
 const userKEK = 'test_kek15'
 const vapidKeys = {} as JWK
+// Inbound Notes come from a remote actor of the same origin as the Note.
+const remoteActorId = getApId('https://example.com/actor')
 
 describe('Create', () => {
 	test('Object must be an object', async () => {
@@ -57,18 +59,19 @@ describe('Create', () => {
 	test('Note to inbox stores in DB', async () => {
 		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		mockRemoteActorFetch(remoteActorId.toString())
 
 		const activity: CreateActivity<Note> = {
 			type: 'Create',
 			id: createActivityId(domain),
-			actor: actor.id,
+			actor: remoteActorId,
 			to: [actor.id],
 			cc: [],
 			object: {
 				id: getApId('https://example.com/note1'),
 				type: 'Note',
 				content: 'test note',
-				attributedTo: actor.id,
+				attributedTo: remoteActorId,
 				attachment: [],
 				to: [actor.id],
 				cc: [],
@@ -134,10 +137,11 @@ describe('Create', () => {
 		assert.equal(entry.actor_id, remoteActorId)
 	})
 
-	test('local actor sends Note with mention create notification', async () => {
+	test('remote actor sends Note with mention create notification', async () => {
 		const db = makeDB()
 		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
-		const actorB = await createTestUser(domain, db, userKEK, 'b@cloudflare.com')
+		const actorB = { id: remoteActorId }
+		mockRemoteActorFetch(remoteActorId.toString())
 
 		const activity: CreateActivity<Note> = {
 			type: 'Create',
@@ -171,7 +175,8 @@ describe('Create', () => {
 
 	test('Note records reply', async () => {
 		const db = makeDB()
-		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		const actor = { id: remoteActorId }
+		mockRemoteActorFetch(remoteActorId.toString())
 
 		{
 			const activity: CreateActivity<Note> = {
@@ -233,7 +238,8 @@ describe('Create', () => {
 
 	test('preserve Note sent with `to`', async () => {
 		const db = makeDB()
-		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		const actor = { id: remoteActorId }
+		mockRemoteActorFetch(remoteActorId.toString())
 
 		const activity: CreateActivity<Note> = {
 			type: 'Create',
@@ -263,12 +269,13 @@ describe('Create', () => {
 	test('Object props get sanitized', async () => {
 		const db = makeDB()
 		const person = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		mockRemoteActorFetch(remoteActorId.toString())
 
 		const activity: CreateActivity<Note> = {
 			'@context': 'https://www.w3.org/ns/activitystreams',
 			id: createActivityId(domain),
 			type: 'Create',
-			actor: person,
+			actor: remoteActorId,
 			object: {
 				id: getApId('https://example.com/note2'),
 				type: 'Note',
@@ -277,7 +284,7 @@ describe('Create', () => {
 				spoiler_text: '<b>spoiler</b><img src=x onerror="alert(2)">',
 				content:
 					'<div><span class="bad h-10 p-100\tu-22\r\ndt-xi e-bam mention hashtag ellipsis invisible o-bad">foo</span><br/><p><a href="blah"><b>bold</b></a></p><script>alert("evil")</script></div>',
-				attributedTo: person.id,
+				attributedTo: remoteActorId,
 				to: [person],
 				cc: [],
 				attachment: [],
