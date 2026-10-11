@@ -3,7 +3,7 @@ import type { Context, Handler } from 'hono'
 
 import { createKopjeFederation, type FederationState, nodeInfo } from './federation'
 import type { LoaderDeps } from './loader'
-import { saveSnapshot, snapshotKey } from './snapshot'
+import { createSnapshotSaver, snapshotKey } from './snapshot'
 import { readConfig } from '../platform/config'
 import { callStore, type StoreResolver } from '../platform/store-client'
 import type { KeyGen } from '../security/key-wrap'
@@ -35,6 +35,7 @@ const NODEINFO_20 = 'http://nodeinfo.diaspora.software/ns/schema/2.0'
 const NODEINFO_21 = 'http://nodeinfo.diaspora.software/ns/schema/2.1'
 
 export function federationHandler(deps: FederationRouteDeps): Handler<FederationEnv> {
+	const saveSnapshot = createSnapshotSaver(deps.now)
 	return async (c) => {
 		const url = new URL(c.req.url)
 		const { response, canonical } = await respond(c, deps, url)
@@ -90,7 +91,13 @@ async function viaFedify(c: Context<FederationEnv>, deps: FederationRouteDeps, u
 	if (state.storeError !== null) {
 		throw state.storeError
 	}
-	const canonical = url.pathname !== '/.well-known/webfinger' || canonicalWebFinger(url, domain, state.resolvedUsername)
+	// An actor path counts only once the dispatcher has matched a local actor; /actor and NodeInfo are fixed.
+	const canonical =
+		url.pathname === '/.well-known/webfinger'
+			? canonicalWebFinger(url, domain, state.resolvedUsername)
+			: url.pathname.startsWith('/ap/users/')
+				? state.resolvedUsername !== null
+				: true
 	return { response, canonical }
 }
 

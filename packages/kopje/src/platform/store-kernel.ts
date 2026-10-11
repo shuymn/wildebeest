@@ -73,6 +73,15 @@ export type Snapshot = { contentType: string; body: string }
 
 export const SNAPSHOT_STATE_PREFIX = 'snapshot:'
 
+// Caps that keep the snapshots bounded whatever a request asks for: keys have one of two shapes and a bounded length,
+// and a body over the size cap is never stored (the rescue path then answers 503, as without a snapshot).
+export const SNAPSHOT_MAX_KEY_LENGTH = 512
+export const SNAPSHOT_MAX_BODY_BYTES = 64 * 1024
+
+export function isSnapshotKey(key: string): boolean {
+	return key.length <= SNAPSHOT_MAX_KEY_LENGTH && /^(path|webfinger):\S+$/.test(key)
+}
+
 type ExpectedMigration = Migration & { checksum: string }
 type AppliedMigration = { name: string; checksum: string }
 
@@ -149,6 +158,9 @@ export class StoreKernel {
 	// directly, which exists whatever the schema state, so it works for any caller build and while the Store refuses
 	// domain operations.
 	readSnapshot(key: string): Snapshot | null {
+		if (!isSnapshotKey(key)) {
+			return null
+		}
 		try {
 			const value = this.#readState(`${SNAPSHOT_STATE_PREFIX}${key}`)
 			return value === null ? null : (JSON.parse(value) as Snapshot)

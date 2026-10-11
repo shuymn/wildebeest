@@ -6,8 +6,10 @@ import { harness } from './app-helpers'
 import { fixtureKeyGen, LEGACY, seedLocalAccount, setDomain } from './federation-helpers'
 import { BUILD, freshStore, migratedStore, testKernel } from './helpers'
 import { MIGRATIONS } from '../src/db/migrations'
+import { createSnapshotSaver, SNAPSHOT_SAVE_INTERVAL_MS } from '../src/federation/snapshot'
 import type { StoreStub } from '../src/platform/store-client'
 import { storeMaintenanceError } from '../src/platform/store-errors'
+import { SNAPSHOT_MAX_BODY_BYTES } from '../src/platform/store-kernel'
 
 const DOMAIN = 'social.example'
 const AP = { headers: { accept: 'application/activity+json' } }
@@ -114,6 +116,78 @@ describe('actor document snapshot', () => {
 		const { request } = harness(store, {}, '0.0.0-other', offline)
 		expect((await request('/ap/users/Alice', AP)).status).toBe(503)
 		expect((await request('/nodeinfo/2.1')).status).toBe(503)
+	})
+})
+
+describe('snapshot caps', () => {
+	it('creates no rows for arbitrary handles, resources or query strings', async () => {
+		const { store } = await healthyInstance()
+		const before = await snapshotNames(store)
+		const { request } = harness(store, { USER_KEK: LEGACY.kek }, BUILD, offline)
+		for (let i = 0; i < 20; i++) {
+			const junk = `${crypto.randomUUID()}${'x'.repeat(i * 50)}`
+			await request(`/ap/users/${junk}`, AP)
+			await request(`/ap/users/Alice?v=${junk}`, AP)
+			await request(`/.well-known/webfinger?resource=acct:${junk}@social.example`)
+			await request(`/.well-known/webfinger?resource=https://social.example/ap/users/${junk}`)
+			await request(`/nodeinfo/2.1?v=${junk}`)
+		}
+		expect(await snapshotNames(store)).toEqual(before)
+	})
+
+	it('does not store a document over the size cap', async () => {
+		const store = await migratedStore()
+		await setDomain(store, DOMAIN)
+		await seedLocalAccount(store, DOMAIN, { id: '111111111111111111', username: 'Alice', note: 'x'.repeat(70 * 1024) })
+		const { request } = harness(store, { USER_KEK: LEGACY.kek }, BUILD, offline)
+		expect((await request('/ap/users/Alice', AP)).status).toBe(200)
+		expect(await snapshotNames(store)).not.toContain('snapshot:path:/ap/users/Alice')
+
+		const big = { contentType: 'application/json', body: 'x'.repeat(SNAPSHOT_MAX_BODY_BYTES + 1) }
+		expect(await store.saveSnapshot(BUILD, { key: 'path:/actor', ...big })).toBe(false)
+		expect(await store.saveSnapshot(BUILD, { key: 'hold', contentType: 'x', body: '{}' })).toBe(false)
+		expect(await store.saveSnapshot(BUILD, { key: `path:/${'x'.repeat(600)}`, contentType: 'x', body: '{}' })).toBe(
+			false
+		)
+		expect(await snapshotNames(store)).toEqual([])
+	})
+
+	it('writes only when a document changed, and a changed one at most once per interval', async () => {
+		let now = 0
+		let writes = 0
+		const counting = {
+			saveSnapshot: () => {
+				writes++
+				return Promise.resolve(true)
+			},
+		} as unknown as StoreStub
+		const save = createSnapshotSaver(() => now)
+		const doc = (body: string) => ({ contentType: 'application/activity+json', body })
+
+		await save(counting, BUILD, 'path:/actor', doc('a'))
+		await save(counting, BUILD, 'path:/actor', doc('a'))
+		now = SNAPSHOT_SAVE_INTERVAL_MS * 10
+		await save(counting, BUILD, 'path:/actor', doc('a'))
+		expect(writes).toBe(1)
+
+		await save(counting, BUILD, 'path:/actor', doc('b'))
+		expect(writes).toBe(2)
+		now += 1
+		await save(counting, BUILD, 'path:/actor', doc('c'))
+		expect(writes).toBe(2)
+		now += SNAPSHOT_SAVE_INTERVAL_MS
+		await save(counting, BUILD, 'path:/actor', doc('c'))
+		expect(writes).toBe(3)
+	})
+
+	it('reads only snapshot keys back', async () => {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec("INSERT INTO kopje_state (name, value) VALUES ('snapshot:hold', '{}')")
+		})
+		expect(await store.rescueSnapshot('0.0.0-other', 'hold')).toBeNull()
+		expect(await store.rescueSnapshot('0.0.0-other', 'last_local_id')).toBeNull()
+		expect(await store.rescueSnapshot('0.0.0-other', `path:/${'x'.repeat(600)}`)).toBeNull()
 	})
 })
 
