@@ -65,6 +65,9 @@ jobs:
       - name: Install packages
         run: pnpm install
 
+      - name: Ensure the legacy migration line is frozen at 0039
+        run: ./scripts/ops/check-frozen-migrations.sh migrations
+
       - name: Configure Cloudflare Images variants
         run: |
           curl -XPOST "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CF_ACCOUNT_ID }}/images/v1/variants" \
@@ -98,7 +101,18 @@ jobs:
               }' \
               -H "Authorization: Bearer ${{ secrets.CF_API_TOKEN }}"
 
+      # For an existing instance the D1 database is whatever is bound as
+      # DATABASE on the Pages project, whatever it is named. Never guess it by
+      # name: attaching a new empty database to an existing instance makes the
+      # next login create a fresh actor and key pair and splits the identity.
+      - name: Resolve existing D1 database
+        run: ./scripts/ops/resolve-d1.sh >> "$GITHUB_ENV"
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+
       - name: Create D1 database
+        if: ${{ env.pages_project_exists == 'false' }}
         continue-on-error: true
         run: npx wrangler d1 create wildebeest-${{ env.NAME_SUFFIX }}-v1
         env:
@@ -106,16 +120,26 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: retrieve D1 database
-        run: npx wrangler d1 list --json | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1") | .uuid' | awk '{print "d1_id="$1}' >> "$GITHUB_ENV"
+        if: ${{ env.pages_project_exists == 'false' }}
+        run: |
+          npx wrangler d1 list --json \
+            | jq -r '.[] | select(.name == "wildebeest-${{ env.NAME_SUFFIX }}-v1") | .uuid' \
+            | awk '{print "d1_id="$1}' >> "$GITHUB_ENV"
+          echo "d1_name=wildebeest-${{ env.NAME_SUFFIX }}-v1" >> "$GITHUB_ENV"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
       - name: migrate D1 database
         run: |
+          if [ -z "$d1_id" ] || [ -z "$d1_name" ]
+          then
+              echo "could not resolve the D1 database to migrate"
+              exit 1
+          fi
           sed -i \
-            -e 's/^database_name = ".*"/database_name = "wildebeest-${{ env.NAME_SUFFIX }}-v1"/' \
-            -e 's/^database_id = ".*"/database_id = "${{ env.d1_id }}"/' \
+            -e "s/^database_name = \".*\"/database_name = \"$d1_name\"/" \
+            -e "s/^database_id = \".*\"/database_id = \"$d1_id\"/" \
             wrangler.toml
           npx wrangler d1 migrations apply --remote DATABASE
         env:
@@ -156,15 +180,29 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
+      # Regenerating the VAPID keys of a live instance breaks every existing
+      # Web Push subscription, so they are generated on a first install only.
+      # If the instance already exists and the keys could not be read, stop.
       - name: generate VAPID keys if needed
         run: |
           sudo chmod 777 ./tf/vapid_jwk || true
 
+          ./scripts/ops/vapid-fingerprint.sh before ./tf/vapid_jwk
+
           if [ ! -s ./tf/vapid_jwk ]
           then
+            if [ "$pages_project_exists" = "true" ] || [ -n "$tfstate_kv" ]
+            then
+                echo "This instance already exists but its VAPID keys could not be read from KV."
+                echo "Refusing to generate new keys: that would invalidate every existing Web Push subscription."
+                echo "Restore the vapid_jwk key in the wildebeest-terraform-${NAME_SUFFIX}-state KV namespace and re-run."
+                exit 1
+            fi
             node ./scripts/generate-vapid-keys.mjs > ./tf/vapid_jwk
-            echo "VAPID keys generated"
+            echo "VAPID keys generated (first install)"
           fi
+
+          ./scripts/ops/vapid-fingerprint.sh after ./tf/vapid_jwk
 
       - name: Publish DO
         run: |
@@ -239,7 +277,7 @@ jobs:
             echo ""
             echo "[[d1_databases]]"
             echo "binding = \"DATABASE\""
-            echo "database_name = \"wildebeest-${{ env.NAME_SUFFIX }}-v1\""
+            echo "database_name = \"${{ env.d1_name }}\""
             echo "database_id = \"${{ env.d1_id }}\""
             echo ""
             echo "[durable_objects]"
