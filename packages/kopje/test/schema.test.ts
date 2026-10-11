@@ -2,9 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { BUILD, freshStore } from './helpers'
-import { MIGRATIONS } from '../src/db/migrations'
-import { StoreKernel } from '../src/platform/store-kernel'
+import { migratedStore } from './helpers'
 
 const LOCAL = '100000000000000001'
 const REMOTE = '100000000000000002'
@@ -17,23 +15,15 @@ function count(sql: SqlStorage, table: string): number {
 	return sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table}`).one().n
 }
 
-async function migrated(): Promise<ReturnType<typeof freshStore>> {
-	const store = freshStore()
-	await runInDurableObject(store, (_instance, state) =>
-		new StoreKernel(state, { build: BUILD, migrations: MIGRATIONS, log: () => {} }).upgrade()
-	)
-	return store
-}
-
 describe('schema 0000', () => {
 	it('passes foreign_key_check on a fresh database', async () => {
-		await runInDurableObject(await migrated(), (_instance, state) => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
 			expect(state.storage.sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
 		})
 	})
 
 	it('rejects ids that are not 18 digits', async () => {
-		await runInDurableObject(await migrated(), (_instance, state) => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
 			const insert = (id: string) =>
 				state.storage.sql.exec(
 					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, 'a', 'x.test')",
@@ -49,7 +39,7 @@ describe('schema 0000', () => {
 	it.each(['accounts', 'statuses', 'media_attachments', 'lists'])(
 		'rejects non-text snowflake ids in %s',
 		async (table) => {
-			await runInDurableObject(await migrated(), (_instance, state) => {
+			await runInDurableObject(await migratedStore(), (_instance, state) => {
 				const sql = state.storage.sql
 				sql.exec(`
 				INSERT INTO accounts (id, uri, username) VALUES ('${LOCAL}', 'https://local.test/ap/users/me', 'me');
@@ -71,7 +61,7 @@ describe('schema 0000', () => {
 	)
 
 	it('keeps local_accounts rows on local accounts only', async () => {
-		await runInDurableObject(await migrated(), (_instance, state) => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
 			const sql = state.storage.sql
 			sql.exec(`
 				INSERT INTO accounts (id, uri, username) VALUES ('${LOCAL}', 'https://local.test/ap/users/me', 'me');
@@ -96,7 +86,7 @@ describe('schema 0000', () => {
 	})
 
 	it('refuses raw on statuses of local accounts', async () => {
-		await runInDurableObject(await migrated(), (_instance, state) => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
 			const sql = state.storage.sql
 			sql.exec(`
 				INSERT INTO accounts (id, uri, username) VALUES ('${LOCAL}', 'https://local.test/ap/users/me', 'me');
@@ -118,7 +108,7 @@ describe('schema 0000', () => {
 	})
 
 	it('cascades a remote status delete to its children and keeps unresolved reply URIs', async () => {
-		await runInDurableObject(await migrated(), (_instance, state) => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
 			const sql = state.storage.sql
 			sql.exec(`
 				INSERT INTO accounts (id, uri, username) VALUES ('${LOCAL}', 'https://local.test/ap/users/me', 'me');

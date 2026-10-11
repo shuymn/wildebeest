@@ -1,10 +1,9 @@
-import { runInDurableObject } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 
 import { describe, expect, it } from 'vitest'
 
-import { harness, migratedStore } from './app-helpers'
-import { BUILD, freshStore } from './helpers'
+import { harness } from './app-helpers'
+import { BUILD, completeSetup, freshStore, migratedStore } from './helpers'
 import { healthReport } from '../src/app/health'
 import { readConfig } from '../src/platform/config'
 import type { StoreStub } from '../src/platform/store-client'
@@ -77,9 +76,7 @@ describe('app skeleton', () => {
 		}
 		expect((await request('/inbox', { method: 'POST', body: '{}' })).status).toBe(503)
 
-		await runInDurableObject(store, (_instance, state) => {
-			state.storage.sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje.test')")
-		})
+		await completeSetup(store)
 		expect((await request('/.well-known/webfinger')).status).toBe(404)
 	})
 })

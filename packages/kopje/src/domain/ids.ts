@@ -25,10 +25,6 @@ function format(id: bigint): string {
 	return text
 }
 
-function snowflake(ms: number, random: RandomInt): string {
-	return format(snowflakeValue(ms, random))
-}
-
 const LAST_LOCAL_ID = 'last_local_id'
 
 // Allocates a local ID: max((now << 16) | rand16, last + 1), so IDs strictly increase even within one millisecond
@@ -48,7 +44,7 @@ export function allocateLocalId(db: Db, nowMs: number, random: RandomInt = crypt
 export function remoteId(published: string, nowMs: number, random: RandomInt = cryptoRandomInt): string {
 	const parsed = Date.parse(published)
 	const ms = Math.max(Number.isNaN(parsed) || parsed > nowMs ? nowMs : parsed, EARLIEST_MS)
-	return snowflake(Math.floor(ms / 1000) * 1000 + random(1000), random)
+	return format(snowflakeValue(Math.floor(ms / 1000) * 1000 + random(1000), random))
 }
 
 const MAX_ID_ATTEMPTS = 5

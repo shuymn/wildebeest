@@ -1,6 +1,7 @@
 import { processInbox, type InboxDeps } from '../federation/inbox'
 import { type SpoolMessage, spoolMessageOptions } from '../federation/spool'
 import { readConfig } from '../platform/config'
+import { errorMessage } from '../platform/error-message'
 import { StoreUnavailableError } from '../platform/store-errors'
 
 // Delay before a spooled request is offered again while maintenance lasts.
@@ -55,8 +56,4 @@ async function requeue(message: Message, body: SpoolMessage, queue: Queue): Prom
 function isSpoolMessage(body: unknown): body is SpoolMessage {
 	const m = body as Partial<SpoolMessage> | null
 	return typeof m === 'object' && m !== null && m.kind === 'spool' && m.body instanceof Uint8Array
-}
-
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error)
 }

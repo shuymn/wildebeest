@@ -1,22 +1,12 @@
 import { createExecutionContext, runInDurableObject } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 
-import { BUILD, freshStore } from './helpers'
+import { BUILD, migratedStore } from './helpers'
 import { QueueSim } from './queue-sim'
 import { createApp } from '../src/app/app'
-import { MIGRATIONS } from '../src/db/migrations'
 import type { StoreStub } from '../src/platform/store-client'
-import { StoreKernel } from '../src/platform/store-kernel'
 
 export const NOW = Date.parse('2026-10-12T00:00:00.000Z')
-
-export async function migratedStore(): Promise<StoreStub> {
-	const store = freshStore()
-	await runInDurableObject(store, (_instance, state) =>
-		new StoreKernel(state, { build: BUILD, migrations: MIGRATIONS, log: () => {} }).upgrade()
-	)
-	return store
-}
 
 // Leaves a persisted readonly hold of this build in a Store whose kernel has not loaded its state yet, as a failed
 // upgrade would. Also completes setup so federation routes are reachable.

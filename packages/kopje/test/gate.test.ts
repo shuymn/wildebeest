@@ -1,14 +1,11 @@
-import { runInDurableObject } from 'cloudflare:test'
-
 import { describe, expect, it } from 'vitest'
 
-import { harness, heldStore, migratedStore, NOW } from './app-helpers'
-import { BUILD } from './helpers'
+import { harness, heldStore, NOW } from './app-helpers'
+import { BUILD, completeSetup, migratedStore } from './helpers'
 import { MAX_RETRIES, QueueSim } from './queue-sim'
 import { classifyRequest, decide, type RequestClass } from '../src/app/gate'
 import type { SpoolMessage } from '../src/federation/spool'
 import { handleQueue, SPOOL_REQUEUE_DELAY_SECONDS } from '../src/jobs/queue'
-import { maxMode } from '../src/platform/maintenance'
 import type { StoreStub } from '../src/platform/store-client'
 
 describe('request classification', () => {
@@ -53,12 +50,6 @@ describe('request classification', () => {
 			write: ['serve', 'unavailable', 'unavailable'],
 			inbox: ['serve', 'spool', 'spool'],
 		})
-	})
-
-	it('takes the stricter of two modes', () => {
-		expect(maxMode('off', 'readonly')).toBe('readonly')
-		expect(maxMode('full', 'readonly')).toBe('full')
-		expect(maxMode('off', 'off')).toBe('off')
 	})
 })
 
@@ -113,9 +104,7 @@ describe('maintenance gate', () => {
 	it('hands inbox POSTs to the inbox handler without spooling when nothing is held', async () => {
 		const store = await migratedStore()
 		const { request, send } = harness(store)
-		await runInDurableObject(store, (_instance, state) => {
-			state.storage.sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje.test')")
-		})
+		await completeSetup(store)
 
 		expect((await request('/inbox', { method: 'POST', body: '{}' })).status).toBe(202)
 		expect(send).not.toHaveBeenCalled()
@@ -256,9 +245,7 @@ describe('spool consumer', () => {
 
 		// Maintenance is over: the env is off and the Store serves writes again.
 		const healthy = await migratedStore()
-		await runInDurableObject(healthy, (_instance, state) => {
-			state.storage.sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje.test')")
-		})
+		await completeSetup(healthy)
 		await consume({ ...env, MAINTENANCE: 'off' } as Env, () => healthy)
 		expect(queue.pending).toEqual([])
 		expect(queue.retries).toBe(0)

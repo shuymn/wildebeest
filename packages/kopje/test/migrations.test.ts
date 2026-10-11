@@ -2,11 +2,10 @@ import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { BUILD, freshStore, rejectionOf, tableNames } from './helpers'
+import { BUILD, freshStore, rejectionOf, tableNames, testKernel as kernel } from './helpers'
 import { MIGRATIONS } from '../src/db/migrations'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
-import { type Migration, StoreKernel } from '../src/platform/store-kernel'
 
 const SCHEMA_TABLES = [
 	'accounts',
@@ -51,14 +50,6 @@ function bookkeeping(sql: SqlStorage) {
 	return sql
 		.exec<{ name: string; applied_at: number }>('SELECT name, applied_at FROM kopje_migrations ORDER BY name')
 		.toArray()
-}
-
-function kernel(
-	state: DurableObjectState,
-	migrations: readonly Migration[],
-	extra: Partial<{ build: string; transaction: <T>(fn: () => T) => T; inject: (phase: string) => void }> = {}
-) {
-	return new StoreKernel(state, { build: BUILD, migrations, log: () => {}, ...extra })
 }
 
 describe('Store migration runner', () => {

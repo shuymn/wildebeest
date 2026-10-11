@@ -1,3 +1,5 @@
+import { errorMessage } from '../platform/error-message'
+
 // Inbox requests received while the Store cannot take them are spooled to the Queue and answered with 202.
 // B0 handles requests that fit one message; splitting into inbound_spool parts and replay come later.
 
@@ -35,7 +37,7 @@ export async function spoolInbox(request: Request, body: Uint8Array, queue: Queu
 	try {
 		await queue.send(message, spoolMessageOptions)
 	} catch (error) {
-		console.error({ event: 'kopje.spool.failed', error: error instanceof Error ? error.message : String(error) })
+		console.error({ event: 'kopje.spool.failed', error: errorMessage(error) })
 		return new Response(null, { status: 503 })
 	}
 	return new Response(null, { status: 202 })

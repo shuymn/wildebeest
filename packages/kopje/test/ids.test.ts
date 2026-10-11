@@ -2,11 +2,9 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { BUILD, freshStore } from './helpers'
-import { MIGRATIONS } from '../src/db/migrations'
+import { BUILD, freshStore, migratedStore, testKernel } from './helpers'
 import { allocateLocalId, insertWithFreshId, type RandomInt, remoteId } from '../src/domain/ids'
 import { writeOperation } from '../src/domain/operation'
-import { StoreKernel } from '../src/platform/store-kernel'
 
 const NOW = Date.parse('2026-10-12T12:34:56.789Z')
 const fixed =
@@ -31,7 +29,7 @@ describe('ID generator', () => {
 	it('allocates local IDs in the Store that increase within one millisecond and across a backwards clock', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
-			const k = new StoreKernel(state, { build: BUILD, migrations: MIGRATIONS, log: () => {} })
+			const k = testKernel(state)
 			await k.upgrade()
 			const allocate = writeOperation<{ now: number; random: RandomInt }, string>((db, { now, random }) =>
 				allocateLocalId(db, now, random)
@@ -75,9 +73,7 @@ describe('ID generator', () => {
 	})
 
 	it('regenerates on an ID collision and lets other UNIQUE violations through', async () => {
-		const store = freshStore()
-		await runInDurableObject(store, async (_instance, state) => {
-			await new StoreKernel(state, { build: BUILD, migrations: MIGRATIONS, log: () => {} }).upgrade()
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
 			const sql = state.storage.sql
 			const insert = (uri: string) => (id: string) => {
 				sql.exec("INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, 'a', 'x.test')", id, uri)

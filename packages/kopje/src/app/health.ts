@@ -1,4 +1,5 @@
 import type { ConfigResult } from '../platform/config'
+import { errorMessage } from '../platform/error-message'
 import type { StoreStub } from '../platform/store-client'
 
 type Check = { ok: boolean; [detail: string]: unknown }
@@ -24,7 +25,7 @@ export async function healthReport(build: string, config: ConfigResult, store: (
 			}
 			checks.database = { ok: true, size: health.databaseSize }
 		} catch (error) {
-			checks.store = { ok: false, error: error instanceof Error ? error.message : String(error) }
+			checks.store = { ok: false, error: errorMessage(error) }
 		}
 	}
 	return { ok: Object.values(checks).every((check) => check.ok), build, checks }
