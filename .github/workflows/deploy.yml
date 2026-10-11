@@ -9,6 +9,10 @@ on:
       - "*.md"
       - "docs/**"
       - "renovate.json"
+      # The new system (Kopje) is built in this repository but never deployed
+      # as the legacy instance.
+      - "packages/kopje/**"
+      - "tools/**"
   repository_dispatch:
 
 jobs:
