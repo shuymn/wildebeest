@@ -47,6 +47,77 @@ describe('schema 0000', () => {
 		})
 	})
 
+	it.each(['accounts', 'statuses', 'media_attachments', 'lists'])(
+		'rejects non-text snowflake ids in %s',
+		async (table) => {
+			await runInDurableObject(await migrated(), (_instance, state) => {
+				const sql = state.storage.sql
+				sql.exec(`
+				INSERT INTO accounts (id, uri, username) VALUES ('${LOCAL}', 'https://local.test/ap/users/me', 'me');
+				INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+					VALUES ('${LOCAL}', 'me@local.test', x'00', x'00', 'pem');
+			`)
+				const values: Record<string, string> = {
+					accounts: "(id, uri, username, domain) VALUES (?, 'https://x.test/b', 'b', 'x.test')",
+					statuses: `(id, uri, account_id, visibility, published_at) VALUES (?, 'https://x.test/s', '${LOCAL}', 'public', 'now')`,
+					media_attachments: `(id, account_id, type, url) VALUES (?, '${LOCAL}', 'image', 'https://x.test/m')`,
+					lists: `(id, account_id, title) VALUES (?, '${LOCAL}', 'l')`,
+				}
+				// 18 ASCII digits stored as a BLOB pass a length and GLOB check.
+				const blob = new TextEncoder().encode('123456789012345678')
+				expect(() => sql.exec(`INSERT INTO ${table} ${values[table]}`, blob)).toThrow(/CHECK constraint failed/)
+				expect(() => sql.exec(`INSERT INTO ${table} ${values[table]}`, '123456789012345678')).not.toThrow()
+			})
+		}
+	)
+
+	it('keeps local_accounts rows on local accounts only', async () => {
+		await runInDurableObject(await migrated(), (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(`
+				INSERT INTO accounts (id, uri, username) VALUES ('${LOCAL}', 'https://local.test/ap/users/me', 'me');
+				INSERT INTO accounts (id, uri, username, domain) VALUES ('${REMOTE}', 'https://remote.test/users/them', 'them', 'remote.test');
+			`)
+			const addLocal = (id: string, email: string) =>
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, x'00', x'00', 'pem')",
+					id,
+					email
+				)
+			expect(() => addLocal(REMOTE, 'them@local.test')).toThrow(/local_accounts requires a local account/)
+			addLocal(LOCAL, 'me@local.test')
+			expect(() => sql.exec('UPDATE local_accounts SET account_id = ? WHERE account_id = ?', REMOTE, LOCAL)).toThrow(
+				/local_accounts requires a local account/
+			)
+			expect(() => sql.exec("UPDATE accounts SET domain = 'evil.test' WHERE id = ?", LOCAL)).toThrow(
+				/a local account cannot get a domain/
+			)
+			expect(sql.exec('SELECT domain FROM accounts WHERE id = ?', LOCAL).one()).toEqual({ domain: null })
+		})
+	})
+
+	it('refuses raw on statuses of local accounts', async () => {
+		await runInDurableObject(await migrated(), (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(`
+				INSERT INTO accounts (id, uri, username) VALUES ('${LOCAL}', 'https://local.test/ap/users/me', 'me');
+				INSERT INTO accounts (id, uri, username, domain) VALUES ('${REMOTE}', 'https://remote.test/users/them', 'them', 'remote.test');
+				INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES ('${STATUS}', 'https://local.test/ap/o/1', '${LOCAL}', 'public', 'now');
+				INSERT INTO statuses (id, uri, account_id, visibility, published_at, raw) VALUES ('${REPLY}', 'https://remote.test/notes/1', '${REMOTE}', 'public', 'now', '{}');
+			`)
+			const refused = /local statuses cannot hold raw/
+			expect(() =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, published_at, raw) VALUES ('${BOOST}', 'https://local.test/ap/o/2', '${LOCAL}', 'public', 'now', '{}')`
+				)
+			).toThrow(refused)
+			expect(() => sql.exec("UPDATE statuses SET raw = '{}' WHERE id = ?", STATUS)).toThrow(refused)
+			expect(() => sql.exec('UPDATE statuses SET account_id = ? WHERE id = ?', LOCAL, REPLY)).toThrow(refused)
+			// A remote account cannot turn local while its statuses still hold raw.
+			expect(() => sql.exec('UPDATE accounts SET domain = NULL WHERE id = ?', REMOTE)).toThrow(refused)
+		})
+	})
+
 	it('cascades a remote status delete to its children and keeps unresolved reply URIs', async () => {
 		await runInDurableObject(await migrated(), (_instance, state) => {
 			const sql = state.storage.sql

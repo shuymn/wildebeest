@@ -12,6 +12,7 @@
 --              (child rows would silently CASCADE away). Every child FK column is indexed, except
 --              outbound_activities.account_id (the table only holds pending rows).
 --              Rows only local users own reference local_accounts, so locality is enforced by the FK.
+--              Triggers keep local_accounts on local accounts and raw off local statuses.
 --   Legacy   : legacy_id (old API ID) and legacy_ap_o (uuid of an old /ap/o/<uuid>) are filled by migration only.
 
 -- ============================================================
@@ -19,7 +20,7 @@
 -- ============================================================
 
 CREATE TABLE accounts (
-  id TEXT NOT NULL PRIMARY KEY CHECK (length(id) = 18 AND id NOT GLOB '*[^0-9]*'),
+  id TEXT NOT NULL PRIMARY KEY CHECK (typeof(id) = 'text' AND length(id) = 18 AND length(CAST(id AS BLOB)) = 18 AND id NOT GLOB '*[^0-9]*'),
   uri TEXT NOT NULL UNIQUE,                       -- AP actor ID. Local: https://DOMAIN/ap/users/<handle>
   username TEXT NOT NULL,                         -- preferredUsername, case as received
   domain TEXT CHECK (domain IS NULL OR domain = lower(domain)),
@@ -62,12 +63,30 @@ CREATE TABLE local_accounts (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+CREATE TRIGGER local_accounts_local_insert BEFORE INSERT ON local_accounts
+WHEN (SELECT domain FROM accounts WHERE id = NEW.account_id) IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'local_accounts requires a local account');
+END;
+
+CREATE TRIGGER local_accounts_local_update BEFORE UPDATE OF account_id ON local_accounts
+WHEN (SELECT domain FROM accounts WHERE id = NEW.account_id) IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'local_accounts requires a local account');
+END;
+
+CREATE TRIGGER accounts_local_keeps_domain BEFORE UPDATE OF domain ON accounts
+WHEN NEW.domain IS NOT NULL AND EXISTS (SELECT 1 FROM local_accounts WHERE account_id = NEW.id)
+BEGIN
+  SELECT RAISE(ABORT, 'a local account cannot get a domain');
+END;
+
 -- ============================================================
 -- Statuses (a boost is a row with reblog_of_id)
 -- ============================================================
 
 CREATE TABLE statuses (
-  id TEXT NOT NULL PRIMARY KEY CHECK (length(id) = 18 AND id NOT GLOB '*[^0-9]*'),
+  id TEXT NOT NULL PRIMARY KEY CHECK (typeof(id) = 'text' AND length(id) = 18 AND length(CAST(id AS BLOB)) = 18 AND id NOT GLOB '*[^0-9]*'),
   uri TEXT NOT NULL UNIQUE,                       -- local: https://DOMAIN/ap/o/<uuid>; remote: original ID; boost: Announce ID
   url TEXT,
   account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
@@ -105,6 +124,25 @@ CREATE UNIQUE INDEX statuses_client_key ON statuses (account_id, client_key) WHE
 CREATE UNIQUE INDEX statuses_legacy_id ON statuses (legacy_id) WHERE legacy_id IS NOT NULL;
 CREATE UNIQUE INDEX statuses_legacy_ap_o ON statuses (legacy_ap_o) WHERE legacy_ap_o IS NOT NULL;
 
+-- Local statuses are authoritative in columns and never hold raw. A missing account leaves the check to the FK.
+CREATE TRIGGER statuses_local_no_raw_insert BEFORE INSERT ON statuses
+WHEN NEW.raw IS NOT NULL AND (SELECT domain IS NULL FROM accounts WHERE id = NEW.account_id)
+BEGIN
+  SELECT RAISE(ABORT, 'local statuses cannot hold raw');
+END;
+
+CREATE TRIGGER statuses_local_no_raw_update BEFORE UPDATE OF raw, account_id ON statuses
+WHEN NEW.raw IS NOT NULL AND (SELECT domain IS NULL FROM accounts WHERE id = NEW.account_id)
+BEGIN
+  SELECT RAISE(ABORT, 'local statuses cannot hold raw');
+END;
+
+CREATE TRIGGER accounts_local_no_status_raw BEFORE UPDATE OF domain ON accounts
+WHEN NEW.domain IS NULL AND EXISTS (SELECT 1 FROM statuses WHERE account_id = NEW.id AND raw IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'local statuses cannot hold raw');
+END;
+
 CREATE TABLE status_edits (
   id INTEGER PRIMARY KEY,
   status_id TEXT NOT NULL REFERENCES statuses (id) ON DELETE CASCADE,
@@ -118,7 +156,7 @@ CREATE TABLE status_edits (
 CREATE INDEX status_edits_status ON status_edits (status_id, id);
 
 CREATE TABLE media_attachments (
-  id TEXT NOT NULL PRIMARY KEY CHECK (length(id) = 18 AND id NOT GLOB '*[^0-9]*'),
+  id TEXT NOT NULL PRIMARY KEY CHECK (typeof(id) = 'text' AND length(id) = 18 AND length(CAST(id AS BLOB)) = 18 AND id NOT GLOB '*[^0-9]*'),
   account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
   status_id TEXT REFERENCES statuses (id) ON DELETE CASCADE,  -- NULL: uploaded, not attached yet
   position INTEGER NOT NULL DEFAULT 0,
@@ -225,7 +263,7 @@ CREATE TABLE domain_blocks (
 CREATE UNIQUE INDEX domain_blocks_pair ON domain_blocks (account_id, domain);
 
 CREATE TABLE lists (
-  id TEXT NOT NULL PRIMARY KEY CHECK (length(id) = 18 AND id NOT GLOB '*[^0-9]*'),
+  id TEXT NOT NULL PRIMARY KEY CHECK (typeof(id) = 'text' AND length(id) = 18 AND length(CAST(id AS BLOB)) = 18 AND id NOT GLOB '*[^0-9]*'),
   account_id TEXT NOT NULL REFERENCES local_accounts (account_id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   replies_policy TEXT NOT NULL DEFAULT 'list' CHECK (replies_policy IN ('followed', 'list', 'none')),
