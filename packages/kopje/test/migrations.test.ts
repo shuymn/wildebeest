@@ -56,7 +56,7 @@ function bookkeeping(sql: SqlStorage) {
 function kernel(
 	state: DurableObjectState,
 	migrations: readonly Migration[],
-	extra: Partial<{ build: string; transaction: <T>(fn: () => T) => T }> = {}
+	extra: Partial<{ build: string; transaction: <T>(fn: () => T) => T; inject: (phase: string) => void }> = {}
 ) {
 	return new StoreKernel(state, { build: BUILD, migrations, log: () => {}, ...extra })
 }
@@ -131,10 +131,12 @@ describe('Store migration runner', () => {
 	it('re-reads bookkeeping after an error thrown once the writes were already durable', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
-			let calls = 0
+			let thrown = false
+			// Throws once, right after the transaction that recorded 0001_extra committed.
 			const timesOutAfterCommit = <T>(fn: () => T): T => {
 				const value = state.storage.transactionSync(fn)
-				if (++calls === 2) {
+				if (!thrown && bookkeeping(state.storage.sql).some((m) => m.name === '0001_extra')) {
+					thrown = true
 					throw new Error('Durable Object storage operation exceeded timeout')
 				}
 				return value
@@ -168,6 +170,60 @@ describe('Store migration runner', () => {
 			expect(await k.execute(BUILD, countSettings, undefined)).toBe(1)
 			await expect(k.execute(BUILD, putSetting, 'write')).rejects.toThrow('kopje-maintenance: upgrade-failed')
 			expect(await k.execute(BUILD, countSettings, undefined)).toBe(1)
+		})
+	})
+
+	const EXTRA = [...MIGRATIONS, { name: '0001_extra', sql: 'CREATE TABLE extra (a);' }]
+	const failAt = (target: string) => (phase: string) => {
+		if (phase === target) {
+			throw new Error(`injected ${phase} failure`)
+		}
+	}
+
+	it.each([
+		['bookmark', 'bookmark-failed', ['0000_initial']],
+		['apply', 'upgrade-failed', ['0000_initial']],
+		['verify', 'verify-failed', ['0000_initial', '0001_extra']],
+	])('stays readonly after a %s failure, also in a fresh kernel', async (phase, reason, recorded) => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			await kernel(state, MIGRATIONS).upgrade()
+			const k = kernel(state, EXTRA, { inject: failAt(phase) })
+
+			expect(await k.upgrade()).toMatchObject({ ok: false, reason })
+			expect(bookkeeping(state.storage.sql).map((m) => m.name)).toEqual(recorded)
+			for (const view of [k, kernel(state, EXTRA)]) {
+				expect(await view.health(BUILD)).toMatchObject({ readonly: true, hold: reason })
+			}
+		})
+	})
+
+	it('keeps a fresh kernel readonly and re-runs verification when the hold could not be persisted', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			await kernel(state, MIGRATIONS).upgrade()
+			await state.storage.deleteAlarm()
+			// Verification throws, and so does recording the hold: only the upgrade marker is durable.
+			const failing = kernel(state, EXTRA, {
+				inject: (phase) => {
+					failAt('verify')(phase)
+					failAt('hold')(phase)
+				},
+			})
+			expect(await failing.upgrade()).toMatchObject({ ok: false, reason: 'verify-failed' })
+			expect(await failing.health(BUILD)).toMatchObject({ readonly: true })
+
+			// A new isolate sees every file applied but no successful verification.
+			const fresh = kernel(state, EXTRA)
+			expect(await fresh.health(BUILD)).toMatchObject({ schema: { status: 'current' }, readonly: true, hold: null })
+			expect(await fresh.execute(BUILD, countSettings, undefined)).toBe(0)
+			await expect(fresh.execute(BUILD, putSetting, 'domain')).rejects.toThrow('kopje-maintenance: upgrade-in-progress')
+			expect(await state.storage.getAlarm()).not.toBeNull()
+
+			// The alarm re-runs verification only, then leaves readonly.
+			expect(await fresh.upgrade()).toMatchObject({ ok: true, applied: [] })
+			await fresh.execute(BUILD, putSetting, 'domain')
+			expect(await kernel(state, EXTRA).health(BUILD)).toMatchObject({ readonly: false })
 		})
 	})
 

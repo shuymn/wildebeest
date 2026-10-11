@@ -6,6 +6,7 @@ export type MaintenanceReason =
 	| 'version-mismatch'
 	| 'schema-pending'
 	| 'schema-diverged'
+	| 'upgrade-in-progress'
 	| 'upgrade-failed'
 	| 'bookmark-failed'
 	| 'verify-failed'

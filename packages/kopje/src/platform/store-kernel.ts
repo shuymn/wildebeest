@@ -21,8 +21,23 @@ export type SchemaState =
 	| { status: 'pending'; pending: string[] }
 	| { status: 'diverged'; detail: string }
 
-// A persisted readonly flag. Cleared when a different build of the code starts (fix-forward deploy).
+// A persisted readonly flag. Cleared when a different build of the code starts (a new deployment).
 export type Hold = { reason: MaintenanceReason; build: string; detail: string; at: number }
+
+// Persisted before the first file is applied and cleared only in the transaction of a successful verification. Any
+// isolate that finds it stays readonly and re-runs the upgrade, which resumes and verifies.
+type UpgradeMarker = { build: string; bookmark: string; at: number }
+
+type KernelState = { schema: SchemaState; hold: Hold | null; upgrading: UpgradeMarker | null }
+
+// Upgrade phases, in order. A failure in each is reported with its own reason.
+export type UpgradePhase = 'bookmark' | 'apply' | 'verify'
+
+const PHASE_REASON: Record<UpgradePhase, MaintenanceReason> = {
+	bookmark: 'bookmark-failed',
+	apply: 'upgrade-failed',
+	verify: 'verify-failed',
+}
 
 export type UpgradeResult =
 	| { ok: true; bookmark: string | null; applied: string[] }
@@ -35,6 +50,7 @@ export type StoreHealth = {
 	schema: SchemaState & { applied: string[]; expected: string[] }
 	readonly: boolean
 	hold: MaintenanceReason | null
+	upgrading: boolean
 	lastBookmark: string | null
 	databaseSize: number
 }
@@ -43,8 +59,10 @@ export type KernelOptions = {
 	build: string
 	migrations: readonly Migration[]
 	now?: () => number
-	// Seam for fault injection in tests. Defaults to ctx.storage.transactionSync.
+	// Seams for fault injection in tests. transaction defaults to ctx.storage.transactionSync. inject is called inside
+	// each upgrade phase, and as 'hold' before a hold is recorded; throwing there simulates a failure of that step.
 	transaction?: <T>(fn: () => T) => T
+	inject?: (phase: UpgradePhase | 'hold') => void
 	log?: (entry: Record<string, unknown>) => void
 }
 
@@ -62,9 +80,10 @@ export class StoreKernel {
 	readonly #migrations: readonly Migration[]
 	readonly #now: () => number
 	readonly #transaction: <T>(fn: () => T) => T
+	readonly #inject: (phase: UpgradePhase | 'hold') => void
 	readonly #log: (entry: Record<string, unknown>) => void
 	#expected: Promise<ExpectedMigration[]> | undefined
-	#state: { schema: SchemaState; hold: Hold | null } | undefined
+	#state: KernelState | undefined
 
 	constructor(ctx: DurableObjectState, options: KernelOptions) {
 		this.build = options.build
@@ -73,44 +92,36 @@ export class StoreKernel {
 		this.#migrations = options.migrations
 		this.#now = options.now ?? Date.now
 		this.#transaction = options.transaction ?? ((fn) => ctx.storage.transactionSync(fn))
+		this.#inject = options.inject ?? (() => {})
 		this.#log = options.log ?? ((entry) => console.log(entry))
 	}
 
 	// Runs a domain operation if this Store can serve its kind: same build as the caller, schema current, and the
-	// readonly table for a held Store. Otherwise throws a maintenance error that the Worker maps to spool or 503.
-	// The state is checked inside the same transaction that runs the operation.
+	// readonly table for a held or upgrading Store. Otherwise throws a maintenance error that the Worker maps to spool
+	// or 503. The state is checked inside the same transaction that runs the operation.
 	async execute<I, O>(callerBuild: string, operation: StoreOperation<I, O>, input: I): Promise<O> {
 		if (callerBuild !== this.build) {
 			throw storeMaintenanceError('version-mismatch')
 		}
-		await this.#currentState()
+		const loaded = await this.#currentState()
 		return this.#transaction(() => {
-			this.#admit(operation.kind)
+			admit(this.#state ?? loaded, operation.kind)
 			return operation.run(this.#sql, input)
 		})
-	}
-
-	#admit(kind: OperationKind): void {
-		const { schema, hold } = this.#state ?? { schema: { status: 'pending', pending: [] }, hold: null }
-		if (schema.status !== 'current') {
-			throw storeMaintenanceError(schema.status === 'pending' ? 'schema-pending' : 'schema-diverged')
-		}
-		if (hold !== null && !READONLY_ADMITS[kind]) {
-			throw storeMaintenanceError(hold.reason)
-		}
 	}
 
 	// Rescue RPC: available in every state and for any caller build.
 	async health(callerBuild: string): Promise<StoreHealth> {
 		const expected = await this.#expectedMigrations()
-		const { schema, hold } = await this.#currentState()
+		const { schema, hold, upgrading } = await this.#currentState()
 		return {
 			build: this.build,
 			callerBuild,
 			versionMatch: callerBuild === this.build,
 			schema: { ...schema, applied: this.#readApplied().map((m) => m.name), expected: expected.map((m) => m.name) },
-			readonly: schema.status !== 'current' || hold !== null,
+			readonly: schema.status !== 'current' || hold !== null || upgrading !== null,
 			hold: hold?.reason ?? null,
+			upgrading: upgrading !== null,
 			lastBookmark: this.#readState('upgrade_bookmark'),
 			databaseSize: this.#sql.databaseSize,
 		}
@@ -135,33 +146,46 @@ export class StoreKernel {
 		this.#ctx.abort('restoring PITR bookmark')
 	}
 
-	// Brings the schema up to date. Called from the alarm; never from the constructor.
+	// Brings the schema up to date and verifies it. Called from the alarm; never from the constructor. Once the
+	// starting state is loaded, a failure in any phase (bookmark, apply, verify) becomes a result and leaves the
+	// Store readonly; nothing throws past here.
 	async upgrade(): Promise<UpgradeResult> {
 		const expected = await this.#expectedMigrations()
-		const { schema, hold } = await this.#currentState()
+		const state = await this.#currentState()
+		const { schema, hold } = state
 		if (hold !== null) {
-			// A failed upgrade of this build stays readonly until a fixed build is deployed or the DB is restored.
+			// A failed upgrade of this build stays readonly until a new deployment or the DB is restored.
 			return { ok: false, bookmark: null, reason: hold.reason, detail: 'held' }
 		}
 		if (schema.status === 'diverged') {
 			return { ok: false, bookmark: null, reason: 'schema-diverged', detail: schema.detail }
 		}
-		if (schema.status === 'current') {
+		if (schema.status === 'current' && state.upgrading === null) {
 			return { ok: true, bookmark: null, applied: [] }
 		}
 
-		let bookmark: string
-		try {
-			bookmark = await this.#ctx.storage.getCurrentBookmark()
-		} catch (error) {
-			return this.#fail(expected, null, 'bookmark-failed', errorMessage(error))
-		}
-		this.#writeState('upgrade_bookmark', bookmark)
-		this.#log({ event: 'kopje.store.upgrade.start', bookmark, pending: schema.pending })
-
+		let phase: UpgradePhase = 'bookmark'
+		let marker = state.upgrading
+		let current: string | null = null
 		const applied: string[] = []
-		for (const migration of expected.filter((m) => schema.pending.includes(m.name))) {
-			try {
+		try {
+			if (marker === null) {
+				// A resumed upgrade keeps the bookmark taken before its first file.
+				this.#inject('bookmark')
+				const bookmark = await this.#ctx.storage.getCurrentBookmark()
+				const started: UpgradeMarker = { build: this.build, bookmark, at: this.#now() }
+				this.#transaction(() => {
+					this.#writeState('upgrade_bookmark', bookmark)
+					this.#writeState('upgrade', JSON.stringify(started))
+				})
+				marker = started
+				this.#state = { ...state, upgrading: started }
+			}
+			this.#log({ event: 'kopje.store.upgrade.start', bookmark: marker.bookmark, pending: pendingOf(schema) })
+
+			phase = 'apply'
+			for (const migration of expected.filter((m) => pendingOf(schema).includes(m.name))) {
+				current = migration.name
 				this.#transaction(() => {
 					this.#sql.exec(migration.sql)
 					this.#sql.exec(
@@ -170,24 +194,37 @@ export class StoreKernel {
 						migration.checksum,
 						this.#now()
 					)
+					this.#inject('apply')
 				})
-			} catch (error) {
-				// An error does not prove a rollback: a timed-out transaction can still be durable. Re-read the
-				// bookkeeping table and report what is actually there; stay readonly either way.
-				const recorded = this.#readApplied().some((m) => m.name === migration.name)
-				const detail = `${migration.name} (recorded: ${recorded}): ${errorMessage(error)}`
-				return this.#fail(expected, bookmark, 'upgrade-failed', detail)
+				applied.push(migration.name)
 			}
-			applied.push(migration.name)
-		}
+			current = null
 
-		const problem = this.#verify(expected)
-		if (problem !== null) {
-			return this.#fail(expected, bookmark, 'verify-failed', problem)
+			phase = 'verify'
+			const problem = this.#transaction(() => {
+				this.#inject('verify')
+				const found = this.#verify(expected)
+				if (found === null) {
+					this.#writeState('upgrade', null)
+				}
+				return found
+			})
+			if (problem !== null) {
+				return this.#fail(expected, marker.bookmark, 'verify-failed', problem)
+			}
+		} catch (error) {
+			// An error does not prove a rollback: a timed-out transaction can still be durable. Report what is
+			// actually recorded; #fail re-reads the durable state and the Store stays readonly either way.
+			const failed = current
+			const detail =
+				failed === null
+					? errorMessage(error)
+					: `${failed} (recorded: ${this.#readAppliedSafe().some((m) => m.name === failed)}): ${errorMessage(error)}`
+			return this.#fail(expected, marker?.bookmark ?? null, PHASE_REASON[phase], detail)
 		}
-		this.#state = { schema: { status: 'current' }, hold: null }
-		this.#log({ event: 'kopje.store.upgrade.done', bookmark, applied })
-		return { ok: true, bookmark, applied }
+		this.#state = { schema: { status: 'current' }, hold: null, upgrading: null }
+		this.#log({ event: 'kopje.store.upgrade.done', bookmark: marker.bookmark, applied })
+		return { ok: true, bookmark: marker.bookmark, applied }
 	}
 
 	#fail(
@@ -199,12 +236,20 @@ export class StoreKernel {
 		const hold: Hold = { reason, build: this.build, detail, at: this.#now() }
 		this.#log({ event: 'kopje.store.upgrade.failed', bookmark, reason, detail })
 		try {
+			this.#inject('hold')
 			this.#writeState('hold', JSON.stringify(hold))
 		} catch (error) {
-			// Storage may be unusable; the in-memory hold still keeps this instance readonly.
+			// Storage may be unusable. The in-memory hold keeps this isolate readonly, and the durable upgrade marker
+			// keeps a fresh isolate readonly.
 			this.#log({ event: 'kopje.store.hold.persist-failed', error: errorMessage(error) })
 		}
-		this.#state = { schema: this.#compare(expected, this.#readAppliedSafe()), hold }
+		let durable: KernelState
+		try {
+			durable = this.#readDurableState(expected)
+		} catch {
+			durable = { schema: { status: 'pending', pending: expected.map((m) => m.name) }, hold, upgrading: null }
+		}
+		this.#state = { ...durable, hold }
 		return { ok: false, bookmark, reason, detail }
 	}
 
@@ -217,24 +262,34 @@ export class StoreKernel {
 		return schema.status === 'current' ? null : `bookkeeping is ${schema.status} after upgrade`
 	}
 
-	async #currentState(): Promise<{ schema: SchemaState; hold: Hold | null }> {
+	async #currentState(): Promise<KernelState> {
 		if (this.#state !== undefined) {
 			return this.#state
 		}
 		const expected = await this.#expectedMigrations()
 		this.#ensureBookkeeping()
-		let hold = this.#readHold()
-		if (hold !== null && hold.build !== this.build) {
+		let state = this.#readDurableState(expected)
+		if (state.hold !== null && state.hold.build !== this.build) {
 			// A different build failed earlier; this build gets its own attempt.
 			this.#writeState('hold', null)
-			hold = null
+			state = { ...state, hold: null }
 		}
-		const schema = this.#compare(expected, this.#readApplied())
-		if (schema.status === 'pending' && hold === null && (await this.#ctx.storage.getAlarm()) === null) {
+		const unfinished = state.schema.status === 'pending' || state.upgrading !== null
+		if (unfinished && state.hold === null && (await this.#ctx.storage.getAlarm()) === null) {
 			await this.#ctx.storage.setAlarm(this.#now())
 		}
-		this.#state = { schema, hold }
+		this.#state ??= state
 		return this.#state
+	}
+
+	#readDurableState(expected: ExpectedMigration[]): KernelState {
+		const hold = this.#readState('hold')
+		const upgrading = this.#readState('upgrade')
+		return {
+			schema: this.#compare(expected, this.#readApplied()),
+			hold: hold === null ? null : (JSON.parse(hold) as Hold),
+			upgrading: upgrading === null ? null : (JSON.parse(upgrading) as UpgradeMarker),
+		}
 	}
 
 	#compare(expected: ExpectedMigration[], applied: AppliedMigration[]): SchemaState {
@@ -283,11 +338,6 @@ export class StoreKernel {
 		}
 	}
 
-	#readHold(): Hold | null {
-		const value = this.#readState('hold')
-		return value === null ? null : (JSON.parse(value) as Hold)
-	}
-
 	#readState(name: string): string | null {
 		const row = this.#sql.exec<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', name).toArray()[0]
 		return row?.value ?? null
@@ -300,6 +350,21 @@ export class StoreKernel {
 			this.#sql.exec('INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)', name, value)
 		}
 	}
+}
+
+// The maintenance table for one operation kind. A schema that is not current serves nothing; a held or upgrading
+// Store is readonly.
+function admit({ schema, hold, upgrading }: KernelState, kind: OperationKind): void {
+	if (schema.status !== 'current') {
+		throw storeMaintenanceError(schema.status === 'pending' ? 'schema-pending' : 'schema-diverged')
+	}
+	if ((hold !== null || upgrading !== null) && !READONLY_ADMITS[kind]) {
+		throw storeMaintenanceError(hold?.reason ?? 'upgrade-in-progress')
+	}
+}
+
+function pendingOf(schema: SchemaState): string[] {
+	return schema.status === 'pending' ? schema.pending : []
 }
 
 async function sha256(text: string): Promise<string> {
