@@ -5,8 +5,9 @@ type Check = { ok: boolean; [detail: string]: unknown }
 
 export type HealthReport = { ok: boolean; build: string; checks: Record<string, Check> }
 
-// Env validity, Store reachability, schema version, and DB size. Hold details stay in the logs.
-export async function checkHealth(build: string, config: ConfigResult, store: () => StoreStub): Promise<HealthReport> {
+// The detailed report: env validity and issues, Store reachability and build, schema version, and DB size. It is for
+// the admin side only (a later /admin route behind Access); the public /health answers with publicHealth.
+export async function healthReport(build: string, config: ConfigResult, store: () => StoreStub): Promise<HealthReport> {
 	const checks: Record<string, Check> = {
 		env: config.ok ? { ok: true } : { ok: false, issues: config.issues },
 	}
@@ -27,4 +28,13 @@ export async function checkHealth(build: string, config: ConfigResult, store: ()
 		}
 	}
 	return { ok: Object.values(checks).every((check) => check.ok), build, checks }
+}
+
+// What the public /health discloses: ok or fail, nothing else.
+export async function publicHealth(build: string, config: ConfigResult, store: () => StoreStub): Promise<Response> {
+	const { ok } = await healthReport(build, config, store)
+	return new Response(ok ? 'ok' : 'fail', {
+		status: ok ? 200 : 503,
+		headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
+	})
 }

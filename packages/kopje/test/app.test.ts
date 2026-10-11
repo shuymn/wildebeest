@@ -1,19 +1,46 @@
 import { runInDurableObject } from 'cloudflare:test'
+import { env } from 'cloudflare:workers'
 
 import { describe, expect, it } from 'vitest'
 
 import { harness, migratedStore } from './app-helpers'
-import { freshStore } from './helpers'
+import { BUILD, freshStore } from './helpers'
+import { healthReport } from '../src/app/health'
+import { readConfig } from '../src/platform/config'
 import type { StoreStub } from '../src/platform/store-client'
 
 describe('app skeleton', () => {
-	it('reports health with env, Store, schema, and database checks', async () => {
-		const { request } = harness(await migratedStore())
-
-		const response = await request('/health')
+	it('answers public health with a bare ok', async () => {
+		const response = await harness(await migratedStore()).request('/health')
 		expect(response.status).toBe(200)
-		expect(await response.json()).toMatchObject({
+		expect(await response.text()).toBe('ok')
+	})
+
+	it('answers public health with a bare fail while the schema is pending', async () => {
+		const response = await harness(freshStore()).request('/health')
+		expect(response.status).toBe(503)
+		expect(await response.text()).toBe('fail')
+	})
+
+	it('discloses no env issues on public health and refuses other requests on invalid env', async () => {
+		const { request } = harness(await migratedStore(), { MAINTENANCE: 'sometimes' })
+
+		const health = await request('/health')
+		expect(health.status).toBe(503)
+		expect(await health.text()).toBe('fail')
+		expect((await request('/api/v1/instance')).status).toBe(503)
+	})
+
+	it('keeps the detailed report for the admin side', async () => {
+		const store = await migratedStore()
+		const report = await healthReport(BUILD, readConfig({ ...env, MAINTENANCE: 'sometimes' }), () => store)
+		expect(report).toMatchObject({
+			ok: false,
+			checks: { env: { ok: false, issues: [expect.stringMatching(/^MAINTENANCE/)] } },
+		})
+		expect(await healthReport(BUILD, readConfig(env), () => store)).toMatchObject({
 			ok: true,
+			build: BUILD,
 			checks: {
 				env: { ok: true },
 				store: { ok: true },
@@ -21,23 +48,6 @@ describe('app skeleton', () => {
 				database: { ok: true, size: expect.any(Number) },
 			},
 		})
-	})
-
-	it('fails health while the schema is pending', async () => {
-		const response = await harness(freshStore()).request('/health')
-		expect(response.status).toBe(503)
-		expect(await response.json()).toMatchObject({ ok: false, checks: { schema: { ok: false, status: 'pending' } } })
-	})
-
-	it('fails health on invalid env and refuses other requests', async () => {
-		const { request } = harness(await migratedStore(), { MAINTENANCE: 'sometimes' })
-
-		const health = await request('/health')
-		expect(health.status).toBe(503)
-		expect(await health.json()).toMatchObject({
-			checks: { env: { ok: false, issues: [expect.stringMatching(/^MAINTENANCE/)] } },
-		})
-		expect((await request('/api/v1/instance')).status).toBe(503)
 	})
 
 	it('returns JSON 404 for unknown API paths', async () => {

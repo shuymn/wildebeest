@@ -3,7 +3,7 @@ import { HTTPException } from 'hono/http-exception'
 
 import { readBoundedBody } from './body'
 import { classifyRequest, decide, type RequestClass } from './gate'
-import { checkHealth } from './health'
+import { publicHealth } from './health'
 import { INBOX_ROUTES, inboxHandler } from '../federation/inbox'
 import { FEDERATION_PATHS, requireSetup } from '../federation/setup-gate'
 import { INBOX_BODY_LIMIT, spoolInbox } from '../federation/spool'
@@ -56,10 +56,7 @@ export function createApp({ build, now, store = defaultStore }: AppDeps) {
 		await next()
 	})
 
-	app.get('/health', async (c) => {
-		const report = await checkHealth(build(c.env), readConfig(c.env), () => store(c.env))
-		return c.json(report, report.ok ? 200 : 503)
-	})
+	app.get('/health', (c) => publicHealth(build(c.env), readConfig(c.env), () => store(c.env)))
 
 	const setupGate = requireSetup(build, store)
 	for (const path of FEDERATION_PATHS) {
