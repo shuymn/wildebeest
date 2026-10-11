@@ -139,8 +139,12 @@ export class StoreKernel {
 	}
 
 	// Rescue RPC: restores the database to a bookmark on the next start and restarts the object now, so the
-	// caller sees this call fail once the restart happens. Keep MAINTENANCE=full set while doing this.
-	async restoreBookmark(bookmark: string): Promise<void> {
+	// caller sees this call fail once the restart happens. Keep MAINTENANCE=full set while doing this. It mutates, so
+	// unlike the other rescue RPCs it requires the caller's build to match.
+	async restoreBookmark(callerBuild: string, bookmark: string): Promise<void> {
+		if (callerBuild !== this.build) {
+			throw storeMaintenanceError('version-mismatch')
+		}
 		this.#log({ event: 'kopje.store.pitr', bookmark })
 		await this.#ctx.storage.onNextSessionRestoreBookmark(bookmark)
 		this.#ctx.abort('restoring PITR bookmark')

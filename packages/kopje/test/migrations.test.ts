@@ -238,6 +238,26 @@ describe('Store migration runner', () => {
 		expect(await store.setupState(BUILD)).toEqual({ complete: false })
 	})
 
+	it('refuses a PITR restore from another build but keeps introspection open to it', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, (_instance, state) => kernel(state, MIGRATIONS).upgrade())
+		const { lastBookmark } = await store.health(BUILD)
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec("INSERT INTO instance_settings (name, value) VALUES ('marker', 'kept')")
+		})
+
+		const error = toStoreUnavailable(await rejectionOf(store.pitrToBookmark('0.0.0-other', lastBookmark!)))
+		expect(error?.reason).toBe('version-mismatch')
+		expect(await store.version('0.0.0-other')).toMatchObject({ build: BUILD })
+		expect(await store.dump('0.0.0-other')).toEqual({ status: 'unimplemented' })
+		// The object was neither restarted nor rewound.
+		await runInDurableObject(store, (_instance, state) => {
+			expect(state.storage.sql.exec("SELECT value FROM instance_settings WHERE name = 'marker'").toArray()).toEqual([
+				{ value: 'kept' },
+			])
+		})
+	})
+
 	it('goes readonly without an upgrade alarm when an applied file was changed', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {

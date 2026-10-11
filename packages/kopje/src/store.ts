@@ -7,8 +7,10 @@ import { StoreKernel } from './platform/store-kernel'
 import { buildOf, PACKAGE_VERSION } from './version'
 
 // The single source of truth of an instance: one SQLite-backed Durable Object. Every RPC takes the caller's build
-// (the Workers version id, see version.ts). Domain operations run through the kernel's gate; rescue RPCs (health, version, PITR, dump) work in
-// every state.
+// (the Workers version id, see version.ts). Domain operations run through the kernel's gate. Rescue RPCs work in every
+// Store state. Of those, health(), version() and dump() are read-only introspection and accept any caller build, since
+// they are what an operator needs while the Worker and the Store disagree; pitrToBookmark() rewinds the database, so
+// it requires the caller's build to match like any other mutation.
 export class Store extends DurableObject<Env> {
 	readonly #kernel: StoreKernel
 
@@ -25,8 +27,8 @@ export class Store extends DurableObject<Env> {
 		return { ...(await this.#kernel.version()), version: PACKAGE_VERSION }
 	}
 
-	pitrToBookmark(_callerBuild: string, bookmark: string) {
-		return this.#kernel.restoreBookmark(bookmark)
+	pitrToBookmark(callerBuild: string, bookmark: string) {
+		return this.#kernel.restoreBookmark(callerBuild, bookmark)
 	}
 
 	dump(_callerBuild: string): { status: 'unimplemented' } {
