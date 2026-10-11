@@ -241,6 +241,57 @@ describe('Inbox', () => {
 		assert.equal(queue.messages.length, 0)
 	})
 
+	test('key document reached through a cross-origin redirect is rejected', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		const keyId = new URL(`${actor.id.toString()}#main-key`)
+
+		// The key URL is on the actor origin, but the document comes from elsewhere.
+		globalThis.fetch = (input) => {
+			const url = input instanceof URL || typeof input === 'string' ? input.toString() : input.url
+			if (url === keyId.toString()) {
+				const res = new Response(actorDocument(actor))
+				Object.defineProperty(res, 'url', { value: 'https://evil.example/actor' })
+				return Promise.resolve(res)
+			}
+			return Promise.reject(new Error(`unexpected request to "${url}"`))
+		}
+
+		const queue = makeQueueSpy()
+		const req = await signedInboxRequest(db, actor, 'sven', { type: 'Follow', actor: actor.id.toString() }, { keyId })
+		const res = await app.fetch(req, makeEnv(db, queue))
+		await assertStatus(res, 401)
+		assert.equal(queue.messages.length, 0)
+	})
+
+	test('key document reached through a same-origin redirect is accepted', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		const keyId = new URL(`${actor.id.toString()}#main-key`)
+
+		globalThis.fetch = (input) => {
+			const url = input instanceof URL || typeof input === 'string' ? input.toString() : input.url
+			if (url === keyId.toString()) {
+				const res = new Response(actorDocument(actor))
+				Object.defineProperty(res, 'url', { value: `https://${domain}/users/sven` })
+				return Promise.resolve(res)
+			}
+			return Promise.reject(new Error(`unexpected request to "${url}"`))
+		}
+
+		const queue = makeQueueSpy()
+		const req = await signedInboxRequest(
+			db,
+			actor,
+			'sven',
+			{ type: 'some activity', actor: actor.id.toString() },
+			{ keyId }
+		)
+		const res = await app.fetch(req, makeEnv(db, queue))
+		await assertStatus(res, 200)
+		assert.equal(queue.messages.length, 1)
+	})
+
 	test('standalone key document is resolved through its owner', async () => {
 		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')

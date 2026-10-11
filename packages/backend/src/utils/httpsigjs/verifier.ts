@@ -1,4 +1,5 @@
 import { isActorType } from '@wildebeest/backend/activitypub/actors'
+import { servedOrigin } from '@wildebeest/backend/activitypub/identity'
 import { UA } from '@wildebeest/backend/config/ua'
 import { ParsedSignature } from '@wildebeest/backend/utils/httpsigjs/parser'
 import { str2ab, importPublicKey } from '@wildebeest/backend/utils/key-ops'
@@ -45,6 +46,13 @@ async function fetchDocument(url: string): Promise<KeyDocument | null> {
 		if (res.status !== 410) {
 			console.warn(`failed to fetch keys from "${url}", returned ${res.status}.`)
 		}
+		return null
+	}
+	// `fetch` follows redirects: the document speaks for the origin that served
+	// it, which must be the origin we asked.
+	const requested = new URL(url)
+	if (servedOrigin(requested, res) !== requested.origin) {
+		console.warn(`"${url}" was served by another origin (${res.url})`)
 		return null
 	}
 	return await res.json<KeyDocument>()

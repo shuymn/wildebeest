@@ -1,8 +1,7 @@
 import { getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
-import { fetchWithIdentity } from '@wildebeest/backend/activitypub/identity'
+import { fetchDocumentById } from '@wildebeest/backend/activitypub/identity'
 import { isNote, Note } from '@wildebeest/backend/activitypub/objects/note'
 import { addPeer } from '@wildebeest/backend/activitypub/peers'
-import { UA } from '@wildebeest/backend/config/ua'
 import { type Database } from '@wildebeest/backend/database'
 import * as query from '@wildebeest/backend/database/d1/querier'
 import {
@@ -12,7 +11,7 @@ import {
 	repairReplyProjection,
 } from '@wildebeest/backend/mastodon/reply_projection'
 import type { MastodonId } from '@wildebeest/backend/types'
-import { HTTPS, isGone, isNotFound, isUUID } from '@wildebeest/backend/utils'
+import { HTTPS, isUUID } from '@wildebeest/backend/utils'
 import { htmlToText, sanitizeHtml } from '@wildebeest/backend/utils/html'
 import { generateMastodonId } from '@wildebeest/backend/utils/id'
 import { Intersect, RequiredProps, SingleOrArray } from '@wildebeest/backend/utils/type'
@@ -175,23 +174,6 @@ export async function createObject<T extends ApObject>(
 	} as LocalObject<T>
 }
 
-async function fetchObject<T extends ApObject>(url: URL): Promise<Remote<T> | null> {
-	const res = await fetch(url, {
-		headers: {
-			accept: 'application/activity+json',
-			'User-Agent': UA,
-		},
-	})
-	if (!res.ok) {
-		if (isNotFound(res) || isGone(res)) {
-			return null
-		}
-		throw new Error(`${url} returned: ${res.status}`)
-	}
-
-	return res.json<T>()
-}
-
 export type LocalObject<T extends ApObject> = T & {
 	published: string
 	[mastodonIdSymbol]: string
@@ -278,7 +260,7 @@ async function cacheObject<T extends ApObject>(
 		remoteObject = obj
 	} else {
 		const remoteObjectUrl = typeof obj === 'string' ? new URL(obj) : obj
-		const remoteObj = await fetchWithIdentity(remoteObjectUrl, fetchObject<T>)
+		const remoteObj = await fetchDocumentById<Remote<T>>(remoteObjectUrl)
 		if (!remoteObj) {
 			console.warn('object not found: ' + remoteObjectUrl.toString())
 			return null
@@ -290,6 +272,11 @@ async function cacheObject<T extends ApObject>(
 	const originalObjectId = parseHttpUrl(properties.id)
 	if (originalObjectId === null) {
 		console.warn('object has no valid id')
+		return null
+	}
+	// Local objects are never cached from a remote copy.
+	if (isLocalObject(domain, originalObjectId)) {
+		console.warn(`remote copy of local object ${originalObjectId.toString()} ignored`)
 		return null
 	}
 

@@ -1,4 +1,4 @@
-import { fetchWithIdentity } from '@wildebeest/backend/activitypub/identity'
+import { fetchDocumentById } from '@wildebeest/backend/activitypub/identity'
 import {
 	type ApObject,
 	getApId,
@@ -10,11 +10,10 @@ import {
 } from '@wildebeest/backend/activitypub/objects'
 import { addPeer } from '@wildebeest/backend/activitypub/peers'
 import { defaultImages } from '@wildebeest/backend/config/accounts'
-import { UA } from '@wildebeest/backend/config/ua'
 import { type Database } from '@wildebeest/backend/database'
 import * as query from '@wildebeest/backend/database/d1/querier'
 import { MastodonId } from '@wildebeest/backend/types'
-import { isGone, isNotFound, isUUID } from '@wildebeest/backend/utils'
+import { isUUID } from '@wildebeest/backend/utils'
 import { adjustLocalHostDomain } from '@wildebeest/backend/utils/adjustLocalHostDomain'
 import { RemoteHandle } from '@wildebeest/backend/utils/handle'
 import { generateMastodonId } from '@wildebeest/backend/utils/id'
@@ -60,21 +59,12 @@ export function isActorType(type: string): type is Actor['type'] {
 	return false
 }
 
+// Fetch the actor whose id is `url`, see `fetchDocumentById`.
 export async function fetchActor(url: string | URL): Promise<Remote<Actor> | null> {
-	const res = await fetch(url, {
-		headers: {
-			accept: 'application/activity+json',
-			'User-Agent': UA,
-		},
-	})
-	if (!res.ok) {
-		if (isNotFound(res) || isGone(res)) {
-			return null
-		}
-		throw new Error(`${url.toString()} returned: ${res.status}`)
+	const actor = await fetchDocumentById<Remote<Actor>>(new URL(url))
+	if (actor === null) {
+		return null
 	}
-
-	const actor = await res.json<Remote<Actor>>()
 	return sanitizeActor(actor)
 }
 
@@ -144,7 +134,7 @@ export async function getAndCacheActor(url: URL, db: Database): Promise<Actor | 
 		}
 	}
 
-	const actor = await fetchWithIdentity(url, fetchActor)
+	const actor = await fetchActor(url)
 	if (!actor) {
 		return null
 	}
