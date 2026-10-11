@@ -2,9 +2,10 @@ import { strict as assert } from 'node:assert/strict'
 
 import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
 import * as activityHandler from '@wildebeest/backend/activitypub/activities/handle'
-import { getActorById } from '@wildebeest/backend/activitypub/actors'
+import { getActorById, getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
 import { getApId, getObjectById } from '@wildebeest/backend/activitypub/objects'
 import type { Database } from '@wildebeest/backend/database'
+import { addFollowing } from '@wildebeest/backend/mastodon/follow'
 import { createPublicStatus } from '@wildebeest/backend/test/shared.utils'
 import { createActivityId, createTestUser, makeDB } from '@wildebeest/backend/test/utils'
 import type { JWK } from '@wildebeest/backend/webpush/jwk'
@@ -156,6 +157,8 @@ describe('Inbound activity authorization', () => {
 					attributedTo: 'https://example.com/someone-else',
 					to: [actor.id],
 					cc: [],
+					attachment: [],
+					sensitive: false,
 				},
 			} as any,
 			db,
@@ -170,6 +173,11 @@ describe('Inbound activity authorization', () => {
 	test('Accept of a Follow targeting another actor is ignored', async () => {
 		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		// A pending follow of the sender, which must not be accepted by an
+		// Accept that references somebody else's Follow.
+		const sender = await getAndCacheActor(getApId('https://example.com/actor'), db)
+		assert.ok(sender)
+		await addFollowing(domain, db, actor, sender)
 
 		await activityHandler.handle(
 			domain,
@@ -190,7 +198,10 @@ describe('Inbound activity authorization', () => {
 			vapidKeys
 		)
 
-		const row = await db.prepare('SELECT count(*) as count FROM actor_following').first<{ count: number }>()
-		assert.equal(row?.count, 0)
+		const row = await db
+			.prepare('SELECT state FROM actor_following WHERE actor_id=?1')
+			.bind(actor.id.toString())
+			.first<{ state: string }>()
+		assert.equal(row?.state, 'pending')
 	})
 })
