@@ -3,6 +3,7 @@ import { strict as assert } from 'node:assert/strict'
 import app from '@wildebeest/backend'
 import { updateActorProperty } from '@wildebeest/backend/activitypub/actors'
 import { getApId, mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import { defaultImages } from '@wildebeest/backend/config/accounts'
 import { createPublicStatus } from '@wildebeest/backend/test/shared.utils'
 import { assertStatus, createTestUser, makeDB } from '@wildebeest/backend/test/utils'
 
@@ -51,5 +52,75 @@ describe('Mastodon API output sanitization', () => {
 		const data = await res.json<{ display_name: string; note: string }>()
 		assert.equal(data.display_name, 'sven')
 		assert.equal(data.note, '<p>bio<a rel="nofollow noopener noreferrer" target="_blank">l</a></p>')
+	})
+
+	test('account URLs stored with a non-web scheme are not served', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		await db
+			.prepare(
+				`UPDATE actors SET properties=json_set(properties, '$.url', ?1, '$.icon', json(?2), '$.image', json(?3)) WHERE id=?4`
+			)
+			.bind(
+				'javascript:alert(1)',
+				JSON.stringify({ type: 'Image', url: 'javascript:alert(2)' }),
+				JSON.stringify({ type: 'Image', url: 'data:text/html,evil' }),
+				getApId(actor).toString()
+			)
+			.run()
+
+		const res = await app.fetch(new Request(`https://${domain}/api/v1/accounts/${actor[mastodonIdSymbol]}`), {
+			DATABASE: db,
+			data: { connectedActor: actor },
+		})
+		await assertStatus(res, 200)
+		const data = await res.json<{ url: string; avatar: string; header: string }>()
+		assert.equal(data.url, '')
+		assert.equal(data.avatar, defaultImages.avatar)
+		assert.equal(data.header, defaultImages.header)
+	})
+
+	test('status and media URLs stored with a non-web scheme are not served', async () => {
+		const db = makeDB()
+		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		const note = await createPublicStatus(domain, db, actor, 'a post')
+		await db
+			.prepare(`UPDATE objects SET properties=json_set(properties, '$.url', ?1, '$.attachment', json(?2)) WHERE id=?3`)
+			.bind(
+				'javascript:alert(1)',
+				JSON.stringify([
+					{ type: 'Document', mediaType: 'image/jpeg', url: 'javascript:alert(2)' },
+					{ type: 'Document', mediaType: 'image/jpeg', url: 'https://example.com/image.jpg' },
+				]),
+				getApId(note).toString()
+			)
+			.run()
+
+		const expectedUrl = `https://${domain}/@sven/${note[mastodonIdSymbol]}`
+		{
+			const res = await app.fetch(new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}`), {
+				DATABASE: db,
+			})
+			await assertStatus(res, 200)
+			const data = await res.json<{ url: string; media_attachments: { url: string }[] }>()
+			assert.equal(data.url, expectedUrl)
+			assert.deepEqual(
+				data.media_attachments.map((m) => m.url),
+				['https://example.com/image.jpg']
+			)
+		}
+		{
+			const res = await app.fetch(
+				new Request(`https://${domain}/api/v1/accounts/${actor[mastodonIdSymbol]}/statuses`),
+				{ DATABASE: db }
+			)
+			await assertStatus(res, 200)
+			const [data] = await res.json<{ url: string; media_attachments: { url: string }[] }[]>()
+			assert.equal(data.url, expectedUrl)
+			assert.deepEqual(
+				data.media_attachments.map((m) => m.url),
+				['https://example.com/image.jpg']
+			)
+		}
 	})
 })

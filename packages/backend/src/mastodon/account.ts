@@ -10,13 +10,14 @@ import { Handle, handleToAcct, isLocalHandle, LocalHandle, RemoteHandle } from '
 import { htmlToText, sanitizeHtml } from '@wildebeest/backend/utils/html'
 import { unwrapPrivateKey } from '@wildebeest/backend/utils/key-ops'
 import { PartialProps } from '@wildebeest/backend/utils/type'
+import { parseHttpUrl } from '@wildebeest/backend/utils/url'
 
 function toMastodonAccount(
 	handle: Handle,
 	actor: Actor
 ): PartialProps<MastodonAccount, 'last_status_at' | 'followers_count' | 'following_count' | 'statuses_count'> {
-	const avatar = actor.icon?.url?.toString() ?? defaultImages.avatar
-	const header = actor.image?.url?.toString() ?? defaultImages.header
+	const avatar = parseHttpUrl(actor.icon?.url)?.toString() ?? defaultImages.avatar
+	const header = parseHttpUrl(actor.image?.url)?.toString() ?? defaultImages.header
 
 	let acct: string
 	if (isLocalHandle(handle)) {
@@ -31,7 +32,7 @@ function toMastodonAccount(
 		// values are HTML. They are sanitized again here because rows may predate the sanitizer.
 		username: htmlToText(actor.preferredUsername ?? actor.name ?? 'unnamed'),
 		acct,
-		url: actor.url ? actor.url.toString() : '',
+		url: parseHttpUrl(actor.url)?.toString() ?? '',
 		display_name: htmlToText(actor.name ?? actor.preferredUsername ?? ''),
 		note: sanitizeHtml(actor.summary ?? ''),
 		avatar,

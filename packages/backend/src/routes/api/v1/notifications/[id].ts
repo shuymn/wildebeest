@@ -17,12 +17,13 @@ import * as query from '@wildebeest/backend/database/d1/querier'
 import { statusNotFound } from '@wildebeest/backend/errors'
 import { loadMastodonAccount } from '@wildebeest/backend/mastodon/account'
 import { actorToMention, detectVisibility } from '@wildebeest/backend/mastodon/status'
-import { fromObject } from '@wildebeest/backend/media'
+import { fromObjects } from '@wildebeest/backend/media'
 import type { HonoEnv } from '@wildebeest/backend/types'
 import { isNotificationType, type Notification } from '@wildebeest/backend/types/notification'
 import { HTTPS } from '@wildebeest/backend/utils'
 import { actorToHandle, handleToAcct } from '@wildebeest/backend/utils/handle'
 import { htmlToText, sanitizeHtml } from '@wildebeest/backend/utils/html'
+import { parseHttpUrl } from '@wildebeest/backend/utils/url'
 
 const headers = {
 	'content-type': 'application/json; charset=utf-8',
@@ -84,9 +85,7 @@ async function handleRequest(domain: string, id: string, db: Database, connected
 			properties = JSON.parse(row.properties) as Note
 		}
 
-		const mediaAttachments = Array.isArray(properties.attachment)
-			? properties.attachment.map((doc) => fromObject(doc))
-			: []
+		const mediaAttachments = fromObjects(properties.attachment)
 
 		const mentions = []
 		for (const link of properties.tag ?? []) {
@@ -130,11 +129,11 @@ async function handleRequest(domain: string, id: string, db: Database, connected
 			spoiler_text: htmlToText(properties.spoiler_text ?? ''),
 			media_attachments: mediaAttachments,
 			mentions,
-			url: properties.url
-				? new URL(properties.url)
-				: isLocalAccount(domain, fromHandle)
+			url:
+				parseHttpUrl(properties.url) ??
+				(isLocalAccount(domain, fromHandle)
 					? new URL(`/@${handleToAcct(fromHandle, domain)}/${row.mastodonId}`, HTTPS + domain)
-					: new URL(row.id),
+					: parseHttpUrl(row.id)),
 			reblog: null,
 			edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 			in_reply_to_id: inReplyToId,

@@ -17,10 +17,11 @@ import * as query from '@wildebeest/backend/database/d1/querier'
 import { loadMastodonAccount } from '@wildebeest/backend/mastodon/account'
 import { actorToMention, detectVisibility } from '@wildebeest/backend/mastodon/status'
 import { getSubscriptionForAllClients } from '@wildebeest/backend/mastodon/subscription'
-import { fromObject } from '@wildebeest/backend/media'
+import { fromObjects } from '@wildebeest/backend/media'
 import { isNotificationType, type Notification, type NotificationType } from '@wildebeest/backend/types/notification'
 import { actorToHandle, handleToAcct } from '@wildebeest/backend/utils/handle'
 import { htmlToText, sanitizeHtml } from '@wildebeest/backend/utils/html'
+import { parseHttpUrl } from '@wildebeest/backend/utils/url'
 import { generateWebPushMessage } from '@wildebeest/backend/webpush'
 import type { JWK } from '@wildebeest/backend/webpush/jwk'
 import type { WebPushInfos, WebPushMessage } from '@wildebeest/backend/webpush/webpushinfos'
@@ -321,9 +322,7 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 				properties = JSON.parse(result.properties) as Note
 			}
 
-			const mediaAttachments = Array.isArray(properties.attachment)
-				? properties.attachment.map((doc) => fromObject(doc))
-				: []
+			const mediaAttachments = fromObjects(properties.attachment)
 
 			let inReplyToId: string | null = null
 			let inReplyToAccountId: string | null = null
@@ -372,11 +371,11 @@ export async function getNotifications(db: Database, actor: Actor, domain: strin
 				spoiler_text: htmlToText(properties.spoiler_text ?? ''),
 				media_attachments: mediaAttachments,
 				mentions,
-				url: properties.url
-					? new URL(properties.url)
-					: isLocalAccount(domain, handle)
+				url:
+					parseHttpUrl(properties.url) ??
+					(isLocalAccount(domain, handle)
 						? new URL(`/@${handleToAcct(handle, domain)}/${result.mastodonId}`, 'https://' + domain)
-						: new URL(result.id),
+						: parseHttpUrl(result.id)),
 				reblog: null,
 				edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 

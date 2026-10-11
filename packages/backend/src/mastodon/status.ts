@@ -27,6 +27,7 @@ import type { MastodonAccount, MastodonId, MastodonStatus, MastodonStatusEdit } 
 import type { MediaAttachment } from '@wildebeest/backend/types/media'
 import { actorToAcct, actorToHandle, handleToAcct, parseHandle } from '@wildebeest/backend/utils/handle'
 import { htmlToText, sanitizeHtml } from '@wildebeest/backend/utils/html'
+import { parseHttpUrl } from '@wildebeest/backend/utils/url'
 import { queryAcct } from '@wildebeest/backend/webfinger'
 
 export { canViewStatus, detectVisibility, isVisible } from '@wildebeest/backend/mastodon/status_visibility'
@@ -71,7 +72,7 @@ export function actorToMention(domain: string, actor: Actor): MastodonStatus['me
 	return {
 		id: actor[mastodonIdSymbol],
 		username: actor.preferredUsername ?? actor.name ?? '',
-		url: actor.url?.toString() ?? '',
+		url: parseHttpUrl(actor.url)?.toString() ?? '',
 		acct: actorToAcct(actor, domain),
 	}
 }
@@ -135,9 +136,7 @@ WHERE id = ?
 		.bind(obj.id.toString())
 		.first<{ favourites_count: number; reblogs_count: number; replies_count: number }>()
 
-	const mediaAttachments: Array<MediaAttachment> = obj.attachment
-		? obj.attachment.map((doc) => media.fromObject(doc))
-		: []
+	const mediaAttachments: Array<MediaAttachment> = media.fromObjects(obj.attachment)
 
 	const mentions = []
 	if (targetActors) {
@@ -183,11 +182,11 @@ WHERE id = ?
 		spoiler_text: htmlToText(obj.spoiler_text ?? ''),
 		media_attachments: mediaAttachments,
 		mentions,
-		url: obj.url
-			? new URL(obj.url)
-			: isLocalAccount(domain, handle)
+		url:
+			parseHttpUrl(obj.url) ??
+			(isLocalAccount(domain, handle)
 				? new URL(`/@${handleToAcct(handle, domain)}/${obj[mastodonIdSymbol]}`, 'https://' + domain)
-				: new URL(obj[originalObjectIdSymbol]),
+				: parseHttpUrl(obj[originalObjectIdSymbol])),
 		reblog: null,
 		edited_at: obj.updated ? new Date(obj.updated).toISOString() : null,
 
@@ -292,9 +291,7 @@ export async function toMastodonStatusesFromRowsWithActor(
 			properties = JSON.parse(row.properties) as Note
 		}
 
-		const mediaAttachments = Array.isArray(properties.attachment)
-			? properties.attachment.map((doc) => media.fromObject(doc))
-			: []
+		const mediaAttachments = media.fromObjects(properties.attachment)
 
 		const mentions = []
 		for (const link of properties.tag ?? []) {
@@ -379,7 +376,7 @@ export async function toMastodonStatusesFromRowsWithActor(
 				in_reply_to_account_id: null,
 				reblog: {
 					id: row.mastodon_id,
-					uri: new URL(properties.id),
+					uri: parseHttpUrl(properties.id) ?? new URL(row.id),
 					created_at: new Date(properties.published ?? row.cdate).toISOString(),
 					account: await loadMastodonAccount(db, domain, statusAuthor, actorToHandle(statusAuthor)),
 					content: sanitizeHtml(properties.content ?? ''),
@@ -391,11 +388,11 @@ export async function toMastodonStatusesFromRowsWithActor(
 					reblogs_count: row.reblogs_count,
 					favourites_count: row.favourites_count,
 					replies_count: row.replies_count,
-					url: properties.url
-						? new URL(properties.url)
-						: isLocalAccount(domain, statusAuthorHandle)
+					url:
+						parseHttpUrl(properties.url) ??
+						(isLocalAccount(domain, statusAuthorHandle)
 							? new URL(`/@${handleToAcct(statusAuthorHandle, domain)}/${row.mastodon_id}`, 'https://' + domain)
-							: new URL(properties.id),
+							: parseHttpUrl(properties.id)),
 					reblog: null,
 					edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 					favourited: row.favourited === 1,
@@ -436,11 +433,11 @@ export async function toMastodonStatusesFromRowsWithActor(
 				reblogs_count: row.reblogs_count,
 				favourites_count: row.favourites_count,
 				replies_count: row.replies_count,
-				url: properties.url
-					? new URL(properties.url)
-					: isLocalAccount(domain, handle)
+				url:
+					parseHttpUrl(properties.url) ??
+					(isLocalAccount(domain, handle)
 						? new URL(`/@${handleToAcct(handle, domain)}/${row.mastodon_id}`, 'https://' + domain)
-						: new URL(properties.id),
+						: parseHttpUrl(properties.id)),
 				reblog: null,
 				edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 				favourited: row.favourited === 1,
@@ -493,9 +490,7 @@ export async function toMastodonStatusFromRow(
 		properties = JSON.parse(row.properties) as Note
 	}
 
-	const mediaAttachments = Array.isArray(properties.attachment)
-		? properties.attachment.map((doc) => media.fromObject(doc))
-		: []
+	const mediaAttachments = media.fromObjects(properties.attachment)
 
 	const author = actorFromRow({
 		id: row.actor_id,
@@ -574,7 +569,7 @@ export async function toMastodonStatusFromRow(
 			in_reply_to_account_id: null,
 			reblog: {
 				id: row.mastodon_id,
-				uri: new URL(properties.id),
+				uri: parseHttpUrl(properties.id) ?? new URL(row.id),
 				created_at: new Date(properties.published ?? row.cdate).toISOString(),
 				account: await loadMastodonAccount(db, domain, statusAuthor, actorToHandle(statusAuthor)),
 				content: sanitizeHtml(properties.content ?? ''),
@@ -586,11 +581,11 @@ export async function toMastodonStatusFromRow(
 				reblogs_count: row.reblogs_count,
 				favourites_count: row.favourites_count,
 				replies_count: row.replies_count,
-				url: properties.url
-					? new URL(properties.url)
-					: isLocalAccount(domain, statusAuthorHandle)
+				url:
+					parseHttpUrl(properties.url) ??
+					(isLocalAccount(domain, statusAuthorHandle)
 						? new URL(`/@${handleToAcct(statusAuthorHandle, domain)}/${row.mastodon_id}`, 'https://' + domain)
-						: new URL(properties.id),
+						: parseHttpUrl(properties.id)),
 				reblog: null,
 				edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 				favourited: row.favourited === 1,
@@ -631,11 +626,11 @@ export async function toMastodonStatusFromRow(
 			reblogs_count: row.reblogs_count,
 			favourites_count: row.favourites_count,
 			replies_count: row.replies_count,
-			url: properties.url
-				? new URL(properties.url)
-				: isLocalAccount(domain, handle)
+			url:
+				parseHttpUrl(properties.url) ??
+				(isLocalAccount(domain, handle)
 					? new URL(`/@${handleToAcct(handle, domain)}/${row.mastodon_id}`, 'https://' + domain)
-					: new URL(properties.id),
+					: parseHttpUrl(properties.id)),
 			reblog: null,
 			edited_at: properties.updated ? new Date(properties.updated).toISOString() : null,
 			favourited: row.favourited === 1,
@@ -708,7 +703,7 @@ function toMastodonStatusEditFromObject(
 		sensitive: obj.sensitive ?? false,
 		created_at: createdAt.toISOString(),
 		account,
-		media_attachments: Array.isArray(obj.attachment) ? obj.attachment.map((doc) => media.fromObject(doc)) : [],
+		media_attachments: media.fromObjects(obj.attachment),
 		emojis: [], // FIXME: stub value
 	}
 }

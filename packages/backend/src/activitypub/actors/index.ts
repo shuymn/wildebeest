@@ -6,6 +6,7 @@ import {
 	mastodonIdSymbol,
 	Remote,
 	sanitizeContent,
+	sanitizeUrlProperties,
 } from '@wildebeest/backend/activitypub/objects'
 import { addPeer } from '@wildebeest/backend/activitypub/peers'
 import { defaultImages } from '@wildebeest/backend/config/accounts'
@@ -81,6 +82,7 @@ export async function sanitizeActor(actor: Remote<Actor>): Promise<Remote<Actor>
 	if (typeof actor.id === 'string') {
 		actor.id = new URL(actor.id)
 	}
+	sanitizeUrlProperties(actor)
 
 	if (actor.summary) {
 		actor.summary = await sanitizeContent(actor.summary)

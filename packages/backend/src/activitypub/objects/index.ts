@@ -461,7 +461,41 @@ export async function sanitizeObjectProperties<T extends ApObject>(properties: T
 	if (spoilerText) {
 		;(properties as { spoiler_text?: string }).spoiler_text = await getTextContent(spoilerText)
 	}
+	sanitizeUrlProperties(properties)
+	// media attachments without a web URL are dropped
+	const attachment = (properties as { attachment?: unknown }).attachment
+	if (Array.isArray(attachment)) {
+		;(properties as { attachment?: unknown }).attachment = attachment.filter(hasHttpUrl)
+	}
 	return properties
+}
+
+function hasHttpUrl(value: unknown): boolean {
+	return value !== null && typeof value === 'object' && parseHttpUrl((value as { url?: unknown }).url) !== null
+}
+
+/**
+ * Drops the URL fields of a remote object or actor that are not web URLs: they end up as links in clients,
+ * where a `javascript:` URL would run. Covers `url`, `icon`, `image` and custom emoji `tag`s.
+ */
+export function sanitizeUrlProperties(properties: ApObject): void {
+	if (properties.url !== undefined && parseHttpUrl(properties.url) === null) {
+		delete properties.url
+	}
+	if (properties.icon !== undefined && !hasHttpUrl(properties.icon)) {
+		delete properties.icon
+	}
+	if (properties.image !== undefined && !hasHttpUrl(properties.image)) {
+		delete properties.image
+	}
+	const object = properties as { tag?: unknown }
+	if (Array.isArray(object.tag)) {
+		object.tag = object.tag.filter(
+			(tag: unknown) =>
+				!(tag !== null && typeof tag === 'object' && (tag as { type?: unknown }).type === 'Emoji') ||
+				hasHttpUrl((tag as { icon?: unknown }).icon)
+		)
+	}
 }
 
 /**
