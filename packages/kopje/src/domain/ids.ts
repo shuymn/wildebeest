@@ -1,3 +1,5 @@
+import type { Db } from '../db/sql'
+
 // API IDs: 18-digit snowflakes, (ms << 16) | 16 random bits, kept as TEXT and never read as JS numbers.
 
 // Returns an integer in [0, maxExclusive).
@@ -11,17 +13,34 @@ export const cryptoRandomInt: RandomInt = (maxExclusive) => {
 // IDs before this date would have fewer than 18 digits.
 const EARLIEST_MS = Date.UTC(2018, 4, 10)
 
-function snowflake(ms: number, random: RandomInt): string {
-	const id = ((BigInt(ms) << 16n) | BigInt(random(0x10000))).toString()
-	if (id.length !== 18) {
-		throw new RangeError(`snowflake out of range for ${ms}`)
-	}
-	return id
+function snowflakeValue(ms: number, random: RandomInt): bigint {
+	return (BigInt(ms) << 16n) | BigInt(random(0x10000))
 }
 
-// Local objects use the current time, taken by the caller (inside a DO, Date.now() does not advance).
-export function localId(nowMs: number, random: RandomInt = cryptoRandomInt): string {
-	return snowflake(Math.max(nowMs, EARLIEST_MS), random)
+function format(id: bigint): string {
+	const text = id.toString()
+	if (text.length !== 18) {
+		throw new RangeError(`snowflake out of range: ${text}`)
+	}
+	return text
+}
+
+function snowflake(ms: number, random: RandomInt): string {
+	return format(snowflakeValue(ms, random))
+}
+
+const LAST_LOCAL_ID = 'last_local_id'
+
+// Allocates a local ID: max((now << 16) | rand16, last + 1), so IDs strictly increase even within one millisecond
+// or when the clock goes back. The last ID lives in the Store state table, and the call must run inside the write
+// operation that uses the ID, so both commit or roll back together. The clock comes from the caller (inside a DO,
+// Date.now() does not advance during a request).
+export function allocateLocalId(db: Db, nowMs: number, random: RandomInt = cryptoRandomInt): string {
+	const last = db.first<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', LAST_LOCAL_ID)?.value
+	const candidate = snowflakeValue(Math.max(nowMs, EARLIEST_MS), random)
+	const id = format(last !== undefined && candidate <= BigInt(last) ? BigInt(last) + 1n : candidate)
+	db.run('INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)', LAST_LOCAL_ID, id)
+	return id
 }
 
 // Remote objects use `published` truncated to the second plus 0-999 random ms. Future or unparsable times use now;

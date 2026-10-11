@@ -319,6 +319,7 @@ export class StoreKernel {
 		return this.#expected
 	}
 
+	// kopje_state holds the hold, the upgrade marker and bookmark, and last_local_id (domain/ids.ts).
 	#ensureBookkeeping(): void {
 		this.#sql.exec(
 			'CREATE TABLE IF NOT EXISTS kopje_migrations (name TEXT NOT NULL PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL) WITHOUT ROWID;' +
