@@ -164,4 +164,46 @@ describe('safe document loader', () => {
 		await createSafeLoader({ fetch, checkHost: () => Promise.resolve(), userAgent: 'Kopje/test' }, sign)(ACTOR)
 		expect(requests[0]?.headers.get('signature')).toBe('test')
 	})
+
+	it('refuses a signal that is already aborted, without fetching', async () => {
+		const { fetch, requests } = fakeFetch({ [ACTOR]: () => Response.json({ id: ACTOR }, { headers: AP }) })
+		const controller = new AbortController()
+		controller.abort(new Error('caller gave up'))
+		await expect(loader(fetch)(ACTOR, { signal: controller.signal })).rejects.toThrow('caller gave up')
+		expect(requests).toHaveLength(0)
+	})
+
+	it('applies a JSON-LD context given in a Link header', async () => {
+		const context = 'https://remote.example/contexts/litepub.jsonld'
+		const { fetch } = fakeFetch({
+			[ACTOR]: () =>
+				Response.json(
+					{ id: ACTOR },
+					{
+						headers: {
+							'content-type': 'application/activity+json',
+							link: `<${context}>; rel="http://www.w3.org/ns/json-ld#context"; type="application/ld+json"`,
+						},
+					}
+				),
+		})
+		expect(await loader(fetch)(ACTOR)).toEqual({ contextUrl: context, document: { id: ACTOR }, documentUrl: ACTOR })
+	})
+
+	it('does not follow an alternate-document link', async () => {
+		const { fetch, requests } = fakeFetch({
+			[ACTOR]: () =>
+				Response.json(
+					{ id: ACTOR },
+					{
+						headers: {
+							'content-type': 'application/json',
+							link: '<https://remote.example/users/bob.json>; rel="alternate"; type="application/activity+json"',
+						},
+					}
+				),
+		})
+		await expect(loader(fetch)(ACTOR)).rejects.toThrow(/alternate/)
+		expect(requests).toHaveLength(1)
+	})
 })

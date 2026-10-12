@@ -1,6 +1,7 @@
 import {
 	type DocumentLoader,
 	FetchError,
+	getRemoteDocument,
 	preloadedContexts,
 	type RemoteDocument,
 	validatePublicUrl,
@@ -38,6 +39,8 @@ export const dnsCheckHost = (url: URL): Promise<void> => validatePublicUrl(url.h
 export function createSafeLoader(deps: LoaderDeps, sign?: RequestSigner): DocumentLoader {
 	const timeoutMs = deps.timeoutMs ?? DOCUMENT_TIMEOUT_MS
 	return async (url, options) => {
+		// A signal aborted before the call never fires 'abort' again, so it is checked up front.
+		options?.signal?.throwIfAborted()
 		if (url in preloadedContexts) {
 			return { contextUrl: null, document: preloadedContexts[url], documentUrl: url }
 		}
@@ -113,17 +116,21 @@ async function readDocument(response: Response, final: URL, target: URL): Promis
 	if (body === 'too-large') {
 		throw new FetchError(final, `Document exceeds ${DOCUMENT_BODY_LIMIT} bytes`)
 	}
-	let document: unknown
+	// Fedify parses the bounded bytes, so a JSON-LD context given in a Link header is applied as Fedify applies it.
+	// Alternate-document links are not followed: only JSON types reach this point.
+	let remote: RemoteDocument
 	try {
-		document = JSON.parse(new TextDecoder().decode(body))
-	} catch {
-		throw new FetchError(final, 'Document is not valid JSON')
+		remote = await getRemoteDocument(final.href, new Response(body, { headers: response.headers }), () =>
+			Promise.reject(new FetchError(final, 'Refused alternate document link'))
+		)
+	} catch (error) {
+		throw error instanceof FetchError ? error : new FetchError(final, 'Document is not valid JSON')
 	}
-	const id = documentId(document)
+	const id = documentId(remote.document)
 	if (id !== undefined && originOf(id) !== final.origin) {
 		throw new FetchError(final, `Document id ${id} is not on ${final.origin}`)
 	}
-	return { contextUrl: null, document, documentUrl: final.href }
+	return { ...remote, documentUrl: final.href }
 }
 
 function originOf(url: string): string | null {
