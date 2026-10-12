@@ -320,6 +320,7 @@ describe('import bootstrap over Access', () => {
 		const { header, trailer } = splitDump(text)
 		const target = await configuredStore()
 		const { post, as } = adminHarness(target, team)
+		expect((await post(adminClaims(), '/admin/config', { values: { domain: 'kopje.test' } })).status).toBe(200)
 
 		const begun = await post(adminClaims(), '/admin/import/begin', { header })
 		expect(begun.status).toBe(200)

@@ -216,6 +216,7 @@ describe('upgrades during an import', () => {
 describe('import completion receipt', () => {
 	it('keeps the report of a verified import for a lost response, without freezing the Store', async () => {
 		const target = await migratedStore()
+		await target.setConfig(BUILD, ACCESS, { domain: 'kopje.test' })
 		const { id, report } = await importViaRpc(target, await dumpOf())
 		expect(report).toMatchObject({ ok: true })
 		expect(await target.importProgress(BUILD, ACCESS, id)).toMatchObject({
@@ -232,6 +233,98 @@ describe('service tokens', () => {
 		const { as } = adminHarness(store, team)
 		expect((await as(serviceClaims(), '/admin/version')).status).toBe(200)
 		expect((await as({ ...serviceClaims(), sub: 'mtls-certificate' }, '/admin/version')).status).toBe(403)
+	})
+})
+
+describe('configuration is everything config accepts', () => {
+	it('keeps the target domain and access_aud, and leaves an absent one absent', async () => {
+		const text = await dumpOf((source) =>
+			runInDurableObject(source, (_instance, state) => {
+				state.storage.sql.exec("UPDATE instance_settings SET value = 'evil.test' WHERE name = 'domain'")
+				state.storage.sql.exec("INSERT INTO instance_settings (name, value) VALUES ('access_aud', 'evil-login-aud')")
+			})
+		)
+		const target = await migratedStore()
+		// Configuration does not make the Store non-empty: it can be set before the import.
+		expect(await target.setConfig(BUILD, ACCESS, { domain: 'kopje.test' })).toMatchObject({ ok: true })
+		expect((await importViaRpc(target, text)).report).toMatchObject({ ok: true })
+		expect(await target.config(BUILD)).toEqual({ values: { domain: 'kopje.test' } })
+		// The rest of instance_settings is data and came with the dump.
+		const title = await runInDurableObject(target, (_instance, state) =>
+			state.storage.sql.exec<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'title'").one()
+		)
+		expect(title.value).toBe('Kopje')
+	})
+})
+
+describe('abandoning a stranded token import', () => {
+	const T0 = Date.parse('2026-10-12T00:00:00Z')
+	const IDLE = 15 * 60 * 1000
+
+	it('lets IMPORT_TOKEN reset a token import idle for 15 minutes, and says when before that', async () => {
+		const text = await dumpOf()
+		const store = await migratedStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const at = (ms: number) =>
+				new StoreAdmin(state, testKernel(state), {
+					source: { build: BUILD, version: 't' },
+					log: () => {},
+					now: () => ms,
+				})
+			const begun = await at(T0).importBegin(BUILD, TOKEN, splitDump(text).header)
+			if (!begun.ok || begun.session === undefined) throw new Error('no session')
+			const session = { kind: 'import-session', secret: begun.session } as const
+			const chunk = (await importChunks(text, 1 << 20))[0]!
+			// A successful step at T0 + 5 min restarts the idle clock.
+			expect(await at(T0 + 5 * 60 * 1000).importChunk(BUILD, session, begun.progress.id, 1, chunk)).toMatchObject({
+				ok: true,
+			})
+
+			const early = await at(T0 + 5 * 60 * 1000 + IDLE - 1000).importReset(BUILD, TOKEN, begun.progress.id, true)
+			expect(early).toMatchObject({ ok: false, code: 'import-not-idle' })
+			expect(early.ok ? '' : early.message).toContain(new Date(T0 + 5 * 60 * 1000 + IDLE).toISOString())
+			// Without the explicit abandon request the token never resets an import.
+			expect(await at(T0 + 60 * IDLE).importReset(BUILD, TOKEN, begun.progress.id)).toMatchObject({
+				ok: false,
+				code: 'wrong-authority',
+			})
+
+			expect(await at(T0 + 5 * 60 * 1000 + IDLE).importReset(BUILD, TOKEN, begun.progress.id, true)).toMatchObject({
+				ok: true,
+			})
+			expect(state.storage.sql.exec('SELECT count(*) AS n FROM accounts').one().n).toBe(0)
+		})
+		expect(await store.adminGate(BUILD)).toMatchObject({ bootstrap: true })
+		expect(await store.importProgress(BUILD, ACCESS)).toEqual({ progress: null })
+	})
+
+	it('never lets IMPORT_TOKEN reset an Access import', async () => {
+		const store = await migratedStore()
+		await setTeamAccess(store, team)
+		const begun = await store.importBegin(BUILD, ACCESS, splitDump(await dumpOf()).header)
+		if (!begun.ok) throw new Error(begun.message)
+		expect(await store.importReset(BUILD, TOKEN, begun.progress.id, true)).toMatchObject({
+			ok: false,
+			code: 'wrong-authority',
+		})
+	})
+
+	it('answers the CLI with the time the reset becomes possible', async () => {
+		const store = await migratedStore()
+		const { request } = adminHarness(store, team, { IMPORT_TOKEN })
+		const begin = await request('/admin/import/begin', {
+			method: 'POST',
+			headers: tokenHeaders({ 'content-type': 'application/json' }),
+			body: JSON.stringify({ header: splitDump(await dumpOf()).header }),
+		})
+		const { progress } = (await begin.json()) as { progress: { id: string } }
+		const reset = await request('/admin/import/reset', {
+			method: 'POST',
+			headers: tokenHeaders({ 'content-type': 'application/json' }),
+			body: JSON.stringify({ confirm: true, id: progress.id, abandonStale: true }),
+		})
+		expect(reset.status).toBe(409)
+		expect(await reset.json()).toMatchObject({ code: 'import-not-idle', resetAfter: expect.any(String) })
 	})
 })
 

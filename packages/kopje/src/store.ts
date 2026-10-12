@@ -107,8 +107,8 @@ export class Store extends DurableObject<Env> {
 		return this.#admin.importProgress(authority, id)
 	}
 
-	importReset(callerBuild: string, authority: ImportAuthority, id?: string) {
-		return this.#admin.importReset(callerBuild, authority, id)
+	importReset(callerBuild: string, authority: ImportAuthority, id?: string, abandonStale?: boolean) {
+		return this.#admin.importReset(callerBuild, authority, id, abandonStale)
 	}
 
 	config(_callerBuild: string) {

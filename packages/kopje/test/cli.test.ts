@@ -124,6 +124,7 @@ describe('kopje-admin', () => {
 				`access_admin_aud=${ADMIN_AUD}`,
 				`admin_email=${ADMIN_EMAIL}`,
 				`access_service_token_client_id=${SERVICE_CLIENT_ID}`,
+				'domain=kopje.test',
 			],
 			{ fetch: edge(target).fetch }
 		)
@@ -335,6 +336,27 @@ describe('kopje-admin', () => {
 		const rerun = await cli(['import', 'i.sql', '--import-token'], { fetch: edge(target).fetch, io })
 		expect(rerun.code, rerun.err).toBe(0)
 		expect(JSON.parse(rerun.out)).toMatchObject({ ok: true })
+	})
+
+	it('abandons a stranded token import only with --abandon-stale --import-token, after the idle time', async () => {
+		const io = memoryIO()
+		expect((await cli(['dump', 'k.sql'], { fetch: edge(await sourceStore(0)).fetch, io })).code).toBe(0)
+		const target = await migratedStore()
+		const crash = edge(target, async (request, forward) => {
+			if (new URL(request.url).pathname === '/admin/import/chunk') {
+				throw new TypeError('network connection lost')
+			}
+			return forward()
+		})
+		expect((await cli(['import', 'k.sql', '--import-token'], { fetch: crash.fetch, io })).code).toBe(1)
+		// The session file is lost.
+		io.files.delete('k.sql.import.json')
+		expect((await cli(['import-reset', '--abandon-stale', '--yes'], { fetch: edge(target).fetch })).code).toBe(2)
+		const early = await cli(['import-reset', '--abandon-stale', '--import-token', '--yes'], {
+			fetch: edge(target).fetch,
+		})
+		expect(early.code).toBe(1)
+		expect(early.err).toMatch(/possible after \d{4}-\d\d-\d\dT/)
 	})
 
 	it('shows the saved report of a failed import instead of finishing it again', async () => {

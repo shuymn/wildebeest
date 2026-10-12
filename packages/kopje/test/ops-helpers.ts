@@ -15,6 +15,18 @@ export const SERVICE_CLIENT_ID = 'cli-client.access'
 // The import authority of an Access-authenticated admin.
 export const ACCESS = { kind: 'access' } as const
 
+// Gives the target the source's configuration (domain, Access settings) with the config operation, as an operator
+// does: an import never carries configuration.
+export async function copyConfig(source: StoreStub, target: StoreStub): Promise<void> {
+	const { values } = await source.config(BUILD)
+	if (Object.keys(values).length > 0) {
+		const result = await target.setConfig(BUILD, ACCESS, values)
+		if (!result.ok) {
+			throw new Error(`${result.code}: ${result.message}`)
+		}
+	}
+}
+
 function id(n: number): string {
 	return String(110_000_000_000_000_000n + BigInt(n))
 }

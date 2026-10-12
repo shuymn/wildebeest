@@ -50,7 +50,7 @@ export type ImportRecord = {
 	verify: VerifyProgress | null
 	// Set when verification failed; the import then needs a reset (deleteAll) and a new import.
 	report: VerifyReport | null
-	// The Store's own Access rows, moved out of instance_settings for the import and written back after it.
+	// The Store's own configuration rows, moved out of instance_settings for the import and written back after it.
 	bootstrap: { name: string; value: string }[]
 	// A 'token' import is continued only with the session credential begin returned; only its SHA-256 is kept.
 	sessionHash: string | null

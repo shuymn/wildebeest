@@ -102,6 +102,8 @@ const VERIFY_STEP_BYTES = 32 * 1024 * 1024
 const MAX_QUERY_ROWS = 1000
 const MAX_QUERY_BYTES = 4 * 1024 * 1024
 const PITR_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+// A token import whose session made no successful step for this long may be abandoned with IMPORT_TOKEN.
+export const STALE_IMPORT_MS = 15 * 60 * 1000
 
 // Thrown to roll back the read-only SQL transaction.
 class Rollback extends Error {}
@@ -501,7 +503,7 @@ export class StoreAdmin {
 				if (!isEmpty(this.#sql, catalog, BOOTSTRAP)) {
 					throw new ImportError('not-empty', 'the Store already has data; import only into an empty Store')
 				}
-				// Move the Store's Access rows aside: the imported instance_settings must land in an empty table, and the
+				// Move the Store's configuration aside: the imported instance_settings must land in an empty table, and the
 				// admin keeps authenticating with these until the import is verified.
 				const bootstrap = readBootstrapRows(this.#sql)
 				replaceBootstrapRows(this.#sql, [])
@@ -711,7 +713,7 @@ export class StoreAdmin {
 					report.problems.push(migrations)
 				}
 				if (report.ok) {
-					// Imported rows never change who administers this Store: its own Access rows come back exactly.
+					// An import never changes configuration (domain, who administers this Store): its own rows come back exactly.
 					replaceBootstrapRows(this.#sql, record.bootstrap ?? [])
 					const completed: ImportReceipt = {
 						id: record.id,
@@ -767,10 +769,16 @@ export class StoreAdmin {
 
 	// Starts over from nothing: deleteAll() (which also drops the schema) and the migration runner. Only for the
 	// authority of the running import, or for a Store that holds no data; so it cannot wipe a serving instance.
+	//
+	// abandonStale: IMPORT_TOKEN's way back from a token import whose session credential was lost. It resets such an
+	// import to the empty Store once the import is not verified, its session has had no successful step for
+	// STALE_IMPORT_MS, and admin access is still not usable. This gives the token no new power: on an empty Store in
+	// bootstrap it could begin an import anyway.
 	async importReset(
 		callerBuild: string,
 		authority: ImportAuthority,
-		id?: string
+		id?: string,
+		abandonStale = false
 	): Promise<Result<{ upgrade: UpgradeResult }>> {
 		this.#requireBuild(callerBuild)
 		await this.#kernel.state()
@@ -779,7 +787,12 @@ export class StoreAdmin {
 			return refuse('dump-in-progress', 'a dump is in progress')
 		}
 		try {
-			if (flags.import !== null) {
+			if (flags.import !== null && authority.kind === 'import-token' && abandonStale) {
+				const refusal = this.#staleRefusal(flags.import, id)
+				if (refusal !== null) {
+					return refusal
+				}
+			} else if (flags.import !== null) {
 				this.#authorizedRecord(authority, id ?? flags.import.id)
 			} else if (authority.kind === 'import-session') {
 				throw new ImportError('wrong-authority', 'this session has no import to reset')
@@ -791,7 +804,7 @@ export class StoreAdmin {
 		} catch (error) {
 			return asRefusal(error)
 		}
-		// deleteAll() takes the Access rows too; they are written back into the recreated schema. Nothing awaits between
+		// deleteAll() takes the configuration too; it is written back into the recreated schema. Nothing awaits between
 		// the checks above and deleteAll(), so no other request runs in between.
 		const bootstrap = flags.import?.bootstrap ?? readBootstrapRows(this.#sql)
 		this.#log({ event: 'kopje.store.import.reset', id: flags.import?.id ?? null })
@@ -799,7 +812,7 @@ export class StoreAdmin {
 		this.#kernel.forget()
 		const upgrade = await this.#kernel.upgrade()
 		if (!upgrade.ok) {
-			// Nothing can hold the Access rows now; report them so the operator can set them again.
+			// Nothing can hold the configuration now; report it so the operator can set it again.
 			return {
 				...refuse('upgrade-failed', `schema recreation failed: ${upgrade.detail}`),
 				bootstrap,
@@ -859,6 +872,28 @@ export class StoreAdmin {
 		} catch (error) {
 			return asRefusal(error)
 		}
+	}
+
+	// Why a token import may not be abandoned (yet), or null when it may.
+	#staleRefusal(record: ImportRecord, id: string | undefined): (Refusal & { resetAfter?: string }) | null {
+		if (id !== undefined && id !== record.id) {
+			return refuse('import-not-found', 'no such import')
+		}
+		if (record.mode !== 'token') {
+			return refuse('wrong-authority', 'IMPORT_TOKEN only abandons a token import')
+		}
+		if (adminUsable(settingsFromRows(record.bootstrap ?? []))) {
+			return refuse('not-bootstrap', 'IMPORT_TOKEN only abandons an import into a Store without admin access')
+		}
+		const resetAfter = record.updatedAt + STALE_IMPORT_MS
+		if (this.#now() < resetAfter) {
+			const at = new Date(resetAfter).toISOString()
+			return {
+				...refuse('import-not-idle', `the import's session was active recently; abandoning it is possible after ${at}`),
+				resetAfter: at,
+			}
+		}
+		return null
 	}
 
 	// Bootstrap: no import running, admin access not usable, and (for an import) no data.

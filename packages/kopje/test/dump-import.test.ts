@@ -6,6 +6,7 @@ import { BUILD, freshStore, migratedStore, rejectionOf, testKernel } from './hel
 import {
 	ACCESS,
 	beginImport,
+	copyConfig,
 	dumpViaRpc,
 	finishImport,
 	importChunks,
@@ -59,7 +60,9 @@ describe('dump', () => {
 		expect(chunks).toBeGreaterThan(3)
 		const { trailer } = splitDump(text) as { trailer: DumpTrailer }
 
+		// Configuration (here the domain) is set with config, never imported.
 		const target = await migratedStore()
+		await copyConfig(source, target)
 		const { report, chunks: sent } = await importViaRpc(target, text, 8 * 1024)
 		expect(sent).toBeGreaterThan(1)
 		expect(report).toMatchObject({ ok: true, foreignKeyViolations: 0, problems: [] })
@@ -234,9 +237,11 @@ describe('import', () => {
 	})
 
 	it('reports a chunk that failed after committing as applied, and verify catches a stray durable write', async () => {
-		const { text } = await dumpViaRpc(await seeded(), 4096)
+		const source = await seeded()
+		const { text } = await dumpViaRpc(source, 4096)
 		const chunks = await importChunks(text, 4096)
 		const target = await migratedStore()
+		await copyConfig(source, target)
 		const id = await beginImport(target, text)
 
 		await runInDurableObject(target, async (_instance, state) => {

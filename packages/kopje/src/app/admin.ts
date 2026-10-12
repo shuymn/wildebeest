@@ -18,8 +18,8 @@ import { constantTimeEqual } from '../security/tokens'
 //   - Cf-Access-Jwt-Assertion verified against the team JWKS with the AUD from instance_settings, from the admin's
 //     email or the admin CLI's service token (common_name = the configured client id); or
 //   - Kopje-Import-Token = IMPORT_TOKEN, while the Store is in bootstrap (no usable admin access): to read its health,
-//     version and catalog, to configure it (/admin/config), and to begin an import into it while it is empty. Used
-//     for the cutover, then removed.
+//     version and catalog, to configure it (/admin/config), to begin an import into it while it is empty, and to
+//     abandon a token import whose session was lost and idle for 15 minutes. Used for the cutover, then removed.
 //   - Kopje-Import-Session = the credential that begin returned for a token import: only for that import.
 // The maintenance gate does not apply: these routes are how an operator works on a Store in maintenance.
 
@@ -32,7 +32,7 @@ const JSON_BODY_LIMIT = 1024 * 1024
 const IMPORT_CHUNK_LIMIT = 16 * 1024 * 1024
 // IMPORT_TOKEN: reads only while in bootstrap (checked here); mutations are checked by the Store.
 const TOKEN_READ_PATHS = [/^\/admin\/(health|version|catalog|config)$/]
-const TOKEN_WRITE_PATHS = [/^\/admin\/import\/begin$/, /^\/admin\/config$/]
+const TOKEN_WRITE_PATHS = [/^\/admin\/import\/(begin|reset)$/, /^\/admin\/config$/]
 const SESSION_PATHS = [/^\/admin\/import\/(chunk|finish|verify|progress|reset)$/]
 const SESSION_SECRET = /^[A-Za-z0-9_-]{43}$/
 
@@ -329,11 +329,18 @@ export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
 	})
 
 	admin.post('/import/reset', async (c) => {
-		const { confirm, id } = await jsonBody(c)
-		if (confirm !== true || (id !== undefined && typeof id !== 'string')) {
-			return c.json({ error: 'reset deletes all data of this Store; send {"confirm": true, "id"?: string}' }, 400)
+		const { confirm, id, abandonStale } = await jsonBody(c)
+		if (
+			confirm !== true ||
+			(id !== undefined && typeof id !== 'string') ||
+			(abandonStale !== undefined && typeof abandonStale !== 'boolean')
+		) {
+			return c.json(
+				{ error: 'reset deletes all data of this Store; send {"confirm": true, "id"?: string, "abandonStale"?: true}' },
+				400
+			)
 		}
-		return reply(c, await stub(c).importReset(build(c.env), c.get('auth'), id))
+		return reply(c, await stub(c).importReset(build(c.env), c.get('auth'), id, abandonStale === true))
 	})
 
 	// ---- configuration (instance values and Access authority; never changed by an import)

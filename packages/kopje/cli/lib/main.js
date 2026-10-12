@@ -20,6 +20,9 @@ Commands
                                 the import then continues with its own session, kept in <file>.import.json
   import-reset [<file>] --yes   delete everything in a Store under import and recreate its schema; with <file>, a
                                 token import is reset with the session kept for that file
+      --abandon-stale --import-token
+                                recover a token import whose session file was lost: IMPORT_TOKEN resets it once it
+                                has been idle for 15 minutes (the error says when) while admin access is not usable
   config                        show the instance values and the Access settings of /admin
   config <name>=<value>|<name>= set (or with an empty value, remove) them; names: domain, access_aud,
                                 access_team_domain, access_admin_aud, admin_email, access_service_token_client_id.
@@ -143,15 +146,12 @@ export async function run({ argv, env, io, stdout, stderr, fetch, now = Date.now
 			throw new UsageError('set KOPJE_ADMIN_URL to the admin base URL')
 		}
 		const useToken = flags['import-token'] === true
-		if (
-			useToken &&
-			command !== 'import' &&
-			command !== 'config' &&
-			command !== 'health' &&
-			command !== 'version' &&
-			command !== 'catalog'
-		) {
-			throw new UsageError('--import-token applies only to import, config, health, version and catalog')
+		const tokenCommands = ['import', 'import-reset', 'config', 'health', 'version', 'catalog']
+		if (useToken && !tokenCommands.includes(command)) {
+			throw new UsageError(`--import-token applies only to ${tokenCommands.join(', ')}`)
+		}
+		if (flags['abandon-stale'] === true && (command !== 'import-reset' || !useToken)) {
+			throw new UsageError('--abandon-stale is import-reset --abandon-stale --import-token --yes')
 		}
 		if (useToken && (env.KOPJE_IMPORT_TOKEN ?? '') === '') {
 			throw new UsageError('--import-token needs KOPJE_IMPORT_TOKEN in the environment')
@@ -265,6 +265,10 @@ export async function run({ argv, env, io, stdout, stderr, fetch, now = Date.now
 			case 'import-reset': {
 				if (flags.yes !== true) {
 					throw new UsageError('import-reset deletes all data of the Store; pass --yes')
+				}
+				if (flags['abandon-stale'] === true) {
+					print(await client.post('/admin/import/reset', { confirm: true, abandonStale: true }))
+					return 0
 				}
 				// A token import is reset with the session kept for its file; an Access import needs no file.
 				const saved = rest[0] === undefined ? null : await io.readText(`${rest[0]}.import.json`)

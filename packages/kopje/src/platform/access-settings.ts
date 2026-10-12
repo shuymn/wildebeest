@@ -19,15 +19,15 @@ export function readAccessSettings(sql: SqlStorage): AccessSettings {
 	return settingsFromRows(readBootstrapRows(sql))
 }
 
-// The Access rows are the admin authority of this Store, not data: they do not make it non-empty for an import, an
-// import moves them aside (so they keep authorizing the admin while imported rows land) and afterwards puts back
-// exactly these rows (an imported value never replaces them), and a reset keeps them. Only the config operation
-// changes them.
-export const BOOTSTRAP = {
-	table: 'instance_settings',
-	column: 'name',
-	values: Object.values(ACCESS_SETTINGS) as readonly string[],
-} as const
+// The Store's configuration: everything the config operation sets. That is the Access rows above (who administers
+// the Store), plus domain (actor ids derive from it; domain/setup.ts reads it) and access_aud (the /oauth/authorize
+// application; domain/oauth.ts ACCESS_AUD). Configuration is not data: it does not make the Store non-empty for an
+// import, an import moves it aside (so the admin keeps authenticating while imported rows land) and afterwards puts
+// back exactly these rows (an imported value never replaces them, an absent name stays absent), and a reset keeps
+// it. Only the config operation changes it.
+export const CONFIG_KEYS: readonly string[] = ['domain', 'access_aud', ...Object.values(ACCESS_SETTINGS)]
+
+export const BOOTSTRAP = { table: 'instance_settings', column: 'name', values: CONFIG_KEYS } as const
 
 export type SettingRow = { name: string; value: string }
 
@@ -53,8 +53,8 @@ export function settingsFromRows(rows: readonly SettingRow[]): AccessSettings {
 	return settings
 }
 
-// Makes the authority rows exactly `rows`: any other value of these names (an imported one) is removed, and a name
-// that was absent stays absent.
+// Makes the configuration rows exactly `rows`: any other value of these names (an imported one) is removed, and a
+// name that was absent stays absent.
 export function replaceBootstrapRows(sql: SqlStorage, rows: readonly SettingRow[]): void {
 	sql.exec(
 		`DELETE FROM instance_settings WHERE name IN (${BOOTSTRAP.values.map(() => '?').join(',')})`,
@@ -74,10 +74,6 @@ export function adminUsable(settings: AccessSettings): boolean {
 		(settings.adminEmail !== null || settings.serviceTokenClientId !== null)
 	)
 }
-
-// What the config operation may set: the authority rows above, plus the instance values the cutover tool takes from
-// the legacy settings. domain and access_aud are the rows domain/setup.ts and domain/oauth.ts (ACCESS_AUD) read.
-export const CONFIG_KEYS: readonly string[] = ['domain', 'access_aud', ...BOOTSTRAP.values]
 
 export function readConfigRows(sql: SqlStorage): Record<string, string> {
 	const rows = sql

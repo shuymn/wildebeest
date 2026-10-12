@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { BUILD, freshStore, migratedStore, testKernel } from './helpers'
-import { ACCESS, dumpViaRpc, importViaRpc, seedStore, splitDump, tableSnapshot } from './ops-helpers'
+import { ACCESS, copyConfig, dumpViaRpc, importViaRpc, seedStore, splitDump, tableSnapshot } from './ops-helpers'
 import type { StoreStub } from '../src/platform/store-client'
 import { writeFlag } from '../src/platform/store-flags'
 
@@ -18,6 +18,7 @@ async function seeded(): Promise<StoreStub> {
 async function roundTrip(source: StoreStub) {
 	const { text } = await dumpViaRpc(source)
 	const target = await migratedStore()
+	await copyConfig(source, target)
 	const { report } = await importViaRpc(target, text)
 	return { text, target, report }
 }
