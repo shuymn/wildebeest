@@ -3,6 +3,7 @@ packages:
   - 'packages/frontend'
   - 'packages/consumer'
   - 'packages/do'
+  - 'packages/kopje'
 
 # Allow dependency build scripts only for reviewed packages.
 onlyBuiltDependencies:

@@ -1,0 +1,33 @@
+// Identical for every install. Instance-specific values (domain, title, admin, Access) live in the Store.
+{
+	"$schema": "../../node_modules/wrangler/config-schema.json",
+	"name": "kopje",
+	"main": "src/worker.ts",
+	"compatibility_date": "2026-10-11",
+	"compatibility_flags": ["nodejs_compat"],
+	"minify": true,
+	"upload_source_maps": true,
+	// Keep dashboard-set vars (MAINTENANCE) across deploys. Routes are attached in the dashboard, never here.
+	"keep_vars": true,
+	"observability": { "enabled": true },
+	// Every deployment gets a new version id; it is the build identity the Worker and the Store compare.
+	"version_metadata": { "binding": "CF_VERSION_METADATA" },
+	"durable_objects": {
+		"bindings": [{ "name": "STORE", "class_name": "Store" }],
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Store"] }],
+	"queues": {
+		"producers": [{ "binding": "QUEUE", "queue": "kopje" }],
+		"consumers": [{ "queue": "kopje", "max_retries": 100 }],
+	},
+	"r2_buckets": [{ "binding": "MEDIA", "bucket_name": "kopje-media" }],
+	"images": { "binding": "IMAGES" },
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS",
+		"run_worker_first": ["/*", "!/assets/*"],
+	},
+	"triggers": { "crons": ["*/5 * * * *"] },
+	// Store migrations are bundled as text modules and applied by the Store itself.
+	"rules": [{ "type": "Text", "globs": ["**/*.sql"], "fallthrough": true }],
+}

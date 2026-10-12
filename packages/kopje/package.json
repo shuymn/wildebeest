@@ -1,0 +1,27 @@
+{
+	"name": "kopje",
+	"version": "0.0.0",
+	"description": "A Fediverse server on a single Cloudflare Worker. A spiritual successor of cloudflare/wildebeest, not affiliated with Cloudflare.",
+	"license": "Apache-2.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"lint": "eslint src test --quiet",
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit",
+		"types": "wrangler types --include-runtime=false",
+		"build": "wrangler deploy --dry-run --outdir dist"
+	},
+	"dependencies": {
+		"hono": "4.12.27",
+		"zod": "3.25.76"
+	},
+	"devDependencies": {
+		"@cloudflare/vitest-pool-workers": "0.16.20",
+		"@cloudflare/workers-types": "4.20260627.1",
+		"miniflare": "4.20260625.0",
+		"typescript": "5.9.3",
+		"vitest": "4.1.9",
+		"wrangler": "4.105.0"
+	}
+}
