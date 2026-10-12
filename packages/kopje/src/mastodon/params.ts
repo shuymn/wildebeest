@@ -25,6 +25,34 @@ export class Params {
 		return names.find((name) => this.entries.filter(([key]) => key === name).length > 1)
 	}
 
+	// The objects of an array parameter: JSON sends `name[0][field]` (indexed), forms send `name[][field]`, where a field
+	// that repeats starts the next object (as Rack reads it).
+	objects(name: string): Record<string, string>[] {
+		const pattern = new RegExp(`^${name.replace(/[[\]]/g, '\\$&')}\\[(\\d*)\\]\\[([^\\]]+)\\]$`)
+		const indexed = new Map<string, Record<string, string>>()
+		const sequential: Record<string, string>[] = []
+		for (const [key, value] of this.entries) {
+			const match = pattern.exec(key)
+			if (match === null) {
+				continue
+			}
+			const [, index = '', field = ''] = match
+			if (index !== '') {
+				const object = indexed.get(index) ?? {}
+				object[field] = value
+				indexed.set(index, object)
+				continue
+			}
+			const last = sequential.at(-1)
+			if (last === undefined || field in last) {
+				sequential.push({ [field]: value })
+			} else {
+				last[field] = value
+			}
+		}
+		return [...[...indexed].sort(([a], [b]) => Number(a) - Number(b)).map(([, object]) => object), ...sequential]
+	}
+
 	// Values of `name[]` and of a repeated `name`.
 	getAll(name: string): string[] {
 		return this.entries.filter(([key]) => key === name || key === `${name}[]`).map(([, value]) => value)

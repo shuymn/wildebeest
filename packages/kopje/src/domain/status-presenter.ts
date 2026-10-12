@@ -91,18 +91,24 @@ export type StatusRow = {
 	author_domain: string | null
 }
 
+// in_reply_to_id and in_reply_to_account_id are shown as Mastodon shows them, even when the viewer may not see the
+// parent: they belong to the reply, whose ActivityPub object carries inReplyTo to every recipient anyway, and its
+// author chose to publish them. The parent itself (content, author profile, context entry) stays behind the audience
+// rule. in_reply_to_account_id is the conversation partner carried through self-replies.
 export const STATUS_COLUMNS = `s.id, s.uri, s.url, s.account_id, s.reblog_of_id, s.in_reply_to_id,
-	p.account_id AS in_reply_to_account_id, s.visibility, s.spoiler_text, s.content, s.source_text, s.sensitive,
+	s.in_reply_to_account_id, s.visibility, s.spoiler_text, s.content, s.source_text, s.sensitive,
 	s.language, s.published_at, s.edited_at, s.replies_count, s.reblogs_count, s.favourites_count,
 	au.uri AS author_uri, au.username AS author_username, au.domain AS author_domain`
 
-export const STATUS_FROM = `statuses s JOIN accounts au ON au.id = s.account_id
-	LEFT JOIN statuses p ON p.id = s.in_reply_to_id`
+export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
 
 export type PresentOptions = Present & {
 	viewerId: string | null
-	// DELETE answers with the source text (`text`) in place of `content`, for redrafting.
+	// DELETE answers with the source text (`text`) in place of `content`, for redrafting: on the deleted status only,
+	// never on a boost's original.
 	source?: boolean
+	// Present a boost without its original (reblog: null), for an original the viewer may no longer see.
+	withoutReblog?: boolean
 }
 
 type MediaRow = { id: string; status_id: string; type: string; url: string; description: string }
@@ -161,15 +167,18 @@ export function presentStatuses(db: Db, ids: readonly string[], options: Present
 	)
 	const flags = viewerFlags(db, options.viewerId, all)
 
-	const present = (row: StatusRow): Status | undefined => {
+	const present = (row: StatusRow, top: boolean): Status | undefined => {
 		const account = accounts.get(row.account_id)
 		if (account === undefined) {
 			return undefined
 		}
-		const original = row.reblog_of_id === null ? undefined : byId.get(row.reblog_of_id)
-		const reblog = original === undefined ? null : (present(original) ?? null)
-		if (row.reblog_of_id !== null && reblog === null) {
-			return undefined
+		let reblog: Status | null = null
+		if (row.reblog_of_id !== null && !(top && options.withoutReblog === true)) {
+			const original = byId.get(row.reblog_of_id)
+			reblog = original === undefined ? null : (present(original, false) ?? null)
+			if (reblog === null) {
+				return undefined
+			}
 		}
 		const visibility = apiVisibility(row.visibility)
 		const viewer =
@@ -187,7 +196,9 @@ export function presentStatuses(db: Db, ids: readonly string[], options: Present
 						filtered: [] as [],
 					}
 		const body =
-			options.source === true ? { text: row.source_text ?? htmlToPlainText(row.content) } : { content: row.content }
+			top && options.source === true
+				? { text: row.source_text ?? htmlToPlainText(row.content) }
+				: { content: row.content }
 		return {
 			id: row.id,
 			created_at: row.published_at,
@@ -226,7 +237,7 @@ export function presentStatuses(db: Db, ids: readonly string[], options: Present
 
 	return ids.flatMap((id) => {
 		const row = byId.get(id)
-		const status = row === undefined ? undefined : present(row)
+		const status = row === undefined ? undefined : present(row, true)
 		return status === undefined ? [] : [status]
 	})
 }

@@ -20,7 +20,7 @@ import {
 	undoLikeActivity,
 	updateActivity,
 } from './activities'
-import { type ApiVisibility, canView, listableSql, requiresMention, type Visibility } from './audience'
+import { type ApiVisibility, canView, isDistributable, listableSql, requiresMention, type Visibility } from './audience'
 import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
 import { notify } from './notifications'
@@ -227,7 +227,7 @@ export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusRe
 		return { status: 'invalid', error: TOO_LONG }
 	}
 	const author = localAuthor(db, accountId)
-	let parent: { id: string; uri: string } | null = null
+	let parent: ReplyParent | null = null
 	if (input.inReplyToId !== undefined) {
 		parent = replyParent(db, accountId, input.inReplyToId)
 		if (parent === null) {
@@ -242,11 +242,19 @@ export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusRe
 	const composed = compose(db, input.text, author, input.present.origin)
 	const visibility = input.visibility ?? author.default_visibility
 	const sensitive = (input.sensitive ?? author.default_sensitive === 1) || input.spoilerText !== ''
+	const language = input.language ?? author.default_language
+	// Status#carried_over_reply_to_account_id: continuing one's own reply keeps the conversation partner.
+	const replyTarget =
+		parent === null
+			? null
+			: parent.account_id === accountId && parent.in_reply_to_uri !== null
+				? parent.in_reply_to_account_id
+				: parent.account_id
 	const id = allocateLocalId(db, input.now)
 	db.run(
 		`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, spoiler_text, content,
-			source_text, sensitive, language, published_at, client_key, search_text, created_at)
-		VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?12)`,
+			source_text, sensitive, language, published_at, client_key, search_text, in_reply_to_account_id, created_at)
+		VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?12)`,
 		id,
 		`${origin}/ap/o/${input.objectId}`,
 		accountId,
@@ -257,10 +265,11 @@ export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusRe
 		composed.content,
 		composed.source,
 		sensitive ? 1 : 0,
-		input.language ?? author.default_language,
+		language,
 		iso(input.now),
 		input.idempotencyKey ?? null,
-		searchText(composed.source, input.spoilerText)
+		searchText(composed.source, input.spoilerText),
+		replyTarget
 	)
 	writeMentions(db, id, composed.mentions, [])
 	writeTags(db, id, composed.tags)
@@ -269,6 +278,25 @@ export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusRe
 	recountStatus(db, parent?.id ?? null)
 	for (const mention of composed.mentions) {
 		notify(db, { recipientId: mention.id, type: 'mention', fromId: accountId, statusId: id, now: input.now })
+	}
+	// FeedInsertWorker#notify?: followers who asked to be notified hear of a post that is not a reply to someone else
+	// and that their home would show (the follow's languages); notify() applies the audience rule.
+	if (replyTarget === null || replyTarget === accountId) {
+		const subscribers = db.all<{ account_id: string }>(
+			`SELECT account_id FROM follows WHERE target_account_id = ?1 AND state = 'accepted' AND notify = 1
+				AND (languages IS NULL OR ?2 IS NULL OR ?2 IN (SELECT value FROM json_each(languages)))`,
+			accountId,
+			language
+		)
+		for (const subscriber of subscribers) {
+			notify(db, {
+				recipientId: subscriber.account_id,
+				type: 'status',
+				fromId: accountId,
+				statusId: id,
+				now: input.now,
+			})
+		}
 	}
 	const facts = statusFacts(db, id)
 	if (facts !== null) {
@@ -281,23 +309,27 @@ export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusRe
 	return { status: 'ok', value: status }
 })
 
+type ReplyParent = {
+	id: string
+	uri: string
+	account_id: string
+	in_reply_to_uri: string | null
+	in_reply_to_account_id: string | null
+}
+
 // The status replied to: visible to the poster; a boost stands for its original.
-function replyParent(db: Db, viewerId: string, id: string): { id: string; uri: string } | null {
+function replyParent(db: Db, viewerId: string, id: string): ReplyParent | null {
 	const resolved = resolveStatusId(db, id)
 	if (resolved === null || !canView(db, viewerId, resolved)) {
 		return null
 	}
-	const row = db.first<{ id: string; uri: string; reblog_of_id: string | null }>(
-		'SELECT id, uri, reblog_of_id FROM statuses WHERE id = ?',
-		resolved
+	return (
+		db.first<ReplyParent>(
+			`SELECT o.id, o.uri, o.account_id, o.in_reply_to_uri, o.in_reply_to_account_id
+			FROM statuses s JOIN statuses o ON o.id = IFNULL(s.reblog_of_id, s.id) WHERE s.id = ?`,
+			resolved
+		) ?? null
 	)
-	if (row === undefined) {
-		return null
-	}
-	if (row.reblog_of_id === null) {
-		return { id: row.id, uri: row.uri }
-	}
-	return db.first<{ id: string; uri: string }>('SELECT id, uri FROM statuses WHERE id = ?', row.reblog_of_id) ?? null
 }
 
 // Writes the mention set of a status. Mentions that disappear from the text stay as silent mentions (Mastodon's
@@ -343,9 +375,15 @@ export type EditStatusInput = {
 	sensitive?: boolean
 	language?: string
 	mediaIds: string[]
+	// media_attributes[]: new descriptions of attached media. Entries for media the edit does not attach are ignored.
+	mediaAttributes: { id: string; description: string }[]
 	now: number
 	present: Present
 }
+
+// Edit history is bounded when it is written: a status keeps at most this many versions (the original and 99
+// edits); a further edit is refused. Mastodon has no limit; this one keeps /history bounded (RES-3).
+export const MAX_STATUS_EDITS = 100
 
 type OwnStatus = {
 	id: string
@@ -388,28 +426,32 @@ function mediaSnapshot(db: Db, statusId: string): MediaAttachment[] {
 		.map(presentMedia)
 }
 
-function recordEdit(db: Db, statusId: string, at: string): void {
-	const row = db.first<{ content: string; spoiler_text: string; sensitive: number }>(
-		'SELECT content, spoiler_text, sensitive FROM statuses WHERE id = ?',
-		statusId
-	)
-	if (row === undefined) {
-		return
-	}
-	db.run(
-		`INSERT INTO status_edits (status_id, content, spoiler_text, sensitive, media_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+// Records the status as it is now as a history entry and returns the entry's id (unique per edit; the Update
+// activity is named after it).
+function recordEdit(db: Db, statusId: string, at: string): string {
+	const row = db.all<{ id: string }>(
+		`INSERT INTO status_edits (status_id, content, spoiler_text, sensitive, media_json, created_at)
+		SELECT id, content, spoiler_text, sensitive, ?2, ?3 FROM statuses WHERE id = ?1
+		RETURNING CAST(id AS TEXT) AS id`,
 		statusId,
-		row.content,
-		row.spoiler_text,
-		row.sensitive,
 		JSON.stringify(mediaSnapshot(db, statusId)),
 		at
-	)
+	)[0]
+	if (row === undefined) {
+		throw new Error('edited status disappeared')
+	}
+	return row.id
 }
 
-// PUT /statuses/:id replaces the text, the spoiler, the sensitive flag and the media as Mastodon's UpdateStatusService
-// does (absent media_ids removes the media); an absent language keeps the current one. Visibility cannot change. An
-// edit that changes nothing is not recorded. The first edit also records the original as the first history entry.
+// PUT /statuses/:id replaces the text, the spoiler, the sensitive flag, the media and their descriptions as Mastodon's
+// UpdateStatusService does (absent media_ids removes the media); an absent language keeps the current one.
+// Visibility cannot change. An edit that changes nothing is not recorded. The first edit also records the original
+// as the first history entry.
+//
+// Deliberate difference from Mastodon: the audience of a private, direct or limited status never widens. A mention
+// added by an edit is linked in the text but adds no recipient, notification or delivery, so neither the status nor
+// its history reaches anyone who could not see the original. Public and unlisted statuses follow Mastodon: a new
+// mention is a mention and is notified. Either way, a mention removed by an edit stays as a silent mention.
 export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db, input, { accountId }) => {
 	const options = { ...input.present, viewerId: accountId }
 	const current = ownStatus(db, accountId, input.id)
@@ -425,15 +467,22 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	}
 	const sensitive = (input.sensitive ?? false) || input.spoilerText !== ''
 	const language = input.language ?? current.language
-	const currentMedia = db
-		.all<{ id: string }>('SELECT id FROM media_attachments WHERE status_id = ? ORDER BY position, id', current.id)
-		.map((row) => row.id)
+	const currentMedia = db.all<{ id: string; description: string }>(
+		'SELECT id, description FROM media_attachments WHERE status_id = ? ORDER BY position, id',
+		current.id
+	)
+	// Only descriptions of media this edit attaches (own media, checked by attachableMedia) are applied.
+	const descriptions = new Map(
+		input.mediaAttributes.filter((a) => media.includes(a.id)).map((a) => [a.id, a.description])
+	)
+	const describedBefore = new Map(currentMedia.map((m) => [m.id, m.description]))
 	const unchanged =
 		input.text === (current.source_text ?? '') &&
 		input.spoilerText === current.spoiler_text &&
 		(sensitive ? 1 : 0) === current.sensitive &&
 		language === current.language &&
-		JSON.stringify(media) === JSON.stringify(currentMedia)
+		JSON.stringify(media) === JSON.stringify(currentMedia.map((m) => m.id)) &&
+		[...descriptions].every(([id, description]) => describedBefore.get(id) === description)
 	const status = (): Acted<Status> => {
 		const value = presentStatus(db, current.id, options)
 		return value === null ? { status: 'not_found' } : { status: 'ok', value }
@@ -441,10 +490,15 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	if (unchanged) {
 		return status()
 	}
+	const versions =
+		db.first<{ n: number }>('SELECT COUNT(*) AS n FROM status_edits WHERE status_id = ?', current.id)?.n ?? 0
+	if (versions + (versions === 0 ? 2 : 1) > MAX_STATUS_EDITS) {
+		return { status: 'invalid', error: 'Validation failed: This status has been edited too many times' }
+	}
 	const author = localAuthor(db, accountId)
 	const composed = compose(db, input.text, author, input.present.origin)
 	const editedAt = iso(input.now)
-	if (db.first('SELECT 1 AS yes FROM status_edits WHERE status_id = ? LIMIT 1', current.id) === undefined) {
+	if (versions === 0) {
 		recordEdit(db, current.id, current.published_at)
 	}
 	db.run(
@@ -463,10 +517,22 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	const previous = db
 		.all<{ account_id: string }>('SELECT account_id FROM status_mentions WHERE status_id = ?', current.id)
 		.map((row) => row.account_id)
-	const added = writeMentions(db, current.id, composed.mentions, previous)
+	const mentions = isDistributable(current.visibility)
+		? composed.mentions
+		: composed.mentions.filter((mention) => previous.includes(mention.id))
+	const added = writeMentions(db, current.id, mentions, previous)
 	writeTags(db, current.id, composed.tags)
 	attachMedia(db, current.id, media)
-	recordEdit(db, current.id, editedAt)
+	for (const [id, description] of descriptions) {
+		db.run(
+			'UPDATE media_attachments SET description = ? WHERE id = ? AND account_id = ? AND status_id = ?',
+			description,
+			id,
+			accountId,
+			current.id
+		)
+	}
+	const editId = recordEdit(db, current.id, editedAt)
 	for (const mentioned of added) {
 		notify(db, { recipientId: mentioned, type: 'mention', fromId: accountId, statusId: current.id, now: input.now })
 	}
@@ -486,7 +552,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	}
 	const facts = statusFacts(db, current.id)
 	if (facts !== null) {
-		recordOutbound(db, accountId, updateActivity(facts), input.now)
+		recordOutbound(db, accountId, updateActivity(facts, editId), input.now)
 	}
 	return status()
 })
@@ -496,7 +562,8 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 // ---------------------------------------------------------------------------------------------------------------
 
 // Deletes an own status (or boost) and answers with it as it was, source text included, for redrafting. Its media
-// is detached, not deleted, unless deleteMedia, so a redraft can attach it again.
+// is detached, not deleted, unless deleteMedia, so a redraft can attach it again. Only the deleted status itself
+// carries its source; a boost's original is shown only if the viewer may still see it, and never with its source.
 export const deleteStatus = userWriteOperation<
 	{ id: string; deleteMedia: boolean; now: number; present: Present },
 	Viewed<Status>
@@ -505,7 +572,12 @@ export const deleteStatus = userWriteOperation<
 	if (current === null) {
 		return { status: 'not_found' }
 	}
-	const value = presentStatus(db, current.id, { ...input.present, viewerId: accountId, source: true })
+	const value = presentStatus(db, current.id, {
+		...input.present,
+		viewerId: accountId,
+		source: true,
+		withoutReblog: current.reblog_of_id !== null && !canView(db, accountId, current.reblog_of_id),
+	})
 	if (value === null) {
 		return { status: 'not_found' }
 	}
@@ -552,9 +624,11 @@ export const getStatus = optionalUserReadOperation<{ id: string; present: Presen
 	}
 )
 
+// traversal bounds the reply-tree rows read before the list rule and the order apply, not only the rows returned:
+// a broad tree is cut, breadth first, after that many replies.
 const CONTEXT_LIMITS = {
-	anonymous: { ancestors: 40, descendants: 60, depth: 20 },
-	user: { ancestors: 4096, descendants: 4096, depth: 4096 },
+	anonymous: { ancestors: 40, descendants: 60, depth: 20, traversal: 240 },
+	user: { ancestors: 4096, descendants: 4096, depth: 4096, traversal: 8192 },
 }
 
 export type Context = { ancestors: Status[]; descendants: Status[] }
@@ -587,12 +661,14 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 				UNION ALL
 				SELECT s.id, down.path || '/' || s.id, down.depth + 1 FROM statuses s JOIN down ON s.in_reply_to_id = down.id
 				WHERE down.depth < ?4
+				LIMIT ?5
 			)
 			SELECT s.id FROM down JOIN statuses s ON s.id = down.id WHERE ${listableSql('s', '?1')} ORDER BY down.path LIMIT ?3`,
 			viewerId,
 			resolved,
 			limits.descendants,
-			limits.depth
+			limits.depth,
+			limits.traversal
 		)
 		const options = { ...present, viewerId }
 		return {
@@ -967,7 +1043,8 @@ export const unreblog = userWriteOperation<ActionInput, Acted<Status>>((db, inpu
 export type InteractorsInput = { id: string; kind: 'favourited_by' | 'reblogged_by'; page: PageQuery; present: Present }
 
 // Accounts that favourited or boosted a status the viewer may see, newest first, without accounts the viewer
-// blocks, is blocked by, mutes or domain-blocks, and without suspended accounts. Favourites page by the favourite's id; boosts by
+// blocks, is blocked by, mutes or domain-blocks, and without suspended accounts. Only public and unlisted boosts are
+// listed (Mastodon's RebloggedByAccountsController); reblogs_count still counts every boost, as Mastodon's does. Favourites page by the favourite's id; boosts by
 // the boost's status id.
 export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Page<Account>>>(
 	(db, { id, kind, page, present }, viewerId) => {
@@ -1001,7 +1078,7 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 				: db.all<AccountRow & { cursor: string }>(
 						`SELECT r.id AS cursor, ${ACCOUNT_COLUMNS}
 						FROM statuses r JOIN accounts a ON a.id = r.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
-						WHERE r.reblog_of_id = ?2 AND l.suspended_at IS NULL AND ${excluded}
+						WHERE r.reblog_of_id = ?2 AND r.visibility IN ('public', 'unlisted') AND l.suspended_at IS NULL AND ${excluded}
 							AND (?3 IS NULL OR r.id < ?3) AND (?4 IS NULL OR r.id > ?4)
 						ORDER BY r.id ${order} LIMIT ?5`,
 						viewerId,
@@ -1033,6 +1110,7 @@ export function statusCursor(cursor: string | undefined): string | null {
 	if (cursor === undefined) {
 		return null
 	}
+	cursor = cursor.replace(/^0+(?=\d)/, '')
 	if (cursor.length > STATUS_ID_LENGTH) {
 		return MAX_STATUS_ID
 	}

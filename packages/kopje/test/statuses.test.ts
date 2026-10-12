@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
-import { bearer, json, sql } from './api-helpers'
+import { bearer, form, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import {
 	act,
+	block,
 	community,
 	follow,
 	getJson,
+	ids,
 	outbound,
 	post,
 	remoteAccount,
@@ -15,6 +17,7 @@ import {
 	type Status,
 } from './status-helpers'
 import { MAX_RAW_LENGTH } from '../src/domain/status-text'
+import { MAX_STATUS_EDITS } from '../src/domain/statuses'
 
 describe('POST /api/v1/statuses', () => {
 	it('posts a status in the Mastodon 4.0.2 shape', async () => {
@@ -556,5 +559,223 @@ describe('outbound intents', () => {
 		})
 		expect(activities[1]?.activity).toMatchObject({ type: 'Like', object: 'https://remote.example/n/1' })
 		expect(activities[2]?.activity).toMatchObject({ type: 'Announce', object: 'https://remote.example/n/1' })
+	})
+})
+
+describe('review regressions', () => {
+	const put = (h: Awaited<ReturnType<typeof community>>, token: string, id: string, body: Record<string, unknown>) =>
+		h.request(`/api/v1/statuses/${id}`, bearer(token, json(body, { method: 'PUT' })))
+
+	it('never truncates an Idempotency-Key, keys are per account, and a retry has no second side effect', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const remote = await remoteAccount(h.store, 'fan', 'fans.example')
+		await remoteFollows(h.store, remote, alice.id)
+		const prefix = 'k'.repeat(300)
+		const send = (token: string, key: string, text: string) =>
+			h.request('/api/v1/statuses', bearer(token, json({ status: text }, { headers: { 'idempotency-key': key } })))
+		const first = await (await send(alice.token, `${prefix}a`, '@bob one')).json<Status>()
+		const retry = await (await send(alice.token, `${prefix}a`, '@bob one')).json<Status>()
+		const other = await (await send(alice.token, `${prefix}b`, 'two')).json<Status>()
+		const bobs = await (await send(bob.token, `${prefix}a`, 'bob')).json<Status>()
+		expect(retry.id).toBe(first.id)
+		expect(new Set([first.id, other.id, bobs.id]).size).toBe(3)
+		expect(await sql(h.store, "SELECT id FROM notifications WHERE type = 'mention'")).toHaveLength(1)
+		expect((await outbound(h.store)).filter((o) => o.activity.type === 'Create')).toHaveLength(2)
+		expect((await getJson<{ statuses_count: number }>(h, `/api/v1/accounts/${alice.id}`)).body.statuses_count).toBe(2)
+	})
+
+	it('gives two edits in the same millisecond distinct Update ids', async () => {
+		const h = await community(['alice'])
+		const remote = await remoteAccount(h.store, 'fan', 'fans.example')
+		await remoteFollows(h.store, remote, h.users.alice.id)
+		const status = await post(h, h.users.alice, { status: 'v1' })
+		await put(h, h.users.alice.token, status.id, { status: 'v2' })
+		await put(h, h.users.alice.token, status.id, { status: 'v3' })
+		const updates = (await outbound(h.store)).filter((o) => o.activity.type === 'Update').map((o) => o.activity.id)
+		expect(updates).toHaveLength(2)
+		expect(new Set(updates).size).toBe(2)
+	})
+
+	it('applies media_attributes descriptions on edit, records them in history, and only for own attached media', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		for (const [id, owner] of [
+			['100000000000000001', alice.id],
+			['100000000000000002', bob.id],
+		] as const) {
+			await sql(
+				h.store,
+				"INSERT INTO media_attachments (id, account_id, type, url, description) VALUES (?, ?, 'image', 'https://kopje.test/m.png', 'old')",
+				id,
+				owner
+			)
+		}
+		const status = await post(h, alice, { status: 'pic', media_ids: ['100000000000000001'] })
+		const response = await put(h, alice.token, status.id, {
+			status: 'pic',
+			media_ids: ['100000000000000001'],
+			media_attributes: [
+				{ id: '100000000000000001', description: 'new' },
+				{ id: '100000000000000002', description: 'hijack' },
+			],
+		})
+		expect(response.status).toBe(200)
+		expect(await response.json()).toMatchObject({
+			media_attachments: [{ description: 'new' }],
+			edited_at: expect.any(String),
+		})
+		const history = await getJson<{ media_attachments: { description: string }[] }[]>(
+			h,
+			`/api/v1/statuses/${status.id}/history`
+		)
+		expect(history.body.map((e) => e.media_attachments.map((m) => m.description))).toEqual([['old'], ['new']])
+		expect(await sql(h.store, "SELECT description FROM media_attachments WHERE id = '100000000000000002'")).toEqual([
+			{ description: 'old' },
+		])
+		// Form encoding works too, and a too-long description is refused.
+		const tooLong = await h.request(
+			`/api/v1/statuses/${status.id}`,
+			bearer(
+				alice.token,
+				form(
+					{
+						status: 'pic',
+						'media_ids[]': '100000000000000001',
+						'media_attributes[][id]': '100000000000000001',
+						'media_attributes[][description]': 'x'.repeat(1501),
+					},
+					{ method: 'PUT' }
+				)
+			)
+		)
+		expect(tooLong.status).toBe(422)
+	})
+
+	it('bounds the edit history at write time', async () => {
+		const h = await community(['alice'])
+		const status = await post(h, h.users.alice, { status: 'v0' })
+		let last = 200
+		let edits = 0
+		for (let i = 1; i <= MAX_STATUS_EDITS + 1 && last === 200; i++) {
+			last = (await put(h, h.users.alice.token, status.id, { status: `v${i}` })).status
+			if (last === 200) {
+				edits++
+			}
+		}
+		expect(last).toBe(422)
+		const history = await getJson<unknown[]>(h, `/api/v1/statuses/${status.id}/history`)
+		expect(history.body).toHaveLength(MAX_STATUS_EDITS)
+		expect(edits).toBe(MAX_STATUS_EDITS - 1)
+	})
+
+	it('deletes media with delete_media, and lets a redraft attach the media again otherwise', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const media = (id: string) =>
+			sql(
+				h.store,
+				"INSERT INTO media_attachments (id, account_id, type, url) VALUES (?, ?, 'image', 'u')",
+				id,
+				alice.id
+			)
+		await media('100000000000000001')
+		await media('100000000000000002')
+		const keep = await post(h, alice, { status: 'keep', media_ids: ['100000000000000001'] })
+		const drop = await post(h, alice, { status: 'drop', media_ids: ['100000000000000002'] })
+		await h.request(`/api/v1/statuses/${keep.id}`, bearer(alice.token, { method: 'DELETE' }))
+		await h.request(`/api/v1/statuses/${drop.id}?delete_media=true`, bearer(alice.token, { method: 'DELETE' }))
+		expect(await sql(h.store, 'SELECT id FROM media_attachments')).toEqual([{ id: '100000000000000001' }])
+		const redraft = await post(h, alice, { status: 'keep', media_ids: ['100000000000000001'] })
+		expect(redraft.media_attachments).toMatchObject([{ id: '100000000000000001' }])
+	})
+
+	it('boosting a boost boosts the original', async () => {
+		const h = await community(['alice', 'bob', 'carol'])
+		const status = await post(h, h.users.alice, { status: 'x' })
+		const boost = await (await act(h, h.users.bob, `/api/v1/statuses/${status.id}/reblog`)).json<Status>()
+		const again = await (await act(h, h.users.carol, `/api/v1/statuses/${boost.id}/reblog`)).json<Status>()
+		expect(again.reblog?.id).toBe(status.id)
+		expect(await sql(h.store, 'SELECT reblog_of_id FROM statuses WHERE id = ?', again.id)).toEqual([
+			{ reblog_of_id: status.id },
+		])
+	})
+
+	it('a mention added by editing a direct status adds no recipient (deliberate: audiences never widen)', async () => {
+		const h = await community(['alice', 'bob', 'carol'])
+		const { alice, bob, carol } = h.users
+		const remote = await remoteAccount(h.store, 'dave', 'remote.example')
+		const status = await post(h, alice, { status: '@bob secret', visibility: 'direct' })
+		const edited = await put(h, alice.token, status.id, { status: '@bob @carol @dave@remote.example harmless' })
+		const body = await edited.json<Status>()
+		// The new mentions are links, but not mentions of the status.
+		expect(body.content).toContain('@<span>carol</span>')
+		expect(body.mentions.map((m) => m.id)).toEqual([bob.id])
+		for (const path of ['', '/history', '/context']) {
+			expect((await getJson(h, `/api/v1/statuses/${status.id}${path}`, carol.token)).status).toBe(404)
+		}
+		expect(await ids(h, '/api/v1/notifications', carol.token)).toEqual([])
+		expect(await outbound(h.store)).toEqual([])
+		expect(remote).not.toBe('')
+	})
+
+	it('a mention added by editing a public status is a mention, as in Mastodon', async () => {
+		const h = await community(['alice', 'carol'])
+		const status = await post(h, h.users.alice, { status: 'hello' })
+		await put(h, h.users.alice.token, status.id, { status: 'hello @carol' })
+		expect((await getJson<Status>(h, `/api/v1/statuses/${status.id}`)).body.mentions.map((m) => m.id)).toEqual([
+			h.users.carol.id,
+		])
+		expect(await ids(h, '/api/v1/notifications', h.users.carol.token)).toHaveLength(1)
+	})
+
+	it('deleting an own boost shows the original only if still visible, and never its source', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const visible = await post(h, alice, { status: 'visible' })
+		const boost = await (await act(h, bob, `/api/v1/statuses/${visible.id}/reblog`)).json<Status>()
+		const deleted = await (
+			await h.request(`/api/v1/statuses/${boost.id}`, bearer(bob.token, { method: 'DELETE' }))
+		).json<Status>()
+		expect(deleted.reblog).toMatchObject({ id: visible.id, content: '<p>visible</p>' })
+		expect(deleted.reblog).not.toHaveProperty('text')
+		const hidden = await post(h, alice, { status: 'hidden' })
+		const second = await (await act(h, bob, `/api/v1/statuses/${hidden.id}/reblog`)).json<Status>()
+		await block(h.store, alice.id, bob.id)
+		const response = await h.request(`/api/v1/statuses/${second.id}`, bearer(bob.token, { method: 'DELETE' }))
+		expect(response.status).toBe(200)
+		const gone = await response.json<Status>()
+		expect(gone).toMatchObject({ id: second.id, reblog: null })
+		expect(JSON.stringify(gone)).not.toContain('hidden')
+		expect(await sql(h.store, 'SELECT id FROM statuses WHERE id = ?', second.id)).toEqual([])
+	})
+
+	it('lists only public and unlisted boosts in reblogged_by', async () => {
+		const h = await community(['alice', 'bob', 'carol'])
+		const status = await post(h, h.users.alice, { status: 'x' })
+		await act(h, h.users.bob, `/api/v1/statuses/${status.id}/reblog`, { visibility: 'private' })
+		await act(h, h.users.carol, `/api/v1/statuses/${status.id}/reblog`, { visibility: 'unlisted' })
+		expect(await ids(h, `/api/v1/statuses/${status.id}/reblogged_by`)).toEqual([h.users.carol.id])
+	})
+
+	it('does not reveal direct activity through last_status_at', async () => {
+		const h = await community(['alice', 'bob'])
+		await post(h, h.users.alice, { status: '@bob psst', visibility: 'direct' })
+		const { body } = await getJson<{ last_status_at: string | null }>(h, `/api/v1/accounts/${h.users.alice.id}`)
+		expect(body.last_status_at).toBeNull()
+	})
+
+	it('keeps parent references of a visible reply but never the hidden parent itself (Mastodon parity)', async () => {
+		const h = await community(['alice', 'bob', 'carol'])
+		const { alice, bob, carol } = h.users
+		await follow(h, bob, alice.id)
+		const parent = await post(h, alice, { status: 'members only', visibility: 'private' })
+		const reply = await post(h, bob, { status: 'public answer', in_reply_to_id: parent.id })
+		const seen = await getJson<Status>(h, `/api/v1/statuses/${reply.id}`, carol.token)
+		expect(seen.body).toMatchObject({ in_reply_to_id: parent.id, in_reply_to_account_id: alice.id })
+		expect((await getJson(h, `/api/v1/statuses/${parent.id}`, carol.token)).status).toBe(404)
+		const context = await getJson<{ ancestors: Status[] }>(h, `/api/v1/statuses/${reply.id}/context`, carol.token)
+		expect(context.body.ancestors).toEqual([])
+		expect(JSON.stringify(seen.body)).not.toContain('members only')
 	})
 })

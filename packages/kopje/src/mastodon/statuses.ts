@@ -15,6 +15,7 @@ import { type Params, parseBoolean } from './params'
 import { API_VISIBILITIES, type ApiVisibility } from '../domain/audience'
 import { exceedsRawLength, statusLength } from '../domain/status-text'
 import type { Acted, Viewed } from '../domain/statuses'
+import { sha256Hex } from '../security/tokens'
 
 // /api/v1/statuses (B4a): posting, editing, deleting, the per-status reads, and favourite, reblog and bookmark.
 // Requests are checked here as Mastodon's controllers and validators do; the Store authorizes and decides.
@@ -30,7 +31,8 @@ const TOO_LONG = `Validation failed: Text character limit of ${MAX_CHARACTERS} e
 // ISO 639 codes, optionally with a region or script (zh-TW, zh-Hant). Anything else is ignored, as Mastodon does.
 const LANGUAGE = /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/
 
-const MAX_IDEMPOTENCY_KEY = 255
+// MediaAttachment::MAX_DESCRIPTION_LENGTH.
+const MAX_DESCRIPTION = 1500
 
 function emptyToUndefined(value: string | undefined): string | undefined {
 	return value === '' ? undefined : value
@@ -105,7 +107,10 @@ export const createStatus: ApiHandler = async (c, deps) => {
 	if (typeof composed === 'string' || problem !== undefined) {
 		return refuseAfterAuth(c, deps, mastodonError(422, problem ?? 'Validation failed'))
 	}
+	// The key is stored as the sha256 of all of it, so keys of any length stay distinct (never truncated). It is
+	// unique per account (statuses_client_key).
 	const key = emptyToUndefined(c.req.header('idempotency-key')?.trim())
+	const idempotencyKey = key === undefined ? undefined : await sha256Hex(key)
 	const result = authorized(
 		await storeCall(c, deps, (s, b) =>
 			s.createStatus(b, {
@@ -113,7 +118,7 @@ export const createStatus: ApiHandler = async (c, deps) => {
 				...composed,
 				visibility: visibility as ApiVisibility | undefined,
 				inReplyToId: emptyToUndefined(p.get('in_reply_to_id')),
-				idempotencyKey: key?.slice(0, MAX_IDEMPOTENCY_KEY),
+				idempotencyKey,
 				objectId: crypto.randomUUID(),
 				now: deps.now(),
 				present: present(c),
@@ -137,11 +142,22 @@ export const editStatus: ApiHandler = async (c, deps) => {
 		return p
 	}
 	const composed = composition(p)
-	if (typeof composed === 'string') {
-		return refuseAfterAuth(c, deps, mastodonError(422, composed))
+	const mediaAttributes = p
+		.objects('media_attributes')
+		.flatMap((a) =>
+			a.id === undefined || a.description === undefined ? [] : [{ id: a.id, description: a.description }]
+		)
+	const problem =
+		typeof composed === 'string'
+			? composed
+			: mediaAttributes.some((a) => [...a.description].length > MAX_DESCRIPTION)
+				? `Validation failed: Description is too long (maximum is ${MAX_DESCRIPTION} characters)`
+				: undefined
+	if (typeof composed === 'string' || problem !== undefined) {
+		return refuseAfterAuth(c, deps, mastodonError(422, problem ?? 'Validation failed'))
 	}
 	const result = await storeCall(c, deps, (s, b) =>
-		s.editStatus(b, { credential, id: statusId(c), ...composed, now: deps.now(), present: present(c) })
+		s.editStatus(b, { credential, id: statusId(c), ...composed, mediaAttributes, now: deps.now(), present: present(c) })
 	)
 	return viewedResponse(c, authorized(result))
 }

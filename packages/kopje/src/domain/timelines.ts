@@ -14,6 +14,10 @@ import type { Db } from '../db/sql'
 
 const FEED = "s.visibility IN ('public', 'unlisted', 'private')"
 
+// Status.without_replies: not a reply, or a reply in the author's own conversation (in_reply_to_account_id carries
+// the partner through self-replies, so continuing a reply to someone else is still a reply to them).
+const NOT_A_REPLY_TO_OTHERS = '(s.in_reply_to_uri IS NULL OR s.in_reply_to_account_id = s.account_id)'
+
 type Cursor = { max: string | null; min: string | null; ascending: boolean; limit: number }
 
 function statusPage(page: PageQuery): Cursor {
@@ -47,8 +51,9 @@ function ids(rows: { id: string }[]): string[] {
 
 // Home (Mastodon's FeedManager#filter_from_home): the viewer's own statuses and those of accounts they follow,
 // public, unlisted and private; direct and limited statuses of their own, and of followed accounts that address
-// them. Boosts from follows with show_reblogs off and replies to accounts the viewer does not follow are left out,
-// and so is anything the list rule hides (blocks, mutes, domain blocks, invisible originals).
+// them. Boosts from follows with show_reblogs off, replies (of others) in conversations with accounts the viewer does
+// not follow, and posts outside a follow's languages are left out, and so is anything the list rule hides (blocks,
+// mutes, domain blocks, invisible originals).
 export const homeTimeline = userReadOperation<{ page: PageQuery; present: Present }, Page<Status>>(
 	(db, { page, present }, { accountId }) => {
 		const cursor = statusPage(page)
@@ -56,9 +61,12 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 		const home = `${listableSql('s', '?1')}
 			AND (s.reblog_of_id IS NULL OR s.account_id = ?1 OR EXISTS (SELECT 1 FROM follows hf
 				WHERE hf.account_id = ?1 AND hf.target_account_id = s.account_id AND hf.show_reblogs = 1))
-			AND (s.in_reply_to_id IS NULL OR EXISTS (SELECT 1 FROM statuses hp WHERE hp.id = s.in_reply_to_id
-				AND (hp.account_id IN (?1, s.account_id) OR EXISTS (SELECT 1 FROM follows hr
-					WHERE hr.account_id = ?1 AND hr.target_account_id = hp.account_id AND hr.state = 'accepted'))))`
+			AND (s.account_id = ?1 OR s.in_reply_to_account_id IS NULL OR s.in_reply_to_account_id IN (?1, s.account_id)
+				OR EXISTS (SELECT 1 FROM follows hr
+					WHERE hr.account_id = ?1 AND hr.target_account_id = s.in_reply_to_account_id AND hr.state = 'accepted'))
+			AND NOT EXISTS (SELECT 1 FROM follows hl WHERE hl.account_id = ?1 AND hl.target_account_id = s.account_id
+				AND hl.languages IS NOT NULL AND s.language IS NOT NULL
+				AND s.language NOT IN (SELECT value FROM json_each(hl.languages)))`
 		const rows = db.all<{ id: string }>(
 			`SELECT id FROM (
 				SELECT * FROM (SELECT s.id FROM statuses s
@@ -109,8 +117,7 @@ export const publicTimeline = optionalUserReadOperation<PublicTimelineInput, Pag
 	const rows = db.all<{ id: string }>(
 		`SELECT s.id FROM statuses s JOIN accounts pa ON pa.id = s.account_id
 			WHERE ${publicConditions(input.local, input.remote, input.onlyMedia)}
-				AND (s.in_reply_to_uri IS NULL OR EXISTS (SELECT 1 FROM statuses pp
-					WHERE pp.id = s.in_reply_to_id AND pp.account_id = s.account_id))
+				AND ${NOT_A_REPLY_TO_OTHERS}
 				AND ${cursorSql('s.id')}
 			ORDER BY s.id ${cursor.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 		viewerId,
@@ -179,12 +186,7 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 				AND (s.reblog_of_id IS NULL OR EXISTS (SELECT 1 FROM statuses o WHERE o.id = s.reblog_of_id
 					AND ${visibleSql('o', '?1')} AND ${unfilteredSql('o', '?1')}))
 				${input.onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments um WHERE um.status_id = s.id)' : ''}
-				${
-					input.excludeReplies
-						? `AND (s.in_reply_to_uri IS NULL OR EXISTS (SELECT 1 FROM statuses up
-							WHERE up.id = s.in_reply_to_id AND up.account_id = s.account_id))`
-						: ''
-				}
+				${input.excludeReplies ? `AND ${NOT_A_REPLY_TO_OTHERS}` : ''}
 				${input.excludeReblogs ? 'AND s.reblog_of_id IS NULL' : ''}
 				AND (?6 IS NULL OR EXISTS (SELECT 1 FROM status_tags ut WHERE ut.status_id = s.id AND ut.name = ?6))
 				AND ${cursorSql('s.id')}

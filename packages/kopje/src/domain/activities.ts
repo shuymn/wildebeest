@@ -25,7 +25,9 @@ const CONTEXT = ['https://www.w3.org/ns/activitystreams', { sensitive: 'as:sensi
 export type OutboundEnvelope = { activity: Record<string, unknown>; audience: Audience }
 
 // Records the intent if anyone remote may need it: the signer has a remote follower and the audience includes
-// followers, or the audience names a remote account.
+// followers, or the audience names a remote account. As in Mastodon, the followers are the current ones: a remote
+// follower who left before a Delete is not sent it, and if no remote recipient remains the row is omitted. Which
+// inboxes actually received the Create is for B2 to record in deliveries.
 export function recordOutbound(db: Db, signerId: string, envelope: OutboundEnvelope, now: number): void {
 	const reaches = db.first(
 		`SELECT 1 AS yes WHERE (?2 AND EXISTS (SELECT 1 FROM follows f JOIN accounts a ON a.id = f.account_id
@@ -199,13 +201,14 @@ export function createActivity(facts: StatusFacts): OutboundEnvelope {
 	}
 }
 
-export function updateActivity(facts: StatusFacts): OutboundEnvelope {
+// Named after the edit's history entry, so two edits in the same millisecond are distinct activities.
+export function updateActivity(facts: StatusFacts, editId: string): OutboundEnvelope {
 	const note = noteOf(facts)
 	const at = facts.editedAt ?? facts.publishedAt
 	return {
 		activity: {
 			'@context': CONTEXT,
-			id: `${facts.uri}#updates/${Date.parse(at)}`,
+			id: `${facts.uri}#updates/${editId}`,
 			type: 'Update',
 			actor: facts.actorUri,
 			published: at,

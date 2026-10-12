@@ -95,7 +95,8 @@ export type AccountRow = {
 export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type, a.display_name, a.note, a.url, a.avatar_url,
 	a.header_url, a.locked, a.discoverable, a.followers_count, a.following_count, a.statuses_count, a.created_at,
 	l.suspended_at,
-	(SELECT substr(s.published_at, 1, 10) FROM statuses s WHERE s.account_id = a.id ORDER BY s.id DESC LIMIT 1)
+	(SELECT substr(s.published_at, 1, 10) FROM statuses s
+		WHERE s.account_id = a.id AND s.visibility IN ('public', 'unlisted', 'private') ORDER BY s.id DESC LIMIT 1)
 		AS last_status_at`
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'

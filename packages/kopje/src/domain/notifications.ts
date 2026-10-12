@@ -18,7 +18,7 @@ import type { Db } from '../db/sql'
 // it is shown: the recipient is local and not its sender, the sender is not suspended, blocked, muted with
 // notifications, or domain-blocked by the recipient, and the recipient may see the status (audience rule).
 
-export type NotificationType = 'mention' | 'reblog' | 'favourite' | 'follow' | 'follow_request' | 'update'
+export type NotificationType = 'mention' | 'status' | 'reblog' | 'favourite' | 'follow' | 'follow_request' | 'update'
 
 export type Notification = {
 	id: string
