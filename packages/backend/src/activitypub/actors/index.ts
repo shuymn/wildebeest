@@ -1,3 +1,4 @@
+import { fetchDocumentById } from '@wildebeest/backend/activitypub/identity'
 import {
 	type ApObject,
 	getApId,
@@ -5,14 +6,14 @@ import {
 	mastodonIdSymbol,
 	Remote,
 	sanitizeContent,
+	sanitizeUrlProperties,
 } from '@wildebeest/backend/activitypub/objects'
 import { addPeer } from '@wildebeest/backend/activitypub/peers'
 import { defaultImages } from '@wildebeest/backend/config/accounts'
-import { UA } from '@wildebeest/backend/config/ua'
 import { type Database } from '@wildebeest/backend/database'
 import * as query from '@wildebeest/backend/database/d1/querier'
 import { MastodonId } from '@wildebeest/backend/types'
-import { isGone, isNotFound, isUUID } from '@wildebeest/backend/utils'
+import { isUUID } from '@wildebeest/backend/utils'
 import { adjustLocalHostDomain } from '@wildebeest/backend/utils/adjustLocalHostDomain'
 import { RemoteHandle } from '@wildebeest/backend/utils/handle'
 import { generateMastodonId } from '@wildebeest/backend/utils/id'
@@ -58,21 +59,12 @@ export function isActorType(type: string): type is Actor['type'] {
 	return false
 }
 
+// Fetch the actor whose id is `url`, see `fetchDocumentById`.
 export async function fetchActor(url: string | URL): Promise<Remote<Actor> | null> {
-	const res = await fetch(url, {
-		headers: {
-			accept: 'application/activity+json',
-			'User-Agent': UA,
-		},
-	})
-	if (!res.ok) {
-		if (isNotFound(res) || isGone(res)) {
-			return null
-		}
-		throw new Error(`${url.toString()} returned: ${res.status}`)
+	const actor = await fetchDocumentById<Remote<Actor>>(new URL(url))
+	if (actor === null) {
+		return null
 	}
-
-	const actor = await res.json<Remote<Actor>>()
 	return sanitizeActor(actor)
 }
 
@@ -80,6 +72,7 @@ export async function sanitizeActor(actor: Remote<Actor>): Promise<Remote<Actor>
 	if (typeof actor.id === 'string') {
 		actor.id = new URL(actor.id)
 	}
+	sanitizeUrlProperties(actor)
 
 	if (actor.summary) {
 		actor.summary = await sanitizeContent(actor.summary)
@@ -97,6 +90,16 @@ export async function sanitizeActor(actor: Remote<Actor>): Promise<Remote<Actor>
 		actor.preferredUsername = await getTextContent(actor.preferredUsername)
 		if (actor.preferredUsername.length > 30) {
 			actor.preferredUsername = actor.preferredUsername.substring(0, 30)
+		}
+	}
+	// profile fields (`PropertyValue`): the name is plain text, the value is HTML
+	const attachment = (actor as { attachment?: unknown }).attachment
+	if (Array.isArray(attachment)) {
+		for (const field of attachment) {
+			if (field !== null && typeof field === 'object' && field.type === 'PropertyValue') {
+				field.name = typeof field.name === 'string' ? await getTextContent(field.name) : ''
+				field.value = typeof field.value === 'string' ? await sanitizeContent(field.value) : ''
+			}
 		}
 	}
 

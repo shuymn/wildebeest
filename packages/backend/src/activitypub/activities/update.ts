@@ -19,13 +19,15 @@ export async function createUpdateActivity(
 	db: Database,
 	domain: string,
 	actor: Actor,
-	object: ApObject
+	object: ApObject,
+	audience?: Pick<ApObject, 'to' | 'cc'>
 ): Promise<UpdateActivity> {
 	return await insertActivity(db, domain, actor, {
 		'@context': 'https://www.w3.org/ns/activitystreams',
 		type: 'Update',
 		actor: actor.id,
 		object,
+		...audience,
 	})
 }
 

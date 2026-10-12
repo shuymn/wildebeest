@@ -1,21 +1,22 @@
 import { component$, Slot } from '@builder.io/qwik'
 import { Link, routeLoader$, useLocation } from '@builder.io/qwik-city'
 import { getDatabase } from '@wildebeest/backend/database'
+import { requireAdmin } from '~/utils/requireAdmin'
 import { getSettings } from '@wildebeest/backend/config/server'
 import { ServerAboutData } from './about'
 import { ServerBrandingData } from './branding'
 
 export type ServerSettingsData = ServerBrandingData & ServerAboutData
 
-export const useSettings = routeLoader$(
-	async ({ platform: { env: platform } }): Promise<Partial<ServerSettingsData>> => {
-		const database = getDatabase(platform)
+export const useSettings = routeLoader$(async (requestEvent): Promise<Partial<ServerSettingsData>> => {
+	await requireAdmin(requestEvent)
+	const platform = requestEvent.platform.env
+	const database = getDatabase(platform)
 
-		const settings = await getSettings(database)
+	const settings = await getSettings(database)
 
-		return JSON.parse(JSON.stringify(settings))
-	}
-)
+	return JSON.parse(JSON.stringify(settings))
+})
 
 export default component$(() => {
 	const sectionLinks = [

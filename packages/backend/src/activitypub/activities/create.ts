@@ -82,7 +82,7 @@ export async function handleCreateActivity(
 		return
 	}
 
-	const res = await cacheActivityObject(domain, db, getActivityObject(activity), actor)
+	const res = await cacheActivityObject(domain, db, getActivityObject(activity))
 	if (!res?.created) {
 		// Object already existed in our database. Probably a duplicated
 		// message

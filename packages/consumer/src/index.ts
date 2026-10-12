@@ -4,7 +4,7 @@ import type { DeliverMessageBody, InboxMessageBody, MessageBody } from '@wildebe
 import { MessageType } from '@wildebeest/backend/types'
 
 import { handleDeliverMessage } from './deliver'
-import { handleInboxMessage } from './inbox'
+import { handleInboxMessage, isSignedInboxMessage } from './inbox'
 import { initSentryQueue } from './sentry'
 
 export type Env = {
@@ -23,17 +23,23 @@ export default {
 		const sentry = initSentryQueue(env, ctx)
 		const db = getDatabase(env)
 
-		try {
-			for (const message of batch.messages) {
+		for (const message of batch.messages) {
+			try {
 				const actor = await actors.getActorById(db, new URL(message.body.actorId))
 				if (actor === null) {
 					console.warn(`actor ${message.body.actorId} is missing`)
-					return
+					message.ack()
+					continue
 				}
 
 				switch (message.body.type) {
 					case MessageType.Inbox: {
-						await handleInboxMessage(env, actor, message.body as InboxMessageBody)
+						const inbox = message.body as InboxMessageBody
+						if (!isSignedInboxMessage(inbox)) {
+							console.warn(`dropping unauthenticated Inbox message ${String(inbox.activity?.id)}`)
+							break
+						}
+						await handleInboxMessage(env, actor, inbox)
 						break
 					}
 					case MessageType.Deliver: {
@@ -41,17 +47,18 @@ export default {
 						break
 					}
 					default:
-						throw new Error(`unsupported message type: ${JSON.stringify(message.body)}`)
+						throw new Error(`unsupported message type: ${String(message.body.type)}`)
 				}
+				message.ack()
+			} catch (err) {
+				if (sentry !== null) {
+					sentry.captureException(err)
+				}
+				if (err instanceof Error) {
+					console.error(err.stack, err.cause)
+				}
+				message.retry()
 			}
-		} catch (err) {
-			if (sentry !== null) {
-				sentry.captureException(err)
-			}
-			if (err instanceof Error) {
-				console.error(err.stack, err.cause)
-			}
-			throw err
 		}
 	},
 }
