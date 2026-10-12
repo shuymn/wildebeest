@@ -127,6 +127,10 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 			if (identifier === INSTANCE_ACTOR) {
 				signer = await instanceSigner()
 			} else {
+				// Only the stored spelling has keys: '#main-key' under another case would name a key no actor publishes.
+				if ((await localActor(identifier))?.username !== identifier) {
+					return []
+				}
 				const key = await rpc((s) => s.localKey(build, { username: identifier }))
 				if (key === null) {
 					return []
@@ -137,8 +141,13 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 		})
 
 	const collections = new Map<string, Promise<CollectionPage | null>>()
+	// Collections exist only under the stored spelling of a username, like the actor itself.
 	const collection = (kind: CollectionKind, username: string, page: number | null) =>
-		memo(collections, `${kind}/${username}/${page}`, () => rpc((s) => s.collection(build, { username, kind, page })))
+		memo(collections, `${kind}/${username}/${page}`, async () =>
+			(await localActor(username))?.username === username
+				? rpc((s) => s.collection(build, { username, kind, page }))
+				: null
+		)
 	for (const kind of ['followers', 'following'] as const) {
 		const dispatcher = async (_ctx: unknown, identifier: string, cursor: string | null) => {
 			const page = parsePage(cursor)

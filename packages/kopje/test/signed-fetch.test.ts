@@ -98,4 +98,10 @@ describe('signed fetches', () => {
 		])
 		expect(await ctx.getActorKeyPairs('nobody')).toEqual([])
 	})
+
+	it('has no key pairs for a spelling other than the stored username', async () => {
+		const { ctx } = await setup()
+		expect(await ctx.getActorKeyPairs('alice')).toEqual([])
+		expect(await ctx.getActorKeyPairs('ALICE')).toEqual([])
+	})
 })

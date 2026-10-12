@@ -284,10 +284,12 @@ describe('followers and following collections', () => {
 		})
 	})
 
-	it('answers 404 for an unknown actor or a malformed page', async () => {
+	it('answers 404 for an unknown actor, another spelling of a username, or a malformed page', async () => {
 		const { request } = await instance()
 		for (const path of [
 			'/ap/users/nobody/followers',
+			'/ap/users/alice/followers',
+			'/ap/users/alice/following?cursor=1',
 			'/ap/users/Alice/followers?cursor=0',
 			'/ap/users/Alice/followers?cursor=x',
 		]) {
