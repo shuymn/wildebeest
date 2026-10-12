@@ -7,6 +7,7 @@ import {
 	type PageQuery,
 	type Present,
 	presentAccount,
+	resolveApiId,
 } from './accounts'
 import {
 	announceActivity,
@@ -37,20 +38,15 @@ export type Viewed<T> = { status: 'ok'; value: T } | { status: 'not_found' }
 
 export type Acted<T> = Viewed<T> | { status: 'forbidden' } | { status: 'invalid'; error: string }
 
-const MAX_ID_LENGTH = 64
-
 // The Worker checks the counted length; the Store re-checks the raw bound so no caller can make it parse more.
 const TOO_LONG = 'Validation failed: Text character limit of 500 exceeded'
 
-// Resolves an API id or a legacy id (statuses.legacy_id) to the API id.
 export function resolveStatusId(db: Db, id: string): string | null {
-	if (id === '' || id.length > MAX_ID_LENGTH) {
-		return null
-	}
-	const row =
-		db.first<{ id: string }>('SELECT id FROM statuses WHERE id = ?', id) ??
-		db.first<{ id: string }>('SELECT id FROM statuses WHERE legacy_id = ?', id)
-	return row?.id ?? null
+	return resolveApiId(db, 'statuses', id)
+}
+
+function viewed<T>(value: T | null): Viewed<T> {
+	return value === null ? { status: 'not_found' } : { status: 'ok', value }
 }
 
 type Author = {
@@ -484,8 +480,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 		JSON.stringify(media) === JSON.stringify(currentMedia.map((m) => m.id)) &&
 		[...descriptions].every(([id, description]) => describedBefore.get(id) === description)
 	const status = (): Acted<Status> => {
-		const value = presentStatus(db, current.id, options)
-		return value === null ? { status: 'not_found' } : { status: 'ok', value }
+		return viewed(presentStatus(db, current.id, options))
 	}
 	if (unchanged) {
 		return status()
@@ -619,8 +614,7 @@ function viewable(db: Db, viewerId: string | null, id: string): string | null {
 export const getStatus = optionalUserReadOperation<{ id: string; present: Present }, Viewed<Status>>(
 	(db, { id, present }, viewerId) => {
 		const resolved = viewable(db, viewerId, id)
-		const value = resolved === null ? null : presentStatus(db, resolved, { ...present, viewerId })
-		return value === null ? { status: 'not_found' } : { status: 'ok', value }
+		return viewed(resolved === null ? null : presentStatus(db, resolved, { ...present, viewerId }))
 	}
 )
 
@@ -810,8 +804,7 @@ function viewerUri(db: Db, accountId: string): string {
 }
 
 function presented(db: Db, id: string, viewerId: string, present: Present): Viewed<Status> {
-	const value = canView(db, viewerId, id) ? presentStatus(db, id, { ...present, viewerId }) : null
-	return value === null ? { status: 'not_found' } : { status: 'ok', value }
+	return viewed(canView(db, viewerId, id) ? presentStatus(db, id, { ...present, viewerId }) : null)
 }
 
 type ActionInput = { id: string; now: number; present: Present }
@@ -939,8 +932,7 @@ export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input,
 		target.id
 	)
 	if (existing !== undefined) {
-		const value = presentStatus(db, existing.id, options)
-		return value === null ? { status: 'not_found' } : { status: 'ok', value }
+		return viewed(presentStatus(db, existing.id, options))
 	}
 	const author = localAuthor(db, accountId)
 	const requested = input.visibility ?? author.default_visibility
@@ -968,8 +960,7 @@ export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input,
 		announceActivity(announceOf(author.uri, uri, visibility, publishedAt, target)),
 		input.now
 	)
-	const value = presentStatus(db, id, options)
-	return value === null ? { status: 'not_found' } : { status: 'ok', value }
+	return viewed(presentStatus(db, id, options))
 })
 
 function announceOf(

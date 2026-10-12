@@ -1,13 +1,4 @@
-import {
-	type Account,
-	ACCOUNT_COLUMNS,
-	ACCOUNT_FROM,
-	accountUrl,
-	acctOf,
-	type AccountRow,
-	type Present,
-	presentAccount,
-} from './accounts'
+import { type Account, accountUrl, acctOf, type Present, presentAccountsById } from './accounts'
 import { apiVisibility, type ApiVisibility, type Visibility } from './audience'
 import { htmlToPlainText } from './plain-text'
 import type { Db } from '../db/sql'
@@ -135,14 +126,10 @@ export function presentStatuses(db: Db, ids: readonly string[], options: Present
 	)
 	const byId = new Map(rows.map((row) => [row.id, row]))
 	const all = JSON.stringify([...byId.keys()])
-	const accounts = new Map(
-		db
-			.all<AccountRow>(
-				`SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM}
-				WHERE a.id IN (SELECT DISTINCT account_id FROM statuses WHERE id IN (SELECT value FROM json_each(?1)))`,
-				all
-			)
-			.map((row) => [row.id, presentAccount(row, options)])
+	const accounts = presentAccountsById(
+		db,
+		rows.map((row) => row.account_id),
+		options
 	)
 	const media = groupBy(
 		db.all<MediaRow>(

@@ -1,13 +1,4 @@
-import {
-	type Account,
-	ACCOUNT_COLUMNS,
-	ACCOUNT_FROM,
-	type AccountRow,
-	type Page,
-	type PageQuery,
-	type Present,
-	presentAccount,
-} from './accounts'
+import { type Account, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
 import { viewableSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { presentStatuses, type Status } from './status-presenter'
@@ -83,13 +74,10 @@ type NotificationRow = {
 const NOTIFICATION_COLUMNS = 'CAST(n.id AS TEXT) AS id, n.type, n.from_account_id, n.status_id, n.created_at'
 
 function presentNotifications(db: Db, rows: NotificationRow[], viewerId: string, present: Present): Notification[] {
-	const accounts = new Map(
-		db
-			.all<AccountRow>(
-				`SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM} WHERE a.id IN (SELECT value FROM json_each(?1))`,
-				JSON.stringify([...new Set(rows.map((row) => row.from_account_id))])
-			)
-			.map((row) => [row.id, presentAccount(row, present)])
+	const accounts = presentAccountsById(
+		db,
+		rows.map((row) => row.from_account_id),
+		present
 	)
 	const statusIds = [...new Set(rows.flatMap((row) => (row.status_id === null ? [] : [row.status_id])))]
 	const statuses = new Map(

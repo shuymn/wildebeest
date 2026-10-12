@@ -146,15 +146,31 @@ export function presentAccount(row: AccountRow, { origin }: Present): Account {
 // API ids are 18 digits; legacy ids are UUIDs or other short strings. Anything longer is not an id.
 const MAX_ID_LENGTH = 64
 
-// Resolves an API id or a legacy id to the API id.
-export function resolveAccountId(db: Db, id: string): string | null {
+// Resolves an API id or a legacy id (the table's legacy_id) to the API id.
+export function resolveApiId(db: Db, table: 'accounts' | 'statuses', id: string): string | null {
 	if (id === '' || id.length > MAX_ID_LENGTH) {
 		return null
 	}
 	const row =
-		db.first<{ id: string }>('SELECT id FROM accounts WHERE id = ?', id) ??
-		db.first<{ id: string }>('SELECT id FROM accounts WHERE legacy_id = ?', id)
+		db.first<{ id: string }>(`SELECT id FROM ${table} WHERE id = ?`, id) ??
+		db.first<{ id: string }>(`SELECT id FROM ${table} WHERE legacy_id = ?`, id)
 	return row?.id ?? null
+}
+
+export function resolveAccountId(db: Db, id: string): string | null {
+	return resolveApiId(db, 'accounts', id)
+}
+
+// Presented accounts by id, read in one query.
+export function presentAccountsById(db: Db, ids: readonly string[], present: Present): Map<string, Account> {
+	return new Map(
+		db
+			.all<AccountRow>(
+				`SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM} WHERE a.id IN (SELECT value FROM json_each(?1))`,
+				JSON.stringify([...new Set(ids)])
+			)
+			.map((row) => [row.id, presentAccount(row, present)])
+	)
 }
 
 function accountRow(db: Db, id: string): AccountRow | undefined {
