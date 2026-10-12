@@ -32,13 +32,14 @@ function acceptable(request: Request, url: URL): boolean {
 	return /json/i.test(request.headers.get('accept') ?? '')
 }
 
-// A changed document is written at most once per interval per key; an unchanged one is not written again.
+// An unchanged document is written again at most once per interval per key; a changed one is written at once.
 export const SNAPSHOT_SAVE_INTERVAL_MS = 60 * 1000
 
 export type SnapshotSaver = (store: StoreStub, build: string, key: string, snapshot: Snapshot) => Promise<void>
 
-// Remembers, per isolate, what each key last saved, so the Store write RPC happens only when a document changed (and
-// not more often than the interval), not on every GET. The map is bounded like the keys (see federationHandler).
+// Remembers, per isolate, what each key last saved, so a steady document does not cost a Store write RPC on every
+// GET. Changed content is not throttled: only local data changes it, and a stale snapshot would outlive a key
+// rotation. The map is bounded like the keys (see federationHandler).
 export function createSnapshotSaver(now: () => number): SnapshotSaver {
 	const saved = new Map<string, { digest: string; at: number }>()
 	return async (store, build, key, snapshot) => {
@@ -47,7 +48,9 @@ export function createSnapshotSaver(now: () => number): SnapshotSaver {
 		}
 		const digest = await sha256(`${snapshot.contentType}\n${snapshot.body}`)
 		const last = saved.get(key)
-		if (last !== undefined && (last.digest === digest || now() - last.at < SNAPSHOT_SAVE_INTERVAL_MS)) {
+		// A changed body is always saved (a key rotation or profile edit must reach the rescue path); an identical one
+		// is re-saved at most once per interval.
+		if (last !== undefined && last.digest === digest && now() - last.at < SNAPSHOT_SAVE_INTERVAL_MS) {
 			return
 		}
 		try {

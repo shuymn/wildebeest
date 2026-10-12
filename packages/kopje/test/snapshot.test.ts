@@ -165,7 +165,7 @@ describe('snapshot caps', () => {
 		expect(await snapshotNames(store)).toEqual([])
 	})
 
-	it('writes only when a document changed, and a changed one at most once per interval', async () => {
+	it('re-saves an identical document at most once per interval', async () => {
 		let now = 0
 		let writes = 0
 		const counting = {
@@ -175,22 +175,27 @@ describe('snapshot caps', () => {
 			},
 		} as unknown as StoreStub
 		const save = createSnapshotSaver(() => now)
+		const doc = { contentType: 'application/activity+json', body: 'a' }
+
+		await save(counting, BUILD, 'path:/actor', doc)
+		now = SNAPSHOT_SAVE_INTERVAL_MS - 1
+		await save(counting, BUILD, 'path:/actor', doc)
+		expect(writes).toBe(1)
+		now = SNAPSHOT_SAVE_INTERVAL_MS
+		await save(counting, BUILD, 'path:/actor', doc)
+		expect(writes).toBe(2)
+	})
+
+	it('saves a changed document at once, even inside the interval', async () => {
+		const store = await migratedStore()
+		let now = 0
+		const save = createSnapshotSaver(() => now)
 		const doc = (body: string) => ({ contentType: 'application/activity+json', body })
 
-		await save(counting, BUILD, 'path:/actor', doc('a'))
-		await save(counting, BUILD, 'path:/actor', doc('a'))
-		now = SNAPSHOT_SAVE_INTERVAL_MS * 10
-		await save(counting, BUILD, 'path:/actor', doc('a'))
-		expect(writes).toBe(1)
-
-		await save(counting, BUILD, 'path:/actor', doc('b'))
-		expect(writes).toBe(2)
-		now += 1
-		await save(counting, BUILD, 'path:/actor', doc('c'))
-		expect(writes).toBe(2)
-		now += SNAPSHOT_SAVE_INTERVAL_MS
-		await save(counting, BUILD, 'path:/actor', doc('c'))
-		expect(writes).toBe(3)
+		await save(store, BUILD, 'path:/actor', doc('old-key'))
+		now = 1
+		await save(store, BUILD, 'path:/actor', doc('new-key'))
+		expect(await store.rescueSnapshot(BUILD, 'path:/actor')).toEqual(doc('new-key'))
 	})
 
 	it('reads only snapshot keys back', async () => {
