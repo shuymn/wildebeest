@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers'
 
 import { vi } from 'vitest'
 
-import { type AccessTeam, accessTeam, type ApiHarness } from './api-helpers'
+import { type AccessTeam, accessTeam, type ApiHarness, sql } from './api-helpers'
 import { NOW, offline } from './app-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { QueueSim } from './queue-sim'
@@ -23,98 +23,252 @@ export const ADMIN = 'owner@example.com'
 
 type Item = Record<string, unknown> & { id: string; name: string }
 
+export type Permission = 'apps' | 'org' | 'tokens' | 'accounts' | 'zone' | 'bot'
+
+// A request the fake holds until the test releases it.
+export type Hold = { reached: Promise<void>; release: () => void }
+
 export type FakeCloudflare = {
 	fetch: ReturnType<typeof vi.fn<typeof fetch>>
 	apps: Item[]
 	policies: Item[]
 	// Every API call: method, path and the bearer token it carried.
 	calls: { method: string; path: string; token: string | null; body: unknown }[]
-	// Makes the next API call fail, echoing the token in its error message as a careless API might.
-	failNext: (status: number) => void
-	accounts: { id: string; name: string }[]
-	fightMode: boolean | null
+	writes: () => { method: string; path: string }[]
+	// The token's accounts and their Zero Trust team.
+	accounts: { id: string; name: string; authDomain: string }[]
+	permissions: Set<Permission>
+	// The next API call fails with this status and an error message that echoes the token.
+	failNext: (status: number, message?: (token: string) => string) => void
+	// The n-th write from now is applied, then answered with 500 (a failure after an external mutation).
+	failAfterWrite: (n: number) => void
+	// The next API call answers with a redirect to a URL that carries the token.
+	redirectNext: () => void
+	// The next fetch throws an error whose name and message are the token.
+	throwNext: () => void
+	// Holds the first request that matches, until released.
+	hold: (match: (method: string, path: string) => boolean) => Hold
+	botSettings: Record<string, unknown> | null
+	signInAud: () => string
 }
 
-// The Access API of one account (apps, reusable policies, service tokens, zones and Bot Management), plus the team's
-// key set served by `team`. The sign-in application gets the team's AUD, so tokens of `team` sign in afterwards.
+const MAX_PER_PAGE: Record<string, number> = { '/accounts': 50 }
+
+// The Access API of the token's accounts (organizations, apps, reusable policies, service tokens), zones and Bot
+// Management, with the API's pagination, permission errors and validation of what is written. Unknown routes are
+// 404. The team's key set is served by `team`.
 export function fakeCloudflare(team: AccessTeam): FakeCloudflare {
 	const apps: Item[] = []
 	const policies: Item[] = []
 	const calls: FakeCloudflare['calls'] = []
-	let failure: number | null = null
-	let serial = 0
+	let failure: { status: number; message: (token: string) => string } | null = null
+	let failAfter: number | null = null
+	let redirect = false
+	let throwing = false
+	const holds: { match: (method: string, path: string) => boolean; reached: () => void; gate: Promise<void> }[] = []
+	const audOf = () => crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '')
 	const fake: FakeCloudflare = {
 		apps,
 		policies,
 		calls,
-		accounts: [{ id: ACCOUNT_ID, name: 'Operator' }],
-		fightMode: false,
-		failNext: (status) => {
-			failure = status
+		writes: () => calls.filter((call) => call.method !== 'GET'),
+		accounts: [{ id: ACCOUNT_ID, name: 'Operator', authDomain: team.teamDomain }],
+		permissions: new Set<Permission>(['apps', 'org', 'tokens', 'accounts', 'zone', 'bot']),
+		failNext: (status, message = (token) => `Authentication error for ${token}`) => {
+			failure = { status, message }
+		},
+		failAfterWrite: (n) => {
+			failAfter = n
+		},
+		redirectNext: () => {
+			redirect = true
+		},
+		throwNext: () => {
+			throwing = true
+		},
+		hold: (match) => {
+			let reached = () => {}
+			let release = () => {}
+			const reachedPromise = new Promise<void>((resolve) => {
+				reached = resolve
+			})
+			const gate = new Promise<void>((resolve) => {
+				release = resolve
+			})
+			holds.push({ match, reached, gate })
+			return { reached: reachedPromise, release }
+		},
+		botSettings: { fight_mode: false },
+		signInAud: () => {
+			const aud = apps.find((app) => String(app.domain).endsWith('/oauth/authorize'))?.aud
+			return typeof aud === 'string' ? aud : ''
 		},
 		fetch: vi.fn<typeof fetch>(async (input, init) => {
 			const request = new Request(input, init)
 			const url = new URL(request.url)
-			if (!request.url.startsWith(API_BASE)) {
+			const apiPath = request.url.startsWith(API_BASE) ? url.pathname.slice(new URL(API_BASE).pathname.length) : null
+			const at = holds.findIndex((h) => h.match(request.method, apiPath ?? url.href))
+			const held = holds[at]
+			if (held !== undefined) {
+				holds.splice(at, 1)
+				held.reached()
+				await held.gate
+			}
+			if (apiPath === null) {
 				return team.fetch(input, init)
 			}
-			const path = url.pathname.slice(new URL(API_BASE).pathname.length)
+			const path = apiPath
 			const token = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? null
-			const body = request.method === 'GET' ? undefined : await request.json()
+			if (throwing) {
+				throwing = false
+				const error = new Error(`fetch failed for ${token}`)
+				error.name = `Token${token}`
+				throw error
+			}
+			const body: unknown = request.method === 'GET' ? undefined : await request.json()
 			calls.push({ method: request.method, path, token, body })
-			const ok = (result: unknown) => Response.json({ success: true, errors: [], result })
+			const error = (status: number, code: number, message = 'error') =>
+				Response.json({ success: false, errors: [{ code, message }], messages: [], result: null }, { status })
+			if (redirect) {
+				redirect = false
+				return new Response(null, { status: 302, headers: { location: `https://evil.test/?t=${token}` } })
+			}
 			if (failure !== null) {
-				const status = failure
+				const { status, message } = failure
 				failure = null
-				return Response.json(
-					{ success: false, errors: [{ code: 10000, message: `Authentication error for ${token}` }] },
-					{ status }
-				)
+				return error(status, 10000, message(token ?? ''))
 			}
-			const base = `/accounts/${ACCOUNT_ID}/access`
-			const collection = (items: Item[], prefix: string, make: (body: Item) => Item) => {
-				if (request.method === 'GET' && path === prefix) {
-					return ok(items)
+			const ok = (result: unknown, info?: Record<string, number>) =>
+				Response.json({ success: true, errors: [], messages: [], result, ...(info ? { result_info: info } : {}) })
+			const page = (items: unknown[]) => {
+				const max = MAX_PER_PAGE[path] ?? 100
+				const perPage = Number(url.searchParams.get('per_page') ?? '20')
+				const number = Number(url.searchParams.get('page') ?? '1')
+				if (!Number.isInteger(perPage) || perPage < 5 || perPage > max || !Number.isInteger(number) || number < 1) {
+					return error(400, 1001, 'per_page out of range')
 				}
-				if (request.method === 'POST' && path === prefix) {
-					const item = make({ ...(body as Item), id: `id-${++serial}` })
-					items.push(item)
-					return ok(item)
-				}
-				const at = items.findIndex((item) => `${prefix}/${item.id}` === path)
-				const existing = items[at]
-				if (request.method === 'PUT' && existing !== undefined) {
-					items[at] = { ...existing, ...(body as Item), id: existing.id }
-					return ok(items[at])
-				}
-				return null
+				const slice = items.slice((number - 1) * perPage, number * perPage)
+				return ok(slice, {
+					page: number,
+					per_page: perPage,
+					count: slice.length,
+					total_count: items.length,
+					total_pages: Math.max(1, Math.ceil(items.length / perPage)),
+				})
 			}
+			const need = (permission: Permission) => (fake.permissions.has(permission) ? null : error(403, 10000))
+			// A write is applied; the n-th is then answered with 500.
+			const written = (result: unknown) => {
+				if (failAfter !== null && --failAfter === 0) {
+					failAfter = null
+					return error(500, 10001, 'internal error')
+				}
+				return ok(result)
+			}
+
 			if (path === '/accounts' && request.method === 'GET') {
-				return ok(fake.accounts)
+				return need('accounts') ?? page(fake.accounts.map(({ id, name }) => ({ id, name })))
 			}
-			if (path === `${base}/service_tokens` && request.method === 'GET') {
-				return ok([{ id: 'token-uuid-1', client_id: SERVICE_TOKEN_CLIENT_ID, name: 'cli' }])
-			}
-			const answer =
-				collection(policies, `${base}/policies`, (item) => item) ??
-				collection(apps, `${base}/apps`, (item) => ({
-					...item,
-					aud: String(item.domain).endsWith('/oauth/authorize') ? team.aud : `admin-aud-${serial}`,
-				}))
-			if (answer !== null) {
-				return answer
+			const accountMatch = /^\/accounts\/([0-9a-f]{32})\/access(\/.*)$/.exec(path)
+			const account = fake.accounts.find((a) => a.id === accountMatch?.[1])
+			if (accountMatch !== null) {
+				if (account === undefined) {
+					return error(403, 10000)
+				}
+				const rest = accountMatch[2] ?? ''
+				if (rest === '/organizations' && request.method === 'GET') {
+					return need('org') ?? ok({ auth_domain: account.authDomain, name: account.name })
+				}
+				if (rest === '/service_tokens' && request.method === 'GET') {
+					return need('tokens') ?? page([{ id: 'token-uuid-1', client_id: SERVICE_TOKEN_CLIENT_ID, name: 'cli' }])
+				}
+				const denied = need('apps')
+				if (denied !== null) {
+					return denied
+				}
+				const policyView = (policy: Item) => ({
+					...policy,
+					app_count: apps.filter((app) => (app.policies as { id: string }[]).some((p) => p.id === policy.id)).length,
+				})
+				if (rest === '/policies' || rest.startsWith('/policies/')) {
+					const id = rest.slice('/policies/'.length)
+					const existing = policies.find((p) => p.id === id)
+					if (request.method === 'GET') {
+						return rest === '/policies'
+							? page(policies.map(policyView))
+							: existing === undefined
+								? error(404, 12130)
+								: ok(policyView(existing))
+					}
+					const b = body as Item
+					if (
+						typeof b?.name !== 'string' ||
+						!['allow', 'deny', 'non_identity', 'bypass'].includes(String(b.decision)) ||
+						!Array.isArray(b.include) ||
+						b.include.length === 0
+					) {
+						return error(400, 12130, 'invalid policy')
+					}
+					if (request.method === 'POST' && rest === '/policies') {
+						const policy = { ...b, id: crypto.randomUUID() }
+						policies.push(policy)
+						return written(policyView(policy))
+					}
+					if (request.method === 'PUT' && existing !== undefined) {
+						Object.assign(existing, b, { id: existing.id })
+						return written(policyView(existing))
+					}
+					return error(404, 12130)
+				}
+				if (rest === '/apps' || rest.startsWith('/apps/')) {
+					const id = rest.slice('/apps/'.length)
+					const existing = apps.find((a) => a.id === id)
+					if (request.method === 'GET') {
+						if (rest !== '/apps') {
+							return existing === undefined ? error(404, 12130) : ok(existing)
+						}
+						const name = url.searchParams.get('name')
+						const exact = url.searchParams.get('exact') === 'true'
+						return page(apps.filter((app) => name === null || (exact ? app.name === name : app.name.includes(name))))
+					}
+					const b = body as Item
+					const destinations = b?.destinations as { type?: unknown; uri?: unknown }[] | undefined
+					const links = b?.policies as { id?: unknown; precedence?: unknown }[] | undefined
+					const valid =
+						typeof b?.name === 'string' &&
+						b.type === 'self_hosted' &&
+						typeof b.domain === 'string' &&
+						Array.isArray(destinations) &&
+						destinations.length > 0 &&
+						destinations.every((d) => d.type === 'public' && typeof d.uri === 'string') &&
+						destinations[0]?.uri === b.domain &&
+						Array.isArray(links) &&
+						links.every((l) => policies.some((p) => p.id === l.id) && typeof l.precedence === 'number') &&
+						new Set(links.map((l) => l.precedence)).size === links.length
+					if (!valid) {
+						return error(400, 12130, 'invalid application')
+					}
+					if (request.method === 'POST' && rest === '/apps') {
+						const app = { ...b, id: crypto.randomUUID(), aud: audOf() }
+						apps.push(app)
+						return written(app)
+					}
+					if (request.method === 'PUT' && existing !== undefined) {
+						Object.assign(existing, b, { id: existing.id, aud: existing.aud })
+						return written(existing)
+					}
+					return error(404, 12130)
+				}
+				return error(404, 7003)
 			}
 			if (path === '/zones' && request.method === 'GET') {
 				const name = url.searchParams.get('name')
-				return ok(name === 'kopje.test' ? [{ id: 'zone-1', name }] : [])
+				return need('zone') ?? ok(name === 'kopje.test' ? [{ id: 'zone-1', name }] : [])
 			}
 			if (path === '/zones/zone-1/bot_management' && request.method === 'GET') {
-				if (fake.fightMode === null) {
-					return Response.json({ success: false, errors: [{ code: 9109, message: 'Unauthorized' }] }, { status: 403 })
-				}
-				return ok({ fight_mode: fake.fightMode })
+				return need('bot') ?? (fake.botSettings === null ? error(403, 9109) : ok(fake.botSettings))
 			}
-			return Response.json({ success: false, errors: [{ code: 7003, message: 'No route' }] }, { status: 404 })
+			return error(404, 7003)
 		}),
 	}
 	return fake
@@ -166,7 +320,12 @@ export async function setupHarness(
 		clock += ms
 	}
 	// web-helpers' sign-in drives this harness like apiHarness: request and team are what it uses.
-	const asApi = { store, team, request, env: testEnv } as unknown as ApiHarness
+	const signInTeam = {
+		...team,
+		assertion: (claims: Record<string, unknown> = {}, key?: CryptoKey | JsonWebKey) =>
+			team.assertion({ aud: [cf.signInAud()], ...claims }, key),
+	}
+	const asApi = { store, team: signInTeam, request, env: testEnv } as unknown as ApiHarness
 	return { store, team, cf, queue, request, env: testEnv, advance, asApi }
 }
 
@@ -213,7 +372,8 @@ export async function setupPost(
 	return h.request(path, { method: 'POST', headers, body: body.toString() })
 }
 
-export const API_TOKEN = 'cf-api-token-SECRET-0123456789abcdefghij'
+// Low entropy on purpose (no secret scanner should mistake it), and no 6-character run of it appears elsewhere.
+export const API_TOKEN = 'qzqzqzqzwxwxwxwxjvjvjvjvkykykyky'
 
 export function accessFields(h: SetupHarness, apiToken = API_TOKEN, extra: Record<string, string> = {}) {
 	return {
@@ -232,4 +392,39 @@ export async function completeWizard(h: SetupHarness, browser: SetupBrowser, use
 		throw new Error(`access step failed: ${access.status} ${await access.text()}`)
 	}
 	return setupPost(h, browser.cookie, '/setup/admin', { username, email: ADMIN })
+}
+
+export async function pageText(h: SetupHarness, cookie: string): Promise<string> {
+	return (await h.request('/setup', { headers: { cookie } })).text()
+}
+
+// A setup browser with the domain confirmed.
+export async function readyBrowser(h: SetupHarness): Promise<SetupBrowser> {
+	const browser = await setupLogin(h)
+	await setupPost(h, browser.cookie, '/setup/domain', { domain: 'kopje.test' })
+	return browser
+}
+
+// The Store's record of Access reconciliations (domain/setup.ts).
+export async function accessRecord(h: SetupHarness): Promise<{
+	revision: number
+	reservation: { revision: number } | null
+	completed: { revision: number; access: { adminEmail: string } } | null
+	needsReconcile: boolean
+	managed: Record<string, string>
+} | null> {
+	const [row] = await sql<{ value: string }>(h.store, "SELECT value FROM kopje_state WHERE name = 'setup_access'")
+	return row === undefined ? null : (JSON.parse(row.value) as Awaited<ReturnType<typeof accessRecord>>)
+}
+
+// Every substring of the secret of at least `length` characters that appears in the text.
+export function fragmentsOf(secret: string, text: string, length = 6): string[] {
+	const found: string[] = []
+	for (let i = 0; i + length <= secret.length; i++) {
+		const part = secret.slice(i, i + length)
+		if (text.includes(part)) {
+			found.push(part)
+		}
+	}
+	return found
 }

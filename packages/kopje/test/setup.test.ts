@@ -2,17 +2,18 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { sql } from './api-helpers'
+import { seedAccount, sql } from './api-helpers'
 import { inboxDeps, NOW } from './app-helpers'
-import { BUILD } from './helpers'
+import { BUILD, rejectionOf, testKernel } from './helpers'
 import {
-	ACCOUNT_ID,
 	accessFields,
 	ADMIN,
 	API_TOKEN,
 	completeWizard,
 	fakeImages,
 	formToken,
+	pageText,
+	readyBrowser,
 	SERVICE_TOKEN_CLIENT_ID,
 	SETUP,
 	SETUP_TOKEN,
@@ -23,9 +24,12 @@ import {
 } from './setup-helpers'
 import { setCookies, signIn, cookieHeader, SESSION } from './web-helpers'
 import { hostProblem } from '../src/app/setup'
+import { MAX_SETUP_SESSIONS, SETUP_SESSION_MS, setupView } from '../src/domain/setup'
 import { handleQueue } from '../src/jobs/queue'
 import { handleScheduled } from '../src/jobs/scheduled'
-import { ACCESS_SETTINGS } from '../src/platform/access-settings'
+import { ACCESS_SETTINGS, CONFIG_KEYS } from '../src/platform/access-settings'
+import type { StoreStub } from '../src/platform/store-client'
+import { storeMaintenanceError } from '../src/platform/store-errors'
 import { sha256Hex } from '../src/security/tokens'
 
 afterEach(() => {
@@ -260,62 +264,6 @@ describe('/setup step 1: the domain', () => {
 })
 
 describe('/setup steps 2 and 3: Access', () => {
-	it('checks the team, creates both applications and their policy, and keeps the AUD tags in the draft', async () => {
-		const h = await setupHarness()
-		const browser = await setupLogin(h)
-		await setupPost(h, browser.cookie, '/setup/domain', { domain: 'kopje.test' })
-		const response = await setupPost(h, browser.cookie, '/setup/access', accessFields(h))
-		expect(response.status).toBe(200)
-		expect(await response.text()).toContain('The Access applications for kopje.test are in place')
-		expect(h.cf.apps.map((app) => [app.name, app.domain, app.type])).toEqual([
-			['Kopje kopje.test sign-in', 'kopje.test/oauth/authorize', 'self_hosted'],
-			['Kopje kopje.test admin', 'kopje.test/admin', 'self_hosted'],
-		])
-		expect(h.cf.policies).toEqual([
-			expect.objectContaining({
-				name: 'Kopje kopje.test admin',
-				decision: 'allow',
-				include: [{ email: { email: ADMIN } }],
-			}),
-		])
-		// The team's key set was read before any API call.
-		expect(h.cf.fetch.mock.calls[0]?.[0]).toBe(`https://${h.team.teamDomain}/cdn-cgi/access/certs`)
-		// Nothing is configuration before the bootstrap.
-		expect(await settings(h)).toEqual({})
-	})
-
-	it('reconciles on a run again with a fresh token instead of adding copies', async () => {
-		const h = await setupHarness()
-		const browser = await setupLogin(h)
-		await setupPost(h, browser.cookie, '/setup/domain', { domain: 'kopje.test' })
-		await setupPost(h, browser.cookie, '/setup/access', accessFields(h))
-		const first = h.cf.apps.map((app) => ({ id: app.id, aud: app.aud }))
-		h.cf.calls.length = 0
-		const again = await setupPost(
-			h,
-			browser.cookie,
-			'/setup/access',
-			accessFields(h, 'a-fresh-token-0123456789', { service_token_client_id: SERVICE_TOKEN_CLIENT_ID })
-		)
-		expect(again.status).toBe(200)
-		expect(h.cf.apps.map((app) => ({ id: app.id, aud: app.aud }))).toEqual(first)
-		expect(h.cf.apps).toHaveLength(2)
-		expect(h.cf.policies.map((p) => p.name)).toEqual(['Kopje kopje.test admin', 'Kopje kopje.test admin CLI'])
-		expect(h.cf.policies[1]).toMatchObject({
-			decision: 'non_identity',
-			include: [{ service_token: { token_id: 'token-uuid-1' } }],
-		})
-		expect(h.cf.apps[1]?.policies).toEqual([
-			{ id: h.cf.policies[0]?.id, precedence: 1 },
-			{ id: h.cf.policies[1]?.id, precedence: 2 },
-		])
-		expect(h.cf.calls.filter((call) => call.method === 'POST').map((call) => call.path)).toEqual([
-			`/accounts/${ACCOUNT_ID}/access/policies`,
-		])
-		expect(h.cf.calls.filter((call) => call.method === 'PUT')).toHaveLength(3)
-		expect(new Set(h.cf.calls.map((call) => call.token))).toEqual(new Set(['a-fresh-token-0123456789']))
-	})
-
 	it('refuses a team whose key set does not answer, without calling the API', async () => {
 		const h = await setupHarness()
 		const browser = await setupLogin(h)
@@ -326,140 +274,211 @@ describe('/setup steps 2 and 3: Access', () => {
 		expect(await response.text()).toContain('does not look like a Zero Trust team')
 		expect(h.cf.calls).toEqual([])
 	})
-
-	it('asks for the account ID when the token reaches more than one account', async () => {
-		const h = await setupHarness()
-		h.cf.accounts.push({ id: 'f'.repeat(32), name: 'Other' })
-		const browser = await setupLogin(h)
-		await setupPost(h, browser.cookie, '/setup/domain', { domain: 'kopje.test' })
-		const refused = await setupPost(h, browser.cookie, '/setup/access', accessFields(h))
-		expect(refused.status).toBe(422)
-		expect(await refused.text()).toContain('enter the account ID')
-		const given = await setupPost(
-			h,
-			browser.cookie,
-			'/setup/access',
-			accessFields(h, API_TOKEN, { account_id: ACCOUNT_ID })
-		)
-		expect(given.status).toBe(200)
-	})
-
-	it('SETUP-4: uses the API token in its own request only, and never stores, logs, renders or redirects it', async () => {
-		const logs: unknown[] = []
-		for (const level of ['log', 'info', 'warn', 'error', 'debug'] as const) {
-			vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
-				logs.push(args)
-			})
-		}
-		const h = await setupHarness()
-		const browser = await setupLogin(h)
-		await setupPost(h, browser.cookie, '/setup/domain', { domain: 'kopje.test' })
-		// An API error that echoes the token is shown redacted.
-		h.cf.failNext(403)
-		const failed = await setupPost(h, browser.cookie, '/setup/access', accessFields(h))
-		const failedText = await failed.text()
-		expect(failed.status).toBe(422)
-		expect(failedText).toContain('[redacted]')
-		const responses = [failed]
-		responses.push(await setupPost(h, browser.cookie, '/setup/access', accessFields(h)))
-		h.cf.fightMode = true
-		responses.push(await setupPost(h, browser.cookie, '/setup/check/bot-fight', { api_token: API_TOKEN }))
-		responses.push(await completeWizard(h, browser))
-		responses.push(await h.request('/setup', { headers: { cookie: browser.cookie } }))
-		for (const response of responses) {
-			expect(response.headers.get('location') ?? '').not.toContain(API_TOKEN)
-			expect(setCookies(response).lines.join('\n')).not.toContain(API_TOKEN)
-		}
-		expect(failedText).not.toContain(API_TOKEN)
-		for (const response of responses.slice(1)) {
-			expect(await response.text()).not.toContain(API_TOKEN)
-		}
-		expect(await everyStoredText(h)).not.toContain(API_TOKEN)
-		expect(JSON.stringify(logs)).not.toContain(API_TOKEN)
-		// Sent only to the API, as a bearer token.
-		for (const [input, init] of h.cf.fetch.mock.calls) {
-			const request = new Request(input, init)
-			const carries = request.headers.get('authorization')?.includes(API_TOKEN) === true
-			expect(carries ? new URL(request.url).host : 'api.cloudflare.com').toBe('api.cloudflare.com')
-			expect(request.url).not.toContain(API_TOKEN)
-		}
-	})
 })
 
 describe('/setup steps 4 to 6: checks', () => {
-	it('transforms a tiny image through the binding and charges the instance budget', async () => {
+	it('transforms the tiny image, keeps the outcome, and charges the instance budget once a month', async () => {
 		const h = await setupHarness()
 		const browser = await setupLogin(h)
-		const pass = await setupPost(h, browser.cookie, '/setup/check/images')
-		expect(await pass.text()).toContain('The Images binding transformed the test image')
 		const month = new Date(NOW).toISOString().slice(0, 7)
-		expect(await sql(h.store, 'SELECT value FROM kopje_state WHERE name = ?', `images_transforms:${month}`)).toEqual([
+		const charged = async () =>
+			(
+				await sql<{ value: string }>(
+					h.store,
+					'SELECT value FROM kopje_state WHERE name = ?',
+					`images_transforms:${month}`
+				)
+			)[0]?.value
+		const first = await setupPost(h, browser.cookie, '/setup/check/images')
+		// Post/redirect/get: a reload of the page shows the outcome without running it again.
+		expect(first.status).toBe(303)
+		expect(first.headers.get('location')).toBe('/setup')
+		expect(await pageText(h, browser.cookie)).toContain('The Images binding transformed the test image')
+		expect(await charged()).toBe('1')
+		// A recheck in the same month runs, uncharged; so do concurrent ones.
+		await Promise.all([
+			setupPost(h, browser.cookie, '/setup/check/images'),
+			setupPost(h, browser.cookie, '/setup/check/images'),
+		])
+		expect(await charged()).toBe('1')
+		// The next month charges once again.
+		h.advance(32 * 24 * 60 * 60 * 1000)
+		const next = new Date(NOW + 32 * 24 * 60 * 60 * 1000).toISOString().slice(0, 7)
+		await setupPost(h, (await setupLogin(h)).cookie, '/setup/check/images')
+		expect(await sql(h.store, 'SELECT value FROM kopje_state WHERE name = ?', `images_transforms:${next}`)).toEqual([
 			{ value: '1' },
 		])
+	})
 
+	it('reports a used-up allowance, a failure with its code, and a spent budget', async () => {
 		const quota = await setupHarness({ images: fakeImages(9422) })
 		const quotaBrowser = await setupLogin(quota)
-		const used = await (await setupPost(quota, quotaBrowser.cookie, '/setup/check/images')).text()
+		await setupPost(quota, quotaBrowser.cookie, '/setup/check/images')
+		const used = await pageText(quota, quotaBrowser.cookie)
 		expect(used).toContain('result warn')
 		expect(used).toContain('allowance is used up')
 
 		const broken = await setupHarness({ images: fakeImages(9999) })
 		const brokenBrowser = await setupLogin(broken)
-		const failed = await (await setupPost(broken, brokenBrowser.cookie, '/setup/check/images')).text()
+		await setupPost(broken, brokenBrowser.cookie, '/setup/check/images')
+		const failed = await pageText(broken, brokenBrowser.cookie)
 		expect(failed).toContain('result fail')
 		expect(failed).toContain('error 9999')
 
 		const spent = await setupHarness({ overrides: { IMAGES_MONTHLY_TRANSFORMS: '0' } })
 		const spentBrowser = await setupLogin(spent)
-		expect(await (await setupPost(spent, spentBrowser.cookie, '/setup/check/images')).text()).toContain(
-			'budget (IMAGES_MONTHLY_TRANSFORMS) is used up'
-		)
+		await setupPost(spent, spentBrowser.cookie, '/setup/check/images')
+		expect(await pageText(spent, spentBrowser.cookie)).toContain('budget (IMAGES_MONTHLY_TRANSFORMS) is used up')
 	})
 
 	it('shows whether the Queue consumer received the probe, and when the cron last ran', async () => {
 		const h = await setupHarness()
 		const browser = await setupLogin(h)
-		let page = await (await h.request('/setup', { headers: { cookie: browser.cookie } })).text()
+		let page = await pageText(h, browser.cookie)
 		expect(page).toContain('No probe message has been sent yet')
 		expect(page).toContain('No cron run has been recorded yet')
 
 		expect((await setupPost(h, browser.cookie, '/setup/check/queue')).status).toBe(303)
 		expect(h.queue.pending.map((m) => (m.body as { kind: string }).kind)).toEqual(['setup-probe'])
-		page = await (await h.request('/setup', { headers: { cookie: browser.cookie } })).text()
-		expect(page).toContain('The probe is on its way')
+		expect(await pageText(h, browser.cookie)).toContain('The probe is on its way')
 
 		const [message] = await drainQueue(h)
 		expect(message?.ack).toHaveBeenCalled()
-		await handleScheduled(h.env, { build: () => h.env.CF_VERSION_METADATA.id, now: () => NOW, store: () => h.store })
-		page = await (await h.request('/setup', { headers: { cookie: browser.cookie } })).text()
+		await handleScheduled(h.env, { build: () => BUILD, now: () => NOW, store: () => h.store })
+		page = await pageText(h, browser.cookie)
 		expect(page).toContain('The consumer received the probe')
 		expect(page).toContain(`The cron last ran at ${new Date(NOW).toISOString()}`)
 
-		// A probe nobody consumed fails after two minutes.
+		// A probe nobody consumed fails after two minutes, and so does a stale cron marker.
 		await setupPost(h, browser.cookie, '/setup/check/queue')
-		h.advance(3 * 60 * 1000)
-		page = await (await h.request('/setup', { headers: { cookie: browser.cookie } })).text()
+		h.advance(16 * 60 * 1000)
+		page = await pageText(h, browser.cookie)
 		expect(page).toContain('has not been received')
+		expect(page).toContain('Check the Worker&#39;s cron trigger and that maintenance is off')
 	})
 
-	it('warns about Bot Fight Mode, and reads it when the token can', async () => {
+	it('marks only the latest probe, and retries a probe the Store could not record', async () => {
+		const h = await setupHarness()
+		const browser = await setupLogin(h)
+		await setupPost(h, browser.cookie, '/setup/check/queue')
+		const old = h.queue.pending.splice(0)
+		await setupPost(h, browser.cookie, '/setup/check/queue')
+		h.queue.pending.unshift(...old)
+		const [superseded, latest] = await drainQueue(h)
+		expect(superseded?.ack).toHaveBeenCalled()
+		expect(latest?.ack).toHaveBeenCalled()
+		expect(await pageText(h, browser.cookie)).toContain('The consumer received the probe')
+
+		// While the Store refuses writes (maintenance, an upgrade) the message is retried, not acked as lost.
+		await setupPost(h, browser.cookie, '/setup/check/queue')
+		const pending = h.queue.pending.splice(0)
+		const messages = pending.map((stored) => ({ ...stored, ack: vi.fn(), retry: vi.fn() }))
+		const unavailable = {
+			consumeSetupProbe: () => Promise.reject(storeMaintenanceError('maintenance')),
+		} as unknown as StoreStub
+		const failing = { ...inboxDeps(() => h.store), store: () => unavailable }
+		await handleQueue({ messages, queue: 'kopje' } as unknown as MessageBatch, h.env, failing)
+		expect(messages[0]?.retry).toHaveBeenCalled()
+		expect(messages[0]?.ack).not.toHaveBeenCalled()
+	})
+
+	it('reports a probe that could not be sent', async () => {
+		const h = await setupHarness({ overrides: { QUEUE: { send: () => Promise.reject(new Error('no queue')) } } })
+		const browser = await setupLogin(h)
+		const response = await setupPost(h, browser.cookie, '/setup/check/queue')
+		expect(response.status).toBe(200)
+		expect(await response.text()).toContain('The probe could not be sent to the Queue')
+	})
+
+	it('warns about Bot Fight Mode, and reads it, the stale configuration and Super Bot Fight Mode included', async () => {
 		const h = await setupHarness()
 		const browser = await setupLogin(h)
 		const plain = await (await setupPost(h, browser.cookie, '/setup/check/bot-fight')).text()
 		expect(plain).toContain('Not checked')
 		expect(plain).toContain('blocks federation')
+		const cases: [Record<string, unknown> | null, string][] = [
+			[{ fight_mode: true }, 'Bot Fight Mode is on for this zone'],
+			[{ fight_mode: false }, 'Bot Fight Mode is off.'],
+			// A paid zone after a plan change: the stale configuration is still in force.
+			[{ sbfm_definitely_automated: 'allow', stale_zone_configuration: { fight_mode: true } }, 'is on for this zone'],
+			[{ sbfm_definitely_automated: 'managed_challenge' }, 'is on for this zone'],
+			[{ sbfm_definitely_automated: 'allow', sbfm_likely_automated: 'allow' }, 'Bot Fight Mode is off.'],
+			// Nothing that establishes "off".
+			[{}, 'Could not read the setting'],
+			[{ enable_js: true }, 'Could not read the setting'],
+			[{ fight_mode: false, stale_zone_configuration: { fight_mode: 'yes' } }, 'Could not read the setting'],
+			[null, 'Could not read the setting'],
+		]
+		for (const [settings, expected] of cases) {
+			h.cf.botSettings = settings
+			const text = await (await setupPost(h, browser.cookie, '/setup/check/bot-fight', { api_token: API_TOKEN })).text()
+			expect(text, JSON.stringify(settings)).toContain(expected)
+		}
+	})
+})
 
-		h.cf.fightMode = true
-		const on = await (await setupPost(h, browser.cookie, '/setup/check/bot-fight', { api_token: API_TOKEN })).text()
-		expect(on).toContain('Bot Fight Mode is on for this zone')
-		h.cf.fightMode = false
-		const off = await (await setupPost(h, browser.cookie, '/setup/check/bot-fight', { api_token: API_TOKEN })).text()
-		expect(off).toContain('Bot Fight Mode is off.')
-		h.cf.fightMode = null
-		const unknown = await (
-			await setupPost(h, browser.cookie, '/setup/check/bot-fight', { api_token: API_TOKEN })
-		).text()
-		expect(unknown).toContain('Could not read the setting')
+describe('/setup sessions', () => {
+	it('limits sign-in attempts per address', async () => {
+		const h = await setupHarness({ overrides: { LOGIN_LIMIT: { limit: () => Promise.resolve({ success: false }) } } })
+		const response = await h.request('/setup/login', {
+			method: 'POST',
+			headers: { origin: 'https://kopje.test', 'content-type': 'application/x-www-form-urlencoded' },
+			body: new URLSearchParams({ token: SETUP_TOKEN }).toString(),
+		})
+		expect(response.status).toBe(429)
+		expect(setCookies(response).lines).toEqual([])
+		expect(await sql(h.store, "SELECT name FROM kopje_state WHERE name LIKE 'setup_session:%'")).toEqual([])
+	})
+
+	it('expires a session after an hour', async () => {
+		const h = await setupHarness()
+		const browser = await setupLogin(h)
+		const csrf = await formToken(h, browser.cookie)
+		h.advance(SETUP_SESSION_MS + 1)
+		expect(await pageText(h, browser.cookie)).toContain('Enter the setup token')
+		expect((await setupPost(h, browser.cookie, '/setup/domain', { domain: 'kopje.test' }, { csrf })).status).toBe(403)
+	})
+
+	it('ends the session at logout, for that cookie and in the Store', async () => {
+		const h = await setupHarness()
+		const browser = await setupLogin(h)
+		const csrf = await formToken(h, browser.cookie)
+		const out = await setupPost(h, browser.cookie, '/setup/logout', {}, { csrf })
+		expect(out.status).toBe(303)
+		expect(setCookies(out).lines.join('\n')).toMatch(/__Host-kopje_setup=;/)
+		expect(await sql(h.store, "SELECT name FROM kopje_state WHERE name LIKE 'setup_session:%'")).toEqual([])
+		expect((await setupPost(h, browser.cookie, '/setup/domain', { domain: 'kopje.test' }, { csrf })).status).toBe(403)
+	})
+
+	it(`keeps at most ${MAX_SETUP_SESSIONS} sessions, dropping the oldest`, async () => {
+		const h = await setupHarness()
+		const browsers = []
+		for (let i = 0; i <= MAX_SETUP_SESSIONS; i++) {
+			browsers.push(await setupLogin(h))
+			h.advance(1000)
+		}
+		expect(await sql(h.store, "SELECT name FROM kopje_state WHERE name LIKE 'setup_session:%'")).toHaveLength(
+			MAX_SETUP_SESSIONS
+		)
+		expect(await pageText(h, browsers[0]?.cookie ?? '')).toContain('Enter the setup token')
+		expect(await pageText(h, browsers[1]?.cookie ?? '')).toContain('Go through the steps in order')
+	})
+
+	it('survives a restart of the Worker and of the Store object', async () => {
+		const h = await setupHarness()
+		const browser = await readyBrowser(h)
+		await setupPost(h, browser.cookie, '/setup/access', accessFields(h))
+		// Another Worker instance over the same Store, and a fresh kernel over the same storage.
+		const restarted = await setupHarness({ store: h.store })
+		expect(await pageText(restarted, browser.cookie)).toContain('Confirmed: kopje.test')
+		const sessionHash = await sha256Hex(browser.secret)
+		const view = await runInDurableObject(h.store, (_instance, state) =>
+			testKernel(state).execute(BUILD, setupView, {
+				authority: { kind: 'setup', sessionHash },
+				now: NOW,
+			})
+		)
+		expect(view).toMatchObject({ authorized: true, draft: { domain: 'kopje.test', accessReady: true } })
 	})
 })
 
@@ -474,7 +493,7 @@ describe('/setup step 7: bootstrap', () => {
 		expect(values).toMatchObject({
 			domain: 'kopje.test',
 			[ACCESS_SETTINGS.teamDomain]: h.team.teamDomain,
-			access_aud: h.team.aud,
+			access_aud: h.cf.signInAud(),
 			[ACCESS_SETTINGS.adminAud]: h.cf.apps[1]?.aud,
 			[ACCESS_SETTINGS.adminEmail]: ADMIN,
 		})
@@ -512,17 +531,14 @@ describe('/setup step 7: bootstrap', () => {
 
 	it('SETUP-3: concurrent bootstraps create one admin', async () => {
 		const h = await setupHarness()
-		const a = await setupLogin(h)
-		const b = await setupLogin(h)
-		for (const browser of [a, b]) {
-			await setupPost(h, browser.cookie, '/setup/domain', { domain: 'kopje.test' })
-			await setupPost(h, browser.cookie, '/setup/access', accessFields(h))
-		}
-		const [csrfA, csrfB] = await Promise.all([formToken(h, a.cookie), formToken(h, b.cookie)])
-		const results = await Promise.all([
-			setupPost(h, a.cookie, '/setup/admin', { username: 'first', email: ADMIN }, { csrf: csrfA }),
-			setupPost(h, b.cookie, '/setup/admin', { username: 'second', email: ADMIN }, { csrf: csrfB }),
-		])
+		const browser = await readyBrowser(h)
+		await setupPost(h, browser.cookie, '/setup/access', accessFields(h))
+		const csrf = await formToken(h, browser.cookie)
+		const results = await Promise.all(
+			['first', 'second', 'third'].map((username) =>
+				setupPost(h, browser.cookie, '/setup/admin', { username, email: ADMIN }, { csrf })
+			)
+		)
 		expect(results.filter((r) => r.status === 303)).toHaveLength(1)
 		expect(await sql(h.store, 'SELECT username FROM accounts')).toHaveLength(1)
 		expect(await sql(h.store, "SELECT value FROM instance_settings WHERE name = 'domain'")).toEqual([
@@ -530,34 +546,56 @@ describe('/setup step 7: bootstrap', () => {
 		])
 	})
 
-	it('SETUP-3: refuses when a domain or an account exists already (an import or /admin/config)', async () => {
+	async function readyForBootstrap() {
 		const h = await setupHarness()
-		const browser = await setupLogin(h)
-		await setupPost(h, browser.cookie, '/setup/domain', { domain: 'kopje.test' })
+		const browser = await readyBrowser(h)
 		await setupPost(h, browser.cookie, '/setup/access', accessFields(h))
-		await sql(
-			h.store,
-			"INSERT INTO instance_settings (name, value) VALUES ('access_team_domain', 'x.cloudflareaccess.com')"
-		)
-		// The Store refuses, whatever the Worker let through.
-		const key = { privkey: new Uint8Array([1]), salt: new Uint8Array([2]), pubkey: 'k' }
 		const input = {
 			sessionHash: await sha256Hex(browser.secret),
 			domain: 'kopje.test',
 			username: 'owner',
 			email: ADMIN,
+			key: { privkey: new Uint8Array([1]), salt: new Uint8Array([2]), pubkey: 'k' },
+			now: NOW,
 		}
-		expect(await h.store.bootstrapInstance(BUILD, { ...input, key, now: NOW })).toBe('complete')
-		const response = await setupPost(
-			h,
-			browser.cookie,
-			'/setup/admin',
-			{ username: 'owner', email: ADMIN },
-			{ csrf: 'x' }
+		return { h, browser, input }
+	}
+
+	for (const name of CONFIG_KEYS) {
+		it(`SETUP-3: refuses when ${name} is configured already (an import or /admin/config)`, async () => {
+			const { h, browser, input } = await readyForBootstrap()
+			await sql(h.store, 'INSERT INTO instance_settings (name, value) VALUES (?, ?)', name, 'x')
+			// The Store refuses, whatever the Worker let through.
+			expect(await h.store.bootstrapInstance(BUILD, input)).toBe('complete')
+			expect(
+				(await setupPost(h, browser.cookie, '/setup/admin', { username: 'owner', email: ADMIN }, { csrf: 'x' })).status
+			).toBe(403)
+			expect(await sql(h.store, 'SELECT * FROM local_accounts')).toEqual([])
+			expect(await sql(h.store, 'SELECT name FROM instance_settings')).toEqual([{ name }])
+		})
+	}
+
+	it('SETUP-3: refuses when a local account exists already', async () => {
+		const { h, input } = await readyForBootstrap()
+		await seedAccount(h.store, { username: 'imported' })
+		expect(await h.store.bootstrapInstance(BUILD, input)).toBe('complete')
+		expect(await sql(h.store, 'SELECT name FROM instance_settings')).toEqual([])
+		expect(await sql(h.store, 'SELECT username FROM accounts')).toEqual([{ username: 'imported' }])
+	})
+
+	it('SETUP-3: a failure at the last insert rolls the whole bootstrap back', async () => {
+		const { h, browser, input } = await readyForBootstrap()
+		const before = await sql(h.store, 'SELECT name, value FROM kopje_state ORDER BY name')
+		await sql(
+			h.store,
+			"CREATE TRIGGER fail_bootstrap BEFORE INSERT ON local_accounts BEGIN SELECT RAISE(ABORT, 'injected'); END"
 		)
-		expect(response.status).toBe(403)
-		expect(await sql(h.store, 'SELECT * FROM local_accounts')).toEqual([])
-		expect((await settings(h)).domain).toBeUndefined()
+		expect(String(await rejectionOf(h.store.bootstrapInstance(BUILD, input)))).toContain('injected')
+		expect(await sql(h.store, 'SELECT * FROM instance_settings')).toEqual([])
+		expect(await sql(h.store, 'SELECT * FROM accounts')).toEqual([])
+		expect(await sql(h.store, 'SELECT name, value FROM kopje_state ORDER BY name')).toEqual(before)
+		await sql(h.store, 'DROP TRIGGER fail_bootstrap')
+		expect((await setupPost(h, browser.cookie, '/setup/admin', { username: 'owner', email: ADMIN })).status).toBe(303)
 	})
 })
 
@@ -619,7 +657,8 @@ describe('/setup after bootstrap (SETUP-2)', () => {
 		const post = (path: string, fields: Record<string, string>, origin: string | null = 'https://kopje.test') =>
 			setupPost(h, admin.cookie, path, fields, { csrf, origin })
 
-		expect(await (await post('/setup/check/images', {})).text()).toContain('transformed the test image')
+		expect((await post('/setup/check/images', {})).status).toBe(303)
+		expect(await pageText(h, admin.cookie)).toContain('transformed the test image')
 		expect(await (await post('/setup/check/bot-fight', {})).text()).toContain('Not checked')
 		expect((await post('/setup/domain', { domain: 'kopje.test' })).status).toBe(403)
 		expect((await post('/setup/admin', { username: 'x', email: ADMIN })).status).toBe(403)
