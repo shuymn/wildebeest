@@ -59,10 +59,11 @@ const RUNNER_LEASE_MS = 15 * 60 * 1000
 // Of the cron's 15 minutes of wall time; the reserve is kept for the last checkpoint and cleanup.
 const INVOCATION_MS = 13 * 60 * 1000
 const RESERVE_MS = 60 * 1000
-// Bytes encrypted per invocation before media copying waits for the next cron, to stay inside the cron's 30 seconds of
-// CPU: age, both SHA-256 digests and the copies cost about 4-6 ms of CPU per MiB measured on a 2026 desktop CPU
-// (docs/backup.md), so this leaves room for a slower machine. A dump is never split; it counts toward it.
-const WORK_BYTES = 512 * MIB
+// Plaintext bytes one invocation may encrypt, to stay inside the cron's 30 seconds of CPU: age, both SHA-256 digests
+// and the copies cost about 4-6 ms of CPU per MiB measured on a 2026 desktop CPU (docs/backup.md), so this leaves room
+// for a slower machine. Media copying and the index wait for the next cron at the budget; a dump cannot be split, so a
+// dump larger than the budget fails as dump-too-large.
+export const WORK_BYTES = 512 * MIB
 const MEDIA_PAGE = 100
 export const MAX_MEDIA_PER_RUN = 2000
 // Originals are at most 16 MiB (platform/images.ts); anything far larger is not a Kopje upload.
@@ -91,6 +92,7 @@ export type BackupDeps = {
 	chunkBytes?: number
 	invocationMs?: number
 	workBytes?: number
+	maxMediaPerRun?: number
 	// Tests: throwing at a point simulates the Worker dying there (no cleanup runs, nothing is recorded).
 	inject?: (point: BackupFaultPoint) => void
 	sleep?: (ms: number) => Promise<void>
@@ -199,6 +201,8 @@ class BackupJob {
 	readonly #deadline: number
 	// Plaintext bytes encrypted by this invocation.
 	#work = 0
+	readonly #workLimit: number
+	readonly #maxMedia: number
 	#state: BackupState = EMPTY_BACKUP_STATE
 
 	constructor(env: Env, config: BackupConfig, deps: BackupDeps) {
@@ -211,6 +215,8 @@ class BackupJob {
 		this.#s3 = new S3Client(config, deps.fetch, { sleep: deps.sleep, budget: () => this.#budget() })
 		this.#log = deps.log ?? defaultLog
 		this.#partBytes = Math.max(MIN_PART_BYTES, deps.partBytes ?? PART_BYTES)
+		this.#workLimit = deps.workBytes ?? WORK_BYTES
+		this.#maxMedia = deps.maxMediaPerRun ?? MAX_MEDIA_PER_RUN
 	}
 
 	// Time left for requests, keeping the reserve for the last checkpoint and cleanup.
@@ -368,7 +374,7 @@ class BackupJob {
 	}
 
 	#checkTime(): void {
-		if (this.#budget() <= 0 || this.#work >= (this.#deps.workBytes ?? WORK_BYTES)) {
+		if (this.#budget() <= 0 || this.#work >= this.#workLimit) {
 			throw new OutOfTime()
 		}
 	}
@@ -457,14 +463,26 @@ class BackupJob {
 	}
 
 	// Streams `next` through age into a multipart upload. Each part is preceded by a save, so a part is uploaded only
-	// while this invocation holds the lease. On failure the upload is aborted.
-	async #upload(
-		key: string,
-		next: () => Promise<Uint8Array | null>,
-		onStart: (uploadId: string) => Promise<void>,
-		onPart: (parts: number, bytes: number) => Promise<void>,
+	// while this invocation holds the lease. The plaintext counts toward the invocation's byte budget, and crossing it
+	// throws `overBudget()`. On failure, `release` runs first (the dump's freeze), then the stream is cancelled and the
+	// upload aborted.
+	async #upload({
+		key,
+		next,
+		onStart,
+		onPart,
+		recipients,
+		overBudget,
+		release = () => Promise.resolve(),
+	}: {
+		key: string
+		next: () => Promise<Uint8Array | null>
+		onStart: (uploadId: string) => Promise<void>
+		onPart: (parts: number, bytes: number) => Promise<void>
 		recipients: readonly string[]
-	): Promise<ObjectDigest> {
+		overBudget: () => Error
+		release?: () => Promise<void>
+	}): Promise<ObjectDigest> {
 		const uploadId = await this.#s3.createMultipart(key, 'application/octet-stream')
 		let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
 		try {
@@ -484,6 +502,9 @@ class BackupJob {
 							if (piece.byteLength > 0) {
 								plainBytes += piece.byteLength
 								this.#work += piece.byteLength
+								if (this.#work > this.#workLimit) {
+									throw overBudget()
+								}
 								await plainWriter.write(piece)
 								controller.enqueue(piece)
 								return
@@ -537,6 +558,7 @@ class BackupJob {
 			}
 		} catch (error) {
 			if (!(error instanceof Crash)) {
+				await release().catch(() => {})
 				await reader?.cancel().catch(() => {})
 				await this.#s3.abortMultipart(key, uploadId).catch(() => {})
 			}
@@ -579,22 +601,25 @@ class BackupJob {
 				cursor = step.cursor
 				this.#fault('dump-chunk')
 				if (step.done) {
-					const captured = await this.#store.backupCapture(
+					// One Store transaction: the freeze lease must still hold (else writes may have resumed and the
+					// membership would not match the dump), the run's media membership is replaced, the freeze ends.
+					const finished = await this.#store.backupFinishDump(
 						this.#build,
 						this.#attempt,
 						this.#deps.now(),
 						run.id,
-						run.fingerprint
+						run.fingerprint,
+						opId,
+						cursor
 					)
-					if (!captured.ok) {
-						throw captured.code === 'lost' ? new LostRunner() : refusal('capture', captured.code)
+					if (!finished.ok) {
+						throw finished.code === 'lost' ? new LostRunner() : refusal('dump', finished.code)
 					}
-					const finished = await this.#store.dumpFinish(this.#build, cursor)
-					if (!finished.ok || finished.trailerText === null) {
-						throw finished.ok ? new BackupError('dump-aborted') : refusal('dump', finished.code)
+					if (finished.trailerText === null) {
+						throw new BackupError('dump-aborted')
 					}
 					ended = true
-					this.#log({ event: 'kopje.backup.dump.released', id: run.id, media: captured.required })
+					this.#log({ event: 'kopje.backup.dump.released', id: run.id, media: finished.required })
 					pending.push(encoder.encode(finished.trailerText))
 				}
 				return step.chunk
@@ -604,19 +629,24 @@ class BackupJob {
 					s.run!.dump = { opId, key, uploadId, parts, bytes }
 				})
 			let uploadId: string | null = null
-			const digest = await this.#upload(
+			const digest = await this.#upload({
 				key,
 				next,
-				async (id) => {
+				onStart: async (id) => {
 					uploadId = id
 					await progress(id, 0, 0)
 				},
-				async (parts, bytes) => {
+				onPart: async (parts, bytes) => {
 					await progress(uploadId, parts, bytes)
 					this.#fault('dump-part')
 				},
-				run.recipients
-			)
+				recipients: run.recipients,
+				overBudget: () => new BackupError('dump-too-large'),
+				// The freeze is released before the stream and the upload are cleaned up.
+				release: async () => {
+					await this.#store.dumpAbort(this.#build, opId)
+				},
+			})
 			this.#fault('dump-complete')
 			const result: DumpResult = {
 				...digest,
@@ -645,11 +675,11 @@ class BackupJob {
 		let copied = 0
 		for (;;) {
 			const page = await this.#store.backupMedia(this.#build, run.id, null, MEDIA_PAGE, true)
-			if (page.length === 0 || this.#run().copied >= MAX_MEDIA_PER_RUN) {
+			if (page.length === 0 || this.#run().copied >= this.#maxMedia) {
 				break
 			}
 			for (const row of page) {
-				if (this.#run().copied >= MAX_MEDIA_PER_RUN) {
+				if (this.#run().copied >= this.#maxMedia) {
 					break
 				}
 				this.#checkTime()
@@ -671,6 +701,10 @@ class BackupJob {
 			if (object.size > MAX_MEDIA_BYTES) {
 				await object.body.cancel()
 				throw new BackupError('media-too-large')
+			}
+			if (this.#work > 0 && this.#work + object.size > this.#workLimit) {
+				await object.body.cancel()
+				throw new OutOfTime()
 			}
 			const plaintext = new Uint8Array(await object.arrayBuffer())
 			this.#work += plaintext.byteLength
@@ -737,13 +771,16 @@ class BackupJob {
 				pending.push(encoder.encode(text))
 			}
 		}
-		const index = await this.#upload(
-			`${this.#runBase(run)}${INDEX_NAME}`,
+		// An index too large for a whole invocation's budget can never be written; otherwise it waits for the next cron.
+		const fresh = this.#work === 0
+		const index = await this.#upload({
+			key: `${this.#runBase(run)}${INDEX_NAME}`,
 			next,
-			() => this.#save(() => {}),
-			() => this.#save(() => {}),
-			run.recipients
-		)
+			onStart: () => this.#save(() => {}),
+			onPart: () => this.#save(() => {}),
+			recipients: run.recipients,
+			overBudget: () => (fresh ? new BackupError('index-too-large') : new OutOfTime()),
+		})
 		await this.#save((s) => {
 			s.run!.stage = 'manifest'
 			s.run!.index = { ...index, coverage }

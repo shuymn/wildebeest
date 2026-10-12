@@ -68,7 +68,7 @@ export class S3Client {
 		const response = await this.#send('create-upload', 'POST', key, { uploads: '' }, undefined, {
 			'content-type': contentType,
 		})
-		const uploadId = elements(await response.text(), 'UploadId')[0]
+		const uploadId = elements(await body('create-upload', response.text()), 'UploadId')[0]
 		if (uploadId === undefined || uploadId === '') {
 			throw new S3Error('create-upload', 0)
 		}
@@ -96,7 +96,7 @@ export class S3Client {
 			'content-type': 'application/xml',
 		})
 		// S3 can answer 200 and report the failure in the body.
-		if (/<Error>/.test(await response.text())) {
+		if (/<Error>/.test(await body('complete-upload', response.text()))) {
 			throw new S3Error('complete-upload', 200)
 		}
 	}
@@ -118,7 +118,7 @@ export class S3Client {
 			await response.body?.cancel()
 			return null
 		}
-		return new Uint8Array(await response.arrayBuffer())
+		return new Uint8Array(await body('get', response.arrayBuffer()))
 	}
 
 	async delete(key: string): Promise<void> {
@@ -135,7 +135,7 @@ export class S3Client {
 			if (token !== undefined) {
 				query['continuation-token'] = token
 			}
-			const xml = await (await this.#send('list', 'GET', null, query)).text()
+			const xml = await body('list', (await this.#send('list', 'GET', null, query)).text())
 			for (const block of elements(xml, 'Contents')) {
 				const key = elements(block, 'Key')[0]
 				const size = Number(elements(block, 'Size')[0] ?? 'NaN')
@@ -162,7 +162,7 @@ export class S3Client {
 				query['key-marker'] = marker.key
 				query['upload-id-marker'] = marker.uploadId
 			}
-			const xml = await (await this.#send('list-uploads', 'GET', null, query)).text()
+			const xml = await body('list-uploads', (await this.#send('list-uploads', 'GET', null, query)).text())
 			for (const block of elements(xml, 'Upload')) {
 				const key = elements(block, 'Key')[0]
 				const uploadId = elements(block, 'UploadId')[0]
@@ -211,9 +211,9 @@ export class S3Client {
 				})
 				response = await this.#fetch(request)
 			} catch (error) {
-				const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
-				if (method === 'POST' || attempt >= RETRIES || timedOut) {
-					throw new S3Error(op, timedOut ? 'timeout' : 0, { cause: error })
+				const expired = timedOut(error)
+				if (method === 'POST' || attempt >= RETRIES || expired) {
+					throw new S3Error(op, expired ? 'timeout' : 0, { cause: error })
 				}
 			}
 			if (response !== null) {
@@ -232,6 +232,19 @@ export class S3Client {
 			}
 			await this.#sleep(delay)
 		}
+	}
+}
+
+function timedOut(error: unknown): boolean {
+	return error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
+}
+
+// A response body, read under the request's signal: a body that stalls past the time left fails like the request.
+async function body<T>(op: string, read: Promise<T>): Promise<T> {
+	try {
+		return await read
+	} catch (error) {
+		throw new S3Error(op, timedOut(error) ? 'timeout' : 0, { cause: error })
 	}
 }
 
