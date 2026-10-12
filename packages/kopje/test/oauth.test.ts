@@ -488,7 +488,17 @@ describe('token endpoint', () => {
 		const code = await authorizationCode(h, app)
 		const response = await exchange(h, app, code, { client_secret: 'wrong' })
 		expect(response.status).toBe(401)
+		expect(response.headers.get('www-authenticate')).toMatch(/^Basic /)
 		expect(await response.json()).toMatchObject({ error: 'invalid_client' })
+		const badBasic = await h.request(
+			'/oauth/token',
+			form(
+				{ grant_type: 'authorization_code', code, redirect_uri: app.redirect_uri },
+				{ headers: { authorization: `Basic ${btoa(`${app.client_id}:wrong`)}` } }
+			)
+		)
+		expect(badBasic.status).toBe(401)
+		expect(badBasic.headers.get('www-authenticate')).toMatch(/^Basic /)
 		// HTTP Basic client authentication works as well.
 		const basic = btoa(`${app.client_id}:${app.client_secret}`)
 		const ok = await h.request(
@@ -548,7 +558,14 @@ describe('revoke', () => {
 		const revoke = (secret: string) =>
 			h.request('/oauth/revoke', form({ token, client_id: app.client_id, client_secret: secret }))
 
-		expect((await revoke('wrong')).status).toBe(403)
+		// RFC 7009 §2.2.1: a client authentication failure is RFC 6749 §5.2's invalid_client.
+		const refused = await revoke('wrong')
+		expect(refused.status).toBe(401)
+		expect(refused.headers.get('www-authenticate')).toMatch(/^Basic /)
+		expect(await refused.json()).toMatchObject({ error: 'invalid_client' })
+		const anonymous = await h.request('/oauth/revoke', form({ token }))
+		expect(anonymous.status).toBe(401)
+		expect(await anonymous.json()).toMatchObject({ error: 'invalid_client' })
 		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(token))).status).toBe(200)
 
 		const response = await revoke(app.client_secret)

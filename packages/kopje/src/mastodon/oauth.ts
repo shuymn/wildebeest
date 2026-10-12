@@ -90,15 +90,24 @@ function parseUrl(uri: string): URL | null {
 }
 
 // RFC 6749 §5.2 error responses.
-function oauthError(status: number, error: string, description: string): Response {
+function oauthError(
+	status: number,
+	error: string,
+	description: string,
+	headers: Record<string, string> = {}
+): Response {
 	return Response.json(
 		{ error, error_description: description },
-		{ status, headers: { 'cache-control': 'no-store', pragma: 'no-cache' } }
+		{ status, headers: { 'cache-control': 'no-store', pragma: 'no-cache', ...headers } }
 	)
 }
 
+// A failed client authentication, at /oauth/token and (RFC 7009 §2.2.1) at /oauth/revoke: 401 with the
+// authentication scheme the endpoint accepts.
 const INVALID_CLIENT = () =>
-	oauthError(401, 'invalid_client', 'Client authentication failed due to unknown client or invalid secret.')
+	oauthError(401, 'invalid_client', 'Client authentication failed due to unknown client or invalid secret.', {
+		'www-authenticate': 'Basic realm="oauth", charset="UTF-8"',
+	})
 const INVALID_GRANT = () =>
 	oauthError(400, 'invalid_grant', 'The provided authorization grant is invalid, expired, revoked or was already used.')
 
@@ -189,7 +198,7 @@ export const tokenHandler: ApiHandler = async (c, deps) => {
 	}
 }
 
-// RFC 7009. The client must authenticate; an unknown token is still a success.
+// RFC 7009. The client must authenticate (a failure is invalid_client, §2.2.1); an unknown token is still a success.
 export const revokeHandler: ApiHandler = async (c, deps) => {
 	const result = await readParams(c.req.raw)
 	if (!result.ok) {
@@ -198,7 +207,7 @@ export const revokeHandler: ApiHandler = async (c, deps) => {
 	const client = clientCredentials(c, result.params)
 	const token = result.params.get('token')
 	if (client === null) {
-		return oauthError(403, 'unauthorized_client', 'You are not authorized to revoke this token')
+		return INVALID_CLIENT()
 	}
 	if (token === undefined) {
 		return oauthError(400, 'invalid_request', 'token is required.')
@@ -206,7 +215,7 @@ export const revokeHandler: ApiHandler = async (c, deps) => {
 	const tokenHash = await sha256Hex(token)
 	const outcome = await storeCall(c, deps, (s, b) => s.revokeToken(b, { ...client, tokenHash }))
 	if (outcome.status === 'invalid_client') {
-		return oauthError(403, 'unauthorized_client', 'You are not authorized to revoke this token')
+		return INVALID_CLIENT()
 	}
 	return c.json({})
 }
