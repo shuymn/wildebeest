@@ -91,8 +91,9 @@ export type RemoteActorInput = {
 	keys: { id: string; pem: string }[]
 	// The document as received; followers, alsoKnownAs and fields are read from it.
 	raw: string
-	// A WebFinger domain other than the actor's host, set by the search resolver only after the claimed domain's own
-	// WebFinger named this actor (federation/resolve.ts). Never set from a document.
+	// The canonical domain of the actor's address for this username, set by the search resolver only after the actor's
+	// host declared it and that domain confirmed it (declaredDomain in federation/resolve.ts); the host itself when
+	// the host's own answer names it there. Never set from a document.
 	confirmedDomain?: string
 }
 
@@ -164,8 +165,21 @@ function ignored(reason: string): ReceiveResult {
 	return { applied: false, reason, jobsPending: false }
 }
 
-function retryLater(reason: string): ReceiveResult {
-	return { ...ignored(reason), retry: true }
+// A refusal that must leave no trace: thrown out of the operation, so its transaction rolls back (the actor's
+// document and keys stored before the handler ran included), and turned into a retryable answer by the Store's RPC
+// (store.ts), which the Worker answers 503.
+export class RetryLater extends Error {
+	constructor(readonly reason: string) {
+		super(`retry later: ${reason}`)
+	}
+}
+
+function retryLater(reason: string): never {
+	throw new RetryLater(reason)
+}
+
+export function retryResult(error: RetryLater): ReceiveResult {
+	return { ...ignored(error.reason), retry: true }
 }
 
 function applied(reason: string, jobsPending = false): ReceiveResult {
@@ -216,12 +230,29 @@ export function isDeletedActor(db: Db, uri: string, now: number): boolean {
 	)
 }
 
-// The domain of a remote account's address (its acct), decided here for every path that stores an actor: a WebFinger
-// domain the claimed domain itself confirmed (confirmedDomain), else the domain already stored, else the actor's host.
-// Inbound documents never carry a confirmed domain, so they never replace one, and an account first seen inbound
-// takes a confirmed domain once it is resolved. Domain blocks match the actor's host as well (audience.ts).
-export function accountDomain(stored: string | undefined, actor: RemoteActorInput): string {
-	return actor.confirmedDomain ?? stored ?? new URL(actor.uri).host.toLowerCase()
+// The domain of a remote account's address (its acct), decided here for every path that stores an actor. A domain
+// other than the actor's host holds only for the (username, domain, actor id) it was confirmed for: the actor id is
+// the row's own, and confirmed_username the username. So:
+//   - a confirmation in hand (confirmedDomain) sets it: another domain with this username, or the host (clearing any);
+//   - otherwise a stored confirmation is kept while the username is unchanged;
+//   - otherwise, a changed username included, the address falls back to the actor's host until it is confirmed again.
+// Inbound documents never carry a confirmation (Gap: inbound processing does not look up WebFinger), so they keep a
+// confirmed address while the username is unchanged and never set one. Domain blocks also match the actor's host
+// (domainBlockMatchSql in audience.ts).
+export function accountDomain(
+	stored: { domain: string; confirmed_username: string | null } | undefined,
+	actor: RemoteActorInput
+): { domain: string; confirmedUsername: string | null } {
+	const host = new URL(actor.uri).host.toLowerCase()
+	if (actor.confirmedDomain !== undefined) {
+		return actor.confirmedDomain === host
+			? { domain: host, confirmedUsername: null }
+			: { domain: actor.confirmedDomain, confirmedUsername: actor.username }
+	}
+	if (stored !== undefined && stored.confirmed_username !== null && stored.confirmed_username === actor.username) {
+		return { domain: stored.domain, confirmedUsername: stored.confirmed_username }
+	}
+	return { domain: host, confirmedUsername: null }
 }
 
 // Inserts or refreshes a remote account and its keys from its document. Never touches a local row (ID-3): a URI on
@@ -236,8 +267,11 @@ export function upsertRemoteActor(db: Db, actor: RemoteActorInput, origin: strin
 	}
 	const published = actor.published === null ? NaN : Date.parse(actor.published)
 	const createdAt = new Date(Number.isNaN(published) || published > now ? now : published).toISOString()
-	const stored = db.first<{ domain: string }>('SELECT domain FROM accounts WHERE uri = ?', actor.uri)?.domain
-	const domain = accountDomain(stored, actor)
+	const stored = db.first<{ domain: string; confirmed_username: string | null }>(
+		'SELECT domain, confirmed_username FROM accounts WHERE uri = ? AND domain IS NOT NULL',
+		actor.uri
+	)
+	const { domain, confirmedUsername } = accountDomain(stored, actor)
 	const values = [
 		actor.uri,
 		actor.username,
@@ -256,6 +290,7 @@ export function upsertRemoteActor(db: Db, actor: RemoteActorInput, origin: strin
 		new Date(now).toISOString(),
 		accountSearchText(actor.username, domain, actor.displayName),
 		createdAt,
+		confirmedUsername,
 	]
 	insertWithFreshId(
 		'accounts',
@@ -263,14 +298,16 @@ export function upsertRemoteActor(db: Db, actor: RemoteActorInput, origin: strin
 		(id) =>
 			db.run(
 				`INSERT INTO accounts (id, uri, username, domain, actor_type, display_name, note, url, avatar_url, header_url,
-					locked, discoverable, inbox_url, shared_inbox_url, raw, fetched_at, search_text, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					locked, discoverable, inbox_url, shared_inbox_url, raw, fetched_at, search_text, created_at,
+					confirmed_username)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT (uri) DO UPDATE SET username = excluded.username, actor_type = excluded.actor_type,
 					display_name = excluded.display_name, note = excluded.note, url = excluded.url,
 					avatar_url = excluded.avatar_url, header_url = excluded.header_url, locked = excluded.locked,
 					discoverable = excluded.discoverable, inbox_url = excluded.inbox_url,
 					shared_inbox_url = excluded.shared_inbox_url, raw = excluded.raw, fetched_at = excluded.fetched_at,
-					search_text = excluded.search_text, domain = excluded.domain
+					search_text = excluded.search_text, domain = excluded.domain,
+					confirmed_username = excluded.confirmed_username
 				WHERE accounts.domain IS NOT NULL`,
 				id,
 				...values
@@ -325,6 +362,29 @@ export function isRetracted(db: Db, actorUri: string, targetUri: string, now: nu
 			now
 		) !== undefined
 	)
+}
+
+// The actor_uri of a deletion that holds for every actor: a status or boost that was stored and deleted by its author
+// is not created again under that uri by anyone, its author or another actor of the same origin (ID-6, ID-7). A Delete
+// of an unknown object stays the actor's own (it cannot suppress another actor's objects never seen here).
+export const ANY_ACTOR = '*'
+
+// Records that the stored object `uri` was deleted. Bounded by the authors' caps: it is written only together with
+// the author's own retraction of the same uri, which counts against MAX_RETRACTIONS_PER_ACTOR, and expires and is
+// swept with it.
+function recordDeletedObject(db: Db, uri: string, now: number): void {
+	db.run(
+		`INSERT INTO inbound_retractions (actor_uri, target_uri, expires_at) VALUES (?, ?, ?)
+		ON CONFLICT DO UPDATE SET expires_at = excluded.expires_at`,
+		ANY_ACTOR,
+		uri,
+		now + RETRACTION_TTL_MS
+	)
+}
+
+// Whether `uri` may not be created by `actorUri`: the actor retracted it, or it was stored and deleted.
+export function isDeleted(db: Db, actorUri: string, uri: string, now: number): boolean {
+	return isRetracted(db, actorUri, uri, now) || isRetracted(db, ANY_ACTOR, uri, now)
 }
 
 function recordable(actorUri: string, targetUri: string): boolean {
@@ -1189,8 +1249,8 @@ function withdrawLocalBoosts(
 			job.kind,
 			job.key
 		)?.cursor
-		const boost = db.first<{ id: string; uri: string; booster: string }>(
-			`SELECT r.id, r.uri, r.account_id AS booster FROM statuses r JOIN statuses o ON o.id = r.reblog_of_id
+		const boost = db.first<{ id: string; uri: string; booster: string; withdrawn: number }>(
+			`SELECT r.id, r.uri, r.account_id AS booster, r.withdrawn FROM statuses r JOIN statuses o ON o.id = r.reblog_of_id
 				JOIN local_accounts l ON l.account_id = r.account_id
 			WHERE ${column} = ? ORDER BY r.id = ? DESC, r.id LIMIT 1`,
 			id,
@@ -1199,14 +1259,16 @@ function withdrawLocalBoosts(
 		if (boost === undefined) {
 			return
 		}
-		// A boost is withdrawn once whichever job reaches it first (a status's deletion or its author's purge): a
-		// retraction intent already recorded for it, staged or not, is reused, and both jobs wait for it to finish
-		// staging before they delete the receipts and the boost.
-		if (cursor !== boost.id && !hasRetraction(db, boost.booster, boost.uri)) {
-			// The Undo intent and the earlier intents about the boost it supersedes, then the cursor.
-			if (!withdrawLocalBoost(db, boost.id, now, budget.left() - 1)) {
+		// A boost is withdrawn once whichever job reaches it first (a status's deletion or its author's purge): the
+		// boost row's own marker says its Undo is recorded, however long the intent itself lives (it goes once its
+		// deliveries settle), and both jobs wait for the intent to finish staging before they delete the receipts and
+		// the boost, which takes the marker with it.
+		if (cursor !== boost.id && boost.withdrawn === 0) {
+			// The Undo intent and the earlier intents about the boost it supersedes, then the marker and the cursor.
+			if (!withdrawLocalBoost(db, boost.id, now, budget.left() - 2)) {
 				return
 			}
+			db.run('UPDATE statuses SET withdrawn = 1 WHERE id = ?', boost.id)
 			db.run('UPDATE inbound_jobs SET cursor = ? WHERE kind = ? AND key = ?', boost.id, job.kind, job.key)
 		}
 		// Its targets, a chunk per row, over as many batches as they need; the receipts stay until all are written.
@@ -1220,17 +1282,6 @@ function withdrawLocalBoosts(
 		recountStatuses(db, boost.booster)
 		db.run('UPDATE inbound_jobs SET cursor = NULL WHERE kind = ? AND key = ?', job.kind, job.key)
 	}
-}
-
-// Whether a retraction (an Undo) of the local boost `uri` by its booster is already recorded and still current.
-function hasRetraction(db: Db, booster: string, uri: string): boolean {
-	return (
-		db.first(
-			'SELECT 1 AS x FROM outbound_activities WHERE account_id = ? AND object_uri = ? AND retracts = 1 AND superseded = 0',
-			booster,
-			uri
-		) !== undefined
-	)
 }
 
 // Deletes a status's children within the budget, and the status itself once none remain (so nothing cascades).
@@ -1374,6 +1425,7 @@ const deleteObject: Handler<'Delete'> = (db, actor, activity, { now }) => {
 	if (!retract(db, actor.uri, activity.object, now)) {
 		return retryLater('retraction-cap')
 	}
+	recordDeletedObject(db, activity.object, now)
 	if (status.reblog_of_id !== null) {
 		removeBoost(db, actor.id, { id: status.id, original: status.reblog_of_id })
 		return applied('boost-deleted')
@@ -1595,7 +1647,7 @@ function newOriginal(
 // may wrap (VIS-6). The local author is notified.
 const announce: Handler<'Announce'> = (db, actor, activity, input) => {
 	const { now } = input
-	if (isRetracted(db, actor.uri, activity.id, now)) {
+	if (isDeleted(db, actor.uri, activity.id, now)) {
 		return ignored('retracted')
 	}
 	if (statusByUri(db, activity.id) !== undefined) {

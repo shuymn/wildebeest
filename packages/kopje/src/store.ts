@@ -147,8 +147,16 @@ export class Store extends DurableObject<Env> {
 
 	// Inbound activities (B1b): the Worker verifies and prepares, the Store authorizes and applies (domain/inbox.ts).
 
-	receiveActivity(callerBuild: string, input: inbox.ReceiveInput) {
-		return this.#kernel.execute(callerBuild, inbox.receiveActivity, input)
+	async receiveActivity(callerBuild: string, input: inbox.ReceiveInput): Promise<inbox.ReceiveResult> {
+		try {
+			return await this.#kernel.execute(callerBuild, inbox.receiveActivity, input)
+		} catch (error) {
+			// Rolled back: a retryable refusal changes nothing (domain/inbox.ts, RetryLater).
+			if (error instanceof inbox.RetryLater) {
+				return inbox.retryResult(error)
+			}
+			throw error
+		}
 	}
 
 	runInboundJobs(callerBuild: string, input: OperationInput<typeof inbox.runInboundJobs>) {

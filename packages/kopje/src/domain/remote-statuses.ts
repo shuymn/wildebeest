@@ -10,7 +10,7 @@ import {
 } from './audience'
 import { userWriteOperation } from './auth'
 import { insertWithFreshId, remoteId } from './ids'
-import { isRetracted, type RemoteActorInput, upsertRemoteActor } from './inbox'
+import { isDeleted, type RemoteActorInput, upsertRemoteActor } from './inbox'
 import { notify } from './notifications'
 import { normalizeSearchText } from './search-text'
 import { presentStatus, type Status } from './status-presenter'
@@ -131,11 +131,13 @@ function remoteTime(value: string | null, now: number): number {
 // How far ahead of the clock a remote version may be (clock skew between servers).
 export const VERSION_SKEW_MS = 5 * 60 * 1000
 
-// A remote version (updated, else published) as stored and compared: a future one counts as now plus the skew, so
-// a version dated far ahead cannot be accepted again and again. NaN if there is none.
+// A remote version (updated, else published) as the remote wrote it, unclamped, so that versions compare by their own
+// order whenever they arrive. NaN if there is none; Infinity if it is more than VERSION_SKEW_MS ahead of the clock,
+// which no Update may be (it is ignored until the clock catches up, so a far-future version cannot be accepted
+// again and again as the clock moves).
 function versionOf(value: string | null, now: number): number {
 	const parsed = value === null ? NaN : Date.parse(value)
-	return Math.min(parsed, now + VERSION_SKEW_MS)
+	return parsed > now + VERSION_SKEW_MS ? Infinity : parsed
 }
 
 export function statusByUri(db: Db, uri: string): StoredStatus | undefined {
@@ -310,8 +312,9 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 	if (input.attributedTo !== null && input.attributedTo !== author.uri) {
 		return { applied: false, reason: 'not-author' }
 	}
-	// ID-7: a Delete that arrived first keeps the object from appearing.
-	if (isRetracted(db, author.uri, input.uri, ctx.now)) {
+	// ID-7: a Delete that arrived first keeps the object from appearing, and a deleted stored object is not created
+	// again by anyone (ID-6).
+	if (isDeleted(db, author.uri, input.uri, ctx.now)) {
 		return { applied: false, reason: 'retracted' }
 	}
 	const existing = statusByUri(db, input.uri)
@@ -350,7 +353,8 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 	}
 	const published = remoteTime(input.published, ctx.now)
 	const updated = input.updated === null ? null : remoteTime(input.updated, ctx.now)
-	const version = versionOf(input.updated ?? input.published, ctx.now)
+	const declared = versionOf(input.updated ?? input.published, ctx.now)
+	const version = Number.isFinite(declared) ? declared : published
 	// Status#carried_over_reply_to_account_id.
 	const replyTarget =
 		parent === undefined
@@ -381,7 +385,7 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 				input.language,
 				iso(published),
 				updated !== null && updated !== published ? iso(updated) : null,
-				Number.isNaN(version) ? iso(published) : iso(version),
+				iso(version),
 				input.raw,
 				searchText(input),
 				iso(ctx.now)
@@ -514,9 +518,14 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	if (input.attributedTo !== null && input.attributedTo !== author.uri) {
 		return { applied: false, reason: 'not-author' }
 	}
-	// ID-7: a status whose Delete was recorded (possibly still being removed) takes no Update.
-	if (isRetracted(db, author.uri, input.uri, ctx.now)) {
+	// ID-7: a status whose Delete was recorded (possibly still being removed) takes no Update, from anyone.
+	if (isDeleted(db, author.uri, input.uri, ctx.now)) {
 		return { applied: false, reason: 'retracted' }
+	}
+	// A version too far ahead changes nothing, an unknown status included: no row, history or notification.
+	const version = versionOf(input.updated, ctx.now)
+	if (version === Infinity) {
+		return { applied: false, reason: 'future' }
 	}
 	const existing = statusByUri(db, input.uri)
 	if (existing === undefined) {
@@ -529,8 +538,7 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	if (existing.account_id !== author.id || existing.reblog_of_id !== null) {
 		return { applied: false, reason: 'not-author' }
 	}
-	// The watermark is the last accepted version, whether or not it changed the history; both sides are clamped.
-	const version = versionOf(input.updated, ctx.now)
+	// The watermark is the last accepted version, whether or not it changed the history, as the remote wrote it.
 	const stored = Date.parse(existing.remote_version ?? existing.edited_at ?? existing.published_at)
 	if (Number.isNaN(version) || version <= stored) {
 		return { applied: false, reason: 'stale' }
@@ -566,11 +574,12 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 		editedAt,
 		existing.id
 	)
-	const mentioned = updateMentions(db, existing, input)
 	// As for a Create: a newly mentioned local account is notified if the status addresses it.
 	const audience = knownAccounts(db, [...input.to, ...input.cc].slice(0, MAX_STATUS_AUDIENCE))
+	const addressed = new Set([...audience.local, ...(ctx.deliveredTo === null ? [] : [ctx.deliveredTo])])
+	const mentioned = updateMentions(db, existing, input, addressed)
 	for (const id of mentioned) {
-		if (audience.local.has(id) || id === ctx.deliveredTo) {
+		if (addressed.has(id)) {
 			notify(db, { recipientId: id, type: 'mention', fromId: author.id, statusId: existing.id, now: ctx.now })
 		}
 	}
@@ -601,7 +610,14 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 
 // ProcessStatusUpdateService#update_mentions!, with the audience of a non-public status kept (see updateRemoteStatus).
 // Returns the accounts that are mentioned now and were not before (silent recipients included).
-function updateMentions(db: Db, existing: StoredStatus, input: RemoteStatusInput): string[] {
+// At the MAX_STATUS_MENTION_ROWS cap, a public or unlisted status admits a newly mentioned local account it addresses
+// in place of a remote recipient no longer mentioned (silent ones first); a non-public audience stays frozen.
+function updateMentions(
+	db: Db,
+	existing: StoredStatus,
+	input: RemoteStatusInput,
+	addressed: ReadonlySet<string>
+): string[] {
 	const hrefs = input.mentions.slice(0, MAX_STATUS_MENTION_TAGS)
 	const known = knownAccounts(db, hrefs)
 	const rows = db.all<{ account_id: string; silent: number }>(
@@ -610,13 +626,24 @@ function updateMentions(db: Db, existing: StoredStatus, input: RemoteStatusInput
 	)
 	const present = new Set(rows.map((row) => row.account_id))
 	const mentionedBefore = new Set(rows.filter((row) => row.silent === 0).map((row) => row.account_id))
-	const room = Math.max(MAX_STATUS_MENTION_ROWS - present.size, 0)
+	let room = Math.max(MAX_STATUS_MENTION_ROWS - present.size, 0)
 	const current = [...new Set(hrefs.flatMap((uri) => known.byUri.get(uri) ?? []))]
 	const added = current.filter((id) => !present.has(id))
-	const allowed = [
-		...current.filter((id) => present.has(id)),
-		...(isDistributable(existing.visibility) ? added.slice(0, room) : []),
-	]
+	const distributable = isDistributable(existing.visibility)
+	const local = added.filter((id) => known.local.has(id) && addressed.has(id))
+	const ordered = [...local, ...added.filter((id) => !local.includes(id))]
+	if (distributable && local.length > room) {
+		room += db.run(
+			`DELETE FROM status_mentions WHERE status_id = ?1 AND account_id IN (SELECT m.account_id FROM status_mentions m
+				LEFT JOIN local_accounts l ON l.account_id = m.account_id
+				WHERE m.status_id = ?1 AND l.account_id IS NULL AND m.account_id NOT IN (SELECT value FROM json_each(?2))
+				ORDER BY m.silent DESC LIMIT ?3)`,
+			existing.id,
+			JSON.stringify(current),
+			local.length - room
+		)
+	}
+	const allowed = [...current.filter((id) => present.has(id)), ...(distributable ? ordered.slice(0, room) : [])]
 	db.run(
 		`UPDATE status_mentions SET silent = 1 WHERE status_id = ?1 AND account_id NOT IN (SELECT value FROM json_each(?2))`,
 		existing.id,

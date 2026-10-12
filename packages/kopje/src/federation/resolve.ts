@@ -3,6 +3,7 @@ import { originOf } from './inbound'
 import { requestBudget } from './loader'
 import { fetchActor } from './remote-actor'
 import { ACTOR_TYPES, idOf, parseRemoteStatus, typeIs } from './remote-status'
+import type { RemoteActorInput } from '../domain/inbox'
 import { ADDRESS_QUERY, type Resolved } from '../domain/remote-statuses'
 import { readConfig, userKek } from '../platform/config'
 import { withinJsonBounds } from '../platform/json-bounds'
@@ -78,13 +79,22 @@ async function resolveWith(loaders: RemoteLoaders, query: string, domain: string
 	return url.host === domain ? NONE : resolveUrl(loaders, url.href)
 }
 
+// An actor, with the canonical address its host declares (declaredDomain).
 async function resolveAccount(loaders: RemoteLoaders, uri: string): Promise<Resolved> {
 	const fetched = await fetchActor(uri, loaders.document, loaders.context)
-	return fetched.kind === 'ok' && fetched.input !== null ? { kind: 'account', actor: fetched.input } : NONE
+	if (fetched.kind !== 'ok' || fetched.input === null) {
+		return NONE
+	}
+	const actor = fetched.input
+	const confirmed = await declaredDomain(loaders, actor)
+	return { kind: 'account', actor: confirmed === undefined ? actor : { ...actor, confirmedDomain: confirmed } }
 }
 
-// The actor a WebFinger (RFC 7033) answer for acct:username@host names by its self link, or null.
-async function selfLink(loaders: RemoteLoaders, username: string, host: string): Promise<string | null> {
+type WebFinger = { subject: string | null; self: string | null }
+
+// A WebFinger (RFC 7033) answer for acct:username@host: its subject and the actor its self link names, or null when
+// there is no usable answer.
+async function webfingerAt(loaders: RemoteLoaders, username: string, host: string): Promise<WebFinger | null> {
 	const resource = `acct:${username}@${host}`
 	let jrd: unknown
 	try {
@@ -96,7 +106,7 @@ async function selfLink(loaders: RemoteLoaders, username: string, host: string):
 	if (!withinJsonBounds(jrd) || typeof jrd !== 'object' || jrd === null) {
 		return null
 	}
-	const links = (jrd as { links?: unknown }).links
+	const { subject, links } = jrd as { subject?: unknown; links?: unknown }
 	const self = (Array.isArray(links) ? links : []).find(
 		(link): link is { href: string } =>
 			typeof link === 'object' &&
@@ -106,27 +116,52 @@ async function selfLink(loaders: RemoteLoaders, username: string, host: string):
 			typeof (link as { type?: unknown }).type === 'string' &&
 			/^application\/(activity\+json|ld\+json)/.test((link as { type: string }).type)
 	)
-	return self?.href ?? null
+	return { subject: typeof subject === 'string' ? subject : null, self: self?.href ?? null }
 }
 
-// An address: the actor its WebFinger names. When that actor lives on another host than the address's domain, the
-// domain becomes the account's only if the claimed domain itself vouches for it: its WebFinger for the actor's own
-// username names the same actor id (the lookup just made, when the usernames agree; one more lookup at the claimed
-// domain otherwise). The actor or its host never vouches for another domain. Unconfirmed, the account keeps its host.
+function splitAcct(subject: string | null): { username: string; domain: string } | null {
+	const parts = (subject ?? '').replace(/^acct:/, '').split('@')
+	const [username, domain] = parts
+	return parts.length === 2 && username !== undefined && domain !== undefined && username !== '' && domain !== ''
+		? { username, domain: domain.toLowerCase() }
+		: null
+}
+
+// The canonical domain of an actor's address, as Mastodon's ActivityPub::ProcessAccountService#check_webfinger! and
+// ResolveAccountService#process_webfinger! decide it (v4.7.3): the actor's own host declares the address in the subject
+// of its WebFinger for acct:<preferredUsername>@<host>, and a subject on another domain is only a candidate, which
+// that domain must confirm: its WebFinger for the subject names the same actor id as self. Confirmed: the candidate;
+// the host's answer naming the actor under its own name, or any answer that does not confirm: the host. undefined
+// when the host gives no usable answer (the Store then keeps what it has for this exact username, accountDomain).
+// The address a search was made with plays no part: an alias never sets or replaces the canonical domain.
+async function declaredDomain(loaders: RemoteLoaders, actor: RemoteActorInput): Promise<string | undefined> {
+	const host = new URL(actor.uri).host.toLowerCase()
+	const declared = await webfingerAt(loaders, actor.username, host)
+	if (declared === null) {
+		return undefined
+	}
+	const subject = splitAcct(declared.subject)
+	if (subject === null || subject.username.toLowerCase() !== actor.username.toLowerCase()) {
+		return host
+	}
+	if (subject.domain === host) {
+		return declared.self === actor.uri ? host : undefined
+	}
+	const candidate = await webfingerAt(loaders, subject.username, subject.domain)
+	const confirmed = splitAcct(candidate?.subject ?? null)
+	return candidate !== null &&
+		candidate.self === actor.uri &&
+		confirmed?.username.toLowerCase() === subject.username.toLowerCase() &&
+		confirmed.domain === subject.domain
+		? subject.domain
+		: host
+}
+
+// An address: the actor its WebFinger names, found by its actor id. Its canonical address is the one its host
+// declares (declaredDomain), never the address searched for.
 async function resolveAddress(loaders: RemoteLoaders, username: string, domain: string): Promise<Resolved> {
-	const href = await selfLink(loaders, username, domain)
-	const fetched = href === null ? null : await fetchActor(href, loaders.document, loaders.context)
-	if (fetched?.kind !== 'ok' || fetched.input === null) {
-		return NONE
-	}
-	const actor = fetched.input
-	if (actor.domain === domain) {
-		return { kind: 'account', actor }
-	}
-	const confirmed =
-		actor.username.toLowerCase() === username.toLowerCase() ||
-		(await selfLink(loaders, actor.username, domain)) === actor.uri
-	return { kind: 'account', actor: confirmed ? { ...actor, confirmedDomain: domain } : actor }
+	const href = (await webfingerAt(loaders, username, domain))?.self ?? null
+	return href === null ? NONE : resolveAccount(loaders, href)
 }
 
 // A URL: an actor, or a status with its author (the author has the status's origin, as for inbound objects).

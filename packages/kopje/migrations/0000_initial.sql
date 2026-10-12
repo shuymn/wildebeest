@@ -38,6 +38,7 @@ CREATE TABLE accounts (
   statuses_count INTEGER NOT NULL DEFAULT 0,
   raw TEXT CHECK (raw IS NULL OR json_valid(raw)),
   fetched_at TEXT,                                -- last remote fetch (refetched asynchronously after 24h)
+  confirmed_username TEXT,                        -- remote: the username a WebFinger domain other than the host was confirmed for
   search_text TEXT,                               -- NFKC, lowercased, whitespace-collapsed; matched with instr
   legacy_id TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -103,7 +104,8 @@ CREATE TABLE statuses (
   language TEXT,
   published_at TEXT NOT NULL,
   edited_at TEXT,
-  remote_version TEXT,                            -- remote: the last accepted version (updated, else published), clamped
+  remote_version TEXT,                            -- remote: the last accepted version (updated, else published)
+  withdrawn INTEGER NOT NULL DEFAULT 0 CHECK (withdrawn IN (0, 1)),  -- local boost whose Undo a deletion or purge recorded
   replies_count INTEGER NOT NULL DEFAULT 0,
   reblogs_count INTEGER NOT NULL DEFAULT 0,
   favourites_count INTEGER NOT NULL DEFAULT 0,
