@@ -26,6 +26,7 @@ import { getSetupState } from './domain/setup'
 import { saveSnapshot } from './domain/snapshot'
 import * as statuses from './domain/statuses'
 import * as timelines from './domain/timelines'
+import { readBackupRecord, writeBackupRecord } from './platform/backup-state'
 import { type ImportAuthority, StoreAdmin } from './platform/store-admin'
 import { StoreKernel, type StoreOperation } from './platform/store-kernel'
 import { buildOf, PACKAGE_VERSION } from './version'
@@ -105,6 +106,18 @@ export class Store extends DurableObject<Env> {
 
 	catalog(_callerBuild: string) {
 		return this.#admin.catalog()
+	}
+
+	// The scheduled backup's progress (platform/backup-state.ts). Bookkeeping like the dump flag, so any caller build
+	// and any Store state (maintenance, a dump or an import) may read and save it.
+	async backupState(_callerBuild: string) {
+		await this.#kernel.state()
+		return readBackupRecord(this.ctx.storage.sql)
+	}
+
+	async backupSave(_callerBuild: string, rev: number, state: unknown) {
+		await this.#kernel.state()
+		return this.ctx.storage.transactionSync(() => writeBackupRecord(this.ctx.storage.sql, rev, state))
 	}
 
 	// Import and configuration mutations name their authority; the Store checks it where it writes (store-admin.ts).
