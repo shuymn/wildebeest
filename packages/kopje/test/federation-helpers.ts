@@ -90,13 +90,12 @@ export async function verifyCavage(request: Request, pubkey: string): Promise<bo
 		[...header.matchAll(/(\w+)="([^"]*)"/g)].map((m) => [m[1], m[2]])
 	)
 	const url = new URL(request.url)
-	const lines = (params.headers ?? '')
-		.split(' ')
-		.map((name: string) =>
-			name === '(request-target)'
-				? `(request-target): ${request.method.toLowerCase()} ${url.pathname}${url.search}`
-				: `${name}: ${request.headers.get(name) ?? ''}`
-		)
+	const lines = (params.headers ?? '').split(' ').map((name: string) =>
+		name === '(request-target)'
+			? `(request-target): ${request.method.toLowerCase()} ${url.pathname}${url.search}`
+			: // Host is the URL's when the header is absent, as Fedify and Mastodon rebuild it.
+				`${name}: ${request.headers.get(name) ?? (name === 'host' ? url.host : '')}`
+	)
 	return crypto.subtle.verify(
 		RSA_ALGORITHM,
 		await importPublicKeyPem(pubkey),
