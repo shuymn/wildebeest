@@ -77,6 +77,6 @@ describe('app skeleton', () => {
 		expect((await request('/inbox', { method: 'POST', body: '{}' })).status).toBe(503)
 
 		await completeSetup(store)
-		expect((await request('/.well-known/webfinger')).status).toBe(404)
+		expect((await request('/.well-known/webfinger')).status).toBe(400)
 	})
 })
