@@ -156,29 +156,59 @@ dump starts, so repeating the finish with the same cursor returns the same trail
 
 ## Import protocol
 
-All of these are `POST` under `/admin/import` with JSON, except `chunk`:
+All of these are `POST` under `/admin/import` with JSON, except `chunk` and `progress`:
 
 | Step | Request | Effect |
 |---|---|---|
-| begin | `{ "header": {...} }` | Checks migrations, catalog and emptiness, then records an import. With the same header it resumes the existing import in whatever phase it reached (`receiving`, `finished`, or `failed` with its report) |
+| begin | `{ "header": {...} }` | Checks migrations, catalog and emptiness, then records an import. An Access admin who sends the same header again resumes that import in the phase it reached (`receiving`, `finished`, `failed` with its report, or `verified` from the receipt). A begin with `IMPORT_TOKEN` also returns `session`, the credential that continues this import |
 | chunk | `?id=<id>&seq=<n>`, raw body of whole statements (≤ 16 MiB) | Validates every statement against the templates. Applies the chunk and the progress record in one `transactionSync` |
 | finish | `{ "id", "trailer" }` | Checks the trailer's tables, statement count, byte count and body SHA-256 against what was received |
-| verify | `{ "id" }`, repeated until `done` | Recomputes row counts and checksums in the Store, then runs `PRAGMA foreign_key_check`. On success it removes the import record, and the Store serves again |
-| reset | `{ "confirm": true }` | Runs `deleteAll()`, which drops the schema too, then the migration runner, then writes the Store's Access rows back. Allowed only under import or for a Store without data |
+| verify | `{ "id" }`, repeated until `done` | Recomputes row counts and checksums in the Store, then runs `PRAGMA foreign_key_check`. On success the import record gives way to a receipt and the Store serves again |
+| progress | `GET ?id=<id>` | The running import, or the receipt of the last verified one (`state: "verified"`, with its report) |
+| reset | `{ "confirm": true, "id"?: "<id>" }` | Runs `deleteAll()`, which drops the schema too, then the migration runner, then writes the Store's Access rows back. Allowed only for the authority of the running import, or for a Store without data |
 
 - Chunk numbers start at 1. The progress record holds `lastSeq` and a chain digest:
   `digest_n = hex(sha256(digest_{n-1} || chunk_n))`, with `digest_0` = the empty string.
 - After any error, read `GET /admin/import/progress` and compare `lastSeq` and `digest`. Do not assume a rollback:
   a timed-out transaction can still be durable.
 - A resent chunk with `seq ≤ lastSeq` is reported as `duplicate` and is not applied again.
-- While an import record exists, every domain operation is refused. A failed verification needs `reset` and a new
-  import.
-- The Store's own Access rows in `instance_settings` are configuration, not data: the team domain shared with
-  `/oauth/authorize` (`access_team_domain`), plus the `/admin` application's `access_admin_aud`, `admin_email` and
-  `access_service_token_client_id`. `/oauth/authorize`'s `access_aud` is ordinary data and travels with the dump.
-  The configuration rows do not make the Store non-empty. Begin moves
-  them into the import record, and they keep authorizing the admin during the import. After a successful
-  verification, any of them that the dump did not bring are written back; imported values win.
-- `IMPORT_TOKEN` (header `Kopje-Import-Token`, at least 32 characters) authorizes these endpoints in two cases:
-  - while the Store is empty and has no Access settings;
-  - for the rest of an import begun with the token.
+- While an import record exists, every domain operation is refused and schema upgrades wait. A failed verification
+  needs `reset` and a new import. Verification or reset schedules any upgrade that waited.
+- After verification, a receipt with the import's id, digests and report stays until the next import begins. A
+  client whose verify response was lost reads the outcome there.
+
+### Authority
+
+The Store checks each import step's authority inside the transaction that writes:
+
+| Authority | How | What it may do |
+|---|---|---|
+| Access admin | `Cf-Access-Jwt-Assertion` of the `/admin` application | Begin an import and continue only imports begun this way |
+| `IMPORT_TOKEN` | header `Kopje-Import-Token` (at least 32 characters) | Only while the Store is in bootstrap, meaning admin access is not usable. It may read health, version, catalog and config, set the config, and begin an import while the Store also holds no data |
+| import session | header `Kopje-Import-Session`, the `session` that begin returned | Only the import it was issued for: chunk, finish, verify, progress and reset. The Store keeps only its SHA-256 |
+
+A request authorized for one import or mode cannot act on another. `IMPORT_TOKEN` no longer opens anything once the
+import has begun. The CLI keeps the session in `<file>.import.json` (mode 0600). If that file is lost, the token
+import cannot be continued or reset over the API.
+
+### Configuration is not data
+
+`instance_settings` rows that decide who administers the Store are its configuration, not data:
+- `access_team_domain`, the Access team shared with `/oauth/authorize`;
+- `access_admin_aud`, `admin_email` and `access_service_token_client_id` of the `/admin` application.
+
+These rows behave differently from imported data:
+- They do not make the Store non-empty.
+- Begin moves them into the import record, and they keep authorizing the admin during the import.
+- After verification, the Store's own rows come back exactly: imported values of these names are removed, and a name
+  the Store did not have stays absent. A dump never changes who administers the target.
+
+These rows, and the instance values `domain` and `access_aud` (the `/oauth/authorize` application), are set only
+with the explicit config operation, `GET`/`POST /admin/config` with `{ "values": { "<name>": "<value>" | null } }`.
+Either an Access admin calls it, or `IMPORT_TOKEN` while the Store is in bootstrap. It is refused while an import
+runs. The cutover takes the instance values from the legacy settings in this order:
+1. Import the dump.
+2. Set the values with `kopje-admin config --import-token name=value ...`.
+
+`domain` and `access_aud` are ordinary rows, so a dump that carries them restores them, and setting them before the
+import makes the target non-empty.
