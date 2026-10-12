@@ -14,6 +14,7 @@ import { maintenanceError, mastodonError } from '../mastodon/errors'
 import { mastodonApi } from '../mastodon/routes'
 import { readBoundedBody } from '../platform/body'
 import { readConfig } from '../platform/config'
+import { errorFields } from '../platform/error-message'
 import { defaultStore, type StoreResolver } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
 import { generateRsaKeyPair } from '../security/key-wrap'
@@ -135,7 +136,14 @@ export function createApp({
 		if (error instanceof HTTPException) {
 			return mastodonError(error.status, error.message || 'Error')
 		}
-		console.error({ event: 'kopje.error', path: c.req.path, error: error.message })
+		// The route template, not the URL: a path or query can carry a token or content (DATA-5).
+		console.error({
+			event: 'kopje.error',
+			method: c.req.method,
+			route: c.req.routePath,
+			status: 500,
+			...errorFields(error),
+		})
 		return mastodonError(500, 'Internal Server Error')
 	})
 

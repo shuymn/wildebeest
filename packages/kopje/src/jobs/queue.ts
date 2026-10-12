@@ -1,7 +1,7 @@
 import { processInbox, type InboxDeps } from '../federation/inbox'
 import { type SpoolMessage, spoolMessageOptions } from '../federation/spool'
 import { readConfig } from '../platform/config'
-import { errorMessage } from '../platform/error-message'
+import { errorFields } from '../platform/error-message'
 import { StoreUnavailableError } from '../platform/store-errors'
 
 // Delay before a spooled request is offered again while maintenance lasts.
@@ -35,7 +35,7 @@ export async function handleQueue(batch: MessageBatch, env: Env, deps: InboxDeps
 			if (error instanceof StoreUnavailableError) {
 				await requeue(message, body, env.QUEUE)
 			} else {
-				console.error({ event: 'kopje.spool.replay.failed', id: message.id, error: errorMessage(error) })
+				console.error({ event: 'kopje.spool.replay.failed', id: message.id, ...errorFields(error) })
 				message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
 			}
 		}
@@ -48,7 +48,7 @@ async function requeue(message: Message, body: SpoolMessage, queue: Queue): Prom
 		message.ack()
 	} catch (error) {
 		// The copy was not sent; keep the original instead (this one does count as a retry).
-		console.error({ event: 'kopje.spool.requeue.failed', id: message.id, error: errorMessage(error) })
+		console.error({ event: 'kopje.spool.requeue.failed', id: message.id, ...errorFields(error) })
 		message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
 	}
 }
