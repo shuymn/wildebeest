@@ -400,22 +400,33 @@ async function readProgress(client, id, sleep) {
 	}
 }
 
+const RUN_ID = '\\d{4}-\\d{2}-\\d{2}-[0-9a-f]{8}'
+const ATTEMPT_ID = '[0-9a-f]{16}'
+const SOURCE = /^originals\/\d{18}$/
+
+/** @param {string} text */
+function escapeRegExp(text) {
+	return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+class VerifyError extends Error {}
+
 /**
- * Checks decrypted backup files against their decrypted manifest (docs/backup.md): the dump's size and SHA-256, and
- * when given, the encrypted dump's; the media index's, and through it every original the dump references, decrypted
- * under mediaDir at its R2 key (<dir>/originals/<id>). `problems` are files that do not match; `missing` lists the
- * originals the dump references that the backup does not hold (the index says why), so coverage is incomplete.
- * @param {{ io: FileIO, manifestPath: string, dumpPath: string, encryptedPath?: string, indexPath?: string,
+ * Checks decrypted backup files against their decrypted manifest (docs/backup.md), in order, and stops at the first
+ * mismatch: the dump (and the encrypted dump), then the media index, then each original the index marks copied,
+ * decrypted under mediaDir at its key (<dir>/originals/<id>). Every index entry is validated before any is used: its
+ * source must be exactly originals/<18-digit id>, and a copied entry's object must be named under the media/ prefix of
+ * the run that copied it. `problem` is the first mismatch; `missing` lists the originals the dump references that the
+ * backup does not hold, so coverage is incomplete.
+ * @param {{ io: FileIO, manifestPath: string, dumpPath?: string, encryptedPath?: string, indexPath?: string,
  *   mediaDir?: string }} options
  */
 export async function verifyBackup({ io, manifestPath, dumpPath, encryptedPath, indexPath, mediaDir }) {
 	/** @type {any} */
 	const manifest = await readJson(io, manifestPath)
-	if (manifest?.format !== 'kopje-backup' || manifest.version !== 1) {
+	if (manifest?.format !== 'kopje-backup' || manifest.version !== 1 || typeof manifest.id !== 'string') {
 		throw new Error(`${manifestPath} is not a version 1 Kopje backup manifest`)
 	}
-	/** @type {string[]} */
-	const problems = []
 	/** @type {{ source: string, state: string }[]} */
 	const missing = []
 	/**
@@ -426,41 +437,70 @@ export async function verifyBackup({ io, manifestPath, dumpPath, encryptedPath, 
 	const check = async (label, path, expected) => {
 		const size = await io.size(path)
 		if (size === null) {
-			problems.push(`${label}: ${path} does not exist`)
-			return false
+			throw new VerifyError(`${label}: ${path} does not exist`)
 		}
 		if (size !== expected.size) {
-			problems.push(`${label}: ${path} has ${size} bytes, the manifest says ${expected.size}`)
-			return false
+			throw new VerifyError(`${label}: ${path} has ${size} bytes, the manifest says ${expected.size}`)
 		}
 		if ((await io.sha256(path)) !== expected.sha256) {
-			problems.push(`${label}: ${path} does not match the manifest's SHA-256`)
-			return false
+			throw new VerifyError(`${label}: ${path} does not match the manifest's SHA-256`)
 		}
-		return true
 	}
-	await check('dump', dumpPath, manifest.dump.plaintext)
-	if (encryptedPath !== undefined) {
-		await check('encrypted dump', encryptedPath, manifest.dump)
-	}
-	if (indexPath !== undefined && (await check('media index', indexPath, manifest.mediaIndex.plaintext))) {
-		/** @type {any} */
-		const index = await readJson(io, indexPath)
-		if (index?.format !== 'kopje-backup-media-index' || index.run !== manifest.id || !Array.isArray(index.objects)) {
-			problems.push(`media index: ${indexPath} is not the index of backup ${manifest.id}`)
-		} else {
+	try {
+		const base = new RegExp(`^(.*)backups/${escapeRegExp(manifest.id)}/(${ATTEMPT_ID})/dump\\.kopje\\.age$`).exec(
+			String(manifest.dump?.key)
+		)
+		if (base === null || !new RegExp(`^${RUN_ID}$`).test(manifest.id)) {
+			throw new VerifyError('manifest: the dump key is not a key this backup writes')
+		}
+		const prefix = base[1] ?? ''
+		if (dumpPath !== undefined) {
+			await check('dump', dumpPath, manifest.dump.plaintext)
+		}
+		if (encryptedPath !== undefined) {
+			await check('encrypted dump', encryptedPath, manifest.dump)
+		}
+		if (indexPath !== undefined) {
+			await check('media index', indexPath, manifest.mediaIndex.plaintext)
+			/** @type {any} */
+			const index = await readJson(io, indexPath)
+			if (index?.format !== 'kopje-backup-media-index' || index.run !== manifest.id || !Array.isArray(index.objects)) {
+				throw new VerifyError(`media index: ${indexPath} is not the index of backup ${manifest.id}`)
+			}
+			/** @type {{ source: string, plaintext: { size: number, sha256: string } }[]} */
+			const copied = []
 			for (const entry of index.objects) {
-				if (typeof entry?.source !== 'string' || !/^originals\/\d{18}$/.test(entry.source)) {
-					problems.push('media index: an entry has an unexpected key')
-				} else if (entry.state !== 'copied') {
-					missing.push({ source: entry.source, state: String(entry.state) })
-				} else if (mediaDir !== undefined) {
-					await check('media', `${mediaDir.replace(/\/+$/, '')}/${entry.source}`, entry.plaintext)
+				const source = entry?.source
+				if (typeof source !== 'string' || !SOURCE.test(source)) {
+					throw new VerifyError('media index: an entry names something other than originals/<18-digit id>')
+				}
+				if (entry.state === 'copied') {
+					const key = new RegExp(
+						`^${escapeRegExp(prefix)}media/(${RUN_ID})/${ATTEMPT_ID}/${escapeRegExp(source)}\\.age$`
+					).exec(String(entry.key))
+					if (key === null || key[1] !== entry.run) {
+						throw new VerifyError(`media index: the object of ${source} is not under its run's media/ prefix`)
+					}
+					copied.push({ source, plaintext: entry.plaintext })
+				} else if (entry.state === 'pending' || entry.state === 'absent') {
+					missing.push({ source, state: entry.state })
+				} else {
+					throw new VerifyError(`media index: ${source} has an unknown state`)
+				}
+			}
+			if (mediaDir !== undefined) {
+				for (const { source, plaintext } of copied) {
+					await check('media', `${mediaDir.replace(/\/+$/, '')}/${source}`, plaintext)
 				}
 			}
 		}
+	} catch (error) {
+		if (error instanceof VerifyError) {
+			return { manifest, problem: error.message, missing }
+		}
+		throw error
 	}
-	return { manifest, problems, missing }
+	return { manifest, problem: null, missing }
 }
 
 /**

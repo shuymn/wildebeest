@@ -40,12 +40,14 @@ Commands
   pitr bookmark [--at <time>]   current bookmark, or the one for an ISO 8601 time
   pitr restore <bookmark> --yes restore the Store to a bookmark (requires MAINTENANCE=full)
   sql <query> [--limit <n>]     run a single read-only SELECT/WITH statement
-  backup-verify <manifest.json> <dump file>
-                                check a decrypted backup against its decrypted manifest (sizes and SHA-256) before
-                                importing it; works offline, without KOPJE_ADMIN_URL (docs/backup.md). Exits 1 when a
-                                file does not match, 3 when all match but the backup lacks originals the dump uses
+  backup-verify <manifest.json> [<dump file>]
+                                check a decrypted backup against its decrypted manifest (sizes and SHA-256), stopping
+                                at the first mismatch; works offline, without KOPJE_ADMIN_URL (docs/backup.md). Exits 1
+                                when a file does not match, 3 when all match but the backup lacks originals the dump
+                                uses. Give the dump, --index, or both
       --encrypted <file.age>    also check the encrypted dump as downloaded
-      --index <file.json>       also check the decrypted media index and report the media coverage
+      --index <file.json>       check the decrypted media index and every entry in it (run this before downloading
+                                any media), and report the media coverage
       --media <dir>             with --index: also check every original the index lists, decrypted under <dir> at
                                 its key (<dir>/originals/<id>)
 
@@ -176,13 +178,13 @@ export async function run({
 			const { encrypted, index, media } = flags
 			if (
 				manifestPath === undefined ||
-				dumpPath === undefined ||
+				(dumpPath === undefined && index === undefined) ||
 				rest.length > 2 ||
 				[encrypted, index, media].includes(true) ||
 				(media !== undefined && index === undefined)
 			) {
 				throw new UsageError(
-					'backup-verify <manifest.json> <dump file> [--encrypted <file.age>] [--index <file.json> [--media <dir>]]'
+					'backup-verify <manifest.json> [<dump file>] [--encrypted <file.age>] [--index <file.json> [--media <dir>]]'
 				)
 			}
 			const result = await verifyBackup({
@@ -193,10 +195,8 @@ export async function run({
 				indexPath: /** @type {string | undefined} */ (index),
 				mediaDir: /** @type {string | undefined} */ (media),
 			})
-			for (const problem of result.problems) {
-				out.info(problem)
-			}
-			if (result.problems.length > 0) {
+			if (result.problem !== null) {
+				out.info(result.problem)
 				return 1
 			}
 			const { manifest, missing } = result
