@@ -352,3 +352,46 @@ describe('follower lists', () => {
 		expect((await h.request('/api/v1/accounts/999999999999999999/followers')).status).toBe(404)
 	})
 })
+
+describe('edge ids beyond 2^53', () => {
+	// Ids are kept as strings: as JS numbers, 2^53 + 1 and 2^53 + 3 would round to their neighbours.
+	const BIG = ['9007199254740993', '9007199254740995']
+
+	it('pages with exact cursors', async () => {
+		const h = await apiHarness()
+		const star = await seedAccount(h.store, { username: 'star' })
+		const fans = [await seedAccount(h.store, { username: 'fan0' }), await seedAccount(h.store, { username: 'fan1' })]
+		for (const [i, fan] of fans.entries()) {
+			await sql(
+				h.store,
+				"INSERT INTO follows (id, account_id, target_account_id, state) VALUES (?, ?, ?, 'accepted')",
+				BIG[i]!,
+				fan,
+				star
+			)
+		}
+		const first = await h.request(`/api/v1/accounts/${star}/followers?limit=1`)
+		expect((await first.json<Account[]>()).map((a) => a.id)).toEqual([fans[1]])
+		const link = first.headers.get('link') ?? ''
+		expect(link).toContain(`max_id=${BIG[1]}>`)
+		expect(link).toContain(`min_id=${BIG[1]}>`)
+		const next = await h.request(`/api/v1/accounts/${star}/followers?limit=1&max_id=${BIG[1]}`)
+		expect((await next.json<Account[]>()).map((a) => a.id)).toEqual([fans[0]])
+		const newer = await h.request(`/api/v1/accounts/${star}/followers?min_id=${BIG[0]}`)
+		expect((await newer.json<Account[]>()).map((a) => a.id)).toEqual([fans[1]])
+	})
+
+	it('updates the options of an existing follow', async () => {
+		const h = await aliceSession()
+		const bob = await seedAccount(h.store, { username: 'bob' })
+		await sql(
+			h.store,
+			"INSERT INTO follows (id, account_id, target_account_id, state) VALUES (?, ?, ?, 'accepted')",
+			BIG[0]!,
+			h.aliceId,
+			bob
+		)
+		const response = await h.request(`/api/v1/accounts/${bob}/follow`, bearer(h.token, json({ reblogs: false })))
+		expect(await response.json()).toMatchObject({ following: true, showing_reblogs: false })
+	})
+})

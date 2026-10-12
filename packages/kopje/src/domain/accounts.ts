@@ -425,8 +425,8 @@ export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, i
 		return { status: 'forbidden' }
 	}
 	const languages = input.languages === undefined ? undefined : JSON.stringify(input.languages)
-	const existing = db.first<{ id: number }>(
-		'SELECT id FROM follows WHERE account_id = ? AND target_account_id = ?',
+	const existing = db.first(
+		'SELECT 1 AS found FROM follows WHERE account_id = ? AND target_account_id = ?',
 		viewerId,
 		target.id
 	)
@@ -448,12 +448,13 @@ export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, i
 		db.run(
 			`UPDATE follows SET show_reblogs = COALESCE(?, show_reblogs), notify = COALESCE(?, notify),
 				languages = CASE WHEN ? THEN ? ELSE languages END
-			WHERE id = ?`,
+			WHERE account_id = ? AND target_account_id = ?`,
 			bit(input.reblogs),
 			bit(input.notify),
 			languages === undefined ? 0 : 1,
 			languages ?? null,
-			existing.id
+			viewerId,
+			target.id
 		)
 	}
 	recountFollows(db, viewerId, target)
@@ -496,7 +497,8 @@ function relationshipResult(db: Db, viewerId: string, targetId: string): Relatio
 }
 
 // Keyset pages over an edge table's INTEGER id (a paging cursor only). max_id and since_id page backwards from the
-// newest; min_id pages forwards from the given cursor and is returned newest first as well.
+// newest; min_id pages forwards from the given cursor and is returned newest first as well. Cursors stay strings:
+// they are read with CAST(id AS TEXT) and compared in SQL, never as JS numbers (which are exact only up to 2^53).
 export type PageQuery = { maxId?: string; sinceId?: string; minId?: string; limit: number }
 
 export type Page<T> = { items: T[]; newest: string | null; oldest: string | null }
@@ -518,10 +520,11 @@ export const listFollows = readOperation<ListFollowsInput, Page<Account> | null>
 			direction === 'followers' ? ['target_account_id', 'account_id'] : ['account_id', 'target_account_id']
 		const lower = page.minId ?? page.sinceId ?? null
 		const ascending = page.minId !== undefined
-		const rows = db.all<AccountRow & { cursor: number }>(
-			`SELECT f.id AS cursor, ${ACCOUNT_COLUMNS}
+		const rows = db.all<AccountRow & { cursor: string }>(
+			`SELECT CAST(f.id AS TEXT) AS cursor, ${ACCOUNT_COLUMNS}
 		FROM follows f JOIN accounts a ON a.id = f.${other} LEFT JOIN local_accounts l ON l.account_id = a.id
-		WHERE f.${anchor} = ?1 AND f.state = 'accepted' AND (?2 IS NULL OR f.id < ?2) AND (?3 IS NULL OR f.id > ?3)
+		WHERE f.${anchor} = ?1 AND f.state = 'accepted'
+			AND (?2 IS NULL OR f.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR f.id > CAST(?3 AS INTEGER))
 		ORDER BY f.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			id,
 			page.maxId ?? null,
@@ -533,8 +536,8 @@ export const listFollows = readOperation<ListFollowsInput, Page<Account> | null>
 		}
 		return {
 			items: rows.map((row) => presentAccount(row, present)),
-			newest: rows.length === 0 ? null : String(rows[0]!.cursor),
-			oldest: rows.length === 0 ? null : String(rows[rows.length - 1]!.cursor),
+			newest: rows[0]?.cursor ?? null,
+			oldest: rows.at(-1)?.cursor ?? null,
 		}
 	}
 )
