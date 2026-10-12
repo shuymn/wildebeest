@@ -1,5 +1,6 @@
 node_modules/
 packages/backend/dist/
+packages/kopje/dist/
 .wrangler/state/v3/*
 .wrangler/tmp
 /.worktrees/

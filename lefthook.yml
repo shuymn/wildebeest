@@ -17,5 +17,6 @@ pre-push:
     - merge
     - rebase
   jobs:
+    # Runs only the suites the branch can affect; see scripts/test-affected.sh.
     - name: test
-      run: pnpm run test
+      run: bash scripts/test-affected.sh
