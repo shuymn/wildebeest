@@ -263,6 +263,10 @@ export function memoryIO(files = new Map<string, Uint8Array>()) {
 			files.delete(path)
 			return Promise.resolve()
 		},
+		sha256: (path: string) => {
+			const bytes = files.get(path)
+			return Promise.resolve(bytes === undefined ? null : sha256Hex(bytes))
+		},
 		text: (path: string) => new TextDecoder().decode(files.get(path)),
 	}
 	return io

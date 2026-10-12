@@ -399,3 +399,61 @@ async function readProgress(client, id, sleep) {
 		}
 	}
 }
+
+/**
+ * Checks decrypted backup files against their manifest (docs/backup.md): the dump's size and SHA-256, and when given,
+ * the encrypted dump's and each decrypted original's under mediaDir (at its R2 key, e.g. <dir>/originals/<id>).
+ * Returns the problems found; an empty list means every file given matches.
+ * @param {{ io: FileIO, manifestPath: string, dumpPath: string, encryptedPath?: string, mediaDir?: string }} options
+ */
+export async function verifyBackup({ io, manifestPath, dumpPath, encryptedPath, mediaDir }) {
+	const text = await io.readText(manifestPath)
+	if (text === null) {
+		throw new Error(`${manifestPath} does not exist`)
+	}
+	/** @type {any} */
+	let manifest
+	try {
+		manifest = JSON.parse(text)
+	} catch {
+		throw new Error(`${manifestPath} is not JSON; decrypt it first with age -d`)
+	}
+	if (manifest?.format !== 'kopje-backup' || manifest.version !== 1) {
+		throw new Error(`${manifestPath} is not a version 1 Kopje backup manifest`)
+	}
+	/** @type {string[]} */
+	const problems = []
+	/**
+	 * @param {string} label
+	 * @param {string} path
+	 * @param {{ size: number, sha256: string }} expected
+	 */
+	const check = async (label, path, expected) => {
+		const size = await io.size(path)
+		if (size === null) {
+			problems.push(`${label}: ${path} does not exist`)
+			return
+		}
+		if (size !== expected.size) {
+			problems.push(`${label}: ${path} has ${size} bytes, the manifest says ${expected.size}`)
+			return
+		}
+		if ((await io.sha256(path)) !== expected.sha256) {
+			problems.push(`${label}: ${path} does not match the manifest's SHA-256`)
+		}
+	}
+	await check('dump', dumpPath, manifest.dump.plaintext)
+	if (encryptedPath !== undefined) {
+		await check('encrypted dump', encryptedPath, manifest.dump)
+	}
+	if (mediaDir !== undefined) {
+		for (const object of manifest.media.objects) {
+			if (typeof object.source !== 'string' || !/^originals\/\d{18}$/.test(object.source)) {
+				problems.push('media: the manifest lists an unexpected key')
+				continue
+			}
+			await check('media', `${mediaDir.replace(/\/+$/, '')}/${object.source}`, object.plaintext)
+		}
+	}
+	return { manifest, problems }
+}
