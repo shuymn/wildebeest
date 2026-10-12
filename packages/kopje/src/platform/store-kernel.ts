@@ -1,5 +1,6 @@
 import { errorFields, errorMessage } from './error-message'
 import { type MaintenanceReason, storeMaintenanceError } from './store-errors'
+import { activeDump, admitFlags, readFlags } from './store-flags'
 
 export type Migration = { readonly name: string; readonly sql: string }
 
@@ -54,6 +55,10 @@ export type StoreHealth = {
 	upgrading: boolean
 	lastBookmark: string | null
 	databaseSize: number
+	// Operator state (store-flags.ts).
+	maintenance: boolean
+	dump: { id: string; leaseUntil: number } | null
+	import: { id: string; state: string; lastSeq: number } | null
 }
 
 export type KernelOptions = {
@@ -129,6 +134,7 @@ export class StoreKernel {
 		const loaded = await this.#currentState()
 		return this.#transaction(() => {
 			admit(this.#state ?? loaded, operation.kind)
+			admitFlags(readFlags(this.#sql), operation.kind, this.#now())
 			return operation.run(this.#sql, input)
 		})
 	}
@@ -137,16 +143,30 @@ export class StoreKernel {
 	async health(callerBuild: string): Promise<StoreHealth> {
 		const expected = await this.#expectedMigrations()
 		const { schema, hold, upgrading } = await this.#currentState()
+		const flags = readFlags(this.#sql)
+		const dump = activeDump(flags, this.#now())
 		return {
 			build: this.build,
 			callerBuild,
 			versionMatch: callerBuild === this.build,
 			schema: { ...schema, applied: this.#readApplied().map((m) => m.name), expected: expected.map((m) => m.name) },
-			readonly: schema.status !== 'current' || hold !== null || upgrading !== null,
+			readonly:
+				schema.status !== 'current' ||
+				hold !== null ||
+				upgrading !== null ||
+				flags.maintenance !== null ||
+				dump !== null ||
+				flags.import !== null,
 			hold: hold?.reason ?? null,
 			upgrading: upgrading !== null,
 			lastBookmark: this.#readState('upgrade_bookmark'),
 			databaseSize: this.#sql.databaseSize,
+			maintenance: flags.maintenance !== null,
+			dump: dump === null ? null : { id: dump.id, leaseUntil: dump.leaseUntil },
+			import:
+				flags.import === null
+					? null
+					: { id: flags.import.id, state: flags.import.state, lastSeq: flags.import.lastSeq },
 		}
 	}
 
@@ -159,6 +179,33 @@ export class StoreKernel {
 			expected: expected.at(-1)?.name ?? null,
 			applied: this.#readApplied().at(-1)?.name ?? null,
 		}
+	}
+
+	// The applied migrations with their checksums, in order.
+	appliedMigrations(): { name: string; checksum: string }[] {
+		this.#ensureBookkeeping()
+		return this.#readApplied()
+	}
+
+	async state(): Promise<{ schema: SchemaState; held: boolean; upgrading: boolean }> {
+		const { schema, hold, upgrading } = await this.#currentState()
+		return { schema, held: hold !== null, upgrading: upgrading !== null }
+	}
+
+	// Admin action: runs the upgrade again for this build without a new deployment. A hold left by this build is
+	// cleared first; the upgrade then resumes from its marker and verifies, so re-running applied files is not
+	// possible (they are recorded by name and checksum).
+	async retryUpgrade(callerBuild: string): Promise<UpgradeResult> {
+		if (callerBuild !== this.build) {
+			throw storeMaintenanceError('version-mismatch')
+		}
+		const { hold } = await this.#currentState()
+		if (hold !== null) {
+			this.#writeState('hold', null)
+		}
+		this.#state = undefined
+		this.#log({ event: 'kopje.store.upgrade.retry', hold: hold?.reason ?? null })
+		return this.upgrade()
 	}
 
 	// Rescue RPC: the last good document saved under this key (domain/snapshot.ts), or null. It reads kopje_state
@@ -209,6 +256,10 @@ export class StoreKernel {
 		if (schema.status === 'current' && state.upgrading === null) {
 			return { ok: true, bookmark: null, applied: [] }
 		}
+		const blocked = this.#upgradeBlocker()
+		if (blocked !== null) {
+			return this.#defer(blocked)
+		}
 
 		let phase: UpgradePhase = 'bookmark'
 		let marker = state.upgrading
@@ -220,7 +271,10 @@ export class StoreKernel {
 				this.#inject('bookmark')
 				const bookmark = await this.#ctx.storage.getCurrentBookmark()
 				const started: UpgradeMarker = { build: this.build, bookmark, at: this.#now() }
+				// A dump may have taken its lease while the bookmark was awaited: check again in the transaction that
+				// records the upgrade, so the check and the write are atomic.
 				this.#transaction(() => {
+					this.#assertNotFrozen()
 					this.#writeState('upgrade_bookmark', bookmark)
 					this.#writeState('upgrade', JSON.stringify(started))
 				})
@@ -233,6 +287,7 @@ export class StoreKernel {
 			for (const migration of expected.filter((m) => pendingOf(schema).includes(m.name))) {
 				current = migration.name
 				this.#transaction(() => {
+					this.#assertNotFrozen()
 					this.#sql.exec(migration.sql)
 					this.#sql.exec(
 						'INSERT INTO kopje_migrations (name, checksum, applied_at) VALUES (?, ?, ?)',
@@ -259,6 +314,10 @@ export class StoreKernel {
 				return this.#fail(expected, marker.bookmark, 'verify-failed', problem)
 			}
 		} catch (error) {
+			if (error instanceof UpgradeBlocked) {
+				// Nothing was written in the refused transaction; a resumed upgrade continues from its marker.
+				return this.#defer(error)
+			}
 			// An error does not prove a rollback: a timed-out transaction can still be durable. Report what is
 			// actually recorded; #fail re-reads the durable state and the Store stays readonly either way.
 			const failed = current
@@ -271,6 +330,34 @@ export class StoreKernel {
 		this.#state = { schema: { status: 'current' }, hold: null, upgrading: null }
 		this.#log({ event: 'kopje.store.upgrade.done', bookmark: marker.bookmark, applied })
 		return { ok: true, bookmark: marker.bookmark, applied }
+	}
+
+	// A dump reads across many RPCs and must see one schema: try again once its lease ends (finishing the dump
+	// schedules it sooner). An import must land in the schema its header names: the upgrade waits until the import is
+	// verified or reset, which schedule it.
+	async #defer(blocked: UpgradeBlocked): Promise<UpgradeResult> {
+		if (blocked.leaseUntil !== null) {
+			await this.#ctx.storage.setAlarm(blocked.leaseUntil + 1000)
+		}
+		const what = blocked.reason === 'dump-in-progress' ? 'dump' : 'import'
+		return { ok: false, bookmark: null, reason: blocked.reason, detail: `deferred until the ${what} ends` }
+	}
+
+	#upgradeBlocker(): UpgradeBlocked | null {
+		const flags = readFlags(this.#sql)
+		if (flags.import !== null) {
+			return new UpgradeBlocked('import-in-progress', null)
+		}
+		const dump = activeDump(flags, this.#now())
+		return dump === null ? null : new UpgradeBlocked('dump-in-progress', dump.leaseUntil)
+	}
+
+	// Called inside the transactions that record or apply the upgrade, so the check and the write are atomic.
+	#assertNotFrozen(): void {
+		const blocked = this.#upgradeBlocker()
+		if (blocked !== null) {
+			throw blocked
+		}
 	}
 
 	#fail(
@@ -397,6 +484,15 @@ export class StoreKernel {
 		} else {
 			this.#sql.exec('INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)', name, value)
 		}
+	}
+}
+
+class UpgradeBlocked extends Error {
+	constructor(
+		readonly reason: 'dump-in-progress' | 'import-in-progress',
+		readonly leaseUntil: number | null
+	) {
+		super(reason)
 	}
 }
 

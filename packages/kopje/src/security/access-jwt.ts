@@ -1,6 +1,7 @@
 import { createRemoteJWKSet, customFetch, errors, jwtVerify } from 'jose'
 
-// Verifies the Cf-Access-Jwt-Assertion header that Cloudflare Access adds in front of /oauth/authorize, with jose.
+// Verifies the Cf-Access-Jwt-Assertion header that Cloudflare Access adds in front of /oauth/authorize and /admin/*,
+// with jose.
 // The Worker verifies it itself: with static assets bundled, ctx.access is not available. The team domain and AUD
 // come from instance_settings (written by /setup), never from env.
 
@@ -9,6 +10,12 @@ export type AccessSettings = { teamDomain: string; aud: string }
 export type AccessDeps = { fetch: typeof fetch; now: () => number }
 
 export type AccessResult = { ok: true; email: string } | { ok: false; reason: string }
+
+// Who a verified token speaks for: a person (email) or a service token (common_name, its client id). subject is the
+// raw sub claim: Cloudflare documents it as an empty string when authentication was through a service token.
+export type AccessIdentity = { email: string | null; commonName: string | null; subject: string | null }
+
+export type AccessClaimsResult = ({ ok: true } & AccessIdentity) | { ok: false; reason: string }
 
 // Access rotates its signing keys every six weeks, publishes the next key in advance, and keeps a rotated-out key
 // valid for 7 days. So a fetched key set is used for at most 7 days: after that it must be fetched again, and if the
@@ -44,11 +51,12 @@ function keySet(host: string, deps: AccessDeps): ReturnType<typeof createRemoteJ
 	return set
 }
 
-export async function verifyAccessJwt(
+// Verifies signature, issuer, audience and expiry, and returns the identity claims for the caller's own policy.
+export async function verifyAccessClaims(
 	token: string | undefined,
 	settings: AccessSettings,
 	deps: AccessDeps
-): Promise<AccessResult> {
+): Promise<AccessClaimsResult> {
 	if (token === undefined || token === '') {
 		return { ok: false, reason: 'missing assertion' }
 	}
@@ -67,9 +75,23 @@ export async function verifyAccessJwt(
 		// Only the kind of failure is passed on; messages can carry claim values.
 		return { ok: false, reason: error instanceof errors.JOSEError ? error.code : 'unavailable' }
 	}
+	const text = (value: unknown) => (typeof value === 'string' && value !== '' ? value : null)
+	const subject = typeof payload.sub === 'string' ? payload.sub : null
+	return { ok: true, email: text(payload.email), commonName: text(payload.common_name), subject }
+}
+
+export async function verifyAccessJwt(
+	token: string | undefined,
+	settings: AccessSettings,
+	deps: AccessDeps
+): Promise<AccessResult> {
+	const result = await verifyAccessClaims(token, settings, deps)
+	if (!result.ok) {
+		return result
+	}
 	// Service tokens carry no email; only people log in.
-	if (typeof payload.email !== 'string' || payload.email === '') {
+	if (result.email === null) {
 		return { ok: false, reason: 'no email' }
 	}
-	return { ok: true, email: payload.email }
+	return { ok: true, email: result.email }
 }

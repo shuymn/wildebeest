@@ -5,6 +5,9 @@ import { checkKey } from '../security/keyring'
 
 type Check = { ok: boolean; [detail: string]: unknown }
 
+// The Store RPCs the report uses.
+export type HealthStore = Pick<StoreStub, 'health' | 'localKeys'>
+
 export type HealthReport = { ok: boolean; build: string; checks: Record<string, Check> }
 
 // The detailed report: env validity and issues, Store reachability and build, schema version, DB size, and the keys.
@@ -13,7 +16,7 @@ export type HealthReport = { ok: boolean; build: string; checks: Record<string, 
 export async function healthReport(
 	build: string,
 	config: ConfigResult,
-	store: () => StoreStub,
+	store: () => HealthStore,
 	{ checkKeys = true }: { checkKeys?: boolean } = {}
 ): Promise<HealthReport> {
 	const checks: Record<string, Check> = {
@@ -43,7 +46,7 @@ export async function healthReport(
 
 // Every local key (users and the instance actor) must unwrap with the configured KEK, and a signature made with it must
 // verify against the stored public key. An empty KEK is legal but reported as a warning.
-async function keysCheck(build: string, config: Config, store: () => StoreStub): Promise<Check> {
+async function keysCheck(build: string, config: Config, store: () => HealthStore): Promise<Check> {
 	const kek = userKek(config)
 	const warning = kek === '' ? { warning: 'USER_KEK is empty' } : {}
 	try {

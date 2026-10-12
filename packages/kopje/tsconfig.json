@@ -6,6 +6,7 @@
 		"moduleResolution": "bundler",
 		"types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers/types", "vite/client"],
 		"resolveJsonModule": true,
+		"allowJs": true,
 		"noEmit": true,
 		"isolatedModules": true,
 		"forceConsistentCasingInFileNames": true,

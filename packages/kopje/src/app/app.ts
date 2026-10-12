@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 
+import { ADMIN_PREFIX, adminRoutes, isAdminPath } from './admin'
 import { authorizeRoutes } from './authorize'
 import { classifyRequest, decide, type RequestClass } from './gate'
 import { publicHealth } from './health'
@@ -60,6 +61,10 @@ export function createApp({
 	// state to each RPC by operation kind, and a refusal arrives as StoreUnavailableError in onError: inbox requests
 	// are spooled, everything else gets 503.
 	app.use(async (c, next) => {
+		// The admin API authenticates itself and must work in every maintenance mode and with an invalid env.
+		if (isAdminPath(c.req.path)) {
+			return next()
+		}
 		const requestClass = classifyRequest(c.req.method, c.req.path)
 		c.set('requestClass', requestClass)
 		const config = readConfig(c.env)
@@ -89,6 +94,8 @@ export function createApp({
 	})
 
 	app.get('/health', (c) => publicHealth(build(c.env), readConfig(c.env), () => store(c.env)))
+
+	app.route(ADMIN_PREFIX, adminRoutes({ build, now, store, fetch: (input, init) => fetch(input, init) }))
 
 	const setupGate = requireSetup(build, store)
 	for (const path of FEDERATION_PATHS) {

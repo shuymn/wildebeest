@@ -240,7 +240,9 @@ describe('Store migration runner', () => {
 		const error = toStoreUnavailable(await rejectionOf(store.pitrToBookmark('0.0.0-other', lastBookmark!)))
 		expect(error?.reason).toBe('version-mismatch')
 		expect(await store.version('0.0.0-other')).toMatchObject({ build: BUILD })
-		expect(await store.dump('0.0.0-other')).toEqual({ status: 'unimplemented' })
+		const dump = await store.dumpStart('0.0.0-other')
+		expect(dump).toMatchObject({ ok: true })
+		expect(await store.dumpFinish('0.0.0-other', dump.ok ? dump.cursor : null, true)).toMatchObject({ aborted: true })
 		// The object was neither restarted nor rewound.
 		await runInDurableObject(store, (_instance, state) => {
 			expect(state.storage.sql.exec("SELECT value FROM instance_settings WHERE name = 'marker'").toArray()).toEqual([

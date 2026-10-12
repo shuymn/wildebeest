@@ -10,6 +10,9 @@ export const MAINTENANCE_REASONS = [
 	'upgrade-failed',
 	'bookmark-failed',
 	'verify-failed',
+	'maintenance',
+	'dump-in-progress',
+	'import-in-progress',
 	'transient',
 ] as const
 
