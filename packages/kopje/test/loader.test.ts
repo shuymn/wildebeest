@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { createSafeLoader, DOCUMENT_BODY_LIMIT, DOCUMENT_TIMEOUT_MS, type LoaderDeps } from '../src/federation/loader'
+import {
+	createContextLoader,
+	createSafeLoader,
+	DOCUMENT_BODY_LIMIT,
+	DOCUMENT_TIMEOUT_MS,
+	type LoaderDeps,
+} from '../src/federation/loader'
 
 const ACTOR = 'https://remote.example/users/bob'
 const AP = { 'content-type': 'application/activity+json' }
@@ -147,7 +153,7 @@ describe('safe document loader', () => {
 		const { fetch: html } = fakeFetch({
 			[ACTOR]: () => new Response('<html>', { headers: { 'content-type': 'text/html' } }),
 		})
-		await expect(loader(html)(ACTOR)).rejects.toThrow(/Not a JSON document/)
+		await expect(loader(html)(ACTOR)).rejects.toThrow(/Not an ActivityPub document/)
 
 		const { fetch: gone } = fakeFetch({ [ACTOR]: () => new Response('gone', { status: 410 }) })
 		const error = await loader(gone)(ACTOR).catch((e: unknown) => e)
@@ -190,6 +196,62 @@ describe('safe document loader', () => {
 		expect(await loader(fetch)(ACTOR)).toEqual({ contextUrl: context, document: { id: ACTOR }, documentUrl: ACTOR })
 	})
 
+	// GHSA-jhrq-qvrm-qr36: a JSON file uploaded to a remote origin (a media attachment, say) must not pass for an actor or
+	// object of that origin. Mastodon's rule (JsonLdHelper#valid_activitypub_content_type?), with the header parsed.
+	it.each([
+		'application/activity+json',
+		'Application/Activity+JSON; charset=utf-8',
+		'application/ld+json; profile="https://www.w3.org/ns/activitystreams"',
+		'application/ld+json;profile=https://www.w3.org/ns/activitystreams',
+		'APPLICATION/LD+JSON; charset=utf-8; PROFILE="https://example.com/ext https://www.w3.org/ns/activitystreams"',
+	])('accepts an ActivityPub document served as %s', async (contentType) => {
+		const { fetch } = fakeFetch({
+			[ACTOR]: () => Response.json({ id: ACTOR }, { headers: { 'content-type': contentType } }),
+		})
+		expect((await loader(fetch)(ACTOR)).document).toEqual({ id: ACTOR })
+	})
+
+	it.each([
+		'application/json',
+		'application/jrd+json',
+		'application/ld+json',
+		'application/ld+json; profile="https://www.w3.org/ns/activitystreams-evil"',
+		'application/ld+json; profile="http://www.w3.org/ns/activitystreams"',
+		'application/ld+json; foo="x;profile=https://www.w3.org/ns/activitystreams"',
+		'application/activity+jsonx',
+		'application/activity+json; charset=utf-8,application/json',
+		'application/ld+json; profile="https://www.w3.org/ns/activitystreams"; profile="https://example.com/x"',
+		'application/activity+json/x',
+		'text/html',
+		'',
+	])('refuses a document served as %j', async (contentType) => {
+		const { fetch } = fakeFetch({
+			[ACTOR]: () => Response.json({ id: ACTOR }, { headers: { 'content-type': contentType } }),
+		})
+		await expect(loader(fetch)(ACTOR)).rejects.toThrow(/Not an ActivityPub document/)
+	})
+
+	it.each(['application/ld+json', 'application/json', 'application/activity+json'])(
+		'the context loader accepts a JSON-LD context served as %s',
+		async (contentType) => {
+			const url = 'https://remote.example/contexts/litepub.jsonld'
+			const context = { '@context': { toot: 'http://joinmastodon.org/ns#' } }
+			const { fetch, requests } = fakeFetch({
+				[url]: () => Response.json(context, { headers: { 'content-type': contentType } }),
+			})
+			const deps = { fetch, checkHost: () => Promise.resolve(), userAgent: 'Kopje/test' }
+			expect((await createContextLoader(deps)(url)).document).toEqual(context)
+			expect(requests[0]?.headers.get('accept')).toContain('application/ld+json')
+		}
+	)
+
+	it('the context loader refuses non-JSON content', async () => {
+		const url = 'https://remote.example/contexts/x'
+		const { fetch } = fakeFetch({ [url]: () => new Response('<html>', { headers: { 'content-type': 'text/html' } }) })
+		const deps = { fetch, checkHost: () => Promise.resolve(), userAgent: 'Kopje/test' }
+		await expect(createContextLoader(deps)(url)).rejects.toThrow(/Not a JSON-LD context/)
+	})
+
 	it('does not follow an alternate-document link', async () => {
 		const { fetch, requests } = fakeFetch({
 			[ACTOR]: () =>
@@ -203,7 +265,9 @@ describe('safe document loader', () => {
 					}
 				),
 		})
-		await expect(loader(fetch)(ACTOR)).rejects.toThrow(/alternate/)
+		// Only the context loader lets plain JSON reach Fedify's parser, which is where alternate links are looked for.
+		const deps = { fetch, checkHost: () => Promise.resolve(), userAgent: 'Kopje/test' }
+		await expect(createContextLoader(deps)(ACTOR)).rejects.toThrow(/alternate/)
 		expect(requests).toHaveLength(1)
 	})
 })

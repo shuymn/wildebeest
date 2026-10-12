@@ -9,6 +9,7 @@ import {
 
 import { readBoundedBody } from '../platform/body'
 import { errorMessage } from '../platform/error-message'
+import { isActivityPubMediaType, type MediaType, parseMediaType } from '../platform/media-type'
 
 // The document loader every remote fetch goes through, unsigned or signed. Fedify's default allows http, 16 MiB
 // bodies and 10 s per call, so it is replaced (design §4 連合, §7). The rules, each from a legacy security fix:
@@ -18,12 +19,36 @@ import { errorMessage } from '../platform/error-message'
 //   - the whole load, redirects and body included, ends after 5 s
 //   - the origin is judged from the final response.url; a redirect to another origin is refused
 //   - the document's id must have the origin of the URL it was fetched from
+//   - a document is taken only as application/activity+json or ActivityStreams-profiled application/ld+json
+//     (isActivityPubMediaType, GHSA-jhrq-qvrm-qr36); the context loader alone takes plain JSON-LD or JSON, since JSON-LD
+//     contexts are served that way and a context is never trusted as an object
 export const DOCUMENT_BODY_LIMIT = 1024 * 1024
 export const DOCUMENT_TIMEOUT_MS = 5000
 const MAX_REDIRECTS = 5
 
-const ACCEPT = 'application/activity+json, application/ld+json; profile="https://www.w3.org/ns/activitystreams"'
-const JSON_TYPES = /^application\/(activity\+json|ld\+json|json|jrd\+json)\s*(;|$)/i
+type Kind = {
+	accept: string
+	// Whether the parsed Content-Type is acceptable, and the message when it is not.
+	accepts: (media: MediaType) => boolean
+	refusal: string
+	// Whether the document must be a JSON object (see requireObjectRoot).
+	objectRoot: boolean
+}
+
+const DOCUMENT: Kind = {
+	accept: 'application/activity+json, application/ld+json; profile="https://www.w3.org/ns/activitystreams"',
+	accepts: isActivityPubMediaType,
+	refusal: 'Not an ActivityPub document',
+	objectRoot: true,
+}
+
+const CONTEXT_TYPES = new Set(['application/ld+json', 'application/json', 'application/activity+json'])
+const CONTEXT: Kind = {
+	accept: 'application/ld+json, application/json',
+	accepts: (media) => CONTEXT_TYPES.has(media.essence),
+	refusal: 'Not a JSON-LD context',
+	objectRoot: false,
+}
 
 export type LoaderDeps = {
 	fetch: typeof fetch
@@ -36,7 +61,32 @@ export type RequestSigner = (request: Request) => Promise<Request>
 
 export const dnsCheckHost = (url: URL): Promise<void> => validatePublicUrl(url.href)
 
+// The loader of documents trusted as ActivityPub objects or keys (Fedify's document loaders).
 export function createSafeLoader(deps: LoaderDeps, sign?: RequestSigner): DocumentLoader {
+	return createLoader(deps, DOCUMENT, sign)
+}
+
+// ID-8: an ActivityPub document must be a JSON object. JSON-LD reads a string root as the URL of the real document and
+// fetches it with the context loader, which takes plain JSON, so an uploaded file could become an object or a key.
+// Applied in the loader and again around caches, whose hits do not pass through the loader.
+export function requireObjectRoot(loader: DocumentLoader): DocumentLoader {
+	return async (url, options) => assertObjectRoot(await loader(url, options))
+}
+
+function assertObjectRoot(remote: RemoteDocument): RemoteDocument {
+	const { document } = remote
+	if (typeof document !== 'object' || document === null || Array.isArray(document)) {
+		throw new FetchError(remote.documentUrl, 'Document root is not a JSON object')
+	}
+	return remote
+}
+
+// The loader of JSON-LD contexts (Fedify's context loader), which are never trusted as objects.
+export function createContextLoader(deps: LoaderDeps): DocumentLoader {
+	return createLoader(deps, CONTEXT)
+}
+
+function createLoader(deps: LoaderDeps, kind: Kind, sign?: RequestSigner): DocumentLoader {
 	const timeoutMs = deps.timeoutMs ?? DOCUMENT_TIMEOUT_MS
 	return async (url, options) => {
 		// A signal aborted before the call never fires 'abort' again, so it is checked up front.
@@ -52,7 +102,7 @@ export function createSafeLoader(deps: LoaderDeps, sign?: RequestSigner): Docume
 		const aborted = new Promise<never>((_, reject) => {
 			controller.signal.addEventListener('abort', () => reject(controller.signal.reason as Error), { once: true })
 		})
-		const loading = load(deps, sign, target, controller.signal)
+		const loading = load(deps, kind, sign, target, controller.signal)
 		// After a timeout the abandoned load may still reject; that rejection is not this call's result.
 		loading.catch(() => {})
 		try {
@@ -65,12 +115,12 @@ export function createSafeLoader(deps: LoaderDeps, sign?: RequestSigner): Docume
 	}
 }
 
-async function load(deps: LoaderDeps, sign: RequestSigner | undefined, target: URL, signal: AbortSignal) {
+async function load(deps: LoaderDeps, kind: Kind, sign: RequestSigner | undefined, target: URL, signal: AbortSignal) {
 	let current = target
 	for (let redirects = 0; ; redirects++) {
 		await assertFetchable(current, deps.checkHost ?? dnsCheckHost)
 		const unsigned = new Request(current, {
-			headers: { accept: ACCEPT, 'user-agent': deps.userAgent },
+			headers: { accept: kind.accept, 'user-agent': deps.userAgent },
 			redirect: 'manual',
 			signal,
 		})
@@ -87,11 +137,11 @@ async function load(deps: LoaderDeps, sign: RequestSigner | undefined, target: U
 			current = next
 			continue
 		}
-		return readDocument(response, response.url === '' ? current : new URL(response.url), target)
+		return readDocument(response, kind, response.url === '' ? current : new URL(response.url), target)
 	}
 }
 
-async function readDocument(response: Response, final: URL, target: URL): Promise<RemoteDocument> {
+async function readDocument(response: Response, kind: Kind, final: URL, target: URL): Promise<RemoteDocument> {
 	if (final.origin !== target.origin) {
 		await response.body?.cancel()
 		throw new FetchError(final, `Refused document redirected to ${final.origin}`)
@@ -108,19 +158,23 @@ async function readDocument(response: Response, final: URL, target: URL): Promis
 			})
 		)
 	}
-	if (!JSON_TYPES.test(response.headers.get('content-type') ?? '')) {
+	const media = parseMediaType(response.headers.get('content-type') ?? '')
+	if (media === null || !kind.accepts(media)) {
 		await response.body?.cancel()
-		throw new FetchError(final, `Not a JSON document: ${response.headers.get('content-type')}`)
+		throw new FetchError(final, `${kind.refusal}: ${response.headers.get('content-type')}`)
 	}
 	const body = await readBoundedBody(response, DOCUMENT_BODY_LIMIT)
 	if (body === 'too-large') {
 		throw new FetchError(final, `Document exceeds ${DOCUMENT_BODY_LIMIT} bytes`)
 	}
 	// Fedify parses the bounded bytes, so a JSON-LD context given in a Link header is applied as Fedify applies it.
-	// Alternate-document links are not followed: only JSON types reach this point.
+	// Alternate-document links are not followed: only JSON types reach this point. Fedify compares the Content-Type
+	// case-sensitively, so it is given the parsed essence.
+	const headers = new Headers(response.headers)
+	headers.set('content-type', media.essence)
 	let remote: RemoteDocument
 	try {
-		remote = await getRemoteDocument(final.href, new Response(body, { headers: response.headers }), () =>
+		remote = await getRemoteDocument(final.href, new Response(body, { headers }), () =>
 			Promise.reject(new FetchError(final, 'Refused alternate document link'))
 		)
 	} catch (error) {
@@ -134,7 +188,8 @@ async function readDocument(response: Response, final: URL, target: URL): Promis
 	if (id !== undefined && originOf(id) !== final.origin) {
 		throw new FetchError(final, `Document id ${id} is not on ${final.origin}`)
 	}
-	return { ...remote, documentUrl: final.href }
+	const loaded = { ...remote, documentUrl: final.href }
+	return kind.objectRoot ? assertObjectRoot(loaded) : loaded
 }
 
 function originOf(url: string): string | null {

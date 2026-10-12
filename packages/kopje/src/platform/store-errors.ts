@@ -2,18 +2,21 @@
 // "maintenance" in the message and the Worker decodes it back into a typed error.
 const MAINTENANCE_PREFIX = 'kopje-maintenance: '
 
-export type MaintenanceReason =
-	| 'version-mismatch'
-	| 'schema-pending'
-	| 'schema-diverged'
-	| 'upgrade-in-progress'
-	| 'upgrade-failed'
-	| 'bookmark-failed'
-	| 'verify-failed'
-	| 'maintenance'
-	| 'dump-in-progress'
-	| 'import-in-progress'
-	| 'transient'
+export const MAINTENANCE_REASONS = [
+	'version-mismatch',
+	'schema-pending',
+	'schema-diverged',
+	'upgrade-in-progress',
+	'upgrade-failed',
+	'bookmark-failed',
+	'verify-failed',
+	'maintenance',
+	'dump-in-progress',
+	'import-in-progress',
+	'transient',
+] as const
+
+export type MaintenanceReason = (typeof MAINTENANCE_REASONS)[number]
 
 // Thrown inside the Store.
 export function storeMaintenanceError(reason: MaintenanceReason): Error {

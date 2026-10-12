@@ -3,7 +3,7 @@ import { Application, CryptographicKey, Endpoints, Group, Image, Organization, P
 import { Temporal } from 'temporal-polyfill'
 
 import { DoKvStore } from './kv-store'
-import { createSafeLoader, type LoaderDeps, type RequestSigner } from './loader'
+import { createContextLoader, createSafeLoader, type LoaderDeps, type RequestSigner, requireObjectRoot } from './loader'
 import {
 	type CollectionKind,
 	type CollectionPage,
@@ -14,6 +14,7 @@ import {
 	type StoredKey,
 } from '../domain/actors'
 import type { SnapshotSource } from '../domain/snapshot'
+import { httpUrl } from '../platform/http-url'
 import { PACKAGE_VERSION } from '../platform/package-version'
 import { callStore, type StoreStub } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
@@ -51,7 +52,10 @@ export type FederationDeps = {
 
 const ACTOR_CLASSES = { Person, Service, Group, Organization, Application } as const
 
-const SIGNED_DOCUMENT_PREFIX = ['_fedify', 'signedRemoteDocument'] as const
+// Fedify's kvCache serves a hit without calling the loader, so entries admitted under a looser acceptance policy would
+// outlive a fix for their TTL. Bump the version whenever the document loader's acceptance policy is tightened.
+// v2: ActivityPub media types only and object roots only (ID-8).
+const SIGNED_DOCUMENT_PREFIX = ['_fedify', 'signedRemoteDocument', 'v2'] as const
 
 export function createKopjeFederation(deps: FederationDeps, state: FederationState): Federation<FederationState> {
 	const { build, domain } = deps
@@ -96,18 +100,20 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 	// A signed loader caches per signing key (design §7): what one key was shown must not reach another key or the
 	// unsigned path.
 	const signedLoader = (keyId: URL, sign: () => Promise<RequestSigner>) =>
-		kvCache({
-			loader: async (url, options) => createSafeLoader(loaderDeps, await sign())(url, options),
-			kv,
-			prefix: [...SIGNED_DOCUMENT_PREFIX, keyId.href],
-		})
+		requireObjectRoot(
+			kvCache({
+				loader: async (url, options) => createSafeLoader(loaderDeps, await sign())(url, options),
+				kv,
+				prefix: [...SIGNED_DOCUMENT_PREFIX, keyId.href],
+			})
+		)
 
 	const federation = createFederation<FederationState>({
 		kv,
 		origin,
 		// Fetches with no specific recipient are signed as the instance actor (secure-mode servers refuse unsigned ones).
 		documentLoaderFactory: () => signedLoader(instanceKeyId, async () => (await instanceSigner()).sign),
-		contextLoaderFactory: () => kvCache({ loader: createSafeLoader(loaderDeps), kv }),
+		contextLoaderFactory: () => kvCache({ loader: createContextLoader(loaderDeps), kv }),
 		// Fedify calls this with the recipient's key on a personal inbox.
 		authenticatedDocumentLoaderFactory: ({ keyId, privateKey }) =>
 			signedLoader(keyId, () => Promise.resolve(requestSigner(keyId, privateKey))),
@@ -249,10 +255,16 @@ async function localActorObject(ctx: RequestContext<FederationState>, actor: Loc
 		manuallyApprovesFollowers: actor.locked,
 		discoverable: actor.discoverable,
 		published: Temporal.Instant.from(actor.createdAt),
-		icon: actor.avatarUrl === null ? null : new Image({ url: new URL(actor.avatarUrl) }),
-		image: actor.headerUrl === null ? null : new Image({ url: new URL(actor.headerUrl) }),
-		aliases: actor.alsoKnownAs.map((uri) => new URL(uri)),
+		// Only http(s) URLs are published; anything else stored is left out (HTML-3), aliases included.
+		icon: image(actor.avatarUrl),
+		image: image(actor.headerUrl),
+		aliases: actor.alsoKnownAs.flatMap((uri) => httpUrl(uri) ?? []),
 	})
+}
+
+function image(stored: string | null): Image | null {
+	const url = httpUrl(stored)
+	return url === null ? null : new Image({ url })
 }
 
 // The instance actor, as Mastodon's: an Application at /actor with its own inbox and the shared inbox.

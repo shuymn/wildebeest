@@ -1,5 +1,5 @@
 import type { SnapshotSource } from '../domain/snapshot'
-import { errorMessage } from '../platform/error-message'
+import { errorFields } from '../platform/error-message'
 import { callStore, type StoreStub } from '../platform/store-client'
 import { isSnapshotKey, sha256, type Snapshot } from '../platform/store-kernel'
 
@@ -69,7 +69,7 @@ export function createSnapshotSaver(now: () => number): SnapshotSaver {
 			}
 		} catch (error) {
 			// A refused write (readonly) keeps the previous snapshot, which is what the rescue path should serve anyway.
-			console.warn({ event: 'kopje.snapshot.save-failed', key, error: errorMessage(error) })
+			console.warn({ event: 'kopje.snapshot.save-failed', key, ...errorFields(error) })
 		}
 	}
 }

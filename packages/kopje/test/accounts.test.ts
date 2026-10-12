@@ -170,6 +170,53 @@ describe('account lookup', () => {
 		})
 	})
 
+	// HTML-3: whatever is stored (imported or federated), only http(s) URLs leave the presenter.
+	it.each([
+		'javascript:alert(1)',
+		'JaVaScRiPt:alert(1)',
+		' javascript:alert(1)',
+		'data:image/png;base64,AAAA',
+		'/a.png',
+	])('shows the defaults for a stored avatar, header and profile URL of %j', async (bad) => {
+		const h = await apiHarness()
+		const id = '444444444444444444'
+		await sql(
+			h.store,
+			`INSERT INTO accounts (id, uri, username, domain, url, avatar_url, header_url)
+				VALUES (?, 'https://remote.test/users/x', 'x', 'remote.test', ?, ?, ?)`,
+			id,
+			bad,
+			bad,
+			bad
+		)
+		const response = await h.request(`/api/v1/accounts/${id}`)
+		expect(await response.json()).toMatchObject({
+			url: 'https://remote.test/@x',
+			avatar: 'https://kopje.test/assets/avatar.png',
+			avatar_static: 'https://kopje.test/assets/avatar.png',
+			header: 'https://kopje.test/assets/header.png',
+			header_static: 'https://kopje.test/assets/header.png',
+		})
+	})
+
+	it('shows stored http(s) URLs of any scheme case, normalized', async () => {
+		const h = await apiHarness()
+		const id = '444444444444444444'
+		await sql(
+			h.store,
+			`INSERT INTO accounts (id, uri, username, domain, url, avatar_url, header_url)
+			VALUES (?, 'https://remote.test/users/x', 'x', 'remote.test', 'HTTPS://Remote.test/@x', 'Http://cdn.test/a.png',
+				'https://cdn.test/h.png')`,
+			id
+		)
+		const response = await h.request(`/api/v1/accounts/${id}`)
+		expect(await response.json()).toMatchObject({
+			url: 'https://remote.test/@x',
+			avatar: 'http://cdn.test/a.png',
+			header: 'https://cdn.test/h.png',
+		})
+	})
+
 	it('looks up local and remote accounts by acct', async () => {
 		const h = await apiHarness()
 		const local = await seedAccount(h.store, { username: 'Alice' })

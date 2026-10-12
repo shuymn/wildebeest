@@ -15,6 +15,7 @@ import { maintenanceError, mastodonError } from '../mastodon/errors'
 import { mastodonApi } from '../mastodon/routes'
 import { readBoundedBody } from '../platform/body'
 import { readConfig } from '../platform/config'
+import { errorFields } from '../platform/error-message'
 import { defaultStore, type StoreResolver } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
 import { generateRsaKeyPair } from '../security/key-wrap'
@@ -35,6 +36,9 @@ export type AppDeps = {
 const API_CORS_PATHS = ['/api/*', '/oauth/token', '/oauth/revoke']
 
 type AppEnv = { Bindings: Env; Variables: { requestClass: RequestClass; inboxBody: Uint8Array; domain: string } }
+
+// Methods logged as they are; any other is logged as OTHER (DATA-5).
+const LOGGED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'])
 
 export function createApp({
 	build,
@@ -142,7 +146,14 @@ export function createApp({
 		if (error instanceof HTTPException) {
 			return mastodonError(error.status, error.message || 'Error')
 		}
-		console.error({ event: 'kopje.error', path: c.req.path, error: error.message })
+		// The route template, not the URL: a path or query can carry a token or content (DATA-5).
+		console.error({
+			event: 'kopje.error',
+			method: LOGGED_METHODS.has(c.req.method) ? c.req.method : 'OTHER',
+			route: c.req.routePath,
+			status: 500,
+			...errorFields(error),
+		})
 		return mastodonError(500, 'Internal Server Error')
 	})
 
