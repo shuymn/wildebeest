@@ -1,11 +1,14 @@
+import { FetchError } from '@fedify/fedify'
+
 import { createRemoteLoaders, type FederationDeps, type FederationState, type RemoteLoaders } from './federation'
 import { originOf } from './inbound'
 import { requestBudget } from './loader'
 import { fetchActor } from './remote-actor'
 import { ACTOR_TYPES, idOf, parseRemoteStatus, typeIs } from './remote-status'
 import type { RemoteActorInput } from '../domain/inbox'
-import { ADDRESS_QUERY, type Resolved } from '../domain/remote-statuses'
+import type { Resolved } from '../domain/remote-statuses'
 import { readConfig, userKek } from '../platform/config'
+import { hostDomain, normalizeDomain, parseAddress } from '../platform/domain-name'
 import { withinJsonBounds } from '../platform/json-bounds'
 import { callStore, type StoreResolver } from '../platform/store-client'
 
@@ -64,11 +67,9 @@ export function createResolver(deps: ResolverDeps): Resolver {
 }
 
 async function resolveWith(loaders: RemoteLoaders, query: string, domain: string): Promise<Resolved> {
-	const address = ADDRESS_QUERY.exec(query)
+	const address = parseAddress(query)
 	if (address !== null) {
-		const [, username = '', host = ''] = address
-		const queried = normalizeDomain(host)
-		return queried === null || queried === domain ? NONE : resolveAddress(loaders, username, queried)
+		return address.domain === domain ? NONE : resolveAddress(loaders, address.username, address.domain)
 	}
 	let url: URL
 	try {
@@ -93,16 +94,23 @@ async function resolveAccount(loaders: RemoteLoaders, uri: string): Promise<Reso
 
 type WebFinger = { subject: string | null; self: string | null }
 
-// A WebFinger (RFC 7033) answer for acct:username@host: its subject and the actor its self link names, or null when
-// there is no usable answer.
-async function webfingerAt(loaders: RemoteLoaders, username: string, host: string): Promise<WebFinger | null> {
+// A WebFinger (RFC 7033) answer for acct:username@host: its subject and the actor its self link names; 'missing'
+// when the server answers that there is no such account (404 or 410, an authoritative negative); null when there is no
+// usable answer (a network error, a timeout, a 5xx, the fetch budget, or a document that cannot be read), which
+// proves nothing either way.
+async function webfingerAt(
+	loaders: RemoteLoaders,
+	username: string,
+	host: string
+): Promise<WebFinger | 'missing' | null> {
 	const resource = `acct:${username}@${host}`
 	let jrd: unknown
 	try {
 		jrd = (await loaders.webfinger(`https://${host}/.well-known/webfinger?resource=${encodeURIComponent(resource)}`))
 			.document
-	} catch {
-		return null
+	} catch (error) {
+		const status = error instanceof FetchError ? error.response?.status : undefined
+		return status === 404 || status === 410 ? 'missing' : null
 	}
 	if (!withinJsonBounds(jrd) || typeof jrd !== 'object' || jrd === null) {
 		return null
@@ -118,30 +126,6 @@ async function webfingerAt(loaders: RemoteLoaders, username: string, host: strin
 			/^application\/(activity\+json|ld\+json)/.test((link as { type: string }).type)
 	)
 	return { subject: typeof subject === 'string' ? subject : null, self: self?.href ?? null }
-}
-
-// The one parser of a domain taken from an address or a WebFinger subject: lowercase, IDNA to ASCII (punycode), and
-// only a hostname of at least two labels: no port, userinfo, path, query, trailing dot, IP literal or anything else
-// the URL parser would read differently from the string. null when it is not exactly such a hostname. Domains are
-// queried, compared and stored only in this form.
-export function normalizeDomain(raw: string): string | null {
-	if (raw === '' || /[\s/\\?#@:[\]%]/.test(raw) || raw.endsWith('.')) {
-		return null
-	}
-	let url: URL
-	try {
-		url = new URL(`https://${raw}/`)
-	} catch {
-		return null
-	}
-	const host = url.hostname
-	if (url.port !== '' || url.username !== '' || url.password !== '' || url.pathname !== '/' || url.host !== host) {
-		return null
-	}
-	if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || !host.includes('.') || host.endsWith('.')) {
-		return null
-	}
-	return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host) ? host : null
 }
 
 // The username and domain of a WebFinger subject: acct:<username>@<domain>, exactly one @ and no empty part, with
@@ -166,14 +150,16 @@ function splitAcct(subject: string | null): { username: string; domain: string }
 async function declaredDomain(loaders: RemoteLoaders, actor: RemoteActorInput): Promise<string | undefined> {
 	// The actor's host, in the normalized form; an actor id with a port (or that does not normalize) is not checked:
 	// the Store keeps what it has for this username (accountDomain).
-	const url = new URL(actor.uri)
-	const host = url.port === '' ? normalizeDomain(url.hostname) : null
+	const host = normalizeDomain(hostDomain(actor.uri))
 	if (host === null) {
 		return undefined
 	}
 	const declared = await webfingerAt(loaders, actor.username, host)
 	if (declared === null) {
 		return undefined
+	}
+	if (declared === 'missing') {
+		return host
 	}
 	const subject = splitAcct(declared.subject)
 	if (subject === null || subject.username.toLowerCase() !== actor.username.toLowerCase()) {
@@ -182,9 +168,14 @@ async function declaredDomain(loaders: RemoteLoaders, actor: RemoteActorInput): 
 	if (subject.domain === host) {
 		return declared.self === actor.uri ? host : undefined
 	}
+	// A transient failure at the candidate keeps what is stored for this username; only an authoritative answer
+	// (missing, or naming another subject or actor) gives the host.
 	const candidate = await webfingerAt(loaders, subject.username, subject.domain)
-	const confirmed = splitAcct(candidate?.subject ?? null)
-	return candidate !== null &&
+	if (candidate === null) {
+		return undefined
+	}
+	const confirmed = candidate === 'missing' ? null : splitAcct(candidate.subject)
+	return candidate !== 'missing' &&
 		candidate.self === actor.uri &&
 		confirmed?.username.toLowerCase() === subject.username.toLowerCase() &&
 		confirmed.domain === subject.domain
@@ -195,7 +186,8 @@ async function declaredDomain(loaders: RemoteLoaders, actor: RemoteActorInput): 
 // An address: the actor its WebFinger names, found by its actor id. Its canonical address is the one its host
 // declares (declaredDomain), never the address searched for.
 async function resolveAddress(loaders: RemoteLoaders, username: string, domain: string): Promise<Resolved> {
-	const href = (await webfingerAt(loaders, username, domain))?.self ?? null
+	const found = await webfingerAt(loaders, username, domain)
+	const href = found === null || found === 'missing' ? null : found.self
 	return href === null ? NONE : resolveAccount(loaders, href)
 }
 

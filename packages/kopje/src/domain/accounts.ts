@@ -7,6 +7,7 @@ import { readOperation } from './operation'
 import { htmlToPlainText, plainTextToHtml } from './plain-text'
 import { accountSearchText, queryTerms } from './search-text'
 import type { Db } from '../db/sql'
+import { normalizeDomain, parseAddress } from '../platform/domain-name'
 import { httpUrl } from '../platform/http-url'
 import { sanitizeRemoteHtml } from '../security/html'
 
@@ -251,7 +252,7 @@ export const lookupAccount = readOperation<
 				)
 			: db.first<AccountRow>(
 					`SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM} WHERE a.domain = ? AND lower(a.username) = lower(?)`,
-					domain.toLowerCase(),
+					normalizeDomain(domain) ?? domain.toLowerCase(),
 					username
 				)
 	return row === undefined ? null : presentAccount(row, present)
@@ -451,7 +452,9 @@ export const ACCOUNT_RECENT_LIMIT = 5000
 const PREFIX_END = '\u{10FFFF}'
 
 export function findAccounts(db: Db, input: SearchInput, viewerId: string): Account[] {
-	const query = input.query
+	// An address is read with the shared parser, so a Unicode domain finds the account stored under its punycode.
+	const address = parseAddress(input.query.trim())
+	const query = (address === null ? input.query : `${address.username}@${address.domain}`)
 		.trim()
 		.replace(/^@/, '')
 		.replace(new RegExp(`@${escapeRegExp(input.localDomain)}$`, 'i'), '')

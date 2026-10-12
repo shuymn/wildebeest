@@ -10,8 +10,9 @@ import {
 import { mastodonError } from './errors'
 import { pageQuery } from './pagination'
 import { type Params, parseBoolean } from './params'
-import { ADDRESS_QUERY, isUrlQuery } from '../domain/remote-statuses'
+import { isUrlQuery } from '../domain/remote-statuses'
 import type { SearchType } from '../domain/search'
+import { parseAddress } from '../platform/domain-name'
 import { StoreUnavailableError } from '../platform/store-errors'
 
 // GET /api/v2/search (B4b): accounts, statuses and hashtags from local data (domain/search.ts). Hashtags are recent
@@ -68,7 +69,7 @@ export const search: ApiHandler = async (c, deps) => {
 	const query = parsed.query.trim()
 	const resolving = (parseBoolean(p.get('resolve')) ?? false) && offset === 0
 	let resolved: Found | null = null
-	if (resolving && (isUrlQuery(query) || ADDRESS_QUERY.test(query))) {
+	if (resolving && (isUrlQuery(query) || parseAddress(query) !== null)) {
 		resolved = await resolve(c, deps, query)
 		if (isUrlQuery(query)) {
 			return c.json({

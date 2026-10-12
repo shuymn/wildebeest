@@ -19,6 +19,7 @@ import {
 import { accountSearchText } from './search-text'
 import { recountStatus, recountStatuses, withdrawLocalBoost } from './statuses'
 import type { Db } from '../db/sql'
+import { hostDomain } from '../platform/domain-name'
 
 // Inbound activities about actors and relationships (B1b-1), applied in one Store transaction each. The Worker has
 // already verified the HTTP signature, bound the signer to the actor (ID-1), fetched and sanitized what it needed
@@ -243,7 +244,7 @@ export function accountDomain(
 	stored: { domain: string; confirmed_username: string | null } | undefined,
 	actor: RemoteActorInput
 ): { domain: string; confirmedUsername: string | null } {
-	const host = new URL(actor.uri).host.toLowerCase()
+	const host = hostDomain(actor.uri)
 	if (actor.confirmedDomain !== undefined) {
 		return actor.confirmedDomain === host
 			? { domain: host, confirmedUsername: null }

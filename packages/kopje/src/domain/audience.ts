@@ -55,16 +55,21 @@ export function visibleSql(s: string, viewer: string): string {
 					OR EXISTS (SELECT 1 FROM status_mentions sm WHERE sm.status_id = ${s}.id AND sm.account_id IS ${viewer})))))`
 }
 
-// The host of an actor id (scheme and path dropped), lowercased.
+// The host of an actor id as hostDomain (platform/domain-name.ts) reads it, in SQL: scheme, path and port dropped,
+// lowercased, without a trailing dot. Stored ids are URL hrefs, so an IDN host is already punycode.
 function uriHostSql(uri: string): string {
-	return `lower(substr(${uri}, instr(${uri}, '://') + 3, instr(substr(${uri}, instr(${uri}, '://') + 3) || '/', '/') - 1))`
+	const rest = `substr(${uri}, instr(${uri}, '://') + 3)`
+	const hostPort = `substr(${rest}, 1, instr(${rest} || '/', '/') - 1)`
+	const host = `CASE WHEN instr(${hostPort}, ':') > 0 THEN substr(${hostPort}, 1, instr(${hostPort}, ':') - 1) ELSE ${hostPort} END`
+	return `rtrim(lower(${host}), '.')`
 }
 
-// Whether the domain block row `d` matches the remote account `a`: by its stored domain (a WebFinger domain the
-// resolver confirmed, or its host) or by the host of its actor id, so a confirmed domain elsewhere never lets an
-// account escape a block of the server it lives on.
+// Whether the domain block row `d` matches the remote account `a`: by its stored domain (its canonical address's) or
+// by the host of its actor id, both sides normalized (lowercase, no trailing dot, no port), so neither a confirmed
+// domain elsewhere nor another spelling of the host lets an account escape a block of the server it lives on. Block
+// domains are stored lowercase; an IDN block is matched in its punycode form.
 export function domainBlockMatchSql(d: string, a: string): string {
-	return `(${a}.domain IS NOT NULL AND ${d}.domain IN (${a}.domain, ${uriHostSql(`${a}.uri`)}))`
+	return `(${a}.domain IS NOT NULL AND rtrim(lower(${d}.domain), '.') IN (rtrim(lower(${a}.domain), '.'), ${uriHostSql(`${a}.uri`)}))`
 }
 
 // StatusFilter: what the viewer chose not to see in lists (feeds, context, notifications, bookmarks): authors they

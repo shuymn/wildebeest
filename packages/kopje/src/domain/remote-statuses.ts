@@ -683,10 +683,7 @@ export type Resolved =
 	| { kind: 'none' }
 
 // The queries resolve=true fetches (Mastodon's SearchService#url_query? and AccountSearchService's address forms): an
-// http(s) URL, or user@domain, @user@domain or acct:user@domain.
-export const ADDRESS_QUERY =
-	/^(?:acct:)?@?([a-z0-9_]+(?:[a-z0-9_.-]+[a-z0-9_]+)?)@([a-z0-9-]+(?:\.[a-z0-9-]+)+(?::\d{1,5})?)$/i
-
+// http(s) URL, or an address (parseAddress in platform/domain-name.ts: user@domain, @user@domain or acct:user@domain).
 export function isUrlQuery(query: string): boolean {
 	return /^https?:\/\//i.test(query)
 }
