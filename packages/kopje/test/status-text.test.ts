@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseStatusText, renderStatusHtml, statusLength } from '../src/domain/status-text'
+import {
+	exceedsRawLength,
+	MAX_RAW_LENGTH,
+	MAX_URL_LENGTH,
+	parseStatusText,
+	renderStatusHtml,
+	statusLength,
+} from '../src/domain/status-text'
 
 const KNOWN: Record<string, string> = {
 	'bob@': 'https://kopje.test/@bob',
@@ -84,5 +91,23 @@ describe('status length (StatusLengthValidator)', () => {
 		expect(statusLength(`https://example.com/${'x'.repeat(100)}`, '')).toBe(23)
 		expect(statusLength('@carol@remote.example', '')).toBe('@carol'.length)
 		expect(statusLength('abc', 'cw')).toBe(5)
+	})
+})
+
+describe('raw input bound', () => {
+	it('refuses to parse text over the bound, and counts text and spoiler together', () => {
+		expect(() => parseStatusText('x'.repeat(MAX_RAW_LENGTH + 1))).toThrow(RangeError)
+		expect(() => statusLength('x'.repeat(MAX_RAW_LENGTH + 1), '')).toThrow(RangeError)
+		expect(parseStatusText('x'.repeat(MAX_RAW_LENGTH)).segments).toHaveLength(1)
+		expect(exceedsRawLength('x'.repeat(MAX_RAW_LENGTH), '')).toBe(false)
+		expect(exceedsRawLength('x'.repeat(MAX_RAW_LENGTH), 'y')).toBe(true)
+	})
+
+	it('does not link a URL longer than twitter-text allows, and counts it as text', () => {
+		const long = `https://example.com/${'p'.repeat(MAX_URL_LENGTH)}`
+		expect(parseStatusText(long).segments).toEqual([{ kind: 'text', text: long }])
+		expect(statusLength(long, '')).toBe(long.length)
+		const longest = `https://example.com/${'p'.repeat(MAX_URL_LENGTH - 'https://example.com/'.length)}`
+		expect(parseStatusText(longest).segments).toEqual([{ kind: 'url', url: longest, text: longest }])
 	})
 })

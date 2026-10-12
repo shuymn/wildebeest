@@ -24,6 +24,19 @@ const MENTION = `(?<![=/${WORD}])@([a-z0-9_]+(?:[a-z0-9_.-]+[a-z0-9_]+)?)(?:@([$
 const HASHTAG = `(?<![=/)${WORD}])#([${WORD}_][${WORD}${TAG_SEPARATORS}]*[${ALPHA}${TAG_SEPARATORS}][${WORD}${TAG_SEPARATORS}]*[${WORD}_]|[${WORD}_]*[${ALPHA}][${WORD}_]*)`
 const ENTITY = new RegExp(`${MENTION}|${HASHTAG}`, 'giu')
 
+// Bounds on the raw input, checked before anything is parsed. statusLength counts a URL as 23 characters and a remote
+// mention by its username, so the counted 500 characters say nothing about the size of the raw text: without a bound,
+// a status padded with long URLs or mention domains could be as large as the request body. Every path that takes
+// status text (posting, editing) refuses text and spoiler longer than this together, with Mastodon's length error.
+// 20 UTF-16 code units per counted character leaves room for 500 graphemes of long emoji sequences.
+export const MAX_RAW_LENGTH = 10_000
+// twitter-text's maximum URL length: a longer run is not a link (and is counted as text).
+export const MAX_URL_LENGTH = 4096
+
+export function exceedsRawLength(text: string, spoilerText: string): boolean {
+	return text.length + spoilerText.length > MAX_RAW_LENGTH
+}
+
 export type MentionRef = { username: string; domain: string | null }
 
 export type Segment =
@@ -34,11 +47,18 @@ export type Segment =
 
 export type ParsedText = { segments: Segment[]; mentions: MentionRef[]; tags: string[] }
 
+// Throws on text over MAX_RAW_LENGTH: callers check exceedsRawLength first, so nothing unbounded is ever parsed.
 export function parseStatusText(source: string): ParsedText {
+	if (source.length > MAX_RAW_LENGTH) {
+		throw new RangeError(`status text over ${MAX_RAW_LENGTH} code units`)
+	}
 	const text = source.replace(/\r\n?/g, '\n')
 	const segments: Segment[] = []
 	let at = 0
 	for (const match of linkify.match(text) ?? []) {
+		if (match.raw.length > MAX_URL_LENGTH) {
+			continue
+		}
 		pushEntities(text.slice(at, match.index), segments)
 		segments.push({ kind: 'url', url: match.url, text: match.raw })
 		at = match.lastIndex
@@ -158,7 +178,7 @@ function graphemeLength(text: string): number {
 	return count
 }
 
-// StatusLengthValidator: grapheme count of the text and the spoiler, where a URL counts as 23 characters and a
+// StatusLengthValidator (for text within MAX_RAW_LENGTH): grapheme count of the text and the spoiler, where a URL counts as 23 characters and a
 // remote mention as its local part only.
 export function statusLength(text: string, spoilerText: string): number {
 	const countable = parseStatusText(text)
