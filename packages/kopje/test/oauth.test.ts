@@ -178,23 +178,17 @@ describe('authorize, consent, token, API call', () => {
 		expect(await sql(h.store, 'SELECT 1 FROM oauth_tokens')).toEqual([])
 	})
 
-	it('validates the request against the registered client', async () => {
+	it('shows client and redirect URI errors on the page, never at an unverified URI', async () => {
 		const h = await withAlice()
 		const app = await registerApp(h, { scopes: 'read' })
 		const assertion = await h.team.assertion()
-		const cases: Record<string, string>[] = [
-			{ redirect_uri: 'https://elsewhere.test/cb' },
-			{ scope: 'write' },
-			{ code_challenge: 'x'.repeat(43), code_challenge_method: 'plain' },
-			{ code_challenge: 'x'.repeat(43) },
-			{ response_type: 'token' },
-		]
-		for (const override of cases) {
+		for (const override of [{ redirect_uri: 'https://elsewhere.test/cb' }, { client_id: 'nope' }]) {
 			const query = new URLSearchParams({
 				response_type: 'code',
 				client_id: app.client_id,
 				redirect_uri: app.redirect_uri,
 				scope: 'read',
+				state: 'st',
 				...override,
 			})
 			const response = await h.request(`/oauth/authorize?${query.toString()}`, {
@@ -203,11 +197,56 @@ describe('authorize, consent, token, API call', () => {
 			expect(response.status, JSON.stringify(override)).toBe(400)
 			expect(response.headers.get('location')).toBeNull()
 		}
-		const unknown = await h.request(
-			`/oauth/authorize?response_type=code&client_id=nope&redirect_uri=${encodeURIComponent(app.redirect_uri)}`,
-			{ headers: { 'cf-access-jwt-assertion': assertion } }
-		)
-		expect(unknown.status).toBe(400)
+	})
+
+	// RFC 6749 §4.1.2.1: once the client and its redirect URI are verified, errors go back to the client.
+	it('redirects later errors to the registered callback with the original state', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h, { scopes: 'read' })
+		const assertion = await h.team.assertion()
+		const cases: [Record<string, string>, string][] = [
+			[{ scope: 'write' }, 'invalid_scope'],
+			[{ scope: 'nonsense' }, 'invalid_scope'],
+			[{ code_challenge: 'x'.repeat(43), code_challenge_method: 'plain' }, 'invalid_request'],
+			[{ code_challenge: 'x'.repeat(43) }, 'invalid_request'],
+			[{ response_type: 'token' }, 'unsupported_response_type'],
+		]
+		for (const [override, error] of cases) {
+			const query = new URLSearchParams({
+				response_type: 'code',
+				client_id: app.client_id,
+				redirect_uri: app.redirect_uri,
+				scope: 'read',
+				state: 'st 1',
+				...override,
+			})
+			const response = await h.request(`/oauth/authorize?${query.toString()}`, {
+				headers: { 'cf-access-jwt-assertion': assertion },
+			})
+			expect(response.status, JSON.stringify(override)).toBe(302)
+			const location = new URL(response.headers.get('location')!)
+			expect(location.origin + location.pathname).toBe(app.redirect_uri)
+			expect(location.searchParams.get('error'), JSON.stringify(override)).toBe(error)
+			expect(location.searchParams.get('state')).toBe('st 1')
+			expect(location.searchParams.get('code')).toBeNull()
+		}
+		// The decision POST validates the same way.
+		const denied = await decide(h, app, 'approve', { scope: 'write', state: 'st 2' })
+		expect(denied.status).toBe(302)
+		expect(Object.fromEntries(new URL(denied.headers.get('location')!).searchParams)).toMatchObject({
+			error: 'invalid_scope',
+			state: 'st 2',
+		})
+		expect(await sql(h.store, 'SELECT 1 FROM oauth_tokens')).toEqual([])
+	})
+
+	it('shows later errors on the page for the out-of-band redirect URI', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h, { scopes: 'read', redirectUri: 'urn:ietf:wg:oauth:2.0:oob' })
+		const response = await consentPage(h, app, { scope: 'write' })
+		expect(response.status).toBe(400)
+		expect(response.headers.get('location')).toBeNull()
+		expect(await response.text()).toContain('invalid_scope')
 	})
 
 	it('refuses an Access identity without a local account', async () => {

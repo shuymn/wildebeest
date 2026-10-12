@@ -48,30 +48,53 @@ type AuthorizationRequest = {
 	codeChallenge: string | null
 }
 
-// Validates the request against the registered client. Errors are shown on the page, never sent to a redirect URI
-// that has not been verified.
-function validate(client: Client, get: (name: string) => string | undefined): AuthorizationRequest | string {
-	if (get('response_type') !== 'code') {
-		return 'The response type is not supported.'
-	}
+type AuthorizationError = { error: string; description: string }
+
+// Validates the request against the registered client in two steps (RFC 6749 §4.1.2.1). The client and its redirect
+// URI come first, and their errors are shown on the page, never sent to a redirect URI that has not been verified.
+// Every later error goes back to the verified redirect URI with the original state (shown on the page for OOB).
+function validateRedirect(client: Client, get: (name: string) => string | undefined): string | null {
 	const only = client.redirectUris.length === 1 ? client.redirectUris[0] : undefined
 	const redirectUri = get('redirect_uri') ?? only
-	if (redirectUri === undefined || !client.redirectUris.includes(redirectUri)) {
-		return 'The redirect URI is not registered for this application.'
+	return redirectUri !== undefined && client.redirectUris.includes(redirectUri) ? redirectUri : null
+}
+
+function validate(
+	client: Client,
+	redirectUri: string,
+	state: string | undefined,
+	get: (name: string) => string | undefined
+): AuthorizationRequest | AuthorizationError {
+	const responseType = get('response_type')
+	if (responseType !== 'code') {
+		return responseType === undefined
+			? { error: 'invalid_request', description: 'The response type is missing.' }
+			: { error: 'unsupported_response_type', description: 'The response type is not supported.' }
 	}
 	const scopes = parseScopes(get('scope'))
 	if (scopes === null || !withinScopes(scopes, client.scopes)) {
-		return 'The requested scope is invalid, unknown, or not allowed for this application.'
+		return {
+			error: 'invalid_scope',
+			description: 'The requested scope is invalid, unknown, or not allowed for this application.',
+		}
 	}
 	const challenge = get('code_challenge')
 	if (challenge !== undefined && (get('code_challenge_method') !== 'S256' || !PKCE_CHALLENGE.test(challenge))) {
-		return 'Only S256 PKCE challenges are supported.'
-	}
-	const state = get('state')
-	if (state !== undefined && state.length > MAX_STATE) {
-		return 'The state parameter is too long.'
+		return { error: 'invalid_request', description: 'Only S256 PKCE challenges are supported.' }
 	}
 	return { client, redirectUri, scopes, state, codeChallenge: challenge ?? null }
+}
+
+// An error after the redirect URI is verified: back to the client, or on the page for OOB.
+function authorizationError(
+	c: Context,
+	redirectUri: string,
+	state: string | undefined,
+	{ error, description }: AuthorizationError
+): Response | Promise<Response> {
+	return redirectUri === OOB_REDIRECT_URI
+		? message(c, 400, 'Authorization failed', `${error}: ${description}`)
+		: redirectTo(redirectUri, { error, error_description: description, state })
 }
 
 type Checked = { request: AuthorizationRequest; email: string } | { response: Response | Promise<Response> }
@@ -95,9 +118,25 @@ async function check(
 	if (context.client === null) {
 		return { response: message(c, 400, 'Unknown application', 'The application is not registered on this server.') }
 	}
-	const request = validate(context.client, get)
-	if (typeof request === 'string') {
-		return { response: message(c, 400, 'Invalid request', request) }
+	const redirectUri = validateRedirect(context.client, get)
+	if (redirectUri === null) {
+		return {
+			response: message(c, 400, 'Invalid request', 'The redirect URI is not registered for this application.'),
+		}
+	}
+	const state = get('state')
+	if (state !== undefined && state.length > MAX_STATE) {
+		// Too long to send back: the error goes without it.
+		return {
+			response: authorizationError(c, redirectUri, undefined, {
+				error: 'invalid_request',
+				description: 'The state parameter is too long.',
+			}),
+		}
+	}
+	const request = validate(context.client, redirectUri, state, get)
+	if ('error' in request) {
+		return { response: authorizationError(c, redirectUri, state, request) }
 	}
 	return { request, email: identity.email }
 }
