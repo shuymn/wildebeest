@@ -1,6 +1,7 @@
 import { type Account, type Present, presentAccountsById } from './accounts'
 import {
 	canView,
+	domainBlockMatchSql,
 	interpretAddressing,
 	isDistributable,
 	isPublicCollection,
@@ -673,12 +674,25 @@ export type ResolveResult = { accounts: Account[]; statuses: Status[] }
 export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db, input, { accountId }) => {
 	const { resolved, now, origin } = input
 	const options = { ...input.present, viewerId: accountId }
+	// What the viewer domain-blocks (by the account's domain or its actor's host) is not answered.
+	const blocked = (id: string) =>
+		db.first(
+			`SELECT 1 AS x FROM accounts a JOIN domain_blocks d ON d.account_id = ?1
+			WHERE a.id = ?2 AND ${domainBlockMatchSql('d', 'a')}`,
+			accountId,
+			id
+		) !== undefined
 	const account = (id: string | undefined): ResolveResult => {
-		const found = id === undefined ? undefined : presentAccountsById(db, [id], input.present).get(id)
+		const found = id === undefined || blocked(id) ? undefined : presentAccountsById(db, [id], input.present).get(id)
 		return { accounts: found === undefined ? [] : [found], statuses: [] }
 	}
 	const status = (id: string | undefined): ResolveResult => {
-		const found = id === undefined || !canView(db, accountId, id) ? null : presentStatus(db, id, options)
+		const author =
+			id === undefined ? undefined : db.first<{ a: string }>('SELECT account_id AS a FROM statuses WHERE id = ?', id)?.a
+		const found =
+			id === undefined || author === undefined || blocked(author) || !canView(db, accountId, id)
+				? null
+				: presentStatus(db, id, options)
 		return { accounts: [], statuses: found === null ? [] : [found] }
 	}
 	switch (resolved.kind) {

@@ -21,7 +21,15 @@ import {
 	undoLikeActivity,
 	updateActivity,
 } from './activities'
-import { type ApiVisibility, canView, isDistributable, listableSql, requiresMention, type Visibility } from './audience'
+import {
+	type ApiVisibility,
+	canView,
+	domainBlockMatchSql,
+	isDistributable,
+	listableSql,
+	requiresMention,
+	type Visibility,
+} from './audience'
 import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
 import { beginRetraction } from './deliveries'
 import { allocateLocalId } from './ids'
@@ -1187,7 +1195,7 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 			EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 AND target_account_id = a.id)
 			OR EXISTS (SELECT 1 FROM blocks WHERE account_id = a.id AND target_account_id = ?1)
 			OR EXISTS (SELECT 1 FROM mutes WHERE account_id = ?1 AND target_account_id = a.id)
-			OR EXISTS (SELECT 1 FROM domain_blocks WHERE account_id = ?1 AND domain = a.domain)))`
+			OR EXISTS (SELECT 1 FROM domain_blocks db WHERE db.account_id = ?1 AND ${domainBlockMatchSql('db', 'a')})))`
 		const lower = page.minId ?? page.sinceId ?? null
 		const rows =
 			kind === 'favourited_by'

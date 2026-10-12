@@ -1,5 +1,5 @@
 import { type Account, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
-import { viewableSql, visibleSql } from './audience'
+import { domainBlockMatchSql, viewableSql, visibleSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { presentStatuses, type Status } from './status-presenter'
 import type { Db } from '../db/sql'
@@ -29,7 +29,7 @@ function shownSql(r: string, type: string, from: string, status: string): string
 		AND NOT EXISTS (SELECT 1 FROM blocks nbb WHERE nbb.account_id = ${from} AND nbb.target_account_id = ${r})
 		AND NOT EXISTS (SELECT 1 FROM mutes nm WHERE nm.account_id = ${r} AND nm.target_account_id = ${from} AND nm.hide_notifications = 1)
 		AND NOT EXISTS (SELECT 1 FROM domain_blocks nd JOIN accounts na ON na.id = ${from}
-			WHERE nd.account_id = ${r} AND nd.domain = na.domain)
+			WHERE nd.account_id = ${r} AND ${domainBlockMatchSql('nd', 'na')})
 		AND (${status} IS NULL OR EXISTS (SELECT 1 FROM statuses s WHERE s.id = ${status} AND ${viewableSql('s', r)}))
 		AND (${type} <> 'reblog' OR EXISTS (SELECT 1 FROM statuses nr
 			WHERE nr.account_id = ${from} AND nr.reblog_of_id = ${status} AND ${visibleSql('nr', r)})))`

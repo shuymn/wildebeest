@@ -110,23 +110,23 @@ async function selfLink(loaders: RemoteLoaders, username: string, host: string):
 }
 
 // An address: the actor its WebFinger names. When that actor lives on another host than the address's domain, the
-// domain is the account's only if it is confirmed the other way: the actor's own username at that domain names the
-// same actor (the lookup just made, when the usernames agree; one more WebFinger otherwise). Unconfirmed, the account
-// keeps its host. The Store's accountDomain decides from this what it stores.
-async function resolveAddress(loaders: RemoteLoaders, username: string, host: string): Promise<Resolved> {
-	const href = await selfLink(loaders, username, host)
+// domain becomes the account's only if the claimed domain itself vouches for it: its WebFinger for the actor's own
+// username names the same actor id (the lookup just made, when the usernames agree; one more lookup at the claimed
+// domain otherwise). The actor or its host never vouches for another domain. Unconfirmed, the account keeps its host.
+async function resolveAddress(loaders: RemoteLoaders, username: string, domain: string): Promise<Resolved> {
+	const href = await selfLink(loaders, username, domain)
 	const fetched = href === null ? null : await fetchActor(href, loaders.document, loaders.context)
 	if (fetched?.kind !== 'ok' || fetched.input === null) {
 		return NONE
 	}
 	const actor = fetched.input
-	if (actor.domain === host) {
+	if (actor.domain === domain) {
 		return { kind: 'account', actor }
 	}
 	const confirmed =
 		actor.username.toLowerCase() === username.toLowerCase() ||
-		(await selfLink(loaders, actor.username, host)) === actor.uri
-	return { kind: 'account', actor: confirmed ? { ...actor, domain: host } : actor }
+		(await selfLink(loaders, actor.username, domain)) === actor.uri
+	return { kind: 'account', actor: confirmed ? { ...actor, confirmedDomain: domain } : actor }
 }
 
 // A URL: an actor, or a status with its author (the author has the status's origin, as for inbound objects).

@@ -1,4 +1,5 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
+import { domainBlockMatchSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { retractFollow } from './inbox'
 import { notify } from './notifications'
@@ -376,7 +377,7 @@ function relationshipsOf(db: Db, viewerId: string, accountIds: string[]): Relati
 			EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 AND target_account_id = a.id) AS blocking,
 			EXISTS (SELECT 1 FROM blocks WHERE account_id = a.id AND target_account_id = ?1) AS blocked_by,
 			m.account_id IS NOT NULL AS muting, m.hide_notifications AS muting_notifications,
-			(a.domain IS NOT NULL AND EXISTS (SELECT 1 FROM domain_blocks WHERE account_id = ?1 AND domain = a.domain))
+			EXISTS (SELECT 1 FROM domain_blocks db WHERE db.account_id = ?1 AND ${domainBlockMatchSql('db', 'a')})
 				AS domain_blocking
 		FROM json_each(?2) j
 		JOIN accounts a ON a.id = j.value
@@ -485,10 +486,13 @@ export function findAccounts(db: Db, input: SearchInput, viewerId: string): Acco
 		.all<{ id: string }>(
 			`WITH candidates(id) AS (${candidates})
 			SELECT a.id FROM candidates c JOIN accounts a ON a.id = c.id LEFT JOIN local_accounts l ON l.account_id = a.id
-			WHERE l.suspended_at IS NULL AND ${where.join(' AND ')}
+			WHERE l.suspended_at IS NULL
+				AND NOT EXISTS (SELECT 1 FROM domain_blocks db WHERE db.account_id = ? AND ${domainBlockMatchSql('db', 'a')})
+				AND ${where.join(' AND ')}
 			ORDER BY lower(a.username) = ? DESC, a.domain IS NULL DESC, a.followers_count DESC, a.id
 			LIMIT ? OFFSET ?`,
 			...candidateParams,
+			viewerId,
 			...terms.flat(),
 			exactUsername,
 			input.limit,
@@ -541,7 +545,7 @@ function followTarget(db: Db, viewerId: string, target: string): TargetRow | nul
 				EXISTS (SELECT 1 FROM blocks WHERE (account_id = ?1 AND target_account_id = a.id)
 					OR (account_id = a.id AND target_account_id = ?1)) AS blocked,
 				l.suspended_at IS NOT NULL AS suspended,
-				(a.domain IS NOT NULL AND EXISTS (SELECT 1 FROM domain_blocks WHERE account_id = ?1 AND domain = a.domain))
+				EXISTS (SELECT 1 FROM domain_blocks db WHERE db.account_id = ?1 AND ${domainBlockMatchSql('db', 'a')})
 					AS domain_blocked
 			FROM accounts a LEFT JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?2`,
 			viewerId,

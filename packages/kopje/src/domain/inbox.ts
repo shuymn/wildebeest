@@ -1,5 +1,5 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
-import { canView, isDistributable, isPublicCollection, type Visibility } from './audience'
+import { canView, domainBlockMatchSql, isDistributable, isPublicCollection, type Visibility } from './audience'
 import { stageRetraction } from './deliveries'
 import { insertWithFreshId, remoteId } from './ids'
 import { notify } from './notifications'
@@ -91,6 +91,9 @@ export type RemoteActorInput = {
 	keys: { id: string; pem: string }[]
 	// The document as received; followers, alsoKnownAs and fields are read from it.
 	raw: string
+	// A WebFinger domain other than the actor's host, set by the search resolver only after the claimed domain's own
+	// WebFinger named this actor (federation/resolve.ts). Never set from a document.
+	confirmedDomain?: string
 }
 
 // The object of an Accept, Reject or Undo: an id, or an embedded activity (id optional).
@@ -214,12 +217,11 @@ export function isDeletedActor(db: Db, uri: string, now: number): boolean {
 }
 
 // The domain of a remote account's address (its acct), decided here for every path that stores an actor: a WebFinger
-// domain the search resolver confirmed both ways (federation/resolve.ts marks it by giving a domain other than the
-// actor's host), else the domain already stored, else the actor's host. Inbound documents carry the host, so they
-// never replace a confirmed domain, and an account first seen inbound takes a confirmed domain once it is resolved.
+// domain the claimed domain itself confirmed (confirmedDomain), else the domain already stored, else the actor's host.
+// Inbound documents never carry a confirmed domain, so they never replace one, and an account first seen inbound
+// takes a confirmed domain once it is resolved. Domain blocks match the actor's host as well (audience.ts).
 export function accountDomain(stored: string | undefined, actor: RemoteActorInput): string {
-	const host = new URL(actor.uri).host.toLowerCase()
-	return actor.domain !== host ? actor.domain : (stored ?? host)
+	return actor.confirmedDomain ?? stored ?? new URL(actor.uri).host.toLowerCase()
 }
 
 // Inserts or refreshes a remote account and its keys from its document. Never touches a local row (ID-3): a URI on
@@ -523,10 +525,10 @@ const follow: Handler<'Follow'> = (db, actor, activity, { now }) => {
 	)
 	const blocked = db.first(
 		`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 AND target_account_id = ?2)
-			OR EXISTS (SELECT 1 FROM domain_blocks WHERE account_id = ?1 AND domain = ?3)`,
+			OR EXISTS (SELECT 1 FROM domain_blocks d JOIN accounts a ON a.id = ?2
+				WHERE d.account_id = ?1 AND ${domainBlockMatchSql('d', 'a')})`,
 		target.id,
-		actor.id,
-		actor.domain
+		actor.id
 	)
 	if (blocked !== undefined) {
 		// Refused with a Reject. The id is recorded as dead, so a replay sends no second Reject (ID-7); if it cannot be
@@ -931,7 +933,7 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 			follower.id === target.id ||
 			blockedEitherWay(db, follower.id, target.id) ||
 			db.first(
-				`SELECT 1 AS x FROM domain_blocks d JOIN accounts a ON a.id = ?2 WHERE d.account_id = ?1 AND d.domain = a.domain`,
+				`SELECT 1 AS x FROM domain_blocks d JOIN accounts a ON a.id = ?2 WHERE d.account_id = ?1 AND ${domainBlockMatchSql('d', 'a')}`,
 				follower.id,
 				target.id
 			) !== undefined

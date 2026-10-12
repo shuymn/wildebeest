@@ -55,6 +55,18 @@ export function visibleSql(s: string, viewer: string): string {
 					OR EXISTS (SELECT 1 FROM status_mentions sm WHERE sm.status_id = ${s}.id AND sm.account_id IS ${viewer})))))`
 }
 
+// The host of an actor id (scheme and path dropped), lowercased.
+function uriHostSql(uri: string): string {
+	return `lower(substr(${uri}, instr(${uri}, '://') + 3, instr(substr(${uri}, instr(${uri}, '://') + 3) || '/', '/') - 1))`
+}
+
+// Whether the domain block row `d` matches the remote account `a`: by its stored domain (a WebFinger domain the
+// resolver confirmed, or its host) or by the host of its actor id, so a confirmed domain elsewhere never lets an
+// account escape a block of the server it lives on.
+export function domainBlockMatchSql(d: string, a: string): string {
+	return `(${a}.domain IS NOT NULL AND ${d}.domain IN (${a}.domain, ${uriHostSql(`${a}.uri`)}))`
+}
+
 // StatusFilter: what the viewer chose not to see in lists (feeds, context, notifications, bookmarks): authors they
 // block, mute, or whose domain they block. Their own statuses always pass; an anonymous viewer filters nothing.
 export function unfilteredSql(s: string, viewer: string): string {
@@ -62,7 +74,7 @@ export function unfilteredSql(s: string, viewer: string): string {
 		EXISTS (SELECT 1 FROM blocks vb WHERE vb.account_id IS ${viewer} AND vb.target_account_id = ${s}.account_id)
 		OR EXISTS (SELECT 1 FROM mutes vm WHERE vm.account_id IS ${viewer} AND vm.target_account_id = ${s}.account_id)
 		OR EXISTS (SELECT 1 FROM domain_blocks vd JOIN accounts va ON va.id = ${s}.account_id
-			WHERE vd.account_id IS ${viewer} AND vd.domain = va.domain)))`
+			WHERE vd.account_id IS ${viewer} AND ${domainBlockMatchSql('vd', 'va')})))`
 }
 
 // A status may be shown by itself (GET /statuses/:id): the row is visible and, for a reblog, so is the original.
