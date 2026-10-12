@@ -7,6 +7,7 @@ import { htmlToPlainText, plainTextToHtml } from './plain-text'
 import { accountSearchText, queryTerms } from './search-text'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
+import { sanitizeRemoteHtml } from '../security/html'
 
 // Accounts as the Mastodon API (4.0.2) shows them: one presenter, and the account and relationship operations of B3.
 // Every operation takes an account by its API id or by its legacy id (accounts.legacy_id); both resolve to the same
@@ -35,9 +36,12 @@ export type Account = {
 	statuses_count: number
 	last_status_at: string | null
 	emojis: []
-	fields: []
+	fields: Field[]
 	suspended?: true
 }
+
+// A profile field (Mastodon's Account::Field). Remote fields only: local accounts have none yet.
+export type Field = { name: string; value: string; verified_at: null }
 
 export type Visibility = 'public' | 'unlisted' | 'private' | 'direct'
 
@@ -95,6 +99,8 @@ export type AccountRow = {
 	created_at: string
 	suspended_at: string | null
 	last_status_at: string | null
+	// A remote account's `attachment`, as JSON (fields are read from raw, as the design keeps them).
+	attachment: string | null
 }
 
 export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type, a.display_name, a.note, a.url, a.avatar_url,
@@ -102,7 +108,8 @@ export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type,
 	l.suspended_at,
 	(SELECT substr(s.published_at, 1, 10) FROM statuses s
 		WHERE s.account_id = a.id AND s.visibility IN ('public', 'unlisted', 'private') ORDER BY s.id DESC LIMIT 1)
-		AS last_status_at`
+		AS last_status_at,
+	CASE WHEN a.domain IS NOT NULL THEN a.raw -> '$.attachment' END AS attachment`
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
 
@@ -150,9 +157,44 @@ export function presentAccount(row: AccountRow, { origin }: Present): Account {
 		statuses_count: row.statuses_count,
 		last_status_at: row.last_status_at,
 		emojis: [],
-		fields: [],
+		fields: suspended ? [] : remoteFields(row.attachment),
 		...(suspended ? { suspended: true as const } : {}),
 	}
+}
+
+// Fields a remote profile shows: its PropertyValue attachments (ProcessAccountService#property_values), the name as
+// plain text and the value as sanitized HTML (HTML-1, its links http(s) only, HTML-3), as Mastodon renders them. Kopje's
+// bounds (RES-2): at most MAX_REMOTE_FIELDS, names cut at 255 code units, values at FIELD_VALUE_RAW_LIMIT before
+// sanitizing.
+export const MAX_REMOTE_FIELDS = 16
+const FIELD_NAME_LIMIT = 255
+const FIELD_VALUE_RAW_LIMIT = 4096
+
+function remoteFields(attachment: string | null): Field[] {
+	if (attachment === null) {
+		return []
+	}
+	const parsed = JSON.parse(attachment) as unknown
+	const fields: Field[] = []
+	for (const entry of Array.isArray(parsed) ? parsed : [parsed]) {
+		if (fields.length >= MAX_REMOTE_FIELDS) {
+			break
+		}
+		if (typeof entry !== 'object' || entry === null) {
+			continue
+		}
+		const { type, name, value } = entry as Record<string, unknown>
+		const types = Array.isArray(type) ? type : [type]
+		if (!types.includes('PropertyValue') || typeof name !== 'string' || typeof value !== 'string') {
+			continue
+		}
+		fields.push({
+			name: name.slice(0, FIELD_NAME_LIMIT),
+			value: sanitizeRemoteHtml(value.slice(0, FIELD_VALUE_RAW_LIMIT)),
+			verified_at: null,
+		})
+	}
+	return fields
 }
 
 // API ids are 18 digits; legacy ids are UUIDs or other short strings. Anything longer is not an id.
