@@ -64,6 +64,8 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 			AND (s.account_id = ?1 OR s.in_reply_to_account_id IS NULL OR s.in_reply_to_account_id IN (?1, s.account_id)
 				OR EXISTS (SELECT 1 FROM follows hr
 					WHERE hr.account_id = ?1 AND hr.target_account_id = s.in_reply_to_account_id AND hr.state = 'accepted'))
+			-- A follow's languages filter its own posts. A boost row has language NULL, so boosts pass whatever the
+			-- original's language, as in Mastodon's FeedManager.
 			AND NOT EXISTS (SELECT 1 FROM follows hl WHERE hl.account_id = ?1 AND hl.target_account_id = s.account_id
 				AND hl.languages IS NOT NULL AND s.language IS NOT NULL
 				AND s.language NOT IN (SELECT value FROM json_each(hl.languages)))`

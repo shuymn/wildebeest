@@ -225,3 +225,39 @@ describe('cursors', () => {
 		expect(response.headers.get('link')).toContain(`max_id=${high}>; rel="next"`)
 	})
 })
+
+describe('cursor and filter edge cases', () => {
+	it('reads an all-zero cursor as zero', async () => {
+		const h = await community(['alice'])
+		const status = await post(h, h.users.alice, { status: 'x' })
+		expect(await ids(h, '/api/v1/timelines/home?max_id=0000000000000000000', h.users.alice.token)).toEqual([])
+		expect(await ids(h, '/api/v1/timelines/home?since_id=0000000000000000000', h.users.alice.token)).toEqual([
+			status.id,
+		])
+		expect(await ids(h, '/api/v1/timelines/home?min_id=0', h.users.alice.token)).toEqual([status.id])
+	})
+
+	it("does not apply a follow's languages to boosts, which carry no language (as Mastodon)", async () => {
+		const h = await community(['alice', 'bob', 'carol'])
+		const { alice, bob, carol } = h.users
+		await act(h, carol, `/api/v1/accounts/${bob.id}/follow`, { languages: ['ja'] })
+		const english = await post(h, alice, { status: 'hello', language: 'en' })
+		const boost = await (await act(h, bob, `/api/v1/statuses/${english.id}/reblog`)).json<{ id: string }>()
+		await post(h, bob, { status: 'hello too', language: 'en' })
+		expect(await ids(h, '/api/v1/timelines/home', carol.token)).toEqual([boost.id])
+	})
+
+	it('combines a follow’s languages with notify: only posts in its languages notify', async () => {
+		const h = await community(['alice', 'carol'])
+		const { alice, carol } = h.users
+		await act(h, carol, `/api/v1/accounts/${alice.id}/follow`, { languages: ['ja'], notify: true })
+		await post(h, alice, { status: 'hello', language: 'en' })
+		const ja = await post(h, alice, { status: 'こんにちは', language: 'ja' })
+		const unknown = await post(h, alice, { status: '?' })
+		const { body } = await getJson<{ type: string; status: { id: string } }[]>(h, '/api/v1/notifications', carol.token)
+		expect(body.map((n) => [n.type, n.status.id])).toEqual([
+			['status', unknown.id],
+			['status', ja.id],
+		])
+	})
+})

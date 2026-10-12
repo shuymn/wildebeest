@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers'
 
 import { describe, expect, it } from 'vitest'
 
-import { apiHarness, bearer, json, login, seedAccount, sql } from './api-helpers'
+import { apiHarness, bearer, json, login, registerApp, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import * as accounts from '../src/mastodon/accounts'
 import type { ApiHandler } from '../src/mastodon/context'
@@ -68,69 +68,69 @@ describe('authorization inside the Store operation', () => {
 	}
 })
 
-// The same for every B4a write: nothing is written when the token dies between admission and the Store call.
+// The same for every B4a write: nothing is written when the token dies between admission and the Store call. Each
+// operation gets a fresh fixture in which it would write (the edges an undo removes exist, the notification a dismiss
+// removes exists), and every table it could touch is compared, counters included.
 describe('authorization inside the B4a operations', () => {
 	const interferences = {
 		revoked: (store: Parameters<typeof sql>[0]) => sql(store, "DELETE FROM oauth_tokens WHERE kind = 'access'"),
 		suspended: (store: Parameters<typeof sql>[0]) =>
 			sql(store, 'UPDATE local_accounts SET suspended_at = ?', new Date(NOW).toISOString()),
 	}
-
-	for (const [name, interfere] of Object.entries(interferences)) {
-		it(`writes nothing when the token is ${name} before the write`, async () => {
-			const h = await apiHarness()
-			const alice = await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
-			const bob = await seedAccount(h.store, { username: 'bob' })
-			const remote = await seedAccount(h.store, { username: 'fan', domain: 'fans.example' })
-			await sql(
-				h.store,
-				"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
-				remote,
-				alice
-			)
-			const { token } = await login(h)
-			const own = (
-				await (await h.request('/api/v1/statuses', bearer(token, json({ status: 'mine @bob' })))).json<{ id: string }>()
-			).id
-			await sql(
-				h.store,
-				"INSERT INTO statuses (id, uri, account_id, visibility, content, published_at) VALUES ('100000000000000001', 'https://kopje.test/ap/o/b', ?, 'public', '<p>b</p>', '2026-01-01T00:00:00.000Z')",
-				bob
-			)
-			const before = await snapshot(h.store)
-
-			let interfering = true
-			const late =
-				(handler: ApiHandler): ApiHandler =>
-				async (c, deps) => {
-					if (interfering) {
-						await interfere(h.store)
-					}
-					return handler(c, deps)
-				}
-			const api = mastodonApi(
-				{ build: () => env.CF_VERSION_METADATA.id, now: () => NOW, store: () => h.store, randomToken: () => 'late' },
-				ROUTES.map((route) => (route.method === 'GET' ? route : { ...route, handler: late(route.handler) }))
-			)
-			const call = (path: string, init: RequestInit) =>
-				api.fetch(new Request(`https://kopje.test${path}`, init), h.env, createExecutionContext())
-			const writes: [string, RequestInit][] = [
-				['/api/v1/statuses', json({ status: 'new @bob' })],
-				[`/api/v1/statuses/${own}`, json({ status: 'edited' }, { method: 'PUT' })],
-				[`/api/v1/statuses/${own}`, { method: 'DELETE' }],
-				...['favourite', 'reblog', 'bookmark'].map((action): [string, RequestInit] => [
-					`/api/v1/statuses/100000000000000001/${action}`,
-					{ method: 'POST' },
-				]),
-				['/api/v1/notifications/clear', { method: 'POST' }],
+	type Fixture = { own: string; theirs: string; notification: string }
+	const operations: [string, (f: Fixture) => [string, RequestInit]][] = [
+		['post', () => ['/api/v1/statuses', json({ status: 'new @bob #tag' })]],
+		['edit', (f) => [`/api/v1/statuses/${f.own}`, json({ status: 'edited #other' }, { method: 'PUT' })]],
+		['delete', (f) => [`/api/v1/statuses/${f.own}?delete_media=true`, { method: 'DELETE' }]],
+		...(['favourite', 'reblog', 'bookmark', 'unfavourite', 'unreblog', 'unbookmark'] as const).map(
+			(action): [string, (f: Fixture) => [string, RequestInit]] => [
+				action,
+				(f) => [`/api/v1/statuses/${f.theirs}/${action}`, { method: 'POST' }],
 			]
-			for (const [path, init] of writes) {
-				const response = await call(path, bearer(token, init))
-				expect({ path, status: response.status >= 401 && response.status <= 403 }).toEqual({ path, status: true })
-			}
-			interfering = false
-			expect(await snapshot(h.store)).toEqual(before)
-		})
+		),
+		['dismiss', (f) => [`/api/v1/notifications/${f.notification}/dismiss`, { method: 'POST' }]],
+		['clear', () => ['/api/v1/notifications/clear', { method: 'POST' }]],
+	]
+
+	// alice (signed in) has a status with media, a tag and a mention; bob has a status alice already favourited,
+	// boosted and bookmarked; alice has a notification; a remote account follows alice.
+	async function fixture() {
+		const h = await apiHarness()
+		const alice = await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
+		const bob = await seedAccount(h.store, { username: 'bob', email: 'bob@example.com' })
+		const remote = await seedAccount(h.store, { username: 'fan', domain: 'fans.example' })
+		await sql(
+			h.store,
+			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+			remote,
+			alice
+		)
+		const app = await registerApp(h)
+		const { token } = await login(h, { app })
+		const { token: bobToken } = await login(h, { app, email: 'bob@example.com' })
+		await sql(
+			h.store,
+			"INSERT INTO media_attachments (id, account_id, type, url) VALUES ('100000000000000009', ?, 'image', 'u')",
+			alice
+		)
+		const write = async (t: string, path: string, body: Record<string, unknown> = {}) =>
+			(await h.request(path, bearer(t, json(body)))).json<{ id: string }>()
+		const own = (
+			await write(token, '/api/v1/statuses', { status: 'mine @bob #tag', media_ids: ['100000000000000009'] })
+		).id
+		const theirs = (await write(bobToken, '/api/v1/statuses', { status: 'theirs @alice' })).id
+		for (const action of ['favourite', 'reblog', 'bookmark']) {
+			await write(token, `/api/v1/statuses/${theirs}/${action}`)
+		}
+		const [notification] = await sql<{ id: string }>(
+			h.store,
+			'SELECT CAST(id AS TEXT) AS id FROM notifications WHERE account_id = ?',
+			alice
+		)
+		if (notification === undefined) {
+			throw new Error('fixture has no notification')
+		}
+		return { h, token, fixture: { own, theirs, notification: notification.id } }
 	}
 
 	async function snapshot(store: Parameters<typeof sql>[0]) {
@@ -138,16 +138,51 @@ describe('authorization inside the B4a operations', () => {
 			'statuses',
 			'status_edits',
 			'status_mentions',
+			'status_tags',
+			'media_attachments',
 			'favourites',
 			'bookmarks',
 			'notifications',
 			'outbound_activities',
 		]
-		const counts: Record<string, unknown> = {}
+		const rows: Record<string, unknown> = {}
 		for (const table of tables) {
-			counts[table] = await sql(store, `SELECT * FROM ${table} ORDER BY 1`)
+			rows[table] = await sql(store, `SELECT * FROM ${table} ORDER BY 1, 2`)
 		}
-		return counts
+		rows.counters = await sql(
+			store,
+			'SELECT id, statuses_count, followers_count, following_count FROM accounts ORDER BY id'
+		)
+		return rows
+	}
+
+	for (const [name, interfere] of Object.entries(interferences)) {
+		for (const [operation, request] of operations) {
+			it(`writes nothing for ${operation} when the token is ${name} before the write`, async () => {
+				const { h, token, fixture: f } = await fixture()
+				const before = await snapshot(h.store)
+				const late =
+					(handler: ApiHandler): ApiHandler =>
+					async (c, deps) => {
+						await interfere(h.store)
+						return handler(c, deps)
+					}
+				const api = mastodonApi(
+					{ build: () => env.CF_VERSION_METADATA.id, now: () => NOW, store: () => h.store, randomToken: () => 'late' },
+					ROUTES.map((route) => (route.method === 'GET' ? route : { ...route, handler: late(route.handler) }))
+				)
+				const [path, init] = request(f)
+				const response = await api.fetch(
+					new Request(`https://kopje.test${path}`, bearer(token, init)),
+					h.env,
+					createExecutionContext()
+				)
+				expect(response.status).toBeGreaterThanOrEqual(401)
+				expect(response.status).toBeLessThanOrEqual(403)
+				// Revocation deleted the token rows, suspension set suspended_at; nothing else may differ.
+				expect(await snapshot(h.store)).toEqual(before)
+			})
+		}
 	}
 })
 

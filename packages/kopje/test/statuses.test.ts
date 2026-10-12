@@ -779,3 +779,72 @@ describe('review regressions', () => {
 		expect(JSON.stringify(seen.body)).not.toContain('members only')
 	})
 })
+
+describe('edits never widen a non-public audience', () => {
+	const put = (h: Awaited<ReturnType<typeof community>>, token: string, id: string, body: Record<string, unknown>) =>
+		h.request(`/api/v1/statuses/${id}`, bearer(token, json(body, { method: 'PUT' })))
+
+	for (const visibility of ['private', 'limited'] as const) {
+		it(`${visibility}: an existing remote recipient keeps the audience; new mentions get nothing`, async () => {
+			const h = await community(['alice', 'bob', 'dave'])
+			const { alice, bob, dave } = h.users
+			const carol = await remoteAccount(h.store, 'carol', 'remote.example')
+			const erin = await remoteAccount(h.store, 'erin', 'other.example')
+			let id: string
+			if (visibility === 'private') {
+				id = (await post(h, alice, { status: '@carol@remote.example @bob secret', visibility: 'private' })).id
+			} else {
+				// A limited status (silent recipient) is not something the API posts; write it as an inbound one would be.
+				id = await seedStatus(h.store, {
+					accountId: alice.id,
+					visibility: 'limited',
+					uri: 'https://kopje.test/ap/o/limited',
+					mentions: [{ accountId: carol }, { accountId: bob.id, silent: true }],
+				})
+				await remoteFollows(h.store, carol, alice.id)
+			}
+			const audienceBefore = (await outbound(h.store)).map((o) => o.audience)
+			const edited = await put(h, alice.token, id, {
+				status: '@carol@remote.example @dave @erin@other.example harmless',
+			})
+			expect(edited.status).toBe(200)
+			const updates = (await outbound(h.store)).filter((o) => o.activity.type === 'Update')
+			expect(updates).toHaveLength(1)
+			// Followers only for private; the addressed accounts as before, never dave or erin.
+			const expected = {
+				followers: visibility === 'private',
+				accounts: [carol, bob.id].sort(),
+			}
+			expect({ ...updates[0]?.audience, accounts: [...(updates[0]?.audience.accounts ?? [])].sort() }).toEqual(expected)
+			// The new mentions are only linked in the content: they are not addressed or tagged.
+			const activity = updates[0]?.activity as { to: string[]; cc: string[]; object: { tag: { href: string }[] } }
+			const addressed = [...activity.to, ...activity.cc, ...activity.object.tag.map((t) => t.href)]
+			expect(addressed.filter((uri) => uri.includes('erin') || uri.includes('/dave'))).toEqual([])
+			for (const path of ['', '/history']) {
+				expect((await getJson(h, `/api/v1/statuses/${id}${path}`, dave.token)).status).toBe(404)
+				expect((await getJson(h, `/api/v1/statuses/${id}${path}`, bob.token)).status).toBe(200)
+			}
+			expect(await ids(h, '/api/v1/notifications', dave.token)).toEqual([])
+			expect(
+				await sql(
+					h.store,
+					'SELECT account_id FROM status_mentions WHERE status_id = ? AND account_id IN (?, ?)',
+					id,
+					dave.id,
+					erin
+				)
+			).toEqual([])
+			expect(audienceBefore.length).toBeGreaterThanOrEqual(visibility === 'private' ? 1 : 0)
+		})
+	}
+})
+
+describe('reblogged_by pages after filtering', () => {
+	it('skips a newer private boost when paging', async () => {
+		const h = await community(['alice', 'bob', 'carol'])
+		const status = await post(h, h.users.alice, { status: 'x' })
+		await act(h, h.users.carol, `/api/v1/statuses/${status.id}/reblog`, { visibility: 'unlisted' })
+		await act(h, h.users.bob, `/api/v1/statuses/${status.id}/reblog`, { visibility: 'private' })
+		expect(await ids(h, `/api/v1/statuses/${status.id}/reblogged_by?limit=1`)).toEqual([h.users.carol.id])
+	})
+})
