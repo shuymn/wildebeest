@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 import { base64url } from 'jose'
 
 // Opaque OAuth values (client ids and secrets, codes, access tokens) and their digests. Only digests of codes and
@@ -23,13 +25,10 @@ export async function pkceChallenge(verifier: string): Promise<string> {
 export const PKCE_VERIFIER = /^[A-Za-z0-9\-._~]{43,128}$/
 export const PKCE_CHALLENGE = /^[A-Za-z0-9\-_]{43}$/
 
-// Compares two strings without returning early on the first difference.
+// Compares two strings in time that depends on neither their contents nor their lengths: both are reduced to
+// fixed-size SHA-256 digests (node:crypto), which the runtime's timingSafeEqual compares.
 export function constantTimeEqual(a: string, b: string): boolean {
-	const left = new TextEncoder().encode(a)
-	const right = new TextEncoder().encode(b)
-	let difference = left.length ^ right.length
-	for (let i = 0; i < Math.max(left.length, right.length); i++) {
-		difference |= (left[i] ?? 0) ^ (right[i] ?? 0)
-	}
-	return difference === 0
+	const left = createHash('sha256').update(a, 'utf8').digest()
+	const right = createHash('sha256').update(b, 'utf8').digest()
+	return crypto.subtle.timingSafeEqual(left, right)
 }
