@@ -150,9 +150,19 @@ against their own instance. TLS is assumed between all parties.
   exists once per natural key (its uri; one favourite and one boost per account and status), so a repeated `Create`,
   `Like` or `Announce` adds no row or notification; a `Delete` or `Undo` that arrives first is recorded and keeps the
   object, favourite or boost from appearing, and a replay after it changes nothing; an `Update` applies only if its
-  `updated` is newer than the stored version, so a reordered or repeated one changes nothing. A `Delete` of an
-  unknown object of the actor's origin is recorded too. `test/inbox-statuses.test.ts` ("ID-7: duplicate and reordered
-  Create and Delete", "ignores an Update that is not newer").
+  `updated` is newer than the last accepted version (`statuses.remote_version`, kept whether or not the change wrote
+  history), both clamped to now plus 5 minutes, so a reordered, repeated or far-future one changes nothing (a
+  version after a far-future one is ignored until the clock passes it); a status whose `Delete` was recorded takes no
+  `Update`. A `Delete` of an unknown object of the actor's origin is recorded too. A change whose retraction cannot
+  be recorded (the per-actor cap) is not made: the `Delete` of a stored status or boost, and an `Undo` of a `Like` or
+  `Announce`, answer 503 and change nothing (a `Delete` of an unknown object at the cap is not recorded and answers
+  202). An `Undo` of a `Like` records both its own reference and the id the matched favourite was stored under. A
+  local boost of a status that is deleted while its author is purged is withdrawn once: an Undo already recorded for
+  it, staged or not, is reused by the other job, and both wait for its staging before they delete the boost.
+  `test/inbox-statuses.test.ts` ("ID-7: duplicate and reordered Create and Delete", "ignores an Update that is not
+  newer"), `test/inbox-statuses-edge.test.ts` ("ID-7: the Update watermark", "leaves nothing for every order of
+  Create, Update and Delete", "ID-7: retractions at the per-actor cap", "retracts both ids", "withdraws a local boost
+  once").
 - **ID-8: only ActivityStreams media types become objects.** A fetched document is used as an actor, key or object only
   if served as `application/activity+json` or `application/ld+json` with the ActivityStreams profile, as Mastodon
   requires, and only if its root is a JSON object (JSON-LD would fetch a string root through the context loader). Other
@@ -232,9 +242,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   inbound boosts: an `Announce` is stored only for an original that is public, unlisted or the booster's own, decided
   before anything is stored, so a boost of a private, direct, limited or unfetchable object stores nothing (neither
   the boost nor the fetched original); an embedded copy of someone else's object is never trusted (it is fetched); a
-  boost of an unlisted original stays out of the public timelines; `test/inbox-statuses.test.ts` ("VIS-6: a boost of
-  a private, direct or unfetchable object stores nothing", "VIS-6: a boost of an unlisted object stays out of the
-  public timelines").
+  boost of an unlisted original stays out of the public timelines. The boost's own audience is kept: the known
+  accounts its `to` and `cc` address are its silent recipients (bounded like a status's), so the audience rule
+  decides who sees the wrapper, and a reblog notification is written and shown only while its recipient may see the
+  sender's boost as well as the original (`shownSql` in `src/domain/notifications.ts`, for local boosts too);
+  `test/inbox-statuses.test.ts` ("VIS-6: a boost of a private, direct or unfetchable object stores nothing", "VIS-6:
+  a boost of an unlisted object stays out of the public timelines"), `test/inbox-statuses-edge.test.ts` ("notifies a
+  local author of a private boost only if they may see the boost").
 - **VIS-7: silent recipients see, but are not mentioned.** A silent mention grants VIS-1 access only. It never appears
   in `mentions` and never produces a mention notification. _Enforced (main):_
   `src/domain/status-presenter.ts`, `src/domain/notifications.ts`; `test/visibility.test.ts` ("none for a silent
@@ -390,10 +404,16 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   no test pins it._ _Implemented on branch `kopje/inbound-statuses`_ for the fetches of inbound processing and search:
   the original of a boost (and its author) is fetched as the request's other fetches are, with the personal inbox
   owner's key or the instance actor's, never from the signed-document cache; search with `resolve=true` fetches as
-  the instance actor only, for an authenticated request (401 otherwise, before anything is fetched), with WebFinger
-  unsigned; `createRemoteLoaders` in `src/federation/federation.ts`, `src/federation/resolve.ts`;
-  `test/inbox-statuses.test.ts` ("signed by the instance actor (NET-4)", "resolves a status URL as the instance
-  actor", "answers 401 without a token and fetches nothing").
+  the instance actor only, for a request whose token is valid and has the scope (401 or 403 otherwise, before
+  anything is fetched), with WebFinger unsigned. An address whose WebFinger names an actor on another host is stored
+  under the address's domain only if the actor's own username at that domain names the same actor; otherwise under
+  the actor's host. One helper (`accountDomain` in `src/domain/inbox.ts`) decides the stored domain for every path,
+  and an inbound document never replaces a confirmed domain. _Gap:_ inbound activities do not look up WebFinger, so
+  an account first seen inbound shows its actor's host until it is resolved by its address. `createRemoteLoaders` in
+  `src/federation/federation.ts`, `src/federation/resolve.ts`; `test/inbox-statuses.test.ts` ("signed by the instance
+  actor (NET-4)", "resolves a status URL as the instance actor", "answers 401 without a token and fetches nothing"),
+  `test/inbox-statuses-edge.test.ts` ("NET-4: search resolution fetches nothing without a valid token", "the
+  canonical WebFinger domain").
 - **NET-5: snapshots come only from authoritative local data.** A rescue snapshot holds only a canonical actor,
   WebFinger or NodeInfo document rendered on the fixed domain from Store columns, and is kept only if its source still
   matches the Store when saved. Request hosts, arbitrary queries and remote documents never create or change one.
@@ -495,10 +515,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   within a generous time"). _Implemented on branch `kopje/inbound-statuses`_ for JSON-LD processing and inbound JSON:
   every inbound activity and every fetched document must stay within 10,000 values and 32 levels of nesting before
   anything reads it or hands it to JSON-LD (`withinJsonBounds` in `src/platform/json-bounds.ts`, applied by
-  `parseActivity` and by the loaders of `createRemoteLoaders`), and one request fetches at most 8 documents (the fetch
-  budget), so one activity's JSON-LD work is at most 8 bounded documents; statuses are read as compacted JSON, without
-  JSON-LD, as Mastodon reads them; `test/inbox-statuses.test.ts` ("refuses an activity or a fetched document past the
-  JSON bounds before reading it", "caps the attachments, tags and content one status stores").
+  `parseActivity` and by the loaders of `createRemoteLoaders`); JSON-LD contexts too, before they are cached and again
+  on every cache hit (an entry may predate the check; `boundedContexts` in `src/federation/federation.ts`); and one
+  request fetches at most 8 documents (the fetch budget), so one activity's JSON-LD work is at most 8 bounded
+  documents and their bounded contexts; the Store asks the Worker for documents at most 3 times per activity;
+  statuses are read as compacted JSON, without JSON-LD, as Mastodon reads them; `test/inbox-statuses.test.ts`
+  ("refuses an activity or a fetched document past the JSON bounds before reading it", "caps the attachments, tags
+  and content one status stores"), `test/inbox-statuses-edge.test.ts` ("RES-2: JSON-LD contexts past the JSON
+  bounds", "the Store asks for documents at most three times").
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
@@ -508,12 +532,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   count cap or an expiry with a sweeper. _Implemented on branch `kopje/inbound-statuses`_ for remote statuses: one
   status stores at most 4 attachments (Mastodon's limit) with 10,000 code units of description each, 100 hashtags
   of at most 256 code units, 200 `status_mentions` rows (local accounts first; 100 `Mention` tags and 1,000 `to` and
-  `cc` entries are read), 10,000 code units of content warning, and content cut at 50,000 code units before
-  sanitizing; its history at most 100 versions (the newest edit replaces the last); an arriving parent links at most
-  100 replies that came before it; a deleted status with more children than one batch (500 rows) is hidden at once
-  and removed by a job (`inbound_jobs` kind `delete`); `src/domain/remote-statuses.ts`; `test/inbox-statuses.test.ts`
-  ("caps the attachments, tags and content one status stores", "deletes a status with many children in bounded
-  batches"). _Enforced (main)_ for snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
+  `cc` entries are read; a redelivery to a personal inbox keeps the bound, its owner taking a remote recipient's
+  place), 10,000 code units of content warning, and content cut at 50,000 code units before sanitizing; its history
+  at most 100 versions (the newest edit replaces the last); an arriving parent links at most 100 replies that came
+  before it; a boost at most 200 recipients; profiles show at most 16 fields. A deleted status is removed by a job
+  (`inbound_jobs` kind `delete`) in batches of at most 500 rows, measured with `total_changes()`; the first batch hides
+  it (its mentions, then its content and audience) within that budget. `src/domain/remote-statuses.ts`;
+  `test/inbox-statuses.test.ts` ("caps the attachments, tags and content one status stores", "deletes a status with
+  many children in bounded batches"), `test/inbox-statuses-edge.test.ts` ("RES-4: bounds at their limits", "writes at
+  most PURGE*BATCH rows per batch, hiding included"). \_Enforced (main)* for snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
   sweep and spool: _Planned (B1b)._ Deliveries: _Enforced (main):_ delivered rows are deleted
   at once and given-up rows after 30 days by the 5-minute cron (`sweepDeliveries`); receipts belong to their status
   (foreign key) and are dropped when its retraction is recorded; a lane holds at most 500 and the Store 10,000 active
