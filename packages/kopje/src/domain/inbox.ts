@@ -628,9 +628,19 @@ const undo: Handler<'Undo'> = (db, actor, activity, { now }) => {
 			)
 		}
 	}
-	// Everything this Undo records as retracted must fit, or nothing changes (ID-7).
-	// Pair ids name every generation, so they are never recorded, whichever side carries them.
-	const retracted = [ref.id, ...(edge?.uri == null ? [] : [edge.uri])].filter((uri) => !isMisskeyPairId(uri))
+	// Everything this Undo records as retracted must fit, or nothing changes (ID-7). The undone activity's type is
+	// decided first: a Block (typed, or untyped and matching a stored block) is always recorded, whatever its id's
+	// shape. Only a Follow's pair id names every generation, so it is never recorded, whichever side carries it.
+	const undoesBlock =
+		ref.type === 'Block' ||
+		(ref.type === null &&
+			edge === undefined &&
+			db.first('SELECT 1 AS x FROM blocks WHERE account_id = ? AND uri = ?', actor.id, ref.id) !== undefined)
+	const undoesFollow = !undoesBlock && (ref.type === null || ref.type === 'Follow')
+	const retracted = [
+		...(undoesFollow && isMisskeyPairId(ref.id) ? [] : [ref.id]),
+		...(edge?.uri == null || isMisskeyPairId(edge.uri) ? [] : [edge.uri]),
+	]
 	if (!canRetract(db, actor.uri, retracted, now)) {
 		return ignored('retraction-cap')
 	}

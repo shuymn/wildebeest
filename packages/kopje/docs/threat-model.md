@@ -127,12 +127,15 @@ against their own instance. TLS is assumed between all parties.
   whose retraction cannot be recorded (the per-actor cap) is not made: a Block, and a local reject of a request (which
   records the remote Follow as retracted and answers 503 if it cannot), change nothing then. Misskey's pair-shaped
   Follow id (`/follows/<a>/<b>`) is never recorded as retracted, whether the Undo or the stored edge carries it, so the
-  same pair can undo a later generation; a `Reject` with a pair id matches our follow whatever its uri. Every Follow retraction (Undo,
+  same pair can undo a later generation; the exception applies only to a Follow: an Undo decides the undone type first
+  (embedded, or a stored block with that id), and a Block id is always recorded whatever its shape; a `Reject` with a pair id matches our follow whatever its uri. Every Follow retraction (Undo,
   Block, a refused or superseded Follow, a local reject) goes through one helper (`retractFollow`) that never records a
   pair id, so on the reject path too a redelivered pair Follow asks again. A Block that takes a new id records its old
   id as retracted first (and changes nothing if it cannot), so a redelivered old Block does not come back after an
-  Undo of the new one. The limit is
-  that a redelivered pair Undo or Reject after a new Follow cannot be told from a new one. `test/inbox.test.ts` ("ID-7: replay changes nothing twice", "OPS-1"), `test/inbox-regressions.test.ts`.
+  Undo of the new one (and at the retraction cap the Block keeps its id, edges and deliveries). The limit is
+  that a redelivered pair Undo or Reject after a new Follow cannot be told from a new one. `test/inbox.test.ts` ("ID-7: replay changes nothing twice", "OPS-1"), `test/inbox-regressions.test.ts`,
+  `test/inbox-verify4.test.ts` ("keeps a Block with a pair-shaped id undone", "changes nothing when a Block takes a new
+  id at the retraction cap").
 - **ID-8: only ActivityStreams media types become objects.** A fetched document is used as an actor, key or object only
   if served as `application/activity+json` or `application/ld+json` with the ActivityStreams profile, as Mastodon
   requires, and only if its root is a JSON object (JSON-LD would fetch a string root through the context loader). Other
