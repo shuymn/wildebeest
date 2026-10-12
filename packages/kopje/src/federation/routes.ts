@@ -92,17 +92,20 @@ async function viaFedify(c: Context<FederationEnv>, deps: FederationRouteDeps, u
 		throw state.storeError
 	}
 	// An actor path counts only once the dispatcher has matched a local actor; /actor and NodeInfo are fixed.
+	// Fedify decodes the path and parses the resource its own way, so the raw request must spell the canonical form
+	// exactly: '/ap/users/Ali%63e' or a trailing-slash variant would otherwise each add a row for the same actor.
 	const canonical =
 		url.pathname === '/.well-known/webfinger'
 			? canonicalWebFinger(url, domain, state.resolvedUsername)
 			: url.pathname.startsWith('/ap/users/')
-				? state.resolvedUsername !== null
+				? state.resolvedUsername !== null && url.pathname === `/ap/users/${state.resolvedUsername}`
 				: true
 	return { response, canonical }
 }
 
 function canonicalWebFinger(url: URL, domain: string, username: string | null): boolean {
-	const resource = url.searchParams.get('resource')
+	const resources = url.searchParams.getAll('resource')
+	const resource = resources.length === 1 ? resources[0] : undefined
 	return (
 		username !== null &&
 		(resource === `acct:${username}@${domain}` || resource === `https://${domain}/ap/users/${username}`)

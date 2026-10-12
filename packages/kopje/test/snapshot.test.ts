@@ -135,6 +135,19 @@ describe('snapshot caps', () => {
 		expect(await snapshotNames(store)).toEqual(before)
 	})
 
+	it('creates no rows for other spellings of a canonical path or resource', async () => {
+		const { store } = await healthyInstance()
+		const before = await snapshotNames(store)
+		const { request } = harness(store, { USER_KEK: LEGACY.kek }, BUILD, offline)
+		await request('/ap/users/Ali%63e', AP)
+		await request('/ap/users/%41lice', AP)
+		await request('/ap/users/Alice/', AP)
+		await request('/.well-known/webfinger?resource=acct%3AAlice%40social.example&resource=acct:Bob@x.example')
+		await request('/.well-known/webfinger?resource=acct:Alice@SOCIAL.EXAMPLE')
+		await request('/.well-known/webfinger?resource=https://social.example/ap/users/Ali%63e')
+		expect(await snapshotNames(store)).toEqual(before)
+	})
+
 	it('does not store a document over the size cap', async () => {
 		const store = await migratedStore()
 		await setDomain(store, DOMAIN)
