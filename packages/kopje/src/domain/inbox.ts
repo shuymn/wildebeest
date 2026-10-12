@@ -1,11 +1,25 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
+import { canView, domainBlockMatchSql, isDistributable, isPublicCollection, type Visibility } from './audience'
 import { stageRetraction } from './deliveries'
 import { insertWithFreshId, remoteId } from './ids'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
+import {
+	followersUri,
+	hasLocalFollowers,
+	MAX_STATUS_AUDIENCE,
+	MAX_STATUS_MENTION_ROWS,
+	type RemoteStatusInput,
+	statusByUri,
+	type StoreContext,
+	storeRemoteStatus,
+	updateRemoteStatus,
+	visibilityOf,
+} from './remote-statuses'
 import { accountSearchText } from './search-text'
 import { recountStatus, recountStatuses, withdrawLocalBoost } from './statuses'
 import type { Db } from '../db/sql'
+import { hostDomain } from '../platform/domain-name'
 
 // Inbound activities about actors and relationships (B1b-1), applied in one Store transaction each. The Worker has
 // already verified the HTTP signature, bound the signer to the actor (ID-1), fetched and sanitized what it needed
@@ -20,8 +34,15 @@ import type { Db } from '../db/sql'
 //   Undo         the undone activity's actor is the actor, and it names the current Follow or Block (see undo)
 //   Block        the object is a local account; the actor is the blocker
 //   Move         the object is the actor, and the target lists the actor in alsoKnownAs (ID-4)
-//   Update       of an actor: the object is the actor itself
-//   Delete       of an actor: the object is the actor itself; of anything else: recorded as a retraction (ID-7)
+//   Update       of an actor: the object is the actor itself; of a status: the stored status's author is the actor
+//                (and a local status never is, ID-3)
+//   Delete       of an actor: the object is the actor itself; of a status or boost: its author is the actor; of
+//                anything else of the actor's origin: recorded as a retraction (ID-7)
+//   Create       the object has the actor's origin and names no other author (attributedTo)
+//   Like         the object is a local status the actor may see (VIS-1); the actor is the one who likes it
+//   Announce     the actor is the booster; the original is public, unlisted or the actor's own (VIS-6)
+// B1b-2's rows (Create, Update and Delete of statuses, Like, Announce) are applied in domain/remote-statuses.ts and
+// below; test/inbox-statuses.test.ts has one negative test per row.
 // The activity id has the actor's origin (checked by the Worker before anything is written, and again here).
 // ID-3: no inbound activity changes a local account's own row or a local status; local follows change only as the
 // relationship the remote side controls (its follow of us, our pending follow of it).
@@ -45,7 +66,7 @@ export const JOB_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 // Bounds of one batch of a Move (RES-6): local followers moved, and local blocks and mutes carried over to the target.
 export const MOVE_BATCH = 100
 export const MOVE_MAX_CARRIED = 100
-// Statuses and favourites of a deleted actor removed per batch (RES-6).
+// Rows one batch of a deleted actor's purge, or of a deleted status's removal, writes at most (RES-6).
 export const PURGE_BATCH = 500
 // Job batches one runInboundJobs call does at most.
 export const JOB_BATCHES_PER_RUN = 4
@@ -71,6 +92,10 @@ export type RemoteActorInput = {
 	keys: { id: string; pem: string }[]
 	// The document as received; followers, alsoKnownAs and fields are read from it.
 	raw: string
+	// The canonical domain of the actor's address for this username, set by the search resolver only after the actor's
+	// host declared it and that domain confirmed it (declaredDomain in federation/resolve.ts); the host itself when
+	// the host's own answer names it there. Never set from a document.
+	confirmedDomain?: string
 }
 
 // The object of an Accept, Reject or Undo: an id, or an embedded activity (id optional).
@@ -87,6 +112,28 @@ export type InboundActivity =
 	| { type: 'UpdateActor'; id: string }
 	| { type: 'DeleteActor'; id: string }
 	| { type: 'Delete'; id: string; object: string }
+	| { type: 'Create'; id: string; object: RemoteStatusInput }
+	| { type: 'UpdateStatus'; id: string; object: RemoteStatusInput }
+	// A Like, a Misskey reaction (Like with _misskey_reaction) or an EmojiReact: a favourite of `object`.
+	| { type: 'Like'; id: string; object: string }
+	// embedded: the object as the Announce carried it (used only for the actor's own status, as Mastodon does).
+	| {
+			type: 'Announce'
+			id: string
+			object: string
+			embedded: RemoteStatusInput | null
+			to: string[]
+			cc: string[]
+			published: string | null
+			raw: string
+	  }
+
+// Documents the Worker fetched because the Store asked for them (ReceiveResult.need), by the uri asked for: a parsed
+// status or actor, or null when it could not be fetched or used.
+export type Prefetched = {
+	statuses: Record<string, RemoteStatusInput | null>
+	actors: Record<string, RemoteActorInput | null>
+}
 
 export type ReceiveInput = {
 	now: number
@@ -96,14 +143,44 @@ export type ReceiveInput = {
 	// A fresh document of the actor to store, or null to use the stored row as it is.
 	actor: RemoteActorInput | null
 	activity: InboundActivity
+	// The username of the personal inbox the activity was delivered to (null: the shared inbox).
+	recipient?: string | null
+	prefetched?: Prefetched
 }
 
-// jobsPending: a purge or Move has batches left; the Worker asks the Queue to continue (cron continues regardless).
-// delivers: the activity recorded deliveries (an Accept, Reject, Follow or Undo); the Worker rings the doorbell.
-export type ReceiveResult = { applied: boolean; reason: string; jobsPending: boolean; delivers?: boolean }
+// jobsPending: a purge, Move or status deletion has batches left; the Worker asks the Queue to continue (cron
+// continues regardless). delivers: the activity recorded deliveries (an Accept, Reject, Follow or Undo); the Worker
+// rings the doorbell. need: nothing was written; the Store needs this document to apply the activity, and the Worker
+// asks again with it in prefetched.
+export type ReceiveResult = {
+	applied: boolean
+	reason: string
+	jobsPending: boolean
+	delivers?: boolean
+	need?: { kind: 'status' | 'actor'; uri: string }
+	// Nothing changed, and the activity may apply later (its retraction could not be recorded): answered 503.
+	retry?: boolean
+}
 
 function ignored(reason: string): ReceiveResult {
 	return { applied: false, reason, jobsPending: false }
+}
+
+// A refusal that must leave no trace: thrown out of the operation, so its transaction rolls back (the actor's
+// document and keys stored before the handler ran included), and turned into a retryable answer by the Store's RPC
+// (store.ts), which the Worker answers 503.
+export class RetryLater extends Error {
+	constructor(readonly reason: string) {
+		super(`retry later: ${reason}`)
+	}
+}
+
+function retryLater(reason: string): never {
+	throw new RetryLater(reason)
+}
+
+export function retryResult(error: RetryLater): ReceiveResult {
+	return { ...ignored(error.reason), retry: true }
 }
 
 function applied(reason: string, jobsPending = false): ReceiveResult {
@@ -154,6 +231,31 @@ export function isDeletedActor(db: Db, uri: string, now: number): boolean {
 	)
 }
 
+// The domain of a remote account's address (its acct), decided here for every path that stores an actor. A domain
+// other than the actor's host holds only for the (username, domain, actor id) it was confirmed for: the actor id is
+// the row's own, and confirmed_username the username. So:
+//   - a confirmation in hand (confirmedDomain) sets it: another domain with this username, or the host (clearing any);
+//   - otherwise a stored confirmation is kept while the username is unchanged;
+//   - otherwise, a changed username included, the address falls back to the actor's host until it is confirmed again.
+// Inbound documents never carry a confirmation (Gap: inbound processing does not look up WebFinger), so they keep a
+// confirmed address while the username is unchanged and never set one. Domain blocks also match the actor's host
+// (domainBlockMatchSql in audience.ts).
+export function accountDomain(
+	stored: { domain: string; confirmed_username: string | null } | undefined,
+	actor: RemoteActorInput
+): { domain: string; confirmedUsername: string | null } {
+	const host = hostDomain(actor.uri)
+	if (actor.confirmedDomain !== undefined) {
+		return actor.confirmedDomain === host
+			? { domain: host, confirmedUsername: null }
+			: { domain: actor.confirmedDomain, confirmedUsername: actor.username }
+	}
+	if (stored !== undefined && stored.confirmed_username !== null && stored.confirmed_username === actor.username) {
+		return { domain: stored.domain, confirmedUsername: stored.confirmed_username }
+	}
+	return { domain: host, confirmedUsername: null }
+}
+
 // Inserts or refreshes a remote account and its keys from its document. Never touches a local row (ID-3): a URI on
 // this instance's origin, or one a local account holds, is refused, and so is a deleted actor.
 export function upsertRemoteActor(db: Db, actor: RemoteActorInput, origin: string, now: number): RemoteRow | undefined {
@@ -166,10 +268,15 @@ export function upsertRemoteActor(db: Db, actor: RemoteActorInput, origin: strin
 	}
 	const published = actor.published === null ? NaN : Date.parse(actor.published)
 	const createdAt = new Date(Number.isNaN(published) || published > now ? now : published).toISOString()
+	const stored = db.first<{ domain: string; confirmed_username: string | null }>(
+		'SELECT domain, confirmed_username FROM accounts WHERE uri = ? AND domain IS NOT NULL',
+		actor.uri
+	)
+	const { domain, confirmedUsername } = accountDomain(stored, actor)
 	const values = [
 		actor.uri,
 		actor.username,
-		actor.domain,
+		domain,
 		actor.actorType,
 		actor.displayName,
 		actor.note,
@@ -182,8 +289,9 @@ export function upsertRemoteActor(db: Db, actor: RemoteActorInput, origin: strin
 		actor.sharedInboxUrl,
 		actor.raw,
 		new Date(now).toISOString(),
-		accountSearchText(actor.username, actor.domain, actor.displayName),
+		accountSearchText(actor.username, domain, actor.displayName),
 		createdAt,
+		confirmedUsername,
 	]
 	insertWithFreshId(
 		'accounts',
@@ -191,14 +299,16 @@ export function upsertRemoteActor(db: Db, actor: RemoteActorInput, origin: strin
 		(id) =>
 			db.run(
 				`INSERT INTO accounts (id, uri, username, domain, actor_type, display_name, note, url, avatar_url, header_url,
-					locked, discoverable, inbox_url, shared_inbox_url, raw, fetched_at, search_text, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					locked, discoverable, inbox_url, shared_inbox_url, raw, fetched_at, search_text, created_at,
+					confirmed_username)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT (uri) DO UPDATE SET username = excluded.username, actor_type = excluded.actor_type,
 					display_name = excluded.display_name, note = excluded.note, url = excluded.url,
 					avatar_url = excluded.avatar_url, header_url = excluded.header_url, locked = excluded.locked,
 					discoverable = excluded.discoverable, inbox_url = excluded.inbox_url,
 					shared_inbox_url = excluded.shared_inbox_url, raw = excluded.raw, fetched_at = excluded.fetched_at,
-					search_text = excluded.search_text
+					search_text = excluded.search_text, domain = excluded.domain,
+					confirmed_username = excluded.confirmed_username
 				WHERE accounts.domain IS NOT NULL`,
 				id,
 				...values
@@ -253,6 +363,29 @@ export function isRetracted(db: Db, actorUri: string, targetUri: string, now: nu
 			now
 		) !== undefined
 	)
+}
+
+// The actor_uri of a deletion that holds for every actor: a status or boost that was stored and deleted by its author
+// is not created again under that uri by anyone, its author or another actor of the same origin (ID-6, ID-7). A Delete
+// of an unknown object stays the actor's own (it cannot suppress another actor's objects never seen here).
+export const ANY_ACTOR = '*'
+
+// Records that the stored object `uri` was deleted. Bounded by the authors' caps: it is written only together with
+// the author's own retraction of the same uri, which counts against MAX_RETRACTIONS_PER_ACTOR, and expires and is
+// swept with it.
+function recordDeletedObject(db: Db, uri: string, now: number): void {
+	db.run(
+		`INSERT INTO inbound_retractions (actor_uri, target_uri, expires_at) VALUES (?, ?, ?)
+		ON CONFLICT DO UPDATE SET expires_at = excluded.expires_at`,
+		ANY_ACTOR,
+		uri,
+		now + RETRACTION_TTL_MS
+	)
+}
+
+// Whether `uri` may not be created by `actorUri`: the actor retracted it, or it was stored and deleted.
+export function isDeleted(db: Db, actorUri: string, uri: string, now: number): boolean {
+	return isRetracted(db, actorUri, uri, now) || isRetracted(db, ANY_ACTOR, uri, now)
 }
 
 function recordable(actorUri: string, targetUri: string): boolean {
@@ -453,10 +586,10 @@ const follow: Handler<'Follow'> = (db, actor, activity, { now }) => {
 	)
 	const blocked = db.first(
 		`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 AND target_account_id = ?2)
-			OR EXISTS (SELECT 1 FROM domain_blocks WHERE account_id = ?1 AND domain = ?3)`,
+			OR EXISTS (SELECT 1 FROM domain_blocks d JOIN accounts a ON a.id = ?2
+				WHERE d.account_id = ?1 AND ${domainBlockMatchSql('d', 'a')})`,
 		target.id,
-		actor.id,
-		actor.domain
+		actor.id
 	)
 	if (blocked !== undefined) {
 		// Refused with a Reject. The id is recorded as dead, so a replay sends no second Reject (ID-7); if it cannot be
@@ -611,6 +744,14 @@ const undo: Handler<'Undo'> = (db, actor, activity, { now }) => {
 	if (isRetracted(db, actor.uri, ref.id, now)) {
 		return ignored('retracted')
 	}
+	if (
+		ref.type === 'Like' ||
+		ref.type === 'EmojiReact' ||
+		ref.type === 'Announce' ||
+		(ref.type === null && interactionOf(db, actor, ref.id))
+	) {
+		return undoInteraction(db, actor, { ...ref, id: ref.id }, now)
+	}
 	const pair = ref.type === 'Follow' && isMisskeyPairId(ref.id)
 	type Edge = { target: string; uri: string | null }
 	let edge: Edge | undefined
@@ -662,7 +803,7 @@ const undo: Handler<'Undo'> = (db, actor, activity, { now }) => {
 				) > 0)
 	}
 	// Recorded whether or not the target was found: an Undo that overtook its activity keeps it from applying later,
-	// and a replay of an undone activity does not restore it (ID-7). Likes and Announces (B1b-2) check it too.
+	// and a replay of an undone activity does not restore it (ID-7). Likes and Announces check it too.
 	for (const uri of retracted) {
 		retract(db, actor.uri, uri, now)
 	}
@@ -853,7 +994,7 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 			follower.id === target.id ||
 			blockedEitherWay(db, follower.id, target.id) ||
 			db.first(
-				`SELECT 1 AS x FROM domain_blocks d JOIN accounts a ON a.id = ?2 WHERE d.account_id = ?1 AND d.domain = a.domain`,
+				`SELECT 1 AS x FROM domain_blocks d JOIN accounts a ON a.id = ?2 WHERE d.account_id = ?1 AND ${domainBlockMatchSql('d', 'a')}`,
 				follower.id,
 				target.id
 			) !== undefined
@@ -907,7 +1048,7 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 	return true
 }
 
-function finishJob(db: Db, kind: 'purge' | 'move', key: string, now: number): void {
+function finishJob(db: Db, kind: JobKind, key: string, now: number): void {
 	db.run(
 		'UPDATE inbound_jobs SET done_at = ?, expires_at = ? WHERE kind = ? AND key = ? AND done_at IS NULL',
 		now,
@@ -957,7 +1098,7 @@ export function purgeBatch(db: Db, uri: string, now: number): boolean {
 	const id = account.id
 	const budget = new Budget(db, PURGE_BATCH)
 	purgeRelationships(db, id, budget)
-	withdrawLocalBoosts(db, uri, id, budget, now)
+	withdrawLocalBoosts(db, { kind: 'purge', key: uri }, 'o.account_id', id, budget, now)
 	while (budget.left() > 0) {
 		const status = db.first<{ id: string }>(
 			`SELECT r.id FROM statuses r JOIN statuses o ON o.id = r.reblog_of_id
@@ -1090,30 +1231,46 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	)
 }
 
-// Local boosts of the account's statuses, each withdrawn once (the purge job's cursor holds the boost whose Undo is
-// recorded), then deleted like any status (its receipts a batch at a time), and its booster's statuses_count recounted.
-function withdrawLocalBoosts(db: Db, uri: string, id: string, budget: Budget, now: number): void {
+type JobKind = 'purge' | 'move' | 'delete'
+
+// Local boosts of the originals `column` = `id` selects (an account's statuses, or one status), each withdrawn once
+// (the job's cursor holds the boost whose Undo is recorded), then deleted like any status (its receipts a batch at a
+// time), and its booster's statuses_count recounted.
+function withdrawLocalBoosts(
+	db: Db,
+	job: { kind: JobKind; key: string },
+	column: 'o.account_id' | 'o.id',
+	id: string,
+	budget: Budget,
+	now: number
+): void {
 	while (budget.left() > 0) {
 		const cursor = db.first<{ cursor: string | null }>(
-			"SELECT cursor FROM inbound_jobs WHERE kind = 'purge' AND key = ?",
-			uri
+			'SELECT cursor FROM inbound_jobs WHERE kind = ? AND key = ?',
+			job.kind,
+			job.key
 		)?.cursor
-		const boost = db.first<{ id: string; uri: string; booster: string }>(
-			`SELECT r.id, r.uri, r.account_id AS booster FROM statuses r JOIN statuses o ON o.id = r.reblog_of_id
+		const boost = db.first<{ id: string; uri: string; booster: string; withdrawn: number }>(
+			`SELECT r.id, r.uri, r.account_id AS booster, r.withdrawn FROM statuses r JOIN statuses o ON o.id = r.reblog_of_id
 				JOIN local_accounts l ON l.account_id = r.account_id
-			WHERE o.account_id = ? ORDER BY r.id = ? DESC, r.id LIMIT 1`,
+			WHERE ${column} = ? ORDER BY r.id = ? DESC, r.id LIMIT 1`,
 			id,
 			cursor ?? ''
 		)
 		if (boost === undefined) {
 			return
 		}
-		if (cursor !== boost.id) {
-			// The Undo intent and the earlier intents about the boost it supersedes, then the cursor.
-			if (!withdrawLocalBoost(db, boost.id, now, budget.left() - 1)) {
+		// A boost is withdrawn once whichever job reaches it first (a status's deletion or its author's purge): the
+		// boost row's own marker says its Undo is recorded, however long the intent itself lives (it goes once its
+		// deliveries settle), and both jobs wait for the intent to finish staging before they delete the receipts and
+		// the boost, which takes the marker with it.
+		if (cursor !== boost.id && boost.withdrawn === 0) {
+			// The Undo intent and the earlier intents about the boost it supersedes, then the marker and the cursor.
+			if (!withdrawLocalBoost(db, boost.id, now, budget.left() - 2)) {
 				return
 			}
-			db.run("UPDATE inbound_jobs SET cursor = ? WHERE kind = 'purge' AND key = ?", boost.id, uri)
+			db.run('UPDATE statuses SET withdrawn = 1 WHERE id = ?', boost.id)
+			db.run('UPDATE inbound_jobs SET cursor = ? WHERE kind = ? AND key = ?', boost.id, job.kind, job.key)
 		}
 		// Its targets, a chunk per row, over as many batches as they need; the receipts stay until all are written.
 		if (!stageRetraction(db, boost.booster, boost.uri, budget.left())) {
@@ -1124,7 +1281,7 @@ function withdrawLocalBoosts(db: Db, uri: string, id: string, budget: Budget, no
 			return
 		}
 		recountStatuses(db, boost.booster)
-		db.run("UPDATE inbound_jobs SET cursor = NULL WHERE kind = 'purge' AND key = ?", uri)
+		db.run('UPDATE inbound_jobs SET cursor = NULL WHERE kind = ? AND key = ?', job.kind, job.key)
 	}
 }
 
@@ -1246,14 +1403,403 @@ function accountHasRows(db: Db, id: string): boolean {
 	)
 }
 
-// A Delete of something other than the actor. Deleting a stored remote status is B1b-2; here the retraction is
-// recorded so that the object cannot appear afterwards (ID-7), whether or not it was seen before.
+// A Delete of something other than the actor (Mastodon's Delete#delete_object). The retraction is recorded so that
+// the object cannot appear afterwards (ID-7), whether or not it was seen before, for any id of the actor's origin
+// (design: a Delete of an unknown object is recorded). A stored status or boost is removed only by its author (ID-6;
+// a local status never has a remote author, ID-3): a boost at once, a status in bounded batches (deleteStatusBatch).
+// The removal needs its retraction: at the per-actor cap nothing changes and the Delete is answered 503, to be
+// delivered again (a Delete of an unknown object at the cap is not recorded, and answered 202).
 const deleteObject: Handler<'Delete'> = (db, actor, activity, { now }) => {
 	if (originOf(activity.object) !== originOf(actor.uri)) {
 		return ignored('foreign-object')
 	}
-	retract(db, actor.uri, activity.object, now)
-	return applied('retraction-recorded')
+	const status = db.first<{ id: string; account_id: string; reblog_of_id: string | null }>(
+		'SELECT id, account_id, reblog_of_id FROM statuses WHERE uri = ?',
+		activity.object
+	)
+	if (status !== undefined && status.account_id !== actor.id) {
+		return ignored('not-author')
+	}
+	if (status === undefined) {
+		return retract(db, actor.uri, activity.object, now) ? applied('retraction-recorded') : ignored('retraction-cap')
+	}
+	if (!retract(db, actor.uri, activity.object, now)) {
+		return retryLater('retraction-cap')
+	}
+	recordDeletedObject(db, activity.object, now)
+	if (status.reblog_of_id !== null) {
+		removeBoost(db, actor.id, { id: status.id, original: status.reblog_of_id })
+		return applied('boost-deleted')
+	}
+	db.run(
+		"INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('delete', ?, ?, ?) ON CONFLICT DO NOTHING",
+		status.id,
+		actor.uri,
+		now
+	)
+	return applied('status-deleted', deleteStatusBatch(db, status.id, now))
+}
+
+// One batch of a deleted remote status's removal (Mastodon's RemoveStatusService, RES-6), at most PURGE_BATCH rows
+// in all: the status is hidden first (its mentions removed, then no content and no audience but its author), so it
+// is gone from every view at once however many batches the rest takes; then local boosts of it are withdrawn (their
+// Undo recorded once, see withdrawLocalBoosts) and deleted, then remote boosts, then the status's children and the
+// status itself (deleteStatusWithin, so nothing cascades). Returns whether anything remains.
+export function deleteStatusBatch(db: Db, statusId: string, now: number): boolean {
+	if (db.first('SELECT 1 AS x FROM statuses WHERE id = ?', statusId) === undefined) {
+		finishJob(db, 'delete', statusId, now)
+		return false
+	}
+	const budget = new Budget(db, PURGE_BATCH)
+	spend(
+		db,
+		budget,
+		`DELETE FROM status_mentions WHERE status_id = ?1
+			AND account_id IN (SELECT account_id FROM status_mentions WHERE status_id = ?1 LIMIT ?2)`,
+		statusId
+	)
+	if (budget.left() > 0) {
+		db.run(
+			`UPDATE statuses SET visibility = 'direct', content = '', spoiler_text = '', search_text = NULL
+			WHERE id = ? AND (visibility <> 'direct' OR content <> '' OR spoiler_text <> '' OR search_text IS NOT NULL)`,
+			statusId
+		)
+	}
+	withdrawLocalBoosts(db, { kind: 'delete', key: statusId }, 'o.id', statusId, budget, now)
+	while (budget.left() > 0) {
+		const boost = db.first<{ id: string }>(
+			`SELECT r.id FROM statuses r LEFT JOIN local_accounts l ON l.account_id = r.account_id
+			WHERE r.reblog_of_id = ? AND l.account_id IS NULL LIMIT 1`,
+			statusId
+		)
+		if (boost === undefined || !deleteStatusWithin(db, boost.id, budget)) {
+			break
+		}
+	}
+	if (deleteStatusWithin(db, statusId, budget, 1)) {
+		finishJob(db, 'delete', statusId, now)
+		return false
+	}
+	return true
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Statuses, favourites and boosts (B1b-2)
+// ---------------------------------------------------------------------------------------------------------------
+
+// The local account whose personal inbox received the activity, by its exact username (ID-5).
+function deliveredTo(db: Db, recipient: string | null | undefined): string | null {
+	if (recipient === null || recipient === undefined) {
+		return null
+	}
+	return (
+		db.first<{ id: string }>(
+			`SELECT a.id FROM accounts a JOIN local_accounts l ON l.account_id = a.id
+			WHERE a.domain IS NULL AND a.username = ? AND l.suspended_at IS NULL`,
+			recipient
+		)?.id ?? null
+	)
+}
+
+function storeContext(db: Db, input: ReceiveInput): StoreContext {
+	return { now: input.now, origin: input.origin, deliveredTo: deliveredTo(db, input.recipient), fetched: false }
+}
+
+function outcome(result: { applied: boolean; reason: string }): ReceiveResult {
+	return result.applied ? applied(result.reason) : ignored(result.reason)
+}
+
+const create: Handler<'Create'> = (db, actor, activity, input) =>
+	outcome(storeRemoteStatus(db, actor, activity.object, storeContext(db, input)))
+
+const updateStatus: Handler<'UpdateStatus'> = (db, actor, activity, input) =>
+	outcome(updateRemoteStatus(db, actor, activity.object, storeContext(db, input)))
+
+// Mastodon's ActivityPub::Activity::Like: a favourite of a local status, once per account, unless an Undo of this Like
+// arrived first (ID-7). Kopje also requires that the actor may see the status (VIS-1), which Mastodon does not check.
+const like: Handler<'Like'> = (db, actor, activity, { now }) => {
+	const status = db.first<{ id: string; account_id: string }>(
+		`SELECT s.id, s.account_id FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id
+		WHERE s.uri = ? AND s.reblog_of_id IS NULL`,
+		activity.object
+	)
+	if (status === undefined) {
+		return ignored('unknown-object')
+	}
+	if (isRetracted(db, actor.uri, activity.id, now)) {
+		return ignored('retracted')
+	}
+	if (!canView(db, actor.id, status.id)) {
+		return ignored('not-visible')
+	}
+	const inserted = db.first<{ id: number }>(
+		`INSERT INTO favourites (account_id, status_id, uri, created_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT DO NOTHING RETURNING id`,
+		actor.id,
+		status.id,
+		activity.id,
+		new Date(now).toISOString()
+	)
+	if (inserted === undefined) {
+		return ignored('duplicate')
+	}
+	recountStatus(db, status.id)
+	notify(db, { recipientId: status.account_id, type: 'favourite', fromId: actor.id, statusId: status.id, now })
+	return applied('favourited')
+}
+
+type Original = { id: string; account_id: string; visibility: Visibility; local: number }
+
+function originalByUri(db: Db, uri: string): Original | undefined {
+	return db.first<Original>(
+		`SELECT s.id, s.account_id, s.visibility, l.account_id IS NOT NULL AS local
+		FROM statuses s LEFT JOIN local_accounts l ON l.account_id = s.account_id
+		WHERE s.uri = ? AND s.reblog_of_id IS NULL`,
+		uri
+	)
+}
+
+function followersOf(raw: string | null): string | null {
+	if (raw === null) {
+		return null
+	}
+	const followers = (JSON.parse(raw) as { followers?: unknown }).followers
+	return typeof followers === 'string' ? followers : null
+}
+
+// Mastodon's Announce#visibility_from_audience.
+function boostVisibility(db: Db, actor: RemoteRow, to: readonly string[], cc: readonly string[]): Visibility {
+	if (to.some(isPublicCollection)) {
+		return 'public'
+	}
+	if (cc.some(isPublicCollection)) {
+		return 'unlisted'
+	}
+	const followers = followersUri(db, actor.id)
+	return followers !== null && to.includes(followers) ? 'private' : 'direct'
+}
+
+// VIS-6 (StatusPolicy#reblog? as Mastodon's Announce#announceable? applies it): a boost wraps a public or unlisted
+// original, or the booster's own.
+function announceable(authorId: string, actorId: string, visibility: Visibility): boolean {
+	return authorId === actorId || isDistributable(visibility)
+}
+
+// The boosted original of an Announce that is not stored yet, stored now if it may be boosted: the actor's own
+// embedded status (Mastodon's status_from_object), or the original fetched by its id with its author (asked of the
+// Worker through `need`). VIS-6: whether it may be boosted is decided before anything is stored, so a boost of a
+// private, direct or limited object, or of one that cannot be fetched, stores nothing.
+function newOriginal(
+	db: Db,
+	actor: RemoteRow,
+	activity: Extract<InboundActivity, { type: 'Announce' }>,
+	input: ReceiveInput
+): Original | ReceiveResult {
+	const { now, origin } = input
+	const context = { now, origin, deliveredTo: null, fetched: true }
+	const embedded = activity.embedded
+	if (embedded !== null && embedded.uri === activity.object && embedded.attributedTo === actor.uri) {
+		const stored = storeRemoteStatus(db, actor, embedded, context)
+		const original = stored.statusId === undefined ? undefined : originalByUri(db, embedded.uri)
+		return original ?? ignored(stored.reason)
+	}
+	const fetched = input.prefetched?.statuses[activity.object]
+	if (fetched === undefined) {
+		return { ...ignored('need-object'), need: { kind: 'status', uri: activity.object } }
+	}
+	if (fetched === null) {
+		return ignored('unfetchable')
+	}
+	const authorUri = fetched.attributedTo
+	if (authorUri === null || originOf(authorUri) !== originOf(fetched.uri)) {
+		return ignored('unusable-object')
+	}
+	const known = originalByUri(db, fetched.uri)
+	if (known !== undefined) {
+		return known
+	}
+	let author = remoteAccount(db, authorUri)
+	let followers = author === undefined ? null : followersUri(db, author.id)
+	const document = author === undefined ? input.prefetched?.actors[authorUri] : undefined
+	if (author === undefined) {
+		if (document === undefined) {
+			return { ...ignored('need-author'), need: { kind: 'actor', uri: authorUri } }
+		}
+		if (document === null || document.uri !== authorUri) {
+			return ignored('unfetchable')
+		}
+		followers = followersOf(document.raw)
+	}
+	if (authorUri !== actor.uri && !isDistributable(visibilityOf(fetched, followers))) {
+		return ignored('not-announceable')
+	}
+	if (author === undefined && document !== undefined && document !== null) {
+		author = upsertRemoteActor(db, document, origin, now)
+	}
+	if (author === undefined) {
+		return ignored('unknown-author')
+	}
+	const stored = storeRemoteStatus(db, author, fetched, context)
+	return (stored.statusId === undefined ? undefined : originalByUri(db, fetched.uri)) ?? ignored(stored.reason)
+}
+
+// Mastodon's ActivityPub::Activity::Announce: a boost row (reblog_of_id) by the actor, once per original (ID-7), only
+// when it concerns this instance (a local follower of the booster, or a local original), and only of an original it
+// may wrap (VIS-6). The local author is notified.
+const announce: Handler<'Announce'> = (db, actor, activity, input) => {
+	const { now } = input
+	if (isDeleted(db, actor.uri, activity.id, now)) {
+		return ignored('retracted')
+	}
+	if (statusByUri(db, activity.id) !== undefined) {
+		return ignored('duplicate')
+	}
+	let original = originalByUri(db, activity.object)
+	if (original?.local !== 1 && !hasLocalFollowers(db, actor.id)) {
+		return ignored('unrelated')
+	}
+	if (original === undefined) {
+		if (originOf(activity.object) === input.origin) {
+			return ignored('unknown-object')
+		}
+		const resolved = newOriginal(db, actor, activity, input)
+		if ('reason' in resolved) {
+			return resolved
+		}
+		original = resolved
+	}
+	if (!announceable(original.account_id, actor.id, original.visibility)) {
+		return ignored('not-announceable')
+	}
+	const originalId = original.id
+	if (
+		db.first('SELECT 1 AS x FROM statuses WHERE account_id = ? AND reblog_of_id = ?', actor.id, originalId) !==
+		undefined
+	) {
+		return ignored('duplicate')
+	}
+	const published = Date.parse(activity.published ?? '')
+	const publishedAt = new Date(Number.isNaN(published) || published > now ? now : published).toISOString()
+	const boostId = insertWithFreshId(
+		'statuses',
+		() => remoteId(publishedAt, now),
+		(id) => {
+			db.run(
+				`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at, raw, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				id,
+				activity.id,
+				actor.id,
+				originalId,
+				boostVisibility(db, actor, activity.to, activity.cc),
+				publishedAt,
+				activity.raw,
+				new Date(now).toISOString()
+			)
+			return id
+		}
+	)
+	// The wrapper's own audience: known accounts it addresses are its silent recipients (bounded, local first), so the
+	// audience rule decides who may see the boost, its reblog notification included (notifications.ts).
+	const addressed = db.all<{ id: string }>(
+		`SELECT a.id FROM accounts a LEFT JOIN local_accounts l ON l.account_id = a.id
+		WHERE a.uri IN (SELECT value FROM json_each(?)) AND a.id <> ?
+		ORDER BY l.account_id IS NULL LIMIT ?`,
+		JSON.stringify([...activity.to, ...activity.cc].slice(0, MAX_STATUS_AUDIENCE)),
+		actor.id,
+		MAX_STATUS_MENTION_ROWS
+	)
+	db.run(
+		'INSERT INTO status_mentions (status_id, account_id, silent) SELECT ?1, value, 1 FROM json_each(?2) WHERE true',
+		boostId,
+		JSON.stringify(addressed.map((row) => row.id))
+	)
+	recountStatus(db, originalId)
+	// The local author hears of the boost only if they may see it (notify applies the rule to the wrapper too).
+	notify(db, { recipientId: original.account_id, type: 'reblog', fromId: actor.id, statusId: originalId, now })
+	return applied('boosted')
+}
+
+// A favourite or boost the actor made under this id.
+function interactionOf(db: Db, actor: RemoteRow, uri: string): boolean {
+	return (
+		db.first(
+			`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM favourites WHERE account_id = ?1 AND uri = ?2)
+				OR EXISTS (SELECT 1 FROM statuses WHERE account_id = ?1 AND uri = ?2 AND reblog_of_id IS NOT NULL)`,
+			actor.id,
+			uri
+		) !== undefined
+	)
+}
+
+function removeFavourite(db: Db, actorId: string, favourite: { id: string; status_id: string }): void {
+	db.run('DELETE FROM favourites WHERE id = CAST(? AS INTEGER)', favourite.id)
+	recountStatus(db, favourite.status_id)
+	db.run(
+		`DELETE FROM notifications WHERE type = 'favourite' AND from_account_id = ? AND status_id = ?`,
+		actorId,
+		favourite.status_id
+	)
+}
+
+// A boost has no children but its recipients (bounded) and its reblog notification, which names the original.
+function removeBoost(db: Db, actorId: string, boost: { id: string; original: string }): void {
+	db.run('DELETE FROM status_mentions WHERE status_id = ?', boost.id)
+	db.run('DELETE FROM statuses WHERE id = ?', boost.id)
+	recountStatus(db, boost.original)
+	db.run(
+		`DELETE FROM notifications WHERE type = 'reblog' AND from_account_id = ? AND status_id = ?`,
+		actorId,
+		boost.original
+	)
+}
+
+// Undo of a Like (or a reaction) or an Announce. A Like is found by its id or, as Mastodon's undo_like does, as the
+// actor's favourite of the embedded Like's object; an Announce by its id. Every id involved is recorded as retracted:
+// the Undo's own reference, and the id the matched favourite was stored under (another Like of the same status, which
+// a replay must not restore). An Undo that overtook its activity keeps it from applying (ID-7). If they cannot all be
+// recorded (the per-actor cap), nothing changes and the Undo is answered 503.
+function undoInteraction(db: Db, actor: RemoteRow, ref: ActivityRef & { id: string }, now: number): ReceiveResult {
+	type Favourite = { id: string; status_id: string; uri: string | null }
+	const favourite =
+		ref.type === 'Announce'
+			? undefined
+			: (db.first<Favourite>(
+					'SELECT CAST(id AS TEXT) AS id, status_id, uri FROM favourites WHERE account_id = ? AND uri = ?',
+					actor.id,
+					ref.id
+				) ??
+				(ref.object === null
+					? undefined
+					: db.first<Favourite>(
+							`SELECT CAST(f.id AS TEXT) AS id, f.status_id, f.uri FROM favourites f JOIN statuses s ON s.id = f.status_id
+							WHERE f.account_id = ? AND s.uri = ?`,
+							actor.id,
+							ref.object
+						)))
+	const boost =
+		ref.type === 'Like' || ref.type === 'EmojiReact'
+			? undefined
+			: db.first<{ id: string; original: string }>(
+					`SELECT id, reblog_of_id AS original FROM statuses
+					WHERE account_id = ? AND uri = ? AND reblog_of_id IS NOT NULL`,
+					actor.id,
+					ref.id
+				)
+	const retracted = [ref.id, ...(favourite?.uri == null || favourite.uri === ref.id ? [] : [favourite.uri])]
+	if (!canRetract(db, actor.uri, retracted, now)) {
+		return retryLater('retraction-cap')
+	}
+	if (favourite !== undefined) {
+		removeFavourite(db, actor.id, favourite)
+	}
+	if (boost !== undefined) {
+		removeBoost(db, actor.id, boost)
+	}
+	for (const uri of retracted) {
+		retract(db, actor.uri, uri, now)
+	}
+	return favourite !== undefined || boost !== undefined ? applied('undone') : applied('retraction-recorded')
 }
 
 const HANDLERS: { [T in InboundActivity['type']]: Handler<T> } = {
@@ -1266,6 +1812,10 @@ const HANDLERS: { [T in InboundActivity['type']]: Handler<T> } = {
 	UpdateActor: updateActor,
 	DeleteActor: deleteActor,
 	Delete: deleteObject,
+	Create: create,
+	UpdateStatus: updateStatus,
+	Like: like,
+	Announce: announce,
 }
 
 export const receiveActivity = writeOperation<ReceiveInput, ReceiveResult>((db, input) => {
@@ -1329,7 +1879,7 @@ export const runInboundJobs = writeOperation<{ now: number }, { pending: boolean
 		const before = deliverySequence(db)
 		sweep(db, now)
 		for (let batch = 0; batch < JOB_BATCHES_PER_RUN; batch++) {
-			const job = db.first<{ kind: 'purge' | 'move'; key: string }>(
+			const job = db.first<{ kind: JobKind; key: string }>(
 				'SELECT kind, key FROM inbound_jobs WHERE done_at IS NULL ORDER BY created_at, kind, key LIMIT 1'
 			)
 			if (job === undefined) {
@@ -1337,6 +1887,8 @@ export const runInboundJobs = writeOperation<{ now: number }, { pending: boolean
 			}
 			if (job.kind === 'purge') {
 				purgeBatch(db, job.key, now)
+			} else if (job.kind === 'delete') {
+				deleteStatusBatch(db, job.key, now)
 			} else {
 				moveBatch(db, job.key, now)
 			}

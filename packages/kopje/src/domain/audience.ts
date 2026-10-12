@@ -55,6 +55,23 @@ export function visibleSql(s: string, viewer: string): string {
 					OR EXISTS (SELECT 1 FROM status_mentions sm WHERE sm.status_id = ${s}.id AND sm.account_id IS ${viewer})))))`
 }
 
+// The host of an actor id as hostDomain (platform/domain-name.ts) reads it, in SQL: scheme, path and port dropped,
+// lowercased, without a trailing dot. Stored ids are URL hrefs, so an IDN host is already punycode.
+function uriHostSql(uri: string): string {
+	const rest = `substr(${uri}, instr(${uri}, '://') + 3)`
+	const hostPort = `substr(${rest}, 1, instr(${rest} || '/', '/') - 1)`
+	const host = `CASE WHEN instr(${hostPort}, ':') > 0 THEN substr(${hostPort}, 1, instr(${hostPort}, ':') - 1) ELSE ${hostPort} END`
+	return `rtrim(lower(${host}), '.')`
+}
+
+// Whether the domain block row `d` matches the remote account `a`: by its stored domain (its canonical address's) or
+// by the host of its actor id, both sides normalized (lowercase, no trailing dot, no port), so neither a confirmed
+// domain elsewhere nor another spelling of the host lets an account escape a block of the server it lives on. Block
+// domains are stored lowercase; an IDN block is matched in its punycode form.
+export function domainBlockMatchSql(d: string, a: string): string {
+	return `(${a}.domain IS NOT NULL AND rtrim(lower(${d}.domain), '.') IN (rtrim(lower(${a}.domain), '.'), ${uriHostSql(`${a}.uri`)}))`
+}
+
 // StatusFilter: what the viewer chose not to see in lists (feeds, context, notifications, bookmarks): authors they
 // block, mute, or whose domain they block. Their own statuses always pass; an anonymous viewer filters nothing.
 export function unfilteredSql(s: string, viewer: string): string {
@@ -62,7 +79,7 @@ export function unfilteredSql(s: string, viewer: string): string {
 		EXISTS (SELECT 1 FROM blocks vb WHERE vb.account_id IS ${viewer} AND vb.target_account_id = ${s}.account_id)
 		OR EXISTS (SELECT 1 FROM mutes vm WHERE vm.account_id IS ${viewer} AND vm.target_account_id = ${s}.account_id)
 		OR EXISTS (SELECT 1 FROM domain_blocks vd JOIN accounts va ON va.id = ${s}.account_id
-			WHERE vd.account_id IS ${viewer} AND vd.domain = va.domain)))`
+			WHERE vd.account_id IS ${viewer} AND ${domainBlockMatchSql('vd', 'va')})))`
 }
 
 // A status may be shown by itself (GET /statuses/:id): the row is visible and, for a reblog, so is the original.

@@ -21,7 +21,15 @@ import {
 	undoLikeActivity,
 	updateActivity,
 } from './activities'
-import { type ApiVisibility, canView, isDistributable, listableSql, requiresMention, type Visibility } from './audience'
+import {
+	type ApiVisibility,
+	canView,
+	domainBlockMatchSql,
+	isDistributable,
+	listableSql,
+	requiresMention,
+	type Visibility,
+} from './audience'
 import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
 import { beginRetraction } from './deliveries'
 import { allocateLocalId } from './ids'
@@ -445,7 +453,7 @@ function mediaSnapshot(db: Db, statusId: string): MediaAttachment[] {
 
 // Records the status as it is now as a history entry and returns the entry's id (unique per edit; the Update
 // activity is named after it).
-function recordEdit(db: Db, statusId: string, at: string): string {
+export function recordEdit(db: Db, statusId: string, at: string): string {
 	const row = db.all<{ id: string }>(
 		`INSERT INTO status_edits (status_id, content, spoiler_text, sensitive, media_json, created_at)
 		SELECT id, content, spoiler_text, sensitive, ?2, ?3 FROM statuses WHERE id = ?1
@@ -1187,7 +1195,7 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 			EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 AND target_account_id = a.id)
 			OR EXISTS (SELECT 1 FROM blocks WHERE account_id = a.id AND target_account_id = ?1)
 			OR EXISTS (SELECT 1 FROM mutes WHERE account_id = ?1 AND target_account_id = a.id)
-			OR EXISTS (SELECT 1 FROM domain_blocks WHERE account_id = ?1 AND domain = a.domain)))`
+			OR EXISTS (SELECT 1 FROM domain_blocks db WHERE db.account_id = ?1 AND ${domainBlockMatchSql('db', 'a')})))`
 		const lower = page.minId ?? page.sinceId ?? null
 		const rows =
 			kind === 'favourited_by'

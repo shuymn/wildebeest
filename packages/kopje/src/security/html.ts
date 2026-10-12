@@ -1,6 +1,6 @@
 import sanitizeHtml from 'sanitize-html'
 
-// Remote HTML (bios now, post content in B1b-2) as Kopje stores and serves it (HTML-1): allowlisted by sanitize-html
+// Remote HTML (bios, status content and profile field values) as Kopje stores and serves it (HTML-1): allowlisted by sanitize-html
 // with Mastodon's Sanitize::Config::MASTODON_STRICT as the reference. Kept: p br span a del s pre blockquote code b
 // strong u i em ul ol li ruby rt rp, with a@href (http and https only, HTML-3; Mastodon also allows dat, ipfs, gemini
 // and the like), a@class, span@class, p@class (Mastodon's class allowlist), a@translate and span@translate (only
@@ -136,5 +136,23 @@ export function sanitizeRemoteHtml(html: string): string {
 			// sanitize-html writes void tags XHTML-style and empty attributes with ="" ; Mastodon writes <br> and reversed.
 			.replaceAll('<br />', '<br>')
 			.replace(/<ol\b([^>]*) reversed=""/g, '<ol$1 reversed')
+	)
+}
+
+// The text of sanitized remote HTML, for search_text: tags dropped, line and paragraph breaks kept as spaces, the
+// entities sanitize-html writes decoded. Its input is sanitizeRemoteHtml's output, so the breaks have one spelling.
+const TEXT_OPTIONS: sanitizeHtml.IOptions = {
+	allowedTags: [],
+	allowedAttributes: {},
+	disallowedTagsMode: 'discard',
+	nonTextTags: DROPPED_WITH_CONTENT,
+}
+
+const ENTITIES: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'" }
+
+export function remoteHtmlText(html: string): string {
+	return sanitizeHtml(html.replace(/<br>|<\/p>/g, ' $&'), TEXT_OPTIONS).replace(
+		/&(?:amp|lt|gt|quot|#39);/g,
+		(entity) => ENTITIES[entity] ?? entity
 	)
 }
