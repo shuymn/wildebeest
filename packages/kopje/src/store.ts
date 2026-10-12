@@ -23,7 +23,7 @@ import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
 import { resolveSearch } from './domain/remote-statuses'
 import { search } from './domain/search'
-import { getSetupState } from './domain/setup'
+import * as setup from './domain/setup'
 import { saveSnapshot } from './domain/snapshot'
 import * as statuses from './domain/statuses'
 import * as timelines from './domain/timelines'
@@ -144,7 +144,49 @@ export class Store extends DurableObject<Env> {
 	}
 
 	setupState(callerBuild: string) {
-		return this.#kernel.execute(callerBuild, getSetupState, undefined)
+		return this.#kernel.execute(callerBuild, setup.getSetupState, undefined)
+	}
+
+	// The /setup wizard (B5b, domain/setup.ts): each operation authorizes its setup session or admin itself.
+
+	setupView(callerBuild: string, input: OperationInput<typeof setup.setupView>) {
+		return this.#kernel.execute(callerBuild, setup.setupView, input)
+	}
+
+	beginSetupSession(callerBuild: string, input: OperationInput<typeof setup.beginSetupSession>) {
+		return this.#kernel.execute(callerBuild, setup.beginSetupSession, input)
+	}
+
+	endSetupSession(callerBuild: string, input: OperationInput<typeof setup.endSetupSession>) {
+		return this.#kernel.execute(callerBuild, setup.endSetupSession, input)
+	}
+
+	confirmSetupDomain(callerBuild: string, input: OperationInput<typeof setup.confirmSetupDomain>) {
+		return this.#kernel.execute(callerBuild, setup.confirmSetupDomain, input)
+	}
+
+	saveSetupAccess(callerBuild: string, input: OperationInput<typeof setup.saveSetupAccess>) {
+		return this.#kernel.execute(callerBuild, setup.saveSetupAccess, input)
+	}
+
+	sendSetupProbe(callerBuild: string, input: OperationInput<typeof setup.sendSetupProbe>) {
+		return this.#kernel.execute(callerBuild, setup.sendSetupProbe, input)
+	}
+
+	consumeSetupProbe(callerBuild: string, input: OperationInput<typeof setup.consumeSetupProbe>) {
+		return this.#kernel.execute(callerBuild, setup.consumeSetupProbe, input)
+	}
+
+	recordCronRun(callerBuild: string, input: OperationInput<typeof setup.recordCronRun>) {
+		return this.#kernel.execute(callerBuild, setup.recordCronRun, input)
+	}
+
+	chargeSetupTransform(callerBuild: string, input: OperationInput<typeof setup.chargeSetupTransform>) {
+		return this.#kernel.execute(callerBuild, setup.chargeSetupTransform, input)
+	}
+
+	bootstrapInstance(callerBuild: string, input: OperationInput<typeof setup.bootstrapInstance>) {
+		return this.#kernel.execute(callerBuild, setup.bootstrapInstance, input)
 	}
 
 	// Inbound activities (B1b): the Worker verifies and prepares, the Store authorizes and applies (domain/inbox.ts).
