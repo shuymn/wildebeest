@@ -444,7 +444,7 @@ function mediaSnapshot(db: Db, statusId: string): MediaAttachment[] {
 
 // Records the status as it is now as a history entry and returns the entry's id (unique per edit; the Update
 // activity is named after it).
-function recordEdit(db: Db, statusId: string, at: string): string {
+export function recordEdit(db: Db, statusId: string, at: string): string {
 	const row = db.all<{ id: string }>(
 		`INSERT INTO status_edits (status_id, content, spoiler_text, sensitive, media_json, created_at)
 		SELECT id, content, spoiler_text, sensitive, ?2, ?3 FROM statuses WHERE id = ?1

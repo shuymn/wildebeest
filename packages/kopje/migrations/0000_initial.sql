@@ -427,8 +427,10 @@ CREATE INDEX remote_keys_account ON remote_keys (account_id);
 --          stored again. It expires 30 days after the purge is done, independently of inbound_retractions.
 --   move   key = the Move activity's id. bound is the highest follows.id that existed when the Move arrived, so a
 --          replay never moves a follow made after it; cursor is the last follows.id moved.
+--   delete key = the id of a remote status its author deleted, removed in batches; cursor is the local boost whose
+--          Undo is recorded.
 CREATE TABLE inbound_jobs (
-  kind TEXT NOT NULL CHECK (kind IN ('purge', 'move')),
+  kind TEXT NOT NULL CHECK (kind IN ('purge', 'move', 'delete')),
   key TEXT NOT NULL,
   actor_uri TEXT NOT NULL,
   target_account_id TEXT REFERENCES accounts (id) ON DELETE CASCADE,

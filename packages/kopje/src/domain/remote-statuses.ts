@@ -1,0 +1,673 @@
+import { type Account, type Present, presentAccountsById } from './accounts'
+import {
+	canView,
+	interpretAddressing,
+	isDistributable,
+	isPublicCollection,
+	type StatusMention,
+	type Visibility,
+} from './audience'
+import { userWriteOperation } from './auth'
+import { insertWithFreshId, remoteId } from './ids'
+import { isRetracted, type RemoteActorInput, upsertRemoteActor } from './inbox'
+import { notify } from './notifications'
+import { normalizeSearchText } from './search-text'
+import { presentStatus, type Status } from './status-presenter'
+import { MAX_STATUS_EDITS, recordEdit, recountStatus } from './statuses'
+import type { Db } from '../db/sql'
+
+// Remote statuses (B1b-2): Create, Update and the originals of boosts and search results, stored as Mastodon 4.7.3's
+// ActivityPub::Activity::Create and ProcessStatusUpdateService store them. The Worker has parsed the object as
+// Mastodon reads it (compacted JSON), sanitized its content (HTML-1), kept only http(s) URLs (HTML-3) and cut it to
+// the bounds below (RES-2, RES-4); here it is authorized against the stored state (ID-3, ID-6, ID-7) and written.
+//
+// Addressing goes through interpretAddressing (audience.ts): known accounts in to/cc that are not mentioned, and the
+// owner of the personal inbox it came to, are silent mentions; a direct status with any is limited (VIS-2). Unknown
+// mentioned or addressed accounts are not fetched and add nothing. The raw object is kept whole in statuses.raw.
+
+// What one remote status may store (RES-4), as Mastodon caps it where it has a cap: 4 attachments
+// (Status::MEDIA_ATTACHMENTS_LIMIT) and 10,000 code units of description (MAX_DESCRIPTION_HARD_LENGTH_LIMIT). Content
+// is cut at REMOTE_HTML_RAW_LIMIT before sanitizing (security/html.ts). Mastodon has no cap on the rest; these are
+// Kopje's.
+export const MAX_STATUS_MEDIA = 4
+export const MAX_STATUS_TAGS = 100
+// Mention tags read, and to and cc entries read (Public is detected before the cut).
+export const MAX_STATUS_MENTION_TAGS = 100
+export const MAX_STATUS_AUDIENCE = 1000
+// status_mentions rows of one remote status, local accounts first, then mentions, then silent mentions.
+export const MAX_STATUS_MENTION_ROWS = 200
+export const MAX_SPOILER_LENGTH = 10_000
+export const MAX_MEDIA_DESCRIPTION_LENGTH = 10_000
+export const MAX_TAG_LENGTH = 256
+// Replies stored before their parent that one arriving parent links (the rest stay unresolved, by uri).
+export const MAX_LINKED_REPLIES = 100
+// An Update of an unknown status creates it only if the status is this recent (Mastodon's OBJECT_AGE_THRESHOLD).
+export const UPDATE_CREATES_WITHIN_MS = 24 * 60 * 60 * 1000
+
+export type RemoteMediaInput = {
+	type: 'image' | 'video' | 'audio' | 'unknown'
+	url: string
+	previewUrl: string | null
+	description: string
+	focus: { x: number; y: number } | null
+	width: number | null
+	height: number | null
+}
+
+// A remote Note (or a converted Article, Page, Image, Audio, Video or Event) as the Worker read it.
+export type RemoteStatusInput = {
+	uri: string
+	url: string | null
+	attributedTo: string | null
+	// Sanitized HTML (HTML-1), and its text for search.
+	content: string
+	text: string
+	spoilerText: string
+	sensitive: boolean
+	language: string | null
+	published: string | null
+	updated: string | null
+	inReplyTo: string | null
+	to: string[]
+	cc: string[]
+	// hrefs of Mention tags, and normalized names of Hashtag tags.
+	mentions: string[]
+	tags: string[]
+	media: RemoteMediaInput[]
+	// The object as received.
+	raw: string
+}
+
+export type StoreContext = {
+	now: number
+	origin: string
+	// The local account whose personal inbox received the activity.
+	deliveredTo: string | null
+	// Fetched by Kopje (a boosted original, a search result) rather than delivered: Mastodon's fetch?, which needs no
+	// relation to a local account, and sends no notifications.
+	fetched: boolean
+}
+
+export type StatusOutcome = { applied: boolean; reason: string; statusId?: string }
+
+type Author = { id: string; uri: string }
+
+type StoredStatus = {
+	id: string
+	account_id: string
+	reblog_of_id: string | null
+	visibility: Visibility
+	content: string
+	spoiler_text: string
+	sensitive: number
+	language: string | null
+	published_at: string
+	edited_at: string | null
+}
+
+function originOf(uri: string | null): string | null {
+	if (uri === null) {
+		return null
+	}
+	try {
+		return new URL(uri).origin
+	} catch {
+		return null
+	}
+}
+
+function iso(ms: number): string {
+	return new Date(ms).toISOString()
+}
+
+// A remote time as stored: parsed, and never in the future (a future time would pin the status to the top of feeds).
+function remoteTime(value: string | null, now: number): number {
+	const parsed = value === null ? NaN : Date.parse(value)
+	return Number.isNaN(parsed) || parsed > now ? now : parsed
+}
+
+export function statusByUri(db: Db, uri: string): StoredStatus | undefined {
+	return db.first<StoredStatus>(
+		`SELECT id, account_id, reblog_of_id, visibility, content, spoiler_text, sensitive, language, published_at, edited_at
+		FROM statuses WHERE uri = ?`,
+		uri
+	)
+}
+
+// The author's followers collection, as its stored document names it.
+export function followersUri(db: Db, accountId: string): string | null {
+	return (
+		db.first<{ followers: string | null }>(
+			`SELECT CASE WHEN json_type(raw, '$.followers') = 'text' THEN json_extract(raw, '$.followers') END AS followers
+			FROM accounts WHERE id = ?`,
+			accountId
+		)?.followers ?? null
+	)
+}
+
+type Known = { byUri: Map<string, string>; local: Set<string> }
+
+// Known accounts (local or remote) among uris, by their exact URI (ID-5).
+function knownAccounts(db: Db, uris: readonly string[]): Known {
+	const rows = db.all<{ id: string; uri: string; local: number }>(
+		`SELECT id, uri, domain IS NULL AS local FROM accounts WHERE uri IN (SELECT value FROM json_each(?))`,
+		JSON.stringify([...new Set(uris)])
+	)
+	return {
+		byUri: new Map(rows.map((row) => [row.uri, row.id])),
+		local: new Set(rows.filter((row) => row.local === 1).map((row) => row.id)),
+	}
+}
+
+export function hasLocalFollowers(db: Db, accountId: string): boolean {
+	return (
+		db.first(
+			`SELECT 1 AS x FROM follows f JOIN local_accounts l ON l.account_id = f.account_id
+			WHERE f.target_account_id = ? AND f.state = 'accepted' LIMIT 1`,
+			accountId
+		) !== undefined
+	)
+}
+
+type Parent = { id: string; account_id: string; in_reply_to_uri: string | null; in_reply_to_account_id: string | null }
+
+function parentOf(db: Db, uri: string | null): Parent | undefined {
+	return uri === null
+		? undefined
+		: db.first<Parent>(
+				`SELECT id, account_id, in_reply_to_uri, in_reply_to_account_id FROM statuses
+				WHERE uri = ? AND reblog_of_id IS NULL`,
+				uri
+			)
+}
+
+// The mention rows to write: local accounts first (they are who the audience rule serves), then mentions, then the
+// rest, at most MAX_STATUS_MENTION_ROWS.
+function boundedMentions(mentions: readonly StatusMention[], local: ReadonlySet<string>): StatusMention[] {
+	const rank = (m: StatusMention) => (local.has(m.accountId) ? 0 : m.silent ? 2 : 1)
+	return [...mentions].sort((a, b) => rank(a) - rank(b)).slice(0, MAX_STATUS_MENTION_ROWS)
+}
+
+// Mastodon's Create#related_to_local_activity? for a delivered status: public and unlisted ones need a local follower
+// of the author, a reply to a local status or to a followed account, or a local account in to/cc (or the personal
+// inbox); private ones a local follower or a local account addressed; direct ones a local account addressed.
+function relatedToLocal(
+	db: Db,
+	author: Author,
+	visibility: Visibility,
+	addressesLocal: boolean,
+	parent: Parent | undefined
+): boolean {
+	if (addressesLocal) {
+		return true
+	}
+	if (visibility === 'direct' || visibility === 'limited') {
+		return false
+	}
+	if (hasLocalFollowers(db, author.id)) {
+		return true
+	}
+	if (visibility === 'private' || parent === undefined) {
+		return false
+	}
+	const parentLocal =
+		db.first('SELECT 1 AS x FROM local_accounts WHERE account_id = ?', parent.account_id) !== undefined
+	return parentLocal || hasLocalFollowers(db, parent.account_id)
+}
+
+function mediaMeta(media: RemoteMediaInput): string | null {
+	const original = media.width !== null && media.height !== null ? { width: media.width, height: media.height } : null
+	if (original === null && media.focus === null) {
+		return null
+	}
+	return JSON.stringify(original === null ? {} : { original })
+}
+
+function writeMedia(db: Db, statusId: string, author: Author, media: readonly RemoteMediaInput[], ctx: StoreContext) {
+	const current = db.all<{ id: string; url: string }>(
+		'SELECT id, url FROM media_attachments WHERE status_id = ? AND file_token IS NULL',
+		statusId
+	)
+	const kept = new Set<string>()
+	media.slice(0, MAX_STATUS_MEDIA).forEach((m, position) => {
+		const values = [
+			position,
+			m.type,
+			m.url,
+			m.previewUrl,
+			m.description,
+			mediaMeta(m),
+			m.focus?.x ?? 0,
+			m.focus?.y ?? 0,
+		] as const
+		const existing = current.find((row) => row.url === m.url && !kept.has(row.id))
+		if (existing !== undefined) {
+			kept.add(existing.id)
+			db.run(
+				`UPDATE media_attachments SET position = ?, type = ?, url = ?, preview_url = ?, description = ?, meta = ?,
+					focus_x = ?, focus_y = ? WHERE id = ?`,
+				...values,
+				existing.id
+			)
+			return
+		}
+		insertWithFreshId(
+			'media_attachments',
+			() => remoteId('', ctx.now),
+			(id) =>
+				db.run(
+					`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, description,
+						meta, focus_x, focus_y, processed, created_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+					id,
+					author.id,
+					statusId,
+					...values,
+					iso(ctx.now)
+				)
+		)
+	})
+	for (const row of current) {
+		if (!kept.has(row.id)) {
+			db.run('DELETE FROM media_attachments WHERE id = ? AND file_token IS NULL', row.id)
+		}
+	}
+}
+
+function writeTags(db: Db, statusId: string, tags: readonly string[]): void {
+	db.run('DELETE FROM status_tags WHERE status_id = ?', statusId)
+	db.run(
+		'INSERT INTO status_tags (status_id, name) SELECT ?1, value FROM json_each(?2) WHERE true ON CONFLICT DO NOTHING',
+		statusId,
+		JSON.stringify(tags.slice(0, MAX_STATUS_TAGS))
+	)
+}
+
+function searchText(input: RemoteStatusInput): string {
+	return normalizeSearchText(`${input.spoilerText} ${input.text}`)
+}
+
+// Mastodon's ActivityPub::Activity::Create#create_status for an object whose author is `author` (already stored and
+// verified: the actor of the activity, or the fetched author of a fetched object).
+export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInput, ctx: StoreContext): StatusOutcome {
+	// ID-6: the object is the author's, on the author's origin; ID-3: so it is never a local object.
+	if (originOf(input.uri) === null || originOf(input.uri) !== originOf(author.uri)) {
+		return { applied: false, reason: 'foreign-object' }
+	}
+	if (input.attributedTo !== null && input.attributedTo !== author.uri) {
+		return { applied: false, reason: 'not-author' }
+	}
+	// ID-7: a Delete that arrived first keeps the object from appearing.
+	if (isRetracted(db, author.uri, input.uri, ctx.now)) {
+		return { applied: false, reason: 'retracted' }
+	}
+	const existing = statusByUri(db, input.uri)
+	if (existing !== undefined) {
+		if (existing.account_id !== author.id) {
+			return { applied: false, reason: 'not-author' }
+		}
+		return extendAudience(db, existing, ctx.deliveredTo)
+	}
+	const to = input.to.slice(0, MAX_STATUS_AUDIENCE)
+	const cc = input.cc.slice(0, MAX_STATUS_AUDIENCE)
+	const mentionUris = input.mentions.slice(0, MAX_STATUS_MENTION_TAGS)
+	const known = knownAccounts(db, [...to, ...cc, ...mentionUris])
+	const deliveredTo = ctx.deliveredTo
+	const { visibility, mentions } = interpretAddressing({
+		to,
+		cc,
+		followersUri: followersUri(db, author.id),
+		mentionUris,
+		known: known.byUri,
+		deliveredTo,
+	})
+	const audience = new Set(
+		[...to, ...cc].flatMap((uri) => {
+			const id = known.byUri.get(uri)
+			return id === undefined ? [] : [id]
+		})
+	)
+	if (deliveredTo !== null) {
+		audience.add(deliveredTo)
+	}
+	const parent = parentOf(db, input.inReplyTo)
+	const addressesLocal = [...audience].some((id) => known.local.has(id) || id === deliveredTo)
+	if (!ctx.fetched && !relatedToLocal(db, author, visibility, addressesLocal, parent)) {
+		return { applied: false, reason: 'unrelated' }
+	}
+	const published = remoteTime(input.published, ctx.now)
+	const updated = input.updated === null ? null : remoteTime(input.updated, ctx.now)
+	// Status#carried_over_reply_to_account_id.
+	const replyTarget =
+		parent === undefined
+			? null
+			: parent.account_id === author.id && parent.in_reply_to_uri !== null
+				? parent.in_reply_to_account_id
+				: parent.account_id
+	const id = insertWithFreshId(
+		'statuses',
+		() => remoteId(iso(published), ctx.now),
+		(candidate) => {
+			db.run(
+				`INSERT INTO statuses (id, uri, url, account_id, in_reply_to_uri, in_reply_to_id, in_reply_to_account_id,
+					visibility, spoiler_text, content, sensitive, language, published_at, edited_at, raw, search_text, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				candidate,
+				input.uri,
+				input.url,
+				author.id,
+				input.inReplyTo,
+				parent?.id ?? null,
+				replyTarget,
+				visibility,
+				input.spoilerText,
+				input.content,
+				input.sensitive ? 1 : 0,
+				input.language,
+				iso(published),
+				updated !== null && updated !== published ? iso(updated) : null,
+				input.raw,
+				searchText(input),
+				iso(ctx.now)
+			)
+			return candidate
+		}
+	)
+	const rows = boundedMentions(mentions, known.local)
+	db.run(
+		`INSERT INTO status_mentions (status_id, account_id, silent)
+		SELECT ?1, json_extract(value, '$.accountId'), json_extract(value, '$.silent') FROM json_each(?2) WHERE true
+		ON CONFLICT DO NOTHING`,
+		id,
+		JSON.stringify(rows.map((m) => ({ accountId: m.accountId, silent: m.silent ? 1 : 0 })))
+	)
+	writeTags(db, id, input.tags)
+	writeMedia(db, id, author, input.media, ctx)
+	recountStatus(db, parent?.id ?? null)
+	linkReplies(db, { id, uri: input.uri, accountId: author.id, replyTarget, isReply: input.inReplyTo !== null })
+	if (!ctx.fetched) {
+		notifyCreated(db, { id, author, rows, audience, language: input.language, replyTarget, now: ctx.now })
+	}
+	return { applied: true, reason: 'created', statusId: id }
+}
+
+// Replies that arrived before this status are linked to it now (a bounded number; the rest keep their uri).
+function linkReplies(
+	db: Db,
+	status: { id: string; uri: string; accountId: string; replyTarget: string | null; isReply: boolean }
+): void {
+	const changed = db.run(
+		`UPDATE statuses SET in_reply_to_id = ?1,
+			in_reply_to_account_id = CASE WHEN account_id = ?2 AND ?3 THEN ?4 ELSE ?2 END
+		WHERE id IN (SELECT id FROM statuses WHERE in_reply_to_uri = ?5 AND in_reply_to_id IS NULL LIMIT ?6)`,
+		status.id,
+		status.accountId,
+		status.isReply ? 1 : 0,
+		status.replyTarget,
+		status.uri,
+		MAX_LINKED_REPLIES
+	)
+	if (changed > 0) {
+		recountStatus(db, status.id)
+	}
+}
+
+// Mastodon's mention notifications (only accounts in the audience: one tagged but not addressed is not notified) and
+// FeedInsertWorker#notify? for followers who asked to hear of the author's posts. notify() applies the audience rule.
+function notifyCreated(
+	db: Db,
+	created: {
+		id: string
+		author: Author
+		rows: readonly StatusMention[]
+		audience: ReadonlySet<string>
+		language: string | null
+		replyTarget: string | null
+		now: number
+	}
+): void {
+	const { id, author, now } = created
+	for (const mention of created.rows) {
+		if (!mention.silent && created.audience.has(mention.accountId)) {
+			notify(db, { recipientId: mention.accountId, type: 'mention', fromId: author.id, statusId: id, now })
+		}
+	}
+	if (created.replyTarget !== null && created.replyTarget !== author.id) {
+		return
+	}
+	const subscribers = db.all<{ account_id: string }>(
+		`SELECT f.account_id FROM follows f JOIN local_accounts l ON l.account_id = f.account_id
+		WHERE f.target_account_id = ?1 AND f.state = 'accepted' AND f.notify = 1
+			AND (f.languages IS NULL OR ?2 IS NULL OR ?2 IN (SELECT value FROM json_each(f.languages)))`,
+		author.id,
+		created.language
+	)
+	for (const subscriber of subscribers) {
+		notify(db, { recipientId: subscriber.account_id, type: 'status', fromId: author.id, statusId: id, now })
+	}
+}
+
+// Create#postprocess_audience_and_deliver: a known status delivered again to a personal inbox whose owner it does not
+// address gains them as a silent mention (a direct status becomes limited). Nothing else changes (ID-7).
+function extendAudience(db: Db, existing: StoredStatus, deliveredTo: string | null): StatusOutcome {
+	if (
+		deliveredTo === null ||
+		existing.reblog_of_id !== null ||
+		db.first('SELECT 1 AS x FROM status_mentions WHERE status_id = ? AND account_id = ?', existing.id, deliveredTo) !==
+			undefined
+	) {
+		return { applied: false, reason: 'duplicate', statusId: existing.id }
+	}
+	db.run(
+		'INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, 1) ON CONFLICT DO NOTHING',
+		existing.id,
+		deliveredTo
+	)
+	db.run("UPDATE statuses SET visibility = 'limited' WHERE id = ? AND visibility = 'direct'", existing.id)
+	return { applied: true, reason: 'audience-extended', statusId: existing.id }
+}
+
+// Mastodon's ActivityPub::Activity::Update#update_status and ProcessStatusUpdateService, for `author`'s status.
+//   - ID-6: only the status's author updates it; a local status is never one (ID-3).
+//   - An Update whose `updated` is not newer than the stored version is ignored, so a reordered or repeated Update
+//     changes nothing (ID-7).
+//   - The visibility never changes, and the audience of a private, direct or limited status never widens: a mention
+//     the edit adds is linked in the content but adds no recipient (as B2 edits outbound). Public and unlisted
+//     statuses take new mentions, as Mastodon does. A mention the edit removes stays as a silent mention.
+//   - A significant change (content, spoiler, media) is recorded in status_edits, the original first, and local
+//     boosters are notified; history keeps at most MAX_STATUS_EDITS versions, the newest replacing the last one.
+//   - An Update of an unknown status creates it if it is recent (Create and Update out of order).
+export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusInput, ctx: StoreContext): StatusOutcome {
+	if (originOf(input.uri) === null || originOf(input.uri) !== originOf(author.uri)) {
+		return { applied: false, reason: 'foreign-object' }
+	}
+	if (input.attributedTo !== null && input.attributedTo !== author.uri) {
+		return { applied: false, reason: 'not-author' }
+	}
+	// ID-7: a status whose Delete was recorded (possibly still being removed) takes no Update.
+	if (isRetracted(db, author.uri, input.uri, ctx.now)) {
+		return { applied: false, reason: 'retracted' }
+	}
+	const existing = statusByUri(db, input.uri)
+	if (existing === undefined) {
+		const published = input.published === null ? NaN : Date.parse(input.published)
+		if (!Number.isNaN(published) && published < ctx.now - UPDATE_CREATES_WITHIN_MS) {
+			return { applied: false, reason: 'unknown-object' }
+		}
+		return storeRemoteStatus(db, author, input, ctx)
+	}
+	if (existing.account_id !== author.id || existing.reblog_of_id !== null) {
+		return { applied: false, reason: 'not-author' }
+	}
+	const updated = input.updated === null ? NaN : Date.parse(input.updated)
+	const stored = Date.parse(existing.edited_at ?? existing.published_at)
+	if (Number.isNaN(updated) || updated <= stored) {
+		return { applied: false, reason: 'stale' }
+	}
+	const editedAt = iso(Math.min(updated, ctx.now))
+	const media = input.media.slice(0, MAX_STATUS_MEDIA)
+	const currentMedia = db.all<{ url: string; description: string; focus_x: number; focus_y: number }>(
+		'SELECT url, description, focus_x, focus_y FROM media_attachments WHERE status_id = ? ORDER BY position, id',
+		existing.id
+	)
+	const mediaChanged =
+		JSON.stringify(currentMedia.map((m) => [m.url, m.description])) !==
+		JSON.stringify(media.map((m) => [m.url, m.description]))
+	const significant = input.content !== existing.content || input.spoilerText !== existing.spoiler_text || mediaChanged
+	const versions = significant
+		? (db.first<{ n: number }>('SELECT COUNT(*) AS n FROM status_edits WHERE status_id = ?', existing.id)?.n ?? 0)
+		: 0
+	if (significant && versions === 0) {
+		recordEdit(db, existing.id, existing.published_at)
+	}
+	db.run(
+		`UPDATE statuses SET content = ?, spoiler_text = ?, sensitive = ?, language = ?, raw = ?, search_text = ?,
+			edited_at = CASE WHEN ? THEN ? ELSE edited_at END
+		WHERE id = ?`,
+		input.content,
+		input.spoilerText,
+		input.sensitive ? 1 : 0,
+		input.language,
+		input.raw,
+		searchText(input),
+		significant ? 1 : 0,
+		editedAt,
+		existing.id
+	)
+	updateMentions(db, existing, input)
+	writeTags(db, existing.id, input.tags)
+	writeMedia(db, existing.id, author, media, ctx)
+	if (significant) {
+		if (versions + (versions === 0 ? 2 : 1) > MAX_STATUS_EDITS) {
+			db.run('DELETE FROM status_edits WHERE id = (SELECT max(id) FROM status_edits WHERE status_id = ?)', existing.id)
+		}
+		recordEdit(db, existing.id, editedAt)
+		const boosters = db.all<{ account_id: string }>(
+			`SELECT DISTINCT r.account_id FROM statuses r JOIN local_accounts l ON l.account_id = r.account_id
+			WHERE r.reblog_of_id = ?`,
+			existing.id
+		)
+		for (const booster of boosters) {
+			notify(db, {
+				recipientId: booster.account_id,
+				type: 'update',
+				fromId: author.id,
+				statusId: existing.id,
+				now: ctx.now,
+			})
+		}
+	}
+	return { applied: true, reason: significant ? 'edited' : 'updated', statusId: existing.id }
+}
+
+// ProcessStatusUpdateService#update_mentions!, with the audience of a non-public status kept (see updateRemoteStatus).
+function updateMentions(db: Db, existing: StoredStatus, input: RemoteStatusInput): void {
+	const hrefs = input.mentions.slice(0, MAX_STATUS_MENTION_TAGS)
+	const known = knownAccounts(db, hrefs)
+	const present = new Set(
+		db
+			.all<{ account_id: string }>('SELECT account_id FROM status_mentions WHERE status_id = ?', existing.id)
+			.map((row) => row.account_id)
+	)
+	const room = Math.max(MAX_STATUS_MENTION_ROWS - present.size, 0)
+	const current = [...new Set(hrefs.flatMap((uri) => known.byUri.get(uri) ?? []))]
+	const added = current.filter((id) => !present.has(id))
+	const allowed = [
+		...current.filter((id) => present.has(id)),
+		...(isDistributable(existing.visibility) ? added.slice(0, room) : []),
+	]
+	db.run(
+		`UPDATE status_mentions SET silent = 1 WHERE status_id = ?1 AND account_id NOT IN (SELECT value FROM json_each(?2))`,
+		existing.id,
+		JSON.stringify(allowed)
+	)
+	db.run(
+		`INSERT INTO status_mentions (status_id, account_id, silent) SELECT ?1, value, 0 FROM json_each(?2) WHERE true
+		ON CONFLICT (status_id, account_id) DO UPDATE SET silent = 0`,
+		existing.id,
+		JSON.stringify(allowed)
+	)
+}
+
+// The visibility a fetched original would be stored with (before silent mentions), for VIS-6's check before anything
+// is stored: StatusParser#visibility.
+export function visibilityOf(input: RemoteStatusInput, followersUri: string | null): Visibility {
+	if (input.to.some(isPublicCollection)) {
+		return 'public'
+	}
+	if (input.cc.some(isPublicCollection)) {
+		return 'unlisted'
+	}
+	return followersUri !== null && input.to.includes(followersUri) ? 'private' : 'direct'
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Search resolution (GET /api/v2/search?resolve=true)
+// ---------------------------------------------------------------------------------------------------------------
+
+// What the Worker fetched for a resolve query (federation/resolve.ts): an account, or a status with its author, each
+// fetched through the safe loader signed by the instance actor and parsed as inbound documents are. none: nothing was
+// fetched (a local URL, an unusable answer, a failed fetch); the query is then looked up by uri in stored data only.
+export type Resolved =
+	| { kind: 'account'; actor: RemoteActorInput }
+	| { kind: 'status'; status: RemoteStatusInput; author: RemoteActorInput }
+	| { kind: 'none' }
+
+// The queries resolve=true fetches (Mastodon's SearchService#url_query? and AccountSearchService's address forms): an
+// http(s) URL, or user@domain, @user@domain or acct:user@domain.
+export const ADDRESS_QUERY =
+	/^(?:acct:)?@?([a-z0-9_]+(?:[a-z0-9_.-]+[a-z0-9_]+)?)@([a-z0-9-]+(?:\.[a-z0-9-]+)+(?::\d{1,5})?)$/i
+
+export function isUrlQuery(query: string): boolean {
+	return /^https?:\/\//i.test(query)
+}
+
+export type ResolveInput = { query: string; resolved: Resolved; now: number; origin: string; present: Present }
+
+export type ResolveResult = { accounts: Account[]; statuses: Status[] }
+
+// Stores what was resolved with the validation of inbound activities (ID-3, ID-7, HTML-1, HTML-3, RES-4), then answers
+// with it only if the viewer may see it (VIS-1): a private object a server answered the instance actor with is
+// stored with its audience and shown to nobody else.
+export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db, input, { accountId }) => {
+	const { resolved, now, origin } = input
+	const options = { ...input.present, viewerId: accountId }
+	const account = (id: string | undefined): ResolveResult => {
+		const found = id === undefined ? undefined : presentAccountsById(db, [id], input.present).get(id)
+		return { accounts: found === undefined ? [] : [found], statuses: [] }
+	}
+	const status = (id: string | undefined): ResolveResult => {
+		const found = id === undefined || !canView(db, accountId, id) ? null : presentStatus(db, id, options)
+		return { accounts: [], statuses: found === null ? [] : [found] }
+	}
+	switch (resolved.kind) {
+		case 'account':
+			return account(upsertRemoteActor(db, resolved.actor, origin, now)?.id)
+		case 'status': {
+			const author = upsertRemoteActor(db, resolved.author, origin, now)
+			if (author === undefined) {
+				return { accounts: [], statuses: [] }
+			}
+			const stored = storeRemoteStatus(db, author, resolved.status, {
+				now,
+				origin,
+				deliveredTo: null,
+				fetched: true,
+			})
+			return status(stored.statusId)
+		}
+		case 'none': {
+			const byUri = db.first<{ kind: string; id: string }>(
+				`SELECT 'status' AS kind, id FROM statuses WHERE uri = ?1 AND reblog_of_id IS NULL
+				UNION ALL SELECT 'account', a.id FROM accounts a LEFT JOIN local_accounts l ON l.account_id = a.id
+					WHERE a.uri = ?1 AND l.suspended_at IS NULL
+				LIMIT 1`,
+				input.query
+			)
+			if (byUri === undefined) {
+				return { accounts: [], statuses: [] }
+			}
+			return byUri.kind === 'status' ? status(byUri.id) : account(byUri.id)
+		}
+	}
+})
