@@ -9,8 +9,7 @@ status, updates this file. IDs are never reused: an invariant that no longer app
 ## Status of an invariant
 
 Paths are relative to `packages/kopje`. **Enforced (main):** the cited source and test exist on `main`. **Implemented on
-branch `kopje/<name>`:** on a branch not yet in a PR (`kopje/ops-tools` is B6a, `kopje/statuses` is B4a,
-`kopje/deliveries` is B2, `kopje/media-search` is B4b, `kopje/inbound-relationships` is B1b-1). **Planned
+branch `kopje/<name>`:** on a branch not yet in a PR (`kopje/ops-tools` is B6a, `kopje/statuses` is B4a). **Planned
 (stage):** not implemented; required before the stage ships.
 
 A **Gap** note names a part that no test pins yet; that part does not count as enforced. Stages: B1b inbound activities,
@@ -60,24 +59,24 @@ against their own instance. TLS is assumed between all parties.
 
 ## Entry points
 
-| Entry point                                                   | Reached by | Authenticated by                                         | Status and code                                            |
-| ------------------------------------------------------------- | ---------- | -------------------------------------------------------- | ---------------------------------------------------------- |
-| `POST /inbox`, `/ap/users/:username/inbox`, `/actor/inbox`    | R1, R2     | HTTP signature, also on replay from the spool            | `kopje/inbound-relationships`: `src/federation/inbound.ts` |
-| Actor, `/actor`, WebFinger, NodeInfo, followers and following | R1, R2     | none (public)                                            | main: `src/federation/*`                                   |
-| `/ap/o/:uuid`, status documents and the outbox                | R1, R2     | none (VIS-4)                                             | `kopje/deliveries`: `src/federation/federation.ts`         |
-| Outbound document fetches                                     | R1 answers | final URL and parsed id (ID-2)                           | main: `src/federation/loader.ts`                           |
-| Deliveries, remote media fetches, Web Push POSTs              | R1 answers | sink policy (NET-3)                                      | `kopje/deliveries` (deliveries); Planned (B4, push)        |
-| Mastodon API `/api/*`                                         | R2–R4, R7  | bearer token and route access                            | main: `src/mastodon/*`, `src/domain/auth.ts`               |
-| `/oauth/authorize`                                            | R2, R6, R7 | Access JWT, Origin, consent                              | main: `src/app/authorize.tsx`                              |
-| `/oauth/token`, `/oauth/revoke`                               | R2, R3     | client credentials                                       | main: `src/mastodon/oauth.ts`                              |
-| `/admin/*` and the `kopje-admin` CLI                          | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session | `kopje/ops-tools`: `src/app/admin.ts`                      |
-| `/setup` and its Cloudflare API calls                         | R2, R7     | `SETUP_TOKEN`                                            | Planned (B5)                                               |
-| Web UI (profiles, permalinks, settings)                       | R2, R4, R7 | session                                                  | Planned (B5)                                               |
-| Media upload and serving, Images transformation               | R2–R4      | bearer token; capability URL for reads                   | `kopje/media-search`: `src/mastodon/media.ts`              |
-| Web Push registration                                         | R3         | bearer token with `push`                                 | Planned (push)                                             |
-| Queue consumer, alarms, cron                                  | internal   | —                                                        | main: `src/jobs/queue.ts`, `src/platform/store-kernel.ts`  |
-| Delivery doorbell and cron (`src/jobs/deliver.ts`)            | internal   | —                                                        | `kopje/deliveries`                                         |
-| Dump import, backup restore, cutover tools                    | R5, R8     | admin authority, then digest chain and manifest          | `kopje/ops-tools` (import); Planned (B6b, B8)              |
+| Entry point                                                   | Reached by | Authenticated by                                         | Status and code                                           |
+| ------------------------------------------------------------- | ---------- | -------------------------------------------------------- | --------------------------------------------------------- |
+| `POST /inbox`, `/ap/users/:username/inbox`, `/actor/inbox`    | R1, R2     | HTTP signature, also on replay from the spool            | main: `src/federation/inbound.ts`                         |
+| Actor, `/actor`, WebFinger, NodeInfo, followers and following | R1, R2     | none (public)                                            | main: `src/federation/*`                                  |
+| `/ap/o/:uuid`, status documents and the outbox                | R1, R2     | none (VIS-4)                                             | main: `src/federation/federation.ts`                      |
+| Outbound document fetches                                     | R1 answers | final URL and parsed id (ID-2)                           | main: `src/federation/loader.ts`                          |
+| Deliveries, remote media fetches, Web Push POSTs              | R1 answers | sink policy (NET-3)                                      | main (deliveries); Planned (B4, push)                     |
+| Mastodon API `/api/*`                                         | R2–R4, R7  | bearer token and route access                            | main: `src/mastodon/*`, `src/domain/auth.ts`              |
+| `/oauth/authorize`                                            | R2, R6, R7 | Access JWT, Origin, consent                              | main: `src/app/authorize.tsx`                             |
+| `/oauth/token`, `/oauth/revoke`                               | R2, R3     | client credentials                                       | main: `src/mastodon/oauth.ts`                             |
+| `/admin/*` and the `kopje-admin` CLI                          | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session | `kopje/ops-tools`: `src/app/admin.ts`                     |
+| `/setup` and its Cloudflare API calls                         | R2, R7     | `SETUP_TOKEN`                                            | Planned (B5)                                              |
+| Web UI (profiles, permalinks, settings)                       | R2, R4, R7 | session                                                  | Planned (B5)                                              |
+| Media upload and serving, Images transformation               | R2–R4      | bearer token; capability URL for reads                   | main: `src/mastodon/media.ts`                             |
+| Web Push registration                                         | R3         | bearer token with `push`                                 | Planned (push)                                            |
+| Queue consumer, alarms, cron                                  | internal   | —                                                        | main: `src/jobs/queue.ts`, `src/platform/store-kernel.ts` |
+| Delivery doorbell and cron (`src/jobs/deliver.ts`)            | internal   | —                                                        | main: `src/jobs/deliver.ts`                               |
+| Dump import, backup restore, cutover tools                    | R5, R8     | admin authority, then digest chain and manifest          | `kopje/ops-tools` (import); Planned (B6b, B8)             |
 
 ## Invariants
 
@@ -90,7 +89,7 @@ against their own instance. TLS is assumed between all parties.
   trusted for 24 hours after its document was fetched; after that, or when its signature fails, the key and the actor
   document are fetched anew, bypassing the document cache. The one exception is an actor's own `Delete` when its key (by the status its fetch actually returned) and
   its actor document both answer 404 or 410: it is verified with the stored key at any age. A live actor is never
-  deleted with a key its current document does not list (401), and a transient failure answers 503. _Implemented on branch `kopje/inbound-relationships`:_ `receiveInbound` in `src/federation/inbound.ts`;
+  deleted with a key its current document does not list (401), and a transient failure answers 503. _Enforced (main):_ `receiveInbound` in `src/federation/inbound.ts`;
   `test/inbox.test.ts` ("ID-1: an inbound activity acts only for its signer"), `test/inbox-regressions.test.ts`
   ("stored keys, rotation and ownership").
 - **ID-2: a fetched document is trusted only for its own origin.** The identity of a fetched object is its parsed `id`
@@ -98,11 +97,11 @@ against their own instance. TLS is assumed between all parties.
   pre-filter. Cross-origin redirects are refused. _Enforced (main):_ `src/federation/loader.ts`;
   `test/remote-identity.test.ts`, `test/loader.test.ts`.
 - **ID-3: remote input never changes local actors or local objects.** No inbound activity updates, deletes, moves or
-  attributes anything to a local account or local status. _Implemented on branch `kopje/inbound-relationships`_ for actors and relationships: `upsertRemoteActor` and
+  attributes anything to a local account or local status. _Enforced (main)_ for actors and relationships: `upsertRemoteActor` and
   `localAccount` in `src/domain/inbox.ts`; `test/inbox.test.ts` ("a local actor URI is never written", "an actor updates
   only itself"). Statuses: _Planned (B1b-2)._
 - **ID-4: `Move` requires the alias.** A `Move` is honoured only if the freshly fetched target lists the source in
-  `alsoKnownAs`. _Implemented on branch `kopje/inbound-relationships`:_ `prepare` in `src/federation/inbound.ts`, `move` in
+  `alsoKnownAs`. _Enforced (main):_ `prepare` in `src/federation/inbound.ts`, `move` in
   `src/domain/inbox.ts`; `test/inbox.test.ts` ("ignores a Move whose target does not list the actor").
 - **ID-5: local documents come from stored data only.** Actor ids derive from the domain fixed at setup and the stored
   username's exact spelling; public keys come from `local_accounts.pubkey`. Another spelling or host answers 404 and has
@@ -112,13 +111,13 @@ against their own instance. TLS is assumed between all parties.
   row). The activity `id` has the actor's origin before any idempotency key is reserved. `Undo` requires the actor of
   the undone activity; `Accept` and `Reject` require the target of the matching `Follow`; `Update` and `Delete` require
   the object's current author, and an update never changes the author. A same-origin but different actor is refused like
-  a cross-origin one. _Implemented on branch `kopje/inbound-relationships`_ for Follow, Accept, Reject, Undo, Block, Move and
+  a cross-origin one. _Enforced (main)_ for Follow, Accept, Reject, Undo, Block, Move and
   Update and Delete of actors: the table in `src/domain/inbox.ts`; `test/inbox.test.ts` ("ID-6: the authorization
   table"). Update and Delete of statuses, Like and Announce: _Planned (B1b-2)._
 - **ID-7: replay changes nothing twice.** A repeated activity creates no second relationship, counter change,
   notification, push or outbound intent (natural keys). A valid `Delete` or `Undo` that arrives before its target is
   recorded for 30 days and prevents the target from appearing later. Input that fails ID-1 or ID-6 reserves no key and
-  records no retraction. _Implemented on branch `kopje/inbound-relationships`:_ natural keys and `retract` and `isRetracted` in
+  records no retraction. _Enforced (main):_ natural keys and `retract` and `isRetracted` in
   `src/domain/inbox.ts`. A Follow has generations: a superseded, undone, refused or blocked Follow id is recorded as retracted, so
   no late Undo, Accept, Reject or replay reaches a newer generation, and no Accept or Reject is recorded twice; an
   answer's id derives from the Follow it answers. A Move is a job keyed by its id that never moves a follow made after
@@ -158,14 +157,14 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule. _Implemented
   on branch `kopje/statuses`:_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
   `test/visibility.test.ts` (single status, context, history, source, `favourited_by`, timelines, account statuses,
-  notifications, bookmarks, favourites). _Implemented on branch `kopje/media-search`_ for search: `src/domain/search.ts`;
+  notifications, bookmarks, favourites). _Enforced (main)_ for search: `src/domain/search.ts`;
   `test/search.test.ts` ("never returns a status the viewer may not see", "drops a boosted status that became
   inaccessible", hashtags only where a status with them is visible), `test/search-edge.test.ts` (hashtag candidates
   pass the rule before ranking and truncation, so hidden statuses neither hide nor crowd out a visible tag, hidden
   mentions included). Hashtag search is recent autocomplete over the viewer's own library windows and the newest
   public statuses, not a catalogue: a tag outside the windows is not found. _Gap:_ a status the viewer saved that later
   became hidden still takes a slot of the viewer's own window, which reveals that something changed, not what. Media
-  URLs appear only in statuses that pass the rule (see the capability URL accepted risk). The web UI is _Planned (B5)._ The object endpoint serves only what VIS-4 allows (`kopje/deliveries`).
+  URLs appear only in statuses that pass the rule (see the capability URL accepted risk). The web UI is _Planned (B5)._ The object endpoint serves only what VIS-4 allows (enforced on main).
 - **VIS-2: limited stays limited.** A direct status with silent recipients (Misskey `specified`) is `limited`: shown
   only to its addressed recipients, presented as `private` by the API, never widened by an edit. _Implemented on branch
   `kopje/statuses`:_ `interpretAddressing` in `src/domain/audience.ts`; `test/audience.test.ts` ("reads Misskey
@@ -175,14 +174,14 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   addressed, and nothing about other silent recipients. A personal copy goes only to its recipient's personal inbox:
   if there is none, nothing is sent to them, never a substitute at a shared inbox, and the copy is kept as `gave_up`
   `no personal inbox` for the operator (it cannot be retried) and logged without identifiers. A personal copy never
-  replaces the neutral copy for an inbox. _Implemented on branch `kopje/deliveries`:_ `audienceTargets` and `bodyFor`
+  replaces the neutral copy for an inbox. _Enforced (main):_ `audienceTargets` and `bodyFor`
   in `src/domain/deliveries.ts`; `test/delivery-regressions.test.ts` ("sends each silent recipient a copy addressed to
   them alone", "never names a silent recipient in the copy for the followers"), `test/delivery-verify.test.ts` ("sends
   nothing to a silent recipient without a personal inbox", "POSTs each silent recipient a copy naming only them").
 - **VIS-3: changes reach only the original audience.** `Update` and `Delete` are addressed to the audience the status
   already had; `Delete` carries a `Tombstone`, not the content. _Implemented on branch `kopje/statuses`:_
   `src/domain/activities.ts`; `test/statuses.test.ts` ("records Create, Update and Delete for the original audience
-  only"). Delivery: _Implemented on branch `kopje/deliveries`:_ silent recipients get the activity as VIS-2 says and
+  only"). Delivery: _Enforced (main):_ silent recipients get the activity as VIS-2 says and
   are never named in the shared copy; a `Delete` or `Undo` also reaches every inbox that received the object or may
   still receive it (receipts, and the rows and unexpanded targets of earlier activities about it, leased ones
   included), and never any other. Deleting an original first records an `Undo(Announce)` for each local boost of it,
@@ -199,7 +198,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   answer for local `public` and `unlisted` statuses, as Mastodon does for an unauthenticated fetch. `private`, `direct`,
   `limited`, remote objects and statuses of suspended accounts answer 404, whether or not the request is signed.
   The Note is built by `noteOf`, the presenter of the outbound `Create`; the outbox lists the same statuses and boosts
-  of public or unlisted originals. _Implemented on branch `kopje/deliveries`:_ `getLocalNote` and `getOutbox` in
+  of public or unlisted originals. _Enforced (main):_ `getLocalNote` and `getOutbox` in
   `src/domain/activities.ts`, the object and outbox dispatchers in `src/federation/federation.ts`;
   `test/object-endpoint.test.ts`. Boosts (`Announce` ids) answer 404; Mastodon serves them.
 - **VIS-5: lists also apply the viewer's filters**, Mastodon's `StatusFilter`. Feeds, context, notifications, bookmarks,
@@ -221,8 +220,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `follow` in `src/domain/accounts.ts`; `test/accounts.test.ts` ("requests a locked or remote account", "lists following
   without pending requests").
 - **VIS-9: only the followed side accepts.** A pending follow of a local account becomes `accepted` only by that
-  account's own authorize call; a pending remote follow only by an `Accept` that passes ID-6. _Implemented on branch
-  `kopje/inbound-relationships`:_ `answerFollowRequest` in `src/domain/accounts.ts` (`POST
+  account's own authorize call; a pending remote follow only by an `Accept` that passes ID-6. _Enforced (main):_ `answerFollowRequest` in `src/domain/accounts.ts` (`POST
 /api/v1/follow_requests/:id/authorize` and `/reject`, the viewer from the credential; a remote requester gets the
   Accept or Reject at its personal inbox), and the inbound `Accept`, matched first by the `follows.uri` of our Follow;
   `test/inbox.test.ts` ("Accept: only the target of our Follow accepts it"), `test/inbox-regressions.test.ts` ("with
@@ -342,7 +340,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   server, to shared and personal inboxes alike, arrives in order, so a later `Update` or `Delete` cannot overtake the
   `Create`. The whole path from claim to POST (key loading, DNS, signing, the POST) runs under one absolute deadline,
   the earlier of 30 s and 10 s before the lease ends; the clock is checked against it after the key is loaded and
-  right before the POST, so a late timer cannot let a POST through. _Implemented on branch `kopje/deliveries`:_
+  right before the POST, so a late timer cannot let a POST through. _Enforced (main):_
   `src/domain/deliveries.ts` (expansion, lanes, claims, completions), `src/federation/delivery.ts` (the POST);
   `test/deliveries.test.ts` ("NET-2: delivers a public status once per shared inbox", "NET-2: a recipient outside the
   audience gets nothing", "NET-2: an expired lease is claimed again"), `test/delivery-post.test.ts` ("NET-2: never
@@ -354,7 +352,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   documents as NET-1; remote media a size cap, a time limit and a type allowlist; Web Push and deliveries no redirects.
   Credentials and signatures never follow a redirect to another origin. Fedify's sending and queueing are not used.
   _Enforced (main)_ for documents and the Fedify rule: `test/fedify-usage.test.ts` ("never sends or queues through
-  Fedify"). Deliveries: _Implemented on branch `kopje/deliveries`:_ `assertPublicShape` and the DNS check before every
+  Fedify"). Deliveries: _Enforced (main):_ `assertPublicShape` and the DNS check before every
   POST, no redirects, 30 s (`postActivity` in `src/federation/delivery.ts`); `test/delivery-post.test.ts` ("NET-3:
   refuses inboxes that fail the public-host rules"). Media and push: _Planned (B4, push)._
 - **NET-4: signed fetches stay with their signer.** A document fetched with a signature is cached under a key that
@@ -371,7 +369,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 
 - **HTML-1: remote HTML is sanitized by allowlist.** Tags, attributes and URL schemes are allowlisted by a maintained
   sanitizer (or custom code that passes the vector suites below). Sanitized HTML enters only rich-content sinks
-  (`content`, `note`, field values) and is not escaped a second time. _Implemented on branch `kopje/inbound-relationships`_ for bios:
+  (`content`, `note`, field values) and is not escaped a second time. _Enforced (main)_ for bios:
   `sanitizeRemoteHtml` in `src/security/html.ts` (sanitize-html with Mastodon's `MASTODON_STRICT` allowlist, styles never allowed and postcss stubbed out);
   `test/html.test.ts`. Status content and field values: _Planned (B1b-2)._
 - **HTML-2: local text becomes HTML only by escaping and linking.** Status text and bios are escaped, then absolute
@@ -384,10 +382,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/mastodon/oauth.ts` (_Gap: untested_). _Implemented on branch `kopje/hardening-1`_ for the account presenter and
   local actor documents (profile URL, avatar, header, icon, image and aliases): `httpUrl` in `src/platform/http-url.ts`,
   used by `presentAccount` in `src/domain/accounts.ts` and `localActorObject` in `src/federation/federation.ts`;
-  `test/accounts.test.ts`, `test/federation.test.ts`. _Implemented on branch `kopje/media-search`_ for attachment URLs
+  `test/accounts.test.ts`, `test/federation.test.ts`. _Enforced (main)_ for attachment URLs
   in the API and in Note attachments: `presentMedia` in `src/domain/status-presenter.ts`, `noteOf` in
-  `src/domain/activities.ts` (_Gap: no test with a non-http stored attachment URL_). _Implemented on branch
-  `kopje/inbound-relationships`_ for remote actors at ingest (profile URL, avatar, header, inboxes) and links in remote
+  `src/domain/activities.ts` (_Gap: no test with a non-http stored attachment URL_). _Enforced (main)_ for remote actors at ingest (profile URL, avatar, header, inboxes) and links in remote
   HTML: `src/federation/remote-actor.ts`, `src/security/html.ts`; `test/inbox.test.ts` ("stores the remote actor"),
   `test/html.test.ts`. Field links: _Planned (B1b-2)._
 
@@ -396,13 +393,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **MEDIA-1: only the owner uses an attachment.** Only the uploader may update, delete or attach an attachment, and only
   while it is unattached or attached to the status being edited. _Implemented on branch `kopje/statuses`_ for attaching:
   `attachableMedia` in `src/domain/statuses.ts`; `test/statuses.test.ts` ("attaches own unattached media").
-  _Implemented on branch `kopje/media-search`_ for reading, updating and deleting: `src/domain/media.ts` (an upload is
+  _Enforced (main)_ for reading, updating and deleting: `src/domain/media.ts` (an upload is
   read or updated only by its owner while unattached; it is deleted only through its owner's status with
   `delete_media`, or by the sweep after its grace period, and a doomed or still-processing upload cannot be attached);
   `test/media.test.ts` ("shows and updates own unattached media only").
 - **MEDIA-2: R2 keys are server-made.** Keys derive from server-generated ids and stored records; no filename, path
   segment or encoded separator from a request selects or overwrites a key. Originals are not publicly readable.
-  _Implemented on branch `kopje/media-search`:_ `src/platform/media-files.ts` (originals at `originals/<id>`, served
+  _Enforced (main):_ `src/platform/media-files.ts` (originals at `originals/<id>`, served
   files at `files/<token>/<variant>`; the serving route builds only `files/` keys from a token of the server's form);
   the Store holds a row for every key before it is written, and the sweep deletes a row only after its objects. A write
   started before the upload's deadline can still land after the sweep, so the sweep leaves a tombstone
@@ -414,8 +411,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   of served files"), `test/media-reconcile.test.ts` ("deletes nothing from R2 for a Store that knows nothing of it",
   "deletes nothing during maintenance, an import, or before setup", "deletes a late write of a failed upload").
 - **MEDIA-3: served images are re-encoded.** An image is served only as Images output with location metadata removed; if
-  transformation fails, the upload is refused and original bytes are never served. _Implemented on branch
-  `kopje/media-search`:_ outputs are PNG or WebP only, for which Images discards all metadata (the binding has no
+  transformation fails, the upload is refused and original bytes are never served. _Enforced (main):_ outputs are PNG or WebP only, for which Images discards all metadata (the binding has no
   metadata option, and JPEG output would keep the EXIF copyright tag); `processImage` in `src/platform/images.ts` then
   checks every output with `retainedMetadata` (`src/platform/image-bytes.ts`), which refuses any EXIF, XMP, IPTC,
   comment, text chunk or unknown JPEG application segment and keeps only colour profiles, and refuses the upload
@@ -425,7 +421,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   verified on the verification instance (B9).
 - **MEDIA-4: media cannot run as instance content.** Uploads are accepted by detected type from an allowlist and served
   with their stored type and `nosniff`; HTML, SVG and other active types are never served from the instance origin.
-  _Implemented on branch `kopje/media-search`:_ `sniffImageType` (JPEG, PNG, GIF, WebP, AVIF by signature, and Images
+  _Enforced (main):_ `sniffImageType` (JPEG, PNG, GIF, WebP, AVIF by signature, and Images
   must read the same type); `SERVED_TYPES` and `src/web/media.ts` (JPEG, PNG and WebP only, `nosniff`, `sandbox` CSP);
   video and audio are refused; `test/media.test.ts` ("refuses active and unsupported types by their bytes", "never
   serves a stored object of another type").
@@ -449,36 +445,34 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   code units). Media uploads have their own limit. _Enforced (main)_ for bodies: `src/platform/body.ts`,
   `src/mastodon/params.ts`; `test/gate.test.ts` ("refuses an inbox body over 1 MiB", "stops reading a streamed inbox
   body"). _Gap: no API body test._ _Implemented on branch `kopje/statuses`_ for status text: `test/status-text.test.ts`
-  ("raw input bound"). _Implemented on branch `kopje/media-search`_ for search terms (500 characters) and media (16 MB
+  ("raw input bound"). _Enforced (main)_ for search terms (500 characters) and media (16 MB
   and 16,777,216 pixels, read with the body bound before parsing): `src/mastodon/search.ts`, `src/mastodon/media.ts`;
-  `test/search.test.ts` ("bounds the query"), `test/media.test.ts` ("refuses a file over 16 MB"). _Implemented on
-  branch `kopje/inbound-relationships`_ for remote profiles: bios are cut at 50,000 code units before sanitizing and
+  `test/search.test.ts` ("bounds the query"), `test/media.test.ts` ("refuses a file over 16 MB"). _Enforced (main)_ for remote profiles: bios are cut at 50,000 code units before sanitizing and
   display names at 2,048 (`src/security/html.ts`, `src/federation/remote-actor.ts`). Other query strings: _Gap._
 - **RES-2: parsing work is bounded.** Every regex, parser and normalization over input at the RES-1 cap has an
   adversarial fixture with a time bound. _Implemented on branch `kopje/statuses`_ for status text:
-  `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Implemented on branch
-  `kopje/media-search`_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
-  bound"). Remote HTML: _Implemented on branch `kopje/inbound-relationships`:_ `test/html.test.ts` ("at the raw cap
+  `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Enforced (main)_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
+  bound"). Remote HTML: _Enforced (main):_ `test/html.test.ts` ("at the raw cap
   within a generous time"). JSON-LD processing: _Planned (B1b-2)._
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
-  `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Implemented on branch `kopje/media-search`_ for search: at
+  `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
   most 40 results per type (80 for the account search), and offsets past 10,000 answer an empty page;
   `test/search.test.ts` ("bounds the query, the limit and the offset").
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Enforced (main)_ for snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
-  sweep and spool: _Planned (B1b)._ Deliveries: _Implemented on branch `kopje/deliveries`:_ delivered rows are deleted
+  sweep and spool: _Planned (B1b)._ Deliveries: _Enforced (main):_ delivered rows are deleted
   at once and given-up rows after 30 days by the 5-minute cron (`sweepDeliveries`); receipts belong to their status
   (foreign key) and are dropped when its retraction is recorded; a lane holds at most 500 and the Store 10,000 active
   rows, and a row over either cap is written as `gave_up` with `backlog full`, visible in `kopje-admin deliveries`.
   Retractions (`Delete`, `Undo`, and a `Reject` ending a follow we had accepted) are exempt: they clean up what was
   already sent and are bounded by it, so they are never refused. A `Reject` of a Follow never accepted (a refused
   request, a blocked follower) is new work and passes admission; refused, it is given up, and the remote can ask again
-  (`kopje/inbound-relationships`, `test/inbox-verify2.test.ts`). Operator retries pass the same admission, and a retry over a cap stays given up (`refused`);
+  (`test/inbox-verify2.test.ts`). Operator retries pass the same admission, and a retry over a cap stays given up (`refused`);
   `test/deliveries.test.ts` ("lists given-up deliveries for the operator, retries them, and sweeps them after 30
   days"), `test/delivery-regressions.test.ts` ("gives up new work for a lane over its cap", "gives up new work once
   the whole backlog is at its cap").
-  Retractions: _Implemented on branch `kopje/inbound-relationships`:_ they expire after 30 days, each
+  Retractions: _Enforced (main):_ they expire after 30 days, each
   inbound activity sweeps 100 expired rows, and an actor has at most 10,000 live rows. Finished inbound jobs (and
   with them deleted actors' tombstones) expire 30 days after they finish. `test/inbox.test.ts`,
   `test/inbox-regressions.test.ts`.
@@ -491,7 +485,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   again: naming it answers 409 `superseded`, and `--all` skips it, choosing eligible rows before its batch limit and
   continuing from the cursor it returns (`test/delivery-regressions.test.ts`, "refuses to retry a Like that its Undo
   has superseded"; `test/delivery-verify.test.ts`, "operator retries", "the `all` cursor").
-  _Implemented on branch `kopje/deliveries`:_ `src/domain/deliveries.ts`, `src/jobs/deliver.ts`;
+  _Enforced (main):_ `src/domain/deliveries.ts`, `src/jobs/deliver.ts`;
   `test/deliveries.test.ts` ("retries after min(30 s·2^n, 12 h)"), `test/delivery-post.test.ts` ("RES-5: claims
   nothing and counts no attempt in maintenance"), `test/cli.test.ts`. Spool messages that fail terminally are kept and
   inspectable before acknowledgement: _Planned (B1b)._
@@ -499,7 +493,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   recipients, collection expansion and notifications. Delivery backlog and concurrency are bounded. Anonymous app
   registration, inbox spooling and media transformations have rate or storage budgets with a visible refusal. _Planned
   (B1b). Gap: `POST /api/v1/apps` on main has no rate or storage budget yet; planned with B5 (rate limiting)._
-  _Implemented on branch `kopje/media-search`_ for media: before the body is read or Images is called, the Store
+  _Enforced (main)_ for media: before the body is read or Images is called, the Store
   counts upload attempts (deleted and failed ones included) to at most 30 per 30 minutes per account (Mastodon's
   limit) and checks the monthly budgets; right before Images is called it revalidates the reservation with fresh time
   and charges two transformations to the month they run in, against an instance budget per UTC month (`IMAGES_MONTHLY_TRANSFORMS`,
@@ -510,7 +504,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   uploads once the monthly Images budget is reserved", "stops one account at its monthly share", "answers 503 when the
   transformation allowance is used up"), `test/media-reconcile.test.ts` ("spends no transformation on a reservation
   that expired", "charges the budgets of the month the transformations run in").
-  Delivery: _Implemented on branch `kopje/deliveries`:_ an activity's targets are expanded 100 at a time, oldest
+  Delivery: _Enforced (main):_ an activity's targets are expanded 100 at a time, oldest
   activity first, in the recording transaction and then in each claim; a claim reads at most 16 lane heads (only heads
   are due); a Queue batch runs one round however many doorbells it holds; the consumer runs at most 4 batches at once
   (`max_concurrency`); the backlog has the RES-4 caps. `test/deliveries.test.ts` ("bounds a claim to its limit"),
@@ -524,7 +518,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   targets exceed what one row can hold", "refuses an actor whose inbox URL is over the cap"). _Gap: computing an
   activity's targets reads all of the signer's remote followers in one transaction (a read, then one row per
   chunk)._
-  _Implemented on branch `kopje/inbound-relationships`_ for relationship activities: one request's fetches share a budget of 8 fetches
+  _Enforced (main)_ for relationship activities: one request's fetches share a budget of 8 fetches
   (documents, JSON-LD contexts and each redirect hop), 2 MiB and 15 seconds (`requestBudget` in
   `src/federation/loader.ts`; cached contexts cost nothing; icons are taken only when embedded). Running out of the budget is retryable: the
   request answers 503, records nothing and its spooled copy is retried; a document refused for itself stays a permanent
@@ -546,7 +540,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Implemented on branch `kopje/statuses`_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
-  untested_). _Implemented on branch `kopje/media-search`_ for search: statuses pass `listableSql` before `LIMIT`,
+  untested_). _Enforced (main)_ for search: statuses pass `listableSql` before `LIMIT`,
   each library source reads at most 2,500 rows through an index ordered by the status id it returns (cursors applied
   inside it), hashtags come from at most 500 entries per library source plus the newest 2,000 public statuses, and an
   account search matches the exact address (always), at most 1,000 username-prefix candidates, the 5,000 newest
@@ -592,8 +586,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **DATA-7: the instance key signs only recipient-neutral fetches.** Fetches without a specific recipient are signed by
   the instance actor; fetches for a personal inbox by the recipient's key; activities by their author's key. The
   instance key never signs an activity attributed to a user. _Enforced (main)_ for fetches:
-  `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("signed fetches"). Activities: _Implemented on branch
-  `kopje/deliveries`:_ a delivery is signed with the key of its lane's account, unwrapped once per round
+  `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("signed fetches"). Activities: _Enforced (main):_ a delivery is signed with the key of its lane's account, unwrapped once per round
   (`src/jobs/deliver.ts`); `test/delivery-post.test.ts` ("signs the activity with its author key").
 - **DATA-8: a restore has selected authority.** Restore uses a manifest the operator selected by digest, checks schema
   version, domain and every referenced component before use, and before leaving maintenance invalidates OAuth grants
@@ -610,7 +603,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/app/app.ts`, `src/app/gate.ts`, `src/federation/spool.ts`; `test/gate.test.ts` ("maintenance gate"). A PITR
   restore requires env `MAINTENANCE=full`: _Implemented on branch `kopje/ops-tools`_ (`test/admin.test.ts`, "restores
   only under MAINTENANCE=full"). Replay that verifies the signature against the spool time:
-  _Implemented on branch `kopje/inbound-relationships`:_ `src/jobs/queue.ts`, `src/federation/inbound.ts`; `test/inbox.test.ts`
+  _Enforced (main):_ `src/jobs/queue.ts`, `src/federation/inbound.ts`; `test/inbox.test.ts`
   ("OPS-1"), `test/gate.test.ts` ("refuses a personal inbox of nobody").
 - **OPS-2: no upgrade runs under a dump freeze or an import.** Migrations wait while either exists. The freeze also
   stops session writes and alarm work. _Implemented on branch `kopje/ops-tools`:_ `src/platform/store-kernel.ts`,
@@ -619,7 +612,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   operations that a client may retry after a lost response carry a stable idempotency key. _Enforced (main)_ for
   migrations: `test/migrations.test.ts` ("re-reads bookkeeping"). _Implemented on branch `kopje/statuses`_
   (`Idempotency-Key`, `test/statuses.test.ts`) and `kopje/ops-tools` (import chunks, `test/dump-import.test.ts`).
-  Deliveries: _Implemented on branch `kopje/deliveries`:_ a claim or completion whose response is lost leaves the row
+  Deliveries: _Enforced (main):_ a claim or completion whose response is lost leaves the row
   leased until the lease ends, then it is claimed and POSTed again (the receiver deduplicates by activity id); a
   repeated completion is stale and records nothing twice; `test/deliveries.test.ts` ("OPS-3: a claim or completion
   whose response is lost"), `test/delivery-post.test.ts` ("OPS-3: a lost completion"). Push: _Planned (push)._
