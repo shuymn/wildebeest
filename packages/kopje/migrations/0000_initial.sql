@@ -103,6 +103,7 @@ CREATE TABLE statuses (
   language TEXT,
   published_at TEXT NOT NULL,
   edited_at TEXT,
+  remote_version TEXT,                            -- remote: the last accepted version (updated, else published), clamped
   replies_count INTEGER NOT NULL DEFAULT 0,
   reblogs_count INTEGER NOT NULL DEFAULT 0,
   favourites_count INTEGER NOT NULL DEFAULT 0,

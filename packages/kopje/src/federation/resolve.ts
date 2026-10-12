@@ -83,18 +83,18 @@ async function resolveAccount(loaders: RemoteLoaders, uri: string): Promise<Reso
 	return fetched.kind === 'ok' && fetched.input !== null ? { kind: 'account', actor: fetched.input } : NONE
 }
 
-// WebFinger (RFC 7033) for the address, then the actor its self link names.
-async function resolveAddress(loaders: RemoteLoaders, username: string, host: string): Promise<Resolved> {
+// The actor a WebFinger (RFC 7033) answer for acct:username@host names by its self link, or null.
+async function selfLink(loaders: RemoteLoaders, username: string, host: string): Promise<string | null> {
 	const resource = `acct:${username}@${host}`
 	let jrd: unknown
 	try {
 		jrd = (await loaders.webfinger(`https://${host}/.well-known/webfinger?resource=${encodeURIComponent(resource)}`))
 			.document
 	} catch {
-		return NONE
+		return null
 	}
 	if (!withinJsonBounds(jrd) || typeof jrd !== 'object' || jrd === null) {
-		return NONE
+		return null
 	}
 	const links = (jrd as { links?: unknown }).links
 	const self = (Array.isArray(links) ? links : []).find(
@@ -106,7 +106,27 @@ async function resolveAddress(loaders: RemoteLoaders, username: string, host: st
 			typeof (link as { type?: unknown }).type === 'string' &&
 			/^application\/(activity\+json|ld\+json)/.test((link as { type: string }).type)
 	)
-	return self === undefined ? NONE : resolveAccount(loaders, self.href)
+	return self?.href ?? null
+}
+
+// An address: the actor its WebFinger names. When that actor lives on another host than the address's domain, the
+// domain is the account's only if it is confirmed the other way: the actor's own username at that domain names the
+// same actor (the lookup just made, when the usernames agree; one more WebFinger otherwise). Unconfirmed, the account
+// keeps its host. The Store's accountDomain decides from this what it stores.
+async function resolveAddress(loaders: RemoteLoaders, username: string, host: string): Promise<Resolved> {
+	const href = await selfLink(loaders, username, host)
+	const fetched = href === null ? null : await fetchActor(href, loaders.document, loaders.context)
+	if (fetched?.kind !== 'ok' || fetched.input === null) {
+		return NONE
+	}
+	const actor = fetched.input
+	if (actor.domain === host) {
+		return { kind: 'account', actor }
+	}
+	const confirmed =
+		actor.username.toLowerCase() === username.toLowerCase() ||
+		(await selfLink(loaders, actor.username, host)) === actor.uri
+	return { kind: 'account', actor: confirmed ? { ...actor, domain: host } : actor }
 }
 
 // A URL: an actor, or a status with its author (the author has the status's origin, as for inbound objects).

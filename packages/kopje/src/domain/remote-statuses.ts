@@ -103,6 +103,7 @@ type StoredStatus = {
 	language: string | null
 	published_at: string
 	edited_at: string | null
+	remote_version: string | null
 }
 
 function originOf(uri: string | null): string | null {
@@ -126,9 +127,20 @@ function remoteTime(value: string | null, now: number): number {
 	return Number.isNaN(parsed) || parsed > now ? now : parsed
 }
 
+// How far ahead of the clock a remote version may be (clock skew between servers).
+export const VERSION_SKEW_MS = 5 * 60 * 1000
+
+// A remote version (updated, else published) as stored and compared: a future one counts as now plus the skew, so
+// a version dated far ahead cannot be accepted again and again. NaN if there is none.
+function versionOf(value: string | null, now: number): number {
+	const parsed = value === null ? NaN : Date.parse(value)
+	return Math.min(parsed, now + VERSION_SKEW_MS)
+}
+
 export function statusByUri(db: Db, uri: string): StoredStatus | undefined {
 	return db.first<StoredStatus>(
-		`SELECT id, account_id, reblog_of_id, visibility, content, spoiler_text, sensitive, language, published_at, edited_at
+		`SELECT id, account_id, reblog_of_id, visibility, content, spoiler_text, sensitive, language, published_at, edited_at,
+			remote_version
 		FROM statuses WHERE uri = ?`,
 		uri
 	)
@@ -337,6 +349,7 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 	}
 	const published = remoteTime(input.published, ctx.now)
 	const updated = input.updated === null ? null : remoteTime(input.updated, ctx.now)
+	const version = versionOf(input.updated ?? input.published, ctx.now)
 	// Status#carried_over_reply_to_account_id.
 	const replyTarget =
 		parent === undefined
@@ -350,8 +363,9 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 		(candidate) => {
 			db.run(
 				`INSERT INTO statuses (id, uri, url, account_id, in_reply_to_uri, in_reply_to_id, in_reply_to_account_id,
-					visibility, spoiler_text, content, sensitive, language, published_at, edited_at, raw, search_text, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					visibility, spoiler_text, content, sensitive, language, published_at, edited_at, remote_version, raw,
+					search_text, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				candidate,
 				input.uri,
 				input.url,
@@ -366,6 +380,7 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 				input.language,
 				iso(published),
 				updated !== null && updated !== published ? iso(updated) : null,
+				Number.isNaN(version) ? iso(published) : iso(version),
 				input.raw,
 				searchText(input),
 				iso(ctx.now)
@@ -458,6 +473,20 @@ function extendAudience(db: Db, existing: StoredStatus, deliveredTo: string | nu
 	) {
 		return { applied: false, reason: 'duplicate', statusId: existing.id }
 	}
+	// The mention bound holds here too (RES-4): a local recipient takes the place of a remote silent one, else of a
+	// remote mention; if every row is local, it is not added.
+	const count = db.first<{ n: number }>('SELECT count(*) AS n FROM status_mentions WHERE status_id = ?', existing.id)
+	if ((count?.n ?? 0) >= MAX_STATUS_MENTION_ROWS) {
+		const evicted = db.run(
+			`DELETE FROM status_mentions WHERE status_id = ?1 AND account_id = (SELECT m.account_id FROM status_mentions m
+				LEFT JOIN local_accounts l ON l.account_id = m.account_id
+				WHERE m.status_id = ?1 AND l.account_id IS NULL ORDER BY m.silent DESC LIMIT 1)`,
+			existing.id
+		)
+		if (evicted === 0) {
+			return { applied: false, reason: 'mention-cap', statusId: existing.id }
+		}
+	}
 	db.run(
 		'INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, 1) ON CONFLICT DO NOTHING',
 		existing.id,
@@ -499,12 +528,13 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	if (existing.account_id !== author.id || existing.reblog_of_id !== null) {
 		return { applied: false, reason: 'not-author' }
 	}
-	const updated = input.updated === null ? NaN : Date.parse(input.updated)
-	const stored = Date.parse(existing.edited_at ?? existing.published_at)
-	if (Number.isNaN(updated) || updated <= stored) {
+	// The watermark is the last accepted version, whether or not it changed the history; both sides are clamped.
+	const version = versionOf(input.updated, ctx.now)
+	const stored = Date.parse(existing.remote_version ?? existing.edited_at ?? existing.published_at)
+	if (Number.isNaN(version) || version <= stored) {
 		return { applied: false, reason: 'stale' }
 	}
-	const editedAt = iso(Math.min(updated, ctx.now))
+	const editedAt = iso(Math.min(version, ctx.now))
 	const media = input.media.slice(0, MAX_STATUS_MEDIA)
 	const currentMedia = db.all<{ url: string; description: string; focus_x: number; focus_y: number }>(
 		'SELECT url, description, focus_x, focus_y FROM media_attachments WHERE status_id = ? ORDER BY position, id',
@@ -522,7 +552,7 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	}
 	db.run(
 		`UPDATE statuses SET content = ?, spoiler_text = ?, sensitive = ?, language = ?, raw = ?, search_text = ?,
-			edited_at = CASE WHEN ? THEN ? ELSE edited_at END
+			remote_version = ?, edited_at = CASE WHEN ? THEN ? ELSE edited_at END
 		WHERE id = ?`,
 		input.content,
 		input.spoilerText,
@@ -530,11 +560,19 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 		input.language,
 		input.raw,
 		searchText(input),
+		iso(version),
 		significant ? 1 : 0,
 		editedAt,
 		existing.id
 	)
-	updateMentions(db, existing, input)
+	const mentioned = updateMentions(db, existing, input)
+	// As for a Create: a newly mentioned local account is notified if the status addresses it.
+	const audience = knownAccounts(db, [...input.to, ...input.cc].slice(0, MAX_STATUS_AUDIENCE))
+	for (const id of mentioned) {
+		if (audience.local.has(id) || id === ctx.deliveredTo) {
+			notify(db, { recipientId: id, type: 'mention', fromId: author.id, statusId: existing.id, now: ctx.now })
+		}
+	}
 	writeTags(db, existing.id, input.tags)
 	writeMedia(db, existing.id, author, media, ctx)
 	if (significant) {
@@ -561,14 +599,16 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 }
 
 // ProcessStatusUpdateService#update_mentions!, with the audience of a non-public status kept (see updateRemoteStatus).
-function updateMentions(db: Db, existing: StoredStatus, input: RemoteStatusInput): void {
+// Returns the accounts that are mentioned now and were not before (silent recipients included).
+function updateMentions(db: Db, existing: StoredStatus, input: RemoteStatusInput): string[] {
 	const hrefs = input.mentions.slice(0, MAX_STATUS_MENTION_TAGS)
 	const known = knownAccounts(db, hrefs)
-	const present = new Set(
-		db
-			.all<{ account_id: string }>('SELECT account_id FROM status_mentions WHERE status_id = ?', existing.id)
-			.map((row) => row.account_id)
+	const rows = db.all<{ account_id: string; silent: number }>(
+		'SELECT account_id, silent FROM status_mentions WHERE status_id = ?',
+		existing.id
 	)
+	const present = new Set(rows.map((row) => row.account_id))
+	const mentionedBefore = new Set(rows.filter((row) => row.silent === 0).map((row) => row.account_id))
 	const room = Math.max(MAX_STATUS_MENTION_ROWS - present.size, 0)
 	const current = [...new Set(hrefs.flatMap((uri) => known.byUri.get(uri) ?? []))]
 	const added = current.filter((id) => !present.has(id))
@@ -587,6 +627,7 @@ function updateMentions(db: Db, existing: StoredStatus, input: RemoteStatusInput
 		existing.id,
 		JSON.stringify(allowed)
 	)
+	return allowed.filter((id) => !mentionedBefore.has(id))
 }
 
 // The visibility a fetched original would be stored with (before silent mentions), for VIS-6's check before anything

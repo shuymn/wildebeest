@@ -437,6 +437,9 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 	if (result === undefined) {
 		return { status: 202, reason: 'too-many-fetches' }
 	}
+	if (result.retry === true) {
+		return { status: 503, reason: result.reason }
+	}
 	return { status: 202, reason: result.reason, jobsPending: result.jobsPending, delivers: result.delivers === true }
 }
 
