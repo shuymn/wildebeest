@@ -8,8 +8,8 @@ import { constantTimeEqual } from '../security/tokens'
 //
 //   - Both cookies are __Host- (Secure, Path=/, no Domain), HttpOnly and SameSite=Lax; their values are random and
 //     minted by the server only, never taken from a URL, so a session cannot be fixed from outside.
-//   - The login cookie lives for the sign-in only: it holds the OAuth state, the PKCE verifier and the local path to
-//     return to.
+//   - The login cookie lives for the sign-in only: it holds the opaque id of the attempt, whose state, PKCE challenge,
+//     return path and starting session the Store keeps.
 //   - A form that changes state must come from this origin (Origin equal to the request's origin; missing, `null` and
 //     foreign are refused) and carry the anti-forgery token derived from the session.
 
@@ -69,44 +69,12 @@ export function returnPath(value: string | undefined | null): string {
 	return url.origin === base && isLocalPath(resolved) ? resolved : DEFAULT_RETURN_PATH
 }
 
-// startedWith: the digest of the session the browser had when it started signing in (hex), so the callback can tell
-// whether the browser signed out meanwhile.
-export type LoginState = { state: string; verifier: string; startedWith: string | null; returnTo: string }
+// The login cookie holds only the opaque id of a sign-in attempt the Worker minted (32 random bytes, base64url); the
+// Store keeps the attempt (domain/web-session.ts). Anything else in the cookie is no attempt.
+const ATTEMPT_ID = /^[A-Za-z0-9_-]{16,128}$/
 
-const NO_SESSION = '-'
-
-// The login cookie's value. state and verifier are base64url and the digest hex (no '.'), so the path comes last and
-// may contain dots.
-export function encodeLogin(login: LoginState): string {
-	return `${login.state}.${login.verifier}.${login.startedWith ?? NO_SESSION}.${login.returnTo}`
-}
-
-export function decodeLogin(value: string | undefined): LoginState | null {
-	if (value === undefined) {
-		return null
-	}
-	const [state, verifier, startedWith, ...rest] = value.split('.')
-	if (
-		state === undefined ||
-		state === '' ||
-		verifier === undefined ||
-		verifier === '' ||
-		startedWith === undefined ||
-		!(startedWith === NO_SESSION || /^[0-9a-f]{64}$/.test(startedWith)) ||
-		rest.length === 0
-	) {
-		return null
-	}
-	return {
-		state,
-		verifier,
-		startedWith: startedWith === NO_SESSION ? null : startedWith,
-		returnTo: returnPath(rest.join('.')),
-	}
-}
-
-export function stateMatches(login: LoginState, sent: string | undefined): boolean {
-	return sent !== undefined && constantTimeEqual(login.state, sent)
+export function attemptIdOf(value: string | undefined): string | null {
+	return value !== undefined && ATTEMPT_ID.test(value) ? value : null
 }
 
 // An ActivityPub client asks for the object, a browser for the page (content negotiation on /@user and /@user/:id).

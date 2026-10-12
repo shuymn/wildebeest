@@ -27,6 +27,8 @@ export const STRINGS = {
 	signInExpired: 'This sign-in has expired or did not start in this browser. Start again.',
 	signInCancelledTitle: 'Sign-in cancelled',
 	signInCancelled: 'The sign-in was cancelled.',
+	signInBusyTitle: 'Try again later',
+	signInBusy: 'Too many sign-ins from this address. Try again in a minute.',
 	signInFailedTitle: 'Sign-in failed',
 	signInFailed: 'The sign-in could not be completed. Start again.',
 	forbiddenTitle: 'Invalid request',

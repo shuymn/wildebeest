@@ -18,14 +18,12 @@ import { MessagePage, ProfilePage, SettingsPage, StatusPage } from '../web/pages
 import {
 	csrfMatches,
 	csrfToken,
-	decodeLogin,
-	encodeLogin,
+	attemptIdOf,
 	LOGIN_COOKIE,
 	LOGIN_LIFETIME_S,
 	returnPath,
 	sameOrigin,
 	SESSION_COOKIE,
-	stateMatches,
 	wantsActivityPub,
 } from '../web/session'
 import { noticeOf, STRINGS } from '../web/strings'
@@ -65,7 +63,7 @@ const PUBLIC_HEADERS = {
 // Pages of a signed-in user, and every answer of the sign-in flow.
 const PRIVATE_HEADERS = { ...FRAMING, 'referrer-policy': 'no-referrer', 'cache-control': 'no-store' }
 
-type PageStatus = 200 | 400 | 403 | 404 | 410 | 422
+type PageStatus = 200 | 400 | 403 | 404 | 410 | 422 | 429
 
 function publicPage(c: WebContext, status: PageStatus, body: Parameters<WebContext['html']>[0]) {
 	return c.html(body, status, PUBLIC_HEADERS)
@@ -203,21 +201,31 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 		if (new URL(c.req.url).host !== domain) {
 			return redirect(`https://${domain}/login?return=${encodeURIComponent(target)}`, 302)
 		}
+		// RES-6: sign-ins are limited per client IP, the key an anonymous caller controls; nothing here can hold a slot
+		// another browser needs.
+		const ip = c.req.header('cf-connecting-ip') ?? 'unknown'
+		if (!(await c.env.LOGIN_LIMIT.limit({ key: ip })).success) {
+			return message(c, 429, STRINGS.signInBusyTitle, STRINGS.signInBusy)
+		}
 		const redirectUri = `https://${domain}/auth/callback`
+		const attempt = deps.randomToken()
 		const state = deps.randomToken()
-		const verifier = deps.randomToken()
-		const challenge = await pkceChallenge(verifier)
+		const challenge = await pkceChallenge(deps.randomToken())
 		const previous = getCookie(c, SESSION_COOKIE, 'host')
-		const clientId = await storeCall(c, deps, (s, b) =>
-			s.ensureWebClient(b, { clientId: deps.randomToken(), secret: deps.randomToken(), redirectUri, now: deps.now() })
+		const clientId = await storeCall(c, deps, async (s, b) =>
+			s.beginWebLogin(b, {
+				clientId: deps.randomToken(),
+				secret: deps.randomToken(),
+				redirectUri,
+				attemptHash: await sha256Hex(attempt),
+				state,
+				challenge,
+				returnTo: target,
+				startedWith: previous === undefined ? null : await sha256Hex(previous),
+				now: deps.now(),
+			})
 		)
-		const startedWith = previous === undefined ? null : await sha256Hex(previous)
-		setCookie(
-			c,
-			LOGIN_COOKIE,
-			encodeLogin({ state, verifier, startedWith, returnTo: target }),
-			cookieOptions(LOGIN_LIFETIME_S)
-		)
+		setCookie(c, LOGIN_COOKIE, attempt, cookieOptions(LOGIN_LIFETIME_S))
 		const query = new URLSearchParams({
 			response_type: 'code',
 			client_id: clientId,
@@ -231,44 +239,48 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 	})
 
 	app.get('/auth/callback', setup, async (c) => {
-		const login = decodeLogin(getCookie(c, LOGIN_COOKIE, 'host'))
-		// The state ties the callback to the sign-in this browser started; without it nothing is exchanged. A stale
-		// callback (an older tab's) leaves the login cookie of the newer sign-in in place.
+		const attempt = attemptIdOf(getCookie(c, LOGIN_COOKIE, 'host'))
 		const state = c.req.query('state')
-		if (login === null || state === undefined || !stateMatches(login, state)) {
-			return message(c, 400, STRINGS.signInExpiredTitle, STRINGS.signInExpired, {
-				href: '/login',
-				text: STRINGS.signIn,
-			})
+		const expired = () =>
+			message(c, 400, STRINGS.signInExpiredTitle, STRINGS.signInExpired, { href: '/login', text: STRINGS.signIn })
+		if (attempt === null || state === undefined) {
+			return expired()
 		}
-		deleteCookie(c, LOGIN_COOKIE, CLEARED)
-		const code = c.req.query('code')
-		if (code === undefined || c.req.query('error') !== undefined) {
-			return message(c, 403, STRINGS.signInCancelledTitle, STRINGS.signInCancelled, {
-				href: `/login?return=${encodeURIComponent(login.returnTo)}`,
-				text: STRINGS.signIn,
-			})
-		}
-		const token = deps.randomToken()
+		const code = c.req.query('error') === undefined ? (c.req.query('code') ?? null) : null
 		const presented = getCookie(c, SESSION_COOKIE, 'host')
+		const token = deps.randomToken()
 		const result = await storeCall(c, deps, async (s, b) =>
 			s.startWebSession(b, {
-				stateHash: await sha256Hex(state),
-				codeHash: await sha256Hex(code),
+				attemptHash: await sha256Hex(attempt),
+				state,
+				codeHash: code === null ? null : await sha256Hex(code),
 				redirectUri: `https://${c.get('domain')}/auth/callback`,
-				verifierChallenge: await pkceChallenge(login.verifier),
 				tokenHash: await sha256Hex(token),
-				startedWith: login.startedWith,
 				presented: presented === undefined ? null : await sha256Hex(presented),
 				family: deps.randomToken(),
 				now: deps.now(),
 			})
 		)
-		if (result.status !== 'ok') {
-			return message(c, 400, STRINGS.signInFailedTitle, STRINGS.signInFailed, { href: '/login', text: STRINGS.signIn })
+		// A stale callback (an older tab's) leaves the login cookie of the newer sign-in in place.
+		if (result.status === 'state_mismatch') {
+			return expired()
 		}
-		setCookie(c, SESSION_COOKIE, token, cookieOptions(SESSION_LIFETIME_MS / 1000))
-		return c.body(null, 303, { location: login.returnTo, 'cache-control': 'no-store' })
+		deleteCookie(c, LOGIN_COOKIE, CLEARED)
+		switch (result.status) {
+			case 'invalid_grant':
+				return message(c, 400, STRINGS.signInFailedTitle, STRINGS.signInFailed, {
+					href: '/login',
+					text: STRINGS.signIn,
+				})
+			case 'cancelled':
+				return message(c, 403, STRINGS.signInCancelledTitle, STRINGS.signInCancelled, {
+					href: `/login?return=${encodeURIComponent(returnPath(result.returnTo))}`,
+					text: STRINGS.signIn,
+				})
+			case 'ok':
+				setCookie(c, SESSION_COOKIE, token, cookieOptions(SESSION_LIFETIME_MS / 1000))
+				return c.body(null, 303, { location: returnPath(result.returnTo), 'cache-control': 'no-store' })
+		}
 	})
 
 	app.post('/logout', setup, async (c) => {

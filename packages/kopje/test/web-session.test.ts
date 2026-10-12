@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { apiHarness, bearer, login, registerApp, seedAccount, sql } from './api-helpers'
+import { type ApiHarness, apiHarness, bearer, login, registerApp, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import {
 	type Browser,
@@ -27,7 +27,7 @@ async function withAlice() {
 	return { ...h, aliceId }
 }
 
-function settings(h: Awaited<ReturnType<typeof withAlice>>, browser: Browser) {
+function settings(h: ApiHarness, browser: Browser) {
 	return h.request('/settings', { headers: { cookie: browser.cookie } })
 }
 
@@ -208,28 +208,42 @@ describe('sign-in (AUTH)', () => {
 	})
 
 	it('lets no anonymous flood of sign-ins or failed callbacks lock out the owner (RES-6)', async () => {
-		const h = await withAlice()
-		const before = await sql(h.store, 'SELECT name FROM kopje_state')
-		let lastCookie = ''
-		for (let i = 0; i < 50; i++) {
-			const response = await h.request('/login')
-			expect(response.status).toBe(302)
-			lastCookie = setCookies(response).values.get(LOGIN) ?? ''
+		const attacker = '203.0.113.66'
+		const limiter = {
+			limit: vi.fn(({ key }: { key: string }) => Promise.resolve({ success: key !== attacker })),
 		}
-		// Failed callbacks: forged codes, with and without a matching state, aimed at the owner's sign-in.
-		const state = lastCookie.split('.')[0] ?? ''
-		for (const query of [`?code=forged&state=${state}`, '?code=forged&state=other', '?error=access_denied']) {
-			const response = await h.request(`/auth/callback${query}`, {
-				headers: { cookie: cookieHeader({ [LOGIN]: lastCookie }) },
-			})
-			expect(response.status).toBeGreaterThanOrEqual(400)
+		const h = await apiHarness({ LOGIN_LIMIT: limiter })
+		await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
+		const fromAttacker = { headers: { 'cf-connecting-ip': attacker } }
+		// The attacker's address is limited; the limit keys on the address, never on the account signing in.
+		expect((await h.request('/login', fromAttacker)).status).toBe(429)
+		// Sign-ins and failed callbacks from elsewhere, aimed at the owner's account.
+		const cookies: string[] = []
+		for (let i = 0; i < 30; i++) {
+			const response = await h.request('/login', { headers: { 'cf-connecting-ip': `198.51.100.${i}` } })
+			expect(response.status).toBe(302)
+			cookies.push(setCookies(response).values.get(LOGIN) ?? '')
+		}
+		for (const cookie of cookies) {
+			for (const query of ['?code=forged&state=forged', '?error=access_denied&state=forged']) {
+				const response = await h.request(`/auth/callback${query}`, {
+					headers: { cookie: cookieHeader({ [LOGIN]: cookie }) },
+				})
+				expect(response.status).toBe(400)
+			}
 		}
 		// Sign-out without a session cannot end anyone's family.
 		expect((await h.request('/logout', { method: 'POST', headers: { origin: ORIGIN } })).status).toBe(403)
-		// /login stores nothing; failed callbacks store nothing.
-		expect(await sql(h.store, 'SELECT name FROM kopje_state')).toEqual(before)
 		const owner = await signIn(h)
 		expect((await settings(h, owner)).status).toBe(200)
+		// Abandoned attempts expire.
+		const attempts = await sql(h.store, "SELECT name FROM kopje_state WHERE name LIKE 'web_login:%'")
+		expect(attempts).toHaveLength(30)
+		// The owner's attempt was consumed. Ten minutes on, each new sign-in prunes expired ones.
+		h.now.mockReturnValue(NOW + 11 * 60 * 1000)
+		await h.request('/login')
+		await h.request('/login')
+		expect(await sql(h.store, "SELECT name FROM kopje_state WHERE name LIKE 'web_login:%'")).toHaveLength(2)
 	})
 
 	it('shows a cancelled sign-in and starts no session', async () => {
@@ -322,15 +336,32 @@ describe('return paths (WEB-4)', () => {
 		}
 	})
 
-	it('ignores a tampered return path in the login cookie', async () => {
+	it('trusts nothing but the attempt id from the login cookie (forged attempts, sessions, return paths)', async () => {
 		const h = await withAlice()
-		for (const tampered of ['//evil.example', '/./x/..//evil.example', 'https://evil.example/']) {
-			const fresh = await startSignIn(h)
-			const [freshState, freshVerifier] = fresh.loginCookie.split('.')
-			const response = await callback(h, fresh.callback, { [LOGIN]: `${freshState}.${freshVerifier}.-.${tampered}` })
-			expect(response.status, tampered).toBe(303)
-			expect(response.headers.get('location'), tampered).toBe('/settings')
+		await seedAccount(h.store, { username: 'bob', email: 'bob@example.com' })
+		const bob = await signIn(h, 'bob@example.com')
+		const victim = await startSignIn(h)
+		const attacker = await startSignIn(h, 'bob@example.com')
+		// Structured or unknown cookie values name no attempt: no return path, session digest or family is read from it.
+		for (const forged of [
+			`${victim.loginCookie}.//evil.example`,
+			`${victim.loginCookie}.${'a'.repeat(64)}./settings`,
+			'unknown-attempt-id-000000000000',
+		]) {
+			const response = await callback(h, victim.callback, { [LOGIN]: forged })
+			expect(response.status, forged).toBe(400)
+			expect(response.headers.get('location')).toBeNull()
 		}
+		// Another attempt's cookie with the victim's callback: the state is not that attempt's; neither is consumed.
+		const crossed = await callback(h, victim.callback, { [LOGIN]: attacker.loginCookie })
+		expect(crossed.status).toBe(400)
+		expect(setCookies(crossed).lines).toEqual([])
+		// Both attempts still complete with their own cookies, and the return path is the Store's.
+		const done = await callback(h, victim.callback, { [LOGIN]: victim.loginCookie })
+		expect(done.status).toBe(303)
+		expect(done.headers.get('location')).toBe('/settings')
+		// Bob's session was never touched.
+		expect((await settings(h, bob)).status).toBe(200)
 	})
 })
 

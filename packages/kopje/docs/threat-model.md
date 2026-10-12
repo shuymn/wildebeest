@@ -297,14 +297,17 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   are 32 random bytes. Codes and access tokens are stored and looked up only by their full SHA-256. _Enforced (main):_
   `src/security/tokens.ts`, `src/domain/oauth.ts`; `test/oauth.test.ts` ("stores only digests of tokens and codes").
 - **AUTH-8: a web session is an OAuth token of the web UI, and nothing else.** The web UI is an ordinary OAuth client
-  of the instance: `/login` sends the browser to `/oauth/authorize` (Access, WEB-1) with a PKCE S256 challenge, and
-  keeps the state, the verifier and the digest of the session it already had in a 10-minute `__Host-` login cookie;
-  `/login` writes nothing to the Store but the web client's row, so an anonymous party cannot add state, hold a slot or
-  block anyone's sign-in. The callback exchanges the code, bound to that challenge, in the Store, and records the
-  state as completed, so a second code for the same sign-in starts nothing. A session is an access token of the web
+  of the instance: `/login` sends the browser to `/oauth/authorize` (Access, WEB-1) with a PKCE S256 challenge. The
+  Store keeps the attempt (state, challenge, return path, and the digest of the session cookie the request carried)
+  under the digest of an opaque id the Worker minted; the browser's 10-minute `__Host-` login cookie holds only that id,
+  and nothing else from the browser is trusted for the attempt. Attempts are keyed per browser, expire after 10
+  minutes and are pruned as new ones come; `/login` is limited to 10 per minute per client IP (the Rate Limiting
+  binding), so no shared cap or counter exists that an anonymous party could fill to lock anyone out. The callback
+  consumes the attempt (once) and the code, which must be bound to the attempt's challenge; a state that is not the
+  attempt's leaves both in place. A session is an access token of the web
   client (AUTH-1, AUTH-7) with a fixed lifetime of 7 days, held in an opaque `__Host-` cookie (HttpOnly, Secure,
   SameSite=Lax, Path=/). Session values are minted only by the server at the callback, never taken from a URL; a
-  callback without the login cookie, with another state, or with a code bound to another verifier starts nothing
+  callback without the login cookie, with another state, or with a code bound to another challenge starts nothing
   (session fixation, login CSRF), and a stale callback leaves the newer login cookie in place. Sessions of one browser
   form a family: a new session deletes the family's live one and every session the browser presented; sign-out
   deletes the presented and the live session and ends the family, so a sign-in started before it installs nothing.
@@ -314,7 +317,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   own tokens (AUTH-6). _Implemented on branch `kopje/web-ui`:_ `src/domain/web-session.ts`, `src/web/session.ts`,
   `src/app/web.tsx`; `test/web-session.test.ts` ("signs in through Access and sets an opaque, HttpOnly, Secure,
   SameSite session cookie", "refuses a callback without the login cookie, or with another state", "uses a code once",
-  "consumes a sign-in attempt once", "keeps one session per browser", "leaves the newer sign-in in place when a stale
+  "consumes a sign-in attempt once", "keeps one session per browser", "trusts nothing but the attempt id from the
+  login cookie", "leaves the newer sign-in in place when a stale
   callback arrives", "installs nothing from a callback that arrives after sign-out", "signs out the newer session when
   sign-out carries the session it replaced", "retires every replaced or signed-out session for cookies and bearer use
   alike", "lets no anonymous flood of sign-ins or failed callbacks lock out the owner", "expires a session after its
