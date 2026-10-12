@@ -6,7 +6,7 @@
 		"lint": "eslint src --quiet"
 	},
 	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "0.16.20",
+		"@cloudflare/vitest-pool-workers": "0.21.3",
 		"@cloudflare/workers-types": "4.20260627.1",
 		"toucan-js": "4.1.1",
 		"typescript": "5.9.3",
