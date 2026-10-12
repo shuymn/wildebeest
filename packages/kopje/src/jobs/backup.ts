@@ -3,11 +3,12 @@ import { encryptBytes, encryptStream, sha256Of, toHex } from '../platform/backup
 import {
 	type BackupRun,
 	type BackupState,
-	type Digest,
+	type Coverage,
 	type DumpProgress,
 	type DumpResult,
 	EMPTY_BACKUP_STATE,
-	type MediaCopy,
+	type MediaRow,
+	type ObjectDigest,
 } from '../platform/backup-state'
 import { readConfig } from '../platform/config'
 import { errorFields } from '../platform/error-message'
@@ -18,25 +19,32 @@ import type { DumpCursor } from '../platform/store-dump'
 import { StoreUnavailableError, toStoreUnavailable } from '../platform/store-errors'
 
 // The daily encrypted backup (docs/backup.md). Each 5-minute cron asks whether a backup is due or running, and if so
-// takes the runner lease and moves the run forward:
+// takes the runner lease (in the Store) and moves the run forward within one invocation deadline:
 //
 //   dump      the Store's dump (B6a's chunked RPCs, the import format), age-encrypted as it streams into one S3
-//             multipart upload. The Store is frozen (readonly, inbound spooled) from dumpStart to dumpFinish; the
-//             freeze is released as soon as the last chunk is read, on any failure, and by its lease if the Worker
-//             dies. age's stream state cannot be saved, so an interrupted dump is restarted, never continued: its
-//             upload is aborted and a new dump begins.
-//   media     every R2 original added since the last successful backup, each encrypted on its own, under
-//             media/<run>/. Progress is saved after every object, and the stage spans invocations.
-//   manifest  written last, so its presence marks a complete backup.
+//             multipart upload. The Store is frozen (readonly, inbound spooled) from dumpStart until the last chunk is
+//             read; then the job records which originals the dump references and ends the freeze at once. The freeze
+//             also ends on any failure (by opId, even when dumpStart's answer was lost) and by its lease if the Worker
+//             dies. age's stream state cannot be saved, so an interrupted dump is restarted, never continued.
+//   media     each referenced original not yet in this bucket, encrypted on its own; progress is in the Store's
+//             media index (backup_media) and the stage spans invocations.
+//   index     the complete media index: every original the dump references, with its object and digests, or why it
+//             is missing.
+//   manifest  written last, with the digests of the dump and the index, so its presence marks a complete backup.
 //   retention keeps the newest BACKUP_RETENTION complete backups and deletes older ones, only under backups/.
+//
+// Fencing (OPS-5): every object a run writes is named <run id>/<attempt>, the attempt being the invocation that holds
+// the lease. An invocation that lost the lease can finish a request already in flight, but only into its own names,
+// never into objects another invocation recorded. Every Store write checks the lease in its transaction.
 //
 // Nothing is ever deleted from R2. Every byte sent to the bucket is ciphertext (DATA-4), and neither secrets nor error
 // messages reach logs, the saved state or health: failures are recorded as fixed reason codes (DATA-5, DATA-9).
 
 export const DUMP_NAME = 'dump.kopje.age'
+export const INDEX_NAME = 'media-index.json.age'
 export const MANIFEST_NAME = 'manifest.json.age'
 export const MANIFEST_FORMAT = 'kopje-backup'
-const ORIGINALS = 'originals/'
+export const INDEX_FORMAT = 'kopje-backup-media-index'
 
 const MIB = 1024 * 1024
 // S3 parts are at least 5 MiB except the last.
@@ -45,27 +53,33 @@ const PART_BYTES = 8 * MIB
 const CHUNK_BYTES = 4 * MIB
 // The freeze lease, renewed by every dump chunk. It bounds how long a dead job keeps the Store frozen.
 const DUMP_LEASE_SECONDS = 180
-// The runner lease, renewed by every save. Another invocation takes over only after it ends.
-const RUNNER_LEASE_MS = 5 * 60 * 1000
-// Media copying stops for this invocation after this long and continues at the next cron.
-const MEDIA_BUDGET_MS = 10 * 60 * 1000
-// An original is copied only once its id is older than this, so an upload still in flight is not skipped.
-const MEDIA_SETTLE_MS = 60 * 60 * 1000
-const MEDIA_LIST_LIMIT = 100
+// The runner lease, renewed by every save. It is the platform's wall-time limit of a cron invocation, so a live runner
+// never loses it between two saves (one request and its retries end by the invocation deadline).
+const RUNNER_LEASE_MS = 15 * 60 * 1000
+// Of the cron's 15 minutes of wall time; the reserve is kept for the last checkpoint and cleanup.
+const INVOCATION_MS = 13 * 60 * 1000
+const RESERVE_MS = 60 * 1000
+// Bytes encrypted per invocation before media copying waits for the next cron, to stay inside the cron's 30 seconds of
+// CPU: age, both SHA-256 digests and the copies cost about 4-6 ms of CPU per MiB measured on a 2026 desktop CPU
+// (docs/backup.md), so this leaves room for a slower machine. A dump is never split; it counts toward it.
+const WORK_BYTES = 512 * MIB
+const MEDIA_PAGE = 100
 export const MAX_MEDIA_PER_RUN = 2000
 // Originals are at most 16 MiB (platform/images.ts); anything far larger is not a Kopje upload.
 const MAX_MEDIA_BYTES = 64 * MIB
 const RETRY_MS = 60 * 60 * 1000
 // Invocations that may die holding one run before it is recorded as failed.
-const MAX_ATTEMPTS = 3
+export const MAX_ATTEMPTS = 3
 
 export type BackupFaultPoint =
 	| 'dump-chunk'
 	| 'dump-part'
 	| 'dump-complete'
 	| 'media-copied'
+	| 'index-stage'
 	| 'manifest-stage'
 	| 'manifest-written'
+	| 'retention-deleted'
 
 export type BackupDeps = {
 	build: (env: Env) => string
@@ -73,10 +87,10 @@ export type BackupDeps = {
 	now: () => number
 	fetch: S3Fetch
 	log?: (entry: Record<string, unknown>) => void
-	randomId?: () => string
 	partBytes?: number
 	chunkBytes?: number
-	mediaBudgetMs?: number
+	invocationMs?: number
+	workBytes?: number
 	// Tests: throwing at a point simulates the Worker dying there (no cleanup runs, nothing is recorded).
 	inject?: (point: BackupFaultPoint) => void
 	sleep?: (ms: number) => Promise<void>
@@ -103,8 +117,11 @@ export class BackupError extends Error {
 // A simulated death of the Worker (deps.inject): it propagates past every cleanup.
 class Crash extends Error {}
 
-// Another invocation took the run over; this one stops without recording anything.
+// Another invocation holds the run now; this one stops without recording anything.
 class LostRunner extends Error {}
+
+// The invocation deadline is near: the run is saved and continues at the next cron.
+class OutOfTime extends Error {}
 
 const SAFE_CODE = /^[a-z0-9-]{1,64}$/
 
@@ -130,9 +147,8 @@ export function utcDate(ms: number): string {
 	return new Date(ms).toISOString().slice(0, 10)
 }
 
-// A snowflake id's time: the id is (ms << 16) | 16 random bits (domain/ids.ts).
-function snowflakeMs(id: string): number {
-	return Number(BigInt(id) >> 16n)
+function randomHex(bytes: number): string {
+	return toHex(crypto.getRandomValues(new Uint8Array(bytes)))
 }
 
 export function backupPrefix(config: BackupConfig): string {
@@ -177,9 +193,12 @@ class BackupJob {
 	readonly #store: StoreStub
 	readonly #s3: S3Client
 	readonly #log: (entry: Record<string, unknown>) => void
-	readonly #runner: string
+	// This invocation: the runner lease holder, and the attempt segment of every object name it writes.
+	readonly #attempt = randomHex(8)
 	readonly #partBytes: number
-	#rev = 0
+	readonly #deadline: number
+	// Plaintext bytes encrypted by this invocation.
+	#work = 0
 	#state: BackupState = EMPTY_BACKUP_STATE
 
 	constructor(env: Env, config: BackupConfig, deps: BackupDeps) {
@@ -188,68 +207,83 @@ class BackupJob {
 		this.#deps = deps
 		this.#build = deps.build(env)
 		this.#store = deps.store(env)
-		this.#s3 = new S3Client(config, deps.fetch, deps.sleep)
+		this.#deadline = deps.now() + (deps.invocationMs ?? INVOCATION_MS)
+		this.#s3 = new S3Client(config, deps.fetch, { sleep: deps.sleep, budget: () => this.#budget() })
 		this.#log = deps.log ?? defaultLog
-		this.#runner = (deps.randomId ?? (() => crypto.randomUUID()))()
 		this.#partBytes = Math.max(MIN_PART_BYTES, deps.partBytes ?? PART_BYTES)
 	}
 
+	// Time left for requests, keeping the reserve for the last checkpoint and cleanup.
+	#budget(): number {
+		return this.#deadline - RESERVE_MS - this.#deps.now()
+	}
+
 	async run(): Promise<BackupOutcome> {
-		const loaded = await this.#store.backupState(this.#build)
-		this.#rev = loaded.rev
-		this.#state = loaded.state
 		const now = this.#deps.now()
-		const { runner, run, retryAt } = this.#state
-		if (runner !== null && now < runner.until) {
+		const seen = await this.#store.backupState(this.#build)
+		if (seen.runner !== null && now < seen.runner.until) {
 			return 'busy'
 		}
-		if (retryAt !== null && now < retryAt) {
+		if (seen.retryAt !== null && now < seen.retryAt) {
 			return 'waiting'
 		}
-		if (run === null && !this.#due(now)) {
+		if (seen.run === null && !this.#due(seen, now)) {
 			return 'not-due'
 		}
-		// A run whose runner lease ran out without a release: that invocation died.
-		const crashed = run !== null && runner !== null
+		const fingerprint = await this.#fingerprint()
+		const claim = await this.#store.backupClaim(this.#build, this.#attempt, now, RUNNER_LEASE_MS)
+		if (!claim.ok) {
+			return 'busy'
+		}
+		this.#state = claim.state
 		try {
-			await this.#save((s) => {
-				s.retryAt = null
-				if (s.run === null) {
+			await this.#abortStrayUploads()
+			const held = this.#state.run
+			if (held !== null && held.fingerprint !== fingerprint) {
+				await this.#abandon(held)
+			}
+			if (this.#state.run === null) {
+				if (!this.#due(this.#state, now)) {
+					await this.#save(() => {}, { release: true })
+					return 'not-due'
+				}
+				await this.#save((s) => {
+					s.retryAt = null
 					s.run = {
-						id: utcDate(now),
+						id: `${utcDate(now)}-${randomHex(4)}`,
 						startedAt: now,
 						attempts: 0,
 						stage: 'dump',
+						fingerprint,
+						recipients: [...this.#config.recipients],
 						dump: null,
 						result: null,
-						media: { from: s.mediaAfter, after: s.mediaAfter, objects: [] },
+						copied: 0,
+						index: null,
 						manifestAt: null,
 					}
-				} else if (crashed) {
-					s.run.attempts++
-				}
-			})
-		} catch (error) {
-			if (error instanceof LostRunner) {
-				return 'busy'
+				})
+			} else if (claim.crashed) {
+				await this.#save((s) => {
+					s.run!.attempts++
+				})
 			}
-			throw error
-		}
-		const current = this.#run()
-		this.#log({ event: 'kopje.backup.run', id: current.id, stage: current.stage, attempts: current.attempts, crashed })
-		try {
-			if (current.dump !== null) {
-				await this.#releaseDump(current.dump)
+			const run = this.#run()
+			this.#log({ event: 'kopje.backup.run', id: run.id, stage: run.stage, attempts: run.attempts })
+			if (run.dump !== null) {
+				await this.#releaseDump(run.dump)
 			}
-			if (current.attempts > MAX_ATTEMPTS) {
+			if (run.attempts >= MAX_ATTEMPTS) {
 				throw new BackupError('interrupted')
 			}
 			if (this.#run().stage === 'dump') {
 				await this.#dump()
 			}
-			if (this.#run().stage === 'media' && (await this.#media()) === 'paused') {
-				await this.#save(() => {}, true)
-				return 'paused'
+			if (this.#run().stage === 'media') {
+				await this.#media()
+			}
+			if (this.#run().stage === 'index') {
+				await this.#index()
 			}
 			await this.#manifest()
 			return 'done'
@@ -258,7 +292,11 @@ class BackupJob {
 				throw error.cause
 			}
 			if (error instanceof LostRunner) {
+				this.#log({ event: 'kopje.backup.lost_lease', id: this.#state.run?.id ?? null })
 				return 'busy'
+			}
+			if (error instanceof OutOfTime) {
+				return this.#pause()
 			}
 			await this.#fail(error)
 			return 'failed'
@@ -273,28 +311,52 @@ class BackupJob {
 		return run
 	}
 
-	// Due once per UTC day, at or after BACKUP_HOUR_UTC, unless that day's backup already succeeded.
-	#due(now: number): boolean {
+	#runBase(run: BackupRun): string {
+		return `${backupPrefix(this.#config)}${run.id}/${this.#attempt}/`
+	}
+
+	// Due once per UTC day, at or after BACKUP_HOUR_UTC, on a day after the last successful backup's: a clock that
+	// went back never reuses a day that already has a backup.
+	#due(state: BackupState, now: number): boolean {
 		if (new Date(now).getUTCHours() < this.#config.hourUtc) {
 			return false
 		}
-		return this.#state.lastSuccess?.id !== utcDate(now)
+		const last = state.lastSuccess?.id.slice(0, 10)
+		return last === undefined || utcDate(now) > last
 	}
 
-	// Saves a copy of the state with the runner lease renewed (or released), compare-and-set on rev.
-	async #save(mutate: (state: BackupState) => void, release = false): Promise<void> {
+	// The bucket (endpoint, bucket, region, prefix) and the recipients: a run, and every media copy, is valid only for
+	// the fingerprint it was made under.
+	async #fingerprint(): Promise<string> {
+		const { endpoint, bucket, region, prefix, recipients } = this.#config
+		return sha256Of(
+			new TextEncoder().encode(JSON.stringify([endpoint, bucket, region, prefix, [...recipients].sort()]))
+		)
+	}
+
+	// Saves a copy of the state if this invocation still holds the lease (checked in the Store), renewing it.
+	async #save(
+		mutate: (state: BackupState) => void,
+		{ release = false, pruneTo = null }: { release?: boolean; pruneTo?: string | null } = {}
+	): Promise<void> {
 		const next = structuredClone(this.#state)
 		mutate(next)
-		next.runner = release ? null : { id: this.#runner, until: this.#deps.now() + RUNNER_LEASE_MS }
-		const result = await this.#store.backupSave(this.#build, this.#rev, next)
+		const result = await this.#store.backupSave(
+			this.#build,
+			this.#attempt,
+			this.#deps.now(),
+			RUNNER_LEASE_MS,
+			next,
+			release,
+			pruneTo
+		)
 		if (!result.ok) {
-			if (result.code === 'conflict') {
+			if (result.code === 'lost') {
 				throw new LostRunner()
 			}
 			throw new BackupError(`state-${result.code}`)
 		}
-		this.#rev = result.rev
-		this.#state = next
+		this.#state = { ...next, runner: release ? null : { id: this.#attempt, until: result.until } }
 	}
 
 	#fault(point: BackupFaultPoint): void {
@@ -303,6 +365,25 @@ class BackupJob {
 		} catch (error) {
 			throw new Crash(point, { cause: error })
 		}
+	}
+
+	#checkTime(): void {
+		if (this.#budget() <= 0 || this.#work >= (this.#deps.workBytes ?? WORK_BYTES)) {
+			throw new OutOfTime()
+		}
+	}
+
+	async #pause(): Promise<BackupOutcome> {
+		const run = this.#state.run
+		this.#log({ event: 'kopje.backup.paused', id: run?.id ?? null, stage: run?.stage ?? null })
+		try {
+			await this.#save(() => {}, { release: true })
+		} catch (error) {
+			if (!(error instanceof LostRunner)) {
+				this.#log({ event: 'kopje.backup.record_failed', ...errorFields(error) })
+			}
+		}
+		return 'paused'
 	}
 
 	async #fail(error: unknown): Promise<void> {
@@ -317,53 +398,55 @@ class BackupJob {
 		})
 		const now = this.#deps.now()
 		try {
-			await this.#save((s) => {
-				s.lastFailure = { id: run?.id ?? null, at: now, stage: run?.stage ?? null, reason }
-				s.retryAt = now + RETRY_MS
-				if (s.run !== null) {
-					s.run.attempts = 0
-					if (s.run.stage === 'dump') {
-						s.run.dump = null
+			// The run keeps its dump handles; the next invocation releases them again (idempotent).
+			await this.#save(
+				(s) => {
+					s.lastFailure = { id: run?.id ?? null, at: now, stage: run?.stage ?? null, reason }
+					s.retryAt = now + RETRY_MS
+					if (s.run !== null) {
+						s.run.attempts = 0
 					}
-				}
-			}, true)
+				},
+				{ release: true }
+			)
 		} catch (saveError) {
 			// The runner lease ends on its own; the next invocation recovers the run.
 			this.#log({ event: 'kopje.backup.record_failed', ...errorFields(saveError) })
 		}
 	}
 
-	// Releases what a dead invocation left: the Store's freeze (found by its cursor, or by opId if the cursor was never
-	// saved) and the multipart upload.
+	// A run whose destination or recipients no longer match the settings cannot continue: its objects are in another
+	// bucket, or encrypted to other keys. It is dropped, and its freeze released; a new run starts.
+	async #abandon(run: BackupRun): Promise<void> {
+		if (run.dump !== null) {
+			await this.#store.dumpAbort(this.#build, run.dump.opId)
+		}
+		this.#log({ event: 'kopje.backup.abandoned', id: run.id, reason: 'settings-changed' })
+		await this.#save((s) => {
+			s.run = null
+		})
+	}
+
+	// Releases what an earlier invocation left: the Store's freeze (by opId, which never starts a dump) and the
+	// multipart upload. Both are no-ops when already released.
 	async #releaseDump(dump: DumpProgress): Promise<void> {
-		let cursor = dump.cursor
-		if (cursor === null) {
-			// Asking with the same opId returns that dump while it runs. If it already ended, this starts a fresh one,
-			// which is aborted on the next line: a freeze of one round trip.
-			const again = await this.#store.dumpStart(this.#build, DUMP_LEASE_SECONDS, dump.opId)
-			cursor = again.ok ? again.cursor : null
-		}
-		if (cursor !== null) {
-			// Refused when that dump finished, expired or was replaced: then there is no freeze of ours to release.
-			await this.#store.dumpFinish(this.#build, cursor, true)
-		}
+		await this.#store.dumpAbort(this.#build, dump.opId)
 		if (dump.uploadId !== null) {
 			await this.#s3.abortMultipart(dump.key, dump.uploadId)
 		}
 		await this.#save((s) => {
-			if (s.run !== null) {
-				s.run.dump = null
-			}
+			s.run!.dump = null
 		})
 	}
 
-	// Multipart uploads under backups/ that no run holds: from an invocation that died before saving the upload id.
+	// Multipart uploads under backups/ that no live invocation is writing: this one holds the lease, so any upload
+	// there is from an invocation that died or lost the lease.
 	async #abortStrayUploads(): Promise<void> {
 		let uploads: { key: string; uploadId: string }[]
 		try {
 			uploads = await this.#s3.listUploads(backupPrefix(this.#config))
 		} catch (error) {
-			// Some S3-compatible stores do not list uploads; a bucket lifecycle rule then cleans up (docs/backup.md).
+			// Not every store or policy lists uploads; the bucket's lifecycle rule then cleans up (docs/backup.md).
 			this.#log({ event: 'kopje.backup.list_uploads_failed', reason: failureReason(error) })
 			return
 		}
@@ -373,88 +456,44 @@ class BackupJob {
 		}
 	}
 
-	async #dump(): Promise<void> {
-		const run = this.#run()
-		const key = `${backupPrefix(this.#config)}${run.id}/${DUMP_NAME}`
-		await this.#abortStrayUploads()
-		const opId = crypto.randomUUID()
-		// The opId is saved first, so a death right after dumpStart can still find and release this dump.
-		await this.#save((s) => {
-			s.run!.dump = { opId, cursor: null, key, uploadId: null, parts: 0, bytes: 0 }
-		})
-		const started = await this.#store.dumpStart(this.#build, DUMP_LEASE_SECONDS, opId)
-		if (!started.ok) {
-			throw refusal('dump', started.code)
-		}
-		const header = started.header
-		let cursor: DumpCursor = started.cursor
-		let frozen = true
-		let uploadId: string | null = null
+	// Streams `next` through age into a multipart upload. Each part is preceded by a save, so a part is uploaded only
+	// while this invocation holds the lease. On failure the upload is aborted.
+	async #upload(
+		key: string,
+		next: () => Promise<Uint8Array | null>,
+		onStart: (uploadId: string) => Promise<void>,
+		onPart: (parts: number, bytes: number) => Promise<void>,
+		recipients: readonly string[]
+	): Promise<ObjectDigest> {
+		const uploadId = await this.#s3.createMultipart(key, 'application/octet-stream')
 		let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
 		try {
-			uploadId = await this.#s3.createMultipart(key, 'application/octet-stream')
-			const id = uploadId
-			await this.#save((s) => {
-				s.run!.dump = { opId, cursor, key, uploadId: id, parts: 0, bytes: 0 }
-			})
-
+			await onStart(uploadId)
 			const plainDigest = new crypto.DigestStream('SHA-256')
 			const plainWriter = plainDigest.getWriter()
 			let plainBytes = 0
-			const encoder = new TextEncoder()
-			const pending: Uint8Array[] = [encoder.encode(started.headerLine)]
-			let ended = false
-			// Pulls the next piece of the dump file: header line, chunks, then the trailer from dumpFinish (which ends the
-			// freeze at once, before the last parts are uploaded).
-			const next = async (): Promise<Uint8Array | null> => {
-				for (;;) {
-					const piece = pending.shift()
-					if (piece !== undefined) {
-						if (piece.byteLength === 0) {
-							continue
-						}
-						return piece
-					}
-					if (ended) {
-						return null
-					}
-					if (cursor.phase === 'done') {
-						const finished = await this.#store.dumpFinish(this.#build, cursor)
-						if (!finished.ok || finished.trailerText === null) {
-							throw finished.ok ? new BackupError('dump-aborted') : refusal('dump', finished.code)
-						}
-						frozen = false
-						ended = true
-						this.#log({ event: 'kopje.backup.dump.released', id: run.id })
-						pending.push(encoder.encode(finished.trailerText))
-						continue
-					}
-					const step = await this.#store.dumpNext(this.#build, cursor, this.#deps.chunkBytes ?? CHUNK_BYTES)
-					if (!step.ok) {
-						throw refusal('dump', step.code)
-					}
-					cursor = step.cursor
-					pending.push(step.chunk)
-					this.#fault('dump-chunk')
-				}
-			}
 			const plaintext = new ReadableStream<Uint8Array>(
 				{
 					pull: async (controller) => {
-						const piece = await next()
-						if (piece === null) {
-							controller.close()
-							return
+						for (;;) {
+							const piece = await next()
+							if (piece === null) {
+								controller.close()
+								return
+							}
+							if (piece.byteLength > 0) {
+								plainBytes += piece.byteLength
+								this.#work += piece.byteLength
+								await plainWriter.write(piece)
+								controller.enqueue(piece)
+								return
+							}
 						}
-						plainBytes += piece.byteLength
-						await plainWriter.write(piece)
-						controller.enqueue(piece)
 					},
 				},
 				{ highWaterMark: 0 }
 			)
-
-			reader = (await encryptStream(this.#config.recipients, plaintext)).getReader()
+			reader = (await encryptStream(recipients, plaintext)).getReader()
 			const cipherDigest = new crypto.DigestStream('SHA-256')
 			const cipherWriter = cipherDigest.getWriter()
 			let cipherBytes = 0
@@ -463,14 +502,9 @@ class BackupJob {
 			const parts: { partNumber: number; etag: string }[] = []
 			const flush = async () => {
 				const partNumber = parts.length + 1
-				const etag = await this.#s3.uploadPart(key, id, partNumber, part.slice(0, filled))
-				parts.push({ partNumber, etag })
+				parts.push({ partNumber, etag: await this.#s3.uploadPart(key, uploadId, partNumber, part.slice(0, filled)) })
 				filled = 0
-				const at = cursor
-				await this.#save((s) => {
-					s.run!.dump = { opId, cursor: at, key, uploadId: id, parts: parts.length, bytes: cipherBytes }
-				})
-				this.#fault('dump-part')
+				await onPart(parts.length, cipherBytes)
 			}
 			for (;;) {
 				const { done, value } = await reader.read()
@@ -492,15 +526,100 @@ class BackupJob {
 			if (filled > 0 || parts.length === 0) {
 				await flush()
 			}
-			await this.#s3.completeMultipart(key, id, parts)
-			this.#fault('dump-complete')
+			await this.#s3.completeMultipart(key, uploadId, parts)
 			await plainWriter.close()
 			await cipherWriter.close()
-			const result: DumpResult = {
+			return {
 				key,
 				size: cipherBytes,
 				sha256: toHex(await cipherDigest.digest),
 				plaintext: { size: plainBytes, sha256: toHex(await plainDigest.digest) },
+			}
+		} catch (error) {
+			if (!(error instanceof Crash)) {
+				await reader?.cancel().catch(() => {})
+				await this.#s3.abortMultipart(key, uploadId).catch(() => {})
+			}
+			throw error
+		}
+	}
+
+	async #dump(): Promise<void> {
+		const run = this.#run()
+		const key = `${this.#runBase(run)}${DUMP_NAME}`
+		const opId = crypto.randomUUID()
+		// The opId is saved first, so whatever happens after dumpStart (even a lost answer) can release this dump.
+		await this.#save((s) => {
+			s.run!.dump = { opId, key, uploadId: null, parts: 0, bytes: 0 }
+		})
+		try {
+			const started = await this.#store.dumpStart(this.#build, DUMP_LEASE_SECONDS, opId)
+			if (!started.ok) {
+				throw refusal('dump', started.code)
+			}
+			const { header } = started
+			let cursor: DumpCursor = started.cursor
+			const encoder = new TextEncoder()
+			const pending: Uint8Array[] = [encoder.encode(started.headerLine)]
+			let ended = false
+			// The dump file, piece by piece: header, chunks, trailer. When the last chunk has been read, the originals
+			// it references are recorded and the freeze ends at once; the last chunk and the trailer are kept here.
+			const next = async (): Promise<Uint8Array | null> => {
+				const piece = pending.shift()
+				if (piece !== undefined) {
+					return piece
+				}
+				if (ended) {
+					return null
+				}
+				const step = await this.#store.dumpNext(this.#build, cursor, this.#deps.chunkBytes ?? CHUNK_BYTES)
+				if (!step.ok) {
+					throw refusal('dump', step.code)
+				}
+				cursor = step.cursor
+				this.#fault('dump-chunk')
+				if (step.done) {
+					const captured = await this.#store.backupCapture(
+						this.#build,
+						this.#attempt,
+						this.#deps.now(),
+						run.id,
+						run.fingerprint
+					)
+					if (!captured.ok) {
+						throw captured.code === 'lost' ? new LostRunner() : refusal('capture', captured.code)
+					}
+					const finished = await this.#store.dumpFinish(this.#build, cursor)
+					if (!finished.ok || finished.trailerText === null) {
+						throw finished.ok ? new BackupError('dump-aborted') : refusal('dump', finished.code)
+					}
+					ended = true
+					this.#log({ event: 'kopje.backup.dump.released', id: run.id, media: captured.required })
+					pending.push(encoder.encode(finished.trailerText))
+				}
+				return step.chunk
+			}
+			const progress = (uploadId: string | null, parts: number, bytes: number) =>
+				this.#save((s) => {
+					s.run!.dump = { opId, key, uploadId, parts, bytes }
+				})
+			let uploadId: string | null = null
+			const digest = await this.#upload(
+				key,
+				next,
+				async (id) => {
+					uploadId = id
+					await progress(id, 0, 0)
+				},
+				async (parts, bytes) => {
+					await progress(uploadId, parts, bytes)
+					this.#fault('dump-part')
+				},
+				run.recipients
+			)
+			this.#fault('dump-complete')
+			const result: DumpResult = {
+				...digest,
 				createdAt: header.createdAt,
 				source: header.source,
 				migrations: header.migrations,
@@ -510,162 +629,210 @@ class BackupJob {
 				s.run!.dump = null
 				s.run!.result = result
 			})
-			this.#log({ event: 'kopje.backup.dump.uploaded', id: run.id, bytes: cipherBytes, parts: parts.length })
+			this.#log({ event: 'kopje.backup.dump.uploaded', id: run.id, bytes: digest.size })
 		} catch (error) {
-			if (error instanceof Crash) {
-				throw error
-			}
-			await reader?.cancel().catch(() => {})
-			// Release the freeze first, then the upload; a failure of either is cleaned up by the next attempt.
-			if (frozen) {
-				await this.#store.dumpFinish(this.#build, cursor, true).catch(() => {})
-			}
-			if (uploadId !== null) {
-				await this.#s3.abortMultipart(key, uploadId).catch(() => {})
+			if (!(error instanceof Crash)) {
+				// Released at once, whatever failed; a no-op if the dump already finished. The handles stay in the run
+				// for the next invocation in case this fails too.
+				await this.#store.dumpAbort(this.#build, opId).catch(() => {})
 			}
 			throw error
 		}
 	}
 
-	async #media(): Promise<'done' | 'paused'> {
-		const deadline = this.#deps.now() + (this.#deps.mediaBudgetMs ?? MEDIA_BUDGET_MS)
+	async #media(): Promise<void> {
 		const run = this.#run()
-		const horizon = run.startedAt - MEDIA_SETTLE_MS
 		let copied = 0
 		for (;;) {
-			const listing = await this.#env.MEDIA.list({
-				prefix: ORIGINALS,
-				limit: MEDIA_LIST_LIMIT,
-				...(this.#run().media.after === null ? {} : { startAfter: this.#run().media.after! }),
-			})
-			let reachedHorizon = false
-			for (const object of listing.objects) {
-				if (this.#run().media.objects.length >= MAX_MEDIA_PER_RUN) {
-					reachedHorizon = true
-					break
-				}
-				if (this.#deps.now() >= deadline) {
-					this.#log({ event: 'kopje.backup.media.paused', id: run.id, copied })
-					return 'paused'
-				}
-				const id = object.key.slice(ORIGINALS.length)
-				const isMediaId = /^\d{18}$/.test(id)
-				if (isMediaId && snowflakeMs(id) >= horizon) {
-					reachedHorizon = true
-					break
-				}
-				const copy = isMediaId ? await this.#copyOriginal(object.key) : null
-				await this.#save((s) => {
-					s.run!.media.after = object.key
-					if (copy !== null) {
-						s.run!.media.objects.push(copy)
-					}
-				})
-				if (copy !== null) {
-					copied++
-				}
-			}
-			if (reachedHorizon || !listing.truncated) {
+			const page = await this.#store.backupMedia(this.#build, run.id, null, MEDIA_PAGE, true)
+			if (page.length === 0 || this.#run().copied >= MAX_MEDIA_PER_RUN) {
 				break
+			}
+			for (const row of page) {
+				if (this.#run().copied >= MAX_MEDIA_PER_RUN) {
+					break
+				}
+				this.#checkTime()
+				await this.#copyOriginal(run, row)
+				copied++
 			}
 		}
 		await this.#save((s) => {
-			s.run!.stage = 'manifest'
-			s.run!.manifestAt = this.#deps.now()
+			s.run!.stage = 'index'
 		})
-		this.#log({ event: 'kopje.backup.media.done', id: run.id, copied, total: this.#run().media.objects.length })
-		return 'done'
+		this.#log({ event: 'kopje.backup.media.done', id: run.id, copied, total: this.#run().copied })
 	}
 
-	// Copies one original, encrypted, under media/<run>/. Writing the same key again after a crash is harmless.
-	async #copyOriginal(source: string): Promise<MediaCopy | null> {
-		const object = await this.#env.MEDIA.get(source)
-		if (object === null) {
-			// Deleted since it was listed (a failed upload's cleanup); nothing to keep.
-			return null
+	// Copies one original, encrypted, to media/<run>/<attempt>/<key>.age, or records that R2 no longer has it.
+	async #copyOriginal(run: BackupRun, row: MediaRow): Promise<void> {
+		const object = await this.#env.MEDIA.get(row.source)
+		let copy: ObjectDigest | null = null
+		if (object !== null) {
+			if (object.size > MAX_MEDIA_BYTES) {
+				await object.body.cancel()
+				throw new BackupError('media-too-large')
+			}
+			const plaintext = new Uint8Array(await object.arrayBuffer())
+			this.#work += plaintext.byteLength
+			const ciphertext = await encryptBytes(run.recipients, plaintext)
+			const key = `${mediaPrefix(this.#config)}${run.id}/${this.#attempt}/${row.source}.age`
+			await this.#s3.put(key, ciphertext, 'application/octet-stream')
+			this.#fault('media-copied')
+			copy = {
+				key,
+				size: ciphertext.byteLength,
+				sha256: await sha256Of(ciphertext),
+				plaintext: { size: plaintext.byteLength, sha256: await sha256Of(plaintext) },
+			}
 		}
-		if (object.size > MAX_MEDIA_BYTES) {
-			await object.body.cancel()
-			throw new BackupError('media-too-large')
+		const recorded = await this.#store.backupRecord(
+			this.#build,
+			this.#attempt,
+			this.#deps.now(),
+			row.source,
+			copy === null ? { state: 'absent' } : { state: 'copied', destination: run.fingerprint, run: run.id, copy }
+		)
+		if (!recorded.ok) {
+			throw recorded.code === 'lost' ? new LostRunner() : refusal('record', recorded.code)
 		}
-		const plaintext = new Uint8Array(await object.arrayBuffer())
-		const ciphertext = await encryptBytes(this.#config.recipients, plaintext)
-		const key = `${mediaPrefix(this.#config)}${this.#run().id}/${source}.age`
-		await this.#s3.put(key, ciphertext, 'application/octet-stream')
-		this.#fault('media-copied')
-		return {
-			source,
-			key,
-			size: ciphertext.byteLength,
-			sha256: await sha256Of(ciphertext),
-			plaintext: await digestOf(plaintext),
+		await this.#save((s) => {
+			s.run!.copied++
+		})
+	}
+
+	// The complete media index of this run, streamed from backup_media.
+	async #index(): Promise<void> {
+		this.#fault('index-stage')
+		this.#checkTime()
+		const run = this.#run()
+		const coverage: Coverage = await this.#store.backupCoverage(this.#build, run.id)
+		const encoder = new TextEncoder()
+		const pending: Uint8Array[] = [
+			encoder.encode(`{"format":"${INDEX_FORMAT}","version":1,"run":${JSON.stringify(run.id)},"objects":[`),
+		]
+		let after: string | null = null
+		let first = true
+		let ended = false
+		const next = async (): Promise<Uint8Array | null> => {
+			for (;;) {
+				const piece = pending.shift()
+				if (piece !== undefined) {
+					return piece
+				}
+				if (ended) {
+					return null
+				}
+				const page = await this.#store.backupMedia(this.#build, run.id, after, 1000, false)
+				if (page.length === 0) {
+					ended = true
+					pending.push(encoder.encode('\n]}\n'))
+					continue
+				}
+				after = page.at(-1)!.source
+				let text = ''
+				for (const row of page) {
+					text += `${first ? '' : ','}\n${indexEntry(row)}`
+					first = false
+				}
+				pending.push(encoder.encode(text))
+			}
 		}
+		const index = await this.#upload(
+			`${this.#runBase(run)}${INDEX_NAME}`,
+			next,
+			() => this.#save(() => {}),
+			() => this.#save(() => {}),
+			run.recipients
+		)
+		await this.#save((s) => {
+			s.run!.stage = 'manifest'
+			s.run!.index = { ...index, coverage }
+			s.run!.manifestAt = this.#deps.now()
+		})
 	}
 
 	async #manifest(): Promise<void> {
 		this.#fault('manifest-stage')
+		this.#checkTime()
 		const run = this.#run()
-		const result = run.result
-		if (result === null || run.manifestAt === null) {
+		const { result, index } = run
+		if (result === null || index === null || run.manifestAt === null) {
 			throw new BackupError('manifest-without-dump')
 		}
-		const manifest = buildManifest(run, result, this.#config.recipients)
-		const key = `${backupPrefix(this.#config)}${run.id}/${MANIFEST_NAME}`
-		const ciphertext = await encryptBytes(this.#config.recipients, new TextEncoder().encode(JSON.stringify(manifest)))
+		const manifest = buildManifest(run, this.#attempt, result, index)
+		const key = `${this.#runBase(run)}${MANIFEST_NAME}`
+		const ciphertext = await encryptBytes(run.recipients, new TextEncoder().encode(JSON.stringify(manifest)))
+		// The lease is checked right before the write.
+		await this.#save(() => {})
 		await this.#s3.put(key, ciphertext, 'application/octet-stream')
 		this.#fault('manifest-written')
 		const now = this.#deps.now()
 		// Recorded apart from the bucket, so an operator can tell this manifest from one written by someone else holding
 		// the recipient's public key and bucket access (anyone can encrypt to a public key).
 		const manifestSha256 = await sha256Of(ciphertext)
-		await this.#save((s) => {
-			s.lastSuccess = {
-				id: run.id,
-				at: now,
-				manifest: key,
-				manifestSha256,
-				dumpBytes: result.size,
-				media: run.media.objects.length,
-			}
-			s.mediaAfter = run.media.after
-			s.run = null
-		})
+		await this.#save(
+			(s) => {
+				s.lastSuccess = {
+					id: run.id,
+					at: now,
+					manifest: key,
+					manifestSha256,
+					dumpBytes: result.size,
+					coverage: index.coverage,
+				}
+				s.run = null
+			},
+			{ pruneTo: run.id }
+		)
 		this.#log({
 			event: 'kopje.backup.succeeded',
 			id: run.id,
+			manifest: key,
 			manifestSha256,
 			bytes: result.size,
-			media: run.media.objects.length,
+			media: index.coverage,
 		})
 		let retentionFailure: { at: number; reason: string } | null = null
 		try {
 			const deleted = await this.#retention()
 			this.#log({ event: 'kopje.backup.retention', kept: this.#config.retention, deleted })
 		} catch (error) {
+			if (error instanceof Crash || error instanceof LostRunner) {
+				throw error
+			}
 			retentionFailure = { at: now, reason: failureReason(error) }
 			this.#log({ event: 'kopje.backup.retention_failed', reason: retentionFailure.reason, ...errorFields(error) })
 		}
-		await this.#save((s) => {
-			s.retentionFailure = retentionFailure
-		}, true)
+		await this.#save(
+			(s) => {
+				s.retentionFailure = retentionFailure
+			},
+			{ release: true }
+		)
 	}
 
-	// Keeps the newest `retention` complete backups (those with a manifest). Deletes, only under backups/ and only the
-	// two object names this job writes, every backup older than the oldest one kept: its manifest first, so a half-
-	// deleted backup never looks complete. The newest complete backup is never deleted (retention is at least 1).
+	// Keeps the newest `retention` complete backups: runs with at least one manifest, selected by manifest only. Every
+	// run older than the oldest one kept is deleted, complete or not; only the three object names this job writes, only
+	// under backups/, all manifests of a run first, so a half-deleted run never looks complete. The newest complete
+	// backup is never deleted (retention is at least 1). media/ is never deleted: the kept indexes refer to it.
 	async #retention(): Promise<number> {
 		const base = backupPrefix(this.#config)
-		const runs = new Map<string, Set<string>>()
+		const runs = new Map<string, { manifests: string[]; others: string[] }>()
 		for (const object of await this.#s3.list(base)) {
-			const match = /^(\d{4}-\d{2}-\d{2})\/(dump\.kopje\.age|manifest\.json\.age)$/.exec(object.key.slice(base.length))
+			const match =
+				/^(\d{4}-\d{2}-\d{2}-[0-9a-f]{8})\/[0-9a-f]{16}\/(dump\.kopje\.age|media-index\.json\.age|manifest\.json\.age)$/.exec(
+					object.key.slice(base.length)
+				)
 			if (match === null) {
 				continue
 			}
 			const [, id = '', name = ''] = match
-			runs.set(id, (runs.get(id) ?? new Set()).add(name))
+			const entry = runs.get(id) ?? { manifests: [], others: [] }
+			;(name === MANIFEST_NAME ? entry.manifests : entry.others).push(object.key)
+			runs.set(id, entry)
 		}
 		const complete = [...runs]
-			.filter(([, names]) => names.has(MANIFEST_NAME))
+			.filter(([, entry]) => entry.manifests.length > 0)
 			.map(([id]) => id)
 			.sort()
 			.reverse()
@@ -673,40 +840,58 @@ class BackupJob {
 		if (oldestKept === undefined) {
 			return 0
 		}
+		await this.#save(() => {})
 		let deleted = 0
-		for (const [id, names] of [...runs].sort(([a], [b]) => (a < b ? -1 : 1))) {
+		for (const [id, entry] of [...runs].sort(([a], [b]) => (a < b ? -1 : 1))) {
 			if (id >= oldestKept) {
 				continue
 			}
-			for (const name of [MANIFEST_NAME, DUMP_NAME]) {
-				if (names.has(name)) {
-					await this.#s3.delete(`${base}${id}/${name}`)
-					deleted++
-				}
+			for (const key of [...entry.manifests, ...entry.others]) {
+				await this.#s3.delete(key)
+				this.#fault('retention-deleted')
+				deleted++
 			}
 		}
 		return deleted
 	}
 }
 
-async function digestOf(bytes: Uint8Array): Promise<Digest> {
-	return { size: bytes.byteLength, sha256: await sha256Of(bytes) }
+function indexEntry(row: MediaRow): string {
+	return JSON.stringify(
+		row.state === 'copied'
+			? {
+					source: row.source,
+					state: row.state,
+					key: row.key,
+					size: row.size,
+					sha256: row.sha256,
+					plaintext: { size: row.plain_size, sha256: row.plain_sha256 },
+					run: row.copied_run,
+				}
+			: { source: row.source, state: row.state }
+	)
 }
 
 export type BackupManifest = ReturnType<typeof buildManifest>
 
-function buildManifest(run: BackupRun, result: DumpResult, recipients: readonly string[]) {
+function buildManifest(
+	run: BackupRun,
+	attempt: string,
+	result: DumpResult,
+	index: ObjectDigest & { coverage: Coverage }
+) {
 	return {
 		format: MANIFEST_FORMAT,
 		version: 1,
 		id: run.id,
+		attempt,
 		createdAt: new Date(run.manifestAt ?? 0).toISOString(),
 		kopje: { version: PACKAGE_VERSION, build: result.source.build, dumpVersion: result.source.version },
 		schema: {
 			version: result.migrations.at(-1)?.name ?? null,
 			migrations: result.migrations,
 		},
-		recipients: [...recipients],
+		recipients: [...run.recipients],
 		dump: {
 			key: result.key,
 			size: result.size,
@@ -714,10 +899,7 @@ function buildManifest(run: BackupRun, result: DumpResult, recipients: readonly 
 			plaintext: result.plaintext,
 			createdAt: result.createdAt,
 		},
-		media: {
-			after: run.media.from,
-			through: run.media.after,
-			objects: run.media.objects,
-		},
+		mediaIndex: { key: index.key, size: index.size, sha256: index.sha256, plaintext: index.plaintext },
+		media: index.coverage,
 	}
 }

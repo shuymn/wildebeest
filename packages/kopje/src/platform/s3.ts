@@ -5,7 +5,8 @@ import { toHex } from './backup-crypto'
 // The few S3 calls the scheduled backup makes, path-style (https://endpoint/bucket/key) and signed with SigV4 by
 // aws4fetch. Every request carries the SHA-256 of its payload, so the store rejects a body changed in transit.
 //
-// Errors are S3Error with the operation and HTTP status only. Neither the response body nor the request (which carries
+// Every request, its retries included, ends by the caller's budget (the time left in the invocation), so the job keeps
+// time to checkpoint. Errors are S3Error with the operation and HTTP status (or 'timeout') only. Neither the response body nor the request (which carries
 // the signature) is kept, so an error can be logged and shown in health as is (DATA-5, DATA-9).
 
 export type S3Settings = {
@@ -21,7 +22,7 @@ export type S3Fetch = (request: Request) => Promise<Response>
 export class S3Error extends Error {
 	constructor(
 		readonly op: string,
-		readonly status: number,
+		readonly status: number | 'timeout',
 		options?: ErrorOptions
 	) {
 		super(`s3-${op}-${status}`, options)
@@ -40,11 +41,15 @@ export class S3Client {
 	readonly #base: string
 	readonly #fetch: S3Fetch
 	readonly #sleep: (ms: number) => Promise<void>
+	readonly #budget: () => number
 
 	constructor(
 		settings: S3Settings,
 		fetch: S3Fetch,
-		sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+		{
+			sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
+			budget = () => TIMEOUT_MS,
+		}: { sleep?: (ms: number) => Promise<void>; budget?: () => number } = {}
 	) {
 		this.#aws = new AwsClient({
 			accessKeyId: settings.accessKeyId,
@@ -56,6 +61,7 @@ export class S3Client {
 		this.#base = `${settings.endpoint}/${encodeURIComponent(settings.bucket)}`
 		this.#fetch = fetch
 		this.#sleep = sleep
+		this.#budget = budget
 	}
 
 	async createMultipart(key: string, contentType: string): Promise<string> {
@@ -191,18 +197,23 @@ export class S3Client {
 		}
 		const payloadHash = toHex(await crypto.subtle.digest('SHA-256', body ?? new Uint8Array(0)))
 		for (let attempt = 0; ; attempt++) {
+			const left = this.#budget()
+			if (left <= 0) {
+				throw new S3Error(op, 'timeout')
+			}
 			let response: Response | null = null
 			try {
 				const request = await this.#aws.sign(url.toString(), {
 					method,
 					headers: { ...headers, 'x-amz-content-sha256': payloadHash },
 					body: body ?? null,
-					signal: AbortSignal.timeout(TIMEOUT_MS),
+					signal: AbortSignal.timeout(Math.min(TIMEOUT_MS, left)),
 				})
 				response = await this.#fetch(request)
 			} catch (error) {
-				if (method === 'POST' || attempt >= RETRIES) {
-					throw new S3Error(op, 0, { cause: error })
+				const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
+				if (method === 'POST' || attempt >= RETRIES || timedOut) {
+					throw new S3Error(op, timedOut ? 'timeout' : 0, { cause: error })
 				}
 			}
 			if (response !== null) {
@@ -215,7 +226,11 @@ export class S3Client {
 					throw new S3Error(op, response.status)
 				}
 			}
-			await this.#sleep(200 * 4 ** attempt)
+			const delay = 200 * 4 ** attempt
+			if (this.#budget() <= delay) {
+				throw new S3Error(op, 'timeout')
+			}
+			await this.#sleep(delay)
 		}
 	}
 }

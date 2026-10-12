@@ -98,7 +98,7 @@ async function backupCheck(
 	}
 	let state: BackupState
 	try {
-		state = (await store().backupState(build)).state
+		state = await store().backupState(build)
 	} catch (error) {
 		return { ok: false, state: 'unknown', error: errorMessage(error) }
 	}
@@ -117,8 +117,8 @@ async function backupCheck(
 						id: run.id,
 						stage: run.stage,
 						startedAt: run.startedAt,
-						media: run.media.objects.length,
 						parts: run.dump?.parts ?? 0,
+						copied: run.copied,
 					},
 		retryAt,
 		retentionFailure,
