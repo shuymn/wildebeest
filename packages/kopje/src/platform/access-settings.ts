@@ -24,7 +24,7 @@ export function readAccessSettings(sql: SqlStorage): AccessSettings {
 // application; domain/oauth.ts ACCESS_AUD). Configuration is not data: it does not make the Store non-empty for an
 // import, an import moves it aside (so the admin keeps authenticating while imported rows land) and afterwards puts
 // back exactly these rows (an imported value never replaces them, an absent name stays absent), and a reset keeps
-// it. Only the config operation changes it.
+// it. Only the config operation and /setup (its bootstrap, then the admin's Access reconcile: domain/setup.ts) change it.
 export const CONFIG_KEYS: readonly string[] = ['domain', 'access_aud', ...Object.values(ACCESS_SETTINGS)]
 
 export const BOOTSTRAP = { table: 'instance_settings', column: 'name', values: CONFIG_KEYS } as const
