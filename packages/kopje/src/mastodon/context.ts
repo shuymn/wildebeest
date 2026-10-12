@@ -1,6 +1,8 @@
 import type { Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 
+import { mastodonError } from './errors'
+import { type Params, readParams } from './params'
 import type { Present } from '../domain/accounts'
 import type { AuthFailure, Authorized, Credential, UserCredential } from '../domain/auth'
 import { readConfig } from '../platform/config'
@@ -60,6 +62,11 @@ export function userCredential(c: ApiContext, deps: Pick<ApiDeps, 'now'>): UserC
 	return { ...value, scope: value.scope }
 }
 
+// The credential of a route whose token is optional: null when the request sent none.
+export function optionalCredential(c: ApiContext, deps: Pick<ApiDeps, 'now'>): UserCredential | null {
+	return c.get('credential') === null ? null : userCredential(c, deps)
+}
+
 const AUTH_ERRORS: Record<AuthFailure['status'], { status: 401 | 403 | 422; message: string }> = {
 	unauthenticated: { status: 401, message: 'The access token is invalid' },
 	suspended: { status: 403, message: 'Your login is currently disabled' },
@@ -84,6 +91,19 @@ export async function refuseAfterAuth(c: ApiContext, deps: ApiDeps, response: Re
 		authorized(await storeCall(c, deps, (s, b) => s.checkCredential(b, value)))
 	}
 	return response
+}
+
+// The request's parameters, or the error answer for an unreadable body (after authentication, as Mastodon orders it).
+export async function requestParams(c: ApiContext, deps: ApiDeps): Promise<Params | Response> {
+	const result = await readParams(c.req.raw)
+	if (!result.ok) {
+		return refuseAfterAuth(
+			c,
+			deps,
+			mastodonError(result.status, result.status === 413 ? 'Request body is too large' : 'Malformed request body')
+		)
+	}
+	return result.params
 }
 
 // The Web Push application server key clients subscribe with; empty until VAPID_JWK is set.

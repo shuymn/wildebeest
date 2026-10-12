@@ -1,31 +1,19 @@
 import {
 	type ApiContext,
-	type ApiDeps,
 	type ApiHandler,
 	authorized,
 	present,
 	refuseAfterAuth,
+	requestParams,
 	storeCall,
 	userCredential,
 } from './context'
 import { mastodonError } from './errors'
 import { linkHeader, pageQuery } from './pagination'
-import { type Params, parseBoolean, readParams } from './params'
+import { parseBoolean } from './params'
 import type { CredentialChanges, RelationshipResult, Visibility } from '../domain/accounts'
 
 // /api/v1/accounts (B3): credentials, lookup, search, relationships, follow, and follower lists.
-
-async function params(c: ApiContext, deps: ApiDeps): Promise<Params | Response> {
-	const result = await readParams(c.req.raw)
-	if (!result.ok) {
-		return refuseAfterAuth(
-			c,
-			deps,
-			mastodonError(result.status, result.status === 413 ? 'Request body is too large' : 'Malformed request body')
-		)
-	}
-	return result.params
-}
 
 const NOT_FOUND = () => mastodonError(404, 'Record not found')
 
@@ -45,7 +33,7 @@ const LANGUAGE = /^[a-z]{2,3}$/
 // Plain-text fields only. Avatar and header uploads come with media (B4) and are ignored here.
 export const updateCredentials: ApiHandler = async (c, deps) => {
 	const credential = userCredential(c, deps)
-	const p = await params(c, deps)
+	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
@@ -114,7 +102,7 @@ export const lookupAccount: ApiHandler = async (c, deps) => {
 
 export const relationships: ApiHandler = async (c, deps) => {
 	const credential = userCredential(c, deps)
-	const p = await params(c, deps)
+	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
@@ -124,7 +112,7 @@ export const relationships: ApiHandler = async (c, deps) => {
 
 export const searchAccounts: ApiHandler = async (c, deps) => {
 	const credential = userCredential(c, deps)
-	const p = await params(c, deps)
+	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
@@ -161,7 +149,7 @@ function relationshipResponse(c: ApiContext, result: RelationshipResult): Respon
 
 export const follow: ApiHandler = async (c, deps) => {
 	const credential = userCredential(c, deps)
-	const p = await params(c, deps)
+	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
@@ -186,7 +174,7 @@ export const unfollow: ApiHandler = async (c, deps) => {
 
 function followList(direction: 'followers' | 'following'): ApiHandler {
 	return async (c, deps) => {
-		const p = await params(c, deps)
+		const p = await requestParams(c, deps)
 		if (p instanceof Response) {
 			return p
 		}

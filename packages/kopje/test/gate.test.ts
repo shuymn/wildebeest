@@ -66,7 +66,7 @@ describe('maintenance gate', () => {
 	// Probe routes stand in for handlers that do not exist yet, so "let through" means the handler ran.
 	async function probed(mode: string) {
 		const h = harness(await migratedStore(), { MAINTENANCE: mode })
-		for (const path of ['/api/v1/statuses', '/api/v1/timelines/home', '/oauth/probe']) {
+		for (const path of ['/api/v1/probe', '/oauth/probe']) {
 			h.app.all(path, (c) => c.text('reached'))
 		}
 		return h
@@ -75,11 +75,11 @@ describe('maintenance gate', () => {
 	it('answers writes with a Mastodon 503 in readonly but lets reads and sessions through', async () => {
 		const { request } = await probed('readonly')
 
-		const write = await request('/api/v1/statuses', { method: 'POST' })
+		const write = await request('/api/v1/probe', { method: 'POST' })
 		expect(write.status).toBe(503)
 		expect(await write.json()).toEqual({ error: expect.stringContaining('maintenance') })
 		for (const [path, method] of [
-			['/api/v1/timelines/home', 'GET'],
+			['/api/v1/probe', 'GET'],
 			['/oauth/probe', 'POST'],
 		] as const) {
 			const response = await request(path, { method })
@@ -91,7 +91,7 @@ describe('maintenance gate', () => {
 	it('refuses reads and sessions in full but keeps always-served routes', async () => {
 		const { request } = await probed('full')
 
-		expect((await request('/api/v1/timelines/home')).status).toBe(503)
+		expect((await request('/api/v1/probe')).status).toBe(503)
 		expect((await request('/oauth/probe', { method: 'POST' })).status).toBe(503)
 		expect((await request('/health')).status).toBe(200)
 	})
