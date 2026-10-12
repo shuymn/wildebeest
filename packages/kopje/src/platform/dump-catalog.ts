@@ -1,4 +1,5 @@
 import { isLiteral, quoteIdentifier, type TableSpec } from './dump-format'
+import { bindAll, readColumn, textLiteral, valueLiteral } from './dump-literals'
 
 // What a dump contains, read from the live schema so a new migration needs no change here.
 //
@@ -113,20 +114,11 @@ export function readCatalog(sql: SqlStorage): TableSpec[] {
 	return ordered
 }
 
-// SQL literal of a value, as quote() writes it, except TEXT containing NUL (quote() would truncate it).
-export function literalExpression(column: string): string {
-	const q = quoteIdentifier(column)
-	return `CASE WHEN typeof(${q}) = 'text' AND instr(${q}, char(0)) > 0 THEN 'CAST(' || quote(CAST(${q} AS BLOB)) || ' AS TEXT)' ELSE quote(${q}) END`
-}
-
-export function textLiteral(value: string): string {
-	return `'${value.replaceAll("'", "''")}'`
-}
-
 export type ScanMode = 'rows' | 'links'
 
-// One row of a scan: the ordering key (to resume after it) and the literals of the selected columns. In rows mode
-// those are all columns; in links mode the deferred columns followed by the primary key columns.
+// One row of a scan: the ordering key (to resume after it) and the canonical literals (dump-literals.ts) of the
+// selected columns. In rows mode those are all columns; in links mode the deferred columns followed by the primary
+// key columns.
 export type ScannedRow = { after: string[]; literals: string[] }
 
 // Reads a table in its order, starting after a cursor key, and hands each row to `visit` until it returns false.
@@ -137,10 +129,11 @@ export function scanTable(
 	after: readonly string[] | null,
 	visit: (row: ScannedRow) => boolean
 ): void {
-	const orderKeys = spec.order.by === 'rowid' ? ['CAST(rowid AS TEXT)'] : spec.order.columns.map(literalExpression)
+	const byRowid = spec.order.by === 'rowid'
+	const orderColumns = spec.order.by === 'key' ? spec.order.columns : []
 	const selected = mode === 'rows' ? spec.columns : [...spec.deferred, ...spec.key]
 	const where: string[] = []
-	const bindings: string[] = []
+	const bindings: SqlStorageValue[] = []
 	if (spec.only !== undefined) {
 		where.push(`${quoteIdentifier(spec.only.column)} IN (${spec.only.values.map(textLiteral).join(',')})`)
 	}
@@ -148,31 +141,47 @@ export function scanTable(
 		where.push(`(${spec.deferred.map((c) => `${quoteIdentifier(c)} IS NOT NULL`).join(' OR ')})`)
 	}
 	if (after !== null) {
-		if (spec.order.by === 'rowid') {
+		if (byRowid) {
 			if (after.length !== 1 || !/^-?\d{1,19}$/.test(after[0] ?? '')) {
 				throw new CatalogError(`invalid cursor key for ${spec.name}`)
 			}
 			where.push('rowid > CAST(? AS INTEGER)')
 			bindings.push(after[0] ?? '')
 		} else {
-			if (after.length !== spec.order.columns.length || !after.every(isLiteral)) {
+			if (after.length !== orderColumns.length || !after.every(isLiteral)) {
 				throw new CatalogError(`invalid cursor key for ${spec.name}`)
 			}
-			where.push(`(${spec.order.columns.map(quoteIdentifier).join(',')}) > (${after.join(',')})`)
+			let bound
+			try {
+				bound = bindAll(after)
+			} catch {
+				throw new CatalogError(`invalid cursor key for ${spec.name}`)
+			}
+			where.push(`(${orderColumns.map(quoteIdentifier).join(',')}) > (${bound.exprs.join(',')})`)
+			bindings.push(...bound.params)
 		}
 	}
-	const order = spec.order.by === 'rowid' ? 'rowid' : spec.order.columns.map(quoteIdentifier).join(',')
+	const keyColumns = byRowid ? ['CAST(rowid AS TEXT)'] : orderColumns.flatMap(readColumn)
+	const order = byRowid ? 'rowid' : orderColumns.map(quoteIdentifier).join(',')
 	const query =
-		`SELECT ${[...orderKeys, ...selected.map(literalExpression)].join(', ')} FROM ${quoteIdentifier(spec.name)}` +
+		`SELECT ${[...keyColumns, ...selected.flatMap(readColumn)].join(', ')} FROM ${quoteIdentifier(spec.name)}` +
 		(where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '') +
 		` ORDER BY ${order}`
-	const width = orderKeys.length
+	const keyWidth = keyColumns.length
 	for (const raw of sql.exec(query, ...bindings).raw()) {
-		const values = raw as string[]
-		if (!visit({ after: values.slice(0, width), literals: values.slice(width) })) {
+		const keys = byRowid ? [raw[0] as string] : pairsToLiterals(raw, 0, keyWidth)
+		if (!visit({ after: keys, literals: pairsToLiterals(raw, keyWidth, raw.length) })) {
 			return
 		}
 	}
+}
+
+function pairsToLiterals(raw: SqlStorageValue[], from: number, to: number): string[] {
+	const literals: string[] = []
+	for (let i = from; i < to; i += 2) {
+		literals.push(valueLiteral(raw[i] ?? null, raw[i + 1] ?? null))
+	}
+	return literals
 }
 
 export function rowCount(sql: SqlStorage, spec: TableSpec): number {

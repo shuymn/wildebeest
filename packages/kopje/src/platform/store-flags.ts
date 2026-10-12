@@ -21,6 +21,9 @@ export type DumpRecord = {
 	header: DumpHeader
 	// Results of the tables finished so far, in header order; the trailer is built from these.
 	results: TableResult[]
+	// Set by a successful finish, which also ends the lease. Kept as a receipt so a finish whose response was lost can
+	// be repeated; the next dump replaces it.
+	completed?: { trailer: DumpTrailer; trailerText: string }
 }
 
 export type VerifyProgress = { position: ScanPosition; results: TableResult[] }
@@ -44,6 +47,8 @@ export type ImportRecord = {
 	verify: VerifyProgress | null
 	// Set when verification failed; the import then needs a reset (deleteAll) and a new import.
 	report: VerifyReport | null
+	// The Store's own Access rows, moved out of instance_settings for the import and written back after it.
+	bootstrap: { name: string; value: string }[]
 	startedAt: number
 	updatedAt: number
 }

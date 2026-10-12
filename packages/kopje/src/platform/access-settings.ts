@@ -12,27 +12,48 @@ export const ACCESS_SETTINGS = {
 
 export type AccessSettings = { -readonly [K in keyof typeof ACCESS_SETTINGS]: string | null }
 
+// No schema yet means nothing is configured.
 export function readAccessSettings(sql: SqlStorage): AccessSettings {
-	const settings: AccessSettings = { teamDomain: null, adminAud: null, adminEmail: null, serviceTokenClientId: null }
-	let rows: { name: string; value: string }[]
+	return settingsFromRows(readBootstrapRows(sql))
+}
+
+// The Access rows are configuration of this Store, not data: they do not make it non-empty for an import, an import
+// moves them aside (so they keep authorizing the admin while imported rows land), and a reset keeps them.
+export const BOOTSTRAP = {
+	table: 'instance_settings',
+	column: 'name',
+	values: Object.values(ACCESS_SETTINGS) as readonly string[],
+} as const
+
+export type SettingRow = { name: string; value: string }
+
+export function readBootstrapRows(sql: SqlStorage): SettingRow[] {
 	try {
-		rows = sql
-			.exec<{ name: string; value: string }>(
-				`SELECT name, value FROM instance_settings WHERE name IN (${Object.values(ACCESS_SETTINGS)
-					.map(() => '?')
-					.join(',')})`,
-				...Object.values(ACCESS_SETTINGS)
+		return sql
+			.exec<SettingRow>(
+				`SELECT name, value FROM instance_settings WHERE name IN (${BOOTSTRAP.values.map(() => '?').join(',')}) ORDER BY name`,
+				...BOOTSTRAP.values
 			)
 			.toArray()
 	} catch {
-		// No schema yet: nothing is configured.
-		return settings
+		return []
 	}
+}
+
+export function settingsFromRows(rows: readonly SettingRow[]): AccessSettings {
+	const settings: AccessSettings = { teamDomain: null, adminAud: null, adminEmail: null, serviceTokenClientId: null }
 	for (const [key, name] of Object.entries(ACCESS_SETTINGS) as [keyof AccessSettings, string][]) {
 		const value = rows.find((row) => row.name === name)?.value.trim()
 		settings[key] = value === undefined || value === '' ? null : value
 	}
 	return settings
+}
+
+// Writes bootstrap rows back where the table has no row of that name (imported values win).
+export function restoreBootstrapRows(sql: SqlStorage, rows: readonly SettingRow[]): void {
+	for (const row of rows) {
+		sql.exec('INSERT OR IGNORE INTO instance_settings (name, value) VALUES (?, ?)', row.name, row.value)
+	}
 }
 
 export function accessConfigured(settings: AccessSettings): boolean {

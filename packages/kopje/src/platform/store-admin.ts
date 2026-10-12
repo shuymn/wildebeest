@@ -1,4 +1,12 @@
-import { type AccessSettings, accessConfigured, readAccessSettings } from './access-settings'
+import {
+	type AccessSettings,
+	accessConfigured,
+	BOOTSTRAP,
+	readAccessSettings,
+	readBootstrapRows,
+	restoreBootstrapRows,
+	settingsFromRows,
+} from './access-settings'
 import { CatalogError, readCatalog } from './dump-catalog'
 import {
 	type DumpHeader,
@@ -162,13 +170,14 @@ export class StoreAdmin {
 
 	// What /admin authentication needs from the Store. IMPORT_TOKEN is usable while the Store is empty and has no
 	// Access settings, and for the rest of an import that was begun with it (the imported rows bring Access settings).
+	// During an import the Access settings are the Store's own ones set aside at begin, not imported rows.
 	async gate(): Promise<{ access: AccessSettings; tokenImport: boolean }> {
 		await this.#kernel.state()
-		const access = readAccessSettings(this.#sql)
 		const { import: running } = readFlags(this.#sql)
+		const access = running === null ? readAccessSettings(this.#sql) : settingsFromRows(running.bootstrap ?? [])
 		let empty: boolean
 		try {
-			empty = isEmpty(this.#sql, readCatalog(this.#sql))
+			empty = isEmpty(this.#sql, readCatalog(this.#sql), BOOTSTRAP)
 		} catch {
 			empty = false
 		}
@@ -311,6 +320,9 @@ export class StoreAdmin {
 				if (record === null || record.id !== start.dump) {
 					return refuse('dump-not-found', 'no such dump; start a new one')
 				}
+				if (record.completed !== undefined) {
+					return refuse('dump-finished', 'the dump is finished; ask dump/finish for its trailer')
+				}
 				if (now >= record.leaseUntil) {
 					// Writes may have happened since the lease ended, so the rows read so far are no longer one snapshot.
 					return refuse('dump-lease-expired', 'the dump lease expired; start a new dump')
@@ -356,6 +368,12 @@ export class StoreAdmin {
 				if (record === null || record.id !== cursor.dump) {
 					return refuse('dump-not-found', 'no such dump')
 				}
+				if (record.completed !== undefined) {
+					// A repeated finish (the first response was lost) gets the same answer.
+					return abort
+						? refuse('dump-finished', 'the dump is already finished')
+						: { ok: true, aborted: false, ...record.completed }
+				}
 				if (abort) {
 					writeFlag(this.#sql, 'dump', null)
 					return { ok: true, aborted: true, trailer: null, trailerText: null }
@@ -366,8 +384,10 @@ export class StoreAdmin {
 				}
 				// Each step checked the lease before reading, so every chunk was read under one continuous freeze.
 				const trailer = trailerOf(record.results, cursor)
-				writeFlag(this.#sql, 'dump', null)
-				return { ok: true, aborted: false, trailer, trailerText: trailerLines(trailer) }
+				const completed = { trailer, trailerText: trailerLines(trailer) }
+				// The lease ends now; the record stays as a receipt.
+				writeFlag(this.#sql, 'dump', { ...record, leaseUntil: 0, completed })
+				return { ok: true, aborted: false, ...completed }
 			}
 		)
 		if (outcome.ok) {
@@ -405,7 +425,8 @@ export class StoreAdmin {
 					throw new ImportError('dump-in-progress', 'a dump is in progress')
 				}
 				if (flags.import !== null) {
-					if (flags.import.headerSha256 === headerSha256 && flags.import.state === 'receiving') {
+					// The same dump resumes in whatever phase it reached (receiving, finished, or failed with its report).
+					if (flags.import.headerSha256 === headerSha256) {
 						return { ok: true as const, progress: progressOf(flags.import), resumed: true }
 					}
 					throw new ImportError(
@@ -422,8 +443,14 @@ export class StoreAdmin {
 				if (tables !== null) {
 					throw new ImportError('catalog-differs', tables)
 				}
-				if (!isEmpty(this.#sql, catalog)) {
+				if (!isEmpty(this.#sql, catalog, BOOTSTRAP)) {
 					throw new ImportError('not-empty', 'the Store already has data; import only into an empty Store')
+				}
+				// Move the Store's Access rows aside: the imported instance_settings must land in an empty table, and the
+				// admin keeps authenticating with these until the import is verified.
+				const bootstrap = readBootstrapRows(this.#sql)
+				for (const row of bootstrap) {
+					this.#sql.exec('DELETE FROM instance_settings WHERE name = ?', row.name)
 				}
 				const record: ImportRecord = {
 					id: this.#randomId(),
@@ -439,6 +466,7 @@ export class StoreAdmin {
 					trailer: null,
 					verify: null,
 					report: null,
+					bootstrap,
 					startedAt: now,
 					updatedAt: now,
 				}
@@ -615,6 +643,7 @@ export class StoreAdmin {
 				}
 				if (report.ok) {
 					writeFlag(this.#sql, 'import', null)
+					restoreBootstrapRows(this.#sql, record.bootstrap ?? [])
 					this.#log({ event: 'kopje.store.import.verified', id })
 					return { ok: true as const, done: true, report, progress: null }
 				}
@@ -645,18 +674,28 @@ export class StoreAdmin {
 		}
 		let empty: boolean
 		try {
-			empty = isEmpty(this.#sql, readCatalog(this.#sql))
+			empty = isEmpty(this.#sql, readCatalog(this.#sql), BOOTSTRAP)
 		} catch {
 			empty = false
 		}
 		if (flags.import === null && !empty) {
 			return refuse('reset-refused', 'reset is only for a Store under import or without data')
 		}
+		// deleteAll() takes the Access rows too; they are written back into the recreated schema.
+		const bootstrap = flags.import?.bootstrap ?? readBootstrapRows(this.#sql)
 		this.#log({ event: 'kopje.store.import.reset', id: flags.import?.id ?? null })
 		await this.#ctx.storage.deleteAll()
 		this.#kernel.forget()
 		const upgrade = await this.#kernel.upgrade()
-		return upgrade.ok ? { ok: true, upgrade } : refuse('upgrade-failed', `schema recreation failed: ${upgrade.detail}`)
+		if (!upgrade.ok) {
+			// Nothing can hold the Access rows now; report them so the operator can set them again.
+			return {
+				...refuse('upgrade-failed', `schema recreation failed: ${upgrade.detail}`),
+				bootstrap,
+			} as Refusal
+		}
+		this.#transaction(() => restoreBootstrapRows(this.#sql, bootstrap))
+		return { ok: true, upgrade }
 	}
 
 	#importRecord(id: string): ImportRecord {

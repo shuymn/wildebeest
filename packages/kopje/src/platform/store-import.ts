@@ -1,4 +1,4 @@
-import { DUMPED_STATE, rowCount, SEQUENCE_TABLE, STATE_TABLE, textLiteral } from './dump-catalog'
+import { DUMPED_STATE, rowCount, SEQUENCE_TABLE, STATE_TABLE } from './dump-catalog'
 import {
 	DUMP_FORMAT,
 	type DumpHeader,
@@ -9,6 +9,7 @@ import {
 	type TableResult,
 	type TableSpec,
 } from './dump-format'
+import { bindAll, LiteralError, textLiteral } from './dump-literals'
 
 // Checks the shape of a header that came from a caller. The catalog and migrations are compared separately.
 export function parseHeader(value: unknown): DumpHeader {
@@ -90,19 +91,39 @@ export function migrationDifference(
 		: `dump migrations [${dump.map((m) => m.name).join(',')}] differ from this Store's [${applied.map((m) => m.name).join(',')}]`
 }
 
-// A Store with no rows in any dumped table (kopje_state counts only its dumped names).
-export function isEmpty(sql: SqlStorage, tables: readonly TableSpec[]): boolean {
-	return tables.every((t) => rowCount(sql, t) === 0)
+// Rows that are configuration of this Store rather than data: they do not make it non-empty.
+export type Bootstrap = { table: string; column: string; values: readonly string[] }
+
+// A Store with no rows in any dumped table (kopje_state counts only its dumped names, bootstrap rows not at all).
+export function isEmpty(sql: SqlStorage, tables: readonly TableSpec[], bootstrap?: Bootstrap): boolean {
+	return tables.every((t) => {
+		if (bootstrap === undefined || t.name !== bootstrap.table) {
+			return rowCount(sql, t) === 0
+		}
+		const names = bootstrap.values.map(() => '?').join(',')
+		const query = `SELECT count(*) AS n FROM ${quoteIdentifier(t.name)} WHERE ${quoteIdentifier(bootstrap.column)} NOT IN (${names})`
+		return sql.exec<{ n: number }>(query, ...bootstrap.values).one().n === 0
+	})
 }
 
-// Executes validated statements. Statement text is executed as is: parseStatements has matched it against a template
-// of this Store's catalog, so it is an INSERT of literals into all columns of a known table or a link UPDATE by key.
-// Literals keep SQLite's exact types (JS numbers would bind as REAL).
+// Executes validated statements. parseStatements matched each against a template of this Store's catalog; the
+// literals are then bound as parameters (bindLiteral), which keeps the statement text short whatever the value size
+// (the platform limits a statement to 100 KB) and keeps every storage class exact.
 export function applyStatements(sql: SqlStorage, statements: readonly ParsedStatement[]): void {
 	const allowedState = new Set(DUMPED_STATE.map(textLiteral))
 	for (const statement of statements) {
+		const table = quoteIdentifier(statement.table.name)
+		let bound
+		try {
+			bound = bindAll(statement.literals)
+		} catch (error) {
+			throw new ImportError('invalid-chunk', error instanceof LiteralError ? error.message : 'invalid literal')
+		}
 		if (statement.kind === 'link') {
-			if (sql.exec(statement.text).rowsWritten === 0) {
+			const { deferred, key } = statement.table
+			const set = deferred.map((c, i) => `${quoteIdentifier(c)} = ${bound.exprs[i]}`).join(', ')
+			const match = key.map((c, i) => `${quoteIdentifier(c)} = ${bound.exprs[deferred.length + i]}`).join(' AND ')
+			if (sql.exec(`UPDATE ${table} SET ${set} WHERE ${match}`, ...bound.params).rowsWritten === 0) {
 				throw new ImportError('link-target-missing', `link to a missing ${statement.table.name} row`)
 			}
 			continue
@@ -113,9 +134,11 @@ export function applyStatements(sql: SqlStorage, statements: readonly ParsedStat
 		}
 		if (statement.table.name === SEQUENCE_TABLE) {
 			// AUTOINCREMENT inserts above created their own counter rows; the dumped value replaces them.
-			sql.exec(`DELETE FROM ${quoteIdentifier(SEQUENCE_TABLE)} WHERE name = ${name}`)
+			const nameBound = bindAll([name])
+			sql.exec(`DELETE FROM ${table} WHERE name = ${nameBound.exprs[0]}`, ...nameBound.params)
 		}
-		sql.exec(statement.text)
+		const columns = statement.table.columns.map(quoteIdentifier).join(',')
+		sql.exec(`INSERT INTO ${table} (${columns}) VALUES (${bound.exprs.join(',')})`, ...bound.params)
 	}
 }
 

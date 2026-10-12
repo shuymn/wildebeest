@@ -346,12 +346,13 @@ describe('import', () => {
 		for (const [i, chunk] of (await importChunks(text, 1 << 20)).entries()) {
 			expect(await target.importChunk(BUILD, begun.progress.id, i + 1, chunk)).toMatchObject({ ok: true })
 		}
+		// Imported Access rows do not authorize anyone before the import is verified; the token still does.
+		expect(await target.adminGate(BUILD)).toMatchObject({ tokenImport: true, access: { adminAud: null } })
+		expect(await finishImport(target, begun.progress.id, text)).toMatchObject({ ok: true })
 		expect(await target.adminGate(BUILD)).toMatchObject({
-			tokenImport: true,
+			tokenImport: false,
 			access: { adminAud: 'aud-admin-0123456789' },
 		})
-		expect(await finishImport(target, begun.progress.id, text)).toMatchObject({ ok: true })
-		expect(await target.adminGate(BUILD)).toMatchObject({ tokenImport: false })
 	})
 })
 

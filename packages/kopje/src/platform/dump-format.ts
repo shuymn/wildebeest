@@ -9,9 +9,9 @@
 //   -- kopje-dump-trailer {json}           DumpTrailer
 //   -- kopje-dump-end
 //
-// Each statement ends with ";\n". Literals are exactly what SQLite's quote() produces, except that TEXT containing
-// NUL is written as CAST(X'..' AS TEXT) (quote() would truncate it). Nothing else is accepted on import: the Store
-// executes only statements that match these templates for tables of its own catalog.
+// Each statement ends with ";\n". Every value is written as its canonical literal (dump-literals.ts). Nothing else is
+// accepted on import: the Store applies only statements that match these templates for tables of its own catalog,
+// binding the literals as parameters.
 
 export const DUMP_FORMAT = 1
 

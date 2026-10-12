@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { BUILD } from './helpers'
 import { readDumpFile, statementChunks } from '../cli/lib/format.js'
 import { END_LINE } from '../src/platform/dump-format'
+import { sha256Hex } from '../src/platform/sha256'
 import type { StoreStub } from '../src/platform/store-client'
 import type { DumpCursor } from '../src/platform/store-dump'
 
@@ -162,15 +163,25 @@ export async function tableSnapshot(store: StoreStub): Promise<Record<string, st
 				"SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\' AND name NOT IN ('kopje_migrations', 'kopje_state') ORDER BY name"
 			)
 			.toArray()
+		// Each value as its storage class and the SHA-256 of its exact bytes, computed here independently of the dump
+		// code (hex inside SQLite would exceed its 2 MB value limit for large values).
 		for (const { name } of tables) {
 			const columns = sql
 				.exec<{ name: string }>('SELECT name FROM pragma_table_info(?)', name)
 				.toArray()
-				.map((c) => `quote(hex(CAST("${c.name}" AS BLOB))) || typeof("${c.name}")`)
-			out[name] = sql
-				.exec<{ row: string }>(`SELECT ${columns.join(" || ',' || ")} AS row FROM "${name}" ORDER BY 1`)
-				.toArray()
-				.map((r) => r.row)
+				.flatMap((c) => [`typeof("${c.name}")`, `CAST("${c.name}" AS BLOB)`])
+			out[name] = [...sql.exec(`SELECT ${columns.join(', ')} FROM "${name}"`).raw()]
+				.map((row) => {
+					const parts: string[] = []
+					for (let i = 0; i < row.length; i += 2) {
+						const bytes = row[i + 1]
+						parts.push(
+							`${row[i] as string}:${bytes instanceof ArrayBuffer ? sha256Hex(new Uint8Array(bytes)) : 'null'}`
+						)
+					}
+					return parts.join(',')
+				})
+				.sort()
 		}
 		out.kopje_state = sql
 			.exec<{ row: string }>("SELECT name || '=' || value AS row FROM kopje_state ORDER BY name")

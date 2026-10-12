@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 
 import { accessKeys, accessToken, adminClaims, adminHarness, serviceClaims } from './access-helpers'
 import { BUILD, migratedStore, testKernel } from './helpers'
-import { ADMIN_EMAIL, dumpViaRpc, seedStore, setAccess, splitDump, TEAM_DOMAIN } from './ops-helpers'
+import { ADMIN_EMAIL, dumpViaRpc, importChunks, seedStore, setAccess, splitDump, TEAM_DOMAIN } from './ops-helpers'
 import { StoreAdmin } from '../src/platform/store-admin'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -205,11 +205,13 @@ describe('admin endpoints', () => {
 			trailerText: expect.stringMatching(/kopje-dump-end\n$/),
 		})
 		const again = await post(adminClaims(), '/admin/dump/next', { cursor: meta.cursor })
-		expect(again.status).toBe(404)
+		expect(again.status).toBe(409)
+		expect(await again.json()).toMatchObject({ code: 'dump-finished' })
 	})
 
 	it('needs confirmation to reset and refuses to reset a serving Store', async () => {
 		const store = await configuredStore()
+		await seedStore(store, 0)
 		const { post } = adminHarness(store, keys)
 		expect((await post(adminClaims(), '/admin/import/reset', {})).status).toBe(400)
 		const refused = await post(adminClaims(), '/admin/import/reset', { confirm: true })
@@ -295,5 +297,39 @@ describe('team domain', () => {
 		const { as, jwks } = adminHarness(store, keys)
 		expect((await as(adminClaims(), '/admin/version')).status).toBe(200)
 		expect(jwks.fetches).toBe(1)
+	})
+})
+
+describe('import bootstrap over Access', () => {
+	it('imports into a Store that holds only its Access settings, and keeps them across a reset', async () => {
+		const source = await migratedStore()
+		await seedStore(source, 0)
+		const { text } = await dumpViaRpc(source)
+		const { header, trailer } = splitDump(text)
+		const target = await configuredStore()
+		const { post, as } = adminHarness(target, keys)
+
+		const begun = await post(adminClaims(), '/admin/import/begin', { header })
+		expect(begun.status).toBe(200)
+		const { progress } = (await begun.json()) as { progress: { id: string } }
+		const chunks = await importChunks(text, 1 << 20)
+		expect(await target.importChunk(BUILD, progress.id, 1, chunks[0]!)).toMatchObject({ ok: true })
+
+		// Reset keeps the Access settings, so the admin can still sign in and import again.
+		expect((await post(adminClaims(), '/admin/import/reset', { confirm: true })).status).toBe(200)
+		expect((await as(adminClaims(), '/admin/version')).status).toBe(200)
+
+		const again = (await (await post(adminClaims(), '/admin/import/begin', { header })).json()) as {
+			progress: { id: string }
+		}
+		for (const [i, chunk] of chunks.entries()) {
+			expect(await target.importChunk(BUILD, again.progress.id, i + 1, chunk)).toMatchObject({ ok: true })
+		}
+		expect((await post(adminClaims(), '/admin/import/finish', { id: again.progress.id, trailer })).status).toBe(200)
+		const verified = await post(adminClaims(), '/admin/import/verify', { id: again.progress.id })
+		expect(await verified.json()).toMatchObject({ done: true, report: { ok: true } })
+		// The dump had no Access settings; the bootstrap ones are kept, and the admin API still works.
+		expect((await as(adminClaims(), '/admin/version')).status).toBe(200)
+		expect(await target.setupState(BUILD)).toEqual({ complete: true })
 	})
 })

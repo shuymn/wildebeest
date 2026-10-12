@@ -222,9 +222,7 @@ export class StoreKernel {
 		}
 		const dump = activeDump(readFlags(this.#sql), this.#now())
 		if (dump !== null) {
-			// A dump reads across many RPCs and must see one schema; try again once its lease ends.
-			await this.#ctx.storage.setAlarm(dump.leaseUntil + 1000)
-			return { ok: false, bookmark: null, reason: 'dump-in-progress', detail: 'deferred until the dump ends' }
+			return this.#deferForDump(dump.leaseUntil)
 		}
 
 		let phase: UpgradePhase = 'bookmark'
@@ -237,7 +235,10 @@ export class StoreKernel {
 				this.#inject('bookmark')
 				const bookmark = await this.#ctx.storage.getCurrentBookmark()
 				const started: UpgradeMarker = { build: this.build, bookmark, at: this.#now() }
+				// A dump may have taken its lease while the bookmark was awaited: check again in the transaction that
+				// records the upgrade, so the check and the write are atomic.
 				this.#transaction(() => {
+					this.#assertNotFrozen()
 					this.#writeState('upgrade_bookmark', bookmark)
 					this.#writeState('upgrade', JSON.stringify(started))
 				})
@@ -250,6 +251,7 @@ export class StoreKernel {
 			for (const migration of expected.filter((m) => pendingOf(schema).includes(m.name))) {
 				current = migration.name
 				this.#transaction(() => {
+					this.#assertNotFrozen()
 					this.#sql.exec(migration.sql)
 					this.#sql.exec(
 						'INSERT INTO kopje_migrations (name, checksum, applied_at) VALUES (?, ?, ?)',
@@ -276,6 +278,10 @@ export class StoreKernel {
 				return this.#fail(expected, marker.bookmark, 'verify-failed', problem)
 			}
 		} catch (error) {
+			if (error instanceof DumpFrozen) {
+				// Nothing was written in the refused transaction; a resumed upgrade continues from its marker.
+				return this.#deferForDump(error.leaseUntil)
+			}
 			// An error does not prove a rollback: a timed-out transaction can still be durable. Report what is
 			// actually recorded; #fail re-reads the durable state and the Store stays readonly either way.
 			const failed = current
@@ -288,6 +294,19 @@ export class StoreKernel {
 		this.#state = { schema: { status: 'current' }, hold: null, upgrading: null }
 		this.#log({ event: 'kopje.store.upgrade.done', bookmark: marker.bookmark, applied })
 		return { ok: true, bookmark: marker.bookmark, applied }
+	}
+
+	// A dump reads across many RPCs and must see one schema; try again once its lease ends.
+	async #deferForDump(leaseUntil: number): Promise<UpgradeResult> {
+		await this.#ctx.storage.setAlarm(leaseUntil + 1000)
+		return { ok: false, bookmark: null, reason: 'dump-in-progress', detail: 'deferred until the dump ends' }
+	}
+
+	#assertNotFrozen(): void {
+		const dump = activeDump(readFlags(this.#sql), this.#now())
+		if (dump !== null) {
+			throw new DumpFrozen(dump.leaseUntil)
+		}
 	}
 
 	#fail(
@@ -413,6 +432,12 @@ export class StoreKernel {
 		} else {
 			this.#sql.exec('INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)', name, value)
 		}
+	}
+}
+
+class DumpFrozen extends Error {
+	constructor(readonly leaseUntil: number) {
+		super('a dump holds the lease')
 	}
 }
 
