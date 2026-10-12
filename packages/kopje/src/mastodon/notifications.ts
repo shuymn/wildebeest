@@ -8,13 +8,13 @@ import { linkHeader, pageQuery } from './pagination'
 const NOT_FOUND = () => mastodonError(404, 'Record not found')
 
 export const listNotifications: ApiHandler = async (c, deps) => {
-	const credential = userCredential(c, deps)
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
 	const page = pageQuery(p)
 	const accountId = p.get('account_id')
+	const credential = userCredential(c, deps)
 	const result = authorized(
 		await storeCall(c, deps, (s, b) =>
 			s.listNotifications(b, {
@@ -35,8 +35,8 @@ export const listNotifications: ApiHandler = async (c, deps) => {
 }
 
 export const getNotification: ApiHandler = async (c, deps) => {
-	const credential = userCredential(c, deps)
 	const id = c.req.param('id') ?? ''
+	const credential = userCredential(c, deps)
 	const notification = authorized(
 		await storeCall(c, deps, (s, b) => s.getNotification(b, { credential, id, present: present(c) }))
 	)
@@ -44,8 +44,8 @@ export const getNotification: ApiHandler = async (c, deps) => {
 }
 
 export const dismissNotification: ApiHandler = async (c, deps) => {
-	const credential = userCredential(c, deps)
 	const id = c.req.param('id') ?? ''
+	const credential = userCredential(c, deps)
 	const dismissed = authorized(await storeCall(c, deps, (s, b) => s.dismissNotification(b, { credential, id })))
 	return dismissed ? c.json({}) : NOT_FOUND()
 }

@@ -89,7 +89,6 @@ function composition(p: Params): Composition | string {
 }
 
 export const createStatus: ApiHandler = async (c, deps) => {
-	const credential = userCredential(c, deps)
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
@@ -111,6 +110,7 @@ export const createStatus: ApiHandler = async (c, deps) => {
 	// unique per account (statuses_client_key).
 	const key = emptyToUndefined(c.req.header('idempotency-key')?.trim())
 	const idempotencyKey = key === undefined ? undefined : await sha256Hex(key)
+	const credential = userCredential(c, deps)
 	const result = authorized(
 		await storeCall(c, deps, (s, b) =>
 			s.createStatus(b, {
@@ -136,7 +136,6 @@ export const createStatus: ApiHandler = async (c, deps) => {
 }
 
 export const editStatus: ApiHandler = async (c, deps) => {
-	const credential = userCredential(c, deps)
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
@@ -156,6 +155,7 @@ export const editStatus: ApiHandler = async (c, deps) => {
 	if (typeof composed === 'string' || problem !== undefined) {
 		return refuseAfterAuth(c, deps, mastodonError(422, problem ?? 'Validation failed'))
 	}
+	const credential = userCredential(c, deps)
 	const result = await storeCall(c, deps, (s, b) =>
 		s.editStatus(b, { credential, id: statusId(c), ...composed, mediaAttributes, now: deps.now(), present: present(c) })
 	)
@@ -163,11 +163,11 @@ export const editStatus: ApiHandler = async (c, deps) => {
 }
 
 export const deleteStatus: ApiHandler = async (c, deps) => {
-	const credential = userCredential(c, deps)
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
+	const credential = userCredential(c, deps)
 	const result = await storeCall(c, deps, (s, b) =>
 		s.deleteStatus(b, {
 			credential,
@@ -214,8 +214,7 @@ type Action = 'favourite' | 'unfavourite' | 'bookmark' | 'unbookmark' | 'unreblo
 
 function action(name: Action): ApiHandler {
 	return async (c, deps) => {
-		const credential = userCredential(c, deps)
-		const input = { credential, id: statusId(c), now: deps.now(), present: present(c) }
+		const input = { credential: userCredential(c, deps), id: statusId(c), now: deps.now(), present: present(c) }
 		const result = await storeCall(c, deps, (s, b) => s[name](b, input))
 		return viewedResponse(c, authorized(result))
 	}
@@ -228,13 +227,13 @@ export const unbookmark = action('unbookmark')
 export const unreblog = action('unreblog')
 
 export const reblog: ApiHandler = async (c, deps) => {
-	const credential = userCredential(c, deps)
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
 	const requested = p.get('visibility')
 	const visibility = API_VISIBILITIES.includes(requested as ApiVisibility) ? (requested as ApiVisibility) : undefined
+	const credential = userCredential(c, deps)
 	const result = await storeCall(c, deps, (s, b) =>
 		s.reblog(b, {
 			credential,
@@ -250,12 +249,12 @@ export const reblog: ApiHandler = async (c, deps) => {
 
 function interactors(kind: 'favourited_by' | 'reblogged_by'): ApiHandler {
 	return async (c, deps) => {
-		const credential = optionalCredential(c, deps)
 		const p = await requestParams(c, deps)
 		if (p instanceof Response) {
 			return p
 		}
 		const page = pageQuery(p)
+		const credential = optionalCredential(c, deps)
 		const result = authorized(
 			await storeCall(c, deps, (s, b) =>
 				s.interactors(b, { credential, id: statusId(c), kind, page, present: present(c) })

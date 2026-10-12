@@ -30,23 +30,23 @@ function pageResponse<T>(c: ApiContext, page: Page<T>, limit: number): Response 
 }
 
 export const home: ApiHandler = async (c, deps) => {
-	const credential = userCredential(c, deps)
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
 	const page = pageQuery(p, STATUS_LIMIT, MAX_STATUS_LIMIT)
+	const credential = userCredential(c, deps)
 	const result = await storeCall(c, deps, (s, b) => s.homeTimeline(b, { credential, page, present: present(c) }))
 	return pageResponse(c, authorized(result), page.limit)
 }
 
 export const publicTimeline: ApiHandler = async (c, deps) => {
-	const credential = optionalCredential(c, deps)
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
 	const page = pageQuery(p, STATUS_LIMIT, MAX_STATUS_LIMIT)
+	const credential = optionalCredential(c, deps)
 	const result = await storeCall(c, deps, (s, b) =>
 		s.publicTimeline(b, {
 			credential,
@@ -61,7 +61,6 @@ export const publicTimeline: ApiHandler = async (c, deps) => {
 }
 
 export const tagTimeline: ApiHandler = async (c, deps) => {
-	const credential = optionalCredential(c, deps)
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
@@ -72,6 +71,7 @@ export const tagTimeline: ApiHandler = async (c, deps) => {
 			.getAll(name)
 			.filter((tag) => tag !== '')
 			.slice(0, MAX_EXTRA_TAGS)
+	const credential = optionalCredential(c, deps)
 	const result = await storeCall(c, deps, (s, b) =>
 		s.tagTimeline(b, {
 			credential,
@@ -90,13 +90,13 @@ export const tagTimeline: ApiHandler = async (c, deps) => {
 }
 
 export const accountStatuses: ApiHandler = async (c, deps) => {
-	const credential = optionalCredential(c, deps)
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
 	const page = pageQuery(p, STATUS_LIMIT, MAX_STATUS_LIMIT)
 	const tagged = p.get('tagged')
+	const credential = optionalCredential(c, deps)
 	const result = authorized(
 		await storeCall(c, deps, (s, b) =>
 			s.accountStatuses(b, {
@@ -120,12 +120,12 @@ export const accountStatuses: ApiHandler = async (c, deps) => {
 
 function edgeList(rpc: 'bookmarksList' | 'favouritesList'): ApiHandler {
 	return async (c, deps) => {
-		const credential = userCredential(c, deps)
 		const p = await requestParams(c, deps)
 		if (p instanceof Response) {
 			return p
 		}
 		const page = pageQuery(p, STATUS_LIMIT, MAX_STATUS_LIMIT)
+		const credential = userCredential(c, deps)
 		const result = await storeCall(c, deps, (s, b) => s[rpc](b, { credential, page, present: present(c) }))
 		return pageResponse(c, authorized(result), page.limit)
 	}

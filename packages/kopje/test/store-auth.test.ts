@@ -151,6 +151,55 @@ describe('authorization inside the B4a operations', () => {
 	}
 })
 
+describe('token expiry', () => {
+	it('judges expiry when the Store is called, after a slow body has been read', async () => {
+		const h = await apiHarness()
+		const alice = await seedAccount(h.store, { username: 'alice', email: 'alice@example.com', displayName: 'Alice' })
+		const bob = await seedAccount(h.store, { username: 'bob' })
+		const { token } = await login(h)
+		const status = await (
+			await h.request('/api/v1/statuses', bearer(token, json({ status: 'v1' })))
+		).json<{ id: string }>()
+		await sql(
+			h.store,
+			"UPDATE oauth_tokens SET expires_at = ? WHERE kind = 'access'",
+			new Date(NOW + 1000).toISOString()
+		)
+		const before = await sql(h.store, 'SELECT id, content, edited_at FROM statuses ORDER BY id')
+		// The body arrives after the token has expired.
+		const slow = (body: unknown, method: string): RequestInit => {
+			const bytes = new TextEncoder().encode(JSON.stringify(body))
+			const stream = new ReadableStream<Uint8Array>(
+				{
+					pull(controller) {
+						h.now.mockReturnValue(NOW + 5000)
+						controller.enqueue(bytes)
+						controller.close()
+					},
+				},
+				// Nothing is pulled until the handler reads the body.
+				{ highWaterMark: 0 }
+			)
+			return bearer(token, { method, headers: { 'content-type': 'application/json' }, body: stream })
+		}
+		const writes: [string, () => RequestInit][] = [
+			['/api/v1/statuses', () => slow({ status: 'late' }, 'POST')],
+			[`/api/v1/statuses/${status.id}`, () => slow({ status: 'late edit' }, 'PUT')],
+			[`/api/v1/accounts/${bob}/follow`, () => slow({}, 'POST')],
+			['/api/v1/accounts/update_credentials', () => slow({ display_name: 'Mallory' }, 'PATCH')],
+		]
+		for (const [path, init] of writes) {
+			h.now.mockReturnValue(NOW)
+			expect({ path, status: (await h.request(path, init())).status }).toEqual({ path, status: 401 })
+		}
+		expect(await sql(h.store, 'SELECT id, content, edited_at FROM statuses ORDER BY id')).toEqual(before)
+		expect(await sql(h.store, 'SELECT 1 FROM follows')).toEqual([])
+		expect(await sql(h.store, 'SELECT display_name FROM accounts WHERE id = ?', alice)).toEqual([
+			{ display_name: 'Alice' },
+		])
+	})
+})
+
 describe('error order', () => {
 	it('answers a bad token before a parameter error, as Mastodon authenticates first', async () => {
 		const h = await apiHarness()

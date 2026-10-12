@@ -44,7 +44,9 @@ export function present(c: Context): Present {
 	return { origin: new URL(c.req.url).origin }
 }
 
-// The credential of a route that declares a token (scope null) or a scope.
+// The credential of a route that declares a token (scope null) or a scope. Its `now` is the time the Store judges
+// expiry by, so handlers take it immediately before the Store call, after the request body has been read: a slow
+// body must not carry a token past its expiry.
 export function credential(c: ApiContext, deps: Pick<ApiDeps, 'now'>): Credential {
 	const value = c.get('credential')
 	if (value === null) {
