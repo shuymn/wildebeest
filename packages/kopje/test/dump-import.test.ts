@@ -1,6 +1,6 @@
 import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { BUILD, freshStore, migratedStore, rejectionOf, testKernel } from './helpers'
 import {
@@ -181,7 +181,10 @@ describe('dump', () => {
 			expect(alarm === null || alarm <= Date.now() + 1000).toBe(true)
 		})
 		await runDurableObjectAlarm(store)
-		expect(await store.health(BUILD)).toMatchObject({ schema: { status: 'current' }, readonly: false })
+		// The alarm may already be running on its own, awaiting the bookmark, when the test asks for it.
+		await vi.waitFor(async () =>
+			expect(await store.health(BUILD)).toMatchObject({ schema: { status: 'current' }, readonly: false })
+		)
 	})
 
 	it('releases the freeze when the lease expires and refuses to continue that dump', async () => {
