@@ -1,15 +1,16 @@
-// Reads a request body up to a byte limit without buffering more than the limit plus one chunk. A declared
-// Content-Length over the limit is refused before reading; otherwise the stream is cancelled as soon as the running
-// total passes the limit. Every body read in the app goes through here.
-export async function readBoundedBody(request: Request, limit: number): Promise<Uint8Array | 'too-large'> {
-	const declared = Number(request.headers.get('content-length'))
+// Reads a request or response body up to a byte limit without buffering more than the limit plus one chunk. A
+// declared Content-Length over the limit is refused before reading; otherwise the stream is cancelled as soon as the
+// running total passes the limit. Every body read in the app and the document loader goes through here.
+export async function readBoundedBody(message: Request | Response, limit: number): Promise<Uint8Array | 'too-large'> {
+	const declared = Number(message.headers.get('content-length'))
 	if (Number.isFinite(declared) && declared > limit) {
+		await message.body?.cancel('body too large')
 		return 'too-large'
 	}
-	if (request.body === null) {
+	if (message.body === null) {
 		return new Uint8Array(0)
 	}
-	const reader = request.body.getReader()
+	const reader = message.body.getReader()
 	const chunks: Uint8Array[] = []
 	let total = 0
 	for (;;) {

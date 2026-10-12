@@ -18,6 +18,8 @@ const configSchema = z.object({
 	CF_VERSION_METADATA: binding<Env['CF_VERSION_METADATA']>('CF_VERSION_METADATA'),
 	MAINTENANCE: z.enum(MAINTENANCE_MODES).default('off'),
 	SETUP_TOKEN: z.string().min(1).optional(),
+	// The KEK that wraps local private keys. Unset reads as the empty string, which is a legal KEK (healthReport warns).
+	USER_KEK: z.string().optional(),
 	// Set after /setup generates it; Web Push stays unavailable until then.
 	VAPID_JWK: z
 		.string()
@@ -26,6 +28,11 @@ const configSchema = z.object({
 })
 
 export type Config = z.infer<typeof configSchema>
+
+// The effective KEK: an unset USER_KEK reads as the empty string, which is a legal KEK.
+export function userKek(config: Config): string {
+	return config.USER_KEK ?? ''
+}
 
 export type ConfigResult = { ok: true; config: Config } | { ok: false; issues: string[] }
 

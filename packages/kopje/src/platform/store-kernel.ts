@@ -67,6 +67,28 @@ export type KernelOptions = {
 	log?: (entry: Record<string, unknown>) => void
 }
 
+// A response body kept for the rescue path: the last good actor document, WebFinger or NodeInfo payload. Stored in
+// kopje_state under SNAPSHOT_STATE_PREFIX + key.
+export type Snapshot = { contentType: string; body: string }
+
+export const SNAPSHOT_STATE_PREFIX = 'snapshot:'
+
+// The row: the snapshot and the time it was rendered, or only the time once an oversized replacement emptied it.
+export type StoredSnapshot = (Snapshot & { renderedAt: number }) | { renderedAt: number }
+
+// Caps that keep the snapshots bounded whatever a request asks for: keys have one of two shapes and a bounded length,
+// and a body over the size cap is never stored (the rescue path then answers 503, as without a snapshot).
+export const SNAPSHOT_MAX_KEY_LENGTH = 512
+export const SNAPSHOT_MAX_BODY_BYTES = 64 * 1024
+
+export function isSnapshotKey(key: string): boolean {
+	return key.length <= SNAPSHOT_MAX_KEY_LENGTH && /^(path|webfinger):\S+$/.test(key)
+}
+
+export function isStorableSnapshot(key: string, body: string): boolean {
+	return isSnapshotKey(key) && new TextEncoder().encode(body).byteLength <= SNAPSHOT_MAX_BODY_BYTES
+}
+
 type ExpectedMigration = Migration & { checksum: string }
 type AppliedMigration = { name: string; checksum: string }
 
@@ -136,6 +158,25 @@ export class StoreKernel {
 			build: this.build,
 			expected: expected.at(-1)?.name ?? null,
 			applied: this.#readApplied().at(-1)?.name ?? null,
+		}
+	}
+
+	// Rescue RPC: the last good document saved under this key (domain/snapshot.ts), or null. It reads kopje_state
+	// directly, which exists whatever the schema state, so it works for any caller build and while the Store refuses
+	// domain operations.
+	readSnapshot(key: string): Snapshot | null {
+		if (!isSnapshotKey(key)) {
+			return null
+		}
+		try {
+			const value = this.#readState(`${SNAPSHOT_STATE_PREFIX}${key}`)
+			const stored = value === null ? null : (JSON.parse(value) as Partial<Snapshot>)
+			return stored?.contentType === undefined || stored.body === undefined
+				? null
+				: { contentType: stored.contentType, body: stored.body }
+		} catch (error) {
+			this.#log({ event: 'kopje.store.snapshot.unreadable', key, error: errorMessage(error) })
+			return null
 		}
 	}
 
@@ -324,7 +365,8 @@ export class StoreKernel {
 		return this.#expected
 	}
 
-	// kopje_state holds the hold, the upgrade marker and bookmark, and last_local_id (domain/ids.ts).
+	// kopje_state holds the hold, the upgrade marker and bookmark, last_local_id (domain/ids.ts), and the rescue
+	// snapshots (domain/snapshot.ts).
 	#ensureBookkeeping(): void {
 		this.#sql.exec(
 			'CREATE TABLE IF NOT EXISTS kopje_migrations (name TEXT NOT NULL PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL) WITHOUT ROWID;' +
@@ -373,7 +415,7 @@ function pendingOf(schema: SchemaState): string[] {
 	return schema.status === 'pending' ? schema.pending : []
 }
 
-async function sha256(text: string): Promise<string> {
+export async function sha256(text: string): Promise<string> {
 	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
 	return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
 }
