@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 
 import { type AccessTeam, accessToken, adminHarness, adminTeam, serviceClaims, setTeamAccess } from './access-helpers'
 import { BUILD, migratedStore } from './helpers'
-import { memoryIO, seedStore, tableSnapshot } from './ops-helpers'
+import { ADMIN_AUD, ADMIN_EMAIL, memoryIO, SERVICE_CLIENT_ID, seedStore, tableSnapshot } from './ops-helpers'
 import { run } from '../cli/lib/main.js'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -112,6 +112,24 @@ describe('kopje-admin', () => {
 		expect(imported.code, imported.err).toBe(0)
 		expect(JSON.parse(imported.out)).toMatchObject({ ok: true })
 		expect(imported.err).toContain('import verified')
+		// The dump's Access rows did not configure the target: it is still in bootstrap.
+		expect((await cli(['health'], { fetch: edge(target).fetch })).code).toBe(1)
+
+		// The cutover sets them explicitly, with the import token, while the Store has no admin access.
+		const configured = await cli(
+			[
+				'config',
+				'--import-token',
+				`access_team_domain=${team.teamDomain}`,
+				`access_admin_aud=${ADMIN_AUD}`,
+				`admin_email=${ADMIN_EMAIL}`,
+				`access_service_token_client_id=${SERVICE_CLIENT_ID}`,
+			],
+			{ fetch: edge(target).fetch }
+		)
+		expect(configured.code, configured.err).toBe(0)
+		expect((await cli(['health'], { fetch: edge(target).fetch })).code).toBe(0)
+		expect((await cli(['config', '--import-token', 'domain=x.test'], { fetch: edge(target).fetch })).code).toBe(1)
 		expect(withoutState(await tableSnapshot(target))).toEqual(withoutState(await tableSnapshot(source)))
 	})
 
@@ -269,6 +287,77 @@ describe('kopje-admin', () => {
 		const restarted = await cli(['dump', 'f.sql', '--restart'], { fetch: edge(source).fetch, io })
 		expect(restarted.code, restarted.err).toBe(0)
 		expect(await source.health(BUILD)).toMatchObject({ dump: null })
+	})
+
+	it('aborts the remote dump when writing its header fails, and --restart recovers', async () => {
+		const source = await sourceStore(0)
+		const io = memoryIO()
+		io.failAppend = (path, bytes) => (path === 'g.sql' ? bytes.slice(0, 5) : null)
+		const failed = await cli(['dump', 'g.sql'], { fetch: edge(source).fetch, io })
+		expect(failed.code).toBe(1)
+		expect(await source.health(BUILD)).toMatchObject({ dump: null })
+
+		io.failAppend = null
+		const restarted = await cli(['dump', 'g.sql', '--restart'], { fetch: edge(source).fetch, io })
+		expect(restarted.code, restarted.err).toBe(0)
+		expect(io.text('g.sql')).toMatch(/-- kopje-dump-end\n$/)
+	})
+
+	it('continues the same dump when the start response was lost', async () => {
+		const source = await sourceStore(0)
+		const io = memoryIO()
+		const lost = edge(source, async (request, forward) => {
+			const response = await forward()
+			if (new URL(request.url).pathname === '/admin/dump/start') {
+				throw new TypeError('network connection lost')
+			}
+			return response
+		})
+		expect((await cli(['dump', 'h.sql'], { fetch: lost.fetch, io })).code).toBe(1)
+		expect(await source.health(BUILD)).toMatchObject({ dump: { id: expect.any(String) } })
+		const rerun = await cli(['dump', 'h.sql'], { fetch: edge(source).fetch, io })
+		expect(rerun.code, rerun.err).toBe(0)
+		expect(await source.health(BUILD)).toMatchObject({ dump: null })
+	})
+
+	it('reports a verified import whose verify response was lost', async () => {
+		const io = memoryIO()
+		expect((await cli(['dump', 'i.sql'], { fetch: edge(await sourceStore(0)).fetch, io })).code).toBe(0)
+		const target = await migratedStore()
+		const lost = edge(target, async (request, forward) => {
+			const response = await forward()
+			if (new URL(request.url).pathname === '/admin/import/verify') {
+				throw new TypeError('network connection lost')
+			}
+			return response
+		})
+		expect((await cli(['import', 'i.sql', '--import-token'], { fetch: lost.fetch, io })).code).toBe(1)
+		const rerun = await cli(['import', 'i.sql', '--import-token'], { fetch: edge(target).fetch, io })
+		expect(rerun.code, rerun.err).toBe(0)
+		expect(JSON.parse(rerun.out)).toMatchObject({ ok: true })
+	})
+
+	it('shows the saved report of a failed import instead of finishing it again', async () => {
+		const io = memoryIO()
+		expect((await cli(['dump', 'j.sql'], { fetch: edge(await sourceStore(0)).fetch, io })).code).toBe(0)
+		// A wrong checksum for one table makes verification fail.
+		const text = io
+			.text('j.sql')
+			.replace(/("name":"accounts","rows":\d+,"checksum":")[0-9a-f]{64}/, `$1${'0'.repeat(64)}`)
+		io.files.set('j.sql', new TextEncoder().encode(text))
+		const target = await migratedStore()
+		const lost = edge(target, async (request, forward) => {
+			const response = await forward()
+			if (new URL(request.url).pathname === '/admin/import/verify') {
+				throw new TypeError('network connection lost')
+			}
+			return response
+		})
+		expect((await cli(['import', 'j.sql', '--import-token'], { fetch: lost.fetch, io })).code).toBe(1)
+		const rerun = await cli(['import', 'j.sql', '--import-token'], { fetch: edge(target).fetch, io })
+		expect(rerun.code).toBe(1)
+		expect(JSON.parse(rerun.out)).toMatchObject({ ok: false, problems: [expect.stringMatching(/^accounts/)] })
+		expect(rerun.err).toContain('FAILED verification')
 	})
 })
 

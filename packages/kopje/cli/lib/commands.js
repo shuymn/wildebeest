@@ -1,4 +1,4 @@
-/* global setTimeout */
+/* global setTimeout, crypto */
 import { AdminError } from './client.js'
 import { chainDigest, readDumpFile, statementChunks, utf8 } from './format.js'
 
@@ -42,8 +42,9 @@ function rate(bytes, startedAt, now) {
 }
 
 /**
- * Dumps the Store into a local file. Resumable: the cursor and the file length after the last complete chunk are
- * kept in <file>.state.json, so a rerun truncates any partial write and continues from that cursor.
+ * Dumps the Store into a local file. Resumable: <file>.state.json is written before the dump starts, with an op id
+ * that makes the start repeatable, and then holds the cursor and the file length after the last complete chunk, so
+ * a rerun truncates any partial write and continues from that cursor (or asks the start again by its op id).
  * @param {{ client: AdminClient, io: FileIO, out: Output, path: string, maxBytes?: number, leaseSeconds?: number,
  *   restart?: boolean, now?: () => number, sleep?: (ms: number) => Promise<void> }} options
  */
@@ -59,48 +60,51 @@ export async function dumpToFile({
 	sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
 	const statePath = `${path}.state.json`
+	/** @param {string} opId */
+	const start = (opId) =>
+		client.post('/admin/dump/start', leaseSeconds === undefined ? { opId } : { leaseSeconds, opId })
 	if (restart) {
-		// Release the freeze of the dump being discarded first; its cursor is lost once the state file is gone.
+		// Release the freeze of the dump being discarded first; it cannot be found once the state file is gone.
 		const previous = await io.readText(statePath)
 		if (previous !== null) {
-			const { cursor, trailerText } = JSON.parse(previous)
-			if (trailerText === undefined) {
-				try {
-					await client.post('/admin/dump/finish', { cursor, abort: true })
-					out.info(`aborted dump ${cursor.dump}`)
-				} catch (error) {
-					// Already gone or finished: nothing holds the lease. Anything else keeps the local state.
-					if (!(error instanceof AdminError && (error.code === 'dump-not-found' || error.code === 'dump-finished'))) {
-						throw error
-					}
-				}
-			}
+			await abandonDump(client, out, JSON.parse(previous), start)
 		}
 		await io.remove(statePath)
 		await io.remove(path)
 	}
 	const saved = await io.readText(statePath)
-	/** @type {{ cursor: any, offset: number, trailerText?: string, tables: number }} */
-	let state
+	/** @type {{ opId: string, cursor?: any, offset?: number, trailerText?: string, tables?: number }} */
+	let state = saved === null ? { opId: crypto.randomUUID() } : JSON.parse(saved)
 	if (saved === null) {
 		if ((await io.size(path)) !== null) {
 			throw new Error(`${path} already exists; choose another file or pass --restart`)
 		}
-		const started = await client.post('/admin/dump/start', leaseSeconds === undefined ? {} : { leaseSeconds })
-		const header = utf8.encode(started.headerLine)
-		await io.append(path, header)
-		state = { cursor: started.cursor, offset: header.byteLength, tables: started.header.tables.length }
 		await io.writeTextAtomic(statePath, JSON.stringify(state))
+	}
+	if (state.cursor === undefined) {
+		// A new dump, or one whose start response or header write was lost: the op id finds the same dump again.
+		const started = await start(state.opId)
+		try {
+			await io.remove(path)
+			const header = utf8.encode(started.headerLine)
+			await io.append(path, header)
+			state = { ...state, cursor: started.cursor, offset: header.byteLength, tables: started.header.tables.length }
+			await io.writeTextAtomic(statePath, JSON.stringify(state))
+		} catch (error) {
+			// Nothing local can continue this dump, so do not leave the Store frozen until the lease ends.
+			await client.post('/admin/dump/finish', { cursor: started.cursor, abort: true }).catch(() => {})
+			throw error
+		}
 		out.info(`dump ${started.cursor.dump} started (${state.tables} tables)`)
 	} else {
-		state = JSON.parse(saved)
 		// Anything after the recorded offset is a partial write of a chunk that is fetched again.
-		await io.truncate(path, state.offset)
-		out.info(`resuming dump ${state.cursor.dump} at ${formatBytes(state.offset)}`)
+		await io.truncate(path, state.offset ?? 0)
+		out.info(`resuming dump ${state.cursor.dump} at ${formatBytes(state.offset ?? 0)}`)
 	}
 
 	const startedAt = now()
-	const startOffset = state.offset
+	let offset = state.offset ?? 0
+	const startOffset = offset
 	while (state.trailerText === undefined && state.cursor.phase !== 'done') {
 		let step
 		for (let attempt = 0; ; attempt++) {
@@ -119,10 +123,11 @@ export async function dumpToFile({
 			}
 		}
 		await io.append(path, step.chunk)
-		state = { ...state, cursor: step.meta.cursor, offset: state.offset + step.chunk.byteLength }
+		offset += step.chunk.byteLength
+		state = { ...state, cursor: step.meta.cursor, offset }
 		await io.writeTextAtomic(statePath, JSON.stringify(state))
 		const where = state.cursor.phase === 'rows' ? `table ${state.cursor.table + 1}/${state.tables}` : state.cursor.phase
-		out.progress(`${formatBytes(state.offset)} written, ${where}, ${rate(state.offset - startOffset, startedAt, now)}`)
+		out.progress(`${formatBytes(offset)} written, ${where}, ${rate(offset - startOffset, startedAt, now)}`)
 	}
 
 	if (state.trailerText === undefined) {
@@ -130,26 +135,53 @@ export async function dumpToFile({
 		state = { ...state, trailerText: finished.trailerText }
 		await io.writeTextAtomic(statePath, JSON.stringify(state))
 	}
-	await io.truncate(path, state.offset)
+	await io.truncate(path, offset)
 	await io.append(path, utf8.encode(state.trailerText ?? ''))
 	await io.remove(statePath)
 	/** @type {Json} */
 	const trailer = JSON.parse((state.trailerText ?? '').split('\n')[0]?.replace(/^-- kopje-dump-trailer /, '') ?? '{}')
-	out.info(
-		`dump complete: ${trailer.body.statements} statements, ${formatBytes(state.offset)} of statements and header`
-	)
+	out.info(`dump complete: ${trailer.body.statements} statements, ${formatBytes(offset)} of statements and header`)
 	return trailer
+}
+
+/**
+ * Aborts the remote dump a saved state belongs to: by its cursor, or, when the start never got saved, by asking the
+ * start again with the same op id (which returns that dump while it runs) and aborting that.
+ * @param {AdminClient} client
+ * @param {Output} out
+ * @param {{ opId?: string, cursor?: any, trailerText?: string }} state
+ * @param {(opId: string) => Promise<Json>} start
+ */
+async function abandonDump(client, out, state, start) {
+	if (state.trailerText !== undefined) {
+		return
+	}
+	// Already gone or finished, or the lease is someone else's: nothing of ours holds it. Anything else is an error.
+	const gone = ['dump-not-found', 'dump-finished', 'dump-in-progress']
+	try {
+		const cursor = state.cursor ?? (state.opId === undefined ? undefined : (await start(state.opId)).cursor)
+		if (cursor !== undefined) {
+			await client.post('/admin/dump/finish', { cursor, abort: true })
+			out.info(`aborted dump ${cursor.dump}`)
+		}
+	} catch (error) {
+		if (!(error instanceof AdminError && error.code !== null && gone.includes(error.code))) {
+			throw error
+		}
+	}
 }
 
 /**
  * Imports a dump file into an empty Store and verifies it. Resumable: the Store records the last applied chunk and a
  * chain digest; a rerun re-splits the file with the same chunk size, checks the digest up to that chunk, and
- * continues. After any failed chunk the progress is read back instead of assuming the chunk was rolled back.
+ * continues in the phase the import reached. After any failed chunk the progress is read back instead of assuming
+ * the chunk was rolled back. A token import is continued with the session credential begin returned, which is kept
+ * in <file>.import.json (mode 0600) and never printed.
  * @param {{ client: AdminClient, io: FileIO, out: Output, path: string, chunkBytes?: number,
  *   now?: () => number, sleep?: (ms: number) => Promise<void> }} options
  */
 export async function importFromFile({
-	client,
+	client: baseClient,
 	io,
 	out,
 	path,
@@ -159,19 +191,71 @@ export async function importFromFile({
 }) {
 	const file = await readDumpFile(io, path)
 	const statePath = `${path}.import.json`
-	const begun = await client.post('/admin/import/begin', { header: file.header })
-	const progress = begun.progress
 	const saved = await io.readText(statePath)
+	/** @type {{ id: string, chunkBytes: number, session?: string } | null} */
 	const local = saved === null ? null : JSON.parse(saved)
-	// Chunk boundaries must be the same as in the earlier run for the digests to match.
+	/** @type {Json} */
+	let progress
+	let client = baseClient
+	if (local?.session !== undefined) {
+		// A token import: only its session continues it (IMPORT_TOKEN no longer applies once the import began).
+		client = baseClient.withSession(local.session)
+		progress = (await readProgress(client, local.id, sleep)).progress
+		if (progress === null) {
+			throw new Error(`import ${local.id} is no longer on the Store; remove ${statePath} to start a new import`)
+		}
+		out.info(`resuming import ${progress.id} (${progress.state}) after chunk ${progress.lastSeq}`)
+	} else {
+		const begun = await baseClient.post('/admin/import/begin', { header: file.header })
+		progress = begun.progress
+		if (typeof begun.session === 'string') {
+			client = baseClient.withSession(begun.session)
+		}
+		// Chunk boundaries must be the same as in the earlier run for the digests to match.
+		const chunkBytes = local !== null && local.id === progress.id ? local.chunkBytes : (requestedChunkBytes ?? 8 * MIB)
+		await io.writeTextAtomic(statePath, JSON.stringify({ id: progress.id, chunkBytes, session: begun.session }))
+		out.info(
+			begun.resumed
+				? `resuming import ${progress.id} (${progress.state}) after chunk ${progress.lastSeq}`
+				: `import ${progress.id} begun (${file.header.tables.length} tables, ${formatBytes(file.bodyEnd - file.bodyStart)})`
+		)
+	}
 	const chunkBytes = local !== null && local.id === progress.id ? local.chunkBytes : (requestedChunkBytes ?? 8 * MIB)
-	await io.writeTextAtomic(statePath, JSON.stringify({ id: progress.id, chunkBytes }))
-	out.info(
-		begun.resumed
-			? `resuming import ${progress.id} after chunk ${progress.lastSeq}`
-			: `import ${progress.id} begun (${file.header.tables.length} tables, ${formatBytes(file.bodyEnd - file.bodyStart)})`
-	)
 
+	if (progress.state === 'verified' || progress.state === 'failed') {
+		// Decided already (a lost response): report it. A failed import keeps its state file for a reset.
+		if (progress.state === 'verified') {
+			await io.remove(statePath)
+		}
+		/** @type {Json} */
+		const report = progress.report
+		return report
+	}
+	if (progress.state === 'receiving') {
+		await sendChunks({ client, io, out, path, file, progress, chunkBytes, now, sleep })
+	}
+	await client.post('/admin/import/finish', { id: progress.id, trailer: file.trailer })
+	out.info('all chunks applied; verifying')
+	for (;;) {
+		const result = await client.post('/admin/import/verify', { id: progress.id })
+		if (result.done) {
+			if (result.progress?.state === 'verified') {
+				await io.remove(statePath)
+			}
+			/** @type {Json} */
+			const report = result.report
+			return report
+		}
+		out.progress(`verifying: ${result.progress?.state ?? ''}`)
+	}
+}
+
+/**
+ * Sends the chunks after the Store's last one, checking that the chunks before it match what the Store recorded.
+ * @param {{ client: AdminClient, io: FileIO, out: Output, path: string, file: import('./format.js').DumpFile,
+ *   progress: Json, chunkBytes: number, now: () => number, sleep: (ms: number) => Promise<void> }} options
+ */
+async function sendChunks({ client, io, out, path, file, progress, chunkBytes, now, sleep }) {
 	const total = file.bodyEnd - file.bodyStart
 	const startedAt = now()
 	let sent = 0
@@ -202,19 +286,6 @@ export async function importFromFile({
 	if (seq < progress.lastSeq) {
 		throw new Error(`the Store has ${progress.lastSeq} chunks but this file has only ${seq}; reset and import again`)
 	}
-
-	await client.post('/admin/import/finish', { id: progress.id, trailer: file.trailer })
-	out.info('all chunks applied; verifying')
-	for (;;) {
-		const result = await client.post('/admin/import/verify', { id: progress.id })
-		if (result.done) {
-			await io.remove(statePath)
-			/** @type {Json} */
-			const report = result.report
-			return report
-		}
-		out.progress(`verifying: ${result.progress?.state ?? ''}`)
-	}
 }
 
 /**
@@ -234,7 +305,7 @@ async function sendChunk({ client, out, id, seq, bytes, digest, sleep }) {
 				throw error
 			}
 			// The error is no proof that nothing was written: ask the Store what it has.
-			const { progress } = await readProgress(client, sleep)
+			const { progress } = await readProgress(client, id, sleep)
 			if (progress === null || progress.id !== id) {
 				throw new Error(`the import disappeared from the Store (${error.message})`)
 			}
@@ -257,13 +328,14 @@ async function sendChunk({ client, out, id, seq, bytes, digest, sleep }) {
 
 /**
  * @param {AdminClient} client
+ * @param {string} id
  * @param {(ms: number) => Promise<void>} sleep
  * @returns {Promise<Json>}
  */
-async function readProgress(client, sleep) {
+async function readProgress(client, id, sleep) {
 	for (let attempt = 0; ; attempt++) {
 		try {
-			return await client.get('/admin/import/progress')
+			return await client.get('/admin/import/progress', { id })
 		} catch (error) {
 			if (!(error instanceof AdminError) || !error.transient || attempt >= RETRIES) {
 				throw error

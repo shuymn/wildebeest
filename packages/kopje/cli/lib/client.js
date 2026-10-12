@@ -26,7 +26,7 @@ export class AdminError extends Error {
 /**
  * A parsed JSON response of the admin API.
  * @typedef {Record<string, any>} Json
- * @typedef {{ accessClientId?: string, accessClientSecret?: string, importToken?: string }} Credentials
+ * @typedef {{ accessClientId?: string, accessClientSecret?: string, importToken?: string, importSession?: string }} Credentials
  * @typedef {(input: string, init?: RequestInit) => Promise<Response>} Fetch
  */
 
@@ -44,7 +44,10 @@ export function createClient({ url, credentials, fetch: fetchImpl = (input, init
 		auth['CF-Access-Client-Id'] = credentials.accessClientId
 		auth['CF-Access-Client-Secret'] = credentials.accessClientSecret
 	}
-	if (credentials.importToken !== undefined) {
+	// An import session replaces the import token: after begin, a token import is continued only with its session.
+	if (credentials.importSession !== undefined) {
+		auth['Kopje-Import-Session'] = credentials.importSession
+	} else if (credentials.importToken !== undefined) {
 		auth['Kopje-Import-Token'] = credentials.importToken
 	}
 
@@ -115,6 +118,16 @@ export function createClient({ url, credentials, fetch: fetchImpl = (input, init
 	}
 
 	return {
+		/**
+		 * The same client, authorized by the session credential of a token import instead of IMPORT_TOKEN.
+		 * @param {string} secret
+		 */
+		withSession: (secret) =>
+			createClient({
+				url,
+				fetch: fetchImpl,
+				credentials: { ...credentials, importToken: undefined, importSession: secret },
+			}),
 		/** @param {string} path @param {Record<string, string>} [query] */
 		get: (path, query) => json('GET', path, { query }),
 		/** @param {string} path @param {unknown} [body] */

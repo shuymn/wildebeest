@@ -16,8 +16,15 @@ Commands
       --restart                 discard <file> and its saved cursor and start over
   import <file>                 import <file> into an empty Store and verify (resumable)
       --chunk-mib <n>           chunk size in MiB, 0.001-16 (default 8)
-      --import-token            authenticate with KOPJE_IMPORT_TOKEN (cutover into an empty Store)
-  import-reset --yes            delete everything in a Store under import and recreate its schema
+      --import-token            begin with KOPJE_IMPORT_TOKEN (cutover into an empty Store without admin access);
+                                the import then continues with its own session, kept in <file>.import.json
+  import-reset [<file>] --yes   delete everything in a Store under import and recreate its schema; with <file>, a
+                                token import is reset with the session kept for that file
+  config                        show the instance values and the Access settings of /admin
+  config <name>=<value>|<name>= set (or with an empty value, remove) them; names: domain, access_aud,
+                                access_team_domain, access_admin_aud, admin_email, access_service_token_client_id.
+                                An import never changes them. With --import-token only while the Store has no
+                                usable admin access (bootstrap)
   catalog                       migrations and tables a dump for this Store must declare
   pitr bookmark [--at <time>]   current bookmark, or the one for an ISO 8601 time
   pitr restore <bookmark> --yes restore the Store to a bookmark (requires MAINTENANCE=full)
@@ -136,6 +143,16 @@ export async function run({ argv, env, io, stdout, stderr, fetch, now = Date.now
 			throw new UsageError('set KOPJE_ADMIN_URL to the admin base URL')
 		}
 		const useToken = flags['import-token'] === true
+		if (
+			useToken &&
+			command !== 'import' &&
+			command !== 'config' &&
+			command !== 'health' &&
+			command !== 'version' &&
+			command !== 'catalog'
+		) {
+			throw new UsageError('--import-token applies only to import, config, health, version and catalog')
+		}
 		if (useToken && (env.KOPJE_IMPORT_TOKEN ?? '') === '') {
 			throw new UsageError('--import-token needs KOPJE_IMPORT_TOKEN in the environment')
 		}
@@ -172,6 +189,24 @@ export async function run({ argv, env, io, stdout, stderr, fetch, now = Date.now
 			case 'catalog':
 				print(await client.get('/admin/catalog'))
 				return 0
+			case 'config': {
+				if (rest.length === 0) {
+					print(await client.get('/admin/config'))
+					return 0
+				}
+				/** @type {Record<string, string | null>} */
+				const values = {}
+				for (const pair of rest) {
+					const at = pair.indexOf('=')
+					if (at <= 0) {
+						throw new UsageError('config <name>=<value> ...')
+					}
+					const value = pair.slice(at + 1)
+					values[pair.slice(0, at)] = value === '' ? null : value
+				}
+				print(await client.post('/admin/config', { values }))
+				return 0
+			}
 			case 'maintenance': {
 				const mode = rest[0]
 				if (mode !== 'on' && mode !== 'off') {
@@ -222,15 +257,30 @@ export async function run({ argv, env, io, stdout, stderr, fetch, now = Date.now
 					sleep,
 				})
 				print(report)
-				out.info(report.ok ? 'import verified' : 'import FAILED verification; run import-reset --yes and import again')
+				out.info(
+					report.ok ? 'import verified' : `import FAILED verification; run import-reset ${path} --yes and import again`
+				)
 				return report.ok ? 0 : 1
 			}
-			case 'import-reset':
+			case 'import-reset': {
 				if (flags.yes !== true) {
 					throw new UsageError('import-reset deletes all data of the Store; pass --yes')
 				}
-				print(await client.post('/admin/import/reset', { confirm: true }))
+				// A token import is reset with the session kept for its file; an Access import needs no file.
+				const saved = rest[0] === undefined ? null : await io.readText(`${rest[0]}.import.json`)
+				const local = saved === null ? null : JSON.parse(saved)
+				const resetter = typeof local?.session === 'string' ? client.withSession(local.session) : client
+				print(
+					await resetter.post(
+						'/admin/import/reset',
+						local === null ? { confirm: true } : { confirm: true, id: local.id }
+					)
+				)
+				if (rest[0] !== undefined) {
+					await io.remove(`${rest[0]}.import.json`)
+				}
 				return 0
+			}
 			case 'pitr': {
 				if (rest[0] === 'bookmark') {
 					const at = flags.at
