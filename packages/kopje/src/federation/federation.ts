@@ -250,10 +250,10 @@ async function localActorObject(ctx: RequestContext<FederationState>, actor: Loc
 		manuallyApprovesFollowers: actor.locked,
 		discoverable: actor.discoverable,
 		published: Temporal.Instant.from(actor.createdAt),
-		// Only http(s) URLs are published; anything else stored is left out (HTML-3).
+		// Only http(s) URLs are published; anything else stored is left out (HTML-3), aliases included.
 		icon: image(actor.avatarUrl),
 		image: image(actor.headerUrl),
-		aliases: actor.alsoKnownAs.map((uri) => new URL(uri)),
+		aliases: actor.alsoKnownAs.flatMap((uri) => httpUrl(uri) ?? []),
 	})
 }
 

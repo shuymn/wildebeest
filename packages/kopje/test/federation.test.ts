@@ -113,6 +113,38 @@ describe('actor document', () => {
 		})
 	})
 
+	it('publishes only http(s) aliases, dropping invalid and relative ones', async () => {
+		const { json, store } = await instance()
+		const stored = ['https://old.example/users/alice', 'javascript:alert(1)', '/users/alice', 'HTTP://Older.example/a']
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec(
+				'UPDATE local_accounts SET also_known_as = ? WHERE account_id = ?',
+				JSON.stringify(stored),
+				ALICE
+			)
+		})
+		const { status, body } = await json('/ap/users/Alice')
+		expect(status).toBe(200)
+		expect((body as { alsoKnownAs: unknown }).alsoKnownAs).toEqual([
+			'https://old.example/users/alice',
+			'http://older.example/a',
+		])
+	})
+
+	it('publishes no aliases when none is an http(s) URL', async () => {
+		const { json, store } = await instance()
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec(
+				'UPDATE local_accounts SET also_known_as = ? WHERE account_id = ?',
+				JSON.stringify(['/users/alice', 'data:,x']),
+				ALICE
+			)
+		})
+		const { status, body } = await json('/ap/users/Alice')
+		expect(status).toBe(200)
+		expect(body).not.toHaveProperty('alsoKnownAs')
+	})
+
 	it('answers 404 for an unknown actor and for a differently cased path', async () => {
 		const { request } = await instance()
 		expect((await request('/ap/users/nobody', AP)).status).toBe(404)
