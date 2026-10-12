@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { type ApiHarness, apiHarness, bearer, json, login, seedAccount, sql } from './api-helpers'
+import { type ApiHarness, apiHarness, bearer, form, json, login, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 
 type Account = Record<string, unknown> & { id: string }
@@ -306,6 +306,20 @@ describe('follow and relationships', () => {
 		const response = await h.request(`/api/v1/accounts/${remote}/follow`, bearer(h.token, { method: 'POST' }))
 		expect(response.status).toBe(403)
 		expect(await sql(h.store, 'SELECT 1 FROM follows')).toEqual([])
+	})
+
+	it('clears the languages filter with an explicitly empty list, and keeps it when absent', async () => {
+		const h = await aliceSession()
+		const bob = await seedAccount(h.store, { username: 'bob' })
+		const follow = async (init: RequestInit) =>
+			(await h.request(`/api/v1/accounts/${bob}/follow`, bearer(h.token, init))).json<{ languages: unknown }>()
+
+		expect((await follow(json({ languages: ['ja', 'en'] }))).languages).toEqual(['ja', 'en'])
+		expect((await follow(json({ notify: true }))).languages).toEqual(['ja', 'en'])
+		expect((await follow(json({ languages: [] }))).languages).toBeNull()
+
+		expect((await follow(json({ languages: ['ja'] }))).languages).toEqual(['ja'])
+		expect((await follow(form({ 'languages[]': '' }))).languages).toBeNull()
 	})
 
 	it('answers relationships for several ids, legacy ids included', async () => {

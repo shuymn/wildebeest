@@ -438,7 +438,13 @@ export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, i
 	if (target.id === viewerId || target.blocked === 1 || target.domain_blocked === 1) {
 		return { status: 'forbidden' }
 	}
-	const languages = input.languages === undefined ? undefined : JSON.stringify(input.languages)
+	// undefined keeps the current filter; null or an empty list means every language (no filter).
+	const languages =
+		input.languages === undefined
+			? undefined
+			: input.languages === null || input.languages.length === 0
+				? null
+				: JSON.stringify(input.languages)
 	const existing = db.first(
 		'SELECT 1 AS found FROM follows WHERE account_id = ? AND target_account_id = ?',
 		viewerId,

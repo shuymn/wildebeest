@@ -14,6 +14,11 @@ export class Params {
 		return this.entries.find(([key]) => key === name)?.[1]
 	}
 
+	// Whether `name` or `name[]` was sent at all, even with no value: an explicitly empty list is not an absent one.
+	has(name: string): boolean {
+		return this.entries.some(([key]) => key === name || key === `${name}[]`)
+	}
+
 	// Values of `name[]` and of a repeated `name`.
 	getAll(name: string): string[] {
 		return this.entries.filter(([key]) => key === name || key === `${name}[]`).map(([, value]) => value)
@@ -57,6 +62,10 @@ async function bodyEntries(contentType: string, body: Uint8Array): Promise<[stri
 
 function flatten(prefix: string, value: unknown, out: [string, string][]): void {
 	if (Array.isArray(value)) {
+		// An empty array reads as `name[]=` with no value, as a form sends an empty list.
+		if (value.length === 0 && prefix !== '') {
+			out.push([`${prefix}[]`, ''])
+		}
 		value.forEach((item, index) => {
 			const scalar = item === null || typeof item !== 'object'
 			flatten(scalar ? `${prefix}[]` : `${prefix}[${index}]`, item, out)

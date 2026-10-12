@@ -165,13 +165,14 @@ export const follow: ApiHandler = async (c, deps) => {
 	if (p instanceof Response) {
 		return p
 	}
-	const languages = p.getAll('languages')
+	// Absent keeps the follow's filter; an empty list (`languages: []`, `languages[]=`) clears it.
+	const languages = p.has('languages') ? p.getAll('languages').filter((language) => language !== '') : undefined
 	const input = {
 		credential,
 		target: c.req.param('id') ?? '',
 		reblogs: parseBoolean(p.get('reblogs')),
 		notify: parseBoolean(p.get('notify')),
-		languages: languages.length === 0 ? undefined : languages,
+		languages,
 		now: deps.now(),
 	}
 	return relationshipResponse(c, authorized(await storeCall(c, deps, (s, b) => s.follow(b, input))))
