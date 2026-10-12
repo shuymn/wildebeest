@@ -24,7 +24,7 @@
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "0.16.20",
-		"@cloudflare/workers-types": "4.20260627.1",
+		"@cloudflare/workers-types": "4.20260701.1",
 		"@fedify/testing": "2.4.2",
 		"miniflare": "4.20260625.0",
 		"typescript": "5.9.3",
