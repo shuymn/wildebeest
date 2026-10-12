@@ -229,10 +229,14 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
    `health`, or from the `kopje.backup.succeeded` entry in Workers Logs for an older backup. Download that object and
    compare its digest before decrypting it:
 
+    Run every step below in one bash session started with `set -euo pipefail`, so any failed check stops the restore.
+
     ```sh
+    set -euo pipefail
     mkdir restore-backup && cd restore-backup      # fails if it exists
     aws s3 cp "s3://BUCKET/<manifest key>" manifest.json.age
-    shasum -a 256 manifest.json.age                # must equal manifestSha256
+    # Exits non-zero, and stops the session, unless the digest equals the recorded manifestSha256.
+    echo "<manifestSha256>  manifest.json.age" | shasum -a 256 -c -
     age -d -i ../kopje-backup-key.txt -o manifest.json manifest.json.age
     ```
 
@@ -262,7 +266,6 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
    18-digit id, into a new directory:
 
     ```sh
-    set -euo pipefail
     mkdir media media/encrypted media/originals    # fails if they exist
     jq -r '.objects[] | select(.state == "copied") | .source' media-index.json |
     while read -r source; do
