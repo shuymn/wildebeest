@@ -69,54 +69,6 @@ export const registerApp = sessionOperation<RegisterAppInput, Client>((db, input
 	return toClient(clientRow(db, input.clientId)!)
 })
 
-// The caller of an API request. accountId is null for an app token (client_credentials).
-export type Viewer = {
-	tokenHash: string
-	scopes: string[]
-	accountId: string | null
-	client: { id: string; name: string; website: string | null }
-}
-
-export type Authentication = { status: 'ok'; viewer: Viewer } | { status: 'invalid' } | { status: 'suspended' }
-
-// Token validation: one indexed lookup by the token's sha256. A suspended account's tokens are refused even if one
-// survived the suspension.
-export const authenticate = readOperation<{ tokenHash: string; now: number }, Authentication>(
-	(db, { tokenHash, now }) => {
-		const row = db.first<{
-			scopes: string
-			account_id: string | null
-			expires_at: string | null
-			client_id: string
-			name: string
-			website: string | null
-			suspended_at: string | null
-		}>(
-			`SELECT t.scopes, t.account_id, t.expires_at, c.id AS client_id, c.name, c.website, l.suspended_at
-			FROM oauth_tokens t
-			JOIN oauth_clients c ON c.id = t.client_id
-			LEFT JOIN local_accounts l ON l.account_id = t.account_id
-			WHERE t.token_hash = ? AND t.kind = 'access'`,
-			tokenHash
-		)
-		if (row === undefined || (row.expires_at !== null && row.expires_at <= new Date(now).toISOString())) {
-			return { status: 'invalid' }
-		}
-		if (row.suspended_at !== null) {
-			return { status: 'suspended' }
-		}
-		return {
-			status: 'ok',
-			viewer: {
-				tokenHash,
-				scopes: row.scopes.split(' '),
-				accountId: row.account_id,
-				client: { id: row.client_id, name: row.name, website: row.website },
-			},
-		}
-	}
-)
-
 // instance_settings names written by /setup step 3.
 export const ACCESS_TEAM_DOMAIN = 'access_team_domain'
 export const ACCESS_AUD = 'access_aud'

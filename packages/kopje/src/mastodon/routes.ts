@@ -6,8 +6,9 @@ import type { ApiDeps, ApiEnv, ApiHandler } from './context'
 import * as instance from './instance'
 import * as oauth from './oauth'
 
-// The explicit API route table (design §4): every route names the access it requires, and one middleware
-// (requireAccess) enforces it. Routes are matched in order, so fixed paths come before their :id siblings.
+// The explicit API route table (design §4): every route names the access it requires, one middleware (requireAccess)
+// declares it, and the Store enforces it in each operation. Routes are matched in order, so fixed paths come before
+// their :id siblings.
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
 
@@ -68,7 +69,7 @@ export const ROUTES: readonly Route[] = [
 export function mastodonApi(deps: ApiDeps, routes: readonly Route[] = ROUTES): Hono<ApiEnv> {
 	const api = new Hono<ApiEnv>()
 	for (const route of routes) {
-		api.on(route.method, route.path, requireAccess(route.access, deps), (c) => route.handler(c, deps))
+		api.on(route.method, route.path, requireAccess(route.access), (c) => route.handler(c, deps))
 	}
 	return api
 }

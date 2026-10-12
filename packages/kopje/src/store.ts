@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers'
 
 import { MIGRATIONS } from './db/migrations'
 import * as accounts from './domain/accounts'
+import { checkCredential, type Credential, type UserCredential } from './domain/auth'
 import { acceptInbox, type InboxDelivery } from './domain/inbox'
 import { instanceInfo } from './domain/instance'
 import * as oauth from './domain/oauth'
@@ -52,8 +53,10 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, oauth.registerApp, input)
 	}
 
-	authenticate(callerBuild: string, input: { tokenHash: string; now: number }) {
-		return this.#kernel.execute(callerBuild, oauth.authenticate, input)
+	// Protected operations take the request's credential and validate it in their own transaction (domain/auth.ts).
+	// checkCredential() only validates.
+	checkCredential(callerBuild: string, input: Credential) {
+		return this.#kernel.execute(callerBuild, checkCredential, input)
 	}
 
 	authorizeContext(callerBuild: string, input: { clientId: string }) {
@@ -96,30 +99,30 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, accounts.lookupAccount, input)
 	}
 
-	verifyCredentials(callerBuild: string, input: { accountId: string; present: accounts.Present }) {
+	verifyCredentials(callerBuild: string, input: { credential: UserCredential; present: accounts.Present }) {
 		return this.#kernel.execute(callerBuild, accounts.verifyCredentials, input)
 	}
 
 	updateCredentials(
 		callerBuild: string,
-		input: { accountId: string; changes: accounts.CredentialChanges; present: accounts.Present }
+		input: { credential: UserCredential; changes: accounts.CredentialChanges; present: accounts.Present }
 	) {
 		return this.#kernel.execute(callerBuild, accounts.updateCredentials, input)
 	}
 
-	relationships(callerBuild: string, input: { viewerId: string; ids: string[] }) {
+	relationships(callerBuild: string, input: { credential: UserCredential; ids: string[] }) {
 		return this.#kernel.execute(callerBuild, accounts.relationships, input)
 	}
 
-	searchAccounts(callerBuild: string, input: accounts.SearchInput) {
+	searchAccounts(callerBuild: string, input: accounts.SearchInput & { credential: UserCredential }) {
 		return this.#kernel.execute(callerBuild, accounts.searchAccounts, input)
 	}
 
-	follow(callerBuild: string, input: accounts.FollowInput) {
+	follow(callerBuild: string, input: accounts.FollowInput & { credential: UserCredential }) {
 		return this.#kernel.execute(callerBuild, accounts.follow, input)
 	}
 
-	unfollow(callerBuild: string, input: { viewerId: string; target: string }) {
+	unfollow(callerBuild: string, input: { credential: UserCredential; target: string }) {
 		return this.#kernel.execute(callerBuild, accounts.unfollow, input)
 	}
 

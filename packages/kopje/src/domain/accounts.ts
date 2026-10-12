@@ -1,4 +1,5 @@
-import { readOperation, writeOperation } from './operation'
+import { userReadOperation, userWriteOperation } from './auth'
+import { readOperation } from './operation'
 import { htmlToPlainText, plainTextToHtml } from './plain-text'
 import { accountSearchText, queryTerms } from './search-text'
 import type { Db } from '../db/sql'
@@ -205,8 +206,8 @@ function credentialAccount(db: Db, accountId: string, present: Present): Credent
 	}
 }
 
-export const verifyCredentials = readOperation<{ accountId: string; present: Present }, CredentialAccount | null>(
-	(db, { accountId, present }) => credentialAccount(db, accountId, present)
+export const verifyCredentials = userReadOperation<{ present: Present }, CredentialAccount | null>(
+	(db, { present }, viewer) => credentialAccount(db, viewer.accountId, present)
 )
 
 export type CredentialChanges = {
@@ -222,10 +223,10 @@ export type CredentialChanges = {
 
 // Lengths and values are validated by the caller. display_name and the note are plain text: display_name is stored
 // as is (JSON consumers escape it), the note is stored as escaped paragraphs.
-export const updateCredentials = writeOperation<
-	{ accountId: string; changes: CredentialChanges; present: Present },
+export const updateCredentials = userWriteOperation<
+	{ changes: CredentialChanges; present: Present },
 	CredentialAccount | null
->((db, { accountId, changes, present }) => {
+>((db, { changes, present }, { accountId }) => {
 	const current = db.first<{ username: string; display_name: string; actor_type: string }>(
 		'SELECT a.username, a.display_name, a.actor_type FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?',
 		accountId
@@ -323,8 +324,8 @@ function relationshipsOf(db: Db, viewerId: string, accountIds: string[]): Relati
 
 export const MAX_RELATIONSHIP_IDS = 100
 
-export const relationships = readOperation<{ viewerId: string; ids: string[] }, Relationship[]>(
-	(db, { viewerId, ids }) => {
+export const relationships = userReadOperation<{ ids: string[] }, Relationship[]>(
+	(db, { ids }, { accountId: viewerId }) => {
 		const resolved = ids
 			.slice(0, MAX_RELATIONSHIP_IDS)
 			.map((id) => resolveAccountId(db, id))
@@ -338,7 +339,6 @@ export type SearchInput = {
 	limit: number
 	offset: number
 	following: boolean
-	viewerId: string
 	// The instance's own host: "alice@<host>" searches for the local alice.
 	localDomain: string
 	present: Present
@@ -346,7 +346,7 @@ export type SearchInput = {
 
 // Local and known remote accounts whose search_text contains every term (in any of its variants). An exact username
 // ranks first, then local accounts. Suspended local accounts are not listed.
-export const searchAccounts = readOperation<SearchInput, Account[]>((db, input) => {
+export const searchAccounts = userReadOperation<SearchInput, Account[]>((db, input, viewer) => {
 	const query = input.query
 		.trim()
 		.replace(/^@/, '')
@@ -361,7 +361,7 @@ export const searchAccounts = readOperation<SearchInput, Account[]>((db, input) 
 		where.push(
 			"EXISTS (SELECT 1 FROM follows f WHERE f.account_id = ? AND f.target_account_id = a.id AND f.state = 'accepted')"
 		)
-		params.push(input.viewerId)
+		params.push(viewer.accountId)
 	}
 	const exactUsername = (query.split('@')[0] ?? '').toLowerCase()
 	const rows = db.all<AccountRow>(
@@ -382,7 +382,6 @@ function escapeRegExp(text: string): string {
 }
 
 export type FollowInput = {
-	viewerId: string
 	target: string
 	reblogs?: boolean
 	notify?: boolean
@@ -417,18 +416,18 @@ function followTarget(db: Db, viewerId: string, target: string): TargetRow | nul
 // Follows or updates the options of an existing follow. A local unlocked target is followed at once; a locked or
 // remote target gets a pending request (a remote Accept arrives over federation). State only: delivery of the
 // Follow activity and the follow notification come with B2.
-export const follow = writeOperation<FollowInput, RelationshipResult>((db, input) => {
-	const target = followTarget(db, input.viewerId, input.target)
+export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, input, { accountId: viewerId }) => {
+	const target = followTarget(db, viewerId, input.target)
 	if (target === null) {
 		return { status: 'not_found' }
 	}
-	if (target.id === input.viewerId || target.blocked === 1) {
+	if (target.id === viewerId || target.blocked === 1) {
 		return { status: 'forbidden' }
 	}
 	const languages = input.languages === undefined ? undefined : JSON.stringify(input.languages)
 	const existing = db.first<{ id: number }>(
 		'SELECT id FROM follows WHERE account_id = ? AND target_account_id = ?',
-		input.viewerId,
+		viewerId,
 		target.id
 	)
 	if (existing === undefined) {
@@ -437,7 +436,7 @@ export const follow = writeOperation<FollowInput, RelationshipResult>((db, input
 		db.run(
 			`INSERT INTO follows (account_id, target_account_id, state, show_reblogs, notify, languages, created_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			input.viewerId,
+			viewerId,
 			target.id,
 			state,
 			bit(input.reblogs ?? true),
@@ -457,12 +456,12 @@ export const follow = writeOperation<FollowInput, RelationshipResult>((db, input
 			existing.id
 		)
 	}
-	recountFollows(db, input.viewerId, target)
-	return relationshipResult(db, input.viewerId, target.id)
+	recountFollows(db, viewerId, target)
+	return relationshipResult(db, viewerId, target.id)
 })
 
-export const unfollow = writeOperation<{ viewerId: string; target: string }, RelationshipResult>(
-	(db, { viewerId, target: targetId }) => {
+export const unfollow = userWriteOperation<{ target: string }, RelationshipResult>(
+	(db, { target: targetId }, { accountId: viewerId }) => {
 		const target = followTarget(db, viewerId, targetId)
 		if (target === null) {
 			return { status: 'not_found' }

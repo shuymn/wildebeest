@@ -1,4 +1,4 @@
-import { type ApiContext, type ApiHandler, storeCall, vapidKey } from './context'
+import { type ApiContext, type ApiHandler, authorized, credential, storeCall, vapidKey } from './context'
 import { mastodonError } from './errors'
 import { type Params, readParams } from './params'
 import { OOB_REDIRECT_URI } from '../domain/oauth'
@@ -61,11 +61,10 @@ export const registerApp: ApiHandler = async (c, deps) => {
 	})
 }
 
-export const verifyApp: ApiHandler = (c) => {
-	const viewer = c.get('viewer')
-	return Promise.resolve(
-		c.json({ name: viewer?.client.name ?? '', website: viewer?.client.website ?? null, vapid_key: vapidKey(c.env) })
-	)
+export const verifyApp: ApiHandler = async (c, deps) => {
+	const token = credential(c, deps)
+	const { client } = authorized(await storeCall(c, deps, (s, b) => s.checkCredential(b, token)))
+	return c.json({ name: client.name, website: client.website, vapid_key: vapidKey(c.env) })
 }
 
 // Absolute, no fragment (RFC 6749 §3.1.2), and not a script URL. Custom schemes of native apps are allowed.
