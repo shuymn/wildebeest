@@ -22,6 +22,9 @@
 		// round makes at most 16 POSTs.
 		"consumers": [{ "queue": "kopje", "max_retries": 100, "max_concurrency": 4 }],
 	},
+	// RES-6: anonymous app registration per client IP (mastodon/oauth.ts). The Rate Limiting binding needs no paid
+	// product; namespace_id is any number unique within the account.
+	"ratelimits": [{ "name": "APP_REGISTRATION_LIMIT", "namespace_id": "4201", "simple": { "limit": 5, "period": 60 } }],
 	"r2_buckets": [{ "binding": "MEDIA", "bucket_name": "kopje-media" }],
 	"images": { "binding": "IMAGES" },
 	"assets": {

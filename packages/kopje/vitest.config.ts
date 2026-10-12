@@ -9,7 +9,12 @@ export default defineConfig({
 		cloudflareTest({
 			wrangler: { configPath: fileURLToPath(new URL('./wrangler.jsonc', import.meta.url)) },
 			// wrangler.jsonc pins the production date, which can be newer than the local runtime supports.
-			miniflare: { compatibilityDate: supportedCompatibilityDate },
+			// The app registration limit (5 per minute per IP in wrangler.jsonc) would throttle the suites, which register
+			// apps from one address; test/apps-budget.test.ts injects a limiter of its own.
+			miniflare: {
+				compatibilityDate: supportedCompatibilityDate,
+				ratelimits: { APP_REGISTRATION_LIMIT: { simple: { limit: 1_000_000, period: 60 } } },
+			},
 		}),
 	],
 	// As wrangler.jsonc's alias: sanitize-html never reaches postcss (stubs/postcss.cjs).
