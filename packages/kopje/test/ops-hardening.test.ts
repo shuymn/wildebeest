@@ -39,7 +39,7 @@ function configRows(state: DurableObjectState): string[] {
 describe('Access authority is re-checked where the Store writes', () => {
 	it('refuses a write from an admin who was revoked after the Worker authenticated the request', async () => {
 		const store = await configured()
-		const revokedAdmin = { kind: 'access', email: ADMIN_EMAIL, commonName: null } as const
+		const revokedAdmin = { ...ACCESS, email: ADMIN_EMAIL }
 		// Another admin replaces the admin email while the first request is still in flight.
 		await runInDurableObject(store, (_instance, state) => {
 			state.storage.sql.exec("UPDATE instance_settings SET value = 'next@kopje.test' WHERE name = 'admin_email'")
@@ -52,7 +52,7 @@ describe('Access authority is re-checked where the Store writes', () => {
 			ok: false,
 			code: 'wrong-authority',
 		})
-		const current = { kind: 'access', email: 'NEXT@kopje.test', commonName: null } as const
+		const current = { ...ACCESS, email: 'NEXT@kopje.test' }
 		expect(await store.setConfig(BUILD, current, { domain: 'kopje.test' })).toMatchObject({ ok: true })
 	})
 })

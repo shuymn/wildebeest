@@ -14,8 +14,14 @@ export const TEAM_DOMAIN = 'kopje-team.cloudflareaccess.com'
 export const ADMIN_AUD = 'aud-admin-0123456789'
 export const SERVICE_CLIENT_ID = 'cli-client.access'
 
-// The import authority of an Access-authenticated admin.
-export const ACCESS = { kind: 'access', email: 'admin@kopje.test', commonName: null } as const
+// The authority of an Access-authenticated admin: who, and the Access binding (team, AUD) the Worker verified with.
+export const ACCESS = {
+	kind: 'access',
+	email: 'admin@kopje.test',
+	commonName: null,
+	teamDomain: 'kopje-team.cloudflareaccess.com',
+	aud: 'aud-admin-0123456789',
+} as const
 
 // Gives the target the source's configuration (domain, Access settings), as an operator does with config: an import
 // never carries configuration.
@@ -282,9 +288,22 @@ export async function resetImport(store: StoreStub, id: string) {
 	}
 }
 
-export async function beginImport(store: StoreStub, text: string): Promise<string> {
+// The import authority the RPC helpers use; a test with its own Access team passes that team's binding.
+export type AccessAuthority = {
+	kind: 'access'
+	email: string | null
+	commonName: string | null
+	teamDomain: string
+	aud: string
+}
+
+export async function beginImport(
+	store: StoreStub,
+	text: string,
+	authority: AccessAuthority = ACCESS
+): Promise<string> {
 	await ensureAdmin(store)
-	const begun = await store.importBegin(BUILD, ACCESS, splitDump(text).header)
+	const begun = await store.importBegin(BUILD, authority, splitDump(text).header)
 	if (!begun.ok) {
 		throw new Error(`${begun.code}: ${begun.message}`)
 	}
@@ -292,13 +311,13 @@ export async function beginImport(store: StoreStub, text: string): Promise<strin
 }
 
 // Finishes an import whose chunks are all applied and runs verification to the end.
-export async function finishImport(store: StoreStub, id: string, text: string) {
-	const finished = await store.importFinish(BUILD, ACCESS, id, splitDump(text).trailer)
+export async function finishImport(store: StoreStub, id: string, text: string, authority: AccessAuthority = ACCESS) {
+	const finished = await store.importFinish(BUILD, authority, id, splitDump(text).trailer)
 	if (!finished.ok) {
 		throw new Error(`${finished.code}: ${finished.message}`)
 	}
 	for (;;) {
-		const verified = await store.importVerify(BUILD, ACCESS, id)
+		const verified = await store.importVerify(BUILD, authority, id)
 		if (!verified.ok) {
 			throw new Error(`${verified.code}: ${verified.message}`)
 		}
@@ -309,14 +328,19 @@ export async function finishImport(store: StoreStub, id: string, text: string) {
 }
 
 // Imports a dump text through the Store RPCs and verifies it.
-export async function importViaRpc(store: StoreStub, text: string, chunkBytes = 64 * 1024) {
-	const id = await beginImport(store, text)
+export async function importViaRpc(
+	store: StoreStub,
+	text: string,
+	chunkBytes = 64 * 1024,
+	authority: AccessAuthority = ACCESS
+) {
+	const id = await beginImport(store, text, authority)
 	let seq = 0
 	for (const chunk of await importChunks(text, chunkBytes)) {
-		const result = await store.importChunk(BUILD, ACCESS, id, ++seq, chunk)
+		const result = await store.importChunk(BUILD, authority, id, ++seq, chunk)
 		if (!result.ok) {
 			throw new Error(`${result.code}: ${result.message}`)
 		}
 	}
-	return { id, chunks: seq, report: await finishImport(store, id, text) }
+	return { id, chunks: seq, report: await finishImport(store, id, text, authority) }
 }

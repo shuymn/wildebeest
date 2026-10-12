@@ -25,6 +25,9 @@ const TOKEN = { kind: 'import-token' } as const
 
 let team: AccessTeam
 
+// The Access authority of this test's team (the Store checks the team it was verified with).
+const teamAccess = () => ({ ...ACCESS, teamDomain: team.teamDomain })
+
 beforeEach(async () => {
 	team = await adminTeam()
 })
@@ -65,7 +68,7 @@ describe('imported data never changes admin authority', () => {
 		})
 		const before = await authorityRows(target)
 
-		expect((await importViaRpc(target, text)).report).toMatchObject({ ok: true })
+		expect((await importViaRpc(target, text, undefined, teamAccess())).report).toMatchObject({ ok: true })
 		// The target's rows exactly: the dump's values are gone, and the key the target lacked stays absent.
 		expect(await authorityRows(target)).toEqual(before)
 		const { as } = adminHarness(target, team)
@@ -121,9 +124,9 @@ describe('config', () => {
 	it('is refused while an import is in progress', async () => {
 		const target = await migratedStore()
 		await setTeamAccess(target, team)
-		const begun = await target.importBegin(BUILD, ACCESS, splitDump(await dumpOf()).header)
+		const begun = await target.importBegin(BUILD, teamAccess(), splitDump(await dumpOf()).header)
 		expect(begun).toMatchObject({ ok: true })
-		expect(await target.setConfig(BUILD, ACCESS, { domain: 'x.test' })).toMatchObject({
+		expect(await target.setConfig(BUILD, teamAccess(), { domain: 'x.test' })).toMatchObject({
 			ok: false,
 			code: 'import-in-progress',
 		})
@@ -308,7 +311,7 @@ describe('abandoning a stranded token import', () => {
 	it('never lets IMPORT_TOKEN reset an Access import', async () => {
 		const store = await migratedStore()
 		await setTeamAccess(store, team)
-		const begun = await store.importBegin(BUILD, ACCESS, splitDump(await dumpOf()).header)
+		const begun = await store.importBegin(BUILD, teamAccess(), splitDump(await dumpOf()).header)
 		if (!begun.ok) throw new Error(begun.message)
 		expect(await store.importReset(BUILD, TOKEN, begun.progress.id, true)).toMatchObject({
 			ok: false,

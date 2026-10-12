@@ -1,7 +1,8 @@
 import {
 	type AccessSettings,
+	type AccessBinding,
+	accessRefusal,
 	type AdminIdentity,
-	adminRefusal,
 	adminUsable,
 	BOOTSTRAP,
 	CONFIG_KEYS,
@@ -82,7 +83,7 @@ export type AdminOptions = {
 // Who asks for an import or configuration change (see the import section of StoreAdmin).
 // access carries the identity the Worker verified; the Store checks it again where it writes.
 export type ImportAuthority =
-	| ({ kind: 'access' } & AdminIdentity)
+	| ({ kind: 'access' } & AdminIdentity & AccessBinding)
 	| { kind: 'import-token' }
 	| { kind: 'import-session'; secret: string }
 
@@ -842,6 +843,8 @@ export class StoreAdmin {
 				return this.#touch({ ...record, state: 'resetting' })
 			})
 			if (started === null) {
+				// Answered from the receipt: the wake-up of a deferred upgrade may have been lost with the first answer.
+				await this.#resumeDeferredUpgrade()
 				return { ok: true, done: true, progress: null }
 			}
 			for (let step = 0; step < maxSteps; step++) {
@@ -868,6 +871,15 @@ export class StoreAdmin {
 		if (record === null || record.id !== id || record.state !== 'resetting') {
 			throw new ImportError('import-not-found', 'the reset was taken over')
 		}
+		// First the references inside a table (statuses: reblog_of_id, in_reply_to_id, and any deferred column), set to
+		// NULL in bounded batches: deleting a row they point at would cascade or update without bound. Then rows,
+		// children before parents, so no delete reaches another row.
+		for (const spec of record.header.tables) {
+			if (unlinkRows(this.#sql, spec, this.#resetBatchRows) > 0) {
+				this.#touch(record)
+				return false
+			}
+		}
 		for (const spec of [...record.header.tables].reverse()) {
 			if (deleteRows(this.#sql, spec, this.#resetBatchRows) > 0) {
 				this.#touch(record)
@@ -889,8 +901,8 @@ export class StoreAdmin {
 	}
 
 	// The admin policy against the given configuration, inside the caller's transaction.
-	#assertAdmin(authority: { kind: 'access' } & AdminIdentity, settings: AccessSettings): void {
-		const refused = adminRefusal(settings, authority)
+	#assertAdmin(authority: { kind: 'access' } & AdminIdentity & AccessBinding, settings: AccessSettings): void {
+		const refused = accessRefusal(settings, authority)
 		if (refused !== null) {
 			throw new ImportError('wrong-authority', refused)
 		}
@@ -1013,7 +1025,7 @@ export class StoreAdmin {
 
 	#authorizeReceipt(authority: ImportAuthority, receipt: ImportReceipt): void {
 		const allowed =
-			(authority.kind === 'access' && adminRefusal(readAccessSettings(this.#sql), authority) === null) ||
+			(authority.kind === 'access' && accessRefusal(readAccessSettings(this.#sql), authority) === null) ||
 			(authority.kind === 'import-session' &&
 				receipt.mode === 'token' &&
 				sessionMatches(authority.secret, receipt.sessionHash))
@@ -1080,6 +1092,34 @@ class RefusalError extends Error {
 	}
 }
 
+// How a reset step names rows of a table: the rowid, or the primary key of a WITHOUT ROWID table.
+function rowKey(spec: TableSpec): { key: string; columns: string } {
+	if (spec.order.by === 'rowid') {
+		return { key: 'rowid', columns: 'rowid' }
+	}
+	const columns = spec.key.map(quoteIdentifier).join(',')
+	return { key: `(${columns})`, columns }
+}
+
+// Sets the deferred (self- or cyclic) references of up to `limit` rows to NULL. Returns how many rows changed.
+function unlinkRows(sql: SqlStorage, spec: TableSpec, limit: number): number {
+	if (spec.deferred.length === 0) {
+		return 0
+	}
+	const table = quoteIdentifier(spec.name)
+	const set = spec.deferred.map((c) => `${quoteIdentifier(c)} = NULL`).join(', ')
+	const linked = spec.deferred.map((c) => `${quoteIdentifier(c)} IS NOT NULL`).join(' OR ')
+	const { key, columns } = rowKey(spec)
+	return sql
+		.exec<{
+			n: number
+		}>(
+			`UPDATE ${table} SET ${set} WHERE ${key} IN (SELECT ${columns} FROM ${table} WHERE ${linked} LIMIT ?) RETURNING 1 AS n`,
+			limit
+		)
+		.toArray().length
+}
+
 // Deletes up to `limit` rows of a dumped table (kopje_state: only its dumped rows). Returns how many were deleted.
 function deleteRows(sql: SqlStorage, spec: TableSpec, limit: number): number {
 	const table = quoteIdentifier(spec.name)
@@ -1088,8 +1128,7 @@ function deleteRows(sql: SqlStorage, spec: TableSpec, limit: number): number {
 			? ''
 			: ` WHERE ${quoteIdentifier(spec.only.column)} IN (${spec.only.values.map(() => '?').join(',')})`
 	const params = spec.only === undefined ? [] : [...spec.only.values]
-	const key = spec.order.by === 'rowid' ? 'rowid' : `(${spec.key.map(quoteIdentifier).join(',')})`
-	const columns = spec.order.by === 'rowid' ? 'rowid' : spec.key.map(quoteIdentifier).join(',')
+	const { key, columns } = rowKey(spec)
 	return sql.exec(
 		`DELETE FROM ${table} WHERE ${key} IN (SELECT ${columns} FROM ${table}${only} LIMIT ?)`,
 		...params,

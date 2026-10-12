@@ -3,7 +3,7 @@ import { createMiddleware } from 'hono/factory'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 
 import { healthReport } from './health'
-import { type AccessSettings, adminRefusal, adminUsable } from '../platform/access-settings'
+import { type AccessSettings, adminRefusal, adminUsable, normalizeTeamDomain } from '../platform/access-settings'
 import { readBoundedBody } from '../platform/body'
 import { readConfig } from '../platform/config'
 import { errorMessage } from '../platform/error-message'
@@ -194,7 +194,14 @@ export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
 			if (refused !== null) {
 				return c.json({ error: refused }, 403)
 			}
-			c.set('auth', { kind: 'access', email: verified.email, commonName: verified.commonName })
+			// The Store checks the identity and the binding it was verified with again where it writes.
+			c.set('auth', {
+				kind: 'access',
+				email: verified.email,
+				commonName: verified.commonName,
+				teamDomain: normalizeTeamDomain(access.teamDomain),
+				aud: access.adminAud,
+			})
 			await next()
 		})
 	)

@@ -339,7 +339,8 @@ describe('import bootstrap over Access', () => {
 		expect(begun.status).toBe(200)
 		const { progress } = (await begun.json()) as { progress: { id: string } }
 		const chunks = await importChunks(text, 1 << 20)
-		expect(await target.importChunk(BUILD, ACCESS, progress.id, 1, chunks[0]!)).toMatchObject({ ok: true })
+		const teamAccess = { ...ACCESS, teamDomain: team.teamDomain }
+		expect(await target.importChunk(BUILD, teamAccess, progress.id, 1, chunks[0]!)).toMatchObject({ ok: true })
 
 		// Reset keeps the Access settings, so the admin can still sign in and import again.
 		const reset = await post(adminClaims(), '/admin/import/reset', { confirm: true, id: progress.id })
@@ -351,7 +352,7 @@ describe('import bootstrap over Access', () => {
 			progress: { id: string }
 		}
 		for (const [i, chunk] of chunks.entries()) {
-			expect(await target.importChunk(BUILD, ACCESS, again.progress.id, i + 1, chunk)).toMatchObject({ ok: true })
+			expect(await target.importChunk(BUILD, teamAccess, again.progress.id, i + 1, chunk)).toMatchObject({ ok: true })
 		}
 		expect((await post(adminClaims(), '/admin/import/finish', { id: again.progress.id, trailer })).status).toBe(200)
 		const verified = await post(adminClaims(), '/admin/import/verify', { id: again.progress.id })

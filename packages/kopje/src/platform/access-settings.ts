@@ -68,6 +68,31 @@ export function replaceBootstrapRows(sql: SqlStorage, rows: readonly SettingRow[
 // Who an Access-authenticated request speaks for, as the Worker verified it (security/access-jwt.ts).
 export type AdminIdentity = { email: string | null; commonName: string | null }
 
+// What the Worker verified a token against: the team (issuer, normalized) and the /admin AUD. A write is admitted only
+// while the configuration still has these, so a change of team or application revokes requests already in flight.
+export type AccessBinding = { teamDomain: string; aud: string }
+
+// The team host as the verifier uses it (security/access-jwt.ts teamHost): "team.cloudflareaccess.com", with any
+// scheme and trailing slashes removed.
+export function normalizeTeamDomain(teamDomain: string): string {
+	return teamDomain
+		.trim()
+		.replace(/^https?:\/\//, '')
+		.replace(/\/+$/, '')
+}
+
+// The binding and the admin policy together, against the given configuration.
+export function accessRefusal(settings: AccessSettings, authority: AdminIdentity & AccessBinding): string | null {
+	if (
+		settings.teamDomain === null ||
+		normalizeTeamDomain(settings.teamDomain) !== authority.teamDomain ||
+		settings.adminAud !== authority.aud
+	) {
+		return 'the Access team or application changed since this request was authenticated'
+	}
+	return adminRefusal(settings, authority)
+}
+
 // The admin policy: the admin's email (case-insensitive), or, for a token without email, the admin CLI's service
 // token client id. The Worker applies it when it authenticates a request, and the Store again, against its saved
 // configuration, inside the transaction that writes: an admin revoked meanwhile cannot finish a write. The Worker also
