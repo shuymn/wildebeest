@@ -1,7 +1,9 @@
 // An in-memory S3 for the backup tests: path-style requests to https://s3.test/<bucket>/<key>, the calls the backup
 // makes (multipart uploads, put, get, delete, ListObjectsV2, ListMultipartUploads), S3's part rule (every part but
-// the last at least 5 MiB), and a check that each request is SigV4-signed by the configured key id and carries the
-// SHA-256 of its body. `fail` injects an error status for a request.
+// the last at least 5 MiB), and a check that each request carries a valid SigV4 signature (test/sigv4.ts) for the
+// configured key and region, and the SHA-256 of its body. Upload ids and ETags contain characters that need XML and
+// URL escaping, and listings are paginated. `fail` injects an error status for a request; `completeError` answers a
+// completion with HTTP 200 and an error body, as S3 may.
 
 export type S3Op =
 	| 'create-upload'
@@ -16,6 +18,8 @@ export type S3Op =
 
 export type S3Request = { op: S3Op; key: string | null; status: number }
 
+import { parseAuthorization, signatureOf } from './sigv4'
+
 const MIB = 1024 * 1024
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -28,6 +32,14 @@ function escape(text: string): string {
 	return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
+function unescape(text: string): string {
+	return text
+		.replace(/&quot;/g, '"')
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&amp;/g, '&')
+}
+
 export class S3Mock {
 	readonly objects = new Map<string, Uint8Array>()
 	readonly uploads = new Map<string, { key: string; parts: Map<number, { body: Uint8Array; etag: string }> }>()
@@ -35,16 +47,25 @@ export class S3Mock {
 	// Every body the bucket received (parts and objects), to check that none is plaintext.
 	readonly received: Uint8Array[] = []
 	fail: ((op: S3Op, key: string | null) => number | undefined) | undefined
+	completeError = false
 	// Keys a listing leaves out, as an eventually consistent store might.
 	hidden = new Set<string>()
+	// Called before a request is handled; a test can hold a request here.
+	before: ((op: S3Op, key: string | null) => Promise<void>) | undefined
 	#next = 1
 
 	constructor(
 		readonly bucket = 'kopje-backups',
 		readonly accessKeyId = 'AKIDKOPJETEST',
+		readonly secretAccessKey = 'kopje-dummy-s3-secret-0123456789',
+		readonly region = 'us-east-1',
 		readonly minPartBytes = 5 * MIB,
-		readonly maxListKeys = 1000
+		readonly maxListKeys = 2
 	) {}
+
+	#uploadId(): string {
+		return `up+/=&<${this.#next++}>`
+	}
 
 	readonly fetch = async (request: Request): Promise<Response> => {
 		const url = new URL(request.url)
@@ -72,15 +93,33 @@ export class S3Mock {
 								? 'abort-upload'
 								: 'delete'
 							: 'get'
+		await this.before?.(op, key)
 		const response = await this.#handle(op, key, q, request)
 		this.requests.push({ op, key, status: response.status })
 		return response
 	}
 
 	async #handle(op: S3Op, key: string | null, q: URLSearchParams, request: Request): Promise<Response> {
-		const auth = request.headers.get('authorization') ?? ''
-		if (!auth.startsWith(`AWS4-HMAC-SHA256 Credential=${this.accessKeyId}/`)) {
-			return new Response('<Error><Code>AccessDenied</Code></Error>', { status: 403 })
+		const auth = parseAuthorization(request.headers.get('authorization') ?? '')
+		if (
+			auth === null ||
+			auth.accessKeyId !== this.accessKeyId ||
+			auth.region !== this.region ||
+			auth.date !== (request.headers.get('x-amz-date') ?? '').slice(0, 8) ||
+			!['host', 'x-amz-content-sha256', 'x-amz-date'].every((h) => auth.signedHeaders.includes(h)) ||
+			auth.signature !==
+				(await signatureOf(
+					{
+						method: request.method,
+						url: request.url,
+						headers: request.headers,
+						secretAccessKey: this.secretAccessKey,
+						region: this.region,
+					},
+					auth.signedHeaders
+				))
+		) {
+			return new Response('<Error><Code>SignatureDoesNotMatch</Code></Error>', { status: 403 })
 		}
 		const body = new Uint8Array(await request.arrayBuffer())
 		if (request.headers.get('x-amz-content-sha256') !== (await sha256Hex(body))) {
@@ -92,16 +131,18 @@ export class S3Mock {
 		}
 		switch (op) {
 			case 'create-upload': {
-				const uploadId = `upload-${this.#next++}`
+				const uploadId = this.#uploadId()
 				this.uploads.set(uploadId, { key: key!, parts: new Map() })
-				return xml(`<InitiateMultipartUploadResult><UploadId>${uploadId}</UploadId></InitiateMultipartUploadResult>`)
+				return xml(
+					`<InitiateMultipartUploadResult><UploadId>${escape(uploadId)}</UploadId></InitiateMultipartUploadResult>`
+				)
 			}
 			case 'upload-part': {
 				const upload = this.uploads.get(q.get('uploadId') ?? '')
 				if (upload === undefined || upload.key !== key) {
 					return new Response('<Error><Code>NoSuchUpload</Code></Error>', { status: 404 })
 				}
-				const etag = `"etag-${this.#next++}"`
+				const etag = `"etag&<${this.#next++}>"`
 				this.received.push(body)
 				upload.parts.set(Number(q.get('partNumber')), { body, etag })
 				return new Response(null, { headers: { etag } })
@@ -115,7 +156,7 @@ export class S3Mock {
 				const listed = [
 					...new TextDecoder().decode(body).matchAll(/<PartNumber>(\d+)<\/PartNumber><ETag>([^<]*)<\/ETag>/g),
 				]
-				const parts = listed.map(([, n, etag]) => ({ n: Number(n), etag: (etag ?? '').replace(/&quot;/g, '"') }))
+				const parts = listed.map(([, n, etag]) => ({ n: Number(n), etag: unescape(etag ?? '') }))
 				const chosen = parts.map((p) => upload.parts.get(p.n))
 				if (
 					parts.length === 0 ||
@@ -123,6 +164,9 @@ export class S3Mock {
 					chosen.slice(0, -1).some((p) => (p?.body.byteLength ?? 0) < this.minPartBytes)
 				) {
 					return new Response('<Error><Code>InvalidPart</Code></Error>', { status: 400 })
+				}
+				if (this.completeError) {
+					return xml('<Error><Code>InternalError</Code><Message>completion failed</Message></Error>')
 				}
 				const total = chosen.reduce((n, p) => n + (p?.body.byteLength ?? 0), 0)
 				const joined = new Uint8Array(total)
@@ -176,13 +220,25 @@ export class S3Mock {
 			}
 			case 'list-uploads': {
 				const prefix = q.get('prefix') ?? ''
+				const marker = [q.get('key-marker') ?? '', q.get('upload-id-marker') ?? ''] as const
+				const all = [...this.uploads]
+					.filter(
+						([id, u]) => u.key.startsWith(prefix) && (u.key > marker[0] || (u.key === marker[0] && id > marker[1]))
+					)
+					.sort(([a, u], [b, v]) => (u.key < v.key ? -1 : u.key > v.key ? 1 : a < b ? -1 : 1))
+				const page = all.slice(0, this.maxListKeys)
+				const truncated = all.length > page.length
+				const last = page.at(-1)
 				return xml(
 					'<ListMultipartUploadsResult>' +
-						[...this.uploads]
-							.filter(([, u]) => u.key.startsWith(prefix))
-							.map(([id, u]) => `<Upload><Key>${escape(u.key)}</Key><UploadId>${id}</UploadId></Upload>`)
+						page
+							.map(([id, u]) => `<Upload><Key>${escape(u.key)}</Key><UploadId>${escape(id)}</UploadId></Upload>`)
 							.join('') +
-						'<IsTruncated>false</IsTruncated></ListMultipartUploadsResult>'
+						`<IsTruncated>${truncated}</IsTruncated>` +
+						(truncated && last !== undefined
+							? `<NextKeyMarker>${escape(last[1].key)}</NextKeyMarker><NextUploadIdMarker>${escape(last[0])}</NextUploadIdMarker>`
+							: '') +
+						'</ListMultipartUploadsResult>'
 				)
 			}
 		}
@@ -190,7 +246,7 @@ export class S3Mock {
 
 	// Starts a multipart upload directly, as an earlier invocation that died would have left it.
 	strayUpload(key: string, part?: Uint8Array): string {
-		const uploadId = `upload-${this.#next++}`
+		const uploadId = this.#uploadId()
 		const parts = new Map<number, { body: Uint8Array; etag: string }>()
 		if (part !== undefined) {
 			parts.set(1, { body: part, etag: '"stray"' })
