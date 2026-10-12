@@ -1,3 +1,5 @@
+import { type DeliveryDeps, handleDoorbells } from './deliver'
+import { isDeliverMessage } from '../federation/delivery'
 import { processInbox, type InboxDeps } from '../federation/inbox'
 import { type SpoolMessage, spoolMessageOptions } from '../federation/spool'
 import { readConfig } from '../platform/config'
@@ -13,11 +15,22 @@ export const QUEUE_RETRY_DELAY_SECONDS = 60
 // and the original is acked: message.retry() would count against max_retries and drop the request after a long
 // enough maintenance. A fresh message also starts a fresh 14-day retention; spooledAt keeps the original time.
 // message.retry() is kept for real processing errors.
-export async function handleQueue(batch: MessageBatch, env: Env, deps: InboxDeps): Promise<void> {
+// Delivery doorbells (jobs/deliver.ts) share the Queue; however many a batch holds, they start one round.
+export type QueueDeps = InboxDeps & { delivery?: Omit<DeliveryDeps, 'build' | 'store'> }
+
+export async function handleQueue(batch: MessageBatch, env: Env, deps: QueueDeps): Promise<void> {
 	const config = readConfig(env)
 	// An invalid env counts as maintenance, so nothing is replayed through a misconfigured Worker.
 	const maintenance = !config.ok || config.config.MAINTENANCE !== 'off'
+	const doorbells = batch.messages.filter((message) => isDeliverMessage(message.body))
+	if (doorbells.length > 0) {
+		const delivery = deps.delivery ?? { now: () => Date.now(), fetch: (input, init) => fetch(input, init) }
+		await handleDoorbells(doorbells, env, { ...delivery, build: deps.build, store: deps.store })
+	}
 	for (const message of batch.messages) {
+		if (isDeliverMessage(message.body)) {
+			continue
+		}
 		const body = message.body
 		if (!isSpoolMessage(body)) {
 			console.error({ event: 'kopje.queue.unknown', id: message.id })

@@ -1,5 +1,16 @@
 import { createFederation, type Federation, kvCache, type NodeInfo, type RequestContext } from '@fedify/fedify'
-import { Application, CryptographicKey, Endpoints, Group, Image, Organization, Person, Service } from '@fedify/vocab'
+import {
+	Activity,
+	Application,
+	CryptographicKey,
+	Endpoints,
+	Group,
+	Image,
+	Note,
+	Organization,
+	Person,
+	Service,
+} from '@fedify/vocab'
 import { Temporal } from 'temporal-polyfill'
 
 import { DoKvStore } from './kv-store'
@@ -22,7 +33,8 @@ import { bytesToBase64, generateWrappedKey, importPublicKeyPem, type KeyGen } fr
 import { createKeyring, type KeyOwner, requestSigner, type Signer } from '../security/keyring'
 
 // The Fedify Federation of one request: dispatchers for actors, key pairs, WebFinger, NodeInfo and the followers and
-// following collections, over the Store, with ids under the domain fixed at /setup. It never sends: Fedify's queue,
+// following collections, local Notes and the outbox, over the Store, with ids under the domain fixed at /setup. It
+// never sends: Fedify's queue,
 // sendActivity and forwardActivity are not used (test/fedify-usage.test.ts); outbound delivery goes through deliveries.
 
 // The identifier of the instance actor, served at /actor. It cannot collide with a username, which has no ':'.
@@ -192,6 +204,41 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 			.setFirstCursor(async (_ctx, identifier) => ((await collection(kind, identifier, null)) === null ? null : '1'))
 	}
 
+	// VIS-4: local public and unlisted statuses as Notes, from the data of their outbound Create (domain/activities.ts).
+	// Anything else, signed request or not, is not found.
+	federation.setObjectDispatcher(Note, '/ap/o/{uuid}', async (ctx, { uuid }) => {
+		if (!OBJECT_ID.test(uuid)) {
+			return null
+		}
+		const note = await rpc((s) => s.localNote(build, { uri: `${origin}/ap/o/${uuid}` }))
+		return note === null ? null : Note.fromJsonLd(JSON.parse(note), { contextLoader: ctx.contextLoader })
+	})
+
+	// The outbox: Create and Announce of the public and unlisted statuses, newest first.
+	federation
+		.setOutboxDispatcher('/ap/users/{identifier}/outbox', async (ctx, identifier, cursor) => {
+			const before = cursor === FIRST_OUTBOX_CURSOR ? '~' : cursor !== null && /^\d{18}$/.test(cursor) ? cursor : null
+			if (before === null || (await localActor(identifier))?.username !== identifier) {
+				return null
+			}
+			const page = await rpc((s) => s.outbox(build, { username: identifier, before }))
+			if (page === null) {
+				return null
+			}
+			const items = await Promise.all(
+				page.items.map((item) => Activity.fromJsonLd(JSON.parse(item), { contextLoader: ctx.contextLoader }))
+			)
+			return { items, nextCursor: page.next }
+		})
+		.setCounter(async (_ctx, identifier) =>
+			(await localActor(identifier))?.username === identifier
+				? ((await rpc((s) => s.outbox(build, { username: identifier, before: null })))?.total ?? null)
+				: null
+		)
+		.setFirstCursor(async (_ctx, identifier) =>
+			(await localActor(identifier))?.username === identifier ? FIRST_OUTBOX_CURSOR : null
+		)
+
 	federation.setNodeInfoDispatcher('/nodeinfo/2.1', async () => {
 		const now = deps.now()
 		const usage = await rpc((s) => s.nodeInfoUsage(build, { now }))
@@ -201,6 +248,10 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 
 	return federation
 }
+
+// The object id of a local status URI: a uuid, or the legacy id it was migrated with.
+const OBJECT_ID = /^[0-9A-Za-z-]{1,64}$/
+const FIRST_OUTBOX_CURSOR = 'first'
 
 function isInstanceActorRequest(url: URL, origin: string): boolean {
 	if (url.pathname === '/.well-known/webfinger') {

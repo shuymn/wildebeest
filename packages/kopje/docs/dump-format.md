@@ -27,21 +27,27 @@ UTF-8 text file that is also a valid SQLite script for a database that already h
 
 ```json
 {
-  "format": 1,
-  "createdAt": "2026-10-12T00:00:00.000Z",
-  "source": { "build": "<workers version id>", "version": "<package version>" },
-  "migrations": [{ "name": "0000_initial", "checksum": "<sha256 hex of the migration file>" }],
-  "tables": [
-    {
-      "name": "statuses",
-      "columns": ["id", "uri", "..."],
-      "order": { "by": "rowid" },
-      "key": ["id"],
-      "deferred": ["reblog_of_id", "in_reply_to_id"]
-    },
-    { "name": "kopje_state", "columns": ["name", "value"], "order": { "by": "key", "columns": ["name"] },
-      "key": ["name"], "deferred": [], "only": { "column": "name", "values": ["last_local_id"] } }
-  ]
+	"format": 1,
+	"createdAt": "2026-10-12T00:00:00.000Z",
+	"source": { "build": "<workers version id>", "version": "<package version>" },
+	"migrations": [{ "name": "0000_initial", "checksum": "<sha256 hex of the migration file>" }],
+	"tables": [
+		{
+			"name": "statuses",
+			"columns": ["id", "uri", "..."],
+			"order": { "by": "rowid" },
+			"key": ["id"],
+			"deferred": ["reblog_of_id", "in_reply_to_id"]
+		},
+		{
+			"name": "kopje_state",
+			"columns": ["name", "value"],
+			"order": { "by": "key", "columns": ["name"] },
+			"key": ["name"],
+			"deferred": [],
+			"only": { "column": "name", "values": ["last_local_id"] }
+		}
+	]
 }
 ```
 
@@ -50,11 +56,11 @@ UTF-8 text file that is also a valid SQLite script for a database that already h
   from the empty target with `GET /admin/catalog` (or `kopje-admin catalog`) and copy `migrations` and `tables`
   from there.
 - The catalog is read from the live schema:
-  - All tables are included except `kopje_migrations`, `_cf_*`, and `sqlite_*` other than `sqlite_sequence`.
-  - Columns are in declaration order.
-  - `key` is the primary key.
-  - `order` is `rowid` for rowid tables, and `key` (with the primary key columns) for WITHOUT ROWID tables and
-    `sqlite_sequence` (by `name`).
+    - All tables are included except `kopje_migrations`, `_cf_*`, and `sqlite_*` other than `sqlite_sequence`.
+    - Columns are in declaration order.
+    - `key` is the primary key.
+    - `order` is `rowid` for rowid tables, and `key` (with the primary key columns) for WITHOUT ROWID tables and
+      `sqlite_sequence` (by `name`).
 - Table order puts parents before children; names break ties. `sqlite_sequence` is always last.
 - `deferred` lists the foreign key columns that point to the same table, or to a later table in a cycle.
 
@@ -83,14 +89,14 @@ UPDATE "<table>" SET "<d1>"=<lit>,"<d2>"=<lit> WHERE "<k1>"=<lit> AND "<k2>"=<li
 Each stored value has exactly one canonical literal. The encoding is one-to-one with the stored storage class and
 bytes, so the table checksums (below) cover the exact data:
 
-| Value | Literal |
-|---|---|
-| NULL | `NULL` |
-| INTEGER | `-?[0-9]+`, exact 64-bit |
-| REAL | ECMAScript `Number#toString` of the double (shortest round-trip), with `.0` appended when it has neither `.` nor `e`: `1.0`, `0.1`, `1.2345678901234567`, `1e+300`, `5e-324`. Special values: `-0.0`, `9e999` (+Infinity), `-9e999` (-Infinity). A REAL is written as REAL in any column, including INTEGER-affinity ones |
-| TEXT that is valid UTF-8 and has no NUL | `'...'` with `'` doubled. IDs are TEXT, e.g. `'110000000000000001'` |
-| any other TEXT | `CAST(X'<HEX of the exact stored bytes>' AS TEXT)` |
-| BLOB | `X'<HEX>'` (uppercase from the Store; either case is accepted) |
+| Value                                   | Literal                                                                                                                                                                                                                                                                                                                   |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NULL                                    | `NULL`                                                                                                                                                                                                                                                                                                                    |
+| INTEGER                                 | `-?[0-9]+`, exact 64-bit                                                                                                                                                                                                                                                                                                  |
+| REAL                                    | ECMAScript `Number#toString` of the double (shortest round-trip), with `.0` appended when it has neither `.` nor `e`: `1.0`, `0.1`, `1.2345678901234567`, `1e+300`, `5e-324`. Special values: `-0.0`, `9e999` (+Infinity), `-9e999` (-Infinity). A REAL is written as REAL in any column, including INTEGER-affinity ones |
+| TEXT that is valid UTF-8 and has no NUL | `'...'` with `'` doubled. IDs are TEXT, e.g. `'110000000000000001'`                                                                                                                                                                                                                                                       |
+| any other TEXT                          | `CAST(X'<HEX of the exact stored bytes>' AS TEXT)`                                                                                                                                                                                                                                                                        |
+| BLOB                                    | `X'<HEX>'` (uppercase from the Store; either case is accepted)                                                                                                                                                                                                                                                            |
 
 The literals are not SQLite's `quote()` output. `quote()` truncates TEXT at NUL, spells REAL differently across
 SQLite versions, and expands BLOBs inside SQLite past its 2 MB value limit. The Store reads each value's exact bytes
@@ -98,6 +104,7 @@ SQLite versions, and expands BLOBs inside SQLite past its 2 MB value limit. The 
 
 The importer validates each statement against its template, then binds every literal as a parameter instead of
 executing the text, so a row of any size stays under the platform's 100 KB statement limit:
+
 - INTEGER binds as `CAST(? AS INTEGER)` from its decimal text, which keeps it exact;
 - REAL binds as a number;
 - TEXT and BLOB bind as their bytes, with `CAST(? AS TEXT)` for the CAST form.
@@ -105,9 +112,9 @@ executing the text, so a row of any size stays under the platform's 100 KB state
 ### Body order
 
 1. Rows, table by table in header order. Within a table, rows follow the table's `order`:
-   - `rowid`: ascending rowid. For an INTEGER PRIMARY KEY table that is the key. Otherwise it is insertion order,
-     so the file order becomes the rowid order of the target.
-   - `key`: ascending by the key columns (BINARY collation, row-value comparison).
+    - `rowid`: ascending rowid. For an INTEGER PRIMARY KEY table that is the key. Otherwise it is insertion order,
+      so the file order becomes the rowid order of the target.
+    - `key`: ascending by the key columns (BINARY collation, row-value comparison).
 2. Links, for each table with deferred columns in header order, for every row where a deferred column is not NULL.
    They are ordered like the rows.
 
@@ -118,11 +125,11 @@ counter for that name. They come last, after the AUTOINCREMENT inserts that crea
 
 These are excluded because they must not be restored blindly:
 
-| Excluded | Why |
-|---|---|
-| `kopje_migrations` | The header carries it. The target's own migration runner recreates it |
-| `kopje_state` except `last_local_id` | `hold`, `upgrade` and `upgrade_bookmark` (a bookmark belongs to the source object), `maintenance`, `dump` and `import` describe one object at one time |
-| `_cf_*`, `sqlite_*` (except `sqlite_sequence`) | Platform and SQLite internals |
+| Excluded                                       | Why                                                                                                                                                    |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `kopje_migrations`                             | The header carries it. The target's own migration runner recreates it                                                                                  |
+| `kopje_state` except `last_local_id`           | `hold`, `upgrade` and `upgrade_bookmark` (a bookmark belongs to the source object), `maintenance`, `dump` and `import` describe one object at one time |
+| `_cf_*`, `sqlite_*` (except `sqlite_sequence`) | Platform and SQLite internals                                                                                                                          |
 
 The importer refuses a `kopje_state` row whose name is not allowlisted.
 
@@ -130,8 +137,8 @@ The importer refuses a `kopje_state` row whose name is not allowlisted.
 
 ```json
 {
-  "tables": [{ "name": "accounts", "rows": 2, "checksum": "<sha256 hex>" }],
-  "body": { "statements": 18, "bytes": 4252, "sha256": "<sha256 hex of the body bytes>" }
+	"tables": [{ "name": "accounts", "rows": 2, "checksum": "<sha256 hex>" }],
+	"body": { "statements": 18, "bytes": 4252, "sha256": "<sha256 hex of the body bytes>" }
 }
 ```
 
@@ -158,14 +165,14 @@ dump starts, so repeating the finish with the same cursor returns the same trail
 
 All of these are `POST` under `/admin/import` with JSON, except `chunk` and `progress`:
 
-| Step | Request | Effect |
-|---|---|---|
-| begin | `{ "header": {...} }` | Checks migrations, catalog and emptiness, then records an import. An Access admin who sends the same header again, while that import is still running, resumes it in the phase it reached (`receiving`, `finished` or `failed` with its report). After verification, `GET /admin/import/progress?id=<id>` answers from the receipt (`verified`, with its report); begin does not, since the Store is no longer empty. A begin with `IMPORT_TOKEN` also returns `session`, the credential that continues this import |
-| chunk | `?id=<id>&seq=<n>`, raw body of whole statements (≤ 16 MiB) | Validates every statement against the templates. Applies the chunk and the progress record in one `transactionSync` |
-| finish | `{ "id", "trailer" }` | Checks the trailer's tables, statement count, byte count and body SHA-256 against what was received |
-| verify | `{ "id" }`, repeated until `done` | Recomputes row counts and checksums in the Store, then runs `PRAGMA foreign_key_check`. On success the import record gives way to a receipt and the Store serves again |
-| progress | `GET ?id=<id>` | The running import, or the receipt of the last verified one (`state: "verified"`, with its report). It includes `headerSha256` and `trailerSha256`, the digests of the header and trailer JSON as received, so a client can check that its file is the dump the Store has |
-| reset | `{ "confirm": true, "id": "<id>" }`, repeated until `done` | Takes the Store back to before that import (see "Reset" below). Only the authority of that import may reset it. A retried request for an import already reset answers `done` again |
+| Step     | Request                                                     | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| -------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| begin    | `{ "header": {...} }`                                       | Checks migrations, catalog and emptiness, then records an import. An Access admin who sends the same header again, while that import is still running, resumes it in the phase it reached (`receiving`, `finished` or `failed` with its report). After verification, `GET /admin/import/progress?id=<id>` answers from the receipt (`verified`, with its report); begin does not, since the Store is no longer empty. A begin with `IMPORT_TOKEN` also returns `session`, the credential that continues this import |
+| chunk    | `?id=<id>&seq=<n>`, raw body of whole statements (≤ 16 MiB) | Validates every statement against the templates. Applies the chunk and the progress record in one `transactionSync`                                                                                                                                                                                                                                                                                                                                                                                                 |
+| finish   | `{ "id", "trailer" }`                                       | Checks the trailer's tables, statement count, byte count and body SHA-256 against what was received                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| verify   | `{ "id" }`, repeated until `done`                           | Recomputes row counts and checksums in the Store, then runs `PRAGMA foreign_key_check`. On success the import record gives way to a receipt and the Store serves again                                                                                                                                                                                                                                                                                                                                              |
+| progress | `GET ?id=<id>`                                              | The running import, or the receipt of the last verified one (`state: "verified"`, with its report). It includes `headerSha256` and `trailerSha256`, the digests of the header and trailer JSON as received, so a client can check that its file is the dump the Store has                                                                                                                                                                                                                                           |
+| reset    | `{ "confirm": true, "id": "<id>" }`, repeated until `done`  | Takes the Store back to before that import (see "Reset" below). Only the authority of that import may reset it. A retried request for an import already reset answers `done` again                                                                                                                                                                                                                                                                                                                                  |
 
 - Chunk numbers start at 1. The progress record holds `lastSeq` and a chain digest:
   `digest_n = hex(sha256(digest_{n-1} || chunk_n))`, with `digest_0` = the empty string.
@@ -182,11 +189,11 @@ All of these are `POST` under `/admin/import` with JSON, except `chunk` and `pro
 
 The Store checks each import step's authority inside the transaction that writes:
 
-| Authority | How | What it may do |
-|---|---|---|
-| Access admin | `Cf-Access-Jwt-Assertion` of the `/admin` application | Begin an import and continue only imports begun this way. The Store checks the verified identity and Access binding (team domain and `/admin` AUD) against its own configuration in the writing transaction, so a request is refused once the admin, the team or the application changed after it was authenticated |
-| `IMPORT_TOKEN` | header `Kopje-Import-Token` (at least 32 characters) | Only while the Store is in bootstrap, meaning admin access is not usable. It may read health, version, catalog and config, set the config, begin an import while the Store also holds no data, and abandon a stale token import (below) |
-| import session | header `Kopje-Import-Session`, the `session` that begin returned | Only the import it was issued for: chunk, finish, verify, progress and reset. The Store keeps only its SHA-256 |
+| Authority      | How                                                              | What it may do                                                                                                                                                                                                                                                                                                      |
+| -------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Access admin   | `Cf-Access-Jwt-Assertion` of the `/admin` application            | Begin an import and continue only imports begun this way. The Store checks the verified identity and Access binding (team domain and `/admin` AUD) against its own configuration in the writing transaction, so a request is refused once the admin, the team or the application changed after it was authenticated |
+| `IMPORT_TOKEN` | header `Kopje-Import-Token` (at least 32 characters)             | Only while the Store is in bootstrap, meaning admin access is not usable. It may read health, version, catalog and config, set the config, begin an import while the Store also holds no data, and abandon a stale token import (below)                                                                             |
+| import session | header `Kopje-Import-Session`, the `session` that begin returned | Only the import it was issued for: chunk, finish, verify, progress and reset. The Store keeps only its SHA-256                                                                                                                                                                                                      |
 
 A request authorized for one import or mode cannot act on another. Once the import has begun, `IMPORT_TOKEN` opens
 nothing except the stale-import recovery below. The CLI keeps the session in `<file>.import.json` (mode 0600).
@@ -194,15 +201,16 @@ nothing except the stale-import recovery below. The CLI keeps the session in `<f
 ### Reset
 
 A reset never uses `deleteAll()`:
+
 1. The import record turns into `resetting`; nothing else continues the import.
 2. Bounded transactions of at most 2,000 rows each first set the references inside a table to NULL, then delete the
    rows, children before parents. The references are `statuses.reblog_of_id`, `statuses.in_reply_to_id`, and any
    column the catalog defers. No delete then cascades to or updates another row. Each call runs a few transactions,
    and the caller repeats the call until `done`.
 3. The last transaction:
-   - writes the configuration back exactly from the record;
-   - removes the record;
-   - leaves a reset receipt, so a retried request for the same import is answered `done`.
+    - writes the configuration back exactly from the record;
+    - removes the record;
+    - leaves a reset receipt, so a retried request for the same import is answered `done`.
 
 The configuration is never touched in between, and the schema stays. A request for another import id is refused. The
 CLI names the import from `<file>.import.json`, or else from the running import.
@@ -224,6 +232,7 @@ If `<file>.import.json` is lost, nothing can continue the token import. Abandon 
 read `GET /admin/import/progress` for a token import while admin access is not usable.
 
 The reset runs only when all of these hold:
+
 - the import is a token import and is not verified;
 - its session has made no successful step (chunk, finish or verify) for 15 minutes;
 - admin access is still not usable.
@@ -237,12 +246,14 @@ This gives the token no new power: on an empty Store without admin access it cou
 ### Configuration is not data
 
 Everything the config operation sets is the Store's configuration, not data:
+
 - `domain` (actor ids derive from it);
 - `access_aud`, the `/oauth/authorize` application;
 - `access_team_domain`, the Access team shared with `/oauth/authorize`;
 - `access_admin_aud`, `admin_email` and `access_service_token_client_id` of the `/admin` application.
 
 An import never touches configuration:
+
 - These rows do not make the Store non-empty, so they can be set before the import.
 - Begin moves them into the import record, and the Access rows among them keep authorizing the admin during the
   import.

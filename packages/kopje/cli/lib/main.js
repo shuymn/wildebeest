@@ -9,6 +9,9 @@ Commands
   version                       Worker build and Store schema version
   capacity                      database size and rows per table
   spool                         spooled inbox parts waiting for replay
+  deliveries [--before <id>]    delivery backlog and the deliveries that gave up, newest first
+  deliveries retry <id>...|--all
+                                put given-up deliveries back in their lanes with fresh attempts
   maintenance on|off            enter or leave the Store's readonly maintenance
   upgrade retry                 re-run a failed schema upgrade for the current build
   dump <file>                   dump the Store to <file> (resumable)
@@ -61,7 +64,7 @@ function parseArgs(argv) {
 	const positional = []
 	/** @type {Record<string, string | true>} */
 	const flags = {}
-	const valued = new Set(['chunk-mib', 'lease-seconds', 'at', 'limit'])
+	const valued = new Set(['chunk-mib', 'lease-seconds', 'at', 'limit', 'before'])
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i] ?? ''
 		if (arg.startsWith('--')) {
@@ -205,6 +208,44 @@ export async function run({
 			case 'spool':
 				print(await client.get('/admin/spool'))
 				return 0
+			case 'deliveries': {
+				if (rest[0] === 'retry') {
+					const ids = rest.slice(1)
+					const all = flags.all === true
+					if (all === ids.length > 0 || !ids.every((id) => /^\d{1,19}$/.test(id))) {
+						throw new UsageError('deliveries retry <id>... | deliveries retry --all')
+					}
+					if (!all) {
+						print(await client.post('/admin/deliveries/retry', { ids }))
+						return 0
+					}
+					// Every page of eligible rows, following the cursor.
+					const total = { retried: 0, skipped: 0, refused: 0 }
+					/** @type {string | null} */
+					let after = null
+					do {
+						const page = await client.post(
+							'/admin/deliveries/retry',
+							after === null ? { all: true } : { all: true, after }
+						)
+						total.retried += page.retried
+						total.refused += page.refused
+						total.skipped = Math.max(total.skipped, page.skipped)
+						after = page.more ? page.next : null
+					} while (after !== null)
+					print(total)
+					return 0
+				}
+				if (rest.length > 0) {
+					throw new UsageError('deliveries [--before <id>] | deliveries retry <id>...|--all')
+				}
+				const before = flags.before
+				if (before !== undefined && (typeof before !== 'string' || !/^\d{1,19}$/.test(before))) {
+					throw new UsageError('--before takes a delivery id')
+				}
+				print(await client.get(`/admin/deliveries${before === undefined ? '' : `?before=${before}`}`))
+				return 0
+			}
 			case 'catalog':
 				print(await client.get('/admin/catalog'))
 				return 0

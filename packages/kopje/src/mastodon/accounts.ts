@@ -168,7 +168,8 @@ export const follow: ApiHandler = async (c, deps) => {
 export const unfollow: ApiHandler = async (c, deps) => {
 	const target = c.req.param('id') ?? ''
 	const credential = userCredential(c, deps)
-	return relationshipResponse(c, authorized(await storeCall(c, deps, (s, b) => s.unfollow(b, { credential, target }))))
+	const input = { credential, target, now: deps.now() }
+	return relationshipResponse(c, authorized(await storeCall(c, deps, (s, b) => s.unfollow(b, input))))
 }
 
 function followList(direction: 'followers' | 'following'): ApiHandler {

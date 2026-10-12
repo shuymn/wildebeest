@@ -1,6 +1,8 @@
 import { createExecutionContext } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 
+import { vi } from 'vitest'
+
 import { type AccessTeam, accessTeam } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
@@ -32,7 +34,9 @@ export function setTeamAccess(store: StoreStub, team: AccessTeam, overrides: Rec
 // The app with the team's JWKS endpoint served from memory and the clock of the team's tokens.
 export function adminHarness(store: StoreStub, team: AccessTeam, overrides: Record<string, unknown> = {}) {
 	const testEnv = { ...env, ...overrides } as unknown as Env
-	const app = createApp({ build: () => BUILD, now: () => NOW, store: () => store, fetch: team.fetch })
+	// Doorbells are recorded, never sent: the test pool's Queue would run the real consumer.
+	const doorbell = vi.fn(() => Promise.resolve())
+	const app = createApp({ build: () => BUILD, now: () => NOW, store: () => store, fetch: team.fetch, doorbell })
 	const request = (path: string, init?: RequestInit) =>
 		app.fetch(new Request(`https://admin.kopje.test${path}`, init), testEnv, createExecutionContext())
 	const as = async (claims: Claims, path: string, init: RequestInit = {}) => {
@@ -42,5 +46,5 @@ export function adminHarness(store: StoreStub, team: AccessTeam, overrides: Reco
 	}
 	const post = (claims: Claims, path: string, body: unknown = {}) =>
 		as(claims, path, { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } })
-	return { app, request, as, post, env: testEnv }
+	return { app, request, as, post, env: testEnv, doorbell }
 }
