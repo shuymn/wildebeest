@@ -4,6 +4,7 @@ import {
 	type Federation,
 	kvCache,
 	type NodeInfo,
+	type RemoteDocument,
 	type RequestContext,
 } from '@fedify/fedify'
 import {
@@ -147,7 +148,7 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 				prefix: [...SIGNED_DOCUMENT_PREFIX, keyId.href],
 			})
 		)
-	const contextLoader = kvCache({ loader: createContextLoader(loaderDeps), kv })
+	const contextLoader = boundedContexts(loaderDeps, kv)
 
 	return {
 		origin,
@@ -186,19 +187,31 @@ export function createRemoteLoaders(
 			(recipient === null ? null : await parts.userSigner(recipient)) ?? parts.instanceSigner())())
 	const fetched = new Map<string, ReturnType<DocumentLoader>>()
 	const fresh = requireObjectRoot(async (url, options) => {
-		const remote = await createSafeLoader(loaderDeps, (await signer()).sign)(url, options)
-		if (!withinJsonBounds(remote.document)) {
-			throw new RefusedFetchError(new URL(remote.documentUrl), 'Document exceeds the JSON bounds')
-		}
-		return remote
+		return withinBounds(await createSafeLoader(loaderDeps, (await signer()).sign)(url, options))
 	})
 	return {
 		// Keyed without the fragment: HTTP never sends it, so `actor#main-key` and `actor` are one fetch. Key ids are
 		// still compared whole by Fedify and by receiveInbound.
 		document: (url, options) => memo(fetched, withoutFragment(url), () => fresh(url, options)),
-		context: kvCache({ loader: createContextLoader(loaderDeps), kv: parts.kv }),
+		context: boundedContexts(loaderDeps, parts.kv),
 		webfinger: createWebFingerLoader(loaderDeps),
 	}
+}
+
+// RES-2: a document or JSON-LD context past the JSON bounds is refused before anything reads it.
+function withinBounds(remote: RemoteDocument): RemoteDocument {
+	if (!withinJsonBounds(remote.document)) {
+		throw new RefusedFetchError(new URL(remote.documentUrl), 'Document exceeds the JSON bounds')
+	}
+	return remote
+}
+
+// JSON-LD contexts, cached in the KvStore. Checked before they are cached and again on every cache hit, since an
+// entry may predate the check.
+function boundedContexts(loaderDeps: LoaderDeps, kv: DoKvStore): DocumentLoader {
+	const loader = createContextLoader(loaderDeps)
+	const cached = kvCache({ loader: async (url, options) => withinBounds(await loader(url, options)), kv })
+	return async (url, options) => withinBounds(await cached(url, options))
 }
 
 export function createKopjeFederation(deps: FederationDeps, state: FederationState): Federation<FederationState> {
