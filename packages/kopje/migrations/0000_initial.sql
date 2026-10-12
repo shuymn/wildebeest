@@ -228,6 +228,8 @@ CREATE TABLE follows (
 
 CREATE UNIQUE INDEX follows_pair ON follows (account_id, target_account_id);
 CREATE INDEX follows_target ON follows (target_account_id, state);
+-- following-only account search reads accepted follows without touching pending ones
+CREATE INDEX follows_accepted ON follows (account_id, target_account_id) WHERE state = 'accepted';
 
 CREATE TABLE favourites (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

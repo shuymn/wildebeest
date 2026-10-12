@@ -4,6 +4,7 @@ import { userReadOperation } from './auth'
 import { statusQueryTerms } from './search-text'
 import { presentStatuses, type Status } from './status-presenter'
 import { normalizeTag } from './status-text'
+import { statusCursor } from './statuses'
 import type { Db } from '../db/sql'
 
 // GET /api/v2/search (design §6, "search"): local data only, matched with instr on search_text (NFKC); no virtual
@@ -15,12 +16,14 @@ import type { Db } from '../db/sql'
 // order is the returned status id, with max_id and min_id applied inside the source, so a query matches at most
 // 5 x LIBRARY_SOURCE_LIMIT candidates and a client paging with max_id reaches every older entry of every source.
 //
-// Hashtags are ranked only over statuses the viewer is allowed to see, inside two windows that private statuses cannot
-// change: the newest HASHTAG_LIBRARY_LIMIT entries of each library source, and the newest HASHTAG_PUBLIC_WINDOW public
-// statuses the instance knows (a partial index holds public originals only). Candidates pass listableSql before tags
-// are taken from them, so a tag used only in posts the viewer may not see is never shown, and hidden statuses cannot
-// push a visible tag out. Trade-off: a tag found only in older public posts outside the viewer's library is not
-// found; blocks, mutes and suspensions can still thin the public window for one viewer, which reveals no content.
+// Hashtag search is recent autocomplete, not a catalogue of every tag. Tags are taken only from statuses the viewer may
+// see, inside two windows: the newest HASHTAG_LIBRARY_LIMIT entries of each library source the viewer writes (own
+// statuses, boosts, favourites, bookmarks), and the newest HASHTAG_PUBLIC_WINDOW public statuses the instance knows (a
+// partial index holds public originals only). Candidates pass listableSql before tags are taken from them, so a tag
+// used only in posts the viewer may not see is never shown. Mentions are not a window source: others write them, and
+// a hidden mention (from an author who blocks the viewer) could push a visible entry out. Limitations: a tag used only
+// outside the windows is not found, even by its exact name; a status the viewer saved that later became hidden (its
+// author blocked them) still takes a slot of the viewer's own windows, which reveals that something changed, not what.
 
 export const LIBRARY_SOURCE_LIMIT = 2500
 export const HASHTAG_LIBRARY_LIMIT = 500
@@ -74,8 +77,13 @@ class Params {
 }
 
 // The viewer's library as one candidate list of status ids, newest first per source, each source read through an
-// index ordered by the id it returns. `cursor` adds max_id and min_id conditions on that id.
-function librarySources(limit: string, cursor: (column: string) => string): string {
+// index ordered by the id it returns. `cursor` adds max_id and min_id conditions on that id. Mentions are a source of
+// status search only (`mentions`): others write them, so they are left out of the hashtag window (see above).
+function librarySources(limit: string, cursor: (column: string) => string, mentions = true): string {
+	const mentioned = mentions
+		? `UNION SELECT id FROM (SELECT status_id AS id FROM status_mentions WHERE account_id = ?1 ${cursor('status_id')}
+				ORDER BY status_id DESC LIMIT ${limit})`
+		: ''
 	return `SELECT id FROM (SELECT id FROM statuses WHERE account_id = ?1 AND reblog_of_id IS NULL ${cursor('id')}
 				ORDER BY id DESC LIMIT ${limit})
 			UNION SELECT id FROM (SELECT reblog_of_id AS id FROM statuses
@@ -85,8 +93,7 @@ function librarySources(limit: string, cursor: (column: string) => string): stri
 				ORDER BY status_id DESC LIMIT ${limit})
 			UNION SELECT id FROM (SELECT status_id AS id FROM bookmarks WHERE account_id = ?1 ${cursor('status_id')}
 				ORDER BY status_id DESC LIMIT ${limit})
-			UNION SELECT id FROM (SELECT status_id AS id FROM status_mentions WHERE account_id = ?1 ${cursor('status_id')}
-				ORDER BY status_id DESC LIMIT ${limit})`
+			${mentioned}`
 }
 
 function searchStatuses(db: Db, input: SearchRequest, viewerId: string): Status[] {
@@ -96,8 +103,11 @@ function searchStatuses(db: Db, input: SearchRequest, viewerId: string): Status[
 	}
 	const p = new Params(viewerId)
 	const limit = p.add(LIBRARY_SOURCE_LIMIT)
-	const maxId = input.maxId === undefined ? null : p.add(input.maxId)
-	const minId = input.minId === undefined ? null : p.add(input.minId)
+	// Cursors compare as numbers: statusCursor pads a short one and caps an over-long one (ids are 18-digit TEXT).
+	const maxCursor = statusCursor(input.maxId)
+	const minCursor = statusCursor(input.minId)
+	const maxId = maxCursor === null ? null : p.add(maxCursor)
+	const minId = minCursor === null ? null : p.add(minCursor)
 	const cursor = (column: string) =>
 		`${maxId === null ? '' : `AND ${column} < ${maxId}`} ${minId === null ? '' : `AND ${column} > ${minId}`}`
 	let candidates: string
@@ -146,7 +156,7 @@ function searchHashtags(db: Db, input: SearchRequest, viewerId: string): Hashtag
 	const rows = db.all<{ name: string }>(
 		// The Store's SQLite allows five terms per compound SELECT, so the windows are two CTEs. CROSS JOIN keeps the
 		// windows on the outside: tags are looked up per visible status, never scanned by name.
-		`WITH library(id) AS (${librarySources('?4', () => '')}),
+		`WITH library(id) AS (${librarySources('?4', () => '', false)}),
 		public(id) AS (SELECT id FROM statuses WHERE visibility = 'public' AND reblog_of_id IS NULL ORDER BY id DESC LIMIT ?5),
 		candidates(id) AS (SELECT id FROM library UNION SELECT id FROM public),
 		visible(id) AS (SELECT s.id FROM candidates c JOIN statuses s ON s.id = c.id WHERE ${listableSql('s', '?1')})

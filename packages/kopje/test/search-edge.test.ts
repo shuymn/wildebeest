@@ -94,7 +94,12 @@ describe('library cursors reach past each source window', () => {
 async function rowsRead(
 	h: Awaited<ReturnType<typeof fixture>>['h'],
 	token: string,
-	input: Omit<SearchRequest, 'present' | 'localDomain' | 'limit' | 'offset' | 'following'>
+	{
+		followingOnly = false,
+		...input
+	}: Omit<SearchRequest, 'present' | 'localDomain' | 'limit' | 'offset' | 'following'> & {
+		followingOnly?: boolean
+	}
 ): Promise<number> {
 	const tokenHash = await sha256Hex(token)
 	return runInDurableObject(h.store, (_instance, state) => {
@@ -119,7 +124,7 @@ async function rowsRead(
 			credential: { tokenHash, scope: 'read:search', now: NOW },
 			limit: 20,
 			offset: 0,
-			following: false,
+			following: followingOnly,
 			localDomain: 'kopje.test',
 			present: { origin: 'https://kopje.test' },
 			...input,
@@ -208,4 +213,117 @@ describe('hashtag results do not depend on hidden statuses (VIS-1)', () => {
 		await post(h, bob, { status: '#azz visible' })
 		expect((await search('a', '&type=hashtags')).hashtags.map((t) => t.name)).toEqual(['azz'])
 	})
+})
+
+describe('verification review', () => {
+	// `count` remote accounts named `username` (or u<i>) on their own domains, ids from `base` up.
+	async function remoteAccounts(
+		h: Awaited<ReturnType<typeof fixture>>['h'],
+		count: number,
+		base: bigint,
+		username?: string
+	) {
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ? - 1)
+			INSERT INTO accounts (id, uri, username, domain, search_text)
+			SELECT CAST(? + i AS TEXT), 'https://d' || ? || '-' || i || '.example/users/x', IFNULL(?, 'u' || i),
+				'd' || ? || '-' || i || '.example', IFNULL(?, 'u' || i) || '@d' || ? || '-' || i || '.example'
+			FROM n`,
+			count,
+			String(base),
+			String(base),
+			username ?? null,
+			String(base),
+			username ?? null,
+			String(base)
+		)
+	}
+
+	it('finds an exact known address outside both discovery windows', async () => {
+		const { h, search } = await fixture()
+		await remoteAccounts(h, 1100, 500000000000000000n, 'alice')
+		const target = await sql<{ id: string }>(
+			h.store,
+			`INSERT INTO accounts (id, uri, username, domain, search_text)
+			VALUES ('600000000000000000', 'https://target.example/users/alice', 'alice', 'target.example', 'alice@target.example')
+			RETURNING id`
+		)
+		await remoteAccounts(h, 5100, 700000000000000000n)
+		const found = await search('alice@target.example', '&type=accounts')
+		expect(found.accounts.map((a) => a.id)).toEqual([target[0]?.id])
+	}, 60_000)
+
+	it('finds an exact followed address beyond the following window', async () => {
+		const { h, search } = await fixture()
+		const { alice } = h.users
+		await remoteAccounts(h, 5100, 500000000000000000n)
+		await sql(
+			h.store,
+			`INSERT INTO accounts (id, uri, username, domain, search_text)
+			VALUES ('900000000000000000', 'https://far.example/users/zed', 'zed', 'far.example', 'zed@far.example')`
+		)
+		await sql(
+			h.store,
+			`INSERT INTO follows (account_id, target_account_id, state) SELECT ?, id, 'accepted' FROM accounts WHERE domain IS NOT NULL`,
+			alice.id
+		)
+		const found = await search('zed@far.example', '&type=accounts&following=true')
+		expect(found.accounts.map((a) => a.id)).toEqual(['900000000000000000'])
+	}, 60_000)
+
+	it('reads about as many rows for a matching username prefix four times as common', async () => {
+		const measure = async (size: number) => {
+			const { h } = await fixture()
+			await remoteAccounts(h, size, 500000000000000000n)
+			return rowsRead(h, h.users.alice.token, { query: 'u', types: ['accounts'] })
+		}
+		const small = await measure(6000)
+		const large = await measure(24000)
+		expect(large).toBeLessThan(small * 1.5)
+	}, 60_000)
+
+	it('reads about as many rows for following=true with four times as many pending follows', async () => {
+		const measure = async (size: number) => {
+			const { h } = await fixture()
+			await remoteAccounts(h, size, 500000000000000000n)
+			await sql(
+				h.store,
+				`INSERT INTO follows (account_id, target_account_id, state) SELECT ?, id, 'pending' FROM accounts WHERE domain IS NOT NULL`,
+				h.users.alice.id
+			)
+			return runFollowing(h)
+		}
+		const runFollowing = (h: Awaited<ReturnType<typeof fixture>>['h']) =>
+			rowsRead(h, h.users.alice.token, { query: 'nobody', types: ['accounts'], followingOnly: true })
+		const small = await measure(4000)
+		const large = await measure(16000)
+		expect(large).toBeLessThan(small * 1.5)
+	}, 60_000)
+
+	it('compares search cursors as numbers', async () => {
+		const { h, search } = await fixture()
+		const status = await post(h, h.users.alice, { status: 'cursor probe' })
+		expect((await search('cursor', '&type=statuses&min_id=9')).statuses.map((s) => s.id)).toEqual([status.id])
+		expect((await search('cursor', `&type=statuses&max_id=${'9'.repeat(19)}`)).statuses.map((s) => s.id)).toEqual([
+			status.id,
+		])
+	})
+
+	it('keeps hashtag results the same when hidden mentions crowd the library (VIS-1)', async () => {
+		const { h, search } = await fixture()
+		const { alice, bob, carol } = h.users
+		await post(h, carol, { status: '@alice #needle unlisted', visibility: 'unlisted' })
+		const before = (await search('needle', '&type=hashtags')).hashtags.map((t) => t.name)
+		await sql(h.store, 'INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?)', bob.id, alice.id)
+		for (let i = 0; i < 520; i++) {
+			await seedStatus(h.store, {
+				accountId: bob.id,
+				visibility: 'private',
+				content: '<p>x</p>',
+				mentions: [{ accountId: alice.id }],
+			})
+		}
+		expect((await search('needle', '&type=hashtags')).hashtags.map((t) => t.name)).toEqual(before)
+	}, 60_000)
 })

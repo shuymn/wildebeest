@@ -12,7 +12,8 @@ import { pageQuery } from './pagination'
 import { type Params, parseBoolean } from './params'
 import type { SearchType } from '../domain/search'
 
-// GET /api/v2/search (B4b): accounts, statuses and hashtags from local data (domain/search.ts).
+// GET /api/v2/search (B4b): accounts, statuses and hashtags from local data (domain/search.ts). Hashtags are recent
+// autocomplete over the viewer's library and the newest public statuses, not a catalogue of every tag.
 //
 // resolve=true is accepted and answered from local data only: resolving a remote account or status URL needs the
 // signed fetch of B1b-2 (TODO(B1b-2): resolve acct: and URL queries through the instance actor).

@@ -128,7 +128,7 @@ describe('GET /api/v2/search', () => {
 		const { h, search } = await fixture()
 		const { alice, bob, carol } = h.users
 		await post(h, bob, { status: '#cats #catsofkopje #cat' })
-		await seedStatus(h.store, {
+		const secret = await seedStatus(h.store, {
 			accountId: bob.id,
 			visibility: 'direct',
 			content: '<p>x</p>',
@@ -138,6 +138,8 @@ describe('GET /api/v2/search', () => {
 		const tags = (await search('#cat', '&type=hashtags')).hashtags
 		expect(tags.map((t) => t.name)).toEqual(['cat', 'cats', 'catsofkopje'])
 		expect(tags[0]).toEqual({ name: 'cat', url: 'https://kopje.test/tags/cat', history: [] })
+		// carol may see it; it enters her windows once she saves it (mentions are not a hashtag window source).
+		await sql(h.store, 'INSERT INTO bookmarks (account_id, status_id) VALUES (?, ?)', carol.id, secret)
 		expect((await search('cat', '&type=hashtags', carol.token)).hashtags.map((t) => t.name)).toContain('catsecret')
 		expect((await search('ＣＡＴ', '&type=hashtags&limit=1&offset=1')).hashtags.map((t) => t.name)).toEqual(['cats'])
 		void alice
