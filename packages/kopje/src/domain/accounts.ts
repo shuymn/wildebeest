@@ -394,7 +394,14 @@ export type RelationshipResult =
 	| { status: 'not_found' }
 	| { status: 'forbidden' }
 
-type TargetRow = { id: string; domain: string | null; locked: number; blocked: number }
+type TargetRow = {
+	id: string
+	domain: string | null
+	locked: number
+	blocked: number
+	suspended: number
+	domain_blocked: number
+}
 
 function followTarget(db: Db, viewerId: string, target: string): TargetRow | null {
 	const id = resolveAccountId(db, target)
@@ -405,8 +412,11 @@ function followTarget(db: Db, viewerId: string, target: string): TargetRow | nul
 		db.first<TargetRow>(
 			`SELECT a.id, a.domain, a.locked,
 				EXISTS (SELECT 1 FROM blocks WHERE (account_id = ?1 AND target_account_id = a.id)
-					OR (account_id = a.id AND target_account_id = ?1)) AS blocked
-			FROM accounts a WHERE a.id = ?2`,
+					OR (account_id = a.id AND target_account_id = ?1)) AS blocked,
+				l.suspended_at IS NOT NULL AS suspended,
+				(a.domain IS NOT NULL AND EXISTS (SELECT 1 FROM domain_blocks WHERE account_id = ?1 AND domain = a.domain))
+					AS domain_blocked
+			FROM accounts a LEFT JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?2`,
 			viewerId,
 			id
 		) ?? null
@@ -415,13 +425,14 @@ function followTarget(db: Db, viewerId: string, target: string): TargetRow | nul
 
 // Follows or updates the options of an existing follow. A local unlocked target is followed at once; a locked or
 // remote target gets a pending request (a remote Accept arrives over federation). State only: delivery of the
-// Follow activity and the follow notification come with B2.
+// Follow activity and the follow notification come with B2. As in Mastodon's FollowService, a suspended target is
+// not found, and a block either way or a domain block of the viewer forbids the follow.
 export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, input, { accountId: viewerId }) => {
 	const target = followTarget(db, viewerId, input.target)
-	if (target === null) {
+	if (target === null || target.suspended === 1) {
 		return { status: 'not_found' }
 	}
-	if (target.id === viewerId || target.blocked === 1) {
+	if (target.id === viewerId || target.blocked === 1 || target.domain_blocked === 1) {
 		return { status: 'forbidden' }
 	}
 	const languages = input.languages === undefined ? undefined : JSON.stringify(input.languages)

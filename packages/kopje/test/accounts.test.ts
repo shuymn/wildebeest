@@ -251,6 +251,29 @@ describe('follow and relationships', () => {
 		expect((await follow('999999999999999999')).status).toBe(404)
 	})
 
+	it('refuses following a suspended account', async () => {
+		const h = await aliceSession()
+		const bob = await seedAccount(h.store, { username: 'bob' })
+		await sql(
+			h.store,
+			'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
+			new Date(NOW).toISOString(),
+			bob
+		)
+		const response = await h.request(`/api/v1/accounts/${bob}/follow`, bearer(h.token, { method: 'POST' }))
+		expect(response.status).toBe(404)
+		expect(await sql(h.store, 'SELECT 1 FROM follows')).toEqual([])
+	})
+
+	it("refuses following an account on a domain the viewer blocks, as Mastodon's FollowService does", async () => {
+		const h = await aliceSession()
+		const remote = await seedAccount(h.store, { username: 'dave', domain: 'blocked.test' })
+		await sql(h.store, "INSERT INTO domain_blocks (account_id, domain) VALUES (?, 'blocked.test')", h.aliceId)
+		const response = await h.request(`/api/v1/accounts/${remote}/follow`, bearer(h.token, { method: 'POST' }))
+		expect(response.status).toBe(403)
+		expect(await sql(h.store, 'SELECT 1 FROM follows')).toEqual([])
+	})
+
 	it('answers relationships for several ids, legacy ids included', async () => {
 		const h = await aliceSession()
 		const bob = await seedAccount(h.store, { username: 'bob', legacyId: 'legacy-bob' })
