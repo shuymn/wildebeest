@@ -1,5 +1,5 @@
 import { type Account, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
-import { viewableSql } from './audience'
+import { domainBlockMatchSql, viewableSql, visibleSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { presentStatuses, type Status } from './status-presenter'
 import type { Db } from '../db/sql'
@@ -19,16 +19,20 @@ export type Notification = {
 	status?: Status
 }
 
-// Whether the recipient `r` is shown a notification from `from` about `status` (SQL expressions or parameters).
-function shownSql(r: string, from: string, status: string): string {
+// Whether the recipient `r` is shown a notification of `type` from `from` about `status` (SQL expressions or
+// parameters). A reblog notification names the original; the boost itself (the sender's one boost of it) must be
+// visible to the recipient too, so a followers-only or direct boost is not revealed to an author outside its audience.
+function shownSql(r: string, type: string, from: string, status: string): string {
 	return `(${from} <> ${r}
 		AND NOT EXISTS (SELECT 1 FROM local_accounts ns WHERE ns.account_id = ${from} AND ns.suspended_at IS NOT NULL)
 		AND NOT EXISTS (SELECT 1 FROM blocks nb WHERE nb.account_id = ${r} AND nb.target_account_id = ${from})
 		AND NOT EXISTS (SELECT 1 FROM blocks nbb WHERE nbb.account_id = ${from} AND nbb.target_account_id = ${r})
 		AND NOT EXISTS (SELECT 1 FROM mutes nm WHERE nm.account_id = ${r} AND nm.target_account_id = ${from} AND nm.hide_notifications = 1)
 		AND NOT EXISTS (SELECT 1 FROM domain_blocks nd JOIN accounts na ON na.id = ${from}
-			WHERE nd.account_id = ${r} AND nd.domain = na.domain)
-		AND (${status} IS NULL OR EXISTS (SELECT 1 FROM statuses s WHERE s.id = ${status} AND ${viewableSql('s', r)})))`
+			WHERE nd.account_id = ${r} AND ${domainBlockMatchSql('nd', 'na')})
+		AND (${status} IS NULL OR EXISTS (SELECT 1 FROM statuses s WHERE s.id = ${status} AND ${viewableSql('s', r)}))
+		AND (${type} <> 'reblog' OR EXISTS (SELECT 1 FROM statuses nr
+			WHERE nr.account_id = ${from} AND nr.reblog_of_id = ${status} AND ${visibleSql('nr', r)})))`
 }
 
 export type NotifyInput = {
@@ -53,7 +57,7 @@ export function notify(db: Db, input: NotifyInput): void {
 	db.run(
 		`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at)
 		SELECT ?1, ?2, ?3, ?4, ?5
-		WHERE EXISTS (SELECT 1 FROM local_accounts WHERE account_id = ?1) AND ${shownSql('?1', '?3', '?4')}
+		WHERE EXISTS (SELECT 1 FROM local_accounts WHERE account_id = ?1) AND ${shownSql('?1', '?2', '?3', '?4')}
 		ON CONFLICT DO NOTHING`,
 		input.recipientId,
 		input.type,
@@ -120,7 +124,7 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 				AND (?4 IS NULL OR n.type IN (SELECT value FROM json_each(?4)))
 				AND n.type NOT IN (SELECT value FROM json_each(?5))
 				AND (?6 IS NULL OR n.from_account_id = ?6)
-				AND ${shownSql('?1', 'n.from_account_id', 'n.status_id')}
+				AND ${shownSql('?1', 'n.type', 'n.from_account_id', 'n.status_id')}
 			ORDER BY n.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?7`,
 			viewerId,
 			page.maxId ?? null,
@@ -150,7 +154,7 @@ export const getNotification = userReadOperation<{ id: string; present: Present 
 		}
 		const rows = db.all<NotificationRow>(
 			`SELECT ${NOTIFICATION_COLUMNS} FROM notifications n
-			WHERE n.account_id = ?1 AND n.id = CAST(?2 AS INTEGER) AND ${shownSql('?1', 'n.from_account_id', 'n.status_id')}`,
+			WHERE n.account_id = ?1 AND n.id = CAST(?2 AS INTEGER) AND ${shownSql('?1', 'n.type', 'n.from_account_id', 'n.status_id')}`,
 			viewerId,
 			id
 		)

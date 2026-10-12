@@ -9,7 +9,8 @@ status, updates this file. IDs are never reused: an invariant that no longer app
 ## Status of an invariant
 
 Paths are relative to `packages/kopje`. **Enforced (main):** the cited source and test exist on `main`. **Implemented on
-branch `kopje/<name>`:** on a branch not yet in a PR. **Planned (stage):** not implemented; required before the stage ships.
+branch `kopje/<name>`:** on a branch not yet in a PR (`kopje/inbound-statuses` is B1b-2). **Planned (stage):** not
+implemented; required before the stage ships.
 
 A **Gap** note names a part that no test pins yet; that part does not count as enforced. Stages: B1b inbound activities,
 B2 delivery, B4 statuses, media and search, B5 web UI and `/setup`, B6b backups and restore, B8 cutover tools. "Push"
@@ -98,7 +99,11 @@ against their own instance. TLS is assumed between all parties.
 - **ID-3: remote input never changes local actors or local objects.** No inbound activity updates, deletes, moves or
   attributes anything to a local account or local status. _Enforced (main)_ for actors and relationships: `upsertRemoteActor` and
   `localAccount` in `src/domain/inbox.ts`; `test/inbox.test.ts` ("a local actor URI is never written", "an actor updates
-  only itself"). Statuses: _Planned (B1b-2)._
+  only itself"). _Implemented on branch `kopje/inbound-statuses`_ for statuses, favourites and boosts: a remote object
+  must have its actor's origin and name no other author, and only its stored author updates or deletes it, so a local
+  status is never created, updated or deleted from outside (`storeRemoteStatus` and `updateRemoteStatus` in
+  `src/domain/remote-statuses.ts`, `deleteObject` in `src/domain/inbox.ts`); `test/inbox-statuses.test.ts` ("nobody
+  remote updates a local one (ID-3)", "nothing of anyone else’s (ID-6, ID-3)").
 - **ID-4: `Move` requires the alias.** A `Move` is honoured only if the freshly fetched target lists the source in
   `alsoKnownAs`. _Enforced (main):_ `prepare` in `src/federation/inbound.ts`, `move` in
   `src/domain/inbox.ts`; `test/inbox.test.ts` ("ignores a Move whose target does not list the actor").
@@ -112,7 +117,14 @@ against their own instance. TLS is assumed between all parties.
   the object's current author, and an update never changes the author. A same-origin but different actor is refused like
   a cross-origin one. _Enforced (main)_ for Follow, Accept, Reject, Undo, Block, Move and
   Update and Delete of actors: the table in `src/domain/inbox.ts`; `test/inbox.test.ts` ("ID-6: the authorization
-  table"). Update and Delete of statuses, Like and Announce: _Planned (B1b-2)._
+  table"). _Implemented on branch `kopje/inbound-statuses`_ for Create, Update and Delete of statuses, Like and
+  Announce (the rows of the same table): `Create` needs the actor's origin and no other `attributedTo`; `Update` and
+  `Delete` the stored status's author (a refused `Delete` records no retraction); `Like` a local status the actor may
+  see (VIS-1, which Mastodon does not check); `Announce` an original that is public, unlisted or the actor's own
+  (VIS-6); `Undo` of a `Like` or `Announce` the actor's own; `test/inbox-statuses.test.ts` ("ID-6: another actor of
+  the same origin cannot update a status", "deletes the author’s status with its children, and nothing of anyone
+  else’s (ID-6, ID-3)", "ID-6, ID-7: keeps an Undo that arrived before its Like", "ID-6, VIS-6: a boost of a private,
+  direct or unfetchable object stores nothing").
 - **ID-7: replay changes nothing twice.** A repeated activity creates no second relationship, counter change,
   notification, push or outbound intent (natural keys). A valid `Delete` or `Undo` that arrives before its target is
   recorded for 30 days and prevents the target from appearing later. Input that fails ID-1 or ID-6 reserves no key and
@@ -134,6 +146,31 @@ against their own instance. TLS is assumed between all parties.
   that a redelivered pair Undo or Reject after a new Follow cannot be told from a new one. `test/inbox.test.ts` ("ID-7: replay changes nothing twice", "OPS-1"), `test/inbox-regressions.test.ts`,
   `test/inbox-verify4.test.ts` ("keeps a Block with a pair-shaped id undone", "changes nothing when a Block takes a new
   id at the retraction cap").
+  _Implemented on branch `kopje/inbound-statuses`_ for statuses, favourites and boosts: a status, favourite or boost
+  exists once per natural key (its uri; one favourite and one boost per account and status), so a repeated `Create`,
+  `Like` or `Announce` adds no row or notification; a `Delete` or `Undo` that arrives first is recorded and keeps the
+  object, favourite or boost from appearing, and a replay after it changes nothing; an `Update` applies only if its
+  `updated` is newer than the last accepted version (`statuses.remote_version`, kept as the remote wrote it whether
+  or not the change wrote history, and compared unclamped), so a reordered or repeated one changes nothing whenever it
+  arrives; an `Update` dated more than 5 minutes ahead of the clock is ignored (no change, history or notification)
+  until the clock reaches it; a status whose `Delete` was recorded takes no `Update`. A `Delete` of an unknown object
+  of the actor's origin is recorded for that actor only, so it cannot suppress another actor's objects never seen
+  here; the `Delete` of a stored status or boost is also recorded for every actor (`ANY_ACTOR`), so nobody, another
+  actor of the same origin included, creates or updates that uri again (bounded by the authors' caps: it is written
+  only with the author's own retraction of the uri, which counts against the author's cap, and expires and is swept
+  with it). A change whose retraction cannot be recorded (the per-actor cap) is not made: the `Delete` of a stored
+  status or boost, and an `Undo` of a `Like` or `Announce`, answer 503 and the whole receive transaction rolls back,
+  the actor document and keys refreshed for it included (`RetryLater`, turned into the answer by the Store's RPC); a
+  `Delete` of an unknown object at the cap is not recorded and answers 202. An `Undo` of a `Like` records both its
+  own reference and the id the matched favourite was stored under, or neither. A local boost of a status that is
+  deleted while its author is purged is withdrawn once: the boost row's own marker (`statuses.withdrawn`) records
+  that its Undo was recorded, whichever job did it, and lives until the boost is deleted, however soon the intent
+  itself goes once its deliveries settle; both jobs wait for the intent's staging before they delete the boost.
+  `test/inbox-statuses.test.ts` ("ID-7: duplicate and reordered Create and Delete", "ignores an Update that is not
+  newer"), `test/inbox-statuses-edge.test.ts` ("ID-7: the Update watermark", "leaves nothing for every order of
+  Create, Update and Delete", "ID-7: retractions at the per-actor cap", "retracts both ids", "withdraws a local boost
+  once", "ID-7: a retryable refusal commits nothing", "ID-6, ID-7: a deleted status is not created again by anyone",
+  "after its deliveries are done").
 - **ID-8: only ActivityStreams media types become objects.** A fetched document is used as an actor, key or object only
   if served as `application/activity+json` or `application/ld+json` with the ActivityStreams profile, as Mastodon
   requires, and only if its root is a JSON object (JSON-LD would fetch a string root through the context loader). Other
@@ -164,7 +201,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   URLs appear only in statuses that pass the rule (see the capability URL accepted risk). The web UI is _Planned (B5)._ The object endpoint serves only what VIS-4 allows (enforced on main).
 - **VIS-2: limited stays limited.** A direct status with silent recipients (Misskey `specified`) is `limited`: shown
   only to its addressed recipients, presented as `private` by the API, never widened by an edit. _Enforced (main):_ `interpretAddressing` in `src/domain/audience.ts`; `test/audience.test.ts` ("reads Misskey
-  specified"). Use on inbound statuses: _Planned (B1b)._ Outbound: each silent recipient gets a copy of its own at
+  specified"). _Implemented on branch `kopje/inbound-statuses`_ for inbound statuses: addressing goes through
+  `interpretAddressing`, including the owner of the personal inbox a status came to, and an edit never changes the
+  visibility or adds a recipient to a private, direct or limited status; `test/inbox-statuses.test.ts` ("VIS-2: a
+  Misskey specified note is limited", "never widens a private audience"). Outbound: each silent recipient gets a copy of its own at
   its personal inbox naming only itself in `to` (no Mention), because Misskey derives `visibleUsers` from `to` and
   `cc` only; the copy everyone else gets never names a silent recipient. So a silent recipient learns that it is
   addressed, and nothing about other silent recipients. A personal copy goes only to its recipient's personal inbox:
@@ -202,11 +242,27 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   favourites, `favourited_by` and `reblogged_by` drop authors the viewer blocks, mutes or domain-blocks. A single status
   by id is not filtered. _Enforced (main):_ `unfilteredSql` and `listableSql` in
   `src/domain/audience.ts`; `test/audience.test.ts`, `test/visibility.test.ts` ("blocked and muted accounts stay out of
-  lists").
+  lists"). _Implemented on branch `kopje/inbound-statuses`:_ a domain block matches an account by its stored domain
+  and by the host of its actor id, both normalized (lowercase, no port, no trailing dot; `domainBlockMatchSql`), everywhere a domain block applies (lists, notifications,
+  relationships, inbound Follows and Moves, account search and search resolution), so an account confirmed under
+  another WebFinger domain cannot escape a block of the server it lives on; `test/inbox-canonical-address.test.ts`
+  ("applies a block of the actor’s host on every path", "never lets a third-party alias replace a confirmed domain or
+  evade a block on it").
 - **VIS-6: a wrapper reveals nothing its target hides.** A boost is visible only if its original is; boosting is limited
   to `public` and `unlisted` statuses and one's own `private` ones (`StatusPolicy#reblog?`). _Enforced (main):_ `viewableSql`; `test/visibility.test.ts` ("a boost of an original the viewer may not see is hidden
   with it"), `test/statuses.test.ts` ("refuses to boost direct and others’ private statuses"). Quotes and other embedded
-  objects check their target the same way: _Planned (B1b, B4)._
+  objects check their target the same way: _Planned (B4)._ _Implemented on branch `kopje/inbound-statuses`_ for
+  inbound boosts: an `Announce` is stored only for an original that is public, unlisted or the booster's own, decided
+  before anything is stored, so a boost of a private, direct, limited or unfetchable object stores nothing (neither
+  the boost nor the fetched original); an embedded copy of someone else's object is never trusted (it is fetched); a
+  boost of an unlisted original stays out of the public timelines. The boost's own audience is kept: the known
+  accounts its `to` and `cc` address are its silent recipients (bounded like a status's), so the audience rule
+  decides who sees the wrapper, and a reblog notification is written and shown only while its recipient may see the
+  sender's boost as well as the original (`shownSql` in `src/domain/notifications.ts`, for local boosts too);
+  `test/inbox-statuses.test.ts` ("VIS-6: a boost of a private, direct or unfetchable object stores nothing", "VIS-6:
+  a boost of an unlisted object stays out of the public timelines"), `test/inbox-statuses-edge.test.ts` ("notifies a
+  local author of a private boost only if they may see the boost", "hides an already written notification once its
+  recipient may no longer see the boost").
 - **VIS-7: silent recipients see, but are not mentioned.** A silent mention grants VIS-1 access only. It never appears
   in `mentions` and never produces a mention notification. _Enforced (main):_
   `src/domain/status-presenter.ts`, `src/domain/notifications.ts`; `test/visibility.test.ts` ("none for a silent
@@ -308,7 +364,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **WEB-4: the web UI applies WEB-1 to every state change.** Each form that changes state checks `Origin` and its
   session; a return or redirect target is a validated local path. _Planned (B5)._
 - **WEB-5: responses declare their type.** API and federation responses carry their exact JSON media type and
-  `X-Content-Type-Options: nosniff`. _Planned (B1b, B4)._
+  `X-Content-Type-Options: nosniff`. _Implemented on branch `kopje/inbound-statuses`:_ one middleware sets `nosniff`
+  on every response (API, federation, inbox, media, errors and maintenance answers), and API and federation bodies
+  are written by Hono's `c.json` and Fedify with their JSON types; `src/app/app.ts`; `test/inbox-statuses.test.ts`
+  ("WEB-5: responses declare their type").
 
 ### Setup (SETUP)
 
@@ -356,7 +415,34 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   includes the signing key id and is never served to another key or to the unsigned path. _Enforced (main):_
   `signedLoader` in `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("caches signed documents per signing
   key"). Expiry within 5 minutes and a sweep of expired rows: _Planned (B1b); the TTL is Fedify's `kvCache` default and
-  no test pins it._
+  no test pins it._ _Implemented on branch `kopje/inbound-statuses`_ for the fetches of inbound processing and search:
+  the original of a boost (and its author) is fetched as the request's other fetches are, with the personal inbox
+  owner's key or the instance actor's, never from the signed-document cache; search with `resolve=true` fetches as
+  the instance actor only, for a request whose token is valid and has the scope (401 or 403 otherwise, before
+  anything is fetched), with WebFinger unsigned. An account's canonical address is decided as Mastodon 4.7.3's
+  `ActivityPub::ProcessAccountService#check_webfinger!` and `ResolveAccountService` decide it: the actor's own host
+  declares it in the subject of its WebFinger answer for `acct:<preferredUsername>@<host>`; another domain there is a
+  candidate, which must answer for that subject with the same actor id; otherwise the address is on the host
+  (`declaredDomain` in `src/federation/resolve.ts`). Every domain from an address or a subject goes through one strict
+  parser (`normalizeDomain`): lowercase, punycode for an IDN, a hostname of two labels or more, and nothing else (no
+  port, userinfo, path, trailing dot or IP literal); a subject needs exactly one `@` and no empty part. Domains are
+  queried, compared and stored only in that form, so the domain stored is the one queried and confirmed. An address is
+  split into its parts before its domain is normalized, for resolution, exact account search and lookup, so a Unicode
+  and a punycode spelling find the same account. The fallback domain is the actor id's host as Mastodon takes it
+  (`Addressable::URI#normalized_host`: lowercase, punycode, without the port), also without a trailing dot
+  (`hostDomain` in `src/platform/domain-name.ts`); the id itself is kept whole for origin checks. Only an
+  authoritative answer (404 or 410, or another subject or actor) drops a confirmation: a transient failure (network,
+  timeout, 5xx, the fetch budget) keeps the stored address for that username. The confirmation is bound to its (username, domain, actor id):
+  `accounts.confirmed_username` holds the username it was made for, and an actor whose `preferredUsername` changes
+  falls back to its host until it is confirmed again. A search by an alias (any address whose WebFinger names an
+  existing actor) finds the account by its actor id and never sets or replaces its address. One helper
+  (`accountDomain` in `src/domain/inbox.ts`) decides the stored domain for every path. _Gap:_ inbound activities do
+  not look up WebFinger, so an account first seen inbound shows its actor's host until it is resolved, and a renamed
+  actor keeps its host until it is resolved again. `test/inbox-canonical-address.test.ts`. `createRemoteLoaders` in
+  `src/federation/federation.ts`, `src/federation/resolve.ts`; `test/inbox-statuses.test.ts` ("signed by the instance
+  actor (NET-4)", "resolves a status URL as the instance actor", "answers 401 without a token and fetches nothing"),
+  `test/inbox-statuses-edge.test.ts` ("NET-4: search resolution fetches nothing without a valid token", "the
+  canonical WebFinger domain").
 - **NET-5: snapshots come only from authoritative local data.** A rescue snapshot holds only a canonical actor,
   WebFinger or NodeInfo document rendered on the fixed domain from Store columns, and is kept only if its source still
   matches the Store when saved. Request hosts, arbitrary queries and remote documents never create or change one.
@@ -368,7 +454,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   sanitizer (or custom code that passes the vector suites below). Sanitized HTML enters only rich-content sinks
   (`content`, `note`, field values) and is not escaped a second time. _Enforced (main)_ for bios:
   `sanitizeRemoteHtml` in `src/security/html.ts` (sanitize-html with Mastodon's `MASTODON_STRICT` allowlist, styles never allowed and postcss stubbed out);
-  `test/html.test.ts`. Status content and field values: _Planned (B1b-2)._
+  `test/html.test.ts`. _Implemented on branch `kopje/inbound-statuses`_ for status content (sanitized once by the
+  Worker before it is stored, the converted text of an Article or Page included) and profile field values (read from
+  the stored actor document and sanitized when presented, at most 16 fields): the same `sanitizeRemoteHtml`;
+  `test/inbox-statuses.test.ts` ("sanitizes content by allowlist with http(s) links only", "shows PropertyValue fields
+  with sanitized values").
 - **HTML-2: local text becomes HTML only by escaping and linking.** Status text and bios are escaped, then absolute
   http(s) URLs, known mentions and hashtags are linked. Display names stay plain strings. _Enforced (main)_ for bios:
   `src/domain/plain-text.ts`; `test/accounts.test.ts` ("stores plain-text profile fields safely"). _Enforced (main)_ for status text: `src/domain/status-text.ts`; `test/status-text.test.ts`.
@@ -382,7 +472,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   in the API and in Note attachments: `presentMedia` in `src/domain/status-presenter.ts`, `noteOf` in
   `src/domain/activities.ts` (_Gap: no test with a non-http stored attachment URL_). _Enforced (main)_ for remote actors at ingest (profile URL, avatar, header, inboxes) and links in remote
   HTML: `src/federation/remote-actor.ts`, `src/security/html.ts`; `test/inbox.test.ts` ("stores the remote actor"),
-  `test/html.test.ts`. Field links: _Planned (B1b-2)._
+  `test/html.test.ts`. _Implemented on branch `kopje/inbound-statuses`_ for field links and remote statuses at ingest
+  (the status url and attachment and preview URLs, which are dropped unless http(s)); `src/federation/remote-status.ts`;
+  `test/inbox-statuses.test.ts` ("keeps only http(s) media (HTML-1, HTML-3)", "http(s) links only").
 
 ### Media (MEDIA)
 
@@ -449,14 +541,35 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   adversarial fixture with a time bound. _Enforced (main)_ for status text:
   `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Enforced (main)_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
   bound"). Remote HTML: _Enforced (main):_ `test/html.test.ts` ("at the raw cap
-  within a generous time"). JSON-LD processing: _Planned (B1b-2)._
+  within a generous time"). _Implemented on branch `kopje/inbound-statuses`_ for JSON-LD processing and inbound JSON:
+  every inbound activity and every fetched document must stay within 10,000 values and 32 levels of nesting before
+  anything reads it or hands it to JSON-LD (`withinJsonBounds` in `src/platform/json-bounds.ts`, applied by
+  `parseActivity` and by the loaders of `createRemoteLoaders`); JSON-LD contexts too, before they are cached and again
+  on every cache hit (an entry may predate the check; `boundedContexts` in `src/federation/federation.ts`); and one
+  request fetches at most 8 documents (the fetch budget), so one activity's JSON-LD work is at most 8 bounded
+  documents and their bounded contexts; the Store asks the Worker for documents at most 3 times per activity;
+  statuses are read as compacted JSON, without JSON-LD, as Mastodon reads them; `test/inbox-statuses.test.ts`
+  ("refuses an activity or a fetched document past the JSON bounds before reading it", "caps the attachments, tags
+  and content one status stores"), `test/inbox-statuses-edge.test.ts` ("RES-2: JSON-LD contexts past the JSON
+  bounds", "the Store asks for documents at most three times").
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
   most 40 results per type (80 for the account search), and offsets past 10,000 answer an empty page;
   `test/search.test.ts` ("bounds the query, the limit and the offset").
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
-  count cap or an expiry with a sweeper. _Enforced (main)_ for snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
+  count cap or an expiry with a sweeper. _Implemented on branch `kopje/inbound-statuses`_ for remote statuses: one
+  status stores at most 4 attachments (Mastodon's limit) with 10,000 code units of description each, 100 hashtags
+  of at most 256 code units, 200 `status_mentions` rows (local accounts first; 100 `Mention` tags and 1,000 `to` and
+  `cc` entries are read; a redelivery to a personal inbox keeps the bound, its owner taking a remote recipient's
+  place, and so does an edit of a public or unlisted status that newly mentions and addresses a local account), 10,000 code units of content warning, and content cut at 50,000 code units before sanitizing; its history
+  at most 100 versions (the newest edit replaces the last); an arriving parent links at most 100 replies that came
+  before it; a boost at most 200 recipients; profiles show at most 16 fields. A deleted status is removed by a job
+  (`inbound_jobs` kind `delete`) in batches of at most 500 rows, measured with `total_changes()`; the first batch hides
+  it (its mentions, then its content and audience) within that budget. `src/domain/remote-statuses.ts`;
+  `test/inbox-statuses.test.ts` ("caps the attachments, tags and content one status stores", "deletes a status with
+  many children in bounded batches"), `test/inbox-statuses-edge.test.ts` ("RES-4: bounds at their limits", "writes at
+  most PURGE*BATCH rows per batch, hiding included"). \_Enforced (main)* for snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
   sweep and spool: _Planned (B1b)._ Deliveries: _Enforced (main):_ delivered rows are deleted
   at once and given-up rows after 30 days by the 5-minute cron (`sweepDeliveries`); receipts belong to their status
   (foreign key) and are dropped when its retraction is recorded; a lane holds at most 500 and the Store 10,000 active
@@ -538,7 +651,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   Queue message nor maintenance stops them, and waiting out maintenance spends no retry. `test/inbox.test.ts`,
   `test/inbox-regressions.test.ts`, `test/inbox-verify4.test.ts` ("writes the targets of a withdrawal that needs more
   than a batch of rows, every batch within the budget", "reaches every target when purge batches and delivery claims
-  interleave", "when the purge completes before any expansion").
+  interleave", "when the purge completes before any expansion"). _Gap:_ the batch budget bounds the rows a withdrawal
+  writes, not the work it does: each staging call reads every receipt of the boost and every follower of its booster
+  and sorts all the targets left, so a boost's withdrawal (by a purge, or by a remote author's `Delete` of the boosted
+  status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has this in
+  common with follower enumeration.
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Enforced (main)_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
@@ -663,26 +780,26 @@ activity specs, cited in test names.
 
 ## Accepted risks
 
-| Risk                                                                                                                                                                                                                                       | Why accepted                                                                                                                                                                                                                | Revisit when                                                         |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Duplicate keys in a JSON OAuth body are not rejected; the last one wins                                                                                                                                                                    | RFC 6749 defines form bodies only, and Doorkeeper behaves the same                                                                                                                                                          | a client depends on JSON bodies                                      |
-| Fedify 2.4.2 signs draft-cavage `(request-target)` without the query string                                                                                                                                                                | Mastodon accepts it; reported upstream                                                                                                                                                                                      | a peer rejects signed GETs to URLs with a query                      |
-| Legacy keys are not rewrapped; an empty or known `USER_KEK` gives no protection against R5                                                                                                                                                 | Owner's decision; health warns on an empty KEK (main), the cutover tool warns (B8)                                                                                                                                          | a key leak, or rewrapping becomes cheap                              |
-| Signed-fetch cache entries may outlive a remote block or key change by up to 5 minutes                                                                                                                                                     | Measured CPU savings on personal inboxes                                                                                                                                                                                    | blocks must apply at once                                            |
-| OAuth client secrets are stored in plaintext, so R5 can act as any registered app (no user scopes)                                                                                                                                         | Matches Mastodon; app tokens carry no user authority                                                                                                                                                                        | app tokens gain user-level powers                                    |
-| Aggregate counters (`reblogs_count`, `favourites_count`, `replies_count`) include interactions the viewer cannot see                                                                                                                       | Mastodon parity; clients rely on the counts                                                                                                                                                                                 | counters must hide private interactions                              |
-| Non-public media is readable by anyone holding its unguessable URL; cached copies outlive deletion                                                                                                                                         | Clients and peers fetch media without credentials; URLs appear only under VIS-1                                                                                                                                             | authenticated media fetch becomes interoperable                      |
-| A write of a failed upload that lands after the sweep stays a day; one landing after its tombstone stays for good                                                                                                                          | An HTTP Worker has no fixed wall-time limit; deleting unrecorded objects would destroy media after a restore                                                                                                                | R2 offers conditional writes bound to a Store record                 |
-| R2 originals keep the uploaded bytes, EXIF and location included                                                                                                                                                                           | Never served (MEDIA-2); backups restore from them; they are A8                                                                                                                                                              | backups can be rebuilt from re-encoded files                         |
-| Service tokens are recognized by Access's claim shape (no email, empty `sub`, `common_name`)                                                                                                                                               | The admin application's policy decides which identities reach it                                                                                                                                                            | the admin application admits mTLS or Access changes the claims       |
-| A delivery whose completion was lost is POSTed again after its lease (at-least-once)                                                                                                                                                       | Receivers deduplicate by activity id; exactly-once needs the receiver's cooperation                                                                                                                                         | a receiver is seen to apply a repeat                                 |
-| Misskey with several silent recipients of one status on one server: only the first copy Misskey processes sets the note's audience, so the other silent recipients there cannot see it. Supported: one silent recipient per Misskey server | Misskey keeps the first `Create` of a note; a combined copy would name the recipients to each other, and recipient-specific object ids would split the status                                                               | Misskey honours a later copy, or a peer needs it                     |
-| A purge's Undo of a local boost staged over several batches misses a follower whose inbox changes, between two batches, to a key the staging has already passed | Staging spans batches only when a batch's remaining rows can't hold the targets, and the boosted status was deleted by its author, whose `Delete` already makes other servers drop boosts of it; tracking every staged target durably would cost a row per target | staging is seen to span many batches in practice |
-| An untyped `Undo` whose object is a pair-shaped id (`/follows/<a>/<b>`) that matches nothing is not recorded as retracted, so a `Block` with that id arriving after it applies                                                             | Such an id names every generation of a Misskey follow and must not be recorded; Misskey's Block ids are `/blocks/<id>`, so only an unusual server that gives a Block a pair-shaped id and reorders its delivery is affected | a server is seen to send pair-shaped Block ids                       |
-| A lease taken just before maintenance and not completed counts one attempt when it expires                                                                                                                                                 | Bounded by one attempt per lease; maintenance itself claims nothing (RES-5)                                                                                                                                                 | maintenance windows become frequent                                  |
-| Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured                                                                                                                             | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added                                                                                                                                       | Kopje configures logtape                                             |
-| Remote HTML is sanitized by sanitize-html, whose htmlparser2 is a tokenizer rather than an HTML5 tree builder                                                                                                                              | It emits only allowlisted tags with quoted, escaped attributes and escapes all other text; the parse5-checked vector suites pass                                                                                            | a vector fails, or a maintained tree-based sanitizer fits the budget |
-| Activities signed by someone other than their actor (forwarded, with LD signatures) are refused                                                                                                                                            | ID-1. Replies that reach Kopje only by forwarding (to a collection the author cannot deliver to) and deliveries through relays are missed                                                                                   | relays or forwarded replies must be supported                        |
+| Risk                                                                                                                                                                                                                                       | Why accepted                                                                                                                                                                                                                                                      | Revisit when                                                         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Duplicate keys in a JSON OAuth body are not rejected; the last one wins                                                                                                                                                                    | RFC 6749 defines form bodies only, and Doorkeeper behaves the same                                                                                                                                                                                                | a client depends on JSON bodies                                      |
+| Fedify 2.4.2 signs draft-cavage `(request-target)` without the query string                                                                                                                                                                | Mastodon accepts it; reported upstream                                                                                                                                                                                                                            | a peer rejects signed GETs to URLs with a query                      |
+| Legacy keys are not rewrapped; an empty or known `USER_KEK` gives no protection against R5                                                                                                                                                 | Owner's decision; health warns on an empty KEK (main), the cutover tool warns (B8)                                                                                                                                                                                | a key leak, or rewrapping becomes cheap                              |
+| Signed-fetch cache entries may outlive a remote block or key change by up to 5 minutes                                                                                                                                                     | Measured CPU savings on personal inboxes                                                                                                                                                                                                                          | blocks must apply at once                                            |
+| OAuth client secrets are stored in plaintext, so R5 can act as any registered app (no user scopes)                                                                                                                                         | Matches Mastodon; app tokens carry no user authority                                                                                                                                                                                                              | app tokens gain user-level powers                                    |
+| Aggregate counters (`reblogs_count`, `favourites_count`, `replies_count`) include interactions the viewer cannot see                                                                                                                       | Mastodon parity; clients rely on the counts                                                                                                                                                                                                                       | counters must hide private interactions                              |
+| Non-public media is readable by anyone holding its unguessable URL; cached copies outlive deletion                                                                                                                                         | Clients and peers fetch media without credentials; URLs appear only under VIS-1                                                                                                                                                                                   | authenticated media fetch becomes interoperable                      |
+| A write of a failed upload that lands after the sweep stays a day; one landing after its tombstone stays for good                                                                                                                          | An HTTP Worker has no fixed wall-time limit; deleting unrecorded objects would destroy media after a restore                                                                                                                                                      | R2 offers conditional writes bound to a Store record                 |
+| R2 originals keep the uploaded bytes, EXIF and location included                                                                                                                                                                           | Never served (MEDIA-2); backups restore from them; they are A8                                                                                                                                                                                                    | backups can be rebuilt from re-encoded files                         |
+| Service tokens are recognized by Access's claim shape (no email, empty `sub`, `common_name`)                                                                                                                                               | The admin application's policy decides which identities reach it                                                                                                                                                                                                  | the admin application admits mTLS or Access changes the claims       |
+| A delivery whose completion was lost is POSTed again after its lease (at-least-once)                                                                                                                                                       | Receivers deduplicate by activity id; exactly-once needs the receiver's cooperation                                                                                                                                                                               | a receiver is seen to apply a repeat                                 |
+| Misskey with several silent recipients of one status on one server: only the first copy Misskey processes sets the note's audience, so the other silent recipients there cannot see it. Supported: one silent recipient per Misskey server | Misskey keeps the first `Create` of a note; a combined copy would name the recipients to each other, and recipient-specific object ids would split the status                                                                                                     | Misskey honours a later copy, or a peer needs it                     |
+| A purge's Undo of a local boost staged over several batches misses a follower whose inbox changes, between two batches, to a key the staging has already passed                                                                            | Staging spans batches only when a batch's remaining rows can't hold the targets, and the boosted status was deleted by its author, whose `Delete` already makes other servers drop boosts of it; tracking every staged target durably would cost a row per target | staging is seen to span many batches in practice                     |
+| An untyped `Undo` whose object is a pair-shaped id (`/follows/<a>/<b>`) that matches nothing is not recorded as retracted, so a `Block` with that id arriving after it applies                                                             | Such an id names every generation of a Misskey follow and must not be recorded; Misskey's Block ids are `/blocks/<id>`, so only an unusual server that gives a Block a pair-shaped id and reorders its delivery is affected                                       | a server is seen to send pair-shaped Block ids                       |
+| A lease taken just before maintenance and not completed counts one attempt when it expires                                                                                                                                                 | Bounded by one attempt per lease; maintenance itself claims nothing (RES-5)                                                                                                                                                                                       | maintenance windows become frequent                                  |
+| Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured                                                                                                                             | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added                                                                                                                                                                             | Kopje configures logtape                                             |
+| Remote HTML is sanitized by sanitize-html, whose htmlparser2 is a tokenizer rather than an HTML5 tree builder                                                                                                                              | It emits only allowlisted tags with quoted, escaped attributes and escapes all other text; the parse5-checked vector suites pass                                                                                                                                  | a vector fails, or a maintained tree-based sanitizer fits the budget |
+| Activities signed by someone other than their actor (forwarded, with LD signatures) are refused                                                                                                                                            | ID-1. Replies that reach Kopje only by forwarding (to a collection the author cannot deliver to) and deliveries through relays are missed                                                                                                                         | relays or forwarded replies must be supported                        |
 
 ## How to use
 

@@ -50,6 +50,16 @@ const CONTEXT: Kind = {
 	objectRoot: false,
 }
 
+// WebFinger answers (RFC 7033): JRD, as servers serve it. Never trusted as an ActivityPub object; only the actor link
+// is read from it, and that actor is then fetched through the document loader.
+const WEBFINGER_TYPES = new Set(['application/jrd+json', 'application/json'])
+const WEBFINGER: Kind = {
+	accept: 'application/jrd+json, application/json',
+	accepts: (media) => WEBFINGER_TYPES.has(media.essence),
+	refusal: 'Not a WebFinger document',
+	objectRoot: true,
+}
+
 // A document refused by policy (scheme, host, redirect, type, size, id, root) or unusable as served. Fetching
 // it again would not help.
 export class RefusedFetchError extends FetchError {}
@@ -135,6 +145,11 @@ function assertObjectRoot(remote: RemoteDocument): RemoteDocument {
 // The loader of JSON-LD contexts (Fedify's context loader), which are never trusted as objects.
 export function createContextLoader(deps: LoaderDeps): DocumentLoader {
 	return createLoader(deps, CONTEXT)
+}
+
+// The loader of WebFinger documents (search resolution of user@domain), unsigned, with NET-1's rules and the budget.
+export function createWebFingerLoader(deps: LoaderDeps): DocumentLoader {
+	return createLoader(deps, WEBFINGER)
 }
 
 function createLoader(deps: LoaderDeps, kind: Kind, sign?: RequestSigner): DocumentLoader {

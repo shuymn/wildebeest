@@ -5,7 +5,16 @@ import { Temporal } from 'temporal-polyfill'
 import { createRemoteLoaders, type FederationDeps, type FederationState, type RemoteLoaders } from './federation'
 import { isTransientLoadError, loadFailureOf, RefusedFetchError, requestBudget } from './loader'
 import { fetchActor } from './remote-actor'
-import type { ActivityRef, InboundActivity, RemoteActorInput } from '../domain/inbox'
+import {
+	ACTOR_TYPES,
+	CONVERTED_TYPES,
+	fetchRemoteStatus,
+	parseRemoteStatus,
+	STATUS_TYPES,
+	typeIs,
+} from './remote-status'
+import type { ActivityRef, InboundActivity, Prefetched, ReceiveResult, RemoteActorInput } from '../domain/inbox'
+import { withinJsonBounds } from '../platform/json-bounds'
 import { isActivityPubMediaType, parseMediaType } from '../platform/media-type'
 import { callStore } from '../platform/store-client'
 import { importPublicKeyPem } from '../security/key-wrap'
@@ -20,7 +29,11 @@ import { importPublicKeyPem } from '../security/key-wrap'
 //      is refused, ID-8).
 //   4. ID-1: the actor is not local, and it owns the verifying key: its document (fetched, or the stored one while
 //      fresh) lists the key id, and the key names no other owner. The activity id has the actor's origin.
-//   5. Per type, what the Store cannot fetch itself: a fresh actor document for Update, the Move target (ID-4).
+//   5. Per type, what the Store cannot fetch itself: a fresh actor document for Update, the Move target (ID-4), the
+//      object of a Create or Update given by id only.
+//   6. The Store applies it. It may answer that it needs a document first (the original of a boost it does not have,
+//      or that original's author): the Worker fetches it within the request's budget, signed as the request's other
+//      fetches are (NET-4), and asks again with it (at most MAX_STORE_ROUNDS times).
 //
 // Effects are idempotent by natural keys and retractions (ID-7); a refused activity reserves and records nothing.
 
@@ -45,9 +58,15 @@ const TIME_WINDOW = { hours: 1 }
 
 type Json = Record<string, unknown>
 
+// A Create or Update whose object is given by id only (Mastodon's dereference_object!): fetched before the Store runs.
+type Dereference = { type: 'Dereference'; kind: 'Create' | 'UpdateStatus'; id: string; object: string; activity: Json }
+
 type Parsed =
-	| { ok: true; actor: string; activity: InboundActivity; target: string | null }
+	| { ok: true; actor: string; activity: InboundActivity | Dereference; target: string | null }
 	| { ok: false; reason: string; deleteOfSelf?: boolean }
+
+// Store calls one activity may take: the activity, its boosted original, and that original's author.
+const MAX_STORE_ROUNDS = 3
 
 function isObject(value: unknown): value is Json {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -90,7 +109,7 @@ function hasActivityStreamsContext(context: unknown): boolean {
 }
 
 // The activity as Mastodon reads it: compacted JSON with the ActivityStreams context, ids as strings or objects with
-// an id. Types handled elsewhere (Create, Like, Announce, ... in B1b-2) are 'unsupported'.
+// an id. Other types (Flag, Add, Remove, ...) and objects Kopje does not store are 'unsupported'.
 export function parseActivity(body: Uint8Array): Parsed {
 	let json: unknown
 	try {
@@ -100,6 +119,10 @@ export function parseActivity(body: Uint8Array): Parsed {
 	}
 	if (!isObject(json)) {
 		return { ok: false, reason: 'not-an-object' }
+	}
+	// RES-2: the work of reading an activity is bounded before anything reads it.
+	if (!withinJsonBounds(json)) {
+		return { ok: false, reason: 'too-complex' }
 	}
 	const actor = idOf(json.actor)
 	const id = typeof json.id === 'string' ? json.id : null
@@ -119,13 +142,27 @@ export function parseActivity(body: Uint8Array): Parsed {
 	return { ok: true, actor, activity, target: type === 'Move' ? idOf(json.target) : null }
 }
 
+function strings(value: unknown): string[] {
+	return (Array.isArray(value) ? value : value === undefined || value === null ? [] : [value]).flatMap(
+		(entry) => idOf(entry) ?? []
+	)
+}
+
+function statusActivity(kind: 'Create' | 'UpdateStatus', id: string, json: Json): InboundActivity | Dereference | null {
+	if (typeof json.object === 'string') {
+		return { type: 'Dereference', kind, id, object: json.object, activity: json }
+	}
+	const object = parseRemoteStatus(json.object, json)
+	return object === null ? null : { type: kind, id, object }
+}
+
 function activityOf(
 	type: string,
 	id: string,
 	actor: string,
 	json: Json,
 	object: string | null
-): InboundActivity | null {
+): InboundActivity | Dereference | null {
 	switch (type) {
 		case 'Follow':
 		case 'Block':
@@ -137,14 +174,45 @@ function activityOf(
 		case 'Move':
 			// The object of a Move is the actor itself (Mastodon ignores any other).
 			return object === actor ? { type, id, target: { local: '' } } : null
-		case 'Update':
-			// Updates of statuses are B1b-2; an actor may update only itself (ID-6).
-			return object === actor ? { type: 'UpdateActor', id } : null
+		case 'Create':
+			return statusActivity('Create', id, json)
+		case 'Update': {
+			// An actor updates only itself (ID-6); a status is updated by its author (checked in the Store).
+			if (object === actor) {
+				return { type: 'UpdateActor', id }
+			}
+			const embedded = isObject(json.object) ? json.object : null
+			if (embedded !== null && typeIs(embedded.type, ACTOR_TYPES)) {
+				return null
+			}
+			if (embedded !== null && !typeIs(embedded.type, [...STATUS_TYPES, ...CONVERTED_TYPES])) {
+				return null
+			}
+			return statusActivity('UpdateStatus', id, json)
+		}
 		case 'Delete':
 			if (object === null) {
 				return null
 			}
 			return object === actor ? { type: 'DeleteActor', id } : { type: 'Delete', id, object }
+		// Misskey's reactions arrive as a Like with _misskey_reaction (or content), and Pleroma's as EmojiReact: both are
+		// a favourite, and the emoji is not kept (as Mastodon).
+		case 'Like':
+		case 'EmojiReact':
+			return object === null ? null : { type: 'Like', id, object }
+		case 'Announce':
+			return object === null
+				? null
+				: {
+						type: 'Announce',
+						id,
+						object,
+						embedded: isObject(json.object) ? parseRemoteStatus(json.object) : null,
+						to: strings(json.to),
+						cc: strings(json.cc),
+						published: typeof json.published === 'string' ? json.published : null,
+						raw: JSON.stringify(json),
+					}
 		default:
 			return null
 	}
@@ -336,10 +404,61 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 	if (!('type' in prepared)) {
 		return prepared
 	}
-	const result = await callStore(() =>
-		deps.store().receiveActivity(deps.build, { now: deps.now(), origin, actorUri, actor, activity: prepared })
-	)
+	const prefetched: Prefetched = { statuses: {}, actors: {} }
+	let result: ReceiveResult | undefined
+	for (let round = 0; round < MAX_STORE_ROUNDS; round++) {
+		result = await callStore(() =>
+			deps.store().receiveActivity(deps.build, {
+				now: deps.now(),
+				origin,
+				actorUri,
+				actor,
+				activity: prepared,
+				recipient: deps.recipient,
+				prefetched,
+			})
+		)
+		const need = result.need
+		if (need === undefined) {
+			break
+		}
+		const fetched = await fetchNeeded(need, origin, loaders)
+		rethrowStoreError(state)
+		if (fetched === 'transient') {
+			return { status: 503, reason: 'object-unavailable' }
+		}
+		if (need.kind === 'status') {
+			prefetched.statuses[need.uri] = fetched as Prefetched['statuses'][string]
+		} else {
+			prefetched.actors[need.uri] = fetched as Prefetched['actors'][string]
+		}
+		result = undefined
+	}
+	if (result === undefined) {
+		return { status: 202, reason: 'too-many-fetches' }
+	}
+	if (result.retry === true) {
+		return { status: 503, reason: result.reason }
+	}
 	return { status: 202, reason: result.reason, jobsPending: result.jobsPending, delivers: result.delivers === true }
+}
+
+// A document the Store asked for, fetched through the request's loaders: a status (null if it cannot be one) or an
+// actor (null if it cannot be stored). A local URI is never fetched.
+async function fetchNeeded(
+	need: NonNullable<ReceiveResult['need']>,
+	origin: string,
+	loaders: RemoteLoaders
+): Promise<Prefetched['statuses'][string] | Prefetched['actors'][string] | 'transient'> {
+	if (originOf(need.uri) === null || originOf(need.uri) === origin) {
+		return null
+	}
+	if (need.kind === 'status') {
+		const fetched = await fetchRemoteStatus(need.uri, loaders.document)
+		return fetched.kind === 'transient' ? 'transient' : fetched.kind === 'ok' ? fetched.status : null
+	}
+	const fetched = await fetchActor(need.uri, loaders.document, loaders.context)
+	return fetched.kind === 'transient' ? 'transient' : fetched.kind === 'ok' ? fetched.input : null
 }
 
 // An actor may list a key by reference (publicKey: "<key URL>") rather than embed it. Fedify has just resolved that
@@ -367,12 +486,26 @@ function withVerifiedReference(
 
 // What a type needs beyond the activity itself.
 async function prepare(
-	activity: InboundActivity,
+	activity: InboundActivity | Dereference,
 	target: string | null,
 	actorUri: string,
 	origin: string,
 	loaders: RemoteLoaders
 ): Promise<InboundActivity | InboxOutcome> {
+	if (activity.type === 'Dereference') {
+		// The object of the actor's own activity: only on the actor's origin (Mastodon's permitted_origin).
+		if (originOf(activity.object) !== originOf(actorUri)) {
+			return { status: 202, reason: 'foreign-object' }
+		}
+		const fetched = await fetchRemoteStatus(activity.object, loaders.document, activity.activity)
+		if (fetched.kind === 'transient') {
+			return { status: 503, reason: 'object-unavailable' }
+		}
+		if (fetched.kind === 'unusable') {
+			return { status: 202, reason: 'unusable-object' }
+		}
+		return { type: activity.kind, id: activity.id, object: fetched.status }
+	}
 	if (activity.type !== 'Move') {
 		return activity
 	}
