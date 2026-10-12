@@ -5,6 +5,7 @@ import { notify } from './notifications'
 import { readOperation } from './operation'
 import { htmlToPlainText, plainTextToHtml } from './plain-text'
 import { accountSearchText, queryTerms } from './search-text'
+import { renderFieldValue } from './status-text'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
 
@@ -35,9 +36,20 @@ export type Account = {
 	statuses_count: number
 	last_status_at: string | null
 	emojis: []
-	fields: []
+	fields: Field[]
 	suspended?: true
 }
+
+// A profile field (Mastodon's Account::Field): the name as plain text, the value as HTML.
+export type Field = { name: string; value: string; verified_at: null }
+
+// A local field as the owner wrote it (plain text), stored in local_accounts.fields.
+export type FieldSource = { name: string; value: string }
+
+// Mastodon's limits for local fields (Account::DEFAULT_FIELDS_SIZE, 255 characters each).
+export const MAX_FIELDS = 4
+export const MAX_FIELD_NAME = 255
+export const MAX_FIELD_VALUE = 255
 
 export type Visibility = 'public' | 'unlisted' | 'private' | 'direct'
 
@@ -47,7 +59,7 @@ export type CredentialAccount = Account & {
 		sensitive: boolean
 		language: string | null
 		note: string
-		fields: []
+		fields: (FieldSource & { verified_at: null })[]
 		follow_requests_count: number
 	}
 	role: { id: string; name: string; permissions: string; color: string; highlighted: boolean }
@@ -72,7 +84,7 @@ export type Relationship = {
 	note: string
 }
 
-// Placeholders until media (B4) ships real defaults as static assets.
+// Plain defaults shipped as static assets (public/assets), for accounts without an avatar or header.
 const DEFAULT_AVATAR = '/assets/avatar.png'
 const DEFAULT_HEADER = '/assets/header.png'
 
@@ -95,6 +107,8 @@ export type AccountRow = {
 	created_at: string
 	suspended_at: string | null
 	last_status_at: string | null
+	// local_accounts.fields; null for a remote account.
+	local_fields: string | null
 }
 
 export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type, a.display_name, a.note, a.url, a.avatar_url,
@@ -102,7 +116,8 @@ export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type,
 	l.suspended_at,
 	(SELECT substr(s.published_at, 1, 10) FROM statuses s
 		WHERE s.account_id = a.id AND s.visibility IN ('public', 'unlisted', 'private') ORDER BY s.id DESC LIMIT 1)
-		AS last_status_at`
+		AS last_status_at,
+	l.fields AS local_fields`
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
 
@@ -150,9 +165,29 @@ export function presentAccount(row: AccountRow, { origin }: Present): Account {
 		statuses_count: row.statuses_count,
 		last_status_at: row.last_status_at,
 		emojis: [],
-		fields: [],
+		fields: suspended ? [] : fieldSources(row.local_fields).map(presentField),
 		...(suspended ? { suspended: true as const } : {}),
 	}
+}
+
+// Stored local fields; anything that is not a name and value pair of strings is skipped.
+export function fieldSources(stored: string | null): FieldSource[] {
+	if (stored === null) {
+		return []
+	}
+	const parsed = JSON.parse(stored) as unknown
+	return (Array.isArray(parsed) ? parsed : []).flatMap((entry: unknown) => {
+		if (typeof entry !== 'object' || entry === null) {
+			return []
+		}
+		const { name, value } = entry as Record<string, unknown>
+		return typeof name === 'string' && typeof value === 'string' ? [{ name, value }] : []
+	})
+}
+
+// HTML-2: the name stays plain text (JSON consumers escape it); the value is escaped and its URLs linked.
+function presentField(field: FieldSource): Field {
+	return { name: field.name, value: renderFieldValue(field.value), verified_at: null }
 }
 
 // API ids are 18 digits; legacy ids are UUIDs or other short strings. Anything longer is not an id.
@@ -221,7 +256,7 @@ type CredentialRow = {
 	follow_requests_count: number
 }
 
-function credentialAccount(db: Db, accountId: string, present: Present): CredentialAccount | null {
+export function credentialAccount(db: Db, accountId: string, present: Present): CredentialAccount | null {
 	const row = accountRow(db, accountId)
 	const local = db.first<CredentialRow>(
 		`SELECT default_visibility, default_sensitive, default_language,
@@ -239,7 +274,7 @@ function credentialAccount(db: Db, accountId: string, present: Present): Credent
 			sensitive: local.default_sensitive === 1,
 			language: local.default_language,
 			note: htmlToPlainText(row.note),
-			fields: [],
+			fields: fieldSources(row.local_fields).map((field) => ({ ...field, verified_at: null })),
 			follow_requests_count: local.follow_requests_count,
 		},
 		// Every user has Mastodon's default role (id -99) until roles exist. permissions is a string (design §4).
@@ -260,6 +295,8 @@ export type CredentialChanges = {
 	privacy?: Visibility
 	sensitive?: boolean
 	language?: string | null
+	// Replaces every field; lengths and count are validated by the caller.
+	fields?: FieldSource[]
 }
 
 // Lengths and values are validated by the caller. display_name and the note are plain text: display_name is stored
@@ -297,12 +334,14 @@ export const updateCredentials = userWriteOperation<
 	db.run(
 		`UPDATE local_accounts SET default_visibility = COALESCE(?, default_visibility),
 			default_sensitive = COALESCE(?, default_sensitive),
-			default_language = CASE WHEN ? THEN ? ELSE default_language END
+			default_language = CASE WHEN ? THEN ? ELSE default_language END,
+			fields = COALESCE(?, fields)
 		WHERE account_id = ?`,
 		changes.privacy ?? null,
 		bit(changes.sensitive),
 		changes.language === undefined ? 0 : 1,
 		changes.language ?? null,
+		changes.fields === undefined ? null : JSON.stringify(changes.fields.slice(0, MAX_FIELDS)),
 		accountId
 	)
 	return credentialAccount(db, accountId, present)

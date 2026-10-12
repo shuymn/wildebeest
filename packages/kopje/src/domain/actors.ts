@@ -1,3 +1,4 @@
+import { type FieldSource, fieldSources } from './accounts'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 import { base64ToBytes } from '../security/key-wrap'
@@ -15,6 +16,8 @@ export type LocalActor = {
 	locked: boolean
 	discoverable: boolean | null
 	alsoKnownAs: string[]
+	// Profile fields as the owner wrote them; the actor document publishes them as PropertyValue attachments.
+	fields: FieldSource[]
 	pubkey: string
 	createdAt: string
 }
@@ -31,6 +34,7 @@ type ActorRow = {
 	locked: number
 	discoverable: number | null
 	also_known_as: string
+	fields: string
 	pubkey: string
 	created_at: string
 }
@@ -46,7 +50,7 @@ export const getInstanceDomain = readOperation<void, string | null>(
 export function localActorOf(db: Db, username: string): LocalActor | null {
 	const row = db.first<ActorRow>(
 		`SELECT a.username, a.actor_type, a.display_name, a.note, a.avatar_url, a.header_url, a.locked, a.discoverable,
-			l.also_known_as, l.pubkey, a.created_at ${LOCAL_BY_USERNAME}`,
+			l.also_known_as, l.fields, l.pubkey, a.created_at ${LOCAL_BY_USERNAME}`,
 		username
 	)
 	if (row === undefined) {
@@ -62,6 +66,7 @@ export function localActorOf(db: Db, username: string): LocalActor | null {
 		locked: row.locked === 1,
 		discoverable: row.discoverable === null ? null : row.discoverable === 1,
 		alsoKnownAs: JSON.parse(row.also_known_as) as string[],
+		fields: fieldSources(row.fields),
 		pubkey: row.pubkey,
 		createdAt: row.created_at,
 	}

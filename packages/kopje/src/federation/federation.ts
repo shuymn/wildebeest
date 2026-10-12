@@ -16,6 +16,7 @@ import {
 	Note,
 	Organization,
 	Person,
+	PropertyValue,
 	Service,
 } from '@fedify/vocab'
 import { Temporal } from 'temporal-polyfill'
@@ -39,6 +40,7 @@ import {
 	type StoredKey,
 } from '../domain/actors'
 import type { SnapshotSource } from '../domain/snapshot'
+import { renderFieldValue } from '../domain/status-text'
 import { httpUrl } from '../platform/http-url'
 import { PACKAGE_VERSION } from '../platform/package-version'
 import { callStore, type StoreStub } from '../platform/store-client'
@@ -391,6 +393,10 @@ async function localActorObject(ctx: RequestContext<FederationState>, actor: Loc
 		icon: image(actor.avatarUrl),
 		image: image(actor.headerUrl),
 		aliases: actor.alsoKnownAs.flatMap((uri) => httpUrl(uri) ?? []),
+		// Profile fields as Mastodon publishes them: the value escaped and linked (HTML-2).
+		attachments: actor.fields.map(
+			(field) => new PropertyValue({ name: field.name, value: renderFieldValue(field.value) })
+		),
 	})
 }
 
