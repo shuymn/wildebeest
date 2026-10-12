@@ -208,6 +208,23 @@ describe('snapshot caps', () => {
 		expect(await snapshotNames(store)).toEqual([])
 	})
 
+	it('does not remember a save the Store refused', async () => {
+		const answers = [false, true]
+		let writes = 0
+		const refusingOnce = {
+			saveSnapshot: () => {
+				writes++
+				return Promise.resolve(answers.shift() ?? true)
+			},
+		} as unknown as StoreStub
+		const save = createSnapshotSaver(() => 0)
+		const doc = { contentType: 'application/activity+json', body: 'b' }
+
+		await save(refusingOnce, BUILD, 'path:/actor', doc, STATIC)
+		await save(refusingOnce, BUILD, 'path:/actor', doc, STATIC)
+		expect(writes).toBe(2)
+	})
+
 	it('re-saves an identical document at most once per interval', async () => {
 		let now = 0
 		let writes = 0

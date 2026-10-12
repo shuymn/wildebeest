@@ -62,8 +62,10 @@ export function createSnapshotSaver(now: () => number): SnapshotSaver {
 			return
 		}
 		try {
-			await callStore(() => store.saveSnapshot(build, { key, ...snapshot, source }))
-			saved.set(key, { digest, at: now() })
+			// Only a stored body counts as saved: a refused one (stale source, oversized) must not suppress a later save.
+			if (await callStore(() => store.saveSnapshot(build, { key, ...snapshot, source }))) {
+				saved.set(key, { digest, at: now() })
+			}
 		} catch (error) {
 			// A refused write (readonly) keeps the previous snapshot, which is what the rescue path should serve anyway.
 			console.warn({ event: 'kopje.snapshot.save-failed', key, error: errorMessage(error) })
