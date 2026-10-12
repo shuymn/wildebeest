@@ -1,4 +1,5 @@
-import { open, readFile, rename, rm, stat, truncate, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { open, readFile, rename, rm, stat, truncate } from 'node:fs/promises'
 
 import { writeAll } from './write-all.js'
 
@@ -54,16 +55,24 @@ export const nodeIO = {
 			throw error
 		}
 	},
+	// These files can hold the session credential of a token import. The temporary file has an unpredictable name and
+	// is created exclusively ('wx') with mode 0600, so no file planted beforehand (whose mode would be kept) is
+	// reused. It is written and synced through its own handle, renamed over the target, and removed on any failure.
 	async writeTextAtomic(path, text) {
-		const temporary = `${path}.tmp`
-		await writeFile(temporary, text, { mode: 0o600 })
-		const handle = await open(temporary, 'r+')
+		const temporary = `${path}.${randomUUID()}.tmp`
+		const handle = await open(temporary, 'wx', 0o600)
 		try {
-			await handle.sync()
-		} finally {
-			await handle.close()
+			try {
+				await writeAll(handle, new TextEncoder().encode(text))
+				await handle.sync()
+			} finally {
+				await handle.close()
+			}
+			await rename(temporary, path)
+		} catch (error) {
+			await rm(temporary, { force: true })
+			throw error
 		}
-		await rename(temporary, path)
 	},
 	async remove(path) {
 		await rm(path, { force: true })
