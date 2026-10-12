@@ -31,7 +31,7 @@
 		"@fedify/testing": "2.4.2",
 		"miniflare": "4.20260625.0",
 		"typescript": "5.9.3",
-		"vitest": "4.1.9",
+		"vitest": "4.1.11",
 		"wrangler": "4.105.0"
 	}
 }
