@@ -23,6 +23,11 @@ const configSchema = z.object({
 
 export type Config = z.infer<typeof configSchema>
 
+// The effective KEK: an unset USER_KEK reads as the empty string, which is a legal KEK.
+export function userKek(config: Config): string {
+	return config.USER_KEK ?? ''
+}
+
 export type ConfigResult = { ok: true; config: Config } | { ok: false; issues: string[] }
 
 const parsed = new WeakMap<object, ConfigResult>()

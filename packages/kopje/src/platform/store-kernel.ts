@@ -82,6 +82,10 @@ export function isSnapshotKey(key: string): boolean {
 	return key.length <= SNAPSHOT_MAX_KEY_LENGTH && /^(path|webfinger):\S+$/.test(key)
 }
 
+export function isStorableSnapshot(key: string, body: string): boolean {
+	return isSnapshotKey(key) && new TextEncoder().encode(body).byteLength <= SNAPSHOT_MAX_BODY_BYTES
+}
+
 type ExpectedMigration = Migration & { checksum: string }
 type AppliedMigration = { name: string; checksum: string }
 
@@ -405,7 +409,7 @@ function pendingOf(schema: SchemaState): string[] {
 	return schema.status === 'pending' ? schema.pending : []
 }
 
-async function sha256(text: string): Promise<string> {
+export async function sha256(text: string): Promise<string> {
 	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
 	return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
 }

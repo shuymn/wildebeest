@@ -4,7 +4,7 @@ import type { Context, Handler } from 'hono'
 import { createKopjeFederation, type FederationState, nodeInfo } from './federation'
 import type { LoaderDeps } from './loader'
 import { createSnapshotSaver, snapshotKey } from './snapshot'
-import { readConfig } from '../platform/config'
+import { readConfig, userKek } from '../platform/config'
 import { callStore, type StoreResolver } from '../platform/store-client'
 import type { KeyGen } from '../security/key-wrap'
 
@@ -74,7 +74,7 @@ async function viaFedify(c: Context<FederationEnv>, deps: FederationRouteDeps, u
 			domain,
 			build: deps.build(c.env),
 			store: () => deps.store(c.env),
-			kek: (config.ok ? config.config.USER_KEK : undefined) ?? '',
+			kek: config.ok ? userKek(config.config) : '',
 			now: deps.now,
 			keygen: deps.keygen,
 			loader: deps.loader,

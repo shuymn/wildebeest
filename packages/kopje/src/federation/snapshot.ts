@@ -1,6 +1,6 @@
 import { errorMessage } from '../platform/error-message'
 import { callStore, type StoreStub } from '../platform/store-client'
-import { isSnapshotKey, type Snapshot, SNAPSHOT_MAX_BODY_BYTES } from '../platform/store-kernel'
+import { isSnapshotKey, isStorableSnapshot, sha256, type Snapshot } from '../platform/store-kernel'
 
 // Snapshots of the always-served GETs (design §4, maintenance mode): actor documents, WebFinger and NodeInfo. A
 // healthy response is saved under the key of its request; while the Store refuses (version mismatch, pending or
@@ -43,7 +43,7 @@ export type SnapshotSaver = (store: StoreStub, build: string, key: string, snaps
 export function createSnapshotSaver(now: () => number): SnapshotSaver {
 	const saved = new Map<string, { digest: string; at: number }>()
 	return async (store, build, key, snapshot) => {
-		if (!isSnapshotKey(key) || new TextEncoder().encode(snapshot.body).byteLength > SNAPSHOT_MAX_BODY_BYTES) {
+		if (!isStorableSnapshot(key, snapshot.body)) {
 			return
 		}
 		const digest = await sha256(`${snapshot.contentType}\n${snapshot.body}`)
@@ -61,11 +61,6 @@ export function createSnapshotSaver(now: () => number): SnapshotSaver {
 			console.warn({ event: 'kopje.snapshot.save-failed', key, error: errorMessage(error) })
 		}
 	}
-}
-
-async function sha256(text: string): Promise<string> {
-	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
-	return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 // The rescue answer of an always-served GET, or null when there is none. Only keys of the two snapshot shapes reach
