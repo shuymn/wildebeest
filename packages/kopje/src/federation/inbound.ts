@@ -1,4 +1,4 @@
-import { type DocumentLoader, exportSpki, type KeyCache, verifyRequestDetailed } from '@fedify/fedify'
+import { type DocumentLoader, exportSpki, FetchError, type KeyCache, verifyRequestDetailed } from '@fedify/fedify'
 import { CryptographicKey } from '@fedify/vocab'
 import { Temporal } from 'temporal-polyfill'
 
@@ -188,6 +188,12 @@ function rethrowStoreError(state: FederationState): void {
 	}
 }
 
+function isGone(result: { status: number } | { error: Error }): boolean {
+	const status =
+		'status' in result ? result.status : result.error instanceof FetchError ? result.error.response?.status : undefined
+	return status === 404 || status === 410
+}
+
 function isTransientKeyFailure(result: { status: number } | { error: Error }): boolean {
 	if ('status' in result) {
 		return result.status === 408 || result.status === 429 || result.status >= 500
@@ -238,9 +244,11 @@ async function verify(
 	if (reason.type !== 'keyFetchError') {
 		return { status: 401, reason: reason.type }
 	}
-	return isTransientKeyFailure(reason.result)
-		? { status: 503, reason: 'key-unavailable' }
-		: { status: 401, reason: 'key-gone' }
+	if (isTransientKeyFailure(reason.result)) {
+		return { status: 503, reason: 'key-unavailable' }
+	}
+	// Only a key that answers 404 or 410 is gone; anything else (403, a refused document) only fails verification.
+	return { status: 401, reason: isGone(reason.result) ? 'key-gone' : 'key-refused' }
 }
 
 export async function receiveInbound(deps: InboundDeps, request: InboundRequest): Promise<InboxOutcome> {
@@ -273,7 +281,10 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 		verified = await verify(deps, request, headers, { document: NO_FETCH, context: NO_FETCH }, served, true)
 		rethrowStoreError(state)
 		if ('status' in verified) {
-			return verified.reason === 'key-gone' ? { status: 202, reason: 'unknown-actor-deleted' } : verified
+			// No stored key (nothing is fetched here): the Delete cannot be verified.
+			return verified.reason === 'key-gone' || verified.reason === 'key-refused'
+				? { status: 202, reason: 'unknown-actor-deleted' }
+				: verified
 		}
 	}
 	if ('status' in verified) {

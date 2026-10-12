@@ -398,7 +398,10 @@ describe('Update and Delete of an actor', () => {
 		t.web.fail(bob.uri, 410)
 		const deletion = { '@context': AS, id: `${bob.uri}#delete`, type: 'Delete', actor: bob.uri, object: bob.uri }
 		expect(await t.post(bob, deletion)).toBe(202)
-		expect(await sql(t.store, 'SELECT count(*) AS n FROM statuses')).toEqual([{ n: PURGE_BATCH + 1 }])
+		// One batch writes at most PURGE_BATCH rows in all (relationships first, then statuses).
+		const left = (await sql<{ n: number }>(t.store, 'SELECT count(*) AS n FROM statuses'))[0]!.n
+		expect(left).toBeGreaterThanOrEqual(PURGE_BATCH + 1)
+		expect(left).toBeLessThan(PURGE_BATCH * 2 + 1)
 		expect(t.queue.pending.map((m) => m.body)).toContainEqual({ kind: 'inbound-jobs' })
 
 		const deps = inboxDeps(() => t.store, t.web.loader)

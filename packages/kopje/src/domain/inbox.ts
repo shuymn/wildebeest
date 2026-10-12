@@ -3,7 +3,7 @@ import { insertWithFreshId, remoteId } from './ids'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
 import { accountSearchText } from './search-text'
-import { recountStatus } from './statuses'
+import { recountStatus, recountStatuses, withdrawLocalBoost } from './statuses'
 import type { Db } from '../db/sql'
 
 // Inbound activities about actors and relationships (B1b-1), applied in one Store transaction each. The Worker has
@@ -459,7 +459,7 @@ const follow: Handler<'Follow'> = (db, actor, activity, { now }) => {
 		// A newer generation: the edge takes the new id, and the superseded one is recorded as dead, so a late Undo,
 		// or a replay, of it changes nothing (ID-7). A pending request keeps waiting; an accepted follow is accepted
 		// again under the new id (Mastodon's fast-forward: the follower lost track of our Accept).
-		if (existing.uri !== null && !retract(db, actor.uri, existing.uri, now)) {
+		if (existing.uri !== null && !isMisskeyPairId(existing.uri) && !retract(db, actor.uri, existing.uri, now)) {
 			return ignored('retraction-cap')
 		}
 		db.run('UPDATE follows SET uri = ? WHERE id = CAST(? AS INTEGER)', activity.id, existing.id)
@@ -496,8 +496,16 @@ const follow: Handler<'Follow'> = (db, actor, activity, { now }) => {
 //   - the Follow's id equals the edge's uri, with the actor as its target; or
 //   - the edge has no uri (it never named an id: local follows do not federate before B2, and migrated rows), and the
 //     embedded Follow names its follower and the actor as its pair.
-// An id that names another generation of the edge (the edge has a different uri) answers nothing.
-function ourFollow(db: Db, actor: RemoteRow, ref: ActivityRef): { id: string; follower: string } | 'not-target' | null {
+// An id that names another generation of the edge (the edge has a different uri) answers nothing. The one exception is
+// a Reject with Misskey's pair-shaped id (`/follows/<follower>/<followee>`): Misskey rejects a follower it removes with
+// the pair, not with our Follow's id, so for a Reject (pairReject) the pair matches our follow whatever its uri. As
+// with the pair Undo, a redelivered pair Reject cannot be told from a new one, and ends a later generation too.
+function ourFollow(
+	db: Db,
+	actor: RemoteRow,
+	ref: ActivityRef,
+	pairReject = false
+): { id: string; follower: string } | 'not-target' | null {
 	if (ref.object !== null && ref.object !== actor.uri) {
 		return 'not-target'
 	}
@@ -522,10 +530,13 @@ function ourFollow(db: Db, actor: RemoteRow, ref: ActivityRef): { id: string; fo
 	if (follower === undefined) {
 		return null
 	}
+	const anyGeneration = pairReject && ref.id !== null && isMisskeyPairId(ref.id)
 	const edge = db.first<{ id: string }>(
-		'SELECT CAST(id AS TEXT) AS id FROM follows WHERE account_id = ? AND target_account_id = ? AND uri IS NULL',
+		`SELECT CAST(id AS TEXT) AS id FROM follows WHERE account_id = ? AND target_account_id = ?
+			AND (uri IS NULL OR ?)`,
 		follower.id,
-		actor.id
+		actor.id,
+		anyGeneration ? 1 : 0
 	)
 	return edge === undefined ? null : { id: edge.id, follower: follower.id }
 }
@@ -545,7 +556,7 @@ const accept: Handler<'Accept'> = (db, actor, activity) => {
 
 // Mastodon's Reject removes our request, or our follow if it was already accepted.
 const reject: Handler<'Reject'> = (db, actor, activity) => {
-	const edge = ourFollow(db, actor, activity.object)
+	const edge = ourFollow(db, actor, activity.object, true)
 	if (edge === null || edge === 'not-target') {
 		return ignored(edge ?? 'unknown-follow')
 	}
@@ -604,7 +615,8 @@ const undo: Handler<'Undo'> = (db, actor, activity, { now }) => {
 		}
 	}
 	// Everything this Undo records as retracted must fit, or nothing changes (ID-7).
-	const retracted = [...(pair ? [] : [ref.id]), ...(edge?.uri == null ? [] : [edge.uri])]
+	// Pair ids name every generation, so they are never recorded, whichever side carries them.
+	const retracted = [ref.id, ...(edge?.uri == null ? [] : [edge.uri])].filter((uri) => !isMisskeyPairId(uri))
 	if (!canRetract(db, actor.uri, retracted, now)) {
 		return ignored('retraction-cap')
 	}
@@ -656,8 +668,9 @@ const block: Handler<'Block'> = (db, actor, activity, { now }) => {
 		actor.id,
 		target.id
 	)?.uri
-	if (followUri != null) {
-		retract(db, actor.uri, followUri, now)
+	// The removed follow's generation must be recorded, or the Block changes nothing (ID-7).
+	if (followUri != null && !isMisskeyPairId(followUri) && !retract(db, actor.uri, followUri, now)) {
+		return ignored('retraction-cap')
 	}
 	removeFollow(db, actor.id, target.id)
 	// Mastodon's UnfollowService: the local account's follow of the blocker ends, and is undone there too.
@@ -888,9 +901,15 @@ const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
 	return applied('actor-deleted', purgeBatch(db, actor.uri, now))
 }
 
-// Deletes one batch of a deleted actor's relationships, notifications, statuses and favourites, at most PURGE_BATCH
-// rows of each, recounting what they counted on (RES-6). Returns whether anything remains; when nothing does, the
-// account row goes and the job is done.
+// One batch of a deleted actor's purge, at most PURGE_BATCH rows written in all, whatever the account has (RES-6):
+//   1. its relationships, notifications, mentions, favourites and keys, recounting what they counted;
+//   2. local boosts of its statuses: each boost's Undo is recorded through the boost's own path (B2,
+//      withdrawLocalBoost; the job's cursor keeps the boost being withdrawn so it is recorded once), then the boost goes;
+//   3. remote boosts of its statuses, then its own statuses.
+// A status is deleted only once its children (edits, media, mentions, tags, favourites, bookmarks, notifications,
+// receipts, boosts and the reply links to it) are gone, so deleting it cascades nothing. Local media is detached for
+// the media sweep (its R2 objects go only through B4b's path), never deleted here. Returns whether anything remains;
+// when nothing does, the account row goes and the job is done.
 function purgeBatch(db: Db, uri: string, now: number): boolean {
 	const account = remoteAccount(db, uri)
 	if (account === undefined) {
@@ -898,13 +917,50 @@ function purgeBatch(db: Db, uri: string, now: number): boolean {
 		return false
 	}
 	const id = account.id
+	const budget = { left: PURGE_BATCH }
+	purgeRelationships(db, id, budget)
+	withdrawLocalBoosts(db, uri, id, budget, now)
+	while (budget.left > 0) {
+		const status = db.first<{ id: string }>(
+			`SELECT r.id FROM statuses r JOIN statuses o ON o.id = r.reblog_of_id
+				LEFT JOIN local_accounts l ON l.account_id = r.account_id
+			WHERE o.account_id = ?1 AND l.account_id IS NULL
+			UNION ALL SELECT * FROM (SELECT id FROM statuses WHERE account_id = ?1 ORDER BY id)
+			LIMIT 1`,
+			id
+		)
+		if (status === undefined || !deleteStatusWithin(db, status.id, budget)) {
+			break
+		}
+	}
+	if (budget.left === 0 || accountHasRows(db, id)) {
+		return true
+	}
+	db.run('DELETE FROM accounts WHERE id = ? AND domain IS NOT NULL', id)
+	finishJob(db, 'purge', uri, now)
+	return false
+}
+
+type Budget = { left: number }
+
+// Runs a bounded write over the budget: `sql` must take the row limit as its last parameter.
+function spend(db: Db, budget: Budget, sql: string, ...params: SqlStorageValue[]): number {
+	if (budget.left <= 0) {
+		return 0
+	}
+	const written = db.run(sql, ...params, budget.left)
+	budget.left -= written
+	return written
+}
+
+function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	const follows = db.all<{ id: string; other: string }>(
 		`SELECT CAST(id AS TEXT) AS id, CASE WHEN account_id = ?1 THEN target_account_id ELSE account_id END AS other
 		FROM follows WHERE account_id = ?1 OR target_account_id = ?1 ORDER BY id LIMIT ?2`,
 		id,
-		PURGE_BATCH
+		budget.left
 	)
-	db.run(
+	budget.left -= db.run(
 		'DELETE FROM follows WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))',
 		JSON.stringify(follows.map((f) => f.id))
 	)
@@ -912,62 +968,219 @@ function purgeBatch(db: Db, uri: string, now: number): boolean {
 		db,
 		follows.map((f) => f.other)
 	)
-	db.run(
-		'DELETE FROM blocks WHERE id IN (SELECT id FROM blocks WHERE account_id = ?1 OR target_account_id = ?1 LIMIT ?2)',
-		id,
-		PURGE_BATCH
-	)
-	db.run('DELETE FROM mutes WHERE id IN (SELECT id FROM mutes WHERE target_account_id = ? LIMIT ?)', id, PURGE_BATCH)
-	db.run(
-		`DELETE FROM list_accounts WHERE account_id = ?1
-			AND list_id IN (SELECT list_id FROM list_accounts WHERE account_id = ?1 LIMIT ?2)`,
-		id,
-		PURGE_BATCH
-	)
-	db.run(
-		'DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE from_account_id = ? LIMIT ?)',
-		id,
-		PURGE_BATCH
-	)
-	const statuses = db.all<{ id: string; parent: string | null; original: string | null }>(
-		`SELECT id, in_reply_to_id AS parent, reblog_of_id AS original FROM statuses WHERE account_id = ?
-		ORDER BY id LIMIT ?`,
-		id,
-		PURGE_BATCH
-	)
 	const favourites = db.all<{ id: string; status: string }>(
 		'SELECT CAST(id AS TEXT) AS id, status_id AS status FROM favourites WHERE account_id = ? ORDER BY id LIMIT ?',
 		id,
-		PURGE_BATCH
+		Math.max(budget.left, 0)
 	)
-	db.run(
+	budget.left -= db.run(
 		'DELETE FROM favourites WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))',
 		JSON.stringify(favourites.map((f) => f.id))
 	)
-	db.run('DELETE FROM statuses WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(statuses.map((s) => s.id)))
-	const touched = new Set([
-		...statuses.flatMap((s) => [s.parent, s.original]).filter((status) => status !== null),
-		...favourites.map((f) => f.status),
-	])
-	for (const status of touched) {
+	for (const status of new Set(favourites.map((f) => f.status))) {
 		recountStatus(db, status)
 	}
-	const remaining = db.first(
-		`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM statuses WHERE account_id = ?1)
-			OR EXISTS (SELECT 1 FROM favourites WHERE account_id = ?1)
-			OR EXISTS (SELECT 1 FROM follows WHERE account_id = ?1 OR target_account_id = ?1)
-			OR EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 OR target_account_id = ?1)
-			OR EXISTS (SELECT 1 FROM mutes WHERE target_account_id = ?1)
-			OR EXISTS (SELECT 1 FROM list_accounts WHERE account_id = ?1)
-			OR EXISTS (SELECT 1 FROM notifications WHERE from_account_id = ?1)`,
+	spend(
+		db,
+		budget,
+		'DELETE FROM blocks WHERE id IN (SELECT id FROM blocks WHERE account_id = ?1 OR target_account_id = ?1 LIMIT ?2)',
 		id
 	)
-	if (remaining !== undefined) {
+	spend(db, budget, 'DELETE FROM mutes WHERE id IN (SELECT id FROM mutes WHERE target_account_id = ? LIMIT ?)', id)
+	spend(
+		db,
+		budget,
+		`DELETE FROM list_accounts WHERE account_id = ?1
+			AND list_id IN (SELECT list_id FROM list_accounts WHERE account_id = ?1 LIMIT ?2)`,
+		id
+	)
+	spend(
+		db,
+		budget,
+		'DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE from_account_id = ? LIMIT ?)',
+		id
+	)
+	spend(
+		db,
+		budget,
+		`DELETE FROM status_mentions WHERE account_id = ?1
+			AND status_id IN (SELECT status_id FROM status_mentions WHERE account_id = ?1 LIMIT ?2)`,
+		id
+	)
+	spend(
+		db,
+		budget,
+		`UPDATE statuses SET in_reply_to_account_id = NULL
+		WHERE id IN (SELECT id FROM statuses WHERE in_reply_to_account_id = ?1 AND account_id <> ?1 LIMIT ?2)`,
+		id
+	)
+	spend(
+		db,
+		budget,
+		'DELETE FROM media_attachments WHERE id IN (SELECT id FROM media_attachments WHERE account_id = ? AND status_id IS NULL AND file_token IS NULL LIMIT ?)',
+		id
+	)
+	spend(
+		db,
+		budget,
+		'DELETE FROM remote_keys WHERE key_id IN (SELECT key_id FROM remote_keys WHERE account_id = ? LIMIT ?)',
+		id
+	)
+	spend(
+		db,
+		budget,
+		`DELETE FROM inbound_jobs WHERE kind = 'move' AND key IN
+			(SELECT key FROM inbound_jobs WHERE kind = 'move' AND target_account_id = ? LIMIT ?)`,
+		id
+	)
+}
+
+// Local boosts of the account's statuses, each withdrawn once through B2 (the purge job's cursor holds the boost
+// whose Undo is recorded), then deleted like any status, and its booster's statuses_count recounted.
+function withdrawLocalBoosts(db: Db, uri: string, id: string, budget: Budget, now: number): void {
+	while (budget.left > 0) {
+		const cursor = db.first<{ cursor: string | null }>(
+			"SELECT cursor FROM inbound_jobs WHERE kind = 'purge' AND key = ?",
+			uri
+		)?.cursor
+		const boost = db.first<{ id: string; booster: string }>(
+			`SELECT r.id, r.account_id AS booster FROM statuses r JOIN statuses o ON o.id = r.reblog_of_id
+				JOIN local_accounts l ON l.account_id = r.account_id
+			WHERE o.account_id = ? ORDER BY r.id = ? DESC, r.id LIMIT 1`,
+			id,
+			cursor ?? ''
+		)
+		if (boost === undefined) {
+			return
+		}
+		if (cursor !== boost.id) {
+			withdrawLocalBoost(db, boost.id, now)
+			db.run("UPDATE inbound_jobs SET cursor = ? WHERE kind = 'purge' AND key = ?", boost.id, uri)
+			budget.left--
+		}
+		if (!deleteStatusWithin(db, boost.id, budget)) {
+			return
+		}
+		recountStatuses(db, boost.booster)
+		db.run("UPDATE inbound_jobs SET cursor = NULL WHERE kind = 'purge' AND key = ?", uri)
+	}
+}
+
+// Deletes a status's children within the budget, and the status itself once none remain (so nothing cascades).
+// Returns whether the status is gone.
+function deleteStatusWithin(db: Db, statusId: string, budget: Budget): boolean {
+	const row = db.first<{ parent: string | null; original: string | null }>(
+		'SELECT in_reply_to_id AS parent, reblog_of_id AS original FROM statuses WHERE id = ?',
+		statusId
+	)
+	if (row === undefined) {
 		return true
 	}
-	db.run('DELETE FROM accounts WHERE id = ? AND domain IS NOT NULL', id)
-	finishJob(db, 'purge', uri, now)
-	return false
+	spend(
+		db,
+		budget,
+		'DELETE FROM status_edits WHERE id IN (SELECT id FROM status_edits WHERE status_id = ? LIMIT ?)',
+		statusId
+	)
+	// Local uploads are detached for the media sweep, which deletes their R2 objects; remote rows only name URLs.
+	spend(
+		db,
+		budget,
+		`UPDATE media_attachments SET status_id = NULL, position = 0, gc_at = ?1
+		WHERE id IN (SELECT id FROM media_attachments WHERE status_id = ?2 AND file_token IS NOT NULL LIMIT ?3)`,
+		new Date(0).toISOString(),
+		statusId
+	)
+	spend(
+		db,
+		budget,
+		'DELETE FROM media_attachments WHERE id IN (SELECT id FROM media_attachments WHERE status_id = ? AND file_token IS NULL LIMIT ?)',
+		statusId
+	)
+	spend(
+		db,
+		budget,
+		`DELETE FROM status_mentions WHERE status_id = ?1
+			AND account_id IN (SELECT account_id FROM status_mentions WHERE status_id = ?1 LIMIT ?2)`,
+		statusId
+	)
+	spend(
+		db,
+		budget,
+		'DELETE FROM status_tags WHERE status_id = ?1 AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 LIMIT ?2)',
+		statusId
+	)
+	spend(
+		db,
+		budget,
+		'DELETE FROM favourites WHERE id IN (SELECT id FROM favourites WHERE status_id = ? LIMIT ?)',
+		statusId
+	)
+	spend(
+		db,
+		budget,
+		'DELETE FROM bookmarks WHERE id IN (SELECT id FROM bookmarks WHERE status_id = ? LIMIT ?)',
+		statusId
+	)
+	spend(
+		db,
+		budget,
+		'DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE status_id = ? LIMIT ?)',
+		statusId
+	)
+	spend(
+		db,
+		budget,
+		`DELETE FROM outbound_receipts WHERE status_id = ?1
+			AND inbox_url IN (SELECT inbox_url FROM outbound_receipts WHERE status_id = ?1 LIMIT ?2)`,
+		statusId
+	)
+	spend(
+		db,
+		budget,
+		'UPDATE statuses SET in_reply_to_id = NULL WHERE id IN (SELECT id FROM statuses WHERE in_reply_to_id = ? LIMIT ?)',
+		statusId
+	)
+	const children = db.first(
+		`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM status_edits WHERE status_id = ?1)
+			OR EXISTS (SELECT 1 FROM media_attachments WHERE status_id = ?1)
+			OR EXISTS (SELECT 1 FROM status_mentions WHERE status_id = ?1)
+			OR EXISTS (SELECT 1 FROM status_tags WHERE status_id = ?1)
+			OR EXISTS (SELECT 1 FROM favourites WHERE status_id = ?1)
+			OR EXISTS (SELECT 1 FROM bookmarks WHERE status_id = ?1)
+			OR EXISTS (SELECT 1 FROM notifications WHERE status_id = ?1)
+			OR EXISTS (SELECT 1 FROM outbound_receipts WHERE status_id = ?1)
+			OR EXISTS (SELECT 1 FROM statuses WHERE in_reply_to_id = ?1 OR reblog_of_id = ?1)`,
+		statusId
+	)
+	if (children !== undefined || budget.left <= 0) {
+		return false
+	}
+	db.run('DELETE FROM statuses WHERE id = ?', statusId)
+	budget.left--
+	recountStatus(db, row.parent)
+	recountStatus(db, row.original)
+	return true
+}
+
+function accountHasRows(db: Db, id: string): boolean {
+	return (
+		db.first(
+			`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM statuses WHERE account_id = ?1)
+				OR EXISTS (SELECT 1 FROM favourites WHERE account_id = ?1)
+				OR EXISTS (SELECT 1 FROM follows WHERE account_id = ?1 OR target_account_id = ?1)
+				OR EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 OR target_account_id = ?1)
+				OR EXISTS (SELECT 1 FROM mutes WHERE target_account_id = ?1)
+				OR EXISTS (SELECT 1 FROM list_accounts WHERE account_id = ?1)
+				OR EXISTS (SELECT 1 FROM notifications WHERE from_account_id = ?1)
+				OR EXISTS (SELECT 1 FROM status_mentions WHERE account_id = ?1)
+				OR EXISTS (SELECT 1 FROM statuses WHERE in_reply_to_account_id = ?1)
+				OR EXISTS (SELECT 1 FROM media_attachments WHERE account_id = ?1)
+				OR EXISTS (SELECT 1 FROM remote_keys WHERE account_id = ?1)
+				OR EXISTS (SELECT 1 FROM inbound_jobs WHERE target_account_id = ?1)`,
+			id
+		) !== undefined
+	)
 }
 
 // A Delete of something other than the actor. Deleting a stored remote status is B1b-2; here the retraction is

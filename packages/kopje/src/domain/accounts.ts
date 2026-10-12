@@ -1,5 +1,6 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { userReadOperation, userWriteOperation } from './auth'
+import { retract } from './inbox'
 import { notify } from './notifications'
 import { readOperation } from './operation'
 import { htmlToPlainText, plainTextToHtml } from './plain-text'
@@ -59,10 +60,12 @@ export type Relationship = {
 	notifying: boolean
 	languages: string[] | null
 	followed_by: boolean
+	requested_by: boolean
 	blocking: boolean
 	blocked_by: boolean
 	muting: boolean
 	muting_notifications: boolean
+	muting_expires_at: string | null
 	requested: boolean
 	domain_blocking: boolean
 	endorsed: boolean
@@ -349,10 +352,13 @@ function relationshipsOf(db: Db, viewerId: string, accountIds: string[]): Relati
 		notifying: row.following !== null && row.notify === 1,
 		languages: row.languages === null ? null : (JSON.parse(row.languages) as string[]),
 		followed_by: row.followed_by === 'accepted',
+		requested_by: row.followed_by === 'pending',
 		blocking: row.blocking === 1,
 		blocked_by: row.blocked_by === 1,
 		muting: row.muting === 1,
 		muting_notifications: row.muting_notifications === 1,
+		// Mutes have no expiry yet.
+		muting_expires_at: null,
 		requested: row.following === 'pending',
 		domain_blocking: row.domain_blocking === 1,
 		endorsed: false,
@@ -470,6 +476,8 @@ export type RelationshipResult =
 	| { status: 'ok'; relationship: Relationship }
 	| { status: 'not_found' }
 	| { status: 'forbidden' }
+	// The change cannot be recorded right now (answered 503).
+	| { status: 'unavailable' }
 
 type TargetRow = {
 	id: string
@@ -716,6 +724,11 @@ export const answerFollowRequest = userWriteOperation<
 	if (decision === 'authorize') {
 		db.run("UPDATE follows SET state = 'accepted' WHERE id = CAST(? AS INTEGER)", request.id)
 	} else {
+		// A rejected remote Follow is recorded as retracted, so a redelivery of it does not ask again (ID-7). If it
+		// cannot be recorded (the requester's retraction cap), nothing changes.
+		if (request.remote === 1 && request.uri !== null && !retract(db, request.requester_uri, request.uri, now)) {
+			return { status: 'unavailable' }
+		}
 		db.run('DELETE FROM follows WHERE id = CAST(? AS INTEGER)', request.id)
 	}
 	db.run(

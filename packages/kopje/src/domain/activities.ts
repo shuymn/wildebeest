@@ -35,8 +35,15 @@ export type OutboundEnvelope = { activity: Record<string, unknown>; audience: Au
 // Mastodon, the followers are the current ones; a Delete also reaches every inbox that received the status or may
 // still receive it, so a follower who left since still gets the Tombstone. Record a retraction before deleting the
 // row it retracts: the receipts go with the row.
-export function recordOutbound(db: Db, signerId: string, envelope: OutboundEnvelope, now: number): void {
-	enqueueActivity(db, signerId, envelope, now)
+// withdraws: a Reject that ends a follow already accepted (see subjectOf in deliveries.ts).
+export function recordOutbound(
+	db: Db,
+	signerId: string,
+	envelope: OutboundEnvelope,
+	now: number,
+	options: { withdraws?: boolean } = {}
+): void {
+	enqueueActivity(db, signerId, envelope, now, options)
 }
 
 export function followersUri(actorUri: string): string {

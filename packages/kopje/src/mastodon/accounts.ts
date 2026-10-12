@@ -148,6 +148,8 @@ function relationshipResponse(c: ApiContext, result: RelationshipResult): Respon
 			return NOT_FOUND()
 		case 'forbidden':
 			return mastodonError(403, 'This action is not allowed')
+		case 'unavailable':
+			return mastodonError(503, 'This action cannot be recorded right now')
 	}
 }
 
