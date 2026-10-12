@@ -154,7 +154,18 @@ describe('dump', () => {
 			await expect(kernel.execute(BUILD, sessionWrite, 'login')).rejects.toThrow('dump-in-progress')
 			await expect(kernel.execute(BUILD, writeSetting, 'post')).rejects.toThrow('dump-in-progress')
 		})
-		const inbox = toStoreUnavailable(await rejectionOf(store.receiveInbox(BUILD, { receivedAt: 1 })))
+		const delete_ = { type: 'Delete' as const, id: 'https://remote.example/d', object: 'https://remote.example/o' }
+		const inbox = toStoreUnavailable(
+			await rejectionOf(
+				store.receiveActivity(BUILD, {
+					now: 1,
+					origin: 'https://kopje.test',
+					actorUri: 'https://remote.example/users/a',
+					actor: null,
+					activity: delete_,
+				})
+			)
+		)
 		expect(inbox?.reason).toBe('dump-in-progress')
 		expect(await store.health(BUILD)).toMatchObject({ readonly: true, dump: { id: started.cursor.dump } })
 

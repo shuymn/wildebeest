@@ -1,4 +1,11 @@
-import { createFederation, type Federation, kvCache, type NodeInfo, type RequestContext } from '@fedify/fedify'
+import {
+	createFederation,
+	type DocumentLoader,
+	type Federation,
+	kvCache,
+	type NodeInfo,
+	type RequestContext,
+} from '@fedify/fedify'
 import { Application, CryptographicKey, Endpoints, Group, Image, Organization, Person, Service } from '@fedify/vocab'
 import { Temporal } from 'temporal-polyfill'
 
@@ -57,7 +64,9 @@ const ACTOR_CLASSES = { Person, Service, Group, Organization, Application } as c
 // v2: ActivityPub media types only and object roots only (ID-8).
 const SIGNED_DOCUMENT_PREFIX = ['_fedify', 'signedRemoteDocument', 'v2'] as const
 
-export function createKopjeFederation(deps: FederationDeps, state: FederationState): Federation<FederationState> {
+// The pieces every federation use shares: Store RPCs that record a maintenance failure in the state, the KvStore, the
+// instance actor's key, and loaders signed and cached per signing key.
+function federationParts(deps: FederationDeps, state: FederationState) {
 	const { build, domain } = deps
 	const origin = `https://${domain}`
 	const rpc = async <T>(call: (store: StoreStub) => Promise<T>): Promise<T> => {
@@ -97,6 +106,15 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 		})())
 	const instanceSigner = async () => keyring.signerFor(instanceOwner(await loadInstanceKey(), instanceKeyId))
 
+	// The signer of a local user by the stored spelling of the username, or null.
+	const userSigner = async (username: string): Promise<Signer | null> => {
+		if ((await localActor(username))?.username !== username) {
+			return null
+		}
+		const key = await rpc((s) => s.localKey(build, { username }))
+		return key === null ? null : keyring.signerFor(userOwner(key, new URL(`/ap/users/${username}#main-key`, origin)))
+	}
+
 	// A signed loader caches per signing key (design §7): what one key was shown must not reach another key or the
 	// unsigned path.
 	const signedLoader = (keyId: URL, sign: () => Promise<RequestSigner>) =>
@@ -107,13 +125,64 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 				prefix: [...SIGNED_DOCUMENT_PREFIX, keyId.href],
 			})
 		)
+	const contextLoader = kvCache({ loader: createContextLoader(loaderDeps), kv })
+
+	return {
+		origin,
+		rpc,
+		kv,
+		loaderDeps,
+		instanceKeyId,
+		localActor,
+		loadInstanceKey,
+		instanceSigner,
+		userSigner,
+		signedLoader,
+		contextLoader,
+	}
+}
+
+// The loaders of inbound processing (DATA-7): fetches for a personal inbox are signed with the recipient's key, all
+// others with the instance actor's. document is cached per signing key (NET-4); fresh bypasses the cache, for what
+// must be fetched anew (a Move target, an Update of an actor).
+export type RemoteLoaders = { document: DocumentLoader; fresh: DocumentLoader; context: DocumentLoader }
+
+export function createRemoteLoaders(
+	deps: FederationDeps,
+	state: FederationState,
+	recipient: string | null
+): RemoteLoaders {
+	const parts = federationParts(deps, state)
+	let resolved: Promise<Signer> | undefined
+	// Resolved on the first fetch only: a request refused before any fetch unwraps no key.
+	const signer = () =>
+		(resolved ??= (async () =>
+			(recipient === null ? null : await parts.userSigner(recipient)) ?? parts.instanceSigner())())
+	return {
+		document: async (url, options) => {
+			const { keyId, sign } = await signer()
+			return parts.signedLoader(keyId, () => Promise.resolve(sign))(url, options)
+		},
+		fresh: requireObjectRoot(async (url, options) =>
+			createSafeLoader(parts.loaderDeps, (await signer()).sign)(url, options)
+		),
+		context: parts.contextLoader,
+	}
+}
+
+export function createKopjeFederation(deps: FederationDeps, state: FederationState): Federation<FederationState> {
+	const { domain } = deps
+	const parts = federationParts(deps, state)
+	const { origin, kv, instanceKeyId, localActor, loadInstanceKey, instanceSigner, userSigner, signedLoader, rpc } =
+		parts
+	const { build } = deps
 
 	const federation = createFederation<FederationState>({
 		kv,
 		origin,
 		// Fetches with no specific recipient are signed as the instance actor (secure-mode servers refuse unsigned ones).
 		documentLoaderFactory: () => signedLoader(instanceKeyId, async () => (await instanceSigner()).sign),
-		contextLoaderFactory: () => kvCache({ loader: createContextLoader(loaderDeps), kv }),
+		contextLoaderFactory: () => parts.contextLoader,
 		// Fedify calls this with the recipient's key on a personal inbox.
 		authenticatedDocumentLoaderFactory: ({ keyId, privateKey }) =>
 			signedLoader(keyId, () => Promise.resolve(requestSigner(keyId, privateKey))),
@@ -148,14 +217,11 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 				signer = await instanceSigner()
 			} else {
 				// Only the stored spelling has keys: '#main-key' under another case would name a key no actor publishes.
-				if ((await localActor(identifier))?.username !== identifier) {
+				const user = await userSigner(identifier)
+				if (user === null) {
 					return []
 				}
-				const key = await rpc((s) => s.localKey(build, { username: identifier }))
-				if (key === null) {
-					return []
-				}
-				signer = await keyring.signerFor(userOwner(key, new URL(`/ap/users/${identifier}#main-key`, origin)))
+				signer = user
 			}
 			return [signer.keyPair]
 		})

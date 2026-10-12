@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { harness } from './app-helpers'
+import { harness, inboxDeps } from './app-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { createSnapshotSaver } from '../src/federation/snapshot'
 import { type SpoolMessage, spoolInbox } from '../src/federation/spool'
@@ -138,7 +138,11 @@ describe('log redaction', () => {
 	it('logs a failed spool replay without its message', async () => {
 		const logs = captureLogs()
 		const { batch, message } = batchOf(spoolMessage())
-		await handleQueue(batch, { ...env, MAINTENANCE: 'off' } as Env, { build: () => BUILD, store: () => failingStore })
+		await handleQueue(
+			batch,
+			{ ...env, MAINTENANCE: 'off' } as Env,
+			inboxDeps(() => failingStore)
+		)
 		expect(message.retry).toHaveBeenCalledOnce()
 		logs.expectNoSecrets()
 		expect(logs.lines.join('\n')).toContain('kopje.spool.replay.failed')
@@ -148,10 +152,11 @@ describe('log redaction', () => {
 		const logs = captureLogs()
 		const { batch, message } = batchOf(spoolMessage())
 		const queue = { send: () => Promise.reject(secretError()) } as unknown as Queue
-		await handleQueue(batch, { ...env, MAINTENANCE: 'readonly', QUEUE: queue } as Env, {
-			build: () => BUILD,
-			store: () => failingStore,
-		})
+		await handleQueue(
+			batch,
+			{ ...env, MAINTENANCE: 'readonly', QUEUE: queue } as Env,
+			inboxDeps(() => failingStore)
+		)
 		expect(message.retry).toHaveBeenCalledOnce()
 		logs.expectNoSecrets()
 		expect(logs.lines.join('\n')).toContain('kopje.spool.requeue.failed')

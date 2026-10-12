@@ -159,7 +159,7 @@ function recountStatuses(db: Db, accountId: string): void {
 }
 
 // replies_count counts public and unlisted replies, as Mastodon does.
-function recountStatus(db: Db, statusId: string | null): void {
+export function recountStatus(db: Db, statusId: string | null): void {
 	if (statusId === null) {
 		return
 	}

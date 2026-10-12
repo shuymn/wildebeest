@@ -74,7 +74,8 @@ describe('app skeleton', () => {
 			expect(response.status, path).toBe(503)
 			expect(await response.json()).toEqual({ error: 'This server has not been set up yet' })
 		}
-		expect((await request('/inbox', { method: 'POST', body: '{}' })).status).toBe(503)
+		const inbox = { method: 'POST', headers: { 'content-type': 'application/activity+json' }, body: '{}' }
+		expect((await request('/inbox', inbox)).status).toBe(503)
 
 		await completeSetup(store)
 		expect((await request('/.well-known/webfinger')).status).toBe(400)

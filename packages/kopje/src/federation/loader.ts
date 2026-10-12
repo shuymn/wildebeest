@@ -50,6 +50,23 @@ const CONTEXT: Kind = {
 	objectRoot: false,
 }
 
+// A document refused by policy (scheme, host, redirect, type, size, id, root) or unusable as served. Unlike a timeout,
+// a network failure or a 5xx, fetching it again would not help.
+export class RefusedFetchError extends FetchError {}
+
+// Whether a failed load may succeed if tried again: a timeout, a network error, or an HTTP 408, 429 or 5xx. Refusals and
+// other HTTP errors (404, 410, ...) are permanent.
+export function isTransientLoadError(error: unknown): boolean {
+	if (error instanceof RefusedFetchError) {
+		return false
+	}
+	if (error instanceof FetchError && error.response !== undefined) {
+		const status = error.response.status
+		return status === 408 || status === 429 || status >= 500
+	}
+	return true
+}
+
 export type LoaderDeps = {
 	fetch: typeof fetch
 	checkHost?: (url: URL) => Promise<void>
@@ -76,7 +93,7 @@ export function requireObjectRoot(loader: DocumentLoader): DocumentLoader {
 function assertObjectRoot(remote: RemoteDocument): RemoteDocument {
 	const { document } = remote
 	if (typeof document !== 'object' || document === null || Array.isArray(document)) {
-		throw new FetchError(remote.documentUrl, 'Document root is not a JSON object')
+		throw new RefusedFetchError(remote.documentUrl, 'Document root is not a JSON object')
 	}
 	return remote
 }
@@ -129,10 +146,10 @@ async function load(deps: LoaderDeps, kind: Kind, sign: RequestSigner | undefine
 			await response.body?.cancel()
 			const next = new URL(response.headers.get('location') ?? '', current)
 			if (next.origin !== target.origin) {
-				throw new FetchError(current, `Refused cross-origin redirect to ${next.origin}`)
+				throw new RefusedFetchError(current, `Refused cross-origin redirect to ${next.origin}`)
 			}
 			if (redirects >= MAX_REDIRECTS) {
-				throw new FetchError(current, `Too many redirects (${redirects + 1})`)
+				throw new RefusedFetchError(current, `Too many redirects (${redirects + 1})`)
 			}
 			current = next
 			continue
@@ -144,7 +161,7 @@ async function load(deps: LoaderDeps, kind: Kind, sign: RequestSigner | undefine
 async function readDocument(response: Response, kind: Kind, final: URL, target: URL): Promise<RemoteDocument> {
 	if (final.origin !== target.origin) {
 		await response.body?.cancel()
-		throw new FetchError(final, `Refused document redirected to ${final.origin}`)
+		throw new RefusedFetchError(final, `Refused document redirected to ${final.origin}`)
 	}
 	if (!response.ok) {
 		await response.body?.cancel()
@@ -161,11 +178,11 @@ async function readDocument(response: Response, kind: Kind, final: URL, target: 
 	const media = parseMediaType(response.headers.get('content-type') ?? '')
 	if (media === null || !kind.accepts(media)) {
 		await response.body?.cancel()
-		throw new FetchError(final, `${kind.refusal}: ${response.headers.get('content-type')}`)
+		throw new RefusedFetchError(final, `${kind.refusal}: ${response.headers.get('content-type')}`)
 	}
 	const body = await readBoundedBody(response, DOCUMENT_BODY_LIMIT)
 	if (body === 'too-large') {
-		throw new FetchError(final, `Document exceeds ${DOCUMENT_BODY_LIMIT} bytes`)
+		throw new RefusedFetchError(final, `Document exceeds ${DOCUMENT_BODY_LIMIT} bytes`)
 	}
 	// Fedify parses the bounded bytes, so a JSON-LD context given in a Link header is applied as Fedify applies it.
 	// Alternate-document links are not followed: only JSON types reach this point. Fedify compares the Content-Type
@@ -175,10 +192,10 @@ async function readDocument(response: Response, kind: Kind, final: URL, target: 
 	let remote: RemoteDocument
 	try {
 		remote = await getRemoteDocument(final.href, new Response(body, { headers }), () =>
-			Promise.reject(new FetchError(final, 'Refused alternate document link'))
+			Promise.reject(new RefusedFetchError(final, 'Refused alternate document link'))
 		)
 	} catch (error) {
-		throw error instanceof FetchError ? error : new FetchError(final, 'Document is not valid JSON')
+		throw error instanceof FetchError ? error : new RefusedFetchError(final, 'Document is not valid JSON')
 	}
 	// A cheap pre-filter only: it sees the literal id and @id, not a JSON-LD alias of @id. The identity that counts is
 	// the parsed object's id, which Fedify's consumers compare with this documentUrl (fetchKey for signature keys,
@@ -186,7 +203,7 @@ async function readDocument(response: Response, kind: Kind, final: URL, target: 
 	// itself must make the same check.
 	const id = documentId(remote.document)
 	if (id !== undefined && originOf(id) !== final.origin) {
-		throw new FetchError(final, `Document id ${id} is not on ${final.origin}`)
+		throw new RefusedFetchError(final, `Document id ${id} is not on ${final.origin}`)
 	}
 	const loaded = { ...remote, documentUrl: final.href }
 	return kind.objectRoot ? assertObjectRoot(loaded) : loaded
@@ -214,21 +231,21 @@ const IPV4_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/
 // URL parsing has already normalized IPv4 forms like 0x7f.1 or 2130706433 to dotted quads.
 async function assertFetchable(url: URL, checkHost: (url: URL) => Promise<void>): Promise<void> {
 	if (url.protocol !== 'https:') {
-		throw new FetchError(url, `Refused non-https URL: ${url.protocol}`)
+		throw new RefusedFetchError(url, `Refused non-https URL: ${url.protocol}`)
 	}
 	if (url.username !== '' || url.password !== '') {
-		throw new FetchError(url, 'Refused URL with credentials')
+		throw new RefusedFetchError(url, 'Refused URL with credentials')
 	}
 	const host = url.hostname
 	if (host.startsWith('[') || IPV4_LITERAL.test(host)) {
-		throw new FetchError(url, `Refused literal IP host: ${host}`)
+		throw new RefusedFetchError(url, `Refused literal IP host: ${host}`)
 	}
 	if (host === 'localhost' || host.endsWith('.localhost') || !host.includes('.')) {
-		throw new FetchError(url, `Refused local host: ${host}`)
+		throw new RefusedFetchError(url, `Refused local host: ${host}`)
 	}
 	try {
 		await checkHost(url)
 	} catch (error) {
-		throw new FetchError(url, `Refused host ${host}: ${errorMessage(error)}`)
+		throw new RefusedFetchError(url, `Refused host ${host}: ${errorMessage(error)}`)
 	}
 }

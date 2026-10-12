@@ -1,7 +1,8 @@
-import { processInbox, type InboxDeps } from '../federation/inbox'
+import { processInbox, type InboxDeps, type PurgeMessage } from '../federation/inbox'
 import { type SpoolMessage, spoolMessageOptions } from '../federation/spool'
 import { readConfig } from '../platform/config'
 import { errorFields } from '../platform/error-message'
+import { callStore } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
 
 // Delay before a spooled request is offered again while maintenance lasts.
@@ -19,6 +20,10 @@ export async function handleQueue(batch: MessageBatch, env: Env, deps: InboxDeps
 	const maintenance = !config.ok || config.config.MAINTENANCE !== 'off'
 	for (const message of batch.messages) {
 		const body = message.body
+		if (isPurgeMessage(body)) {
+			await purge(message, body, env, deps, maintenance)
+			continue
+		}
 		if (!isSpoolMessage(body)) {
 			console.error({ event: 'kopje.queue.unknown', id: message.id })
 			message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
@@ -29,8 +34,21 @@ export async function handleQueue(batch: MessageBatch, env: Env, deps: InboxDeps
 			continue
 		}
 		try {
-			await processInbox(env, deps, body.spooledAt)
-			message.ack()
+			// The original request, verified against the time it was spooled (OPS-1).
+			const outcome = await processInbox(env, deps, {
+				url: body.url,
+				method: body.method,
+				headers: body.headers,
+				body: await inflate(body.body),
+				receivedAt: body.spooledAt,
+			})
+			if (outcome.status === 503) {
+				// A remote fetch failed in a way that may pass: try again later (counts as a retry).
+				message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
+			} else {
+				// Done, or refused for good (401, 404, 415): a refused request is dropped, as the live inbox answers it.
+				message.ack()
+			}
 		} catch (error) {
 			if (error instanceof StoreUnavailableError) {
 				await requeue(message, body, env.QUEUE)
@@ -42,6 +60,31 @@ export async function handleQueue(batch: MessageBatch, env: Env, deps: InboxDeps
 	}
 }
 
+// One more batch of a deleted actor's content; the next batch is a fresh message.
+async function purge(message: Message, body: PurgeMessage, env: Env, deps: InboxDeps, maintenance: boolean) {
+	if (maintenance) {
+		message.retry({ delaySeconds: SPOOL_REQUEUE_DELAY_SECONDS })
+		return
+	}
+	try {
+		const { remaining } = await callStore(() =>
+			deps.store(env).purgeRemoteAccount(deps.build(env), { uri: body.uri, now: deps.now() })
+		)
+		if (remaining) {
+			await env.QUEUE.send(body)
+		}
+		message.ack()
+	} catch (error) {
+		console.error({ event: 'kopje.purge.failed', id: message.id, ...errorFields(error) })
+		message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
+	}
+}
+
+async function inflate(bytes: Uint8Array): Promise<Uint8Array> {
+	const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'))
+	return new Uint8Array(await new Response(stream).arrayBuffer())
+}
+
 async function requeue(message: Message, body: SpoolMessage, queue: Queue): Promise<void> {
 	try {
 		await queue.send(body, { ...spoolMessageOptions, delaySeconds: SPOOL_REQUEUE_DELAY_SECONDS })
@@ -51,6 +94,11 @@ async function requeue(message: Message, body: SpoolMessage, queue: Queue): Prom
 		console.error({ event: 'kopje.spool.requeue.failed', id: message.id, ...errorFields(error) })
 		message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
 	}
+}
+
+function isPurgeMessage(body: unknown): body is PurgeMessage {
+	const m = body as Partial<PurgeMessage> | null
+	return typeof m === 'object' && m !== null && m.kind === 'purge' && typeof m.uri === 'string'
 }
 
 function isSpoolMessage(body: unknown): body is SpoolMessage {
