@@ -1,271 +1,43 @@
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
-import { harness, inboxDeps } from './app-helpers'
-import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
-import { completeSetup, migratedStore } from './helpers'
+import { inboxDeps } from './app-helpers'
+import { AP, LOCAL, MASTODON, mastodonActor, MISSKEY, MISSKEY_CONTEXT, misskeyActor, signedInit } from './inbox-helpers'
 import {
-	AP,
-	LOCAL,
-	MASTODON,
-	mastodonActor,
-	MISSKEY,
-	MISSKEY_CONTEXT,
-	misskeyActor,
-	RemoteWeb,
-	type SignOptions,
-	signedInit,
-	type TestActor,
-} from './inbox-helpers'
+	accountId,
+	ALICE,
+	ALICE_URI,
+	announce,
+	AS,
+	create,
+	DAVE,
+	DAVE_URI,
+	followed,
+	like,
+	localStatus,
+	mastodonNote,
+	misskeyNote,
+	notifications,
+	OTHER,
+	PUBLIC,
+	remove,
+	setup,
+	statuses,
+	statusRow,
+	undo,
+	update,
+} from './inbox-status-helpers'
 import { PURGE_BATCH } from '../src/domain/inbox'
 import { MAX_STATUS_MEDIA, MAX_STATUS_TAGS } from '../src/domain/remote-statuses'
 import { handleQueue } from '../src/jobs/queue'
 import { MAX_JSON_DEPTH } from '../src/platform/json-bounds'
-import type { StoreStub } from '../src/platform/store-client'
 import { REMOTE_HTML_RAW_LIMIT } from '../src/security/html'
-import { sha256Hex } from '../src/security/tokens'
 
 // Inbound statuses, favourites and boosts (B1b-2), end to end through the app: signed activities from synthetic
 // Mastodon- and Misskey-shaped servers, the Store's rows, and what local users see through the API. Test names cite
 // the invariants (docs/threat-model.md); the threat model's B1b negative cases owned here are unauthorized Update and
 // Delete, duplicate and reordered Delete and Create, Announce of private and unlisted objects, and fetches of private
 // and unlisted objects.
-
-const AS = 'https://www.w3.org/ns/activitystreams'
-const PUBLIC = `${AS}#Public`
-const ALICE = '111111111111111111'
-const ALICE_URI = `${LOCAL}/ap/users/alice`
-const DAVE = '222222222222222222'
-const DAVE_URI = `${LOCAL}/ap/users/dave`
-const OTHER = 'https://other.example'
-
-async function token(store: StoreStub, accountId: string): Promise<string> {
-	await sql(
-		store,
-		`INSERT OR IGNORE INTO oauth_clients (id, secret, name, redirect_uris, scopes)
-		VALUES ('test', 'secret', 'test', 'urn:ietf:wg:oauth:2.0:oob', 'read write follow')`
-	)
-	const value = `token-${accountId}`
-	await sql(
-		store,
-		"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'test', ?, 'read write follow')",
-		await sha256Hex(value),
-		accountId
-	)
-	return value
-}
-
-async function setup() {
-	const store = await migratedStore()
-	await completeSetup(store)
-	await seedLocalAccount(store, 'kopje.test', { id: ALICE, username: 'alice', key: LEGACY_EMPTY_KEK })
-	await seedLocalAccount(store, 'kopje.test', { id: DAVE, username: 'dave', key: LEGACY_EMPTY_KEK })
-	const web = new RemoteWeb()
-	const h = harness(store, {}, undefined, { keygen: fixtureKeyGen, loader: web.loader })
-	const tokens = { alice: await token(store, ALICE), dave: await token(store, DAVE) }
-	const post = async (actor: TestActor, activity: unknown, options: SignOptions & { path?: string } = {}) => {
-		const path = options.path ?? '/inbox'
-		return (await h.request(path, await signedInit(actor, path, activity, options))).status
-	}
-	const api = async <T = unknown>(path: string, as: 'alice' | 'dave' | null = 'alice') => {
-		const response = await h.request(path, as === null ? {} : { headers: { authorization: `Bearer ${tokens[as]}` } })
-		return { status: response.status, body: (await response.json()) as T }
-	}
-	return { store, web, ...h, post, api, tokens }
-}
-
-type Setup = Awaited<ReturnType<typeof setup>>
-
-let sequence = 0
-
-type Note = Record<string, unknown> & { id: string; to: string[]; cc: string[] }
-
-// A Note as Mastodon 4.x's ActivityPub::NoteSerializer renders it.
-function mastodonNote(actor: TestActor, extra: Record<string, unknown> = {}): Note {
-	const n = ++sequence
-	const id = `${actor.uri}/statuses/${n}`
-	return {
-		id,
-		type: 'Note',
-		summary: null,
-		inReplyTo: null,
-		published: '2026-10-11T12:00:00Z',
-		url: `${new URL(actor.uri).origin}/@${actor.uri.split('/').at(-1)}/${n}`,
-		attributedTo: actor.uri,
-		to: [PUBLIC],
-		cc: [`${actor.uri}/followers`],
-		sensitive: false,
-		atomUri: id,
-		inReplyToAtomUri: null,
-		conversation: `tag:mastodon.example,2026-10-11:objectId=${n}:objectType=Conversation`,
-		content: `<p>note ${n}</p>`,
-		contentMap: { en: `<p>note ${n}</p>` },
-		attachment: [],
-		tag: [],
-		replies: { id: `${id}/replies`, type: 'Collection', first: { type: 'CollectionPage', items: [] } },
-		likes: { id: `${id}/likes`, type: 'Collection', totalItems: 0 },
-		shares: { id: `${id}/shares`, type: 'Collection', totalItems: 0 },
-		...extra,
-	} as Note
-}
-
-// A Note as Misskey's ApRendererService#renderNote renders it: MFM source in _misskey_content and source, quotes in
-// _misskey_quote, quoteUrl and quoteUri.
-function misskeyNote(actor: TestActor, extra: Record<string, unknown> = {}): Note {
-	const id = `${MISSKEY}/notes/9n${++sequence}`
-	return {
-		id,
-		type: 'Note',
-		attributedTo: actor.uri,
-		summary: null,
-		content: '<p><span>にゃーん $[x2 big]</span></p>',
-		_misskey_content: 'にゃーん $[x2 big]',
-		source: { content: 'にゃーん $[x2 big]', mediaType: 'text/x.misskeymarkdown' },
-		_misskey_quote: `${MISSKEY}/notes/9quoted`,
-		quoteUrl: `${MISSKEY}/notes/9quoted`,
-		quoteUri: `${MISSKEY}/notes/9quoted`,
-		published: '2026-10-11T12:00:00.000Z',
-		to: [PUBLIC],
-		cc: [`${actor.uri}/followers`],
-		inReplyTo: null,
-		attachment: [],
-		sensitive: false,
-		tag: [],
-		...extra,
-	} as Note
-}
-
-function create(actor: TestActor, object: Note, context: unknown = AS) {
-	return {
-		'@context': context,
-		id: `${object.id}/activity`,
-		type: 'Create',
-		actor: actor.uri,
-		published: object.published,
-		to: object.to,
-		cc: object.cc,
-		object,
-	}
-}
-
-function update(actor: TestActor, object: Note, updated: string) {
-	return {
-		'@context': AS,
-		id: `${object.id}#updates/${Date.parse(updated)}`,
-		type: 'Update',
-		actor: actor.uri,
-		to: object.to,
-		cc: object.cc,
-		object: { ...object, updated },
-	}
-}
-
-function remove(actor: TestActor, object: string) {
-	return {
-		'@context': AS,
-		id: `${object}#delete-${++sequence}`,
-		type: 'Delete',
-		actor: actor.uri,
-		object: { id: object, type: 'Tombstone', atomUri: object },
-	}
-}
-
-function announce(actor: TestActor, object: string, extra: Record<string, unknown> = {}) {
-	return {
-		'@context': AS,
-		id: `${actor.uri}/statuses/${++sequence}/activity`,
-		type: 'Announce',
-		actor: actor.uri,
-		published: '2026-10-11T13:00:00Z',
-		to: [PUBLIC],
-		cc: [`${actor.uri}/followers`],
-		object,
-		...extra,
-	}
-}
-
-function like(actor: TestActor, object: string, extra: Record<string, unknown> = {}) {
-	return {
-		'@context': AS,
-		id: `${new URL(actor.uri).origin}/likes/${++sequence}`,
-		type: 'Like',
-		actor: actor.uri,
-		object,
-		...extra,
-	}
-}
-
-function undo(actor: TestActor, object: unknown) {
-	return { '@context': AS, id: `${actor.uri}#undo-${++sequence}`, type: 'Undo', actor: actor.uri, object }
-}
-
-const statuses = (store: StoreStub) =>
-	sql<{ uri: string; visibility: string; reblog_of_id: string | null }>(
-		store,
-		'SELECT uri, visibility, reblog_of_id FROM statuses ORDER BY id'
-	)
-type StatusRow = {
-	id: string
-	url: string | null
-	content: string
-	spoiler_text: string
-	sensitive: number
-	language: string | null
-	visibility: string
-	published_at: string
-	edited_at: string | null
-	in_reply_to_uri: string | null
-	in_reply_to_id: string | null
-	in_reply_to_account_id: string | null
-	replies_count: number
-	favourites_count: number
-	reblogs_count: number
-	raw: string
-}
-const statusRow = async (store: StoreStub, uri: string) =>
-	(
-		await sql<StatusRow>(
-			store,
-			`SELECT id, url, content, spoiler_text, sensitive, language, visibility, published_at, edited_at, in_reply_to_uri,
-				in_reply_to_id, in_reply_to_account_id, replies_count, favourites_count, reblogs_count, raw
-			FROM statuses WHERE uri = ?`,
-			uri
-		)
-	)[0]
-const notifications = (store: StoreStub) =>
-	sql<{ account_id: string; type: string }>(store, 'SELECT account_id, type FROM notifications ORDER BY id')
-const accountId = async (store: StoreStub, uri: string) =>
-	(await sql<{ id: string }>(store, 'SELECT id FROM accounts WHERE uri = ?', uri))[0]?.id
-
-// The remote actor is stored (by a Follow of dave) and followed by alice, so its public posts concern this instance.
-async function followed(t: Setup, actor: TestActor, follower = ALICE): Promise<string> {
-	await t.post(actor, {
-		'@context': AS,
-		id: `${actor.uri}#follows/${++sequence}`,
-		type: 'Follow',
-		actor: actor.uri,
-		object: follower === ALICE ? DAVE_URI : ALICE_URI,
-	})
-	const id = (await accountId(t.store, actor.uri))!
-	await sql(
-		t.store,
-		"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
-		follower,
-		id
-	)
-	await sql(t.store, 'DELETE FROM notifications')
-	return id
-}
-
-async function localStatus(t: Setup, body: Record<string, unknown>, as: 'alice' | 'dave' = 'alice') {
-	const response = await t.request('/api/v1/statuses', {
-		method: 'POST',
-		headers: { authorization: `Bearer ${t.tokens[as]}`, 'content-type': 'application/json' },
-		body: JSON.stringify(body),
-	})
-	expect(response.status).toBe(200)
-	return (await response.json()) as { id: string; uri: string }
-}
 
 describe('Create (Mastodon and Misskey)', () => {
 	it('stores a public Note of a followed account as Mastodon does, and shows it in the follower’s home', async () => {
