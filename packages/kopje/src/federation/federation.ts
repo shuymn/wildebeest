@@ -116,9 +116,9 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 	federation
 		.setActorDispatcher('/ap/users/{identifier}', async (ctx, identifier) => {
 			if (identifier === INSTANCE_ACTOR) {
-				// The HTTP alias rule: the document is served at /actor, never under the /ap/users template. Other callers,
-				// such as WebFinger for https://<domain>/actor, may still resolve the instance actor.
-				if (ctx.url.pathname.startsWith('/ap/users/')) {
+				// The HTTP alias rule: the document is served at /actor, never under the /ap/users template. WebFinger
+				// resolves it only by its canonical URI; Fedify also maps the template spelling of the identifier to it.
+				if (!isInstanceActorRequest(ctx.url, origin)) {
 					return null
 				}
 				const key = await loadInstanceKey()
@@ -194,6 +194,14 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 	})
 
 	return federation
+}
+
+function isInstanceActorRequest(url: URL, origin: string): boolean {
+	if (url.pathname === '/.well-known/webfinger') {
+		const resources = url.searchParams.getAll('resource')
+		return resources.length === 1 && resources[0] === `${origin}/actor`
+	}
+	return url.pathname === '/actor'
 }
 
 function memo<T>(cache: Map<string, Promise<T>>, key: string, load: () => Promise<T>): Promise<T> {

@@ -137,9 +137,17 @@ describe('instance actor', () => {
 				{ rel: 'self', type: 'application/activity+json', href: 'https://social.example/actor' },
 			]),
 		})
-		expect(
-			(await request('/.well-known/webfinger?resource=https://social.example/ap/users/kopje%3Ainstance')).status
-		).toBe(404)
+		// Only the canonical URI: the template spelling of the instance identifier, as the resource value
+		// "https://social.example/ap/users/kopje%3Ainstance", and other spellings are not the instance actor.
+		for (const resource of [
+			'https://social.example/ap/users/kopje%3Ainstance',
+			'https://social.example/ap/users/kopje:instance',
+			'https://social.example/actor/',
+			'https://social.example/actor?x=1',
+		]) {
+			const query = new URLSearchParams({ resource })
+			expect((await request(`/.well-known/webfinger?${query}`)).status, resource).toBe(404)
+		}
 	})
 })
 
