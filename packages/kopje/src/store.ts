@@ -27,6 +27,8 @@ import { getSetupState } from './domain/setup'
 import { saveSnapshot } from './domain/snapshot'
 import * as statuses from './domain/statuses'
 import * as timelines from './domain/timelines'
+import * as webPages from './domain/web-pages'
+import * as webSession from './domain/web-session'
 import { type ImportAuthority, StoreAdmin } from './platform/store-admin'
 import { StoreKernel, type StoreOperation } from './platform/store-kernel'
 import { buildOf, PACKAGE_VERSION } from './version'
@@ -270,6 +272,43 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, oauth.revokeToken, input)
 	}
 
+	sweepOAuth(callerBuild: string, input: OperationInput<typeof oauth.sweepOAuth>) {
+		return this.#kernel.execute(callerBuild, oauth.sweepOAuth, input)
+	}
+
+	// The web UI (B5): sessions of its own OAuth client, the user's authorizations, and the public pages.
+	beginWebLogin(callerBuild: string, input: OperationInput<typeof webSession.beginWebLogin>) {
+		return this.#kernel.execute(callerBuild, webSession.beginWebLogin, input)
+	}
+
+	startWebSession(callerBuild: string, input: OperationInput<typeof webSession.startWebSession>) {
+		return this.#kernel.execute(callerBuild, webSession.startWebSession, input)
+	}
+
+	endWebSession(callerBuild: string, input: OperationInput<typeof webSession.endWebSession>) {
+		return this.#kernel.execute(callerBuild, webSession.endWebSession, input)
+	}
+
+	settingsView(callerBuild: string, input: OperationInput<typeof webSession.settingsView>) {
+		return this.#kernel.execute(callerBuild, webSession.settingsView, input)
+	}
+
+	revokeAuthorization(callerBuild: string, input: OperationInput<typeof webSession.revokeAuthorization>) {
+		return this.#kernel.execute(callerBuild, webSession.revokeAuthorization, input)
+	}
+
+	revokeOtherSessions(callerBuild: string, input: OperationInput<typeof webSession.revokeOtherSessions>) {
+		return this.#kernel.execute(callerBuild, webSession.revokeOtherSessions, input)
+	}
+
+	profilePage(callerBuild: string, input: OperationInput<typeof webPages.profilePage>) {
+		return this.#kernel.execute(callerBuild, webPages.profilePage, input)
+	}
+
+	statusPage(callerBuild: string, input: OperationInput<typeof webPages.statusPage>) {
+		return this.#kernel.execute(callerBuild, webPages.statusPage, input)
+	}
+
 	suspendAccount(callerBuild: string, input: { accountId: string; now: number }) {
 		return this.#kernel.execute(callerBuild, oauth.suspendAccount, input)
 	}
@@ -290,10 +329,7 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, accounts.verifyCredentials, input)
 	}
 
-	updateCredentials(
-		callerBuild: string,
-		input: { credential: UserCredential; changes: accounts.CredentialChanges; present: accounts.Present }
-	) {
+	updateCredentials(callerBuild: string, input: OperationInput<typeof accounts.updateCredentials>) {
 		return this.#kernel.execute(callerBuild, accounts.updateCredentials, input)
 	}
 
@@ -443,6 +479,10 @@ export class Store extends DurableObject<Env> {
 
 	updateMedia(callerBuild: string, input: OperationInput<typeof media.updateMedia>) {
 		return this.#kernel.execute(callerBuild, media.updateMedia, input)
+	}
+
+	setProfileImage(callerBuild: string, input: OperationInput<typeof media.setProfileImage>) {
+		return this.#kernel.execute(callerBuild, media.setProfileImage, input)
 	}
 
 	startTransforms(callerBuild: string, input: OperationInput<typeof media.startTransforms>) {

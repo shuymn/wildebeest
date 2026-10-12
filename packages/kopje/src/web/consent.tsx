@@ -1,5 +1,7 @@
 import type { Child, FC } from 'hono/jsx'
 
+import { STRINGS } from './strings'
+
 // The OAuth consent page and its messages: plain server-rendered HTML with no script (the response carries
 // script-src 'none'). hono/jsx escapes every interpolated value. The full web UI comes in a later stage.
 
@@ -41,30 +43,40 @@ export const ConsentPage: FC<{
 	username: string
 	scopes: string[]
 	fields: ConsentFields
-}> = ({ appName, website, username, scopes, fields }) => (
-	<Layout title="Authorization required">
-		<p>
-			<strong>{appName}</strong>
-			{website === null ? '' : ` (${website})`} wants to access the account <strong>@{username}</strong>.
-		</p>
-		<p>It is asking for these permissions:</p>
-		<ul>
-			{scopes.map((scope) => (
-				<li>
-					<code>{scope}</code>
-				</li>
-			))}
-		</ul>
+	// The instance's own web UI (domain/web-session.ts): the same decision, worded as signing in.
+	firstParty?: boolean
+}> = ({ appName, website, username, scopes, fields, firstParty = false }) => (
+	<Layout title={firstParty ? STRINGS.signIn : 'Authorization required'}>
+		{firstParty ? (
+			<p>
+				{STRINGS.signInAs} <strong>@{username}</strong>?
+			</p>
+		) : (
+			<>
+				<p>
+					<strong>{appName}</strong>
+					{website === null ? '' : ` (${website})`} wants to access the account <strong>@{username}</strong>.
+				</p>
+				<p>It is asking for these permissions:</p>
+				<ul>
+					{scopes.map((scope) => (
+						<li>
+							<code>{scope}</code>
+						</li>
+					))}
+				</ul>
+			</>
+		)}
 		<form method="post" action="/oauth/authorize">
 			{Object.entries(fields).map(([name, value]) =>
 				value === undefined ? null : <input type="hidden" name={name} value={value} />
 			)}
 			<div class="actions">
 				<button type="submit" name="decision" value="approve">
-					Authorize
+					{firstParty ? STRINGS.signIn : 'Authorize'}
 				</button>
 				<button type="submit" name="decision" value="deny">
-					Deny
+					{firstParty ? STRINGS.cancel : 'Deny'}
 				</button>
 			</div>
 		</form>

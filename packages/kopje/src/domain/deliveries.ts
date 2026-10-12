@@ -246,7 +246,19 @@ export function enqueueActivity(
 			object
 		)
 	}
-	if (object !== null && envelope.activity.type === 'Update') {
+	// An Update of an actor (a profile change) goes to every target as it is, and replaces the earlier Updates of the
+	// actor still waiting there, so quick edits deliver only the latest document. An Update of a status goes as a
+	// Create to servers that lack the status.
+	if (object !== null && envelope.activity.type === 'Update' && isActorObject(envelope.activity.object)) {
+		replaceWaiting(
+			db,
+			signerId,
+			object,
+			new Set(targets.filter((t) => t.inbox !== '').map((t) => laneOf(t.inbox))),
+			now
+		)
+		insertIntent(db, signerId, envelope, object, false, targets, now)
+	} else if (object !== null && envelope.activity.type === 'Update') {
 		const having = serversWithObject(db, signerId, object)
 		const fresh = targets.filter((t) => t.inbox !== '' && !having.has(laneOf(t.inbox)))
 		if (fresh.length > 0) {
@@ -268,6 +280,12 @@ export function enqueueActivity(
 		insertIntent(db, signerId, envelope, object, retracts, targets, now)
 	}
 	expandPending(db, now, EXPANSION_STEP)
+}
+
+const ACTOR_TYPES = new Set(['Person', 'Service', 'Group', 'Application', 'Organization'])
+
+function isActorObject(object: unknown): boolean {
+	return typeof object === 'object' && object !== null && ACTOR_TYPES.has(String((object as Activity).type))
 }
 
 const SUPERSEDED = `account_id = ? AND object_uri = ? AND (? OR json_extract(body, '$.activity.type') = 'Update')`

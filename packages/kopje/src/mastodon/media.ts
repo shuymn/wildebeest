@@ -12,6 +12,7 @@ import {
 } from './context'
 import { mastodonError } from './errors'
 import { Params } from './params'
+import type { UserCredential } from '../domain/auth'
 import { type MediaChanges, type MonthlyTransforms, SWEEP_BATCH } from '../domain/media'
 import type { MediaAttachment } from '../domain/status-presenter'
 import { readBoundedBody } from '../platform/body'
@@ -142,7 +143,10 @@ async function readMediaForm(request: Request, ms: number): Promise<MediaForm> {
 	return { file: new Uint8Array(await file.arrayBuffer()), params: new Params(all) }
 }
 
-type Failure = { status: number; error: string }
+export type Failure = { status: number; error: string }
+
+// What the pipeline reads of the request context: the bindings and the raw request (its body is the form).
+type UploadContext = { env: Env; req: { raw: Request } }
 
 const PROCESSING_FAILURES: Record<'unsupported' | 'too_large' | 'quota' | 'failed', Failure> = {
 	unsupported: { status: 422, error: INVALID_TYPE },
@@ -151,14 +155,26 @@ const PROCESSING_FAILURES: Record<'unsupported' | 'too_large' | 'quota' | 'faile
 	failed: { status: 500, error: 'Error processing uploaded media' },
 }
 
-function budgetRefusal(scope: 'account' | 'instance'): Response {
+function budgetRefusal(scope: 'account' | 'instance'): Failure {
 	return scope === 'account'
-		? mastodonError(429, 'Your media processing budget for the month is used up')
-		: mastodonError(429, "This server's media processing budget for the month is used up")
+		? { status: 429, error: 'Your media processing budget for the month is used up' }
+		: { status: 429, error: "This server's media processing budget for the month is used up" }
 }
 
-// POST /api/v1/media and /api/v2/media.
-export const uploadMedia: ApiHandler = async (c, deps) => {
+export type UploadOutcome = { ok: true; media: MediaAttachment } | ({ ok: false } & Failure)
+
+// What the caller checks in the form once it is read, before any transformation is spent: a failure refuses the
+// upload (the API checks the description, the settings page its anti-forgery token).
+export type FormCheck = (params: Params) => Failure | null | Promise<Failure | null>
+
+// The upload pipeline of one image, for POST /api/v{1,2}/media and the settings page's avatar and header
+// (app/web.tsx): reserve, read the form, check it, transform, write, complete; a failure abandons the reservation.
+export async function receiveImageUpload(
+	c: UploadContext,
+	deps: ApiDeps,
+	credential: () => UserCredential,
+	check: FormCheck
+): Promise<UploadOutcome> {
 	const token = deps.randomToken()
 	const config = readConfig(c.env)
 	// The app answers 503 before any route when the env is invalid, so this is the validated value.
@@ -167,51 +183,76 @@ export const uploadMedia: ApiHandler = async (c, deps) => {
 		: { instance: 0, account: 0 }
 	const reserved = authorized(
 		await storeCall(c, deps, (s, b) =>
-			s.reserveMedia(b, { credential: userCredential(c, deps), token, monthlyTransforms, now: deps.now() })
+			s.reserveMedia(b, { credential: credential(), token, monthlyTransforms, now: deps.now() })
 		)
 	)
 	if (reserved.status !== 'ok') {
 		await c.req.raw.body?.cancel()
-		return reserved.status === 'rate_limited' ? mastodonError(429, 'Too many requests') : budgetRefusal(reserved.scope)
+		return {
+			ok: false,
+			...(reserved.status === 'rate_limited'
+				? { status: 429, error: 'Too many requests' }
+				: budgetRefusal(reserved.scope)),
+		}
 	}
 	const { id, deadline } = reserved
-	let outcome: Response | MediaAttachment
+	const upload = { id, token, deadline, monthlyTransforms, credential, check }
+	let outcome: Failure | MediaAttachment
 	try {
-		outcome = await processUpload(c, deps, { id, token, deadline, monthlyTransforms })
+		outcome = await processUpload(c, deps, upload)
 	} catch (error) {
-		await abandon(c, deps, id, token)
+		await abandon(c, deps, upload)
 		throw error
 	}
-	if (outcome instanceof Response) {
-		await abandon(c, deps, id, token)
-		return outcome
+	if ('error' in outcome) {
+		await abandon(c, deps, upload)
+		return { ok: false, ...outcome }
 	}
-	return c.json(outcome)
+	return { ok: true, media: outcome }
+}
+
+// POST /api/v1/media and /api/v2/media.
+export const uploadMedia: ApiHandler = async (c, deps) => {
+	const outcome = await receiveImageUpload(
+		c,
+		deps,
+		() => userCredential(c, deps),
+		(params) => {
+			const problem = descriptionProblem(params.get('description'))
+			return problem === undefined ? null : { status: 422, error: problem }
+		}
+	)
+	return outcome.ok ? c.json(outcome.media) : mastodonError(outcome.status, outcome.error)
 }
 
 const EXPIRED_MESSAGE = 'Validation failed: The upload expired'
-const EXPIRED = () => mastodonError(422, EXPIRED_MESSAGE)
+const EXPIRED: Failure = { status: 422, error: EXPIRED_MESSAGE }
 
-async function processUpload(
-	c: ApiContext,
-	deps: ApiDeps,
-	upload: { id: string; token: string; deadline: number; monthlyTransforms: MonthlyTransforms }
-): Promise<Response | MediaAttachment> {
-	const { id, token } = upload
+type Upload = {
+	id: string
+	token: string
+	deadline: number
+	monthlyTransforms: MonthlyTransforms
+	credential: () => UserCredential
+	check: FormCheck
+}
+
+async function processUpload(c: UploadContext, deps: ApiDeps, upload: Upload): Promise<Failure | MediaAttachment> {
+	const { id, token, credential } = upload
 	const form = await readMediaForm(c.req.raw, upload.deadline - deps.now())
 	if ('error' in form) {
-		return mastodonError(422, form.error)
+		return { status: 422, error: form.error }
+	}
+	const refused = await upload.check(form.params)
+	if (refused !== null) {
+		return refused
 	}
 	const description = form.params.get('description')
-	const problem = descriptionProblem(description)
-	if (problem !== undefined) {
-		return mastodonError(422, problem)
-	}
 	// The Store revalidates the reservation with the time now and charges the transformations to this month.
 	const started = authorized(
 		await storeCall(c, deps, (s, b) =>
 			s.startTransforms(b, {
-				credential: userCredential(c, deps),
+				credential: credential(),
 				id,
 				monthlyTransforms: upload.monthlyTransforms,
 				now: deps.now(),
@@ -219,25 +260,24 @@ async function processUpload(
 		)
 	)
 	if (started.status === 'expired') {
-		return EXPIRED()
+		return EXPIRED
 	}
 	if (started.status === 'budget_exhausted') {
 		return budgetRefusal(started.scope)
 	}
 	const processed = await processImage(deps.images(c.env), form.file)
 	if (!processed.ok) {
-		const failure = PROCESSING_FAILURES[processed.reason]
 		if (processed.reason === 'quota') {
 			console.warn({ event: 'kopje.media.images_quota' })
 		} else if (processed.reason === 'failed') {
 			console.error({ event: 'kopje.media.transform_failed', detail: processed.detail ?? null })
 		}
-		return mastodonError(failure.status, failure.error)
+		return PROCESSING_FAILURES[processed.reason]
 	}
 	// The writer deadline fences the sweep: no write starts after it, and the Store refuses to complete after it, so a
 	// reservation the sweep may delete has no writer left (domain/media.ts).
 	if (deps.now() >= upload.deadline) {
-		return EXPIRED()
+		return EXPIRED
 	}
 	await writeFiles(c.env.MEDIA, id, token, form.file, processed.image)
 	const { full, small } = processed.image
@@ -245,7 +285,7 @@ async function processUpload(
 		authorized(
 			await storeCall(c, deps, (s, b) =>
 				s.completeMedia(b, {
-					credential: userCredential(c, deps),
+					credential: credential(),
 					id,
 					contentType: full.contentType,
 					original: { width: full.width, height: full.height },
@@ -267,7 +307,7 @@ async function processUpload(
 		}
 		media = await complete()
 	}
-	return media ?? EXPIRED()
+	return media ?? EXPIRED
 }
 
 // The original is kept (private, for backups) next to the served files. Keys come from the Store's id and token only.
@@ -294,12 +334,11 @@ async function writeFiles(
 // has settled every write), or keeps an upload whose completion committed although its answer was lost. Only then are
 // the R2 objects deleted, and only those of a doomed or vanished row. If the Store cannot be asked, the objects stay
 // for the sweep, which deletes them with the reservation once its writer deadline has passed.
-async function abandon(c: ApiContext, deps: ApiDeps, id: string, token: string): Promise<void> {
+async function abandon(c: UploadContext, deps: ApiDeps, upload: Upload): Promise<void> {
+	const { id, token } = upload
 	try {
 		const outcome = authorized(
-			await storeCall(c, deps, (s, b) =>
-				s.abandonMedia(b, { credential: userCredential(c, deps), id, now: deps.now() })
-			)
+			await storeCall(c, deps, (s, b) => s.abandonMedia(b, { credential: upload.credential(), id, now: deps.now() }))
 		)
 		if (outcome !== 'kept') {
 			await c.env.MEDIA.delete(mediaKeys(id, token))

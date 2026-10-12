@@ -100,7 +100,9 @@ function authorizationError(
 // RFC 6749 §3.1: each parameter at most once.
 const AUTHORIZE_PARAMS = ['response_type', 'scope', 'state', 'code_challenge', 'code_challenge_method', 'decision']
 
-type Checked = { request: AuthorizationRequest; email: string } | { response: Response | Promise<Response> }
+type Checked =
+	| { request: AuthorizationRequest; email: string; firstParty: boolean }
+	| { response: Response | Promise<Response> }
 
 // Access first, then the client: nothing about registered clients is disclosed to a caller Access did not admit.
 async function check(
@@ -157,7 +159,7 @@ async function check(
 	if ('error' in request) {
 		return { response: authorizationError(c, redirectUri, state, request) }
 	}
-	return { request, email: identity.email }
+	return { request, email: identity.email, firstParty: context.firstParty }
 }
 
 const NO_ACCOUNT = 'There is no account for this sign-in on this server.'
@@ -193,7 +195,7 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 		if ('response' in checked) {
 			return checked.response
 		}
-		const { request, email } = checked
+		const { request, email, firstParty } = checked
 		const login = await storeCall(c, deps, (s, b) => s.accountForLogin(b, { email }))
 		if (login.status === 'no_account') {
 			// TODO(first-login): create the account for this Access identity here once the keyring is available.
@@ -219,6 +221,7 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 				username={login.username}
 				scopes={request.scopes}
 				fields={fields}
+				firstParty={firstParty}
 			/>
 		)
 	})

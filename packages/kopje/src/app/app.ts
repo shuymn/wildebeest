@@ -6,6 +6,7 @@ import { ADMIN_PREFIX, adminRoutes, isAdminPath } from './admin'
 import { authorizeRoutes } from './authorize'
 import { classifyRequest, decide, type RequestClass } from './gate'
 import { publicHealth } from './health'
+import { webRoutes } from './web'
 import { ringDoorbell } from '../federation/delivery'
 import { INBOX_ROUTES, inboxHandler, precheckInbox } from '../federation/inbox'
 import { createResolver } from '../federation/resolve'
@@ -159,6 +160,7 @@ export function createApp({
 	app.get(MEDIA_ROUTE, serveMedia)
 	app.route('/', authorizeRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init) }))
 	app.route('/', mastodonApi(apiDeps))
+	app.route('/', webRoutes({ ...apiDeps, dispatch: (request, env, ctx) => app.fetch(request, env, ctx) }))
 
 	app.notFound((c) => {
 		if (c.req.path.startsWith('/api/')) {

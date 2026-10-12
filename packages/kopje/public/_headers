@@ -1,0 +1,3 @@
+# Static assets bypass the Worker; they are served with their exact types and never sniffed (WEB-5).
+/assets/*
+  X-Content-Type-Options: nosniff

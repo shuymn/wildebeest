@@ -151,6 +151,14 @@ export function renderStatusHtml(segments: readonly Segment[], options: RenderOp
 		.join('')
 }
 
+// A local profile field value (HTML-2): escaped, with absolute http(s) URLs linked as in statuses. Mentions and
+// hashtags stay text. Values are short (MAX_FIELD_VALUE), so this never reaches the raw bound.
+export function renderFieldValue(value: string): string {
+	return parseStatusText(value.slice(0, MAX_RAW_LENGTH))
+		.segments.map((segment) => (segment.kind === 'url' ? linkHtml(segment.url) : escapeHtml(segment.text)))
+		.join('')
+}
+
 const DISPLAY_LIMIT = 30
 
 // Mastodon's link display: the scheme (and www.) hidden, the rest cut with an ellipsis after 30 characters.

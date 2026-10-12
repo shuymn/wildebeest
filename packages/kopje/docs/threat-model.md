@@ -71,7 +71,7 @@ against their own instance. TLS is assumed between all parties.
 | `/oauth/token`, `/oauth/revoke`                               | R2, R3     | client credentials                                       | main: `src/mastodon/oauth.ts`                             |
 | `/admin/*` and the `kopje-admin` CLI                          | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session | main: `src/app/admin.ts`                                  |
 | `/setup` and its Cloudflare API calls                         | R2, R7     | `SETUP_TOKEN`                                            | Planned (B5)                                              |
-| Web UI (profiles, permalinks, settings)                       | R2, R4, R7 | session                                                  | Planned (B5)                                              |
+| Web UI (profiles, permalinks, settings)                       | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)          | branch `kopje/web-ui`: `src/app/web.tsx`, `src/web/*`     |
 | Media upload and serving, Images transformation               | R2–R4      | bearer token; capability URL for reads                   | main: `src/mastodon/media.ts`                             |
 | Web Push registration                                         | R3         | bearer token with `push`                                 | Planned (push)                                            |
 | Queue consumer, alarms, cron                                  | internal   | —                                                        | main: `src/jobs/queue.ts`, `src/platform/store-kernel.ts` |
@@ -198,7 +198,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   mentions included). Hashtag search is recent autocomplete over the viewer's own library windows and the newest
   public statuses, not a catalogue: a tag outside the windows is not found. _Gap:_ a status the viewer saved that later
   became hidden still takes a slot of the viewer's own window, which reveals that something changed, not what. Media
-  URLs appear only in statuses that pass the rule (see the capability URL accepted risk). The web UI is _Planned (B5)._ The object endpoint serves only what VIS-4 allows (enforced on main).
+  URLs appear only in statuses that pass the rule (see the capability URL accepted risk). The object endpoint serves only what VIS-4 allows (enforced on main). The web UI's public pages apply the rule with no viewer: _Implemented on branch `kopje/web-ui`:_ `src/domain/web-pages.ts`; `test/web-pages.test.ts`.
 - **VIS-2: limited stays limited.** A direct status with silent recipients (Misskey `specified`) is `limited`: shown
   only to its addressed recipients, presented as `private` by the API, never widened by an edit. _Enforced (main):_ `interpretAddressing` in `src/domain/audience.ts`; `test/audience.test.ts` ("reads Misskey
   specified"). _Implemented on branch `kopje/inbound-statuses`_ for inbound statuses: addressing goes through
@@ -231,13 +231,22 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   to inboxes whose Create is still leased", "retires the receipts of local boosts"), `test/delivery-verify.test.ts`
   ("boosts that cascade with their original", "a destination that never received the Create", "retraction targets in
   every state"). Peer limitation: Misskey ignores `Update` of a Note, so edits do not reach Misskey users.
+  A profile change (API or settings page, images and fields included) records an `Update` of the actor to Public for
+  the followers, only when the published document changed; it replaces the earlier actor Updates still waiting, and
+  is never turned into a Create. A suspended actor sends none. _Implemented on branch `kopje/web-ui`:_
+  `src/domain/actor-update.ts`, `enqueueActivity` in `src/domain/deliveries.ts`; `test/actor-update.test.ts`.
 - **VIS-4: the object endpoint serves public and unlisted local statuses only.** `/ap/o/:uuid` and status documents
   answer for local `public` and `unlisted` statuses, as Mastodon does for an unauthenticated fetch. `private`, `direct`,
   `limited`, remote objects and statuses of suspended accounts answer 404, whether or not the request is signed.
   The Note is built by `noteOf`, the presenter of the outbound `Create`; the outbox lists the same statuses and boosts
   of public or unlisted originals. _Enforced (main):_ `getLocalNote` and `getOutbox` in
   `src/domain/activities.ts`, the object and outbox dispatchers in `src/federation/federation.ts`;
-  `test/object-endpoint.test.ts`. Boosts (`Announce` ids) answer 404; Mastodon serves them.
+  `test/object-endpoint.test.ts`. Boosts (`Announce` ids) answer 404; Mastodon serves them. The permalink `/@user/:id`
+  shows the same set as HTML, and answers every other case (private, direct, limited, a boost, a remote status, another
+  author, a suspended author, no status) with the same 404 page; with an ActivityPub `Accept` it serves the object
+  endpoint's Note. A profile page lists only the account's public and unlisted originals. _Implemented on branch `kopje/web-ui`:_
+  `statusPage` and `profilePage` in `src/domain/web-pages.ts`; `test/web-pages.test.ts` ("answers the same 404 for
+  private, direct, limited, boosts, remote, another author and nothing", "hides the statuses of a suspended account").
 - **VIS-5: lists also apply the viewer's filters**, Mastodon's `StatusFilter`. Feeds, context, notifications, bookmarks,
   favourites, `favourited_by` and `reblogged_by` drop authors the viewer blocks, mutes or domain-blocks. A single status
   by id is not filtered. _Enforced (main):_ `unfilteredSql` and `listableSql` in
@@ -343,6 +352,38 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **AUTH-7: opaque credentials are unguessable and stored as digests.** Client ids and secrets, codes and access tokens
   are 32 random bytes. Codes and access tokens are stored and looked up only by their full SHA-256. _Enforced (main):_
   `src/security/tokens.ts`, `src/domain/oauth.ts`; `test/oauth.test.ts` ("stores only digests of tokens and codes").
+- **AUTH-8: a web session is an OAuth token of the web UI, and nothing else.** The web UI is an ordinary OAuth client
+  of the instance: `/login` sends the browser to `/oauth/authorize` (Access, WEB-1) with a PKCE S256 challenge. The
+  Store keeps the attempt (state, challenge, return path, and the digest of the session cookie the request carried)
+  under the digest of an opaque id the Worker minted; the browser's 10-minute `__Host-` login cookie holds only that id,
+  and nothing else from the browser is trusted for the attempt. Attempts are keyed per browser, expire after 10
+  minutes and are pruned as new ones come; `/login` is limited to 10 per minute per client IP (the Rate Limiting
+  binding), so no shared cap or counter exists that an anonymous party could fill to lock anyone out. The callback
+  consumes the attempt (once) and the code, which must be bound to the attempt's challenge; a state that is not the
+  attempt's leaves both in place. A session is an access token of the web
+  client (AUTH-1, AUTH-7) with a fixed lifetime of 7 days, held in an opaque `__Host-` cookie (HttpOnly, Secure,
+  SameSite=Lax, Path=/). Session values are minted only by the server at the callback, never taken from a URL; a
+  callback without the login cookie, with another state, or with a code bound to another challenge starts nothing
+  (session fixation, login CSRF), and a stale callback leaves the newer login cookie in place. Sessions of one browser
+  form a family: a new session deletes the family's live one and every session the browser presented; sign-out
+  deletes the presented and the live session and ends the family, so a sign-in started before it installs nothing.
+  Every retired session is a deleted token row, refused by cookie and as a bearer token alike; suspension, expiry and
+  "sign out other sessions" end sessions too. An attempt records its family when it starts, and an ended family's record
+  outlives every attempt naming it, so expiry and the sweep cannot lift the fence. "Sign out other sessions" ends their
+  families and deletes the web client's unexchanged codes for the user in the same transaction, so their sign-ins in
+  flight install nothing. Only a signed-in browser's sign-out (Origin and form token, WEB-4) can end
+  a family. Authorizations and sessions are listed and revoked only by a session of the web client, for the viewer's
+  own tokens (AUTH-6). _Implemented on branch `kopje/web-ui`:_ `src/domain/web-session.ts`, `src/web/session.ts`,
+  `src/app/web.tsx`; `test/web-session.test.ts` ("signs in through Access and sets an opaque, HttpOnly, Secure,
+  SameSite session cookie", "refuses a callback without the login cookie, or with another state", "uses a code once",
+  "consumes a sign-in attempt once", "keeps one session per browser", "trusts nothing but the attempt id from the
+  login cookie", "leaves the newer sign-in in place when a stale
+  callback arrives", "installs nothing from a callback that arrives after sign-out", "signs out the newer session when
+  sign-out carries the session it replaced", "keeps the sign-out fence when the session expires and is swept",
+  "fences the sign-ins in flight of the sessions \"sign out other sessions\" ends", "retires every replaced or signed-out session for cookies and bearer use
+  alike", "lets no anonymous flood of sign-ins or failed callbacks lock out the owner", "expires a session after its
+  lifetime", "does not take an API token for a session", "signs out, and the cookie authenticates nothing afterwards",
+  "signs out the other sessions only", "lists the authorized apps and revokes one").
 
 ### Web (WEB)
 
@@ -350,24 +391,45 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   requires a valid Access identity, an `Origin` equal to the instance origin (missing, `null` or foreign answers 403),
   and `decision=approve`; the Store revalidates client, redirect URI, scopes and account when it writes the code.
   _Enforced (main):_ `src/app/authorize.tsx`, `issueCode` in `src/domain/oauth.ts`; `test/oauth.test.ts` ("refuses a
-  decision posted from another origin", "refuses an account suspended between the consent page and approval"). _Gap:
-  missing and `null` Origin are not tested._
+  decision posted from another origin", "refuses an account suspended between the consent page and approval"). Missing
+  and `null` Origin: _Implemented on branch `kopje/web-ui`:_ `test/oauth.test.ts` ("refuses a decision posted from another origin, a null
+  origin or none").
 - **WEB-2: Kopje's HTML pages cannot be framed, scripted or cached.** Consent and code pages send a CSP with `script-src
 'none'` and `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and `Cache-Control:
 no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize.tsx`, `src/web/consent.tsx`;
   `test/oauth.test.ts` ("logs in through Access and calls the API with the token"). _Gap: only `script-src`,
-  `X-Frame-Options` and escaping are asserted._ Web UI and `/setup` pages: _Planned (B5)._
+  `X-Frame-Options` and escaping are asserted._ Web UI pages: _Implemented on branch `kopje/web-ui`:_ a CSP of `default-src 'none'` with only
+  `style-src 'self'` (the stylesheet is a static asset), `img-src 'self' https:`, `form-action 'self'`, `base-uri 'none'`
+  and `frame-ancestors 'none'` (no script source at all), `X-Frame-Options: DENY`; pages of a signed-in user and the
+  sign-in flow send `Cache-Control: no-store` and `Referrer-Policy: no-referrer`; public pages may be kept 60 s and vary
+  with `Accept`. `src/app/web.tsx`; `test/web-pages.test.ts` ("sends a CSP without script, denies framing"),
+  `test/web-session.test.ts` ("is never cached, framed or opened to other origins"). `/setup`: _Planned (B5b)._
 - **WEB-3: CORS is open only where no ambient credential exists.** Wildcard CORS without credentials applies to
   `/api/*`, `/oauth/token` and `/oauth/revoke` only (bearer tokens). `/oauth/authorize`, `/admin/*`, `/setup` and the
   web UI send no CORS headers. _Enforced (main):_ `src/app/app.ts`; `test/oauth.test.ts` ("opens the API and token
   endpoints to browser clients, errors included"). Admin, setup and UI routes: _Planned (B5); `/admin/*` on main sends no CORS headers._
+  UI routes: _Implemented on branch `kopje/web-ui`:_ no CORS headers even for a request with a foreign `Origin`; `test/web-pages.test.ts`,
+  `test/web-session.test.ts`.
 - **WEB-4: the web UI applies WEB-1 to every state change.** Each form that changes state checks `Origin` and its
-  session; a return or redirect target is a validated local path. _Planned (B5)._
+  session; a return or redirect target is a validated local path. _Implemented on branch `kopje/web-ui`:_ every POST (profile, avatar, header,
+  revoking an app, signing out other sessions, sign-out) first requires `Origin` equal to the instance origin (missing,
+  `null` and foreign answer 403 before the body is read), then the session and an anti-forgery token derived from it
+  (SHA-256 of the session token under its own context, compared in constant time). The only redirect targets are fixed
+  local paths and the sign-in's return path, which must start with exactly one `/`, contain no backslash, whitespace,
+  control character, `.` or `..` segment, or percent-encoded slash, backslash, dot, control or `%`, and resolve to the
+  instance origin as a path of the same form (so normalization cannot turn it into `//host`); anything else becomes
+  `/settings`. A legacy permalink moves to the author's stored username, not the request's text. `src/web/session.ts`,
+  `src/app/web.tsx`; `test/web-session.test.ts` ("refuses a missing, null or foreign Origin on every form", "refuses a
+  missing or wrong anti-forgery token on every form", "accepts only local paths (WEB-4: unsafe return path)", "returns after sign-in only to a
+  validated local path", "ignores a tampered return path in the login cookie"), `test/web-images.test.ts` ("refuses a
+  foreign, null or missing Origin and a wrong token before any transformation").
 - **WEB-5: responses declare their type.** API and federation responses carry their exact JSON media type and
   `X-Content-Type-Options: nosniff`. _Implemented on branch `kopje/inbound-statuses`:_ one middleware sets `nosniff`
   on every response (API, federation, inbox, media, errors and maintenance answers), and API and federation bodies
   are written by Hono's `c.json` and Fedify with their JSON types; `src/app/app.ts`; `test/inbox-statuses.test.ts`
   ("WEB-5: responses declare their type").
+  Web UI pages: _Implemented on branch `kopje/web-ui`:_ `text/html; charset=UTF-8` and `nosniff` on every page and error page; static assets
+  get `nosniff` from `public/_headers`; `test/web-pages.test.ts`, `test/web-session.test.ts`.
 
 ### Setup (SETUP)
 
@@ -459,9 +521,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   the stored actor document and sanitized when presented, at most 16 fields): the same `sanitizeRemoteHtml`;
   `test/inbox-statuses.test.ts` ("sanitizes content by allowlist with http(s) links only", "shows PropertyValue fields
   with sanitized values").
+  The web UI sanitizes again at the sink: bios, status content and field values reach a page only as the sanitizer's
+  output (`SafeHtml` in `src/web/safe-html.ts`), whatever the Store holds. _Implemented on branch `kopje/web-ui`:_ `test/web-pages.test.ts`
+  ("sanitizes stored HTML at the sink and drops non-http links").
 - **HTML-2: local text becomes HTML only by escaping and linking.** Status text and bios are escaped, then absolute
   http(s) URLs, known mentions and hashtags are linked. Display names stay plain strings. _Enforced (main)_ for bios:
   `src/domain/plain-text.ts`; `test/accounts.test.ts` ("stores plain-text profile fields safely"). _Enforced (main)_ for status text: `src/domain/status-text.ts`; `test/status-text.test.ts`.
+  Local profile fields are stored as plain text and presented escaped with http(s) URLs linked (`renderFieldValue`),
+  in the API and as the actor's `PropertyValue` attachments: _Implemented on branch `kopje/web-ui`:_ `test/web-session.test.ts` ("saves the
+  profile", "publishes fields as PropertyValue attachments of the actor").
 - **HTML-3: navigable URLs are http(s) only.** Before a profile URL, avatar, header, attachment URL, field link or app
   website is emitted, it is parsed and must be http or https; anything else becomes absent or the default. This applies
   to fetched and imported data too. _Enforced (main)_ for app websites at registration: `validWebsite` in
@@ -475,6 +543,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/html.test.ts`. _Implemented on branch `kopje/inbound-statuses`_ for field links and remote statuses at ingest
   (the status url and attachment and preview URLs, which are dropped unless http(s)); `src/federation/remote-status.ts`;
   `test/inbox-statuses.test.ts` ("keeps only http(s) media (HTML-1, HTML-3)", "http(s) links only").
+  Web UI pages emit only local paths and http(s) URLs (avatars, headers, media, field and app links, the parent of a
+  reply); field links carry `rel="me"`: _Implemented on branch `kopje/web-ui`:_ `src/web/pages.tsx`; `test/web-pages.test.ts`.
 
 ### Media (MEDIA)
 
@@ -601,7 +671,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **RES-6: one request cannot trigger unbounded work.** An inbound activity has fixed limits on dereferences,
   recipients, collection expansion and notifications. Delivery backlog and concurrency are bounded. Anonymous app
   registration, inbox spooling and media transformations have rate or storage budgets with a visible refusal. _Planned
-  (B1b). Gap: `POST /api/v1/apps` on main has no rate or storage budget yet; planned with B5 (rate limiting)._
+  (B1b)._ App registration: _Implemented on branch `kopje/web-ui`:_ `POST /api/v1/apps` is limited to 5 per minute per client IP by the Workers
+  Rate Limiting binding before its body is read (429), and the Store keeps at most 500 never-authorized apps (no token or
+  code of a user); when full it first removes unused apps (no token of any kind) older than a day, then the oldest
+  never-authorized apps older than an hour (app tokens and all), and otherwise refuses with 429. Only a user's token or
+  code protects an app: anyone can get an app token without a user, so app tokens cannot hold a slot for good. The cron removes unused apps after a day,
+  as Mastodon's `ApplicationsVacuum` does, and expired codes and web sessions, 500 of each per run. `registerApp` and
+  `sweepOAuth` in `src/domain/oauth.ts`, `src/mastodon/oauth.ts`; `test/apps-budget.test.ts`. Avatar and header
+  uploads from the web UI go through the media budgets below.
   _Enforced (main)_ for media: before the body is read or Images is called, the Store
   counts upload attempts (deleted and failed ones included) to at most 30 per 30 minutes per account (Mastodon's
   limit) and checks the monthly budgets; right before Images is called it revalidates the reservation with fresh time
@@ -749,7 +826,7 @@ Each stage ships tests for these cases, named with the invariant IDs.
 | B1b inbound                | Wrong signer or actor; foreign activity id; same-origin different actor; unauthorized Undo, Accept, Update, Delete; duplicate and reordered Delete and Create; non-AS media type; private and unlisted object fetches                                                                                                                                                   |
 | B2 delivery                | Redirect of a private activity; recipient outside the audience; duplicate inbox; expired lease; stale completion; commit followed by response loss (`test/deliveries.test.ts`, `test/delivery-post.test.ts`)                                                                                                                                                            |
 | B4 statuses, media, search | Edit, source or history of another's status; history seen by a recipient added later; private boost in `reblogged_by`; hidden parent in reply fields; DM moving `last_status_at`; unbounded edits or reply tree; boost or quote of an invisible status; foreign attachment; unsafe R2 key; retained EXIF; failed transform; active media type; private status in search |
-| B5 UI and setup            | Missing, `null` and foreign Origin; framing headers; unsafe return path; reused setup token; concurrent bootstrap                                                                                                                                                                                                                                                       |
+| B5 UI and setup            | Missing, `null` and foreign Origin; framing headers; unsafe return path; session fixation and reuse after logout (`test/web-session.test.ts`, `test/web-images.test.ts`, `test/web-pages.test.ts`); reused setup token; concurrent bootstrap (B5b)                                                                                                                      |
 | B6b backup and restore     | Plaintext dump, media or manifest egress; interrupted upload; missing component; unselected manifest; restored obsolete credentials                                                                                                                                                                                                                                     |
 | B8 cutover                 | Wrong target resources, domain or keys; writes to the source; an alternate Pages route still writable; unreconciled Queue or DLQ; changed content with unchanged length                                                                                                                                                                                                 |
 
@@ -761,7 +838,7 @@ Each stage ships tests for these cases, named with the invariant IDs.
 - **Outbound activity or delivery:** VIS-3, NET-2, NET-3, DATA-1, DATA-7, RES-5, RES-6.
 - **Fetch of a remote URL:** NET-1, NET-3, NET-4, ID-2, ID-8. Use a sink client, never `fetch` directly.
 - **Rendered field or HTML page:** HTML-1, HTML-2, HTML-3, WEB-2, WEB-5. Run the vector suites.
-- **Web UI, consent or setup:** WEB-1 to WEB-4, SETUP-1 to SETUP-4.
+- **Web UI, consent or setup:** WEB-1 to WEB-5, AUTH-8, VIS-4, HTML-1 to HTML-3, SETUP-1 to SETUP-4.
 - **Media:** MEDIA-1 to MEDIA-4, NET-3, VIS-1, RES-1, RES-6.
 - **Web Push:** PUSH-1 to PUSH-3, AUTH-7, DATA-2, NET-3, VIS-10.
 - **Store operation or migration:** AUTH-1, OPS-2, OPS-3, DATA-6. Migrations are append-only after the first release and
@@ -800,6 +877,10 @@ activity specs, cited in test names.
 | Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured                                                                                                                             | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added                                                                                                                                                                             | Kopje configures logtape                                             |
 | Remote HTML is sanitized by sanitize-html, whose htmlparser2 is a tokenizer rather than an HTML5 tree builder                                                                                                                              | It emits only allowlisted tags with quoted, escaped attributes and escapes all other text; the parse5-checked vector suites pass                                                                                                                                  | a vector fails, or a maintained tree-based sanitizer fits the budget |
 | Activities signed by someone other than their actor (forwarded, with LD signatures) are refused                                                                                                                                            | ID-1. Replies that reach Kopje only by forwarding (to a collection the author cannot deliver to) and deliveries through relays are missed                                                                                                                         | relays or forwarded replies must be supported                        |
+| The app registration limit is approximate: the Rate Limiting binding counts per Cloudflare location and is eventually consistent, and many addresses together can fill the 500 never-authorized slots, evicting never-authorized apps older than an hour or refusing registration for an hour at most | The Store's bound holds exactly whatever the limiter lets through, and every refusal is visible (429); Workers offers no exact global limiter without a paid product | registrations are seen to be refused or evicted in practice |
+| An app token (`client_credentials`) of an app no user has authorized may stop working under registration pressure: the app is evicted with its tokens | Anyone can get an app token without a user; letting app tokens protect an app would let them fill the budget for good. Clients re-register, as after Mastodon's vacuum | logged-out clients are seen to lose their app tokens |
+| Two first sign-ins of one browser that overlap (the second starts before the first's session cookie arrives) leave two sessions; signing out ends only the one in the cookie | Both belong to the same person in the same browser, the other token is in no cookie or response any more, and it expires with its 7-day lifetime; binding them would need a server-side browser identity before sign-in | a session token is seen to leak this way |
+| A web session lasts its 7 days even if the person's Access session ends or the Access policy changes | Access verifies the person at sign-in only (design); suspension, sign-out and "sign out other sessions" end sessions at once | sessions must follow Access policy changes |
 
 ## How to use
 

@@ -1,3 +1,4 @@
+import { actorSnapshot, recordActorUpdate } from './actor-update'
 import { userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
 import { writeOperation } from './operation'
@@ -31,6 +32,10 @@ import { mediaPath } from '../platform/media-files'
 // stops using media (edit, delete) detaches it with a new grace period, so a redraft can attach it again; delete_media
 // dooms it at once. The sweep (expiredMedia, then R2 deletes, then purgeMedia) removes doomed rows and their R2 objects
 // in bounded batches, objects first.
+//
+// A profile image (avatar or header, set from the settings page) is a completed upload that the account's avatar_url or
+// header_url names, kept with neither status_id nor gc_at: it is never swept, and never attached, read or updated
+// through the API. Replacing it dooms the previous one.
 //
 // Only the uploader reads, updates or attaches an upload, and only while it is unattached (MEDIA-1); Mastodon's
 // MediaController finds `current_account.media_attachments.where(status_id: nil)`.
@@ -79,9 +84,12 @@ function iso(ms: number): string {
 	return new Date(ms).toISOString()
 }
 
-// The condition for an upload that may still be used: processed and not doomed. `now` is a parameter expression.
+// The condition for an unattached upload that may still be used: processed, not doomed, and not the uploader's
+// avatar or header. `now` is a parameter expression.
 export function liveMediaSql(m: string, now: string): string {
-	return `(${m}.processed = 1 AND (${m}.gc_at IS NULL OR ${m}.gc_at > ${now}))`
+	return `(${m}.processed = 1 AND (${m}.gc_at IS NULL OR ${m}.gc_at > ${now})
+		AND NOT EXISTS (SELECT 1 FROM accounts ${m}_pa WHERE ${m}_pa.id = ${m}.account_id
+			AND ${m}.url IN (${m}_pa.avatar_url, ${m}_pa.header_url)))`
 }
 
 function ownUpload(db: Db, accountId: string, id: string, now: number): MediaRow | undefined {
@@ -282,6 +290,37 @@ export const getMedia = userReadOperation<{ id: string; now: number }, MediaAtta
 	(db, { id, now }, { accountId }) => {
 		const row = ownUpload(db, accountId, id, now)
 		return row === undefined ? null : presentMedia(row)
+	}
+)
+
+export type ProfileImage = 'avatar' | 'header'
+
+// Makes a completed upload of the viewer their avatar or header: the account points at its full file, the row is kept
+// for good (gc_at NULL), and the image it replaces, if it was one of the account's uploads, is doomed so the sweep
+// deletes its files. False when the upload is not the viewer's own live, unattached upload.
+export const setProfileImage = userWriteOperation<{ id: string; kind: ProfileImage; now: number }, boolean>(
+	(db, { id, kind, now }, { accountId }) => {
+		const upload = ownUpload(db, accountId, id, now)
+		if (upload === undefined || upload.url === '') {
+			return false
+		}
+		const before = actorSnapshot(db, accountId)
+		const column = kind === 'avatar' ? 'avatar_url' : 'header_url'
+		const previous = db.first<{ url: string | null }>(`SELECT ${column} AS url FROM accounts WHERE id = ?`, accountId)
+		db.run(`UPDATE accounts SET ${column} = ? WHERE id = ?`, upload.url, accountId)
+		db.run('UPDATE media_attachments SET gc_at = NULL WHERE id = ?', id)
+		if (previous?.url != null && previous.url !== upload.url) {
+			db.run(
+				`UPDATE media_attachments SET gc_at = ? WHERE account_id = ? AND url = ? AND status_id IS NULL
+					AND gc_at IS NULL AND id <> ?`,
+				iso(now),
+				accountId,
+				previous.url,
+				id
+			)
+		}
+		recordActorUpdate(db, accountId, before, now)
+		return true
 	}
 )
 
