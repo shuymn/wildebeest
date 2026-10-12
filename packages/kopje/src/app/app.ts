@@ -36,6 +36,9 @@ const API_CORS_PATHS = ['/api/*', '/oauth/token', '/oauth/revoke']
 
 type AppEnv = { Bindings: Env; Variables: { requestClass: RequestClass; inboxBody: Uint8Array; domain: string } }
 
+// Methods logged as they are; any other is logged as OTHER (DATA-5).
+const LOGGED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'])
+
 export function createApp({
 	build,
 	now,
@@ -139,7 +142,7 @@ export function createApp({
 		// The route template, not the URL: a path or query can carry a token or content (DATA-5).
 		console.error({
 			event: 'kopje.error',
-			method: c.req.method,
+			method: LOGGED_METHODS.has(c.req.method) ? c.req.method : 'OTHER',
 			route: c.req.routePath,
 			status: 500,
 			...errorFields(error),

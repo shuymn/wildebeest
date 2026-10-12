@@ -89,6 +89,18 @@ describe('log redaction', () => {
 		])
 	})
 
+	// workerd refuses methods outside its own list, so an extension method it knows (WebDAV's PROPFIND) stands in for any
+	// method outside the standard set.
+	it('logs a non-standard method as OTHER', async () => {
+		const logs = captureLogs()
+		const response = await harness(failingStore).request('/.well-known/webfinger', { method: 'PROPFIND' })
+		expect(response.status).toBe(500)
+		logs.expectNoSecrets()
+		expect(logs.lines.map((line) => JSON.parse(line) as unknown)).toEqual([
+			[expect.objectContaining({ event: 'kopje.error', method: 'OTHER', status: 500 })],
+		])
+	})
+
 	it('logs a failed spool replay without its message', async () => {
 		const logs = captureLogs()
 		const { batch, message } = batchOf(spoolMessage())
