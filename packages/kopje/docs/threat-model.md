@@ -404,7 +404,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   account search matches at most 1,000 username-prefix candidates plus the 5,000 newest accounts and the local ones
   (`src/domain/search.ts`, `findAccounts` in `src/domain/accounts.ts`); `test/search.test.ts` ("filters before
   LIMIT"), `test/search-edge.test.ts` (rows read stay flat as favourites, bookmarks, accounts and tagged statuses grow
-  fourfold; max_id reaches past each window). Context traversal and edit history: _Planned (B4a fixes)._
+  fourfold; `max_id` reaches past each window). Context traversal and edit history: _Planned (B4a fixes)._
 
 ### Data and keys (DATA)
 
