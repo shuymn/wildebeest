@@ -447,6 +447,28 @@ export class StoreAdmin {
 		return outcome
 	}
 
+	// Aborts the running dump that was started with this opId, if any: a client that may have lost the start's
+	// response (and so has no cursor) can still release the freeze. Never starts a dump, never touches another one.
+	async dumpAbort(opId: string): Promise<Result<{ aborted: boolean }>> {
+		if (!/^[A-Za-z0-9-]{8,64}$/.test(opId)) {
+			return refuse('invalid-op-id', 'opId must be 8-64 letters, digits or dashes')
+		}
+		await this.#kernel.state()
+		const id = this.#transaction(() => {
+			const record = readFlags(this.#sql).dump
+			if (record === null || record.opId !== opId || record.completed !== undefined) {
+				return null
+			}
+			writeFlag(this.#sql, 'dump', null)
+			return record.id
+		})
+		if (id !== null) {
+			this.#log({ event: 'kopje.store.dump.finish', id, aborted: true })
+			await this.#resumeDeferredUpgrade()
+		}
+		return { ok: true, aborted: id !== null }
+	}
+
 	// ---- import
 	//
 	// Every import mutation names its authority, and the Store checks it inside the transaction that writes:

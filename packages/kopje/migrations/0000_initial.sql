@@ -200,6 +200,26 @@ CREATE TABLE media_orphans (
 ) WITHOUT ROWID;
 
 CREATE INDEX media_orphans_due ON media_orphans (delete_after);
+
+-- The scheduled backup's media index (jobs/backup.ts): one row per R2 original that a backup's dump references, and
+-- where its encrypted copy is. `destination` fingerprints the bucket that holds the copy and the recipients it is
+-- encrypted to; a copy made under another fingerprint counts as missing. Rows no successful backup needs are pruned, so the table is bounded by the number of originals.
+-- Not part of a dump (dump-catalog.ts): it describes one backup bucket, not instance data.
+CREATE TABLE backup_media (
+  source TEXT NOT NULL PRIMARY KEY,               -- originals/<media id>
+  required_run TEXT NOT NULL,                     -- the last backup run whose dump references it
+  state TEXT NOT NULL CHECK (state IN ('pending', 'copied', 'absent')),  -- absent: not in R2
+  destination TEXT,
+  key TEXT,
+  size INTEGER,
+  sha256 TEXT,
+  plain_size INTEGER,
+  plain_sha256 TEXT,
+  copied_run TEXT,
+  CHECK ((state = 'copied') = (key IS NOT NULL))
+) WITHOUT ROWID;
+
+CREATE INDEX backup_media_run ON backup_media (required_run, state, source);
 CREATE UNIQUE INDEX media_attachments_legacy_ap_o ON media_attachments (legacy_ap_o) WHERE legacy_ap_o IS NOT NULL;
 
 CREATE TABLE status_mentions (
