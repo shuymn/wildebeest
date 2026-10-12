@@ -459,23 +459,38 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   counts), the admin's web session (a web-client token of the account whose email is `admin_email`) only afterwards.
   After bootstrap no setup session opens, and those left authorize nothing; the admin may see the status, run the
   checks and reconcile the Access applications (keeping `admin_email` and the domain), never change the domain or the
-  admin. `src/domain/setup.ts`, `src/app/setup.tsx`; `test/setup.test.ts` ("a reused setup token opens nothing", "a
+  admin. Access reconciliations are coordinated by the Store: each reserves the instance-wide reconciliation (a lease
+  and the next revision) before its first external call, renews it before every write, and stops once superseded or
+  no longer authorized, so a setup session's run cannot write to Cloudflare after bootstrap; it checks that the team
+  is the selected account's organization (`auth_domain`) before anything is written, and changes only objects whose
+  ids it recorded or a single checked object of its name (adopting or recreating is an explicit recovery choice).
+  `test/setup-access.test.ts` ("a run paused before its reservation makes no external write after bootstrap", "a run
+  whose lease ran out and was superseded stops before its next write", "refuses a team that is not the selected
+  account’s organization, before any write", "refuses a reusable policy attached to other applications"). `src/domain/setup.ts`, `src/app/setup.tsx`; `test/setup.test.ts` ("a reused setup token opens nothing", "a
   setup session opened before bootstrap cannot change the domain, the admin or Access", "shows the status to the
   admin, runs the checks, and reconciles Access with a new token", "refuses a signed-in user who is not the admin",
   "AUTH-5: refuses when SETUP_TOKEN is unset or shorter than 32 characters").
 - **SETUP-3: bootstrap happens once.** The domain and the first admin are written in one Store transaction that fails if
   either exists, so concurrent requests cannot create two. _Implemented on branch `kopje/setup`:_ `bootstrapInstance`
   writes the domain, the Access configuration, `admin_email` and the admin's local account together, refuses once any
-  configuration row or local account exists, and ends every setup session. `src/domain/setup.ts`;
+  configuration row or local account exists, while a reconciliation runs or is unresolved (a failure, or a lease that
+  ran out without an outcome), or when the session's Access outcome is not the latest completed revision; it ends
+  every setup session. `src/domain/setup.ts`;
   `test/setup.test.ts` ("SETUP-3: concurrent bootstraps create one admin", "SETUP-3: refuses when a domain or an
-  account exists already", "SETUP-3: writes the domain, the Access configuration and the admin together").
+  account exists already", "SETUP-3: writes the domain, the Access configuration and the admin together", "SETUP-3: a
+  failure at the last insert rolls the whole bootstrap back"), `test/setup-access.test.ts` ("only the latest completed
+  run bootstraps", "bootstrap waits while a run is in progress", "a failure after external write n of 4 leaves the
+  state unresolved").
 - **SETUP-4: the Cloudflare API token is transient.** It is used only within the request that received it and is never
   stored, logged or returned. _Implemented on branch `kopje/setup`:_ it is read from the form of one POST, sent only to
   `api.cloudflare.com` as a bearer token, never rendered (token fields are never filled), never put in a cookie or
-  redirect, and error messages are built from the API's status and error codes with any occurrence of the token
-  replaced by `[redacted]`; an unexpected error is logged by name only. Only the API's answers (team, AUD tags,
-  account id) reach the Store. `src/platform/cloudflare-api.ts`, `src/app/setup.tsx`; `test/setup.test.ts`
-  ("SETUP-4: uses the API token in its own request only, and never stores, logs, renders or redirects it").
+  redirect; redirects are refused, not followed. A failure is reported as a fixed category with the step, the HTTP
+  status and the API's validated numeric error codes; no text of the API's answer or of a thrown error is rendered,
+  and an unexpected error is logged with `errorFields()` only (DATA-5). Only the API's answers (team, AUD tags,
+  account id) reach the Store. `src/platform/cloudflare-api.ts`, `src/app/setup.tsx`;
+  `test/setup-access.test.ts` ("SETUP-4: uses the API token in its own request only, and never stores, logs, renders
+  or redirects it", "shows no fragment of the token for an echoed error across a truncation boundary, a
+  thrown name or a redirect").
 
 ### Network (NET)
 
