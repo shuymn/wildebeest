@@ -1,4 +1,4 @@
--- Kopje Store schema 0000 (25 tables). Applied by the Store DO; never edit after release (checksummed).
+-- Kopje Store schema 0000 (26 tables). Applied by the Store DO; never edit after release (checksummed).
 --
 -- Conventions
 --   IDs      : id is an 18-digit snowflake stored as TEXT (same value as the API ID); uri is the ActivityPub ID.
@@ -189,6 +189,18 @@ CREATE TABLE media_attachments (
 CREATE INDEX media_attachments_status ON media_attachments (status_id, position) WHERE status_id IS NOT NULL;
 CREATE INDEX media_attachments_account ON media_attachments (account_id);
 CREATE INDEX media_attachments_gc ON media_attachments (gc_at) WHERE status_id IS NULL AND gc_at IS NOT NULL;
+
+-- Tombstones of uploads that never completed (abandoned, expired, or refused at the deadline). The sweep deletes
+-- such a row after deleting its R2 objects and records it here, so a write that lands later is deleted when the
+-- tombstone falls due. Media reconciliation deletes only what is recorded here, never objects merely missing a row.
+-- Not part of a dump (dump-catalog.ts): a restored or imported Store starts with none.
+CREATE TABLE media_orphans (
+  file_token TEXT NOT NULL PRIMARY KEY,
+  media_id TEXT NOT NULL,
+  delete_after TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE INDEX media_orphans_due ON media_orphans (delete_after);
 CREATE UNIQUE INDEX media_attachments_legacy_ap_o ON media_attachments (legacy_ap_o) WHERE legacy_ap_o IS NOT NULL;
 
 CREATE TABLE status_mentions (

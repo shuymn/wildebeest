@@ -1,6 +1,6 @@
 import { userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
-import { readOperation, writeOperation } from './operation'
+import { writeOperation } from './operation'
 import { MEDIA_COLUMNS, type MediaAttachment, type MediaRow, presentMedia } from './status-presenter'
 import type { Db } from '../db/sql'
 import { mediaPath } from '../platform/media-files'
@@ -17,9 +17,11 @@ import { mediaPath } from '../platform/media-files'
 // The uploading request has a deadline, WRITE_WINDOW_MS after the reservation. startTransforms and completeMedia refuse
 // after it, each judging the time the Worker took right before the call, in the transaction that would change the row;
 // the Worker starts no R2 write after it either. What this does not guarantee: a write started before the deadline may
-// still land after the sweep deleted the reservation (an HTTP Worker has no fixed wall-time limit). Such an object has
-// no row, and reconciliation (expired in R2 and unnamed by any row, after ORPHAN_GRACE_MS) deletes it, so an orphan
-// lives at most until a reconciliation run passes it.
+// still land after the sweep deleted the reservation (an HTTP Worker has no fixed wall-time limit). So the sweep leaves
+// a tombstone (media_orphans) for every upload that never completed, and reconciliation deletes its keys again once the
+// tombstone falls due, ORPHAN_GRACE_MS after the deadline. A write that lands later still is an orphan until an
+// operator removes it. Reconciliation deletes only recorded tombstones, never an object because no row names it: an
+// empty, reset, importing or restored Store must not delete the media it does not (yet) know.
 //
 // processed = 0 means the uploading request may still be at work; completion and abandonment both set it to 1.
 // Completion is idempotent, so a request whose completion answer was lost can ask again, and abandonment never dooms a
@@ -43,7 +45,7 @@ export const DETACHED_GRACE_MS = 24 * HOUR
 export const WRITE_WINDOW_MS = 15 * 60 * 1000
 const RESERVATION_MS = HOUR
 
-// R2 objects no row names are deleted by reconciliation once they are this old.
+// A tombstone of an upload that never completed falls due this long after its writer's deadline.
 export const ORPHAN_GRACE_MS = 24 * HOUR
 
 // Mastodon's rate limit for media uploads: 30 per 30 minutes per account (RES-6). Attempts are counted, not rows: a
@@ -308,64 +310,73 @@ export const updateMedia = userWriteOperation<
 // token is null for rows with no R2 files (migrated media), which are only deleted.
 export type ExpiredMedia = { id: string; token: string | null }
 
+// Background work that deletes R2 objects runs only in a set-up Store: it is a write operation, so the kernel refuses
+// it during maintenance, a dump or an import, and a Store without its domain (fresh, reset, or being bootstrapped)
+// answers with nothing to do.
+function setUp(db: Db): boolean {
+	return db.first("SELECT 1 AS found FROM instance_settings WHERE name = 'domain'") !== undefined
+}
+
 // Doomed uploads, oldest first. They cannot be attached or read any more (liveMediaSql), so the R2 objects can go
 // before the rows.
-export const expiredMedia = readOperation<{ now: number; limit: number }, ExpiredMedia[]>((db, { now, limit }) =>
-	db.all<ExpiredMedia>(
-		`SELECT id, file_token AS token FROM media_attachments
-		WHERE status_id IS NULL AND gc_at IS NOT NULL AND gc_at <= ?
-		ORDER BY gc_at LIMIT ?`,
-		iso(now),
-		Math.min(limit, SWEEP_BATCH)
-	)
+export const expiredMedia = writeOperation<{ now: number; limit: number }, ExpiredMedia[]>((db, { now, limit }) =>
+	setUp(db)
+		? db.all<ExpiredMedia>(
+				`SELECT id, file_token AS token FROM media_attachments
+				WHERE status_id IS NULL AND gc_at IS NOT NULL AND gc_at <= ?
+				ORDER BY gc_at LIMIT ?`,
+				iso(now),
+				Math.min(limit, SWEEP_BATCH)
+			)
+		: []
 )
 
-// Deletes swept rows whose R2 objects are gone; a row attached again meanwhile cannot match (it has no gc_at).
-export const purgeMedia = writeOperation<{ ids: string[]; now: number }, number>((db, { ids, now }) =>
-	db.run(
-		`DELETE FROM media_attachments
+// Deletes swept rows whose R2 objects are gone; a row attached again meanwhile cannot match (it has no gc_at). A row
+// that never completed leaves a tombstone: its writer may still put an object after this, and reconciliation deletes
+// the keys again once the tombstone falls due, ORPHAN_GRACE_MS after the later of now and the writer's deadline.
+export const purgeMedia = writeOperation<{ ids: string[]; now: number }, number>((db, { ids, now }) => {
+	const swept = db.all<{ id: string; token: string | null; url: string; created_at: string }>(
+		`SELECT id, file_token AS token, url, created_at FROM media_attachments
 		WHERE id IN (SELECT value FROM json_each(?)) AND status_id IS NULL AND gc_at IS NOT NULL AND gc_at <= ?`,
 		JSON.stringify(ids.slice(0, SWEEP_BATCH)),
 		iso(now)
 	)
-)
-
-// Reconciliation (the cron, mastodon/media.ts): which of these ids and file tokens a row still names. Any row counts,
-// processing or doomed, because the sweep deletes a row's objects itself.
-export const mediaReferences = readOperation<{ ids: string[]; tokens: string[] }, { ids: string[]; tokens: string[] }>(
-	(db, { ids, tokens }) => ({
-		ids: db
-			.all<{
-				id: string
-			}>(
-				'SELECT id FROM media_attachments WHERE id IN (SELECT value FROM json_each(?))',
-				JSON.stringify(ids.slice(0, RECONCILE_PAGE))
+	for (const row of swept) {
+		if (row.token !== null && row.url === '') {
+			const deadline = Date.parse(row.created_at) + WRITE_WINDOW_MS
+			db.run(
+				'INSERT OR REPLACE INTO media_orphans (file_token, media_id, delete_after) VALUES (?, ?, ?)',
+				row.token,
+				row.id,
+				iso(Math.max(now, deadline) + ORPHAN_GRACE_MS)
 			)
-			.map((row) => row.id),
-		tokens: db
-			.all<{
-				token: string
-			}>(
-				'SELECT file_token AS token FROM media_attachments WHERE file_token IN (SELECT value FROM json_each(?))',
-				JSON.stringify(tokens.slice(0, RECONCILE_PAGE))
-			)
-			.map((row) => row.token),
-	})
-)
-
-// At most this many R2 objects are looked at per reconciliation run.
-export const RECONCILE_PAGE = 500
-
-const RECONCILE_CURSOR = 'media_reconcile_cursor'
-
-// Where the next reconciliation run continues: the R2 prefix and its list cursor (null: from the start).
-export type ReconcileCursor = { prefix: string; cursor: string | null }
-
-export const reconcileCursor = readOperation<undefined, ReconcileCursor | null>((db) => {
-	const value = state(db, RECONCILE_CURSOR)
-	return value === undefined ? null : (JSON.parse(value) as ReconcileCursor)
+		}
+		db.run('DELETE FROM media_attachments WHERE id = ?', row.id)
+	}
+	return swept.length
 })
 
-export const saveReconcileCursor = writeOperation<ReconcileCursor, void>((db, cursor) => {
-	setState(db, RECONCILE_CURSOR, JSON.stringify(cursor))
-})
+// At most this many tombstones are handled per reconciliation run.
+export const RECONCILE_BATCH = 100
+
+export type Orphan = { id: string; token: string }
+
+// Reconciliation (the cron, mastodon/media.ts): tombstones that fell due. Nothing else is ever deleted by it; an R2
+// object no row names but no tombstone records stays.
+export const dueOrphans = writeOperation<{ now: number }, Orphan[]>((db, { now }) =>
+	setUp(db)
+		? db.all<Orphan>(
+				`SELECT media_id AS id, file_token AS token FROM media_orphans WHERE delete_after <= ?
+				ORDER BY delete_after LIMIT ?`,
+				iso(now),
+				RECONCILE_BATCH
+			)
+		: []
+)
+
+export const forgetOrphans = writeOperation<{ tokens: string[] }, number>((db, { tokens }) =>
+	db.run(
+		'DELETE FROM media_orphans WHERE file_token IN (SELECT value FROM json_each(?))',
+		JSON.stringify(tokens.slice(0, RECONCILE_BATCH))
+	)
+)

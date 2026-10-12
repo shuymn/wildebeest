@@ -12,14 +12,7 @@ import {
 } from './context'
 import { mastodonError } from './errors'
 import { Params } from './params'
-import {
-	type MediaChanges,
-	type MonthlyTransforms,
-	ORPHAN_GRACE_MS,
-	RECONCILE_PAGE,
-	type ReconcileCursor,
-	SWEEP_BATCH,
-} from '../domain/media'
+import { type MediaChanges, type MonthlyTransforms, SWEEP_BATCH } from '../domain/media'
 import type { MediaAttachment } from '../domain/status-presenter'
 import { readBoundedBody } from '../platform/body'
 import { accountMonthlyTransforms, readConfig } from '../platform/config'
@@ -381,62 +374,23 @@ export function sweepSoon(c: ApiContext, deps: ApiDeps): void {
 	}
 }
 
-// The R2 prefixes reconciliation walks, in turn.
-const RECONCILE_PREFIXES = ['files/', 'originals/'] as const
-
-// Deletes R2 objects no row names, one page per run (the cron): an object a writer put after the sweep deleted its
-// reservation, or one a failed cleanup left. Only objects older than ORPHAN_GRACE_MS go, so an upload in progress (whose
-// row exists anyway) is never touched. The position is kept in the Store, so successive runs walk the whole bucket.
-// Returns how many objects were deleted.
-export async function reconcileMedia(env: Env, deps: SweepDeps, page = RECONCILE_PAGE): Promise<number> {
+// Deletes the R2 keys of tombstones that fell due (domain/media.ts), one bounded batch per run (the cron), then the
+// tombstones. Nothing else: an object is never deleted because no row names it. In maintenance, a dump or an import the
+// Store refuses and the run waits. Returns how many tombstones were handled.
+export async function reconcileMedia(env: Env, deps: SweepDeps): Promise<number> {
 	const store = deps.store(env)
 	const build = deps.build(env)
 	try {
-		const saved = (await callStore(() => store.reconcileCursor(build))) ?? {
-			prefix: RECONCILE_PREFIXES[0],
-			cursor: null,
+		const due = await callStore(() => store.dueOrphans(build, { now: deps.now() }))
+		if (due.length === 0) {
+			return 0
 		}
-		const listed = await env.MEDIA.list({
-			prefix: saved.prefix,
-			limit: Math.min(page, RECONCILE_PAGE),
-			...(saved.cursor === null ? {} : { cursor: saved.cursor }),
-		})
-		const cutoff = deps.now() - ORPHAN_GRACE_MS
-		const old = listed.objects.filter((object) => object.uploaded.getTime() <= cutoff).map((object) => object.key)
-		const owners = old.map((key) => ({ key, ...ownerOf(key) }))
-		const ids = owners.flatMap((o) => (o.id === undefined ? [] : [o.id]))
-		const tokens = owners.flatMap((o) => (o.token === undefined ? [] : [o.token]))
-		const named = await callStore(() => store.mediaReferences(build, { ids, tokens }))
-		const orphans = owners
-			.filter(
-				(o) =>
-					(o.id !== undefined && !named.ids.includes(o.id)) ||
-					(o.token !== undefined && !named.tokens.includes(o.token))
-			)
-			.map((o) => o.key)
-		if (orphans.length > 0) {
-			await env.MEDIA.delete(orphans)
-		}
-		const index = RECONCILE_PREFIXES.indexOf(saved.prefix as (typeof RECONCILE_PREFIXES)[number])
-		const next: ReconcileCursor = listed.truncated
-			? { prefix: saved.prefix, cursor: listed.cursor }
-			: { prefix: RECONCILE_PREFIXES[(index + 1) % RECONCILE_PREFIXES.length] ?? RECONCILE_PREFIXES[0], cursor: null }
-		await callStore(() => store.saveReconcileCursor(build, next))
-		return orphans.length
+		await env.MEDIA.delete(due.flatMap((orphan) => mediaKeys(orphan.id, orphan.token)))
+		return await callStore(() => store.forgetOrphans(build, { tokens: due.map((orphan) => orphan.token) }))
 	} catch (error) {
 		if (error instanceof StoreUnavailableError) {
 			return 0
 		}
 		throw error
 	}
-}
-
-// The id or file token an R2 key belongs to; keys of another shape belong to nobody known and are left alone.
-function ownerOf(key: string): { id?: string; token?: string } {
-	const original = /^originals\/(\d{18})$/.exec(key)
-	if (original !== null) {
-		return { id: original[1] }
-	}
-	const file = /^files\/([A-Za-z0-9_-]{32,64})\/(full|small)$/.exec(key)
-	return file === null ? {} : { token: file[1] }
 }

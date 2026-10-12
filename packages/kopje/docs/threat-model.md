@@ -328,10 +328,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Implemented on branch `kopje/media-search`:_ `src/platform/media-files.ts` (originals at `originals/<id>`, served
   files at `files/<token>/<variant>`; the serving route builds only `files/` keys from a token of the server's form);
   the Store holds a row for every key before it is written, and the sweep deletes a row only after its objects. A write
-  started before the upload's deadline can still land after the sweep (see accepted risks); reconciliation (the cron,
-  `reconcileMedia` in `src/mastodon/media.ts`) deletes R2 objects no row names once they are a day old;
-  `test/image-bytes.test.ts` ("media keys"), `test/media.test.ts` ("serves only well-formed paths of served files"),
-  `test/media-reconcile.test.ts` ("deletes old objects no row names").
+  started before the upload's deadline can still land after the sweep, so the sweep leaves a tombstone
+  (`media_orphans`) for each upload that never completed, and reconciliation (the cron, `reconcileMedia` in
+  `src/mastodon/media.ts`) deletes its keys again a day after the deadline. Reconciliation deletes only recorded
+  tombstones, never an object because no row names it, and neither it nor the sweep runs during maintenance, a dump,
+  an import, or before setup; tombstones are not dumped, so a restored or imported Store starts with none and deletes
+  nothing it restores. `test/image-bytes.test.ts` ("media keys"), `test/media.test.ts` ("serves only well-formed paths
+  of served files"), `test/media-reconcile.test.ts` ("deletes nothing from R2 for a Store that knows nothing of it",
+  "deletes nothing during maintenance, an import, or before setup", "deletes a late write of a failed upload").
 - **MEDIA-3: served images are re-encoded.** An image is served only as Images output with location metadata removed; if
   transformation fails, the upload is refused and original bytes are never served. _Implemented on branch
   `kopje/media-search`:_ outputs are PNG or WebP only, for which Images discards all metadata (the binding has no
@@ -431,7 +435,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   template statements with bound literals, into an empty Store with the same schema, and verification recomputes the
   digests from the imported rows. _Implemented on branch `kopje/ops-tools`:_ `src/platform/store-dump.ts`,
   `src/platform/store-import.ts`, `docs/dump-format.md`; `test/dump-import.test.ts`, `test/ops-regressions.test.ts`,
-  `test/dump-format.test.ts`.
+  `test/dump-format.test.ts`. Media tombstones (`media_orphans`) are left out of dumps (`src/platform/dump-catalog.ts`):
+  they name R2 objects to delete, which a restored Store must not act on.
 - **DATA-4: backups leave Cloudflare only encrypted.** Dump chunks, R2 originals and manifests are age-encrypted before
   upload. _Planned (B6b)._
 - **DATA-5: logs carry no secrets or content.** Log entries are structured events. They never include request bodies,
@@ -519,20 +524,20 @@ activity specs, cited in test names.
 
 ## Accepted risks
 
-| Risk                                                                                                                 | Why accepted                                                                          | Revisit when                                                   |
-| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Duplicate keys in a JSON OAuth body are not rejected; the last one wins                                              | RFC 6749 defines form bodies only, and Doorkeeper behaves the same                    | a client depends on JSON bodies                                |
-| Fedify 2.4.2 signs draft-cavage `(request-target)` without the query string                                          | Mastodon accepts it; reported upstream                                                | a peer rejects signed GETs to URLs with a query                |
-| Legacy keys are not rewrapped; an empty or known `USER_KEK` gives no protection against R5                           | Owner's decision; health warns on an empty KEK (main), the cutover tool warns (B8)    | a key leak, or rewrapping becomes cheap                        |
-| Signed-fetch cache entries may outlive a remote block or key change by up to 5 minutes                               | Measured CPU savings on personal inboxes                                              | blocks must apply at once                                      |
-| OAuth client secrets are stored in plaintext, so R5 can act as any registered app (no user scopes)                   | Matches Mastodon; app tokens carry no user authority                                  | app tokens gain user-level powers                              |
-| Aggregate counters (`reblogs_count`, `favourites_count`, `replies_count`) include interactions the viewer cannot see | Mastodon parity; clients rely on the counts                                           | counters must hide private interactions                        |
-| Non-public media is readable by anyone holding its unguessable URL; cached copies outlive deletion                   | Clients and peers fetch media without credentials; URLs appear only under VIS-1       | authenticated media fetch becomes interoperable                |
-| An R2 write that lands after the sweep deleted its upload stays until reconciliation, at least a day                 | An HTTP Worker has no fixed wall-time limit, so a writer cannot be proven stopped     | R2 offers conditional writes bound to a Store record           |
-| R2 originals keep the uploaded bytes, EXIF and location included                                                     | Never served (MEDIA-2); backups restore from them; they are A8                        | backups can be rebuilt from re-encoded files                   |
-| Service tokens are recognized by Access's claim shape (no email, empty `sub`, `common_name`)                         | The admin application's policy decides which identities reach it                      | the admin application admits mTLS or Access changes the claims |
-| Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured       | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added | Kopje configures logtape                                       |
-| `constantTimeEqual` on main takes time that depends on the input length                                              | No content leak is known; `kopje/ops-tools` compares fixed-size digests               | `kopje/ops-tools` merges (then remove this row)                |
+| Risk                                                                                                                 | Why accepted                                                                                                 | Revisit when                                                   |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| Duplicate keys in a JSON OAuth body are not rejected; the last one wins                                              | RFC 6749 defines form bodies only, and Doorkeeper behaves the same                                           | a client depends on JSON bodies                                |
+| Fedify 2.4.2 signs draft-cavage `(request-target)` without the query string                                          | Mastodon accepts it; reported upstream                                                                       | a peer rejects signed GETs to URLs with a query                |
+| Legacy keys are not rewrapped; an empty or known `USER_KEK` gives no protection against R5                           | Owner's decision; health warns on an empty KEK (main), the cutover tool warns (B8)                           | a key leak, or rewrapping becomes cheap                        |
+| Signed-fetch cache entries may outlive a remote block or key change by up to 5 minutes                               | Measured CPU savings on personal inboxes                                                                     | blocks must apply at once                                      |
+| OAuth client secrets are stored in plaintext, so R5 can act as any registered app (no user scopes)                   | Matches Mastodon; app tokens carry no user authority                                                         | app tokens gain user-level powers                              |
+| Aggregate counters (`reblogs_count`, `favourites_count`, `replies_count`) include interactions the viewer cannot see | Mastodon parity; clients rely on the counts                                                                  | counters must hide private interactions                        |
+| Non-public media is readable by anyone holding its unguessable URL; cached copies outlive deletion                   | Clients and peers fetch media without credentials; URLs appear only under VIS-1                              | authenticated media fetch becomes interoperable                |
+| A write of a failed upload that lands after the sweep stays a day; one landing after its tombstone stays for good    | An HTTP Worker has no fixed wall-time limit; deleting unrecorded objects would destroy media after a restore | R2 offers conditional writes bound to a Store record           |
+| R2 originals keep the uploaded bytes, EXIF and location included                                                     | Never served (MEDIA-2); backups restore from them; they are A8                                               | backups can be rebuilt from re-encoded files                   |
+| Service tokens are recognized by Access's claim shape (no email, empty `sub`, `common_name`)                         | The admin application's policy decides which identities reach it                                             | the admin application admits mTLS or Access changes the claims |
+| Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured       | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added                        | Kopje configures logtape                                       |
+| `constantTimeEqual` on main takes time that depends on the input length                                              | No content leak is known; `kopje/ops-tools` compares fixed-size digests                                      | `kopje/ops-tools` merges (then remove this row)                |
 
 ## How to use
 

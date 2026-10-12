@@ -7,7 +7,7 @@ import { NOW } from './app-helpers'
 import { PNG_PLAIN } from './fixtures/images'
 import { bytes, mediaForm, TestCodec, upload, uploaded } from './media-helpers'
 import { community, getJson, post } from './status-helpers'
-import { reconcileMedia } from '../src/mastodon/media'
+import { reconcileMedia, sweepMedia } from '../src/mastodon/media'
 import type { StoreStub } from '../src/platform/store-client'
 
 // The B4b verification review: R2 objects with no row are reconciled away; a reservation is revalidated, and its
@@ -55,31 +55,92 @@ async function afterReserve(at: () => number) {
 	return h
 }
 
-describe('reconciliation of R2 with the Store', () => {
-	it('deletes old objects no row names, and keeps live and recent ones', async () => {
+describe('reconciliation deletes only recorded tombstones', () => {
+	const deps = (h: { store: StoreStub }, at: number) => ({
+		build: () => env.CF_VERSION_METADATA.id,
+		store: () => h.store,
+		now: () => at,
+	})
+	const later = NOW + 30 * 24 * HOUR
+
+	async function present(keys: string[]): Promise<string[]> {
+		const found: string[] = []
+		for (const key of keys) {
+			if ((await env.MEDIA.head(key)) !== null) {
+				found.push(key)
+			}
+		}
+		return found
+	}
+
+	it('deletes nothing from R2 for a Store that knows nothing of it (wiped, reset or restored)', async () => {
 		const h = await users()
-		const live = await uploaded(h, h.users.alice, png())
-		const [row] = await sql<{ file_token: string }>(h.store, 'SELECT file_token FROM media_attachments')
-		const orphanToken = 'R'.repeat(43)
-		const orphans = [`files/${orphanToken}/full`, `files/${orphanToken}/small`, 'originals/100000000000000555']
-		for (const key of orphans) {
-			await env.MEDIA.put(key, 'late')
+		const keys = [`files/${'W'.repeat(43)}/full`, `files/${'W'.repeat(43)}/small`, 'originals/100000000000000901']
+		for (const key of keys) {
+			await env.MEDIA.put(key, 'restored media')
 		}
-		const deps = { build: () => env.CF_VERSION_METADATA.id, store: () => h.store }
-		// Younger than the grace period: kept.
-		await reconcileMedia(env, { ...deps, now: () => Date.now() }, 2)
-		for (const key of orphans) {
-			expect(await env.MEDIA.head(key), key).not.toBeNull()
+		await sweepMedia(env, deps(h, later))
+		await reconcileMedia(env, deps(h, later))
+		expect(await present(keys)).toEqual(keys)
+	})
+
+	it('deletes nothing during maintenance, an import, or before setup, even for a due tombstone', async () => {
+		const h = await users()
+		const token = 'T'.repeat(43)
+		const keys = [`files/${token}/full`, 'originals/100000000000000902']
+		const tombstone = async () => {
+			await sql(
+				h.store,
+				'INSERT OR REPLACE INTO media_orphans (file_token, media_id, delete_after) VALUES (?, ?, ?)',
+				token,
+				'100000000000000902',
+				new Date(NOW).toISOString()
+			)
+			for (const key of keys) {
+				await env.MEDIA.put(key, 'x')
+			}
 		}
-		// Past it, every page is visited in bounded runs and only the orphans go.
-		for (let run = 0; run < 20; run++) {
-			await reconcileMedia(env, { ...deps, now: () => Date.now() + 25 * HOUR }, 2)
-		}
-		for (const key of orphans) {
-			expect(await env.MEDIA.head(key), key).toBeNull()
-		}
-		expect(await env.MEDIA.head(`files/${row?.file_token}/full`)).not.toBeNull()
-		expect(await env.MEDIA.head(`originals/${live.id}`)).not.toBeNull()
+		await tombstone()
+		await sql(
+			h.store,
+			"INSERT INTO kopje_state (name, value) VALUES ('maintenance', ?)",
+			JSON.stringify({ mode: 'readonly', at: NOW })
+		)
+		expect(await reconcileMedia(env, deps(h, later))).toBe(0)
+		expect(await present(keys)).toEqual(keys)
+		await sql(h.store, "DELETE FROM kopje_state WHERE name = 'maintenance'")
+		await sql(
+			h.store,
+			"INSERT INTO kopje_state (name, value) VALUES ('import', ?)",
+			JSON.stringify({ id: 'i', state: 'receiving' })
+		)
+		expect(await reconcileMedia(env, deps(h, later))).toBe(0)
+		expect(await present(keys)).toEqual(keys)
+		await sql(h.store, "DELETE FROM kopje_state WHERE name = 'import'")
+		await sql(h.store, "DELETE FROM instance_settings WHERE name = 'domain'")
+		expect(await reconcileMedia(env, deps(h, later))).toBe(0)
+		expect(await present(keys)).toEqual(keys)
+	})
+
+	it('deletes a late write of a failed upload once its tombstone falls due', async () => {
+		const h = await users()
+		h.codec.failEncode = 9523
+		expect((await upload(h, h.users.alice, png())).status).toBe(500)
+		const [row] = await sql<{ id: string; file_token: string; created_at: string }>(
+			h.store,
+			'SELECT id, file_token, created_at FROM media_attachments'
+		)
+		const token = row?.file_token ?? ''
+		expect(await sweepMedia(env, deps(h, NOW))).toBe(1)
+		expect(await sql(h.store, 'SELECT file_token FROM media_orphans')).toEqual([{ file_token: token }])
+		// A put that was still in flight lands after the sweep.
+		await env.MEDIA.put(`files/${token}/full`, 'late')
+		const due = Date.parse(row?.created_at ?? '') + 15 * MINUTE + 24 * HOUR
+		expect(await reconcileMedia(env, deps(h, due - 1))).toBe(0)
+		expect(await env.MEDIA.head(`files/${token}/full`)).not.toBeNull()
+		expect(await reconcileMedia(env, deps(h, due))).toBe(1)
+		expect(await env.MEDIA.head(`files/${token}/full`)).toBeNull()
+		expect(await sql(h.store, 'SELECT file_token FROM media_orphans')).toEqual([])
 	})
 })
 
@@ -137,6 +198,13 @@ describe('completion fence', () => {
 		const response = await upload(h, h.users.alice, png())
 		expect(response.status).toBe(422)
 		expect(await sql(h.store, 'SELECT processed, url FROM media_attachments')).toEqual([{ processed: 1, url: '' }])
+		// A put of the refused upload that lands after the sweep is cleaned up by its tombstone.
+		const [row] = await sql<{ file_token: string }>(h.store, 'SELECT file_token FROM media_attachments')
+		const deps = (at: number) => ({ build: () => env.CF_VERSION_METADATA.id, store: () => h.store, now: () => at })
+		await sweepMedia(env, deps(NOW + 15 * MINUTE))
+		await env.MEDIA.put(`files/${row?.file_token}/small`, 'late')
+		await reconcileMedia(env, deps(NOW + 15 * MINUTE + 24 * HOUR))
+		expect(await env.MEDIA.head(`files/${row?.file_token}/small`)).toBeNull()
 	})
 
 	it('keeps committed files when both completion answers are lost', async () => {
