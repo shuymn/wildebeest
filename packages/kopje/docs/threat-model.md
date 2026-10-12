@@ -150,19 +150,27 @@ against their own instance. TLS is assumed between all parties.
   exists once per natural key (its uri; one favourite and one boost per account and status), so a repeated `Create`,
   `Like` or `Announce` adds no row or notification; a `Delete` or `Undo` that arrives first is recorded and keeps the
   object, favourite or boost from appearing, and a replay after it changes nothing; an `Update` applies only if its
-  `updated` is newer than the last accepted version (`statuses.remote_version`, kept whether or not the change wrote
-  history), both clamped to now plus 5 minutes, so a reordered, repeated or far-future one changes nothing (a
-  version after a far-future one is ignored until the clock passes it); a status whose `Delete` was recorded takes no
-  `Update`. A `Delete` of an unknown object of the actor's origin is recorded too. A change whose retraction cannot
-  be recorded (the per-actor cap) is not made: the `Delete` of a stored status or boost, and an `Undo` of a `Like` or
-  `Announce`, answer 503 and change nothing (a `Delete` of an unknown object at the cap is not recorded and answers
-  202). An `Undo` of a `Like` records both its own reference and the id the matched favourite was stored under. A
-  local boost of a status that is deleted while its author is purged is withdrawn once: an Undo already recorded for
-  it, staged or not, is reused by the other job, and both wait for its staging before they delete the boost.
+  `updated` is newer than the last accepted version (`statuses.remote_version`, kept as the remote wrote it whether
+  or not the change wrote history, and compared unclamped), so a reordered or repeated one changes nothing whenever it
+  arrives; an `Update` dated more than 5 minutes ahead of the clock is ignored (no change, history or notification)
+  until the clock reaches it; a status whose `Delete` was recorded takes no `Update`. A `Delete` of an unknown object
+  of the actor's origin is recorded for that actor only, so it cannot suppress another actor's objects never seen
+  here; the `Delete` of a stored status or boost is also recorded for every actor (`ANY_ACTOR`), so nobody, another
+  actor of the same origin included, creates or updates that uri again (bounded by the authors' caps: it is written
+  only with the author's own retraction of the uri, which counts against the author's cap, and expires and is swept
+  with it). A change whose retraction cannot be recorded (the per-actor cap) is not made: the `Delete` of a stored
+  status or boost, and an `Undo` of a `Like` or `Announce`, answer 503 and the whole receive transaction rolls back,
+  the actor document and keys refreshed for it included (`RetryLater`, turned into the answer by the Store's RPC); a
+  `Delete` of an unknown object at the cap is not recorded and answers 202. An `Undo` of a `Like` records both its
+  own reference and the id the matched favourite was stored under, or neither. A local boost of a status that is
+  deleted while its author is purged is withdrawn once: the boost row's own marker (`statuses.withdrawn`) records
+  that its Undo was recorded, whichever job did it, and lives until the boost is deleted, however soon the intent
+  itself goes once its deliveries settle; both jobs wait for the intent's staging before they delete the boost.
   `test/inbox-statuses.test.ts` ("ID-7: duplicate and reordered Create and Delete", "ignores an Update that is not
   newer"), `test/inbox-statuses-edge.test.ts` ("ID-7: the Update watermark", "leaves nothing for every order of
   Create, Update and Delete", "ID-7: retractions at the per-actor cap", "retracts both ids", "withdraws a local boost
-  once").
+  once", "ID-7: a retryable refusal commits nothing", "ID-6, ID-7: a deleted status is not created again by anyone",
+  "after its deliveries are done").
 - **ID-8: only ActivityStreams media types become objects.** A fetched document is used as an actor, key or object only
   if served as `application/activity+json` or `application/ld+json` with the ActivityStreams profile, as Mastodon
   requires, and only if its root is a JSON object (JSON-LD would fetch a string root through the context loader). Other
@@ -237,8 +245,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   lists"). _Implemented on branch `kopje/inbound-statuses`:_ a domain block matches an account by its stored domain
   and by the host of its actor id (`domainBlockMatchSql`), everywhere a domain block applies (lists, notifications,
   relationships, inbound Follows and Moves, account search and search resolution), so an account confirmed under
-  another WebFinger domain cannot escape a block of the server it lives on; `test/inbox-statuses-edge.test.ts`
-  ("applies a domain block to the actor’s host whatever domain it was confirmed under").
+  another WebFinger domain cannot escape a block of the server it lives on; `test/inbox-canonical-address.test.ts`
+  ("applies a block of the actor’s host on every path", "never lets a third-party alias replace a confirmed domain or
+  evade a block on it").
 - **VIS-6: a wrapper reveals nothing its target hides.** A boost is visible only if its original is; boosting is limited
   to `public` and `unlisted` statuses and one's own `private` ones (`StatusPolicy#reblog?`). _Enforced (main):_ `viewableSql`; `test/visibility.test.ts` ("a boost of an original the viewer may not see is hidden
   with it"), `test/statuses.test.ts` ("refuses to boost direct and others’ private statuses"). Quotes and other embedded
@@ -252,7 +261,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   sender's boost as well as the original (`shownSql` in `src/domain/notifications.ts`, for local boosts too);
   `test/inbox-statuses.test.ts` ("VIS-6: a boost of a private, direct or unfetchable object stores nothing", "VIS-6:
   a boost of an unlisted object stays out of the public timelines"), `test/inbox-statuses-edge.test.ts` ("notifies a
-  local author of a private boost only if they may see the boost").
+  local author of a private boost only if they may see the boost", "hides an already written notification once its
+  recipient may no longer see the boost").
 - **VIS-7: silent recipients see, but are not mentioned.** A silent mention grants VIS-1 access only. It never appears
   in `mentions` and never produces a mention notification. _Enforced (main):_
   `src/domain/status-presenter.ts`, `src/domain/notifications.ts`; `test/visibility.test.ts` ("none for a silent
@@ -409,12 +419,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   the original of a boost (and its author) is fetched as the request's other fetches are, with the personal inbox
   owner's key or the instance actor's, never from the signed-document cache; search with `resolve=true` fetches as
   the instance actor only, for a request whose token is valid and has the scope (401 or 403 otherwise, before
-  anything is fetched), with WebFinger unsigned. An address whose WebFinger names an actor on another host is stored
-  under the address's domain only if that domain itself vouches for it: its own WebFinger for the actor's username names
-  the same actor id (the actor, or its host, never vouches for another domain); otherwise under the actor's host
-  (`test/inbox-statuses-edge.test.ts`, "never takes a domain the claimed domain does not vouch for"). One helper (`accountDomain` in `src/domain/inbox.ts`) decides the stored domain for every path,
-  and an inbound document never replaces a confirmed domain. _Gap:_ inbound activities do not look up WebFinger, so
-  an account first seen inbound shows its actor's host until it is resolved by its address. `createRemoteLoaders` in
+  anything is fetched), with WebFinger unsigned. An account's canonical address is decided as Mastodon 4.7.3's
+  `ActivityPub::ProcessAccountService#check_webfinger!` and `ResolveAccountService` decide it: the actor's own host
+  declares it in the subject of its WebFinger answer for `acct:<preferredUsername>@<host>`; another domain there is a
+  candidate, which must answer for that subject with the same actor id; otherwise the address is on the host
+  (`declaredDomain` in `src/federation/resolve.ts`). The confirmation is bound to its (username, domain, actor id):
+  `accounts.confirmed_username` holds the username it was made for, and an actor whose `preferredUsername` changes
+  falls back to its host until it is confirmed again. A search by an alias (any address whose WebFinger names an
+  existing actor) finds the account by its actor id and never sets or replaces its address. One helper
+  (`accountDomain` in `src/domain/inbox.ts`) decides the stored domain for every path. _Gap:_ inbound activities do
+  not look up WebFinger, so an account first seen inbound shows its actor's host until it is resolved, and a renamed
+  actor keeps its host until it is resolved again. `test/inbox-canonical-address.test.ts`. `createRemoteLoaders` in
   `src/federation/federation.ts`, `src/federation/resolve.ts`; `test/inbox-statuses.test.ts` ("signed by the instance
   actor (NET-4)", "resolves a status URL as the instance actor", "answers 401 without a token and fetches nothing"),
   `test/inbox-statuses-edge.test.ts` ("NET-4: search resolution fetches nothing without a valid token", "the
@@ -538,7 +553,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   status stores at most 4 attachments (Mastodon's limit) with 10,000 code units of description each, 100 hashtags
   of at most 256 code units, 200 `status_mentions` rows (local accounts first; 100 `Mention` tags and 1,000 `to` and
   `cc` entries are read; a redelivery to a personal inbox keeps the bound, its owner taking a remote recipient's
-  place), 10,000 code units of content warning, and content cut at 50,000 code units before sanitizing; its history
+  place, and so does an edit of a public or unlisted status that newly mentions and addresses a local account), 10,000 code units of content warning, and content cut at 50,000 code units before sanitizing; its history
   at most 100 versions (the newest edit replaces the last); an arriving parent links at most 100 replies that came
   before it; a boost at most 200 recipients; profiles show at most 16 fields. A deleted status is removed by a job
   (`inbound_jobs` kind `delete`) in batches of at most 500 rows, measured with `total_changes()`; the first batch hides
@@ -627,7 +642,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   Queue message nor maintenance stops them, and waiting out maintenance spends no retry. `test/inbox.test.ts`,
   `test/inbox-regressions.test.ts`, `test/inbox-verify4.test.ts` ("writes the targets of a withdrawal that needs more
   than a batch of rows, every batch within the budget", "reaches every target when purge batches and delivery claims
-  interleave", "when the purge completes before any expansion").
+  interleave", "when the purge completes before any expansion"). _Gap:_ the batch budget bounds the rows a withdrawal
+  writes, not the work it does: each staging call reads every receipt of the boost and every follower of its booster
+  and sorts all the targets left, so a boost's withdrawal (by a purge, or by a remote author's `Delete` of the boosted
+  status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has this in
+  common with follower enumeration.
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Enforced (main)_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
