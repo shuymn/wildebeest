@@ -48,6 +48,51 @@ describe('Sha256', () => {
 		expect(() => Sha256.restore('nope')).toThrow('invalid hash state')
 		expect(() => Sha256.restore(`${'0'.repeat(64)}:3:`)).toThrow('invalid hash state')
 	})
+
+	// FIPS 180-2 / NIST CSRC example vectors.
+	const NIST: [string, string][] = [
+		['', 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'],
+		['abc', 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'],
+		[
+			'abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq',
+			'248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1',
+		],
+		[
+			'abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu',
+			'cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1',
+		],
+		['a'.repeat(1_000_000), 'cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0'],
+	]
+
+	it('produces the NIST example digests', () => {
+		for (const [message, digest] of NIST) {
+			expect(sha256Hex(message), `${message.length} bytes`).toBe(digest)
+		}
+	})
+
+	it('produces the NIST digests when saved and restored at random split points', () => {
+		// A fixed-seed generator keeps failures reproducible.
+		let seed = 0x2545f491
+		const random = (max: number) => {
+			seed ^= seed << 13
+			seed ^= seed >>> 17
+			seed ^= seed << 5
+			return (seed >>> 0) % (max + 1)
+		}
+		for (const [message, digest] of NIST) {
+			const bytes = new TextEncoder().encode(message)
+			for (let round = 0; round < 25; round++) {
+				const cuts = [random(bytes.length), random(bytes.length), random(bytes.length)].sort((a, b) => a - b)
+				let hash = new Sha256()
+				let at = 0
+				for (const cut of [...cuts, bytes.length]) {
+					hash = Sha256.restore(hash.update(bytes.subarray(at, cut)).save())
+					at = cut
+				}
+				expect(hash.hex(), `${message.length} bytes split at ${cuts.join(',')}`).toBe(digest)
+			}
+		}
+	})
 })
 
 describe('dump format', () => {
