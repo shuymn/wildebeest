@@ -1109,7 +1109,8 @@ export function withdrawLocalBoost(db: Db, boostId: string, now: number): void {
 		return
 	}
 	const announce = announceOf(viewerUri(db, boost.account_id), boost.uri, boost.visibility, boost.published_at, target)
-	recordOutbound(db, boost.account_id, undoAnnounceActivity(announce), now)
+	// Deferred: the purge deletes the boost's receipts and B2's rounds expand the Undo, both in bounded steps.
+	recordOutbound(db, boost.account_id, undoAnnounceActivity(announce), now, { deferred: true })
 }
 
 function removeReblog(db: Db, accountId: string, reblogId: string, originalId: string, now: number): void {

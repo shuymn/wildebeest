@@ -109,9 +109,15 @@ function applied(reason: string, jobsPending = false): ReceiveResult {
 	return { applied: true, reason, jobsPending }
 }
 
-// The deliveries id sequence (AUTOINCREMENT): it moves whenever a delivery is recorded, even one deleted since.
+// Moves whenever a delivery or an outbound intent is recorded: the deliveries id sequence (AUTOINCREMENT, so a row
+// deleted since still counts) and the newest intent (one recorded without its deliveries yet, which a delivery round
+// expands).
 function deliverySequence(db: Db): number {
-	return db.first<{ seq: number }>("SELECT seq FROM sqlite_sequence WHERE name = 'deliveries'")?.seq ?? 0
+	const row = db.first<{ seq: number; intent: number }>(
+		`SELECT IFNULL((SELECT seq FROM sqlite_sequence WHERE name = 'deliveries'), 0) AS seq,
+			IFNULL((SELECT max(id) FROM outbound_activities), 0) AS intent`
+	)
+	return row === undefined ? 0 : row.seq * 2 ** 26 + row.intent
 }
 
 function originOf(uri: string | null): string | null {
@@ -286,6 +292,14 @@ export function retract(db: Db, actorUri: string, targetUri: string, now: number
 	return true
 }
 
+// Records a Follow id as retracted: the one way every path (Undo, Block, a refused or superseded Follow, a local
+// reject) records a Follow generation. A Misskey pair id (`/follows/<follower>/<followee>`) names every generation of a
+// follow, so it is never recorded: true without writing anything. Its limit, on every path: a pair activity delivered
+// again after a new Follow cannot be told from a new one.
+export function retractFollow(db: Db, actorUri: string, followUri: string, now: number): boolean {
+	return isMisskeyPairId(followUri) || retract(db, actorUri, followUri, now)
+}
+
 function sweep(db: Db, now: number): void {
 	db.run(
 		`DELETE FROM inbound_retractions WHERE (actor_uri, target_uri) IN
@@ -446,7 +460,7 @@ const follow: Handler<'Follow'> = (db, actor, activity, { now }) => {
 	if (blocked !== undefined) {
 		// Refused with a Reject. The id is recorded as dead, so a replay sends no second Reject (ID-7); if it cannot be
 		// recorded, no Reject is recorded either.
-		if (!retract(db, actor.uri, activity.id, now)) {
+		if (!retractFollow(db, actor.uri, activity.id, now)) {
 			return ignored('retraction-cap')
 		}
 		recordFollowAnswer(db, 'Reject', target, actor, activity.id, now)
@@ -459,7 +473,7 @@ const follow: Handler<'Follow'> = (db, actor, activity, { now }) => {
 		// A newer generation: the edge takes the new id, and the superseded one is recorded as dead, so a late Undo,
 		// or a replay, of it changes nothing (ID-7). A pending request keeps waiting; an accepted follow is accepted
 		// again under the new id (Mastodon's fast-forward: the follower lost track of our Accept).
-		if (existing.uri !== null && !isMisskeyPairId(existing.uri) && !retract(db, actor.uri, existing.uri, now)) {
+		if (existing.uri !== null && !retractFollow(db, actor.uri, existing.uri, now)) {
 			return ignored('retraction-cap')
 		}
 		db.run('UPDATE follows SET uri = ? WHERE id = CAST(? AS INTEGER)', activity.id, existing.id)
@@ -567,7 +581,7 @@ const reject: Handler<'Reject'> = (db, actor, activity) => {
 
 // Misskey's Undo of a Follow names the follow by its pair (ApRendererService#renderFollow without a request id:
 // <origin>/follows/<follower id>/<followee id>), not by the id of the Follow it sent.
-function isMisskeyPairId(id: string): boolean {
+export function isMisskeyPairId(id: string): boolean {
 	try {
 		return /^\/follows\/[^/]+\/[^/]+$/.test(new URL(id).pathname)
 	} catch {
@@ -660,8 +674,16 @@ const block: Handler<'Block'> = (db, actor, activity, { now }) => {
 		target.id
 	)
 	if (existing !== undefined) {
+		if (existing.uri === activity.id) {
+			return ignored('duplicate')
+		}
+		// A new id for the same block: the old one is recorded as retracted first, so a redelivery of it after an Undo
+		// of the new one does not bring the block back (ID-7). If it cannot be recorded, nothing changes.
+		if (existing.uri !== null && !retract(db, actor.uri, existing.uri, now)) {
+			return ignored('retraction-cap')
+		}
 		db.run('UPDATE blocks SET uri = ? WHERE id = CAST(? AS INTEGER)', activity.id, existing.id)
-		return existing.uri === activity.id ? ignored('duplicate') : applied('block-updated')
+		return applied('block-updated')
 	}
 	const followUri = db.first<{ uri: string | null }>(
 		'SELECT uri FROM follows WHERE account_id = ? AND target_account_id = ?',
@@ -669,7 +691,7 @@ const block: Handler<'Block'> = (db, actor, activity, { now }) => {
 		target.id
 	)?.uri
 	// The removed follow's generation must be recorded, or the Block changes nothing (ID-7).
-	if (followUri != null && !isMisskeyPairId(followUri) && !retract(db, actor.uri, followUri, now)) {
+	if (followUri != null && !retractFollow(db, actor.uri, followUri, now)) {
 		return ignored('retraction-cap')
 	}
 	removeFollow(db, actor.id, target.id)
@@ -901,26 +923,29 @@ const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
 	return applied('actor-deleted', purgeBatch(db, actor.uri, now))
 }
 
-// One batch of a deleted actor's purge, at most PURGE_BATCH rows written in all, whatever the account has (RES-6):
-//   1. its relationships, notifications, mentions, favourites and keys, recounting what they counted;
-//   2. local boosts of its statuses: each boost's Undo is recorded through the boost's own path (B2,
-//      withdrawLocalBoost; the job's cursor keeps the boost being withdrawn so it is recorded once), then the boost goes;
+// One batch of a deleted actor's purge (RES-6). Every row the batch writes counts against PURGE_BATCH, measured with
+// SQLite's total_changes() so that nothing escapes the count: deletions, counter recounts, and the Undo intent of a
+// local boost. Each step is limited beforehand to what is left, so a batch never writes more than PURGE_BATCH rows:
+//   1. the account's relationships, notifications, mentions, favourites and keys, with the counters they counted;
+//   2. local boosts of its statuses: each boost's Undo is recorded once (withdrawLocalBoost, deferred: the intent
+//      carries its targets and B2's delivery rounds expand it in their own bounded steps; the job's cursor keeps the
+//      boost being withdrawn), then the boost is deleted like any status and its booster's count recounted;
 //   3. remote boosts of its statuses, then its own statuses.
 // A status is deleted only once its children (edits, media, mentions, tags, favourites, bookmarks, notifications,
 // receipts, boosts and the reply links to it) are gone, so deleting it cascades nothing. Local media is detached for
 // the media sweep (its R2 objects go only through B4b's path), never deleted here. Returns whether anything remains;
 // when nothing does, the account row goes and the job is done.
-function purgeBatch(db: Db, uri: string, now: number): boolean {
+export function purgeBatch(db: Db, uri: string, now: number): boolean {
 	const account = remoteAccount(db, uri)
 	if (account === undefined) {
 		finishJob(db, 'purge', uri, now)
 		return false
 	}
 	const id = account.id
-	const budget = { left: PURGE_BATCH }
+	const budget = new Budget(db, PURGE_BATCH)
 	purgeRelationships(db, id, budget)
 	withdrawLocalBoosts(db, uri, id, budget, now)
-	while (budget.left > 0) {
+	while (budget.left() > 0) {
 		const status = db.first<{ id: string }>(
 			`SELECT r.id FROM statuses r JOIN statuses o ON o.id = r.reblog_of_id
 				LEFT JOIN local_accounts l ON l.account_id = r.account_id
@@ -933,7 +958,8 @@ function purgeBatch(db: Db, uri: string, now: number): boolean {
 			break
 		}
 	}
-	if (budget.left === 0 || accountHasRows(db, id)) {
+	// The final account delete and the job's completion are two more rows.
+	if (budget.left() < 2 || accountHasRows(db, id)) {
 		return true
 	}
 	db.run('DELETE FROM accounts WHERE id = ? AND domain IS NOT NULL', id)
@@ -941,26 +967,41 @@ function purgeBatch(db: Db, uri: string, now: number): boolean {
 	return false
 }
 
-type Budget = { left: number }
+// The rows a purge batch may still write: PURGE_BATCH less every row changed since the batch began.
+class Budget {
+	readonly #start: number
 
-// Runs a bounded write over the budget: `sql` must take the row limit as its last parameter.
-function spend(db: Db, budget: Budget, sql: string, ...params: SqlStorageValue[]): number {
-	if (budget.left <= 0) {
-		return 0
+	constructor(
+		private readonly db: Db,
+		private readonly limit: number
+	) {
+		this.#start = changes(db)
 	}
-	const written = db.run(sql, ...params, budget.left)
-	budget.left -= written
-	return written
+
+	left(): number {
+		return Math.max(this.limit - (changes(this.db) - this.#start), 0)
+	}
+}
+
+function changes(db: Db): number {
+	return db.first<{ n: number }>('SELECT total_changes() AS n')?.n ?? 0
+}
+
+// Runs a write limited to the rows left: `sql` takes the row limit as its last parameter.
+function spend(db: Db, budget: Budget, sql: string, ...params: SqlStorageValue[]): number {
+	const left = budget.left()
+	return left === 0 ? 0 : db.run(sql, ...params, left)
 }
 
 function purgeRelationships(db: Db, id: string, budget: Budget): void {
+	// A follow's delete and its local side's recount: two rows each at most.
 	const follows = db.all<{ id: string; other: string }>(
 		`SELECT CAST(id AS TEXT) AS id, CASE WHEN account_id = ?1 THEN target_account_id ELSE account_id END AS other
 		FROM follows WHERE account_id = ?1 OR target_account_id = ?1 ORDER BY id LIMIT ?2`,
 		id,
-		budget.left
+		Math.floor(budget.left() / 2)
 	)
-	budget.left -= db.run(
+	db.run(
 		'DELETE FROM follows WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))',
 		JSON.stringify(follows.map((f) => f.id))
 	)
@@ -968,12 +1009,13 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		db,
 		follows.map((f) => f.other)
 	)
+	// A favourite's delete and its status's recount.
 	const favourites = db.all<{ id: string; status: string }>(
 		'SELECT CAST(id AS TEXT) AS id, status_id AS status FROM favourites WHERE account_id = ? ORDER BY id LIMIT ?',
 		id,
-		Math.max(budget.left, 0)
+		Math.floor(budget.left() / 2)
 	)
-	budget.left -= db.run(
+	db.run(
 		'DELETE FROM favourites WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))',
 		JSON.stringify(favourites.map((f) => f.id))
 	)
@@ -1035,16 +1077,16 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	)
 }
 
-// Local boosts of the account's statuses, each withdrawn once through B2 (the purge job's cursor holds the boost
-// whose Undo is recorded), then deleted like any status, and its booster's statuses_count recounted.
+// Local boosts of the account's statuses, each withdrawn once (the purge job's cursor holds the boost whose Undo is
+// recorded), then deleted like any status (its receipts a batch at a time), and its booster's statuses_count recounted.
 function withdrawLocalBoosts(db: Db, uri: string, id: string, budget: Budget, now: number): void {
-	while (budget.left > 0) {
+	while (budget.left() > 0) {
 		const cursor = db.first<{ cursor: string | null }>(
 			"SELECT cursor FROM inbound_jobs WHERE kind = 'purge' AND key = ?",
 			uri
 		)?.cursor
-		const boost = db.first<{ id: string; booster: string }>(
-			`SELECT r.id, r.account_id AS booster FROM statuses r JOIN statuses o ON o.id = r.reblog_of_id
+		const boost = db.first<{ id: string; uri: string; booster: string }>(
+			`SELECT r.id, r.uri, r.account_id AS booster FROM statuses r JOIN statuses o ON o.id = r.reblog_of_id
 				JOIN local_accounts l ON l.account_id = r.account_id
 			WHERE o.account_id = ? ORDER BY r.id = ? DESC, r.id LIMIT 1`,
 			id,
@@ -1054,11 +1096,21 @@ function withdrawLocalBoosts(db: Db, uri: string, id: string, budget: Budget, no
 			return
 		}
 		if (cursor !== boost.id) {
+			// The intent, the earlier intents about the boost it supersedes, and the cursor.
+			const superseded =
+				db.first<{ n: number }>(
+					'SELECT count(*) AS n FROM outbound_activities WHERE account_id = ? AND object_uri = ?',
+					boost.booster,
+					boost.uri
+				)?.n ?? 0
+			if (budget.left() < superseded + 2) {
+				return
+			}
 			withdrawLocalBoost(db, boost.id, now)
 			db.run("UPDATE inbound_jobs SET cursor = ? WHERE kind = 'purge' AND key = ?", boost.id, uri)
-			budget.left--
 		}
-		if (!deleteStatusWithin(db, boost.id, budget)) {
+		// The boost's deletion, its booster's recount and the cursor's reset.
+		if (!deleteStatusWithin(db, boost.id, budget, 2)) {
 			return
 		}
 		recountStatuses(db, boost.booster)
@@ -1067,8 +1119,8 @@ function withdrawLocalBoosts(db: Db, uri: string, id: string, budget: Budget, no
 }
 
 // Deletes a status's children within the budget, and the status itself once none remain (so nothing cascades).
-// Returns whether the status is gone.
-function deleteStatusWithin(db: Db, statusId: string, budget: Budget): boolean {
+// `after` is how many rows the caller writes once the status is gone. Returns whether the status is gone.
+function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0): boolean {
 	const row = db.first<{ parent: string | null; original: string | null }>(
 		'SELECT in_reply_to_id AS parent, reblog_of_id AS original FROM statuses WHERE id = ?',
 		statusId
@@ -1128,6 +1180,7 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget): boolean {
 		'DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE status_id = ? LIMIT ?)',
 		statusId
 	)
+	// Receipts of a withdrawn local boost are deleted here, a batch at a time, after its Undo has taken them as targets.
 	spend(
 		db,
 		budget,
@@ -1153,11 +1206,11 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget): boolean {
 			OR EXISTS (SELECT 1 FROM statuses WHERE in_reply_to_id = ?1 OR reblog_of_id = ?1)`,
 		statusId
 	)
-	if (children !== undefined || budget.left <= 0) {
+	// The status's delete and the recounts of its parent and original.
+	if (children !== undefined || budget.left() < 3 + after) {
 		return false
 	}
 	db.run('DELETE FROM statuses WHERE id = ?', statusId)
-	budget.left--
 	recountStatus(db, row.parent)
 	recountStatus(db, row.original)
 	return true

@@ -1,6 +1,6 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { userReadOperation, userWriteOperation } from './auth'
-import { retract } from './inbox'
+import { retractFollow } from './inbox'
 import { notify } from './notifications'
 import { readOperation } from './operation'
 import { htmlToPlainText, plainTextToHtml } from './plain-text'
@@ -724,9 +724,10 @@ export const answerFollowRequest = userWriteOperation<
 	if (decision === 'authorize') {
 		db.run("UPDATE follows SET state = 'accepted' WHERE id = CAST(? AS INTEGER)", request.id)
 	} else {
-		// A rejected remote Follow is recorded as retracted, so a redelivery of it does not ask again (ID-7). If it
+		// A rejected remote Follow is recorded as retracted (retractFollow), so a redelivery of it does not ask again
+		// (ID-7); a Misskey pair id is not recorded, and its redelivery asks again (the pair limit). If it
 		// cannot be recorded (the requester's retraction cap), nothing changes.
-		if (request.remote === 1 && request.uri !== null && !retract(db, request.requester_uri, request.uri, now)) {
+		if (request.remote === 1 && request.uri !== null && !retractFollow(db, request.requester_uri, request.uri, now)) {
 			return { status: 'unavailable' }
 		}
 		db.run('DELETE FROM follows WHERE id = CAST(? AS INTEGER)', request.id)

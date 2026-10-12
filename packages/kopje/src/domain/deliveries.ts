@@ -224,7 +224,7 @@ export function enqueueActivity(
 	signerId: string,
 	envelope: { activity: Activity; audience: DeliveryAudience },
 	now: number,
-	options: { withdraws?: boolean } = {}
+	options: { withdraws?: boolean; deferred?: boolean } = {}
 ): void {
 	const targets = audienceTargets(db, signerId, envelope.activity, envelope.audience, options.withdraws === true)
 	const { object, retracts } = subjectOf(envelope.activity, options.withdraws === true)
@@ -237,7 +237,9 @@ export function enqueueActivity(
 			retracts ? 1 : 0
 		)
 	}
-	if (object !== null && retracts) {
+	// deferred: the caller (a purge) deletes the receipts itself in bounded batches; the intent already holds them as
+	// targets.
+	if (object !== null && retracts && options.deferred !== true) {
 		db.run(
 			'DELETE FROM outbound_receipts WHERE account_id = ? AND status_id IN (SELECT id FROM statuses WHERE uri = ?)',
 			signerId,
@@ -265,7 +267,10 @@ export function enqueueActivity(
 	} else {
 		insertIntent(db, signerId, envelope, object, retracts, targets, now)
 	}
-	expandPending(db, now, EXPANSION_STEP)
+	// deferred: the intent waits for the delivery rounds, which expand it EXPANSION_STEP targets at a time.
+	if (options.deferred !== true) {
+		expandPending(db, now, EXPANSION_STEP)
+	}
 }
 
 function insertIntent(
