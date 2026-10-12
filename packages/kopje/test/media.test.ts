@@ -387,9 +387,10 @@ describe('GET /media/:token/:file', () => {
 })
 
 describe('media lifecycle', () => {
-	it('deletes the R2 objects of a status deleted with delete_media', async () => {
+	it('deletes the R2 objects of a status deleted with delete_media, and federates the Delete (B2)', async () => {
 		const h = await users()
 		const { alice } = h.users
+		await remoteFollows(h.store, await remoteAccount(h.store, 'fan'), alice.id)
 		const media = await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS)))
 		const keys = await keysOf(h, media.id)
 		const status = await post(h, alice, { status: 'x', media_ids: [media.id] })
@@ -401,6 +402,9 @@ describe('media lifecycle', () => {
 		expect(await stored(keys)).toEqual([])
 		expect(await row(h, media.id)).toBeUndefined()
 		expect((await h.request(pathOf(media.url))).status).toBe(404)
+		const activities = (await outbound(h.store)).map((o) => o.activity)
+		expect(activities.map((a) => a.type)).toEqual(['Create', 'Delete'])
+		expect(activities[1]?.object).toMatchObject({ id: status.uri })
 	})
 
 	it('keeps detached media for a redraft, then sweeps it after the grace period', async () => {

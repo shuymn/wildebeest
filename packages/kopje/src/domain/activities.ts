@@ -7,6 +7,8 @@ import {
 	type Recipient,
 	type Visibility,
 } from './audience'
+import { enqueueActivity } from './deliveries'
+import { readOperation } from './operation'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
 
@@ -17,36 +19,23 @@ import { httpUrl } from '../platform/http-url'
 //   { "activity": <the activity JSON>, "audience": { "followers": boolean, "accounts": [<account id>, ...] } }
 //
 // where followers means the signer's followers and accounts are the addressed accounts (silent recipients included,
-// local ones too; B2 skips HTTP for local recipients). Update and Delete are addressed and delivered to the audience
+// local ones too; delivery skips local recipients). An addressed account named in to/cc is delivered to by its shared
+// inbox, any other (silent recipients, the object of a Like or a Follow) by its personal inbox (deliveries.ts). Update and Delete are addressed and delivered to the audience
 // the status already had and never wider: visibility cannot change, and a mention removed by an edit stays as a
 // silent mention. Delete carries a Tombstone, not the content.
 
-const CONTEXT = ['https://www.w3.org/ns/activitystreams', { sensitive: 'as:sensitive', Hashtag: 'as:Hashtag' }] as const
+const AS_CONTEXT = 'https://www.w3.org/ns/activitystreams'
+
+const CONTEXT = [AS_CONTEXT, { sensitive: 'as:sensitive', Hashtag: 'as:Hashtag' }] as const
 
 export type OutboundEnvelope = { activity: Record<string, unknown>; audience: Audience }
 
-// Records the intent if anyone remote may need it: the signer has a remote follower and the audience includes
-// followers, or the audience names a remote account. As in Mastodon, the followers are the current ones: a remote
-// follower who left before a Delete is not sent it, and if no remote recipient remains the row is omitted. Which
-// inboxes actually received the Create is for B2 to record in deliveries.
+// Records the intent and its target inboxes (domain/deliveries.ts), or nothing if no remote inbox needs it. As in
+// Mastodon, the followers are the current ones; a Delete also reaches every inbox that received the status or may
+// still receive it, so a follower who left since still gets the Tombstone. Record a retraction before deleting the
+// row it retracts: the receipts go with the row.
 export function recordOutbound(db: Db, signerId: string, envelope: OutboundEnvelope, now: number): void {
-	const reaches = db.first(
-		`SELECT 1 AS yes WHERE (?2 AND EXISTS (SELECT 1 FROM follows f JOIN accounts a ON a.id = f.account_id
-				WHERE f.target_account_id = ?1 AND f.state = 'accepted' AND a.domain IS NOT NULL))
-			OR EXISTS (SELECT 1 FROM accounts a WHERE a.id IN (SELECT value FROM json_each(?3)) AND a.domain IS NOT NULL)`,
-		signerId,
-		envelope.audience.followers ? 1 : 0,
-		JSON.stringify(envelope.audience.accounts)
-	)
-	if (reaches === undefined) {
-		return
-	}
-	db.run(
-		'INSERT INTO outbound_activities (account_id, body, created_at) VALUES (?, ?, ?)',
-		signerId,
-		JSON.stringify(envelope),
-		now
-	)
+	enqueueActivity(db, signerId, envelope, now)
 }
 
 export function followersUri(actorUri: string): string {
@@ -150,7 +139,7 @@ export function statusFacts(db: Db, statusId: string): StatusFacts | null {
 	}
 }
 
-function noteOf(facts: StatusFacts): Record<string, unknown> {
+export function noteOf(facts: StatusFacts): Record<string, unknown> {
 	const { to, cc } = addressingOf(facts.visibility, followersUri(facts.actorUri), facts.recipients)
 	return {
 		id: facts.uri,
@@ -324,3 +313,165 @@ export function undoAnnounceActivity(input: AnnounceInput) {
 		audience: announce.audience,
 	} satisfies OutboundEnvelope
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Follows (Mastodon's FollowService, UnfollowService, AuthorizeFollowService and RejectFollowService). Each goes to
+// the other side's personal inbox. A follow's id is `<actor>#follows/<edge id>`; Accept and Reject are named after
+// the follow edge they answer, as Mastodon's `#accepts/follows/<id>`.
+// ---------------------------------------------------------------------------------------------------------------
+
+export type FollowActivityInput = { followUri: string; actorUri: string; targetUri: string; targetId: string }
+
+export function followUri(actorUri: string, edgeId: string): string {
+	return `${actorUri}#follows/${edgeId}`
+}
+
+export function followActivity(input: FollowActivityInput) {
+	return {
+		activity: {
+			'@context': AS_CONTEXT,
+			id: input.followUri,
+			type: 'Follow',
+			actor: input.actorUri,
+			object: input.targetUri,
+		},
+		audience: { followers: false, accounts: [input.targetId] },
+	} satisfies OutboundEnvelope
+}
+
+export function undoFollowActivity(input: FollowActivityInput) {
+	const { '@context': _, ...follow } = followActivity(input).activity
+	return {
+		activity: {
+			'@context': AS_CONTEXT,
+			id: `${input.followUri}/undo`,
+			type: 'Undo',
+			actor: input.actorUri,
+			object: follow,
+		},
+		audience: { followers: false, accounts: [input.targetId] },
+	} satisfies OutboundEnvelope
+}
+
+// The answer of a local account to a remote follow: Accept when it is (or becomes) accepted, Reject when a request is
+// refused or a follower is removed. followUri is the remote Follow's id as received; edgeId is follows.id.
+export type FollowAnswerInput = {
+	localActorUri: string
+	followerUri: string
+	followerId: string
+	followUri: string | null
+	edgeId: string
+}
+
+export function followAnswerActivity(kind: 'Accept' | 'Reject', input: FollowAnswerInput) {
+	const path = kind === 'Accept' ? 'accepts' : 'rejects'
+	return {
+		activity: {
+			'@context': AS_CONTEXT,
+			id: `${input.localActorUri}#${path}/follows/${input.edgeId}`,
+			type: kind,
+			actor: input.localActorUri,
+			object: {
+				...(input.followUri === null ? {} : { id: input.followUri }),
+				type: 'Follow',
+				actor: input.followerUri,
+				object: input.localActorUri,
+			},
+		},
+		audience: { followers: false, accounts: [input.followerId] },
+	} satisfies OutboundEnvelope
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Local objects served over ActivityPub (VIS-4): the Note of a public or unlisted local status, and the outbox. Both
+// come from statusFacts and noteOf, the data of the outbound Create, so the served object and the delivered one agree.
+// ---------------------------------------------------------------------------------------------------------------
+
+// Public, unlisted, local, and not by a suspended account. Anything else answers as missing.
+const SERVABLE = `s.visibility IN ('public', 'unlisted') AND l.suspended_at IS NULL`
+
+// The Note as serialized JSON-LD.
+export const getLocalNote = readOperation<{ uri: string }, string | null>((db, { uri }) => {
+	const row = db.first<{ id: string }>(
+		`SELECT s.id FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id
+		WHERE s.uri = ? AND s.reblog_of_id IS NULL AND ${SERVABLE}`,
+		uri
+	)
+	const facts = row === undefined ? null : statusFacts(db, row.id)
+	return facts === null ? null : JSON.stringify({ '@context': CONTEXT, ...noteOf(facts) })
+})
+
+export const OUTBOX_PAGE_SIZE = 20
+
+// Items are serialized JSON: RPC types cannot carry `unknown`.
+export type OutboxPage = { total: number | null; items: string[]; next: string | null }
+
+// A local actor's outbox, newest first: Create for its statuses, Announce for its boosts (of public or unlisted
+// originals only). before null asks for the count only; otherwise a page of statuses with ids below it.
+export const getOutbox = readOperation<{ username: string; before: string | null }, OutboxPage | null>(
+	(db, { username, before }) => {
+		const owner = db.first<{ id: string; uri: string }>(
+			`SELECT a.id, a.uri FROM accounts a JOIN local_accounts l ON l.account_id = a.id
+			WHERE a.domain IS NULL AND a.username = ? AND l.suspended_at IS NULL`,
+			username
+		)
+		if (owner === undefined) {
+			return null
+		}
+		const listed = `FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id
+			LEFT JOIN statuses o ON o.id = s.reblog_of_id
+			WHERE s.account_id = ?1 AND ${SERVABLE}
+				AND (s.reblog_of_id IS NULL OR (o.visibility IN ('public', 'unlisted')
+					AND NOT EXISTS (SELECT 1 FROM local_accounts ol WHERE ol.account_id = o.account_id AND ol.suspended_at IS NOT NULL)))`
+		// The count only for the collection itself; a page does not need it.
+		if (before === null) {
+			return {
+				total: db.first<{ n: number }>(`SELECT count(*) AS n ${listed}`, owner.id)?.n ?? 0,
+				items: [],
+				next: null,
+			}
+		}
+		const rows = db.all<{
+			id: string
+			uri: string
+			visibility: Visibility
+			published_at: string
+			original_id: string | null
+			original_uri: string | null
+			original_author_id: string | null
+			original_author_uri: string | null
+		}>(
+			`SELECT s.id, s.uri, s.visibility, s.published_at, o.id AS original_id, o.uri AS original_uri,
+				o.account_id AS original_author_id, (SELECT uri FROM accounts WHERE id = o.account_id) AS original_author_uri
+			${listed} AND s.id < ?2 ORDER BY s.id DESC LIMIT ?3`,
+			owner.id,
+			before,
+			OUTBOX_PAGE_SIZE + 1
+		)
+		const items: string[] = []
+		for (const row of rows.slice(0, OUTBOX_PAGE_SIZE)) {
+			if (row.original_uri !== null && row.original_author_uri !== null && row.original_author_id !== null) {
+				items.push(
+					JSON.stringify(
+						announceActivity({
+							announceUri: row.uri,
+							actorUri: owner.uri,
+							visibility: row.visibility,
+							publishedAt: row.published_at,
+							objectUri: row.original_uri,
+							authorUri: row.original_author_uri,
+							authorId: row.original_author_id,
+						}).activity
+					)
+				)
+				continue
+			}
+			const facts = statusFacts(db, row.id)
+			if (facts !== null) {
+				items.push(JSON.stringify(createActivity(facts).activity))
+			}
+		}
+		const last = rows[OUTBOX_PAGE_SIZE - 1]
+		return { total: null, items, next: rows.length > OUTBOX_PAGE_SIZE && last !== undefined ? last.id : null }
+	}
+)

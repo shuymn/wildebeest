@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, form, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { BUILD } from './helpers'
 import {
 	act,
 	block,
@@ -18,6 +19,13 @@ import {
 } from './status-helpers'
 import { MAX_RAW_LENGTH } from '../src/domain/status-text'
 import { MAX_STATUS_EDITS } from '../src/domain/statuses'
+import type { StoreStub } from '../src/platform/store-client'
+
+// Puts the pending Creates in flight, so the servers they go to will have the object: an edit then goes to them as an
+// Update (a server without the object gets a Create of the current version instead).
+async function createsInFlight(store: StoreStub): Promise<void> {
+	await store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'in-flight' })
+}
 
 describe('POST /api/v1/statuses', () => {
 	it('posts a status in the Mastodon 4.0.2 shape', async () => {
@@ -498,6 +506,7 @@ describe('outbound intents', () => {
 		const carol = await remoteAccount(h.store, 'carol', 'remote.example')
 		await remoteFollows(h.store, follower, alice.id)
 		const direct = await post(h, alice, { status: '@carol@remote.example psst', visibility: 'direct' })
+		await createsInFlight(h.store)
 		h.now.mockReturnValue(NOW + 1000)
 		await h.request(`/api/v1/statuses/${direct.id}`, bearer(alice.token, json({ status: 'edited' }, { method: 'PUT' })))
 		await h.request(`/api/v1/statuses/${direct.id}`, bearer(alice.token, { method: 'DELETE' }))
@@ -590,6 +599,7 @@ describe('review regressions', () => {
 		const remote = await remoteAccount(h.store, 'fan', 'fans.example')
 		await remoteFollows(h.store, remote, h.users.alice.id)
 		const status = await post(h, h.users.alice, { status: 'v1' })
+		await createsInFlight(h.store)
 		await put(h, h.users.alice.token, status.id, { status: 'v2' })
 		await put(h, h.users.alice.token, status.id, { status: 'v3' })
 		const updates = (await outbound(h.store)).filter((o) => o.activity.type === 'Update').map((o) => o.activity.id)
@@ -793,6 +803,7 @@ describe('edits never widen a non-public audience', () => {
 			let id: string
 			if (visibility === 'private') {
 				id = (await post(h, alice, { status: '@carol@remote.example @bob secret', visibility: 'private' })).id
+				await createsInFlight(h.store)
 			} else {
 				// A limited status (silent recipient) is not something the API posts; write it as an inbound one would be.
 				id = await seedStatus(h.store, {
@@ -802,6 +813,13 @@ describe('edits never widen a non-public audience', () => {
 					mentions: [{ accountId: carol }, { accountId: bob.id, silent: true }],
 				})
 				await remoteFollows(h.store, carol, alice.id)
+				// remote.example has it already, as if its Create had been delivered.
+				await sql(
+					h.store,
+					"INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at) VALUES (?, 'https://remote.example/inbox', ?, 0)",
+					id,
+					alice.id
+				)
 			}
 			const audienceBefore = (await outbound(h.store)).map((o) => o.audience)
 			const edited = await put(h, alice.token, id, {
