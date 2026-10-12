@@ -136,6 +136,40 @@ describe('account lookup', () => {
 		expect(await response.text()).toContain(`"id":"${id}"`)
 	})
 
+	it("redacts a suspended account's profile as Mastodon 4.0.2 does", async () => {
+		const h = await apiHarness()
+		const id = await seedAccount(h.store, { username: 'gone', displayName: 'Gone', locked: true })
+		await sql(
+			h.store,
+			`UPDATE accounts SET note = '<p>bio</p>', actor_type = 'Service', discoverable = 1,
+				avatar_url = 'https://cdn.test/a.png', header_url = 'https://cdn.test/h.png' WHERE id = ?`,
+			id
+		)
+		await sql(
+			h.store,
+			'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
+			new Date(NOW).toISOString(),
+			id
+		)
+		const response = await h.request(`/api/v1/accounts/${id}`)
+		expect(await response.json()).toMatchObject({
+			id,
+			username: 'gone',
+			display_name: '',
+			note: '',
+			locked: false,
+			bot: false,
+			discoverable: false,
+			avatar: 'https://kopje.test/assets/avatar.png',
+			avatar_static: 'https://kopje.test/assets/avatar.png',
+			header: 'https://kopje.test/assets/header.png',
+			header_static: 'https://kopje.test/assets/header.png',
+			emojis: [],
+			fields: [],
+			suspended: true,
+		})
+	})
+
 	it('looks up local and remote accounts by acct', async () => {
 		const h = await apiHarness()
 		const local = await seedAccount(h.store, { username: 'Alice' })

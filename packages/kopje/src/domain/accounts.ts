@@ -99,22 +99,25 @@ const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type, a.disp
 
 const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
 
+// A suspended account is shown redacted, as Mastodon 4.0.2's REST::AccountSerializer does: no display name, note,
+// fields or emojis, the default avatar and header, and locked, bot and discoverable false.
 export function presentAccount(row: AccountRow, { origin }: Present): Account {
+	const suspended = row.suspended_at !== null
 	// A local account's url is derived from its actor URI, which carries the instance origin.
 	const url = row.url ?? `${new URL(row.uri).origin}/@${row.username}`
-	const avatar = row.avatar_url ?? `${origin}${DEFAULT_AVATAR}`
-	const header = row.header_url ?? `${origin}${DEFAULT_HEADER}`
+	const avatar = (suspended ? null : row.avatar_url) ?? `${origin}${DEFAULT_AVATAR}`
+	const header = (suspended ? null : row.header_url) ?? `${origin}${DEFAULT_HEADER}`
 	return {
 		id: row.id,
 		username: row.username,
 		acct: row.domain === null ? row.username : `${row.username}@${row.domain}`,
-		display_name: row.display_name,
-		locked: row.locked === 1,
-		bot: row.actor_type === 'Service' || row.actor_type === 'Application',
-		discoverable: row.discoverable === null ? null : row.discoverable === 1,
+		display_name: suspended ? '' : row.display_name,
+		locked: !suspended && row.locked === 1,
+		bot: !suspended && (row.actor_type === 'Service' || row.actor_type === 'Application'),
+		discoverable: suspended ? false : row.discoverable === null ? null : row.discoverable === 1,
 		group: row.actor_type === 'Group',
 		created_at: row.created_at,
-		note: row.note,
+		note: suspended ? '' : row.note,
 		url,
 		avatar,
 		avatar_static: avatar,
@@ -126,7 +129,7 @@ export function presentAccount(row: AccountRow, { origin }: Present): Account {
 		last_status_at: row.last_status_at,
 		emojis: [],
 		fields: [],
-		...(row.suspended_at !== null ? { suspended: true as const } : {}),
+		...(suspended ? { suspended: true as const } : {}),
 	}
 }
 
