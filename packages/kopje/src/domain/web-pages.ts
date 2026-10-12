@@ -58,7 +58,7 @@ export type ParentLink = { url: string; acct: string }
 
 export type StatusPage =
 	| { status: 'ok'; value: Status; parent: ParentLink | null }
-	| { status: 'moved'; id: string }
+	| { status: 'moved'; username: string; id: string }
 	| { status: 'not_found' }
 
 // A local status by the path's username and id (an API id, or a legacy id, which moves to the API id). VIS-4: only a
@@ -71,8 +71,8 @@ export const statusPage = readOperation<{ username: string; id: string; present:
 		if (resolved === null) {
 			return { status: 'not_found' }
 		}
-		const row = db.first<{ in_reply_to_id: string | null }>(
-			`SELECT s.in_reply_to_id FROM statuses s JOIN accounts au ON au.id = s.account_id
+		const row = db.first<{ in_reply_to_id: string | null; username: string }>(
+			`SELECT s.in_reply_to_id, au.username FROM statuses s JOIN accounts au ON au.id = s.account_id
 			WHERE s.id = ?2 AND au.domain IS NULL AND lower(au.username) = lower(?3) AND s.reblog_of_id IS NULL
 				AND ${visibleSql('s', '?1')}`,
 			null,
@@ -83,7 +83,7 @@ export const statusPage = readOperation<{ username: string; id: string; present:
 			return { status: 'not_found' }
 		}
 		if (resolved !== id) {
-			return { status: 'moved', id: resolved }
+			return { status: 'moved', username: row.username, id: resolved }
 		}
 		const status = presentStatus(db, resolved, { ...present, viewerId: null })
 		if (status === null) {

@@ -338,10 +338,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   revoking an app, signing out other sessions, sign-out) first requires `Origin` equal to the instance origin (missing,
   `null` and foreign answer 403 before the body is read), then the session and an anti-forgery token derived from it
   (SHA-256 of the session token under its own context, compared in constant time). The only redirect targets are fixed
-  local paths and the sign-in's return path, which must start with a single `/`, contain no backslash, whitespace or
-  control character, and resolve to the instance origin; anything else becomes `/settings`. `src/web/session.ts`,
+  local paths and the sign-in's return path, which must start with exactly one `/`, contain no backslash, whitespace,
+  control character, `.` or `..` segment, or percent-encoded slash, backslash, dot, control or `%`, and resolve to the
+  instance origin as a path of the same form (so normalization cannot turn it into `//host`); anything else becomes
+  `/settings`. A legacy permalink moves to the author's stored username, not the request's text. `src/web/session.ts`,
   `src/app/web.tsx`; `test/web-session.test.ts` ("refuses a missing, null or foreign Origin on every form", "refuses a
-  missing or wrong anti-forgery token on every form", "accepts only local paths", "returns after sign-in only to a
+  missing or wrong anti-forgery token on every form", "accepts only local paths (WEB-4: unsafe return path)", "returns after sign-in only to a
   validated local path", "ignores a tampered return path in the login cookie"), `test/web-images.test.ts` ("refuses a
   foreign, null or missing Origin and a wrong token before any transformation").
 - **WEB-5: responses declare their type.** API and federation responses carry their exact JSON media type and

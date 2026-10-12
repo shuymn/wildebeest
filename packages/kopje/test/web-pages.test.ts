@@ -267,7 +267,8 @@ describe('permalink (VIS-4)', () => {
 		expect((await h.request(statusPath(status))).status).toBe(200)
 
 		await sql(h.store, "UPDATE statuses SET legacy_id = '3f1c2b9e-0000-4000-8000-000000000001' WHERE id = ?", status.id)
-		const moved = await h.request('/@alice/3f1c2b9e-0000-4000-8000-000000000001')
+		// The target uses the stored username, never the request's spelling (WEB-4).
+		const moved = await h.request('/@ALICE/3f1c2b9e-0000-4000-8000-000000000001')
 		expect(moved.status).toBe(301)
 		expect(moved.headers.get('location')).toBe(statusPath(status))
 	})

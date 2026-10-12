@@ -171,10 +171,10 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 				: notFound(c)
 		}
 		if (page.status === 'moved') {
-			// A legacy id moves to the status's id for good.
+			// A legacy id moves to the status's id for good, under the stored username (never the request's text).
 			return new Response(null, {
 				status: 301,
-				headers: { location: `/@${username}/${page.id}`, vary: 'Accept', 'cache-control': 'public, max-age=60' },
+				headers: { location: `/@${page.username}/${page.id}`, vary: 'Accept', 'cache-control': 'public, max-age=60' },
 			})
 		}
 		if (wantsActivityPub(c.req.header('accept'))) {

@@ -163,23 +163,41 @@ describe('sign-in (AUTH)', () => {
 })
 
 describe('return paths (WEB-4)', () => {
-	it('accepts only local paths', () => {
+	it('accepts only local paths (WEB-4: unsafe return path)', () => {
 		expect(returnPath('/settings')).toBe('/settings')
 		expect(returnPath('/@alice?max_id=1')).toBe('/@alice?max_id=1')
-		for (const unsafe of [
-			'//evil.example',
-			'/\\evil.example',
-			'/\t/evil.example',
-			'https://evil.example/',
-			'javascript:alert(1)',
-			'evil',
-			'',
-			'/x\ny',
-			`/${'a'.repeat(600)}`,
-		]) {
-			expect(returnPath(unsafe), unsafe).toBe('/settings')
+		// An '@' after the single leading slash is part of a local path (a profile), never userinfo.
+		expect(returnPath('/@evil.example')).toBe('/@evil.example')
+		const unsafe = {
+			'absolute URL to another host': 'https://evil.example/',
+			'absolute URL with userinfo': 'https://kopje.test@evil.example/',
+			'protocol-relative': '//evil.example',
+			'protocol-relative with userinfo': '//kopje.test@evil.example/',
+			'slash backslash': '/\\evil.example',
+			'backslash later': '/settings\\..\\x',
+			'javascript:': 'javascript:alert(1)',
+			'data:': 'data:text/html,x',
+			'no leading slash': 'evil.example',
+			empty: '',
+			'tab inside //': '/\t/evil.example',
+			newline: '/x\ny',
+			'control character': '/x\u0000y',
+			DEL: '/x\u007fy',
+			'encoded slashes': '/%2F%2Fevil.example',
+			'encoded slash, lowercase': '/%2f/evil.example',
+			'encoded backslash': '/%5Cevil.example',
+			'encoded control': '/x%0d%0aLocation:%20//evil.example',
+			'encoded dot segment': '/%2e%2e//evil.example',
+			'double encoding': '/%252F%252Fevil.example',
+			'dot segment to //': '/a/..//evil.example',
+			'single dot to //': '/.//evil.example',
+			'too long': `/${'a'.repeat(600)}`,
+		}
+		for (const [name, value] of Object.entries(unsafe)) {
+			expect(returnPath(value), name).toBe('/settings')
 		}
 		expect(returnPath(undefined)).toBe('/settings')
+		expect(returnPath(null)).toBe('/settings')
 	})
 
 	it('returns after sign-in only to a validated local path', async () => {
@@ -188,6 +206,9 @@ describe('return paths (WEB-4)', () => {
 			['/@alice', '/@alice'],
 			['//evil.example/x', '/settings'],
 			['https://evil.example/', '/settings'],
+			['/a/..//evil.example', '/settings'],
+			['/%2F%2Fevil.example', '/settings'],
+			['javascript:alert(1)', '/settings'],
 		] as const) {
 			const started = await startSignIn(h, 'alice@example.com', asked)
 			const response = await callback(h, started.callback, { [LOGIN]: started.loginCookie })
@@ -197,11 +218,13 @@ describe('return paths (WEB-4)', () => {
 
 	it('ignores a tampered return path in the login cookie', async () => {
 		const h = await withAlice()
-		const started = await startSignIn(h)
-		const [state, verifier] = started.loginCookie.split('.')
-		const response = await callback(h, started.callback, { [LOGIN]: `${state}.${verifier}.//evil.example` })
-		expect(response.status).toBe(303)
-		expect(response.headers.get('location')).toBe('/settings')
+		for (const tampered of ['//evil.example', '/./x/..//evil.example', 'https://evil.example/']) {
+			const fresh = await startSignIn(h)
+			const [freshState, freshVerifier] = fresh.loginCookie.split('.')
+			const response = await callback(h, fresh.callback, { [LOGIN]: `${freshState}.${freshVerifier}.${tampered}` })
+			expect(response.status, tampered).toBe(303)
+			expect(response.headers.get('location'), tampered).toBe('/settings')
+		}
 	})
 })
 

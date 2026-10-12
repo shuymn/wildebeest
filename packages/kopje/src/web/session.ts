@@ -41,21 +41,32 @@ export async function csrfMatches(sessionToken: string, sent: string | undefined
 const MAX_RETURN_PATH = 512
 const DEFAULT_RETURN_PATH = '/settings'
 
-// WEB-4: where to go after signing in. Only a path on this origin: it starts with one '/', has no backslash, control
-// character or whitespace (browsers read '/\host' and tabs inside '//host' as another host), and resolves to this
-// origin. Anything else is the settings page.
+// Percent-encoded slash, backslash, dot, control characters and percent itself: a browser or a later decoding step
+// could turn them into a separator or another host.
+const ENCODED_UNSAFE = /%(?:2f|5c|2e|25|[01][0-9a-f]|7f)/i
+// A "." or ".." segment: resolving it can turn a single leading slash into "//host".
+const DOT_SEGMENT = /(?:^|\/)\.{1,2}(?:[/?#]|$)/
+
+function isLocalPath(value: string): boolean {
+	return (
+		value.length <= MAX_RETURN_PATH &&
+		/^\/(?![/\\])[^\\\s\p{Cc}]*$/u.test(value) &&
+		!ENCODED_UNSAFE.test(value) &&
+		!DOT_SEGMENT.test(value)
+	)
+}
+
+// WEB-4: where to go after signing in. Only a path on this origin: it starts with exactly one '/', has no backslash,
+// whitespace, control character, dot segment or encoded separator, and both it and what it resolves to stay on this
+// origin as a path of the same form (so no normalization can make it "//host"). Anything else is the settings page.
 export function returnPath(value: string | undefined | null): string {
-	if (
-		value === undefined ||
-		value === null ||
-		value.length > MAX_RETURN_PATH ||
-		!/^\/(?![/\\])[^\\\s\p{Cc}]*$/u.test(value)
-	) {
+	if (value === undefined || value === null || !isLocalPath(value)) {
 		return DEFAULT_RETURN_PATH
 	}
 	const base = 'https://kopje.invalid'
 	const url = new URL(value, base)
-	return url.origin === base ? `${url.pathname}${url.search}` : DEFAULT_RETURN_PATH
+	const resolved = `${url.pathname}${url.search}`
+	return url.origin === base && isLocalPath(resolved) ? resolved : DEFAULT_RETURN_PATH
 }
 
 export type LoginState = { state: string; verifier: string; returnTo: string }
