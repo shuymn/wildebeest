@@ -17,6 +17,7 @@ import { rescueFromSnapshot } from '../federation/snapshot'
 import { INBOX_BODY_LIMIT, spoolInbox } from '../federation/spool'
 import { maintenanceError, mastodonError } from '../mastodon/errors'
 import { mastodonApi } from '../mastodon/routes'
+import { readBackupConfig } from '../platform/backup-config'
 import { readBoundedBody } from '../platform/body'
 import { readConfig } from '../platform/config'
 import { errorFields } from '../platform/error-message'
@@ -130,7 +131,7 @@ export function createApp({
 		}
 	})
 
-	app.get('/health', (c) => publicHealth(build(c.env), readConfig(c.env), () => store(c.env)))
+	app.get('/health', (c) => publicHealth(build(c.env), readConfig(c.env), () => store(c.env), readBackupConfig(c.env)))
 
 	app.route(ADMIN_PREFIX, adminRoutes({ build, now, store, doorbell, fetch: (input, init) => fetch(input, init) }))
 

@@ -1,7 +1,8 @@
 # Kopje Store dump format, version 1
 
-One format serves the scheduled backup, the cutover import from legacy Wildebeest, and restore drills. A dump is a
-UTF-8 text file that is also a valid SQLite script for a database that already has the Kopje schema.
+One format serves the scheduled backup ([backup.md](backup.md)), the cutover import from legacy Wildebeest, and
+restore drills. A dump is a UTF-8 text file that is also a valid SQLite script for a database that already has the
+Kopje schema.
 `src/platform/dump-format.ts` (Store) and `cli/lib/format.js` (CLI) implement it.
 
 ## Layout
@@ -56,8 +57,8 @@ UTF-8 text file that is also a valid SQLite script for a database that already h
   from the empty target with `GET /admin/catalog` (or `kopje-admin catalog`) and copy `migrations` and `tables`
   from there.
 - The catalog is read from the live schema:
-    - All tables are included except `kopje_migrations`, `media_orphans`, `_cf_*`, and `sqlite_*` other than
-      `sqlite_sequence`.
+    - All tables are included except `kopje_migrations`, `media_orphans`, `backup_media`, `_cf_*`, and `sqlite_*`
+      other than `sqlite_sequence`.
     - Columns are in declaration order.
     - `key` is the primary key.
     - `order` is `rowid` for rowid tables, and `key` (with the primary key columns) for WITHOUT ROWID tables and
@@ -131,6 +132,7 @@ These are excluded because they must not be restored blindly:
 | `kopje_migrations`                             | The header carries it. The target's own migration runner recreates it                                                                                  |
 | `kopje_state` except `last_local_id`           | `hold`, `upgrade` and `upgrade_bookmark` (a bookmark belongs to the source object), `maintenance`, `dump` and `import` describe one object at one time |
 | `media_orphans`                                | Tombstones of R2 objects to delete; a restored Store must not delete what it restores                                                                  |
+| `backup_media`                                 | The scheduled backup's media index for one bucket ([backup.md](backup.md)); a restored Store starts a fresh media baseline                             |
 | `_cf_*`, `sqlite_*` (except `sqlite_sequence`) | Platform and SQLite internals                                                                                                                          |
 
 The importer refuses a `kopje_state` row whose name is not allowlisted.

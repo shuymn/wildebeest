@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -57,5 +58,15 @@ describe('nodeIO.append', () => {
 		const path = join(dir, 'dump.sql')
 		await nodeIO.append(path, new TextEncoder().encode('abc'))
 		expect(await mode(path)).toBe(0o600)
+	})
+})
+
+describe('nodeIO.sha256', () => {
+	it('hashes a file across many read chunks, and answers null for a missing one', async () => {
+		const path = join(dir, 'dump.kopje')
+		// Larger than one read-stream chunk (64 KiB).
+		await writeFile(path, 'a'.repeat(200_000))
+		expect(await nodeIO.sha256(path)).toBe(createHash('sha256').update('a'.repeat(200_000)).digest('hex'))
+		expect(await nodeIO.sha256(join(dir, 'missing'))).toBeNull()
 	})
 })

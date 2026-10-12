@@ -29,6 +29,16 @@ import * as statuses from './domain/statuses'
 import * as timelines from './domain/timelines'
 import * as webPages from './domain/web-pages'
 import * as webSession from './domain/web-session'
+import {
+	captureMedia,
+	claimBackup,
+	type MediaCopyRecord,
+	mediaCoverage,
+	mediaPage,
+	readBackupState,
+	recordMedia,
+	saveBackup,
+} from './platform/backup-state'
 import { type ImportAuthority, StoreAdmin } from './platform/store-admin'
 import { StoreKernel, type StoreOperation } from './platform/store-kernel'
 import { buildOf, PACKAGE_VERSION } from './version'
@@ -106,8 +116,82 @@ export class Store extends DurableObject<Env> {
 		return this.#admin.dumpFinish(cursor, abort)
 	}
 
+	dumpAbort(_callerBuild: string, opId: string) {
+		return this.#admin.dumpAbort(opId)
+	}
+
 	catalog(_callerBuild: string) {
 		return this.#admin.catalog()
+	}
+
+	// The scheduled backup's bookkeeping (platform/backup-state.ts). Like the dump flag it is not data, so any caller
+	// build and any Store state (maintenance, a dump or an import) may use it. The runner lease is taken and checked
+	// inside each transaction, at the time the caller passes.
+	async backupState(_callerBuild: string) {
+		await this.#kernel.state()
+		return readBackupState(this.ctx.storage.sql)
+	}
+
+	async backupClaim(_callerBuild: string, runner: string, now: number, leaseMs: number) {
+		await this.#kernel.state()
+		return this.#backupTx((sql) => claimBackup(sql, runner, now, leaseMs))
+	}
+
+	async backupSave(
+		_callerBuild: string,
+		runner: string,
+		now: number,
+		leaseMs: number,
+		state: unknown,
+		release: boolean,
+		pruneTo: string | null
+	) {
+		await this.#kernel.state()
+		return this.#backupTx((sql) => saveBackup(sql, runner, now, leaseMs, state, release, pruneTo))
+	}
+
+	// Completes the backup's dump and records the originals it references in one transaction, while its freeze holds.
+	async backupFinishDump(
+		_callerBuild: string,
+		runner: string,
+		now: number,
+		run: string,
+		destination: string,
+		opId: string,
+		cursor: unknown
+	) {
+		let required = 0
+		const finished = await this.#admin.dumpFinish(cursor, false, {
+			opId,
+			within: (sql) => {
+				const captured = captureMedia(sql, runner, now, run, destination)
+				if (!captured.ok) {
+					return { ok: false, code: captured.code, message: `backup ${captured.code}` }
+				}
+				required = captured.required
+				return null
+			},
+		})
+		return finished.ok ? { ...finished, required } : finished
+	}
+
+	async backupMedia(_callerBuild: string, run: string, after: string | null, limit: number, pendingOnly: boolean) {
+		await this.#kernel.state()
+		return mediaPage(this.ctx.storage.sql, run, after, limit, pendingOnly)
+	}
+
+	async backupRecord(_callerBuild: string, runner: string, now: number, source: string, record: MediaCopyRecord) {
+		await this.#kernel.state()
+		return this.#backupTx((sql) => recordMedia(sql, runner, now, source, record))
+	}
+
+	async backupCoverage(_callerBuild: string, run: string) {
+		await this.#kernel.state()
+		return mediaCoverage(this.ctx.storage.sql, run)
+	}
+
+	#backupTx<T>(fn: (sql: SqlStorage) => T): T {
+		return this.ctx.storage.transactionSync(() => fn(this.ctx.storage.sql))
 	}
 
 	// Import and configuration mutations name their authority; the Store checks it where it writes (store-admin.ts).

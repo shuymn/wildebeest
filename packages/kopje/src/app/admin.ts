@@ -4,6 +4,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 
 import { healthReport } from './health'
 import { type AccessSettings, adminRefusal, adminUsable, normalizeTeamDomain } from '../platform/access-settings'
+import { readBackupConfig } from '../platform/backup-config'
 import { readBoundedBody } from '../platform/body'
 import { readConfig } from '../platform/config'
 import { errorMessage } from '../platform/error-message'
@@ -215,8 +216,9 @@ export function adminRoutes({ build, store, fetch, now, doorbell }: AdminDeps) {
 		const once = {
 			health: () => (health ??= stub(c).health(b)),
 			localKeys: (caller: string) => stub(c).localKeys(caller),
+			backupState: (caller: string) => stub(c).backupState(caller),
 		}
-		const report = await healthReport(b, config, () => once)
+		const report = await healthReport(b, config, () => once, { backup: readBackupConfig(c.env) })
 		let detail: unknown
 		try {
 			detail = await once.health()
