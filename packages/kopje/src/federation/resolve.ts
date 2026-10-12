@@ -67,7 +67,8 @@ async function resolveWith(loaders: RemoteLoaders, query: string, domain: string
 	const address = ADDRESS_QUERY.exec(query)
 	if (address !== null) {
 		const [, username = '', host = ''] = address
-		return host.toLowerCase() === domain ? NONE : resolveAddress(loaders, username, host.toLowerCase())
+		const queried = normalizeDomain(host)
+		return queried === null || queried === domain ? NONE : resolveAddress(loaders, username, queried)
 	}
 	let url: URL
 	try {
@@ -119,12 +120,40 @@ async function webfingerAt(loaders: RemoteLoaders, username: string, host: strin
 	return { subject: typeof subject === 'string' ? subject : null, self: self?.href ?? null }
 }
 
+// The one parser of a domain taken from an address or a WebFinger subject: lowercase, IDNA to ASCII (punycode), and
+// only a hostname of at least two labels: no port, userinfo, path, query, trailing dot, IP literal or anything else
+// the URL parser would read differently from the string. null when it is not exactly such a hostname. Domains are
+// queried, compared and stored only in this form.
+export function normalizeDomain(raw: string): string | null {
+	if (raw === '' || /[\s/\\?#@:[\]%]/.test(raw) || raw.endsWith('.')) {
+		return null
+	}
+	let url: URL
+	try {
+		url = new URL(`https://${raw}/`)
+	} catch {
+		return null
+	}
+	const host = url.hostname
+	if (url.port !== '' || url.username !== '' || url.password !== '' || url.pathname !== '/' || url.host !== host) {
+		return null
+	}
+	if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || !host.includes('.') || host.endsWith('.')) {
+		return null
+	}
+	return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host) ? host : null
+}
+
+// The username and domain of a WebFinger subject: acct:<username>@<domain>, exactly one @ and no empty part, with
+// the domain normalized (normalizeDomain); null otherwise.
 function splitAcct(subject: string | null): { username: string; domain: string } | null {
 	const parts = (subject ?? '').replace(/^acct:/, '').split('@')
-	const [username, domain] = parts
-	return parts.length === 2 && username !== undefined && domain !== undefined && username !== '' && domain !== ''
-		? { username, domain: domain.toLowerCase() }
-		: null
+	if (parts.length !== 2) {
+		return null
+	}
+	const [username = '', raw = ''] = parts
+	const domain = normalizeDomain(raw)
+	return username === '' || domain === null ? null : { username, domain }
 }
 
 // The canonical domain of an actor's address, as Mastodon's ActivityPub::ProcessAccountService#check_webfinger! and
@@ -135,7 +164,13 @@ function splitAcct(subject: string | null): { username: string; domain: string }
 // when the host gives no usable answer (the Store then keeps what it has for this exact username, accountDomain).
 // The address a search was made with plays no part: an alias never sets or replaces the canonical domain.
 async function declaredDomain(loaders: RemoteLoaders, actor: RemoteActorInput): Promise<string | undefined> {
-	const host = new URL(actor.uri).host.toLowerCase()
+	// The actor's host, in the normalized form; an actor id with a port (or that does not normalize) is not checked:
+	// the Store keeps what it has for this username (accountDomain).
+	const url = new URL(actor.uri)
+	const host = url.port === '' ? normalizeDomain(url.hostname) : null
+	if (host === null) {
+		return undefined
+	}
 	const declared = await webfingerAt(loaders, actor.username, host)
 	if (declared === null) {
 		return undefined
