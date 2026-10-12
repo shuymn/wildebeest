@@ -241,3 +241,69 @@ describe('the domains of WebFinger subjects and addresses, parsed one way', () =
 		expect(t.web.fetched).toEqual([])
 	})
 })
+
+describe('round 4: host spellings, transient failures, IDN addresses and candidate subjects', () => {
+	it('blocks an actor whose id has another port or a trailing dot by its normalized host (VIS-5)', async () => {
+		const t = await setup()
+		const ported = await mastodonActor(t.web, 'bob', { origin: 'https://blocked.example:8443', key: 3 })
+		const dotted = await mastodonActor(t.web, 'carol', { origin: 'https://blocked.example.', key: 4 })
+		await sql(t.store, "INSERT INTO domain_blocks (account_id, domain) VALUES (?, 'blocked.example')", ALICE)
+		for (const actor of [ported, dotted]) {
+			const follow = { '@context': AS, id: `${actor.uri}#follow`, type: 'Follow', actor: actor.uri, object: ALICE_URI }
+			expect(await t.post(actor, follow)).toBe(202)
+			// Mastodon's normalized_host: the hostname without its port, lowercase, punycode; here also without a dot.
+			expect(await sql(t.store, 'SELECT domain FROM accounts WHERE uri = ?', actor.uri)).toEqual([
+				{ domain: 'blocked.example' },
+			])
+		}
+		expect(await sql(t.store, 'SELECT * FROM follows WHERE target_account_id = ?', ALICE)).toEqual([])
+		expect((await t.api<Found>('/api/v2/search?type=accounts&q=blocked.example')).body.accounts).toEqual([])
+	})
+
+	it('keeps a confirmation through a transient failure at the candidate, and drops it on an authoritative 404', async () => {
+		const t = await setup()
+		const ali = await splitDomain(t)
+		await resolve(t, `ali@${CANONICAL}`)
+		const candidate = `https://${CANONICAL}/.well-known/webfinger?resource=${encodeURIComponent(`acct:ali@${CANONICAL}`)}`
+		serveWebFinger(t.web, 'acct:anyone@alias.example', 'acct:anyone@alias.example', ali.uri)
+		t.web.fail(candidate, 503)
+		await resolve(t, 'anyone@alias.example', 'dave')
+		expect(await stored(t, ali.uri)).toEqual([{ username: 'ali', domain: CANONICAL, confirmed_username: 'ali' }])
+		t.web.fail(candidate, 404)
+		await resolve(t, 'anyone@alias.example', 'dave')
+		expect(await stored(t, ali.uri)).toEqual([{ username: 'ali', domain: HOST, confirmed_username: null }])
+	})
+
+	it('stores no confirmation when the candidate names the actor under another subject', async () => {
+		for (const subject of [`acct:someone@${CANONICAL}`, 'acct:ali@other.example']) {
+			const t = await setup()
+			const ali = await mastodonActor(t.web, 'ali', { origin: `https://${HOST}`, key: 3 })
+			serveWebFinger(t.web, `acct:ali@${HOST}`, `acct:ali@${CANONICAL}`, ali.uri)
+			// The right actor id as self, under the wrong subject.
+			serveWebFinger(t.web, `acct:ali@${CANONICAL}`, subject, ali.uri)
+			await resolve(t, `ali@${HOST}`)
+			expect(await stored(t, ali.uri), subject).toEqual([{ username: 'ali', domain: HOST, confirmed_username: null }])
+		}
+	})
+
+	it('finds an IDN address in its Unicode and punycode forms alike', async () => {
+		const t = await setup()
+		const unicode = 'ニース.example'
+		const ascii = new URL(`https://${unicode}/`).hostname
+		const ali = await mastodonActor(t.web, 'ali', { origin: `https://${HOST}`, key: 3 })
+		serveWebFinger(t.web, `acct:ali@${HOST}`, `acct:ali@${ascii}`, ali.uri)
+		serveWebFinger(t.web, `acct:ali@${ascii}`, `acct:ali@${ascii}`, ali.uri)
+		const resolved = await resolve(t, `ali@${unicode}`)
+		expect(resolved.body.accounts.map((a) => a.acct)).toEqual([`ali@${ascii}`])
+		const id = resolved.body.accounts[0]!.id
+		for (const domain of [unicode, ascii]) {
+			const exact = await t.api<Found>(`/api/v2/search?type=accounts&q=${encodeURIComponent(`ali@${domain}`)}`)
+			expect(
+				exact.body.accounts.map((a) => a.id),
+				domain
+			).toEqual([id])
+			const lookup = await t.api<{ id: string }>(`/api/v1/accounts/lookup?acct=${encodeURIComponent(`ali@${domain}`)}`)
+			expect(lookup.body.id, domain).toBe(id)
+		}
+	})
+})

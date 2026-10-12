@@ -158,6 +158,32 @@ describe('ID-7: the Update watermark', () => {
 	})
 })
 
+describe('ID-7: versions of a status first seen late', () => {
+	it('stores nothing for a far-future Update of an unknown uri', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const note = mastodonNote(bob, { published: new Date(NOW - 60_000).toISOString() })
+		expect(await t.post(bob, update(bob, note, new Date(NOW + 60 * 60_000).toISOString()))).toBe(202)
+		expect(await statuses(t.store)).toEqual([])
+		expect(await notifications(t.store)).toEqual([])
+	})
+
+	it('rejects an Update older than the already-edited version it was first stored at', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const note = mastodonNote(bob, { updated: at(60), content: '<p>edited before we saw it</p>' })
+		await t.post(bob, create(bob, note))
+		await t.post(bob, update(bob, { ...note, content: '<p>older</p>' }, at(30)))
+		expect(await statusRow(t.store, note.id)).toMatchObject({
+			content: '<p>edited before we saw it</p>',
+			edited_at: at(60),
+		})
+		expect(await sql(t.store, 'SELECT * FROM status_edits')).toEqual([])
+	})
+})
+
 describe('ID-7: retractions at the per-actor cap', () => {
 	it('answers 503 to a Delete or Undo it cannot record, and changes nothing', async () => {
 		const t = await setup()
@@ -675,11 +701,18 @@ describe('ID-6, ID-7: a deleted status is not created again by anyone', () => {
 		await t.post(carol, { ...create(carol, taken), id: `${carol.uri}#create-taken` })
 		await t.post(carol, update(carol, { ...taken, content: '<p>mine now</p>' }, at(60)))
 		expect(await statuses(t.store)).toEqual([])
+		// Nor as the id of a boost: carol's Announce under the deleted uri stores nothing.
+		const local = await localStatus(t, { status: 'boost target', visibility: 'public' })
+		const before = await notifications(t.store)
+		await t.post(carol, { ...announce(carol, local.uri), id: note.id })
+		expect((await statuses(t.store)).map((s) => s.uri)).toEqual([local.uri])
+		expect((await statusRow(t.store, local.uri))?.reblogs_count).toBe(0)
+		expect(await notifications(t.store)).toEqual(before)
 		// bob's Delete of an object never seen here does not keep carol's from appearing.
 		const unseen = mastodonNote(carol)
 		await t.post(bob, remove(bob, unseen.id))
 		await t.post(carol, create(carol, unseen))
-		expect((await statuses(t.store)).map((s) => s.uri)).toEqual([unseen.id])
+		expect((await statuses(t.store)).map((s) => s.uri)).toContain(unseen.id)
 	})
 })
 

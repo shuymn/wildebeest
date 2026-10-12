@@ -243,7 +243,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   by id is not filtered. _Enforced (main):_ `unfilteredSql` and `listableSql` in
   `src/domain/audience.ts`; `test/audience.test.ts`, `test/visibility.test.ts` ("blocked and muted accounts stay out of
   lists"). _Implemented on branch `kopje/inbound-statuses`:_ a domain block matches an account by its stored domain
-  and by the host of its actor id (`domainBlockMatchSql`), everywhere a domain block applies (lists, notifications,
+  and by the host of its actor id, both normalized (lowercase, no port, no trailing dot; `domainBlockMatchSql`), everywhere a domain block applies (lists, notifications,
   relationships, inbound Follows and Moves, account search and search resolution), so an account confirmed under
   another WebFinger domain cannot escape a block of the server it lives on; `test/inbox-canonical-address.test.ts`
   ("applies a block of the actor’s host on every path", "never lets a third-party alias replace a confirmed domain or
@@ -426,7 +426,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`declaredDomain` in `src/federation/resolve.ts`). Every domain from an address or a subject goes through one strict
   parser (`normalizeDomain`): lowercase, punycode for an IDN, a hostname of two labels or more, and nothing else (no
   port, userinfo, path, trailing dot or IP literal); a subject needs exactly one `@` and no empty part. Domains are
-  queried, compared and stored only in that form, so the domain stored is the one queried and confirmed. The confirmation is bound to its (username, domain, actor id):
+  queried, compared and stored only in that form, so the domain stored is the one queried and confirmed. An address is
+  split into its parts before its domain is normalized, for resolution, exact account search and lookup, so a Unicode
+  and a punycode spelling find the same account. The fallback domain is the actor id's host as Mastodon takes it
+  (`Addressable::URI#normalized_host`: lowercase, punycode, without the port), also without a trailing dot
+  (`hostDomain` in `src/platform/domain-name.ts`); the id itself is kept whole for origin checks. Only an
+  authoritative answer (404 or 410, or another subject or actor) drops a confirmation: a transient failure (network,
+  timeout, 5xx, the fetch budget) keeps the stored address for that username. The confirmation is bound to its (username, domain, actor id):
   `accounts.confirmed_username` holds the username it was made for, and an actor whose `preferredUsername` changes
   falls back to its host until it is confirmed again. A search by an alias (any address whose WebFinger names an
   existing actor) finds the account by its actor id and never sets or replaces its address. One helper
