@@ -2,18 +2,30 @@ import { DurableObject } from 'cloudflare:workers'
 
 import { MIGRATIONS } from './db/migrations'
 import * as accounts from './domain/accounts'
+import {
+	ensureInstanceActorKey,
+	getCollection,
+	getInstanceActorKey,
+	getInstanceDomain,
+	getLocalActor,
+	getLocalKey,
+	getNodeInfoUsage,
+	listLocalKeys,
+} from './domain/actors'
 import { checkCredential, type Credential, type UserCredential } from './domain/auth'
+import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import { acceptInbox, type InboxDelivery } from './domain/inbox'
 import { instanceInfo } from './domain/instance'
 import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
 import { getSetupState } from './domain/setup'
+import { saveSnapshot } from './domain/snapshot'
 import * as statuses from './domain/statuses'
 import * as timelines from './domain/timelines'
-import { type StoreOperation, StoreKernel } from './platform/store-kernel'
+import { StoreKernel, type StoreOperation } from './platform/store-kernel'
 import { buildOf, PACKAGE_VERSION } from './version'
 
-type InputOf<T> = T extends StoreOperation<infer I, unknown> ? I : never
+type OperationInput<T> = T extends StoreOperation<infer I, unknown> ? I : never
 
 // The single source of truth of an instance: one SQLite-backed Durable Object. Every RPC takes the caller's build
 // (the Workers version id, see version.ts). Domain operations run through the kernel's gate. Rescue RPCs work in every
@@ -50,6 +62,69 @@ export class Store extends DurableObject<Env> {
 
 	receiveInbox(callerBuild: string, delivery: InboxDelivery) {
 		return this.#kernel.execute(callerBuild, acceptInbox, delivery)
+	}
+
+	// Federation (B1a): Fedify's KvStore, local actors and keys, collections, NodeInfo, and the rescue snapshots.
+	// rescueSnapshot is a rescue RPC like health(): any caller build, every Store state.
+
+	kvGet(callerBuild: string, input: OperationInput<typeof kvGet>) {
+		return this.#kernel.execute(callerBuild, kvGet, input)
+	}
+
+	kvSet(callerBuild: string, input: OperationInput<typeof kvSet>) {
+		return this.#kernel.execute(callerBuild, kvSet, input)
+	}
+
+	kvDelete(callerBuild: string, input: OperationInput<typeof kvDelete>) {
+		return this.#kernel.execute(callerBuild, kvDelete, input)
+	}
+
+	kvCas(callerBuild: string, input: OperationInput<typeof kvCas>) {
+		return this.#kernel.execute(callerBuild, kvCas, input)
+	}
+
+	kvList(callerBuild: string, input: OperationInput<typeof kvList>) {
+		return this.#kernel.execute(callerBuild, kvList, input)
+	}
+
+	instanceDomain(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, getInstanceDomain, undefined)
+	}
+
+	localActor(callerBuild: string, input: OperationInput<typeof getLocalActor>) {
+		return this.#kernel.execute(callerBuild, getLocalActor, input)
+	}
+
+	localKey(callerBuild: string, input: OperationInput<typeof getLocalKey>) {
+		return this.#kernel.execute(callerBuild, getLocalKey, input)
+	}
+
+	instanceActorKey(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, getInstanceActorKey, undefined)
+	}
+
+	ensureInstanceActorKey(callerBuild: string, input: OperationInput<typeof ensureInstanceActorKey>) {
+		return this.#kernel.execute(callerBuild, ensureInstanceActorKey, input)
+	}
+
+	localKeys(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, listLocalKeys, undefined)
+	}
+
+	collection(callerBuild: string, input: OperationInput<typeof getCollection>) {
+		return this.#kernel.execute(callerBuild, getCollection, input)
+	}
+
+	nodeInfoUsage(callerBuild: string, input: OperationInput<typeof getNodeInfoUsage>) {
+		return this.#kernel.execute(callerBuild, getNodeInfoUsage, input)
+	}
+
+	saveSnapshot(callerBuild: string, input: OperationInput<typeof saveSnapshot>) {
+		return this.#kernel.execute(callerBuild, saveSnapshot, input)
+	}
+
+	rescueSnapshot(_callerBuild: string, key: string) {
+		return this.#kernel.readSnapshot(key)
 	}
 
 	// OAuth and the account and instance API (B3).
@@ -137,99 +212,99 @@ export class Store extends DurableObject<Env> {
 
 	// Statuses, timelines and notifications (B4a).
 
-	createStatus(callerBuild: string, input: InputOf<typeof statuses.createStatus>) {
+	createStatus(callerBuild: string, input: OperationInput<typeof statuses.createStatus>) {
 		return this.#kernel.execute(callerBuild, statuses.createStatus, input)
 	}
 
-	editStatus(callerBuild: string, input: InputOf<typeof statuses.editStatus>) {
+	editStatus(callerBuild: string, input: OperationInput<typeof statuses.editStatus>) {
 		return this.#kernel.execute(callerBuild, statuses.editStatus, input)
 	}
 
-	deleteStatus(callerBuild: string, input: InputOf<typeof statuses.deleteStatus>) {
+	deleteStatus(callerBuild: string, input: OperationInput<typeof statuses.deleteStatus>) {
 		return this.#kernel.execute(callerBuild, statuses.deleteStatus, input)
 	}
 
-	getStatus(callerBuild: string, input: InputOf<typeof statuses.getStatus>) {
+	getStatus(callerBuild: string, input: OperationInput<typeof statuses.getStatus>) {
 		return this.#kernel.execute(callerBuild, statuses.getStatus, input)
 	}
 
-	statusContext(callerBuild: string, input: InputOf<typeof statuses.statusContext>) {
+	statusContext(callerBuild: string, input: OperationInput<typeof statuses.statusContext>) {
 		return this.#kernel.execute(callerBuild, statuses.statusContext, input)
 	}
 
-	statusHistory(callerBuild: string, input: InputOf<typeof statuses.statusHistory>) {
+	statusHistory(callerBuild: string, input: OperationInput<typeof statuses.statusHistory>) {
 		return this.#kernel.execute(callerBuild, statuses.statusHistory, input)
 	}
 
-	statusSource(callerBuild: string, input: InputOf<typeof statuses.statusSource>) {
+	statusSource(callerBuild: string, input: OperationInput<typeof statuses.statusSource>) {
 		return this.#kernel.execute(callerBuild, statuses.statusSource, input)
 	}
 
-	favourite(callerBuild: string, input: InputOf<typeof statuses.favourite>) {
+	favourite(callerBuild: string, input: OperationInput<typeof statuses.favourite>) {
 		return this.#kernel.execute(callerBuild, statuses.favourite, input)
 	}
 
-	unfavourite(callerBuild: string, input: InputOf<typeof statuses.unfavourite>) {
+	unfavourite(callerBuild: string, input: OperationInput<typeof statuses.unfavourite>) {
 		return this.#kernel.execute(callerBuild, statuses.unfavourite, input)
 	}
 
-	reblog(callerBuild: string, input: InputOf<typeof statuses.reblog>) {
+	reblog(callerBuild: string, input: OperationInput<typeof statuses.reblog>) {
 		return this.#kernel.execute(callerBuild, statuses.reblog, input)
 	}
 
-	unreblog(callerBuild: string, input: InputOf<typeof statuses.unreblog>) {
+	unreblog(callerBuild: string, input: OperationInput<typeof statuses.unreblog>) {
 		return this.#kernel.execute(callerBuild, statuses.unreblog, input)
 	}
 
-	bookmark(callerBuild: string, input: InputOf<typeof statuses.bookmark>) {
+	bookmark(callerBuild: string, input: OperationInput<typeof statuses.bookmark>) {
 		return this.#kernel.execute(callerBuild, statuses.bookmark, input)
 	}
 
-	unbookmark(callerBuild: string, input: InputOf<typeof statuses.unbookmark>) {
+	unbookmark(callerBuild: string, input: OperationInput<typeof statuses.unbookmark>) {
 		return this.#kernel.execute(callerBuild, statuses.unbookmark, input)
 	}
 
-	interactors(callerBuild: string, input: InputOf<typeof statuses.interactors>) {
+	interactors(callerBuild: string, input: OperationInput<typeof statuses.interactors>) {
 		return this.#kernel.execute(callerBuild, statuses.interactors, input)
 	}
 
-	homeTimeline(callerBuild: string, input: InputOf<typeof timelines.homeTimeline>) {
+	homeTimeline(callerBuild: string, input: OperationInput<typeof timelines.homeTimeline>) {
 		return this.#kernel.execute(callerBuild, timelines.homeTimeline, input)
 	}
 
-	publicTimeline(callerBuild: string, input: InputOf<typeof timelines.publicTimeline>) {
+	publicTimeline(callerBuild: string, input: OperationInput<typeof timelines.publicTimeline>) {
 		return this.#kernel.execute(callerBuild, timelines.publicTimeline, input)
 	}
 
-	tagTimeline(callerBuild: string, input: InputOf<typeof timelines.tagTimeline>) {
+	tagTimeline(callerBuild: string, input: OperationInput<typeof timelines.tagTimeline>) {
 		return this.#kernel.execute(callerBuild, timelines.tagTimeline, input)
 	}
 
-	accountStatuses(callerBuild: string, input: InputOf<typeof timelines.accountStatuses>) {
+	accountStatuses(callerBuild: string, input: OperationInput<typeof timelines.accountStatuses>) {
 		return this.#kernel.execute(callerBuild, timelines.accountStatuses, input)
 	}
 
-	bookmarksList(callerBuild: string, input: InputOf<typeof timelines.bookmarks>) {
+	bookmarksList(callerBuild: string, input: OperationInput<typeof timelines.bookmarks>) {
 		return this.#kernel.execute(callerBuild, timelines.bookmarks, input)
 	}
 
-	favouritesList(callerBuild: string, input: InputOf<typeof timelines.favourites>) {
+	favouritesList(callerBuild: string, input: OperationInput<typeof timelines.favourites>) {
 		return this.#kernel.execute(callerBuild, timelines.favourites, input)
 	}
 
-	listNotifications(callerBuild: string, input: InputOf<typeof notifications.listNotifications>) {
+	listNotifications(callerBuild: string, input: OperationInput<typeof notifications.listNotifications>) {
 		return this.#kernel.execute(callerBuild, notifications.listNotifications, input)
 	}
 
-	getNotification(callerBuild: string, input: InputOf<typeof notifications.getNotification>) {
+	getNotification(callerBuild: string, input: OperationInput<typeof notifications.getNotification>) {
 		return this.#kernel.execute(callerBuild, notifications.getNotification, input)
 	}
 
-	dismissNotification(callerBuild: string, input: InputOf<typeof notifications.dismissNotification>) {
+	dismissNotification(callerBuild: string, input: OperationInput<typeof notifications.dismissNotification>) {
 		return this.#kernel.execute(callerBuild, notifications.dismissNotification, input)
 	}
 
-	clearNotifications(callerBuild: string, input: InputOf<typeof notifications.clearNotifications>) {
+	clearNotifications(callerBuild: string, input: OperationInput<typeof notifications.clearNotifications>) {
 		return this.#kernel.execute(callerBuild, notifications.clearNotifications, input)
 	}
 
