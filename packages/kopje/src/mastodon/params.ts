@@ -55,6 +55,8 @@ async function bodyEntries(contentType: string, body: Uint8Array): Promise<[stri
 	const type = contentType.split(';')[0]?.trim().toLowerCase()
 	if (type === 'application/json') {
 		const entries: [string, string][] = []
+		// JSON.parse keeps the last of duplicate keys, so repeated() sees form and query duplicates only. RFC 6749 defines
+		// form bodies alone, and Doorkeeper (Mastodon) lets the last JSON key win as well.
 		flatten('', JSON.parse(new TextDecoder().decode(body)), entries)
 		return entries
 	}
