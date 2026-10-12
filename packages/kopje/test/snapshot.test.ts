@@ -148,6 +148,17 @@ describe('snapshot caps', () => {
 		expect(await snapshotNames(store)).toEqual(before)
 	})
 
+	it('drops the kept snapshot when its replacement is over the size cap', async () => {
+		const store = await migratedStore()
+		const small = { contentType: 'application/activity+json', body: '{"v":1}' }
+		const big = { contentType: 'application/activity+json', body: 'x'.repeat(SNAPSHOT_MAX_BODY_BYTES + 1) }
+		expect(await store.saveSnapshot(BUILD, { key: 'path:/actor', ...small })).toBe(true)
+
+		expect(await store.saveSnapshot(BUILD, { key: 'path:/actor', ...big })).toBe(false)
+		// The rescue path then answers 503 rather than serving the outdated document.
+		expect(await store.rescueSnapshot(BUILD, 'path:/actor')).toBeNull()
+	})
+
 	it('does not store a document over the size cap', async () => {
 		const store = await migratedStore()
 		await setDomain(store, DOMAIN)

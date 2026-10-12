@@ -1,6 +1,6 @@
 import { errorMessage } from '../platform/error-message'
 import { callStore, type StoreStub } from '../platform/store-client'
-import { isSnapshotKey, isStorableSnapshot, sha256, type Snapshot } from '../platform/store-kernel'
+import { isSnapshotKey, sha256, type Snapshot } from '../platform/store-kernel'
 
 // Snapshots of the always-served GETs (design §4, maintenance mode): actor documents, WebFinger and NodeInfo. A
 // healthy response is saved under the key of its request; while the Store refuses (version mismatch, pending or
@@ -43,7 +43,8 @@ export type SnapshotSaver = (store: StoreStub, build: string, key: string, snaps
 export function createSnapshotSaver(now: () => number): SnapshotSaver {
 	const saved = new Map<string, { digest: string; at: number }>()
 	return async (store, build, key, snapshot) => {
-		if (!isStorableSnapshot(key, snapshot.body)) {
+		// An oversized body still goes to the Store, which drops the kept snapshot of the key.
+		if (!isSnapshotKey(key)) {
 			return
 		}
 		const digest = await sha256(`${snapshot.contentType}\n${snapshot.body}`)
