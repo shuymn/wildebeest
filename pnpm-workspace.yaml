@@ -31,3 +31,6 @@ trustPolicy: no-downgrade
 # resolution (including Renovate's lockfile updates).
 trustPolicyExclude:
   - semver@6.3.1
+minimumReleaseAgeExclude:
+  # Renovate security update: postcss@8.5.23
+  - postcss@8.5.23
