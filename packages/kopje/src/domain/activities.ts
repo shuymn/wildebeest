@@ -11,6 +11,7 @@ import { enqueueActivity } from './deliveries'
 import { readOperation } from './operation'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
+import { sha256Hex } from '../platform/sha256'
 
 // Outbound intents. A local change that federates records the ActivityPub activity it means and the audience it is
 // for in outbound_activities, in the transaction of the change. Nothing is delivered here: B2 expands the audience
@@ -34,8 +35,17 @@ export type OutboundEnvelope = { activity: Record<string, unknown>; audience: Au
 // Mastodon, the followers are the current ones; a Delete also reaches every inbox that received the status or may
 // still receive it, so a follower who left since still gets the Tombstone. Record a retraction before deleting the
 // row it retracts: the receipts go with the row.
-export function recordOutbound(db: Db, signerId: string, envelope: OutboundEnvelope, now: number): void {
-	enqueueActivity(db, signerId, envelope, now)
+// withdraws: a Reject that ends a follow already accepted (see subjectOf in deliveries.ts). deferred: record the intent
+// only; its receipts are deleted by the caller and its deliveries expanded by the delivery rounds (a purge's bounded
+// batches, see domain/inbox.ts).
+export function recordOutbound(
+	db: Db,
+	signerId: string,
+	envelope: OutboundEnvelope,
+	now: number,
+	options: { withdraws?: boolean; deferred?: boolean } = {}
+): void {
+	enqueueActivity(db, signerId, envelope, now, options)
 }
 
 export function followersUri(actorUri: string): string {
@@ -316,8 +326,10 @@ export function undoAnnounceActivity(input: AnnounceInput) {
 
 // ---------------------------------------------------------------------------------------------------------------
 // Follows (Mastodon's FollowService, UnfollowService, AuthorizeFollowService and RejectFollowService). Each goes to
-// the other side's personal inbox. A follow's id is `<actor>#follows/<edge id>`; Accept and Reject are named after
-// the follow edge they answer, as Mastodon's `#accepts/follows/<id>`.
+// the other side's personal inbox. A follow's id is `<actor>#follows/<edge id>`. Accept and Reject are named after
+// the Follow they answer: `<actor>#accepts/follows/<sha256 of the Follow's id>`, so two generations of one follow get
+// two answers and a replayed Follow names the same one; a Follow without an id (migrated rows) falls back to the
+// edge id, as Mastodon's `#accepts/follows/<id>`.
 // ---------------------------------------------------------------------------------------------------------------
 
 export type FollowActivityInput = { followUri: string; actorUri: string; targetUri: string; targetId: string }
@@ -365,10 +377,11 @@ export type FollowAnswerInput = {
 
 export function followAnswerActivity(kind: 'Accept' | 'Reject', input: FollowAnswerInput) {
 	const path = kind === 'Accept' ? 'accepts' : 'rejects'
+	const name = input.followUri === null ? input.edgeId : sha256Hex(input.followUri)
 	return {
 		activity: {
 			'@context': AS_CONTEXT,
-			id: `${input.localActorUri}#${path}/follows/${input.edgeId}`,
+			id: `${input.localActorUri}#${path}/follows/${name}`,
 			type: kind,
 			actor: input.localActorUri,
 			object: {

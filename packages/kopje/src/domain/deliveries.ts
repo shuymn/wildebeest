@@ -78,7 +78,10 @@ function idOf(value: unknown): string | null {
 }
 
 // The local object an activity is about, and whether it retracts it.
-function subjectOf(activity: Activity): { object: string | null; retracts: boolean } {
+// retracts: the activity withdraws work already sent, so it supersedes what it names and admission never refuses it.
+// A Reject withdraws only when it ends a follow we had accepted (withdraws); a Reject of a request never accepted (a
+// refused or blocked Follow) is new work and is admitted like any other.
+function subjectOf(activity: Activity, withdraws: boolean): { object: string | null; retracts: boolean } {
 	switch (activity.type) {
 		case 'Create':
 		case 'Update':
@@ -86,8 +89,9 @@ function subjectOf(activity: Activity): { object: string | null; retracts: boole
 		case 'Delete':
 			return { object: idOf(activity.object), retracts: true }
 		case 'Undo':
-		case 'Reject':
 			return { object: idOf(activity.object), retracts: true }
+		case 'Reject':
+			return { object: idOf(activity.object), retracts: withdraws }
 		case 'Accept':
 			return { object: idOf(activity.object), retracts: false }
 		default:
@@ -122,7 +126,13 @@ export type DeliveryAudience = { followers: boolean; accounts: string[] }
 // Local accounts are never delivered to over HTTP: they read the Store. A neutral copy goes once to each inbox, and a
 // personal copy once to each silent recipient. Personal copies are written first, so on a server that also gets the
 // neutral copy, the one naming its recipient is POSTed first; Misskey keeps only the first Create it processes.
-export function audienceTargets(db: Db, signerId: string, activity: Activity, audience: DeliveryAudience): Target[] {
+export function audienceTargets(
+	db: Db,
+	signerId: string,
+	activity: Activity,
+	audience: DeliveryAudience,
+	withdraws = false
+): Target[] {
 	// Neutral copies by inbox; personal copies by recipient, kept apart so one never replaces the other.
 	const neutral = new Set<string>()
 	const personal = new Map<string, string>()
@@ -163,7 +173,7 @@ export function audienceTargets(db: Db, signerId: string, activity: Activity, au
 			)
 		}
 	}
-	const { object, retracts } = subjectOf(activity)
+	const { object, retracts } = subjectOf(activity, withdraws)
 	if (retracts && object !== null) {
 		for (const inbox of receiversOf(db, signerId, object)) {
 			add(inbox, null)
@@ -213,10 +223,11 @@ export function enqueueActivity(
 	db: Db,
 	signerId: string,
 	envelope: { activity: Activity; audience: DeliveryAudience },
-	now: number
+	now: number,
+	options: { withdraws?: boolean; deferred?: boolean } = {}
 ): void {
-	const targets = audienceTargets(db, signerId, envelope.activity, envelope.audience)
-	const { object, retracts } = subjectOf(envelope.activity)
+	const targets = audienceTargets(db, signerId, envelope.activity, envelope.audience, options.withdraws === true)
+	const { object, retracts } = subjectOf(envelope.activity, options.withdraws === true)
 	if (object !== null && (retracts || envelope.activity.type === 'Update')) {
 		db.run(
 			`UPDATE outbound_activities SET superseded = 1 WHERE account_id = ? AND object_uri = ?
@@ -226,7 +237,9 @@ export function enqueueActivity(
 			retracts ? 1 : 0
 		)
 	}
-	if (object !== null && retracts) {
+	// deferred: the caller (a purge) deletes the receipts itself in bounded batches; the intent already holds them as
+	// targets.
+	if (object !== null && retracts && options.deferred !== true) {
 		db.run(
 			'DELETE FROM outbound_receipts WHERE account_id = ? AND status_id IN (SELECT id FROM statuses WHERE uri = ?)',
 			signerId,
@@ -254,7 +267,10 @@ export function enqueueActivity(
 	} else {
 		insertIntent(db, signerId, envelope, object, retracts, targets, now)
 	}
-	expandPending(db, now, EXPANSION_STEP)
+	// deferred: the intent waits for the delivery rounds, which expand it EXPANSION_STEP targets at a time.
+	if (options.deferred !== true) {
+		expandPending(db, now, EXPANSION_STEP)
+	}
 }
 
 function insertIntent(

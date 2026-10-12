@@ -50,11 +50,62 @@ const CONTEXT: Kind = {
 	objectRoot: false,
 }
 
+// A document refused by policy (scheme, host, redirect, type, size, id, root) or unusable as served. Fetching
+// it again would not help.
+export class RefusedFetchError extends FetchError {}
+
+// A timeout or a network failure: fetching again may succeed.
+export class TransientFetchError extends FetchError {}
+
+// The request's fetch budget ran out (count, bytes or deadline). Not a verdict on the document: the same request may
+// fit another time (cached contexts cost nothing), so it is transient and the request is answered 503 and retried.
+export class BudgetExceededError extends TransientFetchError {}
+
+// Whether a failed load may succeed if tried again: a timeout, a network error, or an HTTP 408, 429 or 5xx. Refusals and
+// other HTTP errors (404, 410, ...) are permanent. An error that is not a FetchError (a Store refusal inside a signer,
+// for one) is treated as transient.
+export function isTransientLoadError(error: unknown): boolean {
+	if (error instanceof RefusedFetchError) {
+		return false
+	}
+	if (error instanceof FetchError) {
+		const status = error.response?.status
+		return status === undefined
+			? error instanceof TransientFetchError
+			: status === 408 || status === 429 || status >= 500
+	}
+	return true
+}
+
+// The load failure behind an error that wraps it (JSON-LD reports a failed context fetch as its own error, with the
+// loader's error as its cause), or undefined if there is none.
+export function loadFailureOf(error: unknown, depth = 0): FetchError | undefined {
+	if (error instanceof FetchError || depth > 8 || typeof error !== 'object' || error === null) {
+		return error instanceof FetchError ? error : undefined
+	}
+	const { cause, details } = error as { cause?: unknown; details?: { cause?: unknown } }
+	return loadFailureOf(cause, depth + 1) ?? loadFailureOf(details?.cause, depth + 1)
+}
+
+// What one inbound request may fetch in all (RES-6): documents, JSON-LD contexts and redirect hops share one count,
+// one byte allowance and one deadline. Cache hits and preloaded contexts cost nothing.
+export type FetchBudget = { fetches: number; bytes: number; deadline: number }
+
+export const REQUEST_MAX_FETCHES = 8
+export const REQUEST_MAX_BYTES = 2 * 1024 * 1024
+export const REQUEST_DEADLINE_MS = 15_000
+
+export function requestBudget(now: number): FetchBudget {
+	return { fetches: REQUEST_MAX_FETCHES, bytes: REQUEST_MAX_BYTES, deadline: now + REQUEST_DEADLINE_MS }
+}
+
 export type LoaderDeps = {
 	fetch: typeof fetch
 	checkHost?: (url: URL) => Promise<void>
 	userAgent: string
 	timeoutMs?: number
+	// Shared by every loader of one request; none means only the per-load limits apply.
+	budget?: FetchBudget
 }
 
 export type RequestSigner = (request: Request) => Promise<Request>
@@ -76,7 +127,7 @@ export function requireObjectRoot(loader: DocumentLoader): DocumentLoader {
 function assertObjectRoot(remote: RemoteDocument): RemoteDocument {
 	const { document } = remote
 	if (typeof document !== 'object' || document === null || Array.isArray(document)) {
-		throw new FetchError(remote.documentUrl, 'Document root is not a JSON object')
+		throw new RefusedFetchError(remote.documentUrl, 'Document root is not a JSON object')
 	}
 	return remote
 }
@@ -95,8 +146,16 @@ function createLoader(deps: LoaderDeps, kind: Kind, sign?: RequestSigner): Docum
 			return { contextUrl: null, document: preloadedContexts[url], documentUrl: url }
 		}
 		const target = new URL(url)
+		const left = deps.budget === undefined ? timeoutMs : deps.budget.deadline - Date.now()
+		if (left <= 0) {
+			throw new BudgetExceededError(target, 'Request fetch deadline exhausted')
+		}
+		const limit = Math.min(timeoutMs, left)
 		const controller = new AbortController()
-		const timer = setTimeout(() => controller.abort(new FetchError(url, `Timed out after ${timeoutMs} ms`)), timeoutMs)
+		const timer = setTimeout(
+			() => controller.abort(new TransientFetchError(target, `Timed out after ${limit} ms`)),
+			limit
+		)
 		const onAbort = () => controller.abort(options?.signal?.reason)
 		options?.signal?.addEventListener('abort', onAbort, { once: true })
 		const aborted = new Promise<never>((_, reject) => {
@@ -119,32 +178,50 @@ async function load(deps: LoaderDeps, kind: Kind, sign: RequestSigner | undefine
 	let current = target
 	for (let redirects = 0; ; redirects++) {
 		await assertFetchable(current, deps.checkHost ?? dnsCheckHost)
+		if (deps.budget !== undefined) {
+			if (deps.budget.fetches <= 0) {
+				throw new BudgetExceededError(current, 'Request fetch budget exhausted')
+			}
+			deps.budget.fetches--
+		}
 		const unsigned = new Request(current, {
 			headers: { accept: kind.accept, 'user-agent': deps.userAgent },
 			redirect: 'manual',
 			signal,
 		})
-		const response = await deps.fetch(sign === undefined ? unsigned : await sign(unsigned))
+		const request = sign === undefined ? unsigned : await sign(unsigned)
+		let response: Response
+		try {
+			response = await deps.fetch(request)
+		} catch (error) {
+			throw signal.aborted ? (signal.reason as Error) : new TransientFetchError(current, 'Network error')
+		}
 		if (response.status >= 300 && response.status < 400 && response.headers.has('location')) {
 			await response.body?.cancel()
 			const next = new URL(response.headers.get('location') ?? '', current)
 			if (next.origin !== target.origin) {
-				throw new FetchError(current, `Refused cross-origin redirect to ${next.origin}`)
+				throw new RefusedFetchError(current, `Refused cross-origin redirect to ${next.origin}`)
 			}
 			if (redirects >= MAX_REDIRECTS) {
-				throw new FetchError(current, `Too many redirects (${redirects + 1})`)
+				throw new RefusedFetchError(current, `Too many redirects (${redirects + 1})`)
 			}
 			current = next
 			continue
 		}
-		return readDocument(response, kind, response.url === '' ? current : new URL(response.url), target)
+		return readDocument(response, kind, response.url === '' ? current : new URL(response.url), target, deps.budget)
 	}
 }
 
-async function readDocument(response: Response, kind: Kind, final: URL, target: URL): Promise<RemoteDocument> {
+async function readDocument(
+	response: Response,
+	kind: Kind,
+	final: URL,
+	target: URL,
+	budget: FetchBudget | undefined
+): Promise<RemoteDocument> {
 	if (final.origin !== target.origin) {
 		await response.body?.cancel()
-		throw new FetchError(final, `Refused document redirected to ${final.origin}`)
+		throw new RefusedFetchError(final, `Refused document redirected to ${final.origin}`)
 	}
 	if (!response.ok) {
 		await response.body?.cancel()
@@ -161,11 +238,17 @@ async function readDocument(response: Response, kind: Kind, final: URL, target: 
 	const media = parseMediaType(response.headers.get('content-type') ?? '')
 	if (media === null || !kind.accepts(media)) {
 		await response.body?.cancel()
-		throw new FetchError(final, `${kind.refusal}: ${response.headers.get('content-type')}`)
+		throw new RefusedFetchError(final, `${kind.refusal}: ${response.headers.get('content-type')}`)
 	}
-	const body = await readBoundedBody(response, DOCUMENT_BODY_LIMIT)
+	const limit = Math.min(DOCUMENT_BODY_LIMIT, budget?.bytes ?? DOCUMENT_BODY_LIMIT)
+	const body = await readBoundedBody(response, limit)
 	if (body === 'too-large') {
-		throw new FetchError(final, `Document exceeds ${DOCUMENT_BODY_LIMIT} bytes`)
+		throw limit < DOCUMENT_BODY_LIMIT
+			? new BudgetExceededError(final, `Request byte budget exhausted (${limit} bytes left)`)
+			: new RefusedFetchError(final, `Document exceeds ${limit} bytes`)
+	}
+	if (budget !== undefined) {
+		budget.bytes -= body.byteLength
 	}
 	// Fedify parses the bounded bytes, so a JSON-LD context given in a Link header is applied as Fedify applies it.
 	// Alternate-document links are not followed: only JSON types reach this point. Fedify compares the Content-Type
@@ -175,10 +258,10 @@ async function readDocument(response: Response, kind: Kind, final: URL, target: 
 	let remote: RemoteDocument
 	try {
 		remote = await getRemoteDocument(final.href, new Response(body, { headers }), () =>
-			Promise.reject(new FetchError(final, 'Refused alternate document link'))
+			Promise.reject(new RefusedFetchError(final, 'Refused alternate document link'))
 		)
 	} catch (error) {
-		throw error instanceof FetchError ? error : new FetchError(final, 'Document is not valid JSON')
+		throw error instanceof FetchError ? error : new RefusedFetchError(final, 'Document is not valid JSON')
 	}
 	// A cheap pre-filter only: it sees the literal id and @id, not a JSON-LD alias of @id. The identity that counts is
 	// the parsed object's id, which Fedify's consumers compare with this documentUrl (fetchKey for signature keys,
@@ -186,7 +269,7 @@ async function readDocument(response: Response, kind: Kind, final: URL, target: 
 	// itself must make the same check.
 	const id = documentId(remote.document)
 	if (id !== undefined && originOf(id) !== final.origin) {
-		throw new FetchError(final, `Document id ${id} is not on ${final.origin}`)
+		throw new RefusedFetchError(final, `Document id ${id} is not on ${final.origin}`)
 	}
 	const loaded = { ...remote, documentUrl: final.href }
 	return kind.objectRoot ? assertObjectRoot(loaded) : loaded
@@ -217,7 +300,7 @@ async function assertFetchable(url: URL, checkHost: (url: URL) => Promise<void>)
 	try {
 		await checkHost(url)
 	} catch (error) {
-		throw new FetchError(url, `Refused host ${url.hostname}: ${errorMessage(error)}`)
+		throw new RefusedFetchError(url, `Refused host ${url.hostname}: ${errorMessage(error)}`)
 	}
 }
 
@@ -225,16 +308,16 @@ async function assertFetchable(url: URL, checkHost: (url: URL) => Promise<void>)
 // every outbound sink (NET-3); the DNS check (checkHost) runs after it.
 export function assertPublicShape(url: URL): void {
 	if (url.protocol !== 'https:') {
-		throw new FetchError(url, `Refused non-https URL: ${url.protocol}`)
+		throw new RefusedFetchError(url, `Refused non-https URL: ${url.protocol}`)
 	}
 	if (url.username !== '' || url.password !== '') {
-		throw new FetchError(url, 'Refused URL with credentials')
+		throw new RefusedFetchError(url, 'Refused URL with credentials')
 	}
 	const host = url.hostname
 	if (host.startsWith('[') || IPV4_LITERAL.test(host)) {
-		throw new FetchError(url, `Refused literal IP host: ${host}`)
+		throw new RefusedFetchError(url, `Refused literal IP host: ${host}`)
 	}
 	if (host === 'localhost' || host.endsWith('.localhost') || !host.includes('.')) {
-		throw new FetchError(url, `Refused local host: ${host}`)
+		throw new RefusedFetchError(url, `Refused local host: ${host}`)
 	}
 }

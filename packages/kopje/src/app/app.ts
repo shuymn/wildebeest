@@ -7,7 +7,7 @@ import { authorizeRoutes } from './authorize'
 import { classifyRequest, decide, type RequestClass } from './gate'
 import { publicHealth } from './health'
 import { ringDoorbell } from '../federation/delivery'
-import { INBOX_ROUTES, inboxHandler } from '../federation/inbox'
+import { INBOX_ROUTES, inboxHandler, precheckInbox } from '../federation/inbox'
 import { FEDERATION_GET_ROUTES, federationHandler, type FederationRouteDeps } from '../federation/routes'
 import { FEDERATION_PATHS, requireSetup } from '../federation/setup-gate'
 import { rescueFromSnapshot } from '../federation/snapshot'
@@ -93,6 +93,11 @@ export function createApp({
 				return new Response(null, { status: 413 })
 			}
 			c.set('inboxBody', body)
+			// Refused before anything is spooled: not ActivityStreams (415), or a personal inbox of nobody (404).
+			const precheck = await precheckInbox(c.env, { build, store }, c.req.raw)
+			if (precheck !== 'ok') {
+				return new Response(null, { status: precheck === 'not-found' ? 404 : 415 })
+			}
 			if (decision === 'spool') {
 				return spoolInbox(c.req.raw, body, c.env.QUEUE, now())
 			}
@@ -118,18 +123,14 @@ export function createApp({
 		app.use(path, setupGate)
 	}
 
-	const inbox = inboxHandler({ build, store }, now)
+	const keygen = federation.keygen ?? generateRsaKeyPair
+	const loader = federation.loader ?? { fetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, init) }
+	const inbox = inboxHandler({ build, store, now, keygen, loader })
 	for (const path of INBOX_ROUTES) {
 		app.post(path, inbox)
 	}
 
-	const federationGet = federationHandler({
-		build,
-		now,
-		store,
-		keygen: federation.keygen ?? generateRsaKeyPair,
-		loader: federation.loader ?? { fetch: (input, init) => fetch(input, init) },
-	})
+	const federationGet = federationHandler({ build, now, store, keygen, loader })
 	for (const path of FEDERATION_GET_ROUTES) {
 		app.get(path, federationGet)
 	}

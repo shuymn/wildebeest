@@ -1,9 +1,12 @@
 import { createExecutionContext, runInDurableObject, waitOnExecutionContext } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 
+import { fixtureKeyGen } from './federation-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { QueueSim } from './queue-sim'
 import { type AppDeps, createApp } from '../src/app/app'
+import type { InboxDeps } from '../src/federation/inbox'
+import type { QueueDeps } from '../src/jobs/queue'
 import type { StoreStub } from '../src/platform/store-client'
 
 export const NOW = Date.parse('2026-10-12T00:00:00.000Z')
@@ -21,7 +24,8 @@ export async function heldStore(): Promise<StoreStub> {
 }
 
 // Remote fetches are refused unless a test injects a fetch.
-const offline: AppDeps['federation'] = {
+export const offline: Required<NonNullable<AppDeps['federation']>> = {
+	keygen: fixtureKeyGen,
 	loader: { fetch: () => Promise.reject(new Error('no network in tests')), checkHost: () => Promise.resolve() },
 }
 
@@ -44,4 +48,17 @@ export function harness(
 		return response
 	}
 	return { app, request, send, queue, env: testEnv }
+}
+
+// What the queue consumer needs to replay inbox requests over a given Store, offline unless a loader is given.
+// Deliveries a doorbell starts go to the same fetch, never to the network.
+export function inboxDeps(store: () => StoreStub, loader: InboxDeps['loader'] = offline.loader) {
+	return {
+		build: () => BUILD,
+		store: () => store(),
+		now: () => NOW,
+		keygen: fixtureKeyGen,
+		loader,
+		delivery: { now: () => NOW, fetch: loader.fetch, checkHost: () => Promise.resolve() },
+	} satisfies InboxDeps & QueueDeps
 }

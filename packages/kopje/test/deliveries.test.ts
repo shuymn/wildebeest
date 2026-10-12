@@ -13,6 +13,7 @@ import {
 	MAX_ATTEMPTS,
 	retryDelay,
 } from '../src/domain/deliveries'
+import { sha256Hex } from '../src/platform/sha256'
 import type { StoreStub } from '../src/platform/store-client'
 
 // B2 delivery in the Store (domain/deliveries.ts): expansion of outbound intents into inboxes (NET-2, VIS-3), lanes,
@@ -418,7 +419,7 @@ describe('follows toward remote accounts', () => {
 		expect(followAnswerActivity('Accept', answer)).toEqual({
 			activity: {
 				'@context': 'https://www.w3.org/ns/activitystreams',
-				id: 'https://kopje.test/ap/users/alice#accepts/follows/9',
+				id: `https://kopje.test/ap/users/alice#accepts/follows/${sha256Hex(answer.followUri)}`,
 				type: 'Accept',
 				actor: answer.localActorUri,
 				object: {

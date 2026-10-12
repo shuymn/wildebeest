@@ -1,10 +1,12 @@
 import { type DeliveryDeps, handleDoorbells } from './deliver'
 import { isDeliverMessage } from '../federation/delivery'
-import { processInbox, type InboxDeps } from '../federation/inbox'
+import { type InboxDeps, type JobsMessage, processInbox, requestInboundJobs, ringDeliveries } from '../federation/inbox'
 import { type SpoolMessage, spoolMessageOptions } from '../federation/spool'
 import { readConfig } from '../platform/config'
 import { errorFields } from '../platform/error-message'
+import { callStore } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
+import { generateRsaKeyPair } from '../security/key-wrap'
 
 // Delay before a spooled request is offered again while maintenance lasts.
 export const SPOOL_REQUEUE_DELAY_SECONDS = 1800
@@ -16,15 +18,28 @@ export const QUEUE_RETRY_DELAY_SECONDS = 60
 // enough maintenance. A fresh message also starts a fresh 14-day retention; spooledAt keeps the original time.
 // message.retry() is kept for real processing errors.
 // Delivery doorbells (jobs/deliver.ts) share the Queue; however many a batch holds, they start one round.
-export type QueueDeps = InboxDeps & { delivery?: Omit<DeliveryDeps, 'build' | 'store'> }
+// Inbound processing deps beyond the Store default to the platform's own (production passes them all).
+export type QueueDeps = Pick<InboxDeps, 'build' | 'store'> &
+	Partial<Omit<InboxDeps, 'build' | 'store'>> & { delivery?: Omit<DeliveryDeps, 'build' | 'store'> }
 
-export async function handleQueue(batch: MessageBatch, env: Env, deps: QueueDeps): Promise<void> {
+function inboxDepsOf(deps: QueueDeps): InboxDeps {
+	return {
+		build: deps.build,
+		store: deps.store,
+		now: deps.now ?? (() => Date.now()),
+		keygen: deps.keygen ?? generateRsaKeyPair,
+		loader: deps.loader ?? { fetch: (input, init) => fetch(input, init) },
+	}
+}
+
+export async function handleQueue(batch: MessageBatch, env: Env, queueDeps: QueueDeps): Promise<void> {
+	const deps = inboxDepsOf(queueDeps)
 	const config = readConfig(env)
 	// An invalid env counts as maintenance, so nothing is replayed through a misconfigured Worker.
 	const maintenance = !config.ok || config.config.MAINTENANCE !== 'off'
 	const doorbells = batch.messages.filter((message) => isDeliverMessage(message.body))
 	if (doorbells.length > 0) {
-		const delivery = deps.delivery ?? { now: () => Date.now(), fetch: (input, init) => fetch(input, init) }
+		const delivery = queueDeps.delivery ?? { now: () => Date.now(), fetch: (input, init) => fetch(input, init) }
 		await handleDoorbells(doorbells, env, { ...delivery, build: deps.build, store: deps.store })
 	}
 	for (const message of batch.messages) {
@@ -32,6 +47,10 @@ export async function handleQueue(batch: MessageBatch, env: Env, deps: QueueDeps
 			continue
 		}
 		const body = message.body
+		if (isJobsMessage(body)) {
+			await runJobs(message, env, deps, maintenance)
+			continue
+		}
 		if (!isSpoolMessage(body)) {
 			console.error({ event: 'kopje.queue.unknown', id: message.id })
 			message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
@@ -42,8 +61,21 @@ export async function handleQueue(batch: MessageBatch, env: Env, deps: QueueDeps
 			continue
 		}
 		try {
-			await processInbox(env, deps, body.spooledAt)
-			message.ack()
+			// The original request, verified against the time it was spooled (OPS-1).
+			const outcome = await processInbox(env, deps, {
+				url: body.url,
+				method: body.method,
+				headers: body.headers,
+				body: await inflate(body.body),
+				receivedAt: body.spooledAt,
+			})
+			if (outcome.status === 503) {
+				// A remote fetch failed in a way that may pass: try again later (counts as a retry).
+				message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
+			} else {
+				// Done, or refused for good (401, 404, 415): a refused request is dropped, as the live inbox answers it.
+				message.ack()
+			}
 		} catch (error) {
 			if (error instanceof StoreUnavailableError) {
 				await requeue(message, body, env.QUEUE)
@@ -55,6 +87,64 @@ export async function handleQueue(batch: MessageBatch, env: Env, deps: QueueDeps
 	}
 }
 
+// A round of the Store's inbound jobs. The jobs and their progress are durable in the Store, so this message is only a
+// nudge: in maintenance it is dropped without a retry (cron resumes the jobs afterwards), and while jobs remain one
+// fresh message asks for the next round.
+async function runJobs(message: Message, env: Env, deps: InboxDeps, maintenance: boolean) {
+	if (maintenance) {
+		message.ack()
+		return
+	}
+	try {
+		const { pending, delivers } = await callStore(() =>
+			deps.store(env).runInboundJobs(deps.build(env), { now: deps.now() })
+		)
+		if (delivers) {
+			await ringDeliveries(env.QUEUE)
+		}
+		if (pending) {
+			await requestInboundJobs(env.QUEUE)
+		}
+		message.ack()
+	} catch (error) {
+		if (error instanceof StoreUnavailableError) {
+			message.ack()
+			return
+		}
+		console.error({ event: 'kopje.jobs.failed', id: message.id, ...errorFields(error) })
+		message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
+	}
+}
+
+// Cron: a round of inbound jobs every run, outside maintenance. This is what makes a purge or Move finish even if
+// every Queue message about it was lost.
+export async function runScheduledJobs(env: Env, deps: InboxDeps): Promise<void> {
+	const config = readConfig(env)
+	if (!config.ok || config.config.MAINTENANCE !== 'off') {
+		return
+	}
+	try {
+		const { pending, delivers } = await callStore(() =>
+			deps.store(env).runInboundJobs(deps.build(env), { now: deps.now() })
+		)
+		if (delivers) {
+			await ringDeliveries(env.QUEUE)
+		}
+		if (pending) {
+			await requestInboundJobs(env.QUEUE)
+		}
+	} catch (error) {
+		if (!(error instanceof StoreUnavailableError)) {
+			console.error({ event: 'kopje.jobs.failed', ...errorFields(error) })
+		}
+	}
+}
+
+async function inflate(bytes: Uint8Array): Promise<Uint8Array> {
+	const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'))
+	return new Uint8Array(await new Response(stream).arrayBuffer())
+}
+
 async function requeue(message: Message, body: SpoolMessage, queue: Queue): Promise<void> {
 	try {
 		await queue.send(body, { ...spoolMessageOptions, delaySeconds: SPOOL_REQUEUE_DELAY_SECONDS })
@@ -64,6 +154,11 @@ async function requeue(message: Message, body: SpoolMessage, queue: Queue): Prom
 		console.error({ event: 'kopje.spool.requeue.failed', id: message.id, ...errorFields(error) })
 		message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
 	}
+}
+
+function isJobsMessage(body: unknown): body is JobsMessage {
+	const m = body as Partial<JobsMessage> | null
+	return typeof m === 'object' && m !== null && m.kind === 'inbound-jobs'
 }
 
 function isSpoolMessage(body: unknown): body is SpoolMessage {

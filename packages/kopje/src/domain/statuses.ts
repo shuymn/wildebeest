@@ -171,7 +171,7 @@ function attachMedia(db: Db, statusId: string, mediaIds: readonly string[], now:
 
 // statuses_count counts what Mastodon counts: everything but direct (and limited) statuses, boosts included. Remote
 // accounts keep the count their server reported.
-function recountStatuses(db: Db, accountId: string): void {
+export function recountStatuses(db: Db, accountId: string): void {
 	db.run(
 		`UPDATE accounts SET statuses_count = (SELECT COUNT(*) FROM statuses
 			WHERE account_id = ?1 AND visibility IN ('public', 'unlisted', 'private'))
@@ -181,7 +181,7 @@ function recountStatuses(db: Db, accountId: string): void {
 }
 
 // replies_count counts public and unlisted replies, as Mastodon does.
-function recountStatus(db: Db, statusId: string | null): void {
+export function recountStatus(db: Db, statusId: string | null): void {
 	if (statusId === null) {
 		return
 	}
@@ -1081,6 +1081,36 @@ function undoLocalBoosts(db: Db, originalId: string, now: number): void {
 		)
 		recordOutbound(db, boost.account_id, undoAnnounceActivity(announce), now)
 	}
+}
+
+// Records the Undo of one local boost through the boost's own path (its receipts say where it went), without deleting
+// it: a purge of the original's author withdraws local boosts this way, then deletes them in bounded batches.
+export function withdrawLocalBoost(db: Db, boostId: string, now: number): void {
+	const boost = db.first<{
+		account_id: string
+		uri: string
+		visibility: Visibility
+		published_at: string
+		original: string
+	}>(
+		`SELECT r.account_id, r.uri, r.visibility, r.published_at, r.reblog_of_id AS original FROM statuses r
+		JOIN local_accounts l ON l.account_id = r.account_id WHERE r.id = ? AND r.reblog_of_id IS NOT NULL`,
+		boostId
+	)
+	const target =
+		boost === undefined
+			? undefined
+			: db.first<Target>(
+					`SELECT o.id, o.uri, o.account_id, o.visibility, a.uri AS author_uri
+					FROM statuses o JOIN accounts a ON a.id = o.account_id WHERE o.id = ?`,
+					boost.original
+				)
+	if (boost === undefined || target === undefined) {
+		return
+	}
+	const announce = announceOf(viewerUri(db, boost.account_id), boost.uri, boost.visibility, boost.published_at, target)
+	// Deferred: the purge deletes the boost's receipts and B2's rounds expand the Undo, both in bounded steps.
+	recordOutbound(db, boost.account_id, undoAnnounceActivity(announce), now, { deferred: true })
 }
 
 function removeReblog(db: Db, accountId: string, reblogId: string, originalId: string, now: number): void {

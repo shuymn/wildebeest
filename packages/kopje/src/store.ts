@@ -16,7 +16,7 @@ import {
 import { checkCredential, type Credential, type UserCredential } from './domain/auth'
 import * as deliveries from './domain/deliveries'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
-import { acceptInbox, type InboxDelivery } from './domain/inbox'
+import * as inbox from './domain/inbox'
 import { instanceInfo } from './domain/instance'
 import * as media from './domain/media'
 import * as notifications from './domain/notifications'
@@ -144,8 +144,22 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, getSetupState, undefined)
 	}
 
-	receiveInbox(callerBuild: string, delivery: InboxDelivery) {
-		return this.#kernel.execute(callerBuild, acceptInbox, delivery)
+	// Inbound activities (B1b): the Worker verifies and prepares, the Store authorizes and applies (domain/inbox.ts).
+
+	receiveActivity(callerBuild: string, input: inbox.ReceiveInput) {
+		return this.#kernel.execute(callerBuild, inbox.receiveActivity, input)
+	}
+
+	runInboundJobs(callerBuild: string, input: OperationInput<typeof inbox.runInboundJobs>) {
+		return this.#kernel.execute(callerBuild, inbox.runInboundJobs, input)
+	}
+
+	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {
+		return this.#kernel.execute(callerBuild, inbox.getRemoteKey, input)
+	}
+
+	inboxOwnerExists(callerBuild: string, input: OperationInput<typeof inbox.inboxOwnerExists>) {
+		return this.#kernel.execute(callerBuild, inbox.inboxOwnerExists, input)
 	}
 
 	// Federation (B1a): Fedify's KvStore, local actors and keys, collections, NodeInfo, and the rescue snapshots.
@@ -288,6 +302,14 @@ export class Store extends DurableObject<Env> {
 
 	unfollow(callerBuild: string, input: { credential: UserCredential; target: string; now: number }) {
 		return this.#kernel.execute(callerBuild, accounts.unfollow, input)
+	}
+
+	listFollowRequests(callerBuild: string, input: OperationInput<typeof accounts.listFollowRequests>) {
+		return this.#kernel.execute(callerBuild, accounts.listFollowRequests, input)
+	}
+
+	answerFollowRequest(callerBuild: string, input: OperationInput<typeof accounts.answerFollowRequest>) {
+		return this.#kernel.execute(callerBuild, accounts.answerFollowRequest, input)
 	}
 
 	listFollows(callerBuild: string, input: accounts.ListFollowsInput) {

@@ -12,6 +12,8 @@ export default defineConfig({
 			miniflare: { compatibilityDate: supportedCompatibilityDate },
 		}),
 	],
+	// As wrangler.jsonc's alias: sanitize-html never reaches postcss (stubs/postcss.cjs).
+	resolve: { alias: { postcss: fileURLToPath(new URL('./stubs/postcss.cjs', import.meta.url)) } },
 	test: {
 		name: 'kopje',
 		include: [fileURLToPath(new URL('./test/**/*.test.ts', import.meta.url))],

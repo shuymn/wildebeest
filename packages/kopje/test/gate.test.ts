@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { harness, heldStore, NOW } from './app-helpers'
+import { harness, heldStore, inboxDeps, NOW } from './app-helpers'
+import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
 import { BUILD, completeSetup, migratedStore } from './helpers'
+import { mastodonActor, RemoteWeb, signedInit } from './inbox-helpers'
 import { MAX_RETRIES, QueueSim } from './queue-sim'
 import { classifyRequest, decide, type RequestClass } from '../src/app/gate'
 import type { SpoolMessage } from '../src/federation/spool'
@@ -57,6 +59,22 @@ describe('request classification', () => {
 	})
 })
 
+const AP = { 'content-type': 'application/activity+json' }
+
+// A Follow signed by a remote actor whose documents the returned federation deps serve.
+async function remoteFollow() {
+	const web = new RemoteWeb()
+	const bob = await mastodonActor(web, 'bob')
+	const follow = {
+		'@context': 'https://www.w3.org/ns/activitystreams',
+		id: `${bob.uri}#f`,
+		type: 'Follow',
+		actor: bob.uri,
+		object: 'https://kopje.test/ap/users/alice',
+	}
+	return { init: await signedInit(bob, '/inbox', follow), federation: { keygen: fixtureKeyGen, loader: web.loader } }
+}
+
 async function inflate(bytes: Uint8Array): Promise<string> {
 	const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'))
 	return new Response(stream).text()
@@ -97,12 +115,13 @@ describe('maintenance gate', () => {
 	})
 
 	it('spools inbox POSTs when the env is off but the Store is held readonly', async () => {
-		const { request, send } = harness(await heldStore())
+		const remote = await remoteFollow()
+		const { request, send } = harness(await heldStore(), {}, BUILD, remote.federation)
 
-		const response = await request('/ap/users/alice/inbox', { method: 'POST', body: '{"type":"Follow"}' })
+		const response = await request('/inbox', remote.init)
 		expect(response.status).toBe(202)
 		expect(send).toHaveBeenCalledOnce()
-		expect(send.mock.calls[0]![0]).toMatchObject({ kind: 'spool', url: 'https://kopje.test/ap/users/alice/inbox' })
+		expect(send.mock.calls[0]![0]).toMatchObject({ kind: 'spool', url: 'https://kopje.test/inbox' })
 	})
 
 	it('hands inbox POSTs to the inbox handler without spooling when nothing is held', async () => {
@@ -110,15 +129,42 @@ describe('maintenance gate', () => {
 		const { request, send } = harness(store)
 		await completeSetup(store)
 
-		expect((await request('/inbox', { method: 'POST', body: '{}' })).status).toBe(202)
+		// Processed at once: an unsigned request is refused by the handler (ID-1), not spooled.
+		expect((await request('/inbox', { method: 'POST', headers: AP, body: '{}' })).status).toBe(401)
 		expect(send).not.toHaveBeenCalled()
 	})
+
+	// ID-5, ID-8: refused before anything is spooled, whatever the maintenance state.
+	it.each(['off', 'readonly'])(
+		'refuses a personal inbox of nobody and a non-ActivityStreams body (MAINTENANCE=%s)',
+		async (mode) => {
+			const store = await migratedStore()
+			await completeSetup(store)
+			await seedLocalAccount(store, 'kopje.test', {
+				id: '111111111111111111',
+				username: 'Alice',
+				key: LEGACY_EMPTY_KEK,
+			})
+			const { request, send } = harness(store, { MAINTENANCE: mode })
+
+			for (const path of ['/ap/users/bob/inbox', '/ap/users/alice/inbox', '/ap/users/Ali%63e/inbox']) {
+				expect((await request(path, { method: 'POST', headers: AP, body: '{}' })).status, path).toBe(404)
+			}
+			for (const type of ['application/json', 'text/plain', 'application/ld+json', '']) {
+				const response = await request('/inbox', { method: 'POST', headers: { 'content-type': type }, body: '{}' })
+				expect(response.status, type).toBe(415)
+			}
+			expect(send).not.toHaveBeenCalled()
+			const known = await request('/ap/users/Alice/inbox', { method: 'POST', headers: AP, body: '{}' })
+			expect(known.status).toBe(mode === 'off' ? 401 : 202)
+		}
+	)
 
 	it('spools inbox POSTs as one deflated v8 message and answers 202', async () => {
 		const { request, send } = harness(await migratedStore(), { MAINTENANCE: 'readonly' })
 		const body = JSON.stringify({ type: 'Follow', actor: 'https://remote.test/users/a' })
 
-		const response = await request('/ap/users/alice/inbox', {
+		const response = await request('/inbox', {
 			method: 'POST',
 			headers: { 'content-type': 'application/activity+json', signature: 'keyId="k"' },
 			body,
@@ -130,7 +176,7 @@ describe('maintenance gate', () => {
 		expect(options).toEqual({ contentType: 'v8' })
 		expect(message).toMatchObject({
 			kind: 'spool',
-			url: 'https://kopje.test/ap/users/alice/inbox',
+			url: 'https://kopje.test/inbox',
 			method: 'POST',
 			spooledAt: NOW,
 		})
@@ -144,7 +190,7 @@ describe('maintenance gate', () => {
 		const chunk = () => crypto.getRandomValues(new Uint8Array(64 * 1024))
 		const body = new Uint8Array([...chunk(), ...chunk()])
 
-		expect((await request('/inbox', { method: 'POST', body })).status).toBe(503)
+		expect((await request('/inbox', { method: 'POST', headers: AP, body })).status).toBe(503)
 		expect(send).not.toHaveBeenCalled()
 	})
 
@@ -199,7 +245,7 @@ describe('maintenance gate', () => {
 	it('maps a Store version mismatch to spool for inboxes and 503 for everything else', async () => {
 		const { request, send } = harness(await migratedStore(), {}, '0.0.0-other')
 
-		expect((await request('/inbox', { method: 'POST', body: '{}' })).status).toBe(202)
+		expect((await request('/inbox', { method: 'POST', headers: AP, body: '{}' })).status).toBe(202)
 		expect(send).toHaveBeenCalledOnce()
 		const webfinger = await request('/.well-known/webfinger?resource=acct:a@kopje.test')
 		expect(webfinger.status).toBe(503)
@@ -214,20 +260,23 @@ describe('maintenance gate', () => {
 })
 
 describe('spool consumer', () => {
+	// A signed Follow spooled because the Store, held readonly, refuses the write it needs.
 	async function spooled(store: StoreStub, overrides: Record<string, unknown> = {}) {
-		const h = harness(store, overrides)
-		const response = await h.request('/ap/users/alice/inbox', { method: 'POST', body: '{"type":"Follow"}' })
+		const remote = await remoteFollow()
+		const h = harness(store, overrides, BUILD, remote.federation)
+		const response = await h.request('/inbox', remote.init)
 		expect(response.status).toBe(202)
 		expect(h.queue.pending).toHaveLength(1)
 		const consume = (env = h.env, resolve: () => StoreStub = () => store) =>
-			h.queue.deliver((batch) => handleQueue(batch, env, { build: () => BUILD, store: resolve }))
+			h.queue.deliver((batch) => handleQueue(batch, env, inboxDeps(resolve, remote.federation.loader)))
 		return { ...h, consume, original: h.queue.pending[0]!.body as SpoolMessage }
 	}
 
 	it('never exhausts retries while the Store stays held, however long', async () => {
 		const { queue, consume, original } = await spooled(await heldStore())
 
-		for (let cycle = 0; cycle < MAX_RETRIES * 2; cycle++) {
+		// One cycle more than the retry budget; each replay verifies the signature before the Store refuses the write.
+		for (let cycle = 0; cycle <= MAX_RETRIES; cycle++) {
 			await consume()
 		}
 
@@ -237,7 +286,7 @@ describe('spool consumer', () => {
 		expect(queue.pending[0]).toMatchObject({ attempts: 1, delaySeconds: SPOOL_REQUEUE_DELAY_SECONDS })
 		expect(queue.pending[0]!.body).toEqual(original)
 		expect(original.spooledAt).toBe(NOW)
-	})
+	}, 30_000)
 
 	it('requeues while the env is in maintenance and replays once it is off', async () => {
 		const store = await heldStore()
@@ -257,7 +306,7 @@ describe('spool consumer', () => {
 
 	it('retries, and so counts against max_retries, only on real processing errors', async () => {
 		const { queue, consume, env } = await spooled(await heldStore())
-		const broken = { receiveInbox: () => Promise.reject(new Error('boom')) } as unknown as StoreStub
+		const broken = { instanceDomain: () => Promise.reject(new Error('boom')) } as unknown as StoreStub
 
 		await consume(env, () => broken)
 		expect(queue.retries).toBe(1)

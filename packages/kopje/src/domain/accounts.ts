@@ -1,5 +1,6 @@
-import { followActivity, followUri, undoFollowActivity, recordOutbound } from './activities'
+import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { userReadOperation, userWriteOperation } from './auth'
+import { retractFollow } from './inbox'
 import { notify } from './notifications'
 import { readOperation } from './operation'
 import { htmlToPlainText, plainTextToHtml } from './plain-text'
@@ -59,10 +60,12 @@ export type Relationship = {
 	notifying: boolean
 	languages: string[] | null
 	followed_by: boolean
+	requested_by: boolean
 	blocking: boolean
 	blocked_by: boolean
 	muting: boolean
 	muting_notifications: boolean
+	muting_expires_at: string | null
 	requested: boolean
 	domain_blocking: boolean
 	endorsed: boolean
@@ -349,10 +352,13 @@ function relationshipsOf(db: Db, viewerId: string, accountIds: string[]): Relati
 		notifying: row.following !== null && row.notify === 1,
 		languages: row.languages === null ? null : (JSON.parse(row.languages) as string[]),
 		followed_by: row.followed_by === 'accepted',
+		requested_by: row.followed_by === 'pending',
 		blocking: row.blocking === 1,
 		blocked_by: row.blocked_by === 1,
 		muting: row.muting === 1,
 		muting_notifications: row.muting_notifications === 1,
+		// Mutes have no expiry yet.
+		muting_expires_at: null,
 		requested: row.following === 'pending',
 		domain_blocking: row.domain_blocking === 1,
 		endorsed: false,
@@ -470,6 +476,8 @@ export type RelationshipResult =
 	| { status: 'ok'; relationship: Relationship }
 	| { status: 'not_found' }
 	| { status: 'forbidden' }
+	// The change cannot be recorded right now (answered 503).
+	| { status: 'unavailable' }
 
 type TargetRow = {
 	id: string
@@ -665,3 +673,90 @@ export const listFollows = readOperation<ListFollowsInput, Page<Account> | null>
 		}
 	}
 )
+
+// Follow requests to the viewer (Mastodon's FollowRequestsController and AuthorizeFollowService/RejectFollowService).
+// Only the followed account decides (VIS-9): the viewer is the target, from the credential, never from the request.
+export const listFollowRequests = userReadOperation<{ page: PageQuery; present: Present }, Page<Account>>(
+	(db, { page, present }, { accountId: viewerId }) => {
+		const ascending = page.minId !== undefined
+		const rows = db.all<AccountRow & { cursor: string }>(
+			`SELECT CAST(f.id AS TEXT) AS cursor, ${ACCOUNT_COLUMNS}
+			FROM follows f JOIN accounts a ON a.id = f.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
+			WHERE f.target_account_id = ?1 AND f.state = 'pending'
+				AND (?2 IS NULL OR f.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR f.id > CAST(?3 AS INTEGER))
+			ORDER BY f.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+			viewerId,
+			page.maxId ?? null,
+			page.minId ?? page.sinceId ?? null,
+			page.limit
+		)
+		if (ascending) {
+			rows.reverse()
+		}
+		return {
+			items: rows.map((row) => presentAccount(row, present)),
+			newest: rows[0]?.cursor ?? null,
+			oldest: rows.at(-1)?.cursor ?? null,
+		}
+	}
+)
+
+// Authorizes or rejects a pending follow of the viewer. A remote requester gets the Accept or Reject at its personal
+// inbox, named after its Follow (followAnswerActivity). The follow_request notification goes either way.
+export const answerFollowRequest = userWriteOperation<
+	{ account: string; decision: 'authorize' | 'reject'; now: number },
+	RelationshipResult
+>((db, { account, decision, now }, { accountId: viewerId }) => {
+	const requesterId = resolveAccountId(db, account)
+	const request =
+		requesterId === null
+			? undefined
+			: db.first<{ id: string; uri: string | null; requester_uri: string; remote: number }>(
+					`SELECT CAST(f.id AS TEXT) AS id, f.uri, a.uri AS requester_uri, a.domain IS NOT NULL AS remote
+					FROM follows f JOIN accounts a ON a.id = f.account_id
+					WHERE f.account_id = ? AND f.target_account_id = ? AND f.state = 'pending'`,
+					requesterId,
+					viewerId
+				)
+	if (requesterId === null || request === undefined) {
+		return { status: 'not_found' }
+	}
+	if (decision === 'authorize') {
+		db.run("UPDATE follows SET state = 'accepted' WHERE id = CAST(? AS INTEGER)", request.id)
+	} else {
+		// A rejected remote Follow is recorded as retracted (retractFollow), so a redelivery of it does not ask again
+		// (ID-7); a Misskey pair id is not recorded, and its redelivery asks again (the pair limit). If it
+		// cannot be recorded (the requester's retraction cap), nothing changes.
+		if (request.remote === 1 && request.uri !== null && !retractFollow(db, request.requester_uri, request.uri, now)) {
+			return { status: 'unavailable' }
+		}
+		db.run('DELETE FROM follows WHERE id = CAST(? AS INTEGER)', request.id)
+	}
+	db.run(
+		"DELETE FROM notifications WHERE account_id = ? AND from_account_id = ? AND type = 'follow_request'",
+		viewerId,
+		requesterId
+	)
+	if (request.remote === 1) {
+		const viewerUri = db.first<{ uri: string }>('SELECT uri FROM accounts WHERE id = ?', viewerId)?.uri ?? ''
+		recordOutbound(
+			db,
+			viewerId,
+			followAnswerActivity(decision === 'authorize' ? 'Accept' : 'Reject', {
+				localActorUri: viewerUri,
+				followerUri: request.requester_uri,
+				followerId: requesterId,
+				followUri: request.uri,
+				edgeId: request.id,
+			}),
+			now
+		)
+	}
+	db.run(
+		`UPDATE accounts SET followers_count =
+			(SELECT COUNT(*) FROM follows WHERE target_account_id = ?1 AND state = 'accepted') WHERE id = ?1`,
+		viewerId
+	)
+	const [relationship] = relationshipsOf(db, viewerId, [requesterId])
+	return relationship === undefined ? { status: 'not_found' } : { status: 'ok', relationship }
+})

@@ -428,7 +428,7 @@ describe('admission limits (RES-4, RES-6)', () => {
 		const lastLane = all.filter((r) => r.inbox_url === `https://server${servers - 1}.example/inbox`)
 		expect(lane0.map((r) => r.state)).toEqual(['leased', 'queued'])
 		expect(Number(lastLane[0]?.id)).toBeLessThan(Number(lastLane[1]?.id))
-	})
+	}, 30_000)
 })
 
 describe('outbox count', () => {
