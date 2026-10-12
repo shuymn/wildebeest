@@ -30,6 +30,7 @@ const SCHEMA_TABLES = [
 	'oauth_tokens',
 	'outbound_activities',
 	'outbound_receipts',
+	'outbound_targets',
 	'push_subscriptions',
 	'remote_keys',
 	'status_edits',
