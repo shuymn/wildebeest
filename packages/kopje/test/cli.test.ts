@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 
 import { accessKeys, accessToken, adminHarness, serviceClaims } from './access-helpers'
-import { migratedStore } from './helpers'
+import { BUILD, migratedStore } from './helpers'
 import { memoryIO, seedStore, setAccess, tableSnapshot } from './ops-helpers'
 import { run } from '../cli/lib/main.js'
 import type { StoreStub } from '../src/platform/store-client'
@@ -224,6 +224,52 @@ describe('kopje-admin', () => {
 		expect((await cli(['health'], { fetch, env: { KOPJE_ADMIN_URL: undefined } })).code).toBe(2)
 		expect((await cli(['health'], { fetch, env: { KOPJE_ADMIN_URL: 'http://admin.kopje.test' } })).code).toBe(1)
 		expect((await cli(['import', 'x.sql', '--import-token'], { fetch, env: { KOPJE_IMPORT_TOKEN: '' } })).code).toBe(2)
+	})
+
+	it('completes a dump whose finish response was lost', async () => {
+		const source = await sourceStore(0)
+		const io = memoryIO()
+		const lost = edge(source, async (request, forward) => {
+			const response = await forward()
+			if (new URL(request.url).pathname === '/admin/dump/finish') {
+				throw new TypeError('network connection lost')
+			}
+			return response
+		})
+		expect((await cli(['dump', 'd.sql'], { fetch: lost.fetch, io })).code).toBe(1)
+		const rerun = await cli(['dump', 'd.sql'], { fetch: edge(source).fetch, io })
+		expect(rerun.code, rerun.err).toBe(0)
+		expect(io.text('d.sql')).toMatch(/-- kopje-dump-end\n$/)
+	})
+
+	it('resumes an import that was interrupted during verification', async () => {
+		const io = memoryIO()
+		expect((await cli(['dump', 'e.sql'], { fetch: edge(await sourceStore(0)).fetch, io })).code).toBe(0)
+		const target = await migratedStore()
+		const interrupted = edge(target, async (request, forward) => {
+			if (new URL(request.url).pathname === '/admin/import/verify') {
+				throw new TypeError('network connection lost')
+			}
+			return forward()
+		})
+		expect((await cli(['import', 'e.sql', '--import-token'], { fetch: interrupted.fetch, io })).code).toBe(1)
+		const rerun = await cli(['import', 'e.sql', '--import-token'], { fetch: edge(target).fetch, io })
+		expect(rerun.code, rerun.err).toBe(0)
+		expect(JSON.parse(rerun.out)).toMatchObject({ ok: true })
+	})
+
+	it('releases the remote freeze before --restart discards a dump in progress', async () => {
+		const source = await sourceStore(60)
+		const io = memoryIO()
+		let appends = 0
+		io.failAppend = (path, bytes) => (path === 'f.sql' && ++appends === 3 ? bytes.slice(0, 10) : null)
+		expect((await cli(['dump', 'f.sql', '--chunk-mib', '0.002'], { fetch: edge(source).fetch, io })).code).toBe(1)
+		expect(await source.health(BUILD)).toMatchObject({ dump: { id: expect.any(String) } })
+
+		io.failAppend = null
+		const restarted = await cli(['dump', 'f.sql', '--restart'], { fetch: edge(source).fetch, io })
+		expect(restarted.code, restarted.err).toBe(0)
+		expect(await source.health(BUILD)).toMatchObject({ dump: null })
 	})
 })
 

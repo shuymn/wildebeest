@@ -1,5 +1,7 @@
 import { open, readFile, rename, rm, stat, truncate, writeFile } from 'node:fs/promises'
 
+import { writeAll } from './write-all.js'
+
 /** @type {import('./format.js').FileIO} */
 export const nodeIO = {
 	async size(path) {
@@ -33,7 +35,7 @@ export const nodeIO = {
 	async append(path, bytes) {
 		const handle = await open(path, 'a', 0o600)
 		try {
-			await handle.write(bytes)
+			await writeAll(handle, bytes)
 			await handle.sync()
 		} finally {
 			await handle.close()

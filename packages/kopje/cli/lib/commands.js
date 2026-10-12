@@ -60,6 +60,22 @@ export async function dumpToFile({
 }) {
 	const statePath = `${path}.state.json`
 	if (restart) {
+		// Release the freeze of the dump being discarded first; its cursor is lost once the state file is gone.
+		const previous = await io.readText(statePath)
+		if (previous !== null) {
+			const { cursor, trailerText } = JSON.parse(previous)
+			if (trailerText === undefined) {
+				try {
+					await client.post('/admin/dump/finish', { cursor, abort: true })
+					out.info(`aborted dump ${cursor.dump}`)
+				} catch (error) {
+					// Already gone or finished: nothing holds the lease. Anything else keeps the local state.
+					if (!(error instanceof AdminError && (error.code === 'dump-not-found' || error.code === 'dump-finished'))) {
+						throw error
+					}
+				}
+			}
+		}
 		await io.remove(statePath)
 		await io.remove(path)
 	}
