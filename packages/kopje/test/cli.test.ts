@@ -260,7 +260,8 @@ describe('kopje-admin', () => {
 		expect(io.text('d.sql')).toMatch(/-- kopje-dump-end\n$/)
 	})
 
-	it('resumes an import that was interrupted during verification', async () => {
+	// Interrupted before the first verify call reached the Store; a lost verify response is the next tests' case.
+	it('resumes an import that was interrupted before verification', async () => {
 		const io = memoryIO()
 		expect((await cli(['dump', 'e.sql'], { fetch: edge(await sourceStore(0)).fetch, io })).code).toBe(0)
 		const target = await migratedStore()
@@ -357,6 +358,46 @@ describe('kopje-admin', () => {
 		})
 		expect(early.code).toBe(1)
 		expect(early.err).toMatch(/possible after \d{4}-\d\d-\d\dT/)
+	})
+
+	it('refuses to report the outcome of a different file at the same path', async () => {
+		const io = memoryIO()
+		expect((await cli(['dump', 'l.sql'], { fetch: edge(await sourceStore(0)).fetch, io })).code).toBe(0)
+		expect((await cli(['dump', 'other.sql'], { fetch: edge(await sourceStore(5)).fetch, io })).code).toBe(0)
+		const target = await migratedStore()
+		const lost = edge(target, async (request, forward) => {
+			const response = await forward()
+			if (new URL(request.url).pathname === '/admin/import/verify') {
+				throw new TypeError('network connection lost')
+			}
+			return response
+		})
+		expect((await cli(['import', 'l.sql', '--import-token'], { fetch: lost.fetch, io })).code).toBe(1)
+		// Another dump now sits at the same path; the saved state still names the first import.
+		io.files.set('l.sql', io.files.get('other.sql')!)
+		const rerun = await cli(['import', 'l.sql', '--import-token'], { fetch: edge(target).fetch, io })
+		expect(rerun.code).toBe(1)
+		expect(rerun.err).toContain('does not match this file')
+	})
+
+	it('never prints the session credential of a token import', async () => {
+		const io = memoryIO()
+		expect((await cli(['dump', 'm.sql'], { fetch: edge(await sourceStore(0)).fetch, io })).code).toBe(0)
+		const target = await migratedStore()
+		const crash = edge(target, async (request, forward) => {
+			if (new URL(request.url).pathname === '/admin/import/finish') {
+				throw new TypeError('network connection lost')
+			}
+			return forward()
+		})
+		const outputs = [await cli(['import', 'm.sql', '--import-token'], { fetch: crash.fetch, io })]
+		const { session } = JSON.parse(io.text('m.sql.import.json')) as { session: string }
+		expect(session).toMatch(/^[A-Za-z0-9_-]{43}$/)
+		outputs.push(await cli(['import', 'm.sql', '--import-token'], { fetch: edge(target).fetch, io }))
+		outputs.push(await cli(['import-reset', 'm.sql', '--yes'], { fetch: edge(target).fetch, io }))
+		for (const output of outputs) {
+			expect(output.out + output.err).not.toContain(session)
+		}
 	})
 
 	it('shows the saved report of a failed import instead of finishing it again', async () => {

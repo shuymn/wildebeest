@@ -1,5 +1,7 @@
 import {
 	type AccessSettings,
+	type AdminIdentity,
+	adminRefusal,
 	adminUsable,
 	BOOTSTRAP,
 	CONFIG_KEYS,
@@ -17,9 +19,11 @@ import {
 	headerLine,
 	type MigrationRecord,
 	parseStatements,
+	quoteIdentifier,
 	type TableSpec,
 	trailerLines,
 } from './dump-format'
+import { fromHex } from './dump-literals'
 import { errorMessage } from './error-message'
 import { readOnlyProblem } from './readonly-sql'
 import { Sha256, sha256Hex } from './sha256'
@@ -54,7 +58,7 @@ import {
 	parseTrailer,
 	type VerifyReport,
 } from './store-import'
-import type { StoreKernel, UpgradeResult } from './store-kernel'
+import type { StoreKernel } from './store-kernel'
 
 // Expected refusals are results, not exceptions: an RPC error keeps only its message.
 export type Refusal = { ok: false; code: string; message: string }
@@ -71,14 +75,24 @@ export type AdminOptions = {
 	inject?: (point: AdminFaultPoint, sql: SqlStorage) => void
 	log?: (entry: Record<string, unknown>) => void
 	randomId?: () => string
+	// Rows deleted per reset transaction (tests make it small).
+	resetBatchRows?: number
 }
 
 // Who asks for an import or configuration change (see the import section of StoreAdmin).
-export type ImportAuthority = { kind: 'access' } | { kind: 'import-token' } | { kind: 'import-session'; secret: string }
+// access carries the identity the Worker verified; the Store checks it again where it writes.
+export type ImportAuthority =
+	| ({ kind: 'access' } & AdminIdentity)
+	| { kind: 'import-token' }
+	| { kind: 'import-session'; secret: string }
 
 export type ImportProgress = {
 	id: string
 	mode: ImportRecord['mode']
+	// What the dump is: sha256 of the header and trailer JSON (as received), so a client can check its file.
+	headerSha256: string
+	trailerSha256: string | null
+	updatedAt: number
 	// 'verified' comes from the receipt of a completed import.
 	state: ImportRecord['state'] | 'verified'
 	lastSeq: number
@@ -104,6 +118,8 @@ const MAX_QUERY_BYTES = 4 * 1024 * 1024
 const PITR_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
 // A token import whose session made no successful step for this long may be abandoned with IMPORT_TOKEN.
 export const STALE_IMPORT_MS = 15 * 60 * 1000
+const RESET_BATCH_ROWS = 2000
+const RESET_STEPS = 20
 
 // Thrown to roll back the read-only SQL transaction.
 class Rollback extends Error {}
@@ -129,6 +145,7 @@ export class StoreAdmin {
 	readonly #inject: NonNullable<AdminOptions['inject']>
 	readonly #log: NonNullable<AdminOptions['log']>
 	readonly #randomId: () => string
+	readonly #resetBatchRows: number
 
 	constructor(ctx: DurableObjectState, kernel: StoreKernel, options: AdminOptions) {
 		this.#ctx = ctx
@@ -140,6 +157,7 @@ export class StoreAdmin {
 		this.#inject = options.inject ?? (() => {})
 		this.#log = options.log ?? ((entry) => console.log(entry))
 		this.#randomId = options.randomId ?? (() => crypto.randomUUID())
+		this.#resetBatchRows = options.resetBatchRows ?? RESET_BATCH_ROWS
 	}
 
 	// ---- inspection (read-only, any caller build)
@@ -189,7 +207,7 @@ export class StoreAdmin {
 	async gate(): Promise<{ access: AccessSettings; bootstrap: boolean }> {
 		await this.#kernel.state()
 		const { import: running } = readFlags(this.#sql)
-		const access = running === null ? readAccessSettings(this.#sql) : settingsFromRows(running.bootstrap ?? [])
+		const access = this.#targetSettings(running)
 		return { access, bootstrap: running === null && !adminUsable(access) }
 	}
 
@@ -469,6 +487,9 @@ export class StoreAdmin {
 						'IMPORT_TOKEN only begins an import into an empty Store without admin access'
 					)
 				}
+				if (authority.kind === 'access') {
+					this.#assertAdmin(authority, this.#targetSettings(flags.import))
+				}
 				if (activeDump(flags, now) !== null) {
 					throw new ImportError('dump-in-progress', 'a dump is in progress')
 				}
@@ -478,6 +499,7 @@ export class StoreAdmin {
 					if (
 						authority.kind === 'access' &&
 						flags.import.mode === 'access' &&
+						flags.import.state !== 'resetting' &&
 						flags.import.headerSha256 === headerSha256
 					) {
 						return { ok: true as const, progress: progressOf(flags.import), resumed: true }
@@ -486,10 +508,6 @@ export class StoreAdmin {
 						'import-exists',
 						`import ${flags.import.id} (${flags.import.state}) exists; reset it first`
 					)
-				}
-				const receipt = flags.import_receipt
-				if (authority.kind === 'access' && receipt !== null && receipt.headerSha256 === headerSha256) {
-					return { ok: true as const, progress: receiptProgress(receipt), resumed: true }
 				}
 				const migrations = migrationDifference(header.migrations, this.#kernel.appliedMigrations())
 				if (migrations !== null) {
@@ -565,8 +583,14 @@ export class StoreAdmin {
 			return refuse('out-of-order', 'chunk numbers start at 1')
 		}
 		if (seq <= record.lastSeq) {
-			// Already applied (a lost response). The caller compares the digest with its own.
-			return { ok: true, progress: progressOf(record), duplicate: true }
+			// Already applied (a lost response). The caller compares the digest with its own; the retry counts as
+			// activity of the session.
+			try {
+				const touched = this.#transaction(() => this.#touch(this.#authorizedRecord(authority, id)))
+				return { ok: true, progress: progressOf(touched), duplicate: true }
+			} catch (error) {
+				return asRefusal(error)
+			}
 		}
 		if (seq !== record.lastSeq + 1) {
 			return refuse('out-of-order', `expected chunk ${record.lastSeq + 1}, got ${seq}`)
@@ -609,14 +633,14 @@ export class StoreAdmin {
 			})
 			this.#inject('import-chunk-after-commit', this.#sql)
 		} catch (error) {
-			const progress = this.#progressAfterError()
+			const progress = this.#currentProgress()
 			const applied =
 				progress !== null && progress.lastSeq >= seq && (progress.lastSeq > seq || progress.digest === digest)
 			const code = error instanceof ImportError ? error.code : 'chunk-failed'
 			this.#log({ event: 'kopje.store.import.chunk-failed', id, seq, applied, error: errorMessage(error) })
 			return { ok: false, code, message: errorMessage(error), progress, applied }
 		}
-		const progress = this.#progressAfterError()
+		const progress = this.#currentProgress()
 		return progress === null
 			? refuse('import-not-found', 'the import record disappeared')
 			: { ok: true, progress, duplicate: false }
@@ -636,7 +660,7 @@ export class StoreAdmin {
 				const record = this.#authorizedRecord(authority, id)
 				if (record.state !== 'receiving') {
 					if (record.state === 'finished' && JSON.stringify(record.trailer) === JSON.stringify(trailer)) {
-						return { ok: true as const, progress: progressOf(record) }
+						return { ok: true as const, progress: progressOf(this.#touch(record)) }
 					}
 					throw new ImportError('import-not-receiving', `the import is ${record.state}`)
 				}
@@ -719,6 +743,7 @@ export class StoreAdmin {
 						id: record.id,
 						mode: record.mode,
 						headerSha256: record.headerSha256,
+						trailerSha256: trailerSha256(record.trailer),
 						sessionHash: record.sessionHash ?? null,
 						lastSeq: record.lastSeq,
 						digest: record.digest,
@@ -753,6 +778,7 @@ export class StoreAdmin {
 		const matches = (candidate: string) => id === undefined || candidate === id
 		const sees = (mode: ImportRecord['mode'], sessionHash: string | null) =>
 			authority.kind === 'access' ||
+			(authority.kind === 'import-token' && mode === 'token') ||
 			(authority.kind === 'import-session' && mode === 'token' && sessionMatches(authority.secret, sessionHash))
 		if (flags.import !== null) {
 			const record = flags.import
@@ -767,59 +793,107 @@ export class StoreAdmin {
 		return { progress: null }
 	}
 
-	// Starts over from nothing: deleteAll() (which also drops the schema) and the migration runner. Only for the
-	// authority of the running import, or for a Store that holds no data; so it cannot wipe a serving instance.
+	// Takes the Store back to before the import, without deleteAll(): the import record becomes 'resetting' and the
+	// imported rows are deleted in bounded transactions, children before parents, a few per call; the caller repeats the
+	// call until done. The configuration is never touched: it waits in the import record (written at begin), and the
+	// last transaction writes it back exactly, removes the record and leaves a reset receipt. So an interrupted reset
+	// loses nothing and continues with the next call, and a retried request for the same import gets its receipt.
 	//
-	// abandonStale: IMPORT_TOKEN's way back from a token import whose session credential was lost. It resets such an
-	// import to the empty Store once the import is not verified, its session has had no successful step for
-	// STALE_IMPORT_MS, and admin access is still not usable. This gives the token no new power: on an empty Store in
-	// bootstrap it could begin an import anyway.
+	// abandonStale: IMPORT_TOKEN's way back from a token import whose session credential was lost. It may start such a
+	// reset once the import is not verified, its session has had no successful step for STALE_IMPORT_MS, and admin
+	// access is still not usable, and may continue it. This gives the token no new power: on an empty Store in bootstrap
+	// it could begin an import anyway.
 	async importReset(
 		callerBuild: string,
 		authority: ImportAuthority,
 		id?: string,
-		abandonStale = false
-	): Promise<Result<{ upgrade: UpgradeResult }>> {
+		abandonStale = false,
+		maxSteps = RESET_STEPS
+	): Promise<Result<{ done: boolean; progress: ImportProgress | null }>> {
 		this.#requireBuild(callerBuild)
-		await this.#kernel.state()
-		const flags = readFlags(this.#sql)
-		if (activeDump(flags, this.#now()) !== null) {
-			return refuse('dump-in-progress', 'a dump is in progress')
+		if (id === undefined) {
+			return refuse('import-id-required', 'name the import to reset')
 		}
+		await this.#kernel.state()
 		try {
-			if (flags.import !== null && authority.kind === 'import-token' && abandonStale) {
-				const refusal = this.#staleRefusal(flags.import, id)
-				if (refusal !== null) {
-					return refusal
+			const started = this.#transaction(() => {
+				const flags = readFlags(this.#sql)
+				if (flags.import === null && flags.import_reset?.id === id) {
+					return null
 				}
-			} else if (flags.import !== null) {
-				this.#authorizedRecord(authority, id ?? flags.import.id)
-			} else if (authority.kind === 'import-session') {
-				throw new ImportError('wrong-authority', 'this session has no import to reset')
-			} else if (authority.kind === 'import-token' && !this.#inBootstrap(flags)) {
-				throw new ImportError('not-bootstrap', 'IMPORT_TOKEN only resets an empty Store without admin access')
-			} else if (!this.#emptyOfData()) {
-				throw new ImportError('reset-refused', 'reset is only for a Store under import or without data')
+				if (activeDump(flags, this.#now()) !== null) {
+					throw new ImportError('dump-in-progress', 'a dump is in progress')
+				}
+				const record = flags.import
+				if (record === null || record.id !== id) {
+					throw new ImportError('import-not-found', 'no such import')
+				}
+				if (authority.kind === 'import-token' && abandonStale) {
+					const refusal = this.#staleRefusal(record)
+					if (refusal !== null) {
+						throw new RefusalError(refusal)
+					}
+				} else {
+					this.#authorizedRecord(authority, id)
+				}
+				if (record.state !== 'resetting') {
+					this.#log({ event: 'kopje.store.import.reset', id })
+				}
+				return this.#touch({ ...record, state: 'resetting' })
+			})
+			if (started === null) {
+				return { ok: true, done: true, progress: null }
 			}
+			for (let step = 0; step < maxSteps; step++) {
+				const finished = this.#transaction(() => this.#resetStep(id))
+				if (finished) {
+					await this.#resumeDeferredUpgrade()
+					return { ok: true, done: true, progress: null }
+				}
+			}
+			return { ok: true, done: false, progress: this.#currentProgress() }
 		} catch (error) {
+			if (error instanceof RefusalError) {
+				return error.refusal
+			}
 			return asRefusal(error)
 		}
-		// deleteAll() takes the configuration too; it is written back into the recreated schema. Nothing awaits between
-		// the checks above and deleteAll(), so no other request runs in between.
-		const bootstrap = flags.import?.bootstrap ?? readBootstrapRows(this.#sql)
-		this.#log({ event: 'kopje.store.import.reset', id: flags.import?.id ?? null })
-		await this.#ctx.storage.deleteAll()
-		this.#kernel.forget()
-		const upgrade = await this.#kernel.upgrade()
-		if (!upgrade.ok) {
-			// Nothing can hold the configuration now; report it so the operator can set it again.
-			return {
-				...refuse('upgrade-failed', `schema recreation failed: ${upgrade.detail}`),
-				bootstrap,
-			} as Refusal
+	}
+
+	// One transaction of a reset: deletes up to resetBatchRows rows of the last table (in catalog order) that still has
+	// rows; when none is left, writes the configuration back, removes the record and leaves the receipt. Returns
+	// whether the reset is complete.
+	#resetStep(id: string): boolean {
+		const record = readFlags(this.#sql).import
+		if (record === null || record.id !== id || record.state !== 'resetting') {
+			throw new ImportError('import-not-found', 'the reset was taken over')
 		}
-		this.#transaction(() => replaceBootstrapRows(this.#sql, bootstrap))
-		return { ok: true, upgrade }
+		for (const spec of [...record.header.tables].reverse()) {
+			if (deleteRows(this.#sql, spec, this.#resetBatchRows) > 0) {
+				this.#touch(record)
+				return false
+			}
+		}
+		replaceBootstrapRows(this.#sql, record.bootstrap ?? [])
+		writeFlag(this.#sql, 'import', null)
+		writeFlag(this.#sql, 'import_reset', { id, completedAt: this.#now() })
+		this.#log({ event: 'kopje.store.import.reset-done', id })
+		return true
+	}
+
+	// Writes the record with a fresh updatedAt: a successful step of the import (the idle clock of abandonStale).
+	#touch(record: ImportRecord): ImportRecord {
+		const touched = { ...record, updatedAt: this.#now() }
+		writeFlag(this.#sql, 'import', touched)
+		return touched
+	}
+
+	// The admin policy against the given configuration, inside the caller's transaction.
+	#assertAdmin(authority: { kind: 'access' } & AdminIdentity, settings: AccessSettings): void {
+		const refused = adminRefusal(settings, authority)
+		if (refused !== null) {
+			throw new ImportError('wrong-authority', refused)
+		}
 	}
 
 	// ---- configuration
@@ -828,8 +902,13 @@ export class StoreAdmin {
 	// by an Access admin, or with IMPORT_TOKEN while the Store is in bootstrap (admin access not usable yet). The check
 	// runs in the transaction that writes.
 
+	// During an import the target's configuration is the copy in the import record, not rows of the dump.
 	async config(): Promise<{ values: Record<string, string> }> {
 		await this.#kernel.state()
+		const running = readFlags(this.#sql).import
+		if (running !== null) {
+			return { values: Object.fromEntries((running.bootstrap ?? []).map((row) => [row.name, row.value])) }
+		}
 		return { values: readConfigRows(this.#sql) }
 	}
 
@@ -859,6 +938,9 @@ export class StoreAdmin {
 				if (authority.kind === 'import-token' && !this.#inBootstrap(flags, false)) {
 					throw new ImportError('not-bootstrap', 'IMPORT_TOKEN only configures a Store without admin access')
 				}
+				if (authority.kind === 'access') {
+					this.#assertAdmin(authority, readAccessSettings(this.#sql))
+				}
 				for (const [name, value] of Object.entries(changes)) {
 					if (value === null) {
 						this.#sql.exec('DELETE FROM instance_settings WHERE name = ?', name)
@@ -875,18 +957,16 @@ export class StoreAdmin {
 	}
 
 	// Why a token import may not be abandoned (yet), or null when it may.
-	#staleRefusal(record: ImportRecord, id: string | undefined): (Refusal & { resetAfter?: string }) | null {
-		if (id !== undefined && id !== record.id) {
-			return refuse('import-not-found', 'no such import')
-		}
+	// A reset already under way continues without waiting again.
+	#staleRefusal(record: ImportRecord): (Refusal & { resetAfter?: string }) | null {
 		if (record.mode !== 'token') {
 			return refuse('wrong-authority', 'IMPORT_TOKEN only abandons a token import')
 		}
-		if (adminUsable(settingsFromRows(record.bootstrap ?? []))) {
+		if (adminUsable(this.#targetSettings(record))) {
 			return refuse('not-bootstrap', 'IMPORT_TOKEN only abandons an import into a Store without admin access')
 		}
 		const resetAfter = record.updatedAt + STALE_IMPORT_MS
-		if (this.#now() < resetAfter) {
+		if (record.state !== 'resetting' && this.#now() < resetAfter) {
 			const at = new Date(resetAfter).toISOString()
 			return {
 				...refuse('import-not-idle', `the import's session was active recently; abandoning it is possible after ${at}`),
@@ -925,12 +1005,15 @@ export class StoreAdmin {
 		if (!allowed) {
 			throw new ImportError('wrong-authority', 'this credential does not authorize that import')
 		}
+		if (authority.kind === 'access') {
+			this.#assertAdmin(authority, this.#targetSettings(record))
+		}
 		return record
 	}
 
 	#authorizeReceipt(authority: ImportAuthority, receipt: ImportReceipt): void {
 		const allowed =
-			authority.kind === 'access' ||
+			(authority.kind === 'access' && adminRefusal(readAccessSettings(this.#sql), authority) === null) ||
 			(authority.kind === 'import-session' &&
 				receipt.mode === 'token' &&
 				sessionMatches(authority.secret, receipt.sessionHash))
@@ -939,7 +1022,13 @@ export class StoreAdmin {
 		}
 	}
 
-	#progressAfterError(): ImportProgress | null {
+	// The Store's own Access settings: the live rows, or during an import the copy its record holds (the table then
+	// holds the dump's rows).
+	#targetSettings(running: ImportRecord | null): AccessSettings {
+		return running === null ? readAccessSettings(this.#sql) : settingsFromRows(running.bootstrap ?? [])
+	}
+
+	#currentProgress(): ImportProgress | null {
 		try {
 			const record = readFlags(this.#sql).import
 			return record === null ? null : progressOf(record)
@@ -971,23 +1060,50 @@ function randomSecret(): string {
 		.replace(/=+$/, '')
 }
 
-// Compares SHA-256 digests (fixed length) of the presented secret and the stored one.
+// Compares the SHA-256 digest of the presented secret with the stored one: fixed-size values, compared with the
+// runtime's timingSafeEqual (as security/tokens.ts constantTimeEqual does).
 function sessionMatches(secret: string, sessionHash: string | null): boolean {
-	if (sessionHash === null) {
+	if (sessionHash === null || !/^[0-9a-f]{64}$/.test(sessionHash)) {
 		return false
 	}
-	const presented = sha256Hex(secret)
-	let difference = 0
-	for (let i = 0; i < sessionHash.length; i++) {
-		difference |= presented.charCodeAt(i) ^ sessionHash.charCodeAt(i)
+	return crypto.subtle.timingSafeEqual(fromHex(sha256Hex(secret)), fromHex(sessionHash))
+}
+
+function trailerSha256(trailer: DumpTrailer | null): string | null {
+	return trailer === null ? null : sha256Hex(JSON.stringify(trailer))
+}
+
+// Carries a refusal with extra fields (resetAfter) out of a transaction.
+class RefusalError extends Error {
+	constructor(readonly refusal: Refusal) {
+		super(refusal.message)
 	}
-	return difference === 0 && presented.length === sessionHash.length
+}
+
+// Deletes up to `limit` rows of a dumped table (kopje_state: only its dumped rows). Returns how many were deleted.
+function deleteRows(sql: SqlStorage, spec: TableSpec, limit: number): number {
+	const table = quoteIdentifier(spec.name)
+	const only =
+		spec.only === undefined
+			? ''
+			: ` WHERE ${quoteIdentifier(spec.only.column)} IN (${spec.only.values.map(() => '?').join(',')})`
+	const params = spec.only === undefined ? [] : [...spec.only.values]
+	const key = spec.order.by === 'rowid' ? 'rowid' : `(${spec.key.map(quoteIdentifier).join(',')})`
+	const columns = spec.order.by === 'rowid' ? 'rowid' : spec.key.map(quoteIdentifier).join(',')
+	return sql.exec(
+		`DELETE FROM ${table} WHERE ${key} IN (SELECT ${columns} FROM ${table}${only} LIMIT ?)`,
+		...params,
+		limit
+	).rowsWritten
 }
 
 function receiptProgress(receipt: ImportReceipt): ImportProgress {
 	return {
 		id: receipt.id,
 		mode: receipt.mode,
+		headerSha256: receipt.headerSha256,
+		trailerSha256: receipt.trailerSha256 ?? null,
+		updatedAt: receipt.completedAt,
 		state: 'verified',
 		lastSeq: receipt.lastSeq,
 		digest: receipt.digest,
@@ -1030,6 +1146,9 @@ function progressOf(record: ImportRecord): ImportProgress {
 	return {
 		id: record.id,
 		mode: record.mode,
+		headerSha256: record.headerSha256,
+		trailerSha256: trailerSha256(record.trailer),
+		updatedAt: record.updatedAt,
 		state: record.state,
 		lastSeq: record.lastSeq,
 		digest: record.digest,

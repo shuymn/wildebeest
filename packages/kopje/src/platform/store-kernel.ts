@@ -170,11 +170,6 @@ export class StoreKernel {
 		return { schema, held: hold !== null, upgrading: upgrading !== null }
 	}
 
-	// Drops the cached state, after the database was replaced underneath (deleteAll).
-	forget(): void {
-		this.#state = undefined
-	}
-
 	// Admin action: runs the upgrade again for this build without a new deployment. A hold left by this build is
 	// cleared first; the upgrade then resumes from its marker and verifies, so re-running applied files is not
 	// possible (they are recorded by name and checksum).

@@ -2,6 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { BUILD } from './helpers'
 import { readDumpFile, statementChunks } from '../cli/lib/format.js'
+import { CONFIG_KEYS } from '../src/platform/access-settings'
 import { END_LINE } from '../src/platform/dump-format'
 import { sha256Hex } from '../src/platform/sha256'
 import type { StoreStub } from '../src/platform/store-client'
@@ -13,17 +14,24 @@ export const ADMIN_AUD = 'aud-admin-0123456789'
 export const SERVICE_CLIENT_ID = 'cli-client.access'
 
 // The import authority of an Access-authenticated admin.
-export const ACCESS = { kind: 'access' } as const
+export const ACCESS = { kind: 'access', email: 'admin@kopje.test', commonName: null } as const
 
-// Gives the target the source's configuration (domain, Access settings) with the config operation, as an operator
-// does: an import never carries configuration.
+// Gives the target the source's configuration (domain, Access settings), as an operator does with config: an import
+// never carries configuration.
 export async function copyConfig(source: StoreStub, target: StoreStub): Promise<void> {
 	const { values } = await source.config(BUILD)
-	if (Object.keys(values).length > 0) {
-		const result = await target.setConfig(BUILD, ACCESS, values)
-		if (!result.ok) {
-			throw new Error(`${result.code}: ${result.message}`)
+	await runInDurableObject(target, (_instance, state) => {
+		for (const [name, value] of Object.entries(values)) {
+			state.storage.sql.exec('INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', name, value)
 		}
+	})
+}
+
+// Gives a Store the default admin configuration (ACCESS is its admin) unless it has an admin already.
+export async function ensureAdmin(store: StoreStub): Promise<void> {
+	const { values } = await store.config(BUILD)
+	if (values.admin_email === undefined) {
+		await setAccess(store)
 	}
 }
 
@@ -166,7 +174,8 @@ export function splitDump(text: string): { header: unknown; body: string; traile
 	return { header, body, trailer: JSON.parse(trailerText.replace(/^-- kopje-dump-trailer /, '')) }
 }
 
-// Every dumped table's rows as literal tuples, for comparing two Stores.
+// Every dumped table's rows as literal tuples, for comparing the data of two Stores. Configuration rows of
+// instance_settings are left out: each Store keeps its own, and tests compare them on their own.
 export async function tableSnapshot(store: StoreStub): Promise<Record<string, string[]>> {
 	return runInDurableObject(store, (_instance, state) => {
 		const sql = state.storage.sql
@@ -185,7 +194,9 @@ export async function tableSnapshot(store: StoreStub): Promise<Record<string, st
 				.exec<{ name: string }>('SELECT name FROM pragma_table_info(?)', name)
 				.toArray()
 				.flatMap((c) => [`typeof("${c.name}")`, `CAST("${c.name}" AS BLOB)`])
-			out[name] = [...sql.exec(`SELECT ${columns.join(', ')} FROM "${name}"`).raw()]
+			const data = name === 'instance_settings' ? ` WHERE name NOT IN (${CONFIG_KEYS.map(() => '?').join(',')})` : ''
+			const params = name === 'instance_settings' ? CONFIG_KEYS : []
+			out[name] = [...sql.exec(`SELECT ${columns.join(', ')} FROM "${name}"${data}`, ...params).raw()]
 				.map((row) => {
 					const parts: string[] = []
 					for (let i = 0; i < row.length; i += 2) {
@@ -257,7 +268,18 @@ export async function importChunks(text: string, chunkBytes: number): Promise<Ui
 	return chunks
 }
 
+// Runs a reset of an import to the end (a reset deletes in bounded steps, one call at a time).
+export async function resetImport(store: StoreStub, id: string) {
+	for (;;) {
+		const step = await store.importReset(BUILD, ACCESS, id)
+		if (!step.ok || step.done) {
+			return step
+		}
+	}
+}
+
 export async function beginImport(store: StoreStub, text: string): Promise<string> {
+	await ensureAdmin(store)
 	const begun = await store.importBegin(BUILD, ACCESS, splitDump(text).header)
 	if (!begun.ok) {
 		throw new Error(`${begun.code}: ${begun.message}`)

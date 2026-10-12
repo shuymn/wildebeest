@@ -119,6 +119,15 @@ export async function* statementChunks(io, path, start, end, maxBytes) {
 }
 
 /**
+ * SHA-256 of a text as UTF-8, in hex.
+ * @param {string} text
+ * @returns {Promise<string>}
+ */
+export async function sha256Hex(text) {
+	return toHex(await crypto.subtle.digest('SHA-256', encoder.encode(text)))
+}
+
+/**
  * Chain digest of import chunks: digest_n = hex(sha256(digest_{n-1} || chunk_n)), digest_0 = ''.
  * @param {string} previous
  * @param {Uint8Array} chunk

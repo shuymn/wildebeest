@@ -1,6 +1,6 @@
 /* global setTimeout, crypto */
 import { AdminError } from './client.js'
-import { chainDigest, readDumpFile, statementChunks, utf8 } from './format.js'
+import { chainDigest, readDumpFile, sha256Hex, statementChunks, utf8 } from './format.js'
 
 /**
  * @typedef {import('./client.js').AdminClient} AdminClient
@@ -197,9 +197,12 @@ export async function importFromFile({
 	/** @type {Json} */
 	let progress
 	let client = baseClient
-	if (local?.session !== undefined) {
-		// A token import: only its session continues it (IMPORT_TOKEN no longer applies once the import began).
-		client = baseClient.withSession(local.session)
+	if (local !== null) {
+		// A started import continues by its id: a token import only with its session (IMPORT_TOKEN no longer applies
+		// once it began), an Access import with Access.
+		if (local.session !== undefined) {
+			client = baseClient.withSession(local.session)
+		}
 		progress = (await readProgress(client, local.id, sleep)).progress
 		if (progress === null) {
 			throw new Error(`import ${local.id} is no longer on the Store; remove ${statePath} to start a new import`)
@@ -211,16 +214,23 @@ export async function importFromFile({
 		if (typeof begun.session === 'string') {
 			client = baseClient.withSession(begun.session)
 		}
-		// Chunk boundaries must be the same as in the earlier run for the digests to match.
-		const chunkBytes = local !== null && local.id === progress.id ? local.chunkBytes : (requestedChunkBytes ?? 8 * MIB)
-		await io.writeTextAtomic(statePath, JSON.stringify({ id: progress.id, chunkBytes, session: begun.session }))
+		await io.writeTextAtomic(
+			statePath,
+			JSON.stringify({ id: progress.id, chunkBytes: requestedChunkBytes ?? 8 * MIB, session: begun.session })
+		)
 		out.info(
 			begun.resumed
 				? `resuming import ${progress.id} (${progress.state}) after chunk ${progress.lastSeq}`
 				: `import ${progress.id} begun (${file.header.tables.length} tables, ${formatBytes(file.bodyEnd - file.bodyStart)})`
 		)
 	}
-	const chunkBytes = local !== null && local.id === progress.id ? local.chunkBytes : (requestedChunkBytes ?? 8 * MIB)
+	// Chunk boundaries must be the same as in the earlier run for the digests to match.
+	const chunkBytes = local?.chunkBytes ?? requestedChunkBytes ?? 8 * MIB
+	if (progress.state === 'resetting') {
+		throw new Error(`import ${progress.id} is being reset; finish it with import-reset ${path} --yes`)
+	}
+	// Before an outcome or a later phase is taken as this file's, the file must be the one the Store received.
+	await checkIdentity({ io, path, file, progress, chunkBytes, whole: progress.state !== 'receiving' })
 
 	if (progress.state === 'verified' || progress.state === 'failed') {
 		// Decided already (a lost response): report it. A failed import keeps its state file for a reset.
@@ -247,6 +257,36 @@ export async function importFromFile({
 			return report
 		}
 		out.progress(`verifying: ${result.progress?.state ?? ''}`)
+	}
+}
+
+/**
+ * Checks that the file is the dump the Store's import received: the same header and trailer, and with `whole`, the
+ * same chunks (count and chain digest), which binds the body as well.
+ * @param {{ io: FileIO, path: string, file: import('./format.js').DumpFile, progress: Json, chunkBytes: number,
+ *   whole: boolean }} options
+ */
+async function checkIdentity({ io, path, file, progress, chunkBytes, whole }) {
+	/** @param {string} what */
+	const mismatch = (what) =>
+		new Error(`import ${progress.id} on the Store does not match this file (${what}); is it the same dump?`)
+	if ((await sha256Hex(JSON.stringify(file.header))) !== progress.headerSha256) {
+		throw mismatch('header')
+	}
+	if (progress.trailerSha256 !== null && (await sha256Hex(JSON.stringify(file.trailer))) !== progress.trailerSha256) {
+		throw mismatch('trailer')
+	}
+	if (!whole) {
+		return
+	}
+	let seq = 0
+	let digest = ''
+	for await (const chunk of statementChunks(io, path, file.bodyStart, file.bodyEnd, chunkBytes)) {
+		seq++
+		digest = await chainDigest(digest, chunk.bytes)
+	}
+	if (seq !== progress.lastSeq || digest !== progress.digest) {
+		throw mismatch('body')
 	}
 }
 

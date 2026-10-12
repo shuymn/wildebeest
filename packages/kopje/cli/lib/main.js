@@ -18,8 +18,9 @@ Commands
       --chunk-mib <n>           chunk size in MiB, 0.001-16 (default 8)
       --import-token            begin with KOPJE_IMPORT_TOKEN (cutover into an empty Store without admin access);
                                 the import then continues with its own session, kept in <file>.import.json
-  import-reset [<file>] --yes   delete everything in a Store under import and recreate its schema; with <file>, a
-                                token import is reset with the session kept for that file
+  import-reset [<file>] --yes   take the Store back to before an import (its imported rows are deleted; schema and
+                                configuration stay); the import is the one saved for <file>, or else the running one,
+                                and a token import is reset with the session kept for <file>
       --abandon-stale --import-token
                                 recover a token import whose session file was lost: IMPORT_TOKEN resets it once it
                                 has been idle for 15 minutes (the error says when) while admin access is not usable
@@ -266,20 +267,25 @@ export async function run({ argv, env, io, stdout, stderr, fetch, now = Date.now
 				if (flags.yes !== true) {
 					throw new UsageError('import-reset deletes all data of the Store; pass --yes')
 				}
-				if (flags['abandon-stale'] === true) {
-					print(await client.post('/admin/import/reset', { confirm: true, abandonStale: true }))
-					return 0
-				}
-				// A token import is reset with the session kept for its file; an Access import needs no file.
+				// A reset names its import: the one saved for <file>, or else the one running on the Store. A token
+				// import is reset with the session kept for its file, or with --abandon-stale once it is idle.
 				const saved = rest[0] === undefined ? null : await io.readText(`${rest[0]}.import.json`)
+				/** @type {{ id: string, session?: string } | null} */
 				const local = saved === null ? null : JSON.parse(saved)
 				const resetter = typeof local?.session === 'string' ? client.withSession(local.session) : client
-				print(
-					await resetter.post(
-						'/admin/import/reset',
-						local === null ? { confirm: true } : { confirm: true, id: local.id }
-					)
-				)
+				const id = local?.id ?? (await client.get('/admin/import/progress')).progress?.id
+				if (typeof id !== 'string') {
+					throw new Error('there is no import to reset')
+				}
+				const body = { confirm: true, id, ...(flags['abandon-stale'] === true ? { abandonStale: true } : {}) }
+				for (;;) {
+					const step = await resetter.post('/admin/import/reset', body)
+					if (step.done) {
+						break
+					}
+					out.progress(`resetting import ${id}`)
+				}
+				out.info(`import ${id} reset`)
 				if (rest[0] !== undefined) {
 					await io.remove(`${rest[0]}.import.json`)
 				}

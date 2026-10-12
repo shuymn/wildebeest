@@ -7,10 +7,12 @@ import {
 	ACCESS,
 	beginImport,
 	copyConfig,
+	ensureAdmin,
 	dumpViaRpc,
 	finishImport,
 	importChunks,
 	importViaRpc,
+	resetImport,
 	seedStore,
 	setAccess,
 	splitDump,
@@ -272,9 +274,9 @@ describe('import', () => {
 		// A failed import keeps the Store closed.
 		expect(toStoreUnavailable(await rejectionOf(target.setupState(BUILD)))?.reason).toBe('import-in-progress')
 
-		// Restart from scratch: deleteAll drops the schema too, and the migration runner recreates it.
-		const reset = await target.importReset(BUILD, ACCESS)
-		expect(reset).toMatchObject({ ok: true, upgrade: { ok: true, applied: ['0000_initial'] } })
+		// Restart from scratch: the reset deletes the imported rows; the schema and the configuration stay.
+		const reset = await resetImport(target, id)
+		expect(reset).toMatchObject({ ok: true, done: true })
 		expect(await target.importProgress(BUILD, ACCESS)).toEqual({ progress: null })
 		expect((await importViaRpc(target, text)).report).toMatchObject({ ok: true })
 		expect(await target.setupState(BUILD)).toEqual({ complete: true })
@@ -304,8 +306,12 @@ describe('import', () => {
 		const { text } = await dumpViaRpc(await seeded(0))
 		const header = splitDump(text).header as { migrations: { checksum: string }[]; tables: { columns: string[] }[] }
 
-		expect(await (await seeded(0)).importBegin(BUILD, ACCESS, header)).toMatchObject({ code: 'not-empty' })
+		// An admin of the Store (Access authority is checked against its configuration) still needs an empty Store.
+		const withData = await seeded(0)
+		await ensureAdmin(withData)
+		expect(await withData.importBegin(BUILD, ACCESS, header)).toMatchObject({ code: 'not-empty' })
 		const target = await migratedStore()
+		await ensureAdmin(target)
 		const otherChecksum = { ...header, migrations: [{ ...header.migrations[0], checksum: 'x' }] }
 		expect(await target.importBegin(BUILD, ACCESS, otherChecksum)).toMatchObject({ code: 'migrations-differ' })
 		const otherColumns = {
@@ -335,9 +341,15 @@ describe('import', () => {
 		expect(await target.importProgress(BUILD, ACCESS)).toMatchObject({ progress: { lastSeq: 0, statements: 0 } })
 	})
 
+	// A reset names its import; a serving Store has none, so there is nothing a reset could apply to.
 	it('refuses to reset a serving Store', async () => {
 		const store = await seeded(0)
-		expect(await store.importReset(BUILD, ACCESS)).toMatchObject({ ok: false, code: 'reset-refused' })
+		await ensureAdmin(store)
+		expect(await store.importReset(BUILD, ACCESS)).toMatchObject({ ok: false, code: 'import-id-required' })
+		expect(await store.importReset(BUILD, ACCESS, 'no-such-import')).toMatchObject({
+			ok: false,
+			code: 'import-not-found',
+		})
 		expect(await store.setupState(BUILD)).toEqual({ complete: true })
 	})
 

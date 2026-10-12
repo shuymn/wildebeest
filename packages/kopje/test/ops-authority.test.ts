@@ -8,6 +8,7 @@ import {
 	ACCESS,
 	ADMIN_EMAIL,
 	dumpViaRpc,
+	ensureAdmin,
 	importChunks,
 	importViaRpc,
 	seedStore,
@@ -190,6 +191,7 @@ describe('upgrades during an import', () => {
 	it('defers an upgrade while an import exists and schedules it when the import ends', async () => {
 		const text = await dumpOf()
 		const target = await migratedStore()
+		await ensureAdmin(target)
 		const begun = await target.importBegin(BUILD, ACCESS, splitDump(text).header)
 		if (!begun.ok) throw new Error(begun.message)
 		const next = [...MIGRATIONS, { name: '9999_probe', sql: 'CREATE TABLE probe (a INTEGER)' }]
@@ -216,6 +218,7 @@ describe('upgrades during an import', () => {
 describe('import completion receipt', () => {
 	it('keeps the report of a verified import for a lost response, without freezing the Store', async () => {
 		const target = await migratedStore()
+		await ensureAdmin(target)
 		await target.setConfig(BUILD, ACCESS, { domain: 'kopje.test' })
 		const { id, report } = await importViaRpc(target, await dumpOf())
 		expect(report).toMatchObject({ ok: true })
@@ -245,10 +248,14 @@ describe('configuration is everything config accepts', () => {
 			})
 		)
 		const target = await migratedStore()
+		await ensureAdmin(target)
 		// Configuration does not make the Store non-empty: it can be set before the import.
 		expect(await target.setConfig(BUILD, ACCESS, { domain: 'kopje.test' })).toMatchObject({ ok: true })
+		const before = await target.config(BUILD)
+		expect(before.values).toMatchObject({ domain: 'kopje.test' })
+		expect(before.values.access_aud).toBeUndefined()
 		expect((await importViaRpc(target, text)).report).toMatchObject({ ok: true })
-		expect(await target.config(BUILD)).toEqual({ values: { domain: 'kopje.test' } })
+		expect(await target.config(BUILD)).toEqual(before)
 		// The rest of instance_settings is data and came with the dump.
 		const title = await runInDurableObject(target, (_instance, state) =>
 			state.storage.sql.exec<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'title'").one()

@@ -11,6 +11,7 @@ import type { OperationKind } from './store-kernel'
 //   dump        : a dump in progress; while its lease is valid only reads pass (sessions and alarm work too wait)
 //   import      : an import in progress; nothing passes until it is verified
 //   import_receipt : the outcome of the last verified import, kept for a client whose response was lost (no effect)
+//   import_reset   : the id of the last completed reset, for the same reason (no effect)
 
 export type MaintenanceFlag = { mode: 'readonly'; at: number }
 
@@ -31,7 +32,8 @@ export type DumpRecord = {
 
 export type VerifyProgress = { position: ScanPosition; results: TableResult[] }
 
-export type ImportState = 'receiving' | 'finished' | 'failed'
+// resetting: the imported rows are being deleted (StoreAdmin.importReset); nothing else continues the import.
+export type ImportState = 'receiving' | 'finished' | 'failed' | 'resetting'
 
 export type ImportRecord = {
 	id: string
@@ -64,6 +66,7 @@ export type ImportReceipt = {
 	id: string
 	mode: ImportRecord['mode']
 	headerSha256: string
+	trailerSha256?: string | null
 	sessionHash: string | null
 	lastSeq: number
 	digest: string
@@ -78,18 +81,22 @@ export type OperatorFlags = {
 	dump: DumpRecord | null
 	import: ImportRecord | null
 	import_receipt: ImportReceipt | null
+	// The last completed reset, so a retried reset request for that import is answered instead of refused.
+	import_reset: { id: string; completedAt: number } | null
 }
 
-export const FLAG_NAMES = ['maintenance', 'dump', 'import', 'import_receipt'] as const
+export const FLAG_NAMES = ['maintenance', 'dump', 'import', 'import_receipt', 'import_reset'] as const
 type FlagName = (typeof FLAG_NAMES)[number]
 
 export function readFlags(sql: SqlStorage): OperatorFlags {
-	const flags: OperatorFlags = { maintenance: null, dump: null, import: null, import_receipt: null }
+	const flags: OperatorFlags = { maintenance: null, dump: null, import: null, import_receipt: null, import_reset: null }
 	for (const row of sql
 		.exec<{
 			name: FlagName
 			value: string
-		}>("SELECT name, value FROM kopje_state WHERE name IN ('maintenance', 'dump', 'import', 'import_receipt')")
+		}>(
+			"SELECT name, value FROM kopje_state WHERE name IN ('maintenance', 'dump', 'import', 'import_receipt', 'import_reset')"
+		)
 		.toArray()) {
 		flags[row.name] = JSON.parse(row.value) as never
 	}

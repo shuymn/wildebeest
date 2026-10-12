@@ -3,7 +3,16 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { BUILD, freshStore, migratedStore, testKernel } from './helpers'
-import { ACCESS, copyConfig, dumpViaRpc, importViaRpc, seedStore, splitDump, tableSnapshot } from './ops-helpers'
+import {
+	ACCESS,
+	copyConfig,
+	dumpViaRpc,
+	ensureAdmin,
+	importViaRpc,
+	seedStore,
+	splitDump,
+	tableSnapshot,
+} from './ops-helpers'
 import type { StoreStub } from '../src/platform/store-client'
 import { writeFlag } from '../src/platform/store-flags'
 
@@ -154,6 +163,7 @@ describe('import resume', () => {
 		const { text } = await dumpViaRpc(await seeded())
 		const { header, trailer } = splitDump(text)
 		const target = await migratedStore()
+		await ensureAdmin(target)
 		const begun = await target.importBegin(BUILD, ACCESS, header)
 		if (!begun.ok) throw new Error(begun.message)
 		const { importChunks } = await import('./ops-helpers')

@@ -3,7 +3,7 @@ import { createMiddleware } from 'hono/factory'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 
 import { healthReport } from './health'
-import type { AccessSettings } from '../platform/access-settings'
+import { type AccessSettings, adminRefusal, adminUsable } from '../platform/access-settings'
 import { readBoundedBody } from '../platform/body'
 import { readConfig } from '../platform/config'
 import { errorMessage } from '../platform/error-message'
@@ -32,6 +32,8 @@ const JSON_BODY_LIMIT = 1024 * 1024
 const IMPORT_CHUNK_LIMIT = 16 * 1024 * 1024
 // IMPORT_TOKEN: reads only while in bootstrap (checked here); mutations are checked by the Store.
 const TOKEN_READ_PATHS = [/^\/admin\/(health|version|catalog|config)$/]
+// The import token may name a running token import (its id and phase only) to abandon it when its session was lost.
+const TOKEN_PROGRESS_PATH = /^\/admin\/import\/progress$/
 const TOKEN_WRITE_PATHS = [/^\/admin\/import\/(begin|reset)$/, /^\/admin\/config$/]
 const SESSION_PATHS = [/^\/admin\/import\/(chunk|finish|verify|progress|reset)$/]
 const SESSION_SECRET = /^[A-Za-z0-9_-]{43}$/
@@ -63,6 +65,7 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	'not-bootstrap': 403,
 	'invalid-config': 400,
 	'invalid-op-id': 400,
+	'import-id-required': 400,
 	'import-not-found': 404,
 	'pitr-unavailable': 503,
 	'chunk-failed': 500,
@@ -118,23 +121,14 @@ function parseTime(value: string): number | null {
 	return Number.isNaN(parsed) ? null : parsed
 }
 
-// The admin policy over a verified Access token: the admin's email, or the admin CLI's service token.
-// A service token is recognized by its documented shape: no email, an empty sub, and common_name = its client id.
-// common_name alone is not enough: Access also uses it for the name on an mTLS client certificate.
+// The admin policy over a verified Access token (platform/access-settings.ts), plus the shape of a service token:
+// no email and an empty sub. common_name alone is not enough: Access also uses it for the name on an mTLS client
+// certificate.
 function adminAllowed(identity: AccessIdentity, access: AccessSettings): string | null {
-	if (identity.email !== null) {
-		const admin = access.adminEmail !== null && identity.email.toLowerCase() === access.adminEmail.toLowerCase()
-		return admin ? null : 'this identity is not the admin'
+	if (identity.email === null && identity.subject !== '') {
+		return 'this service token is not the admin CLI token'
 	}
-	if (
-		identity.subject === '' &&
-		identity.commonName !== null &&
-		access.serviceTokenClientId !== null &&
-		identity.commonName === access.serviceTokenClientId
-	) {
-		return null
-	}
-	return 'this service token is not the admin CLI token'
+	return adminRefusal(access, identity)
 }
 
 export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
@@ -169,12 +163,17 @@ export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
 					return c.json({ error: 'invalid import token' }, 401)
 				}
 				const write = c.req.method === 'POST' && TOKEN_WRITE_PATHS.some((p) => p.test(c.req.path))
+				const progress = c.req.method === 'GET' && TOKEN_PROGRESS_PATH.test(c.req.path)
 				const read = c.req.method === 'GET' && TOKEN_READ_PATHS.some((p) => p.test(c.req.path))
-				if (!write && !read) {
+				if (!write && !read && !progress) {
 					return c.json({ error: 'the import token only bootstraps an empty Store' }, 403)
 				}
-				if (read && !(await stub(c).adminGate(build(c.env))).bootstrap) {
-					return c.json({ error: 'the import token is accepted only while the Store has no admin access' }, 403)
+				if (read || progress) {
+					// Reads only while admin access is not usable; during an import that is the target's saved configuration.
+					const gate = await stub(c).adminGate(build(c.env))
+					if (read ? !gate.bootstrap : adminUsable(gate.access)) {
+						return c.json({ error: 'the import token is accepted only while the Store has no admin access' }, 403)
+					}
 				}
 				c.set('auth', { kind: 'import-token' })
 				return next()
@@ -195,7 +194,7 @@ export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
 			if (refused !== null) {
 				return c.json({ error: refused }, 403)
 			}
-			c.set('auth', { kind: 'access' })
+			c.set('auth', { kind: 'access', email: verified.email, commonName: verified.commonName })
 			await next()
 		})
 	)

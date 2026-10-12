@@ -138,10 +138,18 @@ describe('import token', () => {
 
 		const configured = adminHarness(await configuredStore(), team, { IMPORT_TOKEN })
 		expect((await configured.request('/admin/import/progress', withToken())).status).toBe(403)
+		// With data but no admin access the Store is still in bootstrap (the token may configure it), but an import
+		// needs an empty Store.
 		const withData = await migratedStore()
 		await seedStore(withData, 0)
 		const used = adminHarness(withData, team, { IMPORT_TOKEN })
-		expect((await used.request('/admin/import/progress', withToken())).status).toBe(403)
+		const header = splitDump((await dumpViaRpc(withData)).text).header
+		const begin = await used.request(
+			'/admin/import/begin',
+			withToken({ method: 'POST', body: JSON.stringify({ header }), headers: { 'content-type': 'application/json' } })
+		)
+		expect(begin.status).toBe(403)
+		expect(await begin.json()).toMatchObject({ code: 'not-bootstrap' })
 	})
 })
 
@@ -221,14 +229,19 @@ describe('admin endpoints', () => {
 		expect(await again.json()).toMatchObject({ code: 'dump-finished' })
 	})
 
-	it('needs confirmation to reset and refuses to reset a serving Store', async () => {
+	// A reset now always names an import, so a serving Store (no import) has nothing a reset could apply to.
+	it('needs confirmation and an import id to reset, and refuses to reset a serving Store', async () => {
 		const store = await configuredStore()
 		await seedStore(store, 0)
 		const { post } = adminHarness(store, team)
 		expect((await post(adminClaims(), '/admin/import/reset', {})).status).toBe(400)
-		const refused = await post(adminClaims(), '/admin/import/reset', { confirm: true })
-		expect(refused.status).toBe(409)
-		expect(await refused.json()).toMatchObject({ code: 'reset-refused' })
+		const unnamed = await post(adminClaims(), '/admin/import/reset', { confirm: true })
+		expect(unnamed.status).toBe(400)
+		expect(await unnamed.json()).toMatchObject({ code: 'import-id-required' })
+		const refused = await post(adminClaims(), '/admin/import/reset', { confirm: true, id: 'no-such-import' })
+		expect(refused.status).toBe(404)
+		expect(await refused.json()).toMatchObject({ code: 'import-not-found' })
+		expect(await store.setupState(BUILD)).toEqual({ complete: true })
 	})
 
 	it('retries the upgrade', async () => {
@@ -329,7 +342,9 @@ describe('import bootstrap over Access', () => {
 		expect(await target.importChunk(BUILD, ACCESS, progress.id, 1, chunks[0]!)).toMatchObject({ ok: true })
 
 		// Reset keeps the Access settings, so the admin can still sign in and import again.
-		expect((await post(adminClaims(), '/admin/import/reset', { confirm: true })).status).toBe(200)
+		const reset = await post(adminClaims(), '/admin/import/reset', { confirm: true, id: progress.id })
+		expect(reset.status).toBe(200)
+		expect(await reset.json()).toMatchObject({ done: true })
 		expect((await as(adminClaims(), '/admin/version')).status).toBe(200)
 
 		const again = (await (await post(adminClaims(), '/admin/import/begin', { header })).json()) as {
