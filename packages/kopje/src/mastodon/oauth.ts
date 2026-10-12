@@ -110,6 +110,7 @@ const INVALID_CLIENT = () =>
 	})
 const INVALID_GRANT = () =>
 	oauthError(400, 'invalid_grant', 'The provided authorization grant is invalid, expired, revoked or was already used.')
+const INVALID_SCOPE = () => oauthError(400, 'invalid_scope', 'The requested scope is invalid, unknown, or malformed.')
 
 const TOKEN_PARAMS = ['grant_type', 'code', 'redirect_uri', 'code_verifier', 'scope', 'client_id', 'client_secret']
 const REVOKE_PARAMS = ['token', 'token_type_hint', 'client_id', 'client_secret']
@@ -125,6 +126,16 @@ function requestError(c: ApiContext, p: Params, scalars: readonly string[]): Res
 		return oauthError(400, 'invalid_request', 'Only one client authentication method can be used.')
 	}
 	return null
+}
+
+// The parameters of /oauth/token or /oauth/revoke, or the error answer to a body that cannot be read or to a request
+// error found by requestError.
+async function oauthParams(c: ApiContext, scalars: readonly string[]): Promise<Params | Response> {
+	const result = await readParams(c.req.raw)
+	if (!result.ok) {
+		return oauthError(result.status, 'invalid_request', 'The request body could not be read.')
+	}
+	return requestError(c, result.params, scalars) ?? result.params
 }
 
 // client_secret_post or client_secret_basic.
@@ -151,14 +162,9 @@ function clientCredentials(c: ApiContext, p: Params): { clientId: string; client
 }
 
 export const tokenHandler: ApiHandler = async (c, deps) => {
-	const result = await readParams(c.req.raw)
-	if (!result.ok) {
-		return oauthError(result.status, 'invalid_request', 'The request body could not be read.')
-	}
-	const p = result.params
-	const invalid = requestError(c, p, TOKEN_PARAMS)
-	if (invalid !== null) {
-		return invalid
+	const p = await oauthParams(c, TOKEN_PARAMS)
+	if (p instanceof Response) {
+		return p
 	}
 	const client = clientCredentials(c, p)
 	if (client === null) {
@@ -187,7 +193,7 @@ export const tokenHandler: ApiHandler = async (c, deps) => {
 	} else if (grantType === 'client_credentials') {
 		const scopes = parseScopes(p.get('scope'), DEFAULT_SCOPES)
 		if (scopes === null) {
-			return oauthError(400, 'invalid_scope', 'The requested scope is invalid, unknown, or malformed.')
+			return INVALID_SCOPE()
 		}
 		outcome = await storeCall(c, deps, (s, b) => s.issueAppToken(b, { ...client, scopes, tokenHash, now }))
 	} else {
@@ -214,22 +220,18 @@ export const tokenHandler: ApiHandler = async (c, deps) => {
 		case 'invalid_grant':
 			return INVALID_GRANT()
 		case 'invalid_scope':
-			return oauthError(400, 'invalid_scope', 'The requested scope is invalid, unknown, or malformed.')
+			return INVALID_SCOPE()
 	}
 }
 
 // RFC 7009. The client must authenticate (a failure is invalid_client, §2.2.1); an unknown token is still a success.
 export const revokeHandler: ApiHandler = async (c, deps) => {
-	const result = await readParams(c.req.raw)
-	if (!result.ok) {
-		return oauthError(result.status, 'invalid_request', 'The request body could not be read.')
+	const p = await oauthParams(c, REVOKE_PARAMS)
+	if (p instanceof Response) {
+		return p
 	}
-	const invalid = requestError(c, result.params, REVOKE_PARAMS)
-	if (invalid !== null) {
-		return invalid
-	}
-	const client = clientCredentials(c, result.params)
-	const token = result.params.get('token')
+	const client = clientCredentials(c, p)
+	const token = p.get('token')
 	if (client === null) {
 		return INVALID_CLIENT()
 	}
