@@ -364,7 +364,8 @@ CREATE INDEX notifications_status ON notifications (status_id) WHERE status_id I
 -- object_uri is the local object the activity is about (the status of a Create, Update or Delete; the id of a Like,
 -- Announce or Follow; the Follow an Accept or Reject answers). retracts marks a Delete, Undo or Reject of it;
 -- superseded marks an activity a later one about the same object follows, which the operator may not send again.
--- pending_targets holds the inboxes still to expand (JSON), expanded in id order a step at a time.
+-- The targets still to expand are in outbound_targets. staged is set while a retraction is still writing its targets
+-- across bounded steps (a purge's Undo of a local boost): the key of the last one written ('' before the first).
 CREATE TABLE outbound_activities (
   id INTEGER PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES local_accounts (account_id) ON DELETE CASCADE,  -- signer
@@ -372,12 +373,25 @@ CREATE TABLE outbound_activities (
   object_uri TEXT,
   retracts INTEGER NOT NULL DEFAULT 0 CHECK (retracts IN (0, 1)),
   superseded INTEGER NOT NULL DEFAULT 0 CHECK (superseded IN (0, 1)),
-  pending_targets TEXT CHECK (pending_targets IS NULL OR (json_valid(pending_targets) AND json_type(pending_targets) = 'array')),
+  staged TEXT,
   created_at INTEGER NOT NULL
 );
 
 CREATE INDEX outbound_activities_object ON outbound_activities (account_id, object_uri);
-CREATE INDEX outbound_activities_expanding ON outbound_activities (id) WHERE pending_targets IS NOT NULL;
+
+-- The targets of an intent still to expand (JSON arrays of {inbox, addressee}), in chunks of bounded size (at most
+-- 100 targets and 512 KiB), so that no row grows with the audience: a Durable Object row or string is limited to
+-- 2 MB. Chunks are expanded in id order a step at a time (intents in id order, and an intent's targets in order);
+-- next is the index of the first target not yet expanded, and a chunk goes once it is expanded. An intent is
+-- expanding while it has chunks.
+CREATE TABLE outbound_targets (
+  id INTEGER PRIMARY KEY,
+  activity_id INTEGER NOT NULL REFERENCES outbound_activities (id) ON DELETE CASCADE,
+  targets TEXT NOT NULL CHECK (json_valid(targets) AND json_type(targets) = 'array'),
+  next INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX outbound_targets_activity ON outbound_targets (activity_id);
 
 -- Per-inbox delivery state. A lane is (account_id, lane), lane being the inbox's origin, and is delivered in id order,
 -- so everything one actor sends one server (shared and personal inboxes alike) arrives in order. Only a lane's oldest

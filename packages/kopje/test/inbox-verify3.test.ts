@@ -178,21 +178,19 @@ describe('RES-6: a purge batch writes at most PURGE_BATCH rows in all', () => {
 			const next = await batch(t.h.store, bob.uri)
 			expect(next.wrote).toBeLessThanOrEqual(PURGE_BATCH)
 		}
-		const undo = await sql<{ targets: string | null; id: string }>(
+		const undo = await sql<{ id: string }>(
 			t.h.store,
-			`SELECT pending_targets AS targets, CAST(id AS TEXT) AS id FROM outbound_activities
-			WHERE json_extract(body, '$.activity.type') = 'Undo'`
+			`SELECT CAST(id AS TEXT) AS id FROM outbound_activities WHERE json_extract(body, '$.activity.type') = 'Undo'`
 		)
 		expect(undo).toHaveLength(1)
 		const delivered = await sql<{ inbox_url: string }>(
 			t.h.store,
-			'SELECT inbox_url FROM deliveries WHERE activity_id = CAST(? AS INTEGER)',
+			`SELECT inbox_url FROM deliveries WHERE activity_id = CAST(?1 AS INTEGER)
+			UNION ALL SELECT json_extract(t.value, '$.inbox') FROM outbound_targets c, json_each(c.targets) t
+			WHERE c.activity_id = CAST(?1 AS INTEGER) AND t.key >= c.next`,
 			undo[0]!.id
 		)
-		const reached = new Set([
-			...delivered.map((d) => d.inbox_url),
-			...((JSON.parse(undo[0]!.targets ?? '[]') as { inbox: string }[]).map((target) => target.inbox) ?? []),
-		])
+		const reached = new Set(delivered.map((d) => d.inbox_url))
 		expect(reached.has('https://r1.example/inbox')).toBe(true)
 		expect(reached.has(`https://r${receipts}.example/inbox`)).toBe(true)
 		expect(await count(t.h.store, 'SELECT 1 FROM outbound_receipts')).toBe(0)
