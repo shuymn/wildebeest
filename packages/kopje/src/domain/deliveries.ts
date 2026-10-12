@@ -15,7 +15,7 @@ import type { Db } from '../db/sql'
 //     targets and TARGET_CHUNK_BYTES, so no row grows with the audience (a Durable Object row is limited to 2 MB), and
 //     written as deliveries rows EXPANSION_STEP at a time, oldest chunk first, in the transaction that records it and
 //     then in each claim (RES-6). An intent's rows are all written before a later intent's, so id order stays intent
-//     order.
+//     order; the one exception is a retraction staged over several steps (stageRetraction).
 //   - Admission (RES-4): a lane may hold MAX_LANE_BACKLOG active rows and the Store MAX_BACKLOG. A row over either cap
 //     is written as gave_up with 'backlog full': refused at once, visible to the operator, retried by them.
 //   - Lanes: a lane is (sender, inbox origin) and is delivered in id order, so a Create to a server's shared inbox
@@ -31,7 +31,8 @@ import type { Db } from '../db/sql'
 //     permanent failure, the row is gave_up: kept for the operator until retried or swept. An activity that a later
 //     one about the same object follows is superseded, and the operator may not send it again.
 //   - A delivered Create, Update or Announce of a local status records its inbox in outbound_receipts, owned by the
-//     status; none is written once the status is gone or a retraction of it is pending.
+//     status; none is written once the status is gone or a retraction of it is pending (one still staging its
+//     targets reads them from the receipts, so they are written until it is staged).
 //   - Claims and completions return nextDueAt, the earliest time any work is due, so the Worker can ring for it.
 
 export const LEASE_MS = 60_000
@@ -41,7 +42,9 @@ export const RETRY_MAX_MS = 12 * 60 * 60 * 1000
 export const CLAIM_LIMIT = 16
 export const GAVE_UP_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 export const EXPANSION_STEP = 100
-export const TARGET_CHUNK_SIZE = 1000
+// A chunk is one expansion step, so a step parses one chunk; with the URL caps at ingestion a full chunk stays well
+// under TARGET_CHUNK_BYTES, which in turn is far under the 2 MB a Durable Object row or string may hold.
+export const TARGET_CHUNK_SIZE = EXPANSION_STEP
 export const TARGET_CHUNK_BYTES = 512 * 1024
 export const MAX_LANE_BACKLOG = 500
 export const MAX_BACKLOG = 10_000
@@ -224,40 +227,19 @@ function receiversOf(db: Db, signerId: string, object: string): string[] {
 // supersedes earlier Updates only. An Update goes as an Update only to servers that have the object (a receipt, or a
 // Create or Update in flight before it in the lane); every other server gets a Create of the current version
 // instead, which replaces any Create or Update of the object still waiting for it there.
-//
-// maxRows (a deferred retraction only): the rows it may write, the intent, its target chunks and the earlier intents
-// it supersedes. If they do not fit, nothing is written and the result is false.
 export function enqueueActivity(
 	db: Db,
 	signerId: string,
 	envelope: { activity: Activity; audience: DeliveryAudience },
 	now: number,
-	options: { withdraws?: boolean; deferred?: boolean; maxRows?: number } = {}
-): boolean {
+	options: { withdraws?: boolean } = {}
+): void {
 	const targets = audienceTargets(db, signerId, envelope.activity, envelope.audience, options.withdraws === true)
 	const { object, retracts } = subjectOf(envelope.activity, options.withdraws === true)
-	const supersedes = object !== null && (retracts || envelope.activity.type === 'Update')
-	const supersededWhere = `account_id = ? AND object_uri = ? AND (? OR json_extract(body, '$.activity.type') = 'Update')`
-	if (options.maxRows !== undefined && envelope.activity.type !== 'Update') {
-		const superseded = supersedes
-			? (db.first<{ n: number }>(
-					`SELECT count(*) AS n FROM outbound_activities WHERE ${supersededWhere}`,
-					signerId,
-					object,
-					retracts ? 1 : 0
-				)?.n ?? 0)
-			: 0
-		const chunks = chunksOf(targets).length
-		if (superseded + (chunks === 0 ? 0 : 1 + chunks) > options.maxRows) {
-			return false
-		}
+	if (object !== null && (retracts || envelope.activity.type === 'Update')) {
+		supersede(db, signerId, object, retracts)
 	}
-	if (supersedes) {
-		db.run(`UPDATE outbound_activities SET superseded = 1 WHERE ${supersededWhere}`, signerId, object, retracts ? 1 : 0)
-	}
-	// deferred: the caller (a purge) deletes the receipts itself in bounded batches; the intent already holds them as
-	// targets.
-	if (object !== null && retracts && options.deferred !== true) {
+	if (object !== null && retracts) {
 		db.run(
 			'DELETE FROM outbound_receipts WHERE account_id = ? AND status_id IN (SELECT id FROM statuses WHERE uri = ?)',
 			signerId,
@@ -285,33 +267,141 @@ export function enqueueActivity(
 	} else {
 		insertIntent(db, signerId, envelope, object, retracts, targets, now)
 	}
-	// deferred: the intent waits for the delivery rounds, which expand it EXPANSION_STEP targets at a time.
-	if (options.deferred !== true) {
-		expandPending(db, now, EXPANSION_STEP)
+	expandPending(db, now, EXPANSION_STEP)
+}
+
+const SUPERSEDED = `account_id = ? AND object_uri = ? AND (? OR json_extract(body, '$.activity.type') = 'Update')`
+
+// Marks the earlier activities a new one about the object follows. A retraction still staging (stageRetraction) is
+// complete then: the new retraction targets every inbox it held or would have.
+function supersede(db: Db, signerId: string, object: string, retracts: boolean): void {
+	const stopped = db.all<{ id: string }>(
+		`UPDATE outbound_activities SET superseded = 1, staged = NULL WHERE ${SUPERSEDED}
+		RETURNING CAST(id AS TEXT) AS id`,
+		signerId,
+		object,
+		retracts ? 1 : 0
+	)
+	for (const { id } of stopped) {
+		dropSettledActivity(db, id)
 	}
+}
+
+// A retraction recorded in bounded steps: a purge's Undo of a local boost (RES-6), whose receipts alone may be more
+// targets than one batch can write. beginRetraction records the intent, superseding the earlier activities about its
+// object, in at most maxRows rows (false, writing nothing, when they do not fit); stageRetraction then writes its
+// targets a chunk at a time in a fixed order, at most maxRows rows per call, and returns whether all are written.
+// While it stages, `staged` holds the key of the last target written; receipts of its object are still recorded
+// (completeDelivery), so an inbox an earlier activity reaches meanwhile stays a target; and the intent is kept even
+// with no rows. The caller keeps the receipts until it is staged. Its chunks written in a later call come after those
+// of intents recorded meanwhile: nothing recorded later is about the object but another retraction of it.
+export function beginRetraction(
+	db: Db,
+	signerId: string,
+	envelope: { activity: Activity; audience: DeliveryAudience },
+	now: number,
+	maxRows: number
+): boolean {
+	const { object } = subjectOf(envelope.activity, false)
+	const superseded =
+		object === null
+			? 0
+			: (db.first<{ n: number }>(
+					`SELECT count(*) AS n FROM outbound_activities WHERE ${SUPERSEDED}`,
+					signerId,
+					object,
+					1
+				)?.n ?? 0)
+	// Each superseded intent is updated and may be dropped; then the intent itself.
+	if (2 * superseded + 1 > maxRows) {
+		return false
+	}
+	if (object !== null) {
+		supersede(db, signerId, object, true)
+	}
+	db.run(
+		`INSERT INTO outbound_activities (account_id, body, object_uri, retracts, staged, created_at)
+		VALUES (?, ?, ?, 1, '', ?)`,
+		signerId,
+		JSON.stringify(envelope),
+		object,
+		now
+	)
 	return true
 }
 
-// The targets as JSON arrays of at most TARGET_CHUNK_SIZE targets and TARGET_CHUNK_BYTES each (a single target is
-// bounded by the URL caps at ingestion and the 1 MiB document limit).
-function chunksOf(targets: Target[]): string[] {
+export function stageRetraction(db: Db, signerId: string, object: string, maxRows: number): boolean {
+	const intent = db.first<{ id: string; body: string; staged: string }>(
+		`SELECT CAST(id AS TEXT) AS id, body, staged FROM outbound_activities
+		WHERE account_id = ? AND object_uri = ? AND retracts = 1 AND staged IS NOT NULL ORDER BY id LIMIT 1`,
+		signerId,
+		object
+	)
+	if (intent === undefined) {
+		return true
+	}
+	// Each chunk is a row, and so is the update of staged.
+	if (maxRows < 2) {
+		return false
+	}
+	const envelope = JSON.parse(intent.body) as { activity: Activity; audience: DeliveryAudience }
+	const targets = audienceTargets(db, signerId, envelope.activity, envelope.audience)
+		.map((target) => ({ target, key: stageKey(target) }))
+		.filter((t) => t.key > intent.staged)
+		.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+	const chunks = chunked(targets.map((t) => t.target))
+	const fits = chunks.slice(0, maxRows - 1)
+	for (const chunk of fits) {
+		db.run('INSERT INTO outbound_targets (activity_id, targets) VALUES (CAST(? AS INTEGER), ?)', intent.id, chunk.json)
+	}
+	const done = fits.length === chunks.length
+	db.run(
+		'UPDATE outbound_activities SET staged = ? WHERE id = CAST(? AS INTEGER)',
+		done ? null : targets[fits[fits.length - 1]!.last]!.key,
+		intent.id
+	)
+	if (done) {
+		dropSettledActivity(db, intent.id)
+	}
+	return done
+}
+
+// The fixed order a retraction is staged in: personal copies first (as audienceTargets orders them), then by inbox.
+function stageKey(target: Target): string {
+	return `${target.addressee === null ? 1 : 0}\n${target.inbox}\n${target.addressee ?? ''}`
+}
+
+// The targets as JSON arrays of at most TARGET_CHUNK_SIZE targets and TARGET_CHUNK_BYTES each, with the index of
+// the last target each holds. A target too large for a chunk on its own (the URL caps at ingestion keep remote ones
+// far below it; an imported or older row may not be) is left out, counted and logged without its value (DATA-5).
+function chunked(targets: Target[]): { json: string; last: number }[] {
 	const encoder = new TextEncoder()
-	const chunks: string[] = []
+	const chunks: { json: string; last: number }[] = []
 	let current: string[] = []
 	let bytes = 2
-	for (const target of targets) {
+	let last = -1
+	let oversized = 0
+	targets.forEach((target, index) => {
 		const json = JSON.stringify(target)
 		const size = encoder.encode(json).byteLength + 1
-		if (current.length > 0 && (current.length >= TARGET_CHUNK_SIZE || bytes + size > TARGET_CHUNK_BYTES)) {
-			chunks.push(`[${current.join(',')}]`)
+		if (size + 2 > TARGET_CHUNK_BYTES) {
+			oversized++
+			return
+		}
+		if (current.length >= TARGET_CHUNK_SIZE || bytes + size > TARGET_CHUNK_BYTES) {
+			chunks.push({ json: `[${current.join(',')}]`, last })
 			current = []
 			bytes = 2
 		}
 		current.push(json)
 		bytes += size
-	}
+		last = index
+	})
 	if (current.length > 0) {
-		chunks.push(`[${current.join(',')}]`)
+		chunks.push({ json: `[${current.join(',')}]`, last })
+	}
+	if (oversized > 0) {
+		console.warn({ event: 'kopje.delivery.oversized_target', count: oversized })
 	}
 	return chunks
 }
@@ -325,7 +415,8 @@ function insertIntent(
 	targets: Target[],
 	now: number
 ): void {
-	if (targets.length === 0) {
+	const chunks = chunked(targets)
+	if (chunks.length === 0) {
 		return
 	}
 	const intent = db.first<{ id: string }>(
@@ -337,8 +428,8 @@ function insertIntent(
 		retracts ? 1 : 0,
 		now
 	)!
-	for (const chunk of chunksOf(targets)) {
-		db.run('INSERT INTO outbound_targets (activity_id, targets) VALUES (CAST(? AS INTEGER), ?)', intent.id, chunk)
+	for (const chunk of chunks) {
+		db.run('INSERT INTO outbound_targets (activity_id, targets) VALUES (CAST(? AS INTEGER), ?)', intent.id, chunk.json)
 	}
 }
 
@@ -558,7 +649,7 @@ function promoteLane(db: Db, accountId: string, lane: string, now: number): void
 
 function dropSettledActivity(db: Db, activityId: string): void {
 	db.run(
-		`DELETE FROM outbound_activities WHERE id = CAST(?1 AS INTEGER)
+		`DELETE FROM outbound_activities WHERE id = CAST(?1 AS INTEGER) AND staged IS NULL
 			AND NOT EXISTS (SELECT 1 FROM outbound_targets WHERE activity_id = CAST(?1 AS INTEGER))
 			AND NOT EXISTS (SELECT 1 FROM deliveries WHERE activity_id = CAST(?1 AS INTEGER))`,
 		activityId
@@ -691,13 +782,14 @@ export const completeDelivery = writeOperation<
 		return { status: 'stale', nextDueAt: nextDueAt(db, now, leaseToken) }
 	}
 	if (outcome.kind === 'delivered') {
-		// The receipt is kept only for a status that still exists and has no retraction pending (VIS-3).
+		// The receipt is kept only for a status that still exists and has no retraction pending (VIS-3). A retraction
+		// still staging its targets is not pending yet: it reads them from the receipts.
 		db.run(
 			`INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
 			SELECT s.id, ?2, o.account_id, ?3 FROM outbound_activities o JOIN statuses s ON s.uri = o.object_uri
 			WHERE o.id = CAST(?1 AS INTEGER) AND json_extract(o.body, '$.activity.type') IN ('Create', 'Update', 'Announce')
 				AND NOT EXISTS (SELECT 1 FROM outbound_activities r
-					WHERE r.account_id = o.account_id AND r.object_uri = o.object_uri AND r.retracts = 1)
+					WHERE r.account_id = o.account_id AND r.object_uri = o.object_uri AND r.retracts = 1 AND r.staged IS NULL)
 			ON CONFLICT DO UPDATE SET delivered_at = excluded.delivered_at`,
 			row.activity_id,
 			row.inbox_url,

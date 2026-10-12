@@ -1,4 +1,5 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
+import { stageRetraction } from './deliveries'
 import { insertWithFreshId, remoteId } from './ids'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
@@ -935,14 +936,13 @@ const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
 
 // One batch of a deleted actor's purge (RES-6). Every row the batch writes counts against PURGE_BATCH, measured with
 // SQLite's total_changes() so that nothing escapes the count: deletions, counter recounts, and the Undo intent of a
-// local boost. Each step is limited beforehand to what is left, so a batch never writes more than PURGE_BATCH rows
-// (one exception: an Undo whose target chunks alone exceed a batch, over half a million targets, is written by a batch
-// that does nothing else):
+// local boost and its target chunks. Each step is limited beforehand to what is left, so a batch never writes more
+// than PURGE_BATCH rows:
 //   1. the account's relationships, notifications, mentions, favourites and keys, with the counters they counted;
-//   2. local boosts of its statuses: each boost's Undo is recorded once (withdrawLocalBoost, deferred: the intent
-//      carries its targets in bounded chunks and B2's delivery rounds expand it in their own bounded steps; the job's
-//      cursor keeps the boost being withdrawn), then the boost is deleted like any status and its booster's count
-//      recounted;
+//   2. local boosts of its statuses: each boost's Undo is recorded once (withdrawLocalBoost; the job's cursor keeps
+//      the boost being withdrawn), its targets are written a chunk per row over as many batches as they need
+//      (stageRetraction), and B2's delivery rounds expand them in their own bounded steps; then the boost is deleted
+//      like any status, its receipts included, and its booster's count recounted;
 //   3. remote boosts of its statuses, then its own statuses.
 // A status is deleted only once its children (edits, media, mentions, tags, favourites, bookmarks, notifications,
 // receipts, boosts and the reply links to it) are gone, so deleting it cascades nothing. Local media is detached for
@@ -1109,13 +1109,15 @@ function withdrawLocalBoosts(db: Db, uri: string, id: string, budget: Budget, no
 			return
 		}
 		if (cursor !== boost.id) {
-			// The intent with its target chunks and the earlier intents about the boost it supersedes (counted by
-			// enqueueActivity), and the cursor. An Undo too large for any batch is written by a batch of its own.
-			const left = budget.left()
-			if (!withdrawLocalBoost(db, boost.id, now, left === PURGE_BATCH ? Number.POSITIVE_INFINITY : left - 1)) {
+			// The Undo intent and the earlier intents about the boost it supersedes, then the cursor.
+			if (!withdrawLocalBoost(db, boost.id, now, budget.left() - 1)) {
 				return
 			}
 			db.run("UPDATE inbound_jobs SET cursor = ? WHERE kind = 'purge' AND key = ?", boost.id, uri)
+		}
+		// Its targets, a chunk per row, over as many batches as they need; the receipts stay until all are written.
+		if (!stageRetraction(db, boost.booster, boost.uri, budget.left())) {
+			return
 		}
 		// The boost's deletion, its booster's recount and the cursor's reset.
 		if (!deleteStatusWithin(db, boost.id, budget, 2)) {

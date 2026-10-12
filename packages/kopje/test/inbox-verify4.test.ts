@@ -1,3 +1,5 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
@@ -6,9 +8,10 @@ import { fixtureKeyGen } from './federation-helpers'
 import { BUILD } from './helpers'
 import { mastodonActor, RemoteWeb, signedInit, type TestActor } from './inbox-helpers'
 import { community, seedStatus } from './status-helpers'
-import { EXPANSION_STEP, TARGET_CHUNK_BYTES } from '../src/domain/deliveries'
-import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH } from '../src/domain/inbox'
-import { INBOX_URL_LIMIT } from '../src/federation/remote-actor'
+import { Db } from '../src/db/sql'
+import { EXPANSION_STEP, TARGET_CHUNK_BYTES, TARGET_CHUNK_SIZE } from '../src/domain/deliveries'
+import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, purgeBatch } from '../src/domain/inbox'
+import { ACTOR_URI_LIMIT, INBOX_URL_LIMIT } from '../src/federation/remote-actor'
 import type { StoreStub } from '../src/platform/store-client'
 
 // Regressions from the fourth verification of B1b-1: delivery targets stored in bounded chunks and capped inbox URLs
@@ -137,6 +140,23 @@ describe('RES-6: delivery targets are stored in bounded chunks', () => {
 			{ inbox_url: `${carol.uri}/inbox`, shared_inbox_url: null },
 		])
 	})
+
+	it('refuses an actor whose id is over the cap', async () => {
+		const t = await together()
+		const base = await mastodonActor(t.web, 'bob')
+		const uri = `${base.uri}/${'x'.repeat(ACTOR_URI_LIMIT)}`
+		const document = {
+			...base.document,
+			id: uri,
+			inbox: `${base.uri}/inbox`,
+			publicKey: { id: `${uri}#main-key`, owner: uri, publicKeyPem: base.pem },
+		}
+		t.web.serve(uri, document)
+		const bob: TestActor = { ...base, uri, keyId: `${uri}#main-key`, document }
+		await t.post(bob, t.follow(bob))
+		expect(await accountId(t.h.store, uri)).toBeUndefined()
+		expect(await count(t.h.store, 'SELECT 1 FROM follows')).toBe(0)
+	})
 })
 
 describe('ID-7: an Undo records a Block whatever the shape of its id', () => {
@@ -193,41 +213,88 @@ describe('ID-7: an Undo records a Block whatever the shape of its id', () => {
 })
 
 // Coverage: the old code already resumed the deferred Undo in B2's rounds; nothing pinned it.
+// A local boost by alice of a status of bob, with `receipts` receipts at distinct servers, and bob's purge job.
+async function boostWithReceipts(receipts: number) {
+	const t = await together()
+	const bob = await mastodonActor(t.web, 'bob')
+	await t.post(bob, t.follow(bob))
+	const bobId = (await accountId(t.h.store, bob.uri))!
+	const statusId = await seedStatus(t.h.store, {
+		accountId: bobId,
+		visibility: 'public',
+		uri: `${bob.uri}/statuses/1`,
+	})
+	const boosted = await t.h.request(`/api/v1/statuses/${statusId}/reblog`, bearer(t.alice.token, { method: 'POST' }))
+	expect(boosted.status).toBe(200)
+	const boostId = (await sql<{ id: string }>(t.h.store, 'SELECT id FROM statuses WHERE reblog_of_id = ?', statusId))[0]!
+		.id
+	await sql(
+		t.h.store,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+		INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
+		SELECT ?, 'https://r' || i || '.example/inbox', ?, 0 FROM n`,
+		receipts,
+		boostId,
+		t.alice.id
+	)
+	await sql(t.h.store, 'DELETE FROM outbound_activities')
+	await sql(t.h.store, 'DELETE FROM deliveries')
+	await sql(
+		t.h.store,
+		"INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('purge', ?1, ?1, ?2)",
+		bob.uri,
+		NOW
+	)
+	return { t, bob, boostId }
+}
+
+describe('RES-6: a purge stages a large Undo over several batches', () => {
+	it('writes the targets of a withdrawal that needs more than a batch of rows, every batch within the budget', async () => {
+		const receipts = PURGE_BATCH * TARGET_CHUNK_SIZE + 1
+		const { t, bob } = await boostWithReceipts(receipts)
+		const batch = () =>
+			runInDurableObject(t.h.store, (_instance, state) => {
+				const db = new Db(state.storage.sql)
+				const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
+				const before = changes()
+				state.storage.transactionSync(() => purgeBatch(db, bob.uri, NOW))
+				return changes() - before
+			})
+		const staging = () =>
+			count(
+				t.h.store,
+				"SELECT 1 FROM outbound_activities WHERE json_extract(body, '$.activity.type') = 'Undo' AND staged IS NOT NULL"
+			)
+		let batches = 0
+		do {
+			expect(await batch()).toBeLessThanOrEqual(PURGE_BATCH)
+			expect(++batches).toBeLessThan(10)
+		} while ((await staging()) > 0)
+		expect(batches).toBeGreaterThan(1)
+		const undo = await sql<{ id: string }>(
+			t.h.store,
+			`SELECT CAST(id AS TEXT) AS id FROM outbound_activities WHERE json_extract(body, '$.activity.type') = 'Undo'`
+		)
+		expect(undo).toHaveLength(1)
+		expect(
+			await count(t.h.store, 'SELECT 1 FROM outbound_targets WHERE activity_id = CAST(? AS INTEGER)', undo[0]!.id)
+		).toBeGreaterThan(PURGE_BATCH)
+		const staged = await sql<{ n: number; distinct: number }>(
+			t.h.store,
+			`SELECT count(*) AS n, count(DISTINCT json_extract(t.value, '$.inbox')) AS "distinct"
+			FROM outbound_targets c, json_each(c.targets) t
+			WHERE c.activity_id = CAST(? AS INTEGER) AND json_extract(t.value, '$.inbox') GLOB 'https://r*.example/inbox'`,
+			undo[0]!.id
+		)
+		expect(staged).toEqual([{ n: receipts, distinct: receipts }])
+	})
+})
+
 describe('RES-6: a purge’s deferred Undo is expanded by the delivery rounds', () => {
 	const receipts = PURGE_BATCH + 101
 
 	async function boostedAndDeleted() {
-		const t = await together()
-		const bob = await mastodonActor(t.web, 'bob')
-		await t.post(bob, t.follow(bob))
-		const bobId = (await accountId(t.h.store, bob.uri))!
-		const statusId = await seedStatus(t.h.store, {
-			accountId: bobId,
-			visibility: 'public',
-			uri: `${bob.uri}/statuses/1`,
-		})
-		const boosted = await t.h.request(`/api/v1/statuses/${statusId}/reblog`, bearer(t.alice.token, { method: 'POST' }))
-		expect(boosted.status).toBe(200)
-		const boostId = (
-			await sql<{ id: string }>(t.h.store, 'SELECT id FROM statuses WHERE reblog_of_id = ?', statusId)
-		)[0]!.id
-		await sql(
-			t.h.store,
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
-			INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
-			SELECT ?, 'https://r' || i || '.example/inbox', ?, 0 FROM n`,
-			receipts,
-			boostId,
-			t.alice.id
-		)
-		await sql(t.h.store, 'DELETE FROM outbound_activities')
-		await sql(t.h.store, 'DELETE FROM deliveries')
-		await sql(
-			t.h.store,
-			"INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('purge', ?1, ?1, ?2)",
-			bob.uri,
-			NOW
-		)
+		const { t, boostId } = await boostWithReceipts(receipts)
 		let rows = 0
 		let rang = false
 		let claims = 0

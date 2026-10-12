@@ -14,9 +14,12 @@ const USERNAME = /^[a-z0-9_]+([a-z0-9_.-]+[a-z0-9_]+)?$/i
 const USERNAME_LIMIT = 255
 // Raw caps (RES-1). The display name is plain text and is cut, as Mastodon cuts what it receives.
 const DISPLAY_NAME_LIMIT = 2048
-// Inbox URLs (RES-6): every delivery target is one, so their length bounds a target. Real servers use short ones;
-// Mastodon sets no limit. A serialized URL is ASCII, so its length is its size in bytes.
+// Actor ids and inbox URLs (RES-6): a delivery target is an inbox and, for a silent recipient, an actor id, so their
+// length bounds a target. This cap is Kopje's own interoperability policy, not another server's behaviour: Mastodon
+// sets no length limit, and Misskey stores inbox URLs in 512-character columns. Real servers use far shorter URLs.
+// A serialized URL is ASCII, so its length is its size in bytes.
 export const INBOX_URL_LIMIT = 2048
+export const ACTOR_URI_LIMIT = 2048
 
 export type FetchedActor =
 	| { kind: 'ok'; actor: Actor; input: RemoteActorInput | null }
@@ -119,12 +122,18 @@ async function ownKeys(actor: Actor, uri: URL): Promise<{ id: string; pem: strin
 export async function remoteActorInput(actor: Actor, document: unknown): Promise<RemoteActorInput | null> {
 	const uri = actor.id
 	const username = text(actor.preferredUsername)
-	if (uri === null || username === null || username.length > USERNAME_LIMIT || !USERNAME.test(username)) {
+	if (
+		uri === null ||
+		uri.href.length > ACTOR_URI_LIMIT ||
+		username === null ||
+		username.length > USERNAME_LIMIT ||
+		!USERNAME.test(username)
+	) {
 		return null
 	}
 	const inboxUrl = httpUrl(actor.inboxId?.href ?? null)?.href ?? null
-	// An over-long inbox makes the actor unusable, as Mastodon refuses an actor without one; an over-long shared inbox
-	// is ignored, as Mastodon ignores an invalid one, and its personal inbox is used.
+	// By Kopje's policy, an over-long inbox makes the actor unusable (nothing could be delivered to it), and an
+	// over-long shared inbox is ignored, so its personal inbox is used.
 	if (inboxUrl !== null && inboxUrl.length > INBOX_URL_LIMIT) {
 		return null
 	}
