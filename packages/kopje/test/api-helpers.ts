@@ -82,6 +82,8 @@ export type AccessTeam = {
 	assertion: (claims?: Record<string, unknown>, key?: CryptoKey | JsonWebKey) => Promise<string>
 	otherKey: JsonWebKey
 	fetch: ReturnType<typeof vi.fn<typeof fetch>>
+	// Publishes a new signing key next to the current one, as Access does before a rotation; returns its private key.
+	rotate: () => Promise<JsonWebKey>
 }
 
 async function rsaKey(kid: string): Promise<{ privateJwk: JsonWebKey; publicJwk: JsonWebKey }> {
@@ -105,12 +107,13 @@ export async function accessTeam(): Promise<AccessTeam> {
 	const key = await rsaKey(kid)
 	// Same kid, different key: a token it signs must not verify.
 	const other = await rsaKey(kid)
+	const published = [key.publicJwk]
 	const fetchJwks = vi.fn<typeof fetch>((input) => {
 		const url = input instanceof Request ? input.url : String(input)
 		if (url !== `https://${teamDomain}/cdn-cgi/access/certs`) {
 			return Promise.resolve(new Response('not found', { status: 404 }))
 		}
-		return Promise.resolve(Response.json({ keys: [key.publicJwk] }))
+		return Promise.resolve(Response.json({ keys: published }))
 	})
 	return {
 		teamDomain,
@@ -118,6 +121,11 @@ export async function accessTeam(): Promise<AccessTeam> {
 		kid,
 		otherKey: other.privateJwk,
 		fetch: fetchJwks,
+		rotate: async () => {
+			const next = await rsaKey(crypto.randomUUID())
+			published.push(next.publicJwk)
+			return next.privateJwk
+		},
 		assertion: (claims = {}, signingKey = key.privateJwk) =>
 			sign(
 				{

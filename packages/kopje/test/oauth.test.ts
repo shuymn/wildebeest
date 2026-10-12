@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
 	type AccessTeam,
+	type App,
 	apiHarness,
 	authorizationCode,
 	bearer,
@@ -374,27 +375,51 @@ describe('Access assertion', () => {
 		expect(h.team.fetch).toHaveBeenCalledOnce()
 	})
 
-	// Access keeps a rotated-out key valid for 7 days, so a cached set can be trusted that long past its last fetch.
-	it('uses a stale JWKS while the endpoint fails, for at most 7 days', async () => {
-		const h = await withAlice()
-		const app = await registerApp(h)
-		expect((await consentPage(h, app)).status).toBe(200)
-		h.team.fetch.mockImplementation(() => Promise.reject(new Error('unreachable')))
-		const at = async (ms: number) => {
+	// jose's remote key set keeps time with Date.now(); the clock is moved with it.
+	async function clocked(h: Awaited<ReturnType<typeof withAlice>>, app: App) {
+		vi.useFakeTimers({ toFake: ['Date'] })
+		vi.setSystemTime(NOW)
+		return async (ms: number, key?: JsonWebKey) => {
+			vi.setSystemTime(ms)
 			h.now.mockReturnValue(ms)
-			const assertion = await h.team.assertion({ iat: Math.floor(ms / 1000) - 10, exp: Math.floor(ms / 1000) + 3600 })
+			const claims = { iat: Math.floor(ms / 1000) - 10, exp: Math.floor(ms / 1000) + 3600 }
 			const query = new URLSearchParams({
 				response_type: 'code',
 				client_id: app.client_id,
 				redirect_uri: app.redirect_uri,
 				scope: 'read',
 			})
-			return h.request(`/oauth/authorize?${query.toString()}`, { headers: { 'cf-access-jwt-assertion': assertion } })
+			return h.request(`/oauth/authorize?${query.toString()}`, {
+				headers: { 'cf-access-jwt-assertion': await h.team.assertion(claims, key) },
+			})
 		}
+	}
+
+	afterEach(() => {
+		vi.useRealTimers()
+	})
+
+	// Access keeps a rotated-out key valid for 7 days, so a fetched set is trusted that long and no longer.
+	it('uses the fetched JWKS while the endpoint fails, for at most 7 days', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h)
+		const at = await clocked(h, app)
+		expect((await at(NOW)).status).toBe(200)
+		h.team.fetch.mockImplementation(() => Promise.reject(new Error('unreachable')))
 		const day = 24 * 60 * 60 * 1000
 		expect((await at(NOW + 2 * 60 * 60 * 1000)).status).toBe(200)
 		expect((await at(NOW + 7 * day - 1000)).status).toBe(200)
 		expect((await at(NOW + 7 * day + 1000)).status).toBe(403)
+	})
+
+	it('picks up a rotated key by its new kid', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h)
+		const at = await clocked(h, app)
+		expect((await at(NOW)).status).toBe(200)
+		const next = await h.team.rotate()
+		expect((await at(NOW + 60 * 1000, next)).status).toBe(200)
+		expect(h.team.fetch).toHaveBeenCalledTimes(2)
 	})
 
 	it.each<[string, Record<string, unknown>]>([
