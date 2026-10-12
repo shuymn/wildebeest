@@ -175,13 +175,14 @@ export class StoreAdmin {
 		await this.#kernel.state()
 		const { import: running } = readFlags(this.#sql)
 		const access = running === null ? readAccessSettings(this.#sql) : settingsFromRows(running.bootstrap ?? [])
-		let empty: boolean
-		try {
-			empty = isEmpty(this.#sql, readCatalog(this.#sql), BOOTSTRAP)
-		} catch {
-			empty = false
+		const empty = () => {
+			try {
+				return isEmpty(this.#sql, readCatalog(this.#sql), BOOTSTRAP)
+			} catch {
+				return false
+			}
 		}
-		const tokenImport = running?.mode === 'token' || (running === null && !accessConfigured(access) && empty)
+		const tokenImport = running?.mode === 'token' || (running === null && !accessConfigured(access) && empty())
 		return { access, tokenImport }
 	}
 

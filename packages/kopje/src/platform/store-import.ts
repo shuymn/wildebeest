@@ -1,4 +1,4 @@
-import { DUMPED_STATE, rowCount, SEQUENCE_TABLE, STATE_TABLE } from './dump-catalog'
+import { DUMPED_STATE, hasRows, SEQUENCE_TABLE, STATE_TABLE } from './dump-catalog'
 import {
 	DUMP_FORMAT,
 	type DumpHeader,
@@ -96,14 +96,7 @@ export type Bootstrap = { table: string; column: string; values: readonly string
 
 // A Store with no rows in any dumped table (kopje_state counts only its dumped names, bootstrap rows not at all).
 export function isEmpty(sql: SqlStorage, tables: readonly TableSpec[], bootstrap?: Bootstrap): boolean {
-	return tables.every((t) => {
-		if (bootstrap === undefined || t.name !== bootstrap.table) {
-			return rowCount(sql, t) === 0
-		}
-		const names = bootstrap.values.map(() => '?').join(',')
-		const query = `SELECT count(*) AS n FROM ${quoteIdentifier(t.name)} WHERE ${quoteIdentifier(bootstrap.column)} NOT IN (${names})`
-		return sql.exec<{ n: number }>(query, ...bootstrap.values).one().n === 0
-	})
+	return tables.every((t) => !hasRows(sql, t, bootstrap?.table === t.name ? bootstrap : undefined))
 }
 
 // Executes validated statements. parseStatements matched each against a template of this Store's catalog; the
@@ -111,6 +104,7 @@ export function isEmpty(sql: SqlStorage, tables: readonly TableSpec[], bootstrap
 // (the platform limits a statement to 100 KB) and keeps every storage class exact.
 export function applyStatements(sql: SqlStorage, statements: readonly ParsedStatement[]): void {
 	const allowedState = new Set(DUMPED_STATE.map(textLiteral))
+	const columnLists = new Map<string, string>()
 	for (const statement of statements) {
 		const table = quoteIdentifier(statement.table.name)
 		let bound
@@ -137,7 +131,11 @@ export function applyStatements(sql: SqlStorage, statements: readonly ParsedStat
 			const nameBound = bindAll([name])
 			sql.exec(`DELETE FROM ${table} WHERE name = ${nameBound.exprs[0]}`, ...nameBound.params)
 		}
-		const columns = statement.table.columns.map(quoteIdentifier).join(',')
+		let columns = columnLists.get(statement.table.name)
+		if (columns === undefined) {
+			columns = statement.table.columns.map(quoteIdentifier).join(',')
+			columnLists.set(statement.table.name, columns)
+		}
 		sql.exec(`INSERT INTO ${table} (${columns}) VALUES (${bound.exprs.join(',')})`, ...bound.params)
 	}
 }

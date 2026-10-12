@@ -8,7 +8,11 @@ export type HealthReport = { ok: boolean; build: string; checks: Record<string, 
 
 // The detailed report: env validity and issues, Store reachability and build, schema version, and DB size. It is for
 // the admin side only (a later /admin route behind Access); the public /health answers with publicHealth.
-export async function healthReport(build: string, config: ConfigResult, store: () => StoreStub): Promise<HealthReport> {
+export async function healthReport(
+	build: string,
+	config: ConfigResult,
+	store: () => Pick<StoreStub, 'health'>
+): Promise<HealthReport> {
 	const checks: Record<string, Check> = {
 		env: config.ok ? { ok: true } : { ok: false, issues: config.issues },
 	}

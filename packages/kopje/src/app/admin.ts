@@ -179,10 +179,12 @@ export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
 	admin.get('/health', async (c) => {
 		const b = build(c.env)
 		const config = readConfig(c.env)
-		const report = await healthReport(b, config, () => stub(c))
+		let health: ReturnType<StoreStub['health']> | undefined
+		const once = { health: () => (health ??= stub(c).health(b)) }
+		const report = await healthReport(b, config, () => once)
 		let detail: unknown
 		try {
-			detail = await stub(c).health(b)
+			detail = await once.health()
 		} catch (error) {
 			detail = { error: errorMessage(error) }
 		}

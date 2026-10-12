@@ -184,10 +184,21 @@ function pairsToLiterals(raw: SqlStorageValue[], from: number, to: number): stri
 	return literals
 }
 
-export function rowCount(sql: SqlStorage, spec: TableSpec): number {
-	const where =
-		spec.only === undefined
-			? ''
-			: ` WHERE ${quoteIdentifier(spec.only.column)} IN (${spec.only.values.map(textLiteral).join(',')})`
-	return sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${quoteIdentifier(spec.name)}${where}`).one().n
+// Whether a table has a dumped row (kopje_state: an allowlisted one) outside `except`. EXISTS stops at the first
+// row; count(*) would scan the table.
+export function hasRows(
+	sql: SqlStorage,
+	spec: TableSpec,
+	except?: { column: string; values: readonly string[] }
+): boolean {
+	const where: string[] = []
+	if (spec.only !== undefined) {
+		where.push(`${quoteIdentifier(spec.only.column)} IN (${spec.only.values.map(textLiteral).join(',')})`)
+	}
+	if (except !== undefined) {
+		where.push(`${quoteIdentifier(except.column)} NOT IN (${except.values.map(() => '?').join(',')})`)
+	}
+	const filter = where.length === 0 ? '' : ` WHERE ${where.join(' AND ')}`
+	const query = `SELECT EXISTS (SELECT 1 FROM ${quoteIdentifier(spec.name)}${filter}) AS found`
+	return sql.exec<{ found: number }>(query, ...(except?.values ?? [])).one().found === 1
 }
