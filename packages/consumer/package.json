@@ -7,7 +7,7 @@
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "0.16.20",
-		"@cloudflare/workers-types": "4.20260627.1",
+		"@cloudflare/workers-types": "4.20260630.1",
 		"toucan-js": "4.1.1",
 		"typescript": "5.9.3",
 		"vite-tsconfig-paths": "6.1.1",
