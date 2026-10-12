@@ -3,7 +3,7 @@ import { Application, CryptographicKey, Endpoints, Group, Image, Organization, P
 import { Temporal } from 'temporal-polyfill'
 
 import { DoKvStore } from './kv-store'
-import { createSafeLoader, type LoaderDeps, type RequestSigner } from './loader'
+import { createContextLoader, createSafeLoader, type LoaderDeps, type RequestSigner } from './loader'
 import {
 	type CollectionKind,
 	type CollectionPage,
@@ -107,7 +107,7 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 		origin,
 		// Fetches with no specific recipient are signed as the instance actor (secure-mode servers refuse unsigned ones).
 		documentLoaderFactory: () => signedLoader(instanceKeyId, async () => (await instanceSigner()).sign),
-		contextLoaderFactory: () => kvCache({ loader: createSafeLoader(loaderDeps), kv }),
+		contextLoaderFactory: () => kvCache({ loader: createContextLoader(loaderDeps), kv }),
 		// Fedify calls this with the recipient's key on a personal inbox.
 		authenticatedDocumentLoaderFactory: ({ keyId, privateKey }) =>
 			signedLoader(keyId, () => Promise.resolve(requestSigner(keyId, privateKey))),
