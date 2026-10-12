@@ -7,16 +7,19 @@ import {
 	isFollowActivity,
 	isLikeActivity,
 	isMoveActivity,
+	isRejectActivity,
 	isUndoActivity,
 	isUpdateActivity,
 } from '@wildebeest/backend/activitypub/activities'
 import { handleAcceptActivity } from '@wildebeest/backend/activitypub/activities/accept'
 import { handleAnnounceActivity } from '@wildebeest/backend/activitypub/activities/announce'
+import { authorizeInboundActivity } from '@wildebeest/backend/activitypub/activities/authorize'
 import { handleCreateActivity } from '@wildebeest/backend/activitypub/activities/create'
 import { handleDeleteActivity } from '@wildebeest/backend/activitypub/activities/delete'
 import { handleFollowActivity } from '@wildebeest/backend/activitypub/activities/follow'
 import { handleLikeActivity } from '@wildebeest/backend/activitypub/activities/like'
 import { handleMoveActivity } from '@wildebeest/backend/activitypub/activities/move'
+import { handleRejectActivity } from '@wildebeest/backend/activitypub/activities/reject'
 import { handleUndoActivity } from '@wildebeest/backend/activitypub/activities/undo'
 import { handleUpdateActivity } from '@wildebeest/backend/activitypub/activities/update'
 import { Database } from '@wildebeest/backend/database'
@@ -30,6 +33,12 @@ export async function handle(
 	adminEmail: string,
 	vapidKeys: JWK
 ) {
+	const authorization = authorizeInboundActivity(domain, activity)
+	if (!authorization.authorized) {
+		console.warn(`unauthorized ${activity.type} ${String(activity.id)}: ${authorization.reason}`)
+		return
+	}
+
 	if (isUpdateActivity(activity)) {
 		return await handleUpdateActivity(domain, activity, db)
 	}
@@ -38,6 +47,9 @@ export async function handle(
 	}
 	if (isAcceptActivity(activity)) {
 		return await handleAcceptActivity(domain, activity, db)
+	}
+	if (isRejectActivity(activity)) {
+		return await handleRejectActivity(domain, activity, db)
 	}
 	if (isFollowActivity(activity)) {
 		return await handleFollowActivity(domain, activity, db, userKEK, adminEmail, vapidKeys)

@@ -2,9 +2,8 @@ import { strict as assert } from 'node:assert/strict'
 
 import { ApObject, getAndCacheObject, originalObjectIdSymbol, Remote } from '@wildebeest/backend/activitypub/objects'
 import { Note } from '@wildebeest/backend/activitypub/objects/note'
-import { createTestUser, makeDB } from '@wildebeest/backend/test/utils'
+import { makeDB, mockRemoteActorFetch } from '@wildebeest/backend/test/utils'
 
-const userKEK = 'test_kek5'
 const domain = 'cloudflare.com'
 
 describe('Objects', () => {
@@ -14,13 +13,14 @@ describe('Objects', () => {
 			type: 'Note',
 			id: 'https://example.com/id/object1',
 			url: 'https://example.com/url/object1',
+			attributedTo: 'https://example.com/actor',
 		}
-		const actor = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
+		mockRemoteActorFetch('https://example.com/actor')
 
 		let result: any
 
 		// Cache object once adds it to the database
-		const res1 = await getAndCacheObject(domain, db, properties, actor)
+		const res1 = await getAndCacheObject(domain, db, properties)
 		assert.ok(res1)
 		assert.ok(res1.object)
 		assert.ok(res1.created)
@@ -33,7 +33,7 @@ describe('Objects', () => {
 
 		// Cache object second time updates the first one
 		properties.url = 'https://example.com/url/object2'
-		const res2 = await getAndCacheObject(domain, db, properties, actor)
+		const res2 = await getAndCacheObject(domain, db, properties)
 		// The creation date and properties don't change
 		assert.ok(res2)
 		assert.ok(res2.object)
@@ -53,10 +53,11 @@ describe('Objects', () => {
 			type: 'Note',
 			id: 'https://example.com/id/object1',
 			url: 'https://example.com/url/object1',
-		}
-		const actor = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
+			attributedTo: 'https://example.com/actor',
+		} as ApObject
+		mockRemoteActorFetch('https://example.com/actor')
 
-		await getAndCacheObject(domain, db, properties, actor)
+		await getAndCacheObject(domain, db, properties)
 
 		const { results } = (await db.prepare('SELECT domain from peers').all()) as any
 		assert.equal(results.length, 1)

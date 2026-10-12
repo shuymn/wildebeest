@@ -1,6 +1,7 @@
 import { component$ } from '@builder.io/qwik'
 import { routeAction$, Form, Link, z, zod$ } from '@builder.io/qwik-city'
 import { getDatabase } from '@wildebeest/backend/database'
+import { requireAdmin } from '~/utils/requireAdmin'
 import { updateSettings } from '@wildebeest/backend/config/server'
 import { TextArea } from '~/components/Settings/TextArea'
 import { useSettings } from '../layout'
@@ -14,7 +15,9 @@ const zodSchema = z.object({
 
 export type ServerAboutData = z.infer<typeof zodSchema>
 
-export const useUpdateSettings = routeAction$(async (data, { platform: { env: platform } }) => {
+export const useUpdateSettings = routeAction$(async (data, requestEvent) => {
+	await requireAdmin(requestEvent)
+	const platform = requestEvent.platform.env
 	const db = getDatabase(platform)
 	let success = false
 	try {

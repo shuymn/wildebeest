@@ -1,8 +1,18 @@
 import { Hono } from 'hono'
 
-import { getObjectById, getObjectUrl } from '@wildebeest/backend/activitypub/objects'
+import { PUBLIC_GROUP } from '@wildebeest/backend/activitypub/activities'
+import {
+	type ApObject,
+	getApId,
+	getObjectById,
+	getObjectUrl,
+	isLocalObject,
+	originalObjectIdSymbol,
+} from '@wildebeest/backend/activitypub/objects'
+import { isAttachedToPublicLocalObject, isImage } from '@wildebeest/backend/activitypub/objects/image'
 import { type Database, getDatabase } from '@wildebeest/backend/database'
 import type { HonoEnv } from '@wildebeest/backend/types'
+import { toArray } from '@wildebeest/backend/utils'
 import { cors } from '@wildebeest/backend/utils/cors'
 
 const app = new Hono<HonoEnv>()
@@ -18,8 +28,22 @@ const headers = {
 }
 
 async function handleRequest(domain: string, db: Database, id: string): Promise<Response> {
-	const obj = await getObjectById(domain, db, getObjectUrl(domain, id))
+	const objectUrl = getObjectUrl(domain, id)
+	const obj = await getObjectById(domain, db, objectUrl)
 	if (obj === null) {
+		return new Response('', { status: 404 })
+	}
+
+	// Only local objects addressed to the public are served: remote cached copies are the remote
+	// instance's to serve, and followers-only or direct objects must not be readable by anyone.
+	if (!isLocalObject(domain, getApId(obj[originalObjectIdSymbol] ?? obj.id))) {
+		return new Response('', { status: 404 })
+	}
+	if (isImage(obj)) {
+		if (!(await isAttachedToPublicLocalObject(db, objectUrl))) {
+			return new Response('', { status: 404 })
+		}
+	} else if (!isAddressedToPublic(obj)) {
 		return new Response('', { status: 404 })
 	}
 
@@ -42,6 +66,10 @@ async function handleRequest(domain: string, db: Database, id: string): Promise<
 	}
 
 	return new Response(JSON.stringify(res), { status: 200, headers })
+}
+
+function isAddressedToPublic({ to, cc }: Pick<ApObject, 'to' | 'cc'>): boolean {
+	return [...toArray(to ?? []), ...toArray(cc ?? [])].some((target) => getApId(target).toString() === PUBLIC_GROUP)
 }
 
 export default app
