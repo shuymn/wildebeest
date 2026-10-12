@@ -147,9 +147,29 @@ export class Store extends DurableObject<Env> {
 		return this.#backupTx((sql) => saveBackup(sql, runner, now, leaseMs, state, release, pruneTo))
 	}
 
-	async backupCapture(_callerBuild: string, runner: string, now: number, run: string, destination: string) {
-		await this.#kernel.state()
-		return this.#backupTx((sql) => captureMedia(sql, runner, now, run, destination))
+	// Completes the backup's dump and records the originals it references in one transaction, while its freeze holds.
+	async backupFinishDump(
+		_callerBuild: string,
+		runner: string,
+		now: number,
+		run: string,
+		destination: string,
+		opId: string,
+		cursor: unknown
+	) {
+		let required = 0
+		const finished = await this.#admin.dumpFinish(cursor, false, {
+			opId,
+			within: (sql) => {
+				const captured = captureMedia(sql, runner, now, run, destination)
+				if (!captured.ok) {
+					return { ok: false, code: captured.code, message: `backup ${captured.code}` }
+				}
+				required = captured.required
+				return null
+			},
+		})
+		return finished.ok ? { ...finished, required } : finished
 	}
 
 	async backupMedia(_callerBuild: string, run: string, after: string | null, limit: number, pendingOnly: boolean) {

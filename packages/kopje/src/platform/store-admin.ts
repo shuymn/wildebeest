@@ -401,9 +401,13 @@ export class StoreAdmin {
 		}
 	}
 
+	// `bound` (the scheduled backup): the dump must be the one started with that opId and its freeze lease must still
+	// hold, by the Store's clock, and `within` runs in the same transaction that completes the dump, so what it records
+	// is exactly the dump's snapshot. It returns a refusal to stop before anything is written.
 	async dumpFinish(
 		cursorValue: unknown,
-		abort = false
+		abort = false,
+		bound?: { opId: string; within: (sql: SqlStorage) => Refusal | null }
 	): Promise<Result<{ aborted: boolean; trailer: DumpTrailer | null; trailerText: string | null }>> {
 		let cursor: DumpCursor
 		try {
@@ -415,7 +419,7 @@ export class StoreAdmin {
 		const outcome = this.#transaction(
 			(): Result<{ aborted: boolean; trailer: DumpTrailer | null; trailerText: string | null }> => {
 				const record = readFlags(this.#sql).dump
-				if (record === null || record.id !== cursor.dump) {
+				if (record === null || record.id !== cursor.dump || (bound !== undefined && record.opId !== bound.opId)) {
 					return refuse('dump-not-found', 'no such dump')
 				}
 				if (record.completed !== undefined) {
@@ -431,6 +435,16 @@ export class StoreAdmin {
 				const names = record.header.tables.map((t) => t.name).join(',')
 				if (cursor.phase !== 'done' || record.results.map((r) => r.name).join(',') !== names) {
 					return refuse('dump-incomplete', 'the dump has not read every table yet')
+				}
+				if (bound !== undefined) {
+					if (this.#now() >= record.leaseUntil) {
+						// Writes may have resumed since the last chunk: the Store no longer matches the dump.
+						return refuse('dump-lease-expired', 'the dump lease expired; start a new dump')
+					}
+					const refused = bound.within(this.#sql)
+					if (refused !== null) {
+						return refused
+					}
 				}
 				// Each step checked the lease before reading, so every chunk was read under one continuous freeze.
 				const trailer = trailerOf(record.results, cursor)

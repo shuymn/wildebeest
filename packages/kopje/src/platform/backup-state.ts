@@ -151,9 +151,11 @@ export type MediaRow = {
 	copied_run: string | null
 }
 
-// Marks every original the dump references as required by `run`. Call it during the dump's freeze, after the last
-// chunk is read, so the set is exactly the dump's. Copies made under another destination (bucket and recipients), and
-// originals found absent before, become pending again: a new destination gets a full copy, and absence is rechecked.
+// Replaces the run's membership with every original the dump references. It runs in the transaction that completes
+// the dump, under its freeze (StoreAdmin.dumpFinish), so the set is exactly the dump's; a restarted dump replaces the
+// set of the attempt before it. Rows leaving the set keep their copy metadata for reuse until the next success prunes
+// them. Copies made under another destination (bucket and recipients), and originals found absent before, become
+// pending again: a new destination gets a full copy, and absence is rechecked.
 export function captureMedia(
 	sql: SqlStorage,
 	runner: string,
@@ -164,6 +166,7 @@ export function captureMedia(
 	if (!holds(readBackupState(sql), runner, now)) {
 		return { ok: false, code: 'lost' }
 	}
+	sql.exec("UPDATE backup_media SET required_run = '' WHERE required_run = ?", run)
 	sql.exec(
 		`UPDATE backup_media SET state = 'pending', destination = NULL, key = NULL, size = NULL, sha256 = NULL,
 		 plain_size = NULL, plain_sha256 = NULL, copied_run = NULL
