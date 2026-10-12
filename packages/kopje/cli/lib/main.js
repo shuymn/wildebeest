@@ -215,7 +215,25 @@ export async function run({
 					if (all === ids.length > 0 || !ids.every((id) => /^\d{1,19}$/.test(id))) {
 						throw new UsageError('deliveries retry <id>... | deliveries retry --all')
 					}
-					print(await client.post('/admin/deliveries/retry', all ? { all: true } : { ids }))
+					if (!all) {
+						print(await client.post('/admin/deliveries/retry', { ids }))
+						return 0
+					}
+					// Every page of eligible rows, following the cursor.
+					const total = { retried: 0, skipped: 0, refused: 0 }
+					/** @type {string | null} */
+					let after = null
+					do {
+						const page = await client.post(
+							'/admin/deliveries/retry',
+							after === null ? { all: true } : { all: true, after }
+						)
+						total.retried += page.retried
+						total.refused += page.refused
+						total.skipped = Math.max(total.skipped, page.skipped)
+						after = page.more ? page.next : null
+					} while (after !== null)
+					print(total)
 					return 0
 				}
 				if (rest.length > 0) {

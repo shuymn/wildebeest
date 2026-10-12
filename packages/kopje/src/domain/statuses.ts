@@ -587,12 +587,15 @@ export const deleteStatus = userWriteOperation<
 	if (!input.deleteMedia) {
 		db.run('UPDATE media_attachments SET status_id = NULL, position = 0 WHERE status_id = ?', current.id)
 	}
-	// Recorded while the status and its receipts still exist, so the Delete reaches every inbox that received it.
+	// Recorded while the status, its boosts and their receipts still exist, so the Delete reaches every inbox that
+	// received the status, and each local boost's Undo every inbox that received the boost or may still: a booster's
+	// followers may never have received the original, so its Delete would not reach them.
 	if (facts !== null) {
 		recordOutbound(db, accountId, deleteActivity(facts), input.now)
 	}
+	undoLocalBoosts(db, current.id, input.now)
 	// Children cascade (mentions, tags, edits, favourites, bookmarks, notifications, boosts and their receipts);
-	// replies keep their in_reply_to_uri. Receivers drop boosts of a deleted original, as Mastodon does.
+	// replies keep their in_reply_to_uri.
 	db.run('DELETE FROM statuses WHERE id = ?', current.id)
 	recountStatuses(db, accountId)
 	for (const booster of boosters) {
@@ -1015,6 +1018,33 @@ function announceOf(
 		objectUri: target.uri,
 		authorUri: target.author_uri,
 		authorId: target.account_id,
+	}
+}
+
+// Records an Undo(Announce) for every local boost of a status about to be deleted.
+function undoLocalBoosts(db: Db, originalId: string, now: number): void {
+	const target = db.first<Target>(
+		`SELECT o.id, o.uri, o.account_id, o.visibility, a.uri AS author_uri
+		FROM statuses o JOIN accounts a ON a.id = o.account_id WHERE o.id = ?`,
+		originalId
+	)
+	if (target === undefined) {
+		return
+	}
+	const boosts = db.all<{ account_id: string; uri: string; visibility: Visibility; published_at: string }>(
+		`SELECT r.account_id, r.uri, r.visibility, r.published_at FROM statuses r
+		JOIN local_accounts l ON l.account_id = r.account_id WHERE r.reblog_of_id = ? ORDER BY r.id`,
+		originalId
+	)
+	for (const boost of boosts) {
+		const announce = announceOf(
+			viewerUri(db, boost.account_id),
+			boost.uri,
+			boost.visibility,
+			boost.published_at,
+			target
+		)
+		recordOutbound(db, boost.account_id, undoAnnounceActivity(announce), now)
 	}
 }
 

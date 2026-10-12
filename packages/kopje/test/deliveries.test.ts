@@ -118,6 +118,8 @@ describe('expansion (NET-2, VIS-3)', () => {
 		const { alice } = h.users
 		await remoteAccount(h.store, 'carol', 'carol.example')
 		const direct = await post(h, alice, { status: '@carol@carol.example psst', visibility: 'direct' })
+		// The Create is in flight when the edit comes, so the server will have the object: the edit goes as an Update.
+		await h.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'in-flight' })
 		// The edit removes the mention; carol stays addressed as a silent recipient (VIS-11).
 		await h.request(`/api/v1/statuses/${direct.id}`, bearer(alice.token, json({ status: 'edited' }, { method: 'PUT' })))
 		const [create, update] = await rows(h.store)
@@ -329,7 +331,9 @@ describe('retries and giving up (RES-5)', () => {
 			ok: true,
 			retried: 1,
 			skipped: 0,
+			refused: 0,
 			more: false,
+			next: null,
 		})
 		const fansRows = (await rows(h.store)).filter((r) => r.inbox_url === 'https://fans.example/inbox')
 		expect(fansRows.map((r) => [r.id, r.state, r.attempts])).toEqual([
@@ -349,7 +353,9 @@ describe('retries and giving up (RES-5)', () => {
 			ok: true,
 			retried: 0,
 			skipped: 0,
+			refused: 0,
 			more: false,
+			next: null,
 		})
 	})
 })

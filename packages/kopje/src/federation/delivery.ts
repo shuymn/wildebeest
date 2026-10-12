@@ -69,7 +69,11 @@ export async function postActivity(deps: PostDeps, target: PostTarget): Promise<
 		// Never becomes deliverable: the stored URL itself is refused.
 		return { kind: 'failed', status: null, error: 'refused inbox URL', permanent: true }
 	}
-	const budget = Math.min(deps.timeoutMs ?? DELIVERY_TIMEOUT_MS, target.deadline - deps.now())
+	// One absolute deadline: the earlier of the POST timeout and the lease margin. The timer aborts at it, and the
+	// clock is checked against it after the key is loaded and right before the POST, in case the timer runs late.
+	const started = deps.now()
+	const deadline = Math.min(started + (deps.timeoutMs ?? DELIVERY_TIMEOUT_MS), target.deadline)
+	const budget = deadline - started
 	if (budget <= 0) {
 		return exhausted
 	}
@@ -78,7 +82,7 @@ export async function postActivity(deps: PostDeps, target: PostTarget): Promise<
 	const aborted = new Promise<never>((_, reject) => {
 		controller.signal.addEventListener('abort', () => reject(controller.signal.reason as Error), { once: true })
 	})
-	const live = () => !controller.signal.aborted && deps.now() < target.deadline
+	const live = () => !controller.signal.aborted && deps.now() < deadline
 	const sending = (async (): Promise<DeliveryOutcome> => {
 		try {
 			await (deps.checkHost ?? dnsCheckHost)(url)
@@ -87,8 +91,11 @@ export async function postActivity(deps: PostDeps, target: PostTarget): Promise<
 			return { kind: 'failed', status: null, error: 'refused or unresolved host', permanent: false }
 		}
 		const sign = live() ? await target.signer() : null
+		if (!live()) {
+			return exhausted
+		}
 		if (sign === null) {
-			return live() ? { kind: 'failed', status: null, error: 'signing key unavailable', permanent: false } : exhausted
+			return { kind: 'failed', status: null, error: 'signing key unavailable', permanent: false }
 		}
 		const request = await sign(
 			new Request(url, {

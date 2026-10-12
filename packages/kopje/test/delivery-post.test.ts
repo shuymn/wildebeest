@@ -259,7 +259,7 @@ describe('delivery rounds', () => {
 		const h = await signedCommunity()
 		await post(h, h.users.alice, { status: 'hello' })
 		const { fetch } = recordingFetch(
-			(request) => new Response(null, { status: request.url.startsWith('https://fans.example') ? 503 : 202 })
+			(request) => new Response(null, { status: new URL(request.url).origin === 'https://fans.example' ? 503 : 202 })
 		)
 		const result = await deliveryRound(testEnv(new QueueSim()), roundDeps(h.store, fetch))
 		expect(result.settled.sort()).toEqual(['delivered', 'retry'])

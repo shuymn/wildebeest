@@ -262,13 +262,15 @@ describe('kopje-admin', () => {
 		expect(JSON.parse((await cli(['deliveries', 'retry', '7'], { fetch })).out)).toEqual({
 			retried: 1,
 			skipped: 0,
+			refused: 0,
 			more: false,
+			next: null,
 		})
 		expect(JSON.parse((await cli(['deliveries'], { fetch })).out)).toMatchObject({ backlog: { gaveUp: 0, pending: 1 } })
 		expect(JSON.parse((await cli(['deliveries', 'retry', '--all'], { fetch })).out)).toEqual({
 			retried: 0,
 			skipped: 0,
-			more: false,
+			refused: 0,
 		})
 		// A superseded activity (its Undo or Delete was recorded since) is refused with a reason.
 		await runInDurableObject(store, (_instance, state) => {
@@ -281,7 +283,7 @@ describe('kopje-admin', () => {
 		expect(JSON.parse((await cli(['deliveries', 'retry', '--all'], { fetch })).out)).toEqual({
 			retried: 0,
 			skipped: 1,
-			more: false,
+			refused: 0,
 		})
 		expect((await cli(['deliveries', 'retry'], { fetch })).code).toBe(2)
 		expect((await cli(['deliveries', 'retry', '7', '--all'], { fetch })).code).toBe(2)

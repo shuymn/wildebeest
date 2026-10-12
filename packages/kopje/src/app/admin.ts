@@ -274,19 +274,23 @@ export function adminRoutes({ build, store, fetch, now, doorbell }: AdminDeps) {
 	})
 
 	admin.post('/deliveries/retry', async (c) => {
-		const { ids, all } = await jsonBody(c)
+		const { ids, all, after } = await jsonBody(c)
 		const named =
 			Array.isArray(ids) && ids.length > 0 && ids.every((id) => typeof id === 'string' && /^\d{1,19}$/.test(id))
-		if (all === true ? ids !== undefined : !named) {
-			return c.json({ error: 'expected {"ids": [string, ...]} or {"all": true}' }, 400)
+		const cursor = after === undefined || (typeof after === 'string' && /^\d{1,19}$/.test(after))
+		if ((all === true ? ids !== undefined : !named || after !== undefined) || !cursor) {
+			return c.json({ error: 'expected {"ids": [string, ...]} or {"all": true, "after"?: string}' }, 400)
 		}
 		const result = await stub(c).retryDeliveries(build(c.env), {
 			ids: all === true ? 'all' : (ids as string[]),
 			now: now(),
+			...(typeof after === 'string' ? { after } : {}),
 		})
 		if (!result.ok) {
 			const error =
-				'a later activity about the same object (an Undo, a Delete or an Update) supersedes these; sending them again could undo it'
+				result.code === 'superseded'
+					? 'a later activity about the same object (an Undo, a Delete or an Update) supersedes these; sending them again could undo it'
+					: 'these copies are addressed to a silent recipient without a personal inbox; they are never sent elsewhere'
 			return c.json({ error, code: result.code, ids: result.ids }, 409)
 		}
 		if (result.retried > 0) {

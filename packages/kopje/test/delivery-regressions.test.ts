@@ -66,9 +66,10 @@ describe('silent recipients (VIS-2, VIS-3, VIS-7)', () => {
 			status: '@carol@carol.example @erin@misskey.example psst',
 			visibility: 'direct',
 		})
-		// The edit removes both mentions; they stay addressed as silent recipients.
-		await h.request(`/api/v1/statuses/${direct.id}`, bearer(alice.token, json({ status: 'edited' }, { method: 'PUT' })))
+		// The Creates are in flight (one lane per server) when the edit removes both mentions; they stay addressed as
+		// silent recipients.
 		const claimed = await claim(h.store, NOW, 'a')
+		await h.request(`/api/v1/statuses/${direct.id}`, bearer(alice.token, json({ status: 'edited' }, { method: 'PUT' })))
 		// The Creates first (one lane per server); complete them to reach the Updates.
 		for (const delivery of claimed.deliveries) {
 			await complete(h.store, delivery.id, 'a', NOW, OK)
@@ -104,6 +105,8 @@ describe('silent recipients (VIS-2, VIS-3, VIS-7)', () => {
 		const carol = await remoteAccount(h.store, 'carol', 'carol.example')
 		await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'carol.example'), alice.id)
 		const status = await post(h, alice, { status: '@carol@carol.example hi', visibility: 'private' })
+		// The Create is in flight when the edit comes, so the server will have the object: the edit goes as an Update.
+		await h.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'in-flight' })
 		await h.request(
 			`/api/v1/statuses/${status.id}`,
 			bearer(alice.token, json({ status: 'no mention' }, { method: 'PUT' }))
@@ -128,9 +131,11 @@ describe('lane order across a server (NET-2)', () => {
 		const { alice } = h.users
 		await remoteAccount(h.store, 'carol', 'carol.example')
 		const direct = await post(h, alice, { status: '@carol@carol.example psst', visibility: 'direct' })
+		// The Create is in flight when the edit comes, so the server will have the object: the edit goes as an Update.
+		await h.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'in-flight' })
 		await h.request(`/api/v1/statuses/${direct.id}`, bearer(alice.token, json({ status: 'edited' }, { method: 'PUT' })))
 		expect((await rows(h.store)).map((r) => [r.type, r.inbox_url, r.state])).toEqual([
-			['Create', 'https://carol.example/inbox', 'pending'],
+			['Create', 'https://carol.example/inbox', 'leased'],
 			['Update', 'https://carol.example/users/carol/inbox', 'queued'],
 		])
 	})
@@ -295,7 +300,9 @@ describe('operator retry of superseded activities (RES-5)', () => {
 			ok: true,
 			retried: 0,
 			skipped: 1,
+			refused: 0,
 			more: false,
+			next: null,
 		})
 		expect((await rows(h.store)).map((r) => [r.type, r.state])).toEqual([['Like', 'gave_up']])
 	})
