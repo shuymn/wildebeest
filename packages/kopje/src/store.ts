@@ -16,9 +16,12 @@ import { checkCredential, type Credential, type UserCredential } from './domain/
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import { acceptInbox, type InboxDelivery } from './domain/inbox'
 import { instanceInfo } from './domain/instance'
+import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
 import { getSetupState } from './domain/setup'
 import { saveSnapshot } from './domain/snapshot'
+import * as statuses from './domain/statuses'
+import * as timelines from './domain/timelines'
 import { type ImportAuthority, StoreAdmin } from './platform/store-admin'
 import { StoreKernel, type StoreOperation } from './platform/store-kernel'
 import { buildOf, PACKAGE_VERSION } from './version'
@@ -285,6 +288,104 @@ export class Store extends DurableObject<Env> {
 
 	listFollows(callerBuild: string, input: accounts.ListFollowsInput) {
 		return this.#kernel.execute(callerBuild, accounts.listFollows, input)
+	}
+
+	// Statuses, timelines and notifications (B4a).
+
+	createStatus(callerBuild: string, input: OperationInput<typeof statuses.createStatus>) {
+		return this.#kernel.execute(callerBuild, statuses.createStatus, input)
+	}
+
+	editStatus(callerBuild: string, input: OperationInput<typeof statuses.editStatus>) {
+		return this.#kernel.execute(callerBuild, statuses.editStatus, input)
+	}
+
+	deleteStatus(callerBuild: string, input: OperationInput<typeof statuses.deleteStatus>) {
+		return this.#kernel.execute(callerBuild, statuses.deleteStatus, input)
+	}
+
+	getStatus(callerBuild: string, input: OperationInput<typeof statuses.getStatus>) {
+		return this.#kernel.execute(callerBuild, statuses.getStatus, input)
+	}
+
+	statusContext(callerBuild: string, input: OperationInput<typeof statuses.statusContext>) {
+		return this.#kernel.execute(callerBuild, statuses.statusContext, input)
+	}
+
+	statusHistory(callerBuild: string, input: OperationInput<typeof statuses.statusHistory>) {
+		return this.#kernel.execute(callerBuild, statuses.statusHistory, input)
+	}
+
+	statusSource(callerBuild: string, input: OperationInput<typeof statuses.statusSource>) {
+		return this.#kernel.execute(callerBuild, statuses.statusSource, input)
+	}
+
+	favourite(callerBuild: string, input: OperationInput<typeof statuses.favourite>) {
+		return this.#kernel.execute(callerBuild, statuses.favourite, input)
+	}
+
+	unfavourite(callerBuild: string, input: OperationInput<typeof statuses.unfavourite>) {
+		return this.#kernel.execute(callerBuild, statuses.unfavourite, input)
+	}
+
+	reblog(callerBuild: string, input: OperationInput<typeof statuses.reblog>) {
+		return this.#kernel.execute(callerBuild, statuses.reblog, input)
+	}
+
+	unreblog(callerBuild: string, input: OperationInput<typeof statuses.unreblog>) {
+		return this.#kernel.execute(callerBuild, statuses.unreblog, input)
+	}
+
+	bookmark(callerBuild: string, input: OperationInput<typeof statuses.bookmark>) {
+		return this.#kernel.execute(callerBuild, statuses.bookmark, input)
+	}
+
+	unbookmark(callerBuild: string, input: OperationInput<typeof statuses.unbookmark>) {
+		return this.#kernel.execute(callerBuild, statuses.unbookmark, input)
+	}
+
+	interactors(callerBuild: string, input: OperationInput<typeof statuses.interactors>) {
+		return this.#kernel.execute(callerBuild, statuses.interactors, input)
+	}
+
+	homeTimeline(callerBuild: string, input: OperationInput<typeof timelines.homeTimeline>) {
+		return this.#kernel.execute(callerBuild, timelines.homeTimeline, input)
+	}
+
+	publicTimeline(callerBuild: string, input: OperationInput<typeof timelines.publicTimeline>) {
+		return this.#kernel.execute(callerBuild, timelines.publicTimeline, input)
+	}
+
+	tagTimeline(callerBuild: string, input: OperationInput<typeof timelines.tagTimeline>) {
+		return this.#kernel.execute(callerBuild, timelines.tagTimeline, input)
+	}
+
+	accountStatuses(callerBuild: string, input: OperationInput<typeof timelines.accountStatuses>) {
+		return this.#kernel.execute(callerBuild, timelines.accountStatuses, input)
+	}
+
+	bookmarksList(callerBuild: string, input: OperationInput<typeof timelines.bookmarks>) {
+		return this.#kernel.execute(callerBuild, timelines.bookmarks, input)
+	}
+
+	favouritesList(callerBuild: string, input: OperationInput<typeof timelines.favourites>) {
+		return this.#kernel.execute(callerBuild, timelines.favourites, input)
+	}
+
+	listNotifications(callerBuild: string, input: OperationInput<typeof notifications.listNotifications>) {
+		return this.#kernel.execute(callerBuild, notifications.listNotifications, input)
+	}
+
+	getNotification(callerBuild: string, input: OperationInput<typeof notifications.getNotification>) {
+		return this.#kernel.execute(callerBuild, notifications.getNotification, input)
+	}
+
+	dismissNotification(callerBuild: string, input: OperationInput<typeof notifications.dismissNotification>) {
+		return this.#kernel.execute(callerBuild, notifications.dismissNotification, input)
+	}
+
+	clearNotifications(callerBuild: string, input: OperationInput<typeof notifications.clearNotifications>) {
+		return this.#kernel.execute(callerBuild, notifications.clearNotifications, input)
 	}
 
 	override async alarm(): Promise<void> {

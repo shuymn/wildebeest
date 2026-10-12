@@ -8,6 +8,7 @@ import {
 	ADMIN_AUD,
 	ADMIN_EMAIL,
 	dumpViaRpc,
+	footprint,
 	SERVICE_CLIENT_ID,
 	seedStore,
 	setAccess,
@@ -15,7 +16,6 @@ import {
 	TEAM_DOMAIN,
 } from './ops-helpers'
 import { MIGRATIONS } from '../src/db/migrations'
-import { readCatalog } from '../src/platform/dump-catalog'
 import { StoreAdmin } from '../src/platform/store-admin'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -37,22 +37,6 @@ async function importing(): Promise<{ store: StoreStub; id: string }> {
 
 function id(n: number): string {
 	return String(120_000_000_000_000_000n + BigInt(n))
-}
-
-// Every row of every dumped table, and every set self-reference: what one reset step may change at most BATCH of.
-function footprint(sql: SqlStorage): number {
-	let total = 0
-	for (const spec of readCatalog(sql)) {
-		const where =
-			spec.only === undefined
-				? ''
-				: ` WHERE "${spec.only.column}" IN (${spec.only.values.map((v) => `'${v}'`).join(',')})`
-		total += sql.exec<{ n: number }>(`SELECT count(*) AS n FROM "${spec.name}"${where}`).one().n
-		for (const column of spec.deferred) {
-			total += sql.exec<{ n: number }>(`SELECT count(*) AS n FROM "${spec.name}" WHERE "${column}" IS NOT NULL`).one().n
-		}
-	}
-	return total
 }
 
 describe('reset steps are bounded', () => {

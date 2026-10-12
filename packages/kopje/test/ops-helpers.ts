@@ -4,6 +4,7 @@ import { LEGACY_EMPTY_KEK } from './federation-helpers'
 import { BUILD } from './helpers'
 import { readDumpFile, statementChunks } from '../cli/lib/format.js'
 import { CONFIG_KEYS } from '../src/platform/access-settings'
+import { readCatalog } from '../src/platform/dump-catalog'
 import { END_LINE } from '../src/platform/dump-format'
 import { sha256Hex } from '../src/platform/sha256'
 import type { StoreStub } from '../src/platform/store-client'
@@ -343,4 +344,20 @@ export async function importViaRpc(
 		}
 	}
 	return { id, chunks: seq, report: await finishImport(store, id, text, authority) }
+}
+
+// Every row of every dumped table, and every set self-reference: a reset step may change at most its batch of these.
+export function footprint(sql: SqlStorage): number {
+	let total = 0
+	for (const spec of readCatalog(sql)) {
+		const where =
+			spec.only === undefined
+				? ''
+				: ` WHERE "${spec.only.column}" IN (${spec.only.values.map((v) => `'${v}'`).join(',')})`
+		total += sql.exec<{ n: number }>(`SELECT count(*) AS n FROM "${spec.name}"${where}`).one().n
+		for (const column of spec.deferred) {
+			total += sql.exec<{ n: number }>(`SELECT count(*) AS n FROM "${spec.name}" WHERE "${column}" IS NOT NULL`).one().n
+		}
+	}
+	return total
 }
