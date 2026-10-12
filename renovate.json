@@ -84,6 +84,11 @@
 			"matchPackageNames": ["@vitest/coverage-istanbul", "vitest"],
 			"matchUpdateTypes": ["major"],
 			"prCreation": "status-success"
+		},
+		{
+			"description": "Hold @cloudflare/vitest-pool-workers below 0.23.0, which was published by hand without the provenance of earlier releases; the package was renamed to @cloudflare/vitest-plugin, which replaces it",
+			"matchPackageNames": ["@cloudflare/vitest-pool-workers"],
+			"allowedVersions": "<0.23.0"
 		}
 	]
 }
