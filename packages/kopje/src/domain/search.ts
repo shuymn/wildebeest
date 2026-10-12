@@ -7,18 +7,24 @@ import { normalizeTag } from './status-text'
 import type { Db } from '../db/sql'
 
 // GET /api/v2/search (design §6, "search"): local data only, matched with instr on search_text (NFKC); no virtual
-// table. Accounts: every known account (domain/accounts.ts). Hashtags: by prefix. Statuses: the viewer's library (own
-// statuses and boosts, favourites, bookmarks, mentions), or one account's statuses with account_id. Every status passes
-// listableSql (VIS-1 and the viewer's filters) in the query, before LIMIT (RES-7).
+// table. Accounts: domain/accounts.ts. Statuses: the viewer's library (own statuses, boosted originals, favourites,
+// bookmarks, mentions), or one account's statuses with account_id. Hashtags: by prefix, from statuses the viewer may see.
+// Every status passes listableSql (VIS-1 and the viewer's filters) in the query, before LIMIT (RES-7).
 //
-// Work is bounded (RES-3, RES-7): each library source contributes at most LIBRARY_SOURCE_LIMIT of its newest rows, so a
-// query matches against at most 4 x LIBRARY_SOURCE_LIMIT candidates; hashtags look at most HASHTAG_CANDIDATES names
-// and, for each, the newest HASHTAG_VISIBILITY_PROBE statuses that carry it. Statuses older than the window are not
-// found; a client pages with max_id, which moves the window for own statuses and mentions.
+// Work is bounded (RES-3, RES-7). Each library source reads at most LIBRARY_SOURCE_LIMIT rows through an index whose
+// order is the returned status id, with max_id and min_id applied inside the source, so a query matches at most
+// 5 x LIBRARY_SOURCE_LIMIT candidates and a client paging with max_id reaches every older entry of every source.
+//
+// Hashtags are ranked only over statuses the viewer is allowed to see, inside two windows that private statuses cannot
+// change: the newest HASHTAG_LIBRARY_LIMIT entries of each library source, and the newest HASHTAG_PUBLIC_WINDOW public
+// statuses the instance knows (a partial index holds public originals only). Candidates pass listableSql before tags
+// are taken from them, so a tag used only in posts the viewer may not see is never shown, and hidden statuses cannot
+// push a visible tag out. Trade-off: a tag found only in older public posts outside the viewer's library is not
+// found; blocks, mutes and suspensions can still thin the public window for one viewer, which reveals no content.
 
 export const LIBRARY_SOURCE_LIMIT = 2500
-export const HASHTAG_CANDIDATES = 100
-export const HASHTAG_VISIBILITY_PROBE = 50
+export const HASHTAG_LIBRARY_LIMIT = 500
+export const HASHTAG_PUBLIC_WINDOW = 2000
 
 export type Hashtag = { name: string; url: string; history: [] }
 
@@ -67,6 +73,22 @@ class Params {
 	}
 }
 
+// The viewer's library as one candidate list of status ids, newest first per source, each source read through an
+// index ordered by the id it returns. `cursor` adds max_id and min_id conditions on that id.
+function librarySources(limit: string, cursor: (column: string) => string): string {
+	return `SELECT id FROM (SELECT id FROM statuses WHERE account_id = ?1 AND reblog_of_id IS NULL ${cursor('id')}
+				ORDER BY id DESC LIMIT ${limit})
+			UNION SELECT id FROM (SELECT reblog_of_id AS id FROM statuses
+				WHERE account_id = ?1 AND reblog_of_id IS NOT NULL ${cursor('reblog_of_id')}
+				ORDER BY reblog_of_id DESC LIMIT ${limit})
+			UNION SELECT id FROM (SELECT status_id AS id FROM favourites WHERE account_id = ?1 ${cursor('status_id')}
+				ORDER BY status_id DESC LIMIT ${limit})
+			UNION SELECT id FROM (SELECT status_id AS id FROM bookmarks WHERE account_id = ?1 ${cursor('status_id')}
+				ORDER BY status_id DESC LIMIT ${limit})
+			UNION SELECT id FROM (SELECT status_id AS id FROM status_mentions WHERE account_id = ?1 ${cursor('status_id')}
+				ORDER BY status_id DESC LIMIT ${limit})`
+}
+
 function searchStatuses(db: Db, input: SearchRequest, viewerId: string): Status[] {
 	const { include, exclude } = statusQueryTerms(input.query)
 	if (include.length === 0) {
@@ -74,7 +96,10 @@ function searchStatuses(db: Db, input: SearchRequest, viewerId: string): Status[
 	}
 	const p = new Params(viewerId)
 	const limit = p.add(LIBRARY_SOURCE_LIMIT)
-	const below = input.maxId === undefined ? '' : `AND id < ${p.add(input.maxId)}`
+	const maxId = input.maxId === undefined ? null : p.add(input.maxId)
+	const minId = input.minId === undefined ? null : p.add(input.minId)
+	const cursor = (column: string) =>
+		`${maxId === null ? '' : `AND ${column} < ${maxId}`} ${minId === null ? '' : `AND ${column} > ${minId}`}`
 	let candidates: string
 	if (input.accountId !== undefined) {
 		// One account's statuses (the viewer's library is not required; listableSql still decides).
@@ -83,15 +108,9 @@ function searchStatuses(db: Db, input: SearchRequest, viewerId: string): Status[
 			return []
 		}
 		candidates = `SELECT id FROM (SELECT id FROM statuses WHERE account_id = ${p.add(accountId)}
-			AND reblog_of_id IS NULL ${below} ORDER BY id DESC LIMIT ${limit})`
+			AND reblog_of_id IS NULL ${cursor('id')} ORDER BY id DESC LIMIT ${limit})`
 	} else {
-		// The viewer's library, each source by its own index, newest first.
-		candidates = `SELECT id FROM (SELECT IFNULL(reblog_of_id, id) AS id FROM statuses WHERE account_id = ?1 ${below}
-				ORDER BY id DESC LIMIT ${limit})
-			UNION SELECT id FROM (SELECT status_id AS id FROM favourites WHERE account_id = ?1 ORDER BY id DESC LIMIT ${limit})
-			UNION SELECT id FROM (SELECT status_id AS id FROM bookmarks WHERE account_id = ?1 ORDER BY id DESC LIMIT ${limit})
-			UNION SELECT id FROM (SELECT status_id AS id FROM status_mentions WHERE account_id = ?1
-				${below.replace('id <', 'status_id <')} ORDER BY status_id DESC LIMIT ${limit})`
+		candidates = librarySources(limit, cursor)
 	}
 	const matches = (variants: string[]) =>
 		`(${variants.map((variant) => `instr(s.search_text, ${p.add(variant)}) > 0`).join(' OR ')})`
@@ -102,12 +121,6 @@ function searchStatuses(db: Db, input: SearchRequest, viewerId: string): Status[
 		...exclude.map((variants) => `NOT ${matches(variants)}`),
 		listableSql('s', '?1'),
 	]
-	if (input.maxId !== undefined) {
-		where.push(`s.id < ${p.add(input.maxId)}`)
-	}
-	if (input.minId !== undefined) {
-		where.push(`s.id > ${p.add(input.minId)}`)
-	}
 	const ids = db
 		.all<{ id: string }>(
 			`WITH candidates(id) AS (${candidates})
@@ -123,31 +136,27 @@ function searchStatuses(db: Db, input: SearchRequest, viewerId: string): Status[
 // The largest code point, as UTF-8 compares: every name with the prefix sorts below prefix + this.
 const PREFIX_END = '\u{10FFFF}'
 
-// Tags whose name starts with the query, that the viewer can see on at least one status: a tag used only in posts the
-// viewer may not see is not revealed. Distinct names are walked by the index one at a time (bounded), exact match
-// first, then shorter names.
+// Tags whose name starts with the query, from the statuses in the two windows that the viewer may see (see above), exact
+// match first, then shorter names.
 function searchHashtags(db: Db, input: SearchRequest, viewerId: string): Hashtag[] {
 	const prefix = normalizeTag(input.query.trim().replace(/^#/, ''))
 	if (prefix === '' || /\s/.test(prefix)) {
 		return []
 	}
 	const rows = db.all<{ name: string }>(
-		`WITH RECURSIVE names(name, n) AS (
-			SELECT (SELECT min(name) FROM status_tags WHERE name >= ?2 AND name < ?3), 1
-			UNION ALL
-			SELECT (SELECT min(name) FROM status_tags WHERE name > names.name AND name < ?3), n + 1
-			FROM names WHERE names.name IS NOT NULL AND n < ?4
-		)
-		SELECT name FROM names
-		WHERE name IS NOT NULL AND EXISTS (
-			SELECT 1 FROM (SELECT status_id FROM status_tags t WHERE t.name = names.name ORDER BY status_id DESC LIMIT ?5) t
-			JOIN statuses s ON s.id = t.status_id WHERE ${listableSql('s', '?1')})
-		ORDER BY name = ?2 DESC, length(name), name LIMIT ?6 OFFSET ?7`,
+		// The Store's SQLite allows five terms per compound SELECT, so the windows are two CTEs. CROSS JOIN keeps the
+		// windows on the outside: tags are looked up per visible status, never scanned by name.
+		`WITH library(id) AS (${librarySources('?4', () => '')}),
+		public(id) AS (SELECT id FROM statuses WHERE visibility = 'public' AND reblog_of_id IS NULL ORDER BY id DESC LIMIT ?5),
+		candidates(id) AS (SELECT id FROM library UNION SELECT id FROM public),
+		visible(id) AS (SELECT s.id FROM candidates c JOIN statuses s ON s.id = c.id WHERE ${listableSql('s', '?1')})
+		SELECT DISTINCT t.name FROM visible v CROSS JOIN status_tags t ON t.status_id = v.id AND t.name >= ?2 AND t.name < ?3
+		ORDER BY t.name = ?2 DESC, length(t.name), t.name LIMIT ?6 OFFSET ?7`,
 		viewerId,
 		prefix,
 		`${prefix}${PREFIX_END}`,
-		HASHTAG_CANDIDATES,
-		HASHTAG_VISIBILITY_PROBE,
+		HASHTAG_LIBRARY_LIMIT,
+		HASHTAG_PUBLIC_WINDOW,
 		input.limit,
 		input.offset
 	)

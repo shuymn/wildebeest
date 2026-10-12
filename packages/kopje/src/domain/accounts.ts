@@ -387,6 +387,17 @@ export const searchAccounts = userReadOperation<SearchInput, Account[]>((db, inp
 	findAccounts(db, input, viewer.accountId)
 )
 
+// The work of an account search is bounded (RES-7): it matches only candidates from three indexed sources, never the
+// whole table: every local account, up to ACCOUNT_PREFIX_LIMIT accounts whose username starts with the first term, and
+// the ACCOUNT_RECENT_LIMIT accounts the instance learned of most recently (or, with following, up to that many
+// followed accounts). Trade-off: a remote account known for long is found by its username prefix, not by a word of
+// its display name.
+export const ACCOUNT_PREFIX_LIMIT = 1000
+export const ACCOUNT_RECENT_LIMIT = 5000
+
+// The largest code point, as UTF-8 compares: every string with a prefix sorts below prefix + this.
+const PREFIX_END = '\u{10FFFF}'
+
 export function findAccounts(db: Db, input: SearchInput, viewerId: string): Account[] {
 	const query = input.query
 		.trim()
@@ -397,25 +408,35 @@ export function findAccounts(db: Db, input: SearchInput, viewerId: string): Acco
 		return []
 	}
 	const where = terms.map((variants) => `(${variants.map(() => 'instr(a.search_text, ?) > 0').join(' OR ')})`)
-	const params: SqlStorageValue[] = terms.flat()
-	if (input.following) {
-		where.push(
-			"EXISTS (SELECT 1 FROM follows f WHERE f.account_id = ? AND f.target_account_id = a.id AND f.state = 'accepted')"
-		)
-		params.push(viewerId)
-	}
 	const exactUsername = (query.split('@')[0] ?? '').toLowerCase()
-	const rows = db.all<AccountRow>(
-		`SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM}
-		WHERE l.suspended_at IS NULL AND ${where.join(' AND ')}
-		ORDER BY lower(a.username) = ? DESC, a.domain IS NULL DESC, a.followers_count DESC, a.id
-		LIMIT ? OFFSET ?`,
-		...params,
-		exactUsername,
-		input.limit,
-		input.offset
-	)
-	return rows.map((row) => presentAccount(row, input.present))
+	const prefix = (terms[0]?.[0] ?? '').replace(/^@/, '').split('@')[0] ?? ''
+	const candidates = input.following
+		? `SELECT target_account_id AS id FROM (SELECT target_account_id FROM follows
+				WHERE account_id = ? AND state = 'accepted' LIMIT ${ACCOUNT_RECENT_LIMIT})`
+		: `SELECT account_id AS id FROM local_accounts
+			UNION SELECT id FROM (SELECT id FROM accounts WHERE lower(username) >= ? AND lower(username) < ?
+				LIMIT ${ACCOUNT_PREFIX_LIMIT})
+			UNION SELECT id FROM (SELECT id FROM accounts ORDER BY rowid DESC LIMIT ${ACCOUNT_RECENT_LIMIT})`
+	const candidateParams: SqlStorageValue[] = input.following ? [viewerId] : [prefix, `${prefix}${PREFIX_END}`]
+	const ids = db
+		.all<{ id: string }>(
+			`WITH candidates(id) AS (${candidates})
+			SELECT a.id FROM candidates c JOIN accounts a ON a.id = c.id LEFT JOIN local_accounts l ON l.account_id = a.id
+			WHERE l.suspended_at IS NULL AND ${where.join(' AND ')}
+			ORDER BY lower(a.username) = ? DESC, a.domain IS NULL DESC, a.followers_count DESC, a.id
+			LIMIT ? OFFSET ?`,
+			...candidateParams,
+			...terms.flat(),
+			exactUsername,
+			input.limit,
+			input.offset
+		)
+		.map((row) => row.id)
+	const accounts = presentAccountsById(db, ids, input.present)
+	return ids.flatMap((id) => {
+		const account = accounts.get(id)
+		return account === undefined ? [] : [account]
+	})
 }
 
 function escapeRegExp(text: string): string {

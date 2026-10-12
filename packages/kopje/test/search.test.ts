@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, login, sql } from './api-helpers'
 import { act, block, community, follow, mute, post, remoteAccount, seedStatus } from './status-helpers'
-import { HASHTAG_CANDIDATES, LIBRARY_SOURCE_LIMIT } from '../src/domain/search'
+import { HASHTAG_PUBLIC_WINDOW, LIBRARY_SOURCE_LIMIT } from '../src/domain/search'
 
 type Results = {
 	accounts: { id: string; acct: string }[]
@@ -189,7 +189,7 @@ describe('GET /api/v2/search', () => {
 
 	it('matches a bounded window of the library', async () => {
 		expect(LIBRARY_SOURCE_LIMIT).toBeLessThanOrEqual(2500)
-		expect(HASHTAG_CANDIDATES).toBeLessThanOrEqual(100)
+		expect(HASHTAG_PUBLIC_WINDOW).toBeLessThanOrEqual(2000)
 		const { h, statusIds } = await fixture()
 		const { alice } = h.users
 		const old = await post(h, alice, { status: 'window oldest' })

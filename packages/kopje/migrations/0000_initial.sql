@@ -47,6 +47,8 @@ CREATE TABLE accounts (
 
 CREATE INDEX accounts_domain_username ON accounts (domain, lower(username));
 CREATE UNIQUE INDEX accounts_local_username ON accounts (lower(username)) WHERE domain IS NULL;
+-- account search: username prefix across domains
+CREATE INDEX accounts_username ON accounts (lower(username));
 CREATE UNIQUE INDEX accounts_legacy_id ON accounts (legacy_id) WHERE legacy_id IS NOT NULL;
 
 CREATE TABLE local_accounts (
@@ -119,6 +121,10 @@ CREATE INDEX statuses_account ON statuses (account_id, id);
 -- feeds; queries repeat the same WHERE expression
 CREATE INDEX statuses_feed ON statuses (account_id, id) WHERE visibility IN ('public', 'unlisted', 'private');
 CREATE UNIQUE INDEX statuses_reblog ON statuses (reblog_of_id, account_id) WHERE reblog_of_id IS NOT NULL;
+-- search: an account's originals and boosted originals by the id they return, and the newest public originals
+CREATE INDEX statuses_account_originals ON statuses (account_id, id) WHERE reblog_of_id IS NULL;
+CREATE INDEX statuses_account_reblogs ON statuses (account_id, reblog_of_id) WHERE reblog_of_id IS NOT NULL;
+CREATE INDEX statuses_public ON statuses (id) WHERE visibility = 'public' AND reblog_of_id IS NULL;
 CREATE INDEX statuses_in_reply_to ON statuses (in_reply_to_id) WHERE in_reply_to_id IS NOT NULL;
 CREATE INDEX statuses_in_reply_to_account ON statuses (in_reply_to_account_id) WHERE in_reply_to_account_id IS NOT NULL;
 CREATE INDEX statuses_unresolved_reply ON statuses (in_reply_to_uri) WHERE in_reply_to_id IS NULL AND in_reply_to_uri IS NOT NULL;
@@ -233,6 +239,7 @@ CREATE TABLE favourites (
 
 CREATE UNIQUE INDEX favourites_pair ON favourites (status_id, account_id);
 CREATE INDEX favourites_account ON favourites (account_id, id);
+CREATE INDEX favourites_account_status ON favourites (account_id, status_id);  -- search, by status id
 
 CREATE TABLE bookmarks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -243,6 +250,7 @@ CREATE TABLE bookmarks (
 
 CREATE UNIQUE INDEX bookmarks_pair ON bookmarks (status_id, account_id);
 CREATE INDEX bookmarks_account ON bookmarks (account_id, id);
+CREATE INDEX bookmarks_account_status ON bookmarks (account_id, status_id);  -- search, by status id
 
 CREATE TABLE blocks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

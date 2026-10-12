@@ -129,7 +129,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/visibility.test.ts` (single status, context, history, source, `favourited_by`, timelines, account statuses,
   notifications, bookmarks, favourites). _Implemented on branch `kopje/media-search`_ for search: `src/domain/search.ts`;
   `test/search.test.ts` ("never returns a status the viewer may not see", "drops a boosted status that became
-  inaccessible", hashtags only where a status with them is visible). Media URLs appear only in statuses that pass the
+  inaccessible", hashtags only where a status with them is visible), `test/search-edge.test.ts` (hashtag candidates
+  pass the rule before ranking and truncation, so hidden statuses neither hide nor crowd out a visible tag). Media URLs appear only in statuses that pass the
   rule (see the capability URL accepted risk). The web UI and the object endpoint are _Planned (B5, B1b)._
 - **VIS-2: limited stays limited.** A direct status with silent recipients (Misskey `specified`) is `limited`: shown
   only to its addressed recipients, presented as `private` by the API, never widened by an edit. _Implemented on branch
@@ -398,8 +399,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Implemented on branch `kopje/statuses`_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
   untested_). _Implemented on branch `kopje/media-search`_ for search: statuses pass `listableSql` before `LIMIT`,
-  candidates are at most 2,500 per library source, and hashtags look at most 100 names and 50 statuses each
-  (`src/domain/search.ts`); `test/search.test.ts` ("filters before LIMIT", "matches a bounded window of the library"). Context traversal and edit history: _Planned (B4a fixes)._
+  each library source reads at most 2,500 rows through an index ordered by the status id it returns (cursors applied
+  inside it), hashtags come from at most 500 entries per library source plus the newest 2,000 public statuses, and an
+  account search matches at most 1,000 username-prefix candidates plus the 5,000 newest accounts and the local ones
+  (`src/domain/search.ts`, `findAccounts` in `src/domain/accounts.ts`); `test/search.test.ts` ("filters before
+  LIMIT"), `test/search-edge.test.ts` (rows read stay flat as favourites, bookmarks, accounts and tagged statuses grow
+  fourfold; max_id reaches past each window). Context traversal and edit history: _Planned (B4a fixes)._
 
 ### Data and keys (DATA)
 
