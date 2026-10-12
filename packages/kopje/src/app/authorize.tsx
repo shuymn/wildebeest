@@ -2,7 +2,7 @@ import { type Context, Hono } from 'hono'
 
 import { type Client, OOB_REDIRECT_URI } from '../domain/oauth'
 import { type ApiDeps, storeCall } from '../mastodon/context'
-import { readParams } from '../mastodon/params'
+import { Params, readParams } from '../mastodon/params'
 import { verifyAccessJwt } from '../security/access-jwt'
 import { parseScopes, withinScopes } from '../security/scopes'
 import { PKCE_CHALLENGE, sha256Hex } from '../security/tokens'
@@ -97,14 +97,19 @@ function authorizationError(
 		: redirectTo(redirectUri, { error, error_description: description, state })
 }
 
+// RFC 6749 §3.1: each parameter at most once.
+const AUTHORIZE_PARAMS = ['response_type', 'scope', 'state', 'code_challenge', 'code_challenge_method', 'decision']
+
 type Checked = { request: AuthorizationRequest; email: string } | { response: Response | Promise<Response> }
 
 // Access first, then the client: nothing about registered clients is disclosed to a caller Access did not admit.
 async function check(
 	c: Context<AuthorizeEnv>,
 	deps: AuthorizeDeps,
-	get: (name: string) => string | undefined
+	params: Params,
+	fixed: Record<string, string> = {}
 ): Promise<Checked> {
+	const get = (name: string) => fixed[name] ?? params.get(name)
 	const clientId = get('client_id') ?? ''
 	const context = await storeCall(c, deps, (s, b) => s.authorizeContext(b, { clientId }))
 	if (context.access === null) {
@@ -118,10 +123,21 @@ async function check(
 	if (context.client === null) {
 		return { response: message(c, 400, 'Unknown application', 'The application is not registered on this server.') }
 	}
-	const redirectUri = validateRedirect(context.client, get)
+	// A repeated client_id or redirect_uri leaves the callback unverified, so it is answered on the page.
+	const redirectUri =
+		params.repeated(['client_id', 'redirect_uri']) === undefined ? validateRedirect(context.client, get) : null
 	if (redirectUri === null) {
 		return {
 			response: message(c, 400, 'Invalid request', 'The redirect URI is not registered for this application.'),
+		}
+	}
+	const repeated = params.repeated(AUTHORIZE_PARAMS)
+	if (repeated !== undefined) {
+		return {
+			response: authorizationError(c, redirectUri, undefined, {
+				error: 'invalid_request',
+				description: `The ${repeated} parameter is repeated.`,
+			}),
 		}
 	}
 	const state = get('state')
@@ -157,7 +173,7 @@ function redirectTo(uri: string, params: Record<string, string | undefined>): Re
 export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 	const app = new Hono<AuthorizeEnv>()
 	app.get('/oauth/authorize', async (c) => {
-		const checked = await check(c, deps, (name) => c.req.query(name))
+		const checked = await check(c, deps, new Params([...new URL(c.req.url).searchParams]))
 		if ('response' in checked) {
 			return checked.response
 		}
@@ -201,7 +217,7 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 			return message(c, 400, 'Invalid request', 'The form could not be read.')
 		}
 		const params = form.params
-		const checked = await check(c, deps, (name) => (name === 'response_type' ? 'code' : params.get(name)))
+		const checked = await check(c, deps, params, { response_type: 'code' })
 		if ('response' in checked) {
 			return checked.response
 		}

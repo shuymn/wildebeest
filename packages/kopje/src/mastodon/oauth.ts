@@ -111,6 +111,22 @@ const INVALID_CLIENT = () =>
 const INVALID_GRANT = () =>
 	oauthError(400, 'invalid_grant', 'The provided authorization grant is invalid, expired, revoked or was already used.')
 
+const TOKEN_PARAMS = ['grant_type', 'code', 'redirect_uri', 'code_verifier', 'scope', 'client_id', 'client_secret']
+const REVOKE_PARAMS = ['token', 'token_type_hint', 'client_id', 'client_secret']
+
+// A request error found before anything else: a repeated scalar parameter, or more than one client authentication
+// method (RFC 6749 §2.3: Basic and client_secret in the body).
+function requestError(c: ApiContext, p: Params, scalars: readonly string[]): Response | null {
+	const repeated = p.repeated(scalars)
+	if (repeated !== undefined) {
+		return oauthError(400, 'invalid_request', `The ${repeated} parameter is repeated.`)
+	}
+	if (/^Basic\s/i.test(c.req.header('authorization') ?? '') && p.get('client_secret') !== undefined) {
+		return oauthError(400, 'invalid_request', 'Only one client authentication method can be used.')
+	}
+	return null
+}
+
 // client_secret_post or client_secret_basic.
 function clientCredentials(c: ApiContext, p: Params): { clientId: string; clientSecret: string } | null {
 	const basic = /^Basic\s+(\S+)$/i.exec(c.req.header('authorization') ?? '')
@@ -140,6 +156,10 @@ export const tokenHandler: ApiHandler = async (c, deps) => {
 		return oauthError(result.status, 'invalid_request', 'The request body could not be read.')
 	}
 	const p = result.params
+	const invalid = requestError(c, p, TOKEN_PARAMS)
+	if (invalid !== null) {
+		return invalid
+	}
 	const client = clientCredentials(c, p)
 	if (client === null) {
 		return INVALID_CLIENT()
@@ -203,6 +223,10 @@ export const revokeHandler: ApiHandler = async (c, deps) => {
 	const result = await readParams(c.req.raw)
 	if (!result.ok) {
 		return oauthError(result.status, 'invalid_request', 'The request body could not be read.')
+	}
+	const invalid = requestError(c, result.params, REVOKE_PARAMS)
+	if (invalid !== null) {
+		return invalid
 	}
 	const client = clientCredentials(c, result.params)
 	const token = result.params.get('token')

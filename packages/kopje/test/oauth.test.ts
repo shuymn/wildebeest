@@ -576,6 +576,101 @@ describe('token endpoint', () => {
 	})
 })
 
+describe('duplicate parameters', () => {
+	// RFC 6749 §3.1, §3.2: parameters must not be sent more than once; §2.3: one client authentication method only.
+	it('refuses repeated scalar parameters at the token and revoke endpoints', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h)
+		const code = await authorizationCode(h, app)
+		const body = (extra: [string, string][]) =>
+			new URLSearchParams([
+				['grant_type', 'authorization_code'],
+				['code', code],
+				['client_id', app.client_id],
+				['client_secret', app.client_secret],
+				['redirect_uri', app.redirect_uri],
+				...extra,
+			]).toString()
+		const post = (path: string, text: string, headers: Record<string, string> = {}) =>
+			h.request(path, {
+				method: 'POST',
+				headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers },
+				body: text,
+			})
+		for (const extra of [[['code', 'other']], [['redirect_uri', app.redirect_uri]], [['grant_type', 'x']]] as [
+			string,
+			string,
+		][][]) {
+			const response = await post('/oauth/token', body(extra))
+			expect(response.status, JSON.stringify(extra)).toBe(400)
+			expect(await response.json()).toMatchObject({ error: 'invalid_request' })
+		}
+		// The same parameter in the query and the body counts as repeated too.
+		const mixed = await post(`/oauth/token?code=${encodeURIComponent(code)}`, body([]))
+		expect(mixed.status).toBe(400)
+		// Basic and client_secret in the body are two authentication methods.
+		const both = await post('/oauth/token', body([]), {
+			authorization: `Basic ${btoa(`${app.client_id}:${app.client_secret}`)}`,
+		})
+		expect(both.status).toBe(400)
+		expect(await both.json()).toMatchObject({ error: 'invalid_request' })
+		// None of these consumed the code.
+		expect((await post('/oauth/token', body([]))).status).toBe(200)
+
+		const revoke = await post(
+			'/oauth/revoke',
+			new URLSearchParams([
+				['token', 'a'],
+				['token', 'b'],
+				['client_id', app.client_id],
+				['client_secret', app.client_secret],
+			]).toString()
+		)
+		expect(revoke.status).toBe(400)
+		expect(await revoke.json()).toMatchObject({ error: 'invalid_request' })
+	})
+
+	it('refuses repeated authorize parameters, and keeps array parameters elsewhere', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h)
+		const assertion = await h.team.assertion()
+		const base: [string, string][] = [
+			['response_type', 'code'],
+			['client_id', app.client_id],
+			['redirect_uri', app.redirect_uri],
+			['scope', 'read'],
+			['state', 's'],
+		]
+		const get = (extra: [string, string][]) =>
+			h.request(`/oauth/authorize?${new URLSearchParams([...base, ...extra]).toString()}`, {
+				headers: { 'cf-access-jwt-assertion': assertion },
+			})
+		const scope = await get([['scope', 'write']])
+		expect(scope.status).toBe(302)
+		expect(new URL(scope.headers.get('location')!).searchParams.get('error')).toBe('invalid_request')
+		for (const extra of [[['client_id', app.client_id]], [['redirect_uri', 'https://evil.test/']]] as [
+			string,
+			string,
+		][][]) {
+			const response = await get(extra)
+			expect(response.status, JSON.stringify(extra)).toBe(400)
+			expect(response.headers.get('location')).toBeNull()
+		}
+		// Mastodon's array parameters still work.
+		const registered = await h.request('/api/v1/apps', {
+			method: 'POST',
+			headers: { 'content-type': 'application/x-www-form-urlencoded' },
+			body: new URLSearchParams([
+				['client_name', 'Arrays'],
+				['redirect_uris[]', 'https://a.test/cb'],
+				['redirect_uris[]', 'https://b.test/cb'],
+			]).toString(),
+		})
+		expect(registered.status).toBe(200)
+		expect(await registered.json()).toMatchObject({ redirect_uri: 'https://a.test/cb\nhttps://b.test/cb' })
+	})
+})
+
 describe('revoke', () => {
 	it('revokes a token so it no longer authenticates', async () => {
 		const h = await withAlice()

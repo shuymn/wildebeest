@@ -19,6 +19,12 @@ export class Params {
 		return this.entries.some(([key]) => key === name || key === `${name}[]`)
 	}
 
+	// The first of `names` sent more than once (query and body together), for parameters that must be single
+	// (RFC 6749 §3.1, §3.2). Array parameters (`name[]`) are not scalars and are never named here.
+	repeated(names: readonly string[]): string | undefined {
+		return names.find((name) => this.entries.filter(([key]) => key === name).length > 1)
+	}
+
 	// Values of `name[]` and of a repeated `name`.
 	getAll(name: string): string[] {
 		return this.entries.filter(([key]) => key === name || key === `${name}[]`).map(([, value]) => value)
