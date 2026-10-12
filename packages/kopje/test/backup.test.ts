@@ -17,9 +17,11 @@ import {
 	type BackupDeps,
 	type BackupFaultPoint,
 	type BackupManifest,
+	MAX_MEDIA_PER_RUN,
 	MIN_PART_BYTES,
 	runBackup,
 	scheduledBackup,
+	WORK_BYTES,
 } from '../src/jobs/backup'
 import { readBackupConfig } from '../src/platform/backup-config'
 import { readConfig } from '../src/platform/config'
@@ -30,6 +32,7 @@ import type { StoreStub } from '../src/platform/store-client'
 
 const identity = await generateX25519Identity()
 const recipient = await identityToRecipient(identity)
+const otherRecipient = await identityToRecipient(await generateX25519Identity())
 const SECRET = 'kopje-dummy-s3-secret-0123456789'
 const PREFIX = 'kopje-backup/'
 // 2026-10-13 03:00 UTC; the job's clock. The Store's own dump lease runs on real time.
@@ -231,7 +234,7 @@ const JOB_RPCS = [
 	'backupState',
 	'backupClaim',
 	'backupSave',
-	'backupCapture',
+	'backupFinishDump',
 	'backupMedia',
 	'backupRecord',
 	'backupCoverage',
@@ -657,17 +660,61 @@ describe('backup deadline', () => {
 		expect((await restore(h)).index.map((e) => e.state)).toEqual(['copied', 'copied', 'copied', 'copied'])
 	})
 
-	it('pauses media copying once the invocation has encrypted its share of bytes (the CPU budget)', async () => {
+	it('never encrypts past the byte budget: media waits for the next cron (plaintext bytes are counted)', async () => {
+		expect(WORK_BYTES).toBe(512 * 1024 * 1024)
 		const h = await harness()
 		for (const n of [1, 2, 3]) {
 			await addMedia(h.store, snowflake(NOW - DAY, n), new Uint8Array(1000))
 		}
-		// The dump alone exceeds this share, so the first invocation copies nothing; each later one copies one.
-		expect(await h.run({ workBytes: 1 })).toBe('paused')
-		expect((await backupState(h.store)).run).toMatchObject({ stage: 'media', copied: 0 })
-		expect(await h.run({ workBytes: 1 })).toBe('paused')
-		expect((await backupState(h.store)).run).toMatchObject({ copied: 1 })
+		// The first invocation runs out of time at its first media copy, after the dump.
+		h.s3.before = async (op, key) => {
+			if (op === 'put' && key?.includes('/media/') === true) {
+				h.s3.before = undefined
+				h.clock.now += 13 * MINUTE
+			}
+		}
+		expect(await h.run()).toBe('paused')
+		h.clock.now += 16 * MINUTE
+		// 1,500 bytes: one 1,000-byte original fits, the second would cross the budget, so it is not even read.
+		expect(await h.run({ workBytes: 1500 })).toBe('paused')
+		expect((await backupState(h.store)).run).toMatchObject({ stage: 'media', copied: 2 })
 		expect(await h.run()).toBe('done')
+	})
+
+	it('fails a dump larger than the byte budget as dump-too-large, and releases the freeze', async () => {
+		const h = await harness()
+		expect(await h.run({ workBytes: 1000 })).toBe('failed')
+		expect((await backupState(h.store)).lastFailure?.reason).toBe('dump-too-large')
+		expect(await frozen(h.store)).toBe(false)
+		expect(h.s3.uploads.size).toBe(0)
+	})
+
+	it('fails an index larger than a whole invocation budget as index-too-large', async () => {
+		const h = await harness()
+		await addMedia(h.store, snowflake(NOW - DAY), new Uint8Array([1]))
+		h.faults.set('index-stage', 0)
+		await expect(h.run()).rejects.toThrow('crash at index-stage')
+		h.clock.now += 16 * MINUTE
+		expect(await h.run({ workBytes: 10 })).toBe('failed')
+		expect((await backupState(h.store)).lastFailure?.reason).toBe('index-too-large')
+	})
+
+	it('cancels a request that never answers when the time left runs out', async () => {
+		const h = await harness()
+		h.s3.hang = (op) => (op === 'create-upload' ? 'request' : undefined)
+		// 200 ms of request time beyond the reserve.
+		expect(await h.run({ invocationMs: 60_000 + 200 })).toBe('failed')
+		expect(h.s3.aborted).toEqual(['create-upload'])
+		expect((await backupState(h.store)).lastFailure?.reason).toBe('s3-create-upload-timeout')
+		expect(await frozen(h.store)).toBe(false)
+	})
+
+	it('cancels a response body that stalls when the time left runs out', async () => {
+		const h = await harness()
+		h.s3.hang = (op) => (op === 'list' ? 'body' : undefined)
+		expect(await h.run({ invocationMs: 60_000 + 200 })).toBe('done')
+		expect(h.s3.aborted).toEqual(['list'])
+		expect((await backupState(h.store)).retentionFailure?.reason).toBe('s3-list-timeout')
 	})
 
 	it('bounds a request by the time left: a dump that runs out of time fails and releases the freeze', async () => {
@@ -710,6 +757,28 @@ describe('backup destination and recipients', () => {
 			['copied', true],
 		])
 	})
+
+	const COMPONENTS: [string, Record<string, string>][] = [
+		['endpoint', { BACKUP_S3_ENDPOINT: 'https://s3-other.test' }],
+		['bucket', { BACKUP_S3_BUCKET: 'other-bucket' }],
+		['region', { BACKUP_S3_REGION: 'eu-west-1' }],
+		['prefix', { BACKUP_S3_PREFIX: 'moved/' }],
+		['recipients', { BACKUP_AGE_RECIPIENT: otherRecipient }],
+	]
+	for (const [component, overrides] of COMPONENTS) {
+		it(`abandons a run when only its ${component} changes`, async () => {
+			const h = await harness()
+			h.faults.set('index-stage', 0)
+			await expect(h.run()).rejects.toThrow('crash at index-stage')
+			const before = (await backupState(h.store)).run!.id
+			h.env = backupEnv(overrides)
+			h.clock.now += 16 * MINUTE
+			await h.run()
+			expect(h.logs).toContainEqual(expect.objectContaining({ event: 'kopje.backup.abandoned', id: before }))
+			const after = await backupState(h.store)
+			expect(after.lastSuccess?.id ?? after.run?.id).not.toBe(before)
+		})
+	}
 
 	it('abandons a run whose recipients changed, so nothing of it is encrypted to the old key', async () => {
 		const h = await harness()
@@ -765,6 +834,75 @@ describe('backup failures (OPS-5, DATA-9)', () => {
 		expect(await h.run()).toBe('waiting')
 		h.clock.now += 61 * MINUTE
 		expect(await h.run()).toBe('done')
+	})
+
+	it('releases the freeze before it cleans up the upload', async () => {
+		const h = await harness()
+		await addLargeRows(h.store, 8, 1536 * 1024)
+		h.s3.fail = (op) => (op === 'upload-part' ? 500 : undefined)
+		let frozenAtAbort: boolean | undefined
+		h.s3.before = async (op) => {
+			if (op === 'abort-upload' && frozenAtAbort === undefined) {
+				// The abort stays pending until the freeze has been checked.
+				frozenAtAbort = await frozen(h.store)
+			}
+		}
+		expect(await h.run()).toBe('failed')
+		expect(frozenAtAbort).toBe(false)
+		expect(h.s3.uploads.size).toBe(0)
+	})
+
+	it('restarts a dump whose freeze ended before its last step, so the membership matches the dump', async () => {
+		const h = await harness()
+		const kept = await addMedia(h.store, snowflake(NOW - DAY, 1), new Uint8Array([1]))
+		const deletedId = snowflake(NOW - DAY, 2)
+		await addMedia(h.store, deletedId, new Uint8Array([2]))
+		// The answer to the last dump step arrives after the freeze lease ended, and a writer deleted an attachment.
+		let expired = false
+		const store = wrapStore(h.store, async (name, call) => {
+			const result = await call()
+			const step = result as { ok: boolean; done?: boolean }
+			if (name === 'dumpNext' && step.ok && step.done === true && !expired) {
+				expired = true
+				await runInDurableObject(h.store, (_instance, state) => {
+					const sql = state.storage.sql
+					const row = sql.exec<{ value: string }>("SELECT value FROM kopje_state WHERE name = 'dump'").one()
+					sql.exec(
+						"UPDATE kopje_state SET value = ? WHERE name = 'dump'",
+						JSON.stringify({ ...(JSON.parse(row.value) as object), leaseUntil: 0 })
+					)
+					sql.exec('DELETE FROM media_attachments WHERE id = ?', deletedId)
+				})
+			}
+			return result
+		})
+		expect(await h.run({ store: () => store })).toBe('failed')
+		expect((await backupState(h.store)).lastFailure?.reason).toBe('dump-dump-lease-expired')
+		expect(await frozen(h.store)).toBe(false)
+		h.clock.now += 61 * MINUTE
+		expect(await h.run()).toBe('done')
+		const { index, text } = await restore(h)
+		expect(index.map((e) => e.source)).toEqual([kept])
+		expect(text).not.toContain(deletedId)
+	})
+
+	it('a restarted dump replaces the membership the attempt before it recorded', async () => {
+		const h = await harness()
+		const kept = await addMedia(h.store, snowflake(NOW - DAY, 1), new Uint8Array([1]))
+		const goneId = snowflake(NOW - DAY, 2)
+		await addMedia(h.store, goneId, new Uint8Array([2]))
+		// The dump and its membership are recorded, then completing the upload fails.
+		h.s3.completeError = true
+		expect(await h.run()).toBe('failed')
+		await runInDurableObject(h.store, (_instance, state) => {
+			state.storage.sql.exec('DELETE FROM media_attachments WHERE id = ?', goneId)
+		})
+		h.s3.completeError = false
+		h.clock.now += 61 * MINUTE
+		expect(await h.run()).toBe('done')
+		const { index, manifest } = await restore(h)
+		expect(index.map((e) => e.source)).toEqual([kept])
+		expect(manifest.media).toEqual({ required: 1, copied: 1, pending: 0, absent: 0 })
 	})
 
 	it('treats an HTTP 200 completion that reports an error as a failure', async () => {
@@ -967,17 +1105,101 @@ describe('backup restore path (DATA-10)', () => {
 		const changed = dump.slice()
 		changed[changed.length - 30] = (changed[changed.length - 30] ?? 0) ^ 1
 		io.files.set('dump.kopje', changed)
+		const badDump = await verify(io, [...ALL, '--media', 'media'])
+		expect(badDump.code).toBe(1)
+		expect(badDump.err).toContain("dump: dump.kopje does not match the manifest's SHA-256")
+		io.files.set('dump.kopje', dump)
 		io.files.set(`media/${key}`, new TextEncoder().encode('an origjnal'))
-		const bad = await verify(io, [...ALL, '--media', 'media'])
-		expect(bad.code).toBe(1)
-		expect(bad.err).toContain("dump: dump.kopje does not match the manifest's SHA-256")
-		expect(bad.err).toContain(`media: media/${key} does not match`)
+		const badMedia = await verify(io, [...ALL, '--media', 'media'])
+		expect(badMedia.code).toBe(1)
+		expect(badMedia.err).toContain(`media: media/${key} does not match`)
 
 		// A truncated dump, and a manifest that was not decrypted.
 		io.files.set('dump.kopje', dump.slice(0, 100))
 		expect((await verify(io, ['manifest.json', 'dump.kopje'])).err).toContain('the manifest says')
 		io.files.set('manifest.age', h.s3.objects.get((await backupState(h.store)).lastSuccess!.manifest)!)
 		expect((await verify(io, ['manifest.age', 'dump.kopje'])).code).toBe(1)
+	})
+
+	it('verifies the index alone before any media is downloaded, and refuses an index that does not match', async () => {
+		const h = await harness()
+		await addMedia(h.store, snowflake(NOW - DAY), new Uint8Array([1, 2]))
+		expect(await h.run()).toBe('done')
+		const io = await download(h)
+		for (const key of [...io.files.keys()].filter((k) => k.startsWith('media/') || k.startsWith('dump.'))) {
+			io.files.delete(key)
+		}
+		// Index-only: no dump and no media on disk yet.
+		expect((await verify(io, ['manifest.json', '--index', 'media-index.json'])).code).toBe(0)
+		// A replaced index (validly encrypted, but not the manifest's) is refused before anything uses it.
+		const index = JSON.parse(new TextDecoder().decode(io.files.get('media-index.json'))) as { objects: IndexEntry[] }
+		index.objects[0]!.source = 'originals/../../../home/operator/.profile'
+		io.files.set('media-index.json', new TextEncoder().encode(JSON.stringify(index)))
+		const refused = await verify(io, ['manifest.json', '--index', 'media-index.json'])
+		expect(refused.code).toBe(1)
+		expect(refused.err).toMatch(/^media index: media-index\.json (has \d+ bytes|does not match)/)
+	})
+
+	it('rejects index entries that name anything but originals/<id> under their run, and stops at the first', async () => {
+		const h = await harness()
+		await addMedia(h.store, snowflake(NOW - DAY), new Uint8Array([1, 2]))
+		expect(await h.run()).toBe('done')
+		const io = await download(h)
+		const original = JSON.parse(new TextDecoder().decode(io.files.get('media-index.json'))) as {
+			objects: IndexEntry[]
+		}
+		const entry = original.objects[0]!
+		// Even an index whose digest matches the manifest (as if the manifest were forged too) is validated entry by entry.
+		const cases: [Partial<IndexEntry>, string][] = [
+			[{ source: '../../etc/passwd' }, 'names something other than originals/<18-digit id>'],
+			[{ source: `${entry.source}/../../x` }, 'names something other than originals/<18-digit id>'],
+			[{ key: entry.key!.replace('/media/', '/backups/') }, "is not under its run's media/ prefix"],
+			[{ key: `../${entry.key!}` }, "is not under its run's media/ prefix"],
+		]
+		for (const [change, message] of cases) {
+			const forged = {
+				...original,
+				objects: [
+					{ ...entry, ...change },
+					{ ...entry, source: '../second' },
+				],
+			}
+			const bytes = new TextEncoder().encode(JSON.stringify(forged))
+			const manifest = JSON.parse(new TextDecoder().decode(io.files.get('manifest.json'))) as BackupManifest
+			manifest.mediaIndex.plaintext = { size: bytes.byteLength, sha256: await sha256Hex(bytes) }
+			io.files.set('forged-manifest.json', new TextEncoder().encode(JSON.stringify(manifest)))
+			io.files.set('forged-index.json', bytes)
+			const result = await verify(io, ['forged-manifest.json', '--index', 'forged-index.json', '--media', 'media'])
+			expect(result.code).toBe(1)
+			expect(result.err).toContain(message)
+			// The first error stops verification: one line.
+			expect(result.err.trim().split('\n')).toHaveLength(1)
+		}
+	})
+
+	it('lists the originals beyond the per-run cap as pending, and copies them in the next backup', async () => {
+		expect(MAX_MEDIA_PER_RUN).toBe(2000)
+		const h = await harness()
+		const sources: string[] = []
+		for (const n of [1, 2, 3]) {
+			sources.push(await addMedia(h.store, snowflake(NOW - DAY, n), new Uint8Array([n])))
+		}
+		expect(await h.run({ maxMediaPerRun: 2 })).toBe('done')
+		const { index, manifest } = await restore(h)
+		expect(index.map((e) => [e.source, e.state])).toEqual([
+			[sources[0], 'copied'],
+			[sources[1], 'copied'],
+			[sources[2], 'pending'],
+		])
+		expect(manifest.media).toEqual({ required: 3, copied: 2, pending: 1, absent: 0 })
+		const result = await verify(await download(h), [...ALL, '--media', 'media'])
+		expect(result.code).toBe(3)
+		expect(result.err).toContain(`missing: ${sources[2]} (pending)`)
+		expect(result.err).toContain('incomplete: 1 of 3 originals')
+
+		h.clock.now = NOW + DAY
+		expect(await h.run({ maxMediaPerRun: 2 })).toBe('done')
+		expect((await restore(h)).manifest.media).toEqual({ required: 3, copied: 3, pending: 0, absent: 0 })
 	})
 
 	it('reports incomplete media coverage with its own exit code', async () => {

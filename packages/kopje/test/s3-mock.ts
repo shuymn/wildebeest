@@ -48,6 +48,10 @@ export class S3Mock {
 	readonly received: Uint8Array[] = []
 	fail: ((op: S3Op, key: string | null) => number | undefined) | undefined
 	completeError = false
+	// Requests that never answer ('request') or whose body never ends ('body'), until their signal aborts them. The
+	// aborted ones are recorded, so a test can see the client cancel them.
+	hang: ((op: S3Op) => 'request' | 'body' | undefined) | undefined
+	readonly aborted: S3Op[] = []
 	// Keys a listing leaves out, as an eventually consistent store might.
 	hidden = new Set<string>()
 	// Called before a request is handled; a test can hold a request here.
@@ -94,6 +98,10 @@ export class S3Mock {
 								: 'delete'
 							: 'get'
 		await this.before?.(op, key)
+		const hang = this.hang?.(op)
+		if (hang !== undefined) {
+			return this.#hang(op, key, hang, request.signal)
+		}
 		const response = await this.#handle(op, key, q, request)
 		this.requests.push({ op, key, status: response.status })
 		return response
@@ -242,6 +250,25 @@ export class S3Mock {
 				)
 			}
 		}
+	}
+
+	#hang(op: S3Op, key: string | null, mode: 'request' | 'body', signal: AbortSignal): Promise<Response> {
+		this.requests.push({ op, key, status: 0 })
+		const onAbort = (fail: (reason: unknown) => void) =>
+			signal.addEventListener('abort', () => {
+				this.aborted.push(op)
+				fail(signal.reason)
+			})
+		if (mode === 'request') {
+			return new Promise((_resolve, reject) => onAbort(reject))
+		}
+		const body = new ReadableStream<Uint8Array>({
+			start: (controller) => {
+				controller.enqueue(new TextEncoder().encode('<?xml version="1.0"?><ListBucketResult>'))
+				onAbort((reason) => controller.error(reason))
+			},
+		})
+		return Promise.resolve(new Response(body, { headers: { 'content-type': 'application/xml' } }))
 	}
 
 	// Starts a multipart upload directly, as an earlier invocation that died would have left it.
