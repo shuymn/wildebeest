@@ -8,6 +8,7 @@ import { NOW } from './app-helpers'
 import * as accounts from '../src/mastodon/accounts'
 import type { ApiHandler } from '../src/mastodon/context'
 import { mastodonApi, ROUTES } from '../src/mastodon/routes'
+import { imagesCodec } from '../src/platform/images'
 
 // The token is checked in the transaction of the operation it authorizes: a token revoked, or an account suspended,
 // after the request was admitted but before its write, must not write.
@@ -44,6 +45,7 @@ describe('authorization inside the Store operation', () => {
 					now: () => NOW,
 					store: () => h.store,
 					randomToken: () => `late-${++counter}`,
+					images: (e) => imagesCodec(e.IMAGES),
 				},
 				routes
 			)
@@ -168,7 +170,13 @@ describe('authorization inside the B4a operations', () => {
 						return handler(c, deps)
 					}
 				const api = mastodonApi(
-					{ build: () => env.CF_VERSION_METADATA.id, now: () => NOW, store: () => h.store, randomToken: () => 'late' },
+					{
+						build: () => env.CF_VERSION_METADATA.id,
+						now: () => NOW,
+						store: () => h.store,
+						randomToken: () => 'late',
+						images: (e) => imagesCodec(e.IMAGES),
+					},
 					ROUTES.map((route) => (route.method === 'GET' ? route : { ...route, handler: late(route.handler) }))
 				)
 				const [path, init] = request(f)

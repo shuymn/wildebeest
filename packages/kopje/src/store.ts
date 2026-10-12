@@ -18,8 +18,10 @@ import * as deliveries from './domain/deliveries'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import * as inbox from './domain/inbox'
 import { instanceInfo } from './domain/instance'
+import * as media from './domain/media'
 import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
+import { search } from './domain/search'
 import { getSetupState } from './domain/setup'
 import { saveSnapshot } from './domain/snapshot'
 import * as statuses from './domain/statuses'
@@ -410,6 +412,54 @@ export class Store extends DurableObject<Env> {
 
 	clearNotifications(callerBuild: string, input: OperationInput<typeof notifications.clearNotifications>) {
 		return this.#kernel.execute(callerBuild, notifications.clearNotifications, input)
+	}
+
+	// Media (B4b).
+
+	reserveMedia(callerBuild: string, input: OperationInput<typeof media.reserveMedia>) {
+		return this.#kernel.execute(callerBuild, media.reserveMedia, input)
+	}
+
+	completeMedia(callerBuild: string, input: OperationInput<typeof media.completeMedia>) {
+		return this.#kernel.execute(callerBuild, media.completeMedia, input)
+	}
+
+	abandonMedia(callerBuild: string, input: OperationInput<typeof media.abandonMedia>) {
+		return this.#kernel.execute(callerBuild, media.abandonMedia, input)
+	}
+
+	getMedia(callerBuild: string, input: OperationInput<typeof media.getMedia>) {
+		return this.#kernel.execute(callerBuild, media.getMedia, input)
+	}
+
+	updateMedia(callerBuild: string, input: OperationInput<typeof media.updateMedia>) {
+		return this.#kernel.execute(callerBuild, media.updateMedia, input)
+	}
+
+	startTransforms(callerBuild: string, input: OperationInput<typeof media.startTransforms>) {
+		return this.#kernel.execute(callerBuild, media.startTransforms, input)
+	}
+
+	dueOrphans(callerBuild: string, input: OperationInput<typeof media.dueOrphans>) {
+		return this.#kernel.execute(callerBuild, media.dueOrphans, input)
+	}
+
+	forgetOrphans(callerBuild: string, input: OperationInput<typeof media.forgetOrphans>) {
+		return this.#kernel.execute(callerBuild, media.forgetOrphans, input)
+	}
+
+	expiredMedia(callerBuild: string, input: OperationInput<typeof media.expiredMedia>) {
+		return this.#kernel.execute(callerBuild, media.expiredMedia, input)
+	}
+
+	purgeMedia(callerBuild: string, input: OperationInput<typeof media.purgeMedia>) {
+		return this.#kernel.execute(callerBuild, media.purgeMedia, input)
+	}
+
+	// Search (B4b).
+
+	search(callerBuild: string, input: OperationInput<typeof search>) {
+		return this.#kernel.execute(callerBuild, search, input)
 	}
 
 	// Delivery (B2): claims and completions from the Worker's delivery round, the operator's view, and the sweep.

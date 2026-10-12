@@ -32,6 +32,21 @@ export function queryTerms(query: string): string[][] {
 		})
 }
 
+// A status query: AND terms, and terms prefixed with '-' that must not occur (Mastodon's search syntax). Each term has
+// the variants of queryTerms.
+export function statusQueryTerms(query: string): { include: string[][]; exclude: string[][] } {
+	const include: string[] = []
+	const exclude: string[] = []
+	for (const term of normalizeSearchText(query).split(' ')) {
+		if (term.length > 1 && term.startsWith('-')) {
+			exclude.push(term.slice(1))
+		} else if (term !== '') {
+			include.push(term)
+		}
+	}
+	return { include: queryTerms(include.join(' ')), exclude: queryTerms(exclude.join(' ')) }
+}
+
 function toHiragana(text: string): string {
 	return text.replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60))
 }

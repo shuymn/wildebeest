@@ -46,6 +46,8 @@ CREATE TABLE accounts (
 
 CREATE INDEX accounts_domain_username ON accounts (domain, lower(username));
 CREATE UNIQUE INDEX accounts_local_username ON accounts (lower(username)) WHERE domain IS NULL;
+-- account search: username prefix across domains
+CREATE INDEX accounts_username ON accounts (lower(username));
 CREATE UNIQUE INDEX accounts_legacy_id ON accounts (legacy_id) WHERE legacy_id IS NOT NULL;
 
 CREATE TABLE local_accounts (
@@ -118,6 +120,10 @@ CREATE INDEX statuses_account ON statuses (account_id, id);
 -- feeds; queries repeat the same WHERE expression
 CREATE INDEX statuses_feed ON statuses (account_id, id) WHERE visibility IN ('public', 'unlisted', 'private');
 CREATE UNIQUE INDEX statuses_reblog ON statuses (reblog_of_id, account_id) WHERE reblog_of_id IS NOT NULL;
+-- search: an account's originals and boosted originals by the id they return, and the newest public originals
+CREATE INDEX statuses_account_originals ON statuses (account_id, id) WHERE reblog_of_id IS NULL;
+CREATE INDEX statuses_account_reblogs ON statuses (account_id, reblog_of_id) WHERE reblog_of_id IS NOT NULL;
+CREATE INDEX statuses_public ON statuses (id) WHERE visibility = 'public' AND reblog_of_id IS NULL;
 CREATE INDEX statuses_in_reply_to ON statuses (in_reply_to_id) WHERE in_reply_to_id IS NOT NULL;
 CREATE INDEX statuses_in_reply_to_account ON statuses (in_reply_to_account_id) WHERE in_reply_to_account_id IS NOT NULL;
 CREATE INDEX statuses_unresolved_reply ON statuses (in_reply_to_uri) WHERE in_reply_to_id IS NULL AND in_reply_to_uri IS NOT NULL;
@@ -162,14 +168,38 @@ CREATE TABLE media_attachments (
   status_id TEXT REFERENCES statuses (id) ON DELETE CASCADE,  -- NULL: uploaded, not attached yet
   position INTEGER NOT NULL DEFAULT 0,
   type TEXT NOT NULL CHECK (type IN ('image', 'gifv', 'video', 'audio', 'unknown')),
-  url TEXT NOT NULL,
+  url TEXT NOT NULL,                              -- '' while a local upload is processing
+  preview_url TEXT,                               -- NULL: url
   description TEXT NOT NULL DEFAULT '',
+  -- Local uploads (B4). The original is in R2 at originals/<id>; the re-encoded files that are served are at
+  -- files/<file_token>/{full,small}, so the token in the URL is the capability (MEDIA-2). Remote rows keep NULLs.
+  file_token TEXT UNIQUE,
+  content_type TEXT,                              -- type of the served files
+  meta TEXT CHECK (meta IS NULL OR json_valid(meta)),  -- {"original":{"width","height"},"small":{...}}
+  focus_x REAL NOT NULL DEFAULT 0 CHECK (focus_x BETWEEN -1 AND 1),
+  focus_y REAL NOT NULL DEFAULT 0 CHECK (focus_y BETWEEN -1 AND 1),
+  processed INTEGER NOT NULL DEFAULT 1 CHECK (processed IN (0, 1)),  -- 0 while the uploading request may still write to R2
+  gc_at TEXT,                                     -- unattached local upload: deleted (with its R2 objects) from then on
   legacy_ap_o TEXT,                               -- uuid of the old local Image /ap/o/<uuid>
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  CHECK (status_id IS NULL OR processed = 1)
 );
 
 CREATE INDEX media_attachments_status ON media_attachments (status_id, position) WHERE status_id IS NOT NULL;
 CREATE INDEX media_attachments_account ON media_attachments (account_id);
+CREATE INDEX media_attachments_gc ON media_attachments (gc_at) WHERE status_id IS NULL AND gc_at IS NOT NULL;
+
+-- Tombstones of uploads that never completed (abandoned, expired, or refused at the deadline). The sweep deletes
+-- such a row after deleting its R2 objects and records it here, so a write that lands later is deleted when the
+-- tombstone falls due. Media reconciliation deletes only what is recorded here, never objects merely missing a row.
+-- Not part of a dump (dump-catalog.ts): a restored or imported Store starts with none.
+CREATE TABLE media_orphans (
+  file_token TEXT NOT NULL PRIMARY KEY,
+  media_id TEXT NOT NULL,
+  delete_after TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE INDEX media_orphans_due ON media_orphans (delete_after);
 CREATE UNIQUE INDEX media_attachments_legacy_ap_o ON media_attachments (legacy_ap_o) WHERE legacy_ap_o IS NOT NULL;
 
 CREATE TABLE status_mentions (
@@ -209,6 +239,8 @@ CREATE TABLE follows (
 
 CREATE UNIQUE INDEX follows_pair ON follows (account_id, target_account_id);
 CREATE INDEX follows_target ON follows (target_account_id, state);
+-- following-only account search reads accepted follows without touching pending ones
+CREATE INDEX follows_accepted ON follows (account_id, target_account_id) WHERE state = 'accepted';
 
 CREATE TABLE favourites (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -220,6 +252,7 @@ CREATE TABLE favourites (
 
 CREATE UNIQUE INDEX favourites_pair ON favourites (status_id, account_id);
 CREATE INDEX favourites_account ON favourites (account_id, id);
+CREATE INDEX favourites_account_status ON favourites (account_id, status_id);  -- search, by status id
 
 CREATE TABLE bookmarks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -230,6 +263,7 @@ CREATE TABLE bookmarks (
 
 CREATE UNIQUE INDEX bookmarks_pair ON bookmarks (status_id, account_id);
 CREATE INDEX bookmarks_account ON bookmarks (account_id, id);
+CREATE INDEX bookmarks_account_status ON bookmarks (account_id, status_id);  -- search, by status id
 
 CREATE TABLE blocks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
