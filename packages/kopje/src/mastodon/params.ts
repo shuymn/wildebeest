@@ -6,6 +6,9 @@ import { readBoundedBody } from '../platform/body'
 
 export const API_BODY_LIMIT = 1024 * 1024
 
+// The tail of an object field key after `name[`: `index][field]` or `][field]`.
+const OBJECT_FIELD = /^(\d*)\]\[([^\]]+)\]$/
+
 export class Params {
 	constructor(private readonly entries: readonly (readonly [string, string])[]) {}
 
@@ -28,11 +31,12 @@ export class Params {
 	// The objects of an array parameter: JSON sends `name[0][field]` (indexed), forms send `name[][field]`, where a field
 	// that repeats starts the next object (as Rack reads it).
 	objects(name: string): Record<string, string>[] {
-		const pattern = new RegExp(`^${name.replace(/[[\]]/g, '\\$&')}\\[(\\d*)\\]\\[([^\\]]+)\\]$`)
+		const prefix = `${name}[`
 		const indexed = new Map<string, Record<string, string>>()
 		const sequential: Record<string, string>[] = []
 		for (const [key, value] of this.entries) {
-			const match = pattern.exec(key)
+			// The name is compared as a string; only the `[index][field]` tail is a pattern.
+			const match = key.startsWith(prefix) ? OBJECT_FIELD.exec(key.slice(prefix.length)) : null
 			if (match === null) {
 				continue
 			}
