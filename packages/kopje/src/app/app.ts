@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 
+import { ADMIN_PREFIX, adminRoutes, isAdminPath } from './admin'
 import { readBoundedBody } from './body'
 import { classifyRequest, decide, type RequestClass } from './gate'
 import { publicHealth } from './health'
@@ -11,23 +12,30 @@ import { maintenanceError, mastodonError } from '../mastodon/errors'
 import { readConfig } from '../platform/config'
 import { defaultStore, type StoreResolver } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
+import { type AccessVerifier, createAccessVerifier } from '../security/access-jwt'
 
 export type AppDeps = {
 	// The build identity sent on every Store RPC (the Workers version id in production; tests inject one).
 	build: (env: Env) => string
 	now: () => number
 	store?: StoreResolver
+	// Verifies Cloudflare Access JWTs on /admin/* (tests inject one with their own JWKS).
+	verifyAccess?: AccessVerifier
 }
 
 type AppEnv = { Bindings: Env; Variables: { requestClass: RequestClass; inboxBody: Uint8Array } }
 
-export function createApp({ build, now, store = defaultStore }: AppDeps) {
+export function createApp({ build, now, store = defaultStore, verifyAccess = createAccessVerifier() }: AppDeps) {
 	const app = new Hono<AppEnv>()
 
 	// Maintenance gate, max(env, Store). The env mode (MAINTENANCE) is applied here. The Store applies its own readonly
 	// state to each RPC by operation kind, and a refusal arrives as StoreUnavailableError in onError: inbox requests
 	// are spooled, everything else gets 503.
 	app.use(async (c, next) => {
+		// The admin API authenticates itself and must work in every maintenance mode and with an invalid env.
+		if (isAdminPath(c.req.path)) {
+			return next()
+		}
 		const requestClass = classifyRequest(c.req.method, c.req.path)
 		c.set('requestClass', requestClass)
 		const config = readConfig(c.env)
@@ -57,6 +65,8 @@ export function createApp({ build, now, store = defaultStore }: AppDeps) {
 	})
 
 	app.get('/health', (c) => publicHealth(build(c.env), readConfig(c.env), () => store(c.env)))
+
+	app.route(ADMIN_PREFIX, adminRoutes({ build, store, verifyAccess }))
 
 	const setupGate = requireSetup(build, store)
 	for (const path of FEDERATION_PATHS) {

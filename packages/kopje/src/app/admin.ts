@@ -1,0 +1,341 @@
+import { type Context, Hono } from 'hono'
+import { createMiddleware } from 'hono/factory'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
+
+import { readBoundedBody } from './body'
+import { healthReport } from './health'
+import { readConfig } from '../platform/config'
+import { errorMessage } from '../platform/error-message'
+import type { StoreResolver, StoreStub } from '../platform/store-client'
+import { toStoreUnavailable } from '../platform/store-errors'
+import { type AccessVerifier, timingSafeEqualText } from '../security/access-jwt'
+
+// The admin HTTP API behind its own Access application. Every request is authenticated here as well:
+//   - Cf-Access-Jwt-Assertion verified against the team JWKS with the AUD from instance_settings, from the admin's
+//     email or the admin CLI's service token (common_name = the configured client id); or
+//   - Kopje-Import-Token = IMPORT_TOKEN, only for the import endpoints, only while the Store is empty and has no Access
+//     settings (and for the rest of an import begun that way). Used for the cutover, then removed.
+// The maintenance gate does not apply: these routes are how an operator works on a Store in maintenance.
+
+export const ADMIN_PREFIX = '/admin'
+export const IMPORT_TOKEN_HEADER = 'Kopje-Import-Token'
+const MIN_IMPORT_TOKEN_LENGTH = 32
+const JSON_BODY_LIMIT = 1024 * 1024
+// A chunk of statements plus room for nothing else; the Store refuses anything larger.
+const IMPORT_CHUNK_LIMIT = 16 * 1024 * 1024
+const TOKEN_PATHS = [/^\/admin\/import\//, /^\/admin\/(health|version|catalog)$/]
+
+export type AdminDeps = {
+	build: (env: Env) => string
+	store: StoreResolver
+	verifyAccess: AccessVerifier
+}
+
+type AdminVariables = { auth: { kind: 'access' | 'import-token' } }
+type AdminEnv = { Bindings: Env; Variables: AdminVariables }
+
+type Refusal = { ok: false; code: string; message: string }
+
+const STATUS: Record<string, ContentfulStatusCode> = {
+	'not-read-only': 400,
+	'invalid-cursor': 400,
+	'invalid-header': 400,
+	'invalid-trailer': 400,
+	'invalid-chunk': 400,
+	'out-of-order': 400,
+	'chunk-too-large': 413,
+	'trailer-mismatch': 400,
+	'body-mismatch': 400,
+	'out-of-range': 400,
+	'query-failed': 400,
+	'dump-not-found': 404,
+	'import-not-found': 404,
+	'pitr-unavailable': 503,
+	'chunk-failed': 500,
+}
+
+function refusal(c: Context, result: Refusal): Response {
+	const { ok: _ok, code, message, ...rest } = result as Refusal & Record<string, unknown>
+	return c.json({ error: message, code, ...rest }, STATUS[code] ?? 409)
+}
+
+// A Store result: { ok: true, ... } as 200, a refusal with its status.
+function reply<T extends { ok: boolean }>(c: Context, result: T): Response {
+	if (!result.ok) {
+		return refusal(c, result as unknown as Refusal)
+	}
+	const { ok: _ok, ...rest } = result
+	return c.json(rest)
+}
+
+async function jsonBody(c: Context): Promise<Record<string, unknown>> {
+	const body = await readBoundedBody(c.req.raw, JSON_BODY_LIMIT)
+	if (body === 'too-large') {
+		throw new AdminRequestError(413, 'request body too large')
+	}
+	if (body.byteLength === 0) {
+		return {}
+	}
+	try {
+		const value: unknown = JSON.parse(new TextDecoder().decode(body))
+		if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+			throw new Error('not an object')
+		}
+		return value as Record<string, unknown>
+	} catch {
+		throw new AdminRequestError(400, 'request body must be a JSON object')
+	}
+}
+
+class AdminRequestError extends Error {
+	constructor(
+		readonly status: ContentfulStatusCode,
+		message: string
+	) {
+		super(message)
+	}
+}
+
+function parseTime(value: string): number | null {
+	if (/^\d{1,16}$/.test(value)) {
+		return Number(value)
+	}
+	const parsed = Date.parse(value)
+	return Number.isNaN(parsed) ? null : parsed
+}
+
+export function adminRoutes({ build, store, verifyAccess }: AdminDeps) {
+	const admin = new Hono<AdminEnv>()
+	const stub = (c: Context<AdminEnv>): StoreStub => store(c.env)
+
+	admin.use(
+		createMiddleware<AdminEnv>(async (c, next) => {
+			// Requests without any credential are refused before the Store is asked for settings.
+			const presented = c.req.header(IMPORT_TOKEN_HEADER)
+			const assertion = c.req.header('Cf-Access-Jwt-Assertion')
+			if (presented === undefined && (assertion === undefined || assertion === '')) {
+				return c.json({ error: 'missing Cf-Access-Jwt-Assertion' }, 401)
+			}
+			if (presented !== undefined) {
+				const secret = (c.env as { IMPORT_TOKEN?: unknown }).IMPORT_TOKEN
+				if (typeof secret !== 'string' || secret.length < MIN_IMPORT_TOKEN_LENGTH) {
+					return c.json(
+						{ error: `IMPORT_TOKEN is not set (it must be at least ${MIN_IMPORT_TOKEN_LENGTH} characters)` },
+						401
+					)
+				}
+				if (!timingSafeEqualText(presented, secret)) {
+					return c.json({ error: 'invalid import token' }, 401)
+				}
+				if (!TOKEN_PATHS.some((p) => p.test(c.req.path))) {
+					return c.json({ error: 'the import token only authorizes import' }, 403)
+				}
+				if (!(await stub(c).adminGate(build(c.env))).tokenImport) {
+					return c.json(
+						{ error: 'the import token is accepted only while the Store is empty and has no Access settings' },
+						403
+					)
+				}
+				c.set('auth', { kind: 'import-token' })
+				return next()
+			}
+			const { access } = await stub(c).adminGate(build(c.env))
+			const check = await verifyAccess(assertion, {
+				teamDomain: access.teamDomain,
+				aud: access.adminAud,
+				adminEmail: access.adminEmail,
+				serviceTokenClientId: access.serviceTokenClientId,
+			})
+			if (!check.ok) {
+				return c.json({ error: check.reason }, check.status)
+			}
+			c.set('auth', { kind: 'access' })
+			await next()
+		})
+	)
+
+	admin.get('/health', async (c) => {
+		const b = build(c.env)
+		const config = readConfig(c.env)
+		const report = await healthReport(b, config, () => stub(c))
+		let detail: unknown
+		try {
+			detail = await stub(c).health(b)
+		} catch (error) {
+			detail = { error: errorMessage(error) }
+		}
+		const maintenance = config.ok ? config.config.MAINTENANCE : null
+		return c.json({ ...report, maintenance, store: detail })
+	})
+
+	admin.get('/version', async (c) => {
+		const b = build(c.env)
+		// The Store runs from the same script, so its package version is the Worker's too.
+		return c.json({ worker: { build: b }, store: await stub(c).version(b) })
+	})
+
+	admin.get('/capacity', async (c) => c.json(await stub(c).capacity(build(c.env))))
+
+	admin.get('/spool', async (c) => c.json(await stub(c).spool(build(c.env))))
+
+	admin.post('/maintenance', async (c) => {
+		const { on } = await jsonBody(c)
+		if (typeof on !== 'boolean') {
+			return c.json({ error: 'expected {"on": true|false}' }, 400)
+		}
+		return c.json(await stub(c).setMaintenance(build(c.env), on))
+	})
+
+	admin.post('/upgrade/retry', async (c) => {
+		const result = await stub(c).retryUpgrade(build(c.env))
+		return c.json(result, result.ok ? 200 : 409)
+	})
+
+	admin.post('/sql', async (c) => {
+		const { sql, limit } = await jsonBody(c)
+		if (typeof sql !== 'string' || (limit !== undefined && typeof limit !== 'number')) {
+			return c.json({ error: 'expected {"sql": string, "limit"?: number}' }, 400)
+		}
+		return reply(c, await stub(c).query(build(c.env), sql, limit))
+	})
+
+	// ---- dump
+
+	admin.post('/dump/start', async (c) => {
+		const { leaseSeconds } = await jsonBody(c)
+		if (leaseSeconds !== undefined && typeof leaseSeconds !== 'number') {
+			return c.json({ error: 'leaseSeconds must be a number' }, 400)
+		}
+		return reply(c, await stub(c).dumpStart(build(c.env), leaseSeconds))
+	})
+
+	// The response is the cursor as one JSON line, then the chunk bytes.
+	admin.post('/dump/next', async (c) => {
+		const { cursor, maxBytes } = await jsonBody(c)
+		if (maxBytes !== undefined && typeof maxBytes !== 'number') {
+			return c.json({ error: 'maxBytes must be a number' }, 400)
+		}
+		const result = await stub(c).dumpNext(build(c.env), cursor, maxBytes)
+		if (!result.ok) {
+			return refusal(c, result)
+		}
+		const head = new TextEncoder().encode(
+			`${JSON.stringify({ cursor: result.cursor, done: result.done, leaseUntil: result.leaseUntil })}\n`
+		)
+		const body = new Uint8Array(head.byteLength + result.chunk.byteLength)
+		body.set(head, 0)
+		body.set(result.chunk, head.byteLength)
+		return new Response(body, {
+			headers: { 'content-type': 'application/octet-stream', 'cache-control': 'no-store' },
+		})
+	})
+
+	admin.post('/dump/finish', async (c) => {
+		const { cursor, abort } = await jsonBody(c)
+		return reply(c, await stub(c).dumpFinish(build(c.env), cursor, abort === true))
+	})
+
+	// ---- import
+
+	admin.get('/catalog', async (c) => c.json(await stub(c).catalog(build(c.env))))
+
+	admin.post('/import/begin', async (c) => {
+		const { header } = await jsonBody(c)
+		const mode = c.get('auth').kind === 'import-token' ? 'token' : 'access'
+		return reply(c, await stub(c).importBegin(build(c.env), header, mode))
+	})
+
+	admin.get('/import/progress', async (c) => c.json({ progress: await stub(c).importProgress(build(c.env)) }))
+
+	admin.post('/import/chunk', async (c) => {
+		const id = c.req.query('id')
+		const seq = Number(c.req.query('seq'))
+		if (id === undefined || !Number.isSafeInteger(seq)) {
+			return c.json({ error: 'expected ?id=<import id>&seq=<chunk number>' }, 400)
+		}
+		const body = await readBoundedBody(c.req.raw, IMPORT_CHUNK_LIMIT)
+		if (body === 'too-large') {
+			return c.json({ error: `a chunk may hold at most ${IMPORT_CHUNK_LIMIT} bytes`, code: 'chunk-too-large' }, 413)
+		}
+		return reply(c, await stub(c).importChunk(build(c.env), id, seq, body))
+	})
+
+	admin.post('/import/finish', async (c) => {
+		const { id, trailer } = await jsonBody(c)
+		if (typeof id !== 'string') {
+			return c.json({ error: 'expected {"id": string, "trailer": object}' }, 400)
+		}
+		return reply(c, await stub(c).importFinish(build(c.env), id, trailer))
+	})
+
+	admin.post('/import/verify', async (c) => {
+		const { id } = await jsonBody(c)
+		if (typeof id !== 'string') {
+			return c.json({ error: 'expected {"id": string}' }, 400)
+		}
+		return reply(c, await stub(c).importVerify(build(c.env), id))
+	})
+
+	admin.post('/import/reset', async (c) => {
+		const { confirm } = await jsonBody(c)
+		if (confirm !== true) {
+			return c.json({ error: 'reset deletes all data of this Store; send {"confirm": true}' }, 400)
+		}
+		return reply(c, await stub(c).importReset(build(c.env)))
+	})
+
+	// ---- PITR
+
+	admin.get('/pitr/bookmark', async (c) => {
+		const at = c.req.query('at')
+		const time = at === undefined ? undefined : parseTime(at)
+		if (time === null) {
+			return c.json({ error: 'at must be an ISO 8601 time or epoch milliseconds' }, 400)
+		}
+		return reply(c, await stub(c).pitrBookmark(build(c.env), time))
+	})
+
+	// Restoring rewinds every flag inside the Store, so it is refused unless the env MAINTENANCE=full holds the
+	// instance from outside. The Store restarts to apply the bookmark, which fails this call with the abort reason.
+	admin.post('/pitr/restore', async (c) => {
+		const { bookmark } = await jsonBody(c)
+		if (typeof bookmark !== 'string' || !/^[0-9A-Za-z-]{1,256}$/.test(bookmark)) {
+			return c.json({ error: 'expected {"bookmark": string}' }, 400)
+		}
+		const config = readConfig(c.env)
+		if (!config.ok || config.config.MAINTENANCE !== 'full') {
+			return c.json(
+				{ error: 'set MAINTENANCE=full on the Worker before a PITR restore', code: 'maintenance-required' },
+				409
+			)
+		}
+		try {
+			await stub(c).pitrToBookmark(build(c.env), bookmark)
+		} catch (error) {
+			if (errorMessage(error).includes('restoring PITR bookmark')) {
+				return c.json({ status: 'restoring', bookmark }, 202)
+			}
+			throw error
+		}
+		return c.json({ status: 'restoring', bookmark }, 202)
+	})
+
+	admin.onError((error, c) => {
+		if (error instanceof AdminRequestError) {
+			return c.json({ error: error.message }, error.status)
+		}
+		const unavailable = toStoreUnavailable(error)
+		if (unavailable !== undefined) {
+			const status = unavailable.reason === 'version-mismatch' ? 409 : 503
+			return c.json({ error: unavailable.message, code: unavailable.reason }, status)
+		}
+		console.error({ event: 'kopje.admin.error', path: c.req.path, error: errorMessage(error) })
+		return c.json({ error: errorMessage(error), code: 'internal' }, 500)
+	})
+
+	return admin
+}
+
+export function isAdminPath(path: string): boolean {
+	return path === ADMIN_PREFIX || path.startsWith(`${ADMIN_PREFIX}/`)
+}

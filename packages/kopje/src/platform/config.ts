@@ -17,6 +17,8 @@ const configSchema = z.object({
 	CF_VERSION_METADATA: binding<Env['CF_VERSION_METADATA']>('CF_VERSION_METADATA'),
 	MAINTENANCE: z.enum(MAINTENANCE_MODES).default('off'),
 	SETUP_TOKEN: z.string().min(1).optional(),
+	// One-time secret for the cutover import into an empty Store (app/admin.ts); removed after the import.
+	IMPORT_TOKEN: z.string().min(1).optional(),
 })
 
 export type Config = z.infer<typeof configSchema>
