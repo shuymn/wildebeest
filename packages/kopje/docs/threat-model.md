@@ -84,9 +84,13 @@ against their own instance. TLS is assumed between all parties.
 
 - **ID-1: an inbound activity acts only for its signer.** It is processed only if its HTTP signature verifies, the key's
   owner equals `activity.actor`, and that actor is not local. An unsigned or unverifiable request changes nothing and
-  answers 401. The owner is the actor whose document (fetched, or stored for at most 24 hours) lists the key id, and
-  the key names no other owner. _Implemented on branch `kopje/inbound-relationships`:_ `receiveInbound` in `src/federation/inbound.ts`;
-  `test/inbox.test.ts` ("ID-1: an inbound activity acts only for its signer").
+  answers 401. The owner is the actor whose document lists the key, by id and key material, and the key names no
+  other owner. A stored key (`remote_keys`, kept per key id with its owner, whatever the shape of the key URL) is
+  trusted for 24 hours after its document was fetched; after that, or when its signature fails, the key and the actor
+  document are fetched anew, bypassing the document cache. The one exception is a deleted actor's own `Delete`, which
+  is verified with the stored key at any age. _Implemented on branch `kopje/inbound-relationships`:_ `receiveInbound` in `src/federation/inbound.ts`;
+  `test/inbox.test.ts` ("ID-1: an inbound activity acts only for its signer"), `test/inbox-regressions.test.ts`
+  ("stored keys, rotation and ownership").
 - **ID-2: a fetched document is trusted only for its own origin.** The identity of a fetched object is its parsed `id`
   after JSON-LD processing, and it must have the origin of the final response URL. The loader's literal `id` check is a
   pre-filter. Cross-origin redirects are refused. _Enforced (main):_ `src/federation/loader.ts`;
@@ -113,8 +117,11 @@ against their own instance. TLS is assumed between all parties.
   notification, push or outbound intent (natural keys). A valid `Delete` or `Undo` that arrives before its target is
   recorded for 30 days and prevents the target from appearing later. Input that fails ID-1 or ID-6 reserves no key and
   records no retraction. _Implemented on branch `kopje/inbound-relationships`:_ natural keys and `retract` and `isRetracted` in
-  `src/domain/inbox.ts`. A replayed or superseded Follow id and a refused Follow are recorded as retracted too, so no
-  Accept or Reject is recorded twice. `test/inbox.test.ts` ("ID-7: replay changes nothing twice", "OPS-1").
+  `src/domain/inbox.ts`. A Follow has generations: a superseded, undone, refused or blocked Follow id is recorded as retracted, so
+  no late Undo, Accept, Reject or replay reaches a newer generation, and no Accept or Reject is recorded twice; an
+  answer's id derives from the Follow it answers. A Move is a job keyed by its id that never moves a follow made after
+  it. An actor's deletion is a tombstone (`inbound_jobs`) independent of the retraction cap and TTL, honoured by every
+  upsert. `test/inbox.test.ts` ("ID-7: replay changes nothing twice", "OPS-1"), `test/inbox-regressions.test.ts`.
 - **ID-8: only ActivityStreams media types become objects.** A fetched document is used as an actor, key or object only
   if served as `application/activity+json` or `application/ld+json` with the ActivityStreams profile, as Mastodon
   requires, and only if its root is a JSON object (JSON-LD would fetch a string root through the context loader). Other
@@ -368,7 +375,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Enforced (main)_ for snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
   sweep, spool and deliveries: _Planned (B1b, B2)._ Retractions: _Implemented on branch `kopje/inbound-relationships`:_ they expire after 30 days, each
-  inbound activity sweeps 100 expired rows, and an actor has at most 10,000 live rows; `test/inbox.test.ts`.
+  inbound activity sweeps 100 expired rows, and an actor has at most 10,000 live rows. Finished inbound jobs (and
+  with them deleted actors' tombstones) expire 30 days after they finish. `test/inbox.test.ts`,
+  `test/inbox-regressions.test.ts`.
 - **RES-5: retries are bounded, but maintenance is not a failure.** Waiting out maintenance consumes no processing
   retry; real processing errors count against `max_retries`. _Enforced (main):_ `src/jobs/queue.ts`; `test/gate.test.ts`
   ("spool consumer"). Deliveries give up after 15 attempts (`min(30s·2^n, 12h)`) and are listed for the operator; spool
@@ -377,10 +386,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   recipients, collection expansion and notifications. Delivery backlog and concurrency are bounded. Anonymous app
   registration, inbox spooling and media transformations have rate or storage budgets with a visible refusal. _Planned
   (B1b, B2, B4). Gap: `POST /api/v1/apps` on main has no rate or storage budget yet; planned with B5 (rate limiting)._
-  _Implemented on branch `kopje/inbound-relationships`_ for relationship activities: at most three documents are dereferenced (key,
-  actor, Move target; icons only when embedded), a Move moves at most 100 followers and carries at most 100 blocks and
-  mutes, and a deleted actor's content is purged 500 statuses at a time, continued on the Queue; `test/inbox.test.ts`
-  ("purges a large account in bounded batches").
+  _Implemented on branch `kopje/inbound-relationships`_ for relationship activities: one request's fetches share a budget of 8 fetches
+  (documents, JSON-LD contexts and each redirect hop), 2 MiB and 15 seconds (`requestBudget` in
+  `src/federation/loader.ts`; cached contexts cost nothing; icons are taken only when embedded). A Move moves 100
+  followers per batch and carries at most 100 blocks and mutes; a deleted actor's content is purged 500 statuses per
+  batch. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
+  Queue message nor maintenance stops them, and waiting out maintenance spends no retry. `test/inbox.test.ts`,
+  `test/inbox-regressions.test.ts`.
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Implemented on branch `kopje/statuses`_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
@@ -491,20 +503,20 @@ activity specs, cited in test names.
 
 ## Accepted risks
 
-| Risk                                                                                                                 | Why accepted                                                                                                                     | Revisit when                                                         |
-| -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Duplicate keys in a JSON OAuth body are not rejected; the last one wins                                              | RFC 6749 defines form bodies only, and Doorkeeper behaves the same                                                               | a client depends on JSON bodies                                      |
-| Fedify 2.4.2 signs draft-cavage `(request-target)` without the query string                                          | Mastodon accepts it; reported upstream                                                                                           | a peer rejects signed GETs to URLs with a query                      |
-| Legacy keys are not rewrapped; an empty or known `USER_KEK` gives no protection against R5                           | Owner's decision; health warns on an empty KEK (main), the cutover tool warns (B8)                                               | a key leak, or rewrapping becomes cheap                              |
-| Signed-fetch cache entries may outlive a remote block or key change by up to 5 minutes                               | Measured CPU savings on personal inboxes                                                                                         | blocks must apply at once                                            |
-| OAuth client secrets are stored in plaintext, so R5 can act as any registered app (no user scopes)                   | Matches Mastodon; app tokens carry no user authority                                                                             | app tokens gain user-level powers                                    |
-| Aggregate counters (`reblogs_count`, `favourites_count`, `replies_count`) include interactions the viewer cannot see | Mastodon parity; clients rely on the counts                                                                                      | counters must hide private interactions                              |
-| Non-public media is readable by anyone who holds its unguessable URL                                                 | Clients and remote servers fetch media without credentials                                                                       | authenticated media fetch becomes interoperable                      |
-| Service tokens are recognized by Access's claim shape (no email, empty `sub`, `common_name`)                         | The admin application's policy decides which identities reach it                                                                 | the admin application admits mTLS or Access changes the claims       |
-| Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured       | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added                                            | Kopje configures logtape                                             |
-| `constantTimeEqual` on main takes time that depends on the input length                                              | No content leak is known; `kopje/ops-tools` compares fixed-size digests                                                          | `kopje/ops-tools` merges (then remove this row)                      |
-| Remote HTML is sanitized by sanitize-html, whose htmlparser2 is a tokenizer rather than an HTML5 tree builder        | It emits only allowlisted tags with quoted, escaped attributes and escapes all other text; the parse5-checked vector suites pass | a vector fails, or a maintained tree-based sanitizer fits the budget |
-| Activities signed by someone other than their actor (forwarded, with LD signatures) are refused                      | ID-1; Mastodon accepts some; the author's own delivery still arrives                                                             | relays or forwarded replies must be supported                        |
+| Risk                                                                                                                 | Why accepted                                                                                                                              | Revisit when                                                         |
+| -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Duplicate keys in a JSON OAuth body are not rejected; the last one wins                                              | RFC 6749 defines form bodies only, and Doorkeeper behaves the same                                                                        | a client depends on JSON bodies                                      |
+| Fedify 2.4.2 signs draft-cavage `(request-target)` without the query string                                          | Mastodon accepts it; reported upstream                                                                                                    | a peer rejects signed GETs to URLs with a query                      |
+| Legacy keys are not rewrapped; an empty or known `USER_KEK` gives no protection against R5                           | Owner's decision; health warns on an empty KEK (main), the cutover tool warns (B8)                                                        | a key leak, or rewrapping becomes cheap                              |
+| Signed-fetch cache entries may outlive a remote block or key change by up to 5 minutes                               | Measured CPU savings on personal inboxes                                                                                                  | blocks must apply at once                                            |
+| OAuth client secrets are stored in plaintext, so R5 can act as any registered app (no user scopes)                   | Matches Mastodon; app tokens carry no user authority                                                                                      | app tokens gain user-level powers                                    |
+| Aggregate counters (`reblogs_count`, `favourites_count`, `replies_count`) include interactions the viewer cannot see | Mastodon parity; clients rely on the counts                                                                                               | counters must hide private interactions                              |
+| Non-public media is readable by anyone who holds its unguessable URL                                                 | Clients and remote servers fetch media without credentials                                                                                | authenticated media fetch becomes interoperable                      |
+| Service tokens are recognized by Access's claim shape (no email, empty `sub`, `common_name`)                         | The admin application's policy decides which identities reach it                                                                          | the admin application admits mTLS or Access changes the claims       |
+| Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured       | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added                                                     | Kopje configures logtape                                             |
+| `constantTimeEqual` on main takes time that depends on the input length                                              | No content leak is known; `kopje/ops-tools` compares fixed-size digests                                                                   | `kopje/ops-tools` merges (then remove this row)                      |
+| Remote HTML is sanitized by sanitize-html, whose htmlparser2 is a tokenizer rather than an HTML5 tree builder        | It emits only allowlisted tags with quoted, escaped attributes and escapes all other text; the parse5-checked vector suites pass          | a vector fails, or a maintained tree-based sanitizer fits the budget |
+| Activities signed by someone other than their actor (forwarded, with LD signatures) are refused                      | ID-1. Replies that reach Kopje only by forwarding (to a collection the author cannot deliver to) and deliveries through relays are missed | relays or forwarded replies must be supported                        |
 
 ## How to use
 
