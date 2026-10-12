@@ -37,15 +37,15 @@ export type OutboundEnvelope = { activity: Record<string, unknown>; audience: Au
 // row it retracts: the receipts go with the row.
 // withdraws: a Reject that ends a follow already accepted (see subjectOf in deliveries.ts). deferred: record the intent
 // only; its receipts are deleted by the caller and its deliveries expanded by the delivery rounds (a purge's bounded
-// batches, see domain/inbox.ts).
+// batches, see domain/inbox.ts). maxRows: see enqueueActivity; false when the intent did not fit and was not recorded.
 export function recordOutbound(
 	db: Db,
 	signerId: string,
 	envelope: OutboundEnvelope,
 	now: number,
-	options: { withdraws?: boolean; deferred?: boolean } = {}
-): void {
-	enqueueActivity(db, signerId, envelope, now, options)
+	options: { withdraws?: boolean; deferred?: boolean; maxRows?: number } = {}
+): boolean {
+	return enqueueActivity(db, signerId, envelope, now, options)
 }
 
 export function followersUri(actorUri: string): string {

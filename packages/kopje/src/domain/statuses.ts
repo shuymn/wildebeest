@@ -1084,8 +1084,9 @@ function undoLocalBoosts(db: Db, originalId: string, now: number): void {
 }
 
 // Records the Undo of one local boost through the boost's own path (its receipts say where it went), without deleting
-// it: a purge of the original's author withdraws local boosts this way, then deletes them in bounded batches.
-export function withdrawLocalBoost(db: Db, boostId: string, now: number): void {
+// it: a purge of the original's author withdraws local boosts this way, then deletes them in bounded batches. Returns
+// false, recording nothing, when the intent needs more than maxRows rows (see enqueueActivity).
+export function withdrawLocalBoost(db: Db, boostId: string, now: number, maxRows: number): boolean {
 	const boost = db.first<{
 		account_id: string
 		uri: string
@@ -1106,11 +1107,11 @@ export function withdrawLocalBoost(db: Db, boostId: string, now: number): void {
 					boost.original
 				)
 	if (boost === undefined || target === undefined) {
-		return
+		return true
 	}
 	const announce = announceOf(viewerUri(db, boost.account_id), boost.uri, boost.visibility, boost.published_at, target)
 	// Deferred: the purge deletes the boost's receipts and B2's rounds expand the Undo, both in bounded steps.
-	recordOutbound(db, boost.account_id, undoAnnounceActivity(announce), now, { deferred: true })
+	return recordOutbound(db, boost.account_id, undoAnnounceActivity(announce), now, { deferred: true, maxRows })
 }
 
 function removeReblog(db: Db, accountId: string, reblogId: string, originalId: string, now: number): void {

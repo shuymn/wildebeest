@@ -14,6 +14,9 @@ const USERNAME = /^[a-z0-9_]+([a-z0-9_.-]+[a-z0-9_]+)?$/i
 const USERNAME_LIMIT = 255
 // Raw caps (RES-1). The display name is plain text and is cut, as Mastodon cuts what it receives.
 const DISPLAY_NAME_LIMIT = 2048
+// Inbox URLs (RES-6): every delivery target is one, so their length bounds a target. Real servers use short ones;
+// Mastodon sets no limit. A serialized URL is ASCII, so its length is its size in bytes.
+export const INBOX_URL_LIMIT = 2048
 
 export type FetchedActor =
 	| { kind: 'ok'; actor: Actor; input: RemoteActorInput | null }
@@ -119,6 +122,13 @@ export async function remoteActorInput(actor: Actor, document: unknown): Promise
 	if (uri === null || username === null || username.length > USERNAME_LIMIT || !USERNAME.test(username)) {
 		return null
 	}
+	const inboxUrl = httpUrl(actor.inboxId?.href ?? null)?.href ?? null
+	// An over-long inbox makes the actor unusable, as Mastodon refuses an actor without one; an over-long shared inbox
+	// is ignored, as Mastodon ignores an invalid one, and its personal inbox is used.
+	if (inboxUrl !== null && inboxUrl.length > INBOX_URL_LIMIT) {
+		return null
+	}
+	const sharedInboxUrl = httpUrl(actor.endpoints?.sharedInbox?.href ?? null)?.href ?? null
 	const options = { documentLoader: NO_FETCH, contextLoader: NO_FETCH }
 	const images: Images = actor
 	return {
@@ -133,8 +143,8 @@ export async function remoteActorInput(actor: Actor, document: unknown): Promise
 		headerUrl: await imageUrl(() => images.getImage(options)),
 		locked: actor.manuallyApprovesFollowers === true,
 		discoverable: actor.discoverable,
-		inboxUrl: httpUrl(actor.inboxId?.href ?? null)?.href ?? null,
-		sharedInboxUrl: httpUrl(actor.endpoints?.sharedInbox?.href ?? null)?.href ?? null,
+		inboxUrl,
+		sharedInboxUrl: sharedInboxUrl !== null && sharedInboxUrl.length <= INBOX_URL_LIMIT ? sharedInboxUrl : null,
 		// A Temporal.Instant, whose type the polyfill's globals leave unresolved for the linter.
 		keys: await ownKeys(actor, uri),
 		published: (actor.published as { toString(): string } | null)?.toString() ?? null,

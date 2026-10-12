@@ -515,8 +515,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   are due); a Queue batch runs one round however many doorbells it holds; the consumer runs at most 4 batches at once
   (`max_concurrency`); the backlog has the RES-4 caps. `test/deliveries.test.ts` ("bounds a claim to its limit"),
   `test/delivery-post.test.ts` ("runs one round for a batch of doorbells"), `test/delivery-regressions.test.ts`
-  ("expands a large audience in bounded steps"). _Gap: computing an activity's targets reads all of the signer's
-  remote followers in one transaction (a read, not writes)._
+  ("expands a large audience in bounded steps"). An intent's targets are stored in chunks (`outbound_targets`) of at most
+  1,000 targets and 512 KiB, each read from its own cursor, so no row grows with the audience (a Durable Object row
+  or string is limited to 2 MB, and an audience over it would fail to record on every retry); an inbox or shared inbox
+  URL from a remote actor document is at most 2,048 bytes (`INBOX_URL_LIMIT` in `src/federation/remote-actor.ts`;
+  Mastodon sets no limit): an over-long inbox makes the actor unusable, as Mastodon refuses an actor without one, and
+  an over-long shared inbox is ignored. `test/inbox-verify4.test.ts` ("enqueues and fully expands an audience whose
+  targets exceed what one row can hold", "refuses an actor whose inbox URL is over the cap"). _Gap: computing an
+  activity's targets reads all of the signer's remote followers in one transaction (a read, then one row per
+  chunk)._
   _Implemented on branch `kopje/inbound-relationships`_ for relationship activities: one request's fetches share a budget of 8 fetches
   (documents, JSON-LD contexts and each redirect hop), 2 MiB and 15 seconds (`requestBudget` in
   `src/federation/loader.ts`; cached contexts cost nothing; icons are taken only when embedded). Running out of the budget is retryable: the
@@ -524,15 +531,18 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   refusal. A key an actor lists by reference is taken from the verification that just resolved it, not fetched again. A Move moves 100
   followers per batch and carries at most 100 blocks and mutes; a deleted actor's purge writes at most 500 rows per batch in all, every
   write counted (SQLite's `total_changes()`): deletions, counter recounts (`followers_count`, `following_count`,
-  `statuses_count`, status counters) and the Undo intent of a withdrawn boost. Its relationships go first; then local
-  boosts of its statuses, each withdrawn once: the Undo intent is recorded deferred, holding the boost's receipts as its
-  targets, without deleting them or expanding deliveries (B2's delivery rounds expand it 100 targets at a time), and the
-  purge deletes the receipts a batch at a time before the boost and its booster's recount; then its statuses, each
+  `statuses_count`, status counters) and the Undo intent of a withdrawn boost with its target chunks. Its relationships
+  go first; then local boosts of its statuses, each withdrawn once: the Undo intent is recorded deferred, holding the
+  boost's receipts as its targets, without deleting them or expanding deliveries (B2's delivery rounds expand it 100
+  targets at a time), and the purge deletes the receipts a batch at a time, after the intent that holds them is
+  stored, before the boost and its booster's recount (an Undo whose chunks alone exceed a batch, over half a million
+  targets, is written by a batch that does nothing else); then its statuses, each
   deleted only after its children (edits, media, mentions, tags, favourites, bookmarks, notifications, receipts,
   boosts, reply links), so no delete cascades. A user's own unboost keeps B2's path unchanged. Local media is detached
   for B4b's media sweep, never deleted from R2 here. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
   Queue message nor maintenance stops them, and waiting out maintenance spends no retry. `test/inbox.test.ts`,
-  `test/inbox-regressions.test.ts`.
+  `test/inbox-regressions.test.ts`, `test/inbox-verify4.test.ts` ("reaches every target when purge batches and
+  delivery claims interleave", "when the purge completes before any expansion").
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Implemented on branch `kopje/statuses`_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
