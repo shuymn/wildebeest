@@ -209,7 +209,7 @@ export function presentStatuses(db: Db, ids: readonly string[], options: Present
 			mentions: (mentions.get(row.id) ?? []).map((m) => ({
 				id: m.id,
 				username: m.username,
-				url: accountUrl(m),
+				url: accountUrl(m, options.origin),
 				acct: acctOf(m),
 			})),
 			tags: (tags.get(row.id) ?? []).map((t) => ({

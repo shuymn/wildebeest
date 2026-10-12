@@ -13,11 +13,12 @@ import {
 } from './federation-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { createKopjeFederation, type FederationState } from '../src/federation/federation'
+import { DoKvStore } from '../src/federation/kv-store'
 
 const DOMAIN = 'social.example'
 const NOTE = 'https://remote.example/notes/1'
 
-async function setup() {
+async function setup(contentType = 'application/activity+json') {
 	const store = await migratedStore()
 	await setDomain(store, DOMAIN)
 	await seedLocalAccount(store, DOMAIN, { id: '111111111111111111', username: 'Alice' })
@@ -25,9 +26,7 @@ async function setup() {
 	const fetch = ((input: RequestInfo | URL) => {
 		const request = input instanceof Request ? input : new Request(input)
 		requests.push(request)
-		return Promise.resolve(
-			Response.json({ id: NOTE, type: 'Note' }, { headers: { 'content-type': 'application/activity+json' } })
-		)
+		return Promise.resolve(Response.json({ id: NOTE, type: 'Note' }, { headers: { 'content-type': contentType } }))
 	}) as typeof globalThis.fetch
 	const state: FederationState = { resolvedUsername: null, source: null, storeError: null }
 	const federation = createKopjeFederation(
@@ -82,8 +81,8 @@ describe('signed fetches', () => {
 		)
 		expect(keys).toEqual(
 			expect.arrayContaining([
-				['_fedify', 'signedRemoteDocument', 'https://social.example/actor#main-key', NOTE],
-				['_fedify', 'signedRemoteDocument', 'https://social.example/ap/users/Alice#main-key', NOTE],
+				['_fedify', 'signedRemoteDocument', 'v2', 'https://social.example/actor#main-key', NOTE],
+				['_fedify', 'signedRemoteDocument', 'v2', 'https://social.example/ap/users/Alice#main-key', NOTE],
 			])
 		)
 	})
@@ -103,5 +102,29 @@ describe('signed fetches', () => {
 		const { ctx } = await setup()
 		expect(await ctx.getActorKeyPairs('alice')).toEqual([])
 		expect(await ctx.getActorKeyPairs('ALICE')).toEqual([])
+	})
+
+	// Plain JSON-LD is a context, never an object (GHSA-jhrq-qvrm-qr36): only the context loader takes it.
+	it('takes plain JSON-LD on the context loader only', async () => {
+		const { ctx } = await setup('application/ld+json')
+		await expect(ctx.documentLoader(NOTE)).rejects.toThrow(/Not an ActivityPub document/)
+		const alice = await ctx.getDocumentLoader({ identifier: 'Alice' })
+		await expect(alice(NOTE)).rejects.toThrow(/Not an ActivityPub document/)
+		expect((await ctx.contextLoader(NOTE)).document).toMatchObject({ id: NOTE })
+	})
+
+	// A cache entry admitted under an older, looser acceptance policy is never served after the policy is tightened.
+	it('ignores signed documents cached under the unversioned namespace', async () => {
+		const { store, requests, ctx } = await setup()
+		const stale = { contextUrl: null, documentUrl: NOTE, document: { id: NOTE, type: 'Note', content: 'stale' } }
+		const kv = new DoKvStore(
+			() => store,
+			BUILD,
+			() => NOW
+		)
+		await kv.set(['_fedify', 'signedRemoteDocument', 'https://social.example/actor#main-key', NOTE], stale)
+
+		expect((await ctx.documentLoader(NOTE)).document).toEqual({ id: NOTE, type: 'Note' })
+		expect(requests).toHaveLength(1)
 	})
 })

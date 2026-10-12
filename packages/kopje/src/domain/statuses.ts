@@ -108,7 +108,7 @@ function compose(db: Db, text: string, author: Author, origin: string): Composed
 	const content = renderStatusHtml(parsed.segments, {
 		mention: (ref) => {
 			const account = resolved.get(mentionKey(ref))
-			return account === undefined ? undefined : { url: accountUrl(account), username: account.username }
+			return account === undefined ? undefined : { url: accountUrl(account, origin), username: account.username }
 		},
 		tagUrl: (name) => `${origin}/tags/${encodeURIComponent(name)}`,
 	})

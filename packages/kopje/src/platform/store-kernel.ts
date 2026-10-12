@@ -1,4 +1,4 @@
-import { errorMessage } from './error-message'
+import { errorFields, errorMessage } from './error-message'
 import { type MaintenanceReason, storeMaintenanceError } from './store-errors'
 
 export type Migration = { readonly name: string; readonly sql: string }
@@ -175,7 +175,7 @@ export class StoreKernel {
 				? null
 				: { contentType: stored.contentType, body: stored.body }
 		} catch (error) {
-			this.#log({ event: 'kopje.store.snapshot.unreadable', key, error: errorMessage(error) })
+			this.#log({ event: 'kopje.store.snapshot.unreadable', key, ...errorFields(error) })
 			return null
 		}
 	}
@@ -287,7 +287,7 @@ export class StoreKernel {
 		} catch (error) {
 			// Storage may be unusable. The in-memory hold keeps this isolate readonly, and the durable upgrade marker
 			// keeps a fresh isolate readonly.
-			this.#log({ event: 'kopje.store.hold.persist-failed', error: errorMessage(error) })
+			this.#log({ event: 'kopje.store.hold.persist-failed', ...errorFields(error) })
 		}
 		let durable: KernelState
 		try {

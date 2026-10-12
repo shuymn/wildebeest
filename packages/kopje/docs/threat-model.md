@@ -107,9 +107,14 @@ against their own instance. TLS is assumed between all parties.
   records no retraction. _Planned (B1b)._
 - **ID-8: only ActivityStreams media types become objects.** A fetched document is used as an actor, key or object only
   if served as `application/activity+json` or `application/ld+json` with the ActivityStreams profile, as Mastodon
-  requires. Other JSON (an uploaded file, for example) is refused. _Planned (B1b). Gap — fix in progress on branch
-  `kopje/hardening-1`: the loader on main also accepts `application/json`, `application/jrd+json` and
-  `application/ld+json` without the profile._
+  requires, and only if its root is a JSON object (JSON-LD would fetch a string root through the context loader). Other
+  JSON (an uploaded file, for example) is refused, and a combined or malformed Content-Type is refused. Signed-document
+  cache entries live under a versioned namespace that is bumped whenever this policy is tightened. _Implemented on
+  branch `kopje/hardening-1`:_ `createSafeLoader` and `requireObjectRoot` in `src/federation/loader.ts` (Fedify's
+  document loaders, around their caches too) with `isActivityPubMediaType` in `src/platform/media-type.ts`; JSON-LD
+  contexts go through `createContextLoader`, which never yields an object; `SIGNED_DOCUMENT_PREFIX` in
+  `src/federation/federation.ts`; `test/loader.test.ts`, `test/media-type.test.ts`, `test/document-root.test.ts`,
+  `test/signed-fetch.test.ts` ("plain JSON-LD on the context loader only", "unversioned namespace").
 
 ### Visibility (VIS)
 
@@ -295,8 +300,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **HTML-3: navigable URLs are http(s) only.** Before a profile URL, avatar, header, attachment URL, field link or app
   website is emitted, it is parsed and must be http or https; anything else becomes absent or the default. This applies
   to fetched and imported data too. _Enforced (main)_ for app websites at registration: `validWebsite` in
-  `src/mastodon/oauth.ts` (_Gap: untested_). Account presenter and actor documents: _Planned (B1b, B4). Gap — fix in
-  progress on branch `kopje/hardening-1`: `presentAccount` and `localActorObject` on main emit stored URLs unchecked._
+  `src/mastodon/oauth.ts` (_Gap: untested_). _Implemented on branch `kopje/hardening-1`_ for the account presenter and
+  local actor documents (profile URL, avatar, header, icon, image and aliases): `httpUrl` in `src/platform/http-url.ts`,
+  used by `presentAccount` in `src/domain/accounts.ts` and `localActorObject` in `src/federation/federation.ts`;
+  `test/accounts.test.ts`, `test/federation.test.ts`. Attachment URLs and field links: _Planned (B1b, B4)._
 
 ### Media (MEDIA)
 
@@ -373,10 +380,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **DATA-4: backups leave Cloudflare only encrypted.** Dump chunks, R2 originals and manifests are age-encrypted before
   upload. _Planned (B6b)._
 - **DATA-5: logs carry no secrets or content.** Log entries are structured events. They never include request bodies,
-  post content, tokens, keys, Access assertions or URLs with credentials. Tests inject marker values into errors and
-  assert they are absent. _Planned (all stages). Gap — fix in progress on branch `kopje/hardening-1`: `app.onError` and
-  the queue handlers on main log arbitrary exception messages. Access failures log only jose's error code (main), and
-  the CLI never prints secrets (`kopje/ops-tools`, `test/cli.test.ts`)._
+  post content, tokens, keys, Access assertions or URLs with credentials. A log entry never includes text that a request
+  supplied: errors are logged by class, standard error name and known Store reason, and requests by standard method (else
+  `OTHER`), route template and status. Diagnostic
+  detail produced inside the Store from no request input is allowed, such as the raw SQLite or migration error in
+  `kopje.store.upgrade.failed`, which reaches only logs and the admin health report. Tests inject marker values into
+  errors and assert they are absent. _Implemented on branch `kopje/hardening-1`:_ `errorFields` in
+  `src/platform/error-message.ts`, used by `app.onError` (`src/app/app.ts`), the queue and spool handlers, the snapshot
+  saver and the Store kernel; `test/log-redaction.test.ts`. Access failures log only jose's error code (main), and the
+  CLI never prints secrets (`kopje/ops-tools`, `test/cli.test.ts`). Later stages: _Planned (all stages)._
 - **DATA-6: ids stay strings end to end.** Ids never pass through JS numbers. INTEGER edge and notification ids are read
   with `CAST(id AS TEXT)` and compared with `CAST(? AS INTEGER)`. 18-digit TEXT status ids compare as TEXT; a shorter
   client cursor is zero-padded first. _Enforced (main)_ for edges: `listFollows` in `src/domain/accounts.ts`;
@@ -452,17 +464,18 @@ activity specs, cited in test names.
 
 ## Accepted risks
 
-| Risk                                                                                                                 | Why accepted                                                                       | Revisit when                                                   |
-| -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Duplicate keys in a JSON OAuth body are not rejected; the last one wins                                              | RFC 6749 defines form bodies only, and Doorkeeper behaves the same                 | a client depends on JSON bodies                                |
-| Fedify 2.4.2 signs draft-cavage `(request-target)` without the query string                                          | Mastodon accepts it; reported upstream                                             | a peer rejects signed GETs to URLs with a query                |
-| Legacy keys are not rewrapped; an empty or known `USER_KEK` gives no protection against R5                           | Owner's decision; health warns on an empty KEK (main), the cutover tool warns (B8) | a key leak, or rewrapping becomes cheap                        |
-| Signed-fetch cache entries may outlive a remote block or key change by up to 5 minutes                               | Measured CPU savings on personal inboxes                                           | blocks must apply at once                                      |
-| OAuth client secrets are stored in plaintext, so R5 can act as any registered app (no user scopes)                   | Matches Mastodon; app tokens carry no user authority                               | app tokens gain user-level powers                              |
-| Aggregate counters (`reblogs_count`, `favourites_count`, `replies_count`) include interactions the viewer cannot see | Mastodon parity; clients rely on the counts                                        | counters must hide private interactions                        |
-| Non-public media is readable by anyone who holds its unguessable URL                                                 | Clients and remote servers fetch media without credentials                         | authenticated media fetch becomes interoperable                |
-| Service tokens are recognized by Access's claim shape (no email, empty `sub`, `common_name`)                         | The admin application's policy decides which identities reach it                   | the admin application admits mTLS or Access changes the claims |
-| `constantTimeEqual` on main takes time that depends on the input length                                              | No content leak is known; `kopje/ops-tools` compares fixed-size digests            | `kopje/ops-tools` merges (then remove this row)                |
+| Risk                                                                                                                 | Why accepted                                                                          | Revisit when                                                   |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Duplicate keys in a JSON OAuth body are not rejected; the last one wins                                              | RFC 6749 defines form bodies only, and Doorkeeper behaves the same                    | a client depends on JSON bodies                                |
+| Fedify 2.4.2 signs draft-cavage `(request-target)` without the query string                                          | Mastodon accepts it; reported upstream                                                | a peer rejects signed GETs to URLs with a query                |
+| Legacy keys are not rewrapped; an empty or known `USER_KEK` gives no protection against R5                           | Owner's decision; health warns on an empty KEK (main), the cutover tool warns (B8)    | a key leak, or rewrapping becomes cheap                        |
+| Signed-fetch cache entries may outlive a remote block or key change by up to 5 minutes                               | Measured CPU savings on personal inboxes                                              | blocks must apply at once                                      |
+| OAuth client secrets are stored in plaintext, so R5 can act as any registered app (no user scopes)                   | Matches Mastodon; app tokens carry no user authority                                  | app tokens gain user-level powers                              |
+| Aggregate counters (`reblogs_count`, `favourites_count`, `replies_count`) include interactions the viewer cannot see | Mastodon parity; clients rely on the counts                                           | counters must hide private interactions                        |
+| Non-public media is readable by anyone who holds its unguessable URL                                                 | Clients and remote servers fetch media without credentials                            | authenticated media fetch becomes interoperable                |
+| Service tokens are recognized by Access's claim shape (no email, empty `sub`, `common_name`)                         | The admin application's policy decides which identities reach it                      | the admin application admits mTLS or Access changes the claims |
+| Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured       | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added | Kopje configures logtape                                       |
+| `constantTimeEqual` on main takes time that depends on the input length                                              | No content leak is known; `kopje/ops-tools` compares fixed-size digests               | `kopje/ops-tools` merges (then remove this row)                |
 
 ## How to use
 

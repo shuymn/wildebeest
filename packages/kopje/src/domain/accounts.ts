@@ -4,6 +4,7 @@ import { readOperation } from './operation'
 import { htmlToPlainText, plainTextToHtml } from './plain-text'
 import { accountSearchText, queryTerms } from './search-text'
 import type { Db } from '../db/sql'
+import { httpUrl } from '../platform/http-url'
 
 // Accounts as the Mastodon API (4.0.2) shows them: one presenter, and the account and relationship operations of B3.
 // Every operation takes an account by its API id or by its legacy id (accounts.legacy_id); both resolve to the same
@@ -102,8 +103,14 @@ export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type,
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
 
 // A local account's url is derived from its actor URI, which carries the instance origin.
-export function accountUrl(row: { url: string | null; uri: string; username: string }): string {
-	return row.url ?? `${new URL(row.uri).origin}/@${row.username}`
+// An account's profile URL. A stored url is used only when it is http(s) (HTML-3); otherwise it is derived from the
+// actor URI, which carries the account's origin, or from this instance's origin when the URI is not http(s) either.
+export function accountUrl(
+	row: { url: string | null; uri: string; username: string; domain: string | null },
+	origin: string
+): string {
+	const actor = httpUrl(row.uri)
+	return httpUrl(row.url)?.href ?? (actor === null ? `${origin}/@${acctOf(row)}` : `${actor.origin}/@${row.username}`)
 }
 
 export function acctOf(row: { username: string; domain: string | null }): string {
@@ -114,9 +121,10 @@ export function acctOf(row: { username: string; domain: string | null }): string
 // fields or emojis, the default avatar and header, and locked, bot and discoverable false.
 export function presentAccount(row: AccountRow, { origin }: Present): Account {
 	const suspended = row.suspended_at !== null
-	const url = accountUrl(row)
-	const avatar = (suspended ? null : row.avatar_url) ?? `${origin}${DEFAULT_AVATAR}`
-	const header = (suspended ? null : row.header_url) ?? `${origin}${DEFAULT_HEADER}`
+	// Stored URLs are shown only when they are http(s) (httpUrl); anything else reads as unset.
+	const url = accountUrl(row, origin)
+	const avatar = (suspended ? null : httpUrl(row.avatar_url)?.href) ?? `${origin}${DEFAULT_AVATAR}`
+	const header = (suspended ? null : httpUrl(row.header_url)?.href) ?? `${origin}${DEFAULT_HEADER}`
 	return {
 		id: row.id,
 		username: row.username,
