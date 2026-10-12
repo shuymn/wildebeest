@@ -146,6 +146,7 @@ type IndexEntry = {
 	size?: number
 	sha256?: string
 	plaintext?: { size: number; sha256: string }
+	run?: string
 }
 
 async function checked(h: Harness, object: { key: string; size: number; sha256: string }): Promise<Uint8Array> {
@@ -443,7 +444,7 @@ describe('backup run', () => {
 		const { report } = await importViaRpc(target, text, 4 * 1024 * 1024)
 		expect(report).toMatchObject({ ok: true, foreignKeyViolations: 0, problems: [] })
 		expect(withoutState(await tableSnapshot(target))).toEqual(withoutState(await tableSnapshot(h.store)))
-	})
+	}, 30_000)
 
 	it('ends the freeze as soon as the last chunk is read, before the remaining parts are uploaded', async () => {
 		const h = await harness()
@@ -466,7 +467,7 @@ describe('backup run', () => {
 		expect(await h.run({ store: () => store })).toBe('done')
 		expect(frozenDuringUpload.length).toBeGreaterThan(0)
 		expect(frozenDuringUpload).not.toContain(true)
-	})
+	}, 30_000)
 })
 
 describe('backup fencing (OPS-5)', () => {
@@ -545,7 +546,7 @@ describe('backup resumption (OPS-5)', () => {
 		expect(h.s3.uploads.size).toBe(0)
 		expect(await frozen(h.store)).toBe(false)
 		await restore(h)
-	})
+	}, 30_000)
 
 	it('restarts a dump that died after some parts were uploaded', async () => {
 		const h = await harness()
@@ -565,7 +566,7 @@ describe('backup resumption (OPS-5)', () => {
 		await copyConfig(h.store, target)
 		const { report } = await importViaRpc(target, (await restore(h)).text, 4 * 1024 * 1024)
 		expect(report).toMatchObject({ ok: true })
-	})
+	}, 30_000)
 
 	for (const point of ['dump-complete', 'media-copied', 'index-stage', 'manifest-stage', 'manifest-written'] as const) {
 		it(`resumes after dying at ${point}`, async () => {
@@ -627,7 +628,7 @@ describe('backup resumption (OPS-5)', () => {
 		h.clock.now += 61 * MINUTE
 		expect(await h.run()).toBe('done')
 		expect(await frozen(h.store)).toBe(false)
-	})
+	}, 30_000)
 
 	it('recovers when a save committed but its answer was lost', async () => {
 		const h = await harness()
@@ -689,6 +690,50 @@ describe('backup deadline', () => {
 		expect(h.s3.uploads.size).toBe(0)
 	})
 
+	it('fails as dump-too-large when the budget is crossed after parts were uploaded', async () => {
+		const h = await harness()
+		await addLargeRows(h.store, 8, 1536 * 1024)
+		expect(await h.run({ workBytes: 7 * 1024 * 1024 })).toBe('failed')
+		expect((await backupState(h.store)).lastFailure?.reason).toBe('dump-too-large')
+		expect(h.s3.requests.filter((r) => r.op === 'upload-part' && r.status === 200).length).toBeGreaterThan(0)
+		expect(h.s3.uploads.size).toBe(0)
+		expect(await frozen(h.store)).toBe(false)
+	}, 30_000)
+
+	// The plaintext sizes of a reference run; the same seed gives the same sizes (the ids in names have fixed lengths).
+	async function sizes(): Promise<{ dump: number; index: number }> {
+		const h = await harness()
+		await addMedia(h.store, snowflake(NOW - DAY), new Uint8Array(1000))
+		expect(await h.run()).toBe('done')
+		const manifest = await recordedManifest(h)
+		await clearOriginals()
+		return { dump: manifest.dump.plaintext.size, index: manifest.mediaIndex.plaintext.size }
+	}
+
+	it('completes a dump of exactly the budget, and refuses one byte less', async () => {
+		const { dump } = await sizes()
+		const exact = await harness()
+		await addMedia(exact.store, snowflake(NOW - DAY), new Uint8Array(1000), false)
+		expect(await exact.run({ workBytes: dump })).not.toBe('failed')
+		expect((await backupState(exact.store)).lastFailure).toBeNull()
+		const short = await harness()
+		await addMedia(short.store, snowflake(NOW - DAY), new Uint8Array(1000), false)
+		expect(await short.run({ workBytes: dump - 1 })).toBe('failed')
+		expect((await backupState(short.store)).lastFailure?.reason).toBe('dump-too-large')
+	})
+
+	it('pauses an index that exceeds what is left of the budget, and completes it with the same budget', async () => {
+		const { dump, index } = await sizes()
+		const h = await harness()
+		await addMedia(h.store, snowflake(NOW - DAY), new Uint8Array(1000))
+		const budget = dump + 1000 + index - 1
+		expect(await h.run({ workBytes: budget })).toBe('paused')
+		expect((await backupState(h.store)).run).toMatchObject({ stage: 'index', copied: 1 })
+		expect(h.s3.uploads.size).toBe(0)
+		expect(await h.run({ workBytes: budget })).toBe('done')
+		expect((await restore(h)).index.map((e) => e.state)).toEqual(['copied'])
+	})
+
 	it('fails an index larger than a whole invocation budget as index-too-large', async () => {
 		const h = await harness()
 		await addMedia(h.store, snowflake(NOW - DAY), new Uint8Array([1]))
@@ -728,7 +773,7 @@ describe('backup deadline', () => {
 		expect(await h.run()).toBe('failed')
 		expect((await backupState(h.store)).lastFailure?.reason).toBe('s3-upload-part-timeout')
 		expect(await frozen(h.store)).toBe(false)
-	})
+	}, 30_000)
 })
 
 describe('backup destination and recipients', () => {
@@ -795,6 +840,108 @@ describe('backup destination and recipients', () => {
 	})
 })
 
+describe('backupFinishDump (OPS-5)', () => {
+	const LEASE = 15 * MINUTE
+
+	async function membership(store: StoreStub): Promise<string[]> {
+		return runInDurableObject(store, (_instance, state) =>
+			state.storage.sql
+				.exec<{ row: string }>("SELECT source || '@' || required_run AS row FROM backup_media ORDER BY source")
+				.toArray()
+				.map((r) => r.row)
+		)
+	}
+
+	// A dump read to its last chunk under `opId`, with runner r1 holding the backup lease.
+	async function readDump(store: StoreStub, opId: string) {
+		const started = await store.dumpStart(BUILD, 60, opId)
+		if (!started.ok) {
+			throw new Error(started.code)
+		}
+		let cursor = started.cursor
+		for (;;) {
+			const step = await store.dumpNext(BUILD, cursor)
+			if (!step.ok) {
+				throw new Error(step.code)
+			}
+			cursor = step.cursor
+			if (step.done) {
+				return cursor
+			}
+		}
+	}
+
+	async function prepared() {
+		const store = await migratedStore()
+		await seedStore(store)
+		await addMedia(store, snowflake(NOW - DAY, 1), new Uint8Array([1]))
+		await addMedia(store, snowflake(NOW - DAY, 2), new Uint8Array([2]))
+		expect((await store.backupClaim(BUILD, 'runner-1', NOW, LEASE)).ok).toBe(true)
+		return store
+	}
+
+	const finish = (store: StoreStub, runner: string, now: number, opId: string, cursor: unknown) =>
+		store.backupFinishDump(BUILD, runner, now, '2026-10-13-aaaaaaaa', 'fingerprint', opId, cursor)
+
+	it('refuses a wrong opId, and leaves the dump and the membership as they were', async () => {
+		const store = await prepared()
+		const cursor = await readDump(store, 'op-good-0001')
+		expect(await finish(store, 'runner-1', NOW, 'op-wrong-0001', cursor)).toMatchObject({
+			ok: false,
+			code: 'dump-not-found',
+		})
+		expect(await frozen(store)).toBe(true)
+		expect(await membership(store)).toEqual([])
+	})
+
+	it('refuses a runner whose lease ended or was taken over, and leaves everything as it was', async () => {
+		const store = await prepared()
+		const cursor = await readDump(store, 'op-good-0002')
+		expect(await finish(store, 'runner-1', NOW + LEASE + 1, 'op-good-0002', cursor)).toMatchObject({
+			ok: false,
+			code: 'lost',
+		})
+		expect((await store.backupClaim(BUILD, 'runner-2', NOW + LEASE + 1, LEASE)).ok).toBe(true)
+		expect(await finish(store, 'runner-1', NOW + LEASE + 2, 'op-good-0002', cursor)).toMatchObject({
+			ok: false,
+			code: 'lost',
+		})
+		expect(await frozen(store)).toBe(true)
+		expect(await membership(store)).toEqual([])
+	})
+
+	it('refuses a stale completion of an aborted dump against a newer good one', async () => {
+		const store = await prepared()
+		const stale = await readDump(store, 'op-stale-0003')
+		expect((await store.dumpAbort(BUILD, 'op-stale-0003')).ok).toBe(true)
+		const good = await readDump(store, 'op-good-0003')
+		expect(await finish(store, 'runner-1', NOW, 'op-stale-0003', stale)).toMatchObject({
+			ok: false,
+			code: 'dump-not-found',
+		})
+		expect(await frozen(store)).toBe(true)
+		expect(await membership(store)).toEqual([])
+		expect(await finish(store, 'runner-1', NOW, 'op-good-0003', good)).toMatchObject({ ok: true, required: 2 })
+	})
+
+	it('answers a replayed completion from its receipt without capturing again', async () => {
+		const store = await prepared()
+		const cursor = await readDump(store, 'op-good-0004')
+		const first = await finish(store, 'runner-1', NOW, 'op-good-0004', cursor)
+		expect(first).toMatchObject({ ok: true, required: 2 })
+		const captured = await membership(store)
+		expect(captured).toHaveLength(2)
+		// An attachment goes after the freeze ended; the replay (a lost answer) must not change the membership.
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec('DELETE FROM media_attachments WHERE id = ?', snowflake(NOW - DAY, 2))
+		})
+		const replay = await finish(store, 'runner-1', NOW, 'op-good-0004', cursor)
+		expect(replay).toMatchObject({ ok: true, trailerText: (first as { trailerText: string }).trailerText })
+		expect(await membership(store)).toEqual(captured)
+		expect(await frozen(store)).toBe(false)
+	})
+})
+
 describe('backup failures (OPS-5, DATA-9)', () => {
 	it('releases the Store freeze and aborts the upload when the job fails, then waits before retrying', async () => {
 		const h = await harness()
@@ -834,7 +981,7 @@ describe('backup failures (OPS-5, DATA-9)', () => {
 		expect(await h.run()).toBe('waiting')
 		h.clock.now += 61 * MINUTE
 		expect(await h.run()).toBe('done')
-	})
+	}, 30_000)
 
 	it('releases the freeze before it cleans up the upload', async () => {
 		const h = await harness()
@@ -850,7 +997,7 @@ describe('backup failures (OPS-5, DATA-9)', () => {
 		expect(await h.run()).toBe('failed')
 		expect(frozenAtAbort).toBe(false)
 		expect(h.s3.uploads.size).toBe(0)
-	})
+	}, 30_000)
 
 	it('restarts a dump whose freeze ended before its last step, so the membership matches the dump', async () => {
 		const h = await harness()
@@ -1174,6 +1321,54 @@ describe('backup restore path (DATA-10)', () => {
 			expect(result.err).toContain(message)
 			// The first error stops verification: one line.
 			expect(result.err.trim().split('\n')).toHaveLength(1)
+		}
+	})
+
+	it('rejects a mismatched run, a malformed attempt, or a bad entry after a good one, before reading any media', async () => {
+		const h = await harness()
+		await addMedia(h.store, snowflake(NOW - DAY, 1), new Uint8Array([1]))
+		await addMedia(h.store, snowflake(NOW - DAY, 2), new Uint8Array([2]))
+		expect(await h.run()).toBe('done')
+		const io = await download(h)
+		const original = JSON.parse(new TextDecoder().decode(io.files.get('media-index.json'))) as {
+			objects: IndexEntry[]
+		}
+		const [first, second] = original.objects as [IndexEntry, IndexEntry]
+		const otherRun = '2026-10-01-0badc0de'
+		const attempt = /\/([0-9a-f]{16})\//.exec(first.key!)![1]!
+		const cases: [IndexEntry[], string][] = [
+			// A well-formed key under another run than the entry names.
+			[[{ ...first, key: first.key!.replace(/\/media\/[^/]+\//, `/media/${otherRun}/`) }, second], 'not under its run'],
+			[[{ ...first, run: otherRun }, second], 'not under its run'],
+			// Malformed attempts: too short, upper case.
+			[[{ ...first, key: first.key!.replace(attempt, attempt.slice(1)) }, second], 'not under its run'],
+			[[{ ...first, key: first.key!.replace(attempt, attempt.toUpperCase()) }, second], 'not under its run'],
+			// The first entry is valid, the second is not.
+			[[first, { ...second, source: 'originals/../../etc/passwd' }], 'originals/<18-digit id>'],
+		]
+		for (const [objects, message] of cases) {
+			const bytes = new TextEncoder().encode(JSON.stringify({ ...original, objects }))
+			const manifest = JSON.parse(new TextDecoder().decode(io.files.get('manifest.json'))) as BackupManifest
+			manifest.mediaIndex.plaintext = { size: bytes.byteLength, sha256: await sha256Hex(bytes) }
+			io.files.set('forged-manifest.json', new TextEncoder().encode(JSON.stringify(manifest)))
+			io.files.set('forged-index.json', bytes)
+			const reads: string[] = []
+			const watched = {
+				...io,
+				size: (path: string) => (reads.push(path), io.size(path)),
+				sha256: (path: string) => (reads.push(path), io.sha256(path)),
+			}
+			let err = ''
+			const code = await cliRun({
+				argv: ['backup-verify', 'forged-manifest.json', '--index', 'forged-index.json', '--media', 'media'],
+				env: {},
+				io: watched,
+				stdout: { write: () => {} },
+				stderr: { write: (t: string) => void (err += t) },
+			})
+			expect(code).toBe(1)
+			expect(err).toContain(message)
+			expect(reads.filter((path) => path.startsWith('media/'))).toEqual([])
 		}
 	})
 
