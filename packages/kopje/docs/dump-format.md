@@ -160,7 +160,7 @@ All of these are `POST` under `/admin/import` with JSON, except `chunk` and `pro
 
 | Step | Request | Effect |
 |---|---|---|
-| begin | `{ "header": {...} }` | Checks migrations, catalog and emptiness, then records an import. An Access admin who sends the same header again resumes that import in the phase it reached (`receiving`, `finished`, `failed` with its report, or `verified` from the receipt). A begin with `IMPORT_TOKEN` also returns `session`, the credential that continues this import |
+| begin | `{ "header": {...} }` | Checks migrations, catalog and emptiness, then records an import. An Access admin who sends the same header again, while that import is still running, resumes it in the phase it reached (`receiving`, `finished` or `failed` with its report). After verification, `GET /admin/import/progress?id=<id>` answers from the receipt (`verified`, with its report); begin does not, since the Store is no longer empty. A begin with `IMPORT_TOKEN` also returns `session`, the credential that continues this import |
 | chunk | `?id=<id>&seq=<n>`, raw body of whole statements (≤ 16 MiB) | Validates every statement against the templates. Applies the chunk and the progress record in one `transactionSync` |
 | finish | `{ "id", "trailer" }` | Checks the trailer's tables, statement count, byte count and body SHA-256 against what was received |
 | verify | `{ "id" }`, repeated until `done` | Recomputes row counts and checksums in the Store, then runs `PRAGMA foreign_key_check`. On success the import record gives way to a receipt and the Store serves again |
@@ -184,7 +184,7 @@ The Store checks each import step's authority inside the transaction that writes
 
 | Authority | How | What it may do |
 |---|---|---|
-| Access admin | `Cf-Access-Jwt-Assertion` of the `/admin` application | Begin an import and continue only imports begun this way |
+| Access admin | `Cf-Access-Jwt-Assertion` of the `/admin` application | Begin an import and continue only imports begun this way. The Store checks the verified identity and Access binding (team domain and `/admin` AUD) against its own configuration in the writing transaction, so a request is refused once the admin, the team or the application changed after it was authenticated |
 | `IMPORT_TOKEN` | header `Kopje-Import-Token` (at least 32 characters) | Only while the Store is in bootstrap, meaning admin access is not usable. It may read health, version, catalog and config, set the config, begin an import while the Store also holds no data, and abandon a stale token import (below) |
 | import session | header `Kopje-Import-Session`, the `session` that begin returned | Only the import it was issued for: chunk, finish, verify, progress and reset. The Store keeps only its SHA-256 |
 
@@ -195,16 +195,26 @@ nothing except the stale-import recovery below. The CLI keeps the session in `<f
 
 A reset never uses `deleteAll()`:
 1. The import record turns into `resetting`; nothing else continues the import.
-2. The imported rows are deleted in bounded transactions, children before parents. Each call runs a few of them, and
-   the caller repeats the call until `done`.
+2. Bounded transactions of at most 2,000 rows each first set the references inside a table to NULL, then delete the
+   rows, children before parents. The references are `statuses.reblog_of_id`, `statuses.in_reply_to_id`, and any
+   column the catalog defers. No delete then cascades to or updates another row. Each call runs a few transactions,
+   and the caller repeats the call until `done`.
 3. The last transaction:
    - writes the configuration back exactly from the record;
    - removes the record;
    - leaves a reset receipt, so a retried request for the same import is answered `done`.
 
-The configuration is never touched in between, and the schema stays. A reset interrupted by a restart or a deploy
-loses nothing: the next call continues it. A request for another import id is refused. The CLI names the import from
-`<file>.import.json`, or else from the running import.
+The configuration is never touched in between, and the schema stays. A request for another import id is refused. The
+CLI names the import from `<file>.import.json`, or else from the running import.
+
+Nothing continues a reset on its own; no alarm drives it. A reset interrupted by a restart, a deploy or a lost client
+loses nothing. The Store stays `resetting` (refusing domain operations) until the reset is resumed by running
+`kopje-admin import-reset` again.
+
+The steps of one call carry no authority of their own. The call is authorized once, then runs its transactions without
+yielding, and the configuration they would be checked against cannot change while the import exists (config is
+refused). Each new call is authorized again. A retry answered from the receipt also schedules any upgrade that waited
+for the reset.
 
 #### Recovering a token import whose session was lost
 
