@@ -10,7 +10,14 @@ import { Application, CryptographicKey, Endpoints, Group, Image, Organization, P
 import { Temporal } from 'temporal-polyfill'
 
 import { DoKvStore } from './kv-store'
-import { createContextLoader, createSafeLoader, type LoaderDeps, type RequestSigner, requireObjectRoot } from './loader'
+import {
+	createContextLoader,
+	createSafeLoader,
+	type FetchBudget,
+	type LoaderDeps,
+	type RequestSigner,
+	requireObjectRoot,
+} from './loader'
 import {
 	type CollectionKind,
 	type CollectionPage,
@@ -143,30 +150,31 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 }
 
 // The loaders of inbound processing (DATA-7): fetches for a personal inbox are signed with the recipient's key, all
-// others with the instance actor's. document is cached per signing key (NET-4); fresh bypasses the cache, for what
-// must be fetched anew (a Move target, an Update of an actor).
-export type RemoteLoaders = { document: DocumentLoader; fresh: DocumentLoader; context: DocumentLoader }
+// others with the instance actor's. Documents are fetched anew, never from the 5-minute document cache, because key
+// material is judged on them (ID-1); within one request a URL is fetched once. Every fetch, contexts included, draws
+// on the request's budget (RES-6); cached contexts cost nothing.
+export type RemoteLoaders = { document: DocumentLoader; context: DocumentLoader }
 
 export function createRemoteLoaders(
 	deps: FederationDeps,
 	state: FederationState,
-	recipient: string | null
+	recipient: string | null,
+	budget: FetchBudget
 ): RemoteLoaders {
 	const parts = federationParts(deps, state)
+	const loaderDeps = { ...parts.loaderDeps, budget }
 	let resolved: Promise<Signer> | undefined
 	// Resolved on the first fetch only: a request refused before any fetch unwraps no key.
 	const signer = () =>
 		(resolved ??= (async () =>
 			(recipient === null ? null : await parts.userSigner(recipient)) ?? parts.instanceSigner())())
+	const fetched = new Map<string, ReturnType<DocumentLoader>>()
+	const fresh = requireObjectRoot(async (url, options) =>
+		createSafeLoader(loaderDeps, (await signer()).sign)(url, options)
+	)
 	return {
-		document: async (url, options) => {
-			const { keyId, sign } = await signer()
-			return parts.signedLoader(keyId, () => Promise.resolve(sign))(url, options)
-		},
-		fresh: requireObjectRoot(async (url, options) =>
-			createSafeLoader(parts.loaderDeps, (await signer()).sign)(url, options)
-		),
-		context: parts.contextLoader,
+		document: (url, options) => memo(fetched, url, () => fresh(url, options)),
+		context: kvCache({ loader: createContextLoader(loaderDeps), kv: parts.kv }),
 	}
 }
 

@@ -1,4 +1,4 @@
--- Kopje Store schema 0000 (25 tables). Applied by the Store DO; never edit after release (checksummed).
+-- Kopje Store schema 0000 (27 tables). Applied by the Store DO; never edit after release (checksummed).
 --
 -- Conventions
 --   IDs      : id is an 18-digit snowflake stored as TEXT (same value as the API ID); uri is the ActivityPub ID.
@@ -344,6 +344,41 @@ CREATE TABLE inbound_retractions (
 ) WITHOUT ROWID;
 
 CREATE INDEX inbound_retractions_expires ON inbound_retractions (expires_at);
+
+-- Public keys listed by stored remote actor documents, by key id (B1b). Only a key whose own owner is the listing
+-- actor is kept, so a key id maps to exactly the account that owns it, whatever the shape of its URL.
+CREATE TABLE remote_keys (
+  key_id TEXT NOT NULL PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+  pem TEXT NOT NULL,
+  fetched_at INTEGER NOT NULL                     -- when the listing document was fetched; trusted for 24h
+) WITHOUT ROWID;
+
+CREATE INDEX remote_keys_account ON remote_keys (account_id);
+
+-- Inbound work done in bounded batches and resumed by the Queue or cron (B1b):
+--   purge  key = the deleted actor's URI. The row is also the actor's tombstone: while it exists, the actor is not
+--          stored again. It expires 30 days after the purge is done, independently of inbound_retractions.
+--   move   key = the Move activity's id. bound is the highest follows.id that existed when the Move arrived, so a
+--          replay never moves a follow made after it; cursor is the last follows.id moved.
+CREATE TABLE inbound_jobs (
+  kind TEXT NOT NULL CHECK (kind IN ('purge', 'move')),
+  key TEXT NOT NULL,
+  actor_uri TEXT NOT NULL,
+  target_account_id TEXT REFERENCES accounts (id) ON DELETE CASCADE,
+  bound TEXT,
+  cursor TEXT,
+  done_at INTEGER,
+  expires_at INTEGER,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (kind, key),
+  CHECK (kind <> 'move' OR (target_account_id IS NOT NULL AND bound IS NOT NULL)),
+  CHECK ((done_at IS NULL) = (expires_at IS NULL))
+) WITHOUT ROWID;
+
+CREATE INDEX inbound_jobs_pending ON inbound_jobs (created_at) WHERE done_at IS NULL;
+CREATE INDEX inbound_jobs_expires ON inbound_jobs (expires_at) WHERE expires_at IS NOT NULL;
+CREATE INDEX inbound_jobs_target ON inbound_jobs (target_account_id) WHERE target_account_id IS NOT NULL;
 
 -- Parts of inbox requests spooled during maintenance that did not fit one Queue message.
 -- Assembled on replay once all parts are present and deleted with the replay result; incomplete

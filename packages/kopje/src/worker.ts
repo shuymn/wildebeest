@@ -1,5 +1,5 @@
 import { createApp } from './app/app'
-import { handleQueue } from './jobs/queue'
+import { handleQueue, runScheduledJobs } from './jobs/queue'
 import { defaultStore } from './platform/store-client'
 import { generateRsaKeyPair } from './security/key-wrap'
 import { buildOf } from './version'
@@ -19,6 +19,6 @@ const inboxDeps = {
 export default {
 	fetch: (request, env, ctx) => app.fetch(request, env, ctx),
 	queue: (batch, env) => handleQueue(batch, env, inboxDeps),
-	// No periodic work exists yet; in maintenance scheduled is a no-op by design.
-	scheduled: () => {},
+	// Resumes inbound jobs (purges, Moves); in maintenance it is a no-op by design.
+	scheduled: (_controller, env, ctx) => ctx.waitUntil(runScheduledJobs(env, inboxDeps)),
 } satisfies ExportedHandler<Env>

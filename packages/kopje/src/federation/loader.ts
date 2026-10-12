@@ -50,21 +50,49 @@ const CONTEXT: Kind = {
 	objectRoot: false,
 }
 
-// A document refused by policy (scheme, host, redirect, type, size, id, root) or unusable as served. Unlike a timeout,
-// a network failure or a 5xx, fetching it again would not help.
+// A document refused by policy (scheme, host, redirect, type, size, id, root, budget) or unusable as served. Fetching
+// it again would not help.
 export class RefusedFetchError extends FetchError {}
 
+// A timeout or a network failure: fetching again may succeed.
+export class TransientFetchError extends FetchError {}
+
 // Whether a failed load may succeed if tried again: a timeout, a network error, or an HTTP 408, 429 or 5xx. Refusals and
-// other HTTP errors (404, 410, ...) are permanent.
+// other HTTP errors (404, 410, ...) are permanent. An error that is not a FetchError (a Store refusal inside a signer,
+// for one) is treated as transient.
 export function isTransientLoadError(error: unknown): boolean {
 	if (error instanceof RefusedFetchError) {
 		return false
 	}
-	if (error instanceof FetchError && error.response !== undefined) {
-		const status = error.response.status
-		return status === 408 || status === 429 || status >= 500
+	if (error instanceof FetchError) {
+		const status = error.response?.status
+		return status === undefined
+			? error instanceof TransientFetchError
+			: status === 408 || status === 429 || status >= 500
 	}
 	return true
+}
+
+// The load failure behind an error that wraps it (JSON-LD reports a failed context fetch as its own error, with the
+// loader's error as its cause), or undefined if there is none.
+export function loadFailureOf(error: unknown, depth = 0): FetchError | undefined {
+	if (error instanceof FetchError || depth > 8 || typeof error !== 'object' || error === null) {
+		return error instanceof FetchError ? error : undefined
+	}
+	const { cause, details } = error as { cause?: unknown; details?: { cause?: unknown } }
+	return loadFailureOf(cause, depth + 1) ?? loadFailureOf(details?.cause, depth + 1)
+}
+
+// What one inbound request may fetch in all (RES-6): documents, JSON-LD contexts and redirect hops share one count,
+// one byte allowance and one deadline. Cache hits and preloaded contexts cost nothing.
+export type FetchBudget = { fetches: number; bytes: number; deadline: number }
+
+export const REQUEST_MAX_FETCHES = 8
+export const REQUEST_MAX_BYTES = 2 * 1024 * 1024
+export const REQUEST_DEADLINE_MS = 15_000
+
+export function requestBudget(now: number): FetchBudget {
+	return { fetches: REQUEST_MAX_FETCHES, bytes: REQUEST_MAX_BYTES, deadline: now + REQUEST_DEADLINE_MS }
 }
 
 export type LoaderDeps = {
@@ -72,6 +100,8 @@ export type LoaderDeps = {
 	checkHost?: (url: URL) => Promise<void>
 	userAgent: string
 	timeoutMs?: number
+	// Shared by every loader of one request; none means only the per-load limits apply.
+	budget?: FetchBudget
 }
 
 export type RequestSigner = (request: Request) => Promise<Request>
@@ -112,8 +142,16 @@ function createLoader(deps: LoaderDeps, kind: Kind, sign?: RequestSigner): Docum
 			return { contextUrl: null, document: preloadedContexts[url], documentUrl: url }
 		}
 		const target = new URL(url)
+		const left = deps.budget === undefined ? timeoutMs : deps.budget.deadline - Date.now()
+		if (left <= 0) {
+			throw new RefusedFetchError(target, 'Request fetch deadline exhausted')
+		}
+		const limit = Math.min(timeoutMs, left)
 		const controller = new AbortController()
-		const timer = setTimeout(() => controller.abort(new FetchError(url, `Timed out after ${timeoutMs} ms`)), timeoutMs)
+		const timer = setTimeout(
+			() => controller.abort(new TransientFetchError(target, `Timed out after ${limit} ms`)),
+			limit
+		)
 		const onAbort = () => controller.abort(options?.signal?.reason)
 		options?.signal?.addEventListener('abort', onAbort, { once: true })
 		const aborted = new Promise<never>((_, reject) => {
@@ -136,12 +174,24 @@ async function load(deps: LoaderDeps, kind: Kind, sign: RequestSigner | undefine
 	let current = target
 	for (let redirects = 0; ; redirects++) {
 		await assertFetchable(current, deps.checkHost ?? dnsCheckHost)
+		if (deps.budget !== undefined) {
+			if (deps.budget.fetches <= 0) {
+				throw new RefusedFetchError(current, 'Request fetch budget exhausted')
+			}
+			deps.budget.fetches--
+		}
 		const unsigned = new Request(current, {
 			headers: { accept: kind.accept, 'user-agent': deps.userAgent },
 			redirect: 'manual',
 			signal,
 		})
-		const response = await deps.fetch(sign === undefined ? unsigned : await sign(unsigned))
+		const request = sign === undefined ? unsigned : await sign(unsigned)
+		let response: Response
+		try {
+			response = await deps.fetch(request)
+		} catch (error) {
+			throw signal.aborted ? (signal.reason as Error) : new TransientFetchError(current, 'Network error')
+		}
 		if (response.status >= 300 && response.status < 400 && response.headers.has('location')) {
 			await response.body?.cancel()
 			const next = new URL(response.headers.get('location') ?? '', current)
@@ -154,11 +204,17 @@ async function load(deps: LoaderDeps, kind: Kind, sign: RequestSigner | undefine
 			current = next
 			continue
 		}
-		return readDocument(response, kind, response.url === '' ? current : new URL(response.url), target)
+		return readDocument(response, kind, response.url === '' ? current : new URL(response.url), target, deps.budget)
 	}
 }
 
-async function readDocument(response: Response, kind: Kind, final: URL, target: URL): Promise<RemoteDocument> {
+async function readDocument(
+	response: Response,
+	kind: Kind,
+	final: URL,
+	target: URL,
+	budget: FetchBudget | undefined
+): Promise<RemoteDocument> {
 	if (final.origin !== target.origin) {
 		await response.body?.cancel()
 		throw new RefusedFetchError(final, `Refused document redirected to ${final.origin}`)
@@ -180,9 +236,13 @@ async function readDocument(response: Response, kind: Kind, final: URL, target: 
 		await response.body?.cancel()
 		throw new RefusedFetchError(final, `${kind.refusal}: ${response.headers.get('content-type')}`)
 	}
-	const body = await readBoundedBody(response, DOCUMENT_BODY_LIMIT)
+	const limit = Math.min(DOCUMENT_BODY_LIMIT, budget?.bytes ?? DOCUMENT_BODY_LIMIT)
+	const body = await readBoundedBody(response, limit)
 	if (body === 'too-large') {
-		throw new RefusedFetchError(final, `Document exceeds ${DOCUMENT_BODY_LIMIT} bytes`)
+		throw new RefusedFetchError(final, `Document exceeds ${limit} bytes`)
+	}
+	if (budget !== undefined) {
+		budget.bytes -= body.byteLength
 	}
 	// Fedify parses the bounded bytes, so a JSON-LD context given in a Link header is applied as Fedify applies it.
 	// Alternate-document links are not followed: only JSON types reach this point. Fedify compares the Content-Type

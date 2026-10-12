@@ -19,8 +19,19 @@ export type InboxDeps = {
 	loader: Omit<LoaderDeps, 'userAgent'>
 }
 
-// A message that continues the purge of a deleted actor's content (domain/inbox.ts, purgeRemoteAccount).
-export type PurgeMessage = { kind: 'purge'; uri: string }
+// A message that asks for a round of the Store's inbound jobs (purges and Moves, domain/inbox.ts runInboundJobs).
+// It carries nothing: the jobs and their progress live in the Store, so a lost or repeated message changes nothing.
+export type JobsMessage = { kind: 'inbound-jobs' }
+
+export async function requestInboundJobs(queue: Queue, delaySeconds?: number): Promise<boolean> {
+	try {
+		await queue.send({ kind: 'inbound-jobs' } satisfies JobsMessage, delaySeconds === undefined ? {} : { delaySeconds })
+		return true
+	} catch (error) {
+		console.error({ event: 'kopje.jobs.enqueue.failed', ...errorFields(error) })
+		return false
+	}
+}
 
 const PERSONAL_INBOX = /^\/ap\/users\/([^/]+)\/inbox$/
 
@@ -95,17 +106,13 @@ export async function processInbox(
 		},
 		request
 	)
-	if (outcome.status !== 202 || outcome.purge === undefined) {
-		if (outcome.status !== 202) {
-			// Our own reason codes only: nothing the request supplied (DATA-5).
-			console.log({ event: 'kopje.inbox.refused', status: outcome.status, reason: outcome.reason })
-		}
-		return outcome
+	if (outcome.status !== 202) {
+		// Our own reason codes only: nothing the request supplied (DATA-5).
+		console.log({ event: 'kopje.inbox.refused', status: outcome.status, reason: outcome.reason })
 	}
-	try {
-		await env.QUEUE.send({ kind: 'purge', uri: outcome.purge } satisfies PurgeMessage)
-	} catch (error) {
-		console.error({ event: 'kopje.purge.enqueue.failed', ...errorFields(error) })
+	if (outcome.jobsPending === true) {
+		// The jobs are durable in the Store: if this send fails, cron continues them.
+		await requestInboundJobs(env.QUEUE)
 	}
 	return outcome
 }

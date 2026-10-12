@@ -1,9 +1,9 @@
-import { type KeyCache, verifyRequestDetailed } from '@fedify/fedify'
+import { exportSpki, type KeyCache, verifyRequestDetailed } from '@fedify/fedify'
 import { CryptographicKey } from '@fedify/vocab'
 import { Temporal } from 'temporal-polyfill'
 
 import { createRemoteLoaders, type FederationDeps, type FederationState, type RemoteLoaders } from './federation'
-import { isTransientLoadError } from './loader'
+import { isTransientLoadError, loadFailureOf, requestBudget } from './loader'
 import { fetchActor } from './remote-actor'
 import type { ActivityRef, InboundActivity, RemoteActorInput } from '../domain/inbox'
 import { isActivityPubMediaType, parseMediaType } from '../platform/media-type'
@@ -35,7 +35,7 @@ export type InboundRequest = {
 
 // 202: done or deliberately ignored (a format or authorization problem, as Mastodon answers); 401: the signature or
 // the signer's identity failed; 415: not an ActivityStreams body; 503: a remote fetch failed in a way that may pass.
-export type InboxOutcome = { status: 202 | 401 | 415 | 503; reason: string; purge?: string }
+export type InboxOutcome = { status: 202 | 401 | 415 | 503; reason: string; jobsPending?: boolean }
 
 export type InboundDeps = Omit<FederationDeps, 'domain'> & { domain: string; recipient: string | null }
 
@@ -149,16 +149,18 @@ function activityOf(
 	}
 }
 
-type ServedKey = { key: CryptographicKey; owner: string; fresh: boolean }
+type ServedKey = { key: CryptographicKey; owner: string }
 
-// A KeyCache over the Store: the key a stored, origin-checked actor document lists. Fedify verifies with it first and
-// refetches the key if the signature fails (a rotated key). Fetched keys are not written back: the actor document is
-// stored with its keys when the activity is applied.
-function storedKeys(deps: InboundDeps, served: Map<string, ServedKey>): KeyCache {
+// A KeyCache over the Store: a key a verified actor document listed, with its owner (remote_keys). A key is served
+// only while fresh (listed within 24 hours), or, for a Delete of the actor itself, at any age: a deleted actor's
+// documents are gone, and its stored key is the only way to verify its last word. Fedify verifies with a served key
+// first and, if the signature fails (a rotated key), fetches the key anew. Fetched keys are not written back here:
+// the actor document is stored with its keys when the activity is applied.
+function storedKeys(deps: InboundDeps, served: Map<string, ServedKey>, anyAge: boolean): KeyCache {
 	return {
 		async get(keyId) {
 			const stored = await callStore(() => deps.store().remoteKey(deps.build, { keyId: keyId.href, now: deps.now() }))
-			if (stored === null) {
+			if (stored === null || (!stored.fresh && !anyAge)) {
 				return undefined
 			}
 			try {
@@ -167,7 +169,7 @@ function storedKeys(deps: InboundDeps, served: Map<string, ServedKey>): KeyCache
 					owner: new URL(stored.owner),
 					publicKey: await importPublicKeyPem(stored.pem),
 				})
-				served.set(keyId.href, { key, owner: stored.owner, fresh: stored.fresh })
+				served.set(keyId.href, { key, owner: stored.owner })
 				return key
 			} catch {
 				return undefined
@@ -192,6 +194,54 @@ function isTransientKeyFailure(result: { status: number } | { error: Error }): b
 	return isTransientLoadError(result.error)
 }
 
+type Verified = { key: CryptographicKey; pem: string } | InboxOutcome
+
+async function verify(
+	deps: InboundDeps,
+	request: InboundRequest,
+	headers: Headers,
+	loaders: RemoteLoaders,
+	served: Map<string, ServedKey>,
+	deleteOfSelf: boolean
+): Promise<Verified> {
+	const signed = new Request(request.url, { method: request.method, headers, body: request.body })
+	let verified: Awaited<ReturnType<typeof verifyRequestDetailed>>
+	try {
+		verified = await verifyRequestDetailed(signed, {
+			documentLoader: loaders.document,
+			contextLoader: loaders.context,
+			keyCache: storedKeys(deps, served, deleteOfSelf),
+			currentTime: Temporal.Instant.fromEpochMilliseconds(request.receivedAt),
+			timeWindow: TIME_WINDOW,
+		})
+	} catch (error) {
+		// A key document whose JSON-LD context could not be loaded.
+		const failure = loadFailureOf(error)
+		if (failure === undefined) {
+			throw error
+		}
+		return isTransientLoadError(failure)
+			? { status: 503, reason: 'key-unavailable' }
+			: { status: 401, reason: 'key-unusable' }
+	}
+	if (verified.verified) {
+		const material = verified.key.publicKey
+		return material === null
+			? { status: 401, reason: 'invalidSignature' }
+			: { key: verified.key, pem: await exportSpki(material) }
+	}
+	const reason = verified.reason
+	if (reason.type !== 'keyFetchError') {
+		return { status: 401, reason: reason.type }
+	}
+	if (isTransientKeyFailure(reason.result)) {
+		return { status: 503, reason: 'key-unavailable' }
+	}
+	// A deleted actor's key is gone with it. Mastodon answers its Delete with 202 rather than have every server retry
+	// it; there is nothing stored to verify it against.
+	return deleteOfSelf ? { status: 202, reason: 'unknown-actor-deleted' } : { status: 401, reason: 'key-gone' }
+}
+
 export async function receiveInbound(deps: InboundDeps, request: InboundRequest): Promise<InboxOutcome> {
 	const headers = new Headers(request.headers)
 	const media = parseMediaType(headers.get('content-type') ?? '')
@@ -200,31 +250,15 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 	}
 	const origin = `https://${deps.domain}`
 	const state: FederationState = { resolvedUsername: null, source: null, storeError: null }
-	const loaders = createRemoteLoaders(deps, state, deps.recipient)
+	const loaders = createRemoteLoaders(deps, state, deps.recipient, requestBudget(Date.now()))
 	const parsed = parseActivity(request.body)
+	const deleteOfSelf = parsed.ok ? parsed.activity.type === 'DeleteActor' : parsed.deleteOfSelf === true
 
 	const served = new Map<string, ServedKey>()
-	const signed = new Request(request.url, { method: request.method, headers, body: request.body })
-	const verified = await verifyRequestDetailed(signed, {
-		documentLoader: loaders.document,
-		contextLoader: loaders.context,
-		keyCache: storedKeys(deps, served),
-		currentTime: Temporal.Instant.fromEpochMilliseconds(request.receivedAt),
-		timeWindow: TIME_WINDOW,
-	})
+	const verified = await verify(deps, request, headers, loaders, served, deleteOfSelf)
 	rethrowStoreError(state)
-	if (!verified.verified) {
-		const reason = verified.reason
-		if (reason.type !== 'keyFetchError') {
-			return { status: 401, reason: reason.type }
-		}
-		if (isTransientKeyFailure(reason.result)) {
-			return { status: 503, reason: 'key-unavailable' }
-		}
-		// A deleted actor's key is gone with it. Mastodon answers its Delete with 202 rather than have every server
-		// retry it; there is nothing stored to verify it against.
-		const deleteOfSelf = parsed.ok ? parsed.activity.type === 'DeleteActor' : parsed.deleteOfSelf === true
-		return deleteOfSelf ? { status: 202, reason: 'unknown-actor-deleted' } : { status: 401, reason: 'key-gone' }
+	if ('status' in verified) {
+		return verified
 	}
 	if (!parsed.ok) {
 		return { status: 202, reason: parsed.reason }
@@ -232,7 +266,7 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 	const { actor: actorUri, activity } = parsed
 
 	// ID-1: the actor is remote and owns the key.
-	const key = verified.key
+	const { key, pem } = verified
 	if (originOf(actorUri) === origin) {
 		return { status: 401, reason: 'local-actor' }
 	}
@@ -242,33 +276,28 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 	if (originOf(activity.id) !== originOf(actorUri)) {
 		return { status: 202, reason: 'foreign-id' }
 	}
+	// The key came from the Store: its owner is the account whose verified document listed it, within 24 hours (or
+	// at any age for the actor's own Delete; storedKeys). Otherwise the actor's current document, fetched anew, must
+	// list this very key: the same id and the same key material.
 	const fromStore = served.get(key.id.href)
 	const storedOwner = fromStore !== undefined && fromStore.key === key && fromStore.owner === actorUri
 	let actor: RemoteActorInput | null = null
-	if (!storedOwner || !fromStore.fresh || activity.type === 'UpdateActor') {
-		const fetched = await fetchActor(
-			actorUri,
-			activity.type === 'UpdateActor' ? loaders.fresh : loaders.document,
-			loaders.context
-		)
+	if (!storedOwner || activity.type === 'UpdateActor') {
+		const fetched = await fetchActor(actorUri, loaders.document, loaders.context)
 		rethrowStoreError(state)
 		if (fetched.kind === 'transient') {
 			return { status: 503, reason: 'actor-unavailable' }
 		}
 		if (fetched.kind === 'unusable') {
-			// A gone actor can still delete itself with the key we stored.
-			if (!(storedOwner && activity.type === 'DeleteActor')) {
-				return { status: 401, reason: 'actor-unusable' }
-			}
-		} else {
-			if (!fetched.actor.publicKeyIds.some((id) => id.href === key.id?.href)) {
-				return { status: 401, reason: 'not-key-owner' }
-			}
-			if (fetched.input === null) {
-				return { status: 202, reason: 'invalid-actor' }
-			}
-			actor = fetched.input
+			return { status: 401, reason: 'actor-unusable' }
 		}
+		if (fetched.input === null) {
+			return { status: 202, reason: 'invalid-actor' }
+		}
+		if (!fetched.input.keys.some((listed) => listed.id === key.id?.href && listed.pem === pem)) {
+			return { status: 401, reason: 'not-key-owner' }
+		}
+		actor = fetched.input
 	}
 
 	const prepared = await prepare(activity, parsed.target, actorUri, origin, loaders)
@@ -279,11 +308,7 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 	const result = await callStore(() =>
 		deps.store().receiveActivity(deps.build, { now: deps.now(), origin, actorUri, actor, activity: prepared })
 	)
-	return {
-		status: 202,
-		reason: result.reason,
-		...(result.purgeRemaining ? { purge: actorUri } : {}),
-	}
+	return { status: 202, reason: result.reason, jobsPending: result.jobsPending }
 }
 
 // What a type needs beyond the activity itself.
@@ -304,7 +329,7 @@ async function prepare(
 		return { ...activity, target: { local: target } }
 	}
 	// ID-4: the target is fetched anew and must list the actor among its aliases.
-	const fetched = await fetchActor(target, loaders.fresh, loaders.context)
+	const fetched = await fetchActor(target, loaders.document, loaders.context)
 	if (fetched.kind === 'transient') {
 		return { status: 503, reason: 'target-unavailable' }
 	}

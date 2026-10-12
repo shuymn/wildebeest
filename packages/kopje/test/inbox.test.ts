@@ -19,6 +19,7 @@ import {
 } from './inbox-helpers'
 import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, RETRACTION_TTL_MS } from '../src/domain/inbox'
 import { handleQueue } from '../src/jobs/queue'
+import { sha256Hex } from '../src/platform/sha256'
 import type { StoreStub } from '../src/platform/store-client'
 
 // Inbound activities about actors and relationships (B1b-1), end to end through the app: signed requests from
@@ -116,7 +117,6 @@ describe('Follow of a local account (Mastodon and Misskey)', () => {
 		expect(await t.post(bob, activity)).toBe(202)
 
 		const bobId = (await accountId(t.store, bob.uri))!
-		const [edge] = await sql<{ id: string }>(t.store, 'SELECT CAST(id AS TEXT) AS id FROM follows')
 		expect(await follows(t.store)).toEqual([
 			{ account_id: bobId, target_account_id: ALICE, state: 'accepted', uri: activity.id },
 		])
@@ -125,7 +125,7 @@ describe('Follow of a local account (Mastodon and Misskey)', () => {
 			{
 				activity: {
 					'@context': AS,
-					id: `${ALICE_URI}#accepts/follows/${edge!.id}`,
+					id: `${ALICE_URI}#accepts/follows/${sha256Hex(activity.id)}`,
 					type: 'Accept',
 					actor: ALICE_URI,
 					object: { id: activity.id, type: 'Follow', actor: bob.uri, object: ALICE_URI },
@@ -399,7 +399,7 @@ describe('Update and Delete of an actor', () => {
 		const deletion = { '@context': AS, id: `${bob.uri}#delete`, type: 'Delete', actor: bob.uri, object: bob.uri }
 		expect(await t.post(bob, deletion)).toBe(202)
 		expect(await sql(t.store, 'SELECT count(*) AS n FROM statuses')).toEqual([{ n: PURGE_BATCH + 1 }])
-		expect(t.queue.pending.map((m) => m.body)).toEqual([{ kind: 'purge', uri: bob.uri }])
+		expect(t.queue.pending.map((m) => m.body)).toEqual([{ kind: 'inbound-jobs' }])
 
 		const deps = inboxDeps(() => t.store, t.web.loader)
 		const env = { ...t.env, MAINTENANCE: 'off' } as Env
@@ -755,6 +755,7 @@ describe('ID-6: the authorization table, one negative case per row', () => {
 				inboxUrl: null,
 				sharedInboxUrl: null,
 				published: null,
+				keys: [],
 				raw: '{}',
 			},
 			activity: { type: 'UpdateActor', id: `${LOCAL}/u` },

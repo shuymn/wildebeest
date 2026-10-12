@@ -1,7 +1,7 @@
-import type { DocumentLoader } from '@fedify/fedify'
+import { type DocumentLoader, exportSpki } from '@fedify/fedify'
 import { type Actor, getActorTypeName, type Image, isActor, Link, lookupObject } from '@fedify/vocab'
 
-import { isTransientLoadError } from './loader'
+import { isTransientLoadError, loadFailureOf } from './loader'
 import type { RemoteActorInput } from '../domain/inbox'
 import { httpUrl } from '../platform/http-url'
 import { sanitizeRemoteHtml } from '../security/html'
@@ -42,8 +42,11 @@ export async function fetchActor(
 			documentLoader: (url, options) => (url === uri ? Promise.resolve(remote) : loader(url, options)),
 			contextLoader,
 		})
-	} catch {
-		return { kind: 'unusable' }
+	} catch (error) {
+		// A JSON-LD context that failed to load for a reason that may pass is transient too; only a document that
+		// cannot be read as served is unusable.
+		const failure = loadFailureOf(error)
+		return { kind: failure !== undefined && isTransientLoadError(failure) ? 'transient' : 'unusable' }
 	}
 	if (!isActor(object) || object.id?.href !== uri) {
 		return { kind: 'unusable' }
@@ -77,6 +80,30 @@ async function imageUrl(get: () => Promise<{ url: URL | Link | null } | null>): 
 	}
 }
 
+// The keys embedded in the document that belong to this actor: a key naming another owner, or with an id on another
+// origin, is not the actor's to vouch for (ID-1) and is left out. Referenced keys are not fetched.
+async function ownKeys(actor: Actor, uri: URL): Promise<{ id: string; pem: string }[]> {
+	const keys: { id: string; pem: string }[] = []
+	try {
+		for await (const key of actor.getPublicKeys({
+			documentLoader: NO_FETCH,
+			contextLoader: NO_FETCH,
+			suppressError: true,
+		})) {
+			const owner = key.ownerId
+			if (key.id === null || key.id.origin !== uri.origin || (owner !== null && owner.href !== uri.href)) {
+				continue
+			}
+			if (key.publicKey !== null) {
+				keys.push({ id: key.id.href, pem: await exportSpki(key.publicKey) })
+			}
+		}
+	} catch {
+		// A key that does not parse is not listed.
+	}
+	return keys
+}
+
 // The columns of a remote account (null if the document cannot be one). Display names are plain text; the bio is
 // sanitized HTML (HTML-1); URLs are http(s) or null (HTML-3). Misskey's extensions (_misskey_summary, isCat, ...) are
 // not interpreted; they stay in raw with the rest of the document.
@@ -103,6 +130,7 @@ export async function remoteActorInput(actor: Actor, document: unknown): Promise
 		inboxUrl: httpUrl(actor.inboxId?.href ?? null)?.href ?? null,
 		sharedInboxUrl: httpUrl(actor.endpoints?.sharedInbox?.href ?? null)?.href ?? null,
 		// A Temporal.Instant, whose type the polyfill's globals leave unresolved for the linter.
+		keys: await ownKeys(actor, uri),
 		published: (actor.published as { toString(): string } | null)?.toString() ?? null,
 		raw: JSON.stringify(document),
 	}

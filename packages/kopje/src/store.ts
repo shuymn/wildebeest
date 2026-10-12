@@ -146,8 +146,8 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, inbox.receiveActivity, input)
 	}
 
-	purgeRemoteAccount(callerBuild: string, input: OperationInput<typeof inbox.purgeRemoteAccount>) {
-		return this.#kernel.execute(callerBuild, inbox.purgeRemoteAccount, input)
+	runInboundJobs(callerBuild: string, input: OperationInput<typeof inbox.runInboundJobs>) {
+		return this.#kernel.execute(callerBuild, inbox.runInboundJobs, input)
 	}
 
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {

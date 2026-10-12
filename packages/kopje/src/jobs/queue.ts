@@ -1,4 +1,4 @@
-import { processInbox, type InboxDeps, type PurgeMessage } from '../federation/inbox'
+import { type InboxDeps, type JobsMessage, processInbox, requestInboundJobs } from '../federation/inbox'
 import { type SpoolMessage, spoolMessageOptions } from '../federation/spool'
 import { readConfig } from '../platform/config'
 import { errorFields } from '../platform/error-message'
@@ -20,8 +20,8 @@ export async function handleQueue(batch: MessageBatch, env: Env, deps: InboxDeps
 	const maintenance = !config.ok || config.config.MAINTENANCE !== 'off'
 	for (const message of batch.messages) {
 		const body = message.body
-		if (isPurgeMessage(body)) {
-			await purge(message, body, env, deps, maintenance)
+		if (isJobsMessage(body)) {
+			await runJobs(message, env, deps, maintenance)
 			continue
 		}
 		if (!isSpoolMessage(body)) {
@@ -60,23 +60,46 @@ export async function handleQueue(batch: MessageBatch, env: Env, deps: InboxDeps
 	}
 }
 
-// One more batch of a deleted actor's content; the next batch is a fresh message.
-async function purge(message: Message, body: PurgeMessage, env: Env, deps: InboxDeps, maintenance: boolean) {
+// A round of the Store's inbound jobs. The jobs and their progress are durable in the Store, so this message is only a
+// nudge: in maintenance it is dropped without a retry (cron resumes the jobs afterwards), and while jobs remain one
+// fresh message asks for the next round.
+async function runJobs(message: Message, env: Env, deps: InboxDeps, maintenance: boolean) {
 	if (maintenance) {
-		message.retry({ delaySeconds: SPOOL_REQUEUE_DELAY_SECONDS })
+		message.ack()
 		return
 	}
 	try {
-		const { remaining } = await callStore(() =>
-			deps.store(env).purgeRemoteAccount(deps.build(env), { uri: body.uri, now: deps.now() })
-		)
-		if (remaining) {
-			await env.QUEUE.send(body)
+		const { pending } = await callStore(() => deps.store(env).runInboundJobs(deps.build(env), { now: deps.now() }))
+		if (pending) {
+			await requestInboundJobs(env.QUEUE)
 		}
 		message.ack()
 	} catch (error) {
-		console.error({ event: 'kopje.purge.failed', id: message.id, ...errorFields(error) })
+		if (error instanceof StoreUnavailableError) {
+			message.ack()
+			return
+		}
+		console.error({ event: 'kopje.jobs.failed', id: message.id, ...errorFields(error) })
 		message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
+	}
+}
+
+// Cron: a round of inbound jobs every run, outside maintenance. This is what makes a purge or Move finish even if
+// every Queue message about it was lost.
+export async function runScheduledJobs(env: Env, deps: InboxDeps): Promise<void> {
+	const config = readConfig(env)
+	if (!config.ok || config.config.MAINTENANCE !== 'off') {
+		return
+	}
+	try {
+		const { pending } = await callStore(() => deps.store(env).runInboundJobs(deps.build(env), { now: deps.now() }))
+		if (pending) {
+			await requestInboundJobs(env.QUEUE)
+		}
+	} catch (error) {
+		if (!(error instanceof StoreUnavailableError)) {
+			console.error({ event: 'kopje.jobs.failed', ...errorFields(error) })
+		}
 	}
 }
 
@@ -96,9 +119,9 @@ async function requeue(message: Message, body: SpoolMessage, queue: Queue): Prom
 	}
 }
 
-function isPurgeMessage(body: unknown): body is PurgeMessage {
-	const m = body as Partial<PurgeMessage> | null
-	return typeof m === 'object' && m !== null && m.kind === 'purge' && typeof m.uri === 'string'
+function isJobsMessage(body: unknown): body is JobsMessage {
+	const m = body as Partial<JobsMessage> | null
+	return typeof m === 'object' && m !== null && m.kind === 'inbound-jobs'
 }
 
 function isSpoolMessage(body: unknown): body is SpoolMessage {
