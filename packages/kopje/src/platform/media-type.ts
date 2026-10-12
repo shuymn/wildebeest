@@ -48,6 +48,7 @@ export function isActivityPubMediaType(media: MediaType): boolean {
 	return (
 		media.essence === 'application/ld+json' &&
 		profile !== undefined &&
-		profile.split(/[\t ]+/).includes(ACTIVITYSTREAMS)
+		// An exact comparison with each listed profile URI, not a substring match.
+		profile.split(/[\t ]+/).some((p) => p === ACTIVITYSTREAMS)
 	)
 }
