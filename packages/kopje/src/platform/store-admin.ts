@@ -401,9 +401,13 @@ export class StoreAdmin {
 		}
 	}
 
+	// `bound` (the scheduled backup): the dump must be the one started with that opId and its freeze lease must still
+	// hold, by the Store's clock, and `within` runs in the same transaction that completes the dump, so what it records
+	// is exactly the dump's snapshot. It returns a refusal to stop before anything is written.
 	async dumpFinish(
 		cursorValue: unknown,
-		abort = false
+		abort = false,
+		bound?: { opId: string; within: (sql: SqlStorage) => Refusal | null }
 	): Promise<Result<{ aborted: boolean; trailer: DumpTrailer | null; trailerText: string | null }>> {
 		let cursor: DumpCursor
 		try {
@@ -415,7 +419,7 @@ export class StoreAdmin {
 		const outcome = this.#transaction(
 			(): Result<{ aborted: boolean; trailer: DumpTrailer | null; trailerText: string | null }> => {
 				const record = readFlags(this.#sql).dump
-				if (record === null || record.id !== cursor.dump) {
+				if (record === null || record.id !== cursor.dump || (bound !== undefined && record.opId !== bound.opId)) {
 					return refuse('dump-not-found', 'no such dump')
 				}
 				if (record.completed !== undefined) {
@@ -432,6 +436,16 @@ export class StoreAdmin {
 				if (cursor.phase !== 'done' || record.results.map((r) => r.name).join(',') !== names) {
 					return refuse('dump-incomplete', 'the dump has not read every table yet')
 				}
+				if (bound !== undefined) {
+					if (this.#now() >= record.leaseUntil) {
+						// Writes may have resumed since the last chunk: the Store no longer matches the dump.
+						return refuse('dump-lease-expired', 'the dump lease expired; start a new dump')
+					}
+					const refused = bound.within(this.#sql)
+					if (refused !== null) {
+						return refused
+					}
+				}
 				// Each step checked the lease before reading, so every chunk was read under one continuous freeze.
 				const trailer = trailerOf(record.results, cursor)
 				const completed = { trailer, trailerText: trailerLines(trailer) }
@@ -445,6 +459,28 @@ export class StoreAdmin {
 			await this.#resumeDeferredUpgrade()
 		}
 		return outcome
+	}
+
+	// Aborts the running dump that was started with this opId, if any: a client that may have lost the start's
+	// response (and so has no cursor) can still release the freeze. Never starts a dump, never touches another one.
+	async dumpAbort(opId: string): Promise<Result<{ aborted: boolean }>> {
+		if (!/^[A-Za-z0-9-]{8,64}$/.test(opId)) {
+			return refuse('invalid-op-id', 'opId must be 8-64 letters, digits or dashes')
+		}
+		await this.#kernel.state()
+		const id = this.#transaction(() => {
+			const record = readFlags(this.#sql).dump
+			if (record === null || record.opId !== opId || record.completed !== undefined) {
+				return null
+			}
+			writeFlag(this.#sql, 'dump', null)
+			return record.id
+		})
+		if (id !== null) {
+			this.#log({ event: 'kopje.store.dump.finish', id, aborted: true })
+			await this.#resumeDeferredUpgrade()
+		}
+		return { ok: true, aborted: id !== null }
 	}
 
 	// ---- import

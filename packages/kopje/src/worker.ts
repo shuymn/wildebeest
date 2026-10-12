@@ -1,4 +1,5 @@
 import { createApp } from './app/app'
+import { scheduledBackup } from './jobs/backup'
 import { scheduledDeliveries } from './jobs/deliver'
 import { handleQueue, runScheduledJobs } from './jobs/queue'
 import { handleScheduled } from './jobs/scheduled'
@@ -22,9 +23,12 @@ const inboxDeps = {
 export default {
 	fetch: (request, env, ctx) => app.fetch(request, env, ctx),
 	queue: (batch, env) => handleQueue(batch, env, { ...inboxDeps, delivery }),
-	// Every 5 minutes: the delivery sweep and doorbell, the media sweep and reconciliation, and a round of inbound jobs
-	// (purges, Moves). Each is a no-op in maintenance, by design.
+	// Every 5 minutes: the delivery sweep and doorbell, the media sweep and reconciliation, a round of inbound jobs
+	// (purges, Moves), and the daily backup when it is due or running. Each is a no-op in maintenance, by design.
 	scheduled: (_controller, env, ctx) => {
+		ctx.waitUntil(
+			scheduledBackup(env, { build: buildOf, store: defaultStore, now, fetch: (request) => fetch(request) })
+		)
 		ctx.waitUntil(scheduledDeliveries(env, { ...delivery, build: buildOf, store: defaultStore }))
 		ctx.waitUntil(handleScheduled(env, { build: buildOf, now: () => Date.now(), store: defaultStore }))
 		ctx.waitUntil(runScheduledJobs(env, inboxDeps))

@@ -1,4 +1,5 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
+import { createReadStream } from 'node:fs'
 import { open, readFile, rename, rm, stat, truncate } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
@@ -78,5 +79,20 @@ export const nodeIO = {
 	},
 	async remove(path) {
 		await rm(path, { force: true })
+	},
+	// Streams the file through SHA-256, so a dump of any size is hashed without holding it in memory.
+	async sha256(path) {
+		const hash = createHash('sha256')
+		try {
+			for await (const chunk of createReadStream(path)) {
+				hash.update(chunk)
+			}
+		} catch (error) {
+			if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT') {
+				return null
+			}
+			throw error
+		}
+		return hash.digest('hex')
 	},
 }

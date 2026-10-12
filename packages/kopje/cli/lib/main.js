@@ -1,6 +1,6 @@
 /* global globalThis */
 import { AdminError, createClient } from './client.js'
-import { dumpToFile, formatBytes, importFromFile } from './commands.js'
+import { dumpToFile, formatBytes, importFromFile, verifyBackup } from './commands.js'
 
 export const USAGE = `Usage: kopje-admin <command> [options]
 
@@ -40,6 +40,16 @@ Commands
   pitr bookmark [--at <time>]   current bookmark, or the one for an ISO 8601 time
   pitr restore <bookmark> --yes restore the Store to a bookmark (requires MAINTENANCE=full)
   sql <query> [--limit <n>]     run a single read-only SELECT/WITH statement
+  backup-verify <manifest.json> [<dump file>]
+                                check a decrypted backup against its decrypted manifest (sizes and SHA-256), stopping
+                                at the first mismatch; works offline, without KOPJE_ADMIN_URL (docs/backup.md). Exits 1
+                                when a file does not match, 3 when all match but the backup lacks originals the dump
+                                uses. Give the dump, --index, or both
+      --encrypted <file.age>    also check the encrypted dump as downloaded
+      --index <file.json>       check the decrypted media index and every entry in it (run this before downloading
+                                any media), and report the media coverage
+      --media <dir>             with --index: also check every original the index lists, decrypted under <dir> at
+                                its key (<dir>/originals/<id>)
 
 Environment
   KOPJE_ADMIN_URL               base URL of the instance's admin host, e.g. https://admin.example.com
@@ -64,7 +74,7 @@ function parseArgs(argv) {
 	const positional = []
 	/** @type {Record<string, string | true>} */
 	const flags = {}
-	const valued = new Set(['chunk-mib', 'lease-seconds', 'at', 'limit', 'before'])
+	const valued = new Set(['chunk-mib', 'lease-seconds', 'at', 'limit', 'before', 'encrypted', 'index', 'media'])
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i] ?? ''
 		if (arg.startsWith('--')) {
@@ -162,6 +172,47 @@ export async function run({
 		if (command === undefined || command === 'help' || flags.help === true) {
 			stdout.write(USAGE)
 			return command === undefined && flags.help !== true ? 2 : 0
+		}
+		if (command === 'backup-verify') {
+			const [manifestPath, dumpPath] = rest
+			const { encrypted, index, media } = flags
+			if (
+				manifestPath === undefined ||
+				(dumpPath === undefined && index === undefined) ||
+				rest.length > 2 ||
+				[encrypted, index, media].includes(true) ||
+				(media !== undefined && index === undefined)
+			) {
+				throw new UsageError(
+					'backup-verify <manifest.json> [<dump file>] [--encrypted <file.age>] [--index <file.json> [--media <dir>]]'
+				)
+			}
+			const result = await verifyBackup({
+				io,
+				manifestPath,
+				dumpPath,
+				encryptedPath: /** @type {string | undefined} */ (encrypted),
+				indexPath: /** @type {string | undefined} */ (index),
+				mediaDir: /** @type {string | undefined} */ (media),
+			})
+			if (result.problem !== null) {
+				out.info(result.problem)
+				return 1
+			}
+			const { manifest, missing } = result
+			print(
+				`backup ${manifest.id} matches its manifest (schema ${manifest.schema.version}, Kopje ${manifest.kopje.version})`
+			)
+			if (missing.length > 0) {
+				for (const entry of missing) {
+					out.info(`missing: ${entry.source} (${entry.state})`)
+				}
+				out.info(
+					`incomplete: ${missing.length} of ${manifest.media.required} originals the dump references are not in this backup`
+				)
+				return 3
+			}
+			return 0
 		}
 		const url = env.KOPJE_ADMIN_URL
 		if (url === undefined || url === '') {
