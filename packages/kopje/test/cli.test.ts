@@ -1,3 +1,5 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { beforeAll, describe, expect, it } from 'vitest'
 
 import { type AccessTeam, accessToken, adminHarness, adminTeam, serviceClaims, setTeamAccess } from './access-helpers'
@@ -232,6 +234,40 @@ describe('kopje-admin', () => {
 		const refused = await cli(['sql', 'DELETE FROM accounts'], { fetch })
 		expect(refused.code).toBe(1)
 		expect(refused.err).toContain('only a single SELECT or WITH statement')
+	})
+
+	it('lists given-up deliveries and retries them (RES-5)', async () => {
+		const store = await sourceStore(0)
+		const { fetch } = edge(store)
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			const { account_id } = sql.exec<{ account_id: string }>('SELECT account_id FROM local_accounts LIMIT 1').one()
+			sql.exec(
+				`INSERT INTO outbound_activities (id, account_id, body, created_at)
+				VALUES (1, ?, '{"activity":{"id":"https://kopje.test/x","type":"Create"},"audience":{"followers":true,"accounts":[]}}', 0)`,
+				account_id
+			)
+			sql.exec(
+				`INSERT INTO deliveries (id, activity_id, account_id, inbox_url, state, attempts, next_attempt_at, last_status,
+					last_error, updated_at)
+				VALUES (7, 1, ?, 'https://remote.example/inbox', 'gave_up', 15, 0, 410, 'HTTP 410', 0)`,
+				account_id
+			)
+		})
+		const listed = JSON.parse((await cli(['deliveries'], { fetch })).out)
+		expect(listed).toMatchObject({
+			backlog: { gaveUp: 1, pending: 0 },
+			gaveUp: [{ id: '7', inbox: 'https://remote.example/inbox', activityType: 'Create', lastStatus: 410 }],
+		})
+		expect(JSON.parse((await cli(['deliveries', 'retry', '7'], { fetch })).out)).toEqual({ retried: 1, more: false })
+		expect(JSON.parse((await cli(['deliveries'], { fetch })).out)).toMatchObject({ backlog: { gaveUp: 0, pending: 1 } })
+		expect(JSON.parse((await cli(['deliveries', 'retry', '--all'], { fetch })).out)).toEqual({
+			retried: 0,
+			more: false,
+		})
+		expect((await cli(['deliveries', 'retry'], { fetch })).code).toBe(2)
+		expect((await cli(['deliveries', 'retry', '7', '--all'], { fetch })).code).toBe(2)
+		expect((await cli(['deliveries', '--before', 'x'], { fetch })).code).toBe(2)
 	})
 
 	it('checks its arguments', async () => {
