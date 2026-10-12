@@ -294,7 +294,10 @@ function supersede(db: Db, signerId: string, object: string, retracts: boolean):
 // While it stages, `staged` holds the key of the last target written; receipts of its object are still recorded
 // (completeDelivery), so an inbox an earlier activity reaches meanwhile stays a target; and the intent is kept even
 // with no rows. The caller keeps the receipts until it is staged. Its chunks written in a later call come after those
-// of intents recorded meanwhile: nothing recorded later is about the object but another retraction of it.
+// of intents recorded meanwhile: nothing recorded later is about the object but another retraction of it. Chunks
+// already written may be expanded before the rest are staged, which is harmless. Each call recomputes the targets and
+// skips keys at or below `staged`, so a follower whose inbox changes to an earlier key between calls is missed (an
+// accepted risk in the threat model).
 export function beginRetraction(
 	db: Db,
 	signerId: string,
