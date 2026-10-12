@@ -13,6 +13,7 @@ import { Params } from './params'
 import { type MediaChanges, SWEEP_BATCH } from '../domain/media'
 import type { MediaAttachment } from '../domain/status-presenter'
 import { readBoundedBody } from '../platform/body'
+import { readConfig } from '../platform/config'
 import { errorFields } from '../platform/error-message'
 import { IMAGE_MATRIX_LIMIT, IMAGE_SIZE_LIMIT, processImage, type ProcessedImage } from '../platform/images'
 import { fileKey, mediaKeys, originalKey } from '../platform/media-files'
@@ -27,9 +28,10 @@ import { StoreUnavailableError } from '../platform/store-errors'
 // Video and audio are refused with 422: the Images binding transforms images only, and serving an un-transcoded
 // container would publish its metadata (location included) as uploaded.
 //
-// Upload order: the Store reserves the row (authorization and the 30-per-30-minutes budget, RES-6) before the body is
-// read or Images is called, so an unauthenticated or over-budget request costs no transformation. Processing is
-// synchronous, so v2 answers 200 like v1 (Mastodon answers 200 when processing finished in the request).
+// Upload order: the Store reserves the row (authorization, the 30-attempts-per-30-minutes budget and the instance's
+// monthly Images budget, RES-6) before the body is read or Images is called, so an unauthenticated or over-budget
+// request costs no transformation. Processing is synchronous, so v2 answers 200 like v1 (Mastodon answers 200 when
+// processing finished in the request).
 
 const NOT_FOUND = () => mastodonError(404, 'Record not found')
 
@@ -107,14 +109,19 @@ const PROCESSING_FAILURES: Record<'unsupported' | 'too_large' | 'quota' | 'faile
 // POST /api/v1/media and /api/v2/media.
 export const uploadMedia: ApiHandler = async (c, deps) => {
 	const token = deps.randomToken()
+	const config = readConfig(c.env)
+	// The app answers 503 before any route when the env is invalid, so this is the validated value.
+	const monthlyTransforms = config.ok ? config.config.IMAGES_MONTHLY_TRANSFORMS : 0
 	const reserved = authorized(
 		await storeCall(c, deps, (s, b) =>
-			s.reserveMedia(b, { credential: userCredential(c, deps), token, now: deps.now() })
+			s.reserveMedia(b, { credential: userCredential(c, deps), token, monthlyTransforms, now: deps.now() })
 		)
 	)
-	if (reserved.status === 'rate_limited') {
+	if (reserved.status !== 'ok') {
 		await c.req.raw.body?.cancel()
-		return mastodonError(429, 'Too many requests')
+		return reserved.status === 'rate_limited'
+			? mastodonError(429, 'Too many requests')
+			: mastodonError(429, "This server's media processing budget for the month is used up")
 	}
 	const id = reserved.id
 	let outcome: Response | MediaAttachment

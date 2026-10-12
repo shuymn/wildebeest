@@ -1,9 +1,9 @@
 // Byte-level checks of images, on both sides of re-encoding:
 //   - sniffImageType: the type an upload really is, from its signature, never from the client's Content-Type or file
 //     name (MEDIA-4). Only the accepted image types are recognized.
-//   - retainedMetadata: whether a re-encoded file still carries metadata that can locate or identify the uploader
-//     (GPS EXIF, XMP, IPTC), as a check on the transformation's output (MEDIA-3). It walks the container's chunks and
-//     only reads lengths and tags, so its work is linear in the input and bounded by it (RES-2).
+//   - retainedMetadata: whether a re-encoded file still carries any metadata but a colour profile, as a check on the
+//     transformation's output (MEDIA-3). It walks the container's chunks and only reads lengths and tags, so its
+//     work is linear in the input and bounded by it (RES-2).
 
 export type ImageType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | 'image/avif'
 
@@ -32,9 +32,11 @@ export function sniffImageType(bytes: Uint8Array): ImageType | null {
 	return null
 }
 
-// What the output still carries, or null when it carries nothing that locates or identifies. A file that cannot be
-// walked counts as carrying metadata (fail closed).
-export type RetainedMetadata = 'gps' | 'xmp' | 'iptc' | 'unreadable'
+// What the output still carries, or null when it carries no metadata beyond colour (ICC profiles are kept). Any EXIF
+// block (serial numbers, MakerNote and timestamps identify a camera and its owner, wherever a GPS IFD may sit), XMP,
+// IPTC, comments, text chunks and unknown JPEG application segments count. A file that cannot be walked counts too
+// (fail closed); so does any type the walker does not know.
+export type RetainedMetadata = 'exif' | 'xmp' | 'iptc' | 'comment' | 'text' | 'segment' | 'unreadable'
 
 export function retainedMetadata(bytes: Uint8Array, type: string): RetainedMetadata | null {
 	switch (type) {
@@ -49,14 +51,35 @@ export function retainedMetadata(bytes: Uint8Array, type: string): RetainedMetad
 	}
 }
 
-const EXIF_HEADER = 'Exif\0\0'
-const XMP_HEADER = 'http://ns.adobe.com/xap/1.0/\0'
+function startsWith(data: Uint8Array, prefix: string): boolean {
+	return data.length >= prefix.length && ascii(data, 0, prefix.length) === prefix
+}
+
+// The only application segments a re-encoded JPEG may keep: JFIF and JFXX (APP0), ICC_PROFILE (APP2), Adobe (APP14).
+function allowedJpegSegment(marker: number, data: Uint8Array): RetainedMetadata | null {
+	switch (marker) {
+		case 0xe0:
+			return startsWith(data, 'JFIF\0') || startsWith(data, 'JFXX\0') ? null : 'segment'
+		case 0xe1:
+			return startsWith(data, 'Exif\0') ? 'exif' : startsWith(data, 'http://ns.adobe.com/') ? 'xmp' : 'segment'
+		case 0xe2:
+			return startsWith(data, 'ICC_PROFILE\0') ? null : 'segment'
+		case 0xed:
+			return 'iptc'
+		case 0xee:
+			return startsWith(data, 'Adobe') ? null : 'segment'
+		case 0xfe:
+			return 'comment'
+		default:
+			return marker >= 0xe0 && marker <= 0xef ? 'segment' : null
+	}
+}
 
 function jpegMetadata(bytes: Uint8Array): RetainedMetadata | null {
-	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
 	if (sniffImageType(bytes) !== 'image/jpeg') {
 		return 'unreadable'
 	}
+	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
 	let i = 2
 	while (i + 4 <= bytes.length) {
 		if (bytes[i] !== 0xff) {
@@ -79,18 +102,9 @@ function jpegMetadata(bytes: Uint8Array): RetainedMetadata | null {
 		if (length < 2 || i + 2 + length > bytes.length) {
 			return 'unreadable'
 		}
-		const segment = bytes.subarray(i + 4, i + 2 + length)
-		if (marker === 0xe1) {
-			if (ascii(segment, 0, EXIF_HEADER.length) === EXIF_HEADER) {
-				const gps = tiffHasGps(segment.subarray(EXIF_HEADER.length))
-				if (gps !== false) {
-					return gps === 'unreadable' ? 'unreadable' : 'gps'
-				}
-			} else if (ascii(segment, 0, XMP_HEADER.length) === XMP_HEADER) {
-				return 'xmp'
-			}
-		} else if (marker === 0xed) {
-			return 'iptc'
+		const found = allowedJpegSegment(marker, bytes.subarray(i + 4, i + 2 + length))
+		if (found !== null) {
+			return found
 		}
 		i += 2 + length
 	}
@@ -109,27 +123,14 @@ function pngMetadata(bytes: Uint8Array): RetainedMetadata | null {
 		if (i + 12 + length > bytes.length) {
 			return 'unreadable'
 		}
-		const data = bytes.subarray(i + 8, i + 8 + length)
 		if (type === 'IEND') {
 			return null
 		}
 		if (type === 'eXIf') {
-			const gps = tiffHasGps(data)
-			if (gps !== false) {
-				return gps === 'unreadable' ? 'unreadable' : 'gps'
-			}
-		} else if (type === 'tEXt' || type === 'zTXt' || type === 'iTXt') {
-			// PNG keywords are 1-79 bytes.
-			const keyword = ascii(data, 0, Math.min(Math.max(data.indexOf(0), 0), 79))
-			if (keyword === 'XML:com.adobe.xmp' || keyword === 'Raw profile type xmp') {
-				return 'xmp'
-			}
-			if (keyword === 'Raw profile type exif' || keyword === 'Raw profile type APP1') {
-				return 'gps'
-			}
-			if (keyword === 'Raw profile type iptc') {
-				return 'iptc'
-			}
+			return 'exif'
+		}
+		if (type === 'tEXt' || type === 'zTXt' || type === 'iTXt') {
+			return 'text'
 		}
 		i += 12 + length
 	}
@@ -149,46 +150,13 @@ function webpMetadata(bytes: Uint8Array): RetainedMetadata | null {
 		if (i + 8 + length > end) {
 			return 'unreadable'
 		}
-		const data = bytes.subarray(i + 8, i + 8 + length)
 		if (type === 'EXIF') {
-			const tiff = ascii(data, 0, EXIF_HEADER.length) === EXIF_HEADER ? data.subarray(EXIF_HEADER.length) : data
-			const gps = tiffHasGps(tiff)
-			if (gps !== false) {
-				return gps === 'unreadable' ? 'unreadable' : 'gps'
-			}
-		} else if (type === 'XMP ') {
+			return 'exif'
+		}
+		if (type === 'XMP ') {
 			return 'xmp'
 		}
 		i += 8 + length + (length % 2)
 	}
 	return i === end ? null : 'unreadable'
-}
-
-const GPS_IFD_POINTER = 0x8825
-
-// Whether a TIFF structure (the body of an EXIF block) has a GPS IFD in IFD0, where EXIF keeps it.
-function tiffHasGps(tiff: Uint8Array): boolean | 'unreadable' {
-	if (tiff.length < 8) {
-		return 'unreadable'
-	}
-	const order = ascii(tiff, 0, 2)
-	if (order !== 'II' && order !== 'MM') {
-		return 'unreadable'
-	}
-	const little = order === 'II'
-	const view = new DataView(tiff.buffer, tiff.byteOffset, tiff.byteLength)
-	const ifd = view.getUint32(4, little)
-	if (ifd + 2 > tiff.length) {
-		return 'unreadable'
-	}
-	const count = view.getUint16(ifd, little)
-	if (ifd + 2 + count * 12 > tiff.length) {
-		return 'unreadable'
-	}
-	for (let entry = 0; entry < count; entry++) {
-		if (view.getUint16(ifd + 2 + entry * 12, little) === GPS_IFD_POINTER) {
-			return true
-		}
-	}
-	return false
 }

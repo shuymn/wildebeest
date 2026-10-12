@@ -181,7 +181,7 @@ CREATE TABLE media_attachments (
 );
 
 CREATE INDEX media_attachments_status ON media_attachments (status_id, position) WHERE status_id IS NOT NULL;
-CREATE INDEX media_attachments_account ON media_attachments (account_id, created_at);
+CREATE INDEX media_attachments_account ON media_attachments (account_id);
 CREATE INDEX media_attachments_gc ON media_attachments (gc_at) WHERE status_id IS NULL AND gc_at IS NOT NULL;
 CREATE UNIQUE INDEX media_attachments_legacy_ap_o ON media_attachments (legacy_ap_o) WHERE legacy_ap_o IS NOT NULL;
 

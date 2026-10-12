@@ -4,12 +4,32 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, json, login, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { GIF, JPEG_WITH_GPS, PNG_WITH_GPS, WIDE_PNG } from './fixtures/images'
-import { type Attachment, bytes, mediaForm, pathOf, r2Keys, TestCodec, upload, uploaded } from './media-helpers'
+import {
+	GIF,
+	JPEG_WITH_GPS,
+	PNG_PLAIN,
+	PNG_WITH_GPS,
+	WEBP_ICC,
+	WEBP_SERIAL,
+	WEBP_XMP,
+	WIDE_PNG,
+} from './fixtures/images'
+import {
+	type Attachment,
+	bytes,
+	mediaForm,
+	pathOf,
+	pngWithChunk,
+	r2Keys,
+	TestCodec,
+	upload,
+	uploaded,
+} from './media-helpers'
 import { community, getJson, outbound, post, remoteAccount, remoteFollows, type Status } from './status-helpers'
-import { UPLOAD_BUDGET } from '../src/domain/media'
+import { TRANSFORMS_PER_UPLOAD, UPLOAD_BUDGET } from '../src/domain/media'
 import { handleScheduled } from '../src/jobs/scheduled'
 import { sweepMedia } from '../src/mastodon/media'
+import { readConfig } from '../src/platform/config'
 import { retainedMetadata } from '../src/platform/image-bytes'
 
 const HOUR = 60 * 60 * 1000
@@ -63,14 +83,15 @@ describe('POST /api/v2/media', () => {
 				focus: { x: 0, y: 0 },
 			},
 		})
-		expect(media.url).toMatch(/^https:\/\/kopje\.test\/media\/[A-Za-z0-9_-]{32,64}\/full\.jpg$/)
-		expect(media.preview_url).toMatch(/^https:\/\/kopje\.test\/media\/[A-Za-z0-9_-]{32,64}\/small\.jpg$/)
+		expect(media.url).toMatch(/^https:\/\/kopje\.test\/media\/[A-Za-z0-9_-]{32,64}\/full\.webp$/)
+		expect(media.preview_url).toMatch(/^https:\/\/kopje\.test\/media\/[A-Za-z0-9_-]{32,64}\/small\.webp$/)
 		const served = await h.request(pathOf(media.url))
 		expect(served.status).toBe(200)
-		expect(served.headers.get('content-type')).toBe('image/jpeg')
+		// JPEG becomes WebP, for which Images discards all metadata.
+		expect(served.headers.get('content-type')).toBe('image/webp')
 		expect(served.headers.get('x-content-type-options')).toBe('nosniff')
 		const body = new Uint8Array(await served.arrayBuffer())
-		expect(retainedMetadata(body, 'image/jpeg')).toBeNull()
+		expect(retainedMetadata(body, 'image/webp')).toBeNull()
 		expect(body).not.toEqual(bytes(JPEG_WITH_GPS))
 		// The original is stored as uploaded, under its id, and no URL reaches it.
 		const original = await env.MEDIA.get(`originals/${media.id}`)
@@ -122,13 +143,31 @@ describe('POST /api/v2/media', () => {
 		expect(await row(h, id)).toBeUndefined()
 	})
 
-	it('refuses an output that keeps GPS EXIF, and deletes what it wrote (MEDIA-3, retained EXIF)', async () => {
+	// The codec stands in for an Images output that kept metadata; each is refused and nothing stays in R2.
+	const KEPT: [string, string, Uint8Array][] = [
+		['a WebP EXIF chunk with a serial number and no GPS', 'jpeg', bytes(WEBP_SERIAL)],
+		['WebP XMP', 'jpeg', bytes(WEBP_XMP)],
+		['PNG eXIf with GPS', 'png', bytes(PNG_WITH_GPS)],
+		['PNG tEXt', 'png', pngWithChunk(bytes(PNG_PLAIN), 'tEXt', 'Author\0alice')],
+		['PNG iTXt', 'png', pngWithChunk(bytes(PNG_PLAIN), 'iTXt', 'XML:com.adobe.xmp\0\0\0\0\0<x/>')],
+	]
+	for (const [name, input, output] of KEPT) {
+		it(`refuses an output that keeps ${name}, and deletes what it wrote (MEDIA-3, retained EXIF)`, async () => {
+			const h = await users()
+			h.codec.encodeResult = output
+			const file =
+				input === 'jpeg' ? mediaForm(bytes(JPEG_WITH_GPS)) : mediaForm(bytes(WIDE_PNG), {}, 'a.png', 'image/png')
+			const response = await upload(h, h.users.alice, file)
+			expect(response.status).toBe(500)
+			const [media] = await sql<{ id: string }>(h.store, 'SELECT id FROM media_attachments')
+			expect(await stored(await keysOf(h, (media as { id: string }).id))).toEqual([])
+		})
+	}
+
+	it('accepts an output that keeps only a colour profile', async () => {
 		const h = await users()
-		h.codec.encodeResult = bytes(JPEG_WITH_GPS)
-		const response = await upload(h, h.users.alice, mediaForm(bytes(JPEG_WITH_GPS)))
-		expect(response.status).toBe(500)
-		const [media] = await sql<{ id: string }>(h.store, 'SELECT id FROM media_attachments')
-		expect(await stored(await keysOf(h, (media as { id: string }).id))).toEqual([])
+		h.codec.encodeResult = bytes(WEBP_ICC)
+		expect((await upload(h, h.users.alice, mediaForm(bytes(JPEG_WITH_GPS)))).status).toBe(200)
 	})
 
 	it('answers 503 when the transformation allowance is used up, and 422 for what Images cannot read', async () => {
@@ -201,22 +240,59 @@ describe('POST /api/v2/media', () => {
 		expect(await sql(h.store, 'SELECT id FROM media_attachments')).toEqual([])
 	})
 
-	it(`limits uploads to ${UPLOAD_BUDGET.count} per 30 minutes per account (RES-6)`, async () => {
+	it(`counts upload attempts, so upload and delete cannot loop past ${UPLOAD_BUDGET.count} in 30 minutes (RES-6)`, async () => {
 		const h = await users()
+		const { alice, bob } = h.users
 		for (let i = 0; i < UPLOAD_BUDGET.count; i++) {
-			await sql(
-				h.store,
-				`INSERT INTO media_attachments (id, account_id, type, url, created_at) VALUES (?, ?, 'image', 'u', ?)`,
-				String(100000000000000100n + BigInt(i)),
-				h.users.alice.id,
-				new Date(NOW - 60_000).toISOString()
-			)
+			const media = await uploaded(h, alice, mediaForm(bytes(PNG_PLAIN), {}, 'a.png', 'image/png'))
+			const status = await post(h, alice, { status: `${i}`, media_ids: [media.id] })
+			await h.request(`/api/v1/statuses/${status.id}?delete_media=true`, bearer(alice.token, { method: 'DELETE' }))
 		}
-		const response = await upload(h, h.users.alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		expect(await sql(h.store, 'SELECT id FROM media_attachments')).toEqual([])
+		const calls = h.codec.calls
+		const response = await upload(h, alice, mediaForm(bytes(PNG_PLAIN), {}, 'a.png', 'image/png'))
 		expect(response.status).toBe(429)
-		expect(h.codec.calls).toBe(0)
-		// Another account has its own budget.
-		expect((await upload(h, h.users.bob, mediaForm(bytes(JPEG_WITH_GPS)))).status).toBe(200)
+		expect(h.codec.calls).toBe(calls)
+		// Another account has its own budget, and the window moves on.
+		expect((await upload(h, bob, mediaForm(bytes(PNG_PLAIN), {}, 'a.png', 'image/png'))).status).toBe(200)
+		h.now.mockReturnValue(NOW + 31 * 60 * 1000)
+		expect((await upload(h, alice, mediaForm(bytes(PNG_PLAIN), {}, 'a.png', 'image/png'))).status).toBe(200)
+	}, 30_000)
+
+	it('counts failed uploads too (RES-6)', async () => {
+		const h = await users()
+		h.codec.failEncode = 9523
+		for (let i = 0; i < UPLOAD_BUDGET.count; i++) {
+			expect((await upload(h, h.users.alice, mediaForm(bytes(PNG_PLAIN), {}, 'a.png', 'image/png'))).status).toBe(500)
+			await sweep(h, NOW)
+		}
+		const calls = h.codec.calls
+		expect((await upload(h, h.users.alice, mediaForm(bytes(PNG_PLAIN), {}, 'a.png', 'image/png'))).status).toBe(429)
+		expect(h.codec.calls).toBe(calls)
+	}, 30_000)
+
+	it('stops all uploads once the monthly Images budget is reserved, before any transformation (RES-6)', async () => {
+		const base = readConfig(env)
+		expect(base.ok && base.config.IMAGES_MONTHLY_TRANSFORMS).toBe(4000)
+		const custom = readConfig({ ...env, IMAGES_MONTHLY_TRANSFORMS: '10' })
+		expect(custom.ok && custom.config.IMAGES_MONTHLY_TRANSFORMS).toBe(10)
+		const h = await users()
+		const month = `images_transforms:${new Date(NOW).toISOString().slice(0, 7)}`
+		await sql(
+			h.store,
+			'INSERT INTO kopje_state (name, value) VALUES (?, ?)',
+			month,
+			String(4000 - TRANSFORMS_PER_UPLOAD)
+		)
+		expect((await upload(h, h.users.alice, mediaForm(bytes(PNG_PLAIN), {}, 'a.png', 'image/png'))).status).toBe(200)
+		const calls = h.codec.calls
+		const refused = await upload(h, h.users.bob, mediaForm(bytes(PNG_PLAIN), {}, 'a.png', 'image/png'))
+		expect(refused.status).toBe(429)
+		expect(await refused.json()).toEqual({ error: "This server's media processing budget for the month is used up" })
+		expect(h.codec.calls).toBe(calls)
+		// A new month starts a new budget.
+		h.now.mockReturnValue(Date.parse('2026-11-01T00:00:00.000Z'))
+		expect((await upload(h, h.users.bob, mediaForm(bytes(PNG_PLAIN), {}, 'a.png', 'image/png'))).status).toBe(200)
 	})
 })
 
@@ -369,7 +445,7 @@ describe('media lifecycle', () => {
 		expect(status.media_attachments).toEqual([media])
 		const [create] = await outbound(h.store)
 		expect((create?.activity.object as { attachment: unknown }).attachment).toEqual([
-			{ type: 'Document', mediaType: 'image/jpeg', url: media.url, name: null },
+			{ type: 'Document', mediaType: 'image/webp', url: media.url, name: null },
 		])
 	})
 })

@@ -1,7 +1,23 @@
 import { describe, expect, it } from 'vitest'
 
-import { GIF, JPEG_COPYRIGHT_ONLY, JPEG_WITH_GPS, PNG_WITH_GPS, WEBP_WITH_GPS, WIDE_PNG } from './fixtures/images'
-import { bytes } from './media-helpers'
+import {
+	GIF,
+	JPEG_COPYRIGHT_ONLY,
+	JPEG_ICC,
+	JPEG_SERIAL,
+	JPEG_WITH_GPS,
+	JPEG_XMP,
+	PNG_ICC,
+	PNG_PLAIN,
+	PNG_WITH_GPS,
+	WEBP_ICC,
+	WEBP_PLAIN,
+	WEBP_SERIAL,
+	WEBP_WITH_GPS,
+	WEBP_XMP,
+	WIDE_PNG,
+} from './fixtures/images'
+import { bytes, exifWithTag, jpegWithSegment, pngWithChunk } from './media-helpers'
 import { retainedMetadata, sniffImageType } from '../src/platform/image-bytes'
 import { keyOfPath, mediaKeys, originalKey } from '../src/platform/media-files'
 
@@ -32,27 +48,37 @@ describe('sniffImageType (MEDIA-4)', () => {
 })
 
 describe('retainedMetadata (MEDIA-3)', () => {
-	it('finds GPS EXIF in JPEG, PNG and WebP', () => {
-		expect(retainedMetadata(bytes(JPEG_WITH_GPS), 'image/jpeg')).toBe('gps')
-		expect(retainedMetadata(bytes(PNG_WITH_GPS), 'image/png')).toBe('gps')
-		expect(retainedMetadata(bytes(WEBP_WITH_GPS), 'image/webp')).toBe('gps')
+	const jpeg = bytes(JPEG_ICC)
+	const png = bytes(PNG_PLAIN)
+
+	it('refuses every EXIF block, not only GPS: location, serial numbers, MakerNote', () => {
+		expect(retainedMetadata(bytes(JPEG_WITH_GPS), 'image/jpeg')).toBe('exif')
+		expect(retainedMetadata(bytes(JPEG_SERIAL), 'image/jpeg')).toBe('exif')
+		expect(retainedMetadata(bytes(JPEG_COPYRIGHT_ONLY), 'image/jpeg')).toBe('exif')
+		expect(retainedMetadata(jpegWithSegment(jpeg, 0xe1, exifWithTag(0x927c, 'maker')), 'image/jpeg')).toBe('exif')
+		expect(retainedMetadata(bytes(PNG_WITH_GPS), 'image/png')).toBe('exif')
+		expect(retainedMetadata(bytes(WEBP_WITH_GPS), 'image/webp')).toBe('exif')
+		expect(retainedMetadata(bytes(WEBP_SERIAL), 'image/webp')).toBe('exif')
 	})
 
-	it('allows EXIF without location (Images keeps the copyright tag by default) and plain images', () => {
-		expect(retainedMetadata(bytes(JPEG_COPYRIGHT_ONLY), 'image/jpeg')).toBeNull()
+	it('refuses XMP, IPTC, comments, text chunks and unknown JPEG application segments', () => {
+		expect(retainedMetadata(bytes(JPEG_XMP), 'image/jpeg')).toBe('xmp')
+		expect(retainedMetadata(bytes(WEBP_XMP), 'image/webp')).toBe('xmp')
+		expect(retainedMetadata(jpegWithSegment(jpeg, 0xed, 'Photoshop 3.0\0'), 'image/jpeg')).toBe('iptc')
+		expect(retainedMetadata(jpegWithSegment(jpeg, 0xfe, 'shot by alice'), 'image/jpeg')).toBe('comment')
+		expect(retainedMetadata(jpegWithSegment(jpeg, 0xe3, 'META'), 'image/jpeg')).toBe('segment')
+		expect(retainedMetadata(jpegWithSegment(jpeg, 0xe2, 'MPF\0'), 'image/jpeg')).toBe('segment')
+		expect(retainedMetadata(pngWithChunk(png, 'tEXt', 'Author\0alice'), 'image/png')).toBe('text')
+		expect(retainedMetadata(pngWithChunk(png, 'iTXt', 'XML:com.adobe.xmp\0\0\0\0\0<x/>'), 'image/png')).toBe('text')
+		expect(retainedMetadata(pngWithChunk(png, 'zTXt', 'Comment\0\0x'), 'image/png')).toBe('text')
+	})
+
+	it('accepts plain images and colour profiles (ICC)', () => {
+		expect(retainedMetadata(bytes(JPEG_ICC), 'image/jpeg')).toBeNull()
+		expect(retainedMetadata(bytes(PNG_ICC), 'image/png')).toBeNull()
+		expect(retainedMetadata(bytes(WEBP_ICC), 'image/webp')).toBeNull()
+		expect(retainedMetadata(bytes(WEBP_PLAIN), 'image/webp')).toBeNull()
 		expect(retainedMetadata(bytes(WIDE_PNG), 'image/png')).toBeNull()
-	})
-
-	it('finds XMP and IPTC segments', () => {
-		const jpeg = bytes(JPEG_COPYRIGHT_ONLY)
-		const segment = (marker: number, payload: Uint8Array) =>
-			new Uint8Array([0xff, marker, (payload.length + 2) >> 8, (payload.length + 2) & 0xff, ...payload])
-		const withSegment = (marker: number, payload: Uint8Array) =>
-			new Uint8Array([...jpeg.subarray(0, 2), ...segment(marker, payload), ...jpeg.subarray(2)])
-		expect(retainedMetadata(withSegment(0xe1, text('http://ns.adobe.com/xap/1.0/\0<x:xmpmeta/>')), 'image/jpeg')).toBe(
-			'xmp'
-		)
-		expect(retainedMetadata(withSegment(0xed, text('Photoshop 3.0\0')), 'image/jpeg')).toBe('iptc')
 	})
 
 	it('fails closed on truncated or unknown files', () => {

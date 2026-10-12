@@ -76,11 +76,17 @@ export const IMAGE_MATRIX_LIMIT = 16_777_216
 export const FULL_EDGE = 3840
 export const SMALL_EDGE = 640
 
-type OutputType = 'image/jpeg' | 'image/png' | 'image/webp'
+// Only PNG and WebP are produced. The Images binding has no metadata option (its output() takes format, quality and
+// anim: https://developers.cloudflare.com/images/transform-images/bindings/), and Images discards all metadata for
+// WebP and PNG output but keeps the EXIF copyright tag in JPEG by default ("For all other output formats (e.g. WebP or
+// PNG), all metadata will always be discarded":
+// https://developers.cloudflare.com/images/transform-images/transform-via-url/#metadata). So metadata is stripped at
+// the source, and retainedMetadata is the safety net. PNG keeps PNG (lossless, transparency); JPEG, GIF, WebP and AVIF
+// become WebP (it keeps transparency and animation).
+type OutputType = 'image/png' | 'image/webp'
 
-// JPEG and PNG keep their type; GIF, WebP and AVIF become WebP (it keeps transparency and animation).
 const OUTPUT: Record<ImageType, OutputType> = {
-	'image/jpeg': 'image/jpeg',
+	'image/jpeg': 'image/webp',
 	'image/png': 'image/png',
 	'image/gif': 'image/webp',
 	'image/webp': 'image/webp',

@@ -28,8 +28,25 @@ export const DETACHED_GRACE_MS = 24 * HOUR
 // A reservation that never completes (the Worker failed mid-upload) is swept after an hour.
 const RESERVATION_MS = HOUR
 
-// Mastodon's rate limit for media uploads: 30 per 30 minutes per account (RES-6).
+// Mastodon's rate limit for media uploads: 30 per 30 minutes per account (RES-6). Attempts are counted, not rows: a
+// deleted or failed upload still counts, so upload-and-delete cannot loop.
 export const UPLOAD_BUDGET = { count: 30, windowMs: 30 * 60 * 1000 }
+
+// Images transformations one upload may spend (the full image and the preview; platform/images.ts).
+export const TRANSFORMS_PER_UPLOAD = 2
+
+// The attempt and transformation counters live in kopje_state, outside the dumped tables: each account's attempt times
+// in the window (at most UPLOAD_BUDGET.count), and the instance's reserved transformations in the current UTC month.
+const ATTEMPTS = 'media_attempts:'
+const TRANSFORMS = 'images_transforms:'
+
+function state(db: Db, name: string): string | undefined {
+	return db.first<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', name)?.value
+}
+
+function setState(db: Db, name: string, value: string): void {
+	db.run('INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)', name, value)
+}
 
 // At most this many uploads are swept per run; each is three R2 keys.
 export const SWEEP_BATCH = 100
@@ -53,20 +70,27 @@ function ownUpload(db: Db, accountId: string, id: string, now: number): MediaRow
 	)
 }
 
-export type Reserved = { status: 'ok'; id: string } | { status: 'rate_limited' }
+export type Reserved = { status: 'ok'; id: string } | { status: 'rate_limited' } | { status: 'budget_exhausted' }
 
-// Step 1. `token` is the file token the Worker generated (32 random bytes).
-export const reserveMedia = userWriteOperation<{ token: string; now: number }, Reserved>(
-	(db, { token, now }, { accountId }) => {
-		const recent =
-			db.first<{ n: number }>(
-				'SELECT COUNT(*) AS n FROM media_attachments WHERE account_id = ? AND created_at > ?',
-				accountId,
-				iso(now - UPLOAD_BUDGET.windowMs)
-			)?.n ?? 0
-		if (recent >= UPLOAD_BUDGET.count) {
+// Step 1. `token` is the file token the Worker generated (32 random bytes). `monthlyTransforms` is the instance's
+// Images budget (IMAGES_MONTHLY_TRANSFORMS). Both budgets are checked and charged here, in the transaction that makes
+// the reservation, so concurrent uploads cannot overshoot them and nothing reaches Images past them (RES-6).
+export const reserveMedia = userWriteOperation<{ token: string; monthlyTransforms: number; now: number }, Reserved>(
+	(db, { token, monthlyTransforms, now }, { accountId }) => {
+		const attemptsName = `${ATTEMPTS}${accountId}`
+		const since = now - UPLOAD_BUDGET.windowMs
+		const attempts = (JSON.parse(state(db, attemptsName) ?? '[]') as number[]).filter((at) => at > since)
+		if (attempts.length >= UPLOAD_BUDGET.count) {
 			return { status: 'rate_limited' }
 		}
+		const month = `${TRANSFORMS}${iso(now).slice(0, 7)}`
+		const spent = Number(state(db, month) ?? '0')
+		if (spent + TRANSFORMS_PER_UPLOAD > monthlyTransforms) {
+			return { status: 'budget_exhausted' }
+		}
+		setState(db, attemptsName, JSON.stringify([...attempts, now]))
+		db.run("DELETE FROM kopje_state WHERE name LIKE 'images\\_transforms:%' ESCAPE '\\' AND name <> ?", month)
+		setState(db, month, String(spent + TRANSFORMS_PER_UPLOAD))
 		const id = allocateLocalId(db, now)
 		db.run(
 			`INSERT INTO media_attachments (id, account_id, type, url, file_token, processed, gc_at, created_at)

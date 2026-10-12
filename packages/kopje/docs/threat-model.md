@@ -327,11 +327,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/image-bytes.test.ts` ("media keys"), `test/media.test.ts` ("serves only well-formed paths of served files").
 - **MEDIA-3: served images are re-encoded.** An image is served only as Images output with location metadata removed; if
   transformation fails, the upload is refused and original bytes are never served. _Implemented on branch
-  `kopje/media-search`:_ `processImage` in `src/platform/images.ts` checks every output (`retainedMetadata` in
-  `src/platform/image-bytes.ts` finds GPS EXIF, XMP and IPTC) and refuses the upload otherwise; `test/media.test.ts`
-  ("re-encodes an image without its location", "refuses a failed transformation", "refuses an output that keeps GPS
-  EXIF"). Tests use Miniflare's local Images binding (sharp); the production binding's metadata behaviour is verified on
-  the verification instance (B9).
+  `kopje/media-search`:_ outputs are PNG or WebP only, for which Images discards all metadata (the binding has no
+  metadata option, and JPEG output would keep the EXIF copyright tag); `processImage` in `src/platform/images.ts` then
+  checks every output with `retainedMetadata` (`src/platform/image-bytes.ts`), which refuses any EXIF, XMP, IPTC,
+  comment, text chunk or unknown JPEG application segment and keeps only colour profiles, and refuses the upload
+  otherwise; `test/image-bytes.test.ts` ("refuses every EXIF block", "refuses XMP, IPTC, comments"),
+  `test/media.test.ts` ("re-encodes an image without its location", "refuses a failed transformation", "refuses an
+  output that keeps ..."). Tests use Miniflare's local Images binding (sharp); the production binding's output is
+  verified on the verification instance (B9).
 - **MEDIA-4: media cannot run as instance content.** Uploads are accepted by detected type from an allowlist and served
   with their stored type and `nosniff`; HTML, SVG and other active types are never served from the instance origin.
   _Implemented on branch `kopje/media-search`:_ `sniffImageType` (JPEG, PNG, GIF, WebP, AVIF by signature, and Images
@@ -383,11 +386,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   recipients, collection expansion and notifications. Delivery backlog and concurrency are bounded. Anonymous app
   registration, inbox spooling and media transformations have rate or storage budgets with a visible refusal. _Planned
   (B1b, B2). Gap: `POST /api/v1/apps` on main has no rate or storage budget yet; planned with B5 (rate limiting)._
-  _Implemented on branch `kopje/media-search`_ for media: an account reserves at most 30 uploads per 30 minutes
-  (Mastodon's limit) before the body is read or Images is called, and a used-up Images allowance answers 503;
-  unattached uploads are deleted after a day by a sweep of at most 100 per run; `UPLOAD_BUDGET` in
-  `src/domain/media.ts`; `test/media.test.ts` ("limits uploads", "answers 503 when the transformation allowance is used
-  up").
+  _Implemented on branch `kopje/media-search`_ for media: before the body is read or Images is called, the Store
+  counts upload attempts (deleted and failed ones included) to at most 30 per 30 minutes per account (Mastodon's
+  limit), and reserves two transformations against an instance budget per UTC month (`IMAGES_MONTHLY_TRANSFORMS`,
+  default 4,000, under the 5,000 of the Images free plan); either refusal answers 429, and a used-up Images allowance
+  answers 503. Unattached uploads are deleted after a day by a sweep of at most 100 per run. `reserveMedia` in
+  `src/domain/media.ts`; `test/media.test.ts` ("counts upload attempts", "counts failed uploads too", "stops all
+  uploads once the monthly Images budget is reserved", "answers 503 when the transformation allowance is used up").
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Implemented on branch `kopje/statuses`_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:

@@ -22,6 +22,9 @@ const configSchema = z.object({
 	IMPORT_TOKEN: z.string().min(1).optional(),
 	// The KEK that wraps local private keys. Unset reads as the empty string, which is a legal KEK (healthReport warns).
 	USER_KEK: z.string().optional(),
+	// Images transformations uploads may reserve per UTC month (two per upload). The default stays under the 5,000 the
+	// Images free plan includes; an operator with paid transformations raises it in the dashboard.
+	IMAGES_MONTHLY_TRANSFORMS: z.coerce.number().int().min(0).default(4000),
 	// Set after /setup generates it; Web Push stays unavailable until then.
 	VAPID_JWK: z
 		.string()
