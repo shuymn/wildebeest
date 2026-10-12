@@ -2,14 +2,28 @@ import { DurableObject } from 'cloudflare:workers'
 
 import { MIGRATIONS } from './db/migrations'
 import * as accounts from './domain/accounts'
+import {
+	ensureInstanceActorKey,
+	getCollection,
+	getInstanceActorKey,
+	getInstanceDomain,
+	getLocalActor,
+	getLocalKey,
+	getNodeInfoUsage,
+	listLocalKeys,
+} from './domain/actors'
 import { checkCredential, type Credential, type UserCredential } from './domain/auth'
+import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import { acceptInbox, type InboxDelivery } from './domain/inbox'
 import { instanceInfo } from './domain/instance'
 import * as oauth from './domain/oauth'
 import { getSetupState } from './domain/setup'
+import { saveSnapshot } from './domain/snapshot'
 import { type ImportAuthority, StoreAdmin } from './platform/store-admin'
-import { StoreKernel } from './platform/store-kernel'
+import { StoreKernel, type StoreOperation } from './platform/store-kernel'
 import { buildOf, PACKAGE_VERSION } from './version'
+
+type OperationInput<T> = T extends StoreOperation<infer I, unknown> ? I : never
 
 // The single source of truth of an instance: one SQLite-backed Durable Object. Every RPC takes the caller's build
 // (the Workers version id, see version.ts). Domain operations run through the kernel's gate. Rescue RPCs work in every
@@ -125,6 +139,69 @@ export class Store extends DurableObject<Env> {
 
 	receiveInbox(callerBuild: string, delivery: InboxDelivery) {
 		return this.#kernel.execute(callerBuild, acceptInbox, delivery)
+	}
+
+	// Federation (B1a): Fedify's KvStore, local actors and keys, collections, NodeInfo, and the rescue snapshots.
+	// rescueSnapshot is a rescue RPC like health(): any caller build, every Store state.
+
+	kvGet(callerBuild: string, input: OperationInput<typeof kvGet>) {
+		return this.#kernel.execute(callerBuild, kvGet, input)
+	}
+
+	kvSet(callerBuild: string, input: OperationInput<typeof kvSet>) {
+		return this.#kernel.execute(callerBuild, kvSet, input)
+	}
+
+	kvDelete(callerBuild: string, input: OperationInput<typeof kvDelete>) {
+		return this.#kernel.execute(callerBuild, kvDelete, input)
+	}
+
+	kvCas(callerBuild: string, input: OperationInput<typeof kvCas>) {
+		return this.#kernel.execute(callerBuild, kvCas, input)
+	}
+
+	kvList(callerBuild: string, input: OperationInput<typeof kvList>) {
+		return this.#kernel.execute(callerBuild, kvList, input)
+	}
+
+	instanceDomain(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, getInstanceDomain, undefined)
+	}
+
+	localActor(callerBuild: string, input: OperationInput<typeof getLocalActor>) {
+		return this.#kernel.execute(callerBuild, getLocalActor, input)
+	}
+
+	localKey(callerBuild: string, input: OperationInput<typeof getLocalKey>) {
+		return this.#kernel.execute(callerBuild, getLocalKey, input)
+	}
+
+	instanceActorKey(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, getInstanceActorKey, undefined)
+	}
+
+	ensureInstanceActorKey(callerBuild: string, input: OperationInput<typeof ensureInstanceActorKey>) {
+		return this.#kernel.execute(callerBuild, ensureInstanceActorKey, input)
+	}
+
+	localKeys(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, listLocalKeys, undefined)
+	}
+
+	collection(callerBuild: string, input: OperationInput<typeof getCollection>) {
+		return this.#kernel.execute(callerBuild, getCollection, input)
+	}
+
+	nodeInfoUsage(callerBuild: string, input: OperationInput<typeof getNodeInfoUsage>) {
+		return this.#kernel.execute(callerBuild, getNodeInfoUsage, input)
+	}
+
+	saveSnapshot(callerBuild: string, input: OperationInput<typeof saveSnapshot>) {
+		return this.#kernel.execute(callerBuild, saveSnapshot, input)
+	}
+
+	rescueSnapshot(_callerBuild: string, key: string) {
+		return this.#kernel.readSnapshot(key)
 	}
 
 	// OAuth and the account and instance API (B3).

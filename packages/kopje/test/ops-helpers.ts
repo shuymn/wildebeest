@@ -1,5 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test'
 
+import { LEGACY_EMPTY_KEK } from './federation-helpers'
 import { BUILD } from './helpers'
 import { readDumpFile, statementChunks } from '../cli/lib/format.js'
 import { CONFIG_KEYS } from '../src/platform/access-settings'
@@ -56,11 +57,13 @@ line2 ✓ 🦬'),
 			id(2)
 		)
 		sql.exec(
-			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, ?, ?, 'PUBKEY')`,
+			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, ?, ?, ?)`,
 			id(1),
 			'alice@kopje.test',
-			new Uint8Array([0, 1, 2, 255, 39, 10]),
-			new Uint8Array([9, 8, 7])
+			// A real wrapped key (the health report unwraps it), from the legacy fixture.
+			LEGACY_EMPTY_KEK.privkey,
+			LEGACY_EMPTY_KEK.salt,
+			LEGACY_EMPTY_KEK.pubkey
 		)
 		// The reply arrives first with its parent unresolved, then the parent, then the link is resolved.
 		sql.exec(
@@ -111,7 +114,8 @@ line2 ✓ 🦬'),
 		sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje.test'), ('title', 'Kopje')")
 		sql.exec(
 			"INSERT INTO inbound_spool (spool_id, part, part_count, fragment, spooled_at) VALUES ('s1', 0, 2, ?, 1)",
-			new Uint8Array([120, 156, 0])
+			// NUL, 0xFF, a quote and a newline: bytes a BLOB literal must carry as they are.
+			new Uint8Array([0, 1, 2, 255, 39, 10])
 		)
 		sql.exec(
 			"INSERT INTO fedify_kv (key, value, expires_at) VALUES ('[\"k\",1]', '{\"v\":true}', NULL), ('[\"a\"]', '1', 5)"

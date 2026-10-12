@@ -419,10 +419,10 @@ describe('upgrade retry', () => {
 describe('read-only SQL', () => {
 	it('returns rows and encodes blobs', async () => {
 		const store = await seeded(0)
-		expect(await store.query(BUILD, 'SELECT privkey, email FROM local_accounts')).toEqual({
+		expect(await store.query(BUILD, 'SELECT fragment, spool_id FROM inbound_spool')).toEqual({
 			ok: true,
-			columns: ['privkey', 'email'],
-			rows: [[{ blob: '000102ff270a' }, 'alice@kopje.test']],
+			columns: ['fragment', 'spool_id'],
+			rows: [[{ blob: '000102ff270a' }, 's1']],
 			truncated: false,
 		})
 		expect(await store.query(BUILD, 'SELECT id FROM accounts', 1)).toMatchObject({

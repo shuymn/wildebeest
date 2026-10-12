@@ -203,7 +203,10 @@ export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
 		const b = build(c.env)
 		const config = readConfig(c.env)
 		let health: ReturnType<StoreStub['health']> | undefined
-		const once = { health: () => (health ??= stub(c).health(b)) }
+		const once = {
+			health: () => (health ??= stub(c).health(b)),
+			localKeys: (caller: string) => stub(c).localKeys(caller),
+		}
 		const report = await healthReport(b, config, () => once)
 		let detail: unknown
 		try {
