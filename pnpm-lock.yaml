@@ -58,8 +58,8 @@ importers:
         specifier: 8.62.0
         version: 8.62.0(eslint@9.39.4(jiti@1.21.7))(typescript@5.9.3)
       '@vitest/coverage-istanbul':
-        specifier: 4.1.9
-        version: 4.1.9(vitest@4.1.9)
+        specifier: 4.1.11
+        version: 4.1.11(vitest@4.1.9)
       eslint:
         specifier: 9.39.4
         version: 9.39.4(jiti@1.21.7)
@@ -89,7 +89,7 @@ importers:
         version: 6.1.1(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)(yaml@2.9.1))
       vitest:
         specifier: 4.1.9
-        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@24.13.2)(@vitest/coverage-istanbul@4.1.9)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)(yaml@2.9.1))
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@24.13.2)(@vitest/coverage-istanbul@4.1.11)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)(yaml@2.9.1))
       wrangler:
         specifier: 4.105.0
         version: 4.105.0(@cloudflare/workers-types@4.20260627.1)
@@ -1568,6 +1568,11 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@vitest/coverage-istanbul@4.1.11':
+    resolution: {integrity: sha512-pK9LJtOS534bmUwdwLpGD9qL52DeqVWSInrXFMNqrvWLbbAhuIPAlRup3UbsjFOMqCC/p3MmmX7uXV7ZTkcFfQ==}
+    peerDependencies:
+      vitest: 4.1.11
+
   '@vitest/coverage-istanbul@4.1.9':
     resolution: {integrity: sha512-4a7DsIwycTf4eYwEDtnMfMV8H80KSKH9PuMHhqL5SwPZzDyUKq2X/TPCVZ7NqIuSz7UbZckmEmkip6iZBI/gEA==}
     peerDependencies:
@@ -2119,6 +2124,7 @@ packages:
   eslint@9.39.4:
     resolution: {integrity: sha512-XoMjdBOwe/esVgEvLmNsD3IRHkm7fbKIUGvrleloJXUZgDHig2IPWNniv+GwjyJXzuNqVjlr5+4yVUZjycJwfQ==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
     hasBin: true
     peerDependencies:
       jiti: '*'
@@ -3856,7 +3862,7 @@ snapshots:
       cjs-module-lexer: 1.2.3
       esbuild: 0.28.1
       miniflare: 4.20260625.0
-      vitest: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@24.13.2)(@vitest/coverage-istanbul@4.1.9)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)(yaml@2.9.1))
+      vitest: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@24.13.2)(@vitest/coverage-istanbul@4.1.11)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)(yaml@2.9.1))
       wrangler: 4.105.0(@cloudflare/workers-types@4.20260627.1)
       zod: 3.25.76
     transitivePeerDependencies:
@@ -4806,6 +4812,22 @@ snapshots:
   '@unrs/resolver-binding-win32-x64-msvc@1.11.1':
     optional: true
 
+  '@vitest/coverage-istanbul@4.1.11(vitest@4.1.9)':
+    dependencies:
+      '@babel/core': 7.29.7
+      '@istanbuljs/schema': 0.1.3
+      '@jridgewell/gen-mapping': 0.3.13
+      '@jridgewell/trace-mapping': 0.3.31
+      istanbul-lib-coverage: 3.2.2
+      istanbul-lib-report: 3.0.1
+      istanbul-reports: 3.2.0
+      magicast: 0.5.3
+      obug: 2.1.3
+      tinyrainbow: 3.1.0
+      vitest: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@24.13.2)(@vitest/coverage-istanbul@4.1.11)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)(yaml@2.9.1))
+    transitivePeerDependencies:
+      - supports-color
+
   '@vitest/coverage-istanbul@4.1.9(vitest@4.1.9)':
     dependencies:
       '@babel/core': 7.29.7
@@ -4821,6 +4843,7 @@ snapshots:
       vitest: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@24.13.2)(@vitest/coverage-istanbul@4.1.9)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)(yaml@2.9.1))
     transitivePeerDependencies:
       - supports-color
+    optional: true
 
   '@vitest/expect@4.1.9':
     dependencies:
@@ -7305,6 +7328,35 @@ snapshots:
       jiti: 1.21.7
       sass: 1.101.0
       yaml: 2.9.1
+
+  vitest@4.1.9(@opentelemetry/api@1.9.1)(@types/node@24.13.2)(@vitest/coverage-istanbul@4.1.11)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)(yaml@2.9.1)):
+    dependencies:
+      '@vitest/expect': 4.1.9
+      '@vitest/mocker': 4.1.9(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)(yaml@2.9.1))
+      '@vitest/pretty-format': 4.1.9
+      '@vitest/runner': 4.1.9
+      '@vitest/snapshot': 4.1.9
+      '@vitest/spy': 4.1.9
+      '@vitest/utils': 4.1.9
+      es-module-lexer: 2.2.0
+      expect-type: 1.3.0
+      magic-string: 0.30.21
+      obug: 2.1.3
+      pathe: 2.0.3
+      picomatch: 4.0.3
+      std-env: 4.1.0
+      tinybench: 2.9.0
+      tinyexec: 1.2.4
+      tinyglobby: 0.2.15
+      tinyrainbow: 3.1.0
+      vite: 6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)(yaml@2.9.1)
+      why-is-node-running: 2.3.0
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.1
+      '@types/node': 24.13.2
+      '@vitest/coverage-istanbul': 4.1.11(vitest@4.1.9)
+    transitivePeerDependencies:
+      - msw
 
   vitest@4.1.9(@opentelemetry/api@1.9.1)(@types/node@24.13.2)(@vitest/coverage-istanbul@4.1.9)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)(yaml@2.9.1)):
     dependencies:
