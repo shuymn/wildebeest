@@ -59,13 +59,15 @@ request and its retries end in time for a last checkpoint.
 
 1. **Dump.** The Store enters its dump freeze. It turns readonly, and inbound activities are spooled and replayed
    afterwards, so nothing is lost. The dump is read in 4 MiB chunks, encrypted as it streams, and uploaded in 8 MiB
-   parts of one multipart upload. As soon as the last chunk has been read, the job records which originals the dump
-   references and ends the freeze, before the remaining parts are uploaded. The freeze also ends at once when the job
-   fails, even if the start's answer was lost (the job aborts by its own id). If the Worker dies, the 3-minute dump
-   lease ends it. The whole dump is never held in memory.
+   parts of one multipart upload. As soon as the last chunk has been read, one Store transaction checks that the
+   freeze still holds, replaces the run's media membership with the originals the dump references, and ends the
+   freeze, before the remaining parts are uploaded. If the freeze had already ended (its 3-minute lease ran out, so
+   writes may have resumed), the dump fails as `dump-dump-lease-expired` and is taken again. On any failure the freeze
+   is released first, before the upload is cleaned up, even if the start's answer was lost (the job aborts by its own
+   id). If the Worker dies, the dump lease ends it. The whole dump is never held in memory.
 2. **Media.** Each referenced original that this bucket does not hold yet is copied, and progress is saved after each
-   one. When the invocation nears its deadline, or has encrypted 512 MiB, it stops, and the next cron continues.
-   Nothing is ever deleted from R2.
+   one. When the invocation nears its deadline, or the next original would take it past its byte budget, it stops,
+   and the next cron continues. Nothing is ever deleted from R2.
 3. **Media index**, then **manifest**, then **retention**.
 
 A backup that is interrupted resumes where it stopped. The one exception is an interrupted dump: age's stream state
@@ -82,13 +84,21 @@ request it already sent. That request only ever writes objects under its own att
 (`lastSuccess`, with the manifest's digest) is therefore never overwritten by a stale invocation. A stale invocation
 can leave a second, self-consistent manifest for the same run, which retention treats as the same backup.
 
-**Limits.** The dump must be read, encrypted and uploaded within one invocation. The cron allows 30 seconds of Worker
-CPU, and reading the dump costs the Store's CPU, not the Worker's. In the Worker, age encryption plus both SHA-256
-digests measured about 4 ms of CPU per MiB on an Apple M4 Pro (Node.js 24; 512 MiB in 2.1 s). Encrypting media copies
-measured about 6 ms per MiB. Workers CPUs are unmeasured. Assuming they are two to four times slower, the CPU limit
-allows dumps of roughly 2 to 4 GB. The wall time is mostly upload: 11 minutes at 10 MB/s is about 6.5 GB. Serializing
-the job's state costs about 3 µs per save, and the media index about 1 µs per original. A Kopje instance's dump is far
-smaller than these limits.
+**Limits.** Each invocation encrypts at most 512 MiB, counted as plaintext bytes (the ciphertext is 16 bytes per
+64 KiB larger). The budget keeps the work inside the cron's 30 seconds of Worker CPU; reading the dump costs the
+Store's CPU, not the Worker's. In the Worker, age encryption plus both SHA-256 digests measured about 4 ms of CPU per
+MiB on an Apple M4 Pro (Node.js 24; 512 MiB in 2.1 s). Encrypting media copies measured about 6 ms per MiB. Workers
+CPUs are unmeasured; even four times slower, 512 MiB stays near 10 to 12 seconds.
+
+- **Media** copying and the **media index** stop before the budget and continue at the next cron. An index too large
+  for a whole invocation fails as `index-too-large`; that takes over a million originals.
+- **The dump** cannot be split or resumed, so its plaintext must fit the budget: **the largest supported dump is
+  512 MiB.** A larger one fails as `dump-too-large`, which `health` shows as the last failure. The instance keeps
+  serving, and the freeze is released at once. A Kopje instance's dump is far smaller (the database size is in
+  `kopje-admin capacity`). A larger dump needs a resumable dump format, which is not built.
+
+The wall time is mostly upload: 11 minutes at 10 MB/s is about 6.5 GB. Serializing the job's state costs about 3 µs
+per save, and the media index about 1 µs per original.
 
 ## Settings
 
@@ -200,7 +210,8 @@ finishes the job.
 
 The check fails when the last failure is newer than the last success, or when the settings are invalid. "Not
 configured" is only a warning. Reason codes name the step and status, for example `s3-upload-part-403`,
-`s3-upload-part-timeout`, `dump-dump-in-progress` or `interrupted`. They never contain a message from the storage
+`s3-upload-part-timeout`, `dump-dump-in-progress`, `dump-dump-lease-expired`, `dump-too-large`, `index-too-large` or
+`interrupted`. They never contain a message from the storage
 provider, a URL or a secret. Workers Logs has `kopje.backup.*` events with the same codes.
 
 **The public `/health` is aggregate operational health.** It answers `fail` while backups are failing, as it does for
@@ -209,50 +220,62 @@ or to restart it: a failing backup does not stop the instance from serving.
 
 ## Restore
 
-You need the identity file, a copy of `kopje-admin`, and read access to the bucket with your own credentials.
+You need the identity file, a copy of `kopje-admin`, `jq`, and read access to the bucket with your own credentials.
+The steps authenticate each file before anything uses it. The manifest is checked against the digest your instance
+recorded, and the dump and the media index against the manifest. Only then is any original downloaded, and local
+paths are built only from validated ids. Work in a new, empty directory so nothing existing is overwritten.
 
-1. **Choose the backup** by its manifest. Take `lastSuccess.manifest` from `health`, or from the
-   `kopje.backup.succeeded` entry in Workers Logs for an older backup. Download that `manifest.json.age` and check that
-   its SHA-256 equals the recorded `manifestSha256`:
-
-    ```sh
-    shasum -a 256 manifest.json.age
-    ```
-
-    Anyone with your public key and write access to the bucket could write a manifest that decrypts. This check ties
-    the manifest to what your instance recorded. `backup-verify` then checks everything else against the manifest.
-
-2. **Download and decrypt** the manifest, and the dump and the media index it names (`dump.key`, `mediaIndex.key`):
+1. **Choose and authenticate the manifest.** Take `lastSuccess.manifest` and `lastSuccess.manifestSha256` from
+   `health`, or from the `kopje.backup.succeeded` entry in Workers Logs for an older backup. Download that object and
+   compare its digest before decrypting it:
 
     ```sh
-    age -d -i kopje-backup-key.txt -o manifest.json manifest.json.age
-    age -d -i kopje-backup-key.txt -o dump.kopje dump.kopje.age
-    age -d -i kopje-backup-key.txt -o media-index.json media-index.json.age
+    mkdir restore-backup && cd restore-backup      # fails if it exists
+    aws s3 cp "s3://BUCKET/<manifest key>" manifest.json.age
+    shasum -a 256 manifest.json.age                # must equal manifestSha256
+    age -d -i ../kopje-backup-key.txt -o manifest.json manifest.json.age
     ```
 
-3. **Download and decrypt the originals** the index marks `copied`, each to its R2 key under one folder:
+    Anyone with your public key and write access to the bucket could write a manifest that decrypts. The recorded
+    digest ties the manifest to what your instance wrote.
+
+2. **Download, decrypt and verify the dump and the media index** the manifest names (`dump.key`, `mediaIndex.key`).
+   Do this before any media step:
 
     ```sh
-    jq -r '.objects[] | select(.state == "copied") | "\(.key) \(.source)"' media-index.json |
-    while read -r key source; do
-      aws s3 cp "s3://BUCKET/$key" "encrypted/$source.age"
-      mkdir -p "restore/$(dirname "$source")"
-      age -d -i kopje-backup-key.txt -o "restore/$source" "encrypted/$source.age"
-    done
+    aws s3 cp "s3://BUCKET/$(jq -r .dump.key manifest.json)" dump.kopje.age
+    aws s3 cp "s3://BUCKET/$(jq -r .mediaIndex.key manifest.json)" media-index.json.age
+    age -d -i ../kopje-backup-key.txt -o dump.kopje dump.kopje.age
+    age -d -i ../kopje-backup-key.txt -o media-index.json media-index.json.age
+    kopje-admin backup-verify manifest.json dump.kopje --encrypted dump.kopje.age --index media-index.json
     ```
 
-4. **Verify** everything against the manifest and the index (sizes and SHA-256):
+    `backup-verify` stops at the first mismatch. It checks the index's size and digest against the manifest, then
+    every entry: a source must be exactly `originals/<18-digit id>`, and a copied object must be named under the
+    `media/` prefix of the run that copied it. An index that fails is never used.
 
-    ```sh
-    kopje-admin backup-verify manifest.json dump.kopje --encrypted dump.kopje.age \
-      --index media-index.json --media restore
-    ```
-
-    The command exits `0` when everything matches. It exits `1` when a file does not match, and `3` when every file
-    matches but the backup lacks originals the dump references. Each missing original is listed as
+    The command exits `0` when everything matches and `1` at the first mismatch. It exits `3` when every file matches
+    but the backup lacks originals the dump references. Each missing original is listed as
     `missing: originals/<id> (pending|absent)`; see the media recovery guarantee above.
 
-5. **Import** into an empty Store whose `kopje-admin catalog` shows the manifest's `schema.migrations`. Run the same
+3. **Download and decrypt the originals** the verified index marks `copied`. Local paths come only from the validated
+   18-digit id, into a new directory:
+
+    ```sh
+    set -euo pipefail
+    mkdir media media/encrypted media/originals    # fails if they exist
+    jq -r '.objects[] | select(.state == "copied") | .source' media-index.json |
+    while read -r source; do
+      id=${source#originals/}
+      [[ "$source" == "originals/$id" && "$id" =~ ^[0-9]{18}$ ]] || { echo "unexpected: $source" >&2; exit 1; }
+      key=$(jq -r --arg s "originals/$id" '.objects[] | select(.source == $s) | .key' media-index.json)
+      aws s3 cp "s3://BUCKET/$key" "media/encrypted/$id.age"
+      age -d -i ../kopje-backup-key.txt -o "media/originals/$id" "media/encrypted/$id.age"
+    done
+    kopje-admin backup-verify manifest.json --index media-index.json --media media
+    ```
+
+4. **Import** into an empty Store whose `kopje-admin catalog` shows the manifest's `schema.migrations`. Run the same
    Kopje version, or deploy it first. Set the instance configuration with `kopje-admin config` (an import never carries
    it), then import:
 
@@ -263,10 +286,10 @@ You need the identity file, a copy of `kopje-admin`, and read access to the buck
     The import checks the dump's own trailer again (table checksums, statement count and body SHA-256) and verifies
     the rows in the Store; see [dump-format.md](dump-format.md).
 
-6. **Put the originals back** into the media bucket:
+5. **Put the originals back** into the media bucket:
 
     ```sh
-    for f in restore/originals/*; do
+    for f in media/originals/*; do
       wrangler r2 object put "kopje-media/originals/$(basename "$f")" --file "$f" --remote
     done
     ```

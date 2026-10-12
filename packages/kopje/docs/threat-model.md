@@ -609,16 +609,22 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **DATA-10: a backup is complete only with its manifest, and restore checks the whole restore set.** The manifest is
   written last. It carries the size and SHA-256 (before and after encryption) of the dump and of the run's media index,
   with the schema and Kopje versions. The index is complete, not incremental: it lists every original the dump
-  references, with its object and digests, or why it is missing (`pending`, `absent`). Retention can therefore delete
+  references, with its object and digests, or why it is missing (`pending`, `absent`). The membership is replaced in
+  the Store transaction that completes the dump, while its freeze still holds, so it is exactly the dump's, also after
+  a restarted dump. Retention can therefore delete
   older backups without losing the integrity evidence for originals they copied. The Store keeps the cumulative index
   (`backup_media`, one row per original, pruned to what the last success needs), so the job never reads objects back.
   The SHA-256 of the encrypted manifest is recorded outside the bucket (Store state, health, Workers Logs), because
-  age encryption to a public key gives no authenticity. `kopje-admin backup-verify` checks the dump, the index and
-  every copied original against the selected manifest, and reports incomplete media coverage (exit code 3). The import
-  re-checks the dump's own trailer. _Implemented on branch `kopje/scheduled-backup`:_ `src/jobs/backup.ts`,
+  age encryption to a public key gives no authenticity. Restore authenticates before it uses anything (`docs/backup.md`):
+  the manifest against the recorded digest, then the dump and the index against the manifest with `kopje-admin
+backup-verify` (index-only before any media is downloaded). `backup-verify` stops at the first mismatch and rejects
+  any index entry whose source is not exactly `originals/<18-digit id>` or whose object is not under its run's
+  `media/` prefix. The runbook builds local paths only from validated ids, in a new directory. It reports incomplete
+  media coverage with exit code 3. The import re-checks the dump's own trailer. _Implemented on branch `kopje/scheduled-backup`:_ `src/jobs/backup.ts`,
   `src/platform/backup-state.ts`, `verifyBackup` in `cli/lib/commands.js`; `test/backup.test.ts` ("verifies the whole
   restore set after retention removed the backup that copied an original", "reports incomplete media coverage",
-  "round-trips"). Gap: comparing `manifestSha256` is a manual step of the restore runbook (DATA-8).
+  "verifies the index alone before any media is downloaded", "rejects index entries that name anything but
+  originals/<id>", "a restarted dump replaces the membership", "round-trips"). Gap: comparing `manifestSha256` is a manual step of the restore runbook (DATA-8).
 - **DATA-8: a restore has selected authority.** Restore uses a manifest the operator selected by digest, checks schema
   version, domain and every referenced component before use, and before leaving maintenance invalidates OAuth grants
   restored from the checkpoint and reconciles suspension and admin state. _Planned (B6b)._
@@ -648,9 +654,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   repeated completion is stale and records nothing twice; `test/deliveries.test.ts` ("OPS-3: a claim or completion
   whose response is lost"), `test/delivery-post.test.ts` ("OPS-3: a lost completion"). Push: _Planned (push)._
 - **OPS-5: the backup never leaves the Store frozen or a recorded backup inconsistent.**
-    - **Freeze.** The dump freeze ends as soon as the last chunk is read, before the remaining parts are uploaded. It
-      also ends at once on any failure, by the run's opId, even when dumpStart's answer was lost (`dumpAbort` never
-      starts a dump). If the Worker dies, the 3-minute dump lease ends it, and the next run releases it again by opId.
+    - **Freeze.** The dump freeze ends as soon as the last chunk is read, before the remaining parts are uploaded, in
+      the Store transaction that checks the freeze lease by the Store's clock and records the media membership. If the
+      lease had expired, the dump is refused and taken again. On any failure the freeze is released first, by the
+      run's opId, before the stream and the upload are cleaned up, even when dumpStart's answer was lost (`dumpAbort`
+      never starts a dump). If the Worker dies, the 3-minute dump lease ends it, and the next run releases it again.
     - **Fencing.** One invocation holds a run. The runner lease is taken, renewed and checked in the Store transaction,
       on every save and before every upload step. Every object an invocation writes is named
       `<run>/<attempt>`, so an invocation that lost the lease can only finish writes into its own names, never into the
@@ -659,8 +667,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
       last successful backup's day never starts a run.
     - **Interruptions.** An interrupted dump is restarted (age's stream state cannot be saved). Its upload, and any
       upload under `backups/` that can be listed, is aborted. Media, index and manifest stages resume. Every request ends
-      by the invocation's deadline, with time kept for a checkpoint, and media copying stops at a per-invocation byte
-      budget sized to the cron's CPU limit.
+      by the invocation's deadline, a stalled response body included, with time kept for a checkpoint. Each invocation
+      encrypts at most 512 MiB of plaintext, sized to the cron's CPU limit. Media and the index wait for the next cron
+      at the budget; a dump that cannot fit fails as `dump-too-large`.
     - **Retention.** Retention selects backups by manifest only. It deletes only the job's names under `backups/`, only
       runs older than the newest `BACKUP_RETENTION` complete ones, and manifests first. Nothing is deleted from R2 or
       `media/`.
@@ -668,6 +677,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
     _Implemented on branch `kopje/scheduled-backup`:_ `src/jobs/backup.ts`, `src/platform/backup-state.ts`,
     `dumpAbort` in `src/platform/store-admin.ts`; `test/backup.test.ts` ("backup fencing", "backup resumption",
     "backup deadline", "backup destination and recipients", "ends the freeze as soon as the last chunk is read",
+    "releases the freeze before it cleans up the upload", "restarts a dump whose freeze ended before its last step",
     "backup retention").
 
 - **OPS-4: cutover never writes the source and never goes back.** The legacy source stays read-only; every ingress route
