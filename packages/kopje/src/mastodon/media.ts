@@ -13,7 +13,7 @@ import { Params } from './params'
 import { type MediaChanges, SWEEP_BATCH } from '../domain/media'
 import type { MediaAttachment } from '../domain/status-presenter'
 import { readBoundedBody } from '../platform/body'
-import { readConfig } from '../platform/config'
+import { accountMonthlyTransforms, readConfig } from '../platform/config'
 import { errorFields } from '../platform/error-message'
 import { IMAGE_MATRIX_LIMIT, IMAGE_SIZE_LIMIT, processImage, type ProcessedImage } from '../platform/images'
 import { fileKey, mediaKeys, originalKey } from '../platform/media-files'
@@ -111,7 +111,9 @@ export const uploadMedia: ApiHandler = async (c, deps) => {
 	const token = deps.randomToken()
 	const config = readConfig(c.env)
 	// The app answers 503 before any route when the env is invalid, so this is the validated value.
-	const monthlyTransforms = config.ok ? config.config.IMAGES_MONTHLY_TRANSFORMS : 0
+	const monthlyTransforms = config.ok
+		? { instance: config.config.IMAGES_MONTHLY_TRANSFORMS, account: accountMonthlyTransforms(config.config) }
+		: { instance: 0, account: 0 }
 	const reserved = authorized(
 		await storeCall(c, deps, (s, b) =>
 			s.reserveMedia(b, { credential: userCredential(c, deps), token, monthlyTransforms, now: deps.now() })
@@ -121,7 +123,9 @@ export const uploadMedia: ApiHandler = async (c, deps) => {
 		await c.req.raw.body?.cancel()
 		return reserved.status === 'rate_limited'
 			? mastodonError(429, 'Too many requests')
-			: mastodonError(429, "This server's media processing budget for the month is used up")
+			: reserved.scope === 'account'
+				? mastodonError(429, 'Your media processing budget for the month is used up')
+				: mastodonError(429, "This server's media processing budget for the month is used up")
 	}
 	const id = reserved.id
 	let outcome: Response | MediaAttachment

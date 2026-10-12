@@ -29,7 +29,7 @@ import { community, getJson, outbound, post, remoteAccount, remoteFollows, type 
 import { TRANSFORMS_PER_UPLOAD, UPLOAD_BUDGET } from '../src/domain/media'
 import { handleScheduled } from '../src/jobs/scheduled'
 import { sweepMedia } from '../src/mastodon/media'
-import { readConfig } from '../src/platform/config'
+import { accountMonthlyTransforms, readConfig } from '../src/platform/config'
 import { retainedMetadata } from '../src/platform/image-bytes'
 
 const HOUR = 60 * 60 * 1000
@@ -270,6 +270,28 @@ describe('POST /api/v2/media', () => {
 		expect((await upload(h, h.users.alice, mediaForm(bytes(PNG_PLAIN), {}, 'a.png', 'image/png'))).status).toBe(429)
 		expect(h.codec.calls).toBe(calls)
 	}, 30_000)
+
+	it('stops one account at its monthly share without locking out the others (RES-6, R4)', async () => {
+		const base = readConfig(env)
+		expect(base.ok && accountMonthlyTransforms(base.config)).toBe(400)
+		const custom = readConfig({ ...env, IMAGES_ACCOUNT_MONTHLY_TRANSFORMS: '6' })
+		expect(custom.ok && accountMonthlyTransforms(custom.config)).toBe(6)
+		const h = await users()
+		const month = new Date(NOW).toISOString().slice(0, 7)
+		await sql(
+			h.store,
+			'INSERT INTO kopje_state (name, value) VALUES (?, ?)',
+			`images_account_transforms:${month}:${h.users.alice.id}`,
+			String(400 - TRANSFORMS_PER_UPLOAD)
+		)
+		expect((await upload(h, h.users.alice, mediaForm(bytes(PNG_PLAIN), {}, 'a.png', 'image/png'))).status).toBe(200)
+		const calls = h.codec.calls
+		const refused = await upload(h, h.users.alice, mediaForm(bytes(PNG_PLAIN), {}, 'a.png', 'image/png'))
+		expect(refused.status).toBe(429)
+		expect(await refused.json()).toEqual({ error: 'Your media processing budget for the month is used up' })
+		expect(h.codec.calls).toBe(calls)
+		expect((await upload(h, h.users.bob, mediaForm(bytes(PNG_PLAIN), {}, 'a.png', 'image/png'))).status).toBe(200)
+	})
 
 	it('stops all uploads once the monthly Images budget is reserved, before any transformation (RES-6)', async () => {
 		const base = readConfig(env)

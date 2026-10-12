@@ -39,6 +39,7 @@ export const TRANSFORMS_PER_UPLOAD = 2
 // in the window (at most UPLOAD_BUDGET.count), and the instance's reserved transformations in the current UTC month.
 const ATTEMPTS = 'media_attempts:'
 const TRANSFORMS = 'images_transforms:'
+const ACCOUNT_TRANSFORMS = 'images_account_transforms:'
 
 function state(db: Db, name: string): string | undefined {
 	return db.first<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', name)?.value
@@ -70,40 +71,66 @@ function ownUpload(db: Db, accountId: string, id: string, now: number): MediaRow
 	)
 }
 
-export type Reserved = { status: 'ok'; id: string } | { status: 'rate_limited' } | { status: 'budget_exhausted' }
+export type Reserved =
+	| { status: 'ok'; id: string }
+	| { status: 'rate_limited' }
+	| { status: 'budget_exhausted'; scope: 'account' | 'instance' }
 
-// Step 1. `token` is the file token the Worker generated (32 random bytes). `monthlyTransforms` is the instance's
-// Images budget (IMAGES_MONTHLY_TRANSFORMS). Both budgets are checked and charged here, in the transaction that makes
-// the reservation, so concurrent uploads cannot overshoot them and nothing reaches Images past them (RES-6).
-export const reserveMedia = userWriteOperation<{ token: string; monthlyTransforms: number; now: number }, Reserved>(
-	(db, { token, monthlyTransforms, now }, { accountId }) => {
-		const attemptsName = `${ATTEMPTS}${accountId}`
-		const since = now - UPLOAD_BUDGET.windowMs
-		const attempts = (JSON.parse(state(db, attemptsName) ?? '[]') as number[]).filter((at) => at > since)
-		if (attempts.length >= UPLOAD_BUDGET.count) {
-			return { status: 'rate_limited' }
-		}
-		const month = `${TRANSFORMS}${iso(now).slice(0, 7)}`
-		const spent = Number(state(db, month) ?? '0')
-		if (spent + TRANSFORMS_PER_UPLOAD > monthlyTransforms) {
-			return { status: 'budget_exhausted' }
-		}
-		setState(db, attemptsName, JSON.stringify([...attempts, now]))
-		db.run("DELETE FROM kopje_state WHERE name LIKE 'images\\_transforms:%' ESCAPE '\\' AND name <> ?", month)
-		setState(db, month, String(spent + TRANSFORMS_PER_UPLOAD))
-		const id = allocateLocalId(db, now)
-		db.run(
-			`INSERT INTO media_attachments (id, account_id, type, url, file_token, processed, gc_at, created_at)
-			VALUES (?, ?, 'image', '', ?, 0, ?, ?)`,
-			id,
-			accountId,
-			token,
-			iso(now + RESERVATION_MS),
-			iso(now)
-		)
-		return { status: 'ok', id }
+export type MonthlyTransforms = { instance: number; account: number }
+
+// Step 1. `token` is the file token the Worker generated (32 random bytes). `monthlyTransforms` holds the instance's
+// Images budget and each account's share of it (IMAGES_MONTHLY_TRANSFORMS, IMAGES_ACCOUNT_MONTHLY_TRANSFORMS), so one
+// account (R4) cannot use up the instance's budget for everyone. All budgets are checked and charged here, in the
+// transaction that makes the reservation, so concurrent uploads cannot overshoot them and nothing reaches Images past
+// them (RES-6).
+export const reserveMedia = userWriteOperation<
+	{ token: string; monthlyTransforms: MonthlyTransforms; now: number },
+	Reserved
+>((db, { token, monthlyTransforms, now }, { accountId }) => {
+	const attemptsName = `${ATTEMPTS}${accountId}`
+	const since = now - UPLOAD_BUDGET.windowMs
+	const attempts = (JSON.parse(state(db, attemptsName) ?? '[]') as number[]).filter((at) => at > since)
+	if (attempts.length >= UPLOAD_BUDGET.count) {
+		return { status: 'rate_limited' }
 	}
-)
+	const month = iso(now).slice(0, 7)
+	const instanceName = `${TRANSFORMS}${month}`
+	const accountName = `${ACCOUNT_TRANSFORMS}${month}:${accountId}`
+	const instanceSpent = Number(state(db, instanceName) ?? '0')
+	const accountSpent = Number(state(db, accountName) ?? '0')
+	if (accountSpent + TRANSFORMS_PER_UPLOAD > monthlyTransforms.account) {
+		return { status: 'budget_exhausted', scope: 'account' }
+	}
+	if (instanceSpent + TRANSFORMS_PER_UPLOAD > monthlyTransforms.instance) {
+		return { status: 'budget_exhausted', scope: 'instance' }
+	}
+	setState(db, attemptsName, JSON.stringify([...attempts, now]))
+	// Counters of past months go (at most ten local accounts, so this stays small).
+	db.run(
+		`DELETE FROM kopje_state WHERE (substr(name, 1, ?1) = ?2 AND name <> ?3) OR (substr(name, 1, ?4) = ?5 AND
+			substr(name, 1, ?6) <> ?7)`,
+		TRANSFORMS.length,
+		TRANSFORMS,
+		instanceName,
+		ACCOUNT_TRANSFORMS.length,
+		ACCOUNT_TRANSFORMS,
+		ACCOUNT_TRANSFORMS.length + month.length,
+		`${ACCOUNT_TRANSFORMS}${month}`
+	)
+	setState(db, instanceName, String(instanceSpent + TRANSFORMS_PER_UPLOAD))
+	setState(db, accountName, String(accountSpent + TRANSFORMS_PER_UPLOAD))
+	const id = allocateLocalId(db, now)
+	db.run(
+		`INSERT INTO media_attachments (id, account_id, type, url, file_token, processed, gc_at, created_at)
+		VALUES (?, ?, 'image', '', ?, 0, ?, ?)`,
+		id,
+		accountId,
+		token,
+		iso(now + RESERVATION_MS),
+		iso(now)
+	)
+	return { status: 'ok', id }
+})
 
 export type CompleteMediaInput = {
 	id: string

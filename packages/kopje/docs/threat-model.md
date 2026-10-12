@@ -389,10 +389,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Implemented on branch `kopje/media-search`_ for media: before the body is read or Images is called, the Store
   counts upload attempts (deleted and failed ones included) to at most 30 per 30 minutes per account (Mastodon's
   limit), and reserves two transformations against an instance budget per UTC month (`IMAGES_MONTHLY_TRANSFORMS`,
-  default 4,000, under the 5,000 of the Images free plan); either refusal answers 429, and a used-up Images allowance
-  answers 503. Unattached uploads are deleted after a day by a sweep of at most 100 per run. `reserveMedia` in
+  default 4,000, under the 5,000 of the Images free plan) and against the account's monthly share of it
+  (`IMAGES_ACCOUNT_MONTHLY_TRANSFORMS`, default a tenth), so one account (R4) cannot lock the others out; every refusal
+  answers 429, and a used-up Images allowance answers 503. Unattached uploads are deleted after a day by a sweep of at most 100 per run. `reserveMedia` in
   `src/domain/media.ts`; `test/media.test.ts` ("counts upload attempts", "counts failed uploads too", "stops all
-  uploads once the monthly Images budget is reserved", "answers 503 when the transformation allowance is used up").
+  uploads once the monthly Images budget is reserved", "stops one account at its monthly share", "answers 503 when the transformation allowance is used up").
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Implemented on branch `kopje/statuses`_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
