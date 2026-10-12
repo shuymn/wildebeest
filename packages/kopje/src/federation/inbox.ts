@@ -12,6 +12,8 @@ export async function processInbox(env: Env, { build, store }: InboxDeps, receiv
 	await callStore(() => store(env).receiveInbox(build(env), { receivedAt }))
 }
 
+// TODO(B1b): inbox path canonicality. A personal inbox path must name a stored username exactly (case included);
+// differently cased and unknown usernames currently get 202 like any other inbox POST.
 export function inboxHandler(deps: InboxDeps, now: () => number): Handler<{ Bindings: Env }> {
 	return async (c) => {
 		await processInbox(c.env, deps, now())

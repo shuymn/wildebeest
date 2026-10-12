@@ -126,6 +126,10 @@ async function readDocument(response: Response, final: URL, target: URL): Promis
 	} catch (error) {
 		throw error instanceof FetchError ? error : new FetchError(final, 'Document is not valid JSON')
 	}
+	// A cheap pre-filter only: it sees the literal id and @id, not a JSON-LD alias of @id. The identity that counts is
+	// the parsed object's id, which Fedify's consumers compare with this documentUrl (fetchKey for signature keys,
+	// lookupObject's crossOrigin check for objects; test/remote-identity.test.ts). Code that parses fetched documents
+	// itself must make the same check.
 	const id = documentId(remote.document)
 	if (id !== undefined && originOf(id) !== final.origin) {
 		throw new FetchError(final, `Document id ${id} is not on ${final.origin}`)
