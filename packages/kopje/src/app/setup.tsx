@@ -2,7 +2,13 @@ import { type Context, Hono } from 'hono'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 
 import { PRIVATE_HEADERS } from './web'
-import { SETUP_SESSION_MS, type SetupAuthority, type SetupView } from '../domain/setup'
+import {
+	type ImagesCheck,
+	type ImagesOutcome,
+	SETUP_SESSION_MS,
+	type SetupAuthority,
+	type SetupView,
+} from '../domain/setup'
 import { type ApiDeps, storeCall } from '../mastodon/context'
 import { type Params, readParams } from '../mastodon/params'
 import {
@@ -11,10 +17,13 @@ import {
 	CloudflareApiError,
 	cloudflareApi,
 	reconcileAccess,
+	type ReconcileHooks,
+	type ReconcileMode,
 	teamDomainOf,
 } from '../platform/cloudflare-api'
 import { readConfig, userKek } from '../platform/config'
 import { normalizeDomain } from '../platform/domain-name'
+import { errorFields } from '../platform/error-message'
 import { sniffImageType } from '../platform/image-bytes'
 import { ImageCodecError } from '../platform/images'
 import { generateWrappedKey, type KeyGen } from '../security/key-wrap'
@@ -62,6 +71,10 @@ const USERNAME = /^[A-Za-z0-9_]{1,30}$/
 const EMAIL = /^[^\s@<>"]{1,64}@[A-Za-z0-9.-]{1,189}\.[A-Za-z]{2,63}$/
 const CLIENT_ID = /^[A-Za-z0-9._-]{1,100}$/
 const API_TOKEN = /^[\x21-\x7e]{1,200}$/
+const MODES: readonly ReconcileMode[] = ['reconcile', 'adopt', 'recreate']
+
+// Thrown from a checkpoint when the Store no longer holds this run's reservation: the run stops before its next write.
+class ReconcileStopped extends Error {}
 
 type Status = 200 | 400 | 403 | 409 | 422 | 429 | 503
 
@@ -120,6 +133,62 @@ function queueResult(view: SetupView, now: number): CheckResult {
 				hint: 'Check that the Queue "kopje" exists and that this Worker is its consumer (Queues in the dashboard), and that maintenance is off.',
 			}
 		: { status: 'warn', text: 'The probe is on its way. Reload in a few seconds.' }
+}
+
+function imagesResult(images: ImagesCheck | null): CheckResult | undefined {
+	if (images === null) {
+		return undefined
+	}
+	const at = ` (checked at ${new Date(images.at).toISOString()})`
+	switch (images.outcome) {
+		case 'pass':
+			return { status: 'pass', text: `The Images binding transformed the test image${at}.` }
+		case 'quota':
+			return {
+				status: 'warn',
+				text: `The account's Images transformation allowance is used up for this month${at}.`,
+				hint: 'Uploads fail until the month turns, unless you enable paid transformations.',
+			}
+		case 'budget':
+			return {
+				status: 'warn',
+				text: `This month's transformation budget (IMAGES_MONTHLY_TRANSFORMS) is used up, so nothing was tried${at}.`,
+			}
+		case 'invalid':
+			return {
+				status: 'fail',
+				text: `The Images binding answered with something that is not the requested image${at}.`,
+			}
+		case 'failed':
+			return {
+				status: 'fail',
+				text: `The Images binding could not transform the test image${images.code === null ? '' : ` (error ${images.code})`}${at}.`,
+				hint: 'Check that Images is available on the account (Images, Transformations) and that the Worker has the IMAGES binding.',
+			}
+	}
+}
+
+// The Access reconciliation's state, when it needs attention.
+function accessResult(view: SetupView): CheckResult | undefined {
+	switch (view.access?.state) {
+		case 'running':
+			return { status: 'warn', text: 'A run of this step is in progress. Reload in a minute.' }
+		case 'unresolved':
+			return {
+				status: 'fail',
+				text: 'The last run of this step did not finish, so the Access applications may be half updated.',
+				hint: 'Run the step again with a fresh token. Setup cannot finish until a run completes.',
+			}
+		default:
+			if (view.draft !== null && view.draft.access !== null && !view.draft.accessReady) {
+				return {
+					status: 'warn',
+					text: 'Another run of this step replaced the one this browser made.',
+					hint: 'Run the step again here before creating the admin.',
+				}
+			}
+			return undefined
+	}
 }
 
 function cronResult(view: SetupView, now: number): CheckResult {
@@ -198,6 +267,8 @@ export function setupRoutes(deps: SetupDeps): Hono<SetupEnv> {
 				view={session.view}
 				results={results}
 				queue={queueResult(session.view, now)}
+				images={imagesResult(session.view.images)}
+				accessState={accessResult(session.view)}
 				cron={cronResult(session.view, now)}
 			/>
 		)
@@ -368,24 +439,70 @@ export function setupRoutes(deps: SetupDeps): Hono<SetupEnv> {
 				'Create the Zero Trust organization first (see the checklist), and enter its team name.'
 			)
 		}
+		const mode = MODES.find((m) => m === params.get('mode')) ?? 'reconcile'
+		const authority = session.authority
+		const serviceTokenClientId = clientId === '' ? null : clientId
+		// The reconciliation is reserved in the Store before any call that could write (items of SETUP-2 and SETUP-3).
+		const reserved = await storeCall(c, deps, (s, b) =>
+			s.reserveAccess(b, { authority, domain, adminEmail, now: deps.now() })
+		)
+		switch (reserved.status) {
+			case 'denied':
+				return ended(c)
+			case 'busy':
+				return fail(
+					'Another run of this step is in progress.',
+					'Wait for it to finish (at most two minutes), then reload the page.'
+				)
+			case 'no_domain':
+				return fail('Confirm the domain first.')
+			case 'admin_mismatch':
+				return fail('The admin changed meanwhile. Reload the page.')
+		}
+		const revision = reserved.revision
+		const hooks: ReconcileHooks = {
+			managed: {},
+			checkpoint: async (managed) => {
+				const held = await storeCall(c, deps, (s, b) =>
+					s.checkpointAccess(b, { authority, revision, managed, now: deps.now() })
+				)
+				if (held !== 'ok') {
+					throw new ReconcileStopped()
+				}
+			},
+		}
 		let result
 		try {
-			result = await reconcileAccess(cloudflareApi(apiToken, deps.fetch), {
-				domain,
-				adminEmail,
-				accountId: accountId === '' ? null : accountId,
-				serviceTokenClientId: clientId === '' ? null : clientId,
-			})
+			result = await reconcileAccess(
+				cloudflareApi(apiToken, deps.fetch),
+				{
+					domain,
+					teamDomain,
+					adminEmail,
+					accountId: accountId === '' ? null : accountId,
+					serviceTokenClientId,
+					mode,
+					managed: reserved.managed,
+				},
+				hooks
+			)
 		} catch (error) {
+			const managed = { ...hooks.managed }
+			await storeCall(c, deps, (s, b) => s.failAccess(b, { authority, revision, managed }))
+			if (error instanceof ReconcileStopped) {
+				return fail('Another run replaced this one, or setup finished meanwhile. Nothing more was changed.')
+			}
 			if (error instanceof CloudflareApiError) {
 				return fail(
-					`The Cloudflare API refused: ${error.message}`,
-					'Check the token’s permissions (listed below) and that it has not expired.'
+					`The Access step failed: ${error.message}.`,
+					error.category === 'unauthorized'
+						? 'Check the token’s permissions (listed below) and that it has not expired.'
+						: 'Run the step again once this is fixed.'
 				)
 			}
-			// Nothing of the error is shown or logged: it might carry the token.
-			console.error({ event: 'kopje.setup.access_failed', name: error instanceof Error ? error.name : 'unknown' })
-			return fail('The Access applications could not be set up.')
+			// SETUP-4: only allowlisted fields of the error (DATA-5), never its name or message.
+			console.error({ event: 'kopje.setup.access_failed', ...errorFields(error) })
+			return fail('The Access applications could not be set up. Run the step again.')
 		}
 		const access = {
 			teamDomain,
@@ -393,24 +510,22 @@ export function setupRoutes(deps: SetupDeps): Hono<SetupEnv> {
 			signInAud: result.signInAud,
 			adminAud: result.adminAud,
 			adminEmail,
-			serviceTokenClientId: clientId === '' ? null : clientId,
+			serviceTokenClientId,
 		}
-		const authority = session.authority
-		const saved = await storeCall(c, deps, (s, b) =>
-			s.saveSetupAccess(b, { authority, domain, access, now: deps.now() })
+		const managed = result.managed
+		const completed = await storeCall(c, deps, (s, b) =>
+			s.completeAccess(b, { authority, revision, access, managed, now: deps.now() })
 		)
-		if (saved === 'denied') {
-			return ended(c)
-		}
-		if (saved !== 'ok') {
-			return fail('The domain or the admin changed meanwhile. Reload the page.')
+		if (completed !== 'ok') {
+			return fail('Another run replaced this one, or setup finished meanwhile. Run the step again.')
 		}
 		return render(c, await refreshed(c, session), {
 			access: { status: 'pass', text: `The Access applications for ${domain} are in place on ${teamDomain}.` },
 		})
 	})
 
-	// Step 4: one transformation through the binding, charged to the instance's monthly budget.
+	// Step 4: the fixed probe through the binding. Its charge to the instance's monthly budget is taken once per UTC
+	// month (a recheck runs uncharged); the outcome is kept, and the answer redirects so a reload does not run it again.
 	app.post('/setup/check/images', async (c) => {
 		const checked = await checkForm(c)
 		if (checked instanceof Response) {
@@ -424,37 +539,22 @@ export function setupRoutes(deps: SetupDeps): Hono<SetupEnv> {
 		if (charged === 'denied') {
 			return ended(c)
 		}
-		if (charged === 'budget_exhausted') {
-			return render(c, session, {
-				images: {
-					status: 'warn',
-					text: "This month's transformation budget (IMAGES_MONTHLY_TRANSFORMS) is used up, so nothing was tried.",
-				},
-			})
+		let outcome: ImagesOutcome = 'budget'
+		let code: number | null = null
+		if (charged === 'ok') {
+			try {
+				const output = await deps.images(c.env).encode(TINY_PNG, { format: 'image/webp' })
+				outcome = sniffImageType(output) === 'image/webp' ? 'pass' : 'invalid'
+			} catch (error) {
+				code =
+					error instanceof ImageCodecError && error.code !== null && Number.isInteger(error.code) ? error.code : null
+				outcome = code === 9422 ? 'quota' : 'failed'
+			}
 		}
-		let result: CheckResult
-		try {
-			const output = await deps.images(c.env).encode(TINY_PNG, { format: 'image/webp' })
-			result =
-				sniffImageType(output) === 'image/webp'
-					? { status: 'pass', text: 'The Images binding transformed the test image.' }
-					: { status: 'fail', text: 'The Images binding answered with something that is not the requested image.' }
-		} catch (error) {
-			const code = error instanceof ImageCodecError ? error.code : null
-			result =
-				code === 9422
-					? {
-							status: 'warn',
-							text: "The account's Images transformation allowance is used up for this month.",
-							hint: 'Uploads fail until the month turns, unless you enable paid transformations.',
-						}
-					: {
-							status: 'fail',
-							text: `The Images binding could not transform the test image${code === null ? '' : ` (error ${code})`}.`,
-							hint: 'Check that Images is available on the account (Images, Transformations) and that the Worker has the IMAGES binding.',
-						}
-		}
-		return render(c, session, { images: result })
+		const recorded = await storeCall(c, deps, (s, b) =>
+			s.recordSetupImages(b, { authority, outcome, code, now: deps.now() })
+		)
+		return recorded ? redirect('/setup') : ended(c)
 	})
 
 	// Step 5: a probe through the Queue; the page shows when the consumer marks it.
@@ -557,6 +657,8 @@ export function setupRoutes(deps: SetupDeps): Hono<SetupEnv> {
 				return ended(c)
 			case 'incomplete':
 				return fail('Confirm the domain and set up the Access applications first.')
+			case 'stale':
+				return fail('The Access step must complete again first: another run replaced this one, or one did not finish.')
 			case 'email_mismatch':
 				return fail('Access admits another email. Use that one, or run the Access step again with this one.')
 		}

@@ -6,6 +6,7 @@ import { readOperation, writeOperation } from './operation'
 import { accountSearchText } from './search-text'
 import type { Db } from '../db/sql'
 import { ACCESS_SETTINGS, CONFIG_KEYS } from '../platform/access-settings'
+import type { ManagedIds } from '../platform/cloudflare-api'
 
 // /setup fixes the instance domain first, so its presence marks a set-up instance.
 export const getSetupState = readOperation<void, { complete: boolean }>((db) => ({
@@ -17,20 +18,30 @@ export const getSetupState = readOperation<void, { complete: boolean }>((db) => 
 //   - Before bootstrap, a setup session authorizes: the Worker opens one after comparing SETUP_TOKEN as a fixed-size
 //     digest (AUTH-5), and the browser holds only an opaque id whose SHA-256 names it. Sessions live in kopje_state
 //     (outside the dumped tables) for SETUP_SESSION_MS and hold the wizard's draft: the confirmed domain and the Access
-//     applications made for it. Nothing of the draft is configuration until the bootstrap.
+//     outcome it saw complete. Nothing of the draft is configuration until the bootstrap.
+//   - Access reconciliations are coordinated here (setup_access). Each one reserves the instance-wide reconciliation,
+//     with a lease and the next revision, before its first external write, and renews the lease (recording the ids of
+//     the objects it made) before each further write; one that is superseded or no longer authorized stops before its
+//     next write. Its outcome is recorded against its revision. A failure, or a lease that ran out without an outcome,
+//     leaves the state "needs reconcile" until a later run completes.
 //   - SETUP-3: bootstrapInstance writes the domain, the Access configuration and the first admin in one transaction
-//     that fails once any configuration row or any local account exists, and ends every setup session.
-//   - SETUP-2: after that, no setup session authorizes anything (none can be opened, and those left are refused): only
-//     the admin, signed in to the web UI (a web session of the account whose email is admin_email), may see the status,
-//     run the checks and reconcile the Access configuration. Nobody changes the domain or the admin here.
-//   - SETUP-4: the Cloudflare API token never reaches the Store; only what the API returned (team, AUD tags) does.
+//     that fails once any configuration row or any local account exists, while a reconciliation is running or
+//     unresolved, or when the session's draft is not the latest completed revision. It ends every setup session.
+//   - SETUP-2: after that, no setup session authorizes anything (none can be opened or reserve, and those left are
+//     refused): only the admin, signed in to the web UI (a web session of the account whose email is admin_email), may
+//     see the status, run the checks and reconcile the Access configuration. Nobody changes the domain or the admin here.
+//   - SETUP-4: the Cloudflare API token never reaches the Store; only what the API returned (team, AUD tags, ids) does.
 
 export const SETUP_SESSION_MS = 60 * 60 * 1000
+// How long a reservation holds without being renewed. Each external write renews it first.
+export const ACCESS_LEASE_MS = 2 * 60 * 1000
 
 const SESSION = 'setup_session:'
 // Setup sessions kept at once; the oldest goes first. Only holders of SETUP_TOKEN open them.
-const MAX_SESSIONS = 8
+export const MAX_SETUP_SESSIONS = 8
+const ACCESS = 'setup_access'
 const PROBE = 'setup_probe'
+const IMAGES = 'setup_images'
 const CRON = 'cron_last_run'
 
 export type AccessDraft = {
@@ -42,13 +53,29 @@ export type AccessDraft = {
 	serviceTokenClientId: string | null
 }
 
-export type SetupDraft = { domain: string | null; access: AccessDraft | null }
+type Reservation = { revision: number; holder: string; leaseUntil: number; domain: string; adminEmail: string }
+
+type AccessState = {
+	revision: number
+	reservation: Reservation | null
+	completed: { revision: number; access: AccessDraft; at: number } | null
+	needsReconcile: boolean
+	managed: ManagedIds
+}
+
+export type SetupDraft = { domain: string | null; access: AccessDraft | null; accessRevision: number | null }
 
 type SessionRecord = SetupDraft & { expiresAt: number }
 
 export type SetupAuthority = { kind: 'setup'; sessionHash: string } | { kind: 'admin'; credential: UserCredential }
 
 export type Probe = { id: string; sentAt: number; consumedAt: number | null }
+
+// pass: transformed; quota: the account's allowance is used up (9422); budget: the instance's monthly budget is spent,
+// nothing was tried; invalid: the output was not the image asked for; failed: the binding failed (code when it gave one).
+export type ImagesOutcome = 'pass' | 'quota' | 'budget' | 'invalid' | 'failed'
+
+export type ImagesCheck = { month: string; at: number; outcome: ImagesOutcome; code: number | null }
 
 export type InstanceConfig = {
 	domain: string | null
@@ -71,6 +98,18 @@ function setting(db: Db, name: string): string | null {
 	return db.first<{ value: string }>('SELECT value FROM instance_settings WHERE name = ?', name)?.value ?? null
 }
 
+function accessState(db: Db): AccessState {
+	return (
+		readState<AccessState>(db, ACCESS) ?? {
+			revision: 0,
+			reservation: null,
+			completed: null,
+			needsReconcile: false,
+			managed: {},
+		}
+	)
+}
+
 // SETUP-3: bootstrapped once any configuration row or any local account exists, however it got there (the wizard, or
 // /admin/config and an import at a cutover).
 export function bootstrapped(db: Db): boolean {
@@ -87,8 +126,15 @@ function liveSession(db: Db, sessionHash: string, now: number): SessionRecord | 
 	return record !== null && record.expiresAt > now ? record : null
 }
 
-function deleteSessions(db: Db, where: string, ...params: SqlStorageValue[]): void {
-	db.run(`DELETE FROM kopje_state WHERE substr(name, 1, ${SESSION.length}) = '${SESSION}' ${where}`, ...params)
+function sessionNames(db: Db, order: 'ASC' | 'DESC'): string[] {
+	return db
+		.all<{ name: string }>(
+			`SELECT name FROM kopje_state WHERE substr(name, 1, ?1) = ?2
+			ORDER BY json_extract(value, '$.expiresAt') ${order}, name ${order}`,
+			SESSION.length,
+			SESSION
+		)
+		.map((row) => row.name)
 }
 
 // The admin behind a web session: a live token of the web client whose account's email is admin_email.
@@ -115,6 +161,10 @@ function permitted(db: Db, authority: SetupAuthority, now: number): boolean {
 	return bootstrapped(db) && adminAccount(db, authority.credential) !== null
 }
 
+function holderOf(authority: SetupAuthority): string {
+	return authority.kind === 'setup' ? `setup:${authority.sessionHash}` : 'admin'
+}
+
 function instanceConfig(db: Db): InstanceConfig {
 	const adminEmail = setting(db, ACCESS_SETTINGS.adminEmail)
 	const admin =
@@ -133,15 +183,47 @@ function instanceConfig(db: Db): InstanceConfig {
 	}
 }
 
+// The reconciliation as the wizard shows it.
+export type AccessStatus = {
+	// running: a reservation whose lease holds; unresolved: a failure, or a lease that ran out without an outcome.
+	state: 'none' | 'running' | 'unresolved' | 'completed'
+	completedAt: number | null
+}
+
+function accessStatus(state: AccessState, now: number): AccessStatus {
+	const completedAt = state.completed?.at ?? null
+	if (state.reservation !== null) {
+		return { state: state.reservation.leaseUntil > now ? 'running' : 'unresolved', completedAt }
+	}
+	if (state.needsReconcile) {
+		return { state: 'unresolved', completedAt }
+	}
+	return { state: state.completed === null ? 'none' : 'completed', completedAt }
+}
+
+// The draft is ready for bootstrap: nothing running or unresolved, and it saw the latest revision complete.
+function draftReady(state: AccessState, session: SessionRecord): boolean {
+	return (
+		state.reservation === null &&
+		!state.needsReconcile &&
+		state.completed !== null &&
+		state.completed.revision === state.revision &&
+		session.access !== null &&
+		session.accessRevision === state.completed.revision
+	)
+}
+
 export type SetupView = {
 	bootstrapped: boolean
 	// Whether the authority given may use the wizard now (see permitted).
 	authorized: boolean
-	// The setup session's draft, before bootstrap.
-	draft: SetupDraft | null
+	// The setup session's draft, before bootstrap; accessReady when step 7 may run with it.
+	draft: (SetupDraft & { accessReady: boolean }) | null
 	// The configuration, for the admin after bootstrap.
 	config: InstanceConfig | null
+	access: AccessStatus | null
 	probe: Probe | null
+	images: ImagesCheck | null
 	cronLastRun: number | null
 }
 
@@ -150,37 +232,60 @@ export const setupView = readOperation<{ authority: SetupAuthority | null; now: 
 		const done = bootstrapped(db)
 		const authorized = authority !== null && permitted(db, authority, now)
 		if (!authorized) {
-			return { bootstrapped: done, authorized, draft: null, config: null, probe: null, cronLastRun: null }
+			return {
+				bootstrapped: done,
+				authorized,
+				draft: null,
+				config: null,
+				access: null,
+				probe: null,
+				images: null,
+				cronLastRun: null,
+			}
 		}
+		const state = accessState(db)
 		const session = authority.kind === 'setup' ? liveSession(db, authority.sessionHash, now) : null
 		return {
 			bootstrapped: done,
 			authorized,
-			draft: session === null ? null : { domain: session.domain, access: session.access },
+			draft:
+				session === null
+					? null
+					: {
+							domain: session.domain,
+							access: session.access,
+							accessRevision: session.accessRevision,
+							accessReady: draftReady(state, session),
+						},
 			config: done ? instanceConfig(db) : null,
+			access: accessStatus(state, now),
 			probe: readState<Probe>(db, PROBE),
+			images: readState<ImagesCheck>(db, IMAGES),
 			cronLastRun: readState<number>(db, CRON),
 		}
 	}
 )
 
-// Opens a setup session after the Worker has checked SETUP_TOKEN. Refused once bootstrapped (SETUP-2).
+// Opens a setup session after the Worker has checked SETUP_TOKEN. Refused once bootstrapped (SETUP-2). Expired
+// sessions are pruned, and at most MAX_SETUP_SESSIONS are kept: the ones closest to expiry go first.
 export const beginSetupSession = writeOperation<{ sessionHash: string; now: number }, 'ok' | 'complete'>(
 	(db, { sessionHash, now }) => {
 		if (bootstrapped(db)) {
 			return 'complete'
 		}
-		deleteSessions(db, "AND json_extract(value, '$.expiresAt') <= ?", now)
-		const kept = db.all<{ name: string }>(
-			`SELECT name FROM kopje_state WHERE substr(name, 1, ${SESSION.length}) = '${SESSION}'
-			ORDER BY json_extract(value, '$.expiresAt') DESC`
+		db.run(
+			`DELETE FROM kopje_state WHERE substr(name, 1, ?1) = ?2 AND json_extract(value, '$.expiresAt') <= ?3`,
+			SESSION.length,
+			SESSION,
+			now
 		)
-		for (const { name } of kept.slice(MAX_SESSIONS - 1)) {
+		for (const name of sessionNames(db, 'DESC').slice(MAX_SETUP_SESSIONS - 1)) {
 			db.run('DELETE FROM kopje_state WHERE name = ?', name)
 		}
 		writeState(db, `${SESSION}${sessionHash}`, {
 			domain: null,
 			access: null,
+			accessRevision: null,
 			expiresAt: now + SETUP_SESSION_MS,
 		} satisfies SessionRecord)
 		return 'ok'
@@ -198,41 +303,140 @@ export const confirmSetupDomain = writeOperation<{ sessionHash: string; domain: 
 		if (session === null) {
 			return 'denied'
 		}
-		const access = session.domain === domain ? session.access : null
-		writeState(db, `${SESSION}${sessionHash}`, { ...session, domain, access } satisfies SessionRecord)
+		const same = session.domain === domain
+		writeState(db, `${SESSION}${sessionHash}`, {
+			...session,
+			domain,
+			access: same ? session.access : null,
+			accessRevision: same ? session.accessRevision : null,
+		} satisfies SessionRecord)
 		return 'ok'
 	}
 )
 
-export type SaveAccessResult = 'ok' | 'denied' | 'no_domain' | 'admin_mismatch'
-
-// Step 3's outcome. Before bootstrap it goes into the draft (for the confirmed domain); after it, the admin reconciles
-// the Access configuration with it. The domain and admin_email stay as they are: the applications admit that admin.
-export const saveSetupAccess = writeOperation<
-	{ authority: SetupAuthority; domain: string; access: AccessDraft; now: number },
-	SaveAccessResult
->((db, { authority, domain, access, now }) => {
-	if (!permitted(db, authority, now)) {
-		return 'denied'
-	}
+// The domain and admin a reconciliation is for: before bootstrap the session's confirmed domain and the email given;
+// after it, the configured ones (the admin cannot change them here).
+function planRefusal(db: Db, authority: SetupAuthority, domain: string, adminEmail: string, now: number) {
 	if (authority.kind === 'setup') {
-		const session = liveSession(db, authority.sessionHash, now)
-		if (session === null || session.domain !== domain) {
-			return 'no_domain'
-		}
-		writeState(db, `${SESSION}${authority.sessionHash}`, { ...session, access } satisfies SessionRecord)
-		return 'ok'
+		return liveSession(db, authority.sessionHash, now)?.domain === domain ? null : ('no_domain' as const)
 	}
-	const adminEmail = setting(db, ACCESS_SETTINGS.adminEmail)
 	if (setting(db, 'domain') !== domain) {
-		return 'no_domain'
+		return 'no_domain' as const
 	}
-	if (adminEmail === null || adminEmail.trim().toLowerCase() !== access.adminEmail.toLowerCase()) {
-		return 'admin_mismatch'
+	const configured = setting(db, ACCESS_SETTINGS.adminEmail)?.trim().toLowerCase()
+	return configured === adminEmail.toLowerCase() ? null : ('admin_mismatch' as const)
+}
+
+export type ReserveResult =
+	| { status: 'ok'; revision: number; managed: ManagedIds }
+	| { status: 'denied' | 'busy' | 'no_domain' | 'admin_mismatch' }
+
+// Reserves the reconciliation before any external write. A live reservation of anyone makes it busy; one whose lease
+// ran out is superseded (it stays unresolved until this run completes). Every older draft stops being bootstrap-ready.
+export const reserveAccess = writeOperation<
+	{ authority: SetupAuthority; domain: string; adminEmail: string; now: number },
+	ReserveResult
+>((db, { authority, domain, adminEmail, now }) => {
+	if (!permitted(db, authority, now)) {
+		return { status: 'denied' }
 	}
-	writeAccess(db, access)
+	const refused = planRefusal(db, authority, domain, adminEmail, now)
+	if (refused !== null) {
+		return { status: refused }
+	}
+	const state = accessState(db)
+	if (state.reservation !== null && state.reservation.leaseUntil > now) {
+		return { status: 'busy' }
+	}
+	const revision = state.revision + 1
+	writeState(db, ACCESS, {
+		...state,
+		revision,
+		needsReconcile: state.needsReconcile || state.reservation !== null,
+		reservation: { revision, holder: holderOf(authority), leaseUntil: now + ACCESS_LEASE_MS, domain, adminEmail },
+	} satisfies AccessState)
+	return { status: 'ok', revision, managed: state.managed }
+})
+
+// The reservation of this revision, held by this authority and still authorized; null when the run must stop.
+function heldReservation(db: Db, authority: SetupAuthority, revision: number, now: number): AccessState | null {
+	const state = accessState(db)
+	const held = state.reservation
+	if (held === null || held.revision !== revision || held.holder !== holderOf(authority)) {
+		return null
+	}
+	return permitted(db, authority, now) ? state : null
+}
+
+// Before each external write after the first: renews the lease and records the ids made so far. 'stop' when the run
+// was superseded, or its authority ended (bootstrap ended the setup session, the admin signed out).
+export const checkpointAccess = writeOperation<
+	{ authority: SetupAuthority; revision: number; managed: ManagedIds; now: number },
+	'ok' | 'stop'
+>((db, { authority, revision, managed, now }) => {
+	const state = heldReservation(db, authority, revision, now)
+	if (state === null || state.reservation === null) {
+		return 'stop'
+	}
+	writeState(db, ACCESS, {
+		...state,
+		managed: { ...state.managed, ...managed },
+		reservation: { ...state.reservation, leaseUntil: now + ACCESS_LEASE_MS },
+	} satisfies AccessState)
 	return 'ok'
 })
+
+// The run's outcome. Success makes it the latest completed revision: the reserving session's draft (before bootstrap)
+// or the configuration (the admin's run) takes it. 'stop' when the run no longer holds the reservation.
+export const completeAccess = writeOperation<
+	{ authority: SetupAuthority; revision: number; access: AccessDraft; managed: ManagedIds; now: number },
+	'ok' | 'stop'
+>((db, { authority, revision, access, managed, now }) => {
+	const state = heldReservation(db, authority, revision, now)
+	if (state === null || state.reservation === null) {
+		return 'stop'
+	}
+	const reservation = state.reservation
+	if (access.adminEmail.toLowerCase() !== reservation.adminEmail.toLowerCase()) {
+		return 'stop'
+	}
+	writeState(db, ACCESS, {
+		revision: state.revision,
+		reservation: null,
+		needsReconcile: false,
+		completed: { revision, access, at: now },
+		managed: { ...state.managed, ...managed },
+	} satisfies AccessState)
+	if (authority.kind === 'setup') {
+		const session = liveSession(db, authority.sessionHash, now)
+		if (session !== null) {
+			writeState(db, `${SESSION}${authority.sessionHash}`, {
+				...session,
+				access,
+				accessRevision: revision,
+			} satisfies SessionRecord)
+		}
+	} else {
+		writeAccess(db, access)
+	}
+	return 'ok'
+})
+
+// A run that failed: it releases its reservation and leaves the state unresolved, keeping the ids it made.
+export const failAccess = writeOperation<{ authority: SetupAuthority; revision: number; managed: ManagedIds }, void>(
+	(db, { authority, revision, managed }) => {
+		const state = accessState(db)
+		if (state.reservation?.revision !== revision || state.reservation.holder !== holderOf(authority)) {
+			return
+		}
+		writeState(db, ACCESS, {
+			...state,
+			reservation: null,
+			needsReconcile: true,
+			managed: { ...state.managed, ...managed },
+		} satisfies AccessState)
+	}
+)
 
 function writeAccess(db: Db, access: AccessDraft): void {
 	const rows: [string, string | null][] = [
@@ -261,7 +465,7 @@ export const sendSetupProbe = writeOperation<{ authority: SetupAuthority; id: st
 	}
 )
 
-// Only the probe last sent is marked; any other id changes nothing.
+// Only the probe last sent is marked; a superseded probe changes nothing.
 export const consumeSetupProbe = writeOperation<{ id: string; now: number }, boolean>((db, { id, now }) => {
 	const probe = readState<Probe>(db, PROBE)
 	if (probe === null || probe.id !== id || probe.consumedAt !== null) {
@@ -276,7 +480,12 @@ export const recordCronRun = writeOperation<{ now: number }, void>((db, { now })
 	writeState(db, CRON, now)
 })
 
-// Step 4 spends one Images transformation, charged to the instance's monthly budget like uploads (RES-6).
+function month(now: number): string {
+	return new Date(now).toISOString().slice(0, 7)
+}
+
+// Step 4 transforms the same tiny image every time, which Images bills once per month: the instance's monthly budget
+// (RES-6) is charged for it at most once per UTC month, atomically here. A recheck in the same month runs uncharged.
 export const chargeSetupTransform = writeOperation<
 	{ authority: SetupAuthority; limit: number; now: number },
 	'ok' | 'denied' | 'budget_exhausted'
@@ -284,7 +493,27 @@ export const chargeSetupTransform = writeOperation<
 	if (!permitted(db, authority, now)) {
 		return 'denied'
 	}
-	return chargeInstanceTransforms(db, 1, limit, now) ? 'ok' : 'budget_exhausted'
+	const charged = readState<{ month: string }>(db, `${IMAGES}_charged`)
+	if (charged?.month === month(now)) {
+		return 'ok'
+	}
+	if (!chargeInstanceTransforms(db, 1, limit, now)) {
+		return 'budget_exhausted'
+	}
+	writeState(db, `${IMAGES}_charged`, { month: month(now) })
+	return 'ok'
+})
+
+// Step 4's outcome, shown until the next check.
+export const recordSetupImages = writeOperation<
+	{ authority: SetupAuthority; outcome: ImagesOutcome; code: number | null; now: number },
+	boolean
+>((db, { authority, outcome, code, now }) => {
+	if (!permitted(db, authority, now)) {
+		return false
+	}
+	writeState(db, IMAGES, { month: month(now), at: now, outcome, code } satisfies ImagesCheck)
+	return true
 })
 
 export type BootstrapInput = {
@@ -296,10 +525,11 @@ export type BootstrapInput = {
 	now: number
 }
 
-export type BootstrapResult = 'ok' | 'complete' | 'denied' | 'incomplete' | 'email_mismatch'
+export type BootstrapResult = 'ok' | 'complete' | 'denied' | 'incomplete' | 'stale' | 'email_mismatch'
 
 // SETUP-3: step 7. The domain, the Access configuration, admin_email and the admin's local account, in this one
-// transaction, which fails once anything of a bootstrap exists. Ends every setup session (SETUP-2).
+// transaction, which fails once anything of a bootstrap exists, while an Access reconciliation runs or is unresolved,
+// or when the session's Access outcome is not the latest completed revision. Ends every setup session (SETUP-2).
 export const bootstrapInstance = writeOperation<BootstrapInput, BootstrapResult>((db, input) => {
 	if (bootstrapped(db)) {
 		return 'complete'
@@ -310,6 +540,9 @@ export const bootstrapInstance = writeOperation<BootstrapInput, BootstrapResult>
 	}
 	if (session.domain !== input.domain || session.access === null) {
 		return 'incomplete'
+	}
+	if (!draftReady(accessState(db), session)) {
+		return 'stale'
 	}
 	if (session.access.adminEmail.toLowerCase() !== input.email.toLowerCase()) {
 		return 'email_mismatch'
@@ -338,6 +571,6 @@ export const bootstrapInstance = writeOperation<BootstrapInput, BootstrapResult>
 		input.key.pubkey,
 		createdAt
 	)
-	deleteSessions(db, '')
+	db.run('DELETE FROM kopje_state WHERE substr(name, 1, ?1) = ?2', SESSION.length, SESSION)
 	return 'ok'
 })

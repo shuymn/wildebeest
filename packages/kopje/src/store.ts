@@ -249,8 +249,24 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, setup.confirmSetupDomain, input)
 	}
 
-	saveSetupAccess(callerBuild: string, input: OperationInput<typeof setup.saveSetupAccess>) {
-		return this.#kernel.execute(callerBuild, setup.saveSetupAccess, input)
+	reserveAccess(callerBuild: string, input: OperationInput<typeof setup.reserveAccess>) {
+		return this.#kernel.execute(callerBuild, setup.reserveAccess, input)
+	}
+
+	checkpointAccess(callerBuild: string, input: OperationInput<typeof setup.checkpointAccess>) {
+		return this.#kernel.execute(callerBuild, setup.checkpointAccess, input)
+	}
+
+	completeAccess(callerBuild: string, input: OperationInput<typeof setup.completeAccess>) {
+		return this.#kernel.execute(callerBuild, setup.completeAccess, input)
+	}
+
+	failAccess(callerBuild: string, input: OperationInput<typeof setup.failAccess>) {
+		return this.#kernel.execute(callerBuild, setup.failAccess, input)
+	}
+
+	recordSetupImages(callerBuild: string, input: OperationInput<typeof setup.recordSetupImages>) {
+		return this.#kernel.execute(callerBuild, setup.recordSetupImages, input)
 	}
 
 	sendSetupProbe(callerBuild: string, input: OperationInput<typeof setup.sendSetupProbe>) {

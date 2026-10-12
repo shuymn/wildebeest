@@ -144,15 +144,17 @@ export async function runScheduledJobs(env: Env, deps: InboxDeps): Promise<void>
 	}
 }
 
-// /setup's Queue check (domain/setup.ts): the probe is marked as received, and acked whatever happens; a probe that
-// could not be marked shows as not received, which is what the check reports.
+// /setup's Queue check (domain/setup.ts): the probe is marked as received. A transient Store refusal (maintenance, an
+// upgrade) is retried, so a received probe is not reported as lost; any other failure is logged and acked.
 async function consumeProbe(message: Message, id: string, env: Env, deps: InboxDeps): Promise<void> {
 	try {
 		await callStore(() => deps.store(env).consumeSetupProbe(deps.build(env), { id, now: deps.now() }))
 	} catch (error) {
-		if (!(error instanceof StoreUnavailableError)) {
-			console.error({ event: 'kopje.setup.probe_failed', id: message.id, ...errorFields(error) })
+		if (error instanceof StoreUnavailableError) {
+			message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
+			return
 		}
+		console.error({ event: 'kopje.setup.probe_failed', id: message.id, ...errorFields(error) })
 	}
 	message.ack()
 }

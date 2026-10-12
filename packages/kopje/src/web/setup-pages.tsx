@@ -76,12 +76,18 @@ export type SetupPageProps = {
 	results: Partial<Record<SetupStep, CheckResult>>
 	queue: CheckResult
 	cron: CheckResult
+	images: CheckResult | undefined
+	accessState: CheckResult | undefined
 }
 
 const PERMISSIONS = (
 	<ul>
 		<li>
 			Account, <em>Access: Apps and Policies</em>, Edit (required)
+		</li>
+		<li>
+			Account, <em>Access: Organizations, Identity Providers, and Groups</em>, Read (required: checks that the team is
+			this account's)
 		</li>
 		<li>
 			Account, <em>Access: Service Tokens</em>, Read (only with a service token client ID)
@@ -92,7 +98,18 @@ const PERMISSIONS = (
 	</ul>
 )
 
-export const SetupPage: FC<SetupPageProps> = ({ mode, host, hostProblem, csrf, view, results, queue, cron }) => {
+export const SetupPage: FC<SetupPageProps> = ({
+	mode,
+	host,
+	hostProblem,
+	csrf,
+	view,
+	results,
+	queue,
+	cron,
+	images,
+	accessState,
+}) => {
 	const admin = mode === 'admin'
 	const domain = admin ? (view.config?.domain ?? null) : (view.draft?.domain ?? null)
 	const confirmed = domain !== null && domain === host
@@ -150,7 +167,7 @@ export const SetupPage: FC<SetupPageProps> = ({ mode, host, hostProblem, csrf, v
 							? 'Not configured yet.'
 							: `Team: ${teamDomain}${admin || access === null ? '' : `, account ${access.accountId}`}`}
 					</p>
-					<Result result={results.access} />
+					<Result result={results.access ?? accessState} />
 					{admin || confirmed ? (
 						<form method="post" action="/setup/access">
 							<Csrf token={csrf} />
@@ -188,6 +205,21 @@ export const SetupPage: FC<SetupPageProps> = ({ mode, host, hostProblem, csrf, v
 							</label>
 							<p class="hint">Create a token with these permissions, and a short expiry:</p>
 							{PERMISSIONS}
+							<fieldset>
+								<legend>Existing objects</legend>
+								<label class="check">
+									<input type="radio" name="mode" value="reconcile" checked />
+									Update the objects Kopje made (normal)
+								</label>
+								<label class="check">
+									<input type="radio" name="mode" value="adopt" />
+									Recovery: take over the objects with Kopje's names, whatever they are now
+								</label>
+								<label class="check">
+									<input type="radio" name="mode" value="recreate" />
+									Recovery: create new objects (delete the old ones in the dashboard afterwards)
+								</label>
+							</fieldset>
 							<button type="submit">{teamDomain === null ? 'Create' : 'Update'} the Access applications</button>
 						</form>
 					) : (
@@ -200,7 +232,7 @@ export const SetupPage: FC<SetupPageProps> = ({ mode, host, hostProblem, csrf, v
 						Uploads are re-encoded through the Images binding. This transforms a tiny image (one transformation of the
 						monthly allowance; the free plan includes 5,000).
 					</p>
-					<Result result={results.images} />
+					<Result result={results.images ?? images} />
 					<form method="post" action="/setup/check/images">
 						<Csrf token={csrf} />
 						<button type="submit">Check Images</button>
@@ -243,7 +275,7 @@ export const SetupPage: FC<SetupPageProps> = ({ mode, host, hostProblem, csrf, v
 							2). This fixes the domain and the admin for good.
 						</p>
 						<Result result={results.admin} />
-						{access === null || !confirmed ? (
+						{access === null || !confirmed || view.draft?.accessReady !== true ? (
 							<p class="hint">Set up the Access applications first.</p>
 						) : (
 							<form method="post" action="/setup/admin">
@@ -289,8 +321,8 @@ export const ChecklistPage: FC = () => (
 				which asks for payment details. Add a login method (one-time PIN works).
 			</li>
 			<li>
-				<strong>Create a short-lived API token</strong> for step 2 with Access: Apps and Policies, Edit, and delete it
-				afterwards.
+				<strong>Create a short-lived API token</strong> for step 2 with Access: Apps and Policies, Edit, and Access:
+				Organizations, Identity Providers, and Groups, Read. Delete it afterwards.
 			</li>
 			<li>
 				<strong>Optional: a service token for the admin CLI.</strong> Create it under Access, Service credentials, and
