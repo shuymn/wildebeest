@@ -10,11 +10,12 @@ import {
 	userCredential,
 } from './context'
 import { mastodonError } from './errors'
+import { descriptionProblem, parseFocus, sweepSoon } from './media'
 import { linkHeader, pageQuery } from './pagination'
 import { type Params, parseBoolean } from './params'
 import { API_VISIBILITIES, type ApiVisibility } from '../domain/audience'
 import { exceedsRawLength, statusLength } from '../domain/status-text'
-import type { Acted, Viewed } from '../domain/statuses'
+import type { Acted, MediaAttributes, Viewed } from '../domain/statuses'
 import { sha256Hex } from '../security/tokens'
 
 // /api/v1/statuses (B4a): posting, editing, deleting, the per-status reads, and favourite, reblog and bookmark.
@@ -30,9 +31,6 @@ const TOO_LONG = `Validation failed: Text character limit of ${MAX_CHARACTERS} e
 
 // ISO 639 codes, optionally with a region or script (zh-TW, zh-Hant). Anything else is ignored, as Mastodon does.
 const LANGUAGE = /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/
-
-// MediaAttachment::MAX_DESCRIPTION_LENGTH.
-const MAX_DESCRIPTION = 1500
 
 function emptyToUndefined(value: string | undefined): string | undefined {
 	return value === '' ? undefined : value
@@ -141,17 +139,26 @@ export const editStatus: ApiHandler = async (c, deps) => {
 		return p
 	}
 	const composed = composition(p)
-	const mediaAttributes = p
-		.objects('media_attributes')
-		.flatMap((a) =>
-			a.id === undefined || a.description === undefined ? [] : [{ id: a.id, description: a.description }]
-		)
+	// UpdateStatusService applies description and focus of each entry; an entry with neither changes nothing. Entries
+	// for the same attachment collapse to one, the later value of each field winning, before anything is compared.
+	const merged = new Map<string, MediaAttributes>()
+	for (const a of p.objects('media_attributes')) {
+		const focus = parseFocus(a.focus)
+		if (a.id === undefined || (a.description === undefined && focus === undefined)) {
+			continue
+		}
+		const previous = merged.get(a.id)
+		merged.set(a.id, {
+			id: a.id,
+			description: a.description ?? previous?.description,
+			focus: focus ?? previous?.focus,
+		})
+	}
+	const mediaAttributes = [...merged.values()]
 	const problem =
 		typeof composed === 'string'
 			? composed
-			: mediaAttributes.some((a) => [...a.description].length > MAX_DESCRIPTION)
-				? `Validation failed: Description is too long (maximum is ${MAX_DESCRIPTION} characters)`
-				: undefined
+			: mediaAttributes.map((a) => descriptionProblem(a.description)).find((found) => found !== undefined)
 	if (typeof composed === 'string' || problem !== undefined) {
 		return refuseAfterAuth(c, deps, mastodonError(422, problem ?? 'Validation failed'))
 	}
@@ -168,16 +175,17 @@ export const deleteStatus: ApiHandler = async (c, deps) => {
 		return p
 	}
 	const credential = userCredential(c, deps)
-	const result = await storeCall(c, deps, (s, b) =>
-		s.deleteStatus(b, {
-			credential,
-			id: statusId(c),
-			deleteMedia: parseBoolean(p.get('delete_media')) ?? false,
-			now: deps.now(),
-			present: present(c),
-		})
+	const deleteMedia = parseBoolean(p.get('delete_media')) ?? false
+	const result = authorized(
+		await storeCall(c, deps, (s, b) =>
+			s.deleteStatus(b, { credential, id: statusId(c), deleteMedia, now: deps.now(), present: present(c) })
+		)
 	)
-	return viewedResponse(c, authorized(result))
+	// delete_media doomed the status's media in the Store; its R2 objects are deleted after the response.
+	if (deleteMedia && result.status === 'ok') {
+		sweepSoon(c, deps)
+	}
+	return viewedResponse(c, result)
 }
 
 export const getStatus: ApiHandler = async (c, deps) => {

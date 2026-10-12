@@ -2,21 +2,26 @@ import { type Account, accountUrl, acctOf, type Present, presentAccountsById } f
 import { apiVisibility, type ApiVisibility, type Visibility } from './audience'
 import { htmlToPlainText } from './plain-text'
 import type { Db } from '../db/sql'
+import { httpUrl } from '../platform/http-url'
 
 // The Status entity as Mastodon 4.0.2's REST::StatusSerializer shows it. One presenter for every read path: it takes
 // a list of ids and the viewer and reads the related rows kind by kind (statuses and reblogged originals, accounts,
 // media, mentions, tags, viewer flags), each in one query over json_each, so the rows read grow with the page only.
 // It never checks visibility: callers pass ids that went through the audience rule (domain/audience.ts).
 
+export type MediaSize = { width: number; height: number; size: string; aspect: number }
+
+export type MediaMeta = { original?: MediaSize; small?: MediaSize; focus?: { x: number; y: number } }
+
 export type MediaAttachment = {
 	id: string
 	type: string
-	url: string
-	preview_url: string
+	url: string | null
+	preview_url: string | null
 	remote_url: string | null
 	preview_remote_url: null
 	text_url: null
-	meta: null
+	meta: MediaMeta | null
 	description: string | null
 	blurhash: null
 }
@@ -102,7 +107,19 @@ export type PresentOptions = Present & {
 	withoutReblog?: boolean
 }
 
-type MediaRow = { id: string; status_id: string; type: string; url: string; description: string }
+// The columns presentMedia reads, for every query that presents media.
+export const MEDIA_COLUMNS = 'id, type, url, preview_url, description, meta, focus_x, focus_y'
+
+export type MediaRow = {
+	id: string
+	type: string
+	url: string
+	preview_url: string | null
+	description: string
+	meta: string | null
+	focus_x: number
+	focus_y: number
+}
 type MentionRow = {
 	status_id: string
 	id: string
@@ -132,8 +149,8 @@ export function presentStatuses(db: Db, ids: readonly string[], options: Present
 		options
 	)
 	const media = groupBy(
-		db.all<MediaRow>(
-			`SELECT id, status_id, type, url, description FROM media_attachments
+		db.all<MediaRow & { status_id: string }>(
+			`SELECT ${MEDIA_COLUMNS}, status_id FROM media_attachments
 			WHERE status_id IN (SELECT value FROM json_each(?1)) ORDER BY status_id, position, id`,
 			all
 		)
@@ -245,19 +262,34 @@ function statusUrl(row: StatusRow): string {
 	return `${new URL(row.author_uri).origin}/@${row.author_username}/${row.id}`
 }
 
-export function presentMedia(row: { id: string; type: string; url: string; description: string }): MediaAttachment {
+// MediaAttachment as REST::MediaAttachmentSerializer shows it. URLs are emitted only when they are http(s) (HTML-3);
+// meta carries the stored dimensions (Mastodon's original and small) and the focal point.
+export function presentMedia(row: MediaRow): MediaAttachment {
+	const url = httpUrl(row.url)?.href ?? null
+	const stored = row.meta === null ? {} : (JSON.parse(row.meta) as { original?: Size; small?: Size })
+	const meta: MediaMeta = {
+		...(stored.original === undefined ? {} : { original: mediaSize(stored.original) }),
+		...(stored.small === undefined ? {} : { small: mediaSize(stored.small) }),
+		...(row.meta === null ? {} : { focus: { x: row.focus_x, y: row.focus_y } }),
+	}
 	return {
 		id: row.id,
 		type: row.type,
-		url: row.url,
-		preview_url: row.url,
+		url,
+		preview_url: httpUrl(row.preview_url)?.href ?? url,
 		remote_url: null,
 		preview_remote_url: null,
 		text_url: null,
-		meta: null,
+		meta: Object.keys(meta).length === 0 ? null : meta,
 		description: row.description === '' ? null : row.description,
 		blurhash: null,
 	}
+}
+
+type Size = { width: number; height: number }
+
+function mediaSize({ width, height }: Size): MediaSize {
+	return { width, height, size: `${width}x${height}`, aspect: width / height }
 }
 
 function viewerFlags(

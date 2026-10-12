@@ -10,8 +10,8 @@ status, updates this file. IDs are never reused: an invariant that no longer app
 
 Paths are relative to `packages/kopje`. **Enforced (main):** the cited source and test exist on `main`. **Implemented on
 branch `kopje/<name>`:** on a branch not yet in a PR (`kopje/ops-tools` is B6a, `kopje/statuses` is B4a,
-`kopje/deliveries` is B2). **Planned
-(stage):** not implemented; required before the stage ships.
+`kopje/deliveries` is B2, `kopje/media-search` is B4b). **Planned (stage):** not implemented; required before the
+stage ships.
 
 A **Gap** note names a part that no test pins yet; that part does not count as enforced. Stages: B1b inbound activities,
 B2 delivery, B4 statuses, media and search, B5 web UI and `/setup`, B6b backups and restore, B8 cutover tools. "Push"
@@ -73,7 +73,7 @@ against their own instance. TLS is assumed between all parties.
 | `/admin/*` and the `kopje-admin` CLI                          | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session | `kopje/ops-tools`: `src/app/admin.ts`                     |
 | `/setup` and its Cloudflare API calls                         | R2, R7     | `SETUP_TOKEN`                                            | Planned (B5)                                              |
 | Web UI (profiles, permalinks, settings)                       | R2, R4, R7 | session                                                  | Planned (B5)                                              |
-| Media upload and serving, Images transformation               | R2–R4      | bearer token; capability URL for reads                   | Planned (B4)                                              |
+| Media upload and serving, Images transformation               | R2–R4      | bearer token; capability URL for reads                   | `kopje/media-search`: `src/mastodon/media.ts`             |
 | Web Push registration                                         | R3         | bearer token with `push`                                 | Planned (push)                                            |
 | Queue consumer, alarms, cron                                  | internal   | —                                                        | main: `src/jobs/queue.ts`, `src/platform/store-kernel.ts` |
 | Delivery doorbell and cron (`src/jobs/deliver.ts`)            | internal   | —                                                        | `kopje/deliveries`                                        |
@@ -129,7 +129,14 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule. _Implemented
   on branch `kopje/statuses`:_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
   `test/visibility.test.ts` (single status, context, history, source, `favourited_by`, timelines, account statuses,
-  notifications, bookmarks, favourites). Search, the web UI and media are _Planned (B4, B5)._ The object endpoint serves only what VIS-4 allows (`kopje/deliveries`).
+  notifications, bookmarks, favourites). _Implemented on branch `kopje/media-search`_ for search: `src/domain/search.ts`;
+  `test/search.test.ts` ("never returns a status the viewer may not see", "drops a boosted status that became
+  inaccessible", hashtags only where a status with them is visible), `test/search-edge.test.ts` (hashtag candidates
+  pass the rule before ranking and truncation, so hidden statuses neither hide nor crowd out a visible tag, hidden
+  mentions included). Hashtag search is recent autocomplete over the viewer's own library windows and the newest
+  public statuses, not a catalogue: a tag outside the windows is not found. _Gap:_ a status the viewer saved that later
+  became hidden still takes a slot of the viewer's own window, which reveals that something changed, not what. Media
+  URLs appear only in statuses that pass the rule (see the capability URL accepted risk). The web UI is _Planned (B5)._ The object endpoint serves only what VIS-4 allows (`kopje/deliveries`).
 - **VIS-2: limited stays limited.** A direct status with silent recipients (Misskey `specified`) is `limited`: shown
   only to its addressed recipients, presented as `private` by the API, never widened by an edit. _Implemented on branch
   `kopje/statuses`:_ `interpretAddressing` in `src/domain/audience.ts`; `test/audience.test.ts` ("reads Misskey
@@ -341,22 +348,48 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/mastodon/oauth.ts` (_Gap: untested_). _Implemented on branch `kopje/hardening-1`_ for the account presenter and
   local actor documents (profile URL, avatar, header, icon, image and aliases): `httpUrl` in `src/platform/http-url.ts`,
   used by `presentAccount` in `src/domain/accounts.ts` and `localActorObject` in `src/federation/federation.ts`;
-  `test/accounts.test.ts`, `test/federation.test.ts`. Attachment URLs and field links: _Planned (B1b, B4)._
+  `test/accounts.test.ts`, `test/federation.test.ts`. _Implemented on branch `kopje/media-search`_ for attachment URLs
+  in the API and in Note attachments: `presentMedia` in `src/domain/status-presenter.ts`, `noteOf` in
+  `src/domain/activities.ts` (_Gap: no test with a non-http stored attachment URL_). Field links: _Planned (B1b)._
 
 ### Media (MEDIA)
 
 - **MEDIA-1: only the owner uses an attachment.** Only the uploader may update, delete or attach an attachment, and only
   while it is unattached or attached to the status being edited. _Implemented on branch `kopje/statuses`_ for attaching:
-  `attachableMedia` in `src/domain/statuses.ts`; `test/statuses.test.ts` ("attaches own unattached media"). Upload,
-  update and delete: _Planned (B4)._
+  `attachableMedia` in `src/domain/statuses.ts`; `test/statuses.test.ts` ("attaches own unattached media").
+  _Implemented on branch `kopje/media-search`_ for reading, updating and deleting: `src/domain/media.ts` (an upload is
+  read or updated only by its owner while unattached; it is deleted only through its owner's status with
+  `delete_media`, or by the sweep after its grace period, and a doomed or still-processing upload cannot be attached);
+  `test/media.test.ts` ("shows and updates own unattached media only").
 - **MEDIA-2: R2 keys are server-made.** Keys derive from server-generated ids and stored records; no filename, path
-  segment or encoded separator from a request selects or overwrites a key. Originals are not publicly readable. _Planned
-  (B4)._
+  segment or encoded separator from a request selects or overwrites a key. Originals are not publicly readable.
+  _Implemented on branch `kopje/media-search`:_ `src/platform/media-files.ts` (originals at `originals/<id>`, served
+  files at `files/<token>/<variant>`; the serving route builds only `files/` keys from a token of the server's form);
+  the Store holds a row for every key before it is written, and the sweep deletes a row only after its objects. A write
+  started before the upload's deadline can still land after the sweep, so the sweep leaves a tombstone
+  (`media_orphans`) for each upload that never completed, and reconciliation (the cron, `reconcileMedia` in
+  `src/mastodon/media.ts`) deletes its keys again a day after the deadline. Reconciliation deletes only recorded
+  tombstones, never an object because no row names it, and neither it nor the sweep runs during maintenance, a dump,
+  an import, or before setup; tombstones are not dumped, so a restored or imported Store starts with none and deletes
+  nothing it restores. `test/image-bytes.test.ts` ("media keys"), `test/media.test.ts` ("serves only well-formed paths
+  of served files"), `test/media-reconcile.test.ts` ("deletes nothing from R2 for a Store that knows nothing of it",
+  "deletes nothing during maintenance, an import, or before setup", "deletes a late write of a failed upload").
 - **MEDIA-3: served images are re-encoded.** An image is served only as Images output with location metadata removed; if
-  transformation fails, the upload is refused and original bytes are never served. _Planned (B4)._
+  transformation fails, the upload is refused and original bytes are never served. _Implemented on branch
+  `kopje/media-search`:_ outputs are PNG or WebP only, for which Images discards all metadata (the binding has no
+  metadata option, and JPEG output would keep the EXIF copyright tag); `processImage` in `src/platform/images.ts` then
+  checks every output with `retainedMetadata` (`src/platform/image-bytes.ts`), which refuses any EXIF, XMP, IPTC,
+  comment, text chunk or unknown JPEG application segment and keeps only colour profiles, and refuses the upload
+  otherwise; `test/image-bytes.test.ts` ("refuses every EXIF block", "refuses XMP, IPTC, comments"),
+  `test/media.test.ts` ("re-encodes an image without its location", "refuses a failed transformation", "refuses an
+  output that keeps ..."). Tests use Miniflare's local Images binding (sharp); the production binding's output is
+  verified on the verification instance (B9).
 - **MEDIA-4: media cannot run as instance content.** Uploads are accepted by detected type from an allowlist and served
   with their stored type and `nosniff`; HTML, SVG and other active types are never served from the instance origin.
-  _Planned (B4)._
+  _Implemented on branch `kopje/media-search`:_ `sniffImageType` (JPEG, PNG, GIF, WebP, AVIF by signature, and Images
+  must read the same type); `SERVED_TYPES` and `src/web/media.ts` (JPEG, PNG and WebP only, `nosniff`, `sandbox` CSP);
+  video and audio are refused; `test/media.test.ts` ("refuses active and unsupported types by their bytes", "never
+  serves a stored object of another type").
 
 ### Web Push and polls (PUSH, POLL)
 
@@ -377,14 +410,20 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   code units). Media uploads have their own limit. _Enforced (main)_ for bodies: `src/platform/body.ts`,
   `src/mastodon/params.ts`; `test/gate.test.ts` ("refuses an inbox body over 1 MiB", "stops reading a streamed inbox
   body"). _Gap: no API body test._ _Implemented on branch `kopje/statuses`_ for status text: `test/status-text.test.ts`
-  ("raw input bound"). Query strings, search terms and media: _Planned (B4)._
+  ("raw input bound"). _Implemented on branch `kopje/media-search`_ for search terms (500 characters) and media (16 MB
+  and 16,777,216 pixels, read with the body bound before parsing): `src/mastodon/search.ts`, `src/mastodon/media.ts`;
+  `test/search.test.ts` ("bounds the query"), `test/media.test.ts` ("refuses a file over 16 MB"). Other query strings:
+  _Gap._
 - **RES-2: parsing work is bounded.** Every regex, parser and normalization over input at the RES-1 cap has an
   adversarial fixture with a time bound. _Implemented on branch `kopje/statuses`_ for status text:
-  `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). JSON-LD processing and remote
-  HTML: _Planned (B1b)._
+  `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Implemented on branch
+  `kopje/media-search`_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
+  bound"). JSON-LD processing and remote HTML: _Planned (B1b)._
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
-  `src/domain/accounts.ts`. _Gap: neither cap is tested._
+  `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Implemented on branch `kopje/media-search`_ for search: at
+  most 40 results per type (80 for the account search), and offsets past 10,000 answer an empty page;
+  `test/search.test.ts` ("bounds the query, the limit and the offset").
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Enforced (main)_ for snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
   sweep and spool: _Planned (B1b)._ Deliveries: _Implemented on branch `kopje/deliveries`:_ delivered rows are deleted
@@ -412,7 +451,18 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **RES-6: one request cannot trigger unbounded work.** An inbound activity has fixed limits on dereferences,
   recipients, collection expansion and notifications. Delivery backlog and concurrency are bounded. Anonymous app
   registration, inbox spooling and media transformations have rate or storage budgets with a visible refusal. _Planned
-  (B1b, B4). Gap: `POST /api/v1/apps` on main has no rate or storage budget yet; planned with B5 (rate limiting)._
+  (B1b). Gap: `POST /api/v1/apps` on main has no rate or storage budget yet; planned with B5 (rate limiting)._
+  _Implemented on branch `kopje/media-search`_ for media: before the body is read or Images is called, the Store
+  counts upload attempts (deleted and failed ones included) to at most 30 per 30 minutes per account (Mastodon's
+  limit) and checks the monthly budgets; right before Images is called it revalidates the reservation with fresh time
+  and charges two transformations to the month they run in, against an instance budget per UTC month (`IMAGES_MONTHLY_TRANSFORMS`,
+  default 4,000, under the 5,000 of the Images free plan) and against the account's monthly share of it
+  (`IMAGES_ACCOUNT_MONTHLY_TRANSFORMS`, default a tenth), so one account (R4) cannot lock the others out; every refusal
+  answers 429, and a used-up Images allowance answers 503. Unattached uploads are deleted after a day by a sweep of at most 100 per run. `reserveMedia` in
+  `src/domain/media.ts`; `test/media.test.ts` ("counts upload attempts", "counts failed uploads too", "stops all
+  uploads once the monthly Images budget is reserved", "stops one account at its monthly share", "answers 503 when the
+  transformation allowance is used up"), `test/media-reconcile.test.ts` ("spends no transformation on a reservation
+  that expired", "charges the budgets of the month the transformations run in").
   Delivery: _Implemented on branch `kopje/deliveries`:_ an activity's targets are expanded 100 at a time, oldest
   activity first, in the recording transaction and then in each claim; a claim reads at most 16 lane heads (only heads
   are due); a Queue batch runs one round however many doorbells it holds; the consumer runs at most 4 batches at once
@@ -423,7 +473,16 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Implemented on branch `kopje/statuses`_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
-  untested_). Context traversal and edit history: _Planned (B4a fixes)._
+  untested_). _Implemented on branch `kopje/media-search`_ for search: statuses pass `listableSql` before `LIMIT`,
+  each library source reads at most 2,500 rows through an index ordered by the status id it returns (cursors applied
+  inside it), hashtags come from at most 500 entries per library source plus the newest 2,000 public statuses, and an
+  account search matches the exact address (always), at most 1,000 username-prefix candidates, the 5,000 newest
+  accounts and the local ones, or with `following` the exact address and up to 5,000 accepted follows through a
+  partial index (pending follows are never read)
+  (`src/domain/search.ts`, `findAccounts` in `src/domain/accounts.ts`); `test/search.test.ts` ("filters before
+  LIMIT"), `test/search-edge.test.ts` (rows read stay flat as favourites, bookmarks, accounts and tagged statuses grow
+  fourfold, pending follows included; `max_id` reaches past each window; an exact address outside every window is
+  found). Context traversal and edit history: _Planned (B4a fixes)._
 
 ### Data and keys (DATA)
 
@@ -438,7 +497,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   template statements with bound literals, into an empty Store with the same schema, and verification recomputes the
   digests from the imported rows. _Implemented on branch `kopje/ops-tools`:_ `src/platform/store-dump.ts`,
   `src/platform/store-import.ts`, `docs/dump-format.md`; `test/dump-import.test.ts`, `test/ops-regressions.test.ts`,
-  `test/dump-format.test.ts`.
+  `test/dump-format.test.ts`. Media tombstones (`media_orphans`) are left out of dumps (`src/platform/dump-catalog.ts`):
+  they name R2 objects to delete, which a restored Store must not act on.
 - **DATA-4: backups leave Cloudflare only encrypted.** Dump chunks, R2 originals and manifests are age-encrypted before
   upload. _Planned (B6b)._
 - **DATA-5: logs carry no secrets or content.** Log entries are structured events. They never include request bodies,
@@ -539,7 +599,9 @@ activity specs, cited in test names.
 | Signed-fetch cache entries may outlive a remote block or key change by up to 5 minutes                                                                                                                                                     | Measured CPU savings on personal inboxes                                                                                                                      | blocks must apply at once                                      |
 | OAuth client secrets are stored in plaintext, so R5 can act as any registered app (no user scopes)                                                                                                                                         | Matches Mastodon; app tokens carry no user authority                                                                                                          | app tokens gain user-level powers                              |
 | Aggregate counters (`reblogs_count`, `favourites_count`, `replies_count`) include interactions the viewer cannot see                                                                                                                       | Mastodon parity; clients rely on the counts                                                                                                                   | counters must hide private interactions                        |
-| Non-public media is readable by anyone who holds its unguessable URL                                                                                                                                                                       | Clients and remote servers fetch media without credentials                                                                                                    | authenticated media fetch becomes interoperable                |
+| Non-public media is readable by anyone holding its unguessable URL; cached copies outlive deletion                                                                                                                                         | Clients and peers fetch media without credentials; URLs appear only under VIS-1                                                                               | authenticated media fetch becomes interoperable                |
+| A write of a failed upload that lands after the sweep stays a day; one landing after its tombstone stays for good                                                                                                                          | An HTTP Worker has no fixed wall-time limit; deleting unrecorded objects would destroy media after a restore                                                  | R2 offers conditional writes bound to a Store record           |
+| R2 originals keep the uploaded bytes, EXIF and location included                                                                                                                                                                           | Never served (MEDIA-2); backups restore from them; they are A8                                                                                                | backups can be rebuilt from re-encoded files                   |
 | Service tokens are recognized by Access's claim shape (no email, empty `sub`, `common_name`)                                                                                                                                               | The admin application's policy decides which identities reach it                                                                                              | the admin application admits mTLS or Access changes the claims |
 | A delivery whose completion was lost is POSTed again after its lease (at-least-once)                                                                                                                                                       | Receivers deduplicate by activity id; exactly-once needs the receiver's cooperation                                                                           | a receiver is seen to apply a repeat                           |
 | Misskey with several silent recipients of one status on one server: only the first copy Misskey processes sets the note's audience, so the other silent recipients there cannot see it. Supported: one silent recipient per Misskey server | Misskey keeps the first `Create` of a note; a combined copy would name the recipients to each other, and recipient-specific object ids would split the status | Misskey honours a later copy, or a peer needs it               |

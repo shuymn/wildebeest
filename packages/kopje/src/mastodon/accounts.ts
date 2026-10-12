@@ -11,6 +11,7 @@ import {
 import { mastodonError } from './errors'
 import { linkHeader, pageQuery } from './pagination'
 import { parseBoolean } from './params'
+import { MAX_SEARCH_OFFSET, searchParams } from './search'
 import type { CredentialChanges, RelationshipResult, Visibility } from '../domain/accounts'
 
 // /api/v1/accounts (B3): credentials, lookup, search, relationships, follow, and follower lists.
@@ -115,19 +116,22 @@ export const searchAccounts: ApiHandler = async (c, deps) => {
 	if (p instanceof Response) {
 		return p
 	}
-	const query = p.get('q')
-	if (query === undefined) {
-		return refuseAfterAuth(c, deps, mastodonError(400, 'Missing parameter q'))
+	const parsed = searchParams(p)
+	if ('error' in parsed) {
+		return refuseAfterAuth(c, deps, parsed.error)
 	}
 	const { limit } = pageQuery(p)
-	const offset = Math.max(Number.parseInt(p.get('offset') ?? '0', 10) || 0, 0)
 	const credential = userCredential(c, deps)
+	if (parsed.offset > MAX_SEARCH_OFFSET) {
+		authorized(await storeCall(c, deps, (s, b) => s.checkCredential(b, credential)))
+		return c.json([])
+	}
 	const accounts = await storeCall(c, deps, (s, b) =>
 		s.searchAccounts(b, {
 			credential,
-			query,
+			query: parsed.query,
 			limit,
-			offset,
+			offset: parsed.offset,
 			following: parseBoolean(p.get('following')) ?? false,
 			localDomain: new URL(c.req.url).host,
 			present: present(c),

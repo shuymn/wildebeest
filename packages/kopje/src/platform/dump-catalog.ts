@@ -7,6 +7,7 @@ import { bindAll, readColumn, textLiteral, valueLiteral } from './dump-literals'
 //   kopje_migrations      the header carries the applied migrations; the target recreates them with its runner
 //   kopje_state           except the names in DUMPED_STATE. hold, upgrade, upgrade_bookmark (the bookmark belongs to
 //                         the source object), maintenance, dump and import are state of one object at one time
+//   media_orphans         tombstones of R2 objects to delete; a restored Store must not delete what it restores
 //   _cf_*                 platform internals
 //   sqlite_* internals    except sqlite_sequence (AUTOINCREMENT counters), which is restored by name
 export const STATE_TABLE = 'kopje_state'
@@ -15,7 +16,10 @@ export const SEQUENCE_TABLE = 'sqlite_sequence'
 
 function excluded(name: string): boolean {
 	return (
-		name === 'kopje_migrations' || name.startsWith('_cf_') || (name.startsWith('sqlite_') && name !== SEQUENCE_TABLE)
+		name === 'kopje_migrations' ||
+		name === 'media_orphans' ||
+		name.startsWith('_cf_') ||
+		(name.startsWith('sqlite_') && name !== SEQUENCE_TABLE)
 	)
 }
 

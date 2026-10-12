@@ -22,6 +22,12 @@ const configSchema = z.object({
 	IMPORT_TOKEN: z.string().min(1).optional(),
 	// The KEK that wraps local private keys. Unset reads as the empty string, which is a legal KEK (healthReport warns).
 	USER_KEK: z.string().optional(),
+	// Images transformations uploads may reserve per UTC month (two per upload). The default stays under the 5,000 the
+	// Images free plan includes; an operator with paid transformations raises it in the dashboard.
+	IMAGES_MONTHLY_TRANSFORMS: z.coerce.number().int().min(0).default(4000),
+	// Each local account's share of it per month, so one account cannot lock the others out. Unset: a tenth of
+	// IMAGES_MONTHLY_TRANSFORMS (accountMonthlyTransforms).
+	IMAGES_ACCOUNT_MONTHLY_TRANSFORMS: z.coerce.number().int().min(0).optional(),
 	// Set after /setup generates it; Web Push stays unavailable until then.
 	VAPID_JWK: z
 		.string()
@@ -34,6 +40,15 @@ export type Config = z.infer<typeof configSchema>
 // The effective KEK: an unset USER_KEK reads as the empty string, which is a legal KEK.
 export function userKek(config: Config): string {
 	return config.USER_KEK ?? ''
+}
+
+// The default share is a tenth of the instance budget: Kopje serves up to about ten local accounts.
+export const ACCOUNT_SHARE_DIVISOR = 10
+
+export function accountMonthlyTransforms(config: Config): number {
+	return (
+		config.IMAGES_ACCOUNT_MONTHLY_TRANSFORMS ?? Math.floor(config.IMAGES_MONTHLY_TRANSFORMS / ACCOUNT_SHARE_DIVISOR)
+	)
 }
 
 export type ConfigResult = { ok: true; config: Config } | { ok: false; issues: string[] }
