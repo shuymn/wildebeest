@@ -30,4 +30,6 @@
 	"triggers": { "crons": ["*/5 * * * *"] },
 	// Store migrations are bundled as text modules and applied by the Store itself.
 	"rules": [{ "type": "Text", "globs": ["**/*.sql"], "fallthrough": true }],
+	// sanitize-html needs postcss only for style attributes, which Kopje never allows (stubs/postcss.cjs).
+	"alias": { "postcss": "./stubs/postcss.cjs" },
 }

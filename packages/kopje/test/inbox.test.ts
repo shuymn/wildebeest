@@ -172,8 +172,8 @@ describe('Follow of a local account (Mastodon and Misskey)', () => {
 				domain: 'mastodon.example',
 				actor_type: 'Person',
 				display_name: 'bob <b>display</b>',
-				// A tokenizer keeps the nesting it was given; browsers close the outer <p> themselves.
-				note: '<p>Hi <a rel="nofollow noopener" target="_blank">bad</a> <p><strong>T</strong></p></p>',
+				// A heading closes the open <p>, and the stray </p> is an empty paragraph, as a browser reads them.
+				note: '<p>Hi <a rel="nofollow noopener" target="_blank">bad</a> </p><p><strong>T</strong></p><p></p>',
 				url: null,
 				avatar_url: null,
 				header_url: `${MASTODON}/system/headers/bob.png`,
