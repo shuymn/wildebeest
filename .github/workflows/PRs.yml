@@ -130,6 +130,22 @@ jobs:
         working-directory: packages/frontend
         run: pnpm run types-check
 
+      - name: Check kopje linting
+        run: pnpm run lint:kopje
+
+      - name: Check kopje types
+        working-directory: packages/kopje
+        run: pnpm run typecheck
+
+      # Kopje keeps its Worker under 1 MiB gzipped, well inside the 3 MiB Workers Free limit.
+      - name: Check kopje bundle
+        working-directory: packages/kopje
+        shell: bash
+        run: |
+          pnpm run build | tee build.log
+          gzip_kib=$(sed -n 's/.*gzip: \([0-9.]*\) KiB.*/\1/p' build.log)
+          awk -v kib="$gzip_kib" 'BEGIN { if (kib == "" || kib > 1024) { print "bundle gzip size " kib " KiB exceeds 1024 KiB"; exit 1 } }'
+
       - name: Install sqlite3def
         env:
           GH_TOKEN: ${{ github.token }}
