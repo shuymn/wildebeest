@@ -24,6 +24,10 @@ describe('request classification', () => {
 		['OPTIONS', '/ap/users/alice', 'read'],
 		['POST', '/oauth/token', 'session'],
 		['POST', '/oauth/revoke', 'session'],
+		['POST', '/oauth/authorize', 'session'],
+		['POST', '/api/v1/apps', 'session'],
+		['GET', '/api/v1/apps/verify_credentials', 'read'],
+		['POST', '/api/v1/accounts/1/follow', 'write'],
 		['POST', '/api/v1/push/subscription', 'session'],
 		['PUT', '/api/v1/push/subscription', 'session'],
 		['DELETE', '/api/v1/push/subscription', 'write'],
@@ -62,7 +66,7 @@ describe('maintenance gate', () => {
 	// Probe routes stand in for handlers that do not exist yet, so "let through" means the handler ran.
 	async function probed(mode: string) {
 		const h = harness(await migratedStore(), { MAINTENANCE: mode })
-		for (const path of ['/api/v1/statuses', '/api/v1/timelines/home', '/oauth/token']) {
+		for (const path of ['/api/v1/statuses', '/api/v1/timelines/home', '/oauth/probe']) {
 			h.app.all(path, (c) => c.text('reached'))
 		}
 		return h
@@ -76,7 +80,7 @@ describe('maintenance gate', () => {
 		expect(await write.json()).toEqual({ error: expect.stringContaining('maintenance') })
 		for (const [path, method] of [
 			['/api/v1/timelines/home', 'GET'],
-			['/oauth/token', 'POST'],
+			['/oauth/probe', 'POST'],
 		] as const) {
 			const response = await request(path, { method })
 			expect(response.status, path).toBe(200)
@@ -88,7 +92,7 @@ describe('maintenance gate', () => {
 		const { request } = await probed('full')
 
 		expect((await request('/api/v1/timelines/home')).status).toBe(503)
-		expect((await request('/oauth/token', { method: 'POST' })).status).toBe(503)
+		expect((await request('/oauth/probe', { method: 'POST' })).status).toBe(503)
 		expect((await request('/health')).status).toBe(200)
 	})
 
