@@ -99,7 +99,7 @@ describe('/api/v1/statuses', () => {
 			)
 			.first<{ id: string; content: string; original_actor_id: URL; original_object_id: unknown }>()
 		assert.ok(row)
-		assert.equal(row.content, '<p>my status <p>evil</p></p>') // note the sanitization
+		assert.equal(row.content, '<p>my status </p>') // note the sanitization
 		assert.equal(row.original_actor_id.toString(), actor.id.toString())
 		assert.equal(row.original_object_id, row.id)
 	})

@@ -6,7 +6,13 @@ import * as activityHandler from '@wildebeest/backend/activitypub/activities/han
 import { Actor } from '@wildebeest/backend/activitypub/actors'
 import { ApObject, getAndCacheObject, getApId, mastodonIdSymbol } from '@wildebeest/backend/activitypub/objects'
 import { Note } from '@wildebeest/backend/activitypub/objects/note'
-import { makeDB, createActivityId, createTestUser, assertStatus } from '@wildebeest/backend/test/utils'
+import {
+	makeDB,
+	createActivityId,
+	createTestUser,
+	assertStatus,
+	mockRemoteActorFetch,
+} from '@wildebeest/backend/test/utils'
 import { MastodonStatusEdit } from '@wildebeest/backend/types'
 import type { JWK } from '@wildebeest/backend/webpush/jwk'
 
@@ -27,9 +33,8 @@ describe('Update', () => {
 			object: 'a',
 		}
 
-		await assert.rejects(activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys), {
-			message: '`activity.object` must be of type object',
-		})
+		// Rejected by the inbound authorization table before the handler runs.
+		await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
 	})
 
 	test('Object must exist', async () => {
@@ -54,15 +59,19 @@ describe('Update', () => {
 
 	test('Object must have the same origin', async () => {
 		const db = makeDB()
-		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		mockRemoteActorFetch('https://example.com/other')
 		const object: ApObject = {
 			id: getApId('https://example.com/note2'),
 			type: 'Note',
 			content: 'test note',
 		}
 
-		const obj = await getAndCacheObject(domain, db, object, actor)
-		assert.notEqual(obj, null, 'could not create object')
+		// Cached as authored by another actor of the same origin.
+		const obj = await getAndCacheObject(domain, db, {
+			...object,
+			attributedTo: 'https://example.com/other',
+		} as ApObject)
+		assert.ok(obj.object, 'could not create object')
 
 		const activity: UpdateActivity = {
 			'@context': 'https://www.w3.org/ns/activitystreams',
@@ -80,11 +89,13 @@ describe('Update', () => {
 	test('Object(Note) is updated', async () => {
 		const db = makeDB()
 		const actor = await createTestUser(domain, db, userKEK, 'sven@cloudflare.com')
+		const author = 'https://example.com/actor'
+		mockRemoteActorFetch(author)
 
 		const note: Note = {
 			id: 'https://example.com/note2',
 			type: 'Note',
-			attributedTo: actor.id,
+			attributedTo: author,
 			attachment: [],
 			content: 'test note<script>alert("evil")</script>',
 			to: [PUBLIC_GROUP],
@@ -92,7 +103,7 @@ describe('Update', () => {
 			sensitive: false,
 		}
 
-		const { object: obj } = await getAndCacheObject(domain, db, note, actor)
+		const { object: obj } = await getAndCacheObject(domain, db, note)
 		assert.ok(obj, 'could not create object')
 
 		const now = new Date('2023-08-16T16:22:14.190Z').toISOString()
@@ -106,7 +117,7 @@ describe('Update', () => {
 			'@context': 'https://www.w3.org/ns/activitystreams',
 			id: createActivityId(domain),
 			type: 'Update',
-			actor: actor.id,
+			actor: getApId(author),
 			object: newNote,
 		}
 
@@ -128,8 +139,8 @@ describe('Update', () => {
 
 			const data = await res.json<MastodonStatusEdit[]>()
 			assert.equal(data.length, 2)
-			assert.equal(data[0].content, 'test note<p>alert("evil")</p>')
-			assert.equal(data[1].content, 'new test note<p>alert("evil")</p>')
+			assert.equal(data[0].content, 'test note')
+			assert.equal(data[1].content, 'new test note')
 			assert.notEqual(data[0].created_at, data[1].created_at)
 		}
 

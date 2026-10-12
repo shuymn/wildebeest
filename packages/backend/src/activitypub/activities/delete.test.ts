@@ -16,7 +16,8 @@ const vapidKeys = {} as JWK
 describe('Delete', () => {
 	test('delete Note', async () => {
 		const db = makeDB()
-		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
+		await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
+		const remoteActorId = 'https://example.com/actor-a'
 		const originalObjectId = 'https://example.com/note123'
 
 		await db
@@ -32,11 +33,11 @@ describe('Delete', () => {
 					content: 'my first status',
 					to: [PUBLIC_GROUP],
 					cc: [],
-					attributedTo: actorA.id.toString(),
+					attributedTo: remoteActorId,
 					attachment: [],
 					sensitive: false,
 				} satisfies Note),
-				actorA.id.toString(),
+				remoteActorId,
 				originalObjectId,
 				'mastodonid1'
 			)
@@ -45,7 +46,7 @@ describe('Delete', () => {
 		const activity: DeleteActivity = {
 			type: 'Delete',
 			id: createActivityId(domain),
-			actor: actorA.id,
+			actor: getApId(remoteActorId),
 			object: getApId(originalObjectId),
 		}
 
@@ -63,7 +64,8 @@ describe('Delete', () => {
 
 	test('delete Tombstone', async () => {
 		const db = makeDB()
-		const actorA = await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
+		await createTestUser(domain, db, userKEK, 'a@cloudflare.com')
+		const remoteActorId = 'https://example.com/actor-a'
 		const originalObjectId = 'https://example.com/note456'
 
 		await db
@@ -79,11 +81,11 @@ describe('Delete', () => {
 					content: 'my first status',
 					to: [PUBLIC_GROUP],
 					cc: [],
-					attributedTo: actorA.id.toString(),
+					attributedTo: remoteActorId,
 					attachment: [],
 					sensitive: false,
 				} satisfies Note),
-				actorA.id.toString(),
+				remoteActorId,
 				originalObjectId,
 				'mastodonid1'
 			)
@@ -92,7 +94,7 @@ describe('Delete', () => {
 		const activity: DeleteActivity = {
 			type: 'Delete',
 			id: createActivityId(domain),
-			actor: actorA.id,
+			actor: getApId(remoteActorId),
 			object: {
 				type: 'Tombstone',
 				id: getApId(originalObjectId),

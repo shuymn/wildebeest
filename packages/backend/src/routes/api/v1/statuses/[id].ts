@@ -3,11 +3,15 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 
-import { createDeleteActivity } from '@wildebeest/backend/activitypub/activities/delete'
+import { createDeleteActivity, newTombstone } from '@wildebeest/backend/activitypub/activities/delete'
 import { createUpdateActivity } from '@wildebeest/backend/activitypub/activities/update'
 import { type Person } from '@wildebeest/backend/activitypub/actors'
-import { deliverFollowers } from '@wildebeest/backend/activitypub/deliver'
-import { deleteObject, getObjectByMastodonId, originalActorIdSymbol } from '@wildebeest/backend/activitypub/objects'
+import {
+	deleteObject,
+	getObjectByMastodonId,
+	originalActorIdSymbol,
+	originalObjectIdSymbol,
+} from '@wildebeest/backend/activitypub/objects'
 import { Image, isImage } from '@wildebeest/backend/activitypub/objects/image'
 import { newMention } from '@wildebeest/backend/activitypub/objects/mention'
 import { Note, updateNote } from '@wildebeest/backend/activitypub/objects/note'
@@ -23,6 +27,7 @@ import {
 	setMastodonStatusViewerState,
 	toMastodonStatusFromObject,
 } from '@wildebeest/backend/mastodon/status'
+import { deliverToStatusAudience } from '@wildebeest/backend/mastodon/status_delivery'
 import * as timeline from '@wildebeest/backend/mastodon/timeline'
 import type { DeliverMessageBody, HonoEnv, MastodonId, Queue } from '@wildebeest/backend/types'
 import { cors, readBody } from '@wildebeest/backend/utils'
@@ -192,8 +197,10 @@ async function handleRequestPut(
 
 		await updateNote(db, updatedObj, currentObj)
 
-		const activity = await createUpdateActivity(db, domain, connectedActor, updatedObj)
-		await deliverFollowers(db, userKEK, connectedActor, activity, queue)
+		// Deliver the Update only to the audience the status was originally addressed to.
+		const audience = { to: currentObj.to, cc: currentObj.cc }
+		const activity = await createUpdateActivity(db, domain, connectedActor, updatedObj, audience)
+		await deliverToStatusAudience(db, userKEK, connectedActor, activity, queue, domain, audience)
 
 		await timeline.pregenerateTimelines(domain, db, cache, connectedActor)
 	}
@@ -226,9 +233,11 @@ async function handleRequestDelete(
 
 	await deleteObject(db, obj)
 
-	// FIXME: deliver a Delete message to our peers
-	const activity = await createDeleteActivity(db, domain, connectedActor, obj)
-	await deliverFollowers(db, userKEK, connectedActor, activity, queue)
+	// Deliver a Tombstone, never the deleted object, and only to the original audience.
+	const audience = { to: obj.to, cc: obj.cc }
+	const tombstone = newTombstone(obj[originalObjectIdSymbol] ?? obj.id)
+	const activity = await createDeleteActivity(db, domain, connectedActor, tombstone, audience)
+	await deliverToStatusAudience(db, userKEK, connectedActor, activity, queue, domain, audience)
 
 	await timeline.pregenerateTimelines(domain, db, cache, connectedActor)
 

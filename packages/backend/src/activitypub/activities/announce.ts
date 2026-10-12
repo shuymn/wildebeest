@@ -44,7 +44,7 @@ export async function handleAnnounceActivity(
 		return
 	}
 
-	const res = await getAndCacheObject(domain, db, objectId, actor).catch((err) => {
+	const res = await getAndCacheObject(domain, db, objectId).catch((err) => {
 		console.warn(`failed to retrieve object ${objectId}: ${err.message}`)
 		return null
 	})

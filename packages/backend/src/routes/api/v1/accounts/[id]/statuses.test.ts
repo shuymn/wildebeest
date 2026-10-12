@@ -332,7 +332,7 @@ describe('/api/v1/accounts/[id]/statuses', () => {
 									published: '2022-12-10T23:48:38Z',
 									to: [PUBLIC_GROUP],
 									object: {
-										id: 'https://example.com/object1',
+										id: 'https://social.com/object1',
 										type: 'Note',
 										content: '<p>p</p>',
 										attachment: [
@@ -386,7 +386,7 @@ describe('/api/v1/accounts/[id]/statuses', () => {
 			if (isCreateActivity(item)) {
 				const actor = await getAndCacheActor(getApId(item.actor), db)
 				assert.ok(actor)
-				const res = await cacheActivityObject(domain, db, getActivityObject(item), actor)
+				const res = await cacheActivityObject(domain, db, getActivityObject(item))
 				assert.ok(res)
 				assert.ok(res.object)
 				// Date in the past to create the order

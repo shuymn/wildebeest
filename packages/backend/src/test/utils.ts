@@ -188,3 +188,14 @@ export function createTestUser(
 		admin,
 	})
 }
+
+// Serve a minimal actor document at each of the given actor ids.
+export function mockRemoteActorFetch(...ids: string[]): void {
+	globalThis.fetch = (input) => {
+		const url = input instanceof URL || typeof input === 'string' ? input.toString() : input.url
+		if (ids.includes(url)) {
+			return Promise.resolve(new Response(JSON.stringify({ id: url, type: 'Person', preferredUsername: 'remote' })))
+		}
+		return Promise.reject(new Error('unexpected request to ' + url))
+	}
+}

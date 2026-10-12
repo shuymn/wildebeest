@@ -1,7 +1,7 @@
-import { Actor, getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
+import { getAndCacheActor } from '@wildebeest/backend/activitypub/actors'
+import { fetchDocumentById } from '@wildebeest/backend/activitypub/identity'
 import { isNote, Note } from '@wildebeest/backend/activitypub/objects/note'
 import { addPeer } from '@wildebeest/backend/activitypub/peers'
-import { UA } from '@wildebeest/backend/config/ua'
 import { type Database } from '@wildebeest/backend/database'
 import * as query from '@wildebeest/backend/database/d1/querier'
 import {
@@ -11,9 +11,11 @@ import {
 	repairReplyProjection,
 } from '@wildebeest/backend/mastodon/reply_projection'
 import type { MastodonId } from '@wildebeest/backend/types'
-import { HTTPS, isGone, isNotFound, isUUID } from '@wildebeest/backend/utils'
+import { HTTPS, isUUID } from '@wildebeest/backend/utils'
+import { htmlToText, sanitizeHtml } from '@wildebeest/backend/utils/html'
 import { generateMastodonId } from '@wildebeest/backend/utils/id'
 import { Intersect, RequiredProps, SingleOrArray } from '@wildebeest/backend/utils/type'
+import { parseHttpUrl } from '@wildebeest/backend/utils/url'
 
 export const originalActorIdSymbol = Symbol()
 export const originalObjectIdSymbol = Symbol()
@@ -146,7 +148,7 @@ export async function createObject<T extends ApObject>(
 
 	let replyToObjectId: string | null = null
 	if (isNote(sanitized) && sanitized.inReplyTo) {
-		const id = await cacheReply(domain, db, sanitized.inReplyTo, sanitized.attributedTo.toString(), 1)
+		const id = await cacheReply(domain, db, sanitized.inReplyTo, 1)
 		if (id) {
 			replyToObjectId = id
 		}
@@ -172,23 +174,6 @@ export async function createObject<T extends ApObject>(
 	} as LocalObject<T>
 }
 
-async function fetchObject<T extends ApObject>(url: URL): Promise<Remote<T> | null> {
-	const res = await fetch(url, {
-		headers: {
-			accept: 'application/activity+json',
-			'User-Agent': UA,
-		},
-	})
-	if (!res.ok) {
-		if (isNotFound(res) || isGone(res)) {
-			return null
-		}
-		throw new Error(`${url} returned: ${res.status}`)
-	}
-
-	return res.json<T>()
-}
-
 export type LocalObject<T extends ApObject> = T & {
 	published: string
 	[mastodonIdSymbol]: string
@@ -207,11 +192,15 @@ type CacheResult<T extends ApObject> =
 	| { created: true; object: RemoteObject<T> }
 	| { created: false; object: RemoteObject<T> | null }
 
+// Cache a remote object, given either embedded in a signed activity or by URL.
+//
+// The cached author is always the object's own `attributedTo`, which must be
+// served by the origin of the object `id`: never the actor of the activity that
+// referenced the object (e.g. the actor of an Announce).
 export async function getAndCacheObject<T extends ApObject>(
 	domain: string,
 	db: Database,
 	obj: Remote<T> | string | URL,
-	actor: Actor | string | URL,
 	depth = 2
 ): Promise<CacheResult<T>> {
 	{
@@ -221,7 +210,7 @@ export async function getAndCacheObject<T extends ApObject>(
 		}
 	}
 	{
-		const cached = await cacheObject<T>(domain, db, obj, actor, depth)
+		const cached = await cacheObject<T>(domain, db, obj, depth)
 		if (cached) {
 			return { created: true, object: cached }
 		}
@@ -229,76 +218,81 @@ export async function getAndCacheObject<T extends ApObject>(
 	}
 }
 
-async function cacheReply(
-	domain: string,
-	db: Database,
-	objectId: string,
-	actorId: string,
-	depth: number
-): Promise<string | null> {
+async function cacheReply(domain: string, db: Database, objectId: string, depth: number): Promise<string | null> {
 	const row = await query.selectObjectByOriginalObjectId(db, { originalObjectId: objectId })
 	if (row) {
 		return row.id
 	}
 
-	const note = await cacheObject<Note>(domain, db, new URL(objectId), new URL(actorId), depth)
+	const note = await cacheObject<Note>(domain, db, new URL(objectId), depth)
 	return note?.id.toString() ?? null
+}
+
+// The id of the actor an object is attributed to, provided that actor lives on
+// the origin of the object.
+function getAttributedActorId(object: ApObject, objectId: URL): URL | null {
+	const attributedTo = (object as { attributedTo?: unknown }).attributedTo
+	const candidates = Array.isArray(attributedTo) ? attributedTo : [attributedTo]
+	for (const candidate of candidates) {
+		const id =
+			candidate !== null && typeof candidate === 'object' && !(candidate instanceof URL)
+				? parseHttpUrl((candidate as { id?: unknown }).id)
+				: parseHttpUrl(candidate)
+		if (id !== null && id.origin === objectId.origin) {
+			return id
+		}
+	}
+	return null
 }
 
 async function cacheObject<T extends ApObject>(
 	domain: string,
 	db: Database,
 	obj: Remote<T> | string | URL,
-	actor: Actor | string | URL,
 	depth: number
 ): Promise<RemoteObject<T> | null> {
 	if (depth < 1) {
 		return null
 	}
 
-	let actorId: URL
-	if (isApObject(actor)) {
-		actorId = getApId(actor)
-	} else {
-		let actorUrl: URL
-		if (typeof actor !== 'string') {
-			actorUrl = actor
-		} else {
-			actorUrl = new URL(actor)
-		}
-
-		const actr = await getAndCacheActor(actorUrl, db)
-		if (!actr) {
-			console.warn('actor not found: ' + actorUrl.toString())
-			return null
-		}
-
-		actorId = actorUrl
-	}
-
 	let remoteObject: Remote<T>
 	if (isApObject(obj)) {
 		remoteObject = obj
 	} else {
-		let remoteObjectUrl: URL
-		if (typeof obj !== 'string') {
-			remoteObjectUrl = obj
-		} else {
-			remoteObjectUrl = new URL(obj)
-		}
-		const remoteObj = await fetchObject<T>(remoteObjectUrl)
+		const remoteObjectUrl = typeof obj === 'string' ? new URL(obj) : obj
+		const remoteObj = await fetchDocumentById<Remote<T>>(remoteObjectUrl)
 		if (!remoteObj) {
-			console.warn('object not found: ' + remoteObjectUrl)
+			console.warn('object not found: ' + remoteObjectUrl.toString())
 			return null
 		}
 		remoteObject = remoteObj
 	}
 
 	const properties = await sanitizeObjectProperties(remoteObject)
-	const originalObjectId = getApId(properties)
+	const originalObjectId = parseHttpUrl(properties.id)
+	if (originalObjectId === null) {
+		console.warn('object has no valid id')
+		return null
+	}
+	// Local objects are never cached from a remote copy.
+	if (isLocalObject(domain, originalObjectId)) {
+		console.warn(`remote copy of local object ${originalObjectId.toString()} ignored`)
+		return null
+	}
 
-	const { inReplyTo, attributedTo } =
-		isNote(properties) && properties.inReplyTo ? properties : { inReplyTo: null, attributedTo: null }
+	const authorId = getAttributedActorId(properties, originalObjectId)
+	if (authorId === null) {
+		console.warn(`object ${originalObjectId.toString()} is not attributed to an actor of its origin`)
+		return null
+	}
+	const author = await getAndCacheActor(authorId, db)
+	if (!author) {
+		console.warn('actor not found: ' + authorId.toString())
+		return null
+	}
+	const actorId = getApId(author.id)
+
+	const inReplyTo = isNote(properties) && properties.inReplyTo ? properties.inReplyTo : null
 
 	const now = new Date()
 	const mastodonId = await generateMastodonId(db, 'objects', now)
@@ -312,13 +306,13 @@ async function cacheObject<T extends ApObject>(
 		cdate: now.toISOString(),
 		originalActorId: actorId.toString(),
 		originalObjectId: originalObjectId.toString(),
-		replyToObjectId: inReplyTo ?? null,
+		replyToObjectId: inReplyTo,
 		properties: JSON.stringify(properties),
 	})
 
 	// add reply
-	if (inReplyTo && attributedTo) {
-		const localObjectId = await cacheReply(domain, db, inReplyTo, attributedTo.toString(), depth - 1).catch((err) => {
+	if (inReplyTo) {
+		const localObjectId = await cacheReply(domain, db, inReplyTo, depth - 1).catch((err) => {
 			console.warn('failed to cache reply: ' + err)
 			return null
 		})
@@ -413,7 +407,7 @@ async function getObjectBy<T extends ApObject>(
 	const properties = JSON.parse(row.properties) as Remote<T>
 
 	if (isNote(properties) && properties.inReplyTo) {
-		const inReplyToId = await cacheReply(domain, db, properties.inReplyTo, properties.attributedTo.toString(), 1)
+		const inReplyToId = await cacheReply(domain, db, properties.inReplyTo, 1)
 		if (inReplyToId) {
 			await repairReplyProjection(db, row.originalActorId, row.id, inReplyToId)
 		}
@@ -443,72 +437,71 @@ export async function sanitizeObjectProperties<T extends ApObject>(properties: T
 	if (properties.content) {
 		properties.content = await sanitizeContent(properties.content)
 	}
+	if (properties.summary) {
+		properties.summary = await sanitizeContent(properties.summary)
+	}
 	if (properties.name) {
 		properties.name = await getTextContent(properties.name)
 	}
+	// `spoiler_text` is plain text in the Mastodon API
+	const spoilerText = (properties as { spoiler_text?: string }).spoiler_text
+	if (spoilerText) {
+		;(properties as { spoiler_text?: string }).spoiler_text = await getTextContent(spoilerText)
+	}
+	sanitizeUrlProperties(properties)
+	// media attachments without a web URL are dropped
+	const attachment = (properties as { attachment?: unknown }).attachment
+	if (Array.isArray(attachment)) {
+		;(properties as { attachment?: unknown }).attachment = attachment.filter(hasHttpUrl)
+	}
 	return properties
+}
+
+function hasHttpUrl(value: unknown): boolean {
+	return value !== null && typeof value === 'object' && parseHttpUrl((value as { url?: unknown }).url) !== null
+}
+
+/**
+ * Drops the URL fields of a remote object or actor that are not web URLs: they end up as links in clients,
+ * where a `javascript:` URL would run. Covers `url`, `icon`, `image` and custom emoji `tag`s.
+ */
+export function sanitizeUrlProperties(properties: ApObject): void {
+	if (properties.url !== undefined && parseHttpUrl(properties.url) === null) {
+		delete properties.url
+	}
+	if (properties.icon !== undefined && !hasHttpUrl(properties.icon)) {
+		delete properties.icon
+	}
+	if (properties.image !== undefined && !hasHttpUrl(properties.image)) {
+		delete properties.image
+	}
+	const object = properties as { tag?: unknown }
+	if (Array.isArray(object.tag)) {
+		object.tag = object.tag.filter(
+			(tag: unknown) =>
+				!(tag !== null && typeof tag === 'object' && (tag as { type?: unknown }).type === 'Emoji') ||
+				hasHttpUrl((tag as { icon?: unknown }).icon)
+		)
+	}
 }
 
 /**
  * Sanitizes the given string as ActivityPub Object content.
  *
- * This sanitization follows that of Mastodon
- *  - convert all elements to `<p>` unless they are recognized as one of `<p>`, `<span>`, `<br>` or `<a>`.
- *  - remove all CSS classes that are not micro-formats or semantic.
+ * This sanitization follows that of Mastodon: only an allowlist of tags, attributes, CSS classes and
+ * URL schemes is kept, see {@link sanitizeHtml}.
  *
  * See https://docs.joinmastodon.org/spec/activitypub/#sanitization
  */
-export async function sanitizeContent(unsafeContent: string): Promise<string> {
-	if (unsafeContent === '') {
-		return ''
-	}
-	return await getContentRewriter().transform(new Response(unsafeContent)).text()
+export function sanitizeContent(unsafeContent: string): Promise<string> {
+	return Promise.resolve(sanitizeHtml(unsafeContent))
 }
 
 /**
  * This method removes all HTML elements from the string leaving only the text content.
  */
-export async function getTextContent(unsafeName: string): Promise<string> {
-	if (unsafeName === '') {
-		return ''
-	}
-	const rawContent = getTextContentRewriter().transform(new Response(unsafeName))
-	const text = await rawContent.text()
-	return text.trim()
-}
-
-function getContentRewriter() {
-	const contentRewriter = new HTMLRewriter()
-	contentRewriter.on('*', {
-		element(el) {
-			if (!['p', 'span', 'br', 'a'].includes(el.tagName)) {
-				const element = el as { tagName: string }
-				element.tagName = 'p'
-			}
-
-			if (el.hasAttribute('class')) {
-				const classes = el.getAttribute('class')!.split(/\s+/)
-				const sanitizedClasses = classes.filter((c) =>
-					/^(h|p|u|dt|e)-|^mention$|^hashtag$|^ellipsis$|^invisible$/.test(c)
-				)
-				el.setAttribute('class', sanitizedClasses.join(' '))
-			}
-		},
-	})
-	return contentRewriter
-}
-
-function getTextContentRewriter() {
-	const textContentRewriter = new HTMLRewriter()
-	textContentRewriter.on('*', {
-		element(el) {
-			el.removeAndKeepContent()
-			if (['p', 'br'].includes(el.tagName)) {
-				el.after(' ')
-			}
-		},
-	})
-	return textContentRewriter
+export function getTextContent(unsafeName: string): Promise<string> {
+	return Promise.resolve(htmlToText(unsafeName))
 }
 
 export async function deleteObject<T extends ApObject>(db: Database, note: T) {
@@ -529,6 +522,9 @@ export async function deleteObject<T extends ApObject>(db: Database, note: T) {
 	}
 }
 
+// Local objects are served from the instance origin: `https://${domain}`, on the
+// default port. Comparing the hostname alone would also accept other schemes
+// and ports of the same host.
 export function isLocalObject(domain: string, id: URL): boolean {
-	return id.hostname === domain
+	return id.origin === new URL(HTTPS + domain).origin
 }

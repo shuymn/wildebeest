@@ -38,7 +38,7 @@ describe('Accept', () => {
 			object: {
 				type: 'Follow',
 				actor: actor.id,
-				object: getUserId(domain, actorToHandle(actor)),
+				object: getUserId(domain, actorToHandle(actor2)),
 			} as FollowActivity,
 		}
 
@@ -68,8 +68,16 @@ describe('Accept', () => {
 			object: 'a',
 		}
 
-		await assert.rejects(activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys), {
-			message: '`activity.object` must be of type object',
-		})
+		// Rejected by the inbound authorization table before the handler runs.
+		await activityHandler.handle(domain, activity, db, userKEK, adminEmail, vapidKeys)
+
+		const { count } = await db
+			.prepare('SELECT count(*) as count FROM actor_following')
+			.first<{ count: number }>()
+			.then((row) => {
+				assert.ok(row)
+				return row
+			})
+		assert.equal(count, 0)
 	})
 })

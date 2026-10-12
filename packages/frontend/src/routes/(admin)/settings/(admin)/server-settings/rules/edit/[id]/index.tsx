@@ -1,6 +1,7 @@
 import { component$ } from '@builder.io/qwik'
 import { routeAction$, Form, routeLoader$, useNavigate, z, zod$ } from '@builder.io/qwik-city'
 import { getDatabase } from '@wildebeest/backend/database'
+import { requireAdmin } from '~/utils/requireAdmin'
 import { getRules, upsertRule } from '@wildebeest/backend/config/rules'
 import { TextArea } from '~/components/Settings/TextArea'
 import { getErrorHtml } from '~/utils/getErrorHtml/getErrorHtml'
@@ -9,7 +10,9 @@ import { SubmitButton } from '~/components/Settings/SubmitButton'
 export type ServerSettingsData = { rules: string[] }
 
 export const useUpdateRule = routeAction$(
-	async (data, { platform: { env: platform } }) => {
+	async (data, requestEvent) => {
+		await requireAdmin(requestEvent)
+		const platform = requestEvent.platform.env
 		let success = false
 		try {
 			const result = await upsertRule(getDatabase(platform), {
@@ -31,20 +34,24 @@ export const useUpdateRule = routeAction$(
 	})
 )
 
-export const useRules = routeLoader$(
-	async ({ params, platform: { env: platform }, html }): Promise<{ id: number; text: string }> => {
-		const database = getDatabase(platform)
-		const rules = await getRules(database)
+export const useRules = routeLoader$(async (requestEvent): Promise<{ id: number; text: string }> => {
+	await requireAdmin(requestEvent)
+	const {
+		params,
+		platform: { env: platform },
+		html,
+	} = requestEvent
+	const database = getDatabase(platform)
+	const rules = await getRules(database)
 
-		const rule: { id: string; text: string } | undefined = rules.find((r) => r.id === params['id'])
+	const rule: { id: string; text: string } | undefined = rules.find((r) => r.id === params['id'])
 
-		if (!rule) {
-			throw html(404, getErrorHtml('The selected rule could not be found'))
-		}
-
-		return JSON.parse(JSON.stringify(rule))
+	if (!rule) {
+		throw html(404, getErrorHtml('The selected rule could not be found'))
 	}
-)
+
+	return JSON.parse(JSON.stringify(rule))
+})
 
 export default component$(() => {
 	const rule = useRules()

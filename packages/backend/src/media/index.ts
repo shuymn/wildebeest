@@ -3,6 +3,7 @@ import { isDocument, mastodonIdSymbol } from '@wildebeest/backend/activitypub/ob
 import { type Image, isImage } from '@wildebeest/backend/activitypub/objects/image'
 import { isVideo, Video } from '@wildebeest/backend/activitypub/objects/video'
 import type { MediaAttachment } from '@wildebeest/backend/types/media'
+import { parseHttpUrl } from '@wildebeest/backend/utils/url'
 
 export function fromObject(obj: ApObject): MediaAttachment {
 	if (isImage(obj)) {
@@ -15,6 +16,14 @@ export function fromObject(obj: ApObject): MediaAttachment {
 		return fromObjectDocument(obj)
 	}
 	throw new Error(`unsupported media type ${obj.type}: ${JSON.stringify(obj)}`)
+}
+
+// Remote attachments whose URL is not a web URL are left out.
+export function fromObjects(objs: ApObject[] | undefined): MediaAttachment[] {
+	if (!Array.isArray(objs)) {
+		return []
+	}
+	return objs.filter((obj) => parseHttpUrl(obj.url) !== null).map(fromObject)
 }
 
 const imageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic']
