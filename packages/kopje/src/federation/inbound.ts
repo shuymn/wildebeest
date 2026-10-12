@@ -35,7 +35,7 @@ export type InboundRequest = {
 
 // 202: done or deliberately ignored (a format or authorization problem, as Mastodon answers); 401: the signature or
 // the signer's identity failed; 415: not an ActivityStreams body; 503: a remote fetch failed in a way that may pass.
-export type InboxOutcome = { status: 202 | 401 | 415 | 503; reason: string; jobsPending?: boolean }
+export type InboxOutcome = { status: 202 | 401 | 415 | 503; reason: string; jobsPending?: boolean; delivers?: boolean }
 
 export type InboundDeps = Omit<FederationDeps, 'domain'> & { domain: string; recipient: string | null }
 
@@ -328,7 +328,7 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 	const result = await callStore(() =>
 		deps.store().receiveActivity(deps.build, { now: deps.now(), origin, actorUri, actor, activity: prepared })
 	)
-	return { status: 202, reason: result.reason, jobsPending: result.jobsPending }
+	return { status: 202, reason: result.reason, jobsPending: result.jobsPending, delivers: result.delivers === true }
 }
 
 // An actor may list a key by reference (publicKey: "<key URL>") rather than embed it. Fedify has just resolved that

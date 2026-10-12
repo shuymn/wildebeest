@@ -1,3 +1,4 @@
+import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { userReadOperation, userWriteOperation } from './auth'
 import { notify } from './notifications'
 import { readOperation } from './operation'
@@ -462,7 +463,8 @@ function followTarget(db: Db, viewerId: string, target: string): TargetRow | nul
 
 // Follows or updates the options of an existing follow. A local unlocked target is followed at once; a locked or
 // remote target gets a pending request (a remote Accept arrives over federation). A local target is notified
-// (follow, or follow_request when locked) in the same transaction; delivery of the Follow activity comes with B2. As
+// (follow, or follow_request when locked) in the same transaction; a remote target is sent a Follow (its id kept in
+// follows.uri, which the remote Accept must match) and stays pending until that Accept arrives (VIS-8, VIS-9). As
 // in Mastodon's FollowService, a suspended target is not found, and a block either way or a domain block of the
 // viewer forbids the follow.
 export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, input, { accountId: viewerId }) => {
@@ -487,10 +489,9 @@ export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, i
 	)
 	if (existing === undefined) {
 		const state = target.domain === null && target.locked === 0 ? 'accepted' : 'pending'
-		// TODO(B2): give a remote follow its Follow activity uri and queue the delivery in this transaction.
-		db.run(
+		const edge = db.first<{ id: string }>(
 			`INSERT INTO follows (account_id, target_account_id, state, show_reblogs, notify, languages, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING CAST(id AS TEXT) AS id`,
 			viewerId,
 			target.id,
 			state,
@@ -502,6 +503,10 @@ export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, i
 		if (target.domain === null) {
 			const type = state === 'accepted' ? 'follow' : 'follow_request'
 			notify(db, { recipientId: target.id, type, fromId: viewerId, statusId: null, now: input.now })
+		} else if (edge !== undefined) {
+			const activity = remoteFollow(db, viewerId, target, edge.id, null)
+			db.run('UPDATE follows SET uri = ? WHERE id = CAST(? AS INTEGER)', activity.followUri, edge.id)
+			recordOutbound(db, viewerId, followActivity(activity), input.now)
 		}
 	} else {
 		db.run(
@@ -520,14 +525,21 @@ export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, i
 	return relationshipResult(db, viewerId, target.id)
 })
 
-export const unfollow = userWriteOperation<{ target: string }, RelationshipResult>(
-	(db, { target: targetId }, { accountId: viewerId }) => {
+export const unfollow = userWriteOperation<{ target: string; now: number }, RelationshipResult>(
+	(db, { target: targetId, now }, { accountId: viewerId }) => {
 		const target = followTarget(db, viewerId, targetId)
 		if (target === null) {
 			return { status: 'not_found' }
 		}
-		// TODO(B2): queue an Undo of the Follow for a remote target.
-		db.run('DELETE FROM follows WHERE account_id = ? AND target_account_id = ?', viewerId, target.id)
+		const removed = db.first<{ id: string; uri: string | null }>(
+			'DELETE FROM follows WHERE account_id = ? AND target_account_id = ? RETURNING CAST(id AS TEXT) AS id, uri',
+			viewerId,
+			target.id
+		)
+		// A remote follow, accepted or still requested, is undone there too (UnfollowService).
+		if (removed !== undefined && target.domain !== null) {
+			recordOutbound(db, viewerId, undoFollowActivity(remoteFollow(db, viewerId, target, removed.id, removed.uri)), now)
+		}
 		// The follow's notification goes with it, as Mastodon destroys a notification with its activity.
 		db.run(
 			"DELETE FROM notifications WHERE account_id = ? AND from_account_id = ? AND type IN ('follow', 'follow_request')",
@@ -538,6 +550,14 @@ export const unfollow = userWriteOperation<{ target: string }, RelationshipResul
 		return relationshipResult(db, viewerId, target.id)
 	}
 )
+
+// The Follow of a remote follow edge. Migrated edges may have no stored uri; they get the id this instance would
+// have given them (a remote server matches an Undo by actor and object as well).
+function remoteFollow(db: Db, viewerId: string, target: TargetRow, edgeId: string, uri: string | null) {
+	const actorUri = db.first<{ uri: string }>('SELECT uri FROM accounts WHERE id = ?', viewerId)?.uri ?? ''
+	const targetUri = db.first<{ uri: string }>('SELECT uri FROM accounts WHERE id = ?', target.id)?.uri ?? ''
+	return { followUri: uri ?? followUri(actorUri, edgeId), actorUri, targetUri, targetId: target.id }
+}
 
 // Counts are recomputed from the edges in the transaction that changed them. A remote account's counts are the
 // cached values from its server and are left alone.
@@ -606,3 +626,84 @@ export const listFollows = readOperation<ListFollowsInput, Page<Account> | null>
 		}
 	}
 )
+
+// Follow requests to the viewer (Mastodon's FollowRequestsController and AuthorizeFollowService/RejectFollowService).
+// Only the followed account decides (VIS-9): the viewer is the target, from the credential, never from the request.
+export const listFollowRequests = userReadOperation<{ page: PageQuery; present: Present }, Page<Account>>(
+	(db, { page, present }, { accountId: viewerId }) => {
+		const ascending = page.minId !== undefined
+		const rows = db.all<AccountRow & { cursor: string }>(
+			`SELECT CAST(f.id AS TEXT) AS cursor, ${ACCOUNT_COLUMNS}
+			FROM follows f JOIN accounts a ON a.id = f.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
+			WHERE f.target_account_id = ?1 AND f.state = 'pending'
+				AND (?2 IS NULL OR f.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR f.id > CAST(?3 AS INTEGER))
+			ORDER BY f.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+			viewerId,
+			page.maxId ?? null,
+			page.minId ?? page.sinceId ?? null,
+			page.limit
+		)
+		if (ascending) {
+			rows.reverse()
+		}
+		return {
+			items: rows.map((row) => presentAccount(row, present)),
+			newest: rows[0]?.cursor ?? null,
+			oldest: rows.at(-1)?.cursor ?? null,
+		}
+	}
+)
+
+// Authorizes or rejects a pending follow of the viewer. A remote requester gets the Accept or Reject at its personal
+// inbox, named after its Follow (followAnswerActivity). The follow_request notification goes either way.
+export const answerFollowRequest = userWriteOperation<
+	{ account: string; decision: 'authorize' | 'reject'; now: number },
+	RelationshipResult
+>((db, { account, decision, now }, { accountId: viewerId }) => {
+	const requesterId = resolveAccountId(db, account)
+	const request =
+		requesterId === null
+			? undefined
+			: db.first<{ id: string; uri: string | null; requester_uri: string; remote: number }>(
+					`SELECT CAST(f.id AS TEXT) AS id, f.uri, a.uri AS requester_uri, a.domain IS NOT NULL AS remote
+					FROM follows f JOIN accounts a ON a.id = f.account_id
+					WHERE f.account_id = ? AND f.target_account_id = ? AND f.state = 'pending'`,
+					requesterId,
+					viewerId
+				)
+	if (requesterId === null || request === undefined) {
+		return { status: 'not_found' }
+	}
+	if (decision === 'authorize') {
+		db.run("UPDATE follows SET state = 'accepted' WHERE id = CAST(? AS INTEGER)", request.id)
+	} else {
+		db.run('DELETE FROM follows WHERE id = CAST(? AS INTEGER)', request.id)
+	}
+	db.run(
+		"DELETE FROM notifications WHERE account_id = ? AND from_account_id = ? AND type = 'follow_request'",
+		viewerId,
+		requesterId
+	)
+	if (request.remote === 1) {
+		const viewerUri = db.first<{ uri: string }>('SELECT uri FROM accounts WHERE id = ?', viewerId)?.uri ?? ''
+		recordOutbound(
+			db,
+			viewerId,
+			followAnswerActivity(decision === 'authorize' ? 'Accept' : 'Reject', {
+				localActorUri: viewerUri,
+				followerUri: request.requester_uri,
+				followerId: requesterId,
+				followUri: request.uri,
+				edgeId: request.id,
+			}),
+			now
+		)
+	}
+	db.run(
+		`UPDATE accounts SET followers_count =
+			(SELECT COUNT(*) FROM follows WHERE target_account_id = ?1 AND state = 'accepted') WHERE id = ?1`,
+		viewerId
+	)
+	const [relationship] = relationshipsOf(db, viewerId, [requesterId])
+	return relationship === undefined ? { status: 'not_found' } : { status: 'ok', relationship }
+})

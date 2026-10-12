@@ -1,5 +1,6 @@
 import type { Handler } from 'hono'
 
+import { ringDoorbell } from './delivery'
 import { type InboundRequest, type InboxOutcome, receiveInbound } from './inbound'
 import type { LoaderDeps } from './loader'
 import { readConfig, userKek } from '../platform/config'
@@ -22,6 +23,14 @@ export type InboxDeps = {
 // A message that asks for a round of the Store's inbound jobs (purges and Moves, domain/inbox.ts runInboundJobs).
 // It carries nothing: the jobs and their progress live in the Store, so a lost or repeated message changes nothing.
 export type JobsMessage = { kind: 'inbound-jobs' }
+
+export async function ringDeliveries(queue: Queue): Promise<void> {
+	try {
+		await ringDoorbell(queue)
+	} catch (error) {
+		console.error({ event: 'kopje.delivery.doorbell.failed', ...errorFields(error) })
+	}
+}
 
 export async function requestInboundJobs(queue: Queue, delaySeconds?: number): Promise<boolean> {
 	try {
@@ -109,6 +118,10 @@ export async function processInbox(
 	if (outcome.status !== 202) {
 		// Our own reason codes only: nothing the request supplied (DATA-5).
 		console.log({ event: 'kopje.inbox.refused', status: outcome.status, reason: outcome.reason })
+	}
+	if (outcome.delivers === true) {
+		// The deliveries are durable in the Store: if this ring is lost, the delivery cron sends them.
+		await ringDeliveries(env.QUEUE)
 	}
 	if (outcome.jobsPending === true) {
 		// The jobs are durable in the Store: if this send fails, cron continues them.

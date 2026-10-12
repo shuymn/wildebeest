@@ -18,7 +18,9 @@
 	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Store"] }],
 	"queues": {
 		"producers": [{ "binding": "QUEUE", "queue": "kopje" }],
-		"consumers": [{ "queue": "kopje", "max_retries": 100 }],
+		// Spool replay and delivery rounds share the consumer; max_concurrency bounds parallel rounds (RES-6). Each
+		// round makes at most 16 POSTs.
+		"consumers": [{ "queue": "kopje", "max_retries": 100, "max_concurrency": 4 }],
 	},
 	"r2_buckets": [{ "binding": "MEDIA", "bucket_name": "kopje-media" }],
 	"images": { "binding": "IMAGES" },

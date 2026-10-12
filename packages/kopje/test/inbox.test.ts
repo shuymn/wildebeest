@@ -399,13 +399,13 @@ describe('Update and Delete of an actor', () => {
 		const deletion = { '@context': AS, id: `${bob.uri}#delete`, type: 'Delete', actor: bob.uri, object: bob.uri }
 		expect(await t.post(bob, deletion)).toBe(202)
 		expect(await sql(t.store, 'SELECT count(*) AS n FROM statuses')).toEqual([{ n: PURGE_BATCH + 1 }])
-		expect(t.queue.pending.map((m) => m.body)).toEqual([{ kind: 'inbound-jobs' }])
+		expect(t.queue.pending.map((m) => m.body)).toContainEqual({ kind: 'inbound-jobs' })
 
 		const deps = inboxDeps(() => t.store, t.web.loader)
 		const env = { ...t.env, MAINTENANCE: 'off' } as Env
 		await t.queue.deliver((batch) => handleQueue(batch, env, deps))
 		await t.queue.deliver((batch) => handleQueue(batch, env, deps))
-		expect(t.queue.pending).toEqual([])
+		expect(t.queue.pending.filter((m) => (m.body as { kind: string }).kind === 'inbound-jobs')).toEqual([])
 		expect(await sql(t.store, 'SELECT count(*) AS n FROM statuses')).toEqual([{ n: 0 }])
 		expect(await accountId(t.store, bob.uri)).toBeUndefined()
 	})
@@ -480,7 +480,12 @@ describe('Block and Move', () => {
 
 		const bob2Id = (await accountId(t.store, bob2.uri))!
 		expect((await follows(t.store)).filter((f) => f.account_id === ALICE)).toEqual([
-			{ account_id: ALICE, target_account_id: bob2Id, state: 'pending', uri: null },
+			{
+				account_id: ALICE,
+				target_account_id: bob2Id,
+				state: 'pending',
+				uri: expect.stringMatching(`^${ALICE_URI}#follows/`),
+			},
 		])
 		expect(await sql(t.store, 'SELECT account_id, target_account_id FROM mutes ORDER BY id')).toEqual([
 			{ account_id: DAVE, target_account_id: bobId },

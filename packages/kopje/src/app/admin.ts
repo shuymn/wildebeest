@@ -41,6 +41,8 @@ const SESSION_SECRET = /^[A-Za-z0-9_-]{43}$/
 export type AdminDeps = AccessDeps & {
 	build: (env: Env) => string
 	store: StoreResolver
+	// Rings the delivery doorbell after a retry.
+	doorbell: (env: Env) => Promise<void>
 }
 
 type AdminVariables = { auth: ImportAuthority }
@@ -131,7 +133,7 @@ function adminAllowed(identity: AccessIdentity, access: AccessSettings): string 
 	return adminRefusal(access, identity)
 }
 
-export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
+export function adminRoutes({ build, store, fetch, now, doorbell }: AdminDeps) {
 	const admin = new Hono<AdminEnv>()
 	const stub = (c: Context<AdminEnv>): StoreStub => store(c.env)
 
@@ -254,6 +256,48 @@ export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
 			return c.json({ error: 'expected {"sql": string, "limit"?: number}' }, 400)
 		}
 		return reply(c, await stub(c).query(build(c.env), sql, limit))
+	})
+
+	// ---- deliveries: the backlog and the given-up rows, and putting them back (RES-5)
+
+	admin.get('/deliveries', async (c) => {
+		const before = c.req.query('before')
+		const limit = c.req.query('limit')
+		if ((before !== undefined && !/^\d{1,19}$/.test(before)) || (limit !== undefined && !/^\d{1,3}$/.test(limit))) {
+			return c.json({ error: 'before must be a delivery id and limit a number' }, 400)
+		}
+		const input = {
+			...(before === undefined ? {} : { before }),
+			...(limit === undefined ? {} : { limit: Number(limit) }),
+		}
+		return c.json(await stub(c).deliveriesReport(build(c.env), input))
+	})
+
+	admin.post('/deliveries/retry', async (c) => {
+		const { ids, all, after } = await jsonBody(c)
+		const named =
+			Array.isArray(ids) && ids.length > 0 && ids.every((id) => typeof id === 'string' && /^\d{1,19}$/.test(id))
+		const cursor = after === undefined || (typeof after === 'string' && /^\d{1,19}$/.test(after))
+		if ((all === true ? ids !== undefined : !named || after !== undefined) || !cursor) {
+			return c.json({ error: 'expected {"ids": [string, ...]} or {"all": true, "after"?: string}' }, 400)
+		}
+		const result = await stub(c).retryDeliveries(build(c.env), {
+			ids: all === true ? 'all' : (ids as string[]),
+			now: now(),
+			...(typeof after === 'string' ? { after } : {}),
+		})
+		if (!result.ok) {
+			const error =
+				result.code === 'superseded'
+					? 'a later activity about the same object (an Undo, a Delete or an Update) supersedes these; sending them again could undo it'
+					: 'these copies are addressed to a silent recipient without a personal inbox; they are never sent elsewhere'
+			return c.json({ error, code: result.code, ids: result.ids }, 409)
+		}
+		if (result.retried > 0) {
+			await doorbell(c.env).catch(() => {})
+		}
+		const { ok: _ok, ...rest } = result
+		return c.json(rest)
 	})
 
 	// ---- dump

@@ -1,11 +1,10 @@
-import { recordOutbound } from './activities'
+import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { insertWithFreshId, remoteId } from './ids'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
 import { accountSearchText } from './search-text'
 import { recountStatus } from './statuses'
 import type { Db } from '../db/sql'
-import { sha256Hex } from '../platform/sha256'
 
 // Inbound activities about actors and relationships (B1b-1), applied in one Store transaction each. The Worker has
 // already verified the HTTP signature, bound the signer to the actor (ID-1), fetched and sanitized what it needed
@@ -99,7 +98,8 @@ export type ReceiveInput = {
 }
 
 // jobsPending: a purge or Move has batches left; the Worker asks the Queue to continue (cron continues regardless).
-export type ReceiveResult = { applied: boolean; reason: string; jobsPending: boolean }
+// delivers: the activity recorded deliveries (an Accept, Reject, Follow or Undo); the Worker rings the doorbell.
+export type ReceiveResult = { applied: boolean; reason: string; jobsPending: boolean; delivers?: boolean }
 
 function ignored(reason: string): ReceiveResult {
 	return { applied: false, reason, jobsPending: false }
@@ -107,6 +107,11 @@ function ignored(reason: string): ReceiveResult {
 
 function applied(reason: string, jobsPending = false): ReceiveResult {
 	return { applied: true, reason, jobsPending }
+}
+
+// The deliveries id sequence (AUTOINCREMENT): it moves whenever a delivery is recorded, even one deleted since.
+function deliverySequence(db: Db): number {
+	return db.first<{ seq: number }>("SELECT seq FROM sqlite_sequence WHERE name = 'deliveries'")?.seq ?? 0
 }
 
 function originOf(uri: string | null): string | null {
@@ -337,6 +342,36 @@ function removeFollow(db: Db, followerId: string, targetId: string): boolean {
 	return removed > 0
 }
 
+// Ends a local account's follow of a remote account and records its Undo (Mastodon's UnfollowService), as the
+// unfollow API does. A migrated edge without a uri is named as this instance would have named it.
+function unfollowRemote(
+	db: Db,
+	local: { id: string; uri: string },
+	remote: { id: string; uri: string },
+	now: number
+): void {
+	const removed = db.first<{ id: string; uri: string | null }>(
+		'SELECT CAST(id AS TEXT) AS id, uri FROM follows WHERE account_id = ? AND target_account_id = ?',
+		local.id,
+		remote.id
+	)
+	if (removed === undefined) {
+		return
+	}
+	removeFollow(db, local.id, remote.id)
+	recordOutbound(
+		db,
+		local.id,
+		undoFollowActivity({
+			followUri: removed.uri ?? followUri(local.uri, removed.id),
+			actorUri: local.uri,
+			targetUri: remote.uri,
+			targetId: remote.id,
+		}),
+		now
+	)
+}
+
 function blockedEitherWay(db: Db, a: string, b: string): boolean {
 	return (
 		db.first(
@@ -348,11 +383,8 @@ function blockedEitherWay(db: Db, a: string, b: string): boolean {
 	)
 }
 
-const CONTEXT = 'https://www.w3.org/ns/activitystreams'
-
-// Accept or Reject of a remote Follow, as an outbound intent for B2 (delivery is not done here). The id is derived
-// from the Follow it answers, so the answers to two generations of a follow are two activities, and a replay of the
-// same Follow names the same answer.
+// Accept or Reject of a remote Follow, as an outbound intent delivered to the follower's personal inbox (B2). Its id
+// derives from the Follow it answers (followAnswerActivity).
 function recordFollowAnswer(
 	db: Db,
 	kind: 'Accept' | 'Reject',
@@ -361,20 +393,16 @@ function recordFollowAnswer(
 	followUri: string,
 	now: number
 ): void {
-	const path = kind === 'Accept' ? 'accepts' : 'rejects'
 	recordOutbound(
 		db,
 		local.id,
-		{
-			activity: {
-				'@context': CONTEXT,
-				id: `${local.uri}#${path}/follows/${sha256Hex(followUri)}`,
-				type: kind,
-				actor: local.uri,
-				object: { id: followUri, type: 'Follow', actor: follower.uri, object: local.uri },
-			},
-			audience: { followers: false, accounts: [follower.id] },
-		},
+		followAnswerActivity(kind, {
+			localActorUri: local.uri,
+			followerUri: follower.uri,
+			followerId: follower.id,
+			followUri,
+			edgeId: '',
+		}),
 		now
 	)
 }
@@ -632,8 +660,8 @@ const block: Handler<'Block'> = (db, actor, activity, { now }) => {
 		retract(db, actor.uri, followUri, now)
 	}
 	removeFollow(db, actor.id, target.id)
-	// TODO(B2): Mastodon's UnfollowService also sends an Undo of the local follow; local unfollows do not federate yet.
-	removeFollow(db, target.id, actor.id)
+	// Mastodon's UnfollowService: the local account's follow of the blocker ends, and is undone there too.
+	unfollowRemote(db, target, actor, now)
 	db.run(
 		'INSERT INTO blocks (account_id, target_account_id, uri, created_at) VALUES (?, ?, ?, ?)',
 		actor.id,
@@ -767,8 +795,14 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 	const changed: string[] = [target.id]
 	for (const follower of followers) {
 		changed.push(follower.id)
-		// TODO(B2): an Undo of the old follow, and a Follow of a remote target, once local follows federate.
-		removeFollow(db, follower.id, source.id)
+		// Mastodon's MoveWorker: UnfollowService for the source (undone there), FollowService for the target.
+		const local = db.first<LocalRow>(
+			'SELECT a.id, a.uri, a.locked, 0 AS suspended FROM accounts a WHERE a.id = ?',
+			follower.id
+		)
+		if (local !== undefined) {
+			unfollowRemote(db, local, source, now)
+		}
 		const barred =
 			follower.id === target.id ||
 			blockedEitherWay(db, follower.id, target.id) ||
@@ -781,9 +815,9 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 			continue
 		}
 		const state = target.local === 1 && target.locked === 0 ? 'accepted' : 'pending'
-		const inserted = db.run(
+		const edge = db.first<{ id: string }>(
 			`INSERT INTO follows (account_id, target_account_id, state, show_reblogs, notify, languages, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+			VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING RETURNING CAST(id AS TEXT) AS id`,
 			follower.id,
 			target.id,
 			state,
@@ -792,9 +826,22 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 			follower.languages,
 			new Date(now).toISOString()
 		)
-		if (inserted > 0 && target.local === 1) {
+		if (edge === undefined) {
+			continue
+		}
+		if (target.local === 1) {
 			const type = state === 'accepted' ? 'follow' : 'follow_request'
 			notify(db, { recipientId: target.id, type, fromId: follower.id, statusId: null, now })
+		} else if (local !== undefined) {
+			// A Follow of the remote target, pending until its Accept (as the follow API records it).
+			const uri = followUri(local.uri, edge.id)
+			db.run('UPDATE follows SET uri = ? WHERE id = CAST(? AS INTEGER)', uri, edge.id)
+			recordOutbound(
+				db,
+				local.id,
+				followActivity({ followUri: uri, actorUri: local.uri, targetUri: target.uri, targetId: target.id }),
+				now
+			)
 		}
 	}
 	recountLocal(db, changed)
@@ -946,6 +993,12 @@ const HANDLERS: { [T in InboundActivity['type']]: Handler<T> } = {
 }
 
 export const receiveActivity = writeOperation<ReceiveInput, ReceiveResult>((db, input) => {
+	const before = deliverySequence(db)
+	const result = receive(db, input)
+	return { ...result, delivers: deliverySequence(db) > before }
+})
+
+function receive(db: Db, input: ReceiveInput): ReceiveResult {
 	const { activity, actorUri, now, origin } = input
 	sweep(db, now)
 	// ID-1/ID-3, again where it is written: a remote actor only, and an activity id of its origin.
@@ -985,7 +1038,7 @@ export const receiveActivity = writeOperation<ReceiveInput, ReceiveResult>((db, 
 	}
 	const handler = HANDLERS[activity.type] as Handler<typeof activity.type>
 	return handler(db, actor, activity as never, input)
-})
+}
 
 function pendingPurge(db: Db, uri: string): boolean {
 	return (
@@ -995,23 +1048,29 @@ function pendingPurge(db: Db, uri: string): boolean {
 
 // One round of pending jobs, oldest first, at most JOB_BATCHES_PER_RUN batches in all (the Queue and cron call it). Returns
 // whether any job still has batches left.
-export const runInboundJobs = writeOperation<{ now: number }, { pending: boolean }>((db, { now }) => {
-	sweep(db, now)
-	for (let batch = 0; batch < JOB_BATCHES_PER_RUN; batch++) {
-		const job = db.first<{ kind: 'purge' | 'move'; key: string }>(
-			'SELECT kind, key FROM inbound_jobs WHERE done_at IS NULL ORDER BY created_at, kind, key LIMIT 1'
-		)
-		if (job === undefined) {
-			break
+export const runInboundJobs = writeOperation<{ now: number }, { pending: boolean; delivers: boolean }>(
+	(db, { now }) => {
+		const before = deliverySequence(db)
+		sweep(db, now)
+		for (let batch = 0; batch < JOB_BATCHES_PER_RUN; batch++) {
+			const job = db.first<{ kind: 'purge' | 'move'; key: string }>(
+				'SELECT kind, key FROM inbound_jobs WHERE done_at IS NULL ORDER BY created_at, kind, key LIMIT 1'
+			)
+			if (job === undefined) {
+				break
+			}
+			if (job.kind === 'purge') {
+				purgeBatch(db, job.key, now)
+			} else {
+				moveBatch(db, job.key, now)
+			}
 		}
-		if (job.kind === 'purge') {
-			purgeBatch(db, job.key, now)
-		} else {
-			moveBatch(db, job.key, now)
+		return {
+			pending: db.first('SELECT 1 AS x FROM inbound_jobs WHERE done_at IS NULL') !== undefined,
+			delivers: deliverySequence(db) > before,
 		}
 	}
-	return { pending: db.first('SELECT 1 AS x FROM inbound_jobs WHERE done_at IS NULL') !== undefined }
-})
+)
 
 // Whether a personal inbox path names a local account with its exact stored username.
 export const inboxOwnerExists = readOperation<{ username: string }, boolean>(

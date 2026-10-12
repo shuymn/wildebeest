@@ -296,6 +296,17 @@ const IPV4_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/
 
 // URL parsing has already normalized IPv4 forms like 0x7f.1 or 2130706433 to dotted quads.
 async function assertFetchable(url: URL, checkHost: (url: URL) => Promise<void>): Promise<void> {
+	assertPublicShape(url)
+	try {
+		await checkHost(url)
+	} catch (error) {
+		throw new RefusedFetchError(url, `Refused host ${url.hostname}: ${errorMessage(error)}`)
+	}
+}
+
+// NET-1's rules that need no lookup: https, no credentials, no literal IP, no local or single-label name. Shared by
+// every outbound sink (NET-3); the DNS check (checkHost) runs after it.
+export function assertPublicShape(url: URL): void {
 	if (url.protocol !== 'https:') {
 		throw new RefusedFetchError(url, `Refused non-https URL: ${url.protocol}`)
 	}
@@ -308,10 +319,5 @@ async function assertFetchable(url: URL, checkHost: (url: URL) => Promise<void>)
 	}
 	if (host === 'localhost' || host.endsWith('.localhost') || !host.includes('.')) {
 		throw new RefusedFetchError(url, `Refused local host: ${host}`)
-	}
-	try {
-		await checkHost(url)
-	} catch (error) {
-		throw new RefusedFetchError(url, `Refused host ${host}: ${errorMessage(error)}`)
 	}
 }

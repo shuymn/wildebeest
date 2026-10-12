@@ -66,6 +66,24 @@ export const ROUTES: readonly Route[] = [
 		handler: accounts.unfollow,
 	},
 	{ method: 'GET', path: '/api/v1/accounts/:id/followers', access: 'public', handler: accounts.followers },
+	{
+		method: 'GET',
+		path: '/api/v1/follow_requests',
+		access: { scope: 'read:follows' },
+		handler: accounts.followRequests,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/follow_requests/:id/authorize',
+		access: { scope: 'write:follows' },
+		handler: accounts.authorizeFollowRequest,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/follow_requests/:id/reject',
+		access: { scope: 'write:follows' },
+		handler: accounts.rejectFollowRequest,
+	},
 	{ method: 'GET', path: '/api/v1/accounts/:id/following', access: 'public', handler: accounts.following },
 	{
 		method: 'GET',

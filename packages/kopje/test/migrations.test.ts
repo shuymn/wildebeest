@@ -29,6 +29,7 @@ const SCHEMA_TABLES = [
 	'oauth_clients',
 	'oauth_tokens',
 	'outbound_activities',
+	'outbound_receipts',
 	'push_subscriptions',
 	'remote_keys',
 	'status_edits',

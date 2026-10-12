@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers'
 
 import { MIGRATIONS } from './db/migrations'
 import * as accounts from './domain/accounts'
+import * as activities from './domain/activities'
 import {
 	ensureInstanceActorKey,
 	getCollection,
@@ -13,6 +14,7 @@ import {
 	listLocalKeys,
 } from './domain/actors'
 import { checkCredential, type Credential, type UserCredential } from './domain/auth'
+import * as deliveries from './domain/deliveries'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import * as inbox from './domain/inbox'
 import { instanceInfo } from './domain/instance'
@@ -296,8 +298,16 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, accounts.follow, input)
 	}
 
-	unfollow(callerBuild: string, input: { credential: UserCredential; target: string }) {
+	unfollow(callerBuild: string, input: { credential: UserCredential; target: string; now: number }) {
 		return this.#kernel.execute(callerBuild, accounts.unfollow, input)
+	}
+
+	listFollowRequests(callerBuild: string, input: OperationInput<typeof accounts.listFollowRequests>) {
+		return this.#kernel.execute(callerBuild, accounts.listFollowRequests, input)
+	}
+
+	answerFollowRequest(callerBuild: string, input: OperationInput<typeof accounts.answerFollowRequest>) {
+		return this.#kernel.execute(callerBuild, accounts.answerFollowRequest, input)
 	}
 
 	listFollows(callerBuild: string, input: accounts.ListFollowsInput) {
@@ -400,6 +410,38 @@ export class Store extends DurableObject<Env> {
 
 	clearNotifications(callerBuild: string, input: OperationInput<typeof notifications.clearNotifications>) {
 		return this.#kernel.execute(callerBuild, notifications.clearNotifications, input)
+	}
+
+	// Delivery (B2): claims and completions from the Worker's delivery round, the operator's view, and the sweep.
+
+	claimDeliveries(callerBuild: string, input: OperationInput<typeof deliveries.claimDeliveries>) {
+		return this.#kernel.execute(callerBuild, deliveries.claimDeliveries, input)
+	}
+
+	completeDelivery(callerBuild: string, input: OperationInput<typeof deliveries.completeDelivery>) {
+		return this.#kernel.execute(callerBuild, deliveries.completeDelivery, input)
+	}
+
+	deliveriesReport(callerBuild: string, input: OperationInput<typeof deliveries.deliveriesReport>) {
+		return this.#kernel.execute(callerBuild, deliveries.deliveriesReport, input)
+	}
+
+	retryDeliveries(callerBuild: string, input: OperationInput<typeof deliveries.retryDeliveries>) {
+		return this.#kernel.execute(callerBuild, deliveries.retryDeliveries, input)
+	}
+
+	sweepDeliveries(callerBuild: string, input: OperationInput<typeof deliveries.sweepDeliveries>) {
+		return this.#kernel.execute(callerBuild, deliveries.sweepDeliveries, input)
+	}
+
+	// Local objects over ActivityPub (VIS-4).
+
+	localNote(callerBuild: string, input: OperationInput<typeof activities.getLocalNote>) {
+		return this.#kernel.execute(callerBuild, activities.getLocalNote, input)
+	}
+
+	outbox(callerBuild: string, input: OperationInput<typeof activities.getOutbox>) {
+		return this.#kernel.execute(callerBuild, activities.getOutbox, input)
 	}
 
 	override async alarm(): Promise<void> {

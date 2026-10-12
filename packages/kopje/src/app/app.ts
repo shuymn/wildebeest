@@ -6,6 +6,7 @@ import { ADMIN_PREFIX, adminRoutes, isAdminPath } from './admin'
 import { authorizeRoutes } from './authorize'
 import { classifyRequest, decide, type RequestClass } from './gate'
 import { publicHealth } from './health'
+import { ringDoorbell } from '../federation/delivery'
 import { INBOX_ROUTES, inboxHandler, precheckInbox } from '../federation/inbox'
 import { FEDERATION_GET_ROUTES, federationHandler, type FederationRouteDeps } from '../federation/routes'
 import { FEDERATION_PATHS, requireSetup } from '../federation/setup-gate'
@@ -31,6 +32,8 @@ export type AppDeps = {
 	// Seams for tests: the Access JWKS fetch and the generator of OAuth values.
 	fetch?: typeof fetch
 	randomToken?: TokenGenerator
+	// Rings the delivery doorbell after an API write (default: a message on env.QUEUE).
+	doorbell?: (env: Env) => Promise<void>
 }
 
 const API_CORS_PATHS = ['/api/*', '/oauth/token', '/oauth/revoke']
@@ -46,6 +49,7 @@ export function createApp({
 	store = defaultStore,
 	fetch = globalThis.fetch,
 	federation = {},
+	doorbell = (env) => ringDoorbell(env.QUEUE),
 	...seams
 }: AppDeps) {
 	const app = new Hono<AppEnv>()
@@ -96,11 +100,20 @@ export function createApp({
 			}
 		}
 		await next()
+		// A successful API write may have recorded deliveries (statuses, favourites, boosts, follows): ring once it has
+		// committed. A lost ring only delays them until the cron.
+		if (requestClass === 'write' && c.req.path.startsWith('/api/') && c.res.status < 400) {
+			c.executionCtx.waitUntil(
+				doorbell(c.env).catch((error: unknown) => {
+					console.error({ event: 'kopje.delivery.doorbell.failed', ...errorFields(error) })
+				})
+			)
+		}
 	})
 
 	app.get('/health', (c) => publicHealth(build(c.env), readConfig(c.env), () => store(c.env)))
 
-	app.route(ADMIN_PREFIX, adminRoutes({ build, now, store, fetch: (input, init) => fetch(input, init) }))
+	app.route(ADMIN_PREFIX, adminRoutes({ build, now, store, doorbell, fetch: (input, init) => fetch(input, init) }))
 
 	const setupGate = requireSetup(build, store)
 	for (const path of FEDERATION_PATHS) {

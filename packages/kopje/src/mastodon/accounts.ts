@@ -168,7 +168,8 @@ export const follow: ApiHandler = async (c, deps) => {
 export const unfollow: ApiHandler = async (c, deps) => {
 	const target = c.req.param('id') ?? ''
 	const credential = userCredential(c, deps)
-	return relationshipResponse(c, authorized(await storeCall(c, deps, (s, b) => s.unfollow(b, { credential, target }))))
+	const input = { credential, target, now: deps.now() }
+	return relationshipResponse(c, authorized(await storeCall(c, deps, (s, b) => s.unfollow(b, input))))
 }
 
 function followList(direction: 'followers' | 'following'): ApiHandler {
@@ -194,3 +195,31 @@ function followList(direction: 'followers' | 'following'): ApiHandler {
 
 export const followers = followList('followers')
 export const following = followList('following')
+
+// /api/v1/follow_requests: the viewer's pending followers, and the decision on one of them (VIS-9).
+export const followRequests: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const page = pageQuery(p)
+	const credential = userCredential(c, deps)
+	const result = authorized(
+		await storeCall(c, deps, (s, b) => s.listFollowRequests(b, { credential, page, present: present(c) }))
+	)
+	const link = linkHeader(c.req.url, { ...result, count: result.items.length }, page.limit)
+	if (link !== undefined) {
+		c.header('Link', link)
+	}
+	return c.json(result.items)
+}
+
+function answerFollowRequest(decision: 'authorize' | 'reject'): ApiHandler {
+	return async (c, deps) => {
+		const input = { credential: userCredential(c, deps), account: c.req.param('id') ?? '', decision, now: deps.now() }
+		return relationshipResponse(c, authorized(await storeCall(c, deps, (s, b) => s.answerFollowRequest(b, input))))
+	}
+}
+
+export const authorizeFollowRequest = answerFollowRequest('authorize')
+export const rejectFollowRequest = answerFollowRequest('reject')

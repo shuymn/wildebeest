@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { sql } from './api-helpers'
+import { bearer, sql } from './api-helpers'
 import { harness, inboxDeps, NOW } from './app-helpers'
 import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
 import { BUILD, completeSetup, migratedStore } from './helpers'
@@ -13,6 +13,7 @@ import {
 	signedInit,
 	type TestActor,
 } from './inbox-helpers'
+import { community } from './status-helpers'
 import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH } from '../src/domain/inbox'
 import { BudgetExceededError, createSafeLoader, isTransientLoadError } from '../src/federation/loader'
 import { handleQueue, runScheduledJobs } from '../src/jobs/queue'
@@ -125,7 +126,7 @@ describe('durable purge of a deleted actor (OPS-1, RES-6)', () => {
 		await t.queue.deliver((batch) => handleQueue(batch, env(t), t.deps))
 		await t.queue.deliver((batch) => handleQueue(batch, env(t), t.deps))
 		expect(t.queue.retries).toBe(0)
-		expect(t.queue.pending).toEqual([])
+		expect(t.queue.pending.filter((m) => (m.body as { kind: string }).kind === 'inbound-jobs')).toEqual([])
 		expect(await count(t.store, 'SELECT 1 FROM statuses')).toBe(0)
 		expect(await edges(t.store)).toEqual([])
 		expect(await t.post(t.bob, follow(t.bob))).toBe(202)
@@ -727,5 +728,140 @@ describe('second review: deletion, keys and generations', () => {
 		await runScheduledJobs({ ...t.env, MAINTENANCE: 'off' } as Env, t.deps)
 		expect(await count(t.store, 'SELECT 1 FROM notifications')).toBe(0)
 		expect(await accountId(t.store, bob.uri)).toBeUndefined()
+	})
+})
+
+describe('with outbound delivery (B2)', () => {
+	// A signed-in local user (the API) and remote servers (the inbox) over one Store.
+	async function together(options: { locked?: boolean } = {}) {
+		const h = await community(['alice'])
+		const alice = h.users.alice
+		if (options.locked === true) {
+			await sql(h.store, 'UPDATE accounts SET locked = 1 WHERE id = ?', alice.id)
+		}
+		const aliceUri = (await sql<{ uri: string }>(h.store, 'SELECT uri FROM accounts WHERE id = ?', alice.id))[0]!.uri
+		const web = new RemoteWeb()
+		const inbox = harness(h.store, {}, BUILD, { keygen: fixtureKeyGen, loader: web.loader })
+		const post = async (actor: TestActor, activity: unknown) =>
+			(await inbox.request('/inbox', await signedInit(actor, '/inbox', activity))).status
+		const deliveries = () =>
+			sql<{ type: string; id: string; inbox_url: string }>(
+				h.store,
+				`SELECT json_extract(o.body, '$.activity.type') AS type, json_extract(o.body, '$.activity.id') AS id, d.inbox_url
+				FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id ORDER BY d.id`
+			)
+		return { h, alice, aliceUri, web, inbox, post, deliveries }
+	}
+
+	it('accepts our outbound Follow by its uri, and rings the doorbell for its own Accept', async () => {
+		const t = await together()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bobFollow = { '@context': AS, id: nextId(bob), type: 'Follow', actor: bob.uri, object: t.aliceUri }
+		expect(await t.post(bob, bobFollow)).toBe(202)
+		// Recording the Accept rang the delivery doorbell.
+		expect(t.inbox.queue.pending.map((m) => m.body)).toContainEqual({ kind: 'deliver' })
+		const bobId = (await accountId(t.h.store, bob.uri))!
+
+		const followed = await t.h.request(`/api/v1/accounts/${bobId}/follow`, bearer(t.alice.token, { method: 'POST' }))
+		expect(followed.status).toBe(200)
+		const [ours] = await sql<{ uri: string; state: string }>(
+			t.h.store,
+			'SELECT uri, state FROM follows WHERE account_id = ? AND target_account_id = ?',
+			t.alice.id,
+			bobId
+		)
+		expect(ours).toEqual({ uri: expect.stringMatching(`^${t.aliceUri}#follows/`), state: 'pending' })
+
+		// Mastodon names the Follow it accepts by its id only.
+		expect(
+			await t.post(bob, { '@context': AS, id: nextId(bob), type: 'Accept', actor: bob.uri, object: ours!.uri })
+		).toBe(202)
+		expect(
+			await sql(
+				t.h.store,
+				'SELECT state FROM follows WHERE account_id = ? AND target_account_id = ?',
+				t.alice.id,
+				bobId
+			)
+		).toEqual([{ state: 'accepted' }])
+	})
+
+	it('delivers an Accept to the requester’s personal inbox once a local follow request is authorized', async () => {
+		const t = await together({ locked: true })
+		const bob = await mastodonActor(t.web, 'bob')
+		const bobFollow = { '@context': AS, id: nextId(bob), type: 'Follow', actor: bob.uri, object: t.aliceUri }
+		expect(await t.post(bob, bobFollow)).toBe(202)
+		const bobId = (await accountId(t.h.store, bob.uri))!
+		expect(await t.deliveries()).toEqual([])
+
+		const list = await t.h.request('/api/v1/follow_requests', bearer(t.alice.token))
+		expect(((await list.json()) as { id: string }[]).map((a) => a.id)).toEqual([bobId])
+		const authorized = await t.h.request(
+			`/api/v1/follow_requests/${bobId}/authorize`,
+			bearer(t.alice.token, { method: 'POST' })
+		)
+		expect(authorized.status).toBe(200)
+		expect(await authorized.json()).toMatchObject({ id: bobId, followed_by: true })
+		expect(await t.deliveries()).toEqual([
+			{ type: 'Accept', id: `${t.aliceUri}#accepts/follows/${sha256Hex(bobFollow.id)}`, inbox_url: `${bob.uri}/inbox` },
+		])
+		expect(t.h.doorbell).toHaveBeenCalled()
+		expect(await count(t.h.store, "SELECT 1 FROM notifications WHERE type = 'follow_request'")).toBe(0)
+	})
+
+	it('rejects a follow request with a Reject to the requester', async () => {
+		const t = await together({ locked: true })
+		const bob = await mastodonActor(t.web, 'bob')
+		const bobFollow = { '@context': AS, id: nextId(bob), type: 'Follow', actor: bob.uri, object: t.aliceUri }
+		await t.post(bob, bobFollow)
+		const bobId = (await accountId(t.h.store, bob.uri))!
+		const rejected = await t.h.request(
+			`/api/v1/follow_requests/${bobId}/reject`,
+			bearer(t.alice.token, { method: 'POST' })
+		)
+		expect(await rejected.json()).toMatchObject({ id: bobId, followed_by: false, requested: false })
+		expect((await t.deliveries()).map((d) => d.type)).toEqual(['Reject'])
+		expect(await edges(t.h.store)).toEqual([])
+	})
+
+	it('undoes the local follow a Block ends, and federates the follows a Move creates', async () => {
+		const t = await together()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bob2 = await mastodonActor(t.web, 'bob2', { origin: 'https://new.example', key: 2 })
+		t.web.serve(bob2.uri, { ...bob2.document, alsoKnownAs: [bob.uri] })
+		await t.post(bob, { '@context': AS, id: nextId(bob), type: 'Follow', actor: bob.uri, object: t.aliceUri })
+		const bobId = (await accountId(t.h.store, bob.uri))!
+		await t.h.request(`/api/v1/accounts/${bobId}/follow`, bearer(t.alice.token, { method: 'POST' }))
+		await sql(t.h.store, "UPDATE follows SET state = 'accepted' WHERE account_id = ?", t.alice.id)
+		await sql(t.h.store, 'DELETE FROM deliveries')
+
+		const move = {
+			'@context': AS,
+			id: `${bob.uri}#moves/1`,
+			type: 'Move',
+			actor: bob.uri,
+			object: bob.uri,
+			target: bob2.uri,
+		}
+		expect(await t.post(bob, move)).toBe(202)
+		expect((await t.deliveries()).map((d) => [d.type, d.inbox_url])).toEqual([
+			['Undo', `${bob.uri}/inbox`],
+			['Follow', `${bob2.uri}/inbox`],
+		])
+
+		await sql(t.h.store, 'DELETE FROM deliveries')
+		const bob2Id = (await accountId(t.h.store, bob2.uri))!
+		await sql(t.h.store, "UPDATE follows SET state = 'accepted' WHERE target_account_id = ?", bob2Id)
+		expect(
+			await t.post(bob2, {
+				'@context': AS,
+				id: `${bob2.uri}#blocks/1`,
+				type: 'Block',
+				actor: bob2.uri,
+				object: t.aliceUri,
+			})
+		).toBe(202)
+		expect((await t.deliveries()).map((d) => [d.type, d.inbox_url])).toEqual([['Undo', `${bob2.uri}/inbox`]])
+		expect(await count(t.h.store, 'SELECT 1 FROM follows WHERE account_id = ?', t.alice.id)).toBe(0)
 	})
 })

@@ -1,9 +1,12 @@
-import { type InboxDeps, type JobsMessage, processInbox, requestInboundJobs } from '../federation/inbox'
+import { type DeliveryDeps, handleDoorbells } from './deliver'
+import { isDeliverMessage } from '../federation/delivery'
+import { type InboxDeps, type JobsMessage, processInbox, requestInboundJobs, ringDeliveries } from '../federation/inbox'
 import { type SpoolMessage, spoolMessageOptions } from '../federation/spool'
 import { readConfig } from '../platform/config'
 import { errorFields } from '../platform/error-message'
 import { callStore } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
+import { generateRsaKeyPair } from '../security/key-wrap'
 
 // Delay before a spooled request is offered again while maintenance lasts.
 export const SPOOL_REQUEUE_DELAY_SECONDS = 1800
@@ -14,11 +17,35 @@ export const QUEUE_RETRY_DELAY_SECONDS = 60
 // and the original is acked: message.retry() would count against max_retries and drop the request after a long
 // enough maintenance. A fresh message also starts a fresh 14-day retention; spooledAt keeps the original time.
 // message.retry() is kept for real processing errors.
-export async function handleQueue(batch: MessageBatch, env: Env, deps: InboxDeps): Promise<void> {
+// Delivery doorbells (jobs/deliver.ts) share the Queue; however many a batch holds, they start one round.
+// Inbound processing deps beyond the Store default to the platform's own (production passes them all).
+export type QueueDeps = Pick<InboxDeps, 'build' | 'store'> &
+	Partial<Omit<InboxDeps, 'build' | 'store'>> & { delivery?: Omit<DeliveryDeps, 'build' | 'store'> }
+
+function inboxDepsOf(deps: QueueDeps): InboxDeps {
+	return {
+		build: deps.build,
+		store: deps.store,
+		now: deps.now ?? (() => Date.now()),
+		keygen: deps.keygen ?? generateRsaKeyPair,
+		loader: deps.loader ?? { fetch: (input, init) => fetch(input, init) },
+	}
+}
+
+export async function handleQueue(batch: MessageBatch, env: Env, queueDeps: QueueDeps): Promise<void> {
+	const deps = inboxDepsOf(queueDeps)
 	const config = readConfig(env)
 	// An invalid env counts as maintenance, so nothing is replayed through a misconfigured Worker.
 	const maintenance = !config.ok || config.config.MAINTENANCE !== 'off'
+	const doorbells = batch.messages.filter((message) => isDeliverMessage(message.body))
+	if (doorbells.length > 0) {
+		const delivery = queueDeps.delivery ?? { now: () => Date.now(), fetch: (input, init) => fetch(input, init) }
+		await handleDoorbells(doorbells, env, { ...delivery, build: deps.build, store: deps.store })
+	}
 	for (const message of batch.messages) {
+		if (isDeliverMessage(message.body)) {
+			continue
+		}
 		const body = message.body
 		if (isJobsMessage(body)) {
 			await runJobs(message, env, deps, maintenance)
@@ -69,7 +96,12 @@ async function runJobs(message: Message, env: Env, deps: InboxDeps, maintenance:
 		return
 	}
 	try {
-		const { pending } = await callStore(() => deps.store(env).runInboundJobs(deps.build(env), { now: deps.now() }))
+		const { pending, delivers } = await callStore(() =>
+			deps.store(env).runInboundJobs(deps.build(env), { now: deps.now() })
+		)
+		if (delivers) {
+			await ringDeliveries(env.QUEUE)
+		}
 		if (pending) {
 			await requestInboundJobs(env.QUEUE)
 		}
@@ -92,7 +124,12 @@ export async function runScheduledJobs(env: Env, deps: InboxDeps): Promise<void>
 		return
 	}
 	try {
-		const { pending } = await callStore(() => deps.store(env).runInboundJobs(deps.build(env), { now: deps.now() }))
+		const { pending, delivers } = await callStore(() =>
+			deps.store(env).runInboundJobs(deps.build(env), { now: deps.now() })
+		)
+		if (delivers) {
+			await ringDeliveries(env.QUEUE)
+		}
 		if (pending) {
 			await requestInboundJobs(env.QUEUE)
 		}
