@@ -178,6 +178,62 @@ describe('profile page', () => {
 	})
 })
 
+describe('profile over ActivityPub', () => {
+	it('resolves a differently cased handle to the stored username', async () => {
+		const h = await community(['alice'])
+		await sql(h.store, 'UPDATE local_accounts SET pubkey = ?', LEGACY.pubkey)
+		for (const path of ['/@ALICE', '/@Alice@kopje.test']) {
+			const response = await h.request(path, AP)
+			expect(response.status, path).toBe(200)
+			expect(await response.json()).toMatchObject({ id: 'https://kopje.test/ap/users/alice' })
+		}
+		expect((await h.request('/@nobody', AP)).status).toBe(404)
+	})
+
+	it('serves a suspended actor redacted, with its key and suspended: true, at /@user and the actor URI', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await h.request(
+			'/api/v1/accounts/update_credentials',
+			bearer(alice.token, {
+				...json({
+					display_name: 'Alice',
+					note: 'bio',
+					fields_attributes: [{ name: 'Site', value: 'https://a.example/' }],
+				}),
+				method: 'PATCH',
+			})
+		)
+		await sql(
+			h.store,
+			"UPDATE accounts SET avatar_url = 'https://kopje.test/a.png', header_url = 'https://kopje.test/h.png'"
+		)
+		await sql(
+			h.store,
+			'UPDATE local_accounts SET pubkey = ?, suspended_at = ?',
+			LEGACY.pubkey,
+			new Date(NOW).toISOString()
+		)
+		for (const path of ['/@alice', '/@ALICE', '/ap/users/alice']) {
+			const response = await h.request(path, AP)
+			expect(response.status, path).toBe(200)
+			const actor = await response.json<Record<string, unknown>>()
+			expect(actor, path).toMatchObject({
+				id: 'https://kopje.test/ap/users/alice',
+				preferredUsername: 'alice',
+				suspended: true,
+				manuallyApprovesFollowers: false,
+				publicKey: { id: 'https://kopje.test/ap/users/alice#main-key' },
+			})
+			for (const hidden of ['name', 'summary', 'icon', 'image', 'attachment', 'alsoKnownAs']) {
+				expect(actor[hidden], `${path} ${hidden}`).toBeUndefined()
+			}
+		}
+		// The HTML profile stays 410.
+		expect((await h.request('/@ALICE')).status).toBe(410)
+	})
+})
+
 describe('permalink (VIS-4)', () => {
 	it('shows a public status with its content warning, media and the visible parent', async () => {
 		const codec = new TestCodec()

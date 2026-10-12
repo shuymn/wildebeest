@@ -129,8 +129,14 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 			return notFound(c)
 		}
 		if (wantsActivityPub(c.req.header('accept'))) {
-			const response = await forward(c, `/ap/users/${encodeURIComponent(username)}`)
-			return withVary(response)
+			// The account first, case-insensitively: the actor endpoint answers only its stored spelling, and serves a
+			// suspended actor redacted.
+			const account = await storeCall(c, deps, (s, b) =>
+				s.lookupAccount(b, { username, domain: null, present: present(c) })
+			)
+			return account === null
+				? withVary(new Response('Not Found', { status: 404 }))
+				: withVary(await forward(c, `/ap/users/${encodeURIComponent(account.username)}`))
 		}
 		const maxId = c.req.query('max_id') ?? null
 		const page = await storeCall(c, deps, (s, b) => s.profilePage(b, { username, maxId, present: present(c) }))
