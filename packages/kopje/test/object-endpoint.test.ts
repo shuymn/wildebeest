@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { sql } from './api-helpers'
+import { bearer, json, sql } from './api-helpers'
+import { LEGACY } from './federation-helpers'
 import { act, community, outbound, post, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
+import { createKeyring } from '../src/security/keyring'
 
 // VIS-4: /ap/o/:uuid serves local public and unlisted statuses only, as the Note of their outbound Create; the
 // outbox lists the same. Everything else answers 404, as Mastodon does for an unauthenticated fetch.
@@ -105,5 +107,79 @@ describe('object endpoint (VIS-4)', () => {
 
 		expect((await h.request('/ap/users/Alice/outbox', AP)).status).toBe(404)
 		expect((await h.request('/ap/users/nobody/outbox', AP)).status).toBe(404)
+	})
+
+	it('keeps sensitivity, tags, attachments, timestamps and replies through the JSON-LD round trip', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const parent = await post(h, alice, { status: 'parent' })
+		const status = await post(h, alice, {
+			status: 'reply #kopje',
+			spoiler_text: 'cw',
+			in_reply_to_id: parent.id,
+		})
+		await h.request(
+			`/api/v1/statuses/${status.id}`,
+			bearer(alice.token, json({ status: 'reply #kopje edited', spoiler_text: 'cw' }, { method: 'PUT' }))
+		)
+		// Attached after the edit, which replaces the media list.
+		await sql(
+			h.store,
+			`INSERT INTO media_attachments (id, account_id, status_id, type, url, description)
+			VALUES ('100000000000000999', ?, ?, 'image', 'https://kopje.test/media/1.png', 'a cat')`,
+			alice.id,
+			status.id
+		)
+		const { status: code, body } = await fetchObject(h, status.uri as string)
+		expect(code).toBe(200)
+		expect(body).toMatchObject({
+			type: 'Note',
+			sensitive: true,
+			summary: 'cw',
+			inReplyTo: parent.uri,
+			published: expect.stringMatching(/^2026-10-12T/),
+			updated: expect.stringMatching(/^2026-10-12T/),
+			tag: [{ type: 'Hashtag', name: '#kopje', href: 'https://kopje.test/tags/kopje' }],
+			attachment: [expect.objectContaining({ type: 'Document', url: 'https://kopje.test/media/1.png', name: 'a cat' })],
+		})
+		expect(String(body?.content)).toContain('edited')
+	})
+
+	it('answers 404 for hidden objects to signed requests too', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await remoteAccount(h.store, 'carol', 'carol.example')
+		const hidden = await post(h, alice, { status: '@carol@carol.example psst', visibility: 'direct' })
+		const signer = await createKeyring(LEGACY.kek).signerFor({
+			...LEGACY,
+			keyId: new URL('https://carol.example/users/carol#main-key'),
+		})
+		const signed = await signer.sign(new Request(hidden.uri as string, AP))
+		expect(signed.headers.get('signature')).not.toBeNull()
+		const response = await h.request(path(hidden.uri as string), { headers: signed.headers })
+		expect(response.status).toBe(404)
+	})
+
+	it('pages the outbox', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const posted: string[] = []
+		for (let i = 0; i < 25; i++) {
+			h.now.mockReturnValue(Date.parse('2026-10-12T00:00:00.000Z') + i * 1000)
+			posted.push((await post(h, alice, { status: `post ${i}` })).uri as string)
+		}
+		const outbox = (await (await h.request('/ap/users/alice/outbox', AP)).json()) as {
+			totalItems: number
+			first: string
+		}
+		expect(outbox.totalItems).toBe(25)
+		type Page = { orderedItems: { object: { id: string } }[]; next?: string }
+		const first = (await (await h.request(path(outbox.first), AP)).json()) as Page
+		expect(first.orderedItems).toHaveLength(20)
+		expect(first.next).toBeDefined()
+		const second = (await (await h.request(path(first.next ?? ''), AP)).json()) as Page
+		expect(second.orderedItems).toHaveLength(5)
+		expect(second.next).toBeUndefined()
+		expect([...first.orderedItems, ...second.orderedItems].map((item) => item.object.id)).toEqual(posted.reverse())
 	})
 })
