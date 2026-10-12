@@ -136,21 +136,29 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   specified"). Use on inbound statuses: _Planned (B1b)._ Outbound: each silent recipient gets a copy of its own at
   its personal inbox naming only itself in `to` (no Mention), because Misskey derives `visibleUsers` from `to` and
   `cc` only; the copy everyone else gets never names a silent recipient. So a silent recipient learns that it is
-  addressed, and nothing about other silent recipients. _Implemented on branch `kopje/deliveries`:_ `audienceTargets`
-  and `bodyFor` in `src/domain/deliveries.ts`; `test/delivery-regressions.test.ts` ("sends each silent recipient a copy
-  addressed to them alone", "never names a silent recipient in the copy for the followers").
+  addressed, and nothing about other silent recipients. A personal copy goes only to its recipient's personal inbox:
+  if there is none, nothing is sent to them, never a substitute at a shared inbox, and the copy is kept as `gave_up`
+  `no personal inbox` for the operator (it cannot be retried) and logged without identifiers. A personal copy never
+  replaces the neutral copy for an inbox. _Implemented on branch `kopje/deliveries`:_ `audienceTargets` and `bodyFor`
+  in `src/domain/deliveries.ts`; `test/delivery-regressions.test.ts` ("sends each silent recipient a copy addressed to
+  them alone", "never names a silent recipient in the copy for the followers"), `test/delivery-verify.test.ts` ("sends
+  nothing to a silent recipient without a personal inbox", "POSTs each silent recipient a copy naming only them").
 - **VIS-3: changes reach only the original audience.** `Update` and `Delete` are addressed to the audience the status
   already had; `Delete` carries a `Tombstone`, not the content. _Implemented on branch `kopje/statuses`:_
   `src/domain/activities.ts`; `test/statuses.test.ts` ("records Create, Update and Delete for the original audience
   only"). Delivery: _Implemented on branch `kopje/deliveries`:_ silent recipients get the activity as VIS-2 says and
   are never named in the shared copy; a `Delete` or `Undo` also reaches every inbox that received the object or may
   still receive it (receipts, and the rows and unexpanded targets of earlier activities about it, leased ones
-  included), and never any other. Receipts belong to their status (a boost cascading with its original takes its
-  receipts along; receivers drop it with the original's `Delete`), and none is written once the status is gone or a
-  retraction is pending. `src/domain/deliveries.ts`; `test/deliveries.test.ts` ("VIS-3, VIS-7: a silent recipient",
+  included), and never any other. Deleting an original first records an `Undo(Announce)` for each local boost of it,
+  with the same targets (a booster's followers may never have received the original, so its `Delete` would not reach
+  them); only then does the cascade take the boosts and their receipts. Receipts belong to their status, and none is
+  written once the status is gone or a retraction is pending. An edit goes as an `Update` only to servers that have
+  the object (a receipt or a `Create` in flight there); any other server gets a `Create` of the current version, which
+  replaces a `Create` or `Update` still waiting for it. An `Update` supersedes earlier `Update`s only. `src/domain/deliveries.ts`; `test/deliveries.test.ts` ("VIS-3, VIS-7: a silent recipient",
   "VIS-3: a Delete reaches the inboxes that received the status"), `test/delivery-regressions.test.ts` ("sends a Delete
-  to inboxes whose Create is still leased", "retires the receipts of local boosts"). Peer limitation: Misskey ignores
-  `Update` of a Note, so edits do not reach Misskey users.
+  to inboxes whose Create is still leased", "retires the receipts of local boosts"), `test/delivery-verify.test.ts`
+  ("boosts that cascade with their original", "a destination that never received the Create", "retraction targets in
+  every state"). Peer limitation: Misskey ignores `Update` of a Note, so edits do not reach Misskey users.
 - **VIS-4: the object endpoint serves public and unlisted local statuses only.** `/ap/o/:uuid` and status documents
   answer for local `public` and `unlisted` statuses, as Mastodon does for an unauthenticated fetch. `private`, `direct`,
   `limited`, remote objects and statuses of suspended accounts answer 404, whether or not the request is signed.
@@ -291,8 +299,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   lane; the POST timeout (30 s) is shorter than the lease (60 s), and completion requires the current lease token, so a
   stale completion cannot settle a later claim. A lane is `(actor, inbox origin)`: everything an actor sends one
   server, to shared and personal inboxes alike, arrives in order, so a later `Update` or `Delete` cannot overtake the
-  `Create`. The whole path from claim to POST (key loading, DNS, signing, the POST) runs under one budget ending 10 s
-  before the lease, and nothing is sent once it is spent. _Implemented on branch `kopje/deliveries`:_
+  `Create`. The whole path from claim to POST (key loading, DNS, signing, the POST) runs under one absolute deadline,
+  the earlier of 30 s and 10 s before the lease ends; the clock is checked against it after the key is loaded and
+  right before the POST, so a late timer cannot let a POST through. _Implemented on branch `kopje/deliveries`:_
   `src/domain/deliveries.ts` (expansion, lanes, claims, completions), `src/federation/delivery.ts` (the POST);
   `test/deliveries.test.ts` ("NET-2: delivers a public status once per shared inbox", "NET-2: a recipient outside the
   audience gets nothing", "NET-2: an expired lease is claimed again"), `test/delivery-post.test.ts` ("NET-2: never
@@ -381,7 +390,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   sweep and spool: _Planned (B1b)._ Deliveries: _Implemented on branch `kopje/deliveries`:_ delivered rows are deleted
   at once and given-up rows after 30 days by the 5-minute cron (`sweepDeliveries`); receipts belong to their status
   (foreign key) and are dropped when its retraction is recorded; a lane holds at most 500 and the Store 10,000 active
-  rows, and a row over either cap is written as `gave_up` with `backlog full`, visible in `kopje-admin deliveries`;
+  rows, and a row over either cap is written as `gave_up` with `backlog full`, visible in `kopje-admin deliveries`.
+  Retractions (`Delete`, `Undo`, `Reject`) are exempt: they clean up what was already sent and are bounded by it, so
+  they are never refused. Operator retries pass the same admission, and a retry over a cap stays given up (`refused`);
   `test/deliveries.test.ts` ("lists given-up deliveries for the operator, retries them, and sweeps them after 30
   days"), `test/delivery-regressions.test.ts` ("gives up new work for a lane over its cap", "gives up new work once
   the whole backlog is at its cap").
@@ -391,8 +402,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   permanent answer (Mastodon's rule: 4xx except 401, 408 and 429, and 501), and are listed and retried through
   `/admin/deliveries` and `kopje-admin deliveries`; in maintenance nothing is claimed, so no attempt is counted. An
   activity a later one about the same object follows (an `Undo`, `Delete` or `Update`) is superseded and never sent
-  again: naming it answers 409 `superseded`, and `--all` skips it (`test/delivery-regressions.test.ts`, "refuses to
-  retry a Like that its Undo has superseded").
+  again: naming it answers 409 `superseded`, and `--all` skips it, choosing eligible rows before its batch limit and
+  continuing from the cursor it returns (`test/delivery-regressions.test.ts`, "refuses to retry a Like that its Undo
+  has superseded"; `test/delivery-verify.test.ts`, "operator retries", "the `all` cursor").
   _Implemented on branch `kopje/deliveries`:_ `src/domain/deliveries.ts`, `src/jobs/deliver.ts`;
   `test/deliveries.test.ts` ("retries after min(30 s·2^n, 12 h)"), `test/delivery-post.test.ts` ("RES-5: claims
   nothing and counts no attempt in maintenance"), `test/cli.test.ts`. Spool messages that fail terminally are kept and
@@ -519,21 +531,21 @@ activity specs, cited in test names.
 
 ## Accepted risks
 
-| Risk                                                                                                                       | Why accepted                                                                              | Revisit when                                                   |
-| -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Duplicate keys in a JSON OAuth body are not rejected; the last one wins                                                    | RFC 6749 defines form bodies only, and Doorkeeper behaves the same                        | a client depends on JSON bodies                                |
-| Fedify 2.4.2 signs draft-cavage `(request-target)` without the query string                                                | Mastodon accepts it; reported upstream                                                    | a peer rejects signed GETs to URLs with a query                |
-| Legacy keys are not rewrapped; an empty or known `USER_KEK` gives no protection against R5                                 | Owner's decision; health warns on an empty KEK (main), the cutover tool warns (B8)        | a key leak, or rewrapping becomes cheap                        |
-| Signed-fetch cache entries may outlive a remote block or key change by up to 5 minutes                                     | Measured CPU savings on personal inboxes                                                  | blocks must apply at once                                      |
-| OAuth client secrets are stored in plaintext, so R5 can act as any registered app (no user scopes)                         | Matches Mastodon; app tokens carry no user authority                                      | app tokens gain user-level powers                              |
-| Aggregate counters (`reblogs_count`, `favourites_count`, `replies_count`) include interactions the viewer cannot see       | Mastodon parity; clients rely on the counts                                               | counters must hide private interactions                        |
-| Non-public media is readable by anyone who holds its unguessable URL                                                       | Clients and remote servers fetch media without credentials                                | authenticated media fetch becomes interoperable                |
-| Service tokens are recognized by Access's claim shape (no email, empty `sub`, `common_name`)                               | The admin application's policy decides which identities reach it                          | the admin application admits mTLS or Access changes the claims |
-| A delivery whose completion was lost is POSTed again after its lease (at-least-once)                                       | Receivers deduplicate by activity id; exactly-once needs the receiver's cooperation       | a receiver is seen to apply a repeat                           |
-| Several silent recipients of one status on the same Misskey server: only the first copy to arrive sets the note's audience | Misskey keeps the first `Create` of a note; a combined copy would name them to each other | Misskey honours a later copy, or a peer needs it               |
-| A lease taken just before maintenance and not completed counts one attempt when it expires                                 | Bounded by one attempt per lease; maintenance itself claims nothing (RES-5)               | maintenance windows become frequent                            |
-| Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured             | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added     | Kopje configures logtape                                       |
-| `constantTimeEqual` on main takes time that depends on the input length                                                    | No content leak is known; `kopje/ops-tools` compares fixed-size digests                   | `kopje/ops-tools` merges (then remove this row)                |
+| Risk                                                                                                                                                                                                                                       | Why accepted                                                                                                                                                  | Revisit when                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Duplicate keys in a JSON OAuth body are not rejected; the last one wins                                                                                                                                                                    | RFC 6749 defines form bodies only, and Doorkeeper behaves the same                                                                                            | a client depends on JSON bodies                                |
+| Fedify 2.4.2 signs draft-cavage `(request-target)` without the query string                                                                                                                                                                | Mastodon accepts it; reported upstream                                                                                                                        | a peer rejects signed GETs to URLs with a query                |
+| Legacy keys are not rewrapped; an empty or known `USER_KEK` gives no protection against R5                                                                                                                                                 | Owner's decision; health warns on an empty KEK (main), the cutover tool warns (B8)                                                                            | a key leak, or rewrapping becomes cheap                        |
+| Signed-fetch cache entries may outlive a remote block or key change by up to 5 minutes                                                                                                                                                     | Measured CPU savings on personal inboxes                                                                                                                      | blocks must apply at once                                      |
+| OAuth client secrets are stored in plaintext, so R5 can act as any registered app (no user scopes)                                                                                                                                         | Matches Mastodon; app tokens carry no user authority                                                                                                          | app tokens gain user-level powers                              |
+| Aggregate counters (`reblogs_count`, `favourites_count`, `replies_count`) include interactions the viewer cannot see                                                                                                                       | Mastodon parity; clients rely on the counts                                                                                                                   | counters must hide private interactions                        |
+| Non-public media is readable by anyone who holds its unguessable URL                                                                                                                                                                       | Clients and remote servers fetch media without credentials                                                                                                    | authenticated media fetch becomes interoperable                |
+| Service tokens are recognized by Access's claim shape (no email, empty `sub`, `common_name`)                                                                                                                                               | The admin application's policy decides which identities reach it                                                                                              | the admin application admits mTLS or Access changes the claims |
+| A delivery whose completion was lost is POSTed again after its lease (at-least-once)                                                                                                                                                       | Receivers deduplicate by activity id; exactly-once needs the receiver's cooperation                                                                           | a receiver is seen to apply a repeat                           |
+| Misskey with several silent recipients of one status on one server: only the first copy Misskey processes sets the note's audience, so the other silent recipients there cannot see it. Supported: one silent recipient per Misskey server | Misskey keeps the first `Create` of a note; a combined copy would name the recipients to each other, and recipient-specific object ids would split the status | Misskey honours a later copy, or a peer needs it               |
+| A lease taken just before maintenance and not completed counts one attempt when it expires                                                                                                                                                 | Bounded by one attempt per lease; maintenance itself claims nothing (RES-5)                                                                                   | maintenance windows become frequent                            |
+| Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured                                                                                                                             | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added                                                                         | Kopje configures logtape                                       |
+| `constantTimeEqual` on main takes time that depends on the input length                                                                                                                                                                    | No content leak is known; `kopje/ops-tools` compares fixed-size digests                                                                                       | `kopje/ops-tools` merges (then remove this row)                |
 
 ## How to use
 
