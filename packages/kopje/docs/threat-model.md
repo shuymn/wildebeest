@@ -107,11 +107,14 @@ against their own instance. TLS is assumed between all parties.
   records no retraction. _Planned (B1b)._
 - **ID-8: only ActivityStreams media types become objects.** A fetched document is used as an actor, key or object only
   if served as `application/activity+json` or `application/ld+json` with the ActivityStreams profile, as Mastodon
-  requires. Other JSON (an uploaded file, for example) is refused. _Implemented on branch `kopje/hardening-1`:_
-  `createSafeLoader` in `src/federation/loader.ts` (Fedify's document loaders) with `isActivityPubMediaType` in
-  `src/platform/media-type.ts`; JSON-LD contexts go through `createContextLoader`, which never yields an object;
-  `test/loader.test.ts`, `test/media-type.test.ts`, `test/signed-fetch.test.ts` ("plain JSON-LD on the context loader
-  only").
+  requires, and only if its root is a JSON object (JSON-LD would fetch a string root through the context loader). Other
+  JSON (an uploaded file, for example) is refused, and a combined or malformed Content-Type is refused. Signed-document
+  cache entries live under a versioned namespace that is bumped whenever this policy is tightened. _Implemented on
+  branch `kopje/hardening-1`:_ `createSafeLoader` and `requireObjectRoot` in `src/federation/loader.ts` (Fedify's
+  document loaders, around their caches too) with `isActivityPubMediaType` in `src/platform/media-type.ts`; JSON-LD
+  contexts go through `createContextLoader`, which never yields an object; `SIGNED_DOCUMENT_PREFIX` in
+  `src/federation/federation.ts`; `test/loader.test.ts`, `test/media-type.test.ts`, `test/document-root.test.ts`,
+  `test/signed-fetch.test.ts` ("plain JSON-LD on the context loader only", "unversioned namespace").
 
 ### Visibility (VIS)
 
@@ -372,7 +375,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   upload. _Planned (B6b)._
 - **DATA-5: logs carry no secrets or content.** Log entries are structured events. They never include request bodies,
   post content, tokens, keys, Access assertions or URLs with credentials. A log entry never includes text that a request
-  supplied: errors are logged by class and stable code, and requests by method, route template and status. Diagnostic
+  supplied: errors are logged by class, standard error name and known Store reason, and requests by standard method (else
+  `OTHER`), route template and status. Diagnostic
   detail produced inside the Store from no request input is allowed, such as the raw SQLite or migration error in
   `kopje.store.upgrade.failed`, which reaches only logs and the admin health report. Tests inject marker values into
   errors and assert they are absent. _Implemented on branch `kopje/hardening-1`:_ `errorFields` in
