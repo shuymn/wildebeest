@@ -8,6 +8,9 @@ pre-commit:
       run: pnpm run lint
     - name: pretty
       run: pnpm run pretty
+    # Blocks commits that stage secrets. Install with `mise install` (betterleaks is pinned in mise.toml).
+    - name: secrets
+      run: betterleaks git --pre-commit --staged --redact --no-banner --verbose
 
 pre-push:
   skip:

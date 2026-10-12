@@ -1,0 +1,11 @@
+# betterleaks configuration: the default rules, plus allowlisted paths that hold sample or test-only credentials.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Vendored Mastodon API docs with example tokens, and test-only key and token fixtures"
+paths = [
+	'''^docs/mastodon-api-spec/''',
+	'''^packages/kopje/test/fixtures/legacy-keys\.json$''',
+	'''^backend/test/test-data\.ts$''',
+]
