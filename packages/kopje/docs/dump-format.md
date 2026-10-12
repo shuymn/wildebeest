@@ -184,31 +184,48 @@ The Store checks each import step's authority inside the transaction that writes
 | Authority | How | What it may do |
 |---|---|---|
 | Access admin | `Cf-Access-Jwt-Assertion` of the `/admin` application | Begin an import and continue only imports begun this way |
-| `IMPORT_TOKEN` | header `Kopje-Import-Token` (at least 32 characters) | Only while the Store is in bootstrap, meaning admin access is not usable. It may read health, version, catalog and config, set the config, and begin an import while the Store also holds no data |
+| `IMPORT_TOKEN` | header `Kopje-Import-Token` (at least 32 characters) | Only while the Store is in bootstrap, meaning admin access is not usable. It may read health, version, catalog and config, set the config, begin an import while the Store also holds no data, and abandon a stale token import (below) |
 | import session | header `Kopje-Import-Session`, the `session` that begin returned | Only the import it was issued for: chunk, finish, verify, progress and reset. The Store keeps only its SHA-256 |
 
-A request authorized for one import or mode cannot act on another. `IMPORT_TOKEN` no longer opens anything once the
-import has begun. The CLI keeps the session in `<file>.import.json` (mode 0600). If that file is lost, the token
-import cannot be continued or reset over the API.
+A request authorized for one import or mode cannot act on another. Once the import has begun, `IMPORT_TOKEN` opens
+nothing except the stale-import recovery below. The CLI keeps the session in `<file>.import.json` (mode 0600).
+
+#### Recovering a token import whose session was lost
+
+If `<file>.import.json` is lost, nothing can continue the token import. Abandon it with
+`kopje-admin import-reset --abandon-stale --import-token --yes`
+(`POST /admin/import/reset` with `{ "confirm": true, "abandonStale": true }` and `Kopje-Import-Token`).
+
+The reset runs only when all of these hold:
+- the import is a token import and is not verified;
+- its session has made no successful step (chunk, finish or verify) for 15 minutes;
+- admin access is still not usable.
+
+It returns the Store to the empty schema with its configuration kept. Before the 15 minutes are up, the answer is
+`409 import-not-idle`, with `resetAfter` giving the time the reset becomes possible. Then begin the import again.
+
+This gives the token no new power: on an empty Store without admin access it could begin an import anyway.
+`IMPORT_TOKEN` never resets an Access import.
 
 ### Configuration is not data
 
-`instance_settings` rows that decide who administers the Store are its configuration, not data:
+Everything the config operation sets is the Store's configuration, not data:
+- `domain` (actor ids derive from it);
+- `access_aud`, the `/oauth/authorize` application;
 - `access_team_domain`, the Access team shared with `/oauth/authorize`;
 - `access_admin_aud`, `admin_email` and `access_service_token_client_id` of the `/admin` application.
 
-These rows behave differently from imported data:
-- They do not make the Store non-empty.
-- Begin moves them into the import record, and they keep authorizing the admin during the import.
+An import never touches configuration:
+- These rows do not make the Store non-empty, so they can be set before the import.
+- Begin moves them into the import record, and the Access rows among them keep authorizing the admin during the
+  import.
 - After verification, the Store's own rows come back exactly: imported values of these names are removed, and a name
-  the Store did not have stays absent. A dump never changes who administers the target.
+  the Store did not have stays absent. A dump never changes the target's domain or who administers it.
 
-These rows, and the instance values `domain` and `access_aud` (the `/oauth/authorize` application), are set only
-with the explicit config operation, `GET`/`POST /admin/config` with `{ "values": { "<name>": "<value>" | null } }`.
-Either an Access admin calls it, or `IMPORT_TOKEN` while the Store is in bootstrap. It is refused while an import
-runs. The cutover takes the instance values from the legacy settings in this order:
-1. Import the dump.
-2. Set the values with `kopje-admin config --import-token name=value ...`.
+They are set only with the explicit config operation, `GET`/`POST /admin/config` with
+`{ "values": { "<name>": "<value>" | null } }`. Either an Access admin calls it, or `IMPORT_TOKEN` while the Store is
+in bootstrap. It is refused while an import runs.
 
-`domain` and `access_aud` are ordinary rows, so a dump that carries them restores them, and setting them before the
-import makes the target non-empty.
+The cutover takes the instance values from the legacy settings and sets them with
+`kopje-admin config --import-token name=value ...`, before or after importing the dump. Once the Access values make
+admin access usable, the token stops working.
