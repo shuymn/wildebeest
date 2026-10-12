@@ -199,7 +199,8 @@ describe('snapshot caps', () => {
 			await request(`/nodeinfo/2.1?v=${junk}`)
 		}
 		expect(await snapshotNames(store)).toEqual(before)
-	})
+		// 100 requests through Fedify; the default 5 s is too tight when the whole repository's suites run at once.
+	}, 30_000)
 
 	it('creates no rows for other spellings of a canonical path or resource', async () => {
 		const { store } = await healthyInstance()
