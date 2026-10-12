@@ -219,6 +219,8 @@ describe('safe document loader', () => {
 		'application/ld+json; profile="http://www.w3.org/ns/activitystreams"',
 		'application/ld+json; foo="x;profile=https://www.w3.org/ns/activitystreams"',
 		'application/activity+jsonx',
+		'application/activity+json; charset=utf-8,application/json',
+		'application/ld+json; profile="https://www.w3.org/ns/activitystreams"; profile="https://example.com/x"',
 		'application/activity+json/x',
 		'text/html',
 		'',

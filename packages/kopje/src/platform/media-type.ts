@@ -1,12 +1,14 @@
 // A Content-Type header value as RFC 9110 §8.3.1 defines it: type "/" subtype *( OWS ";" OWS parameter ). The type,
 // subtype and parameter names are case-insensitive and come back lowercased; a value may be a token or a quoted-string.
-// An unquoted value is read up to the next ';' or whitespace, so a URI like the ActivityStreams profile is accepted
-// unquoted too. A header that does not parse is null; of repeated parameters the first one counts.
+// The one exception: an unquoted profile may be a URI (not a token), so the ActivityStreams profile is accepted unquoted
+// too. A header that does not parse is null, and so is a combined value (a ',' outside a quoted string) and a header
+// that repeats a parameter, conflicting or not: no precedence rule decides which profile counts.
 export type MediaType = { essence: string; parameters: Map<string, string> }
 
 const TCHARS = "[!#$%&'*+.^_`|~0-9A-Za-z-]+"
 const TYPE = new RegExp(`^[\\t ]*(${TCHARS})/(${TCHARS})[\\t ]*`)
-const PARAMETER = new RegExp(`;[\\t ]*(?:(${TCHARS})=(?:"((?:[^"\\\\]|\\\\.)*)"|([^\\t ;"]+)))?[\\t ]*`, 'y')
+const TOKEN = new RegExp(`^${TCHARS}$`)
+const PARAMETER = new RegExp(`;[\\t ]*(?:(${TCHARS})=(?:"((?:[^"\\\\]|\\\\.)*)"|([^\\t ;",]+)))?[\\t ]*`, 'y')
 
 export function parseMediaType(header: string): MediaType | null {
 	const type = TYPE.exec(header)
@@ -20,10 +22,15 @@ export function parseMediaType(header: string): MediaType | null {
 		if (parameter === null) {
 			return null
 		}
-		const [, name, quoted, token] = parameter
-		if (name !== undefined && !parameters.has(name.toLowerCase())) {
-			parameters.set(name.toLowerCase(), quoted?.replace(/\\(.)/g, '$1') ?? token ?? '')
+		const [, rawName, quoted, unquoted] = parameter
+		if (rawName === undefined) {
+			continue
 		}
+		const name = rawName.toLowerCase()
+		if (parameters.has(name) || (unquoted !== undefined && name !== 'profile' && !TOKEN.test(unquoted))) {
+			return null
+		}
+		parameters.set(name, quoted?.replace(/\\(.)/g, '$1') ?? unquoted ?? '')
 	}
 	return { essence: `${type[1]}/${type[2]}`.toLowerCase(), parameters }
 }
