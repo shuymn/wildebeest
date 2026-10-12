@@ -11,7 +11,7 @@
 		"toucan-js": "4.1.1",
 		"typescript": "5.9.3",
 		"vite-tsconfig-paths": "6.1.1",
-		"vitest": "4.1.9",
+		"vitest": "4.1.11",
 		"wrangler": "4.105.0"
 	},
 	"private": true,

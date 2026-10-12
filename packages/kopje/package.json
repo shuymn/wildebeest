@@ -34,7 +34,7 @@
 		"miniflare": "4.20260625.0",
 		"parse5": "8.0.1",
 		"typescript": "5.9.3",
-		"vitest": "4.1.9",
+		"vitest": "4.1.11",
 		"wrangler": "4.105.0"
 	}
 }
