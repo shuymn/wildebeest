@@ -301,6 +301,29 @@ describe('Access assertion', () => {
 		expect(h.team.fetch).toHaveBeenCalledOnce()
 	})
 
+	// Access keeps a rotated-out key valid for 7 days, so a cached set can be trusted that long past its last fetch.
+	it('uses a stale JWKS while the endpoint fails, for at most 7 days', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h)
+		expect((await consentPage(h, app)).status).toBe(200)
+		h.team.fetch.mockImplementation(() => Promise.reject(new Error('unreachable')))
+		const at = async (ms: number) => {
+			h.now.mockReturnValue(ms)
+			const assertion = await h.team.assertion({ iat: Math.floor(ms / 1000) - 10, exp: Math.floor(ms / 1000) + 3600 })
+			const query = new URLSearchParams({
+				response_type: 'code',
+				client_id: app.client_id,
+				redirect_uri: app.redirect_uri,
+				scope: 'read',
+			})
+			return h.request(`/oauth/authorize?${query.toString()}`, { headers: { 'cf-access-jwt-assertion': assertion } })
+		}
+		const day = 24 * 60 * 60 * 1000
+		expect((await at(NOW + 2 * 60 * 60 * 1000)).status).toBe(200)
+		expect((await at(NOW + 7 * day - 1000)).status).toBe(200)
+		expect((await at(NOW + 7 * day + 1000)).status).toBe(403)
+	})
+
 	it.each<[string, Record<string, unknown>]>([
 		['a wrong audience', { aud: ['someone-else'] }],
 		['a wrong issuer', { iss: 'https://other-team.cloudflareaccess.com' }],

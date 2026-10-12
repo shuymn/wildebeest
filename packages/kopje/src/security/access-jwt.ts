@@ -18,6 +18,9 @@ type Jwks = { keys: HonoJsonWebKey[]; fetchedAt: number }
 // Access rotates its signing keys every six weeks and publishes the next key in advance, so a cached set stays valid
 // for a long time. A token with an unknown kid refreshes the set, at most once per REFRESH_MS per team.
 const JWKS_TTL_MS = 60 * 60 * 1000
+// A rotated-out key stays valid for 7 days after the rotation. A set fetched longer ago than that may hold a revoked
+// key, so while the certs endpoint fails the cached set is used up to this age and refused afterwards.
+const JWKS_MAX_STALE_MS = 7 * 24 * 60 * 60 * 1000
 const REFRESH_MS = 30 * 1000
 const JWKS_FETCH_TIMEOUT_MS = 5000
 const CLOCK_SKEW_S = 60
@@ -49,8 +52,11 @@ export async function verifyAccessJwt(
 		return { ok: false, reason: 'malformed assertion' }
 	}
 	let jwks = await loadJwks(host, deps, false)
-	if (kid !== undefined && !jwks.keys.some((key) => key.kid === kid)) {
+	if (jwks !== null && kid !== undefined && !jwks.keys.some((key) => key.kid === kid)) {
 		jwks = await loadJwks(host, deps, true)
+	}
+	if (jwks === null) {
+		return { ok: false, reason: 'signing keys unavailable' }
 	}
 	let payload: Record<string, unknown>
 	try {
@@ -84,7 +90,8 @@ export async function verifyAccessJwt(
 	return { ok: true, email: payload.email }
 }
 
-async function loadJwks(host: string, deps: AccessDeps, refresh: boolean): Promise<Jwks> {
+// The team's signing keys, or null when they cannot be fetched and no cached set is recent enough.
+async function loadJwks(host: string, deps: AccessDeps, refresh: boolean): Promise<Jwks | null> {
 	const now = deps.now()
 	const cached = jwksCache.get(host)
 	if (cached !== undefined && now - cached.fetchedAt < (refresh ? REFRESH_MS : JWKS_TTL_MS)) {
@@ -106,10 +113,9 @@ async function loadJwks(host: string, deps: AccessDeps, refresh: boolean): Promi
 		jwksCache.set(host, jwks)
 		return jwks
 	} catch (error) {
-		// Keep using a stale set rather than locking everyone out while the certs endpoint is unreachable.
-		if (cached !== undefined) {
-			return cached
-		}
-		throw error
+		// Keep using a stale set for a bounded time rather than locking everyone out while the certs endpoint is
+		// unreachable.
+		console.warn({ event: 'kopje.access.jwks-fetch-failed', error: error instanceof Error ? error.message : 'unknown' })
+		return cached !== undefined && now - cached.fetchedAt <= JWKS_MAX_STALE_MS ? cached : null
 	}
 }
