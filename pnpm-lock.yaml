@@ -144,11 +144,11 @@ importers:
         version: 3.0.1
     devDependencies:
       '@builder.io/qwik':
-        specifier: 1.20.0
-        version: 1.20.0(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)(yaml@2.9.1))
+        specifier: 1.20.2
+        version: 1.20.2(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)(yaml@2.9.1))
       '@builder.io/qwik-city':
-        specifier: 1.20.0
-        version: 1.20.0(@types/node@24.13.2)(jiti@1.21.7)(rollup@4.62.2)(sass@1.101.0)(typescript@5.9.3)(yaml@2.9.1)
+        specifier: 1.20.2
+        version: 1.20.2(@types/node@24.13.2)(jiti@1.21.7)(rollup@4.62.2)(sass@1.101.0)(typescript@5.9.3)(yaml@2.9.1)
       '@playwright/test':
         specifier: 1.61.1
         version: 1.61.1
@@ -174,8 +174,8 @@ importers:
         specifier: 9.39.4
         version: 9.39.4(jiti@1.21.7)
       eslint-plugin-qwik:
-        specifier: 1.20.0
-        version: 1.20.0(eslint@9.39.4(jiti@1.21.7))(typescript@5.9.3)
+        specifier: 1.20.2
+        version: 1.20.2(eslint@9.39.4(jiti@1.21.7))(typescript@5.9.3)
       hono:
         specifier: 4.12.27
         version: 4.12.27
@@ -332,12 +332,12 @@ packages:
     resolution: {integrity: sha512-4zBIxpPzowiZpusoFkyGVwakdRJUyuH5PxQ/PrqghfdFWWasvnCdPfQXHrenDai+gyLARulZjZowCOj6fjT4pA==}
     engines: {node: '>=6.9.0'}
 
-  '@builder.io/qwik-city@1.20.0':
-    resolution: {integrity: sha512-gvw75M0yMDMelF/v56x4P1sLccEYT7jmfGZeWSV4c9KCrVAbY+Sp/w/R3c7WodGztWFRF37n1APXbbxhLIP6vw==}
+  '@builder.io/qwik-city@1.20.2':
+    resolution: {integrity: sha512-wYeHLMRqdnxUlJwhQ/p4psad0GAdKtI5P7dFtpmCbzilxJE6nfRkAwKVzCRoYFF4CmeF+t4W5ODB/6d/tCtJzw==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
 
-  '@builder.io/qwik@1.20.0':
-    resolution: {integrity: sha512-mPnENUgyOGYQW9UNGGeGP67hg8rI/hi4WQ0z/rM3PAgQl3UjfreBxyj1njxvSLAz5nei6yD20/W/eywVIxOCIw==}
+  '@builder.io/qwik@1.20.2':
+    resolution: {integrity: sha512-wAP6Wa/N0F6IlWirFm/SlrfukmsJaWa7ABIH0OACmZVC0llDySpy1TXZ1WYMAQG1HnKa9hT3H8l3hKckGmXQBA==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     hasBin: true
     peerDependencies:
@@ -2090,8 +2090,8 @@ packages:
       '@typescript-eslint/parser':
         optional: true
 
-  eslint-plugin-qwik@1.20.0:
-    resolution: {integrity: sha512-6XY7cGK5BDvtjHnIRcDp50dXKlr9+jnQCudxl9VrwRaJPzgKUNpVVSbo5tflTZkCJLj6/svulE5MVSn6zTsHYw==}
+  eslint-plugin-qwik@1.20.2:
+    resolution: {integrity: sha512-w12sQscn7eh31Tbq+z5hR22+aOxF/CTsPOuEs90xKgT+ZfyR0VWjxR+prsF3FkzEIwNhitOP8lOI0n4V4ZqfZA==}
     engines: {node: '>=16.8.0 <18.0.0 || >=18.11'}
     peerDependencies:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
@@ -3243,10 +3243,6 @@ packages:
     resolution: {integrity: sha512-7++dFhtcx3353uBaq8DDR4NuxBetBzC7ZQOhmTQInHEd6bSrXdiEyzCvG07Z44UYdLShWUyXt5M/yhz8ekcb1A==}
     engines: {node: '>=8'}
 
-  shell-quote@1.8.3:
-    resolution: {integrity: sha512-ObmnIF4hXNg1BqhnHmgbDETF8dLPCggZWBjkQfhZpbszZnYur5DUljTcCHii5LC3J5E0yeO/1LIMyH+UvHQgyw==}
-    engines: {node: '>= 0.4'}
-
   shell-quote@1.9.0:
     resolution: {integrity: sha512-Iov+JwFv/2HcTpcwNMKd8+IWNb8tboQJNQTkAY/LLVK7gGH9jy+LGkVqPxfekHl+yMmiqXszdGWXgkfml7hjqA==}
     engines: {node: '>= 0.4'}
@@ -3817,7 +3813,7 @@ snapshots:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
 
-  '@builder.io/qwik-city@1.20.0(@types/node@24.13.2)(jiti@1.21.7)(rollup@4.62.2)(sass@1.101.0)(typescript@5.9.3)(yaml@2.9.1)':
+  '@builder.io/qwik-city@1.20.2(@types/node@24.13.2)(jiti@1.21.7)(rollup@4.62.2)(sass@1.101.0)(typescript@5.9.3)(yaml@2.9.1)':
     dependencies:
       '@mdx-js/mdx': 3.1.1
       '@types/mdx': 2.0.13
@@ -3845,7 +3841,7 @@ snapshots:
       - typescript
       - yaml
 
-  '@builder.io/qwik@1.20.0(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)(yaml@2.9.1))':
+  '@builder.io/qwik@1.20.2(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0)(yaml@2.9.1))':
     dependencies:
       csstype: 3.2.3
       launch-editor: 2.12.0
@@ -5488,7 +5484,7 @@ snapshots:
       - eslint-import-resolver-webpack
       - supports-color
 
-  eslint-plugin-qwik@1.20.0(eslint@9.39.4(jiti@1.21.7))(typescript@5.9.3):
+  eslint-plugin-qwik@1.20.2(eslint@9.39.4(jiti@1.21.7))(typescript@5.9.3):
     dependencies:
       '@typescript-eslint/utils': 8.62.0(eslint@9.39.4(jiti@1.21.7))(typescript@5.9.3)
       eslint: 9.39.4(jiti@1.21.7)
@@ -5604,7 +5600,7 @@ snapshots:
 
   estree-walker@3.0.3:
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
 
   esutils@2.0.3: {}
 
@@ -6027,7 +6023,7 @@ snapshots:
   launch-editor@2.12.0:
     dependencies:
       picocolors: 1.1.1
-      shell-quote: 1.8.3
+      shell-quote: 1.9.0
 
   lefthook-darwin-arm64@2.1.9:
     optional: true
@@ -6948,8 +6944,6 @@ snapshots:
       shebang-regex: 3.0.0
 
   shebang-regex@3.0.0: {}
-
-  shell-quote@1.8.3: {}
 
   shell-quote@1.9.0: {}
 
