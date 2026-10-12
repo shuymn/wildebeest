@@ -16,10 +16,12 @@ import { mastodonApi } from '../mastodon/routes'
 import { readBoundedBody } from '../platform/body'
 import { readConfig } from '../platform/config'
 import { errorFields } from '../platform/error-message'
+import { type ImageCodec, imagesCodec } from '../platform/images'
 import { defaultStore, type StoreResolver } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
 import { generateRsaKeyPair } from '../security/key-wrap'
 import { randomToken, type TokenGenerator } from '../security/tokens'
+import { MEDIA_ROUTE, serveMedia } from '../web/media'
 
 export type AppDeps = {
 	// The build identity sent on every Store RPC (the Workers version id in production; tests inject one).
@@ -28,9 +30,10 @@ export type AppDeps = {
 	store?: StoreResolver
 	// Remote fetches and key generation of the federation layer (tests inject both).
 	federation?: Partial<Pick<FederationRouteDeps, 'keygen' | 'loader'>>
-	// Seams for tests: the Access JWKS fetch and the generator of OAuth values.
+	// Seams for tests: the Access JWKS fetch, the generator of OAuth values and media tokens, and image re-encoding.
 	fetch?: typeof fetch
 	randomToken?: TokenGenerator
+	images?: (env: Env) => ImageCodec
 }
 
 const API_CORS_PATHS = ['/api/*', '/oauth/token', '/oauth/revoke']
@@ -117,7 +120,14 @@ export function createApp({
 	for (const path of FEDERATION_GET_ROUTES) {
 		app.get(path, federationGet)
 	}
-	const apiDeps = { build, now, store, randomToken: seams.randomToken ?? randomToken }
+	const apiDeps = {
+		build,
+		now,
+		store,
+		randomToken: seams.randomToken ?? randomToken,
+		images: seams.images ?? ((env: Env) => imagesCodec(env.IMAGES)),
+	}
+	app.get(MEDIA_ROUTE, serveMedia)
 	app.route('/', authorizeRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init) }))
 	app.route('/', mastodonApi(apiDeps))
 

@@ -24,9 +24,18 @@ import {
 import { type ApiVisibility, canView, isDistributable, listableSql, requiresMention, type Visibility } from './audience'
 import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
+import { DETACHED_GRACE_MS, liveMediaSql } from './media'
 import { notify } from './notifications'
 import { normalizeSearchText } from './search-text'
-import { type MediaAttachment, presentMedia, presentStatus, presentStatuses, type Status } from './status-presenter'
+import {
+	MEDIA_COLUMNS,
+	type MediaAttachment,
+	type MediaRow,
+	presentMedia,
+	presentStatus,
+	presentStatuses,
+	type Status,
+} from './status-presenter'
 import { exceedsRawLength, mentionKey, type MentionRef, parseStatusText, renderStatusHtml } from './status-text'
 import type { Db } from '../db/sql'
 
@@ -116,31 +125,44 @@ function compose(db: Db, text: string, author: Author, origin: string): Composed
 	return { content, source: text, mentions: [...unique.values()], tags: parsed.tags }
 }
 
-// Own media that is not attached yet (or already attached to `statusId`), in the order given.
-function attachableMedia(db: Db, accountId: string, mediaIds: readonly string[], statusId: string | null): string[] {
+// Own media that is already attached to `statusId`, or unattached, processed and not doomed, in the order given
+// (MEDIA-1). Media of other accounts, still processing, or past its grace period is left out, as Mastodon leaves out
+// what `current_account.media_attachments.where(status_id: nil)` does not find.
+function attachableMedia(
+	db: Db,
+	accountId: string,
+	mediaIds: readonly string[],
+	statusId: string | null,
+	now: number
+): string[] {
 	if (mediaIds.length === 0) {
 		return []
 	}
 	return db
 		.all<{ id: string }>(
 			`SELECT m.id FROM json_each(?1) j JOIN media_attachments m ON m.id = j.value
-			WHERE m.account_id = ?2 AND (m.status_id IS NULL OR m.status_id IS ?3) ORDER BY j.key`,
+			WHERE m.account_id = ?2 AND (m.status_id = ?3 OR (m.status_id IS NULL AND ${liveMediaSql('m', '?4')}))
+			ORDER BY j.key`,
 			JSON.stringify([...new Set(mediaIds)]),
 			accountId,
-			statusId
+			statusId,
+			iso(now)
 		)
 		.map((row) => row.id)
 }
 
-function attachMedia(db: Db, statusId: string, mediaIds: readonly string[]): void {
+// Attaches `mediaIds` in order; media the status stops using is detached and may be attached again for a day.
+function attachMedia(db: Db, statusId: string, mediaIds: readonly string[], now: number): void {
 	db.run(
-		`UPDATE media_attachments SET status_id = NULL, position = 0
+		`UPDATE media_attachments SET status_id = NULL, position = 0, gc_at = ?3
 		WHERE status_id = ?1 AND id NOT IN (SELECT value FROM json_each(?2))`,
 		statusId,
-		JSON.stringify(mediaIds)
+		JSON.stringify(mediaIds),
+		iso(now + DETACHED_GRACE_MS)
 	)
 	db.run(
-		`UPDATE media_attachments SET status_id = ?1, position = (SELECT j.key FROM json_each(?2) j WHERE j.value = media_attachments.id)
+		`UPDATE media_attachments SET status_id = ?1, gc_at = NULL,
+			position = (SELECT j.key FROM json_each(?2) j WHERE j.value = media_attachments.id)
 		WHERE id IN (SELECT value FROM json_each(?2))`,
 		statusId,
 		JSON.stringify(mediaIds)
@@ -230,7 +252,7 @@ export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusRe
 			return { status: 'reply_not_found' }
 		}
 	}
-	const media = attachableMedia(db, accountId, input.mediaIds, null)
+	const media = attachableMedia(db, accountId, input.mediaIds, null, input.now)
 	if (input.text.trim() === '' && media.length === 0) {
 		return { status: 'invalid', error: "Validation failed: Text can't be blank" }
 	}
@@ -269,7 +291,7 @@ export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusRe
 	)
 	writeMentions(db, id, composed.mentions, [])
 	writeTags(db, id, composed.tags)
-	attachMedia(db, id, media)
+	attachMedia(db, id, media, input.now)
 	recountStatuses(db, accountId)
 	recountStatus(db, parent?.id ?? null)
 	for (const mention of composed.mentions) {
@@ -413,12 +435,7 @@ function ownStatus(db: Db, accountId: string, id: string): OwnStatus | null {
 
 function mediaSnapshot(db: Db, statusId: string): MediaAttachment[] {
 	return db
-		.all<{
-			id: string
-			type: string
-			url: string
-			description: string
-		}>('SELECT id, type, url, description FROM media_attachments WHERE status_id = ? ORDER BY position, id', statusId)
+		.all<MediaRow>(`SELECT ${MEDIA_COLUMNS} FROM media_attachments WHERE status_id = ? ORDER BY position, id`, statusId)
 		.map(presentMedia)
 }
 
@@ -457,7 +474,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	if (exceedsRawLength(input.text, input.spoilerText)) {
 		return { status: 'invalid', error: TOO_LONG }
 	}
-	const media = attachableMedia(db, accountId, input.mediaIds, current.id)
+	const media = attachableMedia(db, accountId, input.mediaIds, current.id, input.now)
 	if (input.text.trim() === '' && media.length === 0) {
 		return { status: 'invalid', error: "Validation failed: Text can't be blank" }
 	}
@@ -517,7 +534,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 		: composed.mentions.filter((mention) => previous.includes(mention.id))
 	const added = writeMentions(db, current.id, mentions, previous)
 	writeTags(db, current.id, composed.tags)
-	attachMedia(db, current.id, media)
+	attachMedia(db, current.id, media, input.now)
 	for (const [id, description] of descriptions) {
 		db.run(
 			'UPDATE media_attachments SET description = ? WHERE id = ? AND account_id = ? AND status_id = ?',
@@ -557,8 +574,10 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 // ---------------------------------------------------------------------------------------------------------------
 
 // Deletes an own status (or boost) and answers with it as it was, source text included, for redrafting. Its media
-// is detached, not deleted, unless deleteMedia, so a redraft can attach it again. Only the deleted status itself
-// carries its source; a boost's original is shown only if the viewer may still see it, and never with its source.
+// is detached, so a redraft can attach it again within the grace period; with deleteMedia it is doomed at once and
+// the media sweep deletes it and its R2 objects (the Worker starts a sweep after the call). Only the deleted status
+// itself carries its source; a boost's original is shown only if the viewer may still see it, and never with its
+// source.
 export const deleteStatus = userWriteOperation<
 	{ id: string; deleteMedia: boolean; now: number; present: Present },
 	Viewed<Status>
@@ -584,9 +603,12 @@ export const deleteStatus = userWriteOperation<
 	const boosters = db
 		.all<{ account_id: string }>('SELECT DISTINCT account_id FROM statuses WHERE reblog_of_id = ?', current.id)
 		.map((row) => row.account_id)
-	if (!input.deleteMedia) {
-		db.run('UPDATE media_attachments SET status_id = NULL, position = 0 WHERE status_id = ?', current.id)
-	}
+	// Detached before the delete, so the rows (and the R2 keys they name) do not cascade away before the sweep.
+	db.run(
+		'UPDATE media_attachments SET status_id = NULL, position = 0, gc_at = ? WHERE status_id = ?',
+		iso(input.deleteMedia ? input.now : input.now + DETACHED_GRACE_MS),
+		current.id
+	)
 	// Children cascade (mentions, tags, edits, favourites, bookmarks, notifications, boosts); replies keep their
 	// in_reply_to_uri.
 	db.run('DELETE FROM statuses WHERE id = ?', current.id)

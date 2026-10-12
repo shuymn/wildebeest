@@ -16,6 +16,7 @@ import { checkCredential, type Credential, type UserCredential } from './domain/
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import { acceptInbox, type InboxDelivery } from './domain/inbox'
 import { instanceInfo } from './domain/instance'
+import * as media from './domain/media'
 import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
 import { getSetupState } from './domain/setup'
@@ -386,6 +387,36 @@ export class Store extends DurableObject<Env> {
 
 	clearNotifications(callerBuild: string, input: OperationInput<typeof notifications.clearNotifications>) {
 		return this.#kernel.execute(callerBuild, notifications.clearNotifications, input)
+	}
+
+	// Media (B4b).
+
+	reserveMedia(callerBuild: string, input: OperationInput<typeof media.reserveMedia>) {
+		return this.#kernel.execute(callerBuild, media.reserveMedia, input)
+	}
+
+	completeMedia(callerBuild: string, input: OperationInput<typeof media.completeMedia>) {
+		return this.#kernel.execute(callerBuild, media.completeMedia, input)
+	}
+
+	abandonMedia(callerBuild: string, input: OperationInput<typeof media.abandonMedia>) {
+		return this.#kernel.execute(callerBuild, media.abandonMedia, input)
+	}
+
+	getMedia(callerBuild: string, input: OperationInput<typeof media.getMedia>) {
+		return this.#kernel.execute(callerBuild, media.getMedia, input)
+	}
+
+	updateMedia(callerBuild: string, input: OperationInput<typeof media.updateMedia>) {
+		return this.#kernel.execute(callerBuild, media.updateMedia, input)
+	}
+
+	expiredMedia(callerBuild: string, input: OperationInput<typeof media.expiredMedia>) {
+		return this.#kernel.execute(callerBuild, media.expiredMedia, input)
+	}
+
+	purgeMedia(callerBuild: string, input: OperationInput<typeof media.purgeMedia>) {
+		return this.#kernel.execute(callerBuild, media.purgeMedia, input)
 	}
 
 	override async alarm(): Promise<void> {

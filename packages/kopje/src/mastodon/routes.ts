@@ -4,6 +4,7 @@ import { requireAccess, type RouteAccess } from './access'
 import * as accounts from './accounts'
 import type { ApiDeps, ApiEnv, ApiHandler } from './context'
 import * as instance from './instance'
+import * as media from './media'
 import * as notifications from './notifications'
 import * as oauth from './oauth'
 import * as statuses from './statuses'
@@ -170,6 +171,11 @@ export const ROUTES: readonly Route[] = [
 	},
 	{ method: 'GET', path: '/api/v1/bookmarks', access: { scope: 'read:bookmarks' }, handler: timelines.bookmarks },
 	{ method: 'GET', path: '/api/v1/favourites', access: { scope: 'read:favourites' }, handler: timelines.favourites },
+
+	{ method: 'POST', path: '/api/v1/media', access: { scope: 'write:media' }, handler: media.uploadMedia },
+	{ method: 'POST', path: '/api/v2/media', access: { scope: 'write:media' }, handler: media.uploadMedia },
+	{ method: 'GET', path: '/api/v1/media/:id', access: { scope: 'write:media' }, handler: media.getMedia },
+	{ method: 'PUT', path: '/api/v1/media/:id', access: { scope: 'write:media' }, handler: media.updateMedia },
 
 	{
 		method: 'GET',

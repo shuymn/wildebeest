@@ -8,6 +8,7 @@ import {
 	type Visibility,
 } from './audience'
 import type { Db } from '../db/sql'
+import { httpUrl } from '../platform/http-url'
 
 // Outbound intents. A local change that federates records the ActivityPub activity it means and the audience it is
 // for in outbound_activities, in the transaction of the change. Nothing is delivered here: B2 expands the audience
@@ -70,7 +71,7 @@ export type StatusFacts = {
 	// Remote accounts that interacted with a distributable status (reblogged it, or wrote the replied-to status).
 	reached: string[]
 	tags: { name: string; href: string }[]
-	media: { url: string; type: string; description: string }[]
+	media: { url: string; content_type: string | null; description: string }[]
 	mentionNames: Map<string, string>
 }
 
@@ -141,8 +142,8 @@ export function statusFacts(db: Db, statusId: string): StatusFacts | null {
 		tags: db
 			.all<{ name: string }>('SELECT name FROM status_tags WHERE status_id = ? ORDER BY name', statusId)
 			.map((t) => ({ name: t.name, href: `${origin}/tags/${encodeURIComponent(t.name)}` })),
-		media: db.all<{ url: string; type: string; description: string }>(
-			'SELECT url, type, description FROM media_attachments WHERE status_id = ? ORDER BY position, id',
+		media: db.all<{ url: string; content_type: string | null; description: string }>(
+			'SELECT url, content_type, description FROM media_attachments WHERE status_id = ? ORDER BY position, id',
 			statusId
 		),
 		mentionNames: new Map(mentioned.map((m) => [m.uri, `@${m.username}@${m.domain ?? host}`])),
@@ -165,12 +166,20 @@ function noteOf(facts: StatusFacts): Record<string, unknown> {
 		sensitive: facts.sensitive,
 		content: facts.content,
 		...(facts.language === null ? {} : { contentMap: { [facts.language]: facts.content } }),
-		attachment: facts.media.map((m) => ({
-			type: 'Document',
-			mediaType: null,
-			url: m.url,
-			name: m.description === '' ? null : m.description,
-		})),
+		// Only http(s) URLs are published (HTML-3).
+		attachment: facts.media.flatMap((m) => {
+			const url = httpUrl(m.url)
+			return url === null
+				? []
+				: [
+						{
+							type: 'Document',
+							mediaType: m.content_type,
+							url: url.href,
+							name: m.description === '' ? null : m.description,
+						},
+					]
+		}),
 		tag: [
 			...facts.recipients
 				.filter((r) => !r.silent)

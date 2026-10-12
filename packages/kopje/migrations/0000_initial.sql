@@ -163,14 +163,26 @@ CREATE TABLE media_attachments (
   status_id TEXT REFERENCES statuses (id) ON DELETE CASCADE,  -- NULL: uploaded, not attached yet
   position INTEGER NOT NULL DEFAULT 0,
   type TEXT NOT NULL CHECK (type IN ('image', 'gifv', 'video', 'audio', 'unknown')),
-  url TEXT NOT NULL,
+  url TEXT NOT NULL,                              -- '' while a local upload is processing
+  preview_url TEXT,                               -- NULL: url
   description TEXT NOT NULL DEFAULT '',
+  -- Local uploads (B4). The original is in R2 at originals/<id>; the re-encoded files that are served are at
+  -- files/<file_token>/{full,small}, so the token in the URL is the capability (MEDIA-2). Remote rows keep NULLs.
+  file_token TEXT UNIQUE,
+  content_type TEXT,                              -- type of the served files
+  meta TEXT CHECK (meta IS NULL OR json_valid(meta)),  -- {"original":{"width","height"},"small":{...}}
+  focus_x REAL NOT NULL DEFAULT 0 CHECK (focus_x BETWEEN -1 AND 1),
+  focus_y REAL NOT NULL DEFAULT 0 CHECK (focus_y BETWEEN -1 AND 1),
+  processed INTEGER NOT NULL DEFAULT 1 CHECK (processed IN (0, 1)),  -- 0 while a local upload is processing
+  gc_at TEXT,                                     -- unattached local upload: deleted (with its R2 objects) from then on
   legacy_ap_o TEXT,                               -- uuid of the old local Image /ap/o/<uuid>
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  CHECK (status_id IS NULL OR processed = 1)
 );
 
 CREATE INDEX media_attachments_status ON media_attachments (status_id, position) WHERE status_id IS NOT NULL;
-CREATE INDEX media_attachments_account ON media_attachments (account_id);
+CREATE INDEX media_attachments_account ON media_attachments (account_id, created_at);
+CREATE INDEX media_attachments_gc ON media_attachments (gc_at) WHERE status_id IS NULL AND gc_at IS NOT NULL;
 CREATE UNIQUE INDEX media_attachments_legacy_ap_o ON media_attachments (legacy_ap_o) WHERE legacy_ap_o IS NOT NULL;
 
 CREATE TABLE status_mentions (

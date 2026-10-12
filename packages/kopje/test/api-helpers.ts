@@ -1,4 +1,4 @@
-import { createExecutionContext, runInDurableObject } from 'cloudflare:test'
+import { createExecutionContext, runInDurableObject, waitOnExecutionContext } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 
 import { sign } from 'hono/jwt'
@@ -6,7 +6,7 @@ import { vi } from 'vitest'
 
 import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
-import { createApp } from '../src/app/app'
+import { type AppDeps, createApp } from '../src/app/app'
 import { allocateLocalId } from '../src/domain/ids'
 import { writeOperation } from '../src/domain/operation'
 import { accountSearchText } from '../src/domain/search-text'
@@ -147,7 +147,7 @@ export type ApiHarness = Awaited<ReturnType<typeof apiHarness>>
 
 // The real app over a fresh migrated Store, with Access configured, an injected JWKS fetch and clock, and
 // deterministic-looking but unique OAuth values.
-export async function apiHarness(overrides: Record<string, unknown> = {}) {
+export async function apiHarness(overrides: Record<string, unknown> = {}, deps: Pick<AppDeps, 'images'> = {}) {
 	const store = await migratedStore()
 	await setSetting(store, 'domain', 'kopje.test')
 	const team = await accessTeam()
@@ -163,9 +163,15 @@ export async function apiHarness(overrides: Record<string, unknown> = {}) {
 		store: () => store,
 		fetch: team.fetch,
 		randomToken,
+		...deps,
 	})
-	const request = async (path: string, init?: RequestInit): Promise<Response> =>
-		app.fetch(new Request(`https://kopje.test${path}`, init), testEnv, createExecutionContext())
+	// Work a response leaves running (waitUntil, such as the media sweep) settles before the request returns.
+	const request = async (path: string, init?: RequestInit): Promise<Response> => {
+		const ctx = createExecutionContext()
+		const response = await app.fetch(new Request(`https://kopje.test${path}`, init), testEnv, ctx)
+		await waitOnExecutionContext(ctx)
+		return response
+	}
 	return { store, team, request, now, env: testEnv }
 }
 

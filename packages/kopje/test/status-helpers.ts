@@ -26,9 +26,10 @@ export type Status = Record<string, unknown> & {
 // A harness with signed-in local users, by username. Each gets a token with every scope.
 export async function community<const N extends string>(
 	names: readonly N[],
-	scope = 'read write follow'
+	scope = 'read write follow',
+	deps: Parameters<typeof apiHarness>[1] = {}
 ): Promise<ApiHarness & { users: Record<N, User> }> {
-	const h = await apiHarness()
+	const h = await apiHarness({}, deps)
 	const app = await registerApp(h)
 	const users = {} as Record<N, User>
 	for (const name of names) {

@@ -1,0 +1,375 @@
+import { env } from 'cloudflare:workers'
+
+import { describe, expect, it } from 'vitest'
+
+import { bearer, json, login, sql } from './api-helpers'
+import { NOW } from './app-helpers'
+import { GIF, JPEG_WITH_GPS, PNG_WITH_GPS, WIDE_PNG } from './fixtures/images'
+import { type Attachment, bytes, mediaForm, pathOf, r2Keys, TestCodec, upload, uploaded } from './media-helpers'
+import { community, getJson, outbound, post, remoteAccount, remoteFollows, type Status } from './status-helpers'
+import { UPLOAD_BUDGET } from '../src/domain/media'
+import { handleScheduled } from '../src/jobs/scheduled'
+import { sweepMedia } from '../src/mastodon/media'
+import { retainedMetadata } from '../src/platform/image-bytes'
+
+const HOUR = 60 * 60 * 1000
+
+async function users(names: readonly string[] = ['alice', 'bob'], codec = new TestCodec()) {
+	const h = await community(names as ['alice', 'bob'], 'read write follow', { images: () => codec })
+	return { ...h, codec }
+}
+
+function sweep(h: { store: Parameters<typeof sql>[0] }, at: number) {
+	return sweepMedia(env, { build: () => env.CF_VERSION_METADATA.id, now: () => at, store: () => h.store })
+}
+
+async function row(h: { store: Parameters<typeof sql>[0] }, id: string) {
+	const [found] = await sql<{ file_token: string; status_id: string | null; gc_at: string | null; processed: number }>(
+		h.store,
+		'SELECT file_token, status_id, gc_at, processed FROM media_attachments WHERE id = ?',
+		id
+	)
+	return found
+}
+
+async function keysOf(h: { store: Parameters<typeof sql>[0] }, id: string): Promise<string[]> {
+	const found = await row(h, id)
+	if (found === undefined) {
+		throw new Error(`no media row ${id}`)
+	}
+	return [`files/${found.file_token}/full`, `files/${found.file_token}/small`, `originals/${id}`]
+}
+
+async function stored(keys: string[]): Promise<string[]> {
+	const present: string[] = []
+	for (const key of keys) {
+		if ((await env.MEDIA.head(key)) !== null) {
+			present.push(key)
+		}
+	}
+	return present
+}
+
+describe('POST /api/v2/media', () => {
+	it('re-encodes an image without its location, keeps the original private, and serves only the re-encoding (MEDIA-3)', async () => {
+		const h = await users()
+		const media = await uploaded(h, h.users.alice, mediaForm(bytes(JPEG_WITH_GPS), { description: 'a red square' }))
+		expect(media).toMatchObject({
+			type: 'image',
+			description: 'a red square',
+			meta: {
+				original: { width: 80, height: 60, size: '80x60', aspect: 80 / 60 },
+				small: { width: 80, height: 60 },
+				focus: { x: 0, y: 0 },
+			},
+		})
+		expect(media.url).toMatch(/^https:\/\/kopje\.test\/media\/[A-Za-z0-9_-]{32,64}\/full\.jpg$/)
+		expect(media.preview_url).toMatch(/^https:\/\/kopje\.test\/media\/[A-Za-z0-9_-]{32,64}\/small\.jpg$/)
+		const served = await h.request(pathOf(media.url))
+		expect(served.status).toBe(200)
+		expect(served.headers.get('content-type')).toBe('image/jpeg')
+		expect(served.headers.get('x-content-type-options')).toBe('nosniff')
+		const body = new Uint8Array(await served.arrayBuffer())
+		expect(retainedMetadata(body, 'image/jpeg')).toBeNull()
+		expect(body).not.toEqual(bytes(JPEG_WITH_GPS))
+		// The original is stored as uploaded, under its id, and no URL reaches it.
+		const original = await env.MEDIA.get(`originals/${media.id}`)
+		expect(new Uint8Array(await (original as R2ObjectBody).arrayBuffer())).toEqual(bytes(JPEG_WITH_GPS))
+		expect(await row(h, media.id)).toMatchObject({ processed: 1, status_id: null })
+	})
+
+	it('caps the long edge and makes a preview; PNG stays PNG, GIF becomes WebP', async () => {
+		const h = await users()
+		const wide = await uploaded(h, h.users.alice, mediaForm(bytes(WIDE_PNG), {}, 'wide.png', 'image/png'))
+		expect(wide.meta).toMatchObject({ original: { width: 3840, height: 960 }, small: { width: 640, height: 160 } })
+		expect(wide.url).toMatch(/\/full\.png$/)
+		expect(h.codec.encodeCalls).toEqual([
+			{ width: 3840, height: 960, format: 'image/png' },
+			{ width: 640, height: 160, format: 'image/png' },
+		])
+		const gif = await uploaded(h, h.users.alice, mediaForm(bytes(GIF), {}, 'a.gif', 'image/gif'))
+		expect(gif.url).toMatch(/\/full\.webp$/)
+		expect((await h.request(pathOf(gif.preview_url))).headers.get('content-type')).toBe('image/webp')
+	})
+
+	it('accepts v1 too, with description and focus', async () => {
+		const h = await users()
+		const response = await upload(
+			h,
+			h.users.alice,
+			mediaForm(bytes(PNG_WITH_GPS), { description: 'alt', focus: '0.5,-2' }, 'p.png', 'image/png'),
+			'v1'
+		)
+		expect(response.status).toBe(200)
+		expect(await response.json()).toMatchObject({ description: 'alt', meta: { focus: { x: 0.5, y: -1 } } })
+	})
+
+	it('refuses a failed transformation and serves nothing (MEDIA-3)', async () => {
+		const h = await users()
+		h.codec.failEncode = 9523
+		const response = await upload(h, h.users.alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		expect(response.status).toBe(500)
+		expect(await response.json()).toEqual({ error: 'Error processing uploaded media' })
+		const [doomed] = await sql<{ id: string }>(h.store, 'SELECT id FROM media_attachments')
+		expect(doomed).toBeDefined()
+		const id = (doomed as { id: string }).id
+		// Neither the original nor a file reached R2, the row cannot be read or attached, and the sweep removes it.
+		expect(await stored(await keysOf(h, id))).toEqual([])
+		expect((await getJson(h, `/api/v1/media/${id}`, h.users.alice.token)).status).toBe(404)
+		const attach = await h.request('/api/v1/statuses', bearer(h.users.alice.token, json({ media_ids: [id] })))
+		expect(attach.status).toBe(422)
+		expect(await sweep(h, NOW)).toBe(1)
+		expect(await row(h, id)).toBeUndefined()
+	})
+
+	it('refuses an output that keeps GPS EXIF, and deletes what it wrote (MEDIA-3, retained EXIF)', async () => {
+		const h = await users()
+		h.codec.encodeResult = bytes(JPEG_WITH_GPS)
+		const response = await upload(h, h.users.alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		expect(response.status).toBe(500)
+		const [media] = await sql<{ id: string }>(h.store, 'SELECT id FROM media_attachments')
+		expect(await stored(await keysOf(h, (media as { id: string }).id))).toEqual([])
+	})
+
+	it('answers 503 when the transformation allowance is used up, and 422 for what Images cannot read', async () => {
+		const h = await users()
+		h.codec.failInfo = 9422
+		expect((await upload(h, h.users.alice, mediaForm(bytes(JPEG_WITH_GPS)))).status).toBe(503)
+		h.codec.failInfo = 9412
+		expect((await upload(h, h.users.alice, mediaForm(bytes(JPEG_WITH_GPS)))).status).toBe(422)
+	})
+
+	it('refuses active and unsupported types by their bytes, before Images is called (MEDIA-4)', async () => {
+		const h = await users()
+		const refused = [
+			['<!doctype html><script>alert(1)</script>', 'x.jpg', 'image/jpeg'],
+			['<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>', 'x.svg', 'image/svg+xml'],
+			[
+				new Uint8Array([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d, 0, 0, 0, 0]),
+				'v.mp4',
+				'video/mp4',
+			],
+			['ID3\u0004\u0000', 'a.mp3', 'audio/mpeg'],
+		] as const
+		for (const [file, name, type] of refused) {
+			const response = await upload(h, h.users.alice, mediaForm(file, {}, name, type))
+			expect(response.status, name).toBe(422)
+			expect(await response.json()).toEqual({ error: 'Validation failed: File content type is invalid' })
+		}
+		expect(h.codec.calls).toBe(0)
+	})
+
+	it('refuses an image the service reads as another type, and one over the pixel limit (MEDIA-4, RES-1)', async () => {
+		const h = await users()
+		h.codec.infoResult = { format: 'image/svg+xml' }
+		expect((await upload(h, h.users.alice, mediaForm(bytes(JPEG_WITH_GPS)))).status).toBe(422)
+		const big = await users()
+		big.codec.infoResult = { format: 'image/jpeg', width: 5000, height: 4000 }
+		const response = await upload(big, big.users.alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		expect(response.status).toBe(422)
+		expect(big.codec.encodeCalls).toEqual([])
+	})
+
+	it('refuses a file over 16 MB without transforming it (RES-1)', async () => {
+		const h = await users()
+		const huge = new Uint8Array(16 * 1024 * 1024 + 1)
+		huge.set(bytes(JPEG_WITH_GPS))
+		const response = await upload(h, h.users.alice, mediaForm(huge))
+		expect(response.status).toBe(422)
+		expect(await response.json()).toEqual({ error: 'Validation failed: File file size must be less than 16 MB' })
+		expect(h.codec.calls).toBe(0)
+	})
+
+	it('refuses an over-long description', async () => {
+		const h = await users()
+		const response = await upload(h, h.users.alice, mediaForm(bytes(JPEG_WITH_GPS), { description: 'x'.repeat(1501) }))
+		expect(response.status).toBe(422)
+		expect(h.codec.calls).toBe(0)
+	})
+
+	it('needs a token with write:media before anything is read or transformed', async () => {
+		const h = await users()
+		const anonymous = await h.request('/api/v2/media', { method: 'POST', body: mediaForm(bytes(JPEG_WITH_GPS)) })
+		expect(anonymous.status).toBe(401)
+		const { token } = await login(h, { scope: 'read', email: 'alice@example.com' })
+		const reader = await h.request(
+			'/api/v2/media',
+			bearer(token, { method: 'POST', body: mediaForm(bytes(JPEG_WITH_GPS)) })
+		)
+		expect(reader.status).toBe(403)
+		expect(h.codec.calls).toBe(0)
+		expect(await sql(h.store, 'SELECT id FROM media_attachments')).toEqual([])
+	})
+
+	it(`limits uploads to ${UPLOAD_BUDGET.count} per 30 minutes per account (RES-6)`, async () => {
+		const h = await users()
+		for (let i = 0; i < UPLOAD_BUDGET.count; i++) {
+			await sql(
+				h.store,
+				`INSERT INTO media_attachments (id, account_id, type, url, created_at) VALUES (?, ?, 'image', 'u', ?)`,
+				String(100000000000000100n + BigInt(i)),
+				h.users.alice.id,
+				new Date(NOW - 60_000).toISOString()
+			)
+		}
+		const response = await upload(h, h.users.alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		expect(response.status).toBe(429)
+		expect(h.codec.calls).toBe(0)
+		// Another account has its own budget.
+		expect((await upload(h, h.users.bob, mediaForm(bytes(JPEG_WITH_GPS)))).status).toBe(200)
+	})
+})
+
+describe('GET and PUT /api/v1/media/:id', () => {
+	it('shows and updates own unattached media only (MEDIA-1, foreign attachment)', async () => {
+		const h = await users()
+		const { alice, bob } = h.users
+		const media = await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		expect((await getJson<Attachment>(h, `/api/v1/media/${media.id}`, alice.token)).body).toMatchObject({
+			id: media.id,
+		})
+		expect((await getJson(h, `/api/v1/media/${media.id}`, bob.token)).status).toBe(404)
+		const put = (token: string, body: Record<string, unknown>) =>
+			h.request(`/api/v1/media/${media.id}`, bearer(token, json(body, { method: 'PUT' })))
+		expect((await put(bob.token, { description: 'mine now' })).status).toBe(404)
+		const updated = await put(alice.token, { description: 'described', focus: '-0.25,0.75' })
+		expect(await updated.json()).toMatchObject({ description: 'described', meta: { focus: { x: -0.25, y: 0.75 } } })
+		expect((await put(alice.token, { description: 'x'.repeat(1501) })).status).toBe(422)
+
+		// bob cannot attach it; alice can, after which it is no longer read or updated through /media.
+		const stolen = await h.request('/api/v1/statuses', bearer(bob.token, json({ status: 'x', media_ids: [media.id] })))
+		expect((await stolen.json<Status>()).media_attachments).toEqual([])
+		const status = await post(h, alice, { status: 'with media', media_ids: [media.id] })
+		expect(status.media_attachments).toMatchObject([{ id: media.id, description: 'described' }])
+		expect((await getJson(h, `/api/v1/media/${media.id}`, alice.token)).status).toBe(404)
+		expect((await put(alice.token, { description: 'later' })).status).toBe(404)
+		// Attached media cannot be moved to another status either.
+		const other = await post(h, alice, { status: 'other', media_ids: [media.id] })
+		expect(other.media_attachments).toEqual([])
+	})
+})
+
+describe('GET /media/:token/:file', () => {
+	it('serves only well-formed paths of served files (MEDIA-2, unsafe R2 key)', async () => {
+		const h = await users()
+		const media = await uploaded(h, h.users.alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		const token = (/\/media\/([^/]+)\//.exec(media.url ?? '') ?? [])[1] ?? ''
+		for (const path of [
+			`/media/${token}/original.jpg`,
+			`/media/${token}/full.html`,
+			`/media/${token}/full`,
+			`/media/${token}%2F..%2F..%2Foriginals%2F${media.id}/full.jpg`,
+			`/media/..%2Foriginals%2F${media.id}/full.jpg`,
+			`/media/originals/${media.id}`,
+			`/media/${token}/../../originals/${media.id}`,
+			`/media/${'A'.repeat(43)}/full.jpg`,
+		]) {
+			const response = await h.request(path)
+			expect(response.status, path).toBe(404)
+			expect(response.headers.get('content-type'), path).not.toMatch(/^image\//)
+		}
+	})
+
+	it('never serves a stored object of another type, whatever its metadata says (MEDIA-4)', async () => {
+		const h = await users()
+		const token = 'B'.repeat(43)
+		await env.MEDIA.put(`files/${token}/full`, '<script>alert(1)</script>', {
+			httpMetadata: { contentType: 'text/html' },
+		})
+		await env.MEDIA.put(`files/${token}/small`, '<svg/>', { httpMetadata: { contentType: 'image/svg+xml' } })
+		expect((await h.request(`/media/${token}/full.jpg`)).status).toBe(404)
+		expect((await h.request(`/media/${token}/small.webp`)).status).toBe(404)
+		// A served type under the wrong extension is refused too.
+		await env.MEDIA.put(`files/${token}/full`, bytes(WIDE_PNG), { httpMetadata: { contentType: 'image/png' } })
+		expect((await h.request(`/media/${token}/full.jpg`)).status).toBe(404)
+		const png = await h.request(`/media/${token}/full.png`)
+		expect(png.status).toBe(200)
+		expect(png.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox")
+	})
+})
+
+describe('media lifecycle', () => {
+	it('deletes the R2 objects of a status deleted with delete_media', async () => {
+		const h = await users()
+		const { alice } = h.users
+		const media = await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		const keys = await keysOf(h, media.id)
+		const status = await post(h, alice, { status: 'x', media_ids: [media.id] })
+		const deleted = await h.request(
+			`/api/v1/statuses/${status.id}?delete_media=true`,
+			bearer(alice.token, { method: 'DELETE' })
+		)
+		expect(deleted.status).toBe(200)
+		expect(await stored(keys)).toEqual([])
+		expect(await row(h, media.id)).toBeUndefined()
+		expect((await h.request(pathOf(media.url))).status).toBe(404)
+	})
+
+	it('keeps detached media for a redraft, then sweeps it after the grace period', async () => {
+		const h = await users()
+		const { alice } = h.users
+		const media = await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		const keys = await keysOf(h, media.id)
+		const status = await post(h, alice, { status: 'x', media_ids: [media.id] })
+		await h.request(`/api/v1/statuses/${status.id}`, bearer(alice.token, { method: 'DELETE' }))
+		expect(await sweep(h, NOW + 23 * HOUR)).toBe(0)
+		expect(await stored(keys)).toEqual(keys)
+		const redraft = await post(h, alice, { status: 'again', media_ids: [media.id] })
+		expect(redraft.media_attachments).toMatchObject([{ id: media.id }])
+
+		// An edit that drops it detaches it again; after a day it can no longer be attached and is swept.
+		await h.request(
+			`/api/v1/statuses/${redraft.id}`,
+			bearer(alice.token, json({ status: 'no media' }, { method: 'PUT' }))
+		)
+		expect(await row(h, media.id)).toMatchObject({ status_id: null })
+		expect(await sweep(h, NOW + 25 * HOUR)).toBe(1)
+		expect(await stored(keys)).toEqual([])
+		expect(await row(h, media.id)).toBeUndefined()
+	})
+
+	it('sweeps a reservation that never completed, and leaves attached media alone', async () => {
+		const h = await users()
+		const { alice } = h.users
+		const kept = await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		await post(h, alice, { status: 'x', media_ids: [kept.id] })
+		await sql(
+			h.store,
+			`INSERT INTO media_attachments (id, account_id, type, url, file_token, processed, gc_at)
+			VALUES ('100000000000000077', ?, 'image', '', ?, 0, ?)`,
+			alice.id,
+			'C'.repeat(43),
+			new Date(NOW + HOUR).toISOString()
+		)
+		await env.MEDIA.put('originals/100000000000000077', 'partial')
+		expect(await sweep(h, NOW + 30 * 60 * 1000)).toBe(0)
+		expect(await sweep(h, NOW + 2 * HOUR)).toBe(1)
+		expect(await env.MEDIA.head('originals/100000000000000077')).toBeNull()
+		expect(await stored(await keysOf(h, kept.id))).toHaveLength(3)
+		expect(await r2Keys(`originals/${kept.id}`)).toEqual([`originals/${kept.id}`])
+	})
+
+	it('runs the sweep from the cron, but not while the env sets maintenance', async () => {
+		const h = await users()
+		const media = await uploaded(h, h.users.alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		const keys = await keysOf(h, media.id)
+		const deps = { build: () => env.CF_VERSION_METADATA.id, now: () => NOW + 25 * HOUR, store: () => h.store }
+		await handleScheduled({ ...env, MAINTENANCE: 'readonly' } as Env, deps)
+		expect(await stored(keys)).toEqual(keys)
+		await handleScheduled(env, deps)
+		expect(await stored(keys)).toEqual([])
+		expect(await row(h, media.id)).toBeUndefined()
+	})
+
+	it('presents media in statuses with meta, and publishes its type in the Note', async () => {
+		const h = await users()
+		await remoteFollows(h.store, await remoteAccount(h.store, 'fan'), h.users.alice.id)
+		const media = await uploaded(h, h.users.alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		const status = await post(h, h.users.alice, { status: 'x', media_ids: [media.id] })
+		expect(status.media_attachments).toEqual([media])
+		const [create] = await outbound(h.store)
+		expect((create?.activity.object as { attachment: unknown }).attachment).toEqual([
+			{ type: 'Document', mediaType: 'image/jpeg', url: media.url, name: null },
+		])
+	})
+})
