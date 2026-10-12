@@ -240,6 +240,79 @@ describe('authorize, consent, token, API call', () => {
 		expect(await sql(h.store, 'SELECT 1 FROM oauth_tokens')).toEqual([])
 	})
 
+	// Never an open redirect: only an exact registered URI of a registered client receives a redirect.
+	it('never redirects to a URI that is not exactly registered, even for later errors or a denial', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h, { scopes: 'read', redirectUri: 'https://client.test/callback?keep=1' })
+		const assertion = await h.team.assertion()
+		const variants = [
+			'https://evil.test/callback?keep=1',
+			'https://client.test/callback',
+			'https://client.test/callback?keep=1&x=2',
+			'https://client.test/callback/extra?keep=1',
+			'https://client.test/callbackx?keep=1',
+			'https://client.test.evil.test/callback?keep=1',
+			'http://client.test/callback?keep=1',
+			'javascript://client.test/callback?keep=1',
+			'https://client.test@evil.test/callback?keep=1',
+			'https://evil.test@client.test/callback?keep=1',
+			'https://client.test/%63allback?keep=1',
+			'https://client.test/x/../callback?keep=1',
+			'https://client.test/./callback?keep=1',
+			'https://CLIENT.test/callback?keep=1',
+			'https://client.test:443/callback?keep=1',
+		]
+		// scope=write is a later error: with an exact URI it would be redirected.
+		for (const redirectUri of variants) {
+			const query = new URLSearchParams({
+				response_type: 'code',
+				client_id: app.client_id,
+				redirect_uri: redirectUri,
+				scope: 'write',
+				state: 's',
+			})
+			const response = await h.request(`/oauth/authorize?${query.toString()}`, {
+				headers: { 'cf-access-jwt-assertion': assertion },
+			})
+			expect(response.status, redirectUri).toBe(400)
+			expect(response.headers.get('location'), redirectUri).toBeNull()
+
+			const denied = await h.request(
+				'/oauth/authorize',
+				form(
+					{ client_id: app.client_id, redirect_uri: redirectUri, scope: 'read', state: 's', decision: 'deny' },
+					{ headers: { 'cf-access-jwt-assertion': assertion, origin: 'https://kopje.test' } }
+				)
+			)
+			expect(denied.status, redirectUri).toBe(400)
+			expect(denied.headers.get('location'), redirectUri).toBeNull()
+		}
+		for (const clientId of [undefined, 'unknown']) {
+			const query = new URLSearchParams({
+				response_type: 'code',
+				redirect_uri: app.redirect_uri,
+				scope: 'write',
+				...(clientId === undefined ? {} : { client_id: clientId }),
+			})
+			const response = await h.request(`/oauth/authorize?${query.toString()}`, {
+				headers: { 'cf-access-jwt-assertion': assertion },
+			})
+			expect(response.status, String(clientId)).toBe(400)
+			expect(response.headers.get('location')).toBeNull()
+		}
+		// The exact URI gets the error appended with its own query kept, and nothing else changes.
+		const exact = await h.request(
+			`/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id: app.client_id, redirect_uri: app.redirect_uri, scope: 'write', state: 'a&b=c' }).toString()}`,
+			{ headers: { 'cf-access-jwt-assertion': assertion } }
+		)
+		const location = new URL(exact.headers.get('location')!)
+		expect(location.origin + location.pathname).toBe('https://client.test/callback')
+		expect(location.searchParams.get('keep')).toBe('1')
+		expect(location.searchParams.get('state')).toBe('a&b=c')
+		expect(location.searchParams.get('b')).toBeNull()
+		expect(location.searchParams.get('error')).toBe('invalid_scope')
+	})
+
 	it('shows later errors on the page for the out-of-band redirect URI', async () => {
 		const h = await withAlice()
 		const app = await registerApp(h, { scopes: 'read', redirectUri: 'urn:ietf:wg:oauth:2.0:oob' })
