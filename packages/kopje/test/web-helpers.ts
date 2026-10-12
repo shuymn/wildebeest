@@ -36,11 +36,21 @@ export type SignIn = {
 	consent: Response
 	approved: Response
 	callback: URL
+	// Submits the consent form again: a second code for the same sign-in attempt.
+	approveAgain: () => Promise<URL>
 }
 
 // /login, then the consent page and its approval as the given Access identity, up to (not including) the callback.
-export async function startSignIn(h: ApiHarness, email = 'alice@example.com', returnTo?: string): Promise<SignIn> {
-	const login = await h.request(returnTo === undefined ? '/login' : `/login?return=${encodeURIComponent(returnTo)}`)
+// `browser` is the session the browser already has, which /login sees as its cookie.
+export async function startSignIn(
+	h: ApiHarness,
+	email = 'alice@example.com',
+	returnTo?: string,
+	browser?: Browser
+): Promise<SignIn> {
+	const login = await h.request(returnTo === undefined ? '/login' : `/login?return=${encodeURIComponent(returnTo)}`, {
+		headers: browser === undefined ? {} : { cookie: browser.cookie },
+	})
 	if (login.status !== 302) {
 		throw new Error(`login failed: ${login.status} ${await login.text()}`)
 	}
@@ -56,17 +66,20 @@ export async function startSignIn(h: ApiHarness, email = 'alice@example.com', re
 		fields.set(match[1] ?? '', (match[2] ?? '').replaceAll('&amp;', '&'))
 	}
 	fields.set('decision', 'approve')
-	const approved = await h.request('/oauth/authorize', {
-		method: 'POST',
-		headers: {
-			'cf-access-jwt-assertion': assertion,
-			origin: ORIGIN,
-			'content-type': 'application/x-www-form-urlencoded',
-		},
-		body: fields.toString(),
-	})
+	const approve = () =>
+		h.request('/oauth/authorize', {
+			method: 'POST',
+			headers: {
+				'cf-access-jwt-assertion': assertion,
+				origin: ORIGIN,
+				'content-type': 'application/x-www-form-urlencoded',
+			},
+			body: fields.toString(),
+		})
+	const approved = await approve()
 	const callback = new URL(approved.headers.get('location') ?? '', ORIGIN)
-	return { login, loginCookie, authorize, consent, approved, callback }
+	const approveAgain = async () => new URL((await approve()).headers.get('location') ?? '', ORIGIN)
+	return { login, loginCookie, authorize, consent, approved, callback, approveAgain }
 }
 
 export function callback(h: ApiHarness, url: URL, cookies: Record<string, string>): Promise<Response> {

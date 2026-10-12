@@ -119,11 +119,68 @@ describe('sign-in (AUTH)', () => {
 	it('ends the session the browser already had when it signs in again', async () => {
 		const h = await withAlice()
 		const first = await signIn(h)
-		const started = await startSignIn(h)
+		const started = await startSignIn(h, 'alice@example.com', undefined, first)
 		const response = await callback(h, started.callback, { [LOGIN]: started.loginCookie, [SESSION]: first.session })
 		expect(response.status).toBe(303)
 		expect(await sessionRows(h)).toHaveLength(1)
 		expect((await settings(h, first)).status).toBe(302)
+	})
+
+	it('consumes a sign-in attempt once: a second code for it starts nothing (overlapping callbacks)', async () => {
+		const h = await withAlice()
+		const started = await startSignIn(h)
+		const second = await started.approveAgain()
+		expect(second.searchParams.get('code')).not.toBe(started.callback.searchParams.get('code'))
+		expect((await callback(h, started.callback, { [LOGIN]: started.loginCookie })).status).toBe(303)
+		expect((await callback(h, second, { [LOGIN]: started.loginCookie })).status).toBe(400)
+		expect(await sessionRows(h)).toHaveLength(1)
+	})
+
+	it('keeps one session per browser when two sign-ins of it complete', async () => {
+		const h = await withAlice()
+		const first = await signIn(h)
+		const a = await startSignIn(h, 'alice@example.com', undefined, first)
+		const b = await startSignIn(h, 'alice@example.com', undefined, first)
+		expect((await callback(h, a.callback, { [LOGIN]: a.loginCookie })).status).toBe(303)
+		expect((await callback(h, b.callback, { [LOGIN]: b.loginCookie })).status).toBe(303)
+		expect(await sessionRows(h)).toHaveLength(1)
+	})
+
+	it('leaves the newer sign-in in place when a stale callback arrives', async () => {
+		const h = await withAlice()
+		const older = await startSignIn(h)
+		const newer = await startSignIn(h)
+		// The older tab's callback arrives with the newer sign-in's cookie.
+		const stale = await callback(h, older.callback, { [LOGIN]: newer.loginCookie })
+		expect(stale.status).toBe(400)
+		expect(setCookies(stale).lines).toEqual([])
+		expect((await callback(h, newer.callback, { [LOGIN]: newer.loginCookie })).status).toBe(303)
+	})
+
+	it('installs nothing from a callback that arrives after sign-out', async () => {
+		const h = await withAlice()
+		const browser = await signIn(h)
+		const started = await startSignIn(h, 'alice@example.com', undefined, browser)
+		const csrf = await csrfOf(h, browser)
+		expect((await postForm(h, browser, '/logout', { csrf })).status).toBe(200)
+		const late = await callback(h, started.callback, { [LOGIN]: started.loginCookie })
+		expect(late.status).toBe(400)
+		expect(setCookies(late).values.get(SESSION)).toBeUndefined()
+		expect(await sessionRows(h)).toEqual([])
+	})
+
+	it('signs out the newer session when sign-out carries the session it replaced', async () => {
+		const h = await withAlice()
+		const browser = await signIn(h)
+		const csrf = await csrfOf(h, browser)
+		const started = await startSignIn(h, 'alice@example.com', undefined, browser)
+		const replaced = await callback(h, started.callback, { [LOGIN]: started.loginCookie })
+		const session = setCookies(replaced).values.get(SESSION) ?? ''
+		expect((await settings(h, browser)).status).toBe(302)
+		// The sign-out form was rendered for the old session, and is posted after the new one was installed.
+		expect((await postForm(h, browser, '/logout', { csrf })).status).toBe(200)
+		expect(await sessionRows(h)).toEqual([])
+		expect((await settings(h, { session, cookie: cookieHeader({ [SESSION]: session }) })).status).toBe(302)
 	})
 
 	it('shows a cancelled sign-in and starts no session', async () => {

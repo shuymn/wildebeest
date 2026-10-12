@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { apiHarness, json, login, registerApp, seedAccount, sql } from './api-helpers'
+import { apiHarness, bearer, json, login, registerApp, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { signIn } from './web-helpers'
 import { EVICTION_GRACE_MS, MAX_PENDING_APPS, UNUSED_APP_TTL_MS } from '../src/domain/oauth'
@@ -65,17 +65,33 @@ describe('app registration budget (RES-6)', () => {
 		expect((await h.request('/api/v1/apps', json(APP))).status).toBe(200)
 		expect(await count(h.store, "id LIKE 'old-%'")).toBe(0)
 
-		// Now full of recent ones and one older than the grace period that holds only an app token.
+		// Now full of recent ones and one older than the grace period: an unused one goes.
 		const h2 = await apiHarness()
 		await fill(h2.store, 1, NOW - EVICTION_GRACE_MS - 1000, 'aged')
-		await sql(
-			h2.store,
-			"INSERT INTO oauth_tokens (token_hash, kind, client_id, scopes) VALUES ('h', 'access', 'aged-0', 'read')"
-		)
 		await fill(h2.store, MAX_PENDING_APPS - 1, NOW - EVICTION_GRACE_MS + 1000)
 		expect((await h2.request('/api/v1/apps', json(APP))).status).toBe(200)
 		expect(await count(h2.store, "id = 'aged-0'")).toBe(0)
 		expect(await count(h2.store)).toBe(MAX_PENDING_APPS)
+	})
+
+	it('never evicts an app that holds an app token, and refuses instead', async () => {
+		const h = await apiHarness()
+		const holder = await registerApp(h, { scopes: 'read' })
+		const token = await h.request(
+			'/oauth/token',
+			json({
+				grant_type: 'client_credentials',
+				client_id: holder.client_id,
+				client_secret: holder.client_secret,
+				scope: 'read',
+			})
+		)
+		const { access_token } = await token.json<{ access_token: string }>()
+		await sql(h.store, 'UPDATE oauth_clients SET created_at = ?', new Date(NOW - 2 * UNUSED_APP_TTL_MS).toISOString())
+		await fill(h.store, MAX_PENDING_APPS - 1, NOW - EVICTION_GRACE_MS + 1000)
+		expect((await h.request('/api/v1/apps', json(APP))).status).toBe(429)
+		expect(await count(h.store, `id = '${holder.client_id}'`)).toBe(1)
+		expect((await h.request('/api/v1/apps/verify_credentials', bearer(access_token))).status).toBe(200)
 	})
 
 	it('does not count or remove apps a user has authorized, or the web client', async () => {

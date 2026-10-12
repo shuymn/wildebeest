@@ -1,4 +1,5 @@
 import { readOperation, sessionOperation, writeOperation } from './operation'
+import { sweepWebState } from './web-session'
 import type { Db } from '../db/sql'
 import { withinScopes } from '../security/scopes'
 import { constantTimeEqual } from '../security/tokens'
@@ -58,8 +59,9 @@ export type RegisterAppInput = {
 // RES-6, the storage budget of anonymous app registration. A never-authorized app is one no user has a token or a code
 // for (app tokens from client_credentials do not count). At most MAX_PENDING_APPS are kept: when the budget is full,
 // unused apps (no token of any kind) older than UNUSED_APP_TTL_MS go first, as Mastodon's ApplicationsVacuum removes
-// them, then the oldest never-authorized apps older than EVICTION_GRACE_MS (so a client in the middle of its first
-// login keeps its registration); if none can go, the registration is refused. The cron removes unused apps after
+// them, then the oldest unused apps older than EVICTION_GRACE_MS (so a client in the middle of its first login keeps its
+// registration). An app holding any token, an app token included, is never removed: its credentials keep working.
+// If nothing can go, the registration is refused (429). The cron removes unused apps after
 // UNUSED_APP_TTL_MS as well (sweepOAuth). The web UI's own client is never counted or removed.
 export const MAX_PENDING_APPS = 500
 export const UNUSED_APP_TTL_MS = 24 * 60 * 60 * 1000
@@ -102,7 +104,7 @@ export const registerApp = sessionOperation<RegisterAppInput, Registered>((db, i
 	if (excess > 0) {
 		deleteClients(
 			db,
-			`${pendingAppsSql('AND c.created_at < ?1')} ORDER BY c.created_at, c.id LIMIT ?2`,
+			`${pendingAppsSql(`${UNUSED} AND c.created_at < ?1`)} ORDER BY c.created_at, c.id LIMIT ?2`,
 			iso(input.now - EVICTION_GRACE_MS),
 			excess
 		)
@@ -130,23 +132,25 @@ function iso(ms: number): string {
 // At most this many rows of each kind are removed per cron run.
 export const OAUTH_SWEEP_BATCH = 500
 
-// The cron (jobs/scheduled.ts): unused apps older than UNUSED_APP_TTL_MS, and codes and access tokens (web sessions)
-// past their expiry. Bounded per run.
-export const sweepOAuth = writeOperation<{ now: number }, { apps: number; tokens: number }>((db, { now }) => {
-	const apps = deleteClients(
-		db,
-		`${pendingAppsSql(`${UNUSED} AND c.created_at < ?1`)} LIMIT ?2`,
-		iso(now - UNUSED_APP_TTL_MS),
-		OAUTH_SWEEP_BATCH
-	)
-	const tokens = db.all(
-		`DELETE FROM oauth_tokens WHERE token_hash IN (SELECT token_hash FROM oauth_tokens
+// The cron (jobs/scheduled.ts): unused apps older than UNUSED_APP_TTL_MS, codes and access tokens (web sessions) past
+// their expiry, and expired sign-in attempts and browser families (domain/web-session.ts). Bounded per run.
+export const sweepOAuth = writeOperation<{ now: number }, { apps: number; tokens: number; webState: number }>(
+	(db, { now }) => {
+		const apps = deleteClients(
+			db,
+			`${pendingAppsSql(`${UNUSED} AND c.created_at < ?1`)} LIMIT ?2`,
+			iso(now - UNUSED_APP_TTL_MS),
+			OAUTH_SWEEP_BATCH
+		)
+		const tokens = db.all(
+			`DELETE FROM oauth_tokens WHERE token_hash IN (SELECT token_hash FROM oauth_tokens
 			WHERE expires_at IS NOT NULL AND expires_at <= ? LIMIT ?) RETURNING token_hash`,
-		iso(now),
-		OAUTH_SWEEP_BATCH
-	).length
-	return { apps, tokens }
-})
+			iso(now),
+			OAUTH_SWEEP_BATCH
+		).length
+		return { apps, tokens, webState: sweepWebState(db, now, OAUTH_SWEEP_BATCH) }
+	}
+)
 
 // instance_settings names written by /setup step 3.
 export const ACCESS_TEAM_DOMAIN = 'access_team_domain'

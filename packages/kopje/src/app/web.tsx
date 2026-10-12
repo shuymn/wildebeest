@@ -65,7 +65,7 @@ const PUBLIC_HEADERS = {
 // Pages of a signed-in user, and every answer of the sign-in flow.
 const PRIVATE_HEADERS = { ...FRAMING, 'referrer-policy': 'no-referrer', 'cache-control': 'no-store' }
 
-type PageStatus = 200 | 400 | 403 | 404 | 410 | 422
+type PageStatus = 200 | 400 | 403 | 404 | 410 | 422 | 429
 
 function publicPage(c: WebContext, status: PageStatus, body: Parameters<WebContext['html']>[0]) {
 	return c.html(body, status, PUBLIC_HEADERS)
@@ -198,11 +198,26 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 			return redirect(`https://${domain}/login?return=${encodeURIComponent(target)}`, 302)
 		}
 		const redirectUri = `https://${domain}/auth/callback`
-		const clientId = await storeCall(c, deps, (s, b) =>
-			s.ensureWebClient(b, { clientId: deps.randomToken(), secret: deps.randomToken(), redirectUri, now: deps.now() })
-		)
 		const state = deps.randomToken()
 		const verifier = deps.randomToken()
+		const challenge = await pkceChallenge(verifier)
+		const previous = getCookie(c, SESSION_COOKIE, 'host')
+		const begun = await storeCall(c, deps, async (s, b) =>
+			s.beginWebLogin(b, {
+				clientId: deps.randomToken(),
+				secret: deps.randomToken(),
+				redirectUri,
+				stateHash: await sha256Hex(state),
+				challenge,
+				previousTokenHash: previous === undefined ? null : await sha256Hex(previous),
+				family: deps.randomToken(),
+				now: deps.now(),
+			})
+		)
+		if (begun.status === 'busy') {
+			return message(c, 429, STRINGS.signInBusyTitle, STRINGS.signInBusy)
+		}
+		const { clientId } = begun
 		setCookie(c, LOGIN_COOKIE, encodeLogin({ state, verifier, returnTo: target }), cookieOptions(LOGIN_LIFETIME_S))
 		const query = new URLSearchParams({
 			response_type: 'code',
@@ -210,7 +225,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 			redirect_uri: redirectUri,
 			scope: WEB_SCOPES.join(' '),
 			state,
-			code_challenge: await pkceChallenge(verifier),
+			code_challenge: challenge,
 			code_challenge_method: 'S256',
 		})
 		return c.body(null, 302, { location: `/oauth/authorize?${query.toString()}`, 'cache-control': 'no-store' })
@@ -218,14 +233,16 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 
 	app.get('/auth/callback', setup, async (c) => {
 		const login = decodeLogin(getCookie(c, LOGIN_COOKIE, 'host'))
-		deleteCookie(c, LOGIN_COOKIE, CLEARED)
-		// The state ties the callback to the sign-in this browser started; without it nothing is exchanged.
-		if (login === null || !stateMatches(login, c.req.query('state'))) {
+		// The state ties the callback to the sign-in this browser started; without it nothing is exchanged. A stale
+		// callback (an older tab's) leaves the login cookie of the newer sign-in in place.
+		const state = c.req.query('state')
+		if (login === null || state === undefined || !stateMatches(login, state)) {
 			return message(c, 400, STRINGS.signInExpiredTitle, STRINGS.signInExpired, {
 				href: '/login',
 				text: STRINGS.signIn,
 			})
 		}
+		deleteCookie(c, LOGIN_COOKIE, CLEARED)
 		const code = c.req.query('code')
 		if (code === undefined || c.req.query('error') !== undefined) {
 			return message(c, 403, STRINGS.signInCancelledTitle, STRINGS.signInCancelled, {
@@ -234,14 +251,13 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 			})
 		}
 		const token = deps.randomToken()
-		const previous = getCookie(c, SESSION_COOKIE, 'host')
 		const result = await storeCall(c, deps, async (s, b) =>
 			s.startWebSession(b, {
+				stateHash: await sha256Hex(state),
 				codeHash: await sha256Hex(code),
 				redirectUri: `https://${c.get('domain')}/auth/callback`,
 				verifierChallenge: await pkceChallenge(login.verifier),
 				tokenHash: await sha256Hex(token),
-				previousTokenHash: previous === undefined ? null : await sha256Hex(previous),
 				now: deps.now(),
 			})
 		)
@@ -257,7 +273,9 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 		if (checked instanceof Response) {
 			return checked
 		}
-		await storeCall(c, deps, async (s, b) => s.endWebSession(b, { tokenHash: await sha256Hex(checked.session) }))
+		await storeCall(c, deps, async (s, b) =>
+			s.endWebSession(b, { tokenHash: await sha256Hex(checked.session), now: deps.now() })
+		)
 		deleteCookie(c, SESSION_COOKIE, CLEARED)
 		return message(c, 200, STRINGS.signedOutTitle, STRINGS.signedOut, { href: '/login', text: STRINGS.signInAgain })
 	})
