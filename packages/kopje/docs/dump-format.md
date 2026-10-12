@@ -164,15 +164,16 @@ All of these are `POST` under `/admin/import` with JSON, except `chunk` and `pro
 | chunk | `?id=<id>&seq=<n>`, raw body of whole statements (≤ 16 MiB) | Validates every statement against the templates. Applies the chunk and the progress record in one `transactionSync` |
 | finish | `{ "id", "trailer" }` | Checks the trailer's tables, statement count, byte count and body SHA-256 against what was received |
 | verify | `{ "id" }`, repeated until `done` | Recomputes row counts and checksums in the Store, then runs `PRAGMA foreign_key_check`. On success the import record gives way to a receipt and the Store serves again |
-| progress | `GET ?id=<id>` | The running import, or the receipt of the last verified one (`state: "verified"`, with its report) |
-| reset | `{ "confirm": true, "id"?: "<id>" }` | Runs `deleteAll()`, which drops the schema too, then the migration runner, then writes the Store's Access rows back. Allowed only for the authority of the running import, or for a Store without data |
+| progress | `GET ?id=<id>` | The running import, or the receipt of the last verified one (`state: "verified"`, with its report). It includes `headerSha256` and `trailerSha256`, the digests of the header and trailer JSON as received, so a client can check that its file is the dump the Store has |
+| reset | `{ "confirm": true, "id": "<id>" }`, repeated until `done` | Takes the Store back to before that import (see "Reset" below). Only the authority of that import may reset it. A retried request for an import already reset answers `done` again |
 
 - Chunk numbers start at 1. The progress record holds `lastSeq` and a chain digest:
   `digest_n = hex(sha256(digest_{n-1} || chunk_n))`, with `digest_0` = the empty string.
 - After any error, read `GET /admin/import/progress` and compare `lastSeq` and `digest`. Do not assume a rollback:
   a timed-out transaction can still be durable.
 - A resent chunk with `seq ≤ lastSeq` is reported as `duplicate` and is not applied again.
-- While an import record exists, every domain operation is refused and schema upgrades wait. A failed verification
+- While an import record exists, every domain operation is refused and schema upgrades wait. `GET /admin/config`
+  shows the target's own configuration, which the record holds. A failed verification
   needs `reset` and a new import. Verification or reset schedules any upgrade that waited.
 - After verification, a receipt with the import's id, digests and report stays until the next import begins. A
   client whose verify response was lost reads the outcome there.
@@ -190,18 +191,34 @@ The Store checks each import step's authority inside the transaction that writes
 A request authorized for one import or mode cannot act on another. Once the import has begun, `IMPORT_TOKEN` opens
 nothing except the stale-import recovery below. The CLI keeps the session in `<file>.import.json` (mode 0600).
 
+### Reset
+
+A reset never uses `deleteAll()`:
+1. The import record turns into `resetting`; nothing else continues the import.
+2. The imported rows are deleted in bounded transactions, children before parents. Each call runs a few of them, and
+   the caller repeats the call until `done`.
+3. The last transaction:
+   - writes the configuration back exactly from the record;
+   - removes the record;
+   - leaves a reset receipt, so a retried request for the same import is answered `done`.
+
+The configuration is never touched in between, and the schema stays. A reset interrupted by a restart or a deploy
+loses nothing: the next call continues it. A request for another import id is refused. The CLI names the import from
+`<file>.import.json`, or else from the running import.
+
 #### Recovering a token import whose session was lost
 
 If `<file>.import.json` is lost, nothing can continue the token import. Abandon it with
-`kopje-admin import-reset --abandon-stale --import-token --yes`
-(`POST /admin/import/reset` with `{ "confirm": true, "abandonStale": true }` and `Kopje-Import-Token`).
+`kopje-admin import-reset --abandon-stale --import-token --yes`, or over the API: `POST /admin/import/reset` with
+`{ "confirm": true, "id": "<id>", "abandonStale": true }` and `Kopje-Import-Token`. To learn the id, the token may
+read `GET /admin/import/progress` for a token import while admin access is not usable.
 
 The reset runs only when all of these hold:
 - the import is a token import and is not verified;
 - its session has made no successful step (chunk, finish or verify) for 15 minutes;
 - admin access is still not usable.
 
-It returns the Store to the empty schema with its configuration kept. Before the 15 minutes are up, the answer is
+It resets the import as above; a reset it started is continued the same way, without waiting again. Before the 15 minutes are up, the answer is
 `409 import-not-idle`, with `resetAfter` giving the time the reset becomes possible. Then begin the import again.
 
 This gives the token no new power: on an empty Store without admin access it could begin an import anyway.
