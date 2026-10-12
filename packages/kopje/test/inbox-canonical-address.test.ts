@@ -189,3 +189,55 @@ describe('the canonical address of a remote account', () => {
 		).toEqual([])
 	})
 })
+
+describe('the domains of WebFinger subjects and addresses, parsed one way', () => {
+	async function declaring(t: Setup, subject: string): Promise<TestActor> {
+		const ali = await mastodonActor(t.web, 'ali', { origin: `https://${HOST}`, key: 3 })
+		serveWebFinger(t.web, `acct:ali@${HOST}`, subject, ali.uri)
+		return ali
+	}
+
+	for (const subject of [
+		`acct:ali@evil.example@${CANONICAL}`,
+		`acct:ali@${CANONICAL}.`,
+		`acct:ali@${CANONICAL}:443`,
+		`acct:@${CANONICAL}`,
+		`acct:ali@`,
+		`acct:ali@user:pass@${CANONICAL}`,
+		'acct:ali@127.0.0.1',
+		'acct:ali@localhost',
+	]) {
+		it(`keeps the actor’s host for a declared subject it cannot read exactly: ${subject}`, async () => {
+			const t = await setup()
+			const ali = await declaring(t, subject)
+			// Even if a domain would confirm whatever a looser parser read from it.
+			serveWebFinger(t.web, `acct:ali@${CANONICAL}`, `acct:ali@${CANONICAL}`, ali.uri)
+			await resolve(t, `ali@${HOST}`)
+			expect(await stored(t, ali.uri)).toEqual([{ username: 'ali', domain: HOST, confirmed_username: null }])
+			expect(t.web.fetched.filter((url) => url.startsWith(`https://${CANONICAL}/`))).toEqual([])
+		})
+	}
+
+	it('stores a declared domain in its normalized form: lowercase, and punycode for an IDN', async () => {
+		const t = await setup()
+		const ali = await declaring(t, `acct:ali@NICE.Example`)
+		serveWebFinger(t.web, `acct:ali@${CANONICAL}`, `acct:ali@${CANONICAL}`, ali.uri)
+		await resolve(t, `ali@${HOST}`)
+		expect(await stored(t, ali.uri)).toEqual([{ username: 'ali', domain: CANONICAL, confirmed_username: 'ali' }])
+
+		const u = await setup()
+		const idn = 'ニース.example'
+		const ascii = new URL(`https://${idn}/`).hostname
+		expect(ascii).toMatch(/^xn--/)
+		const other = await declaring(u, `acct:ali@${idn}`)
+		serveWebFinger(u.web, `acct:ali@${ascii}`, `acct:ali@${ascii}`, other.uri)
+		await resolve(u, `ali@${HOST}`)
+		expect(await stored(u, other.uri)).toEqual([{ username: 'ali', domain: ascii, confirmed_username: 'ali' }])
+	})
+
+	it('fetches nothing for an address whose domain carries a port', async () => {
+		const t = await setup()
+		expect((await resolve(t, `ali@${CANONICAL}:443`)).body.accounts).toEqual([])
+		expect(t.web.fetched).toEqual([])
+	})
+})

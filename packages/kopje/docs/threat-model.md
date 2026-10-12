@@ -423,7 +423,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `ActivityPub::ProcessAccountService#check_webfinger!` and `ResolveAccountService` decide it: the actor's own host
   declares it in the subject of its WebFinger answer for `acct:<preferredUsername>@<host>`; another domain there is a
   candidate, which must answer for that subject with the same actor id; otherwise the address is on the host
-  (`declaredDomain` in `src/federation/resolve.ts`). The confirmation is bound to its (username, domain, actor id):
+  (`declaredDomain` in `src/federation/resolve.ts`). Every domain from an address or a subject goes through one strict
+  parser (`normalizeDomain`): lowercase, punycode for an IDN, a hostname of two labels or more, and nothing else (no
+  port, userinfo, path, trailing dot or IP literal); a subject needs exactly one `@` and no empty part. Domains are
+  queried, compared and stored only in that form, so the domain stored is the one queried and confirmed. The confirmation is bound to its (username, domain, actor id):
   `accounts.confirmed_username` holds the username it was made for, and an actor whose `preferredUsername` changes
   falls back to its host until it is confirmed again. A search by an alias (any address whose WebFinger names an
   existing actor) finds the account by its actor id and never sets or replaces its address. One helper
