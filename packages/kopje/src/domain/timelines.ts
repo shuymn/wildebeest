@@ -16,7 +16,7 @@ const FEED = "s.visibility IN ('public', 'unlisted', 'private')"
 
 // Status.without_replies: not a reply, or a reply in the author's own conversation (in_reply_to_account_id carries
 // the partner through self-replies, so continuing a reply to someone else is still a reply to them).
-const NOT_A_REPLY_TO_OTHERS = '(s.in_reply_to_uri IS NULL OR s.in_reply_to_account_id = s.account_id)'
+export const NOT_A_REPLY_TO_OTHERS = '(s.in_reply_to_uri IS NULL OR s.in_reply_to_account_id = s.account_id)'
 
 type Cursor = { max: string | null; min: string | null; ascending: boolean; limit: number }
 

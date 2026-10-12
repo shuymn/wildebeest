@@ -164,18 +164,24 @@ describe('authorize, consent, token, API call', () => {
 		expect(await sql(h.store, 'SELECT 1 FROM oauth_tokens')).toEqual([])
 	})
 
-	it('refuses a decision posted from another origin', async () => {
+	it('refuses a decision posted from another origin, a null origin or none (WEB-1)', async () => {
 		const h = await withAlice()
 		const app = await registerApp(h)
 		const assertion = await h.team.assertion()
-		const response = await h.request(
-			'/oauth/authorize',
-			form(
-				{ client_id: app.client_id, redirect_uri: app.redirect_uri, scope: 'read', decision: 'approve' },
-				{ headers: { 'cf-access-jwt-assertion': assertion, origin: 'https://evil.test' } }
+		for (const origin of ['https://evil.test', 'null', undefined]) {
+			const headers: Record<string, string> = { 'cf-access-jwt-assertion': assertion }
+			if (origin !== undefined) {
+				headers.origin = origin
+			}
+			const response = await h.request(
+				'/oauth/authorize',
+				form(
+					{ client_id: app.client_id, redirect_uri: app.redirect_uri, scope: 'read', decision: 'approve' },
+					{ headers }
+				)
 			)
-		)
-		expect(response.status).toBe(403)
+			expect(response.status, String(origin)).toBe(403)
+		}
 		expect(await sql(h.store, 'SELECT 1 FROM oauth_tokens')).toEqual([])
 	})
 

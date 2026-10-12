@@ -11,7 +11,16 @@ const MAX_NAME = 255
 const MAX_REDIRECT_URIS = 10
 const MAX_URI = 2000
 
+// RES-6: anonymous registration is limited per client IP by the Workers Rate Limiting binding (wrangler.jsonc), before
+// the body is read, as Mastodon throttles its unauthenticated API per IP; the Store bounds what registrations may
+// keep (domain/oauth.ts). The binding counts per Cloudflare location and is eventually consistent, so the limit is
+// approximate; the Store's bound is exact.
 export const registerApp: ApiHandler = async (c, deps) => {
+	const ip = c.req.header('cf-connecting-ip') ?? 'unknown'
+	if (!(await c.env.APP_REGISTRATION_LIMIT.limit({ key: ip })).success) {
+		await c.req.raw.body?.cancel()
+		return mastodonError(429, 'Too many requests')
+	}
 	const result = await readParams(c.req.raw)
 	if (!result.ok) {
 		return mastodonError(result.status, 'Malformed request body')
@@ -39,7 +48,7 @@ export const registerApp: ApiHandler = async (c, deps) => {
 	}
 	const clientId = deps.randomToken()
 	const secret = deps.randomToken()
-	const client = await storeCall(c, deps, (s, b) =>
+	const registered = await storeCall(c, deps, (s, b) =>
 		s.registerApp(b, {
 			clientId,
 			secret,
@@ -50,6 +59,10 @@ export const registerApp: ApiHandler = async (c, deps) => {
 			now: deps.now(),
 		})
 	)
+	if (registered.status === 'over_budget') {
+		return mastodonError(429, 'Too many applications are waiting for authorization. Try again later.')
+	}
+	const { client } = registered
 	return c.json({
 		id: client.id,
 		name: client.name,

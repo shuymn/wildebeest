@@ -1,0 +1,383 @@
+import { type CredentialAccount, credentialAccount, type Present } from './accounts'
+import { authorize, type AuthFailure, type Authorized, type UserCredential, type UserViewer } from './auth'
+import { consumeCode, insertAccessToken, webClientId, WEB_CLIENT_SETTING } from './oauth'
+import { readOperation, sessionOperation } from './operation'
+import type { Db } from '../db/sql'
+import type { StoreOperation } from '../platform/store-kernel'
+import { constantTimeEqual } from '../security/tokens'
+
+// Web sessions (AUTH, WEB-4). The web UI is an ordinary OAuth client of the instance (design: "the built-in UI is a
+// normal OAuth client"): Access verifies the person at /oauth/authorize, the consent page issues a PKCE-bound code to
+// the web client's callback, and the callback exchanges it here for an access token of the web client, which the
+// browser keeps as an opaque HttpOnly cookie. So a session is a row of oauth_tokens: stored as its SHA-256 only
+// (AUTH-7), checked in the transaction of every operation it authorizes (AUTH-1), refused once the account is
+// suspended, ended by logout, by expiry (SESSION_LIFETIME_MS, fixed from login) and by "sign out other sessions", and
+// listed with the user's authorizations.
+//
+// The web client has no usable secret: its callback runs in this Worker and exchanges the code with the Store directly,
+// and the code is bound to the PKCE challenge whose verifier only the browser's login cookie holds. Its client id is
+// recorded in instance_settings (WEB_CLIENT_SETTING).
+
+export const SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000
+
+// What the web client may do: read and edit the profile, and upload its images. Nothing else of the API.
+export const WEB_SCOPES = ['read:accounts', 'write:accounts', 'write:media']
+
+// Sign-in attempts and browser families, in kopje_state (outside the dumped tables: they are short-lived). Values are
+// JSON with an `expiresAt`; expired entries are pruned as attempts are added and by the cron (sweepWebState).
+//
+//   web_login:<sha256(attempt id)>  one sign-in attempt: the OAuth state, the PKCE challenge, the local path to
+//                                   return to, the digest of the session the browser held when it started (taken
+//                                   from its session cookie, so only a session it holds), and the expiry. The
+//                                   browser's login cookie holds only the opaque attempt id the Worker minted; the
+//                                   callback takes everything else from this row, and consumes it atomically, so a
+//                                   second callback of the same attempt starts nothing. Attempts are keyed by the
+//                                   browser's own id and expire after LOGIN_ATTEMPT_MS: there is no shared slot or
+//                                   counter an anonymous party could fill (/login is rate limited per client IP).
+//   web_family:<family>             one browser's sessions: the live one (`current`) and whether the browser signed
+//                                   out (`ended`). A new session replaces `current`; sign-out ends the family, so a
+//                                   callback of a sign-in the browser started before signing out installs nothing.
+//   web_session:<token hash>        the family a session belongs to, kept for its lifetime even after it is replaced,
+//                                   so signing out with a replaced session still ends the family's newer one.
+const LOGIN = 'web_login:'
+const FAMILY = 'web_family:'
+const MEMBER = 'web_session:'
+
+// How long a sign-in may take (the login cookie's and the code's lifetime).
+export const LOGIN_ATTEMPT_MS = 10 * 60 * 1000
+
+// Expired attempts pruned per new attempt.
+const PRUNE_PER_LOGIN = 20
+
+// family: the browser's family when it started, resolved then, so a later expiry of the session's membership cannot
+// lose the sign-out fence (an ended family's record outlives every attempt that names it, see endFamily).
+type Attempt = {
+	state: string
+	challenge: string
+	returnTo: string
+	startedWith: string | null
+	family: string | null
+	expiresAt: number
+}
+type Family = { current: string | null; ended: boolean; expiresAt: number }
+
+function readState<T>(db: Db, name: string): T | null {
+	const row = db.first<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', name)
+	return row === undefined ? null : (JSON.parse(row.value) as T)
+}
+
+function writeState(db: Db, name: string, value: unknown): void {
+	db.run('INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)', name, JSON.stringify(value))
+}
+
+function familyOf(db: Db, tokenHash: string): string | null {
+	return readState<{ family: string }>(db, `${MEMBER}${tokenHash}`)?.family ?? null
+}
+
+function endSession(db: Db, clientId: string, tokenHash: string): void {
+	db.run("DELETE FROM oauth_tokens WHERE token_hash = ? AND client_id = ? AND kind = 'access'", tokenHash, clientId)
+}
+
+export type WebClientInput = { clientId: string; secret: string; redirectUri: string; now: number }
+
+// The web client's id, created on first use. Its redirect URI follows the fixed domain the caller derives it from; the
+// row is written only when it is missing or differs.
+function ensureWebClient(db: Db, input: WebClientInput): string {
+	const existing = webClientId(db)
+	const row =
+		existing === null
+			? undefined
+			: db.first<{ redirect_uris: string; scopes: string }>(
+					'SELECT redirect_uris, scopes FROM oauth_clients WHERE id = ?',
+					existing
+				)
+	if (existing !== null && row !== undefined) {
+		if (row.redirect_uris !== input.redirectUri || row.scopes !== WEB_SCOPES.join(' ')) {
+			db.run(
+				'UPDATE oauth_clients SET redirect_uris = ?, scopes = ? WHERE id = ?',
+				input.redirectUri,
+				WEB_SCOPES.join(' '),
+				existing
+			)
+		}
+		return existing
+	}
+	db.run(
+		`INSERT INTO oauth_clients (id, secret, name, redirect_uris, website, scopes, created_at)
+		VALUES (?, ?, 'Kopje', ?, NULL, ?, ?)`,
+		input.clientId,
+		input.secret,
+		input.redirectUri,
+		WEB_SCOPES.join(' '),
+		new Date(input.now).toISOString()
+	)
+	db.run('INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', WEB_CLIENT_SETTING, input.clientId)
+	return input.clientId
+}
+
+export type BeginLoginInput = WebClientInput & {
+	attemptHash: string
+	state: string
+	challenge: string
+	returnTo: string
+	// The digest of the session cookie the request carried, if any.
+	startedWith: string | null
+}
+
+// /login: records the attempt and answers the web client's id.
+export const beginWebLogin = sessionOperation<BeginLoginInput, string>((db, input) => {
+	sweepPrefix(db, LOGIN, input.now, PRUNE_PER_LOGIN)
+	const clientId = ensureWebClient(db, input)
+	writeState(db, `${LOGIN}${input.attemptHash}`, {
+		state: input.state,
+		challenge: input.challenge,
+		returnTo: input.returnTo,
+		startedWith: input.startedWith,
+		family: input.startedWith === null ? null : familyOf(db, input.startedWith),
+		expiresAt: input.now + LOGIN_ATTEMPT_MS,
+	} satisfies Attempt)
+	return clientId
+})
+
+export type StartSessionInput = {
+	attemptHash: string
+	state: string
+	// null when the person cancelled at the consent page (the attempt is consumed, nothing starts).
+	codeHash: string | null
+	redirectUri: string
+	tokenHash: string
+	// The digest of the session cookie the callback request carried, if any.
+	presented: string | null
+	// A family id for a browser that has none.
+	family: string
+	now: number
+}
+
+export type SessionStarted =
+	| { status: 'ok'; returnTo: string }
+	| { status: 'state_mismatch' }
+	| { status: 'cancelled'; returnTo: string }
+	| { status: 'invalid_grant' }
+
+// The callback. The attempt is found by the login cookie's id; a state that is not the attempt's leaves it untouched
+// (a stale callback of an older tab does not cancel the newer sign-in). Otherwise the attempt is consumed, and the code
+// of the web client too (both once, even on failure); the code must be bound to the attempt's PKCE challenge, so a
+// code obtained for another sign-in, or injected without its login cookie, starts nothing (session fixation, login
+// CSRF). The new session replaces the family's live one and every session the browser held, so overlapping sign-ins of
+// one browser leave one session; a family that signed out after the sign-in started gets none. Every session replaced
+// is deleted here, so it cannot authorize again, by cookie or as a bearer token.
+export const startWebSession = sessionOperation<StartSessionInput, SessionStarted>((db, input) => {
+	const attemptName = `${LOGIN}${input.attemptHash}`
+	const attempt = readState<Attempt>(db, attemptName)
+	if (attempt === null || attempt.expiresAt <= input.now) {
+		return { status: 'invalid_grant' }
+	}
+	if (!constantTimeEqual(attempt.state, input.state)) {
+		return { status: 'state_mismatch' }
+	}
+	db.run('DELETE FROM kopje_state WHERE name = ?', attemptName)
+	const clientId = webClientId(db)
+	if (input.codeHash === null) {
+		return { status: 'cancelled', returnTo: attempt.returnTo }
+	}
+	const grant =
+		clientId === null
+			? null
+			: consumeCode(db, { ...input, codeHash: input.codeHash, clientId, verifierChallenge: attempt.challenge })
+	if (clientId === null || grant === null) {
+		return { status: 'invalid_grant' }
+	}
+	const startedFamily = attempt.family
+	const started = startedFamily === null ? null : readState<Family>(db, `${FAMILY}${startedFamily}`)
+	if (started?.ended === true) {
+		return { status: 'invalid_grant' }
+	}
+	const presentedFamily = input.presented === null ? null : familyOf(db, input.presented)
+	const presented = presentedFamily === null ? null : readState<Family>(db, `${FAMILY}${presentedFamily}`)
+	const familyId = started !== null ? startedFamily : presented !== null && !presented.ended ? presentedFamily : null
+	const family = familyId ?? input.family
+	const current = (familyId === null ? null : readState<Family>(db, `${FAMILY}${familyId}`))?.current ?? null
+	for (const replaced of [current, attempt.startedWith, input.presented]) {
+		if (replaced !== null) {
+			endSession(db, clientId, replaced)
+		}
+	}
+	const expiresAt = input.now + SESSION_LIFETIME_MS
+	insertAccessToken(
+		db,
+		input.tokenHash,
+		clientId,
+		grant.accountId,
+		grant.scopes,
+		new Date(input.now).toISOString(),
+		new Date(expiresAt).toISOString()
+	)
+	writeState(db, `${FAMILY}${family}`, { current: input.tokenHash, ended: false, expiresAt } satisfies Family)
+	writeState(db, `${MEMBER}${input.tokenHash}`, { family, expiresAt })
+	return { status: 'ok', returnTo: attempt.returnTo }
+})
+
+// Sign-out: ends the browser's family, its live session (which may be newer than the one presented) and the presented
+// one, so the cookie, if replayed, authenticates nothing and a sign-in still in flight installs nothing. Ending an
+// unknown session succeeds without effect.
+export const endWebSession = sessionOperation<{ tokenHash: string; now: number }, void>((db, { tokenHash, now }) => {
+	const clientId = webClientId(db)
+	if (clientId === null) {
+		return
+	}
+	endSession(db, clientId, tokenHash)
+	const familyId = familyOf(db, tokenHash)
+	if (familyId === null) {
+		return
+	}
+	const familyName = `${FAMILY}${familyId}`
+	endFamily(db, clientId, familyId, now)
+})
+
+// Ends a family and its live session. The record is kept LOGIN_ATTEMPT_MS from now: every attempt that names the
+// family was made before, so it expires no later.
+function endFamily(db: Db, clientId: string, familyId: string, now: number): void {
+	const familyName = `${FAMILY}${familyId}`
+	const current = readState<Family>(db, familyName)?.current ?? null
+	if (current !== null) {
+		endSession(db, clientId, current)
+	}
+	writeState(db, familyName, { current: null, ended: true, expiresAt: now + LOGIN_ATTEMPT_MS } satisfies Family)
+}
+
+// Removes expired entries of one kind, at most `limit`.
+function sweepPrefix(db: Db, prefix: string, now: number, limit: number): number {
+	return db.all(
+		`DELETE FROM kopje_state WHERE name IN (SELECT name FROM kopje_state
+			WHERE substr(name, 1, ?1) = ?2 AND json_extract(value, '$.expiresAt') <= ?3 LIMIT ?4) RETURNING name`,
+		prefix.length,
+		prefix,
+		now,
+		limit
+	).length
+}
+
+// The cron: expired attempts, families and session memberships.
+export function sweepWebState(db: Db, now: number, limit: number): number {
+	return [LOGIN, FAMILY, MEMBER].reduce((total, prefix) => total + sweepPrefix(db, prefix, now, limit), 0)
+}
+
+// Operations of the web UI only: the credential must be a live session of the web client, so an API token (even one
+// with the same scopes) cannot list or revoke the user's authorizations.
+function webOperation<I, O>(
+	declare: typeof readOperation,
+	run: (db: Db, input: I & { credential: UserCredential }, viewer: UserViewer, clientId: string) => O
+): StoreOperation<I & { credential: UserCredential }, Authorized<O>> {
+	return declare<I & { credential: UserCredential }, Authorized<O>>((db, input) => {
+		const auth = authorize(db, input.credential)
+		if (auth.status !== 'ok') {
+			return auth
+		}
+		const clientId = webClientId(db)
+		if (clientId === null || auth.viewer.client.id !== clientId || auth.viewer.accountId === null) {
+			return { status: 'unauthenticated' } satisfies AuthFailure
+		}
+		return { status: 'ok', value: run(db, input, auth.viewer as UserViewer, clientId) }
+	})
+}
+
+export type Authorization = {
+	clientId: string
+	name: string
+	website: string | null
+	scopes: string[]
+	authorizedAt: string
+}
+
+export type Authorizations = { apps: Authorization[]; otherSessions: number }
+
+// The apps the user has authorized (live tokens and pending codes, per app), as Mastodon's "Authorized apps" lists
+// them, and how many other web sessions the user has.
+function authorizationsOf(
+	db: Db,
+	accountId: string,
+	webClient: string,
+	tokenHash: string,
+	now: number
+): Authorizations {
+	const nowIso = new Date(now).toISOString()
+	const rows = db.all<{ id: string; name: string; website: string | null; scopes: string; authorized_at: string }>(
+		`SELECT c.id, c.name, c.website, group_concat(t.scopes, ' ') AS scopes, min(t.created_at) AS authorized_at
+		FROM oauth_tokens t JOIN oauth_clients c ON c.id = t.client_id
+		WHERE t.account_id = ?1 AND t.client_id <> ?2 AND (t.expires_at IS NULL OR t.expires_at > ?3)
+		GROUP BY c.id ORDER BY authorized_at, c.id`,
+		accountId,
+		webClient,
+		nowIso
+	)
+	const others = db.first<{ n: number }>(
+		`SELECT COUNT(*) AS n FROM oauth_tokens WHERE account_id = ? AND client_id = ? AND kind = 'access'
+			AND token_hash <> ? AND (expires_at IS NULL OR expires_at > ?)`,
+		accountId,
+		webClient,
+		tokenHash,
+		nowIso
+	)
+	return {
+		apps: rows.map((row) => ({
+			clientId: row.id,
+			name: row.name,
+			website: row.website,
+			scopes: [...new Set(row.scopes.split(' ').filter((scope) => scope !== ''))].sort(),
+			authorizedAt: row.authorized_at,
+		})),
+		otherSessions: others?.n ?? 0,
+	}
+}
+
+export type SettingsData = { account: CredentialAccount; authorizations: Authorizations }
+
+// Everything the settings page shows, in one read: the profile as the owner edits it, and the authorizations.
+export const settingsView = webOperation<{ now: number; present: Present }, SettingsData | null>(
+	readOperation,
+	(db, { credential, now, present }, { accountId }, webClient) => {
+		const account = credentialAccount(db, accountId, present)
+		return account === null
+			? null
+			: { account, authorizations: authorizationsOf(db, accountId, webClient, credential.tokenHash, now) }
+	}
+)
+
+// Revokes every token and code the user gave one app (AUTH-6: only the viewer's own). The web client is not an app
+// here; its sessions end by logout or revokeOtherSessions.
+export const revokeAuthorization = webOperation<{ clientId: string }, number>(
+	sessionOperation,
+	(db, { clientId }, { accountId }, webClient) =>
+		clientId === webClient
+			? 0
+			: db.all(
+					'DELETE FROM oauth_tokens WHERE account_id = ? AND client_id = ? RETURNING token_hash',
+					accountId,
+					clientId
+				).length
+)
+
+// Ends every web session of the user but the current one.
+// Ends every web session of the user but the current one, in one transaction: their families end too (so their
+// browsers' sign-ins in flight install nothing), and the web client's unexchanged codes for the user are deleted (a
+// sign-in of a browser with no session yet cannot be told apart). The caller's own family stays.
+export const revokeOtherSessions = webOperation<{ now: number }, number>(
+	sessionOperation,
+	(db, { credential, now }, { accountId }, webClient) => {
+		const revoked = db.all<{ token_hash: string }>(
+			`DELETE FROM oauth_tokens WHERE account_id = ? AND client_id = ? AND token_hash <> ? AND kind = 'access'
+			RETURNING token_hash`,
+			accountId,
+			webClient,
+			credential.tokenHash
+		)
+		const own = familyOf(db, credential.tokenHash)
+		for (const family of new Set(revoked.map((row) => familyOf(db, row.token_hash)))) {
+			if (family !== null && family !== own) {
+				endFamily(db, webClient, family, now)
+			}
+		}
+		db.run("DELETE FROM oauth_tokens WHERE account_id = ? AND client_id = ? AND kind = 'code'", accountId, webClient)
+		return revoked.length
+	}
+)

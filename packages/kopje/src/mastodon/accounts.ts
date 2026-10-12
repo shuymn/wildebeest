@@ -10,9 +10,17 @@ import {
 } from './context'
 import { mastodonError } from './errors'
 import { linkHeader, pageQuery } from './pagination'
-import { parseBoolean } from './params'
+import { type Params, parseBoolean } from './params'
 import { MAX_SEARCH_OFFSET, searchParams } from './search'
-import type { CredentialChanges, RelationshipResult, Visibility } from '../domain/accounts'
+import {
+	type CredentialChanges,
+	type FieldSource,
+	MAX_FIELD_NAME,
+	MAX_FIELD_VALUE,
+	MAX_FIELDS,
+	type RelationshipResult,
+	type Visibility,
+} from '../domain/accounts'
 
 // /api/v1/accounts (B3): credentials, lookup, search, relationships, follow, and follower lists.
 
@@ -31,24 +39,26 @@ const MAX_NOTE = 500
 const VISIBILITIES: readonly string[] = ['public', 'unlisted', 'private', 'direct']
 const LANGUAGE = /^[a-z]{2,3}$/
 
-// Plain-text fields only. Avatar and header uploads come with media (B4) and are ignored here.
-export const updateCredentials: ApiHandler = async (c, deps) => {
-	const p = await requestParams(c, deps)
-	if (p instanceof Response) {
-		return p
-	}
+function characters(text: string): number {
+	return [...text].length
+}
+
+// The changes update_credentials asks for, and the validation problems with them (Mastodon's messages). Shared by the
+// API and the settings page (app/web.tsx), which posts the same names. Avatar and header come through the media
+// pipeline on the settings page only.
+export function credentialChanges(p: Params): { changes: CredentialChanges; problems: string[] } {
 	const changes: CredentialChanges = {}
 	const problems: string[] = []
 	const displayName = p.get('display_name')
 	if (displayName !== undefined) {
-		if ([...displayName].length > MAX_DISPLAY_NAME) {
+		if (characters(displayName) > MAX_DISPLAY_NAME) {
 			problems.push(`Display name is too long (maximum is ${MAX_DISPLAY_NAME} characters)`)
 		}
 		changes.displayName = displayName
 	}
 	const note = p.get('note')
 	if (note !== undefined) {
-		if ([...note].length > MAX_NOTE) {
+		if (characters(note) > MAX_NOTE) {
 			problems.push(`Note is too long (maximum is ${MAX_NOTE} characters)`)
 		}
 		changes.note = note
@@ -67,16 +77,41 @@ export const updateCredentials: ApiHandler = async (c, deps) => {
 		}
 		changes.language = language === '' ? null : language
 	}
+	// fields_attributes replaces every field; a pair with both parts blank is dropped, as Mastodon does.
+	if (p.has('fields_attributes') || p.objects('fields_attributes').length > 0) {
+		const fields: FieldSource[] = p
+			.objects('fields_attributes')
+			.map((field) => ({ name: (field.name ?? '').trim(), value: (field.value ?? '').trim() }))
+			.filter((field) => field.name !== '' || field.value !== '')
+		if (fields.length > MAX_FIELDS) {
+			problems.push(`Fields is too long (maximum is ${MAX_FIELDS} fields)`)
+		}
+		if (fields.some((field) => characters(field.name) > MAX_FIELD_NAME || characters(field.value) > MAX_FIELD_VALUE)) {
+			problems.push(`Fields is too long (maximum is ${MAX_FIELD_NAME} characters each)`)
+		}
+		changes.fields = fields
+	}
 	changes.locked = parseBoolean(p.get('locked'))
 	changes.bot = parseBoolean(p.get('bot'))
 	changes.discoverable = parseBoolean(p.get('discoverable'))
 	changes.sensitive = parseBoolean(p.get('source[sensitive]'))
+	return { changes, problems }
+}
+
+export const updateCredentials: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const { changes, problems } = credentialChanges(p)
 	if (problems.length > 0) {
 		return refuseAfterAuth(c, deps, mastodonError(422, `Validation failed: ${problems.join(', ')}`))
 	}
 	const credential = userCredential(c, deps)
 	const account = authorized(
-		await storeCall(c, deps, (s, b) => s.updateCredentials(b, { credential, changes, present: present(c) }))
+		await storeCall(c, deps, (s, b) =>
+			s.updateCredentials(b, { credential, changes, present: present(c), now: deps.now() })
+		)
 	)
 	return account === null ? NOT_FOUND() : c.json(account)
 }

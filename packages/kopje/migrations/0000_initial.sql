@@ -61,6 +61,9 @@ CREATE TABLE local_accounts (
   default_visibility TEXT NOT NULL DEFAULT 'public' CHECK (default_visibility IN ('public', 'unlisted', 'private', 'direct')),
   default_sensitive INTEGER NOT NULL DEFAULT 0 CHECK (default_sensitive IN (0, 1)),
   default_language TEXT,
+  -- Profile fields (Mastodon's fields_attributes): [{"name","value"}] as plain text, at most 4. Values are linked and
+  -- escaped when presented (HTML-2).
+  fields TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(fields) AND json_type(fields) = 'array'),
   suspended_at TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
