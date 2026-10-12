@@ -21,7 +21,7 @@ import {
 	updateActivity,
 } from './activities'
 import { type ApiVisibility, canView, listableSql, requiresMention, type Visibility } from './audience'
-import { optionalUserReadOperation, userWriteOperation } from './auth'
+import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
 import { notify } from './notifications'
 import { normalizeSearchText } from './search-text'
@@ -672,14 +672,17 @@ export const statusHistory = optionalUserReadOperation<{ id: string; present: Pr
 
 export type StatusSource = { id: string; text: string; spoiler_text: string }
 
-export const statusSource = optionalUserReadOperation<{ id: string }, Viewed<StatusSource>>((db, { id }, viewerId) => {
-	const resolved = viewable(db, viewerId, id)
+// The source is the author's only (Mastodon authorizes /source with StatusPolicy#update?): anyone else, even someone
+// who may see the status, gets not_found.
+export const statusSource = userReadOperation<{ id: string }, Viewed<StatusSource>>((db, { id }, { accountId }) => {
+	const resolved = resolveStatusId(db, id)
 	const row =
 		resolved === null
 			? undefined
 			: db.first<{ id: string; source_text: string | null; content: string; spoiler_text: string }>(
-					'SELECT id, source_text, content, spoiler_text FROM statuses WHERE id = ?',
-					resolved
+					'SELECT id, source_text, content, spoiler_text FROM statuses WHERE id = ? AND account_id = ? AND reblog_of_id IS NULL',
+					resolved,
+					accountId
 				)
 	if (row === undefined) {
 		return { status: 'not_found' }
@@ -964,7 +967,7 @@ export const unreblog = userWriteOperation<ActionInput, Acted<Status>>((db, inpu
 export type InteractorsInput = { id: string; kind: 'favourited_by' | 'reblogged_by'; page: PageQuery; present: Present }
 
 // Accounts that favourited or boosted a status the viewer may see, newest first, without accounts the viewer
-// blocks, is blocked by or mutes, and without suspended accounts. Favourites page by the favourite's id; boosts by
+// blocks, is blocked by, mutes or domain-blocks, and without suspended accounts. Favourites page by the favourite's id; boosts by
 // the boost's status id.
 export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Page<Account>>>(
 	(db, { id, kind, page, present }, viewerId) => {
@@ -978,7 +981,8 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 		const excluded = `(?1 IS NULL OR NOT (
 			EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 AND target_account_id = a.id)
 			OR EXISTS (SELECT 1 FROM blocks WHERE account_id = a.id AND target_account_id = ?1)
-			OR EXISTS (SELECT 1 FROM mutes WHERE account_id = ?1 AND target_account_id = a.id)))`
+			OR EXISTS (SELECT 1 FROM mutes WHERE account_id = ?1 AND target_account_id = a.id)
+			OR EXISTS (SELECT 1 FROM domain_blocks WHERE account_id = ?1 AND domain = a.domain)))`
 		const lower = page.minId ?? page.sinceId ?? null
 		const rows =
 			kind === 'favourited_by'

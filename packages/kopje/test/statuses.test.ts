@@ -290,12 +290,18 @@ describe('status reads', () => {
 		expect(fromRoot.body.descendants.map((s) => s.id)).toEqual([a.id, a1.id, a2.id, b.id])
 	})
 
-	it('gives the source for editing', async () => {
-		const h = await community(['alice'])
+	it('gives the source for editing to the author only (StatusPolicy#update?)', async () => {
+		const h = await community(['alice', 'bob'])
 		const status = await post(h, h.users.alice, { status: 'a <b> @nobody', spoiler_text: 'cw' })
-		const { body } = await getJson(h, `/api/v1/statuses/${status.id}/source`, h.users.alice.token)
-		expect(body).toEqual({ id: status.id, text: 'a <b> @nobody', spoiler_text: 'cw' })
+		const author = await getJson(h, `/api/v1/statuses/${status.id}/source`, h.users.alice.token)
+		expect(author).toEqual({ status: 200, body: { id: status.id, text: 'a <b> @nobody', spoiler_text: 'cw' } })
+		// bob may see the public status, but not its source.
+		expect((await getJson(h, `/api/v1/statuses/${status.id}`, h.users.bob.token)).status).toBe(200)
+		expect((await getJson(h, `/api/v1/statuses/${status.id}/source`, h.users.bob.token)).status).toBe(404)
 		expect((await getJson(h, `/api/v1/statuses/${status.id}/source`)).status).toBe(401)
+		// A boost has no source of its own.
+		const boost = await (await act(h, h.users.bob, `/api/v1/statuses/${status.id}/reblog`)).json<Status>()
+		expect((await getJson(h, `/api/v1/statuses/${boost.id}/source`, h.users.bob.token)).status).toBe(404)
 	})
 })
 

@@ -172,6 +172,43 @@ describe('visibility on every read path', () => {
 	})
 })
 
+describe('nothing leaks through what a status points to', () => {
+	it('a boost of an original the viewer may not see is hidden with it', async () => {
+		const h = await community(['viewer'])
+		const author = await remoteAccount(h.store, 'author', 'one.example')
+		const booster = await remoteAccount(h.store, 'booster', 'two.example')
+		await remoteFollows(h.store, h.users.viewer.id, booster)
+		const original = await seedStatus(h.store, { accountId: author, visibility: 'private' })
+		const boost = await seedStatus(h.store, { accountId: booster, visibility: 'public', reblogOfId: original })
+		for (const token of [undefined, h.users.viewer.token]) {
+			expect((await getJson(h, `/api/v1/statuses/${boost}`, token)).status).toBe(404)
+			expect((await getJson(h, `/api/v1/statuses/${boost}/favourited_by`, token)).status).toBe(404)
+			expect(await ids(h, `/api/v1/accounts/${booster}/statuses`, token)).toEqual([])
+		}
+		expect(await ids(h, '/api/v1/timelines/home', h.users.viewer.token)).toEqual([])
+	})
+
+	it('favourited_by and reblogged_by leave out accounts the viewer blocks, is blocked by, mutes or domain-blocks', async () => {
+		const h = await community(['viewer', 'author', 'muted', 'blocker'])
+		const { viewer, author, muted, blocker } = h.users
+		const far = await remoteAccount(h.store, 'far', 'far.example')
+		const status = await post(h, author, { status: 'x' })
+		for (const fan of [muted, blocker]) {
+			await act(h, fan, `/api/v1/statuses/${status.id}/favourite`)
+			await act(h, fan, `/api/v1/statuses/${status.id}/reblog`)
+		}
+		await sql(h.store, 'INSERT INTO favourites (account_id, status_id) VALUES (?, ?)', far, status.id)
+		await seedStatus(h.store, { accountId: far, visibility: 'public', reblogOfId: status.id })
+		await mute(h.store, viewer.id, muted.id)
+		await block(h.store, blocker.id, viewer.id)
+		await domainBlock(h.store, viewer.id, 'far.example')
+		for (const path of ['favourited_by', 'reblogged_by']) {
+			expect(await ids(h, `/api/v1/statuses/${status.id}/${path}`, viewer.token)).toEqual([])
+			expect(await ids(h, `/api/v1/statuses/${status.id}/${path}`)).toHaveLength(3)
+		}
+	})
+})
+
 describe('blocked and muted accounts stay out of lists', () => {
 	async function setup() {
 		const h = await community(['viewer', 'friend', 'muted', 'blocked'])
