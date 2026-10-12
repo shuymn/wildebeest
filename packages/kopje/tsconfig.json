@@ -12,7 +12,9 @@
 		"forceConsistentCasingInFileNames": true,
 		"strict": true,
 		"noUncheckedIndexedAccess": true,
-		"skipLibCheck": true
+		"skipLibCheck": true,
+		"jsx": "react-jsx",
+		"jsxImportSource": "hono/jsx"
 	},
-	"include": ["src/**/*.ts", "test/**/*.ts", "worker-configuration.d.ts"]
+	"include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "worker-configuration.d.ts"]
 }

@@ -17,7 +17,7 @@ const RANK: Record<string, number> = {
 }
 const PLATFORM_MODULE_LAYERS = new Set(['worker', 'platform'])
 
-const sources = import.meta.glob<string>(['../src/**/*.ts', '!../src/**/*.d.ts'], {
+const sources = import.meta.glob<string>(['../src/**/*.ts', '../src/**/*.tsx', '!../src/**/*.d.ts'], {
 	query: '?raw',
 	import: 'default',
 	eager: true,

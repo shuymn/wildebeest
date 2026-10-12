@@ -3,7 +3,7 @@ import type { MaintenanceMode } from '../platform/maintenance'
 // How a request is treated in maintenance (design §4, "maintenance mode").
 //   always  : actor documents and keys, WebFinger, NodeInfo, and /health GETs
 //   read    : any other GET (API, HTML, /ap/o)
-//   session : /oauth/* and Web Push subscription registration
+//   session : /oauth/*, app registration (a client registers before it logs in), and Web Push registration
 //   write   : any other write
 //   inbox   : POST to an inbox
 export type RequestClass = 'always' | 'read' | 'session' | 'write' | 'inbox'
@@ -35,7 +35,11 @@ export function classifyRequest(method: string, path: string): RequestClass {
 	if (method === 'POST' && INBOX_PATHS.some((p) => p.test(path))) {
 		return 'inbox'
 	}
-	if (path.startsWith('/oauth/') || (path === '/api/v1/push/subscription' && (method === 'POST' || method === 'PUT'))) {
+	if (
+		path.startsWith('/oauth/') ||
+		(path === '/api/v1/apps' && method === 'POST') ||
+		(path === '/api/v1/push/subscription' && (method === 'POST' || method === 'PUT'))
+	) {
 		return 'session'
 	}
 	return 'write'

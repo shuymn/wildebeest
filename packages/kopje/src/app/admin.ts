@@ -2,13 +2,15 @@ import { type Context, Hono } from 'hono'
 import { createMiddleware } from 'hono/factory'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 
-import { readBoundedBody } from './body'
 import { healthReport } from './health'
+import type { AccessSettings } from '../platform/access-settings'
+import { readBoundedBody } from '../platform/body'
 import { readConfig } from '../platform/config'
 import { errorMessage } from '../platform/error-message'
 import type { StoreResolver, StoreStub } from '../platform/store-client'
 import { toStoreUnavailable } from '../platform/store-errors'
-import { type AccessVerifier, timingSafeEqualText } from '../security/access-jwt'
+import { type AccessDeps, verifyAccessClaims } from '../security/access-jwt'
+import { constantTimeEqual } from '../security/tokens'
 
 // The admin HTTP API behind its own Access application. Every request is authenticated here as well:
 //   - Cf-Access-Jwt-Assertion verified against the team JWKS with the AUD from instance_settings, from the admin's
@@ -25,10 +27,9 @@ const JSON_BODY_LIMIT = 1024 * 1024
 const IMPORT_CHUNK_LIMIT = 16 * 1024 * 1024
 const TOKEN_PATHS = [/^\/admin\/import\//, /^\/admin\/(health|version|catalog)$/]
 
-export type AdminDeps = {
+export type AdminDeps = AccessDeps & {
 	build: (env: Env) => string
 	store: StoreResolver
-	verifyAccess: AccessVerifier
 }
 
 type AdminVariables = { auth: { kind: 'access' | 'import-token' } }
@@ -104,7 +105,22 @@ function parseTime(value: string): number | null {
 	return Number.isNaN(parsed) ? null : parsed
 }
 
-export function adminRoutes({ build, store, verifyAccess }: AdminDeps) {
+// The admin policy over a verified Access token: the admin's email, or the admin CLI's service token.
+function adminAllowed(
+	identity: { email: string | null; commonName: string | null },
+	access: AccessSettings
+): string | null {
+	if (identity.email !== null) {
+		const admin = access.adminEmail !== null && identity.email.toLowerCase() === access.adminEmail.toLowerCase()
+		return admin ? null : 'this identity is not the admin'
+	}
+	if (identity.commonName !== null && identity.commonName === access.serviceTokenClientId) {
+		return null
+	}
+	return 'this service token is not the admin CLI token'
+}
+
+export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
 	const admin = new Hono<AdminEnv>()
 	const stub = (c: Context<AdminEnv>): StoreStub => store(c.env)
 
@@ -124,7 +140,7 @@ export function adminRoutes({ build, store, verifyAccess }: AdminDeps) {
 						401
 					)
 				}
-				if (!timingSafeEqualText(presented, secret)) {
+				if (!constantTimeEqual(presented, secret)) {
 					return c.json({ error: 'invalid import token' }, 401)
 				}
 				if (!TOKEN_PATHS.some((p) => p.test(c.req.path))) {
@@ -140,14 +156,20 @@ export function adminRoutes({ build, store, verifyAccess }: AdminDeps) {
 				return next()
 			}
 			const { access } = await stub(c).adminGate(build(c.env))
-			const check = await verifyAccess(assertion, {
-				teamDomain: access.teamDomain,
-				aud: access.adminAud,
-				adminEmail: access.adminEmail,
-				serviceTokenClientId: access.serviceTokenClientId,
-			})
-			if (!check.ok) {
-				return c.json({ error: check.reason }, check.status)
+			if (access.teamDomain === null || access.adminAud === null) {
+				return c.json({ error: 'Access is not configured for /admin' }, 401)
+			}
+			const verified = await verifyAccessClaims(
+				assertion,
+				{ teamDomain: access.teamDomain, aud: access.adminAud },
+				{ fetch, now }
+			)
+			if (!verified.ok) {
+				return c.json({ error: `invalid Access token (${verified.reason})` }, 401)
+			}
+			const refused = adminAllowed(verified, access)
+			if (refused !== null) {
+				return c.json({ error: refused }, 403)
 			}
 			c.set('auth', { kind: 'access' })
 			await next()

@@ -173,8 +173,10 @@ All of these are `POST` under `/admin/import` with JSON, except `chunk`:
 - A resent chunk with `seq ≤ lastSeq` is reported as `duplicate` and is not applied again.
 - While an import record exists, every domain operation is refused. A failed verification needs `reset` and a new
   import.
-- The Store's own Access rows in `instance_settings` (`access_team_domain`, `access_admin_aud`, `admin_email`,
-  `access_service_token_client_id`) are configuration, not data. They do not make the Store non-empty. Begin moves
+- The Store's own Access rows in `instance_settings` are configuration, not data: the team domain shared with
+  `/oauth/authorize` (`access_team_domain`), plus the `/admin` application's `access_admin_aud`, `admin_email` and
+  `access_service_token_client_id`. `/oauth/authorize`'s `access_aud` is ordinary data and travels with the dump.
+  The configuration rows do not make the Store non-empty. Begin moves
   them into the import record, and they keep authorizing the admin during the import. After a successful
   verification, any of them that the dump did not bring are written back; imported values win.
 - `IMPORT_TOKEN` (header `Kopje-Import-Token`, at least 32 characters) authorizes these endpoints in two cases:

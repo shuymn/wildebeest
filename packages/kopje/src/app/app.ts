@@ -1,32 +1,45 @@
 import { Hono } from 'hono'
+import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 
 import { ADMIN_PREFIX, adminRoutes, isAdminPath } from './admin'
-import { readBoundedBody } from './body'
+import { authorizeRoutes } from './authorize'
 import { classifyRequest, decide, type RequestClass } from './gate'
 import { publicHealth } from './health'
 import { INBOX_ROUTES, inboxHandler } from '../federation/inbox'
 import { FEDERATION_PATHS, requireSetup } from '../federation/setup-gate'
 import { INBOX_BODY_LIMIT, spoolInbox } from '../federation/spool'
 import { maintenanceError, mastodonError } from '../mastodon/errors'
+import { mastodonApi } from '../mastodon/routes'
+import { readBoundedBody } from '../platform/body'
 import { readConfig } from '../platform/config'
 import { defaultStore, type StoreResolver } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
-import { type AccessVerifier, createAccessVerifier } from '../security/access-jwt'
+import { randomToken, type TokenGenerator } from '../security/tokens'
 
 export type AppDeps = {
 	// The build identity sent on every Store RPC (the Workers version id in production; tests inject one).
 	build: (env: Env) => string
 	now: () => number
 	store?: StoreResolver
-	// Verifies Cloudflare Access JWTs on /admin/* (tests inject one with their own JWKS).
-	verifyAccess?: AccessVerifier
+	// Seams for tests: the Access JWKS fetch and the generator of OAuth values.
+	fetch?: typeof fetch
+	randomToken?: TokenGenerator
 }
+
+const API_CORS_PATHS = ['/api/*', '/oauth/token', '/oauth/revoke']
 
 type AppEnv = { Bindings: Env; Variables: { requestClass: RequestClass; inboxBody: Uint8Array } }
 
-export function createApp({ build, now, store = defaultStore, verifyAccess = createAccessVerifier() }: AppDeps) {
+export function createApp({ build, now, store = defaultStore, fetch = globalThis.fetch, ...seams }: AppDeps) {
 	const app = new Hono<AppEnv>()
+
+	// Browser clients call the API and the token endpoints cross-origin; errors and maintenance answers carry the
+	// headers too. The consent page (/oauth/authorize) is not opened to other origins.
+	const apiCors = cors({ origin: '*', exposeHeaders: ['Link'], maxAge: 86400 })
+	for (const path of API_CORS_PATHS) {
+		app.use(path, apiCors)
+	}
 
 	// Maintenance gate, max(env, Store). The env mode (MAINTENANCE) is applied here. The Store applies its own readonly
 	// state to each RPC by operation kind, and a refusal arrives as StoreUnavailableError in onError: inbox requests
@@ -66,7 +79,7 @@ export function createApp({ build, now, store = defaultStore, verifyAccess = cre
 
 	app.get('/health', (c) => publicHealth(build(c.env), readConfig(c.env), () => store(c.env)))
 
-	app.route(ADMIN_PREFIX, adminRoutes({ build, store, verifyAccess }))
+	app.route(ADMIN_PREFIX, adminRoutes({ build, now, store, fetch: (input, init) => fetch(input, init) }))
 
 	const setupGate = requireSetup(build, store)
 	for (const path of FEDERATION_PATHS) {
@@ -77,6 +90,10 @@ export function createApp({ build, now, store = defaultStore, verifyAccess = cre
 	for (const path of INBOX_ROUTES) {
 		app.post(path, inbox)
 	}
+
+	const apiDeps = { build, now, store, randomToken: seams.randomToken ?? randomToken }
+	app.route('/', authorizeRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init) }))
+	app.route('/', mastodonApi(apiDeps))
 
 	app.notFound((c) => {
 		if (c.req.path.startsWith('/api/')) {

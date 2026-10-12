@@ -1,5 +1,7 @@
-// Cloudflare Access settings of the /admin application, stored in instance_settings by /setup (or by hand).
-//   access_team_domain               <team>.cloudflareaccess.com (issuer and JWKS host)
+// Cloudflare Access settings of the /admin application, stored in instance_settings by /setup (or by hand). The
+// /admin application is its own Access app (its policy also admits the CLI's service token), so it has its own AUD
+// next to /oauth/authorize's access_aud; the team, and so the issuer and key set, is shared.
+//   access_team_domain               <team>.cloudflareaccess.com, the same row as domain/oauth.ts ACCESS_TEAM_DOMAIN
 //   access_admin_aud                 AUD tag of the Access application that protects /admin/*
 //   admin_email                      the admin's Access identity
 //   access_service_token_client_id   client id of the admin CLI's service token (the JWT's common_name)

@@ -189,11 +189,12 @@ CREATE TABLE status_tags (
 CREATE INDEX status_tags_name ON status_tags (name, status_id);
 
 -- ============================================================
--- Edges (federated ones keep the sent/received activity ID in uri)
+-- Edges (federated ones keep the sent/received activity ID in uri). Ids are paging cursors
+-- that clients hold, so they are AUTOINCREMENT and never reused.
 -- ============================================================
 
 CREATE TABLE follows (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
   target_account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
   state TEXT NOT NULL CHECK (state IN ('pending', 'accepted')),
@@ -209,7 +210,7 @@ CREATE UNIQUE INDEX follows_pair ON follows (account_id, target_account_id);
 CREATE INDEX follows_target ON follows (target_account_id, state);
 
 CREATE TABLE favourites (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
   status_id TEXT NOT NULL REFERENCES statuses (id) ON DELETE CASCADE,
   uri TEXT,                                       -- Like activity ID
@@ -220,7 +221,7 @@ CREATE UNIQUE INDEX favourites_pair ON favourites (status_id, account_id);
 CREATE INDEX favourites_account ON favourites (account_id, id);
 
 CREATE TABLE bookmarks (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id TEXT NOT NULL REFERENCES local_accounts (account_id) ON DELETE CASCADE,
   status_id TEXT NOT NULL REFERENCES statuses (id) ON DELETE CASCADE,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -230,7 +231,7 @@ CREATE UNIQUE INDEX bookmarks_pair ON bookmarks (status_id, account_id);
 CREATE INDEX bookmarks_account ON bookmarks (account_id, id);
 
 CREATE TABLE blocks (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
   target_account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
   uri TEXT,                                       -- Block activity ID
@@ -242,7 +243,7 @@ CREATE UNIQUE INDEX blocks_pair ON blocks (account_id, target_account_id);
 CREATE INDEX blocks_target ON blocks (target_account_id, account_id);
 
 CREATE TABLE mutes (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id TEXT NOT NULL REFERENCES local_accounts (account_id) ON DELETE CASCADE,
   target_account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
   hide_notifications INTEGER NOT NULL DEFAULT 1 CHECK (hide_notifications IN (0, 1)),
@@ -254,7 +255,7 @@ CREATE UNIQUE INDEX mutes_pair ON mutes (account_id, target_account_id);
 CREATE INDEX mutes_target ON mutes (target_account_id);
 
 CREATE TABLE domain_blocks (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id TEXT NOT NULL REFERENCES local_accounts (account_id) ON DELETE CASCADE,
   domain TEXT NOT NULL CHECK (domain = lower(domain)),
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))

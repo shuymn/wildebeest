@@ -1,16 +1,15 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 
-import { accessKeys, accessToken, adminHarness, serviceClaims } from './access-helpers'
+import { type AccessTeam, accessToken, adminHarness, adminTeam, serviceClaims, setTeamAccess } from './access-helpers'
 import { BUILD, migratedStore } from './helpers'
-import { memoryIO, seedStore, setAccess, tableSnapshot } from './ops-helpers'
+import { memoryIO, seedStore, tableSnapshot } from './ops-helpers'
 import { run } from '../cli/lib/main.js'
 import type { StoreStub } from '../src/platform/store-client'
 
-type Keys = Awaited<ReturnType<typeof accessKeys>>
-let keys: Keys
+let team: AccessTeam
 
 beforeAll(async () => {
-	keys = await accessKeys()
+	team = await adminTeam()
 })
 
 const CLIENT_ID = 'cli-client.access'
@@ -22,7 +21,7 @@ type Hook = (request: Request, forward: () => Promise<Response>) => Promise<Resp
 // The Worker behind an Access edge: the edge turns a valid service token into a JWT and redirects anything else to
 // its login page, like Cloudflare Access does.
 function edge(store: StoreStub, hook?: Hook, env: Record<string, unknown> = {}) {
-	const { app, env: testEnv } = adminHarness(store, keys, { IMPORT_TOKEN, ...env })
+	const { app, env: testEnv } = adminHarness(store, team, { IMPORT_TOKEN, ...env })
 	const seen: Request[] = []
 	const fetch = async (input: string, init?: RequestInit) => {
 		const request = new Request(input, init)
@@ -36,7 +35,7 @@ function edge(store: StoreStub, hook?: Hook, env: Record<string, unknown> = {}) 
 		const headers = new Headers(request.headers)
 		headers.delete('CF-Access-Client-Id')
 		headers.delete('CF-Access-Client-Secret')
-		headers.set('Cf-Access-Jwt-Assertion', await accessToken(keys, serviceClaims()))
+		headers.set('Cf-Access-Jwt-Assertion', await accessToken(team, serviceClaims()))
 		const forwarded = new Request(request, { headers })
 		const forward = async () =>
 			app.fetch(forwarded, testEnv, { waitUntil: () => {}, passThroughOnException: () => {} } as never)
@@ -87,7 +86,7 @@ async function cli(
 async function sourceStore(statuses = 30): Promise<StoreStub> {
 	const store = await migratedStore()
 	await seedStore(store, statuses)
-	await setAccess(store)
+	await setTeamAccess(store, team)
 	return store
 }
 

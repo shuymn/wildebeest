@@ -60,6 +60,34 @@ describe('schema 0000', () => {
 		}
 	)
 
+	// Edge ids are pagination cursors (max_id, since_id, min_id) that clients hold: deleting the newest edge must not
+	// hand its id to the next one.
+	it.each([
+		['follows', `(account_id, target_account_id, state) VALUES ('${LOCAL}', ?, 'accepted')`],
+		['blocks', `(account_id, target_account_id) VALUES ('${LOCAL}', ?)`],
+		['mutes', `(account_id, target_account_id) VALUES ('${LOCAL}', ?)`],
+		['favourites', `(account_id, status_id) VALUES ('${LOCAL}', ?)`],
+		['bookmarks', `(account_id, status_id) VALUES ('${LOCAL}', ?)`],
+		['domain_blocks', `(account_id, domain) VALUES ('${LOCAL}', ?)`],
+	])('never reuses %s ids', async (table, values) => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(`
+				INSERT INTO accounts (id, uri, username) VALUES ('${LOCAL}', 'https://local.test/ap/users/me', 'me');
+				INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+					VALUES ('${LOCAL}', 'me@local.test', x'00', x'00', 'pem');
+				INSERT INTO accounts (id, uri, username, domain) VALUES ('${REMOTE}', 'https://remote.test/users/them', 'them', 'remote.test');
+				INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES ('${STATUS}', 'https://remote.test/notes/1', '${REMOTE}', 'public', 'now');
+			`)
+			const target =
+				table === 'favourites' || table === 'bookmarks' ? STATUS : table === 'domain_blocks' ? 'remote.test' : REMOTE
+			const insert = () => sql.exec<{ id: number }>(`INSERT INTO ${table} ${values} RETURNING id`, target).one().id
+			const first = insert()
+			sql.exec(`DELETE FROM ${table}`)
+			expect(insert()).toBeGreaterThan(first)
+		})
+	})
+
 	it('keeps local_accounts rows on local accounts only', async () => {
 		await runInDurableObject(await migratedStore(), (_instance, state) => {
 			const sql = state.storage.sql

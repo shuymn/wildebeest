@@ -1,40 +1,49 @@
 import { runInDurableObject } from 'cloudflare:test'
 
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 
-import { accessKeys, accessToken, adminClaims, adminHarness, serviceClaims } from './access-helpers'
+import {
+	type AccessTeam,
+	accessToken,
+	adminClaims,
+	adminHarness,
+	adminTeam,
+	serviceClaims,
+	setTeamAccess,
+} from './access-helpers'
+import { NOW } from './app-helpers'
 import { BUILD, migratedStore, testKernel } from './helpers'
-import { ADMIN_EMAIL, dumpViaRpc, importChunks, seedStore, setAccess, splitDump, TEAM_DOMAIN } from './ops-helpers'
+import { ADMIN_EMAIL, dumpViaRpc, importChunks, seedStore, splitDump } from './ops-helpers'
+import { ACCESS_TEAM_DOMAIN } from '../src/domain/oauth'
+import { ACCESS_SETTINGS } from '../src/platform/access-settings'
 import { StoreAdmin } from '../src/platform/store-admin'
 import type { StoreStub } from '../src/platform/store-client'
 
-type Keys = Awaited<ReturnType<typeof accessKeys>>
-let keys: Keys
-let otherKeys: Keys
+// A team of its own per test: the shared verifier caches key sets per isolate by team domain.
+let team: AccessTeam
 
-beforeAll(async () => {
-	keys = await accessKeys('key-1')
-	otherKeys = await accessKeys('key-1')
+beforeEach(async () => {
+	team = await adminTeam()
 })
 
 const IMPORT_TOKEN = 'import-token-0123456789abcdef0123456789'
 
 async function configuredStore(): Promise<StoreStub> {
 	const store = await migratedStore()
-	await setAccess(store)
+	await setTeamAccess(store, team)
 	return store
 }
 
 describe('admin authentication', () => {
 	it('accepts the admin email and the CLI service token', async () => {
-		const { as } = adminHarness(await configuredStore(), keys)
+		const { as } = adminHarness(await configuredStore(), team)
 		expect((await as(adminClaims(), '/admin/version')).status).toBe(200)
 		expect((await as({ email: ADMIN_EMAIL.toUpperCase() }, '/admin/version')).status).toBe(200)
 		expect((await as(serviceClaims(), '/admin/version')).status).toBe(200)
 	})
 
 	it('refuses a missing, foreign or malformed token with 401', async () => {
-		const { request, as } = adminHarness(await configuredStore(), keys)
+		const { request, as } = adminHarness(await configuredStore(), team)
 		const refused = async (response: Response) => {
 			expect(response.status).toBe(401)
 			return ((await response.json()) as { error: string }).error
@@ -42,47 +51,49 @@ describe('admin authentication', () => {
 		expect(await refused(await request('/admin/version'))).toMatch(/missing/)
 		await refused(await as({ ...adminClaims(), aud: ['another-app'] }, '/admin/version'))
 		await refused(await as({ ...adminClaims(), iss: 'https://evil.cloudflareaccess.com' }, '/admin/version'))
-		await refused(await as({ ...adminClaims(), exp: Math.floor(Date.now() / 1000) - 60 }, '/admin/version'))
+		// Beyond the 60 s clock tolerance.
+		await refused(await as({ ...adminClaims(), exp: Math.floor(NOW / 1000) - 120 }, '/admin/version'))
 		await refused(await as({ ...adminClaims(), exp: undefined }, '/admin/version'))
-		const forged = await accessToken(otherKeys, adminClaims())
+		const forged = await accessToken(team, adminClaims(), team.otherKey)
 		await refused(await request('/admin/version', { headers: { 'Cf-Access-Jwt-Assertion': forged } }))
 		const body = forged.split('.')[1]
-		const unsigned = `${btoa(JSON.stringify({ alg: 'none', typ: 'JWT', kid: 'key-1' })).replace(/=+$/, '')}.${body}.`
+		const unsigned = `${btoa(JSON.stringify({ alg: 'none', typ: 'JWT', kid: team.kid })).replace(/=+$/, '')}.${body}.`
 		await refused(await request('/admin/version', { headers: { 'Cf-Access-Jwt-Assertion': unsigned } }))
 	})
 
 	it('refuses identities that are not the admin with 403', async () => {
-		const { as } = adminHarness(await configuredStore(), keys)
+		const { as } = adminHarness(await configuredStore(), team)
 		expect((await as({ email: 'someone@kopje.test' }, '/admin/version')).status).toBe(403)
-		expect((await as({ common_name: 'other-client.access' }, '/admin/version')).status).toBe(403)
-		expect((await as({}, '/admin/version')).status).toBe(403)
+		expect((await as({ email: undefined, common_name: 'other-client.access' }, '/admin/version')).status).toBe(403)
+		expect((await as({ email: undefined }, '/admin/version')).status).toBe(403)
 	})
 
 	it('refuses everything while Access is not configured', async () => {
-		const { as } = adminHarness(await migratedStore(), keys)
+		const { as } = adminHarness(await migratedStore(), team)
 		const response = await as(adminClaims(), '/admin/version')
 		expect(response.status).toBe(401)
 		expect(await response.json()).toEqual({ error: 'Access is not configured for /admin' })
 	})
 
-	it('caches the JWKS and refetches it at most once a minute for an unknown key', async () => {
-		const { as, request, jwks } = adminHarness(await configuredStore(), keys)
-		await as(adminClaims(), '/admin/version')
-		await as(adminClaims(), '/admin/version')
-		expect(jwks.fetches).toBe(1)
-		const rotated = await accessKeys('key-2')
-		const token = await accessToken(rotated, adminClaims())
-		expect((await request('/admin/version', { headers: { 'Cf-Access-Jwt-Assertion': token } })).status).toBe(401)
-		expect(jwks.fetches).toBe(1)
+	// Key rotation and the 7-day stale limit belong to the shared verifier and are tested with /oauth/authorize.
+	it('verifies through the shared Access verifier and its cached key set', async () => {
+		const { as } = adminHarness(await configuredStore(), team)
+		expect((await as(adminClaims(), '/admin/version')).status).toBe(200)
+		expect((await as(serviceClaims(), '/admin/version')).status).toBe(200)
+		expect(team.fetch).toHaveBeenCalledOnce()
+	})
+
+	it('shares the team domain setting with /oauth/authorize', () => {
+		expect(ACCESS_SETTINGS.teamDomain).toBe(ACCESS_TEAM_DOMAIN)
 	})
 
 	it('works in full maintenance and with an invalid env, where the rest of the site is closed', async () => {
 		const store = await configuredStore()
-		const full = adminHarness(store, keys, { MAINTENANCE: 'full' })
+		const full = adminHarness(store, team, { MAINTENANCE: 'full' })
 		expect((await full.request('/api/v1/instance')).status).toBe(503)
 		expect((await full.as(adminClaims(), '/admin/health')).status).toBe(200)
 
-		const invalid = adminHarness(store, keys, { MAINTENANCE: 'sometimes' })
+		const invalid = adminHarness(store, team, { MAINTENANCE: 'sometimes' })
 		const health = await invalid.as(adminClaims(), '/admin/health')
 		expect(health.status).toBe(200)
 		expect(await health.json()).toMatchObject({ ok: false, checks: { env: { ok: false } } })
@@ -99,7 +110,7 @@ describe('import token', () => {
 		const source = await migratedStore()
 		await seedStore(source, 0)
 		const { header } = splitDump((await dumpViaRpc(source)).text)
-		const { request } = adminHarness(await migratedStore(), keys, { IMPORT_TOKEN })
+		const { request } = adminHarness(await migratedStore(), team, { IMPORT_TOKEN })
 		const begin = await request('/admin/import/begin', withToken({ method: 'POST', body: JSON.stringify({ header }) }))
 		expect(begin.status).toBe(200)
 		expect(await begin.json()).toMatchObject({ progress: { mode: 'token', lastSeq: 0 } })
@@ -107,7 +118,7 @@ describe('import token', () => {
 	})
 
 	it('is refused when wrong, unset, short, outside import, or once the Store has data or Access', async () => {
-		const empty = adminHarness(await migratedStore(), keys, { IMPORT_TOKEN })
+		const empty = adminHarness(await migratedStore(), team, { IMPORT_TOKEN })
 		const wrong = await empty.request('/admin/import/progress', {
 			headers: { 'Kopje-Import-Token': `${IMPORT_TOKEN}x` },
 		})
@@ -117,18 +128,18 @@ describe('import token', () => {
 		)
 		expect((await empty.request('/admin/dump/start', withToken({ method: 'POST' }))).status).toBe(403)
 
-		const unset = adminHarness(await migratedStore(), keys)
+		const unset = adminHarness(await migratedStore(), team)
 		expect((await unset.request('/admin/import/progress', withToken())).status).toBe(401)
-		const short = adminHarness(await migratedStore(), keys, { IMPORT_TOKEN: 'short' })
+		const short = adminHarness(await migratedStore(), team, { IMPORT_TOKEN: 'short' })
 		expect((await short.request('/admin/import/progress', { headers: { 'Kopje-Import-Token': 'short' } })).status).toBe(
 			401
 		)
 
-		const configured = adminHarness(await configuredStore(), keys, { IMPORT_TOKEN })
+		const configured = adminHarness(await configuredStore(), team, { IMPORT_TOKEN })
 		expect((await configured.request('/admin/import/progress', withToken())).status).toBe(403)
 		const withData = await migratedStore()
 		await seedStore(withData, 0)
-		const used = adminHarness(withData, keys, { IMPORT_TOKEN })
+		const used = adminHarness(withData, team, { IMPORT_TOKEN })
 		expect((await used.request('/admin/import/progress', withToken())).status).toBe(403)
 	})
 })
@@ -137,7 +148,7 @@ describe('admin endpoints', () => {
 	it('reports health, version, capacity and spool', async () => {
 		const store = await configuredStore()
 		await seedStore(store, 0)
-		const { as } = adminHarness(store, keys)
+		const { as } = adminHarness(store, team)
 		expect(await (await as(adminClaims(), '/admin/health')).json()).toMatchObject({
 			ok: true,
 			maintenance: 'off',
@@ -165,7 +176,7 @@ describe('admin endpoints', () => {
 
 	it('enters and leaves maintenance', async () => {
 		const store = await configuredStore()
-		const { post } = adminHarness(store, keys)
+		const { post } = adminHarness(store, team)
 		expect((await post(adminClaims(), '/admin/maintenance', { on: 'yes' })).status).toBe(400)
 		expect(await (await post(adminClaims(), '/admin/maintenance', { on: true })).json()).toEqual({ maintenance: true })
 		expect(await store.health(BUILD)).toMatchObject({ maintenance: true, readonly: true })
@@ -174,7 +185,7 @@ describe('admin endpoints', () => {
 	})
 
 	it('runs read-only SQL and refuses anything else', async () => {
-		const { post } = adminHarness(await configuredStore(), keys)
+		const { post } = adminHarness(await configuredStore(), team)
 		const ok = await post(adminClaims(), '/admin/sql', {
 			sql: "SELECT value FROM instance_settings WHERE name = 'admin_email'",
 		})
@@ -186,7 +197,7 @@ describe('admin endpoints', () => {
 
 	it('dumps over HTTP with a framed cursor', async () => {
 		const store = await configuredStore()
-		const { post } = adminHarness(store, keys)
+		const { post } = adminHarness(store, team)
 		const started = (await (await post(adminClaims(), '/admin/dump/start')).json()) as {
 			cursor: unknown
 			headerLine: string
@@ -212,7 +223,7 @@ describe('admin endpoints', () => {
 	it('needs confirmation to reset and refuses to reset a serving Store', async () => {
 		const store = await configuredStore()
 		await seedStore(store, 0)
-		const { post } = adminHarness(store, keys)
+		const { post } = adminHarness(store, team)
 		expect((await post(adminClaims(), '/admin/import/reset', {})).status).toBe(400)
 		const refused = await post(adminClaims(), '/admin/import/reset', { confirm: true })
 		expect(refused.status).toBe(409)
@@ -220,7 +231,7 @@ describe('admin endpoints', () => {
 	})
 
 	it('retries the upgrade', async () => {
-		const { post } = adminHarness(await configuredStore(), keys)
+		const { post } = adminHarness(await configuredStore(), team)
 		const response = await post(adminClaims(), '/admin/upgrade/retry')
 		expect(response.status).toBe(200)
 		expect(await response.json()).toMatchObject({ ok: true })
@@ -229,7 +240,7 @@ describe('admin endpoints', () => {
 
 describe('PITR', () => {
 	it('returns the current bookmark and validates times', async () => {
-		const { as } = adminHarness(await configuredStore(), keys)
+		const { as } = adminHarness(await configuredStore(), team)
 		expect(await (await as(adminClaims(), '/admin/pitr/bookmark')).json()).toMatchObject({
 			bookmark: expect.any(String),
 			at: null,
@@ -268,12 +279,12 @@ describe('PITR', () => {
 				return Promise.reject(new Error('restoring PITR bookmark'))
 			},
 		} as unknown as StoreStub
-		const open = adminHarness(restarting, keys)
+		const open = adminHarness(restarting, team)
 		const refused = await open.post(adminClaims(), '/admin/pitr/restore', { bookmark: 'abc-123' })
 		expect(refused.status).toBe(409)
 		expect(await refused.json()).toMatchObject({ code: 'maintenance-required' })
 
-		const full = adminHarness(restarting, keys, { MAINTENANCE: 'full' })
+		const full = adminHarness(restarting, team, { MAINTENANCE: 'full' })
 		expect((await full.post(adminClaims(), '/admin/pitr/restore', { bookmark: 'not a bookmark!' })).status).toBe(400)
 		const accepted = await full.post(adminClaims(), '/admin/pitr/restore', { bookmark: 'abc-123' })
 		expect(accepted.status).toBe(202)
@@ -283,7 +294,7 @@ describe('PITR', () => {
 
 	it('passes other restore failures through', async () => {
 		// Miniflare cannot restore, so the real call fails with the platform's message.
-		const full = adminHarness(await configuredStore(), keys, { MAINTENANCE: 'full' })
+		const full = adminHarness(await configuredStore(), team, { MAINTENANCE: 'full' })
 		const failed = await full.post(adminClaims(), '/admin/pitr/restore', { bookmark: 'abc-123' })
 		expect(failed.status).toBe(500)
 		expect(await failed.json()).toMatchObject({ code: 'internal' })
@@ -293,10 +304,10 @@ describe('PITR', () => {
 describe('team domain', () => {
 	it('uses the issuer and JWKS of the configured team, with or without a scheme', async () => {
 		const store = await migratedStore()
-		await setAccess(store, { access_team_domain: `https://${TEAM_DOMAIN}/` })
-		const { as, jwks } = adminHarness(store, keys)
+		await setTeamAccess(store, team, { access_team_domain: `https://${team.teamDomain}/` })
+		const { as } = adminHarness(store, team)
 		expect((await as(adminClaims(), '/admin/version')).status).toBe(200)
-		expect(jwks.fetches).toBe(1)
+		expect(team.fetch).toHaveBeenCalledOnce()
 	})
 })
 
@@ -307,7 +318,7 @@ describe('import bootstrap over Access', () => {
 		const { text } = await dumpViaRpc(source)
 		const { header, trailer } = splitDump(text)
 		const target = await configuredStore()
-		const { post, as } = adminHarness(target, keys)
+		const { post, as } = adminHarness(target, team)
 
 		const begun = await post(adminClaims(), '/admin/import/begin', { header })
 		expect(begun.status).toBe(200)
