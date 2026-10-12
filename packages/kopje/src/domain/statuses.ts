@@ -649,20 +649,13 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 			resolved,
 			limits.ancestors
 		)
+		const tree = descendantTree(db, resolved, limits.depth, limits.traversal)
 		const descendants = db.all<{ id: string }>(
-			`WITH RECURSIVE down (id, path, depth) AS (
-				SELECT id, id, 1 FROM statuses WHERE in_reply_to_id = ?2
-				UNION ALL
-				SELECT s.id, down.path || '/' || s.id, down.depth + 1 FROM statuses s JOIN down ON s.in_reply_to_id = down.id
-				WHERE down.depth < ?4
-				LIMIT ?5
-			)
-			SELECT s.id FROM down JOIN statuses s ON s.id = down.id WHERE ${listableSql('s', '?1')} ORDER BY down.path LIMIT ?3`,
+			`SELECT s.id FROM json_each(?2) j JOIN statuses s ON s.id = j.value
+			WHERE ${listableSql('s', '?1')} ORDER BY j.key LIMIT ?3`,
 			viewerId,
-			resolved,
-			limits.descendants,
-			limits.depth,
-			limits.traversal
+			JSON.stringify(tree),
+			limits.descendants
 		)
 		const options = { ...present, viewerId }
 		return {
@@ -682,6 +675,49 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 		}
 	}
 )
+
+// The replies under `rootId`, depth first with siblings in id order, read level by level: each level fetches the
+// children of the current frontier through the in_reply_to index with LIMIT set to the budget that remains, so the
+// rows read stay within the budget however wide or deep the tree is (a recursive CTE would queue every child before
+// its LIMIT applies). Only the bounded result is ordered. A cycle in remote data is cut at the first repeat.
+function descendantTree(db: Db, rootId: string, maxDepth: number, budget: number): string[] {
+	const children = new Map<string, string[]>()
+	const seen = new Set([rootId])
+	let frontier = [rootId]
+	let remaining = budget
+	for (let depth = 0; depth < maxDepth && frontier.length > 0 && remaining > 0; depth++) {
+		const rows = db.all<{ id: string; parent: string }>(
+			`SELECT s.id, s.in_reply_to_id AS parent FROM json_each(?1) f CROSS JOIN statuses s
+			WHERE s.in_reply_to_id = f.value LIMIT ?2`,
+			JSON.stringify(frontier),
+			remaining
+		)
+		remaining -= rows.length
+		frontier = []
+		for (const row of rows) {
+			if (seen.has(row.id)) {
+				continue
+			}
+			seen.add(row.id)
+			frontier.push(row.id)
+			const siblings = children.get(row.parent)
+			if (siblings === undefined) {
+				children.set(row.parent, [row.id])
+			} else {
+				siblings.push(row.id)
+			}
+		}
+	}
+	const ordered: string[] = []
+	const visit = (id: string): void => {
+		for (const child of (children.get(id) ?? []).sort()) {
+			ordered.push(child)
+			visit(child)
+		}
+	}
+	visit(rootId)
+	return ordered
+}
 
 export type StatusEdit = {
 	content: string
