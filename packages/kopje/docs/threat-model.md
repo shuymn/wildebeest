@@ -234,7 +234,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   favourites, `favourited_by` and `reblogged_by` drop authors the viewer blocks, mutes or domain-blocks. A single status
   by id is not filtered. _Enforced (main):_ `unfilteredSql` and `listableSql` in
   `src/domain/audience.ts`; `test/audience.test.ts`, `test/visibility.test.ts` ("blocked and muted accounts stay out of
-  lists").
+  lists"). _Implemented on branch `kopje/inbound-statuses`:_ a domain block matches an account by its stored domain
+  and by the host of its actor id (`domainBlockMatchSql`), everywhere a domain block applies (lists, notifications,
+  relationships, inbound Follows and Moves, account search and search resolution), so an account confirmed under
+  another WebFinger domain cannot escape a block of the server it lives on; `test/inbox-statuses-edge.test.ts`
+  ("applies a domain block to the actor’s host whatever domain it was confirmed under").
 - **VIS-6: a wrapper reveals nothing its target hides.** A boost is visible only if its original is; boosting is limited
   to `public` and `unlisted` statuses and one's own `private` ones (`StatusPolicy#reblog?`). _Enforced (main):_ `viewableSql`; `test/visibility.test.ts` ("a boost of an original the viewer may not see is hidden
   with it"), `test/statuses.test.ts` ("refuses to boost direct and others’ private statuses"). Quotes and other embedded
@@ -406,8 +410,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   owner's key or the instance actor's, never from the signed-document cache; search with `resolve=true` fetches as
   the instance actor only, for a request whose token is valid and has the scope (401 or 403 otherwise, before
   anything is fetched), with WebFinger unsigned. An address whose WebFinger names an actor on another host is stored
-  under the address's domain only if the actor's own username at that domain names the same actor; otherwise under
-  the actor's host. One helper (`accountDomain` in `src/domain/inbox.ts`) decides the stored domain for every path,
+  under the address's domain only if that domain itself vouches for it: its own WebFinger for the actor's username names
+  the same actor id (the actor, or its host, never vouches for another domain); otherwise under the actor's host
+  (`test/inbox-statuses-edge.test.ts`, "never takes a domain the claimed domain does not vouch for"). One helper (`accountDomain` in `src/domain/inbox.ts`) decides the stored domain for every path,
   and an inbound document never replaces a confirmed domain. _Gap:_ inbound activities do not look up WebFinger, so
   an account first seen inbound shows its actor's host until it is resolved by its address. `createRemoteLoaders` in
   `src/federation/federation.ts`, `src/federation/resolve.ts`; `test/inbox-statuses.test.ts` ("signed by the instance

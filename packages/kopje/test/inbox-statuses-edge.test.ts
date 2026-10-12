@@ -409,12 +409,23 @@ describe('RES-4: bounds at their limits', () => {
 		const note = mastodonNote(bob)
 		await t.post(bob, create(bob, note))
 		const id = (await statusRow(t.store, note.id))!.id
-		for (let i = 1; i < MAX_STATUS_EDITS; i++) {
-			await t.post(bob, update(bob, { ...note, content: `<p>v${i}</p>` }, at(i)))
-		}
-		expect(await sql(t.store, 'SELECT count(*) AS n FROM status_edits WHERE status_id = ?', id)).toEqual([
-			{ n: MAX_STATUS_EDITS },
-		])
+		// One edit through the inbox (the original and v1), then history seeded up to one short of the cap.
+		await t.post(bob, update(bob, { ...note, content: '<p>v1</p>' }, at(1)))
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 2 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+			INSERT INTO status_edits (status_id, content, created_at) SELECT ?, '<p>v' || i || '</p>', ? FROM n`,
+			MAX_STATUS_EDITS - 2,
+			id,
+			at(2)
+		)
+		await sql(t.store, 'UPDATE statuses SET remote_version = ? WHERE id = ?', at(MAX_STATUS_EDITS - 2), id)
+		const count = () => sql(t.store, 'SELECT count(*) AS n FROM status_edits WHERE status_id = ?', id)
+		expect(await count()).toEqual([{ n: MAX_STATUS_EDITS - 1 }])
+		// The 100th version is kept like any other.
+		await t.post(bob, update(bob, { ...note, content: `<p>v${MAX_STATUS_EDITS - 1}</p>` }, at(MAX_STATUS_EDITS - 1)))
+		expect(await count()).toEqual([{ n: MAX_STATUS_EDITS }])
+		// The 101st replaces the newest.
 		await t.post(bob, update(bob, { ...note, content: '<p>latest</p>' }, at(MAX_STATUS_EDITS)))
 		const history = await sql<{ content: string }>(
 			t.store,
@@ -424,6 +435,7 @@ describe('RES-4: bounds at their limits', () => {
 		expect(history).toHaveLength(MAX_STATUS_EDITS)
 		expect(history[0]?.content).toBe(note.content)
 		expect(history.at(-2)?.content).toBe(`<p>v${MAX_STATUS_EDITS - 2}</p>`)
+		expect((await statusRow(t.store, note.id))?.content).toBe('<p>latest</p>')
 		expect(history.at(-1)?.content).toBe('<p>latest</p>')
 	})
 
@@ -614,6 +626,50 @@ describe('the canonical WebFinger domain', () => {
 		])
 		const exact = await t.api<{ accounts: { acct: string }[] }>('/api/v2/search?q=ali%40example.org&type=accounts')
 		expect(exact.body.accounts.map((a) => a.acct)).toEqual(['ali@example.org'])
+	})
+
+	it('never takes a domain the claimed domain does not vouch for: an actor elsewhere claiming it keeps its host', async () => {
+		const t = await setup()
+		const evil = await mastodonActor(t.web, 'alice', { origin: 'https://evil.example', key: 3 })
+		// evil.example's WebFinger claims victim.example's address; victim.example's names someone else.
+		t.web.serve(
+			`https://evil.example/.well-known/webfinger?resource=${encodeURIComponent('acct:alice@evil.example')}`,
+			{
+				subject: 'acct:alice@victim.example',
+				aliases: ['acct:alice@victim.example'],
+				links: [{ rel: 'self', type: AP, href: evil.uri }],
+			},
+			'application/jrd+json'
+		)
+		webfinger(t, 'acct:alice@victim.example', 'victim.example', 'https://victim.example/users/alice')
+		const viaEvil = await t.api<{ accounts: { acct: string }[] }>('/api/v2/search?resolve=true&q=alice%40evil.example')
+		expect(viaEvil.body.accounts.map((a) => a.acct)).toEqual(['alice@evil.example'])
+		const viaVictim = await t.api<{ accounts: { acct: string }[] }>(
+			'/api/v2/search?resolve=true&q=alice%40victim.example'
+		)
+		expect(viaVictim.body.accounts.map((a) => a.acct)).not.toContain('alice@evil.example')
+		expect(await sql(t.store, 'SELECT domain FROM accounts WHERE uri = ?', evil.uri)).toEqual([
+			{ domain: 'evil.example' },
+		])
+		expect(await sql(t.store, "SELECT uri FROM accounts WHERE domain = 'victim.example'")).toEqual([])
+	})
+
+	it('applies a domain block to the actor’s host whatever domain it was confirmed under (inbox and search)', async () => {
+		const t = await setup()
+		const ali = await mastodonActor(t.web, 'ali', { origin: 'https://blocked.example', key: 3 })
+		webfinger(t, 'acct:ali@nice.example', 'nice.example', ali.uri)
+		await sql(t.store, "INSERT INTO domain_blocks (account_id, domain) VALUES (?, 'blocked.example')", ALICE)
+		const forDave = await t.api<{ accounts: { acct: string }[] }>(
+			'/api/v2/search?resolve=true&q=ali%40nice.example',
+			'dave'
+		)
+		expect(forDave.body.accounts.map((a) => a.acct)).toEqual(['ali@nice.example'])
+		const forAlice = await t.api<{ accounts: unknown[] }>('/api/v2/search?resolve=true&q=ali%40nice.example')
+		expect(forAlice.body.accounts).toEqual([])
+		const follow = { '@context': AS, id: `${ali.uri}#follow`, type: 'Follow', actor: ali.uri, object: ALICE_URI }
+		expect(await t.post(ali, follow)).toBe(202)
+		expect(await sql(t.store, 'SELECT * FROM follows WHERE target_account_id = ?', ALICE)).toEqual([])
+		expect(await notifications(t.store)).toEqual([])
 	})
 
 	it('keeps the actor’s host when the reverse lookup does not confirm the domain', async () => {
