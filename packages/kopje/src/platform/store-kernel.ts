@@ -73,6 +73,9 @@ export type Snapshot = { contentType: string; body: string }
 
 export const SNAPSHOT_STATE_PREFIX = 'snapshot:'
 
+// The row: the snapshot and the time it was rendered, or only the time once an oversized replacement emptied it.
+export type StoredSnapshot = (Snapshot & { renderedAt: number }) | { renderedAt: number }
+
 // Caps that keep the snapshots bounded whatever a request asks for: keys have one of two shapes and a bounded length,
 // and a body over the size cap is never stored (the rescue path then answers 503, as without a snapshot).
 export const SNAPSHOT_MAX_KEY_LENGTH = 512
@@ -167,7 +170,10 @@ export class StoreKernel {
 		}
 		try {
 			const value = this.#readState(`${SNAPSHOT_STATE_PREFIX}${key}`)
-			return value === null ? null : (JSON.parse(value) as Snapshot)
+			const stored = value === null ? null : (JSON.parse(value) as Partial<Snapshot>)
+			return stored?.contentType === undefined || stored.body === undefined
+				? null
+				: { contentType: stored.contentType, body: stored.body }
 		} catch (error) {
 			this.#log({ event: 'kopje.store.snapshot.unreadable', key, error: errorMessage(error) })
 			return null

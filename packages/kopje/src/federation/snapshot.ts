@@ -41,7 +41,8 @@ export type SnapshotSaver = (
 	build: string,
 	key: string,
 	snapshot: Snapshot,
-	source: SnapshotSource
+	source: SnapshotSource,
+	renderedAt: number
 ) => Promise<void>
 
 // Remembers, per isolate, what each key last saved, so a steady document does not cost a Store write RPC on every
@@ -49,7 +50,7 @@ export type SnapshotSaver = (
 // rotation. The map is bounded like the keys (see federationHandler).
 export function createSnapshotSaver(now: () => number): SnapshotSaver {
 	const saved = new Map<string, { digest: string; at: number }>()
-	return async (store, build, key, snapshot, source) => {
+	return async (store, build, key, snapshot, source, renderedAt) => {
 		// An oversized body still goes to the Store, which drops the kept snapshot of the key.
 		if (!isSnapshotKey(key)) {
 			return
@@ -63,7 +64,7 @@ export function createSnapshotSaver(now: () => number): SnapshotSaver {
 		}
 		try {
 			// Only a stored body counts as saved: a refused one (stale source, oversized) must not suppress a later save.
-			if (await callStore(() => store.saveSnapshot(build, { key, ...snapshot, source }))) {
+			if (await callStore(() => store.saveSnapshot(build, { key, ...snapshot, source, renderedAt }))) {
 				saved.set(key, { digest, at: now() })
 			}
 		} catch (error) {

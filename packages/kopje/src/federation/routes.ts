@@ -39,6 +39,8 @@ export function federationHandler(deps: FederationRouteDeps): Handler<Federation
 	const saveSnapshot = createSnapshotSaver(deps.now)
 	return async (c) => {
 		const url = new URL(c.req.url)
+		// Taken before rendering: the Store refuses a save rendered earlier than the one it keeps.
+		const renderedAt = deps.now()
 		const { response, source } = await respond(c, deps, url)
 		const key = snapshotKey(url)
 		if (source === null || key === null || response.status !== 200 || response.body === null) {
@@ -46,7 +48,9 @@ export function federationHandler(deps: FederationRouteDeps): Handler<Federation
 		}
 		const body = await response.text()
 		const contentType = response.headers.get('content-type') ?? 'application/json'
-		c.executionCtx.waitUntil(saveSnapshot(deps.store(c.env), deps.build(c.env), key, { contentType, body }, source))
+		c.executionCtx.waitUntil(
+			saveSnapshot(deps.store(c.env), deps.build(c.env), key, { contentType, body }, source, renderedAt)
+		)
 		return new Response(body, response)
 	}
 }
