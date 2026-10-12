@@ -323,11 +323,89 @@ describe('authorize, consent, token, API call', () => {
 		expect(await response.text()).toContain('invalid_scope')
 	})
 
-	it('refuses an Access identity without a local account', async () => {
+	// RFC 6749 §4.1.2.1: the client and callback are verified, so the refusal goes back to the client with the state.
+	it('refuses an Access identity without a local account with access_denied at the callback', async () => {
 		const h = await withAlice()
 		const app = await registerApp(h)
-		expect((await consentPage(h, app, { email: 'bob@example.com' })).status).toBe(403)
-		expect((await decide(h, app, 'approve', { email: 'bob@example.com' })).status).toBe(403)
+		for (const response of [
+			await consentPage(h, app, { email: 'bob@example.com', state: 'st' }),
+			await decide(h, app, 'approve', { email: 'bob@example.com', state: 'st' }),
+		]) {
+			expect(response.status).toBe(302)
+			const location = new URL(response.headers.get('location')!)
+			expect(location.origin + location.pathname).toBe(app.redirect_uri)
+			expect(location.searchParams.get('error')).toBe('access_denied')
+			expect(location.searchParams.get('state')).toBe('st')
+		}
+		expect(await sql(h.store, 'SELECT 1 FROM oauth_tokens')).toEqual([])
+	})
+
+	it('refuses an account suspended between the consent page and approval', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h)
+		expect((await consentPage(h, app, { state: 'st' })).status).toBe(200)
+		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ?', new Date(NOW).toISOString())
+		const response = await decide(h, app, 'approve', { state: 'st' })
+		expect(response.status).toBe(302)
+		const location = new URL(response.headers.get('location')!)
+		expect(location.searchParams.get('error')).toBe('access_denied')
+		expect(location.searchParams.get('state')).toBe('st')
+		expect(location.searchParams.get('code')).toBeNull()
+		expect(await sql(h.store, 'SELECT 1 FROM oauth_tokens')).toEqual([])
+	})
+
+	it('keeps account refusals on the page for the out-of-band redirect URI', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h, { redirectUri: 'urn:ietf:wg:oauth:2.0:oob' })
+		for (const response of [
+			await consentPage(h, app, { email: 'bob@example.com' }),
+			await decide(h, app, 'approve', { email: 'bob@example.com' }),
+		]) {
+			expect(response.status).toBe(403)
+			expect(response.headers.get('location')).toBeNull()
+		}
+	})
+
+	// RFC 6749 §4.1.2.1: the original state goes back with every error, unless state itself is what is wrong.
+	it('keeps a unique state in the error for another repeated parameter, and drops only a bad state', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h)
+		const assertion = await h.team.assertion()
+		const authorize = async (pairs: [string, string][]) => {
+			const query = new URLSearchParams([
+				['response_type', 'code'],
+				['client_id', app.client_id],
+				['redirect_uri', app.redirect_uri],
+				...pairs,
+			])
+			const response = await h.request(`/oauth/authorize?${query.toString()}`, {
+				headers: { 'cf-access-jwt-assertion': assertion },
+			})
+			expect(response.status).toBe(302)
+			return new URL(response.headers.get('location')!).searchParams
+		}
+		const repeatedScope = await authorize([
+			['scope', 'read'],
+			['scope', 'write'],
+			['state', 'unique123'],
+		])
+		expect(repeatedScope.get('error')).toBe('invalid_request')
+		expect(repeatedScope.get('state')).toBe('unique123')
+
+		const repeatedState = await authorize([
+			['scope', 'read'],
+			['state', 'a'],
+			['state', 'b'],
+		])
+		expect(repeatedState.get('error')).toBe('invalid_request')
+		expect(repeatedState.has('state')).toBe(false)
+
+		const longState = await authorize([
+			['scope', 'read'],
+			['state', 'x'.repeat(2001)],
+		])
+		expect(longState.get('error')).toBe('invalid_request')
+		expect(longState.has('state')).toBe(false)
 	})
 
 	it('answers 503 until Access is configured', async () => {
@@ -779,10 +857,10 @@ describe('suspension', () => {
 
 		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(token))).status).toBe(401)
 		expect((await exchange(h, app, pending)).status).toBe(400)
-		const consent = await consentPage(h, app)
-		expect(consent.status).toBe(403)
-		expect(await consent.text()).toContain('suspended')
-		expect((await decide(h, app, 'approve')).status).toBe(403)
+		for (const response of [await consentPage(h, app), await decide(h, app, 'approve')]) {
+			expect(response.status).toBe(302)
+			expect(new URL(response.headers.get('location')!).searchParams.get('error')).toBe('access_denied')
+		}
 	})
 
 	it('refuses a token that survived the suspension', async () => {

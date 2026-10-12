@@ -131,18 +131,21 @@ async function check(
 			response: message(c, 400, 'Invalid request', 'The redirect URI is not registered for this application.'),
 		}
 	}
+	// The state is checked on its own first, so that every later error carries it back (RFC 6749 §4.1.2.1). Only a
+	// repeated or too long state is left out: it is the error, and cannot be sent back as the client sent it.
+	const sentState = get('state')
+	const stateOk = params.repeated(['state']) === undefined && (sentState?.length ?? 0) <= MAX_STATE
+	const state = stateOk ? sentState : undefined
 	const repeated = params.repeated(AUTHORIZE_PARAMS)
 	if (repeated !== undefined) {
 		return {
-			response: authorizationError(c, redirectUri, undefined, {
+			response: authorizationError(c, redirectUri, state, {
 				error: 'invalid_request',
 				description: `The ${repeated} parameter is repeated.`,
 			}),
 		}
 	}
-	const state = get('state')
-	if (state !== undefined && state.length > MAX_STATE) {
-		// Too long to send back: the error goes without it.
+	if (!stateOk) {
 		return {
 			response: authorizationError(c, redirectUri, undefined, {
 				error: 'invalid_request',
@@ -159,6 +162,19 @@ async function check(
 
 const NO_ACCOUNT = 'There is no account for this sign-in on this server.'
 const SUSPENDED = 'This account has been suspended.'
+
+// The signed-in account cannot authorize (none, or suspended). The client and callback are verified by now, so the
+// refusal goes back to the client as access_denied with the state (RFC 6749 §4.1.2.1); OOB shows it on the page.
+function accountRefused(
+	c: Context,
+	request: AuthorizationRequest,
+	title: string,
+	text: string
+): Response | Promise<Response> {
+	return request.redirectUri === OOB_REDIRECT_URI
+		? message(c, 403, title, text)
+		: authorizationError(c, request.redirectUri, request.state, { error: 'access_denied', description: text })
+}
 
 function redirectTo(uri: string, params: Record<string, string | undefined>): Response {
 	const url = new URL(uri)
@@ -181,10 +197,10 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 		const login = await storeCall(c, deps, (s, b) => s.accountForLogin(b, { email }))
 		if (login.status === 'no_account') {
 			// TODO(first-login): create the account for this Access identity here once the keyring is available.
-			return message(c, 403, 'No account', NO_ACCOUNT)
+			return accountRefused(c, request, 'No account', NO_ACCOUNT)
 		}
 		if (login.status === 'suspended') {
-			return message(c, 403, 'Account suspended', SUSPENDED)
+			return accountRefused(c, request, 'Account suspended', SUSPENDED)
 		}
 		const fields: ConsentFields = {
 			client_id: request.client.id,
@@ -246,9 +262,10 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 					? page(c, 200, <CodePage code={code} />)
 					: redirectTo(request.redirectUri, { code, state: request.state })
 			case 'no_account':
-				return message(c, 403, 'No account', NO_ACCOUNT)
+				return accountRefused(c, request, 'No account', NO_ACCOUNT)
 			case 'suspended':
-				return message(c, 403, 'Account suspended', SUSPENDED)
+				return accountRefused(c, request, 'Account suspended', SUSPENDED)
+			// The client or its redirect URIs changed after the check: the callback is no longer verified.
 			case 'invalid_request':
 				return message(c, 400, 'Invalid request', 'The application or its redirect URI changed. Start again.')
 		}
