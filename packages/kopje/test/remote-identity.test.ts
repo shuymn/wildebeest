@@ -1,4 +1,5 @@
-import { verifyRequestDetailed } from '@fedify/fedify'
+import { fetchKeyDetailed, verifyRequestDetailed } from '@fedify/fedify'
+import { CryptographicKey } from '@fedify/vocab'
 import { describe, expect, it } from 'vitest'
 
 import { NOW } from './app-helpers'
@@ -73,20 +74,28 @@ describe('remote identity behind a JSON-LD alias', () => {
 	})
 
 	it('cannot lend its key to the victim in signature verification', async () => {
+		// The pair differs only in the identity the document claims through the alias. The embedded key id equals the
+		// signing keyId and the owner stays the attacker in both, so only Fedify's origin checks on parsed ids tell them
+		// apart: fetchKey's check of the actor id against the document URL, and vocab's check of the embedded key id
+		// against the actor id. Either one alone rejects the victim claim; with both removed, it verifies.
 		const keyId = `${ATTACKER}#main-key`
-		const document = aliased({ publicKey: { id: `${VICTIM}#main-key`, owner: VICTIM, publicKeyPem: LEGACY.pubkey } })
-		const ctx = await context(servingAliased(document))
+		const claiming = (id: string) =>
+			aliased({ aliasId: id, publicKey: { id: keyId, owner: ATTACKER, publicKeyPem: LEGACY.pubkey } })
 		const signer = await createKeyring(LEGACY.kek).signerFor({ ...LEGACY, keyId: new URL(keyId) })
-		const signed = await signer.sign(new Request('https://social.example/inbox'))
+		const signed = () => signer.sign(new Request('https://social.example/inbox'))
 
-		const result = await verifyRequestDetailed(signed, { documentLoader: ctx.documentLoader })
-		expect(result.verified).toBe(false)
-
-		// Control: the same key under the attacker's own id verifies.
-		const own = aliased({ aliasId: ATTACKER, publicKey: { id: keyId, owner: ATTACKER, publicKeyPem: LEGACY.pubkey } })
-		const honest = await context(servingAliased(own))
-		expect(await verifyRequestDetailed(signed, { documentLoader: honest.documentLoader })).toMatchObject({
+		const honest = await context(servingAliased(claiming(ATTACKER)))
+		expect(await verifyRequestDetailed(await signed(), { documentLoader: honest.documentLoader })).toMatchObject({
 			verified: true,
 		})
+
+		const victim = await context(servingAliased(claiming(VICTIM)))
+		expect(await verifyRequestDetailed(await signed(), { documentLoader: victim.documentLoader })).toEqual({
+			verified: false,
+			reason: { type: 'invalidSignature', keyId: new URL(keyId) },
+		})
+		// Not a fetch failure: the document loads, and Fedify refuses the key it names.
+		const fetched = await fetchKeyDetailed(new URL(keyId), CryptographicKey, { documentLoader: victim.documentLoader })
+		expect(fetched).toEqual({ key: null, cached: false })
 	})
 })
