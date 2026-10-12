@@ -1,10 +1,14 @@
+import { env } from 'cloudflare:workers'
+
 import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
+import { NOW } from './app-helpers'
 import { PNG_PLAIN } from './fixtures/images'
-import { bytes, mediaForm, pathOf, TestCodec } from './media-helpers'
+import { bytes, mediaForm, pathOf, r2Keys, TestCodec } from './media-helpers'
 import { community } from './status-helpers'
 import { type Browser, csrfOf, ORIGIN, signIn } from './web-helpers'
+import { sweepMedia } from '../src/mastodon/media'
 
 // Avatar and header from the settings page, through B4b's upload pipeline (MEDIA-*, RES-6), with WEB-1 and WEB-4.
 
@@ -69,6 +73,11 @@ describe('profile images', () => {
 		expect(me.avatar).toBe(urls?.avatar_url)
 		for (const row of rows) {
 			expect((await h.request(`/api/v1/media/${row.id}`, bearer(alice.token))).status).toBe(404)
+			const put = await h.request(
+				`/api/v1/media/${row.id}`,
+				bearer(alice.token, { ...json({ description: 'x' }), method: 'PUT' })
+			)
+			expect(put.status).toBe(404)
 			const attach = await h.request(
 				'/api/v1/statuses',
 				bearer(alice.token, json({ status: 'x', media_ids: [row.id] }))
@@ -87,9 +96,22 @@ describe('profile images', () => {
 		await uploadImage(h, h.browser, 'avatar', { csrf })
 		const second = (await account(h))?.avatar_url
 		expect(second).not.toBe(first)
-		const rows = await sql<{ url: string; gc_at: string | null }>(h.store, 'SELECT url, gc_at FROM media_attachments')
-		expect(rows.find((row) => row.url === first)?.gc_at).not.toBeNull()
-		expect(rows.find((row) => row.url === second)?.gc_at).toBeNull()
+		const rows = await sql<{ id: string; url: string; file_token: string; gc_at: string | null }>(
+			h.store,
+			'SELECT id, url, file_token, gc_at FROM media_attachments'
+		)
+		const old = rows.find((row) => row.url === first)
+		const current = rows.find((row) => row.url === second)
+		expect(old?.gc_at).not.toBeNull()
+		expect(current?.gc_at).toBeNull()
+		// The sweep deletes the replaced image's files and row, and keeps the current one.
+		await sweepMedia(env, { build: () => env.CF_VERSION_METADATA.id, now: () => NOW, store: () => h.store })
+		expect(await r2Keys(`files/${old?.file_token}/`)).toEqual([])
+		expect(await r2Keys(`originals/${old?.id}`)).toEqual([])
+		expect(await r2Keys(`files/${current?.file_token}/`)).toHaveLength(2)
+		expect(await r2Keys(`originals/${current?.id}`)).toHaveLength(1)
+		expect((await h.request(pathOf(second ?? null))).status).toBe(200)
+		expect(await sql(h.store, 'SELECT url FROM media_attachments')).toEqual([{ url: second }])
 	})
 
 	it('refuses a foreign, null or missing Origin and a wrong token before any transformation (WEB-1, WEB-4)', async () => {
