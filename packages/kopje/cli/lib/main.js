@@ -42,9 +42,12 @@ Commands
   sql <query> [--limit <n>]     run a single read-only SELECT/WITH statement
   backup-verify <manifest.json> <dump file>
                                 check a decrypted backup against its decrypted manifest (sizes and SHA-256) before
-                                importing it; works offline, without KOPJE_ADMIN_URL (docs/backup.md)
+                                importing it; works offline, without KOPJE_ADMIN_URL (docs/backup.md). Exits 1 when a
+                                file does not match, 3 when all match but the backup lacks originals the dump uses
       --encrypted <file.age>    also check the encrypted dump as downloaded
-      --media <dir>             also check the decrypted originals, laid out by key (<dir>/originals/<id>)
+      --index <file.json>       also check the decrypted media index and report the media coverage
+      --media <dir>             with --index: also check every original the index lists, decrypted under <dir> at
+                                its key (<dir>/originals/<id>)
 
 Environment
   KOPJE_ADMIN_URL               base URL of the instance's admin host, e.g. https://admin.example.com
@@ -69,7 +72,7 @@ function parseArgs(argv) {
 	const positional = []
 	/** @type {Record<string, string | true>} */
 	const flags = {}
-	const valued = new Set(['chunk-mib', 'lease-seconds', 'at', 'limit', 'before', 'encrypted', 'media'])
+	const valued = new Set(['chunk-mib', 'lease-seconds', 'at', 'limit', 'before', 'encrypted', 'index', 'media'])
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i] ?? ''
 		if (arg.startsWith('--')) {
@@ -170,33 +173,45 @@ export async function run({
 		}
 		if (command === 'backup-verify') {
 			const [manifestPath, dumpPath] = rest
-			const encrypted = flags.encrypted
-			const media = flags.media
+			const { encrypted, index, media } = flags
 			if (
 				manifestPath === undefined ||
 				dumpPath === undefined ||
 				rest.length > 2 ||
-				encrypted === true ||
-				media === true
+				[encrypted, index, media].includes(true) ||
+				(media !== undefined && index === undefined)
 			) {
-				throw new UsageError('backup-verify <manifest.json> <dump file> [--encrypted <file.age>] [--media <dir>]')
+				throw new UsageError(
+					'backup-verify <manifest.json> <dump file> [--encrypted <file.age>] [--index <file.json> [--media <dir>]]'
+				)
 			}
-			const { manifest, problems } = await verifyBackup({
+			const result = await verifyBackup({
 				io,
 				manifestPath,
 				dumpPath,
-				encryptedPath: encrypted,
-				mediaDir: media,
+				encryptedPath: /** @type {string | undefined} */ (encrypted),
+				indexPath: /** @type {string | undefined} */ (index),
+				mediaDir: /** @type {string | undefined} */ (media),
 			})
-			for (const problem of problems) {
+			for (const problem of result.problems) {
 				out.info(problem)
 			}
-			if (problems.length > 0) {
+			if (result.problems.length > 0) {
 				return 1
 			}
+			const { manifest, missing } = result
 			print(
 				`backup ${manifest.id} matches its manifest (schema ${manifest.schema.version}, Kopje ${manifest.kopje.version})`
 			)
+			if (missing.length > 0) {
+				for (const entry of missing) {
+					out.info(`missing: ${entry.source} (${entry.state})`)
+				}
+				out.info(
+					`incomplete: ${missing.length} of ${manifest.media.required} originals the dump references are not in this backup`
+				)
+				return 3
+			}
 			return 0
 		}
 		const url = env.KOPJE_ADMIN_URL

@@ -401,28 +401,23 @@ async function readProgress(client, id, sleep) {
 }
 
 /**
- * Checks decrypted backup files against their manifest (docs/backup.md): the dump's size and SHA-256, and when given,
- * the encrypted dump's and each decrypted original's under mediaDir (at its R2 key, e.g. <dir>/originals/<id>).
- * Returns the problems found; an empty list means every file given matches.
- * @param {{ io: FileIO, manifestPath: string, dumpPath: string, encryptedPath?: string, mediaDir?: string }} options
+ * Checks decrypted backup files against their decrypted manifest (docs/backup.md): the dump's size and SHA-256, and
+ * when given, the encrypted dump's; the media index's, and through it every original the dump references, decrypted
+ * under mediaDir at its R2 key (<dir>/originals/<id>). `problems` are files that do not match; `missing` lists the
+ * originals the dump references that the backup does not hold (the index says why), so coverage is incomplete.
+ * @param {{ io: FileIO, manifestPath: string, dumpPath: string, encryptedPath?: string, indexPath?: string,
+ *   mediaDir?: string }} options
  */
-export async function verifyBackup({ io, manifestPath, dumpPath, encryptedPath, mediaDir }) {
-	const text = await io.readText(manifestPath)
-	if (text === null) {
-		throw new Error(`${manifestPath} does not exist`)
-	}
+export async function verifyBackup({ io, manifestPath, dumpPath, encryptedPath, indexPath, mediaDir }) {
 	/** @type {any} */
-	let manifest
-	try {
-		manifest = JSON.parse(text)
-	} catch {
-		throw new Error(`${manifestPath} is not JSON; decrypt it first with age -d`)
-	}
+	const manifest = await readJson(io, manifestPath)
 	if (manifest?.format !== 'kopje-backup' || manifest.version !== 1) {
 		throw new Error(`${manifestPath} is not a version 1 Kopje backup manifest`)
 	}
 	/** @type {string[]} */
 	const problems = []
+	/** @type {{ source: string, state: string }[]} */
+	const missing = []
 	/**
 	 * @param {string} label
 	 * @param {string} path
@@ -432,28 +427,58 @@ export async function verifyBackup({ io, manifestPath, dumpPath, encryptedPath, 
 		const size = await io.size(path)
 		if (size === null) {
 			problems.push(`${label}: ${path} does not exist`)
-			return
+			return false
 		}
 		if (size !== expected.size) {
 			problems.push(`${label}: ${path} has ${size} bytes, the manifest says ${expected.size}`)
-			return
+			return false
 		}
 		if ((await io.sha256(path)) !== expected.sha256) {
 			problems.push(`${label}: ${path} does not match the manifest's SHA-256`)
+			return false
 		}
+		return true
 	}
 	await check('dump', dumpPath, manifest.dump.plaintext)
 	if (encryptedPath !== undefined) {
 		await check('encrypted dump', encryptedPath, manifest.dump)
 	}
-	if (mediaDir !== undefined) {
-		for (const object of manifest.media.objects) {
-			if (typeof object.source !== 'string' || !/^originals\/\d{18}$/.test(object.source)) {
-				problems.push('media: the manifest lists an unexpected key')
-				continue
+	if (indexPath !== undefined && (await check('media index', indexPath, manifest.mediaIndex.plaintext))) {
+		/** @type {any} */
+		const index = await readJson(io, indexPath)
+		if (index?.format !== 'kopje-backup-media-index' || index.run !== manifest.id || !Array.isArray(index.objects)) {
+			problems.push(`media index: ${indexPath} is not the index of backup ${manifest.id}`)
+		} else {
+			for (const entry of index.objects) {
+				if (typeof entry?.source !== 'string' || !/^originals\/\d{18}$/.test(entry.source)) {
+					problems.push('media index: an entry has an unexpected key')
+				} else if (entry.state !== 'copied') {
+					missing.push({ source: entry.source, state: String(entry.state) })
+				} else if (mediaDir !== undefined) {
+					await check('media', `${mediaDir.replace(/\/+$/, '')}/${entry.source}`, entry.plaintext)
+				}
 			}
-			await check('media', `${mediaDir.replace(/\/+$/, '')}/${object.source}`, object.plaintext)
 		}
 	}
-	return { manifest, problems }
+	return { manifest, problems, missing }
+}
+
+/**
+ * @param {FileIO} io
+ * @param {string} path
+ * @returns {Promise<unknown>}
+ */
+async function readJson(io, path) {
+	const text = await io.readText(path)
+	if (text === null) {
+		throw new Error(`${path} does not exist`)
+	}
+	/** @type {unknown} */
+	let value
+	try {
+		value = JSON.parse(text)
+	} catch {
+		throw new Error(`${path} is not JSON; decrypt it first with age -d`)
+	}
+	return value
 }
