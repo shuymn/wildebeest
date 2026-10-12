@@ -10,6 +10,9 @@ export type MaintenanceReason =
 	| 'upgrade-failed'
 	| 'bookmark-failed'
 	| 'verify-failed'
+	| 'maintenance'
+	| 'dump-in-progress'
+	| 'import-in-progress'
 	| 'transient'
 
 // Thrown inside the Store.

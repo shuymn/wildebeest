@@ -1,5 +1,6 @@
 import { errorMessage } from './error-message'
 import { type MaintenanceReason, storeMaintenanceError } from './store-errors'
+import { activeDump, admitFlags, readFlags } from './store-flags'
 
 export type Migration = { readonly name: string; readonly sql: string }
 
@@ -54,6 +55,10 @@ export type StoreHealth = {
 	upgrading: boolean
 	lastBookmark: string | null
 	databaseSize: number
+	// Operator state (store-flags.ts).
+	maintenance: boolean
+	dump: { id: string; leaseUntil: number } | null
+	import: { id: string; state: string; lastSeq: number } | null
 }
 
 export type KernelOptions = {
@@ -107,6 +112,7 @@ export class StoreKernel {
 		const loaded = await this.#currentState()
 		return this.#transaction(() => {
 			admit(this.#state ?? loaded, operation.kind)
+			admitFlags(readFlags(this.#sql), operation.kind, this.#now())
 			return operation.run(this.#sql, input)
 		})
 	}
@@ -115,16 +121,30 @@ export class StoreKernel {
 	async health(callerBuild: string): Promise<StoreHealth> {
 		const expected = await this.#expectedMigrations()
 		const { schema, hold, upgrading } = await this.#currentState()
+		const flags = readFlags(this.#sql)
+		const dump = activeDump(flags, this.#now())
 		return {
 			build: this.build,
 			callerBuild,
 			versionMatch: callerBuild === this.build,
 			schema: { ...schema, applied: this.#readApplied().map((m) => m.name), expected: expected.map((m) => m.name) },
-			readonly: schema.status !== 'current' || hold !== null || upgrading !== null,
+			readonly:
+				schema.status !== 'current' ||
+				hold !== null ||
+				upgrading !== null ||
+				flags.maintenance !== null ||
+				dump !== null ||
+				flags.import !== null,
 			hold: hold?.reason ?? null,
 			upgrading: upgrading !== null,
 			lastBookmark: this.#readState('upgrade_bookmark'),
 			databaseSize: this.#sql.databaseSize,
+			maintenance: flags.maintenance !== null,
+			dump: dump === null ? null : { id: dump.id, leaseUntil: dump.leaseUntil },
+			import:
+				flags.import === null
+					? null
+					: { id: flags.import.id, state: flags.import.state, lastSeq: flags.import.lastSeq },
 		}
 	}
 
@@ -137,6 +157,38 @@ export class StoreKernel {
 			expected: expected.at(-1)?.name ?? null,
 			applied: this.#readApplied().at(-1)?.name ?? null,
 		}
+	}
+
+	// The applied migrations with their checksums, in order.
+	appliedMigrations(): { name: string; checksum: string }[] {
+		this.#ensureBookkeeping()
+		return this.#readApplied()
+	}
+
+	async state(): Promise<{ schema: SchemaState; held: boolean; upgrading: boolean }> {
+		const { schema, hold, upgrading } = await this.#currentState()
+		return { schema, held: hold !== null, upgrading: upgrading !== null }
+	}
+
+	// Drops the cached state, after the database was replaced underneath (deleteAll).
+	forget(): void {
+		this.#state = undefined
+	}
+
+	// Admin action: runs the upgrade again for this build without a new deployment. A hold left by this build is
+	// cleared first; the upgrade then resumes from its marker and verifies, so re-running applied files is not
+	// possible (they are recorded by name and checksum).
+	async retryUpgrade(callerBuild: string): Promise<UpgradeResult> {
+		if (callerBuild !== this.build) {
+			throw storeMaintenanceError('version-mismatch')
+		}
+		const { hold } = await this.#currentState()
+		if (hold !== null) {
+			this.#writeState('hold', null)
+		}
+		this.#state = undefined
+		this.#log({ event: 'kopje.store.upgrade.retry', hold: hold?.reason ?? null })
+		return this.upgrade()
 	}
 
 	// Rescue RPC: restores the database to a bookmark on the next start and restarts the object now, so the
@@ -167,6 +219,12 @@ export class StoreKernel {
 		}
 		if (schema.status === 'current' && state.upgrading === null) {
 			return { ok: true, bookmark: null, applied: [] }
+		}
+		const dump = activeDump(readFlags(this.#sql), this.#now())
+		if (dump !== null) {
+			// A dump reads across many RPCs and must see one schema; try again once its lease ends.
+			await this.#ctx.storage.setAlarm(dump.leaseUntil + 1000)
+			return { ok: false, bookmark: null, reason: 'dump-in-progress', detail: 'deferred until the dump ends' }
 		}
 
 		let phase: UpgradePhase = 'bookmark'
