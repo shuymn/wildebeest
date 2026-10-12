@@ -68,6 +68,7 @@ async function cli(
 		fetch: (input: string, init?: RequestInit) => Promise<Response>
 		io?: ReturnType<typeof memoryIO>
 		env?: Record<string, string | undefined>
+		platform?: string
 	}
 ) {
 	const s = streams()
@@ -79,6 +80,7 @@ async function cli(
 		stderr: s.stderr,
 		fetch: options.fetch,
 		sleep: () => Promise.resolve(),
+		platform: options.platform ?? 'linux',
 	})
 	return { code, out: s.out(), err: s.err() }
 }
@@ -378,6 +380,74 @@ describe('kopje-admin', () => {
 		const rerun = await cli(['import', 'l.sql', '--import-token'], { fetch: edge(target).fetch, io })
 		expect(rerun.code).toBe(1)
 		expect(rerun.err).toContain('does not match this file')
+	})
+
+	// The file is replaced while the Store verifies: each component is changed on its own, so each check is pinned.
+	it.each<[string, (text: string) => string]>([
+		['header', (text) => text.replace(/"createdAt":"[^"]+"/, '"createdAt":"2000-01-01T00:00:00.000Z"')],
+		[
+			'trailer',
+			(text) => text.replace(/(-- kopje-dump-trailer \{"tables":\[\{"name":"accounts","rows":)(\d+)/, '$1999'),
+		],
+		[
+			'chunk count',
+			(text) => {
+				const extra = text
+					.split('\n')
+					.filter((line) => line.startsWith('INSERT INTO "statuses"'))
+					.slice(0, 12)
+				return text.replace('\n-- kopje-dump-trailer ', `\n${extra.join('\n')}\n-- kopje-dump-trailer `)
+			},
+		],
+		['body', (text) => text.replace("'bulk 1 x", "'bulk 1 y")],
+	])('rejects an outcome when the %s changed during verification', async (component, mutate) => {
+		const io = memoryIO()
+		expect((await cli(['dump', 'v.sql'], { fetch: edge(await sourceStore(60)).fetch, io })).code).toBe(0)
+		const original = io.text('v.sql')
+		expect(mutate(original)).not.toBe(original)
+		const target = await migratedStore()
+		const swap = edge(target, async (request, forward) => {
+			if (new URL(request.url).pathname === '/admin/import/verify') {
+				io.files.set('v.sql', new TextEncoder().encode(mutate(original)))
+			}
+			return forward()
+		})
+		const run = await cli(['import', 'v.sql', '--import-token', '--chunk-mib', '0.002'], { fetch: swap.fetch, io })
+		expect(run.code).toBe(1)
+		expect(run.err).toContain(`does not match this file (${component})`)
+	})
+
+	it('redacts a session credential that comes back inside an error', async () => {
+		const io = memoryIO()
+		expect((await cli(['dump', 'r.sql'], { fetch: edge(await sourceStore(0)).fetch, io })).code).toBe(0)
+		const target = await migratedStore()
+		let session = ''
+		const echo = edge(target, async (request, forward) => {
+			if (new URL(request.url).pathname === '/admin/import/finish') {
+				session = (JSON.parse(io.text('r.sql.import.json')) as { session: string }).session
+				return Response.json({ error: `rejected ${session}`, code: 'x', detail: { session } }, { status: 400 })
+			}
+			return forward()
+		})
+		const run = await cli(['import', 'r.sql', '--import-token'], { fetch: echo.fetch, io })
+		expect(run.code).toBe(1)
+		expect(session).toMatch(/^[A-Za-z0-9_-]{43}$/)
+		expect(run.out + run.err).toContain('rejected ***')
+		expect(run.out + run.err).not.toContain(session)
+	})
+
+	it('warns on Windows that the session file is not private', async () => {
+		const io = memoryIO()
+		expect((await cli(['dump', 'w.sql'], { fetch: edge(await sourceStore(0)).fetch, io })).code).toBe(0)
+		const run = await cli(['import', 'w.sql', '--import-token'], {
+			fetch: edge(await migratedStore()).fetch,
+			io,
+			platform: 'win32',
+		})
+		expect(run.code, run.err).toBe(0)
+		expect(run.err).toContain('not private on Windows')
+		const unix = await cli(['dump', 'u.sql'], { fetch: edge(await sourceStore(0)).fetch, io })
+		expect(unix.err).not.toContain('Windows')
 	})
 
 	it('never prints the session credential of a token import', async () => {

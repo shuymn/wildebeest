@@ -1,3 +1,4 @@
+/* global globalThis */
 import { AdminError, createClient } from './client.js'
 import { dumpToFile, formatBytes, importFromFile } from './commands.js'
 
@@ -17,10 +18,13 @@ Commands
   import <file>                 import <file> into an empty Store and verify (resumable)
       --chunk-mib <n>           chunk size in MiB, 0.001-16 (default 8)
       --import-token            begin with KOPJE_IMPORT_TOKEN (cutover into an empty Store without admin access);
-                                the import then continues with its own session, kept in <file>.import.json
+                                the import then continues with its own session, kept in <file>.import.json (mode
+                                0600). That file must stay private: run token imports on macOS, Linux or WSL, since
+                                Windows does not honor the mode (the CLI warns there)
   import-reset [<file>] --yes   take the Store back to before an import (its imported rows are deleted; schema and
                                 configuration stay); the import is the one saved for <file>, or else the running one,
-                                and a token import is reset with the session kept for <file>
+                                and a token import is reset with the session kept for <file>. An interrupted
+                                reset leaves the Store resetting until this command is run again
       --abandon-stale --import-token
                                 recover a token import whose session file was lost: IMPORT_TOKEN resets it once it
                                 has been idle for 15 minutes (the error says when) while admin access is not usable
@@ -45,7 +49,7 @@ Environment
  * @typedef {{ write(text: string): void, isTTY?: boolean }} Stream
  * @typedef {{ argv: string[], env: Record<string, string | undefined>, io: import('./format.js').FileIO,
  *   stdout: Stream, stderr: Stream, fetch?: import('./client.js').Fetch, now?: () => number,
- *   sleep?: (ms: number) => Promise<void> }} RunOptions
+ *   sleep?: (ms: number) => Promise<void>, platform?: string }} RunOptions
  */
 
 /**
@@ -98,19 +102,29 @@ function numberFlag(flags, name, min, max) {
 	return number
 }
 
-// Replaces every secret value in a text, as a last line of defense for anything printed.
+// Replaces every secret value in a text, as a last line of defense for anything printed. Secrets learned while running
+// (an import session) are added to the same list.
 /** @param {string[]} secrets */
 function redactor(secrets) {
-	const values = secrets.filter((s) => s.length >= 4)
 	/** @param {string} text */
-	return (text) => values.reduce((out, secret) => out.split(secret).join('***'), text)
+	return (text) => secrets.filter((s) => s.length >= 4).reduce((out, secret) => out.split(secret).join('***'), text)
 }
 
 /**
  * Runs one CLI command. Returns the process exit code.
  * @param {RunOptions} options
  */
-export async function run({ argv, env, io, stdout, stderr, fetch, now = Date.now, sleep }) {
+export async function run({
+	argv,
+	env,
+	io,
+	stdout,
+	stderr,
+	fetch,
+	now = Date.now,
+	sleep,
+	platform = globalThis.process?.platform,
+}) {
 	const secrets = [env.CF_ACCESS_CLIENT_SECRET, env.KOPJE_IMPORT_TOKEN, env.CF_ACCESS_CLIENT_ID].filter(
 		/** @returns {s is string} */ (s) => typeof s === 'string'
 	)
@@ -132,6 +146,10 @@ export async function run({ argv, env, io, stdout, stderr, fetch, now = Date.now
 		/** @param {string} text */
 		info(text) {
 			stderr.write(`${stderr.isTTY ? '\r\x1b[2K' : ''}${redact(text)}\n`)
+		},
+		/** @param {string} value */
+		secret(value) {
+			secrets.push(value)
 		},
 	}
 
@@ -256,6 +274,7 @@ export async function run({ argv, env, io, stdout, stderr, fetch, now = Date.now
 					chunkBytes: chunkMib === undefined ? undefined : Math.floor(chunkMib * 1024 * 1024),
 					now,
 					sleep,
+					privateFiles: platform !== 'win32',
 				})
 				print(report)
 				out.info(

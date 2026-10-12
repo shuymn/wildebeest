@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { open, readFile, rename, rm, stat, truncate } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 
 import { writeAll } from './write-all.js'
 
@@ -59,7 +60,8 @@ export const nodeIO = {
 	// is created exclusively ('wx') with mode 0600, so no file planted beforehand (whose mode would be kept) is
 	// reused. It is written and synced through its own handle, renamed over the target, and removed on any failure.
 	async writeTextAtomic(path, text) {
-		const temporary = `${path}.${randomUUID()}.tmp`
+		// A short fixed-length name in the same directory: the target's own name may already be near NAME_MAX.
+		const temporary = join(dirname(path), `.kopje-${randomBytes(8).toString('hex')}.tmp`)
 		const handle = await open(temporary, 'wx', 0o600)
 		try {
 			try {

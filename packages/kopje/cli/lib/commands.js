@@ -6,7 +6,7 @@ import { chainDigest, readDumpFile, sha256Hex, statementChunks, utf8 } from './f
  * @typedef {import('./client.js').AdminClient} AdminClient
  * @typedef {import('./client.js').Json} Json
  * @typedef {import('./format.js').FileIO} FileIO
- * @typedef {{ progress(text: string): void, info(text: string): void }} Output
+ * @typedef {{ progress(text: string): void, info(text: string): void, secret?(value: string): void }} Output
  */
 
 const MIB = 1024 * 1024
@@ -178,7 +178,7 @@ async function abandonDump(client, out, state, start) {
  * the chunk was rolled back. A token import is continued with the session credential begin returned, which is kept
  * in <file>.import.json (mode 0600) and never printed.
  * @param {{ client: AdminClient, io: FileIO, out: Output, path: string, chunkBytes?: number,
- *   now?: () => number, sleep?: (ms: number) => Promise<void> }} options
+ *   now?: () => number, sleep?: (ms: number) => Promise<void>, privateFiles?: boolean }} options
  */
 export async function importFromFile({
 	client: baseClient,
@@ -188,6 +188,7 @@ export async function importFromFile({
 	chunkBytes: requestedChunkBytes,
 	now = Date.now,
 	sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+	privateFiles = true,
 }) {
 	const file = await readDumpFile(io, path)
 	const statePath = `${path}.import.json`
@@ -201,6 +202,7 @@ export async function importFromFile({
 		// A started import continues by its id: a token import only with its session (IMPORT_TOKEN no longer applies
 		// once it began), an Access import with Access.
 		if (local.session !== undefined) {
+			out.secret?.(local.session)
 			client = baseClient.withSession(local.session)
 		}
 		progress = (await readProgress(client, local.id, sleep)).progress
@@ -212,7 +214,14 @@ export async function importFromFile({
 		const begun = await baseClient.post('/admin/import/begin', { header: file.header })
 		progress = begun.progress
 		if (typeof begun.session === 'string') {
+			out.secret?.(begun.session)
 			client = baseClient.withSession(begun.session)
+			if (!privateFiles) {
+				// Mode 0600 does not keep a file private on Windows; no ACLs are set here.
+				out.info(
+					`warning: ${statePath} holds the import session and is not private on Windows; import from macOS, Linux or WSL`
+				)
+			}
 		}
 		await io.writeTextAtomic(
 			statePath,
@@ -249,6 +258,9 @@ export async function importFromFile({
 	for (;;) {
 		const result = await client.post('/admin/import/verify', { id: progress.id })
 		if (result.done) {
+			// The file may have changed while the Store verified: read it again before taking the outcome as its own.
+			const current = await readDumpFile(io, path)
+			await checkIdentity({ io, path, file: current, progress: result.progress, chunkBytes, whole: true })
 			if (result.progress?.state === 'verified') {
 				await io.remove(statePath)
 			}
@@ -285,7 +297,10 @@ async function checkIdentity({ io, path, file, progress, chunkBytes, whole }) {
 		seq++
 		digest = await chainDigest(digest, chunk.bytes)
 	}
-	if (seq !== progress.lastSeq || digest !== progress.digest) {
+	if (seq !== progress.lastSeq) {
+		throw mismatch('chunk count')
+	}
+	if (digest !== progress.digest) {
 		throw mismatch('body')
 	}
 }

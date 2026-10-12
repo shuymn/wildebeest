@@ -36,6 +36,14 @@ describe('nodeIO.writeTextAtomic', () => {
 		expect((await readdir(dir)).sort()).toEqual(['dump.sql.import.json', 'dump.sql.import.json.tmp'])
 	})
 
+	it('writes next to a file whose name is close to the 255-byte limit', async () => {
+		// A valid 216-byte state file name (a 204-byte dump name + ".import.json") must not turn into an invalid temp name.
+		const path = join(dir, `${'d'.repeat(204)}.import.json`)
+		await nodeIO.writeTextAtomic(path, '{}')
+		expect(await readFile(path, 'utf8')).toBe('{}')
+		expect(await readdir(dir)).toEqual([`${'d'.repeat(204)}.import.json`])
+	})
+
 	it('removes its temporary file when the write fails', async () => {
 		const path = join(dir, 'target')
 		await mkdir(path)
