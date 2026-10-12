@@ -29,9 +29,10 @@ const CONTEXT = [AS_CONTEXT, { sensitive: 'as:sensitive', Hashtag: 'as:Hashtag' 
 
 export type OutboundEnvelope = { activity: Record<string, unknown>; audience: Audience }
 
-// Records the intent with one deliveries row per target inbox (domain/deliveries.ts), or nothing if no remote inbox
-// needs it. As in Mastodon, the followers are the current ones; a Delete also reaches every inbox that received the
-// status (outbound_receipts), so a follower who left since still gets the Tombstone.
+// Records the intent and its target inboxes (domain/deliveries.ts), or nothing if no remote inbox needs it. As in
+// Mastodon, the followers are the current ones; a Delete also reaches every inbox that received the status or may
+// still receive it, so a follower who left since still gets the Tombstone. Record a retraction before deleting the
+// row it retracts: the receipts go with the row.
 export function recordOutbound(db: Db, signerId: string, envelope: OutboundEnvelope, now: number): void {
 	enqueueActivity(db, signerId, envelope, now)
 }
@@ -394,7 +395,7 @@ export const getLocalNote = readOperation<{ uri: string }, string | null>((db, {
 export const OUTBOX_PAGE_SIZE = 20
 
 // Items are serialized JSON: RPC types cannot carry `unknown`.
-export type OutboxPage = { total: number; items: string[]; next: string | null }
+export type OutboxPage = { total: number | null; items: string[]; next: string | null }
 
 // A local actor's outbox, newest first: Create for its statuses, Announce for its boosts (of public or unlisted
 // originals only). before null asks for the count only; otherwise a page of statuses with ids below it.
@@ -413,9 +414,13 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 			WHERE s.account_id = ?1 AND ${SERVABLE}
 				AND (s.reblog_of_id IS NULL OR (o.visibility IN ('public', 'unlisted')
 					AND NOT EXISTS (SELECT 1 FROM local_accounts ol WHERE ol.account_id = o.account_id AND ol.suspended_at IS NOT NULL)))`
-		const total = db.first<{ n: number }>(`SELECT count(*) AS n ${listed}`, owner.id)?.n ?? 0
+		// The count only for the collection itself; a page does not need it.
 		if (before === null) {
-			return { total, items: [], next: null }
+			return {
+				total: db.first<{ n: number }>(`SELECT count(*) AS n ${listed}`, owner.id)?.n ?? 0,
+				items: [],
+				next: null,
+			}
 		}
 		const rows = db.all<{
 			id: string
@@ -458,6 +463,6 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 			}
 		}
 		const last = rows[OUTBOX_PAGE_SIZE - 1]
-		return { total, items, next: rows.length > OUTBOX_PAGE_SIZE && last !== undefined ? last.id : null }
+		return { total: null, items, next: rows.length > OUTBOX_PAGE_SIZE && last !== undefined ? last.id : null }
 	}
 )

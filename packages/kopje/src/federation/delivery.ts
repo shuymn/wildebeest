@@ -11,7 +11,8 @@ import { errorFields } from '../platform/error-message'
 //     author's key with draft-cavage HTTP Signatures and a Digest (Fedify's signRequest via the keyring). Fedify's
 //     own sending path (sendActivity, its queue) is not used: it follows redirects and owns retries and keys
 //     (test/fedify-usage.test.ts).
-//   - The POST, response included, ends after DELIVERY_TIMEOUT_MS, well inside the Store's lease.
+//   - The whole path from the claim (key loading, DNS, signing, POST, response) is budgeted: it ends after
+//     DELIVERY_TIMEOUT_MS or at the round's deadline inside the lease, whichever is first, and sends nothing after.
 //   - The answer is classified as Mastodon's DeliveryWorker does: 2xx delivered; 401, 408, 429, other 4xx is permanent
 //     except those three, 501 permanent, any other status or a network error retried. Fedify stops only on 404 and
 //     410; Mastodon's wider rule spares servers that refuse an activity for good.
@@ -27,6 +28,16 @@ export type PostDeps = {
 	checkHost?: (url: URL) => Promise<void>
 	userAgent: string
 	timeoutMs?: number
+	now: () => number
+}
+
+// One delivery: the stored inbox and body, the author's signer (loaded lazily, inside the budget), and the time by
+// which the POST must have been sent, which leaves the completion room inside the lease.
+export type PostTarget = {
+	inbox: string
+	body: string
+	signer: () => Promise<RequestSigner | null>
+	deadline: number
 }
 
 const SALVAGEABLE_4XX = new Set([401, 408, 429])
@@ -44,42 +55,53 @@ export function classifyStatus(status: number): DeliveryOutcome {
 
 class Timeout extends Error {}
 
-export async function postActivity(
-	deps: PostDeps,
-	inbox: string,
-	body: string,
-	sign: RequestSigner
-): Promise<DeliveryOutcome> {
+const exhausted: DeliveryOutcome = { kind: 'failed', status: null, error: 'lease budget exhausted', permanent: false }
+
+// The whole path (DNS check, key loading, signing, POST and status) runs under one budget: the smaller of the POST
+// timeout and the time left before the deadline. Nothing is sent once the budget is spent, even if a slow step
+// finishes later, so a POST never leaves after its lease could have been claimed again (NET-2, RES-6).
+export async function postActivity(deps: PostDeps, target: PostTarget): Promise<DeliveryOutcome> {
 	let url: URL
 	try {
-		url = new URL(inbox)
+		url = new URL(target.inbox)
 		assertPublicShape(url)
 	} catch {
 		// Never becomes deliverable: the stored URL itself is refused.
 		return { kind: 'failed', status: null, error: 'refused inbox URL', permanent: true }
 	}
-	try {
-		await (deps.checkHost ?? dnsCheckHost)(url)
-	} catch {
-		// DNS may fail for a while; retried like any transient failure until the attempts run out.
-		return { kind: 'failed', status: null, error: 'refused or unresolved host', permanent: false }
+	const budget = Math.min(deps.timeoutMs ?? DELIVERY_TIMEOUT_MS, target.deadline - deps.now())
+	if (budget <= 0) {
+		return exhausted
 	}
-	const timeoutMs = deps.timeoutMs ?? DELIVERY_TIMEOUT_MS
 	const controller = new AbortController()
-	const timer = setTimeout(() => controller.abort(new Timeout()), timeoutMs)
+	const timer = setTimeout(() => controller.abort(new Timeout()), budget)
 	const aborted = new Promise<never>((_, reject) => {
 		controller.signal.addEventListener('abort', () => reject(controller.signal.reason as Error), { once: true })
 	})
-	const sending = (async () => {
+	const live = () => !controller.signal.aborted && deps.now() < target.deadline
+	const sending = (async (): Promise<DeliveryOutcome> => {
+		try {
+			await (deps.checkHost ?? dnsCheckHost)(url)
+		} catch {
+			// DNS may fail for a while; retried like any transient failure until the attempts run out.
+			return { kind: 'failed', status: null, error: 'refused or unresolved host', permanent: false }
+		}
+		const sign = live() ? await target.signer() : null
+		if (sign === null) {
+			return live() ? { kind: 'failed', status: null, error: 'signing key unavailable', permanent: false } : exhausted
+		}
 		const request = await sign(
 			new Request(url, {
 				method: 'POST',
 				headers: { 'content-type': ACTIVITY_CONTENT_TYPE, accept: ACTIVITY_CONTENT_TYPE, 'user-agent': deps.userAgent },
-				body,
+				body: target.body,
 				redirect: 'manual',
 				signal: controller.signal,
 			})
 		)
+		if (!live()) {
+			return exhausted
+		}
 		const response = await deps.fetch(request)
 		// Only the status matters; the body is not read.
 		await response.body?.cancel().catch(() => {})
@@ -90,7 +112,7 @@ export async function postActivity(
 		return await Promise.race([sending, aborted])
 	} catch (error) {
 		if (error instanceof Timeout) {
-			return { kind: 'failed', status: null, error: `timed out after ${timeoutMs} ms`, permanent: false }
+			return { kind: 'failed', status: null, error: `timed out after ${budget} ms`, permanent: false }
 		}
 		// DATA-5: the error class only; a message may carry the URL.
 		return { kind: 'failed', status: null, error: `network error (${errorFields(error).error})`, permanent: false }

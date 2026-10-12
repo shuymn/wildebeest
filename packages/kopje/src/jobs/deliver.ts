@@ -1,4 +1,4 @@
-import type { Completion, DeliveryOutcome } from '../domain/deliveries'
+import type { Completion } from '../domain/deliveries'
 import { CLAIM_LIMIT } from '../domain/deliveries'
 import { type PostDeps, postActivity, ringDoorbell } from '../federation/delivery'
 import { readConfig, userKek } from '../platform/config'
@@ -10,9 +10,13 @@ import { createKeyring, type Signer } from '../security/keyring'
 
 // The Worker's side of delivery (domain/deliveries.ts has the Store's). A round claims a bounded batch of due lane
 // heads, POSTs them concurrently, and settles each with the lease token of its claim. The Queue only rings: a
-// doorbell starts a round, a full round rings again, and a round with retries rings once more, delayed until the
-// earliest of them is due. The cron rings every 5 minutes, which also picks up expired leases and anything a lost
-// doorbell left behind. There is no DLQ: what fails for good is a gave_up row in the Store.
+// doorbell starts a round, and the round rings once more for the earliest work the Store reports due (nextDueAt):
+// at once for a promoted lane head or an intent still expanding, later for a retry or a lease deadline. The cron
+// rings every 5 minutes for anything a lost doorbell left behind. There is no DLQ: what fails for good is a gave_up
+// row in the Store.
+
+// Room left in the lease after the POST's deadline, for the completion to reach the Store.
+export const COMPLETION_MARGIN_MS = 10_000
 
 export type DeliveryDeps = {
 	build: (env: Env) => string
@@ -25,7 +29,7 @@ export type DeliveryDeps = {
 	leaseToken?: () => string
 }
 
-export type RoundResult = { claimed: number; settled: Completion['status'][]; full: boolean; retryAt: number | null }
+export type RoundResult = { claimed: number; settled: Completion['status'][]; nextDueAt: number | null }
 
 const freshToken = () => crypto.randomUUID()
 
@@ -36,7 +40,7 @@ export async function deliveryRound(env: Env, deps: DeliveryDeps): Promise<Round
 		store.claimDeliveries(build, { now: deps.now(), leaseToken: (deps.leaseToken ?? freshToken)(), limit: CLAIM_LIMIT })
 	)
 	if (claim.deliveries.length === 0) {
-		return { claimed: 0, settled: [], full: false, retryAt: null }
+		return { claimed: 0, settled: [], nextDueAt: claim.nextDueAt }
 	}
 	const config = readConfig(env)
 	const keyring = createKeyring(config.ok ? userKek(config.config) : '')
@@ -68,15 +72,19 @@ export async function deliveryRound(env: Env, deps: DeliveryDeps): Promise<Round
 		fetch: deps.fetch,
 		checkHost: deps.checkHost,
 		timeoutMs: deps.timeoutMs,
+		now: deps.now,
 		userAgent: `Kopje/${PACKAGE_VERSION} (+${origin}/)`,
 	}
+	const deadline = claim.leaseUntil - COMPLETION_MARGIN_MS
 	const settled = await Promise.all(
 		claim.deliveries.map(async (delivery): Promise<Completion | null> => {
-			const signer = await signerOf(delivery.signer)
-			const outcome: DeliveryOutcome =
-				signer === null
-					? { kind: 'failed', status: null, error: 'signing key unavailable', permanent: false }
-					: await postActivity(post, delivery.inbox, delivery.body, signer.sign)
+			// Key loading counts against the delivery's budget like the DNS check and the POST.
+			const outcome = await postActivity(post, {
+				inbox: delivery.inbox,
+				body: delivery.body,
+				signer: async () => (await signerOf(delivery.signer))?.sign ?? null,
+				deadline,
+			})
 			try {
 				const input = { id: delivery.id, leaseToken: claim.leaseToken, now: deps.now(), outcome }
 				return await callStore(async (): Promise<Completion> => {
@@ -92,16 +100,20 @@ export async function deliveryRound(env: Env, deps: DeliveryDeps): Promise<Round
 		})
 	)
 	const completions = settled.filter((c): c is Completion => c !== null)
-	const retries = completions.flatMap((c) => (c.status === 'retry' ? [c.retryAt] : []))
 	const gaveUp = completions.filter((c) => c.status === 'gave_up').length
 	if (gaveUp > 0) {
 		console.warn({ event: 'kopje.delivery.gave_up', count: gaveUp })
 	}
+	// Each answer saw the Store at its own moment; the earliest is never later than the work really due. A lost
+	// completion leaves its row leased, which the claim's answer covers.
+	const due = [
+		...completions.map((c) => c.nextDueAt),
+		...(completions.length < settled.length ? [claim.nextDueAt] : []),
+	].filter((at): at is number => at !== null)
 	return {
 		claimed: claim.deliveries.length,
 		settled: completions.map((c) => c.status),
-		full: claim.deliveries.length >= CLAIM_LIMIT,
-		retryAt: retries.length === 0 ? null : Math.min(...retries),
+		nextDueAt: due.length === 0 ? null : Math.min(...due),
 	}
 }
 
@@ -127,11 +139,8 @@ export async function handleDoorbells(messages: readonly Message[], env: Env, de
 		return
 	}
 	try {
-		if (result.full) {
-			await ringDoorbell(env.QUEUE)
-		}
-		if (result.retryAt !== null) {
-			await ringDoorbell(env.QUEUE, (result.retryAt - deps.now()) / 1000)
+		if (result.nextDueAt !== null) {
+			await ringDoorbell(env.QUEUE, (result.nextDueAt - deps.now()) / 1000)
 		}
 	} catch (error) {
 		console.error({ event: 'kopje.delivery.doorbell.failed', ...errorFields(error) })

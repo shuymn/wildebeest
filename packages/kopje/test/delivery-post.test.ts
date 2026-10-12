@@ -9,11 +9,13 @@ import { LEGACY } from './federation-helpers'
 import { QueueSim } from './queue-sim'
 import { community, post, remoteAccount, remoteFollows } from './status-helpers'
 import { LEASE_MS } from '../src/domain/deliveries'
+import type { DeliveryOutcome } from '../src/domain/deliveries'
 import {
 	ACTIVITY_CONTENT_TYPE,
 	classifyStatus,
 	DELIVERY_TIMEOUT_MS,
 	MAX_DOORBELL_DELAY_SECONDS,
+	type PostDeps,
 	postActivity,
 } from '../src/federation/delivery'
 import { type DeliveryDeps, deliveryRound, scheduledDeliveries } from '../src/jobs/deliver'
@@ -59,13 +61,26 @@ function recordingFetch(answer: (request: Request) => Response | Promise<Respons
 	return { fetch: fetch as unknown as typeof globalThis.fetch, sent }
 }
 
+// One POST with a full budget: the clock stands at NOW and the deadline is the round's.
+function send(
+	deps: Omit<PostDeps, 'now'>,
+	inbox: string,
+	body: string,
+	sign: (request: Request) => Promise<Request>
+): Promise<DeliveryOutcome> {
+	return postActivity(
+		{ ...deps, now: () => NOW },
+		{ inbox, body, signer: () => Promise.resolve(sign), deadline: NOW + 50_000 }
+	)
+}
+
 const BODY = JSON.stringify({ '@context': 'https://www.w3.org/ns/activitystreams', id: `${ALICE}#x`, type: 'Like' })
 
 describe('the POST (NET-2, NET-3)', () => {
 	it('signs the activity with its author key, as JSON-LD, and Mastodon-compatible (DATA-7)', async () => {
 		const { fetch, sent } = recordingFetch(() => new Response(null, { status: 202 }))
 		const deps = { fetch, checkHost: publicHost, userAgent: 'Kopje/test' }
-		expect(await postActivity(deps, 'https://remote.example/inbox', BODY, await aliceSigner())).toEqual({
+		expect(await send(deps, 'https://remote.example/inbox', BODY, await aliceSigner())).toEqual({
 			kind: 'delivered',
 			status: 202,
 		})
@@ -90,7 +105,7 @@ describe('the POST (NET-2, NET-3)', () => {
 		const { fetch, sent } = recordingFetch(
 			() => new Response(null, { status: 307, headers: { location: 'https://elsewhere.example/collect' } })
 		)
-		const result = await postActivity(
+		const result = await send(
 			{ fetch, checkHost: publicHost, userAgent: 'Kopje/test' },
 			'https://remote.example/inbox',
 			JSON.stringify({ type: 'Create', to: ['https://remote.example/users/bob'], object: { content: 'secret' } }),
@@ -134,11 +149,11 @@ describe('the POST (NET-2, NET-3)', () => {
 			'https://user:pw@remote.example/inbox',
 			'not a url',
 		]) {
-			expect(await postActivity(deps, inbox, BODY, sign)).toMatchObject({ kind: 'failed', permanent: true })
+			expect(await send(deps, inbox, BODY, sign)).toMatchObject({ kind: 'failed', permanent: true })
 		}
 		// A name that resolves to a private address is refused by the DNS check, and retried later.
 		const privateDns = { ...deps, checkHost: () => Promise.reject(new Error('private address')) }
-		expect(await postActivity(privateDns, 'https://rebound.example/inbox', BODY, sign)).toMatchObject({
+		expect(await send(privateDns, 'https://rebound.example/inbox', BODY, sign)).toMatchObject({
 			kind: 'failed',
 			permanent: false,
 		})
@@ -148,7 +163,7 @@ describe('the POST (NET-2, NET-3)', () => {
 	it('NET-2: times out the POST before the lease ends', async () => {
 		expect(DELIVERY_TIMEOUT_MS).toBeLessThan(LEASE_MS)
 		const fetch = vi.fn(() => new Promise<Response>(() => {})) as unknown as typeof globalThis.fetch
-		const result = await postActivity(
+		const result = await send(
 			{ fetch, checkHost: publicHost, userAgent: 'Kopje/test', timeoutMs: 20 },
 			'https://slow.example/inbox',
 			BODY,
@@ -161,7 +176,7 @@ describe('the POST (NET-2, NET-3)', () => {
 		const fetch = vi.fn(() =>
 			Promise.reject(new TypeError('connect failed to https://remote.example/inbox?token=SECRET'))
 		) as unknown as typeof globalThis.fetch
-		const result = await postActivity(
+		const result = await send(
 			{ fetch, checkHost: publicHost, userAgent: 'Kopje/test' },
 			'https://remote.example/inbox',
 			BODY,
@@ -228,7 +243,7 @@ describe('delivery rounds', () => {
 		const status = await post(h, h.users.alice, { status: 'hello fediverse' })
 		const { fetch, sent } = recordingFetch(() => new Response(null, { status: 202 }))
 		const result = await deliveryRound(testEnv(new QueueSim()), roundDeps(h.store, fetch))
-		expect(result).toEqual({ claimed: 2, settled: ['delivered', 'delivered'], full: false, retryAt: null })
+		expect(result).toEqual({ claimed: 2, settled: ['delivered', 'delivered'], nextDueAt: null })
 		expect(sent.map((s) => s.url).sort()).toEqual(['https://fans.example/inbox', 'https://other.example/inbox'])
 		for (const { request } of sent) {
 			expect(await verifyRequestDetailed(request, { documentLoader: aliceLoader(LEGACY.pubkey) })).toMatchObject({
@@ -248,7 +263,7 @@ describe('delivery rounds', () => {
 		)
 		const result = await deliveryRound(testEnv(new QueueSim()), roundDeps(h.store, fetch))
 		expect(result.settled.sort()).toEqual(['delivered', 'retry'])
-		expect(result.retryAt).toBe(NOW + 60_000)
+		expect(result.nextDueAt).toBe(NOW + 60_000)
 		expect(await sql(h.store, 'SELECT inbox_url, state, last_status FROM deliveries')).toEqual([
 			{ inbox_url: 'https://fans.example/inbox', state: 'pending', last_status: 503 },
 		])
@@ -320,7 +335,7 @@ describe('the doorbell (RES-5, RES-6)', () => {
 		])
 	})
 
-	it('rings again when a round was full, and from the cron', async () => {
+	it('rings at once while due work remains after a round, and from the cron', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		for (let i = 0; i < 17; i++) {
@@ -335,10 +350,10 @@ describe('the doorbell (RES-5, RES-6)', () => {
 			store: deps.store,
 			delivery: deps,
 		})
-		// The fixture keys of community() do not unwrap: every delivery is retried, and the full round rings at once.
-		expect(queue.pending.map((m) => m.delaySeconds)).toEqual([0, 60])
+		// The fixture keys of community() do not unwrap: the 16 claimed are retried, and the 17th is due at once.
+		expect(queue.pending.map((m) => m.delaySeconds)).toEqual([0])
 		await scheduledDeliveries(testEnv(queue), deps)
-		expect(queue.pending).toHaveLength(3)
+		expect(queue.pending).toHaveLength(2)
 		expect(MAX_DOORBELL_DELAY_SECONDS).toBe(12 * 60 * 60)
 	})
 

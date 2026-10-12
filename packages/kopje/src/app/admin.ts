@@ -284,10 +284,16 @@ export function adminRoutes({ build, store, fetch, now, doorbell }: AdminDeps) {
 			ids: all === true ? 'all' : (ids as string[]),
 			now: now(),
 		})
+		if (!result.ok) {
+			const error =
+				'a later activity about the same object (an Undo, a Delete or an Update) supersedes these; sending them again could undo it'
+			return c.json({ error, code: result.code, ids: result.ids }, 409)
+		}
 		if (result.retried > 0) {
 			await doorbell(c.env).catch(() => {})
 		}
-		return c.json(result)
+		const { ok: _ok, ...rest } = result
+		return c.json(rest)
 	})
 
 	// ---- dump

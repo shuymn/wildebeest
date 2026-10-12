@@ -130,6 +130,21 @@ describe('expansion (NET-2, VIS-3)', () => {
 		expect(JSON.stringify(activity)).not.toContain('https://carol.example/users/carol')
 	})
 
+	it('NET-2: delivers once to a follower who is also mentioned, and falls back to a personal inbox', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const fan = await remoteAccount(h.store, 'fan', 'fans.example')
+		await remoteFollows(h.store, fan, alice.id)
+		const lone = await remoteAccount(h.store, 'lone', 'lone.example')
+		await sql(h.store, 'UPDATE accounts SET shared_inbox_url = NULL WHERE id = ?', lone)
+		await remoteFollows(h.store, lone, alice.id)
+		await post(h, alice, { status: '@fan@fans.example hello' })
+		expect((await rows(h.store)).map((r) => r.inbox_url)).toEqual([
+			'https://fans.example/inbox',
+			'https://lone.example/users/lone/inbox',
+		])
+	})
+
 	it('records no intent when no remote inbox needs it, and refuses inboxes that are not https', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
@@ -150,13 +165,13 @@ describe('expansion (NET-2, VIS-3)', () => {
 		const status = await post(h, alice, { status: 'soon gone', visibility: 'private' })
 		const leased = await claim(h.store, NOW, 'lease-1')
 		for (const delivery of leased.deliveries) {
-			expect(await complete(h.store, delivery.id, 'lease-1', NOW, OK)).toEqual({ status: 'delivered' })
+			expect(await complete(h.store, delivery.id, 'lease-1', NOW, OK)).toMatchObject({ status: 'delivered' })
 		}
 		expect(await rows(h.store)).toEqual([])
 		expect(await sql(h.store, 'SELECT id FROM outbound_activities')).toEqual([])
-		expect(await sql(h.store, 'SELECT object_uri, inbox_url FROM outbound_receipts ORDER BY inbox_url')).toEqual([
-			{ object_uri: status.uri, inbox_url: 'https://fans.example/inbox' },
-			{ object_uri: status.uri, inbox_url: 'https://other.example/inbox' },
+		expect(await sql(h.store, 'SELECT status_id, inbox_url FROM outbound_receipts ORDER BY inbox_url')).toEqual([
+			{ status_id: status.id, inbox_url: 'https://fans.example/inbox' },
+			{ status_id: status.id, inbox_url: 'https://other.example/inbox' },
 		])
 		await sql(h.store, 'DELETE FROM follows WHERE account_id = ?', other)
 		await h.request(`/api/v1/statuses/${status.id}`, bearer(alice.token, { method: 'DELETE' }))
@@ -167,7 +182,7 @@ describe('expansion (NET-2, VIS-3)', () => {
 		])
 		expect(JSON.parse(deleted[0]?.body ?? '{}')).toMatchObject({ object: { type: 'Tombstone', id: status.uri } })
 		// The evidence now lives in the Delete's own rows.
-		expect(await sql(h.store, 'SELECT object_uri FROM outbound_receipts')).toEqual([])
+		expect(await sql(h.store, 'SELECT status_id FROM outbound_receipts')).toEqual([])
 	})
 })
 
@@ -205,11 +220,11 @@ describe('lanes, claims and leases (NET-2, OPS-3)', () => {
 		const second = await claim(h.store, NOW + LEASE_MS, 'new')
 		expect(second.deliveries.map((d) => d.id)).toContain(id)
 		// The completion of the first claim arrives late: it may not acknowledge the second claim.
-		expect(await complete(h.store, id, 'old', NOW + LEASE_MS + 1, OK)).toEqual({ status: 'stale' })
-		expect(await complete(h.store, id, 'old', NOW + LEASE_MS + 1, GONE)).toEqual({ status: 'stale' })
+		expect(await complete(h.store, id, 'old', NOW + LEASE_MS + 1, OK)).toMatchObject({ status: 'stale' })
+		expect(await complete(h.store, id, 'old', NOW + LEASE_MS + 1, GONE)).toMatchObject({ status: 'stale' })
 		const row = (await rows(h.store)).find((r) => r.id === id)
 		expect(row).toMatchObject({ state: 'leased', lease_token: 'new', attempts: 2 })
-		expect(await complete(h.store, id, 'new', NOW + LEASE_MS + 2, OK)).toEqual({ status: 'delivered' })
+		expect(await complete(h.store, id, 'new', NOW + LEASE_MS + 2, OK)).toMatchObject({ status: 'delivered' })
 	})
 
 	it('OPS-3: a claim or completion whose response is lost is reconciled, not repeated', async () => {
@@ -223,8 +238,8 @@ describe('lanes, claims and leases (NET-2, OPS-3)', () => {
 		// The completion committed, its response was lost, and the Worker sends it again: the second is stale and
 		// records nothing twice.
 		const id = again.deliveries[0]?.id ?? ''
-		expect(await complete(h.store, id, 'again', NOW + LEASE_MS, OK)).toEqual({ status: 'delivered' })
-		expect(await complete(h.store, id, 'again', NOW + LEASE_MS, OK)).toEqual({ status: 'stale' })
+		expect(await complete(h.store, id, 'again', NOW + LEASE_MS, OK)).toMatchObject({ status: 'delivered' })
+		expect(await complete(h.store, id, 'again', NOW + LEASE_MS, OK)).toMatchObject({ status: 'stale' })
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM outbound_receipts')).toEqual([{ n: 1 }])
 		expect((await rows(h.store)).map((r) => r.id)).not.toContain(id)
 	})
@@ -259,12 +274,12 @@ describe('retries and giving up (RES-5)', () => {
 			expect(claimed.deliveries).toHaveLength(1)
 			const result = await complete(h.store, claimed.deliveries[0]?.id ?? '', `t${attempt}`, now, FAIL)
 			if (attempt < MAX_ATTEMPTS) {
-				expect(result).toEqual({ status: 'retry', retryAt: now + retryDelay(attempt) })
+				expect(result).toMatchObject({ status: 'retry', retryAt: now + retryDelay(attempt) })
 				expect((await claim(h.store, now + retryDelay(attempt) - 1, 'early')).deliveries).toEqual([])
 				total += retryDelay(attempt)
 				now += retryDelay(attempt)
 			} else {
-				expect(result).toEqual({ status: 'gave_up' })
+				expect(result).toMatchObject({ status: 'gave_up' })
 			}
 		}
 		// About 2.7 days in all (DECISIONS: 15 attempts).
@@ -278,7 +293,7 @@ describe('retries and giving up (RES-5)', () => {
 		await post(h, alice, { status: 'second' })
 		const leased = await claim(h.store, NOW, 'a')
 		const fans = leased.deliveries.find((d) => d.inbox === 'https://fans.example/inbox')
-		expect(await complete(h.store, fans?.id ?? '', 'a', NOW, GONE)).toEqual({ status: 'gave_up' })
+		expect(await complete(h.store, fans?.id ?? '', 'a', NOW, GONE)).toMatchObject({ status: 'gave_up' })
 		const after = await rows(h.store)
 		expect(after.filter((r) => r.inbox_url === 'https://fans.example/inbox').map((r) => r.state)).toEqual([
 			'gave_up',
@@ -310,7 +325,12 @@ describe('retries and giving up (RES-5)', () => {
 		])
 		const fans = report.gaveUp[1]?.id ?? ''
 		// The lane already has a pending row, so the retried one queues behind it... and goes first, being older.
-		expect(await h.store.retryDeliveries(BUILD, { ids: [fans], now: NOW + 1 })).toEqual({ retried: 1, more: false })
+		expect(await h.store.retryDeliveries(BUILD, { ids: [fans], now: NOW + 1 })).toEqual({
+			ok: true,
+			retried: 1,
+			skipped: 0,
+			more: false,
+		})
 		const fansRows = (await rows(h.store)).filter((r) => r.inbox_url === 'https://fans.example/inbox')
 		expect(fansRows.map((r) => [r.id, r.state, r.attempts])).toEqual([
 			[fans, 'queued', 0],
@@ -325,7 +345,12 @@ describe('retries and giving up (RES-5)', () => {
 		const swept = await h.store.sweepDeliveries(BUILD, { now: NOW + GAVE_UP_RETENTION_MS + 1 })
 		expect(swept).toEqual({ swept: 1 })
 		expect((await rows(h.store)).map((r) => r.state)).toEqual(['pending'])
-		expect(await h.store.retryDeliveries(BUILD, { ids: 'all', now: NOW })).toEqual({ retried: 0, more: false })
+		expect(await h.store.retryDeliveries(BUILD, { ids: 'all', now: NOW })).toEqual({
+			ok: true,
+			retried: 0,
+			skipped: 0,
+			more: false,
+		})
 	})
 })
 

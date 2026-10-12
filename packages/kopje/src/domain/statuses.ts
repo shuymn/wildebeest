@@ -587,17 +587,18 @@ export const deleteStatus = userWriteOperation<
 	if (!input.deleteMedia) {
 		db.run('UPDATE media_attachments SET status_id = NULL, position = 0 WHERE status_id = ?', current.id)
 	}
-	// Children cascade (mentions, tags, edits, favourites, bookmarks, notifications, boosts); replies keep their
-	// in_reply_to_uri.
+	// Recorded while the status and its receipts still exist, so the Delete reaches every inbox that received it.
+	if (facts !== null) {
+		recordOutbound(db, accountId, deleteActivity(facts), input.now)
+	}
+	// Children cascade (mentions, tags, edits, favourites, bookmarks, notifications, boosts and their receipts);
+	// replies keep their in_reply_to_uri. Receivers drop boosts of a deleted original, as Mastodon does.
 	db.run('DELETE FROM statuses WHERE id = ?', current.id)
 	recountStatuses(db, accountId)
 	for (const booster of boosters) {
 		recountStatuses(db, booster)
 	}
 	recountStatus(db, current.in_reply_to_id)
-	if (facts !== null) {
-		recordOutbound(db, accountId, deleteActivity(facts), input.now)
-	}
 	return { status: 'ok', value }
 })
 
@@ -1027,6 +1028,15 @@ function removeReblog(db: Db, accountId: string, reblogId: string, originalId: s
 		FROM statuses o JOIN accounts a ON a.id = o.account_id WHERE o.id = ?`,
 		originalId
 	)
+	// The Undo is recorded while the boost and its receipts still exist.
+	if (row !== undefined && target !== undefined) {
+		recordOutbound(
+			db,
+			accountId,
+			undoAnnounceActivity(announceOf(viewerUri(db, accountId), row.uri, row.visibility, row.published_at, target)),
+			now
+		)
+	}
 	db.run('DELETE FROM statuses WHERE id = ?', reblogId)
 	recountStatuses(db, accountId)
 	recountStatus(db, originalId)
@@ -1038,12 +1048,6 @@ function removeReblog(db: Db, accountId: string, reblogId: string, originalId: s
 		target.account_id,
 		accountId,
 		originalId
-	)
-	recordOutbound(
-		db,
-		accountId,
-		undoAnnounceActivity(announceOf(viewerUri(db, accountId), row.uri, row.visibility, row.published_at, target)),
-		now
 	)
 }
 

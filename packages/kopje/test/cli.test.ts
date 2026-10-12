@@ -248,9 +248,9 @@ describe('kopje-admin', () => {
 				account_id
 			)
 			sql.exec(
-				`INSERT INTO deliveries (id, activity_id, account_id, inbox_url, state, attempts, next_attempt_at, last_status,
-					last_error, updated_at)
-				VALUES (7, 1, ?, 'https://remote.example/inbox', 'gave_up', 15, 0, 410, 'HTTP 410', 0)`,
+				`INSERT INTO deliveries (id, activity_id, account_id, inbox_url, lane, state, attempts, next_attempt_at,
+					last_status, last_error, updated_at)
+				VALUES (7, 1, ?, 'https://remote.example/inbox', 'https://remote.example', 'gave_up', 15, 0, 410, 'HTTP 410', 0)`,
 				account_id
 			)
 		})
@@ -259,10 +259,28 @@ describe('kopje-admin', () => {
 			backlog: { gaveUp: 1, pending: 0 },
 			gaveUp: [{ id: '7', inbox: 'https://remote.example/inbox', activityType: 'Create', lastStatus: 410 }],
 		})
-		expect(JSON.parse((await cli(['deliveries', 'retry', '7'], { fetch })).out)).toEqual({ retried: 1, more: false })
+		expect(JSON.parse((await cli(['deliveries', 'retry', '7'], { fetch })).out)).toEqual({
+			retried: 1,
+			skipped: 0,
+			more: false,
+		})
 		expect(JSON.parse((await cli(['deliveries'], { fetch })).out)).toMatchObject({ backlog: { gaveUp: 0, pending: 1 } })
 		expect(JSON.parse((await cli(['deliveries', 'retry', '--all'], { fetch })).out)).toEqual({
 			retried: 0,
+			skipped: 0,
+			more: false,
+		})
+		// A superseded activity (its Undo or Delete was recorded since) is refused with a reason.
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec("UPDATE deliveries SET state = 'gave_up', lease_token = NULL WHERE id = 7")
+			state.storage.sql.exec('UPDATE outbound_activities SET superseded = 1 WHERE id = 1')
+		})
+		const refused = await cli(['deliveries', 'retry', '7'], { fetch })
+		expect(refused.code).toBe(1)
+		expect(refused.err).toContain('supersedes')
+		expect(JSON.parse((await cli(['deliveries', 'retry', '--all'], { fetch })).out)).toEqual({
+			retried: 0,
+			skipped: 1,
 			more: false,
 		})
 		expect((await cli(['deliveries', 'retry'], { fetch })).code).toBe(2)
