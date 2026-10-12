@@ -243,11 +243,17 @@ export function isRetracted(db: Db, actorUri: string, targetUri: string, now: nu
 	)
 }
 
-// Records that actorUri retracted targetUri. Only an id of the actor's own origin is recorded: another origin's
-// activity could never be the actor's to retract.
-export function retract(db: Db, actorUri: string, targetUri: string, now: number): void {
-	if (originOf(targetUri) === null || originOf(targetUri) !== originOf(actorUri)) {
-		return
+function recordable(actorUri: string, targetUri: string): boolean {
+	return originOf(targetUri) !== null && originOf(targetUri) === originOf(actorUri)
+}
+
+// Whether every one of targetUris can be recorded as retracted by actorUri now: those not recorded yet fit under the
+// cap. A change whose generation could not be recorded is not made (ID-7: it could come back).
+export function canRetract(db: Db, actorUri: string, targetUris: readonly string[], now: number): boolean {
+	const missing = new Set(targetUris.filter((uri) => recordable(actorUri, uri) && !isRetracted(db, actorUri, uri, now)))
+		.size
+	if (missing === 0) {
+		return true
 	}
 	const live =
 		db.first<{ n: number }>(
@@ -255,8 +261,15 @@ export function retract(db: Db, actorUri: string, targetUri: string, now: number
 			actorUri,
 			now
 		)?.n ?? 0
-	if (live >= MAX_RETRACTIONS_PER_ACTOR && !isRetracted(db, actorUri, targetUri, now)) {
-		return
+	return live + missing <= MAX_RETRACTIONS_PER_ACTOR
+}
+
+// Records that actorUri retracted targetUri, and reports whether it is recorded. Only an id of the actor's own origin
+// is recorded (another origin's activity could never be the actor's to retract), and at most
+// MAX_RETRACTIONS_PER_ACTOR live ones per actor.
+export function retract(db: Db, actorUri: string, targetUri: string, now: number): boolean {
+	if (!recordable(actorUri, targetUri) || !canRetract(db, actorUri, [targetUri], now)) {
+		return false
 	}
 	db.run(
 		`INSERT INTO inbound_retractions (actor_uri, target_uri, expires_at) VALUES (?, ?, ?)
@@ -265,6 +278,7 @@ export function retract(db: Db, actorUri: string, targetUri: string, now: number
 		targetUri,
 		now + RETRACTION_TTL_MS
 	)
+	return true
 }
 
 function sweep(db: Db, now: number): void {
@@ -402,9 +416,12 @@ const follow: Handler<'Follow'> = (db, actor, activity, { now }) => {
 		actor.domain
 	)
 	if (blocked !== undefined) {
-		// Refused with a Reject. The id is recorded as dead, so a replay sends no second Reject (ID-7).
+		// Refused with a Reject. The id is recorded as dead, so a replay sends no second Reject (ID-7); if it cannot be
+		// recorded, no Reject is recorded either.
+		if (!retract(db, actor.uri, activity.id, now)) {
+			return ignored('retraction-cap')
+		}
 		recordFollowAnswer(db, 'Reject', target, actor, activity.id, now)
-		retract(db, actor.uri, activity.id, now)
 		return applied('follow-rejected')
 	}
 	if (existing !== undefined && existing.uri === activity.id) {
@@ -414,10 +431,10 @@ const follow: Handler<'Follow'> = (db, actor, activity, { now }) => {
 		// A newer generation: the edge takes the new id, and the superseded one is recorded as dead, so a late Undo,
 		// or a replay, of it changes nothing (ID-7). A pending request keeps waiting; an accepted follow is accepted
 		// again under the new id (Mastodon's fast-forward: the follower lost track of our Accept).
-		db.run('UPDATE follows SET uri = ? WHERE id = CAST(? AS INTEGER)', activity.id, existing.id)
-		if (existing.uri !== null) {
-			retract(db, actor.uri, existing.uri, now)
+		if (existing.uri !== null && !retract(db, actor.uri, existing.uri, now)) {
+			return ignored('retraction-cap')
 		}
+		db.run('UPDATE follows SET uri = ? WHERE id = CAST(? AS INTEGER)', activity.id, existing.id)
 		if (existing.state === 'pending') {
 			return applied('follow-request-updated')
 		}
@@ -520,8 +537,11 @@ function isMisskeyPairId(id: string): boolean {
 }
 
 // Undo of a Follow or a Block. The undone activity is found by its id among the actor's own edges. Without a match,
-// only Misskey's pair-shaped Follow id falls back to the actor's current follow of the embedded local target, and
-// never when the id is one recorded as retracted or superseded.
+// only Misskey's pair-shaped Follow id falls back to the actor's current follow of the embedded local target.
+//
+// A pair id names every generation of a follow, so it is never recorded as retracted itself: the generation it undid
+// is (that Follow's own id), and a later Follow and its Undo by the same pair id work again. The limit: a pair Undo
+// delivered again after a new Follow cannot be told from a new Undo, and undoes the new follow.
 const undo: Handler<'Undo'> = (db, actor, activity, { now }) => {
 	const ref = activity.object
 	// ID-6: only the actor of the undone activity may undo it.
@@ -537,30 +557,33 @@ const undo: Handler<'Undo'> = (db, actor, activity, { now }) => {
 	if (isRetracted(db, actor.uri, ref.id, now)) {
 		return ignored('retracted')
 	}
-	let undone = false
+	const pair = ref.type === 'Follow' && isMisskeyPairId(ref.id)
+	type Edge = { target: string; uri: string | null }
+	let edge: Edge | undefined
 	if (ref.type === null || ref.type === 'Follow') {
-		type Edge = { target: string; uri: string | null }
-		let edge = db.first<Edge>(
+		edge = db.first<Edge>(
 			'SELECT target_account_id AS target, uri FROM follows WHERE account_id = ? AND uri = ?',
 			actor.id,
 			ref.id
 		)
 		const target = localAccount(db, ref.object)
-		if (edge === undefined && ref.type === 'Follow' && target !== undefined && isMisskeyPairId(ref.id)) {
+		if (edge === undefined && pair && target !== undefined) {
 			edge = db.first<Edge>(
 				'SELECT target_account_id AS target, uri FROM follows WHERE account_id = ? AND target_account_id = ?',
 				actor.id,
 				target.id
 			)
 		}
-		if (edge !== undefined) {
-			undone = removeFollow(db, actor.id, edge.target)
-			// The removed generation is dead too, whichever id named it.
-			if (edge.uri !== null) {
-				retract(db, actor.uri, edge.uri, now)
-			}
-			recountLocal(db, [edge.target])
-		}
+	}
+	// Everything this Undo records as retracted must fit, or nothing changes (ID-7).
+	const retracted = [...(pair ? [] : [ref.id]), ...(edge?.uri == null ? [] : [edge.uri])]
+	if (!canRetract(db, actor.uri, retracted, now)) {
+		return ignored('retraction-cap')
+	}
+	let undone = false
+	if (edge !== undefined) {
+		undone = removeFollow(db, actor.id, edge.target)
+		recountLocal(db, [edge.target])
 	}
 	if (!undone && (ref.type === null || ref.type === 'Block')) {
 		undone =
@@ -575,7 +598,9 @@ const undo: Handler<'Undo'> = (db, actor, activity, { now }) => {
 	}
 	// Recorded whether or not the target was found: an Undo that overtook its activity keeps it from applying later,
 	// and a replay of an undone activity does not restore it (ID-7). Likes and Announces (B1b-2) check it too.
-	retract(db, actor.uri, ref.id, now)
+	for (const uri of retracted) {
+		retract(db, actor.uri, uri, now)
+	}
 	return undone ? applied('undone') : applied('retraction-recorded')
 }
 
@@ -706,11 +731,19 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 	const target =
 		job === undefined
 			? undefined
-			: db.first<{ id: string; local: number; locked: number }>(
-					'SELECT id, domain IS NULL AS local, locked FROM accounts WHERE id = ?',
+			: db.first<{ id: string; uri: string; local: number; locked: number }>(
+					'SELECT id, uri, domain IS NULL AS local, locked FROM accounts WHERE id = ?',
 					job.target_account_id
 				)
-	if (job === undefined || source === undefined || target === undefined) {
+	// Checked before every batch: a Move whose source or target has since deleted itself ends here, before it changes
+	// anything (ID-7: a purged actor gets no new follows).
+	if (
+		job === undefined ||
+		source === undefined ||
+		target === undefined ||
+		isDeletedActor(db, source.uri, now) ||
+		(target.local === 0 && isDeletedActor(db, target.uri, now))
+	) {
 		finishJob(db, 'move', key, now)
 		return false
 	}
@@ -796,54 +829,68 @@ const updateActor: Handler<'UpdateActor'> = (_db, _actor, _activity, input) =>
 	input.actor === null ? ignored('no-document') : applied('actor-updated')
 
 // Mastodon's DeleteAccountService for a remote account, as a durable job: the purge job (the actor's tombstone) is
-// written with the first batch, relationships and notifications go at once, and statuses and favourites go
-// PURGE_BATCH at a time; the account row goes with the last batch.
+// written with the first batch, and each batch removes a bounded part of what the account has (purgeBatch); the
+// account row goes with the last one.
 const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
-	const job = db.first<{ done_at: number | null }>(
-		"SELECT done_at FROM inbound_jobs WHERE kind = 'purge' AND key = ?",
-		actor.uri
+	db.run(
+		"INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('purge', ?, ?, ?) ON CONFLICT DO NOTHING",
+		actor.uri,
+		actor.uri,
+		now
 	)
-	if (job === undefined) {
-		db.run(
-			"INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('purge', ?, ?, ?)",
-			actor.uri,
-			actor.uri,
-			now
-		)
-		const locals = db
-			.all<{ id: string }>(
-				`SELECT target_account_id AS id FROM follows WHERE account_id = ?1
-				UNION SELECT account_id FROM follows WHERE target_account_id = ?1`,
-				actor.id
-			)
-			.map((row) => row.id)
-		db.run('DELETE FROM follows WHERE account_id = ?1 OR target_account_id = ?1', actor.id)
-		db.run('DELETE FROM blocks WHERE account_id = ?1 OR target_account_id = ?1', actor.id)
-		db.run('DELETE FROM mutes WHERE target_account_id = ?', actor.id)
-		db.run('DELETE FROM list_accounts WHERE account_id = ?', actor.id)
-		db.run('DELETE FROM notifications WHERE from_account_id = ?', actor.id)
-		recountLocal(db, locals)
-	}
 	return applied('actor-deleted', purgeBatch(db, actor.uri, now))
 }
 
-// Deletes one batch of the deleted actor's statuses and favourites, recounting what they counted on. Returns whether
-// anything remains; when nothing does, the account row goes and the job is done.
+// Deletes one batch of a deleted actor's relationships, notifications, statuses and favourites, at most PURGE_BATCH
+// rows of each, recounting what they counted on (RES-6). Returns whether anything remains; when nothing does, the
+// account row goes and the job is done.
 function purgeBatch(db: Db, uri: string, now: number): boolean {
 	const account = remoteAccount(db, uri)
 	if (account === undefined) {
 		finishJob(db, 'purge', uri, now)
 		return false
 	}
+	const id = account.id
+	const follows = db.all<{ id: string; other: string }>(
+		`SELECT CAST(id AS TEXT) AS id, CASE WHEN account_id = ?1 THEN target_account_id ELSE account_id END AS other
+		FROM follows WHERE account_id = ?1 OR target_account_id = ?1 ORDER BY id LIMIT ?2`,
+		id,
+		PURGE_BATCH
+	)
+	db.run(
+		'DELETE FROM follows WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))',
+		JSON.stringify(follows.map((f) => f.id))
+	)
+	recountLocal(
+		db,
+		follows.map((f) => f.other)
+	)
+	db.run(
+		'DELETE FROM blocks WHERE id IN (SELECT id FROM blocks WHERE account_id = ?1 OR target_account_id = ?1 LIMIT ?2)',
+		id,
+		PURGE_BATCH
+	)
+	db.run('DELETE FROM mutes WHERE id IN (SELECT id FROM mutes WHERE target_account_id = ? LIMIT ?)', id, PURGE_BATCH)
+	db.run(
+		`DELETE FROM list_accounts WHERE account_id = ?1
+			AND list_id IN (SELECT list_id FROM list_accounts WHERE account_id = ?1 LIMIT ?2)`,
+		id,
+		PURGE_BATCH
+	)
+	db.run(
+		'DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE from_account_id = ? LIMIT ?)',
+		id,
+		PURGE_BATCH
+	)
 	const statuses = db.all<{ id: string; parent: string | null; original: string | null }>(
 		`SELECT id, in_reply_to_id AS parent, reblog_of_id AS original FROM statuses WHERE account_id = ?
 		ORDER BY id LIMIT ?`,
-		account.id,
+		id,
 		PURGE_BATCH
 	)
 	const favourites = db.all<{ id: string; status: string }>(
 		'SELECT CAST(id AS TEXT) AS id, status_id AS status FROM favourites WHERE account_id = ? ORDER BY id LIMIT ?',
-		account.id,
+		id,
 		PURGE_BATCH
 	)
 	db.run(
@@ -852,21 +899,26 @@ function purgeBatch(db: Db, uri: string, now: number): boolean {
 	)
 	db.run('DELETE FROM statuses WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(statuses.map((s) => s.id)))
 	const touched = new Set([
-		...statuses.flatMap((s) => [s.parent, s.original]).filter((id) => id !== null),
+		...statuses.flatMap((s) => [s.parent, s.original]).filter((status) => status !== null),
 		...favourites.map((f) => f.status),
 	])
-	for (const id of touched) {
-		recountStatus(db, id)
+	for (const status of touched) {
+		recountStatus(db, status)
 	}
 	const remaining = db.first(
 		`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM statuses WHERE account_id = ?1)
-			OR EXISTS (SELECT 1 FROM favourites WHERE account_id = ?1)`,
-		account.id
+			OR EXISTS (SELECT 1 FROM favourites WHERE account_id = ?1)
+			OR EXISTS (SELECT 1 FROM follows WHERE account_id = ?1 OR target_account_id = ?1)
+			OR EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 OR target_account_id = ?1)
+			OR EXISTS (SELECT 1 FROM mutes WHERE target_account_id = ?1)
+			OR EXISTS (SELECT 1 FROM list_accounts WHERE account_id = ?1)
+			OR EXISTS (SELECT 1 FROM notifications WHERE from_account_id = ?1)`,
+		id
 	)
 	if (remaining !== undefined) {
 		return true
 	}
-	db.run('DELETE FROM accounts WHERE id = ? AND domain IS NOT NULL', account.id)
+	db.run('DELETE FROM accounts WHERE id = ? AND domain IS NOT NULL', id)
 	finishJob(db, 'purge', uri, now)
 	return false
 }
@@ -916,6 +968,18 @@ export const receiveActivity = writeOperation<ReceiveInput, ReceiveResult>((db, 
 		input.actor === null || activity.type === 'DeleteActor'
 			? remoteAccount(db, actorUri)
 			: upsertRemoteActor(db, input.actor, origin, now)
+	if (actor === undefined && activity.type === 'DeleteActor' && input.actor !== null) {
+		// Verified against the actor's current document, but never stored: the tombstone alone keeps it from being
+		// stored by a late activity (ID-7).
+		db.run(
+			`INSERT INTO inbound_jobs (kind, key, actor_uri, done_at, expires_at, created_at)
+			VALUES ('purge', ?1, ?1, ?2, ?3, ?2) ON CONFLICT DO NOTHING`,
+			actorUri,
+			now,
+			now + JOB_RETENTION_MS
+		)
+		return applied('actor-deleted')
+	}
 	if (actor === undefined) {
 		return ignored('unknown-actor')
 	}

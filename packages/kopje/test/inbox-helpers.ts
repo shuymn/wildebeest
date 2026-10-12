@@ -13,7 +13,7 @@ export const LOCAL = 'https://kopje.test'
 export const MASTODON = 'https://mastodon.example'
 export const MISSKEY = 'https://misskey.example'
 
-type Served = { status: number; body?: unknown; contentType?: string }
+type Served = { status: number; body?: unknown; contentType?: string; location?: string; delayMs?: number }
 
 // An in-memory web of remote documents. Unknown URLs answer 404; status 0 is a network failure.
 export class RemoteWeb {
@@ -36,9 +36,14 @@ export class RemoteWeb {
 			return Promise.reject(new TypeError('network connection lost'))
 		}
 		const body = served.body === undefined ? null : JSON.stringify(served.body)
-		return Promise.resolve(
-			new Response(body, { status: served.status, headers: { 'content-type': served.contentType ?? AP } })
-		)
+		const headers: Record<string, string> = { 'content-type': served.contentType ?? AP }
+		if (served.location !== undefined) {
+			headers.location = served.location
+		}
+		const response = new Response(body, { status: served.status, headers })
+		return served.delayMs === undefined
+			? Promise.resolve(response)
+			: new Promise<Response>((resolve) => setTimeout(() => resolve(response), served.delayMs))
 	}) as typeof fetch
 
 	get loader() {
@@ -51,6 +56,17 @@ export class RemoteWeb {
 
 	fail(url: string, status: number): void {
 		this.served.set(url, { status })
+	}
+
+	redirect(url: string, location: string): void {
+		this.served.set(url, { status: 302, location })
+	}
+
+	delay(url: string, delayMs: number): void {
+		const served = this.served.get(url)
+		if (served !== undefined) {
+			this.served.set(url, { ...served, delayMs })
+		}
 	}
 }
 

@@ -50,12 +50,16 @@ const CONTEXT: Kind = {
 	objectRoot: false,
 }
 
-// A document refused by policy (scheme, host, redirect, type, size, id, root, budget) or unusable as served. Fetching
+// A document refused by policy (scheme, host, redirect, type, size, id, root) or unusable as served. Fetching
 // it again would not help.
 export class RefusedFetchError extends FetchError {}
 
 // A timeout or a network failure: fetching again may succeed.
 export class TransientFetchError extends FetchError {}
+
+// The request's fetch budget ran out (count, bytes or deadline). Not a verdict on the document: the same request may
+// fit another time (cached contexts cost nothing), so it is transient and the request is answered 503 and retried.
+export class BudgetExceededError extends TransientFetchError {}
 
 // Whether a failed load may succeed if tried again: a timeout, a network error, or an HTTP 408, 429 or 5xx. Refusals and
 // other HTTP errors (404, 410, ...) are permanent. An error that is not a FetchError (a Store refusal inside a signer,
@@ -144,7 +148,7 @@ function createLoader(deps: LoaderDeps, kind: Kind, sign?: RequestSigner): Docum
 		const target = new URL(url)
 		const left = deps.budget === undefined ? timeoutMs : deps.budget.deadline - Date.now()
 		if (left <= 0) {
-			throw new RefusedFetchError(target, 'Request fetch deadline exhausted')
+			throw new BudgetExceededError(target, 'Request fetch deadline exhausted')
 		}
 		const limit = Math.min(timeoutMs, left)
 		const controller = new AbortController()
@@ -176,7 +180,7 @@ async function load(deps: LoaderDeps, kind: Kind, sign: RequestSigner | undefine
 		await assertFetchable(current, deps.checkHost ?? dnsCheckHost)
 		if (deps.budget !== undefined) {
 			if (deps.budget.fetches <= 0) {
-				throw new RefusedFetchError(current, 'Request fetch budget exhausted')
+				throw new BudgetExceededError(current, 'Request fetch budget exhausted')
 			}
 			deps.budget.fetches--
 		}
@@ -239,7 +243,9 @@ async function readDocument(
 	const limit = Math.min(DOCUMENT_BODY_LIMIT, budget?.bytes ?? DOCUMENT_BODY_LIMIT)
 	const body = await readBoundedBody(response, limit)
 	if (body === 'too-large') {
-		throw new RefusedFetchError(final, `Document exceeds ${limit} bytes`)
+		throw limit < DOCUMENT_BODY_LIMIT
+			? new BudgetExceededError(final, `Request byte budget exhausted (${limit} bytes left)`)
+			: new RefusedFetchError(final, `Document exceeds ${limit} bytes`)
 	}
 	if (budget !== undefined) {
 		budget.bytes -= body.byteLength

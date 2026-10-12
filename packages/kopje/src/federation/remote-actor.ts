@@ -1,4 +1,4 @@
-import { type DocumentLoader, exportSpki } from '@fedify/fedify'
+import { type DocumentLoader, exportSpki, FetchError } from '@fedify/fedify'
 import { type Actor, getActorTypeName, type Image, isActor, Link, lookupObject } from '@fedify/vocab'
 
 import { isTransientLoadError, loadFailureOf } from './loader'
@@ -19,7 +19,9 @@ export type FetchedActor =
 	| { kind: 'ok'; actor: Actor; input: RemoteActorInput | null }
 	// Fetching again may succeed (timeout, network error, 5xx).
 	| { kind: 'transient' }
-	// Gone, refused, or not an actor with exactly this id.
+	// The document answers 404 or 410: the actor is gone.
+	| { kind: 'gone' }
+	// Refused, or not an actor with exactly this id.
 	| { kind: 'unusable' }
 
 // Loads the actor at uri. The document is loaded once through `loader` and handed to lookupObject, which therefore
@@ -34,6 +36,10 @@ export async function fetchActor(
 	try {
 		remote = await loader(uri)
 	} catch (error) {
+		const status = error instanceof FetchError ? error.response?.status : undefined
+		if (status === 404 || status === 410) {
+			return { kind: 'gone' }
+		}
 		return { kind: isTransientLoadError(error) ? 'transient' : 'unusable' }
 	}
 	let object: unknown

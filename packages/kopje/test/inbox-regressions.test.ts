@@ -14,7 +14,7 @@ import {
 	type TestActor,
 } from './inbox-helpers'
 import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH } from '../src/domain/inbox'
-import { createSafeLoader } from '../src/federation/loader'
+import { BudgetExceededError, createSafeLoader, isTransientLoadError } from '../src/federation/loader'
 import { handleQueue, runScheduledJobs } from '../src/jobs/queue'
 import { sha256Hex } from '../src/platform/sha256'
 import type { StoreStub } from '../src/platform/store-client'
@@ -391,6 +391,53 @@ describe('Move progress and replays (ID-4, ID-7, RES-6)', () => {
 		expect(await t.post(t.bob, t.move)).toBe(202)
 		expect(await accountId(t.store, t.bob2.uri)).toBeUndefined()
 	})
+
+	it('continues an unfinished Move without moving a follow made after it, and survives a repeated delivery', async () => {
+		const t = await moving(101)
+		expect(await t.post(t.bob, t.move)).toBe(202)
+		await sql(
+			t.store,
+			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+			ALICE,
+			t.bobId
+		)
+		// The response to the first delivery was lost: the Move comes again while its job is unfinished.
+		expect(await t.post(t.bob, t.move)).toBe(202)
+		await t.queue.deliver((batch) => handleQueue(batch, { ...t.env, MAINTENANCE: 'off' } as Env, t.deps))
+		expect(await t.moved()).toBe(101)
+		expect((await edges(t.store)).filter((e) => e.account_id === ALICE)).toEqual([
+			{ account_id: ALICE, target_account_id: t.bobId, state: 'accepted', uri: null },
+		])
+	})
+
+	it('ends a Move whose target deleted itself before the next batch (ID-7)', async () => {
+		const t = await moving(101)
+		await t.post(t.bob2, follow(t.bob2, nextId(t.bob2), DAVE_URI))
+		await seedStatuses(t.store, t.bob2.uri, PURGE_BATCH + 1)
+		expect(await t.post(t.bob, t.move)).toBe(202)
+		t.web.fail(t.bob2.uri, 410)
+		expect(await t.post(t.bob2, deleteSelf(t.bob2))).toBe(202)
+		const env = { ...t.env, MAINTENANCE: 'off' } as Env
+		for (let round = 0; round < 3; round++) {
+			await t.queue.deliver((batch) => handleQueue(batch, env, t.deps))
+			await runScheduledJobs(env, t.deps)
+		}
+		expect(await t.moved()).toBe(0)
+		expect(await accountId(t.store, t.bob2.uri)).toBeUndefined()
+		// The follower the Move had not reached still follows the source.
+		expect(await count(t.store, 'SELECT 1 FROM follows WHERE target_account_id = ?', t.bobId)).toBe(1)
+	})
+
+	it('gives the same result when the Queue and cron run the Move at once', async () => {
+		const t = await moving(250)
+		expect(await t.post(t.bob, t.move)).toBe(202)
+		const env = { ...t.env, MAINTENANCE: 'off' } as Env
+		for (let round = 0; round < 3; round++) {
+			await Promise.all([t.queue.deliver((batch) => handleQueue(batch, env, t.deps)), runScheduledJobs(env, t.deps)])
+		}
+		expect(await t.moved()).toBe(250)
+		expect(await count(t.store, 'SELECT 1 FROM follows WHERE target_account_id = ?', t.bobId)).toBe(0)
+	})
 })
 
 describe('the retraction cap does not stop a deletion (ID-7, RES-4)', () => {
@@ -459,7 +506,7 @@ describe('remote fetches: transient contexts and the request budget (RES-6)', ()
 		])
 	})
 
-	it('stops at the shared fetch budget, contexts included', async () => {
+	it('answers 503 when the shared fetch budget runs out, contexts included, and changes nothing', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
 		const contexts = Array.from({ length: 20 }, (_, i) => `https://ctx.example/c${i}`)
@@ -467,24 +514,218 @@ describe('remote fetches: transient contexts and the request budget (RES-6)', ()
 			t.web.serve(url, { '@context': { [`x${url.at(-1)}`]: `${url}#x` } }, 'application/ld+json')
 		}
 		t.web.serve(bob.uri, { ...bob.document, '@context': [...(bob.document['@context'] as unknown[]), ...contexts] })
-		expect(await t.post(bob, follow(bob))).not.toBe(202)
+		expect(await t.post(bob, follow(bob))).toBe(503)
 		expect(t.web.fetched.length).toBeLessThanOrEqual(8)
 		expect(await edges(t.store)).toEqual([])
 	})
 
-	it('counts fetches (each redirect hop is one) and bytes against the budget, and enforces its deadline', async () => {
+	it('answers 503 to a Move whose target exceeds the budget: no job, and the spooled copy is retried', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bob2 = await mastodonActor(t.web, 'bob2', { origin: 'https://new.example', key: 2 })
+		const contexts = Array.from({ length: 10 }, (_, i) => `https://ctx.example/m${i}`)
+		for (const url of contexts) {
+			t.web.serve(url, { '@context': { [`m${url.at(-1)}`]: `${url}#m` } }, 'application/ld+json')
+		}
+		t.web.serve(bob2.uri, {
+			...bob2.document,
+			alsoKnownAs: [bob.uri],
+			'@context': [...(bob2.document['@context'] as unknown[]), ...contexts],
+		})
+		await t.post(bob, follow(bob))
+		const move = {
+			'@context': AS,
+			id: `${bob.uri}#moves/b`,
+			type: 'Move',
+			actor: bob.uri,
+			object: bob.uri,
+			target: bob2.uri,
+		}
+		expect(await t.post(bob, move)).toBe(503)
+		expect(await count(t.store, 'SELECT 1 FROM inbound_jobs')).toBe(0)
+
+		// Contexts cached by the first attempt cost nothing; the replay starts as cold as the first try.
+		await sql(t.store, 'DELETE FROM fedify_kv')
+		const spool = harness(t.store, { MAINTENANCE: 'readonly' }, BUILD, { keygen: fixtureKeyGen, loader: t.web.loader })
+		expect((await spool.request('/inbox', await signedInit(bob, '/inbox', move))).status).toBe(202)
+		await spool.queue.deliver((batch) => handleQueue(batch, { ...t.env, MAINTENANCE: 'off' } as Env, t.deps))
+		expect(spool.queue.retries).toBe(1)
+		expect(spool.queue.pending).toHaveLength(1)
+	})
+
+	it('counts every redirect hop, adds up bytes across documents, and treats running out as retryable', async () => {
 		const web = new RemoteWeb()
 		const bob = await mastodonActor(web, 'bob')
 		const deps = { ...web.loader, userAgent: 'test' }
-		const fetchCount = { fetches: 1, bytes: 1024 * 1024, deadline: Date.now() + 10_000 }
-		const loader = createSafeLoader({ ...deps, budget: fetchCount })
-		await loader(bob.uri)
-		await expect(loader(bob.uri)).rejects.toThrow('budget exhausted')
+		const later = () => Date.now() + 10_000
 
-		const bytes = { fetches: 5, bytes: 100, deadline: Date.now() + 10_000 }
-		await expect(createSafeLoader({ ...deps, budget: bytes })(bob.uri)).rejects.toThrow('exceeds 100 bytes')
+		web.redirect(`${MASTODON}/a`, `${MASTODON}/b`)
+		web.redirect(`${MASTODON}/b`, bob.uri)
+		const hops = createSafeLoader({ ...deps, budget: { fetches: 2, bytes: 1024 * 1024, deadline: later() } })
+		const redirected = await hops(`${MASTODON}/a`).catch((error: unknown) => error)
+		expect(redirected).toBeInstanceOf(BudgetExceededError)
+		expect(isTransientLoadError(redirected)).toBe(true)
 
-		const late = { fetches: 5, bytes: 1024 * 1024, deadline: Date.now() - 1 }
-		await expect(createSafeLoader({ ...deps, budget: late })(bob.uri)).rejects.toThrow('deadline exhausted')
+		const size = JSON.stringify(bob.document).length
+		const bytes = { fetches: 5, bytes: Math.floor(size * 1.5), deadline: later() }
+		const twice = createSafeLoader({ ...deps, budget: bytes })
+		await twice(bob.uri)
+		const second = await twice(bob.uri).catch((error: unknown) => error)
+		expect(second).toBeInstanceOf(BudgetExceededError)
+
+		// The deadline is reached while a fetch is under way.
+		web.delay(bob.uri, 200)
+		const slow = createSafeLoader({ ...deps, budget: { fetches: 5, bytes: 1024 * 1024, deadline: Date.now() + 50 } })
+		const timedOut = await slow(bob.uri).catch((error: unknown) => error)
+		expect(isTransientLoadError(timedOut)).toBe(true)
+
+		// A document over the per-document cap stays a permanent refusal.
+		const capped = createSafeLoader({ ...deps, budget: { fetches: 5, bytes: 4 * 1024 * 1024, deadline: later() } })
+		web.serve(`${MASTODON}/huge`, { id: `${MASTODON}/huge`, pad: 'x'.repeat(1024 * 1024) })
+		expect(isTransientLoadError(await capped(`${MASTODON}/huge`).catch((error: unknown) => error))).toBe(false)
+	})
+
+	it('fetches an actor document once per request, whatever the fragment', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		expect(await t.post(bob, follow(bob))).toBe(202)
+		expect(t.web.fetched.filter((url) => url === bob.uri)).toHaveLength(1)
+	})
+})
+
+describe('second review: deletion, keys and generations', () => {
+	const ageKeys = (t: { store: StoreStub }) => sql(t.store, 'UPDATE remote_keys SET fetched_at = ?', NOW - DAY - 1)
+
+	it('refuses a self-Delete signed with a stale key while the actor is alive with another key (ID-1)', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const next = await mastodonActor(t.web, 'next', { key: 3 })
+		await t.post(bob, follow(bob))
+		t.web.serve(bob.uri, { ...bob.document, publicKey: { id: bob.keyId, owner: bob.uri, publicKeyPem: next.pem } })
+		await ageKeys(t)
+		expect(await t.post(bob, deleteSelf(bob))).toBe(401)
+		expect(await accountId(t.store, bob.uri)).toBeDefined()
+		expect((await edges(t.store)).length).toBe(1)
+		expect(await count(t.store, 'SELECT 1 FROM inbound_jobs')).toBe(0)
+	})
+
+	it('accepts a stale stored key for the Delete only when the actor document is gone', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await t.post(bob, follow(bob))
+		await ageKeys(t)
+		t.web.fail(bob.uri, 410)
+		expect(await t.post(bob, deleteSelf(bob))).toBe(202)
+		expect(await accountId(t.store, bob.uri)).toBeUndefined()
+	})
+
+	it('answers 503 when the key is gone but the actor document fails transiently, and 401 when it is alive', async () => {
+		const t = await setup()
+		const uri = `${MASTODON}/users/gts`
+		const keyId = `${uri}/main-key`
+		const gts = await mastodonActor(t.web, 'gts')
+		const document = { ...gts.document, publicKey: { id: keyId, owner: uri, publicKeyPem: gts.pem } }
+		t.web.serve(uri, document)
+		t.web.serve(keyId, document)
+		await t.post(gts, follow(gts), { keyId })
+		await ageKeys(t)
+		t.web.fail(keyId, 410)
+		t.web.fail(uri, 502)
+		expect(await t.post(gts, deleteSelf(gts), { keyId })).toBe(503)
+		t.web.serve(uri, document)
+		expect(await t.post(gts, deleteSelf(gts), { keyId })).toBe(401)
+		expect(await accountId(t.store, uri)).toBeDefined()
+	})
+
+	it('records a tombstone for a verified Delete of an actor never stored (ID-7)', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		expect(await t.post(bob, deleteSelf(bob))).toBe(202)
+		expect(await count(t.store, "SELECT 1 FROM inbound_jobs WHERE kind = 'purge' AND key = ?", bob.uri)).toBe(1)
+		expect(await t.post(bob, follow(bob))).toBe(202)
+		expect(await accountId(t.store, bob.uri)).toBeUndefined()
+		expect(await edges(t.store)).toEqual([])
+	})
+
+	it('undoes a second generation with the same Misskey pair id', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const pair = { id: `${MASTODON}/follows/9abc/9def`, type: 'Follow', actor: bob.uri, object: ALICE_URI }
+		const undo = () => ({ '@context': AS, id: nextId(bob), type: 'Undo', actor: bob.uri, object: pair })
+		await t.post(bob, follow(bob))
+		await t.post(bob, undo())
+		await t.post(bob, follow(bob))
+		expect((await edges(t.store)).length).toBe(1)
+		await t.post(bob, undo())
+		expect(await edges(t.store)).toEqual([])
+		expect(await count(t.store, 'SELECT 1 FROM notifications')).toBe(0)
+	})
+
+	it('stores and accepts a key the actor lists by reference', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const keyUrl = `${MASTODON}/keys/bob`
+		t.web.serve(bob.uri, { ...bob.document, publicKey: keyUrl })
+		t.web.serve(keyUrl, {
+			'@context': ['https://www.w3.org/ns/activitystreams', 'https://w3id.org/security/v1', { Key: 'sec:Key' }],
+			id: keyUrl,
+			type: 'Key',
+			owner: bob.uri,
+			publicKeyPem: bob.pem,
+		})
+		expect(await t.post(bob, follow(bob), { keyId: keyUrl })).toBe(202)
+		expect(await sql(t.store, 'SELECT key_id FROM remote_keys')).toEqual([{ key_id: keyUrl }])
+	})
+
+	it('changes no Follow generation it cannot record at the retraction cap (ID-7)', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const f1 = follow(bob)
+		await t.post(bob, f1)
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+			INSERT INTO inbound_retractions (actor_uri, target_uri, expires_at) SELECT ?, ? || '/seeded/' || i, ? FROM n`,
+			MAX_RETRACTIONS_PER_ACTOR,
+			bob.uri,
+			bob.uri,
+			NOW + DAY
+		)
+		await t.post(bob, { '@context': AS, id: nextId(bob), type: 'Undo', actor: bob.uri, object: embedded(f1) })
+		await t.post(bob, f1)
+		await t.post(bob, follow(bob))
+		await t.post(bob, f1)
+		expect((await edges(t.store)).map((e) => e.uri)).toEqual([f1.id])
+		expect(await count(t.store, 'SELECT 1 FROM notifications')).toBe(1)
+		expect(await count(t.store, 'SELECT 1 FROM outbound_activities')).toBe(1)
+	})
+
+	it('purges relationships and notifications in bounded batches too (RES-6)', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await t.post(bob, follow(bob))
+		const bobId = (await accountId(t.store, bob.uri))!
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+			INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+			SELECT printf('4%017d', i), ? || '/s/' || i, ?, 'public', '2026-10-01T00:00:00.000Z' FROM n`,
+			PURGE_BATCH + 1,
+			ALICE_URI,
+			ALICE
+		)
+		await sql(
+			t.store,
+			"INSERT INTO notifications (account_id, type, from_account_id, status_id) SELECT ?, 'favourite', ?, id FROM statuses WHERE id GLOB '4*'",
+			ALICE,
+			bobId
+		)
+		t.web.fail(bob.uri, 410)
+		expect(await t.post(bob, deleteSelf(bob))).toBe(202)
+		// bob's follow notification and the 501 favourites: one batch leaves two.
+		expect(await count(t.store, 'SELECT 1 FROM notifications')).toBe(2)
+		await runScheduledJobs({ ...t.env, MAINTENANCE: 'off' } as Env, t.deps)
+		expect(await count(t.store, 'SELECT 1 FROM notifications')).toBe(0)
+		expect(await accountId(t.store, bob.uri)).toBeUndefined()
 	})
 })

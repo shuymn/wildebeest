@@ -173,7 +173,9 @@ export function createRemoteLoaders(
 		createSafeLoader(loaderDeps, (await signer()).sign)(url, options)
 	)
 	return {
-		document: (url, options) => memo(fetched, url, () => fresh(url, options)),
+		// Keyed without the fragment: HTTP never sends it, so `actor#main-key` and `actor` are one fetch. Key ids are
+		// still compared whole by Fedify and by receiveInbound.
+		document: (url, options) => memo(fetched, withoutFragment(url), () => fresh(url, options)),
 		context: kvCache({ loader: createContextLoader(loaderDeps), kv: parts.kv }),
 	}
 }
@@ -282,6 +284,11 @@ function isInstanceActorRequest(url: URL, origin: string): boolean {
 		return resources.length === 1 && resources[0] === `${origin}/actor`
 	}
 	return url.pathname === '/actor'
+}
+
+function withoutFragment(url: string): string {
+	const hash = url.indexOf('#')
+	return hash === -1 ? url : url.slice(0, hash)
 }
 
 function memo<T>(cache: Map<string, Promise<T>>, key: string, load: () => Promise<T>): Promise<T> {

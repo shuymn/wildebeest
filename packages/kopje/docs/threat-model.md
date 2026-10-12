@@ -87,8 +87,9 @@ against their own instance. TLS is assumed between all parties.
   answers 401. The owner is the actor whose document lists the key, by id and key material, and the key names no
   other owner. A stored key (`remote_keys`, kept per key id with its owner, whatever the shape of the key URL) is
   trusted for 24 hours after its document was fetched; after that, or when its signature fails, the key and the actor
-  document are fetched anew, bypassing the document cache. The one exception is a deleted actor's own `Delete`, which
-  is verified with the stored key at any age. _Implemented on branch `kopje/inbound-relationships`:_ `receiveInbound` in `src/federation/inbound.ts`;
+  document are fetched anew, bypassing the document cache. The one exception is an actor's own `Delete` when its key and
+  its actor document both answer 404 or 410: it is verified with the stored key at any age. A live actor is never
+  deleted with a key its current document does not list (401), and a transient failure answers 503. _Implemented on branch `kopje/inbound-relationships`:_ `receiveInbound` in `src/federation/inbound.ts`;
   `test/inbox.test.ts` ("ID-1: an inbound activity acts only for its signer"), `test/inbox-regressions.test.ts`
   ("stored keys, rotation and ownership").
 - **ID-2: a fetched document is trusted only for its own origin.** The identity of a fetched object is its parsed `id`
@@ -121,7 +122,10 @@ against their own instance. TLS is assumed between all parties.
   no late Undo, Accept, Reject or replay reaches a newer generation, and no Accept or Reject is recorded twice; an
   answer's id derives from the Follow it answers. A Move is a job keyed by its id that never moves a follow made after
   it. An actor's deletion is a tombstone (`inbound_jobs`) independent of the retraction cap and TTL, honoured by every
-  upsert. `test/inbox.test.ts` ("ID-7: replay changes nothing twice", "OPS-1"), `test/inbox-regressions.test.ts`.
+  upsert and by every Move batch, and recorded even for a verified Delete of an actor never stored. A generation change
+  whose retraction cannot be recorded (the per-actor cap) is not made. Misskey's pair-shaped Undo id is not retracted
+  itself, so the same pair id can undo a later generation; the limit is that a redelivered pair Undo after a new Follow
+  cannot be told from a new Undo. `test/inbox.test.ts` ("ID-7: replay changes nothing twice", "OPS-1"), `test/inbox-regressions.test.ts`.
 - **ID-8: only ActivityStreams media types become objects.** A fetched document is used as an actor, key or object only
   if served as `application/activity+json` or `application/ld+json` with the ActivityStreams profile, as Mastodon
   requires, and only if its root is a JSON object (JSON-LD would fetch a string root through the context loader). Other
@@ -388,9 +392,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (B1b, B2, B4). Gap: `POST /api/v1/apps` on main has no rate or storage budget yet; planned with B5 (rate limiting)._
   _Implemented on branch `kopje/inbound-relationships`_ for relationship activities: one request's fetches share a budget of 8 fetches
   (documents, JSON-LD contexts and each redirect hop), 2 MiB and 15 seconds (`requestBudget` in
-  `src/federation/loader.ts`; cached contexts cost nothing; icons are taken only when embedded). A Move moves 100
-  followers per batch and carries at most 100 blocks and mutes; a deleted actor's content is purged 500 statuses per
-  batch. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
+  `src/federation/loader.ts`; cached contexts cost nothing; icons are taken only when embedded). Running out of the budget is retryable: the
+  request answers 503, records nothing and its spooled copy is retried; a document refused for itself stays a permanent
+  refusal. A key an actor lists by reference is taken from the verification that just resolved it, not fetched again. A Move moves 100
+  followers per batch and carries at most 100 blocks and mutes; a deleted actor's content, relationships and notifications are purged 500
+  rows of each per batch. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
   Queue message nor maintenance stops them, and waiting out maintenance spends no retry. `test/inbox.test.ts`,
   `test/inbox-regressions.test.ts`.
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
