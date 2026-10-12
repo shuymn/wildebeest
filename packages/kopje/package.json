@@ -20,9 +20,10 @@
 		"@fedify/vocab": "2.4.2",
 		"es-toolkit": "1.46.1",
 		"hono": "4.12.27",
-		"temporal-polyfill": "1.0.5",
 		"jose": "6.2.12",
 		"linkify-it": "6.1.0",
+		"temporal-polyfill": "1.0.5",
+		"xss": "1.0.15",
 		"zod": "3.25.76"
 	},
 	"devDependencies": {
@@ -30,6 +31,7 @@
 		"@cloudflare/workers-types": "4.20260627.1",
 		"@fedify/testing": "2.4.2",
 		"miniflare": "4.20260625.0",
+		"parse5": "8.0.1",
 		"typescript": "5.9.3",
 		"vitest": "4.1.9",
 		"wrangler": "4.105.0"
