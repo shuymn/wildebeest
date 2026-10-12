@@ -14,6 +14,7 @@ import {
 	type StoredKey,
 } from '../domain/actors'
 import type { SnapshotSource } from '../domain/snapshot'
+import { httpUrl } from '../platform/http-url'
 import { PACKAGE_VERSION } from '../platform/package-version'
 import { callStore, type StoreStub } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
@@ -249,10 +250,16 @@ async function localActorObject(ctx: RequestContext<FederationState>, actor: Loc
 		manuallyApprovesFollowers: actor.locked,
 		discoverable: actor.discoverable,
 		published: Temporal.Instant.from(actor.createdAt),
-		icon: actor.avatarUrl === null ? null : new Image({ url: new URL(actor.avatarUrl) }),
-		image: actor.headerUrl === null ? null : new Image({ url: new URL(actor.headerUrl) }),
+		// Only http(s) URLs are published; anything else stored is left out (HTML-3).
+		icon: image(actor.avatarUrl),
+		image: image(actor.headerUrl),
 		aliases: actor.alsoKnownAs.map((uri) => new URL(uri)),
 	})
+}
+
+function image(stored: string | null): Image | null {
+	const url = httpUrl(stored)
+	return url === null ? null : new Image({ url })
 }
 
 // The instance actor, as Mastodon's: an Application at /actor with its own inbox and the shared inbox.

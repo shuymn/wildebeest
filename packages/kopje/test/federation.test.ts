@@ -83,6 +83,36 @@ describe('actor document', () => {
 		expect(pemBody(publicKeyPem)).toBe(pemBody(LEGACY.pubkey))
 	})
 
+	// HTML-3: a stored avatar or header that is not an http(s) URL is left out of the actor.
+	it.each(['javascript:alert(1)', 'JAVASCRIPT:alert(1)', 'data:image/png;base64,AAAA', '/a.png'])(
+		'leaves out an icon and image stored as %j',
+		async (bad) => {
+			const { json, store } = await instance()
+			await runInDurableObject(store, (_instance, state) => {
+				state.storage.sql.exec('UPDATE accounts SET avatar_url = ?, header_url = ? WHERE id = ?', bad, bad, ALICE)
+			})
+			const { status, body } = await json('/ap/users/Alice')
+			expect(status).toBe(200)
+			expect(body).not.toHaveProperty('icon')
+			expect(body).not.toHaveProperty('image')
+		}
+	)
+
+	it('publishes an http(s) icon and image', async () => {
+		const { json, store } = await instance()
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec(
+				"UPDATE accounts SET avatar_url = 'HTTPS://cdn.test/a.png', header_url = 'https://cdn.test/h.png' WHERE id = ?",
+				ALICE
+			)
+		})
+		const { body } = await json('/ap/users/Alice')
+		expect(body).toMatchObject({
+			icon: { type: 'Image', url: 'https://cdn.test/a.png' },
+			image: { type: 'Image', url: 'https://cdn.test/h.png' },
+		})
+	})
+
 	it('answers 404 for an unknown actor and for a differently cased path', async () => {
 		const { request } = await instance()
 		expect((await request('/ap/users/nobody', AP)).status).toBe(404)
