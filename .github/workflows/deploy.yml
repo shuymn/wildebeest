@@ -15,6 +15,13 @@ on:
       - "tools/**"
   repository_dispatch:
 
+# Deploy migrates the D1 database, and a backup export blocks it, so the two
+# never run at the same time. GitHub keeps one pending run per group, so a
+# newer run replaces a pending one rather than queueing behind it.
+concurrency:
+  group: legacy-d1
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

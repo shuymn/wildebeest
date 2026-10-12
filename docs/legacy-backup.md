@@ -48,7 +48,7 @@ Under the bucket prefix:
 
 ### Why the schedule is at 18:30 UTC
 
-`wrangler d1 export` snapshots the database on Cloudflare's side, and during that snapshot **the database is unresponsive for roughly 15 to 20 seconds per 186 MB** of data. For a live instance that means a short window of request failures, so the job is scheduled at a low-traffic hour. Change the `cron` in `.github/workflows/backup.yml` to whatever is quietest for your instance, and avoid running `workflow_dispatch` during peak hours.
+`wrangler d1 export` snapshots the database on Cloudflare's side, and during that snapshot **the database is unresponsive for roughly 15 to 20 seconds per 186 MB** of data. For a live instance that means a short window of request failures, so the job is scheduled at a low-traffic hour. Change the `cron` in `.github/workflows/backup.yml` to whatever is quietest for your instance, and avoid running `workflow_dispatch` during peak hours. The backup and deploy workflows share a concurrency group, so a deploy that starts during a backup waits for it instead of failing its migration step.
 
 ### Keep the age identity offline
 

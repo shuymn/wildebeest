@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { MAINTENANCE_MODES } from './maintenance'
+import { vapidPublicKey } from './vapid'
 
 function binding<T>(name: string) {
 	return z.custom<T>((value) => typeof value === 'object' && value !== null, `binding ${name} is missing`)
@@ -19,6 +20,11 @@ const configSchema = z.object({
 	SETUP_TOKEN: z.string().min(1).optional(),
 	// The KEK that wraps local private keys. Unset reads as the empty string, which is a legal KEK (healthReport warns).
 	USER_KEK: z.string().optional(),
+	// Set after /setup generates it; Web Push stays unavailable until then.
+	VAPID_JWK: z
+		.string()
+		.refine((value) => vapidPublicKey(value) !== null, 'must be an EC P-256 JWK')
+		.optional(),
 })
 
 export type Config = z.infer<typeof configSchema>
