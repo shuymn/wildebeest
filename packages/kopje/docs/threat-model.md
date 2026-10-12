@@ -561,11 +561,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/platform/store-import.ts`, `docs/dump-format.md`; `test/dump-import.test.ts`, `test/ops-regressions.test.ts`,
   `test/dump-format.test.ts`. Media tombstones (`media_orphans`) are left out of dumps (`src/platform/dump-catalog.ts`):
   they name R2 objects to delete, which a restored Store must not act on.
-- **DATA-4: backups leave Cloudflare only encrypted.** Dump chunks, R2 originals and manifests are age-encrypted
-  (typage, `age-encryption`) to the operator's public keys before upload; the identity never reaches Cloudflare.
-  _Implemented on branch `kopje/scheduled-backup`:_ `src/jobs/backup.ts`, `src/platform/backup-crypto.ts`;
-  `test/backup.test.ts` ("writes the encrypted dump", "round-trips a dump larger than one part": every body the bucket
-  receives is checked to be age ciphertext without plaintext markers).
+- **DATA-4: backups leave Cloudflare only encrypted.** Dump chunks, R2 originals, media indexes and manifests are
+  age-encrypted (typage, `age-encryption`) to the run's pinned recipients before upload; the identity never reaches
+  Cloudflare. A media copy counts only for the bucket and recipients it was made under, so a key change re-encrypts
+  everything. _Implemented on branch `kopje/scheduled-backup`:_ `src/jobs/backup.ts`, `src/platform/backup-crypto.ts`;
+  `test/backup.test.ts` ("writes the dump, the originals the dump references": every body the bucket receives is age
+  ciphertext without plaintext markers; "abandons a run whose recipients changed").
 - **DATA-5: logs carry no secrets or content.** Log entries are structured events. They never include request bodies,
   post content, tokens, keys, Access assertions or URLs with credentials. A log entry never includes text that a request
   supplied: errors are logged by class, standard error name and known Store reason, and requests by standard method (else
@@ -587,22 +588,30 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("signed fetches"). Activities: _Implemented on branch
   `kopje/deliveries`:_ a delivery is signed with the key of its lane's account, unwrapped once per round
   (`src/jobs/deliver.ts`); `test/delivery-post.test.ts` ("signs the activity with its author key").
-- **DATA-9: backup credentials stay out of the Store, logs and reports.** The S3 key is a Worker secret, read apart
-  from the main config so a bad backup setting stops only the backup. Config issues name the variable, never its value;
-  failures are recorded and logged as fixed reason codes (`s3-<op>-<status>`, Store refusal codes), never an error
-  message, a response body, a URL or a signature; the Store keeps only keys, upload ids, sizes and digests. The
-  documented credentials can only put, list, delete and abort multipart uploads under the prefix (`docs/backup.md`).
-  _Implemented on branch `kopje/scheduled-backup`:_ `src/platform/backup-config.ts`, `src/platform/s3.ts`,
-  `failureReason` in `src/jobs/backup.ts`; `test/backup.test.ts` ("never logs, saves or reports a secret", "refuses
-  invalid settings without naming their values").
-- **DATA-10: a backup is complete only with its manifest, and restore checks the manifest's digests.** The manifest is
-  written last and carries the size and SHA-256 of every object as stored and before encryption, with the schema and
-  Kopje versions. The SHA-256 of the encrypted manifest is recorded outside the bucket (Store state, health, Workers
-  Logs), because age encryption to a public key gives no authenticity. `kopje-admin backup-verify` checks decrypted
-  files against the manifest, and the import re-checks the dump's own trailer. _Implemented on branch
-  `kopje/scheduled-backup`:_ `src/jobs/backup.ts`, `verifyBackup` in `cli/lib/commands.js`; `test/backup.test.ts`
-  ("backup-verify checks decrypted files against the manifest", "round-trips"). Gap: comparing `manifestSha256` is a
-  manual step of the restore runbook (DATA-8).
+- **DATA-9: backup credentials stay out of the Store, logs and reports, and are scoped.** The S3 key is a Worker
+  secret, read apart from the main config so a bad backup setting stops only the backup. Config issues name the
+  variable, never its value. Failures are recorded and logged as fixed reason codes (`s3-<op>-<status|timeout>`,
+  Store refusal codes), never an error message, a response body, a URL or a signature. The Store keeps only keys,
+  upload ids, fingerprints, sizes and digests. The documented policy grants put under the prefix, delete and abort only
+  under `backups/` (never `media/`), and prefix-conditioned listing; multipart listing, which cannot be
+  prefix-conditioned, is optional (`docs/backup.md`). _Implemented on branch `kopje/scheduled-backup`:_
+  `src/platform/backup-config.ts`, `src/platform/s3.ts`, `failureReason` in `src/jobs/backup.ts`;
+  `test/backup.test.ts` ("never logs, saves or reports a secret", "refuses invalid settings without naming their
+  values"). The S3 test double verifies every SigV4 signature with an independent implementation checked against AWS's
+  published examples ("SigV4 (independent vectors)", "a wrong signing region is refused").
+- **DATA-10: a backup is complete only with its manifest, and restore checks the whole restore set.** The manifest is
+  written last. It carries the size and SHA-256 (before and after encryption) of the dump and of the run's media index,
+  with the schema and Kopje versions. The index is complete, not incremental: it lists every original the dump
+  references, with its object and digests, or why it is missing (`pending`, `absent`). Retention can therefore delete
+  older backups without losing the integrity evidence for originals they copied. The Store keeps the cumulative index
+  (`backup_media`, one row per original, pruned to what the last success needs), so the job never reads objects back.
+  The SHA-256 of the encrypted manifest is recorded outside the bucket (Store state, health, Workers Logs), because
+  age encryption to a public key gives no authenticity. `kopje-admin backup-verify` checks the dump, the index and
+  every copied original against the selected manifest, and reports incomplete media coverage (exit code 3). The import
+  re-checks the dump's own trailer. _Implemented on branch `kopje/scheduled-backup`:_ `src/jobs/backup.ts`,
+  `src/platform/backup-state.ts`, `verifyBackup` in `cli/lib/commands.js`; `test/backup.test.ts` ("verifies the whole
+  restore set after retention removed the backup that copied an original", "reports incomplete media coverage",
+  "round-trips"). Gap: comparing `manifestSha256` is a manual step of the restore runbook (DATA-8).
 - **DATA-8: a restore has selected authority.** Restore uses a manifest the operator selected by digest, checks schema
   version, domain and every referenced component before use, and before leaving maintenance invalidates OAuth grants
   restored from the checkpoint and reconciles suspension and admin state. _Planned (B6b)._
@@ -631,15 +640,29 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   leased until the lease ends, then it is claimed and POSTed again (the receiver deduplicates by activity id); a
   repeated completion is stale and records nothing twice; `test/deliveries.test.ts` ("OPS-3: a claim or completion
   whose response is lost"), `test/delivery-post.test.ts` ("OPS-3: a lost completion"). Push: _Planned (push)._
-- **OPS-5: the backup never leaves the Store frozen or the bucket inconsistent.** The dump freeze ends when the last
-  chunk is read, on any failure (abort), and by the 3-minute dump lease when the Worker dies; the next run releases a
-  dead run's dump by cursor or op id. A run is held by a runner lease with compare-and-set saves, so two cron
-  invocations never work on one run. An interrupted dump object is restarted (age's stream state cannot be saved), and
-  its multipart upload, and any upload under `backups/` that no run holds, is aborted. Media and manifest stages resume.
-  Retention deletes only the job's two object names under `backups/`, only backups older than the newest
-  `BACKUP_RETENTION` complete ones, manifest first; nothing is deleted from R2. _Implemented on branch
-  `kopje/scheduled-backup`:_ `src/jobs/backup.ts`, `src/platform/backup-state.ts`; `test/backup.test.ts`
-  ("backup resumption", "releases the Store freeze", "aborts abandoned multipart uploads", "backup retention").
+- **OPS-5: the backup never leaves the Store frozen or a recorded backup inconsistent.**
+    - **Freeze.** The dump freeze ends as soon as the last chunk is read, before the remaining parts are uploaded. It
+      also ends at once on any failure, by the run's opId, even when dumpStart's answer was lost (`dumpAbort` never
+      starts a dump). If the Worker dies, the 3-minute dump lease ends it, and the next run releases it again by opId.
+    - **Fencing.** One invocation holds a run. The runner lease is taken, renewed and checked in the Store transaction,
+      on every save and before every upload step. Every object an invocation writes is named
+      `<run>/<attempt>`, so an invocation that lost the lease can only finish writes into its own names, never into the
+      backup the Store recorded.
+    - **Bindings.** A run is bound to its bucket and recipients, and abandoned when they change. A day at or before the
+      last successful backup's day never starts a run.
+    - **Interruptions.** An interrupted dump is restarted (age's stream state cannot be saved). Its upload, and any
+      upload under `backups/` that can be listed, is aborted. Media, index and manifest stages resume. Every request ends
+      by the invocation's deadline, with time kept for a checkpoint, and media copying stops at a per-invocation byte
+      budget sized to the cron's CPU limit.
+    - **Retention.** Retention selects backups by manifest only. It deletes only the job's names under `backups/`, only
+      runs older than the newest `BACKUP_RETENTION` complete ones, and manifests first. Nothing is deleted from R2 or
+      `media/`.
+
+    _Implemented on branch `kopje/scheduled-backup`:_ `src/jobs/backup.ts`, `src/platform/backup-state.ts`,
+    `dumpAbort` in `src/platform/store-admin.ts`; `test/backup.test.ts` ("backup fencing", "backup resumption",
+    "backup deadline", "backup destination and recipients", "ends the freeze as soon as the last chunk is read",
+    "backup retention").
+
 - **OPS-4: cutover never writes the source and never goes back.** The legacy source stays read-only; every ingress route
   (custom domain, `pages.dev`, previews) is replaced before the final export; publication requires independent per-row
   verification that fails when content changes at the same length, and Queue and DLQ reconciliation. After publication,
@@ -704,8 +727,8 @@ activity specs, cited in test names.
 | Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured                                                                                                                             | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added                                                                         | Kopje configures logtape                                             |
 | `constantTimeEqual` on main takes time that depends on the input length                                                                                                                                                                    | No content leak is known; `kopje/ops-tools` compares fixed-size digests                                                                                       | `kopje/ops-tools` merges (then remove this row)                      |
 | Remote HTML is sanitized by sanitize-html, whose htmlparser2 is a tokenizer rather than an HTML5 tree builder                                                                                                                              | It emits only allowlisted tags with quoted, escaped attributes and escapes all other text; the parse5-checked vector suites pass                              | a vector fails, or a maintained tree-based sanitizer fits the budget |
-| Backup media copies are never pruned, so an original deleted from R2 stays in the bucket; served `files/` variants are not backed up                                                                                                       | Media is incremental and every restore needs all earlier copies; originals are the source of the variants                                                     | a restore tool re-encodes variants, or backups track deletions       |
-| The backup's S3 credentials can delete backups under the prefix                                                                                                                                                                            | Retention needs delete; versioning or object lock on the bucket is the documented protection                                                                  | the job can work with put-only credentials                           |
+| Backup media copies are never pruned, so an original deleted from R2 stays in the bucket (and copies from abandoned or stale attempts stay too); served `files/` variants are not backed up                                                | Copies are reused across backups and the kept indexes refer to them; originals are the source of the variants (B8 restore tools)                              | a restore tool re-encodes variants, or backups track deletions       |
+| The backup's S3 credentials can delete backups under `backups/` (not `media/`)                                                                                                                                                             | Retention needs delete; versioning or object lock on the bucket is the documented protection                                                                  | the job can work with put-only credentials                           |
 | Activities signed by someone other than their actor (forwarded, with LD signatures) are refused                                                                                                                                            | ID-1. Replies that reach Kopje only by forwarding (to a collection the author cannot deliver to) and deliveries through relays are missed                     | relays or forwarded replies must be supported                        |
 
 ## How to use

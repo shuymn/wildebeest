@@ -9,51 +9,86 @@ The job is on by default. Until the settings below are present it does nothing, 
 
 ## What a backup contains
 
-Under the prefix (`kopje-backup/` by default), for the backup of UTC day `<id>` (for example `2026-10-13`):
+Each backup run has an id, `<UTC date>-<8 hex digits>` (for example `2026-10-13-5f0c1a2b`). Each invocation that works
+on it adds its own 16-hex-digit attempt id. Every object is written under both ids, below the prefix (`kopje-backup/`
+by default):
 
-| Object                                | Content                                                                                 |
-| ------------------------------------- | --------------------------------------------------------------------------------------- |
-| `backups/<id>/dump.kopje.age`         | The Store's dump, in the import format of [dump-format.md](dump-format.md)              |
-| `media/<id>/originals/<media id>.age` | Each R2 original uploaded since the previous successful backup, one encrypted file each |
-| `backups/<id>/manifest.json.age`      | The manifest. It is written last, so a backup without it is incomplete                  |
+| Object                                           | Content                                                                    |
+| ------------------------------------------------ | -------------------------------------------------------------------------- |
+| `backups/<run>/<attempt>/dump.kopje.age`         | The Store's dump, in the import format of [dump-format.md](dump-format.md) |
+| `media/<run>/<attempt>/originals/<media id>.age` | One R2 original, encrypted on its own                                      |
+| `backups/<run>/<attempt>/media-index.json.age`   | The media index of this backup (below)                                     |
+| `backups/<run>/<attempt>/manifest.json.age`      | The manifest. It is written last, so a run without one is incomplete       |
 
-The manifest (JSON, once decrypted) lists:
+The manifest (JSON, once decrypted) has:
 
-- `id`, `createdAt`, and `kopje.version`, the Kopje version that made it;
+- `id`, `attempt` and `createdAt`, and `kopje.version`, the Kopje version that made it;
 - `schema.version` and `schema.migrations`, the Store's applied migrations (an import target must have the same);
-- `dump`: its key, its size and SHA-256 as stored (`size`, `sha256`) and before encryption (`plaintext`);
-- `media`: the originals copied by this backup (`objects`, each with both digests), after `media.after` up to
-  `media.through`;
+- `dump` and `mediaIndex`: each object's key, its size and SHA-256 as stored (`size`, `sha256`) and before encryption
+  (`plaintext`);
+- `media`: the coverage counts, below;
 - `recipients`: the public keys it was encrypted to.
 
-Media is incremental: each backup copies only the originals added since the previous one, under its own `media/<id>/`
-folder. A restore needs every `media/` folder up to the backup it restores. Retention never deletes `media/`.
-Originals uploaded within the last hour wait for the next day's backup, so an upload still in progress is never missed.
-The served, re-encoded files (`files/` in R2) are not backed up.
+The media index is complete, not incremental. It lists every original the dump references: completed local uploads,
+whose original is at `originals/<media id>` in R2. Each entry is one of these:
+
+- `copied`, with the object holding it, its size and SHA-256 before and after encryption, and the run that copied it.
+  That may be an earlier run: an original is copied once per bucket and recipient set.
+- `pending`: not copied yet. A backup copies at most 2,000 originals; the rest go into the next one.
+- `absent`: not in R2 when the backup looked for it, for example because it was deleted after the dump.
+
+### Media recovery guarantee
+
+A complete backup restores exactly the originals its index marks `copied`, each verifiable against the index. The
+index's digest is in the manifest. The manifest's `media` counts (`required`, `copied`, `pending`, `absent`) say how
+much of the dump's media that is, and `kopje-admin backup-verify` reports every original that is missing. A backup can
+be complete and still lack originals: `pending` ones are copied by later backups, and `absent` ones cannot be.
+
+The served, re-encoded files (`files/` in R2) are not backed up. A restore puts the originals back, but restored media
+is not served until it is re-encoded (a restore tool for that is planned).
 
 ## How it runs
 
-The 5-minute cron starts a backup at the first run on or after `BACKUP_HOUR_UTC` each UTC day, and continues a backup
-in progress. Nothing runs while the env sets `MAINTENANCE`.
+The 5-minute cron starts a backup at the first run on or after `BACKUP_HOUR_UTC`, once per UTC day, and only on a day
+after the last successful backup's day. A clock that goes back never starts a second backup for a day that has one.
+The cron also continues a backup in progress. Nothing runs while the env sets `MAINTENANCE`.
+
+One invocation at a time holds the run. Its lease is kept in the Store and checked in the Store's transaction on every
+save. Each invocation stops 13 minutes after it starts, leaving 2 minutes of the cron's 15-minute wall time. Every
+request and its retries end in time for a last checkpoint.
 
 1. **Dump.** The Store enters its dump freeze. It turns readonly, and inbound activities are spooled and replayed
    afterwards, so nothing is lost. The dump is read in 4 MiB chunks, encrypted as it streams, and uploaded in 8 MiB
-   parts of one multipart upload. The freeze ends as soon as the last chunk is read. It also ends when the job fails,
-   and within 3 minutes if the Worker dies, through the dump lease. The whole dump is never held in memory.
-2. **Media.** New R2 originals are copied one by one, and progress is saved after each one. This stage stops after
-   10 minutes and continues at the next cron, so a large media set spans several invocations. At most 2,000 originals
-   go into one backup; the rest go into the next. Nothing is ever deleted from R2.
-3. **Manifest**, then **retention**.
+   parts of one multipart upload. As soon as the last chunk has been read, the job records which originals the dump
+   references and ends the freeze, before the remaining parts are uploaded. The freeze also ends at once when the job
+   fails, even if the start's answer was lost (the job aborts by its own id). If the Worker dies, the 3-minute dump
+   lease ends it. The whole dump is never held in memory.
+2. **Media.** Each referenced original that this bucket does not hold yet is copied, and progress is saved after each
+   one. When the invocation nears its deadline, or has encrypted 512 MiB, it stops, and the next cron continues.
+   Nothing is ever deleted from R2.
+3. **Media index**, then **manifest**, then **retention**.
 
-A backup that is interrupted resumes where it stopped. The one exception is an interrupted dump: age's stream
-cannot be continued, so its upload is aborted and the dump starts again. Multipart uploads under `backups/` that no
-run holds are aborted before each dump. A failure is recorded with a reason code and retried after an hour. A run that
-dies three times in a row is recorded as `interrupted`.
+A backup that is interrupted resumes where it stopped. The one exception is an interrupted dump: age's stream state
+cannot be saved, so its upload is aborted and the dump starts again. Each invocation first aborts the multipart uploads
+under `backups/` that it can list, since no live invocation is writing them. A failure is recorded with a reason code
+and retried after an hour. A run that dies three times in a row is recorded as `interrupted`.
 
-The dump must finish within one cron invocation: 15 minutes of wall time, and 30 seconds of Worker CPU for the
-5-minute cron. Reading the dump costs the Store's CPU, not the Worker's. In the Worker, age encrypts at about
-300 MB/s and SHA-256 runs natively, so the CPU limit allows dumps of several GB, far more than a Kopje instance stores.
-The wall time is mostly the upload: at 10 MB/s, 15 minutes is about 9 GB.
+A run is tied to the bucket settings (endpoint, bucket, region, prefix) and the recipients it started with. If either
+changes, the run is abandoned and a new one starts. A copy of an original made under other settings counts as missing,
+so a new bucket or a new key gets a full copy of the media.
+
+**Fencing.** An invocation that loses the lease (it was too slow, or another one's clock ran ahead) can still finish a
+request it already sent. That request only ever writes objects under its own attempt id. The backup the Store records
+(`lastSuccess`, with the manifest's digest) is therefore never overwritten by a stale invocation. A stale invocation
+can leave a second, self-consistent manifest for the same run, which retention treats as the same backup.
+
+**Limits.** The dump must be read, encrypted and uploaded within one invocation. The cron allows 30 seconds of Worker
+CPU, and reading the dump costs the Store's CPU, not the Worker's. In the Worker, age encryption plus both SHA-256
+digests measured about 4 ms of CPU per MiB on an Apple M4 Pro (Node.js 24; 512 MiB in 2.1 s). Encrypting media copies
+measured about 6 ms per MiB. Workers CPUs are unmeasured. Assuming they are two to four times slower, the CPU limit
+allows dumps of roughly 2 to 4 GB. The wall time is mostly upload: 11 minutes at 10 MB/s is about 6.5 GB. Serializing
+the job's state costs about 3 µs per save, and the media index about 1 µs per original. A Kopje instance's dump is far
+smaller than these limits.
 
 ## Settings
 
@@ -65,18 +100,18 @@ wrangler secret put BACKUP_S3_ACCESS_KEY_ID
 wrangler secret put BACKUP_S3_SECRET_ACCESS_KEY
 ```
 
-| Name                          | Required | Default         | Meaning                                                                                             |
-| ----------------------------- | -------- | --------------- | --------------------------------------------------------------------------------------------------- |
-| `BACKUP_AGE_RECIPIENT`        | yes      |                 | Your age public key (`age1...`). Several keys may be given, separated by spaces                     |
-| `BACKUP_S3_ENDPOINT`          | yes      |                 | The S3 endpoint's https origin, without a path, for example `https://s3.eu-central-1.amazonaws.com` |
-| `BACKUP_S3_BUCKET`            | yes      |                 | The bucket. Requests are path-style: `<endpoint>/<bucket>/<key>`                                    |
-| `BACKUP_S3_ACCESS_KEY_ID`     | yes      |                 | Secret. The access key id                                                                           |
-| `BACKUP_S3_SECRET_ACCESS_KEY` | yes      |                 | Secret. The secret access key                                                                       |
-| `BACKUP_S3_REGION`            | no       | `us-east-1`     | The signing region (`auto` for some providers)                                                      |
-| `BACKUP_S3_PREFIX`            | no       | `kopje-backup/` | Every object the job writes, lists or deletes is under it. Must end with `/`                        |
-| `BACKUP_RETENTION`            | no       | `7`             | How many complete daily backups to keep (1-366)                                                     |
-| `BACKUP_HOUR_UTC`             | no       | `0`             | The UTC hour from which the day's backup may start (0-23)                                           |
-| `BACKUP_ENABLED`              | no       | `true`          | `false` turns the job off                                                                           |
+| Name                          | Required | Default         | Meaning                                                                                                              |
+| ----------------------------- | -------- | --------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `BACKUP_AGE_RECIPIENT`        | yes      |                 | Your age public key (`age1...`). Several keys may be given, separated by spaces                                      |
+| `BACKUP_S3_ENDPOINT`          | yes      |                 | The S3 endpoint's https origin, without a path, for example `https://s3.eu-central-1.amazonaws.com`                  |
+| `BACKUP_S3_BUCKET`            | yes      |                 | The bucket. Requests are path-style: `<endpoint>/<bucket>/<key>`                                                     |
+| `BACKUP_S3_ACCESS_KEY_ID`     | yes      |                 | Secret. The access key id                                                                                            |
+| `BACKUP_S3_SECRET_ACCESS_KEY` | yes      |                 | Secret. The secret access key                                                                                        |
+| `BACKUP_S3_REGION`            | no       | `us-east-1`     | The signing region. It must match the bucket's region on AWS (for example `eu-central-1`); some providers use `auto` |
+| `BACKUP_S3_PREFIX`            | no       | `kopje-backup/` | Every object the job writes, lists or deletes is under it. Must end with `/`                                         |
+| `BACKUP_RETENTION`            | no       | `7`             | How many complete daily backups to keep (1-366)                                                                      |
+| `BACKUP_HOUR_UTC`             | no       | `0`             | The UTC hour from which the day's backup may start (0-23)                                                            |
+| `BACKUP_ENABLED`              | no       | `true`          | `false` turns the job off                                                                                            |
 
 Create the key pair on a machine you trust, and keep the identity (the private key) offline, never in Cloudflare:
 
@@ -92,90 +127,132 @@ The settings are checked apart from the rest of the configuration. A mistake the
 ### Storage requirements
 
 Any S3-compatible storage that supports SigV4, path-style requests, multipart uploads and ListObjectsV2. AWS S3,
-Backblaze B2, Wasabi and MinIO are examples. ListMultipartUploads is used to find abandoned uploads; where it is
-missing, the job logs that and relies on the bucket's lifecycle rule. Configure in the bucket:
+Backblaze B2, Wasabi and MinIO are examples; only an in-memory test double has been exercised so far. In the bucket,
+configure:
 
-- a lifecycle rule that aborts incomplete multipart uploads after 1 day (a second line of cleanup);
-- optionally, object versioning or object lock on the prefix with a retention longer than `BACKUP_RETENTION` days. The
-  job's credentials can delete under the prefix, so this is what protects backups if the Worker or its secrets are
+- **required:** a lifecycle rule that aborts incomplete multipart uploads after 1 day. The job aborts the uploads it
+  can list, but listing them is optional (see below), and a dead invocation's upload is otherwise only cleaned up by
+  this rule;
+- **recommended:** object versioning or object lock on the prefix, with a retention longer than `BACKUP_RETENTION`
+  days. The job's credentials can delete backups, so this is what protects them if the Worker or its secrets are
   compromised.
 
 ### Minimal credentials
 
-The job needs to put, list and delete objects, and to abort and list multipart uploads, under its prefix only. It never
-reads objects back. Give it its own key, not one that restores. For AWS (other providers have equivalent scoped keys;
-for B2, an application key limited to the bucket and the name prefix):
+The job writes objects under the prefix and deletes and aborts only under `backups/`. It never deletes `media/` and
+never reads anything back. Give it its own key, not one that restores. For AWS:
 
 ```json
 {
 	"Version": "2012-10-17",
 	"Statement": [
 		{
+			"Sid": "WriteBackupsAndMedia",
 			"Effect": "Allow",
-			"Action": ["s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
+			"Action": "s3:PutObject",
 			"Resource": "arn:aws:s3:::BUCKET/kopje-backup/*"
 		},
 		{
+			"Sid": "PruneBackups",
 			"Effect": "Allow",
-			"Action": ["s3:ListBucket", "s3:ListBucketMultipartUploads"],
+			"Action": ["s3:DeleteObject", "s3:AbortMultipartUpload"],
+			"Resource": "arn:aws:s3:::BUCKET/kopje-backup/backups/*"
+		},
+		{
+			"Sid": "ListPrefix",
+			"Effect": "Allow",
+			"Action": "s3:ListBucket",
 			"Resource": "arn:aws:s3:::BUCKET",
-			"Condition": { "StringLike": { "s3:prefix": ["kopje-backup/*"] } }
+			"Condition": { "StringLike": { "s3:prefix": "kopje-backup/*" } }
 		}
 	]
 }
 ```
 
+`s3:ListBucketMultipartUploads` is optional. It does not support the `s3:prefix` condition, so granting it lets the
+key list every upload in the bucket. Grant it only on a bucket dedicated to Kopje's backups; without it, the job logs
+`kopje.backup.list_uploads_failed` and the lifecycle rule cleans up. On B2, use an application key limited to the
+bucket and the name prefix.
+
 Restoring uses `GetObject`, with credentials kept on your own machine.
 
 ## Retention
 
-After each successful backup, the job lists `backups/` and keeps the newest `BACKUP_RETENTION` complete backups (with a
-manifest). It deletes every backup older than the oldest kept one, complete or not. It deletes the manifest first, so a
-half-deleted backup never looks complete. The newest complete backup is never deleted. It deletes only
-`backups/<date>/dump.kopje.age` and `backups/<date>/manifest.json.age`; anything else in the bucket, `media/` included,
-is left alone. A retention failure does not fail the backup. It is shown as `retentionFailure` and tried again after
-the next backup.
+After each successful backup, the job lists `backups/` and keeps the newest `BACKUP_RETENTION` complete runs. A run is
+complete when it has a manifest; runs are selected by manifest only. It deletes every run older than the oldest kept
+one, complete or not. All of a run's manifests go first, so a half-deleted run never looks complete. The newest
+complete backup is never deleted. Only the job's three object names under `backups/<run>/<attempt>/` are deleted.
+Anything else in the bucket, `media/` included, is left alone, since the kept indexes refer to originals copied long
+ago. A retention failure does not fail the backup. It is shown as `retentionFailure`, and the next backup's retention
+finishes the job.
 
 ## Status
 
 `kopje-admin health` (and `GET /admin/health`) shows `checks.backup`:
 
-| Field                         | Meaning                                                                               |
-| ----------------------------- | ------------------------------------------------------------------------------------- |
-| `state`                       | `disabled`, `not-configured`, `invalid`, `idle`, `pending` (a run waits) or `running` |
-| `lastSuccess`                 | The id, time, manifest key and `manifestSha256` of the last complete backup           |
-| `lastFailure`                 | The id, time, stage and reason code of the last failure                               |
-| `inProgress`                  | The run in progress: its stage, uploaded parts and media copied so far                |
-| `retryAt`, `retentionFailure` | When a failed run is tried again; the last retention failure                          |
+| Field                         | Meaning                                                                                         |
+| ----------------------------- | ----------------------------------------------------------------------------------------------- |
+| `state`                       | `disabled`, `not-configured`, `invalid`, `idle`, `pending` (a run waits) or `running`           |
+| `lastSuccess`                 | The run id, time, manifest key, `manifestSha256` and media coverage of the last complete backup |
+| `lastFailure`                 | The run id, time, stage and reason code of the last failure                                     |
+| `inProgress`                  | The run in progress: its stage, uploaded dump parts and originals copied so far                 |
+| `retryAt`, `retentionFailure` | When a failed run is tried again; the last retention failure                                    |
 
-The check fails (and the public `/health` answers `fail`) when the last failure is newer than the last success, or when
-the settings are invalid. "Not configured" is only a warning. Reason codes name the step and status, for example
-`s3-upload-part-403`, `dump-dump-in-progress` or `interrupted`. They never contain a message from the storage
+The check fails when the last failure is newer than the last success, or when the settings are invalid. "Not
+configured" is only a warning. Reason codes name the step and status, for example `s3-upload-part-403`,
+`s3-upload-part-timeout`, `dump-dump-in-progress` or `interrupted`. They never contain a message from the storage
 provider, a URL or a secret. Workers Logs has `kopje.backup.*` events with the same codes.
+
+**The public `/health` is aggregate operational health.** It answers `fail` while backups are failing, as it does for
+other problems an operator must act on. Use it for alerting only. Do not use it to withdraw traffic from the instance
+or to restart it: a failing backup does not stop the instance from serving.
 
 ## Restore
 
 You need the identity file, a copy of `kopje-admin`, and read access to the bucket with your own credentials.
 
-1. **Choose the backup.** List `backups/` and take the newest `<id>` that has a `manifest.json.age`. Check that the
-   SHA-256 of the downloaded `manifest.json.age` equals `manifestSha256` in that day's `kopje.backup.succeeded` log
-   entry (or in `health` if it is the latest). Anyone with your public key and write access to the bucket could write
-   a manifest that decrypts, so this ties the manifest to what your instance wrote.
+1. **Choose the backup** by its manifest. Take `lastSuccess.manifest` from `health`, or from the
+   `kopje.backup.succeeded` entry in Workers Logs for an older backup. Download that `manifest.json.age` and check that
+   its SHA-256 equals the recorded `manifestSha256`:
 
-2. **Download and decrypt** the manifest and the dump:
+    ```sh
+    shasum -a 256 manifest.json.age
+    ```
+
+    Anyone with your public key and write access to the bucket could write a manifest that decrypts. This check ties
+    the manifest to what your instance recorded. `backup-verify` then checks everything else against the manifest.
+
+2. **Download and decrypt** the manifest, and the dump and the media index it names (`dump.key`, `mediaIndex.key`):
 
     ```sh
     age -d -i kopje-backup-key.txt -o manifest.json manifest.json.age
     age -d -i kopje-backup-key.txt -o dump.kopje dump.kopje.age
+    age -d -i kopje-backup-key.txt -o media-index.json media-index.json.age
     ```
 
-3. **Verify** them against the manifest (sizes and SHA-256, before and after encryption):
+3. **Download and decrypt the originals** the index marks `copied`, each to its R2 key under one folder:
 
     ```sh
-    kopje-admin backup-verify manifest.json dump.kopje --encrypted dump.kopje.age
+    jq -r '.objects[] | select(.state == "copied") | "\(.key) \(.source)"' media-index.json |
+    while read -r key source; do
+      aws s3 cp "s3://BUCKET/$key" "encrypted/$source.age"
+      mkdir -p "restore/$(dirname "$source")"
+      age -d -i kopje-backup-key.txt -o "restore/$source" "encrypted/$source.age"
+    done
     ```
 
-4. **Import** into an empty Store whose `kopje-admin catalog` shows the manifest's `schema.migrations`. Run the same
+4. **Verify** everything against the manifest and the index (sizes and SHA-256):
+
+    ```sh
+    kopje-admin backup-verify manifest.json dump.kopje --encrypted dump.kopje.age \
+      --index media-index.json --media restore
+    ```
+
+    The command exits `0` when everything matches. It exits `1` when a file does not match, and `3` when every file
+    matches but the backup lacks originals the dump references. Each missing original is listed as
+    `missing: originals/<id> (pending|absent)`; see the media recovery guarantee above.
+
+5. **Import** into an empty Store whose `kopje-admin catalog` shows the manifest's `schema.migrations`. Run the same
    Kopje version, or deploy it first. Set the instance configuration with `kopje-admin config` (an import never carries
    it), then import:
 
@@ -186,21 +263,12 @@ You need the identity file, a copy of `kopje-admin`, and read access to the buck
     The import checks the dump's own trailer again (table checksums, statement count and body SHA-256) and verifies
     the rows in the Store; see [dump-format.md](dump-format.md).
 
-5. **Media.** Download every `media/<date>/` folder up to `<id>`, decrypt each file to its R2 key, verify, and put them
-   back into the media bucket:
+6. **Put the originals back** into the media bucket:
 
     ```sh
-    for f in media/*/originals/*.age; do
-      out="restore/originals/$(basename "$f" .age)"
-      mkdir -p restore/originals && age -d -i kopje-backup-key.txt -o "$out" "$f"
-    done
-    # for each backup's manifest (each date folder's own manifest, while it is retained):
-    kopje-admin backup-verify manifest.json dump.kopje --media restore
     for f in restore/originals/*; do
       wrangler r2 object put "kopje-media/originals/$(basename "$f")" --file "$f" --remote
     done
     ```
-
-    Served images (`files/` in R2) are not in the backup, so restored media is not served until it is re-encoded.
 
 Restore drills into a scratch instance follow the same steps.
