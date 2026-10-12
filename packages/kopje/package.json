@@ -19,7 +19,7 @@
 		"@fedify/fedify": "2.4.2",
 		"@fedify/vocab": "2.4.2",
 		"es-toolkit": "1.46.1",
-		"hono": "4.12.27",
+		"hono": "4.13.7",
 		"jose": "6.2.12",
 		"linkify-it": "6.1.0",
 		"sanitize-html": "2.18.0",
