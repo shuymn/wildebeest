@@ -80,19 +80,27 @@ UPDATE "<table>" SET "<d1>"=<lit>,"<d2>"=<lit> WHERE "<k1>"=<lit> AND "<k2>"=<li
 - The SET list has every deferred column, in header column order. The WHERE clause has every key column.
 - The importer refuses a link that matches no row.
 
-Literals follow SQLite's `quote()` output exactly:
+Each stored value has exactly one canonical literal. The encoding is one-to-one with the stored storage class and
+bytes, so the table checksums (below) cover the exact data:
 
 | Value | Literal |
 |---|---|
 | NULL | `NULL` |
-| INTEGER | `-?[0-9]+` (exact 64-bit) |
-| REAL | `quote()` form, e.g. `1.0`, `0.1`, `1.5e+300`, `9.0e+999` (Infinity) |
-| TEXT | `'...'` with `'` doubled. IDs are TEXT, e.g. `'110000000000000001'` |
-| TEXT containing NUL | `CAST(X'<hex>' AS TEXT)`. `quote()` would truncate it at the NUL |
-| BLOB | `X'<hex>'` (uppercase from the Store; either case is accepted) |
+| INTEGER | `-?[0-9]+`, exact 64-bit |
+| REAL | ECMAScript `Number#toString` of the double (shortest round-trip), with `.0` appended when it has neither `.` nor `e`: `1.0`, `0.1`, `1.2345678901234567`, `1e+300`, `5e-324`. Special values: `-0.0`, `9e999` (+Infinity), `-9e999` (-Infinity). A REAL is written as REAL in any column, including INTEGER-affinity ones |
+| TEXT that is valid UTF-8 and has no NUL | `'...'` with `'` doubled. IDs are TEXT, e.g. `'110000000000000001'` |
+| any other TEXT | `CAST(X'<HEX of the exact stored bytes>' AS TEXT)` |
+| BLOB | `X'<HEX>'` (uppercase from the Store; either case is accepted) |
 
-The importer executes the validated statement text as-is, so SQLite parses the literal and the storage class is
-kept exactly. A JS number would bind as REAL.
+The literals are not SQLite's `quote()` output. `quote()` truncates TEXT at NUL, spells REAL differently across
+SQLite versions, and expands BLOBs inside SQLite past its 2 MB value limit. The Store reads each value's exact bytes
+(`CAST(v AS BLOB)` for TEXT, `CAST(v AS TEXT)` for INTEGER) and encodes it itself.
+
+The importer validates each statement against its template, then binds every literal as a parameter instead of
+executing the text, so a row of any size stays under the platform's 100 KB statement limit:
+- INTEGER binds as `CAST(? AS INTEGER)` from its decimal text, which keeps it exact;
+- REAL binds as a number;
+- TEXT and BLOB bind as their bytes, with `CAST(? AS TEXT)` for the CAST form.
 
 ### Body order
 
@@ -134,16 +142,17 @@ The importer refuses a `kopje_state` row whose name is not allowlisted.
   empty input, `e3b0c442...b855`.
 - `body` covers the statement lines exactly: all bytes between the header line and the trailer line.
 
+`POST /admin/dump/finish` ends the dump's freeze and returns the trailer. The Store keeps a receipt until the next
+dump starts, so repeating the finish with the same cursor returns the same trailer.
+
 ## Producing a file for import (cutover)
 
 1. Read the catalog from the empty target: `GET /admin/catalog`.
 2. Build the converted data in a local SQLite database created from the same migrations. Use the target's catalog
    order for tables, columns and rows.
-3. Write each value with SQLite's `quote()`, replacing TEXT that contains NUL with the CAST form.
+3. Write each value as its canonical literal (the table above). Do not use `quote()`; read TEXT as bytes, and format
+   REAL with ECMAScript's `Number#toString` (JavaScript's `String(x)`).
 4. Compute each table checksum from the same literals.
-
-Use a SQLite whose `quote()` writes REAL values so they round-trip exactly; current releases do. Schema 0000 has no
-REAL columns, so for now only INTEGER, TEXT, BLOB and NULL occur.
 
 ## Import protocol
 
@@ -151,11 +160,11 @@ All of these are `POST` under `/admin/import` with JSON, except `chunk`:
 
 | Step | Request | Effect |
 |---|---|---|
-| begin | `{ "header": {...} }` | Checks migrations, catalog and emptiness, then records an import. With the same header it resumes the existing import |
+| begin | `{ "header": {...} }` | Checks migrations, catalog and emptiness, then records an import. With the same header it resumes the existing import in whatever phase it reached (`receiving`, `finished`, or `failed` with its report) |
 | chunk | `?id=<id>&seq=<n>`, raw body of whole statements (≤ 16 MiB) | Validates every statement against the templates. Applies the chunk and the progress record in one `transactionSync` |
 | finish | `{ "id", "trailer" }` | Checks the trailer's tables, statement count, byte count and body SHA-256 against what was received |
 | verify | `{ "id" }`, repeated until `done` | Recomputes row counts and checksums in the Store, then runs `PRAGMA foreign_key_check`. On success it removes the import record, and the Store serves again |
-| reset | `{ "confirm": true }` | Runs `deleteAll()`, which drops the schema too, then the migration runner. Allowed only under import or for a Store without data |
+| reset | `{ "confirm": true }` | Runs `deleteAll()`, which drops the schema too, then the migration runner, then writes the Store's Access rows back. Allowed only under import or for a Store without data |
 
 - Chunk numbers start at 1. The progress record holds `lastSeq` and a chain digest:
   `digest_n = hex(sha256(digest_{n-1} || chunk_n))`, with `digest_0` = the empty string.
@@ -164,6 +173,10 @@ All of these are `POST` under `/admin/import` with JSON, except `chunk`:
 - A resent chunk with `seq ≤ lastSeq` is reported as `duplicate` and is not applied again.
 - While an import record exists, every domain operation is refused. A failed verification needs `reset` and a new
   import.
+- The Store's own Access rows in `instance_settings` (`access_team_domain`, `access_admin_aud`, `admin_email`,
+  `access_service_token_client_id`) are configuration, not data. They do not make the Store non-empty. Begin moves
+  them into the import record, and they keep authorizing the admin during the import. After a successful
+  verification, any of them that the dump did not bring are written back; imported values win.
 - `IMPORT_TOKEN` (header `Kopje-Import-Token`, at least 32 characters) authorizes these endpoints in two cases:
   - while the Store is empty and has no Access settings;
   - for the rest of an import begun with the token.
