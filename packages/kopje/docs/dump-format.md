@@ -1,7 +1,8 @@
 # Kopje Store dump format, version 1
 
-One format serves the scheduled backup, the cutover import from legacy Wildebeest, and restore drills. A dump is a
-UTF-8 text file that is also a valid SQLite script for a database that already has the Kopje schema.
+One format serves the scheduled backup ([backup.md](backup.md)), the cutover import from legacy Wildebeest, and
+restore drills. A dump is a UTF-8 text file that is also a valid SQLite script for a database that already has the
+Kopje schema.
 `src/platform/dump-format.ts` (Store) and `cli/lib/format.js` (CLI) implement it.
 
 ## Layout

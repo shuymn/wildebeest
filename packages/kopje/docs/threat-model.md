@@ -10,7 +10,8 @@ status, updates this file. IDs are never reused: an invariant that no longer app
 
 Paths are relative to `packages/kopje`. **Enforced (main):** the cited source and test exist on `main`. **Implemented on
 branch `kopje/<name>`:** on a branch not yet in a PR (`kopje/ops-tools` is B6a, `kopje/statuses` is B4a,
-`kopje/deliveries` is B2, `kopje/media-search` is B4b, `kopje/inbound-relationships` is B1b-1). **Planned
+`kopje/deliveries` is B2, `kopje/media-search` is B4b, `kopje/inbound-relationships` is B1b-1,
+`kopje/scheduled-backup` is B6b). **Planned
 (stage):** not implemented; required before the stage ships.
 
 A **Gap** note names a part that no test pins yet; that part does not count as enforced. Stages: B1b inbound activities,
@@ -60,24 +61,25 @@ against their own instance. TLS is assumed between all parties.
 
 ## Entry points
 
-| Entry point                                                   | Reached by | Authenticated by                                         | Status and code                                            |
-| ------------------------------------------------------------- | ---------- | -------------------------------------------------------- | ---------------------------------------------------------- |
-| `POST /inbox`, `/ap/users/:username/inbox`, `/actor/inbox`    | R1, R2     | HTTP signature, also on replay from the spool            | `kopje/inbound-relationships`: `src/federation/inbound.ts` |
-| Actor, `/actor`, WebFinger, NodeInfo, followers and following | R1, R2     | none (public)                                            | main: `src/federation/*`                                   |
-| `/ap/o/:uuid`, status documents and the outbox                | R1, R2     | none (VIS-4)                                             | `kopje/deliveries`: `src/federation/federation.ts`         |
-| Outbound document fetches                                     | R1 answers | final URL and parsed id (ID-2)                           | main: `src/federation/loader.ts`                           |
-| Deliveries, remote media fetches, Web Push POSTs              | R1 answers | sink policy (NET-3)                                      | `kopje/deliveries` (deliveries); Planned (B4, push)        |
-| Mastodon API `/api/*`                                         | R2–R4, R7  | bearer token and route access                            | main: `src/mastodon/*`, `src/domain/auth.ts`               |
-| `/oauth/authorize`                                            | R2, R6, R7 | Access JWT, Origin, consent                              | main: `src/app/authorize.tsx`                              |
-| `/oauth/token`, `/oauth/revoke`                               | R2, R3     | client credentials                                       | main: `src/mastodon/oauth.ts`                              |
-| `/admin/*` and the `kopje-admin` CLI                          | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session | `kopje/ops-tools`: `src/app/admin.ts`                      |
-| `/setup` and its Cloudflare API calls                         | R2, R7     | `SETUP_TOKEN`                                            | Planned (B5)                                               |
-| Web UI (profiles, permalinks, settings)                       | R2, R4, R7 | session                                                  | Planned (B5)                                               |
-| Media upload and serving, Images transformation               | R2–R4      | bearer token; capability URL for reads                   | `kopje/media-search`: `src/mastodon/media.ts`              |
-| Web Push registration                                         | R3         | bearer token with `push`                                 | Planned (push)                                             |
-| Queue consumer, alarms, cron                                  | internal   | —                                                        | main: `src/jobs/queue.ts`, `src/platform/store-kernel.ts`  |
-| Delivery doorbell and cron (`src/jobs/deliver.ts`)            | internal   | —                                                        | `kopje/deliveries`                                         |
-| Dump import, backup restore, cutover tools                    | R5, R8     | admin authority, then digest chain and manifest          | `kopje/ops-tools` (import); Planned (B6b, B8)              |
+| Entry point                                                    | Reached by | Authenticated by                                         | Status and code                                            |
+| -------------------------------------------------------------- | ---------- | -------------------------------------------------------- | ---------------------------------------------------------- |
+| `POST /inbox`, `/ap/users/:username/inbox`, `/actor/inbox`     | R1, R2     | HTTP signature, also on replay from the spool            | `kopje/inbound-relationships`: `src/federation/inbound.ts` |
+| Actor, `/actor`, WebFinger, NodeInfo, followers and following  | R1, R2     | none (public)                                            | main: `src/federation/*`                                   |
+| `/ap/o/:uuid`, status documents and the outbox                 | R1, R2     | none (VIS-4)                                             | `kopje/deliveries`: `src/federation/federation.ts`         |
+| Outbound document fetches                                      | R1 answers | final URL and parsed id (ID-2)                           | main: `src/federation/loader.ts`                           |
+| Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                      | `kopje/deliveries` (deliveries); Planned (B4, push)        |
+| Mastodon API `/api/*`                                          | R2–R4, R7  | bearer token and route access                            | main: `src/mastodon/*`, `src/domain/auth.ts`               |
+| `/oauth/authorize`                                             | R2, R6, R7 | Access JWT, Origin, consent                              | main: `src/app/authorize.tsx`                              |
+| `/oauth/token`, `/oauth/revoke`                                | R2, R3     | client credentials                                       | main: `src/mastodon/oauth.ts`                              |
+| `/admin/*` and the `kopje-admin` CLI                           | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session | `kopje/ops-tools`: `src/app/admin.ts`                      |
+| `/setup` and its Cloudflare API calls                          | R2, R7     | `SETUP_TOKEN`                                            | Planned (B5)                                               |
+| Web UI (profiles, permalinks, settings)                        | R2, R4, R7 | session                                                  | Planned (B5)                                               |
+| Media upload and serving, Images transformation                | R2–R4      | bearer token; capability URL for reads                   | `kopje/media-search`: `src/mastodon/media.ts`              |
+| Web Push registration                                          | R3         | bearer token with `push`                                 | Planned (push)                                             |
+| Queue consumer, alarms, cron                                   | internal   | —                                                        | main: `src/jobs/queue.ts`, `src/platform/store-kernel.ts`  |
+| Delivery doorbell and cron (`src/jobs/deliver.ts`)             | internal   | —                                                        | `kopje/deliveries`                                         |
+| Dump import, backup restore, cutover tools                     | R5, R8     | admin authority, then digest chain and manifest          | `kopje/ops-tools` (import); Planned (B6b, B8)              |
+| Backup bucket (S3-compatible, outside Cloudflare) and its cron | R5, R8     | SigV4 credentials scoped to the prefix (DATA-9)          | `kopje/scheduled-backup`: `src/jobs/backup.ts`             |
 
 ## Invariants
 
@@ -559,8 +561,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/platform/store-import.ts`, `docs/dump-format.md`; `test/dump-import.test.ts`, `test/ops-regressions.test.ts`,
   `test/dump-format.test.ts`. Media tombstones (`media_orphans`) are left out of dumps (`src/platform/dump-catalog.ts`):
   they name R2 objects to delete, which a restored Store must not act on.
-- **DATA-4: backups leave Cloudflare only encrypted.** Dump chunks, R2 originals and manifests are age-encrypted before
-  upload. _Planned (B6b)._
+- **DATA-4: backups leave Cloudflare only encrypted.** Dump chunks, R2 originals and manifests are age-encrypted
+  (typage, `age-encryption`) to the operator's public keys before upload; the identity never reaches Cloudflare.
+  _Implemented on branch `kopje/scheduled-backup`:_ `src/jobs/backup.ts`, `src/platform/backup-crypto.ts`;
+  `test/backup.test.ts` ("writes the encrypted dump", "round-trips a dump larger than one part": every body the bucket
+  receives is checked to be age ciphertext without plaintext markers).
 - **DATA-5: logs carry no secrets or content.** Log entries are structured events. They never include request bodies,
   post content, tokens, keys, Access assertions or URLs with credentials. A log entry never includes text that a request
   supplied: errors are logged by class, standard error name and known Store reason, and requests by standard method (else
@@ -582,6 +587,22 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("signed fetches"). Activities: _Implemented on branch
   `kopje/deliveries`:_ a delivery is signed with the key of its lane's account, unwrapped once per round
   (`src/jobs/deliver.ts`); `test/delivery-post.test.ts` ("signs the activity with its author key").
+- **DATA-9: backup credentials stay out of the Store, logs and reports.** The S3 key is a Worker secret, read apart
+  from the main config so a bad backup setting stops only the backup. Config issues name the variable, never its value;
+  failures are recorded and logged as fixed reason codes (`s3-<op>-<status>`, Store refusal codes), never an error
+  message, a response body, a URL or a signature; the Store keeps only keys, upload ids, sizes and digests. The
+  documented credentials can only put, list, delete and abort multipart uploads under the prefix (`docs/backup.md`).
+  _Implemented on branch `kopje/scheduled-backup`:_ `src/platform/backup-config.ts`, `src/platform/s3.ts`,
+  `failureReason` in `src/jobs/backup.ts`; `test/backup.test.ts` ("never logs, saves or reports a secret", "refuses
+  invalid settings without naming their values").
+- **DATA-10: a backup is complete only with its manifest, and restore checks the manifest's digests.** The manifest is
+  written last and carries the size and SHA-256 of every object as stored and before encryption, with the schema and
+  Kopje versions. The SHA-256 of the encrypted manifest is recorded outside the bucket (Store state, health, Workers
+  Logs), because age encryption to a public key gives no authenticity. `kopje-admin backup-verify` checks decrypted
+  files against the manifest, and the import re-checks the dump's own trailer. _Implemented on branch
+  `kopje/scheduled-backup`:_ `src/jobs/backup.ts`, `verifyBackup` in `cli/lib/commands.js`; `test/backup.test.ts`
+  ("backup-verify checks decrypted files against the manifest", "round-trips"). Gap: comparing `manifestSha256` is a
+  manual step of the restore runbook (DATA-8).
 - **DATA-8: a restore has selected authority.** Restore uses a manifest the operator selected by digest, checks schema
   version, domain and every referenced component before use, and before leaving maintenance invalidates OAuth grants
   restored from the checkpoint and reconciles suspension and admin state. _Planned (B6b)._
@@ -610,6 +631,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   leased until the lease ends, then it is claimed and POSTed again (the receiver deduplicates by activity id); a
   repeated completion is stale and records nothing twice; `test/deliveries.test.ts` ("OPS-3: a claim or completion
   whose response is lost"), `test/delivery-post.test.ts` ("OPS-3: a lost completion"). Push: _Planned (push)._
+- **OPS-5: the backup never leaves the Store frozen or the bucket inconsistent.** The dump freeze ends when the last
+  chunk is read, on any failure (abort), and by the 3-minute dump lease when the Worker dies; the next run releases a
+  dead run's dump by cursor or op id. A run is held by a runner lease with compare-and-set saves, so two cron
+  invocations never work on one run. An interrupted dump object is restarted (age's stream state cannot be saved), and
+  its multipart upload, and any upload under `backups/` that no run holds, is aborted. Media and manifest stages resume.
+  Retention deletes only the job's two object names under `backups/`, only backups older than the newest
+  `BACKUP_RETENTION` complete ones, manifest first; nothing is deleted from R2. _Implemented on branch
+  `kopje/scheduled-backup`:_ `src/jobs/backup.ts`, `src/platform/backup-state.ts`; `test/backup.test.ts`
+  ("backup resumption", "releases the Store freeze", "aborts abandoned multipart uploads", "backup retention").
 - **OPS-4: cutover never writes the source and never goes back.** The legacy source stays read-only; every ingress route
   (custom domain, `pages.dev`, previews) is replaced before the final export; publication requires independent per-row
   verification that fails when content changes at the same length, and Queue and DLQ reconciliation. After publication,
@@ -625,7 +655,7 @@ Each stage ships tests for these cases, named with the invariant IDs.
 | B2 delivery                | Redirect of a private activity; recipient outside the audience; duplicate inbox; expired lease; stale completion; commit followed by response loss (`test/deliveries.test.ts`, `test/delivery-post.test.ts`)                                                                                                                                                            |
 | B4 statuses, media, search | Edit, source or history of another's status; history seen by a recipient added later; private boost in `reblogged_by`; hidden parent in reply fields; DM moving `last_status_at`; unbounded edits or reply tree; boost or quote of an invisible status; foreign attachment; unsafe R2 key; retained EXIF; failed transform; active media type; private status in search |
 | B5 UI and setup            | Missing, `null` and foreign Origin; framing headers; unsafe return path; reused setup token; concurrent bootstrap                                                                                                                                                                                                                                                       |
-| B6b backup and restore     | Plaintext dump, media or manifest egress; interrupted upload; missing component; unselected manifest; restored obsolete credentials                                                                                                                                                                                                                                     |
+| B6b backup and restore     | Plaintext dump, media or manifest egress; interrupted upload; missing component; unselected manifest; restored obsolete credentials (`kopje/scheduled-backup` covers egress, interrupted uploads and changed components in `test/backup.test.ts`; selection and credential invalidation are DATA-8)                                                                     |
 | B8 cutover                 | Wrong target resources, domain or keys; writes to the source; an alternate Pages route still writable; unreconciled Queue or DLQ; changed content with unchanged length                                                                                                                                                                                                 |
 
 ## IDs to check by change type
@@ -641,7 +671,8 @@ Each stage ships tests for these cases, named with the invariant IDs.
 - **Web Push:** PUSH-1 to PUSH-3, AUTH-7, DATA-2, NET-3, VIS-10.
 - **Store operation or migration:** AUTH-1, OPS-2, OPS-3, DATA-6. Migrations are append-only after the first release and
   never recreate a parent table (that cascades deletes into child tables).
-- **Admin, dump, import, backup or CLI:** AUTH-4, AUTH-5, DATA-3, DATA-4, DATA-5, DATA-8, OPS-2.
+- **Admin, dump, import, backup or CLI:** AUTH-4, AUTH-5, DATA-3, DATA-4, DATA-5, DATA-8, DATA-9, DATA-10, OPS-2,
+  OPS-5.
 - **New dependency:** prefer a maintained, widely used library over custom security code. Record its version, age (at
   least 3 days, per `minimumReleaseAge`), license and bundle size in the PR.
 
@@ -673,6 +704,8 @@ activity specs, cited in test names.
 | Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured                                                                                                                             | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added                                                                         | Kopje configures logtape                                             |
 | `constantTimeEqual` on main takes time that depends on the input length                                                                                                                                                                    | No content leak is known; `kopje/ops-tools` compares fixed-size digests                                                                                       | `kopje/ops-tools` merges (then remove this row)                      |
 | Remote HTML is sanitized by sanitize-html, whose htmlparser2 is a tokenizer rather than an HTML5 tree builder                                                                                                                              | It emits only allowlisted tags with quoted, escaped attributes and escapes all other text; the parse5-checked vector suites pass                              | a vector fails, or a maintained tree-based sanitizer fits the budget |
+| Backup media copies are never pruned, so an original deleted from R2 stays in the bucket; served `files/` variants are not backed up                                                                                                       | Media is incremental and every restore needs all earlier copies; originals are the source of the variants                                                     | a restore tool re-encodes variants, or backups track deletions       |
+| The backup's S3 credentials can delete backups under the prefix                                                                                                                                                                            | Retention needs delete; versioning or object lock on the bucket is the documented protection                                                                  | the job can work with put-only credentials                           |
 | Activities signed by someone other than their actor (forwarded, with LD signatures) are refused                                                                                                                                            | ID-1. Replies that reach Kopje only by forwarding (to a collection the author cannot deliver to) and deliveries through relays are missed                     | relays or forwarded replies must be supported                        |
 
 ## How to use
