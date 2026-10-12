@@ -110,7 +110,9 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 	federation
 		.setActorDispatcher('/ap/users/{identifier}', async (ctx, identifier) => {
 			if (identifier === INSTANCE_ACTOR) {
-				return ctx.url.pathname === '/actor' ? instanceActor(domain, await loadInstanceKey()) : null
+				// The HTTP alias rule: the document is served at /actor, never under the /ap/users template. Other callers,
+				// such as WebFinger for https://<domain>/actor, may still resolve the instance actor.
+				return ctx.url.pathname.startsWith('/ap/users/') ? null : instanceActor(domain, await loadInstanceKey())
 			}
 			const actor = await localActor(identifier)
 			// Actor URIs keep the username's case; a differently cased path is not this actor's id.

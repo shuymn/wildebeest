@@ -126,6 +126,21 @@ describe('instance actor', () => {
 		const { request } = await instance()
 		expect((await request('/ap/users/kopje%3Ainstance', AP)).status).toBe(404)
 	})
+
+	it('is discoverable through WebFinger by its canonical URI', async () => {
+		const { json, request } = await instance()
+		const { status, body } = await json('/.well-known/webfinger?resource=https://social.example/actor')
+		expect(status).toBe(200)
+		expect(body).toMatchObject({
+			subject: 'https://social.example/actor',
+			links: expect.arrayContaining([
+				{ rel: 'self', type: 'application/activity+json', href: 'https://social.example/actor' },
+			]),
+		})
+		expect(
+			(await request('/.well-known/webfinger?resource=https://social.example/ap/users/kopje%3Ainstance')).status
+		).toBe(404)
+	})
 })
 
 async function storedInstanceKey(store: StoreStub) {
