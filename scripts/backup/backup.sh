@@ -233,7 +233,8 @@ new=0
 for id in $(comm -23 <(sort -u "$ids") "$existing"); do
 	blob="$work/blob"
 	if ! cf_api "${api}/images/v1/${id}/blob" --output "$blob"; then
-		echo "download failed for image ${id}" >&2
+		# On failure the body is the API's error JSON (codes and messages only, no image data).
+		echo "download failed for image ${id}: $(jq -c '[.errors[]? | {code, message}]' "$blob" 2>/dev/null)" >&2
 		failures=$((failures + 1))
 		continue
 	fi
