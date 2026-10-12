@@ -14,9 +14,9 @@
 	"assignAutomerge": true,
 	"internalChecksAsSuccess": true,
 	"reviewersFromCodeOwners": true,
-	"separateMultipleMinor": true,
+	"separateMultipleMinor": false,
 	"separateMultipleMajor": true,
-	"separateMinorPatch": true,
+	"separateMinorPatch": false,
 	"customManagers": [
 		{
 			"customType": "regex",
@@ -41,6 +41,26 @@
 			"matchUpdateTypes": ["minor", "patch"],
 			"matchCurrentVersion": "!/^v?0+\\./",
 			"automerge": true
+		},
+		{
+			"description": "Group stable npm and GitHub Actions minor/patch updates by manager",
+			"matchManagers": ["npm", "github-actions"],
+			"matchUpdateTypes": ["minor", "patch"],
+			"matchCurrentVersion": "!/^v?0+\\./",
+			"groupName": "{{manager}} non-major dependencies"
+		},
+		{
+			"description": "Group stable development tool minor/patch updates together",
+			"matchManagers": ["mise", "nodenv", "custom.regex"],
+			"matchUpdateTypes": ["minor", "patch"],
+			"matchCurrentVersion": "!/^v?0+\\./",
+			"groupName": "development tools (non-major)"
+		},
+		{
+			"description": "Keep pre-1.0 minor/patch updates separate from automerged stable updates",
+			"matchUpdateTypes": ["minor", "patch"],
+			"matchCurrentVersion": "/^v?0+\\./",
+			"groupName": "{{manager}} pre-1.0 dependencies"
 		},
 		{
 			"description": "Group linter dependencies together",
