@@ -157,11 +157,10 @@ describe('GET /api/v2/search', () => {
 		expect((await search('alic', '&type=accounts&following=true')).accounts).toEqual([])
 	})
 
-	it('answers resolve=true from local data (remote resolution is B1b-2)', async () => {
+	it('answers resolve=true from local data when the query is neither a URL nor an address', async () => {
+		// Remote resolution of URLs and addresses: test/inbox-statuses.test.ts ("search with resolve=true").
 		const { h, search } = await fixture()
 		await post(h, h.users.alice, { status: 'resolve me' })
-		const results = await search('https://elsewhere.example/@someone/1 resolve', '&resolve=true')
-		expect(results.accounts).toEqual([])
 		expect((await search('resolve', '&resolve=true')).statuses).toHaveLength(1)
 	})
 

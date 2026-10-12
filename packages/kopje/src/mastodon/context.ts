@@ -5,6 +5,7 @@ import { mastodonError } from './errors'
 import { type Params, readParams } from './params'
 import type { Present } from '../domain/accounts'
 import type { AuthFailure, Authorized, Credential, UserCredential } from '../domain/auth'
+import type { Resolved } from '../domain/remote-statuses'
 import { readConfig } from '../platform/config'
 import type { ImageCodec } from '../platform/images'
 import { callStore, type StoreResolver, type StoreStub } from '../platform/store-client'
@@ -20,6 +21,8 @@ export type ApiDeps = {
 	randomToken: TokenGenerator
 	// Re-encodes uploaded images (the Images binding in production).
 	images: (env: Env) => ImageCodec
+	// Fetches a URL or user@domain for search with resolve=true (federation/resolve.ts); none: answered locally.
+	resolve?: (env: Env, query: string) => Promise<Resolved>
 }
 
 // The bearer token's digest and the scope the route declares, set by the access middleware (mastodon/access.ts) on

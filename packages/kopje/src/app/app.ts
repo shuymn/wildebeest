@@ -8,6 +8,7 @@ import { classifyRequest, decide, type RequestClass } from './gate'
 import { publicHealth } from './health'
 import { ringDoorbell } from '../federation/delivery'
 import { INBOX_ROUTES, inboxHandler, precheckInbox } from '../federation/inbox'
+import { createResolver } from '../federation/resolve'
 import { FEDERATION_GET_ROUTES, federationHandler, type FederationRouteDeps } from '../federation/routes'
 import { FEDERATION_PATHS, requireSetup } from '../federation/setup-gate'
 import { rescueFromSnapshot } from '../federation/snapshot'
@@ -153,6 +154,7 @@ export function createApp({
 		store,
 		randomToken: seams.randomToken ?? randomToken,
 		images: seams.images ?? ((env: Env) => imagesCodec(env.IMAGES)),
+		resolve: createResolver({ build, store, now, keygen, loader }),
 	}
 	app.get(MEDIA_ROUTE, serveMedia)
 	app.route('/', authorizeRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init) }))

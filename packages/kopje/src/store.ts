@@ -21,6 +21,7 @@ import { instanceInfo } from './domain/instance'
 import * as media from './domain/media'
 import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
+import { resolveSearch } from './domain/remote-statuses'
 import { search } from './domain/search'
 import { getSetupState } from './domain/setup'
 import { saveSnapshot } from './domain/snapshot'
@@ -460,6 +461,11 @@ export class Store extends DurableObject<Env> {
 
 	search(callerBuild: string, input: OperationInput<typeof search>) {
 		return this.#kernel.execute(callerBuild, search, input)
+	}
+
+	// Search with resolve=true (B1b-2): stores what the Worker fetched, as inbound activities are stored.
+	resolveSearch(callerBuild: string, input: OperationInput<typeof resolveSearch>) {
+		return this.#kernel.execute(callerBuild, resolveSearch, input)
 	}
 
 	// Delivery (B2): claims and completions from the Worker's delivery round, the operator's view, and the sweep.
