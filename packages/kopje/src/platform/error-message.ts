@@ -1,26 +1,42 @@
+import { MAINTENANCE_REASONS, StoreUnavailableError } from './store-errors'
+
 // The message of a thrown value, for logs and reports.
 export function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error)
 }
 
-// What a log may say about a thrown value (DATA-5): its class, and its name or code when they are short identifiers
-// (DOMException's AbortError, jose's ERR_JWT_EXPIRED). Never the message, which can carry a token, an Access
-// assertion, a request body or post content.
-export function errorFields(error: unknown): { error: string; name?: string; code?: string } {
+// Names of standard errors, which tell an abort or a timeout from other failures.
+const STANDARD_NAMES = new Set([
+	'AbortError',
+	'DataError',
+	'InvalidAccessError',
+	'InvalidStateError',
+	'NetworkError',
+	'NotSupportedError',
+	'OperationError',
+	'QuotaExceededError',
+	'RangeError',
+	'ReferenceError',
+	'SyntaxError',
+	'TimeoutError',
+	'TypeError',
+])
+const REASONS = new Set<string>(MAINTENANCE_REASONS)
+
+// What a log may say about a thrown value (DATA-5): only allowlisted metadata. Its class, its name if that is a standard
+// one, and the reason of a StoreUnavailableError if it is a known one. Never the message, which can carry a token, an
+// Access assertion, a request body or post content, and never a free-form name or code.
+export function errorFields(error: unknown): { error: string; name?: string; reason?: string } {
 	if (typeof error !== 'object' || error === null) {
 		return { error: typeof error }
 	}
-	const cls = identifier(error.constructor?.name) ?? 'Object'
-	const name = identifier((error as { name?: unknown }).name)
-	const code = identifier((error as { code?: unknown }).code)
+	const ctor = error.constructor?.name
+	const cls = typeof ctor === 'string' && /^[A-Za-z0-9_$]{1,64}$/.test(ctor) ? ctor : 'Object'
+	const name = (error as { name?: unknown }).name
+	const reason = error instanceof StoreUnavailableError ? error.reason : undefined
 	return {
 		error: cls,
-		...(name !== undefined && name !== cls ? { name } : {}),
-		...(code !== undefined ? { code } : {}),
+		...(typeof name === 'string' && name !== cls && STANDARD_NAMES.has(name) ? { name } : {}),
+		...(reason !== undefined && REASONS.has(reason) ? { reason } : {}),
 	}
-}
-
-function identifier(value: unknown): string | undefined {
-	const text = typeof value === 'number' ? String(value) : value
-	return typeof text === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(text) ? text : undefined
 }

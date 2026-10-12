@@ -8,7 +8,9 @@ import { BUILD, migratedStore } from './helpers'
 import { createSnapshotSaver } from '../src/federation/snapshot'
 import { type SpoolMessage, spoolInbox } from '../src/federation/spool'
 import { handleQueue } from '../src/jobs/queue'
+import { errorFields } from '../src/platform/error-message'
 import type { StoreStub } from '../src/platform/store-client'
+import { storeMaintenanceError, toStoreUnavailable } from '../src/platform/store-errors'
 
 // DATA-5: logs carry allowlisted fields only. Every failure below throws a message full of dummy secrets (a bearer
 // token, an Access JWT, a request body); none of them may reach the console.
@@ -99,6 +101,38 @@ describe('log redaction', () => {
 		expect(logs.lines.map((line) => JSON.parse(line) as unknown)).toEqual([
 			[expect.objectContaining({ event: 'kopje.error', method: 'OTHER', status: 500 })],
 		])
+	})
+
+	it.each(['schema-pending', 'transient'] as const)('keeps the Store maintenance reason %s', async (reason) => {
+		const logs = captureLogs()
+		const held = new Proxy({}, { get: () => () => Promise.reject(storeMaintenanceError(reason)) }) as StoreStub
+		const save = createSnapshotSaver(() => 0)
+		await save(
+			held,
+			BUILD,
+			'path:/actor',
+			{ contentType: 'application/activity+json', body: '{}' },
+			{ kind: 'instance-actor', rendered: 'x' },
+			0
+		)
+		expect(logs.lines.map((line) => JSON.parse(line) as unknown)).toEqual([
+			[{ event: 'kopje.snapshot.save-failed', key: 'path:/actor', error: 'StoreUnavailableError', reason }],
+		])
+	})
+
+	it('logs only allowlisted metadata, whatever name, code or reason an error carries', () => {
+		const custom = Object.assign(new Error(SECRET_MESSAGE), { name: 'dummy-query-secret', code: 'dummy-query-secret' })
+		expect(errorFields(custom)).toEqual({ error: 'Error' })
+		// The Worker reads the reason out of the Store's message, so an unknown one is dropped.
+		const forged = toStoreUnavailable(new Error('kopje-maintenance: dummy-query-secret'))
+		expect(errorFields(forged)).toEqual({ error: 'StoreUnavailableError' })
+		// Standard names are kept: they tell an abort or timeout from other failures.
+		expect(errorFields(new DOMException('dummy post content', 'TimeoutError'))).toEqual({
+			error: 'DOMException',
+			name: 'TimeoutError',
+		})
+		expect(errorFields(new TypeError('dummy post content'))).toEqual({ error: 'TypeError' })
+		expect(errorFields('dummy post content')).toEqual({ error: 'string' })
 	})
 
 	it('logs a failed spool replay without its message', async () => {
