@@ -1,6 +1,7 @@
 import { component$ } from '@builder.io/qwik'
 import { routeAction$, Form, Link, routeLoader$, z, zod$ } from '@builder.io/qwik-city'
 import { getDatabase } from '@wildebeest/backend/database'
+import { requireAdmin } from '~/utils/requireAdmin'
 import { getRules, deleteRule, upsertRule } from '@wildebeest/backend/config/rules'
 import { TextArea } from '~/components/Settings/TextArea'
 import { SubmitButton } from '~/components/Settings/SubmitButton'
@@ -8,7 +9,9 @@ import { SubmitButton } from '~/components/Settings/SubmitButton'
 export type ServerSettingsData = { rules: string[] }
 
 export const useUpdateRule = routeAction$(
-	async (data, { platform: { env: platform } }) => {
+	async (data, requestEvent) => {
+		await requireAdmin(requestEvent)
+		const platform = requestEvent.platform.env
 		let success = false
 		try {
 			const result = await upsertRule(getDatabase(platform), data.text)
@@ -27,7 +30,9 @@ export const useUpdateRule = routeAction$(
 )
 
 export const useDeleteRule = routeAction$(
-	async (data, { platform: { env: platform } }) => {
+	async (data, requestEvent) => {
+		await requireAdmin(requestEvent)
+		const platform = requestEvent.platform.env
 		let success = false
 
 		try {
@@ -46,13 +51,13 @@ export const useDeleteRule = routeAction$(
 	})
 )
 
-export const useRules = routeLoader$(
-	async ({ platform: { env: platform } }): Promise<{ id: number; text: string }[]> => {
-		const database = getDatabase(platform)
-		const rules = await getRules(database)
-		return JSON.parse(JSON.stringify(rules))
-	}
-)
+export const useRules = routeLoader$(async (requestEvent): Promise<{ id: number; text: string }[]> => {
+	await requireAdmin(requestEvent)
+	const platform = requestEvent.platform.env
+	const database = getDatabase(platform)
+	const rules = await getRules(database)
+	return JSON.parse(JSON.stringify(rules))
+})
 
 export default component$(() => {
 	const rules = useRules()

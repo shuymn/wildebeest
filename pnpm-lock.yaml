@@ -97,6 +97,9 @@ importers:
         specifier: workspace:*
         version: link:../backend
     devDependencies:
+      '@cloudflare/vitest-pool-workers':
+        specifier: 0.16.20
+        version: 0.16.20(@cloudflare/workers-types@4.20260627.1)(@vitest/runner@4.1.9)(@vitest/snapshot@4.1.9)(vitest@4.1.9)
       '@cloudflare/workers-types':
         specifier: 4.20260627.1
         version: 4.20260627.1
@@ -106,6 +109,12 @@ importers:
       typescript:
         specifier: 5.9.3
         version: 5.9.3
+      vite-tsconfig-paths:
+        specifier: 6.1.1
+        version: 6.1.1(typescript@5.9.3)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0))
+      vitest:
+        specifier: 4.1.9
+        version: 4.1.9(@types/node@24.13.2)(@vitest/coverage-istanbul@4.1.9)(vite@6.4.3(@types/node@24.13.2)(jiti@1.21.7)(sass@1.101.0))
       wrangler:
         specifier: 4.105.0
         version: 4.105.0(@cloudflare/workers-types@4.20260627.1)
@@ -155,6 +164,9 @@ importers:
       autoprefixer:
         specifier: 10.5.2
         version: 10.5.2(postcss@8.5.15)
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
       eslint:
         specifier: 9.39.4
         version: 9.39.4(jiti@1.21.7)
@@ -167,6 +179,9 @@ importers:
       lorem-ipsum:
         specifier: 2.0.10
         version: 2.0.10
+      miniflare:
+        specifier: 4.20260625.0
+        version: 4.20260625.0
       postcss:
         specifier: 8.5.15
         version: 8.5.15

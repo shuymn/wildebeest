@@ -379,6 +379,67 @@ describe('/api/v1/statuses/[id]', () => {
 		assert.equal(queue.messages[1].activity.object.content, '<p>new status</p>')
 	})
 
+	test('update direct status is not delivered to followers', async () => {
+		const db = makeDB()
+		const queue = makeQueue()
+		const doCache = makeDOCache()
+
+		const actor = await createTestUser(domain, db, userKEK, 'direct-update-author@cloudflare.com')
+		const recipient = await createTestUser(domain, db, userKEK, 'direct-update-recipient@cloudflare.com')
+		const follower = await createTestUser(domain, db, userKEK, 'direct-update-follower@cloudflare.com')
+		await addFollowing(domain, db, follower, actor)
+		await acceptFollowing(db, follower, actor)
+		const note = await createDirectStatus(domain, db, actor, 'secret', [], { to: [recipient] })
+
+		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}`, {
+			method: 'PUT',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ status: 'new secret' }),
+		})
+		const res = await app.fetch(req, {
+			DATABASE: db,
+			userKEK,
+			QUEUE: queue,
+			DO_CACHE: doCache,
+			data: { connectedActor: actor },
+		})
+		await assertStatus(res, 200)
+
+		// the followers collection was never addressed, so nothing is queued for followers
+		assert.equal(queue.messages.length, 0)
+	})
+
+	test('update private status is delivered only to followers', async () => {
+		const db = makeDB()
+		const queue = makeQueue()
+		const doCache = makeDOCache()
+
+		const actor = await createTestUser(domain, db, userKEK, 'private-update-author@cloudflare.com')
+		const follower = await createTestUser(domain, db, userKEK, 'private-update-follower@cloudflare.com')
+		await createTestUser(domain, db, userKEK, 'private-update-stranger@cloudflare.com')
+		await addFollowing(domain, db, follower, actor)
+		await acceptFollowing(db, follower, actor)
+		const note = await createPrivateStatus(domain, db, actor, 'followers only')
+
+		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}`, {
+			method: 'PUT',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ status: 'followers only updated' }),
+		})
+		const res = await app.fetch(req, {
+			DATABASE: db,
+			userKEK,
+			QUEUE: queue,
+			DO_CACHE: doCache,
+			data: { connectedActor: actor },
+		})
+		await assertStatus(res, 200)
+
+		assert.equal(queue.messages.length, 1)
+		assert.equal(queue.messages[0].toActorId, follower.id.toString())
+		assert.equal(queue.messages[0].activity.type, 'Update')
+	})
+
 	test('delete non-existing status', async () => {
 		const db = makeDB()
 		const queue = makeQueue()
@@ -580,5 +641,91 @@ describe('/api/v1/statuses/[id]', () => {
 		assert.equal(queue.messages[1].activity.type, 'Delete')
 		assert.equal(queue.messages[1].actorId, actor.id.toString())
 		assert.equal(queue.messages[1].toActorId, actor3.id.toString())
+	})
+
+	test('delete status delivers a Tombstone without content', async () => {
+		const db = makeDB()
+		const queue = makeQueue()
+		const doCache = makeDOCache()
+
+		const actor = await createTestUser(domain, db, userKEK, 'tombstone-author@cloudflare.com')
+		const follower = await createTestUser(domain, db, userKEK, 'tombstone-follower@cloudflare.com')
+		await addFollowing(domain, db, follower, actor)
+		await acceptFollowing(db, follower, actor)
+		const note = await createPublicStatus(domain, db, actor, 'note to delete')
+
+		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}`, { method: 'DELETE' })
+		const res = await app.fetch(req, {
+			DATABASE: db,
+			userKEK,
+			QUEUE: queue,
+			DO_CACHE: doCache,
+			data: { connectedActor: actor },
+		})
+		await assertStatus(res, 200)
+
+		assert.equal(queue.messages.length, 1)
+		const { activity } = queue.messages[0]
+		assert.equal(activity.type, 'Delete')
+		assert.deepEqual(activity.object, {
+			id: note.id.toString(),
+			type: 'Tombstone',
+			atomUri: note.id.toString(),
+		})
+		assert.ok(!JSON.stringify(activity).includes('note to delete'))
+		assert.deepEqual(activity.to, note.to)
+		assert.deepEqual(activity.cc, note.cc)
+	})
+
+	test('delete direct status is not delivered to followers', async () => {
+		const db = makeDB()
+		const queue = makeQueue()
+		const doCache = makeDOCache()
+
+		const actor = await createTestUser(domain, db, userKEK, 'direct-delete-author@cloudflare.com')
+		const recipient = await createTestUser(domain, db, userKEK, 'direct-delete-recipient@cloudflare.com')
+		const follower = await createTestUser(domain, db, userKEK, 'direct-delete-follower@cloudflare.com')
+		await addFollowing(domain, db, follower, actor)
+		await acceptFollowing(db, follower, actor)
+		const note = await createDirectStatus(domain, db, actor, 'secret to delete', [], { to: [recipient] })
+
+		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}`, { method: 'DELETE' })
+		const res = await app.fetch(req, {
+			DATABASE: db,
+			userKEK,
+			QUEUE: queue,
+			DO_CACHE: doCache,
+			data: { connectedActor: actor },
+		})
+		await assertStatus(res, 200)
+
+		assert.equal(queue.messages.length, 0)
+	})
+
+	test('delete private status is delivered only to followers', async () => {
+		const db = makeDB()
+		const queue = makeQueue()
+		const doCache = makeDOCache()
+
+		const actor = await createTestUser(domain, db, userKEK, 'private-delete-author@cloudflare.com')
+		const follower = await createTestUser(domain, db, userKEK, 'private-delete-follower@cloudflare.com')
+		await createTestUser(domain, db, userKEK, 'private-delete-stranger@cloudflare.com')
+		await addFollowing(domain, db, follower, actor)
+		await acceptFollowing(db, follower, actor)
+		const note = await createPrivateStatus(domain, db, actor, 'followers only to delete')
+
+		const req = new Request(`https://${domain}/api/v1/statuses/${note[mastodonIdSymbol]}`, { method: 'DELETE' })
+		const res = await app.fetch(req, {
+			DATABASE: db,
+			userKEK,
+			QUEUE: queue,
+			DO_CACHE: doCache,
+			data: { connectedActor: actor },
+		})
+		await assertStatus(res, 200)
+
+		assert.equal(queue.messages.length, 1)
+		assert.equal(queue.messages[0].toActorId, follower.id.toString())
+		assert.ok(!JSON.stringify(queue.messages[0].activity).includes('followers only to delete'))
 	})
 })

@@ -47,7 +47,7 @@ describe('/api/v1/accounts/lookup', () => {
 							id: 'https://social.com/someone',
 							url: 'https://social.com/@someone',
 							type: 'Person',
-							preferredUsername: '<script>some</script>one',
+							preferredUsername: '<b>some</b>one',
 							name: 'Sven <i>Cool<i>',
 							outbox: 'https://social.com/someone/outbox',
 							following: 'https://social.com/someone/following',

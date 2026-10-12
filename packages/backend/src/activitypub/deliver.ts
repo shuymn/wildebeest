@@ -27,7 +27,6 @@ export async function deliverToActor<T extends Activity>(
 	}
 
 	const body = JSON.stringify(activity)
-	console.log({ body })
 	const req = new Request(to.inbox, {
 		method: 'POST',
 		body,
