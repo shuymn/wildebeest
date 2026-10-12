@@ -9,8 +9,8 @@ status, updates this file. IDs are never reused: an invariant that no longer app
 ## Status of an invariant
 
 Paths are relative to `packages/kopje`. **Enforced (main):** the cited source and test exist on `main`. **Implemented on
-branch `kopje/<name>`:** on a branch not yet in a PR (`kopje/ops-tools` is B6a, `kopje/statuses` is B4a). **Planned
-(stage):** not implemented; required before the stage ships.
+branch `kopje/<name>`:** on a branch not yet in a PR (`kopje/ops-tools` is B6a, `kopje/statuses` is B4a,
+`kopje/media-search` is B4b). **Planned (stage):** not implemented; required before the stage ships.
 
 A **Gap** note names a part that no test pins yet; that part does not count as enforced. Stages: B1b inbound activities,
 B2 delivery, B4 statuses, media and search, B5 web UI and `/setup`, B6b backups and restore, B8 cutover tools. "Push"
@@ -72,7 +72,7 @@ against their own instance. TLS is assumed between all parties.
 | `/admin/*` and the `kopje-admin` CLI                          | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session | `kopje/ops-tools`: `src/app/admin.ts`                     |
 | `/setup` and its Cloudflare API calls                         | R2, R7     | `SETUP_TOKEN`                                            | Planned (B5)                                              |
 | Web UI (profiles, permalinks, settings)                       | R2, R4, R7 | session                                                  | Planned (B5)                                              |
-| Media upload and serving, Images transformation               | R2–R4      | bearer token; capability URL for reads                   | Planned (B4)                                              |
+| Media upload and serving, Images transformation               | R2–R4      | bearer token; capability URL for reads                   | `kopje/media-search`: `src/mastodon/media.ts`             |
 | Web Push registration                                         | R3         | bearer token with `push`                                 | Planned (push)                                            |
 | Queue consumer, alarms, cron                                  | internal   | —                                                        | main: `src/jobs/queue.ts`, `src/platform/store-kernel.ts` |
 | Dump import, backup restore, cutover tools                    | R5, R8     | admin authority, then digest chain and manifest          | `kopje/ops-tools` (import); Planned (B6b, B8)             |
@@ -127,7 +127,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule. _Implemented
   on branch `kopje/statuses`:_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
   `test/visibility.test.ts` (single status, context, history, source, `favourited_by`, timelines, account statuses,
-  notifications, bookmarks, favourites). Search, the web UI, media and the object endpoint are _Planned (B4, B5, B1b)._
+  notifications, bookmarks, favourites). _Implemented on branch `kopje/media-search`_ for search: `src/domain/search.ts`;
+  `test/search.test.ts` ("never returns a status the viewer may not see", "drops a boosted status that became
+  inaccessible", hashtags only where a status with them is visible). Media URLs appear only in statuses that pass the
+  rule (see the capability URL accepted risk). The web UI and the object endpoint are _Planned (B5, B1b)._
 - **VIS-2: limited stays limited.** A direct status with silent recipients (Misskey `specified`) is `limited`: shown
   only to its addressed recipients, presented as `private` by the API, never widened by an edit. _Implemented on branch
   `kopje/statuses`:_ `interpretAddressing` in `src/domain/audience.ts`; `test/audience.test.ts` ("reads Misskey
@@ -303,22 +306,38 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/mastodon/oauth.ts` (_Gap: untested_). _Implemented on branch `kopje/hardening-1`_ for the account presenter and
   local actor documents (profile URL, avatar, header, icon, image and aliases): `httpUrl` in `src/platform/http-url.ts`,
   used by `presentAccount` in `src/domain/accounts.ts` and `localActorObject` in `src/federation/federation.ts`;
-  `test/accounts.test.ts`, `test/federation.test.ts`. Attachment URLs and field links: _Planned (B1b, B4)._
+  `test/accounts.test.ts`, `test/federation.test.ts`. _Implemented on branch `kopje/media-search`_ for attachment URLs
+  in the API and in Note attachments: `presentMedia` in `src/domain/status-presenter.ts`, `noteOf` in
+  `src/domain/activities.ts` (_Gap: no test with a non-http stored attachment URL_). Field links: _Planned (B1b)._
 
 ### Media (MEDIA)
 
 - **MEDIA-1: only the owner uses an attachment.** Only the uploader may update, delete or attach an attachment, and only
   while it is unattached or attached to the status being edited. _Implemented on branch `kopje/statuses`_ for attaching:
-  `attachableMedia` in `src/domain/statuses.ts`; `test/statuses.test.ts` ("attaches own unattached media"). Upload,
-  update and delete: _Planned (B4)._
+  `attachableMedia` in `src/domain/statuses.ts`; `test/statuses.test.ts` ("attaches own unattached media").
+  _Implemented on branch `kopje/media-search`_ for reading, updating and deleting: `src/domain/media.ts` (an upload is
+  read or updated only by its owner while unattached; it is deleted only through its owner's status with
+  `delete_media`, or by the sweep after its grace period, and a doomed or still-processing upload cannot be attached);
+  `test/media.test.ts` ("shows and updates own unattached media only").
 - **MEDIA-2: R2 keys are server-made.** Keys derive from server-generated ids and stored records; no filename, path
-  segment or encoded separator from a request selects or overwrites a key. Originals are not publicly readable. _Planned
-  (B4)._
+  segment or encoded separator from a request selects or overwrites a key. Originals are not publicly readable.
+  _Implemented on branch `kopje/media-search`:_ `src/platform/media-files.ts` (originals at `originals/<id>`, served
+  files at `files/<token>/<variant>`; the serving route builds only `files/` keys from a token of the server's form);
+  the Store holds a row for every key before it is written and deletes the row only after the objects;
+  `test/image-bytes.test.ts` ("media keys"), `test/media.test.ts` ("serves only well-formed paths of served files").
 - **MEDIA-3: served images are re-encoded.** An image is served only as Images output with location metadata removed; if
-  transformation fails, the upload is refused and original bytes are never served. _Planned (B4)._
+  transformation fails, the upload is refused and original bytes are never served. _Implemented on branch
+  `kopje/media-search`:_ `processImage` in `src/platform/images.ts` checks every output (`retainedMetadata` in
+  `src/platform/image-bytes.ts` finds GPS EXIF, XMP and IPTC) and refuses the upload otherwise; `test/media.test.ts`
+  ("re-encodes an image without its location", "refuses a failed transformation", "refuses an output that keeps GPS
+  EXIF"). Tests use Miniflare's local Images binding (sharp); the production binding's metadata behaviour is verified on
+  the verification instance (B9).
 - **MEDIA-4: media cannot run as instance content.** Uploads are accepted by detected type from an allowlist and served
   with their stored type and `nosniff`; HTML, SVG and other active types are never served from the instance origin.
-  _Planned (B4)._
+  _Implemented on branch `kopje/media-search`:_ `sniffImageType` (JPEG, PNG, GIF, WebP, AVIF by signature, and Images
+  must read the same type); `SERVED_TYPES` and `src/web/media.ts` (JPEG, PNG and WebP only, `nosniff`, `sandbox` CSP);
+  video and audio are refused; `test/media.test.ts` ("refuses active and unsupported types by their bytes", "never
+  serves a stored object of another type").
 
 ### Web Push and polls (PUSH, POLL)
 
@@ -339,14 +358,20 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   code units). Media uploads have their own limit. _Enforced (main)_ for bodies: `src/platform/body.ts`,
   `src/mastodon/params.ts`; `test/gate.test.ts` ("refuses an inbox body over 1 MiB", "stops reading a streamed inbox
   body"). _Gap: no API body test._ _Implemented on branch `kopje/statuses`_ for status text: `test/status-text.test.ts`
-  ("raw input bound"). Query strings, search terms and media: _Planned (B4)._
+  ("raw input bound"). _Implemented on branch `kopje/media-search`_ for search terms (500 characters) and media (16 MB
+  and 16,777,216 pixels, read with the body bound before parsing): `src/mastodon/search.ts`, `src/mastodon/media.ts`;
+  `test/search.test.ts` ("bounds the query"), `test/media.test.ts` ("refuses a file over 16 MB"). Other query strings:
+  _Gap._
 - **RES-2: parsing work is bounded.** Every regex, parser and normalization over input at the RES-1 cap has an
   adversarial fixture with a time bound. _Implemented on branch `kopje/statuses`_ for status text:
-  `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). JSON-LD processing and remote
-  HTML: _Planned (B1b)._
+  `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Implemented on branch
+  `kopje/media-search`_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
+  bound"). JSON-LD processing and remote HTML: _Planned (B1b)._
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
-  `src/domain/accounts.ts`. _Gap: neither cap is tested._
+  `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Implemented on branch `kopje/media-search`_ for search: at
+  most 40 results per type (80 for the account search), and offsets past 10,000 answer an empty page;
+  `test/search.test.ts` ("bounds the query, the limit and the offset").
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Enforced (main)_ for snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
   sweep, spool and deliveries: _Planned (B1b, B2)._
@@ -357,11 +382,18 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **RES-6: one request cannot trigger unbounded work.** An inbound activity has fixed limits on dereferences,
   recipients, collection expansion and notifications. Delivery backlog and concurrency are bounded. Anonymous app
   registration, inbox spooling and media transformations have rate or storage budgets with a visible refusal. _Planned
-  (B1b, B2, B4). Gap: `POST /api/v1/apps` on main has no rate or storage budget yet; planned with B5 (rate limiting)._
+  (B1b, B2). Gap: `POST /api/v1/apps` on main has no rate or storage budget yet; planned with B5 (rate limiting)._
+  _Implemented on branch `kopje/media-search`_ for media: an account reserves at most 30 uploads per 30 minutes
+  (Mastodon's limit) before the body is read or Images is called, and a used-up Images allowance answers 503;
+  unattached uploads are deleted after a day by a sweep of at most 100 per run; `UPLOAD_BUDGET` in
+  `src/domain/media.ts`; `test/media.test.ts` ("limits uploads", "answers 503 when the transformation allowance is used
+  up").
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Implemented on branch `kopje/statuses`_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
-  untested_). Context traversal and edit history: _Planned (B4a fixes)._
+  untested_). _Implemented on branch `kopje/media-search`_ for search: statuses pass `listableSql` before `LIMIT`,
+  candidates are at most 2,500 per library source, and hashtags look at most 100 names and 50 statuses each
+  (`src/domain/search.ts`); `test/search.test.ts` ("filters before LIMIT", "matches a bounded window of the library"). Context traversal and edit history: _Planned (B4a fixes)._
 
 ### Data and keys (DATA)
 
@@ -472,7 +504,8 @@ activity specs, cited in test names.
 | Signed-fetch cache entries may outlive a remote block or key change by up to 5 minutes                               | Measured CPU savings on personal inboxes                                              | blocks must apply at once                                      |
 | OAuth client secrets are stored in plaintext, so R5 can act as any registered app (no user scopes)                   | Matches Mastodon; app tokens carry no user authority                                  | app tokens gain user-level powers                              |
 | Aggregate counters (`reblogs_count`, `favourites_count`, `replies_count`) include interactions the viewer cannot see | Mastodon parity; clients rely on the counts                                           | counters must hide private interactions                        |
-| Non-public media is readable by anyone who holds its unguessable URL                                                 | Clients and remote servers fetch media without credentials                            | authenticated media fetch becomes interoperable                |
+| Non-public media is readable by anyone holding its unguessable URL; cached copies outlive deletion                   | Clients and peers fetch media without credentials; URLs appear only under VIS-1       | authenticated media fetch becomes interoperable                |
+| R2 originals keep the uploaded bytes, EXIF and location included                                                     | Never served (MEDIA-2); backups restore from them; they are A8                        | backups can be rebuilt from re-encoded files                   |
 | Service tokens are recognized by Access's claim shape (no email, empty `sub`, `common_name`)                         | The admin application's policy decides which identities reach it                      | the admin application admits mTLS or Access changes the claims |
 | Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured       | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added | Kopje configures logtape                                       |
 | `constantTimeEqual` on main takes time that depends on the input length                                              | No content leak is known; `kopje/ops-tools` compares fixed-size digests               | `kopje/ops-tools` merges (then remove this row)                |
