@@ -16,6 +16,7 @@ import {
 	startSignIn,
 } from './web-helpers'
 import { SESSION_LIFETIME_MS } from '../src/domain/web-session'
+import { handleScheduled } from '../src/jobs/scheduled'
 import { csrfToken, returnPath } from '../src/web/session'
 
 // The web UI's sessions (AUTH, WEB-1, WEB-4) and the settings page: sign-in through Access, the opaque session cookie,
@@ -181,6 +182,47 @@ describe('sign-in (AUTH)', () => {
 		expect((await postForm(h, browser, '/logout', { csrf })).status).toBe(200)
 		expect(await sessionRows(h)).toEqual([])
 		expect((await settings(h, { session, cookie: cookieHeader({ [SESSION]: session }) })).status).toBe(302)
+	})
+
+	it('keeps the sign-out fence when the session expires and is swept before the late callback', async () => {
+		const h = await withAlice()
+		const browser = await signIn(h)
+		// The session ends in five minutes; the sign-in starts now, sign-out follows.
+		const soon = NOW + 5 * 60 * 1000
+		await sql(h.store, "UPDATE oauth_tokens SET expires_at = ? WHERE kind = 'access'", new Date(soon).toISOString())
+		await sql(
+			h.store,
+			"UPDATE kopje_state SET value = json_set(value, '$.expiresAt', ?) WHERE name LIKE 'web_session:%'",
+			soon
+		)
+		const started = await startSignIn(h, 'alice@example.com', undefined, browser)
+		expect((await postForm(h, browser, '/logout', { csrf: await csrfOf(h, browser) })).status).toBe(200)
+		const later = NOW + 6 * 60 * 1000
+		h.now.mockReturnValue(later)
+		await handleScheduled({ ...h.env, MAINTENANCE: 'off' } as unknown as Env, {
+			build: () => h.env.CF_VERSION_METADATA.id,
+			now: () => later,
+			store: () => h.store,
+		})
+		expect(await sql(h.store, "SELECT name FROM kopje_state WHERE name LIKE 'web_session:%'")).toEqual([])
+		const late = await callback(h, started.callback, { [LOGIN]: started.loginCookie })
+		expect(late.status).toBe(400)
+		expect(await sessionRows(h)).toEqual([])
+	})
+
+	it('fences the sign-ins in flight of the sessions "sign out other sessions" ends', async () => {
+		const h = await withAlice()
+		const a = await signIn(h)
+		const b = await signIn(h)
+		// Browser B has a code for a new sign-in, not yet exchanged.
+		const pending = await startSignIn(h, 'alice@example.com', undefined, b)
+		const response = await postForm(h, a, '/settings/sessions/revoke', { csrf: await csrfOf(h, a) })
+		expect(response.status).toBe(303)
+		const late = await callback(h, pending.callback, { [LOGIN]: pending.loginCookie, [SESSION]: b.session })
+		expect(late.status).toBe(400)
+		expect(setCookies(late).values.get(SESSION)).toBeUndefined()
+		expect(await sessionRows(h)).toHaveLength(1)
+		expect((await settings(h, a)).status).toBe(200)
 	})
 
 	it('retires every replaced or signed-out session for cookies and bearer use alike', async () => {

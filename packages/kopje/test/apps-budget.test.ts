@@ -3,7 +3,17 @@ import { env } from 'cloudflare:workers'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { apiHarness, bearer, json, login, registerApp, seedAccount, sql } from './api-helpers'
+import {
+	apiHarness,
+	authorizationCode,
+	bearer,
+	exchange,
+	json,
+	login,
+	registerApp,
+	seedAccount,
+	sql,
+} from './api-helpers'
 import { NOW } from './app-helpers'
 import { signIn } from './web-helpers'
 import { EVICTION_GRACE_MS, MAX_PENDING_APPS, UNUSED_APP_TTL_MS } from '../src/domain/oauth'
@@ -97,6 +107,18 @@ describe('app registration budget (RES-6)', () => {
 		expect((await h.request('/api/v1/apps', json(APP))).status).toBe(200)
 		expect(await count(h.store, `id = '${holder.client_id}'`)).toBe(0)
 		expect((await h.request('/api/v1/apps/verify_credentials', bearer(access_token))).status).toBe(401)
+	})
+
+	it('keeps an app that holds only a user’s code not yet exchanged, and the code still exchanges', async () => {
+		const h = await apiHarness()
+		await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
+		const app = await registerApp(h)
+		const code = await authorizationCode(h, app)
+		await sql(h.store, 'UPDATE oauth_clients SET created_at = ?', new Date(NOW - 2 * UNUSED_APP_TTL_MS).toISOString())
+		await fill(h.store, MAX_PENDING_APPS, NOW - EVICTION_GRACE_MS - 1000)
+		expect((await h.request('/api/v1/apps', json(APP))).status).toBe(200)
+		expect(await count(h.store, `id = '${app.client_id}'`)).toBe(1)
+		expect((await exchange(h, app, code)).status).toBe(200)
 	})
 
 	it('cannot be filled for good with app tokens: registration succeeds again once they age', async () => {

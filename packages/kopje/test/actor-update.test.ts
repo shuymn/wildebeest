@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
+import { NOW } from './app-helpers'
 import { LEGACY } from './federation-helpers'
 import { PNG_PLAIN } from './fixtures/images'
 import { bytes, mediaForm, TestCodec } from './media-helpers'
@@ -110,4 +111,79 @@ describe('Update(Person)', () => {
 		expect(sent).toHaveLength(1)
 		expect(sent[0]?.activity.object).toMatchObject({ icon: { type: 'Image', url: avatar?.avatar_url } })
 	})
+
+	it('keeps unrelated and leased deliveries and lane order, with partly expanded targets', async () => {
+		const h = await setup()
+		const { alice } = h.users
+		// 150 more followers, each on its own server: one activity's targets take more than one expansion step.
+		for (let i = 0; i < 150; i++) {
+			await remoteFollows(h.store, await remoteAccount(h.store, `f${i}`, `f${i}.example`), alice.id)
+		}
+		expect((await patch(h, { display_name: 'One' })).status).toBe(200)
+		const [first] = await updates(h)
+		const firstId = await activityId(h, 'One')
+		// Some of the first Update's deliveries are leased (possibly already POSTed); its other targets wait.
+		await h.store.claimDeliveries(h.env.CF_VERSION_METADATA.id, { now: NOW, leaseToken: 'round-1' })
+		const leased = await sql<{ id: number; lane: string }>(
+			h.store,
+			"SELECT id, lane FROM deliveries WHERE state = 'leased' AND activity_id = ?",
+			firstId
+		)
+		expect(leased.length).toBeGreaterThan(0)
+		expect(first?.activity.object).toMatchObject({ name: 'One' })
+		// A status in between, then the second edit.
+		const status = await h.request('/api/v1/statuses', bearer(alice.token, json({ status: 'hello' })))
+		expect(status.status).toBe(200)
+		expect((await patch(h, { display_name: 'Two' })).status).toBe(200)
+		const secondId = await activityId(h, 'Two')
+		const createId = (
+			await sql<{ id: number }>(
+				h.store,
+				"SELECT id FROM outbound_activities WHERE json_extract(body, '$.activity.type') = 'Create'"
+			)
+		)[0]?.id
+
+		// The first Update keeps exactly its leased deliveries and no waiting targets.
+		const firstLeft = await sql<{ id: number; state: string }>(
+			h.store,
+			'SELECT id, state FROM deliveries WHERE activity_id = ?',
+			firstId
+		)
+		expect(firstLeft.map((d) => d.id).sort()).toEqual(leased.map((d) => d.id).sort())
+		expect(await targetsOf(h, firstId)).toBe(firstLeft.length)
+		// The status and the second Update reach every follower's server (151 each, expanded or still waiting).
+		expect(await targetsOf(h, createId ?? 0)).toBe(151)
+		expect(await targetsOf(h, secondId)).toBe(151)
+		// Lane order holds where the leased first Update is still in its lane: it, then the status, then the second.
+		for (const { lane } of leased) {
+			const order = await sql<{ activity_id: number }>(
+				h.store,
+				'SELECT activity_id FROM deliveries WHERE lane = ? ORDER BY id',
+				lane
+			)
+			const ids = order.map((d) => d.activity_id)
+			expect(ids[0], lane).toBe(firstId)
+			expect(ids.filter((id) => id !== firstId)).toEqual(ids.filter((id) => id !== firstId).sort((x, y) => x - y))
+		}
+	})
 })
+
+async function activityId(h: Awaited<ReturnType<typeof setup>>, name: string): Promise<number> {
+	const [row] = await sql<{ id: number }>(
+		h.store,
+		"SELECT id FROM outbound_activities WHERE json_extract(body, '$.activity.object.name') = ?",
+		name
+	)
+	return row?.id ?? 0
+}
+
+// Deliveries written for an activity plus targets still waiting in its chunks.
+async function targetsOf(h: Awaited<ReturnType<typeof setup>>, activityId: number): Promise<number> {
+	const [row] = await sql<{ n: number }>(
+		h.store,
+		`SELECT (SELECT COUNT(*) FROM deliveries WHERE activity_id = ?1)
+			+ (SELECT IFNULL(SUM(json_array_length(targets) - next), 0) FROM outbound_targets WHERE activity_id = ?1) AS n`,
+		activityId
+	)
+	return row?.n ?? 0
+}

@@ -49,7 +49,16 @@ export const LOGIN_ATTEMPT_MS = 10 * 60 * 1000
 // Expired attempts pruned per new attempt.
 const PRUNE_PER_LOGIN = 20
 
-type Attempt = { state: string; challenge: string; returnTo: string; startedWith: string | null; expiresAt: number }
+// family: the browser's family when it started, resolved then, so a later expiry of the session's membership cannot
+// lose the sign-out fence (an ended family's record outlives every attempt that names it, see endFamily).
+type Attempt = {
+	state: string
+	challenge: string
+	returnTo: string
+	startedWith: string | null
+	family: string | null
+	expiresAt: number
+}
 type Family = { current: string | null; ended: boolean; expiresAt: number }
 
 function readState<T>(db: Db, name: string): T | null {
@@ -124,6 +133,7 @@ export const beginWebLogin = sessionOperation<BeginLoginInput, string>((db, inpu
 		challenge: input.challenge,
 		returnTo: input.returnTo,
 		startedWith: input.startedWith,
+		family: input.startedWith === null ? null : familyOf(db, input.startedWith),
 		expiresAt: input.now + LOGIN_ATTEMPT_MS,
 	} satisfies Attempt)
 	return clientId
@@ -177,7 +187,7 @@ export const startWebSession = sessionOperation<StartSessionInput, SessionStarte
 	if (clientId === null || grant === null) {
 		return { status: 'invalid_grant' }
 	}
-	const startedFamily = attempt.startedWith === null ? null : familyOf(db, attempt.startedWith)
+	const startedFamily = attempt.family
 	const started = startedFamily === null ? null : readState<Family>(db, `${FAMILY}${startedFamily}`)
 	if (started?.ended === true) {
 		return { status: 'invalid_grant' }
@@ -221,14 +231,19 @@ export const endWebSession = sessionOperation<{ tokenHash: string; now: number }
 		return
 	}
 	const familyName = `${FAMILY}${familyId}`
-	const family = readState<Family>(db, familyName)
-	const current = family?.current ?? null
+	endFamily(db, clientId, familyId, now)
+})
+
+// Ends a family and its live session. The record is kept LOGIN_ATTEMPT_MS from now: every attempt that names the
+// family was made before, so it expires no later.
+function endFamily(db: Db, clientId: string, familyId: string, now: number): void {
+	const familyName = `${FAMILY}${familyId}`
+	const current = readState<Family>(db, familyName)?.current ?? null
 	if (current !== null) {
 		endSession(db, clientId, current)
 	}
-	// Kept until the attempts it could fence have expired.
 	writeState(db, familyName, { current: null, ended: true, expiresAt: now + LOGIN_ATTEMPT_MS } satisfies Family)
-})
+}
 
 // Removes expired entries of one kind, at most `limit`.
 function sweepPrefix(db: Db, prefix: string, now: number, limit: number): number {
@@ -343,13 +358,26 @@ export const revokeAuthorization = webOperation<{ clientId: string }, number>(
 )
 
 // Ends every web session of the user but the current one.
-export const revokeOtherSessions = webOperation<object, number>(
+// Ends every web session of the user but the current one, in one transaction: their families end too (so their
+// browsers' sign-ins in flight install nothing), and the web client's unexchanged codes for the user are deleted (a
+// sign-in of a browser with no session yet cannot be told apart). The caller's own family stays.
+export const revokeOtherSessions = webOperation<{ now: number }, number>(
 	sessionOperation,
-	(db, { credential }, { accountId }, webClient) =>
-		db.all(
-			`DELETE FROM oauth_tokens WHERE account_id = ? AND client_id = ? AND token_hash <> ? RETURNING token_hash`,
+	(db, { credential, now }, { accountId }, webClient) => {
+		const revoked = db.all<{ token_hash: string }>(
+			`DELETE FROM oauth_tokens WHERE account_id = ? AND client_id = ? AND token_hash <> ? AND kind = 'access'
+			RETURNING token_hash`,
 			accountId,
 			webClient,
 			credential.tokenHash
-		).length
+		)
+		const own = familyOf(db, credential.tokenHash)
+		for (const family of new Set(revoked.map((row) => familyOf(db, row.token_hash)))) {
+			if (family !== null && family !== own) {
+				endFamily(db, webClient, family, now)
+			}
+		}
+		db.run("DELETE FROM oauth_tokens WHERE account_id = ? AND client_id = ? AND kind = 'code'", accountId, webClient)
+		return revoked.length
+	}
 )

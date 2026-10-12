@@ -368,7 +368,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   form a family: a new session deletes the family's live one and every session the browser presented; sign-out
   deletes the presented and the live session and ends the family, so a sign-in started before it installs nothing.
   Every retired session is a deleted token row, refused by cookie and as a bearer token alike; suspension, expiry and
-  "sign out other sessions" end sessions too. Only a signed-in browser's sign-out (Origin and form token, WEB-4) can end
+  "sign out other sessions" end sessions too. An attempt records its family when it starts, and an ended family's record
+  outlives every attempt naming it, so expiry and the sweep cannot lift the fence. "Sign out other sessions" ends their
+  families and deletes the web client's unexchanged codes for the user in the same transaction, so their sign-ins in
+  flight install nothing. Only a signed-in browser's sign-out (Origin and form token, WEB-4) can end
   a family. Authorizations and sessions are listed and revoked only by a session of the web client, for the viewer's
   own tokens (AUTH-6). _Implemented on branch `kopje/web-ui`:_ `src/domain/web-session.ts`, `src/web/session.ts`,
   `src/app/web.tsx`; `test/web-session.test.ts` ("signs in through Access and sets an opaque, HttpOnly, Secure,
@@ -376,7 +379,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   "consumes a sign-in attempt once", "keeps one session per browser", "trusts nothing but the attempt id from the
   login cookie", "leaves the newer sign-in in place when a stale
   callback arrives", "installs nothing from a callback that arrives after sign-out", "signs out the newer session when
-  sign-out carries the session it replaced", "retires every replaced or signed-out session for cookies and bearer use
+  sign-out carries the session it replaced", "keeps the sign-out fence when the session expires and is swept",
+  "fences the sign-ins in flight of the sessions \"sign out other sessions\" ends", "retires every replaced or signed-out session for cookies and bearer use
   alike", "lets no anonymous flood of sign-ins or failed callbacks lock out the owner", "expires a session after its
   lifetime", "does not take an API token for a session", "signs out, and the cookie authenticates nothing afterwards",
   "signs out the other sessions only", "lists the authorized apps and revokes one").
@@ -875,6 +879,7 @@ activity specs, cited in test names.
 | Activities signed by someone other than their actor (forwarded, with LD signatures) are refused                                                                                                                                            | ID-1. Replies that reach Kopje only by forwarding (to a collection the author cannot deliver to) and deliveries through relays are missed                                                                                                                         | relays or forwarded replies must be supported                        |
 | The app registration limit is approximate: the Rate Limiting binding counts per Cloudflare location and is eventually consistent, and many addresses together can fill the 500 never-authorized slots, evicting never-authorized apps older than an hour or refusing registration for an hour at most | The Store's bound holds exactly whatever the limiter lets through, and every refusal is visible (429); Workers offers no exact global limiter without a paid product | registrations are seen to be refused or evicted in practice |
 | An app token (`client_credentials`) of an app no user has authorized may stop working under registration pressure: the app is evicted with its tokens | Anyone can get an app token without a user; letting app tokens protect an app would let them fill the budget for good. Clients re-register, as after Mastodon's vacuum | logged-out clients are seen to lose their app tokens |
+| Two first sign-ins of one browser that overlap (the second starts before the first's session cookie arrives) leave two sessions; signing out ends only the one in the cookie | Both belong to the same person in the same browser, the other token is in no cookie or response any more, and it expires with its 7-day lifetime; binding them would need a server-side browser identity before sign-in | a session token is seen to leak this way |
 | A web session lasts its 7 days even if the person's Access session ends or the Access policy changes | Access verifies the person at sign-in only (design); suspension, sign-out and "sign out other sessions" end sessions at once | sessions must follow Access policy changes |
 
 ## How to use

@@ -444,7 +444,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 			return checked
 		}
 		const credential = await credentialOf(checked.session, 'write:accounts')
-		const result = await storeCall(c, deps, (s, b) => s.revokeOtherSessions(b, { credential }))
+		const result = await storeCall(c, deps, (s, b) => s.revokeOtherSessions(b, { credential, now: deps.now() }))
 		return settled(c, result, () => redirect('/settings?notice=sessions'))
 	})
 
