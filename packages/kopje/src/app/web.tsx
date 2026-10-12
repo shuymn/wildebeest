@@ -65,7 +65,7 @@ const PUBLIC_HEADERS = {
 // Pages of a signed-in user, and every answer of the sign-in flow.
 const PRIVATE_HEADERS = { ...FRAMING, 'referrer-policy': 'no-referrer', 'cache-control': 'no-store' }
 
-type PageStatus = 200 | 400 | 403 | 404 | 410 | 422 | 429
+type PageStatus = 200 | 400 | 403 | 404 | 410 | 422
 
 function publicPage(c: WebContext, status: PageStatus, body: Parameters<WebContext['html']>[0]) {
 	return c.html(body, status, PUBLIC_HEADERS)
@@ -208,23 +208,16 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 		const verifier = deps.randomToken()
 		const challenge = await pkceChallenge(verifier)
 		const previous = getCookie(c, SESSION_COOKIE, 'host')
-		const begun = await storeCall(c, deps, async (s, b) =>
-			s.beginWebLogin(b, {
-				clientId: deps.randomToken(),
-				secret: deps.randomToken(),
-				redirectUri,
-				stateHash: await sha256Hex(state),
-				challenge,
-				previousTokenHash: previous === undefined ? null : await sha256Hex(previous),
-				family: deps.randomToken(),
-				now: deps.now(),
-			})
+		const clientId = await storeCall(c, deps, (s, b) =>
+			s.ensureWebClient(b, { clientId: deps.randomToken(), secret: deps.randomToken(), redirectUri, now: deps.now() })
 		)
-		if (begun.status === 'busy') {
-			return message(c, 429, STRINGS.signInBusyTitle, STRINGS.signInBusy)
-		}
-		const { clientId } = begun
-		setCookie(c, LOGIN_COOKIE, encodeLogin({ state, verifier, returnTo: target }), cookieOptions(LOGIN_LIFETIME_S))
+		const startedWith = previous === undefined ? null : await sha256Hex(previous)
+		setCookie(
+			c,
+			LOGIN_COOKIE,
+			encodeLogin({ state, verifier, startedWith, returnTo: target }),
+			cookieOptions(LOGIN_LIFETIME_S)
+		)
 		const query = new URLSearchParams({
 			response_type: 'code',
 			client_id: clientId,
@@ -257,6 +250,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 			})
 		}
 		const token = deps.randomToken()
+		const presented = getCookie(c, SESSION_COOKIE, 'host')
 		const result = await storeCall(c, deps, async (s, b) =>
 			s.startWebSession(b, {
 				stateHash: await sha256Hex(state),
@@ -264,6 +258,9 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 				redirectUri: `https://${c.get('domain')}/auth/callback`,
 				verifierChallenge: await pkceChallenge(login.verifier),
 				tokenHash: await sha256Hex(token),
+				startedWith: login.startedWith,
+				presented: presented === undefined ? null : await sha256Hex(presented),
+				family: deps.randomToken(),
 				now: deps.now(),
 			})
 		)

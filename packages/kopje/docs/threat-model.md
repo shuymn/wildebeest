@@ -293,20 +293,29 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   are 32 random bytes. Codes and access tokens are stored and looked up only by their full SHA-256. _Enforced (main):_
   `src/security/tokens.ts`, `src/domain/oauth.ts`; `test/oauth.test.ts` ("stores only digests of tokens and codes").
 - **AUTH-8: a web session is an OAuth token of the web UI, and nothing else.** The web UI is an ordinary OAuth client
-  of the instance: `/login` sends the browser to `/oauth/authorize` (Access, WEB-1) with a PKCE S256 challenge and a
-  random state kept in a short-lived login cookie; the callback exchanges the code, bound to that challenge, in the
-  Store and starts a session. A session is an access token of the web client (AUTH-1, AUTH-7) with a fixed lifetime of
-  7 days, held in an opaque `__Host-` cookie (HttpOnly, Secure, SameSite=Lax, Path=/). Session values are minted only
-  by the server at the callback, never taken from a URL; a callback without the login cookie, with another state, or
-  with a code bound to another verifier starts nothing (session fixation, login CSRF). Signing in again ends the
-  browser's previous session. Sign-out deletes the token, so a replayed cookie authenticates nothing; suspension,
-  expiry and "sign out other sessions" end sessions too. Authorizations and sessions are listed and revoked only by a
-  session of the web client, for the viewer's own tokens (AUTH-6). _Implemented on branch `kopje/web-ui`:_ `src/domain/web-session.ts`,
-  `src/web/session.ts`, `src/app/web.tsx`; `test/web-session.test.ts` ("signs in through Access and sets an opaque,
-  HttpOnly, Secure, SameSite session cookie", "refuses a callback without the login cookie, or with another state",
-  "uses a code once", "ends the session the browser already had", "expires a session after its lifetime", "does not
-  take an API token for a session", "signs out, and the cookie authenticates nothing afterwards", "signs out the other
-  sessions only", "lists the authorized apps and revokes one").
+  of the instance: `/login` sends the browser to `/oauth/authorize` (Access, WEB-1) with a PKCE S256 challenge, and
+  keeps the state, the verifier and the digest of the session it already had in a 10-minute `__Host-` login cookie;
+  `/login` writes nothing to the Store but the web client's row, so an anonymous party cannot add state, hold a slot or
+  block anyone's sign-in. The callback exchanges the code, bound to that challenge, in the Store, and records the
+  state as completed, so a second code for the same sign-in starts nothing. A session is an access token of the web
+  client (AUTH-1, AUTH-7) with a fixed lifetime of 7 days, held in an opaque `__Host-` cookie (HttpOnly, Secure,
+  SameSite=Lax, Path=/). Session values are minted only by the server at the callback, never taken from a URL; a
+  callback without the login cookie, with another state, or with a code bound to another verifier starts nothing
+  (session fixation, login CSRF), and a stale callback leaves the newer login cookie in place. Sessions of one browser
+  form a family: a new session deletes the family's live one and every session the browser presented; sign-out
+  deletes the presented and the live session and ends the family, so a sign-in started before it installs nothing.
+  Every retired session is a deleted token row, refused by cookie and as a bearer token alike; suspension, expiry and
+  "sign out other sessions" end sessions too. Only a signed-in browser's sign-out (Origin and form token, WEB-4) can end
+  a family. Authorizations and sessions are listed and revoked only by a session of the web client, for the viewer's
+  own tokens (AUTH-6). _Implemented on branch `kopje/web-ui`:_ `src/domain/web-session.ts`, `src/web/session.ts`,
+  `src/app/web.tsx`; `test/web-session.test.ts` ("signs in through Access and sets an opaque, HttpOnly, Secure,
+  SameSite session cookie", "refuses a callback without the login cookie, or with another state", "uses a code once",
+  "consumes a sign-in attempt once", "keeps one session per browser", "leaves the newer sign-in in place when a stale
+  callback arrives", "installs nothing from a callback that arrives after sign-out", "signs out the newer session when
+  sign-out carries the session it replaced", "retires every replaced or signed-out session for cookies and bearer use
+  alike", "lets no anonymous flood of sign-ins or failed callbacks lock out the owner", "expires a session after its
+  lifetime", "does not take an API token for a session", "signs out, and the cookie authenticates nothing afterwards",
+  "signs out the other sessions only", "lists the authorized apps and revokes one").
 
 ### Web (WEB)
 
@@ -540,7 +549,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (B1b)._ App registration: _Implemented on branch `kopje/web-ui`:_ `POST /api/v1/apps` is limited to 5 per minute per client IP by the Workers
   Rate Limiting binding before its body is read (429), and the Store keeps at most 500 never-authorized apps (no token or
   code of a user); when full it first removes unused apps (no token of any kind) older than a day, then the oldest
-  never-authorized apps older than an hour, and otherwise refuses with 429. The cron removes unused apps after a day,
+  never-authorized apps older than an hour (app tokens and all), and otherwise refuses with 429. Only a user's token or
+  code protects an app: anyone can get an app token without a user, so app tokens cannot hold a slot for good. The cron removes unused apps after a day,
   as Mastodon's `ApplicationsVacuum` does, and expired codes and web sessions, 500 of each per run. `registerApp` and
   `sweepOAuth` in `src/domain/oauth.ts`, `src/mastodon/oauth.ts`; `test/apps-budget.test.ts`. Avatar and header
   uploads from the web UI go through the media budgets below.
@@ -738,7 +748,8 @@ activity specs, cited in test names.
 | Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured                                                                                                                             | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added                                                                                                                                       | Kopje configures logtape                                             |
 | Remote HTML is sanitized by sanitize-html, whose htmlparser2 is a tokenizer rather than an HTML5 tree builder                                                                                                                              | It emits only allowlisted tags with quoted, escaped attributes and escapes all other text; the parse5-checked vector suites pass                                                                                            | a vector fails, or a maintained tree-based sanitizer fits the budget |
 | Activities signed by someone other than their actor (forwarded, with LD signatures) are refused                                                                                                                                            | ID-1. Replies that reach Kopje only by forwarding (to a collection the author cannot deliver to) and deliveries through relays are missed                                                                                   | relays or forwarded replies must be supported                        |
-| The app registration limit is approximate: the Rate Limiting binding counts per Cloudflare location and is eventually consistent, and many addresses together can fill the 500 never-authorized slots, evicting apps older than an hour that no user has authorized or refusing registration for a while | The Store's bound holds exactly whatever the limiter lets through, and every refusal is visible (429); Workers offers no exact global limiter without a paid product | registrations are seen to be refused or evicted in practice |
+| The app registration limit is approximate: the Rate Limiting binding counts per Cloudflare location and is eventually consistent, and many addresses together can fill the 500 never-authorized slots, evicting never-authorized apps older than an hour or refusing registration for an hour at most | The Store's bound holds exactly whatever the limiter lets through, and every refusal is visible (429); Workers offers no exact global limiter without a paid product | registrations are seen to be refused or evicted in practice |
+| An app token (`client_credentials`) of an app no user has authorized may stop working under registration pressure: the app is evicted with its tokens | Anyone can get an app token without a user; letting app tokens protect an app would let them fill the budget for good. Clients re-register, as after Mastodon's vacuum | logged-out clients are seen to lose their app tokens |
 | A web session lasts its 7 days even if the person's Access session ends or the Access policy changes | Access verifies the person at sign-in only (design); suspension, sign-out and "sign out other sessions" end sessions at once | sessions must follow Access policy changes |
 
 ## How to use

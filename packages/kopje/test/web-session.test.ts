@@ -16,7 +16,7 @@ import {
 	startSignIn,
 } from './web-helpers'
 import { SESSION_LIFETIME_MS } from '../src/domain/web-session'
-import { returnPath } from '../src/web/session'
+import { csrfToken, returnPath } from '../src/web/session'
 
 // The web UI's sessions (AUTH, WEB-1, WEB-4) and the settings page: sign-in through Access, the opaque session cookie,
 // sign-out, expiry and revocation, and the Origin and anti-forgery checks on every state change.
@@ -183,6 +183,55 @@ describe('sign-in (AUTH)', () => {
 		expect((await settings(h, { session, cookie: cookieHeader({ [SESSION]: session }) })).status).toBe(302)
 	})
 
+	it('retires every replaced or signed-out session for cookies and bearer use alike', async () => {
+		const h = await withAlice()
+		const api = (session: string) => h.request('/api/v1/accounts/verify_credentials', bearer(session))
+		const first = await signIn(h)
+		expect((await api(first.session)).status).toBe(200)
+		// Replaced by a new sign-in of the same browser.
+		const started = await startSignIn(h, 'alice@example.com', undefined, first)
+		const second = setCookies(await callback(h, started.callback, { [LOGIN]: started.loginCookie })).values.get(SESSION)
+		expect((await api(first.session)).status).toBe(401)
+		expect((await api(second ?? '')).status).toBe(200)
+		// Signed out with the replaced session: the newer one goes too.
+		await postForm(h, first, '/logout', { csrf: await csrfToken(first.session) })
+		expect((await api(second ?? '')).status).toBe(401)
+		// Signed out by "sign out other sessions".
+		const a = await signIn(h)
+		const b = await signIn(h)
+		await postForm(h, a, '/settings/sessions/revoke', { csrf: await csrfOf(h, a) })
+		expect((await api(b.session)).status).toBe(401)
+		// A suspended account's session.
+		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ?', new Date(NOW).toISOString())
+		expect((await api(a.session)).status).toBe(403)
+		expect((await settings(h, a)).status).toBe(302)
+	})
+
+	it('lets no anonymous flood of sign-ins or failed callbacks lock out the owner (RES-6)', async () => {
+		const h = await withAlice()
+		const before = await sql(h.store, 'SELECT name FROM kopje_state')
+		let lastCookie = ''
+		for (let i = 0; i < 50; i++) {
+			const response = await h.request('/login')
+			expect(response.status).toBe(302)
+			lastCookie = setCookies(response).values.get(LOGIN) ?? ''
+		}
+		// Failed callbacks: forged codes, with and without a matching state, aimed at the owner's sign-in.
+		const state = lastCookie.split('.')[0] ?? ''
+		for (const query of [`?code=forged&state=${state}`, '?code=forged&state=other', '?error=access_denied']) {
+			const response = await h.request(`/auth/callback${query}`, {
+				headers: { cookie: cookieHeader({ [LOGIN]: lastCookie }) },
+			})
+			expect(response.status).toBeGreaterThanOrEqual(400)
+		}
+		// Sign-out without a session cannot end anyone's family.
+		expect((await h.request('/logout', { method: 'POST', headers: { origin: ORIGIN } })).status).toBe(403)
+		// /login stores nothing; failed callbacks store nothing.
+		expect(await sql(h.store, 'SELECT name FROM kopje_state')).toEqual(before)
+		const owner = await signIn(h)
+		expect((await settings(h, owner)).status).toBe(200)
+	})
+
 	it('shows a cancelled sign-in and starts no session', async () => {
 		const h = await withAlice()
 		const started = await startSignIn(h)
@@ -278,7 +327,7 @@ describe('return paths (WEB-4)', () => {
 		for (const tampered of ['//evil.example', '/./x/..//evil.example', 'https://evil.example/']) {
 			const fresh = await startSignIn(h)
 			const [freshState, freshVerifier] = fresh.loginCookie.split('.')
-			const response = await callback(h, fresh.callback, { [LOGIN]: `${freshState}.${freshVerifier}.${tampered}` })
+			const response = await callback(h, fresh.callback, { [LOGIN]: `${freshState}.${freshVerifier}.-.${tampered}` })
 			expect(response.status, tampered).toBe(303)
 			expect(response.headers.get('location'), tampered).toBe('/settings')
 		}

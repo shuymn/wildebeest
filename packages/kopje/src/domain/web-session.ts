@@ -4,7 +4,6 @@ import { consumeCode, insertAccessToken, webClientId, WEB_CLIENT_SETTING } from 
 import { readOperation, sessionOperation } from './operation'
 import type { Db } from '../db/sql'
 import type { StoreOperation } from '../platform/store-kernel'
-import { constantTimeEqual } from '../security/tokens'
 
 // Web sessions (AUTH, WEB-4). The web UI is an ordinary OAuth client of the instance (design: "the built-in UI is a
 // normal OAuth client"): Access verifies the person at /oauth/authorize, the consent page issues a PKCE-bound code to
@@ -24,25 +23,28 @@ export const SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000
 export const WEB_SCOPES = ['read:accounts', 'write:accounts', 'write:media']
 
 // Sign-in attempts and browser families, in kopje_state (outside the dumped tables: they are short-lived). Values are
-// JSON with an `expiresAt` the cron sweeps by (sweepWebState).
+// JSON with an `expiresAt` the cron sweeps by (sweepWebState). /login writes nothing here: an anonymous visitor
+// cannot add state, hold a slot, or touch another browser's family (RES-6). Each entry is written only by a callback
+// that presented a valid code (a person Access admitted, who approved the sign-in) or by a signed-in browser's
+// sign-out.
 //
-//   web_login:<sha256(state)>   one sign-in attempt: the PKCE challenge, the browser's family, its expiry. The
-//                                callback consumes it atomically, so a second callback of the same attempt (two
-//                                consent submissions, a replay) starts nothing.
-//   web_family:<family>         one browser's sessions: the live one (`current`) and whether the browser signed out
-//                                (`ended`). A new session replaces `current`; sign-out ends the family, so a callback
-//                                of an attempt the browser started before signing out installs nothing.
-//   web_session:<token hash>    the family a session belongs to, kept for its lifetime even after it is replaced, so
-//                                signing out with a replaced session still ends the family's newer one.
-const LOGIN = 'web_login:'
+//   web_login_used:<sha256(state)>  a sign-in attempt that has completed: a second callback with the same state (two
+//                                   consent submissions, a replay) starts nothing.
+//   web_family:<family>             one browser's sessions: the live one (`current`) and whether the browser signed
+//                                   out (`ended`). A new session replaces `current`; sign-out ends the family, so a
+//                                   callback of a sign-in the browser started before signing out installs nothing.
+//   web_session:<token hash>        the family a session belongs to, kept for its lifetime even after it is replaced,
+//                                   so signing out with a replaced session still ends the family's newer one.
+//
+// The browser's own state lives in its login cookie (web/session.ts): the OAuth state, the PKCE verifier, and the
+// digest of the session it had when it started signing in.
+const USED = 'web_login_used:'
 const FAMILY = 'web_family:'
 const MEMBER = 'web_session:'
 
-// How long a sign-in may take, and how many may be in progress at once (RES-6: /login is anonymous).
+// How long a sign-in may take (the login cookie's and the code's lifetime).
 export const LOGIN_ATTEMPT_MS = 10 * 60 * 1000
-export const MAX_LOGIN_ATTEMPTS = 1000
 
-type Attempt = { challenge: string; family: string; previous: string | null; expiresAt: number }
 type Family = { current: string | null; ended: boolean; expiresAt: number }
 
 function readState<T>(db: Db, name: string): T | null {
@@ -54,11 +56,6 @@ function writeState(db: Db, name: string, value: unknown): void {
 	db.run('INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)', name, JSON.stringify(value))
 }
 
-function takeState<T>(db: Db, name: string): T | null {
-	const row = db.first<{ value: string }>('DELETE FROM kopje_state WHERE name = ? RETURNING value', name)
-	return row === undefined ? null : (JSON.parse(row.value) as T)
-}
-
 function familyOf(db: Db, tokenHash: string): string | null {
 	return readState<{ family: string }>(db, `${MEMBER}${tokenHash}`)?.family ?? null
 }
@@ -67,19 +64,28 @@ function endSession(db: Db, clientId: string, tokenHash: string): void {
 	db.run("DELETE FROM oauth_tokens WHERE token_hash = ? AND client_id = ? AND kind = 'access'", tokenHash, clientId)
 }
 
-// The web client's id, created on first use. Its redirect URI follows the fixed domain the caller derives it from.
-function ensureWebClient(
-	db: Db,
-	input: { clientId: string; secret: string; redirectUri: string; now: number }
-): string {
+export type WebClientInput = { clientId: string; secret: string; redirectUri: string; now: number }
+
+// /login: the web client's id, created on first use. Its redirect URI follows the fixed domain the caller derives it
+// from; the row is written only when it is missing or differs.
+export const ensureWebClient = sessionOperation<WebClientInput, string>((db, input) => {
 	const existing = webClientId(db)
-	if (existing !== null && db.first('SELECT 1 AS found FROM oauth_clients WHERE id = ?', existing) !== undefined) {
-		db.run(
-			'UPDATE oauth_clients SET redirect_uris = ?, scopes = ? WHERE id = ?',
-			input.redirectUri,
-			WEB_SCOPES.join(' '),
-			existing
-		)
+	const row =
+		existing === null
+			? undefined
+			: db.first<{ redirect_uris: string; scopes: string }>(
+					'SELECT redirect_uris, scopes FROM oauth_clients WHERE id = ?',
+					existing
+				)
+	if (existing !== null && row !== undefined) {
+		if (row.redirect_uris !== input.redirectUri || row.scopes !== WEB_SCOPES.join(' ')) {
+			db.run(
+				'UPDATE oauth_clients SET redirect_uris = ?, scopes = ? WHERE id = ?',
+				input.redirectUri,
+				WEB_SCOPES.join(' '),
+				existing
+			)
+		}
 		return existing
 	}
 	db.run(
@@ -93,46 +99,7 @@ function ensureWebClient(
 	)
 	db.run('INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', WEB_CLIENT_SETTING, input.clientId)
 	return input.clientId
-}
-
-export type BeginLoginInput = {
-	// For the web client, if it does not exist yet.
-	clientId: string
-	secret: string
-	redirectUri: string
-	stateHash: string
-	challenge: string
-	// The browser's current session, if it sent one, and a family id for a browser that has none (or signed out).
-	previousTokenHash: string | null
-	family: string
-	now: number
-}
-
-// /login: records the attempt and answers the web client's id, or busy when too many sign-ins are in progress.
-export const beginWebLogin = sessionOperation<BeginLoginInput, { status: 'ok'; clientId: string } | { status: 'busy' }>(
-	(db, input) => {
-		const pending = () =>
-			db.first<{ n: number }>('SELECT COUNT(*) AS n FROM kopje_state WHERE substr(name, 1, ?) = ?', LOGIN.length, LOGIN)
-				?.n ?? 0
-		if (pending() >= MAX_LOGIN_ATTEMPTS) {
-			sweepPrefix(db, LOGIN, input.now, MAX_LOGIN_ATTEMPTS)
-			if (pending() >= MAX_LOGIN_ATTEMPTS) {
-				return { status: 'busy' }
-			}
-		}
-		const clientId = ensureWebClient(db, input)
-		const previousFamily = input.previousTokenHash === null ? null : familyOf(db, input.previousTokenHash)
-		const live = previousFamily === null ? null : readState<Family>(db, `${FAMILY}${previousFamily}`)
-		const attempt: Attempt = {
-			challenge: input.challenge,
-			family: live !== null && !live.ended ? (previousFamily ?? input.family) : input.family,
-			previous: input.previousTokenHash,
-			expiresAt: input.now + LOGIN_ATTEMPT_MS,
-		}
-		writeState(db, `${LOGIN}${input.stateHash}`, attempt)
-		return { status: 'ok', clientId }
-	}
-)
+})
 
 export type StartSessionInput = {
 	stateHash: string
@@ -140,34 +107,40 @@ export type StartSessionInput = {
 	redirectUri: string
 	verifierChallenge: string
 	tokenHash: string
+	// The session the browser had when it started signing in (from its login cookie), and the one it presents now.
+	startedWith: string | null
+	presented: string | null
+	// A family id for a browser that has none.
+	family: string
 	now: number
 }
 
-// The callback: consumes the attempt and the code of the web client (both once, even on failure) and starts a
-// session. The code must be bound to the attempt's PKCE challenge, so a code obtained for another browser's sign-in, or
-// injected without its login cookie, starts nothing (session fixation and login CSRF). The new session replaces the
-// family's live one, so overlapping sign-ins of one browser leave one session; a family that signed out meanwhile gets
-// none.
+// The callback: consumes the code of the web client (once, even on failure) and starts a session. The code must be
+// bound to the PKCE challenge of the login cookie's verifier, so a code obtained for another browser's sign-in, or one
+// injected without that cookie, starts nothing (session fixation and login CSRF); a state that already completed
+// starts nothing either. The new session replaces the family's live one and every session the browser presented, so
+// overlapping sign-ins of one browser leave one session; a family that signed out after the sign-in started gets none.
+// Every session replaced is deleted here, so it cannot authorize again, by cookie or as a bearer token.
 export const startWebSession = sessionOperation<StartSessionInput, { status: 'ok' } | { status: 'invalid_grant' }>(
 	(db, input) => {
 		const clientId = webClientId(db)
-		const attempt = takeState<Attempt>(db, `${LOGIN}${input.stateHash}`)
 		const grant = clientId === null ? null : consumeCode(db, { ...input, clientId })
-		if (
-			clientId === null ||
-			grant === null ||
-			attempt === null ||
-			attempt.expiresAt <= input.now ||
-			!constantTimeEqual(attempt.challenge, input.verifierChallenge)
-		) {
+		const usedName = `${USED}${input.stateHash}`
+		if (clientId === null || grant === null || readState(db, usedName) !== null) {
 			return { status: 'invalid_grant' }
 		}
-		const familyName = `${FAMILY}${attempt.family}`
-		const family = readState<Family>(db, familyName)
-		if (family?.ended === true) {
+		writeState(db, usedName, { expiresAt: input.now + LOGIN_ATTEMPT_MS })
+		const startedFamily = input.startedWith === null ? null : familyOf(db, input.startedWith)
+		const started = startedFamily === null ? null : readState<Family>(db, `${FAMILY}${startedFamily}`)
+		if (started?.ended === true) {
 			return { status: 'invalid_grant' }
 		}
-		for (const replaced of [family?.current ?? null, attempt.previous]) {
+		const presentedFamily = input.presented === null ? null : familyOf(db, input.presented)
+		const presented = presentedFamily === null ? null : readState<Family>(db, `${FAMILY}${presentedFamily}`)
+		const familyId = started !== null ? startedFamily : presented !== null && !presented.ended ? presentedFamily : null
+		const family = familyId ?? input.family
+		const current = (familyId === null ? null : readState<Family>(db, `${FAMILY}${familyId}`))?.current ?? null
+		for (const replaced of [current, input.startedWith, input.presented]) {
 			if (replaced !== null) {
 				endSession(db, clientId, replaced)
 			}
@@ -182,8 +155,8 @@ export const startWebSession = sessionOperation<StartSessionInput, { status: 'ok
 			new Date(input.now).toISOString(),
 			new Date(expiresAt).toISOString()
 		)
-		writeState(db, familyName, { current: input.tokenHash, ended: false, expiresAt } satisfies Family)
-		writeState(db, `${MEMBER}${input.tokenHash}`, { family: attempt.family, expiresAt })
+		writeState(db, `${FAMILY}${family}`, { current: input.tokenHash, ended: false, expiresAt } satisfies Family)
+		writeState(db, `${MEMBER}${input.tokenHash}`, { family, expiresAt })
 		return { status: 'ok' }
 	}
 )
@@ -223,9 +196,9 @@ function sweepPrefix(db: Db, prefix: string, now: number, limit: number): number
 	).length
 }
 
-// The cron: expired attempts, families and session memberships.
+// The cron: expired completed-attempt marks, families and session memberships.
 export function sweepWebState(db: Db, now: number, limit: number): number {
-	return [LOGIN, FAMILY, MEMBER].reduce((total, prefix) => total + sweepPrefix(db, prefix, now, limit), 0)
+	return [USED, FAMILY, MEMBER].reduce((total, prefix) => total + sweepPrefix(db, prefix, now, limit), 0)
 }
 
 // Operations of the web UI only: the credential must be a live session of the web client, so an API token (even one

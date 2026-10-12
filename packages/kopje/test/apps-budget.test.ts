@@ -74,7 +74,7 @@ describe('app registration budget (RES-6)', () => {
 		expect(await count(h2.store)).toBe(MAX_PENDING_APPS)
 	})
 
-	it('never evicts an app that holds an app token, and refuses instead', async () => {
+	it('evicts an app whose only token is an app token, which stops working (accepted risk)', async () => {
 		const h = await apiHarness()
 		const holder = await registerApp(h, { scopes: 'read' })
 		const token = await h.request(
@@ -87,18 +87,40 @@ describe('app registration budget (RES-6)', () => {
 			})
 		)
 		const { access_token } = await token.json<{ access_token: string }>()
-		await sql(h.store, 'UPDATE oauth_clients SET created_at = ?', new Date(NOW - 2 * UNUSED_APP_TTL_MS).toISOString())
-		await fill(h.store, MAX_PENDING_APPS - 1, NOW - EVICTION_GRACE_MS + 1000)
-		expect((await h.request('/api/v1/apps', json(APP))).status).toBe(429)
-		expect(await count(h.store, `id = '${holder.client_id}'`)).toBe(1)
 		expect((await h.request('/api/v1/apps/verify_credentials', bearer(access_token))).status).toBe(200)
+		await sql(
+			h.store,
+			'UPDATE oauth_clients SET created_at = ?',
+			new Date(NOW - EVICTION_GRACE_MS - 1000).toISOString()
+		)
+		await fill(h.store, MAX_PENDING_APPS - 1, NOW - EVICTION_GRACE_MS + 1000)
+		expect((await h.request('/api/v1/apps', json(APP))).status).toBe(200)
+		expect(await count(h.store, `id = '${holder.client_id}'`)).toBe(0)
+		expect((await h.request('/api/v1/apps/verify_credentials', bearer(access_token))).status).toBe(401)
+	})
+
+	it('cannot be filled for good with app tokens: registration succeeds again once they age', async () => {
+		const h = await apiHarness()
+		// An attacker fills the budget with apps that each hold an app token.
+		await fill(h.store, MAX_PENDING_APPS, NOW - 1000, 'flood')
+		await sql(
+			h.store,
+			"INSERT INTO oauth_tokens (token_hash, kind, client_id, scopes) SELECT 'h-' || id, 'access', id, 'read' FROM oauth_clients"
+		)
+		expect((await h.request('/api/v1/apps', json(APP))).status).toBe(429)
+		expect(await count(h.store)).toBe(MAX_PENDING_APPS)
+		// An hour later the oldest goes for each new registration; the bound holds.
+		h.now.mockReturnValue(NOW + EVICTION_GRACE_MS)
+		expect((await h.request('/api/v1/apps', json(APP))).status).toBe(200)
+		expect((await h.request('/api/v1/apps', json(APP))).status).toBe(200)
+		expect(await count(h.store)).toBe(MAX_PENDING_APPS)
 	})
 
 	it('does not count or remove apps a user has authorized, or the web client', async () => {
 		const h = await apiHarness()
 		await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
 		const used = await registerApp(h)
-		await login(h, { app: used })
+		const { token } = await login(h, { app: used })
 		await signIn(h)
 		await sql(h.store, 'UPDATE oauth_clients SET created_at = ?', new Date(NOW - 2 * UNUSED_APP_TTL_MS).toISOString())
 		await fill(h.store, MAX_PENDING_APPS - 1, NOW - EVICTION_GRACE_MS + 1000)
@@ -106,6 +128,7 @@ describe('app registration budget (RES-6)', () => {
 		expect((await h.request('/api/v1/apps', json(APP))).status).toBe(429)
 		expect(await count(h.store, `id = '${used.client_id}'`)).toBe(1)
 		expect(await count(h.store, "id = (SELECT value FROM instance_settings WHERE name = 'web_client_id')")).toBe(1)
+		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(token))).status).toBe(200)
 	})
 
 	it('sweeps unused apps after a day and expired codes and sessions from the cron', async () => {

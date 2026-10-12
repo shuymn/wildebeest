@@ -268,8 +268,8 @@ export class Store extends DurableObject<Env> {
 	}
 
 	// The web UI (B5): sessions of its own OAuth client, the user's authorizations, and the public pages.
-	beginWebLogin(callerBuild: string, input: OperationInput<typeof webSession.beginWebLogin>) {
-		return this.#kernel.execute(callerBuild, webSession.beginWebLogin, input)
+	ensureWebClient(callerBuild: string, input: OperationInput<typeof webSession.ensureWebClient>) {
+		return this.#kernel.execute(callerBuild, webSession.ensureWebClient, input)
 	}
 
 	startWebSession(callerBuild: string, input: OperationInput<typeof webSession.startWebSession>) {

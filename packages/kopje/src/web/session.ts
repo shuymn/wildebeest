@@ -69,22 +69,40 @@ export function returnPath(value: string | undefined | null): string {
 	return url.origin === base && isLocalPath(resolved) ? resolved : DEFAULT_RETURN_PATH
 }
 
-export type LoginState = { state: string; verifier: string; returnTo: string }
+// startedWith: the digest of the session the browser had when it started signing in (hex), so the callback can tell
+// whether the browser signed out meanwhile.
+export type LoginState = { state: string; verifier: string; startedWith: string | null; returnTo: string }
 
-// The login cookie's value. state and verifier are base64url (no '.'), so the path comes last and may contain dots.
+const NO_SESSION = '-'
+
+// The login cookie's value. state and verifier are base64url and the digest hex (no '.'), so the path comes last and
+// may contain dots.
 export function encodeLogin(login: LoginState): string {
-	return `${login.state}.${login.verifier}.${login.returnTo}`
+	return `${login.state}.${login.verifier}.${login.startedWith ?? NO_SESSION}.${login.returnTo}`
 }
 
 export function decodeLogin(value: string | undefined): LoginState | null {
 	if (value === undefined) {
 		return null
 	}
-	const [state, verifier, ...rest] = value.split('.')
-	if (state === undefined || state === '' || verifier === undefined || verifier === '' || rest.length === 0) {
+	const [state, verifier, startedWith, ...rest] = value.split('.')
+	if (
+		state === undefined ||
+		state === '' ||
+		verifier === undefined ||
+		verifier === '' ||
+		startedWith === undefined ||
+		!(startedWith === NO_SESSION || /^[0-9a-f]{64}$/.test(startedWith)) ||
+		rest.length === 0
+	) {
 		return null
 	}
-	return { state, verifier, returnTo: returnPath(rest.join('.')) }
+	return {
+		state,
+		verifier,
+		startedWith: startedWith === NO_SESSION ? null : startedWith,
+		returnTo: returnPath(rest.join('.')),
+	}
 }
 
 export function stateMatches(login: LoginState, sent: string | undefined): boolean {

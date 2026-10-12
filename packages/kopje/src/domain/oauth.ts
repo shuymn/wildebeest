@@ -59,9 +59,10 @@ export type RegisterAppInput = {
 // RES-6, the storage budget of anonymous app registration. A never-authorized app is one no user has a token or a code
 // for (app tokens from client_credentials do not count). At most MAX_PENDING_APPS are kept: when the budget is full,
 // unused apps (no token of any kind) older than UNUSED_APP_TTL_MS go first, as Mastodon's ApplicationsVacuum removes
-// them, then the oldest unused apps older than EVICTION_GRACE_MS (so a client in the middle of its first login keeps its
-// registration). An app holding any token, an app token included, is never removed: its credentials keep working.
-// If nothing can go, the registration is refused (429). The cron removes unused apps after
+// them, then the oldest never-authorized apps older than EVICTION_GRACE_MS (so a client in the middle of its first
+// login keeps its registration), app tokens and all: anyone can get an app token without a user, so app tokens cannot
+// protect an app, or the budget could be filled for good. An app a user authorized (a user token or code) is never
+// counted or removed. If nothing can go, the registration is refused (429). The cron removes unused apps after
 // UNUSED_APP_TTL_MS as well (sweepOAuth). The web UI's own client is never counted or removed.
 export const MAX_PENDING_APPS = 500
 export const UNUSED_APP_TTL_MS = 24 * 60 * 60 * 1000
@@ -104,7 +105,7 @@ export const registerApp = sessionOperation<RegisterAppInput, Registered>((db, i
 	if (excess > 0) {
 		deleteClients(
 			db,
-			`${pendingAppsSql(`${UNUSED} AND c.created_at < ?1`)} ORDER BY c.created_at, c.id LIMIT ?2`,
+			`${pendingAppsSql('AND c.created_at < ?1')} ORDER BY c.created_at, c.id LIMIT ?2`,
 			iso(input.now - EVICTION_GRACE_MS),
 			excess
 		)
