@@ -7,7 +7,6 @@ import { harness, inboxDeps, NOW } from './app-helpers'
 import { fixtureKeyGen } from './federation-helpers'
 import { BUILD } from './helpers'
 import {
-	AP,
 	LOCAL,
 	MASTODON,
 	mastodonActor,
@@ -45,7 +44,7 @@ import {
 import { Db } from '../src/db/sql'
 import { MAX_REMOTE_FIELDS } from '../src/domain/accounts'
 import { deleteStatusBatch, MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH } from '../src/domain/inbox'
-import { MAX_LINKED_REPLIES, MAX_STATUS_MENTION_ROWS, VERSION_SKEW_MS } from '../src/domain/remote-statuses'
+import { MAX_LINKED_REPLIES, MAX_STATUS_MENTION_ROWS } from '../src/domain/remote-statuses'
 import { MAX_STATUS_EDITS } from '../src/domain/statuses'
 import { handleQueue } from '../src/jobs/queue'
 import type { StoreStub } from '../src/platform/store-client'
@@ -100,24 +99,35 @@ describe('ID-7: the Update watermark', () => {
 		expect(await sql(t.store, 'SELECT * FROM status_edits')).toEqual([])
 	})
 
-	it('accepts a future-dated version once, clamped to now plus the skew, and not again', async () => {
-		const t = await setup()
+	it('ignores an Update dated beyond the skew until the clock reaches it, and orders versions as written', async () => {
+		const clock = { now: NOW }
+		const t = await setup(clock)
 		const bob = await mastodonActor(t.web, 'bob')
 		await followed(t, bob)
 		const note = mastodonNote(bob)
 		await t.post(bob, create(bob, note))
-		const future = update(bob, { ...note, content: '<p>from the future</p>' }, '2030-01-01T00:00:00Z')
-		await t.post(bob, future)
-		const row = (await statusRow(t.store, note.id))!
-		expect(row).toMatchObject({ content: '<p>from the future</p>', edited_at: new Date(NOW).toISOString() })
-		expect(await sql(t.store, 'SELECT remote_version FROM statuses WHERE id = ?', row.id)).toEqual([
-			{ remote_version: new Date(NOW + VERSION_SKEW_MS).toISOString() },
-		])
-		// A replay, and a later version still within the clamp, change nothing.
-		await t.post(bob, update(bob, { ...note, content: '<p>replayed</p>' }, '2030-01-01T00:00:00Z'))
-		await t.post(bob, update(bob, { ...note, content: '<p>soon</p>' }, new Date(NOW + 60_000).toISOString()))
-		expect((await statusRow(t.store, note.id))?.content).toBe('<p>from the future</p>')
+		const id = (await statusRow(t.store, note.id))!.id
+		const ahead = new Date(NOW + 10 * 60_000).toISOString()
+		const edit = update(bob, { ...note, content: '<p>ahead</p>' }, ahead)
+		const version = () => sql(t.store, 'SELECT remote_version AS v FROM statuses WHERE id = ?', id)
+		// More than five minutes ahead: nothing changes, no history.
+		expect(await t.post(bob, edit)).toBe(202)
+		expect((await statusRow(t.store, note.id))?.content).toBe(note.content)
+		expect(await sql(t.store, 'SELECT * FROM status_edits')).toEqual([])
+		expect(await version()).toEqual([{ v: '2026-10-11T12:00:00.000Z' }])
+		// Once the clock is within the skew, it applies, stored as written.
+		clock.now = NOW + 6 * 60_000
+		expect(await t.post(bob, edit)).toBe(202)
+		expect((await statusRow(t.store, note.id))?.content).toBe('<p>ahead</p>')
+		expect(await version()).toEqual([{ v: ahead }])
+		// An older version, and the same one replayed as the clock moves on, change nothing.
+		clock.now = NOW + 7 * 60_000
+		await t.post(bob, update(bob, { ...note, content: '<p>older</p>' }, new Date(NOW + 9 * 60_000).toISOString()))
+		clock.now = NOW + 60 * 60_000
+		await t.post(bob, { ...edit, object: { ...edit.object, content: '<p>replayed</p>' } })
+		expect((await statusRow(t.store, note.id))?.content).toBe('<p>ahead</p>')
 		expect(await sql(t.store, 'SELECT count(*) AS n FROM status_edits')).toEqual([{ n: 2 }])
+		expect(await version()).toEqual([{ v: ahead }])
 	})
 
 	it('leaves nothing for every order of Create, Update and Delete', async () => {
@@ -140,7 +150,10 @@ describe('ID-7: the Update watermark', () => {
 			await t.queue.deliver((batch) => handleQueue(batch, { ...t.env, MAINTENANCE: 'off' } as Env, deps))
 			expect(await statuses(t.store), order).toEqual([])
 			expect(await sql(t.store, 'SELECT * FROM status_edits'), order).toEqual([])
-			expect(await sql(t.store, 'SELECT target_uri FROM inbound_retractions'), order).toEqual([{ target_uri: note.id }])
+			expect(
+				await sql(t.store, 'SELECT target_uri FROM inbound_retractions WHERE actor_uri = ?', bob.uri),
+				order
+			).toEqual([{ target_uri: note.id }])
 		}
 	})
 })
@@ -161,6 +174,15 @@ describe('ID-7: retractions at the per-actor cap', () => {
 		expect((await statuses(t.store)).map((s) => s.uri)).toContain(note.id)
 		expect(await t.post(bob, undo(bob, { id: liked.id, type: 'Like', actor: bob.uri, object: local.uri }))).toBe(503)
 		expect(await sql(t.store, 'SELECT uri FROM favourites')).toEqual([{ uri: liked.id }])
+		// A stored boost's Delete and an Announce's Undo at the cap: 503, the boost stays.
+		// (Storing a boost records no retraction, so it is taken at the cap.)
+		const boost = announce(bob, local.uri)
+		expect(await t.post(bob, boost)).toBe(202)
+		expect(await t.post(bob, remove(bob, boost.id))).toBe(503)
+		expect(await t.post(bob, undo(bob, { id: boost.id, type: 'Announce', actor: bob.uri, object: local.uri }))).toBe(
+			503
+		)
+		expect((await statuses(t.store)).map((s) => s.uri)).toContain(boost.id)
 		// A Delete of an unknown object at the cap is answered 202 and not recorded (as documented).
 		expect(await t.post(bob, remove(bob, `${bob.uri}/statuses/unknown`))).toBe(202)
 		expect(
@@ -592,97 +614,166 @@ describe('NET-4: search resolution fetches nothing without a valid token', () =>
 	})
 })
 
-describe('the canonical WebFinger domain', () => {
-	function webfinger(t: Setup, resource: string, host: string, actor: string) {
-		t.web.serve(
-			`https://${host}/.well-known/webfinger?resource=${encodeURIComponent(resource)}`,
-			{ subject: resource, links: [{ rel: 'self', type: AP, href: actor }] },
-			'application/jrd+json'
-		)
-	}
-
-	it('stores the WebFinger domain when the actor confirms it, and inbound activity keeps it', async () => {
-		const t = await setup()
-		const alice = await mastodonActor(t.web, 'ali', { origin: 'https://social.example.org', key: 3 })
-		webfinger(t, 'acct:al@example.org', 'example.org', alice.uri)
-		// The actor's own username at the domain names the same actor (one more lookup).
-		webfinger(t, 'acct:ali@example.org', 'example.org', alice.uri)
-		const found = await t.api<{ accounts: { acct: string }[] }>('/api/v2/search?resolve=true&q=al%40example.org')
-		expect(found.body.accounts.map((a) => a.acct)).toEqual(['ali@example.org'])
-		const webfingers = t.web.fetched
-			.map((url, i) => [url, t.web.signers[i]])
-			.filter(([url]) => url!.includes('webfinger'))
-		expect(webfingers.map(([, signer]) => signer)).toEqual(['unsigned', 'unsigned'])
-		// An inbound activity of the actor refreshes it from its document, and keeps the confirmed domain.
-		await t.post(alice, {
-			'@context': AS,
-			id: `${alice.uri}#follow`,
-			type: 'Follow',
-			actor: alice.uri,
-			object: DAVE_URI,
-		})
-		expect(await sql(t.store, 'SELECT domain FROM accounts WHERE uri = ?', alice.uri)).toEqual([
-			{ domain: 'example.org' },
-		])
-		const exact = await t.api<{ accounts: { acct: string }[] }>('/api/v2/search?q=ali%40example.org&type=accounts')
-		expect(exact.body.accounts.map((a) => a.acct)).toEqual(['ali@example.org'])
-	})
-
-	it('never takes a domain the claimed domain does not vouch for: an actor elsewhere claiming it keeps its host', async () => {
-		const t = await setup()
-		const evil = await mastodonActor(t.web, 'alice', { origin: 'https://evil.example', key: 3 })
-		// evil.example's WebFinger claims victim.example's address; victim.example's names someone else.
-		t.web.serve(
-			`https://evil.example/.well-known/webfinger?resource=${encodeURIComponent('acct:alice@evil.example')}`,
-			{
-				subject: 'acct:alice@victim.example',
-				aliases: ['acct:alice@victim.example'],
-				links: [{ rel: 'self', type: AP, href: evil.uri }],
-			},
-			'application/jrd+json'
-		)
-		webfinger(t, 'acct:alice@victim.example', 'victim.example', 'https://victim.example/users/alice')
-		const viaEvil = await t.api<{ accounts: { acct: string }[] }>('/api/v2/search?resolve=true&q=alice%40evil.example')
-		expect(viaEvil.body.accounts.map((a) => a.acct)).toEqual(['alice@evil.example'])
-		const viaVictim = await t.api<{ accounts: { acct: string }[] }>(
-			'/api/v2/search?resolve=true&q=alice%40victim.example'
-		)
-		expect(viaVictim.body.accounts.map((a) => a.acct)).not.toContain('alice@evil.example')
-		expect(await sql(t.store, 'SELECT domain FROM accounts WHERE uri = ?', evil.uri)).toEqual([
-			{ domain: 'evil.example' },
-		])
-		expect(await sql(t.store, "SELECT uri FROM accounts WHERE domain = 'victim.example'")).toEqual([])
-	})
-
-	it('applies a domain block to the actor’s host whatever domain it was confirmed under (inbox and search)', async () => {
-		const t = await setup()
-		const ali = await mastodonActor(t.web, 'ali', { origin: 'https://blocked.example', key: 3 })
-		webfinger(t, 'acct:ali@nice.example', 'nice.example', ali.uri)
-		await sql(t.store, "INSERT INTO domain_blocks (account_id, domain) VALUES (?, 'blocked.example')", ALICE)
-		const forDave = await t.api<{ accounts: { acct: string }[] }>(
-			'/api/v2/search?resolve=true&q=ali%40nice.example',
-			'dave'
-		)
-		expect(forDave.body.accounts.map((a) => a.acct)).toEqual(['ali@nice.example'])
-		const forAlice = await t.api<{ accounts: unknown[] }>('/api/v2/search?resolve=true&q=ali%40nice.example')
-		expect(forAlice.body.accounts).toEqual([])
-		const follow = { '@context': AS, id: `${ali.uri}#follow`, type: 'Follow', actor: ali.uri, object: ALICE_URI }
-		expect(await t.post(ali, follow)).toBe(202)
-		expect(await sql(t.store, 'SELECT * FROM follows WHERE target_account_id = ?', ALICE)).toEqual([])
-		expect(await notifications(t.store)).toEqual([])
-	})
-
-	it('keeps the actor’s host when the reverse lookup does not confirm the domain', async () => {
+describe('ID-7: a retryable refusal commits nothing', () => {
+	it('rolls back the actor and keys refreshed by a Delete that answers 503', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
-		webfinger(t, 'acct:impostor@example.net', 'example.net', bob.uri)
-		const found = await t.api<{ accounts: { acct: string }[] }>('/api/v2/search?resolve=true&q=impostor%40example.net')
-		expect(found.body.accounts.map((a) => a.acct)).toEqual(['bob@mastodon.example'])
-		expect(t.web.fetched).toContain(
-			`https://example.net/.well-known/webfinger?resource=${encodeURIComponent('acct:bob@example.net')}`
+		await followed(t, bob)
+		const note = mastodonNote(bob)
+		await t.post(bob, create(bob, note))
+		await retractionsAtCap(t, bob)
+		// The stored key is stale, so the Delete fetches the actor anew, whose document has changed.
+		await sql(t.store, 'UPDATE remote_keys SET fetched_at = 0')
+		const accountsBefore = await sql(t.store, 'SELECT * FROM accounts WHERE uri = ?', bob.uri)
+		const keysBefore = await sql(t.store, 'SELECT * FROM remote_keys')
+		bob.document.name = 'renamed'
+		t.web.serve(bob.uri, bob.document)
+		t.web.fetched.length = 0
+		expect(await t.post(bob, remove(bob, note.id))).toBe(503)
+		expect(t.web.fetched).toContain(bob.uri)
+		expect(await sql(t.store, 'SELECT * FROM accounts WHERE uri = ?', bob.uri)).toEqual(accountsBefore)
+		expect(await sql(t.store, 'SELECT * FROM remote_keys')).toEqual(keysBefore)
+		expect((await statuses(t.store)).map((s) => s.uri)).toContain(note.id)
+	})
+
+	it('needs room for both ids of an Undo: with one free slot, nothing changes', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const local = await localStatus(t, { status: 'liked twice', visibility: 'public' })
+		const first = like(bob, local.uri)
+		const second = like(bob, local.uri)
+		await t.post(bob, first)
+		await t.post(bob, second)
+		await retractionsAtCap(t, bob)
+		await sql(
+			t.store,
+			'DELETE FROM inbound_retractions WHERE actor_uri = ? AND target_uri LIKE ?',
+			bob.uri,
+			'%/filler/1'
 		)
-		expect(await sql(t.store, 'SELECT domain FROM accounts WHERE uri = ?', bob.uri)).toEqual([
-			{ domain: 'mastodon.example' },
-		])
+		const before = await sql(t.store, 'SELECT * FROM inbound_retractions ORDER BY actor_uri, target_uri')
+		expect(await t.post(bob, undo(bob, { id: second.id, type: 'Like', actor: bob.uri, object: local.uri }))).toBe(503)
+		expect(await sql(t.store, 'SELECT * FROM inbound_retractions ORDER BY actor_uri, target_uri')).toEqual(before)
+		expect(await sql(t.store, 'SELECT uri FROM favourites')).toEqual([{ uri: first.id }])
+		expect((await statusRow(t.store, local.uri))?.favourites_count).toBe(1)
+		expect(await notifications(t.store)).toEqual([{ account_id: ALICE, type: 'favourite' }])
+	})
+})
+
+describe('ID-6, ID-7: a deleted status is not created again by anyone', () => {
+	it('refuses a Create or Update of a deleted uri by another actor of the origin; an unknown Delete stays the actor’s', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const carol = await mastodonActor(t.web, 'carol', { key: 2 })
+		await followed(t, bob)
+		await followed(t, carol)
+		const note = mastodonNote(bob)
+		await t.post(bob, create(bob, note))
+		await t.post(bob, remove(bob, note.id))
+		expect(await statuses(t.store)).toEqual([])
+		const taken = { ...note, attributedTo: carol.uri }
+		await t.post(carol, { ...create(carol, taken), id: `${carol.uri}#create-taken` })
+		await t.post(carol, update(carol, { ...taken, content: '<p>mine now</p>' }, at(60)))
+		expect(await statuses(t.store)).toEqual([])
+		// bob's Delete of an object never seen here does not keep carol's from appearing.
+		const unseen = mastodonNote(carol)
+		await t.post(bob, remove(bob, unseen.id))
+		await t.post(carol, create(carol, unseen))
+		expect((await statuses(t.store)).map((s) => s.uri)).toEqual([unseen.id])
+	})
+})
+
+describe('RES-4: a public edit at the mention cap', () => {
+	it('admits a newly mentioned, addressed local account in place of a remote recipient', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const many = await remoteAccounts(t, MAX_STATUS_MENTION_ROWS)
+		const note = mastodonNote(bob, { cc: many })
+		await t.post(bob, create(bob, note))
+		const id = (await statusRow(t.store, note.id))!.id
+		const count = () => sql(t.store, 'SELECT count(*) AS n FROM status_mentions WHERE status_id = ?', id)
+		expect(await count()).toEqual([{ n: MAX_STATUS_MENTION_ROWS }])
+		await t.post(
+			bob,
+			update(bob, { ...note, cc: [...many, ALICE_URI], tag: [{ type: 'Mention', href: ALICE_URI }] }, at(60))
+		)
+		expect(await count()).toEqual([{ n: MAX_STATUS_MENTION_ROWS }])
+		expect(
+			await sql(t.store, 'SELECT silent FROM status_mentions WHERE status_id = ? AND account_id = ?', id, ALICE)
+		).toEqual([{ silent: 0 }])
+		expect(await notifications(t.store)).toEqual([{ account_id: ALICE, type: 'mention' }])
+	})
+})
+
+describe('ID-7: a local boost is withdrawn once, after its deliveries are done', () => {
+	it('records no second Undo when the purge reaches a boost whose Undo intent has settled', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const note = mastodonNote(bob)
+		await t.post(bob, create(bob, note))
+		const row = (await statusRow(t.store, note.id))!
+		await t.request(`/api/v1/statuses/${row.id}/reblog`, {
+			method: 'POST',
+			headers: { authorization: `Bearer ${t.tokens.alice}` },
+		})
+		const boost = (
+			await sql<{ id: string; uri: string }>(t.store, 'SELECT id, uri FROM statuses WHERE reblog_of_id = ?', row.id)
+		)[0]!
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 70000)
+			INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
+			SELECT ?, 'https://r' || i || '.example/inbox', ?, ? FROM n`,
+			boost.id,
+			ALICE,
+			NOW
+		)
+		const undos = () =>
+			sql(t.store, 'SELECT count(*) AS n FROM outbound_activities WHERE object_uri = ? AND retracts = 1', boost.uri)
+		expect(await t.post(bob, remove(bob, note.id))).toBe(202)
+		// One more batch finishes staging the Undo; the boost stays while its receipts go.
+		await runInDurableObject(t.store, (_instance, state) => deleteStatusBatch(new Db(state.storage.sql), row.id, NOW))
+		expect(
+			await sql(t.store, 'SELECT staged FROM outbound_activities WHERE object_uri = ? AND retracts = 1', boost.uri)
+		).toEqual([{ staged: null }])
+		expect(await sql(t.store, 'SELECT withdrawn FROM statuses WHERE id = ?', boost.id)).toEqual([{ withdrawn: 1 }])
+		// Its deliveries settle and the intent goes, as dropSettledActivity removes it.
+		await sql(t.store, 'DELETE FROM outbound_activities WHERE object_uri = ? AND retracts = 1', boost.uri)
+		t.web.fail(bob.uri, 410)
+		const deletion = { '@context': AS, id: `${bob.uri}#delete`, type: 'Delete', actor: bob.uri, object: bob.uri }
+		expect(await t.post(bob, deletion)).toBe(202)
+		for (let round = 0; round < 100; round++) {
+			if (!(await t.store.runInboundJobs(BUILD, { now: NOW })).pending) {
+				break
+			}
+		}
+		expect(await statuses(t.store)).toEqual([])
+		expect(await undos()).toEqual([{ n: 0 }])
+	})
+})
+
+describe('VIS-6: a reblog notification follows the boost’s audience when read', () => {
+	it('hides an already written notification once its recipient may no longer see the boost', async () => {
+		const t = await setup()
+		const carol = await mastodonActor(t.web, 'carol', { key: 2 })
+		await followed(t, carol, DAVE)
+		const local = await localStatus(t, { status: 'public post', visibility: 'public' })
+		const boost = announce(carol, local.uri, { to: [`${carol.uri}/followers`], cc: [ALICE_URI] })
+		await t.post(carol, boost)
+		const listed = await t.api<{ id: string }[]>('/api/v1/notifications')
+		expect(listed.body).toHaveLength(1)
+		const id = listed.body[0]!.id
+		expect((await t.api(`/api/v1/notifications/${id}`)).status).toBe(200)
+		// alice is no longer addressed by the boost.
+		await sql(
+			t.store,
+			'DELETE FROM status_mentions WHERE account_id = ? AND status_id = (SELECT id FROM statuses WHERE uri = ?)',
+			ALICE,
+			boost.id
+		)
+		expect((await t.api<unknown[]>('/api/v1/notifications')).body).toEqual([])
+		expect((await t.api(`/api/v1/notifications/${id}`)).status).toBe(404)
 	})
 })

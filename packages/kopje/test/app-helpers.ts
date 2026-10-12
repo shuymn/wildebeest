@@ -35,12 +35,13 @@ export function harness(
 	store: StoreStub,
 	overrides: Record<string, unknown> = {},
 	build = BUILD,
-	federation: AppDeps['federation'] = offline
+	federation: AppDeps['federation'] = offline,
+	now: () => number = () => NOW
 ) {
 	const queue = new QueueSim()
 	const send = queue.send
 	const testEnv = { ...env, QUEUE: queue.queue, ...overrides } as unknown as Env
-	const app = createApp({ build: () => build, now: () => NOW, store: () => store, federation })
+	const app = createApp({ build: () => build, now, store: () => store, federation })
 	const request = async (path: string, init?: RequestInit) => {
 		const ctx = createExecutionContext()
 		const response = await app.fetch(new Request(`https://kopje.test${path}`, init), testEnv, ctx)

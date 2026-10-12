@@ -1,7 +1,7 @@
 import { expect } from 'vitest'
 
 import { sql } from './api-helpers'
-import { harness } from './app-helpers'
+import { harness, NOW } from './app-helpers'
 import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
 import { completeSetup, migratedStore } from './helpers'
 import { LOCAL, MISSKEY, RemoteWeb, type SignOptions, signedInit, type TestActor } from './inbox-helpers'
@@ -35,17 +35,18 @@ export async function token(store: StoreStub, accountId: string): Promise<string
 	return value
 }
 
-export async function setup() {
+// clock: the app's time (NOW unless a test moves it); requests are signed at it.
+export async function setup(clock: { now: number } = { now: NOW }) {
 	const store = await migratedStore()
 	await completeSetup(store)
 	await seedLocalAccount(store, 'kopje.test', { id: ALICE, username: 'alice', key: LEGACY_EMPTY_KEK })
 	await seedLocalAccount(store, 'kopje.test', { id: DAVE, username: 'dave', key: LEGACY_EMPTY_KEK })
 	const web = new RemoteWeb()
-	const h = harness(store, {}, undefined, { keygen: fixtureKeyGen, loader: web.loader })
+	const h = harness(store, {}, undefined, { keygen: fixtureKeyGen, loader: web.loader }, () => clock.now)
 	const tokens = { alice: await token(store, ALICE), dave: await token(store, DAVE) }
 	const post = async (actor: TestActor, activity: unknown, options: SignOptions & { path?: string } = {}) => {
 		const path = options.path ?? '/inbox'
-		return (await h.request(path, await signedInit(actor, path, activity, options))).status
+		return (await h.request(path, await signedInit(actor, path, activity, { at: clock.now, ...options }))).status
 	}
 	const api = async <T = unknown>(path: string, as: 'alice' | 'dave' | null = 'alice') => {
 		const response = await h.request(path, as === null ? {} : { headers: { authorization: `Bearer ${tokens[as]}` } })
