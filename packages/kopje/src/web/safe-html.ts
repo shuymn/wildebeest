@@ -1,4 +1,4 @@
-import { sanitizeRemoteHtml } from '../security/html'
+import { remoteHtmlText, sanitizeRemoteHtml } from '../security/html'
 
 // HTML-1 at the sink: the only HTML the web pages emit unescaped is a SafeHtml, and the only way to make one is to pass
 // the stored HTML (bios, status content, field values) through the sanitizer again here. Everything else in a page is
@@ -21,17 +21,9 @@ export function sanitizedField(html: string): SafeHtml {
 	} as SafeHtml
 }
 
-const ENTITIES: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'" }
-
-// Plain text of stored HTML, for meta descriptions (which hono/jsx escapes): paragraphs and line breaks become spaces,
-// tags go, the entities the presenters write are decoded. Bounded for a description.
+// Plain text of stored HTML, for meta descriptions (which hono/jsx escapes): the sanitizer drops the tags and keeps
+// paragraph and line breaks as spaces (remoteHtmlText). Bounded for a description.
 export function plainText(html: string, max = 200): string {
-	const text = html
-		.slice(0, 50_000)
-		.replace(/<br\s*\/?>|<\/p>/gi, ' ')
-		.replace(/<[^>]*>/g, '')
-		.replace(/&(?:amp|lt|gt|quot|#39);/g, (entity) => ENTITIES[entity] ?? entity)
-		.replace(/\s+/g, ' ')
-		.trim()
+	const text = remoteHtmlText(sanitizeRemoteHtml(html)).replace(/\s+/g, ' ').trim()
 	return [...text].length > max ? `${[...text].slice(0, max - 1).join('')}…` : text
 }
