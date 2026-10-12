@@ -127,7 +127,11 @@ against their own instance. TLS is assumed between all parties.
   whose retraction cannot be recorded (the per-actor cap) is not made: a Block, and a local reject of a request (which
   records the remote Follow as retracted and answers 503 if it cannot), change nothing then. Misskey's pair-shaped
   Follow id (`/follows/<a>/<b>`) is never recorded as retracted, whether the Undo or the stored edge carries it, so the
-  same pair can undo a later generation; a `Reject` with a pair id matches our follow whatever its uri. The limit is
+  same pair can undo a later generation; a `Reject` with a pair id matches our follow whatever its uri. Every Follow retraction (Undo,
+  Block, a refused or superseded Follow, a local reject) goes through one helper (`retractFollow`) that never records a
+  pair id, so on the reject path too a redelivered pair Follow asks again. A Block that takes a new id records its old
+  id as retracted first (and changes nothing if it cannot), so a redelivered old Block does not come back after an
+  Undo of the new one. The limit is
   that a redelivered pair Undo or Reject after a new Follow cannot be told from a new one. `test/inbox.test.ts` ("ID-7: replay changes nothing twice", "OPS-1"), `test/inbox-regressions.test.ts`.
 - **ID-8: only ActivityStreams media types become objects.** A fetched document is used as an actor, key or object only
   if served as `application/activity+json` or `application/ld+json` with the ActivityStreams profile, as Mastodon
@@ -515,10 +519,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/federation/loader.ts`; cached contexts cost nothing; icons are taken only when embedded). Running out of the budget is retryable: the
   request answers 503, records nothing and its spooled copy is retried; a document refused for itself stays a permanent
   refusal. A key an actor lists by reference is taken from the verification that just resolved it, not fetched again. A Move moves 100
-  followers per batch and carries at most 100 blocks and mutes; a deleted actor's purge writes at most 500 rows per batch in all: its
-  relationships first, then local boosts of its statuses (each withdrawn once through B2's Undo of the boost, its
-  booster's count recounted), then its statuses, each deleted only after its children (edits, media, mentions, tags,
-  favourites, bookmarks, notifications, receipts, boosts, reply links), so no delete cascades. Local media is detached
+  followers per batch and carries at most 100 blocks and mutes; a deleted actor's purge writes at most 500 rows per batch in all, every
+  write counted (SQLite's `total_changes()`): deletions, counter recounts (`followers_count`, `following_count`,
+  `statuses_count`, status counters) and the Undo intent of a withdrawn boost. Its relationships go first; then local
+  boosts of its statuses, each withdrawn once: the Undo intent is recorded deferred, holding the boost's receipts as its
+  targets, without deleting them or expanding deliveries (B2's delivery rounds expand it 100 targets at a time), and the
+  purge deletes the receipts a batch at a time before the boost and its booster's recount; then its statuses, each
+  deleted only after its children (edits, media, mentions, tags, favourites, bookmarks, notifications, receipts,
+  boosts, reply links), so no delete cascades. A user's own unboost keeps B2's path unchanged. Local media is detached
   for B4b's media sweep, never deleted from R2 here. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
   Queue message nor maintenance stops them, and waiting out maintenance spends no retry. `test/inbox.test.ts`,
   `test/inbox-regressions.test.ts`.
