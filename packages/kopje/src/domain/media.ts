@@ -1,3 +1,4 @@
+import { actorSnapshot, recordActorUpdate } from './actor-update'
 import { userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
 import { writeOperation } from './operation'
@@ -303,6 +304,7 @@ export const setProfileImage = userWriteOperation<{ id: string; kind: ProfileIma
 		if (upload === undefined || upload.url === '') {
 			return false
 		}
+		const before = actorSnapshot(db, accountId)
 		const column = kind === 'avatar' ? 'avatar_url' : 'header_url'
 		const previous = db.first<{ url: string | null }>(`SELECT ${column} AS url FROM accounts WHERE id = ?`, accountId)
 		db.run(`UPDATE accounts SET ${column} = ? WHERE id = ?`, upload.url, accountId)
@@ -317,6 +319,7 @@ export const setProfileImage = userWriteOperation<{ id: string; kind: ProfileIma
 				id
 			)
 		}
+		recordActorUpdate(db, accountId, before, now)
 		return true
 	}
 )

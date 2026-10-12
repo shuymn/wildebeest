@@ -109,7 +109,9 @@ export const updateCredentials: ApiHandler = async (c, deps) => {
 	}
 	const credential = userCredential(c, deps)
 	const account = authorized(
-		await storeCall(c, deps, (s, b) => s.updateCredentials(b, { credential, changes, present: present(c) }))
+		await storeCall(c, deps, (s, b) =>
+			s.updateCredentials(b, { credential, changes, present: present(c), now: deps.now() })
+		)
 	)
 	return account === null ? NOT_FOUND() : c.json(account)
 }

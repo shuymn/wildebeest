@@ -320,10 +320,7 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, accounts.verifyCredentials, input)
 	}
 
-	updateCredentials(
-		callerBuild: string,
-		input: { credential: UserCredential; changes: accounts.CredentialChanges; present: accounts.Present }
-	) {
+	updateCredentials(callerBuild: string, input: OperationInput<typeof accounts.updateCredentials>) {
 		return this.#kernel.execute(callerBuild, accounts.updateCredentials, input)
 	}
 

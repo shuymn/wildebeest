@@ -369,6 +369,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 				credential,
 				changes: { displayName, note, fields, locked, discoverable, privacy },
 				present: present(c),
+				now: deps.now(),
 			})
 		)
 		return settled(c, result, () => redirect('/settings?notice=saved'))

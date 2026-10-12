@@ -1,4 +1,5 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
+import { actorSnapshot, recordActorUpdate } from './actor-update'
 import { userReadOperation, userWriteOperation } from './auth'
 import { retractFollow } from './inbox'
 import { notify } from './notifications'
@@ -302,9 +303,9 @@ export type CredentialChanges = {
 // Lengths and values are validated by the caller. display_name and the note are plain text: display_name is stored
 // as is (JSON consumers escape it), the note is stored as escaped paragraphs.
 export const updateCredentials = userWriteOperation<
-	{ changes: CredentialChanges; present: Present },
+	{ changes: CredentialChanges; present: Present; now: number },
 	CredentialAccount | null
->((db, { changes, present }, { accountId }) => {
+>((db, { changes, present, now }, { accountId }) => {
 	const current = db.first<{ username: string; display_name: string; actor_type: string }>(
 		'SELECT a.username, a.display_name, a.actor_type FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?',
 		accountId
@@ -312,6 +313,7 @@ export const updateCredentials = userWriteOperation<
 	if (current === undefined) {
 		return null
 	}
+	const before = actorSnapshot(db, accountId)
 	const displayName = changes.displayName ?? current.display_name
 	const actorType =
 		changes.bot === undefined || !['Person', 'Service'].includes(current.actor_type)
@@ -344,6 +346,8 @@ export const updateCredentials = userWriteOperation<
 		changes.fields === undefined ? null : JSON.stringify(changes.fields.slice(0, MAX_FIELDS)),
 		accountId
 	)
+	// Other servers learn of the change (Update(Person)), only if the published document changed.
+	recordActorUpdate(db, accountId, before, now)
 	return credentialAccount(db, accountId, present)
 })
 

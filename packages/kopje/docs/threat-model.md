@@ -191,6 +191,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   to inboxes whose Create is still leased", "retires the receipts of local boosts"), `test/delivery-verify.test.ts`
   ("boosts that cascade with their original", "a destination that never received the Create", "retraction targets in
   every state"). Peer limitation: Misskey ignores `Update` of a Note, so edits do not reach Misskey users.
+  A profile change (API or settings page, images and fields included) records an `Update` of the actor to Public for
+  the followers, only when the published document changed; it replaces the earlier actor Updates still waiting, and
+  is never turned into a Create. A suspended actor sends none. _Implemented on branch `kopje/web-ui`:_
+  `src/domain/actor-update.ts`, `enqueueActivity` in `src/domain/deliveries.ts`; `test/actor-update.test.ts`.
 - **VIS-4: the object endpoint serves public and unlisted local statuses only.** `/ap/o/:uuid` and status documents
   answer for local `public` and `unlisted` statuses, as Mastodon does for an unauthenticated fetch. `private`, `direct`,
   `limited`, remote objects and statuses of suspended accounts answer 404, whether or not the request is signed.
