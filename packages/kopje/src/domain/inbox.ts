@@ -1,4 +1,5 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
+import { stageRetraction } from './deliveries'
 import { insertWithFreshId, remoteId } from './ids'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
@@ -628,9 +629,19 @@ const undo: Handler<'Undo'> = (db, actor, activity, { now }) => {
 			)
 		}
 	}
-	// Everything this Undo records as retracted must fit, or nothing changes (ID-7).
-	// Pair ids name every generation, so they are never recorded, whichever side carries them.
-	const retracted = [ref.id, ...(edge?.uri == null ? [] : [edge.uri])].filter((uri) => !isMisskeyPairId(uri))
+	// Everything this Undo records as retracted must fit, or nothing changes (ID-7). The undone activity's type is
+	// decided first: a Block (typed, or untyped and matching a stored block) is always recorded, whatever its id's
+	// shape. Only a Follow's pair id names every generation, so it is never recorded, whichever side carries it.
+	const undoesBlock =
+		ref.type === 'Block' ||
+		(ref.type === null &&
+			edge === undefined &&
+			db.first('SELECT 1 AS x FROM blocks WHERE account_id = ? AND uri = ?', actor.id, ref.id) !== undefined)
+	const undoesFollow = !undoesBlock && (ref.type === null || ref.type === 'Follow')
+	const retracted = [
+		...(undoesFollow && isMisskeyPairId(ref.id) ? [] : [ref.id]),
+		...(edge?.uri == null || isMisskeyPairId(edge.uri) ? [] : [edge.uri]),
+	]
 	if (!canRetract(db, actor.uri, retracted, now)) {
 		return ignored('retraction-cap')
 	}
@@ -925,11 +936,13 @@ const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
 
 // One batch of a deleted actor's purge (RES-6). Every row the batch writes counts against PURGE_BATCH, measured with
 // SQLite's total_changes() so that nothing escapes the count: deletions, counter recounts, and the Undo intent of a
-// local boost. Each step is limited beforehand to what is left, so a batch never writes more than PURGE_BATCH rows:
+// local boost and its target chunks. Each step is limited beforehand to what is left, so a batch never writes more
+// than PURGE_BATCH rows:
 //   1. the account's relationships, notifications, mentions, favourites and keys, with the counters they counted;
-//   2. local boosts of its statuses: each boost's Undo is recorded once (withdrawLocalBoost, deferred: the intent
-//      carries its targets and B2's delivery rounds expand it in their own bounded steps; the job's cursor keeps the
-//      boost being withdrawn), then the boost is deleted like any status and its booster's count recounted;
+//   2. local boosts of its statuses: each boost's Undo is recorded once (withdrawLocalBoost; the job's cursor keeps
+//      the boost being withdrawn), its targets are written a chunk per row over as many batches as they need
+//      (stageRetraction), and B2's delivery rounds expand them in their own bounded steps; then the boost is deleted
+//      like any status, its receipts included, and its booster's count recounted;
 //   3. remote boosts of its statuses, then its own statuses.
 // A status is deleted only once its children (edits, media, mentions, tags, favourites, bookmarks, notifications,
 // receipts, boosts and the reply links to it) are gone, so deleting it cascades nothing. Local media is detached for
@@ -1096,18 +1109,15 @@ function withdrawLocalBoosts(db: Db, uri: string, id: string, budget: Budget, no
 			return
 		}
 		if (cursor !== boost.id) {
-			// The intent, the earlier intents about the boost it supersedes, and the cursor.
-			const superseded =
-				db.first<{ n: number }>(
-					'SELECT count(*) AS n FROM outbound_activities WHERE account_id = ? AND object_uri = ?',
-					boost.booster,
-					boost.uri
-				)?.n ?? 0
-			if (budget.left() < superseded + 2) {
+			// The Undo intent and the earlier intents about the boost it supersedes, then the cursor.
+			if (!withdrawLocalBoost(db, boost.id, now, budget.left() - 1)) {
 				return
 			}
-			withdrawLocalBoost(db, boost.id, now)
 			db.run("UPDATE inbound_jobs SET cursor = ? WHERE kind = 'purge' AND key = ?", boost.id, uri)
+		}
+		// Its targets, a chunk per row, over as many batches as they need; the receipts stay until all are written.
+		if (!stageRetraction(db, boost.booster, boost.uri, budget.left())) {
+			return
 		}
 		// The boost's deletion, its booster's recount and the cursor's reset.
 		if (!deleteStatusWithin(db, boost.id, budget, 2)) {

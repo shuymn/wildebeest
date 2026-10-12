@@ -14,6 +14,12 @@ const USERNAME = /^[a-z0-9_]+([a-z0-9_.-]+[a-z0-9_]+)?$/i
 const USERNAME_LIMIT = 255
 // Raw caps (RES-1). The display name is plain text and is cut, as Mastodon cuts what it receives.
 const DISPLAY_NAME_LIMIT = 2048
+// Actor ids and inbox URLs (RES-6): a delivery target is an inbox and, for a silent recipient, an actor id, so their
+// length bounds a target. This cap is Kopje's own interoperability policy, not another server's behaviour: Mastodon
+// sets no length limit, and Misskey stores inbox URLs in 512-character columns. Real servers use far shorter URLs.
+// A serialized URL is ASCII, so its length is its size in bytes.
+export const INBOX_URL_LIMIT = 2048
+export const ACTOR_URI_LIMIT = 2048
 
 export type FetchedActor =
 	| { kind: 'ok'; actor: Actor; input: RemoteActorInput | null }
@@ -116,9 +122,22 @@ async function ownKeys(actor: Actor, uri: URL): Promise<{ id: string; pem: strin
 export async function remoteActorInput(actor: Actor, document: unknown): Promise<RemoteActorInput | null> {
 	const uri = actor.id
 	const username = text(actor.preferredUsername)
-	if (uri === null || username === null || username.length > USERNAME_LIMIT || !USERNAME.test(username)) {
+	if (
+		uri === null ||
+		uri.href.length > ACTOR_URI_LIMIT ||
+		username === null ||
+		username.length > USERNAME_LIMIT ||
+		!USERNAME.test(username)
+	) {
 		return null
 	}
+	const inboxUrl = httpUrl(actor.inboxId?.href ?? null)?.href ?? null
+	// By Kopje's policy, an over-long inbox makes the actor unusable (nothing could be delivered to it), and an
+	// over-long shared inbox is ignored, so its personal inbox is used.
+	if (inboxUrl !== null && inboxUrl.length > INBOX_URL_LIMIT) {
+		return null
+	}
+	const sharedInboxUrl = httpUrl(actor.endpoints?.sharedInbox?.href ?? null)?.href ?? null
 	const options = { documentLoader: NO_FETCH, contextLoader: NO_FETCH }
 	const images: Images = actor
 	return {
@@ -133,8 +152,8 @@ export async function remoteActorInput(actor: Actor, document: unknown): Promise
 		headerUrl: await imageUrl(() => images.getImage(options)),
 		locked: actor.manuallyApprovesFollowers === true,
 		discoverable: actor.discoverable,
-		inboxUrl: httpUrl(actor.inboxId?.href ?? null)?.href ?? null,
-		sharedInboxUrl: httpUrl(actor.endpoints?.sharedInbox?.href ?? null)?.href ?? null,
+		inboxUrl,
+		sharedInboxUrl: sharedInboxUrl !== null && sharedInboxUrl.length <= INBOX_URL_LIMIT ? sharedInboxUrl : null,
 		// A Temporal.Instant, whose type the polyfill's globals leave unresolved for the linter.
 		keys: await ownKeys(actor, uri),
 		published: (actor.published as { toString(): string } | null)?.toString() ?? null,
