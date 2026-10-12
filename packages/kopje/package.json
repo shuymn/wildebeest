@@ -5,10 +5,13 @@
 	"license": "Apache-2.0",
 	"private": true,
 	"type": "module",
+	"bin": {
+		"kopje-admin": "./cli/kopje-admin.js"
+	},
 	"scripts": {
-		"lint": "eslint src test --quiet",
+		"lint": "eslint src test cli --quiet",
 		"test": "vitest run",
-		"typecheck": "tsc --noEmit",
+		"typecheck": "tsc --noEmit && tsc -p cli",
 		"types": "wrangler types --include-runtime=false",
 		"build": "wrangler deploy --dry-run --outdir dist"
 	},
