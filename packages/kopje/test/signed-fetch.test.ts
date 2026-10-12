@@ -13,6 +13,7 @@ import {
 } from './federation-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { createKopjeFederation, type FederationState } from '../src/federation/federation'
+import { DoKvStore } from '../src/federation/kv-store'
 
 const DOMAIN = 'social.example'
 const NOTE = 'https://remote.example/notes/1'
@@ -80,8 +81,8 @@ describe('signed fetches', () => {
 		)
 		expect(keys).toEqual(
 			expect.arrayContaining([
-				['_fedify', 'signedRemoteDocument', 'https://social.example/actor#main-key', NOTE],
-				['_fedify', 'signedRemoteDocument', 'https://social.example/ap/users/Alice#main-key', NOTE],
+				['_fedify', 'signedRemoteDocument', 'v2', 'https://social.example/actor#main-key', NOTE],
+				['_fedify', 'signedRemoteDocument', 'v2', 'https://social.example/ap/users/Alice#main-key', NOTE],
 			])
 		)
 	})
@@ -110,5 +111,20 @@ describe('signed fetches', () => {
 		const alice = await ctx.getDocumentLoader({ identifier: 'Alice' })
 		await expect(alice(NOTE)).rejects.toThrow(/Not an ActivityPub document/)
 		expect((await ctx.contextLoader(NOTE)).document).toMatchObject({ id: NOTE })
+	})
+
+	// A cache entry admitted under an older, looser acceptance policy is never served after the policy is tightened.
+	it('ignores signed documents cached under the unversioned namespace', async () => {
+		const { store, requests, ctx } = await setup()
+		const stale = { contextUrl: null, documentUrl: NOTE, document: { id: NOTE, type: 'Note', content: 'stale' } }
+		const kv = new DoKvStore(
+			() => store,
+			BUILD,
+			() => NOW
+		)
+		await kv.set(['_fedify', 'signedRemoteDocument', 'https://social.example/actor#main-key', NOTE], stale)
+
+		expect((await ctx.documentLoader(NOTE)).document).toEqual({ id: NOTE, type: 'Note' })
+		expect(requests).toHaveLength(1)
 	})
 })

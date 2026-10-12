@@ -52,7 +52,10 @@ export type FederationDeps = {
 
 const ACTOR_CLASSES = { Person, Service, Group, Organization, Application } as const
 
-const SIGNED_DOCUMENT_PREFIX = ['_fedify', 'signedRemoteDocument'] as const
+// Fedify's kvCache serves a hit without calling the loader, so entries admitted under a looser acceptance policy would
+// outlive a fix for their TTL. Bump the version whenever the document loader's acceptance policy is tightened.
+// v2: ActivityPub media types only and object roots only (ID-8).
+const SIGNED_DOCUMENT_PREFIX = ['_fedify', 'signedRemoteDocument', 'v2'] as const
 
 export function createKopjeFederation(deps: FederationDeps, state: FederationState): Federation<FederationState> {
 	const { build, domain } = deps
