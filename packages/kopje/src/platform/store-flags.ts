@@ -10,11 +10,14 @@ import type { OperationKind } from './store-kernel'
 //   maintenance : set by the admin; readonly (reads and sessions pass, other writes are refused)
 //   dump        : a dump in progress; while its lease is valid only reads pass (sessions and alarm work too wait)
 //   import      : an import in progress; nothing passes until it is verified
+//   import_receipt : the outcome of the last verified import, kept for a client whose response was lost (no effect)
 
 export type MaintenanceFlag = { mode: 'readonly'; at: number }
 
 export type DumpRecord = {
 	id: string
+	// The client's own id for this start, so a start whose response was lost can be asked again (and aborted).
+	opId?: string
 	startedAt: number
 	leaseMs: number
 	leaseUntil: number
@@ -49,26 +52,44 @@ export type ImportRecord = {
 	report: VerifyReport | null
 	// The Store's own Access rows, moved out of instance_settings for the import and written back after it.
 	bootstrap: { name: string; value: string }[]
+	// A 'token' import is continued only with the session credential begin returned; only its SHA-256 is kept.
+	sessionHash: string | null
 	startedAt: number
 	updatedAt: number
+}
+
+// What stays after an import is verified: enough to tell the client of that import (Access admin, or its session)
+// that it completed, and with which result.
+export type ImportReceipt = {
+	id: string
+	mode: ImportRecord['mode']
+	headerSha256: string
+	sessionHash: string | null
+	lastSeq: number
+	digest: string
+	statements: number
+	bytes: number
+	report: VerifyReport
+	completedAt: number
 }
 
 export type OperatorFlags = {
 	maintenance: MaintenanceFlag | null
 	dump: DumpRecord | null
 	import: ImportRecord | null
+	import_receipt: ImportReceipt | null
 }
 
-export const FLAG_NAMES = ['maintenance', 'dump', 'import'] as const
+export const FLAG_NAMES = ['maintenance', 'dump', 'import', 'import_receipt'] as const
 type FlagName = (typeof FLAG_NAMES)[number]
 
 export function readFlags(sql: SqlStorage): OperatorFlags {
-	const flags: OperatorFlags = { maintenance: null, dump: null, import: null }
+	const flags: OperatorFlags = { maintenance: null, dump: null, import: null, import_receipt: null }
 	for (const row of sql
 		.exec<{
 			name: FlagName
 			value: string
-		}>("SELECT name, value FROM kopje_state WHERE name IN ('maintenance', 'dump', 'import')")
+		}>("SELECT name, value FROM kopje_state WHERE name IN ('maintenance', 'dump', 'import', 'import_receipt')")
 		.toArray()) {
 		flags[row.name] = JSON.parse(row.value) as never
 	}

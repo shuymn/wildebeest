@@ -7,8 +7,7 @@ import { acceptInbox, type InboxDelivery } from './domain/inbox'
 import { instanceInfo } from './domain/instance'
 import * as oauth from './domain/oauth'
 import { getSetupState } from './domain/setup'
-import { StoreAdmin } from './platform/store-admin'
-import type { ImportRecord } from './platform/store-flags'
+import { type ImportAuthority, StoreAdmin } from './platform/store-admin'
 import { StoreKernel } from './platform/store-kernel'
 import { buildOf, PACKAGE_VERSION } from './version'
 
@@ -71,8 +70,8 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.retryUpgrade(callerBuild)
 	}
 
-	dumpStart(_callerBuild: string, leaseSeconds?: number) {
-		return this.#admin.dumpStart(leaseSeconds)
+	dumpStart(_callerBuild: string, leaseSeconds?: number, opId?: string) {
+		return this.#admin.dumpStart(leaseSeconds, opId)
 	}
 
 	dumpNext(_callerBuild: string, cursor: unknown, maxBytes?: number) {
@@ -87,28 +86,37 @@ export class Store extends DurableObject<Env> {
 		return this.#admin.catalog()
 	}
 
-	importBegin(callerBuild: string, header: unknown, mode: ImportRecord['mode']) {
-		return this.#admin.importBegin(callerBuild, header, mode)
+	// Import and configuration mutations name their authority; the Store checks it where it writes (store-admin.ts).
+	importBegin(callerBuild: string, authority: ImportAuthority, header: unknown) {
+		return this.#admin.importBegin(callerBuild, authority, header)
 	}
 
-	importChunk(callerBuild: string, id: string, seq: number, bytes: Uint8Array) {
-		return this.#admin.importChunk(callerBuild, id, seq, bytes)
+	importChunk(callerBuild: string, authority: ImportAuthority, id: string, seq: number, bytes: Uint8Array) {
+		return this.#admin.importChunk(callerBuild, authority, id, seq, bytes)
 	}
 
-	importFinish(callerBuild: string, id: string, trailer: unknown) {
-		return this.#admin.importFinish(callerBuild, id, trailer)
+	importFinish(callerBuild: string, authority: ImportAuthority, id: string, trailer: unknown) {
+		return this.#admin.importFinish(callerBuild, authority, id, trailer)
 	}
 
-	importVerify(callerBuild: string, id: string) {
-		return this.#admin.importVerify(callerBuild, id)
+	importVerify(callerBuild: string, authority: ImportAuthority, id: string) {
+		return this.#admin.importVerify(callerBuild, authority, id)
 	}
 
-	importProgress(_callerBuild: string) {
-		return this.#admin.importProgress()
+	importProgress(_callerBuild: string, authority: ImportAuthority, id?: string) {
+		return this.#admin.importProgress(authority, id)
 	}
 
-	importReset(callerBuild: string) {
-		return this.#admin.importReset(callerBuild)
+	importReset(callerBuild: string, authority: ImportAuthority, id?: string) {
+		return this.#admin.importReset(callerBuild, authority, id)
+	}
+
+	config(_callerBuild: string) {
+		return this.#admin.config()
+	}
+
+	setConfig(callerBuild: string, authority: ImportAuthority, values: unknown) {
+		return this.#admin.setConfig(callerBuild, authority, values)
 	}
 
 	setupState(callerBuild: string) {

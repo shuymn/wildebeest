@@ -1,10 +1,12 @@
 import {
 	type AccessSettings,
-	accessConfigured,
+	adminUsable,
 	BOOTSTRAP,
+	CONFIG_KEYS,
 	readAccessSettings,
 	readBootstrapRows,
-	restoreBootstrapRows,
+	readConfigRows,
+	replaceBootstrapRows,
 	settingsFromRows,
 } from './access-settings'
 import { CatalogError, readCatalog } from './dump-catalog'
@@ -33,7 +35,14 @@ import {
 	trailerOf,
 } from './store-dump'
 import { storeMaintenanceError } from './store-errors'
-import { activeDump, type ImportRecord, readFlags, writeFlag } from './store-flags'
+import {
+	activeDump,
+	type ImportReceipt,
+	type ImportRecord,
+	type OperatorFlags,
+	readFlags,
+	writeFlag,
+} from './store-flags'
 import {
 	applyStatements,
 	catalogDifference,
@@ -64,10 +73,14 @@ export type AdminOptions = {
 	randomId?: () => string
 }
 
+// Who asks for an import or configuration change (see the import section of StoreAdmin).
+export type ImportAuthority = { kind: 'access' } | { kind: 'import-token' } | { kind: 'import-session'; secret: string }
+
 export type ImportProgress = {
 	id: string
 	mode: ImportRecord['mode']
-	state: ImportRecord['state']
+	// 'verified' comes from the receipt of a completed import.
+	state: ImportRecord['state'] | 'verified'
 	lastSeq: number
 	digest: string
 	statements: number
@@ -168,22 +181,14 @@ export class StoreAdmin {
 		}
 	}
 
-	// What /admin authentication needs from the Store. IMPORT_TOKEN is usable while the Store is empty and has no
-	// Access settings, and for the rest of an import that was begun with it (the imported rows bring Access settings).
-	// During an import the Access settings are the Store's own ones set aside at begin, not imported rows.
-	async gate(): Promise<{ access: AccessSettings; tokenImport: boolean }> {
+	// What /admin authentication needs from the Store: the Access settings to verify a JWT with (during an import, the
+	// Store's own ones set aside at begin, not imported rows), and whether the Store is in bootstrap, where IMPORT_TOKEN
+	// may read it and configure it. Mutations check their authority again in the transaction that writes.
+	async gate(): Promise<{ access: AccessSettings; bootstrap: boolean }> {
 		await this.#kernel.state()
 		const { import: running } = readFlags(this.#sql)
 		const access = running === null ? readAccessSettings(this.#sql) : settingsFromRows(running.bootstrap ?? [])
-		const empty = () => {
-			try {
-				return isEmpty(this.#sql, readCatalog(this.#sql), BOOTSTRAP)
-			} catch {
-				return false
-			}
-		}
-		const tokenImport = running?.mode === 'token' || (running === null && !accessConfigured(access) && empty())
-		return { access, tokenImport }
+		return { access, bootstrap: running === null && !adminUsable(access) }
 	}
 
 	// ---- maintenance
@@ -264,9 +269,15 @@ export class StoreAdmin {
 
 	// ---- dump
 
+	// opId is the client's id for this start: asking again with the same opId returns the same dump while it runs, so
+	// a client that lost the response (or crashed before saving the cursor) can continue or abort it.
 	async dumpStart(
-		leaseSeconds?: number
+		leaseSeconds?: number,
+		opId?: string
 	): Promise<Result<{ header: DumpHeader; headerLine: string; cursor: DumpCursor }>> {
+		if (opId !== undefined && !/^[A-Za-z0-9-]{8,64}$/.test(opId)) {
+			return refuse('invalid-op-id', 'opId must be 8-64 letters, digits or dashes')
+		}
 		await this.#kernel.state()
 		const leaseMs = clamp(
 			leaseSeconds === undefined ? undefined : leaseSeconds * 1000,
@@ -282,6 +293,15 @@ export class StoreAdmin {
 					return refuse('import-in-progress', 'an import is in progress')
 				}
 				const running = activeDump(flags, now)
+				if (opId !== undefined && flags.dump?.opId === opId) {
+					if (flags.dump.completed !== undefined) {
+						return refuse('dump-finished', 'that dump is finished; ask dump/finish for its trailer')
+					}
+					if (running !== null) {
+						const { header } = running
+						return { ok: true as const, header, headerLine: headerLine(header), cursor: initialCursor(running.id) }
+					}
+				}
 				if (running !== null) {
 					return refuse(
 						'dump-in-progress',
@@ -290,7 +310,15 @@ export class StoreAdmin {
 				}
 				const header = buildHeader(this.#sql, this.#kernel.appliedMigrations(), this.#source, now)
 				const id = this.#randomId()
-				writeFlag(this.#sql, 'dump', { id, startedAt: now, leaseMs, leaseUntil: now + leaseMs, header, results: [] })
+				writeFlag(this.#sql, 'dump', {
+					id,
+					opId,
+					startedAt: now,
+					leaseMs,
+					leaseUntil: now + leaseMs,
+					header,
+					results: [],
+				})
 				this.#log({ event: 'kopje.store.dump.start', id, tables: header.tables.length })
 				return { ok: true as const, header, headerLine: headerLine(header), cursor: initialCursor(id) }
 			})
@@ -399,6 +427,13 @@ export class StoreAdmin {
 	}
 
 	// ---- import
+	//
+	// Every import mutation names its authority, and the Store checks it inside the transaction that writes:
+	//   access          an Access admin (verified by the Worker); continues only imports begun that way
+	//   import-token    IMPORT_TOKEN (verified by the Worker); only begins an import, and only while the Store is in
+	//                   bootstrap (admin access not usable) and holds no data
+	//   import-session  the credential begin returned for a token import; continues only that import
+	// So a request authorized for one import or mode cannot act on another, however late it arrives.
 
 	// What a dump for this Store must declare: its applied migrations and its table catalog.
 	async catalog(): Promise<{ migrations: MigrationRecord[]; tables: TableSpec[] }> {
@@ -408,10 +443,13 @@ export class StoreAdmin {
 
 	async importBegin(
 		callerBuild: string,
-		headerValue: unknown,
-		mode: ImportRecord['mode']
-	): Promise<Result<{ progress: ImportProgress; resumed: boolean }>> {
+		authority: ImportAuthority,
+		headerValue: unknown
+	): Promise<Result<{ progress: ImportProgress; resumed: boolean; session?: string }>> {
 		this.#requireBuild(callerBuild)
+		if (authority.kind === 'import-session') {
+			return refuse('wrong-authority', 'begin an import with Access or IMPORT_TOKEN')
+		}
 		const state = await this.#kernel.state()
 		if (state.schema.status !== 'current' || state.held || state.upgrading) {
 			return refuse('store-not-ready', 'the Store schema is not current; check health and retry the upgrade')
@@ -419,21 +457,37 @@ export class StoreAdmin {
 		try {
 			const header = parseHeader(headerValue)
 			const headerSha256 = sha256Hex(JSON.stringify(header))
+			const session = authority.kind === 'import-token' ? randomSecret() : null
 			return this.#transaction(() => {
 				const now = this.#now()
 				const flags = readFlags(this.#sql)
+				if (authority.kind === 'import-token' && !this.#inBootstrap(flags)) {
+					throw new ImportError(
+						'not-bootstrap',
+						'IMPORT_TOKEN only begins an import into an empty Store without admin access'
+					)
+				}
 				if (activeDump(flags, now) !== null) {
 					throw new ImportError('dump-in-progress', 'a dump is in progress')
 				}
 				if (flags.import !== null) {
-					// The same dump resumes in whatever phase it reached (receiving, finished, or failed with its report).
-					if (flags.import.headerSha256 === headerSha256) {
+					// An Access admin resumes the same dump in whatever phase it reached. A token import is continued with
+					// its session credential, not by beginning again.
+					if (
+						authority.kind === 'access' &&
+						flags.import.mode === 'access' &&
+						flags.import.headerSha256 === headerSha256
+					) {
 						return { ok: true as const, progress: progressOf(flags.import), resumed: true }
 					}
 					throw new ImportError(
 						'import-exists',
 						`import ${flags.import.id} (${flags.import.state}) exists; reset it first`
 					)
+				}
+				const receipt = flags.import_receipt
+				if (authority.kind === 'access' && receipt !== null && receipt.headerSha256 === headerSha256) {
+					return { ok: true as const, progress: receiptProgress(receipt), resumed: true }
 				}
 				const migrations = migrationDifference(header.migrations, this.#kernel.appliedMigrations())
 				if (migrations !== null) {
@@ -450,12 +504,10 @@ export class StoreAdmin {
 				// Move the Store's Access rows aside: the imported instance_settings must land in an empty table, and the
 				// admin keeps authenticating with these until the import is verified.
 				const bootstrap = readBootstrapRows(this.#sql)
-				for (const row of bootstrap) {
-					this.#sql.exec('DELETE FROM instance_settings WHERE name = ?', row.name)
-				}
+				replaceBootstrapRows(this.#sql, [])
 				const record: ImportRecord = {
 					id: this.#randomId(),
-					mode,
+					mode: authority.kind === 'access' ? 'access' : 'token',
 					state: 'receiving',
 					header,
 					headerSha256,
@@ -468,12 +520,15 @@ export class StoreAdmin {
 					verify: null,
 					report: null,
 					bootstrap,
+					sessionHash: session === null ? null : sha256Hex(session),
 					startedAt: now,
 					updatedAt: now,
 				}
 				writeFlag(this.#sql, 'import', record)
-				this.#log({ event: 'kopje.store.import.begin', id: record.id, mode })
-				return { ok: true as const, progress: progressOf(record), resumed: false }
+				writeFlag(this.#sql, 'import_receipt', null)
+				this.#log({ event: 'kopje.store.import.begin', id: record.id, mode: record.mode })
+				const begun = { ok: true as const, progress: progressOf(record), resumed: false }
+				return session === null ? begun : { ...begun, session }
 			})
 		} catch (error) {
 			return asRefusal(error)
@@ -484,6 +539,7 @@ export class StoreAdmin {
 	// again and reported: an error does not prove the transaction rolled back.
 	async importChunk(
 		callerBuild: string,
+		authority: ImportAuthority,
 		id: string,
 		seq: number,
 		bytes: Uint8Array
@@ -493,9 +549,12 @@ export class StoreAdmin {
 	> {
 		this.#requireBuild(callerBuild)
 		await this.#kernel.state()
-		const record = readFlags(this.#sql).import
-		if (record === null || record.id !== id) {
-			return refuse('import-not-found', 'no such import')
+		let record: ImportRecord
+		try {
+			// Checked here to avoid parsing for nothing, and again in the transaction that writes.
+			record = this.#authorizedRecord(authority, id)
+		} catch (error) {
+			return asRefusal(error)
 		}
 		if (record.state !== 'receiving') {
 			return refuse('import-not-receiving', `the import is ${record.state}`)
@@ -526,8 +585,8 @@ export class StoreAdmin {
 		const bodyHash = Sha256.restore(record.bodyHash).update(bytes).save()
 		try {
 			this.#transaction(() => {
-				const current = readFlags(this.#sql).import
-				if (current === null || current.id !== id || current.lastSeq !== seq - 1 || current.state !== 'receiving') {
+				const current = this.#authorizedRecord(authority, id)
+				if (current.lastSeq !== seq - 1 || current.state !== 'receiving') {
 					throw new ImportError('out-of-order', 'the import changed while this chunk was prepared')
 				}
 				const migrations = migrationDifference(current.header.migrations, this.#kernel.appliedMigrations())
@@ -563,6 +622,7 @@ export class StoreAdmin {
 
 	async importFinish(
 		callerBuild: string,
+		authority: ImportAuthority,
 		id: string,
 		trailerValue: unknown
 	): Promise<Result<{ progress: ImportProgress }>> {
@@ -571,7 +631,7 @@ export class StoreAdmin {
 		try {
 			const trailer = parseTrailer(trailerValue)
 			return this.#transaction(() => {
-				const record = this.#importRecord(id)
+				const record = this.#authorizedRecord(authority, id)
 				if (record.state !== 'receiving') {
 					if (record.state === 'finished' && JSON.stringify(record.trailer) === JSON.stringify(trailer)) {
 						return { ok: true as const, progress: progressOf(record) }
@@ -609,19 +669,27 @@ export class StoreAdmin {
 	}
 
 	// Recomputes row counts and ordered checksums inside the Store, a bounded amount per call, then runs
-	// foreign_key_check. On success the import record is removed and the Store serves again; on failure it stays
-	// refused and needs a reset.
+	// foreign_key_check. On success the import record gives way to a receipt and the Store serves again; on failure it
+	// stays refused and needs a reset.
 	async importVerify(
 		callerBuild: string,
+		authority: ImportAuthority,
 		id: string,
 		maxBytes = VERIFY_STEP_BYTES
 	): Promise<Result<{ done: boolean; report: VerifyReport | null; progress: ImportProgress | null }>> {
 		this.#requireBuild(callerBuild)
 		await this.#kernel.state()
 		const budget = clamp(maxBytes, 1024, VERIFY_STEP_BYTES, VERIFY_STEP_BYTES)
+		let outcome: Result<{ done: boolean; report: VerifyReport | null; progress: ImportProgress | null }>
 		try {
-			return this.#transaction(() => {
-				const record = this.#importRecord(id)
+			outcome = this.#transaction(() => {
+				const receipt = readFlags(this.#sql).import_receipt
+				if (receipt !== null && receipt.id === id && readFlags(this.#sql).import === null) {
+					// Verified already (the response was lost): the same answer again.
+					this.#authorizeReceipt(authority, receipt)
+					return { ok: true as const, done: true, report: receipt.report, progress: receiptProgress(receipt) }
+				}
+				const record = this.#authorizedRecord(authority, id)
 				if (record.state === 'failed') {
 					return { ok: true as const, done: true, report: record.report, progress: progressOf(record) }
 				}
@@ -643,10 +711,24 @@ export class StoreAdmin {
 					report.problems.push(migrations)
 				}
 				if (report.ok) {
+					// Imported rows never change who administers this Store: its own Access rows come back exactly.
+					replaceBootstrapRows(this.#sql, record.bootstrap ?? [])
+					const completed: ImportReceipt = {
+						id: record.id,
+						mode: record.mode,
+						headerSha256: record.headerSha256,
+						sessionHash: record.sessionHash ?? null,
+						lastSeq: record.lastSeq,
+						digest: record.digest,
+						statements: record.statements,
+						bytes: record.bytes,
+						report,
+						completedAt: this.#now(),
+					}
 					writeFlag(this.#sql, 'import', null)
-					restoreBootstrapRows(this.#sql, record.bootstrap ?? [])
+					writeFlag(this.#sql, 'import_receipt', completed)
 					this.#log({ event: 'kopje.store.import.verified', id })
-					return { ok: true as const, done: true, report, progress: null }
+					return { ok: true as const, done: true, report, progress: receiptProgress(completed) }
 				}
 				const failed: ImportRecord = { ...record, state: 'failed', report, updatedAt: this.#now() }
 				writeFlag(this.#sql, 'import', failed)
@@ -656,33 +738,61 @@ export class StoreAdmin {
 		} catch (error) {
 			return asRefusal(error)
 		}
+		if (outcome.ok && outcome.progress?.state === 'verified') {
+			await this.#resumeDeferredUpgrade()
+		}
+		return outcome
 	}
 
-	async importProgress(): Promise<ImportProgress | null> {
+	// The running import, or the receipt of the last verified one, as far as the authority may see it.
+	async importProgress(authority: ImportAuthority, id?: string): Promise<{ progress: ImportProgress | null }> {
 		await this.#kernel.state()
-		const record = readFlags(this.#sql).import
-		return record === null ? null : progressOf(record)
+		const flags = readFlags(this.#sql)
+		const matches = (candidate: string) => id === undefined || candidate === id
+		const sees = (mode: ImportRecord['mode'], sessionHash: string | null) =>
+			authority.kind === 'access' ||
+			(authority.kind === 'import-session' && mode === 'token' && sessionMatches(authority.secret, sessionHash))
+		if (flags.import !== null) {
+			const record = flags.import
+			return {
+				progress: matches(record.id) && sees(record.mode, record.sessionHash ?? null) ? progressOf(record) : null,
+			}
+		}
+		const receipt = flags.import_receipt
+		if (receipt !== null && matches(receipt.id) && sees(receipt.mode, receipt.sessionHash)) {
+			return { progress: receiptProgress(receipt) }
+		}
+		return { progress: null }
 	}
 
-	// Starts over from nothing: deleteAll() (which also drops the schema) and the migration runner. Only for a Store
-	// that is under import or holds no data, so it cannot wipe a serving instance.
-	async importReset(callerBuild: string): Promise<Result<{ upgrade: UpgradeResult }>> {
+	// Starts over from nothing: deleteAll() (which also drops the schema) and the migration runner. Only for the
+	// authority of the running import, or for a Store that holds no data; so it cannot wipe a serving instance.
+	async importReset(
+		callerBuild: string,
+		authority: ImportAuthority,
+		id?: string
+	): Promise<Result<{ upgrade: UpgradeResult }>> {
 		this.#requireBuild(callerBuild)
 		await this.#kernel.state()
 		const flags = readFlags(this.#sql)
 		if (activeDump(flags, this.#now()) !== null) {
 			return refuse('dump-in-progress', 'a dump is in progress')
 		}
-		let empty: boolean
 		try {
-			empty = isEmpty(this.#sql, readCatalog(this.#sql), BOOTSTRAP)
-		} catch {
-			empty = false
+			if (flags.import !== null) {
+				this.#authorizedRecord(authority, id ?? flags.import.id)
+			} else if (authority.kind === 'import-session') {
+				throw new ImportError('wrong-authority', 'this session has no import to reset')
+			} else if (authority.kind === 'import-token' && !this.#inBootstrap(flags)) {
+				throw new ImportError('not-bootstrap', 'IMPORT_TOKEN only resets an empty Store without admin access')
+			} else if (!this.#emptyOfData()) {
+				throw new ImportError('reset-refused', 'reset is only for a Store under import or without data')
+			}
+		} catch (error) {
+			return asRefusal(error)
 		}
-		if (flags.import === null && !empty) {
-			return refuse('reset-refused', 'reset is only for a Store under import or without data')
-		}
-		// deleteAll() takes the Access rows too; they are written back into the recreated schema.
+		// deleteAll() takes the Access rows too; they are written back into the recreated schema. Nothing awaits between
+		// the checks above and deleteAll(), so no other request runs in between.
 		const bootstrap = flags.import?.bootstrap ?? readBootstrapRows(this.#sql)
 		this.#log({ event: 'kopje.store.import.reset', id: flags.import?.id ?? null })
 		await this.#ctx.storage.deleteAll()
@@ -695,16 +805,103 @@ export class StoreAdmin {
 				bootstrap,
 			} as Refusal
 		}
-		this.#transaction(() => restoreBootstrapRows(this.#sql, bootstrap))
+		this.#transaction(() => replaceBootstrapRows(this.#sql, bootstrap))
 		return { ok: true, upgrade }
 	}
 
-	#importRecord(id: string): ImportRecord {
+	// ---- configuration
+	//
+	// The instance values and the Access authority are set only here, explicitly, never as a side effect of an import:
+	// by an Access admin, or with IMPORT_TOKEN while the Store is in bootstrap (admin access not usable yet). The check
+	// runs in the transaction that writes.
+
+	async config(): Promise<{ values: Record<string, string> }> {
+		await this.#kernel.state()
+		return { values: readConfigRows(this.#sql) }
+	}
+
+	async setConfig(
+		callerBuild: string,
+		authority: ImportAuthority,
+		values: unknown
+	): Promise<Result<{ values: Record<string, string> }>> {
+		this.#requireBuild(callerBuild)
+		const changes = parseConfigValues(values)
+		if (typeof changes === 'string') {
+			return refuse('invalid-config', changes)
+		}
+		await this.#kernel.state()
+		try {
+			return this.#transaction(() => {
+				const flags = readFlags(this.#sql)
+				if (authority.kind === 'import-session') {
+					throw new ImportError('wrong-authority', 'an import session cannot change the configuration')
+				}
+				if (flags.import !== null) {
+					throw new ImportError('import-in-progress', 'the configuration is set aside while an import runs')
+				}
+				if (activeDump(flags, this.#now()) !== null) {
+					throw new ImportError('dump-in-progress', 'a dump is in progress')
+				}
+				if (authority.kind === 'import-token' && !this.#inBootstrap(flags, false)) {
+					throw new ImportError('not-bootstrap', 'IMPORT_TOKEN only configures a Store without admin access')
+				}
+				for (const [name, value] of Object.entries(changes)) {
+					if (value === null) {
+						this.#sql.exec('DELETE FROM instance_settings WHERE name = ?', name)
+					} else {
+						this.#sql.exec('INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', name, value)
+					}
+				}
+				this.#log({ event: 'kopje.store.config', names: Object.keys(changes), authority: authority.kind })
+				return { ok: true as const, values: readConfigRows(this.#sql) }
+			})
+		} catch (error) {
+			return asRefusal(error)
+		}
+	}
+
+	// Bootstrap: no import running, admin access not usable, and (for an import) no data.
+	#inBootstrap(flags: OperatorFlags, requireEmpty = true): boolean {
+		return (
+			flags.import === null && !adminUsable(readAccessSettings(this.#sql)) && (!requireEmpty || this.#emptyOfData())
+		)
+	}
+
+	#emptyOfData(): boolean {
+		try {
+			return isEmpty(this.#sql, readCatalog(this.#sql), BOOTSTRAP)
+		} catch {
+			return false
+		}
+	}
+
+	// The running import with this id, if the authority may act on it; throws a refusal otherwise.
+	#authorizedRecord(authority: ImportAuthority, id: string): ImportRecord {
 		const record = readFlags(this.#sql).import
 		if (record === null || record.id !== id) {
 			throw new ImportError('import-not-found', 'no such import')
 		}
+		const allowed =
+			(authority.kind === 'access' && record.mode === 'access') ||
+			(authority.kind === 'import-session' &&
+				record.mode === 'token' &&
+				sessionMatches(authority.secret, record.sessionHash ?? null))
+		if (!allowed) {
+			throw new ImportError('wrong-authority', 'this credential does not authorize that import')
+		}
 		return record
+	}
+
+	#authorizeReceipt(authority: ImportAuthority, receipt: ImportReceipt): void {
+		const allowed =
+			authority.kind === 'access' ||
+			(authority.kind === 'import-session' &&
+				receipt.mode === 'token' &&
+				sessionMatches(authority.secret, receipt.sessionHash))
+		if (!allowed) {
+			throw new ImportError('wrong-authority', 'this credential does not authorize that import')
+		}
 	}
 
 	#progressAfterError(): ImportProgress | null {
@@ -728,6 +925,70 @@ export class StoreAdmin {
 			throw storeMaintenanceError('version-mismatch')
 		}
 	}
+}
+
+// 32 random bytes as base64url: the session credential of a token import.
+function randomSecret(): string {
+	const bytes = crypto.getRandomValues(new Uint8Array(32))
+	return btoa(String.fromCharCode(...bytes))
+		.replaceAll('+', '-')
+		.replaceAll('/', '_')
+		.replace(/=+$/, '')
+}
+
+// Compares SHA-256 digests (fixed length) of the presented secret and the stored one.
+function sessionMatches(secret: string, sessionHash: string | null): boolean {
+	if (sessionHash === null) {
+		return false
+	}
+	const presented = sha256Hex(secret)
+	let difference = 0
+	for (let i = 0; i < sessionHash.length; i++) {
+		difference |= presented.charCodeAt(i) ^ sessionHash.charCodeAt(i)
+	}
+	return difference === 0 && presented.length === sessionHash.length
+}
+
+function receiptProgress(receipt: ImportReceipt): ImportProgress {
+	return {
+		id: receipt.id,
+		mode: receipt.mode,
+		state: 'verified',
+		lastSeq: receipt.lastSeq,
+		digest: receipt.digest,
+		statements: receipt.statements,
+		bytes: receipt.bytes,
+		report: receipt.report,
+	}
+}
+
+const MAX_CONFIG_VALUE = 1024
+
+// { name: value | null } over CONFIG_KEYS; null removes the row. Returns why it is invalid otherwise.
+function parseConfigValues(value: unknown): Record<string, string | null> | string {
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+		return 'values must be an object'
+	}
+	const entries = Object.entries(value)
+	if (entries.length === 0) {
+		return 'no values given'
+	}
+	const changes: Record<string, string | null> = {}
+	for (const [name, raw] of entries) {
+		if (!CONFIG_KEYS.includes(name)) {
+			return `${name} is not configurable; allowed: ${CONFIG_KEYS.join(', ')}`
+		}
+		if (raw === null) {
+			changes[name] = null
+			continue
+		}
+		const text = typeof raw === 'string' ? raw.trim() : ''
+		if (text === '' || text.length > MAX_CONFIG_VALUE) {
+			return `${name} must be a non-empty string of at most ${MAX_CONFIG_VALUE} characters, or null`
+		}
+		changes[name] = text
+	}
+	return changes
 }
 
 function progressOf(record: ImportRecord): ImportProgress {

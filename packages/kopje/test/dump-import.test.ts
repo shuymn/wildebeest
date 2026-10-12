@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { BUILD, freshStore, migratedStore, rejectionOf, testKernel } from './helpers'
 import {
+	ACCESS,
 	beginImport,
 	dumpViaRpc,
 	finishImport,
@@ -21,6 +22,8 @@ import { type AdminOptions, StoreAdmin } from '../src/platform/store-admin'
 import type { StoreStub } from '../src/platform/store-client'
 import type { DumpCursor } from '../src/platform/store-dump'
 import { toStoreUnavailable } from '../src/platform/store-errors'
+
+const TOKEN = { kind: 'import-token' } as const
 
 const readSettings = readOperation<void, number>((db) => db.all('SELECT * FROM instance_settings').length)
 const writeSetting = writeOperation<string, void>((db, name) => {
@@ -209,19 +212,22 @@ describe('import', () => {
 		const id = await beginImport(target, text)
 		let digest = ''
 		for (const [i, chunk] of chunks.slice(0, 3).entries()) {
-			expect(await target.importChunk(BUILD, id, i + 1, chunk)).toMatchObject({ ok: true })
+			expect(await target.importChunk(BUILD, ACCESS, id, i + 1, chunk)).toMatchObject({ ok: true })
 			digest = new Sha256().update(digest).update(chunk).hex()
 		}
 
 		// The client restarts: begin with the same header resumes the same import.
-		const resumed = await target.importBegin(BUILD, splitDump(text).header, 'access')
+		const resumed = await target.importBegin(BUILD, ACCESS, splitDump(text).header)
 		expect(resumed).toMatchObject({ ok: true, resumed: true, progress: { id, lastSeq: 3, digest } })
 		// A chunk sent twice is reported, not applied twice.
-		expect(await target.importChunk(BUILD, id, 3, chunks[2]!)).toMatchObject({ ok: true, duplicate: true })
-		expect(await target.importChunk(BUILD, id, 5, chunks[4]!)).toMatchObject({ ok: false, code: 'out-of-order' })
+		expect(await target.importChunk(BUILD, ACCESS, id, 3, chunks[2]!)).toMatchObject({ ok: true, duplicate: true })
+		expect(await target.importChunk(BUILD, ACCESS, id, 5, chunks[4]!)).toMatchObject({
+			ok: false,
+			code: 'out-of-order',
+		})
 		for (const [i, chunk] of chunks.entries()) {
 			if (i >= 3) {
-				expect(await target.importChunk(BUILD, id, i + 1, chunk)).toMatchObject({ ok: true, duplicate: false })
+				expect(await target.importChunk(BUILD, ACCESS, id, i + 1, chunk)).toMatchObject({ ok: true, duplicate: false })
 			}
 		}
 		expect(await finishImport(target, id, text)).toMatchObject({ ok: true })
@@ -245,26 +251,26 @@ describe('import', () => {
 					}
 				},
 			})
-			const result = await faulty.importChunk(BUILD, id, 1, chunks[0]!)
+			const result = await faulty.importChunk(BUILD, ACCESS, id, 1, chunks[0]!)
 			expect(result).toMatchObject({ ok: false, code: 'chunk-failed', applied: true, progress: { lastSeq: 1 } })
 		})
 		// The client trusted the re-read progress and continues with chunk 2.
 		for (const [i, chunk] of chunks.entries()) {
 			if (i >= 1) {
-				expect(await target.importChunk(BUILD, id, i + 1, chunk)).toMatchObject({ ok: true })
+				expect(await target.importChunk(BUILD, ACCESS, id, i + 1, chunk)).toMatchObject({ ok: true })
 			}
 		}
 		const report = await finishImport(target, id, text)
 		expect(report).toMatchObject({ ok: false })
 		expect(report?.problems.join('\n')).toMatch(/instance_settings/)
-		expect(await target.importProgress(BUILD)).toMatchObject({ state: 'failed' })
+		expect(await target.importProgress(BUILD, ACCESS)).toMatchObject({ progress: { state: 'failed' } })
 		// A failed import keeps the Store closed.
 		expect(toStoreUnavailable(await rejectionOf(target.setupState(BUILD)))?.reason).toBe('import-in-progress')
 
 		// Restart from scratch: deleteAll drops the schema too, and the migration runner recreates it.
-		const reset = await target.importReset(BUILD)
+		const reset = await target.importReset(BUILD, ACCESS)
 		expect(reset).toMatchObject({ ok: true, upgrade: { ok: true, applied: ['0000_initial'] } })
-		expect(await target.importProgress(BUILD)).toBeNull()
+		expect(await target.importProgress(BUILD, ACCESS)).toEqual({ progress: null })
 		expect((await importViaRpc(target, text)).report).toMatchObject({ ok: true })
 		expect(await target.setupState(BUILD)).toEqual({ complete: true })
 	})
@@ -280,7 +286,7 @@ describe('import', () => {
 					if (point === 'import-chunk-in-transaction') throw new Error('boom')
 				},
 			})
-			expect(await failing.importChunk(BUILD, id, 1, chunks[0]!)).toMatchObject({
+			expect(await failing.importChunk(BUILD, ACCESS, id, 1, chunks[0]!)).toMatchObject({
 				ok: false,
 				applied: false,
 				progress: { lastSeq: 0 },
@@ -293,17 +299,17 @@ describe('import', () => {
 		const { text } = await dumpViaRpc(await seeded(0))
 		const header = splitDump(text).header as { migrations: { checksum: string }[]; tables: { columns: string[] }[] }
 
-		expect(await (await seeded(0)).importBegin(BUILD, header, 'access')).toMatchObject({ code: 'not-empty' })
+		expect(await (await seeded(0)).importBegin(BUILD, ACCESS, header)).toMatchObject({ code: 'not-empty' })
 		const target = await migratedStore()
 		const otherChecksum = { ...header, migrations: [{ ...header.migrations[0], checksum: 'x' }] }
-		expect(await target.importBegin(BUILD, otherChecksum, 'access')).toMatchObject({ code: 'migrations-differ' })
+		expect(await target.importBegin(BUILD, ACCESS, otherChecksum)).toMatchObject({ code: 'migrations-differ' })
 		const otherColumns = {
 			...header,
 			tables: header.tables.map((t, i) => (i === 0 ? { ...t, columns: [...t.columns, 'extra'] } : t)),
 		}
-		expect(await target.importBegin(BUILD, otherColumns, 'access')).toMatchObject({ code: 'catalog-differs' })
-		expect(await target.importBegin(BUILD, { format: 2 }, 'access')).toMatchObject({ code: 'invalid-header' })
-		expect(toStoreUnavailable(await rejectionOf(target.importBegin('other-build', header, 'access')))?.reason).toBe(
+		expect(await target.importBegin(BUILD, ACCESS, otherColumns)).toMatchObject({ code: 'catalog-differs' })
+		expect(await target.importBegin(BUILD, ACCESS, { format: 2 })).toMatchObject({ code: 'invalid-header' })
+		expect(toStoreUnavailable(await rejectionOf(target.importBegin('other-build', ACCESS, header)))?.reason).toBe(
 			'version-mismatch'
 		)
 	})
@@ -315,44 +321,47 @@ describe('import', () => {
 		const evil = new TextEncoder().encode(
 			`INSERT INTO "instance_settings" ("name","value") VALUES ('a','b');\nDELETE FROM "accounts";\n`
 		)
-		expect(await target.importChunk(BUILD, id, 1, evil)).toMatchObject({ ok: false, code: 'invalid-chunk' })
+		expect(await target.importChunk(BUILD, ACCESS, id, 1, evil)).toMatchObject({ ok: false, code: 'invalid-chunk' })
 		const state = new TextEncoder().encode(`INSERT INTO "kopje_state" ("name","value") VALUES ('hold','{}');\n`)
-		expect(await target.importChunk(BUILD, id, 1, state)).toMatchObject({ ok: false, code: 'state-not-allowed' })
-		expect(await target.importProgress(BUILD)).toMatchObject({ lastSeq: 0, statements: 0 })
+		expect(await target.importChunk(BUILD, ACCESS, id, 1, state)).toMatchObject({
+			ok: false,
+			code: 'state-not-allowed',
+		})
+		expect(await target.importProgress(BUILD, ACCESS)).toMatchObject({ progress: { lastSeq: 0, statements: 0 } })
 	})
 
 	it('refuses to reset a serving Store', async () => {
 		const store = await seeded(0)
-		expect(await store.importReset(BUILD)).toMatchObject({ ok: false, code: 'reset-refused' })
+		expect(await store.importReset(BUILD, ACCESS)).toMatchObject({ ok: false, code: 'reset-refused' })
 		expect(await store.setupState(BUILD)).toEqual({ complete: true })
 	})
 
-	it('accepts IMPORT_TOKEN only while empty without Access settings, and for the rest of its own import', async () => {
+	it('opens IMPORT_TOKEN only in bootstrap and continues a token import only by its session', async () => {
 		const empty = await migratedStore()
-		expect(await empty.adminGate(BUILD)).toMatchObject({ tokenImport: true })
-
+		expect(await empty.adminGate(BUILD)).toMatchObject({ bootstrap: true })
 		const configured = await migratedStore()
 		await setAccess(configured)
-		expect(await configured.adminGate(BUILD)).toMatchObject({ tokenImport: false })
-		expect(await (await seeded(0)).adminGate(BUILD)).toMatchObject({ tokenImport: false })
+		expect(await configured.adminGate(BUILD)).toMatchObject({ bootstrap: false })
 
-		// The dump brings Access settings; the token import that brings them keeps going.
+		// The dump brings Access settings; they never authorize anyone, and the target's own (none) come back.
 		const source = await seeded(0)
 		await setAccess(source)
 		const { text } = await dumpViaRpc(source)
+		const header = splitDump(text).header
+		expect(await (await seeded(0)).importBegin(BUILD, TOKEN, header)).toMatchObject({ code: 'not-bootstrap' })
 		const target = await migratedStore()
-		const begun = await target.importBegin(BUILD, splitDump(text).header, 'token')
-		if (!begun.ok) throw new Error(begun.message)
+		const begun = await target.importBegin(BUILD, TOKEN, header)
+		if (!begun.ok || begun.session === undefined) throw new Error('no session')
+		const session = { kind: 'import-session', secret: begun.session } as const
 		for (const [i, chunk] of (await importChunks(text, 1 << 20)).entries()) {
-			expect(await target.importChunk(BUILD, begun.progress.id, i + 1, chunk)).toMatchObject({ ok: true })
+			expect(await target.importChunk(BUILD, session, begun.progress.id, i + 1, chunk)).toMatchObject({ ok: true })
 		}
-		// Imported Access rows do not authorize anyone before the import is verified; the token still does.
-		expect(await target.adminGate(BUILD)).toMatchObject({ tokenImport: true, access: { adminAud: null } })
-		expect(await finishImport(target, begun.progress.id, text)).toMatchObject({ ok: true })
-		expect(await target.adminGate(BUILD)).toMatchObject({
-			tokenImport: false,
-			access: { adminAud: 'aud-admin-0123456789' },
+		expect(await target.adminGate(BUILD)).toMatchObject({ bootstrap: false, access: { adminAud: null } })
+		expect(await target.importFinish(BUILD, session, begun.progress.id, splitDump(text).trailer)).toMatchObject({
+			ok: true,
 		})
+		expect(await target.importVerify(BUILD, session, begun.progress.id)).toMatchObject({ report: { ok: true } })
+		expect(await target.adminGate(BUILD)).toMatchObject({ bootstrap: true, access: { adminAud: null } })
 	})
 })
 

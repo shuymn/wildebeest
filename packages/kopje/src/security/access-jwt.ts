@@ -11,8 +11,9 @@ export type AccessDeps = { fetch: typeof fetch; now: () => number }
 
 export type AccessResult = { ok: true; email: string } | { ok: false; reason: string }
 
-// Who a verified token speaks for: a person (email) or a service token (common_name, its client id).
-export type AccessIdentity = { email: string | null; commonName: string | null }
+// Who a verified token speaks for: a person (email) or a service token (common_name, its client id). subject is the
+// raw sub claim: Cloudflare documents it as an empty string when authentication was through a service token.
+export type AccessIdentity = { email: string | null; commonName: string | null; subject: string | null }
 
 export type AccessClaimsResult = ({ ok: true } & AccessIdentity) | { ok: false; reason: string }
 
@@ -75,7 +76,8 @@ export async function verifyAccessClaims(
 		return { ok: false, reason: error instanceof errors.JOSEError ? error.code : 'unavailable' }
 	}
 	const text = (value: unknown) => (typeof value === 'string' && value !== '' ? value : null)
-	return { ok: true, email: text(payload.email), commonName: text(payload.common_name) }
+	const subject = typeof payload.sub === 'string' ? payload.sub : null
+	return { ok: true, email: text(payload.email), commonName: text(payload.common_name), subject }
 }
 
 export async function verifyAccessJwt(

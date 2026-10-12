@@ -220,9 +220,9 @@ export class StoreKernel {
 		if (schema.status === 'current' && state.upgrading === null) {
 			return { ok: true, bookmark: null, applied: [] }
 		}
-		const dump = activeDump(readFlags(this.#sql), this.#now())
-		if (dump !== null) {
-			return this.#deferForDump(dump.leaseUntil)
+		const blocked = this.#upgradeBlocker()
+		if (blocked !== null) {
+			return this.#defer(blocked)
 		}
 
 		let phase: UpgradePhase = 'bookmark'
@@ -278,9 +278,9 @@ export class StoreKernel {
 				return this.#fail(expected, marker.bookmark, 'verify-failed', problem)
 			}
 		} catch (error) {
-			if (error instanceof DumpFrozen) {
+			if (error instanceof UpgradeBlocked) {
 				// Nothing was written in the refused transaction; a resumed upgrade continues from its marker.
-				return this.#deferForDump(error.leaseUntil)
+				return this.#defer(error)
 			}
 			// An error does not prove a rollback: a timed-out transaction can still be durable. Report what is
 			// actually recorded; #fail re-reads the durable state and the Store stays readonly either way.
@@ -296,16 +296,31 @@ export class StoreKernel {
 		return { ok: true, bookmark: marker.bookmark, applied }
 	}
 
-	// A dump reads across many RPCs and must see one schema; try again once its lease ends.
-	async #deferForDump(leaseUntil: number): Promise<UpgradeResult> {
-		await this.#ctx.storage.setAlarm(leaseUntil + 1000)
-		return { ok: false, bookmark: null, reason: 'dump-in-progress', detail: 'deferred until the dump ends' }
+	// A dump reads across many RPCs and must see one schema: try again once its lease ends (finishing the dump
+	// schedules it sooner). An import must land in the schema its header names: the upgrade waits until the import is
+	// verified or reset, which schedule it.
+	async #defer(blocked: UpgradeBlocked): Promise<UpgradeResult> {
+		if (blocked.leaseUntil !== null) {
+			await this.#ctx.storage.setAlarm(blocked.leaseUntil + 1000)
+		}
+		const what = blocked.reason === 'dump-in-progress' ? 'dump' : 'import'
+		return { ok: false, bookmark: null, reason: blocked.reason, detail: `deferred until the ${what} ends` }
 	}
 
+	#upgradeBlocker(): UpgradeBlocked | null {
+		const flags = readFlags(this.#sql)
+		if (flags.import !== null) {
+			return new UpgradeBlocked('import-in-progress', null)
+		}
+		const dump = activeDump(flags, this.#now())
+		return dump === null ? null : new UpgradeBlocked('dump-in-progress', dump.leaseUntil)
+	}
+
+	// Called inside the transactions that record or apply the upgrade, so the check and the write are atomic.
 	#assertNotFrozen(): void {
-		const dump = activeDump(readFlags(this.#sql), this.#now())
-		if (dump !== null) {
-			throw new DumpFrozen(dump.leaseUntil)
+		const blocked = this.#upgradeBlocker()
+		if (blocked !== null) {
+			throw blocked
 		}
 	}
 
@@ -435,9 +450,12 @@ export class StoreKernel {
 	}
 }
 
-class DumpFrozen extends Error {
-	constructor(readonly leaseUntil: number) {
-		super('a dump holds the lease')
+class UpgradeBlocked extends Error {
+	constructor(
+		readonly reason: 'dump-in-progress' | 'import-in-progress',
+		readonly leaseUntil: number | null
+	) {
+		super(reason)
 	}
 }
 

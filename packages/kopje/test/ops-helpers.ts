@@ -12,6 +12,9 @@ export const TEAM_DOMAIN = 'kopje-team.cloudflareaccess.com'
 export const ADMIN_AUD = 'aud-admin-0123456789'
 export const SERVICE_CLIENT_ID = 'cli-client.access'
 
+// The import authority of an Access-authenticated admin.
+export const ACCESS = { kind: 'access' } as const
+
 function id(n: number): string {
 	return String(110_000_000_000_000_000n + BigInt(n))
 }
@@ -243,7 +246,7 @@ export async function importChunks(text: string, chunkBytes: number): Promise<Ui
 }
 
 export async function beginImport(store: StoreStub, text: string): Promise<string> {
-	const begun = await store.importBegin(BUILD, splitDump(text).header, 'access')
+	const begun = await store.importBegin(BUILD, ACCESS, splitDump(text).header)
 	if (!begun.ok) {
 		throw new Error(`${begun.code}: ${begun.message}`)
 	}
@@ -252,12 +255,12 @@ export async function beginImport(store: StoreStub, text: string): Promise<strin
 
 // Finishes an import whose chunks are all applied and runs verification to the end.
 export async function finishImport(store: StoreStub, id: string, text: string) {
-	const finished = await store.importFinish(BUILD, id, splitDump(text).trailer)
+	const finished = await store.importFinish(BUILD, ACCESS, id, splitDump(text).trailer)
 	if (!finished.ok) {
 		throw new Error(`${finished.code}: ${finished.message}`)
 	}
 	for (;;) {
-		const verified = await store.importVerify(BUILD, id)
+		const verified = await store.importVerify(BUILD, ACCESS, id)
 		if (!verified.ok) {
 			throw new Error(`${verified.code}: ${verified.message}`)
 		}
@@ -272,7 +275,7 @@ export async function importViaRpc(store: StoreStub, text: string, chunkBytes = 
 	const id = await beginImport(store, text)
 	let seq = 0
 	for (const chunk of await importChunks(text, chunkBytes)) {
-		const result = await store.importChunk(BUILD, id, ++seq, chunk)
+		const result = await store.importChunk(BUILD, ACCESS, id, ++seq, chunk)
 		if (!result.ok) {
 			throw new Error(`${result.code}: ${result.message}`)
 		}

@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { BUILD, freshStore, migratedStore, testKernel } from './helpers'
-import { dumpViaRpc, importViaRpc, seedStore, splitDump, tableSnapshot } from './ops-helpers'
+import { ACCESS, dumpViaRpc, importViaRpc, seedStore, splitDump, tableSnapshot } from './ops-helpers'
 import type { StoreStub } from '../src/platform/store-client'
 import { writeFlag } from '../src/platform/store-flags'
 
@@ -153,17 +153,17 @@ describe('import resume', () => {
 		const { text } = await dumpViaRpc(await seeded())
 		const { header, trailer } = splitDump(text)
 		const target = await migratedStore()
-		const begun = await target.importBegin(BUILD, header, 'access')
+		const begun = await target.importBegin(BUILD, ACCESS, header)
 		if (!begun.ok) throw new Error(begun.message)
 		const { importChunks } = await import('./ops-helpers')
 		for (const [i, chunk] of (await importChunks(text, 1 << 20)).entries()) {
-			await target.importChunk(BUILD, begun.progress.id, i + 1, chunk)
+			await target.importChunk(BUILD, ACCESS, begun.progress.id, i + 1, chunk)
 		}
-		expect(await target.importFinish(BUILD, begun.progress.id, trailer)).toMatchObject({ ok: true })
+		expect(await target.importFinish(BUILD, ACCESS, begun.progress.id, trailer)).toMatchObject({ ok: true })
 
-		const resumed = await target.importBegin(BUILD, header, 'access')
+		const resumed = await target.importBegin(BUILD, ACCESS, header)
 		expect(resumed).toMatchObject({ ok: true, resumed: true, progress: { id: begun.progress.id, state: 'finished' } })
-		expect(await target.importVerify(BUILD, begun.progress.id)).toMatchObject({
+		expect(await target.importVerify(BUILD, ACCESS, begun.progress.id)).toMatchObject({
 			ok: true,
 			done: true,
 			report: { ok: true },

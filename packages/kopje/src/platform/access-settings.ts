@@ -19,8 +19,10 @@ export function readAccessSettings(sql: SqlStorage): AccessSettings {
 	return settingsFromRows(readBootstrapRows(sql))
 }
 
-// The Access rows are configuration of this Store, not data: they do not make it non-empty for an import, an import
-// moves them aside (so they keep authorizing the admin while imported rows land), and a reset keeps them.
+// The Access rows are the admin authority of this Store, not data: they do not make it non-empty for an import, an
+// import moves them aside (so they keep authorizing the admin while imported rows land) and afterwards puts back
+// exactly these rows (an imported value never replaces them), and a reset keeps them. Only the config operation
+// changes them.
 export const BOOTSTRAP = {
 	table: 'instance_settings',
 	column: 'name',
@@ -51,13 +53,38 @@ export function settingsFromRows(rows: readonly SettingRow[]): AccessSettings {
 	return settings
 }
 
-// Writes bootstrap rows back where the table has no row of that name (imported values win).
-export function restoreBootstrapRows(sql: SqlStorage, rows: readonly SettingRow[]): void {
+// Makes the authority rows exactly `rows`: any other value of these names (an imported one) is removed, and a name
+// that was absent stays absent.
+export function replaceBootstrapRows(sql: SqlStorage, rows: readonly SettingRow[]): void {
+	sql.exec(
+		`DELETE FROM instance_settings WHERE name IN (${BOOTSTRAP.values.map(() => '?').join(',')})`,
+		...BOOTSTRAP.values
+	)
 	for (const row of rows) {
-		sql.exec('INSERT OR IGNORE INTO instance_settings (name, value) VALUES (?, ?)', row.name, row.value)
+		sql.exec('INSERT INTO instance_settings (name, value) VALUES (?, ?)', row.name, row.value)
 	}
 }
 
-export function accessConfigured(settings: AccessSettings): boolean {
-	return Object.values(settings).some((value) => value !== null)
+// Admin access works once a team, the /admin AUD and an identity to admit are set. Until then the Store is in
+// bootstrap, where IMPORT_TOKEN may configure it and begin an import.
+export function adminUsable(settings: AccessSettings): boolean {
+	return (
+		settings.teamDomain !== null &&
+		settings.adminAud !== null &&
+		(settings.adminEmail !== null || settings.serviceTokenClientId !== null)
+	)
+}
+
+// What the config operation may set: the authority rows above, plus the instance values the cutover tool takes from
+// the legacy settings. domain and access_aud are the rows domain/setup.ts and domain/oauth.ts (ACCESS_AUD) read.
+export const CONFIG_KEYS: readonly string[] = ['domain', 'access_aud', ...BOOTSTRAP.values]
+
+export function readConfigRows(sql: SqlStorage): Record<string, string> {
+	const rows = sql
+		.exec<SettingRow>(
+			`SELECT name, value FROM instance_settings WHERE name IN (${CONFIG_KEYS.map(() => '?').join(',')}) ORDER BY name`,
+			...CONFIG_KEYS
+		)
+		.toArray()
+	return Object.fromEntries(rows.map((row) => [row.name, row.value]))
 }

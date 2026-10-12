@@ -7,32 +7,41 @@ import type { AccessSettings } from '../platform/access-settings'
 import { readBoundedBody } from '../platform/body'
 import { readConfig } from '../platform/config'
 import { errorMessage } from '../platform/error-message'
+import type { ImportAuthority } from '../platform/store-admin'
 import type { StoreResolver, StoreStub } from '../platform/store-client'
 import { toStoreUnavailable } from '../platform/store-errors'
-import { type AccessDeps, verifyAccessClaims } from '../security/access-jwt'
+import { type AccessDeps, type AccessIdentity, verifyAccessClaims } from '../security/access-jwt'
 import { constantTimeEqual } from '../security/tokens'
 
-// The admin HTTP API behind its own Access application. Every request is authenticated here as well:
+// The admin HTTP API behind its own Access application. Every request is authenticated here as well, and every
+// import or configuration mutation passes its authority to the Store, which checks it where it writes:
 //   - Cf-Access-Jwt-Assertion verified against the team JWKS with the AUD from instance_settings, from the admin's
 //     email or the admin CLI's service token (common_name = the configured client id); or
-//   - Kopje-Import-Token = IMPORT_TOKEN, only for the import endpoints, only while the Store is empty and has no Access
-//     settings (and for the rest of an import begun that way). Used for the cutover, then removed.
+//   - Kopje-Import-Token = IMPORT_TOKEN, while the Store is in bootstrap (no usable admin access): to read its health,
+//     version and catalog, to configure it (/admin/config), and to begin an import into it while it is empty. Used
+//     for the cutover, then removed.
+//   - Kopje-Import-Session = the credential that begin returned for a token import: only for that import.
 // The maintenance gate does not apply: these routes are how an operator works on a Store in maintenance.
 
 export const ADMIN_PREFIX = '/admin'
 export const IMPORT_TOKEN_HEADER = 'Kopje-Import-Token'
+export const IMPORT_SESSION_HEADER = 'Kopje-Import-Session'
 const MIN_IMPORT_TOKEN_LENGTH = 32
 const JSON_BODY_LIMIT = 1024 * 1024
 // A chunk of statements plus room for nothing else; the Store refuses anything larger.
 const IMPORT_CHUNK_LIMIT = 16 * 1024 * 1024
-const TOKEN_PATHS = [/^\/admin\/import\//, /^\/admin\/(health|version|catalog)$/]
+// IMPORT_TOKEN: reads only while in bootstrap (checked here); mutations are checked by the Store.
+const TOKEN_READ_PATHS = [/^\/admin\/(health|version|catalog|config)$/]
+const TOKEN_WRITE_PATHS = [/^\/admin\/import\/begin$/, /^\/admin\/config$/]
+const SESSION_PATHS = [/^\/admin\/import\/(chunk|finish|verify|progress|reset)$/]
+const SESSION_SECRET = /^[A-Za-z0-9_-]{43}$/
 
 export type AdminDeps = AccessDeps & {
 	build: (env: Env) => string
 	store: StoreResolver
 }
 
-type AdminVariables = { auth: { kind: 'access' | 'import-token' } }
+type AdminVariables = { auth: ImportAuthority }
 type AdminEnv = { Bindings: Env; Variables: AdminVariables }
 
 type Refusal = { ok: false; code: string; message: string }
@@ -50,6 +59,10 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	'out-of-range': 400,
 	'query-failed': 400,
 	'dump-not-found': 404,
+	'wrong-authority': 403,
+	'not-bootstrap': 403,
+	'invalid-config': 400,
+	'invalid-op-id': 400,
 	'import-not-found': 404,
 	'pitr-unavailable': 503,
 	'chunk-failed': 500,
@@ -106,15 +119,19 @@ function parseTime(value: string): number | null {
 }
 
 // The admin policy over a verified Access token: the admin's email, or the admin CLI's service token.
-function adminAllowed(
-	identity: { email: string | null; commonName: string | null },
-	access: AccessSettings
-): string | null {
+// A service token is recognized by its documented shape: no email, an empty sub, and common_name = its client id.
+// common_name alone is not enough: Access also uses it for the name on an mTLS client certificate.
+function adminAllowed(identity: AccessIdentity, access: AccessSettings): string | null {
 	if (identity.email !== null) {
 		const admin = access.adminEmail !== null && identity.email.toLowerCase() === access.adminEmail.toLowerCase()
 		return admin ? null : 'this identity is not the admin'
 	}
-	if (identity.commonName !== null && identity.commonName === access.serviceTokenClientId) {
+	if (
+		identity.subject === '' &&
+		identity.commonName !== null &&
+		access.serviceTokenClientId !== null &&
+		identity.commonName === access.serviceTokenClientId
+	) {
 		return null
 	}
 	return 'this service token is not the admin CLI token'
@@ -128,7 +145,15 @@ export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
 		createMiddleware<AdminEnv>(async (c, next) => {
 			// Requests without any credential are refused before the Store is asked for settings.
 			const presented = c.req.header(IMPORT_TOKEN_HEADER)
+			const session = c.req.header(IMPORT_SESSION_HEADER)
 			const assertion = c.req.header('Cf-Access-Jwt-Assertion')
+			if (session !== undefined) {
+				if (!SESSION_SECRET.test(session) || !SESSION_PATHS.some((p) => p.test(c.req.path))) {
+					return c.json({ error: 'an import session only continues its own import' }, 403)
+				}
+				c.set('auth', { kind: 'import-session', secret: session })
+				return next()
+			}
 			if (presented === undefined && (assertion === undefined || assertion === '')) {
 				return c.json({ error: 'missing Cf-Access-Jwt-Assertion' }, 401)
 			}
@@ -143,14 +168,13 @@ export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
 				if (!constantTimeEqual(presented, secret)) {
 					return c.json({ error: 'invalid import token' }, 401)
 				}
-				if (!TOKEN_PATHS.some((p) => p.test(c.req.path))) {
-					return c.json({ error: 'the import token only authorizes import' }, 403)
+				const write = c.req.method === 'POST' && TOKEN_WRITE_PATHS.some((p) => p.test(c.req.path))
+				const read = c.req.method === 'GET' && TOKEN_READ_PATHS.some((p) => p.test(c.req.path))
+				if (!write && !read) {
+					return c.json({ error: 'the import token only bootstraps an empty Store' }, 403)
 				}
-				if (!(await stub(c).adminGate(build(c.env))).tokenImport) {
-					return c.json(
-						{ error: 'the import token is accepted only while the Store is empty and has no Access settings' },
-						403
-					)
+				if (read && !(await stub(c).adminGate(build(c.env))).bootstrap) {
+					return c.json({ error: 'the import token is accepted only while the Store has no admin access' }, 403)
 				}
 				c.set('auth', { kind: 'import-token' })
 				return next()
@@ -226,11 +250,14 @@ export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
 	// ---- dump
 
 	admin.post('/dump/start', async (c) => {
-		const { leaseSeconds } = await jsonBody(c)
-		if (leaseSeconds !== undefined && typeof leaseSeconds !== 'number') {
-			return c.json({ error: 'leaseSeconds must be a number' }, 400)
+		const { leaseSeconds, opId } = await jsonBody(c)
+		if (
+			(leaseSeconds !== undefined && typeof leaseSeconds !== 'number') ||
+			(opId !== undefined && typeof opId !== 'string')
+		) {
+			return c.json({ error: 'expected {"leaseSeconds"?: number, "opId"?: string}' }, 400)
 		}
-		return reply(c, await stub(c).dumpStart(build(c.env), leaseSeconds))
+		return reply(c, await stub(c).dumpStart(build(c.env), leaseSeconds, opId))
 	})
 
 	// The response is the cursor as one JSON line, then the chunk bytes.
@@ -265,11 +292,12 @@ export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
 
 	admin.post('/import/begin', async (c) => {
 		const { header } = await jsonBody(c)
-		const mode = c.get('auth').kind === 'import-token' ? 'token' : 'access'
-		return reply(c, await stub(c).importBegin(build(c.env), header, mode))
+		return reply(c, await stub(c).importBegin(build(c.env), c.get('auth'), header))
 	})
 
-	admin.get('/import/progress', async (c) => c.json({ progress: await stub(c).importProgress(build(c.env)) }))
+	admin.get('/import/progress', async (c) =>
+		c.json(await stub(c).importProgress(build(c.env), c.get('auth'), c.req.query('id')))
+	)
 
 	admin.post('/import/chunk', async (c) => {
 		const id = c.req.query('id')
@@ -281,7 +309,7 @@ export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
 		if (body === 'too-large') {
 			return c.json({ error: `a chunk may hold at most ${IMPORT_CHUNK_LIMIT} bytes`, code: 'chunk-too-large' }, 413)
 		}
-		return reply(c, await stub(c).importChunk(build(c.env), id, seq, body))
+		return reply(c, await stub(c).importChunk(build(c.env), c.get('auth'), id, seq, body))
 	})
 
 	admin.post('/import/finish', async (c) => {
@@ -289,7 +317,7 @@ export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
 		if (typeof id !== 'string') {
 			return c.json({ error: 'expected {"id": string, "trailer": object}' }, 400)
 		}
-		return reply(c, await stub(c).importFinish(build(c.env), id, trailer))
+		return reply(c, await stub(c).importFinish(build(c.env), c.get('auth'), id, trailer))
 	})
 
 	admin.post('/import/verify', async (c) => {
@@ -297,15 +325,24 @@ export function adminRoutes({ build, store, fetch, now }: AdminDeps) {
 		if (typeof id !== 'string') {
 			return c.json({ error: 'expected {"id": string}' }, 400)
 		}
-		return reply(c, await stub(c).importVerify(build(c.env), id))
+		return reply(c, await stub(c).importVerify(build(c.env), c.get('auth'), id))
 	})
 
 	admin.post('/import/reset', async (c) => {
-		const { confirm } = await jsonBody(c)
-		if (confirm !== true) {
-			return c.json({ error: 'reset deletes all data of this Store; send {"confirm": true}' }, 400)
+		const { confirm, id } = await jsonBody(c)
+		if (confirm !== true || (id !== undefined && typeof id !== 'string')) {
+			return c.json({ error: 'reset deletes all data of this Store; send {"confirm": true, "id"?: string}' }, 400)
 		}
-		return reply(c, await stub(c).importReset(build(c.env)))
+		return reply(c, await stub(c).importReset(build(c.env), c.get('auth'), id))
+	})
+
+	// ---- configuration (instance values and Access authority; never changed by an import)
+
+	admin.get('/config', async (c) => c.json(await stub(c).config(build(c.env))))
+
+	admin.post('/config', async (c) => {
+		const { values } = await jsonBody(c)
+		return reply(c, await stub(c).setConfig(build(c.env), c.get('auth'), values))
 	})
 
 	// ---- PITR

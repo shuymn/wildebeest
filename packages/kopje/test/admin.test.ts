@@ -13,7 +13,7 @@ import {
 } from './access-helpers'
 import { NOW } from './app-helpers'
 import { BUILD, migratedStore, testKernel } from './helpers'
-import { ADMIN_EMAIL, dumpViaRpc, importChunks, seedStore, splitDump } from './ops-helpers'
+import { ACCESS, ADMIN_EMAIL, dumpViaRpc, importChunks, seedStore, splitDump } from './ops-helpers'
 import { ACCESS_TEAM_DOMAIN } from '../src/domain/oauth'
 import { ACCESS_SETTINGS } from '../src/platform/access-settings'
 import { StoreAdmin } from '../src/platform/store-admin'
@@ -114,7 +114,8 @@ describe('import token', () => {
 		const begin = await request('/admin/import/begin', withToken({ method: 'POST', body: JSON.stringify({ header }) }))
 		expect(begin.status).toBe(200)
 		expect(await begin.json()).toMatchObject({ progress: { mode: 'token', lastSeq: 0 } })
-		expect((await request('/admin/version', withToken())).status).toBe(200)
+		// Once the import has begun, IMPORT_TOKEN no longer opens anything; its session continues it.
+		expect((await request('/admin/version', withToken())).status).toBe(403)
 	})
 
 	it('is refused when wrong, unset, short, outside import, or once the Store has data or Access', async () => {
@@ -324,7 +325,7 @@ describe('import bootstrap over Access', () => {
 		expect(begun.status).toBe(200)
 		const { progress } = (await begun.json()) as { progress: { id: string } }
 		const chunks = await importChunks(text, 1 << 20)
-		expect(await target.importChunk(BUILD, progress.id, 1, chunks[0]!)).toMatchObject({ ok: true })
+		expect(await target.importChunk(BUILD, ACCESS, progress.id, 1, chunks[0]!)).toMatchObject({ ok: true })
 
 		// Reset keeps the Access settings, so the admin can still sign in and import again.
 		expect((await post(adminClaims(), '/admin/import/reset', { confirm: true })).status).toBe(200)
@@ -334,7 +335,7 @@ describe('import bootstrap over Access', () => {
 			progress: { id: string }
 		}
 		for (const [i, chunk] of chunks.entries()) {
-			expect(await target.importChunk(BUILD, again.progress.id, i + 1, chunk)).toMatchObject({ ok: true })
+			expect(await target.importChunk(BUILD, ACCESS, again.progress.id, i + 1, chunk)).toMatchObject({ ok: true })
 		}
 		expect((await post(adminClaims(), '/admin/import/finish', { id: again.progress.id, trailer })).status).toBe(200)
 		const verified = await post(adminClaims(), '/admin/import/verify', { id: again.progress.id })
