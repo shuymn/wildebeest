@@ -1,3 +1,5 @@
+import { HTTPException } from 'hono/http-exception'
+
 import {
 	type ApiContext,
 	type ApiDeps,
@@ -53,18 +55,38 @@ export function parseFocus(value: string | undefined): { x: number; y: number } 
 	if (value === undefined || value === '') {
 		return undefined
 	}
-	const [x = 0, y = 0] = value.split(',').map((part) => {
+	// At most two components are split off, however many commas the value has.
+	const [x = 0, y = 0] = value.split(',', 2).map((part) => {
 		const n = Number.parseFloat(part)
 		return Number.isFinite(n) ? Math.min(1, Math.max(-1, n)) : 0
 	})
 	return { x, y }
 }
 
+// Whether `text` has more than `max` characters (code points), counting no further than max + 1.
+function exceedsCharacters(text: string, max: number): boolean {
+	if (text.length <= max) {
+		return false
+	}
+	let count = 0
+	for (const _ of text) {
+		if (++count > max) {
+			return true
+		}
+	}
+	return false
+}
+
 export function descriptionProblem(description: string | undefined): string | undefined {
-	return description !== undefined && [...description].length > MAX_DESCRIPTION
+	return description !== undefined && exceedsCharacters(description, MAX_DESCRIPTION)
 		? `Validation failed: Description is too long (maximum is ${MAX_DESCRIPTION} characters)`
 		: undefined
 }
+
+// Each text field of the upload form is bounded on its own (a description is at most 1,500 characters, at most 6 KB
+// in UTF-16), and so is their number, so a small image cannot carry megabytes of text into later processing (RES-1).
+const MAX_FIELD_LENGTH = 4 * MAX_DESCRIPTION
+const MAX_FIELDS = 16
 
 type MediaForm = { file: Uint8Array; params: Params } | { error: string }
 
@@ -93,6 +115,9 @@ async function readMediaForm(request: Request): Promise<MediaForm> {
 		return { error: TOO_LARGE }
 	}
 	const fields = [...form.entries()].filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+	if (fields.length > MAX_FIELDS || fields.some(([, value]) => value.length > MAX_FIELD_LENGTH)) {
+		return { error: 'Validation failed: A form field is too long' }
+	}
 	const query = [...new URL(request.url).searchParams.entries()]
 	return { file: new Uint8Array(await file.arrayBuffer()), params: new Params([...fields, ...query]) }
 }
@@ -127,10 +152,10 @@ export const uploadMedia: ApiHandler = async (c, deps) => {
 				? mastodonError(429, 'Your media processing budget for the month is used up')
 				: mastodonError(429, "This server's media processing budget for the month is used up")
 	}
-	const id = reserved.id
+	const { id, deadline } = reserved
 	let outcome: Response | MediaAttachment
 	try {
-		outcome = await processUpload(c, deps, id, token)
+		outcome = await processUpload(c, deps, { id, token, deadline })
 	} catch (error) {
 		await abandon(c, deps, id, token)
 		throw error
@@ -142,12 +167,14 @@ export const uploadMedia: ApiHandler = async (c, deps) => {
 	return c.json(outcome)
 }
 
+const EXPIRED = () => mastodonError(422, 'Validation failed: The upload expired')
+
 async function processUpload(
 	c: ApiContext,
 	deps: ApiDeps,
-	id: string,
-	token: string
+	upload: { id: string; token: string; deadline: number }
 ): Promise<Response | MediaAttachment> {
+	const { id, token } = upload
 	const form = await readMediaForm(c.req.raw)
 	if ('error' in form) {
 		return mastodonError(422, form.error)
@@ -167,26 +194,44 @@ async function processUpload(
 		}
 		return mastodonError(failure.status, failure.error)
 	}
+	// The writer deadline fences the sweep: no write starts after it, and the Store refuses to complete after it, so a
+	// reservation the sweep may delete has no writer left (domain/media.ts).
+	if (deps.now() >= upload.deadline) {
+		return EXPIRED()
+	}
 	await writeFiles(c.env.MEDIA, id, token, form.file, processed.image)
 	const { full, small } = processed.image
-	const media = authorized(
-		await storeCall(c, deps, (s, b) =>
-			s.completeMedia(b, {
-				credential: userCredential(c, deps),
-				id,
-				contentType: full.contentType,
-				original: { width: full.width, height: full.height },
-				small: { width: small.width, height: small.height },
-				description: description ?? '',
-				focus: parseFocus(form.params.get('focus')) ?? { x: 0, y: 0 },
-				now: deps.now(),
-			})
+	const complete = async () =>
+		authorized(
+			await storeCall(c, deps, (s, b) =>
+				s.completeMedia(b, {
+					credential: userCredential(c, deps),
+					id,
+					contentType: full.contentType,
+					original: { width: full.width, height: full.height },
+					small: { width: small.width, height: small.height },
+					description: description ?? '',
+					focus: parseFocus(form.params.get('focus')) ?? { x: 0, y: 0 },
+					now: deps.now(),
+				})
+			)
 		)
-	)
-	return media ?? mastodonError(422, 'Validation failed: The upload expired')
+	let media: MediaAttachment | null
+	try {
+		media = await complete()
+	} catch (error) {
+		// The completion may have committed and only its answer been lost: completing again is idempotent and answers
+		// with the media if it did.
+		if (error instanceof HTTPException) {
+			throw error
+		}
+		media = await complete()
+	}
+	return media ?? EXPIRED()
 }
 
 // The original is kept (private, for backups) next to the served files. Keys come from the Store's id and token only.
+// Every write settles before this returns, so cleanup after a failure never races a write still in flight.
 async function writeFiles(
 	bucket: R2Bucket,
 	id: string,
@@ -194,23 +239,31 @@ async function writeFiles(
 	original: Uint8Array,
 	image: ProcessedImage
 ): Promise<void> {
-	await Promise.all([
+	const results = await Promise.allSettled([
 		bucket.put(originalKey(id), original, { httpMetadata: { contentType: image.original.type } }),
 		bucket.put(fileKey(token, 'full'), image.full.bytes, { httpMetadata: { contentType: image.full.contentType } }),
 		bucket.put(fileKey(token, 'small'), image.small.bytes, { httpMetadata: { contentType: image.small.contentType } }),
 	])
+	const failed = results.find((result) => result.status === 'rejected')
+	if (failed !== undefined) {
+		throw failed.reason
+	}
 }
 
-// A failed upload: its R2 objects are deleted now, and its row is doomed for the sweep. Both are best effort; the
-// reservation expires on its own if they fail.
+// A failed upload. The Store decides first: it dooms a reservation that never completed (its writer, this request,
+// has settled every write), or keeps an upload whose completion committed although its answer was lost. Only then are
+// the R2 objects deleted, and only those of a doomed or vanished row. If the Store cannot be asked, the objects stay
+// for the sweep, which deletes them with the reservation once its writer deadline has passed.
 async function abandon(c: ApiContext, deps: ApiDeps, id: string, token: string): Promise<void> {
 	try {
-		await c.env.MEDIA.delete(mediaKeys(id, token))
-		authorized(
+		const outcome = authorized(
 			await storeCall(c, deps, (s, b) =>
 				s.abandonMedia(b, { credential: userCredential(c, deps), id, now: deps.now() })
 			)
 		)
+		if (outcome !== 'kept') {
+			await c.env.MEDIA.delete(mediaKeys(id, token))
+		}
 	} catch (error) {
 		console.error({ event: 'kopje.media.abandon_failed', ...errorFields(error) })
 	}

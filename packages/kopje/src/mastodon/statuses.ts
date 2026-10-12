@@ -10,12 +10,12 @@ import {
 	userCredential,
 } from './context'
 import { mastodonError } from './errors'
-import { descriptionProblem, sweepSoon } from './media'
+import { descriptionProblem, parseFocus, sweepSoon } from './media'
 import { linkHeader, pageQuery } from './pagination'
 import { type Params, parseBoolean } from './params'
 import { API_VISIBILITIES, type ApiVisibility } from '../domain/audience'
 import { exceedsRawLength, statusLength } from '../domain/status-text'
-import type { Acted, Viewed } from '../domain/statuses'
+import type { Acted, MediaAttributes, Viewed } from '../domain/statuses'
 import { sha256Hex } from '../security/tokens'
 
 // /api/v1/statuses (B4a): posting, editing, deleting, the per-status reads, and favourite, reblog and bookmark.
@@ -139,11 +139,13 @@ export const editStatus: ApiHandler = async (c, deps) => {
 		return p
 	}
 	const composed = composition(p)
-	const mediaAttributes = p
-		.objects('media_attributes')
-		.flatMap((a) =>
-			a.id === undefined || a.description === undefined ? [] : [{ id: a.id, description: a.description }]
-		)
+	// UpdateStatusService applies description and focus of each entry; an entry with neither changes nothing.
+	const mediaAttributes: MediaAttributes[] = p.objects('media_attributes').flatMap((a) => {
+		const focus = parseFocus(a.focus)
+		return a.id === undefined || (a.description === undefined && focus === undefined)
+			? []
+			: [{ id: a.id, description: a.description, focus }]
+	})
 	const problem =
 		typeof composed === 'string'
 			? composed

@@ -207,6 +207,8 @@ function searchText(text: string, spoilerText: string): string {
 // Posting
 // ---------------------------------------------------------------------------------------------------------------
 
+export type MediaAttributes = { id: string; description?: string; focus?: { x: number; y: number } }
+
 export type CreateStatusInput = {
 	text: string
 	visibility?: ApiVisibility
@@ -393,8 +395,9 @@ export type EditStatusInput = {
 	sensitive?: boolean
 	language?: string
 	mediaIds: string[]
-	// media_attributes[]: new descriptions of attached media. Entries for media the edit does not attach are ignored.
-	mediaAttributes: { id: string; description: string }[]
+	// media_attributes[]: new descriptions and focal points of attached media, as UpdateStatusService applies them.
+	// Entries for media the edit does not attach are ignored.
+	mediaAttributes: MediaAttributes[]
 	now: number
 	present: Present
 }
@@ -480,22 +483,28 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	}
 	const sensitive = (input.sensitive ?? false) || input.spoilerText !== ''
 	const language = input.language ?? current.language
-	const currentMedia = db.all<{ id: string; description: string }>(
-		'SELECT id, description FROM media_attachments WHERE status_id = ? ORDER BY position, id',
+	const currentMedia = db.all<{ id: string; description: string; focus_x: number; focus_y: number }>(
+		'SELECT id, description, focus_x, focus_y FROM media_attachments WHERE status_id = ? ORDER BY position, id',
 		current.id
 	)
-	// Only descriptions of media this edit attaches (own media, checked by attachableMedia) are applied.
-	const descriptions = new Map(
-		input.mediaAttributes.filter((a) => media.includes(a.id)).map((a) => [a.id, a.description])
-	)
-	const describedBefore = new Map(currentMedia.map((m) => [m.id, m.description]))
+	// Only attributes of media this edit attaches (own media, checked by attachableMedia) are applied.
+	const attributes = input.mediaAttributes.filter((a) => media.includes(a.id))
+	const before = new Map(currentMedia.map((m) => [m.id, m]))
+	const changesMedia = (a: MediaAttributes): boolean => {
+		const old = before.get(a.id)
+		return (
+			old === undefined ||
+			(a.description !== undefined && a.description !== old.description) ||
+			(a.focus !== undefined && (a.focus.x !== old.focus_x || a.focus.y !== old.focus_y))
+		)
+	}
 	const unchanged =
 		input.text === (current.source_text ?? '') &&
 		input.spoilerText === current.spoiler_text &&
 		(sensitive ? 1 : 0) === current.sensitive &&
 		language === current.language &&
 		JSON.stringify(media) === JSON.stringify(currentMedia.map((m) => m.id)) &&
-		[...descriptions].every(([id, description]) => describedBefore.get(id) === description)
+		!attributes.some(changesMedia)
 	const status = (): Acted<Status> => {
 		return viewed(presentStatus(db, current.id, options))
 	}
@@ -535,11 +544,15 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	const added = writeMentions(db, current.id, mentions, previous)
 	writeTags(db, current.id, composed.tags)
 	attachMedia(db, current.id, media, input.now)
-	for (const [id, description] of descriptions) {
+	for (const a of attributes) {
 		db.run(
-			'UPDATE media_attachments SET description = ? WHERE id = ? AND account_id = ? AND status_id = ?',
-			description,
-			id,
+			`UPDATE media_attachments SET description = COALESCE(?, description), focus_x = COALESCE(?, focus_x),
+				focus_y = COALESCE(?, focus_y)
+			WHERE id = ? AND account_id = ? AND status_id = ?`,
+			a.description ?? null,
+			a.focus?.x ?? null,
+			a.focus?.y ?? null,
+			a.id,
 			accountId,
 			current.id
 		)

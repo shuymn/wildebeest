@@ -111,20 +111,36 @@ function jpegMetadata(bytes: Uint8Array): RetainedMetadata | null {
 	return 'unreadable'
 }
 
+// PNG chunks a re-encoded image may keep: structure, transparency, colour (gAMA, cHRM, sRGB, iCCP), pixel density and
+// animation (APNG). Anything else counts as metadata.
+const PNG_CHUNKS = new Set([
+	'IHDR',
+	'PLTE',
+	'IDAT',
+	'IEND',
+	'tRNS',
+	'gAMA',
+	'cHRM',
+	'sRGB',
+	'iCCP',
+	'pHYs',
+	'acTL',
+	'fcTL',
+	'fdAT',
+])
+
 function pngMetadata(bytes: Uint8Array): RetainedMetadata | null {
 	if (sniffImageType(bytes) !== 'image/png') {
 		return 'unreadable'
 	}
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
 	let i = 8
-	while (i + 8 <= bytes.length) {
+	while (i + 12 <= bytes.length) {
 		const length = view.getUint32(i)
 		const type = ascii(bytes, i + 4, 4)
-		if (i + 12 + length > bytes.length) {
+		const end = i + 12 + length
+		if (end > bytes.length) {
 			return 'unreadable'
-		}
-		if (type === 'IEND') {
-			return null
 		}
 		if (type === 'eXIf') {
 			return 'exif'
@@ -132,22 +148,37 @@ function pngMetadata(bytes: Uint8Array): RetainedMetadata | null {
 		if (type === 'tEXt' || type === 'zTXt' || type === 'iTXt') {
 			return 'text'
 		}
-		i += 12 + length
+		if (!PNG_CHUNKS.has(type)) {
+			return 'segment'
+		}
+		if (type === 'IEND') {
+			// Nothing may follow the end of the image.
+			return end === bytes.length ? null : 'unreadable'
+		}
+		i = end
 	}
 	return 'unreadable'
 }
+
+// WebP chunks a re-encoded image may keep: image data, alpha, the extended header, the colour profile and animation.
+const WEBP_CHUNKS = new Set(['VP8 ', 'VP8L', 'VP8X', 'ALPH', 'ICCP', 'ANIM', 'ANMF'])
 
 function webpMetadata(bytes: Uint8Array): RetainedMetadata | null {
 	if (sniffImageType(bytes) !== 'image/webp') {
 		return 'unreadable'
 	}
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-	const end = Math.min(bytes.length, 8 + view.getUint32(4, true))
+	// The RIFF extent must cover the file exactly: nothing outside it, and no chunk past it.
+	const end = 8 + view.getUint32(4, true)
+	if (end !== bytes.length) {
+		return 'unreadable'
+	}
 	let i = 12
 	while (i + 8 <= end) {
 		const type = ascii(bytes, i, 4)
 		const length = view.getUint32(i + 4, true)
-		if (i + 8 + length > end) {
+		const next = i + 8 + length + (length % 2)
+		if (next > end) {
 			return 'unreadable'
 		}
 		if (type === 'EXIF') {
@@ -156,7 +187,10 @@ function webpMetadata(bytes: Uint8Array): RetainedMetadata | null {
 		if (type === 'XMP ') {
 			return 'xmp'
 		}
-		i += 8 + length + (length % 2)
+		if (!WEBP_CHUNKS.has(type)) {
+			return 'segment'
+		}
+		i = next
 	}
 	return i === end ? null : 'unreadable'
 }

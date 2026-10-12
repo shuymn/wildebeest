@@ -173,7 +173,7 @@ CREATE TABLE media_attachments (
   meta TEXT CHECK (meta IS NULL OR json_valid(meta)),  -- {"original":{"width","height"},"small":{...}}
   focus_x REAL NOT NULL DEFAULT 0 CHECK (focus_x BETWEEN -1 AND 1),
   focus_y REAL NOT NULL DEFAULT 0 CHECK (focus_y BETWEEN -1 AND 1),
-  processed INTEGER NOT NULL DEFAULT 1 CHECK (processed IN (0, 1)),  -- 0 while a local upload is processing
+  processed INTEGER NOT NULL DEFAULT 1 CHECK (processed IN (0, 1)),  -- 0 while the uploading request may still write to R2
   gc_at TEXT,                                     -- unattached local upload: deleted (with its R2 objects) from then on
   legacy_ap_o TEXT,                               -- uuid of the old local Image /ap/o/<uuid>
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),

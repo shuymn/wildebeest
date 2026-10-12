@@ -12,6 +12,12 @@ import { mediaPath } from '../platform/media-files'
 //   2. the Worker re-encodes the image and writes the original and the served files to R2;
 //   3. completeMedia (Store) records type, URLs and dimensions; abandonMedia marks a failed upload for deletion.
 //
+// The writer (the uploading request) gets a deadline, WRITE_WINDOW_MS after the reservation: it starts no R2 write
+// after it, and completeMedia refuses after it. The reservation itself is kept until RESERVATION_MS, so the sweep never
+// deletes a row, and the objects it names, while its writer may still write. processed = 0 means a writer may still be
+// at work; completion and abandonment both set it to 1. Completion is idempotent, so a request whose completion
+// answer was lost can ask again, and abandonment never dooms a completed upload.
+//
 // Lifecycle: an unattached upload carries gc_at. It is attachable only while gc_at is in the future. A status that
 // stops using media (edit, delete) detaches it with a new grace period, so a redraft can attach it again; delete_media
 // dooms it at once. The sweep (expiredMedia, then R2 deletes, then purgeMedia) removes doomed rows and their R2 objects in
@@ -25,7 +31,9 @@ const HOUR = 60 * 60 * 1000
 // Media a status no longer uses may be attached again for a day (Mastodon vacuums unattached media after a day).
 export const DETACHED_GRACE_MS = 24 * HOUR
 
-// A reservation that never completes (the Worker failed mid-upload) is swept after an hour.
+// The writer of a reservation must finish within WRITE_WINDOW_MS. A reservation that never completes (the Worker failed
+// mid-upload) is swept after RESERVATION_MS, which leaves 45 minutes for writes started before the deadline to settle.
+export const WRITE_WINDOW_MS = 15 * 60 * 1000
 const RESERVATION_MS = HOUR
 
 // Mastodon's rate limit for media uploads: 30 per 30 minutes per account (RES-6). Attempts are counted, not rows: a
@@ -36,7 +44,10 @@ export const UPLOAD_BUDGET = { count: 30, windowMs: 30 * 60 * 1000 }
 export const TRANSFORMS_PER_UPLOAD = 2
 
 // The attempt and transformation counters live in kopje_state, outside the dumped tables: each account's attempt times
-// in the window (at most UPLOAD_BUDGET.count), and the instance's reserved transformations in the current UTC month.
+// in the window (at most UPLOAD_BUDGET.count), and the transformations reserved per UTC month, for the instance and
+// for each account. A reservation is charged to the month of its own time, also when its transformations run after
+// midnight (they run within WRITE_WINDOW_MS). Months before the previous one are pruned; the current and later months
+// are never touched by a request, so one that reaches the Store late cannot reset newer counters.
 const ATTEMPTS = 'media_attempts:'
 const TRANSFORMS = 'images_transforms:'
 const ACCOUNT_TRANSFORMS = 'images_account_transforms:'
@@ -72,7 +83,7 @@ function ownUpload(db: Db, accountId: string, id: string, now: number): MediaRow
 }
 
 export type Reserved =
-	| { status: 'ok'; id: string }
+	| { status: 'ok'; id: string; deadline: number }
 	| { status: 'rate_limited' }
 	| { status: 'budget_exhausted'; scope: 'account' | 'instance' }
 
@@ -105,17 +116,15 @@ export const reserveMedia = userWriteOperation<
 		return { status: 'budget_exhausted', scope: 'instance' }
 	}
 	setState(db, attemptsName, JSON.stringify([...attempts, now]))
-	// Counters of past months go (at most ten local accounts, so this stays small).
+	// Counters of months before the previous one go (at most ten local accounts, so this stays small).
 	db.run(
-		`DELETE FROM kopje_state WHERE (substr(name, 1, ?1) = ?2 AND name <> ?3) OR (substr(name, 1, ?4) = ?5 AND
-			substr(name, 1, ?6) <> ?7)`,
+		`DELETE FROM kopje_state WHERE (substr(name, 1, ?1) = ?2 AND substr(name, ?1 + 1, 7) < ?5)
+			OR (substr(name, 1, ?3) = ?4 AND substr(name, ?3 + 1, 7) < ?5)`,
 		TRANSFORMS.length,
 		TRANSFORMS,
-		instanceName,
 		ACCOUNT_TRANSFORMS.length,
 		ACCOUNT_TRANSFORMS,
-		ACCOUNT_TRANSFORMS.length + month.length,
-		`${ACCOUNT_TRANSFORMS}${month}`
+		previousMonth(now)
 	)
 	setState(db, instanceName, String(instanceSpent + TRANSFORMS_PER_UPLOAD))
 	setState(db, accountName, String(accountSpent + TRANSFORMS_PER_UPLOAD))
@@ -129,8 +138,14 @@ export const reserveMedia = userWriteOperation<
 		iso(now + RESERVATION_MS),
 		iso(now)
 	)
-	return { status: 'ok', id }
+	return { status: 'ok', id, deadline: now + WRITE_WINDOW_MS }
 })
+
+// YYYY-MM of the month before the one `now` is in (UTC).
+function previousMonth(now: number): string {
+	const date = new Date(now)
+	return iso(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() - 1, 1)).slice(0, 7)
+}
 
 export type CompleteMediaInput = {
 	id: string
@@ -143,27 +158,33 @@ export type CompleteMediaInput = {
 }
 
 // Step 3. The URLs are made here, on the instance origin of the uploader's actor URI (as status URIs are), from the
-// row's own token. Null when the reservation is gone (swept, or its grace ran out): the Worker then deletes what it
-// wrote to R2.
+// row's own token. Completing an upload that is already complete answers with it (the first answer may have been lost).
+// Null when the reservation is gone or its writer deadline has passed: the Worker then abandons it.
 export const completeMedia = userWriteOperation<CompleteMediaInput, MediaAttachment | null>(
 	(db, input, { accountId }) => {
-		const pending = db.first<{ token: string; uri: string }>(
-			`SELECT m.file_token AS token, a.uri FROM media_attachments m JOIN accounts a ON a.id = m.account_id
-			WHERE m.id = ? AND m.account_id = ? AND m.processed = 0 AND m.gc_at > ? AND m.file_token IS NOT NULL`,
+		const row = db.first<{ token: string | null; uri: string; processed: number; url: string; created_at: string }>(
+			`SELECT m.file_token AS token, a.uri, m.processed, m.url, m.created_at
+			FROM media_attachments m JOIN accounts a ON a.id = m.account_id WHERE m.id = ? AND m.account_id = ?`,
 			input.id,
-			accountId,
-			iso(input.now)
+			accountId
 		)
-		if (pending === undefined) {
+		if (row === undefined || row.token === null) {
 			return null
 		}
-		const origin = new URL(pending.uri).origin
+		if (row.processed === 1) {
+			const done = row.url === '' ? undefined : ownUpload(db, accountId, input.id, input.now)
+			return done === undefined ? null : presentMedia(done)
+		}
+		if (row.created_at <= iso(input.now - WRITE_WINDOW_MS)) {
+			return null
+		}
+		const origin = new URL(row.uri).origin
 		db.run(
 			`UPDATE media_attachments SET url = ?, preview_url = ?, content_type = ?, meta = ?, description = ?,
 				focus_x = ?, focus_y = ?, processed = 1, gc_at = ?
 			WHERE id = ?`,
-			`${origin}${mediaPath(pending.token, 'full', input.contentType)}`,
-			`${origin}${mediaPath(pending.token, 'small', input.contentType)}`,
+			`${origin}${mediaPath(row.token, 'full', input.contentType)}`,
+			`${origin}${mediaPath(row.token, 'small', input.contentType)}`,
 			input.contentType,
 			JSON.stringify({ original: input.original, small: input.small }),
 			input.description,
@@ -172,20 +193,34 @@ export const completeMedia = userWriteOperation<CompleteMediaInput, MediaAttachm
 			iso(input.now + DETACHED_GRACE_MS),
 			input.id
 		)
-		const row = ownUpload(db, accountId, input.id, input.now)
-		return row === undefined ? null : presentMedia(row)
+		const done = ownUpload(db, accountId, input.id, input.now)
+		return done === undefined ? null : presentMedia(done)
 	}
 )
 
-// A failed upload: doomed at once, swept with whatever reached R2.
-export const abandonMedia = userWriteOperation<{ id: string; now: number }, void>((db, { id, now }, { accountId }) => {
-	db.run(
-		'UPDATE media_attachments SET gc_at = ? WHERE id = ? AND account_id = ? AND processed = 0',
-		iso(now),
-		id,
-		accountId
-	)
-})
+// abandoned: the reservation is doomed (or already was) and its objects may go; kept: the upload completed, so its
+// objects stay; gone: there is no such row, so nothing refers to its objects.
+export type Abandoned = 'abandoned' | 'kept' | 'gone'
+
+// A failed upload: doomed at once and released from its writer, so the sweep takes it right away. A completed upload is
+// never doomed here.
+export const abandonMedia = userWriteOperation<{ id: string; now: number }, Abandoned>(
+	(db, { id, now }, { accountId }) => {
+		const row = db.first<{ processed: number; url: string }>(
+			'SELECT processed, url FROM media_attachments WHERE id = ? AND account_id = ?',
+			id,
+			accountId
+		)
+		if (row === undefined) {
+			return 'gone'
+		}
+		if (row.processed === 1 && row.url !== '') {
+			return 'kept'
+		}
+		db.run('UPDATE media_attachments SET processed = 1, gc_at = ? WHERE id = ? AND status_id IS NULL', iso(now), id)
+		return 'abandoned'
+	}
+)
 
 export const getMedia = userReadOperation<{ id: string; now: number }, MediaAttachment | null>(
 	(db, { id, now }, { accountId }) => {

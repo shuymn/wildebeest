@@ -147,7 +147,11 @@ export type ApiHarness = Awaited<ReturnType<typeof apiHarness>>
 
 // The real app over a fresh migrated Store, with Access configured, an injected JWKS fetch and clock, and
 // deterministic-looking but unique OAuth values.
-export async function apiHarness(overrides: Record<string, unknown> = {}, deps: Pick<AppDeps, 'images'> = {}) {
+// deps replaces the image codec, or wraps the Store stub the app calls (tests still reach the real Store as `store`).
+export async function apiHarness(
+	overrides: Record<string, unknown> = {},
+	deps: Pick<AppDeps, 'images'> & { wrapStore?: (store: StoreStub) => StoreStub } = {}
+) {
 	const store = await migratedStore()
 	await setSetting(store, 'domain', 'kopje.test')
 	const team = await accessTeam()
@@ -160,10 +164,10 @@ export async function apiHarness(overrides: Record<string, unknown> = {}, deps: 
 	const app = createApp({
 		build: () => env.CF_VERSION_METADATA.id,
 		now,
-		store: () => store,
+		store: () => (deps.wrapStore === undefined ? store : deps.wrapStore(store)),
 		fetch: team.fetch,
 		randomToken,
-		...deps,
+		images: deps.images,
 	})
 	// Work a response leaves running (waitUntil, such as the media sweep) settles before the request returns.
 	const request = async (path: string, init?: RequestInit): Promise<Response> => {

@@ -29,9 +29,10 @@ export type Status = Record<string, unknown> & {
 export async function community<const N extends string>(
 	names: readonly N[],
 	scope = 'read write follow',
-	deps: Parameters<typeof apiHarness>[1] = {}
+	deps: Parameters<typeof apiHarness>[1] = {},
+	overrides: Record<string, unknown> = {}
 ): Promise<ApiHarness & { users: Record<N, User> }> {
-	const h = await apiHarness({}, deps)
+	const h = await apiHarness(overrides, deps)
 	const app = await registerApp(h)
 	const users = {} as Record<N, User>
 	for (const name of names) {
