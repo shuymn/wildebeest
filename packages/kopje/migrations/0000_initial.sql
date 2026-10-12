@@ -38,6 +38,7 @@ CREATE TABLE accounts (
   statuses_count INTEGER NOT NULL DEFAULT 0,
   raw TEXT CHECK (raw IS NULL OR json_valid(raw)),
   fetched_at TEXT,                                -- last remote fetch (refetched asynchronously after 24h)
+  confirmed_username TEXT,                        -- remote: the username a WebFinger domain other than the host was confirmed for
   search_text TEXT,                               -- NFKC, lowercased, whitespace-collapsed; matched with instr
   legacy_id TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -106,6 +107,8 @@ CREATE TABLE statuses (
   language TEXT,
   published_at TEXT NOT NULL,
   edited_at TEXT,
+  remote_version TEXT,                            -- remote: the last accepted version (updated, else published)
+  withdrawn INTEGER NOT NULL DEFAULT 0 CHECK (withdrawn IN (0, 1)),  -- local boost whose Undo a deletion or purge recorded
   replies_count INTEGER NOT NULL DEFAULT 0,
   reblogs_count INTEGER NOT NULL DEFAULT 0,
   favourites_count INTEGER NOT NULL DEFAULT 0,
@@ -444,8 +447,10 @@ CREATE INDEX remote_keys_account ON remote_keys (account_id);
 --          stored again. It expires 30 days after the purge is done, independently of inbound_retractions.
 --   move   key = the Move activity's id. bound is the highest follows.id that existed when the Move arrived, so a
 --          replay never moves a follow made after it; cursor is the last follows.id moved.
+--   delete key = the id of a remote status its author deleted, removed in batches; cursor is the local boost whose
+--          Undo is recorded.
 CREATE TABLE inbound_jobs (
-  kind TEXT NOT NULL CHECK (kind IN ('purge', 'move')),
+  kind TEXT NOT NULL CHECK (kind IN ('purge', 'move', 'delete')),
   key TEXT NOT NULL,
   actor_uri TEXT NOT NULL,
   target_account_id TEXT REFERENCES accounts (id) ON DELETE CASCADE,

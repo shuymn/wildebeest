@@ -1,5 +1,6 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { actorSnapshot, recordActorUpdate } from './actor-update'
+import { domainBlockMatchSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { retractFollow } from './inbox'
 import { notify } from './notifications'
@@ -8,7 +9,9 @@ import { htmlToPlainText, plainTextToHtml } from './plain-text'
 import { accountSearchText, queryTerms } from './search-text'
 import { renderFieldValue } from './status-text'
 import type { Db } from '../db/sql'
+import { normalizeDomain, parseAddress } from '../platform/domain-name'
 import { httpUrl } from '../platform/http-url'
+import { sanitizeRemoteHtml } from '../security/html'
 
 // Accounts as the Mastodon API (4.0.2) shows them: one presenter, and the account and relationship operations of B3.
 // Every operation takes an account by its API id or by its legacy id (accounts.legacy_id); both resolve to the same
@@ -41,7 +44,8 @@ export type Account = {
 	suspended?: true
 }
 
-// A profile field (Mastodon's Account::Field): the name as plain text, the value as HTML.
+// A profile field (Mastodon's Account::Field): the name as plain text, the value as HTML. Local fields come from
+// local_accounts.fields, remote ones from the actor's attachments.
 export type Field = { name: string; value: string; verified_at: null }
 
 // A local field as the owner wrote it (plain text), stored in local_accounts.fields.
@@ -110,6 +114,8 @@ export type AccountRow = {
 	last_status_at: string | null
 	// local_accounts.fields; null for a remote account.
 	local_fields: string | null
+	// A remote account's `attachment`, as JSON (fields are read from raw, as the design keeps them).
+	attachment: string | null
 }
 
 export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type, a.display_name, a.note, a.url, a.avatar_url,
@@ -118,7 +124,8 @@ export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type,
 	(SELECT substr(s.published_at, 1, 10) FROM statuses s
 		WHERE s.account_id = a.id AND s.visibility IN ('public', 'unlisted', 'private') ORDER BY s.id DESC LIMIT 1)
 		AS last_status_at,
-	l.fields AS local_fields`
+	l.fields AS local_fields,
+	CASE WHEN a.domain IS NOT NULL THEN a.raw -> '$.attachment' END AS attachment`
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
 
@@ -166,7 +173,11 @@ export function presentAccount(row: AccountRow, { origin }: Present): Account {
 		statuses_count: row.statuses_count,
 		last_status_at: row.last_status_at,
 		emojis: [],
-		fields: suspended ? [] : fieldSources(row.local_fields).map(presentField),
+		fields: suspended
+			? []
+			: row.domain === null
+				? fieldSources(row.local_fields).map(presentField)
+				: remoteFields(row.attachment),
 		...(suspended ? { suspended: true as const } : {}),
 	}
 }
@@ -189,6 +200,41 @@ export function fieldSources(stored: string | null): FieldSource[] {
 // HTML-2: the name stays plain text (JSON consumers escape it); the value is escaped and its URLs linked.
 function presentField(field: FieldSource): Field {
 	return { name: field.name, value: renderFieldValue(field.value), verified_at: null }
+}
+
+// Fields a remote profile shows: its PropertyValue attachments (ProcessAccountService#property_values), the name as
+// plain text and the value as sanitized HTML (HTML-1, its links http(s) only, HTML-3), as Mastodon renders them. Kopje's
+// bounds (RES-2): at most MAX_REMOTE_FIELDS, names cut at 255 code units, values at FIELD_VALUE_RAW_LIMIT before
+// sanitizing.
+export const MAX_REMOTE_FIELDS = 16
+const FIELD_NAME_LIMIT = 255
+const FIELD_VALUE_RAW_LIMIT = 4096
+
+function remoteFields(attachment: string | null): Field[] {
+	if (attachment === null) {
+		return []
+	}
+	const parsed = JSON.parse(attachment) as unknown
+	const fields: Field[] = []
+	for (const entry of Array.isArray(parsed) ? parsed : [parsed]) {
+		if (fields.length >= MAX_REMOTE_FIELDS) {
+			break
+		}
+		if (typeof entry !== 'object' || entry === null) {
+			continue
+		}
+		const { type, name, value } = entry as Record<string, unknown>
+		const types = Array.isArray(type) ? type : [type]
+		if (!types.includes('PropertyValue') || typeof name !== 'string' || typeof value !== 'string') {
+			continue
+		}
+		fields.push({
+			name: name.slice(0, FIELD_NAME_LIMIT),
+			value: sanitizeRemoteHtml(value.slice(0, FIELD_VALUE_RAW_LIMIT)),
+			verified_at: null,
+		})
+	}
+	return fields
 }
 
 // API ids are 18 digits; legacy ids are UUIDs or other short strings. Anything longer is not an id.
@@ -244,7 +290,7 @@ export const lookupAccount = readOperation<
 				)
 			: db.first<AccountRow>(
 					`SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM} WHERE a.domain = ? AND lower(a.username) = lower(?)`,
-					domain.toLowerCase(),
+					normalizeDomain(domain) ?? domain.toLowerCase(),
 					username
 				)
 	return row === undefined ? null : presentAccount(row, present)
@@ -377,7 +423,7 @@ function relationshipsOf(db: Db, viewerId: string, accountIds: string[]): Relati
 			EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 AND target_account_id = a.id) AS blocking,
 			EXISTS (SELECT 1 FROM blocks WHERE account_id = a.id AND target_account_id = ?1) AS blocked_by,
 			m.account_id IS NOT NULL AS muting, m.hide_notifications AS muting_notifications,
-			(a.domain IS NOT NULL AND EXISTS (SELECT 1 FROM domain_blocks WHERE account_id = ?1 AND domain = a.domain))
+			EXISTS (SELECT 1 FROM domain_blocks db WHERE db.account_id = ?1 AND ${domainBlockMatchSql('db', 'a')})
 				AS domain_blocking
 		FROM json_each(?2) j
 		JOIN accounts a ON a.id = j.value
@@ -451,7 +497,9 @@ export const ACCOUNT_RECENT_LIMIT = 5000
 const PREFIX_END = '\u{10FFFF}'
 
 export function findAccounts(db: Db, input: SearchInput, viewerId: string): Account[] {
-	const query = input.query
+	// An address is read with the shared parser, so a Unicode domain finds the account stored under its punycode.
+	const address = parseAddress(input.query.trim())
+	const query = (address === null ? input.query : `${address.username}@${address.domain}`)
 		.trim()
 		.replace(/^@/, '')
 		.replace(new RegExp(`@${escapeRegExp(input.localDomain)}$`, 'i'), '')
@@ -486,10 +534,13 @@ export function findAccounts(db: Db, input: SearchInput, viewerId: string): Acco
 		.all<{ id: string }>(
 			`WITH candidates(id) AS (${candidates})
 			SELECT a.id FROM candidates c JOIN accounts a ON a.id = c.id LEFT JOIN local_accounts l ON l.account_id = a.id
-			WHERE l.suspended_at IS NULL AND ${where.join(' AND ')}
+			WHERE l.suspended_at IS NULL
+				AND NOT EXISTS (SELECT 1 FROM domain_blocks db WHERE db.account_id = ? AND ${domainBlockMatchSql('db', 'a')})
+				AND ${where.join(' AND ')}
 			ORDER BY lower(a.username) = ? DESC, a.domain IS NULL DESC, a.followers_count DESC, a.id
 			LIMIT ? OFFSET ?`,
 			...candidateParams,
+			viewerId,
 			...terms.flat(),
 			exactUsername,
 			input.limit,
@@ -542,7 +593,7 @@ function followTarget(db: Db, viewerId: string, target: string): TargetRow | nul
 				EXISTS (SELECT 1 FROM blocks WHERE (account_id = ?1 AND target_account_id = a.id)
 					OR (account_id = a.id AND target_account_id = ?1)) AS blocked,
 				l.suspended_at IS NOT NULL AS suspended,
-				(a.domain IS NOT NULL AND EXISTS (SELECT 1 FROM domain_blocks WHERE account_id = ?1 AND domain = a.domain))
+				EXISTS (SELECT 1 FROM domain_blocks db WHERE db.account_id = ?1 AND ${domainBlockMatchSql('db', 'a')})
 					AS domain_blocked
 			FROM accounts a LEFT JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?2`,
 			viewerId,

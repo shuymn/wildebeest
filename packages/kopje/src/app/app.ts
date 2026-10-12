@@ -9,6 +9,7 @@ import { publicHealth } from './health'
 import { webRoutes } from './web'
 import { ringDoorbell } from '../federation/delivery'
 import { INBOX_ROUTES, inboxHandler, precheckInbox } from '../federation/inbox'
+import { createResolver } from '../federation/resolve'
 import { FEDERATION_GET_ROUTES, federationHandler, type FederationRouteDeps } from '../federation/routes'
 import { FEDERATION_PATHS, requireSetup } from '../federation/setup-gate'
 import { rescueFromSnapshot } from '../federation/snapshot'
@@ -57,6 +58,19 @@ export function createApp({
 	...seams
 }: AppDeps) {
 	const app = new Hono<AppEnv>()
+
+	// WEB-5: every response, API, federation, media, errors and maintenance answers alike, is read only as the type it
+	// declares.
+	app.use(async (c, next) => {
+		await next()
+		try {
+			c.res.headers.set('x-content-type-options', 'nosniff')
+		} catch {
+			// A response with immutable headers (Response.redirect, a fetched response) is copied first.
+			c.res = new Response(c.res.body, c.res)
+			c.res.headers.set('x-content-type-options', 'nosniff')
+		}
+	})
 
 	// Browser clients call the API and the token endpoints cross-origin; errors and maintenance answers carry the
 	// headers too. The consent page (/oauth/authorize) is not opened to other origins.
@@ -141,6 +155,7 @@ export function createApp({
 		store,
 		randomToken: seams.randomToken ?? randomToken,
 		images: seams.images ?? ((env: Env) => imagesCodec(env.IMAGES)),
+		resolve: createResolver({ build, store, now, keygen, loader }),
 	}
 	app.get(MEDIA_ROUTE, serveMedia)
 	app.route('/', authorizeRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init) }))

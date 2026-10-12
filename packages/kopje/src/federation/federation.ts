@@ -4,6 +4,7 @@ import {
 	type Federation,
 	kvCache,
 	type NodeInfo,
+	type RemoteDocument,
 	type RequestContext,
 } from '@fedify/fedify'
 import {
@@ -25,8 +26,10 @@ import { DoKvStore } from './kv-store'
 import {
 	createContextLoader,
 	createSafeLoader,
+	createWebFingerLoader,
 	type FetchBudget,
 	type LoaderDeps,
+	RefusedFetchError,
 	type RequestSigner,
 	requireObjectRoot,
 } from './loader'
@@ -42,6 +45,7 @@ import {
 import type { SnapshotSource } from '../domain/snapshot'
 import { renderFieldValue } from '../domain/status-text'
 import { httpUrl } from '../platform/http-url'
+import { withinJsonBounds } from '../platform/json-bounds'
 import { PACKAGE_VERSION } from '../platform/package-version'
 import { callStore, type StoreStub } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
@@ -146,7 +150,7 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 				prefix: [...SIGNED_DOCUMENT_PREFIX, keyId.href],
 			})
 		)
-	const contextLoader = kvCache({ loader: createContextLoader(loaderDeps), kv })
+	const contextLoader = boundedContexts(loaderDeps, kv)
 
 	return {
 		origin,
@@ -166,8 +170,9 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 // The loaders of inbound processing (DATA-7): fetches for a personal inbox are signed with the recipient's key, all
 // others with the instance actor's. Documents are fetched anew, never from the 5-minute document cache, because key
 // material is judged on them (ID-1); within one request a URL is fetched once. Every fetch, contexts included, draws
-// on the request's budget (RES-6); cached contexts cost nothing.
-export type RemoteLoaders = { document: DocumentLoader; context: DocumentLoader }
+// on the request's budget (RES-6); cached contexts cost nothing. Every document must stay within the JSON bounds
+// (RES-2) before Fedify's JSON-LD processing or Kopje's own reading sees it. webfinger is unsigned, as WebFinger is.
+export type RemoteLoaders = { document: DocumentLoader; context: DocumentLoader; webfinger: DocumentLoader }
 
 export function createRemoteLoaders(
 	deps: FederationDeps,
@@ -183,15 +188,32 @@ export function createRemoteLoaders(
 		(resolved ??= (async () =>
 			(recipient === null ? null : await parts.userSigner(recipient)) ?? parts.instanceSigner())())
 	const fetched = new Map<string, ReturnType<DocumentLoader>>()
-	const fresh = requireObjectRoot(async (url, options) =>
-		createSafeLoader(loaderDeps, (await signer()).sign)(url, options)
-	)
+	const fresh = requireObjectRoot(async (url, options) => {
+		return withinBounds(await createSafeLoader(loaderDeps, (await signer()).sign)(url, options))
+	})
 	return {
 		// Keyed without the fragment: HTTP never sends it, so `actor#main-key` and `actor` are one fetch. Key ids are
 		// still compared whole by Fedify and by receiveInbound.
 		document: (url, options) => memo(fetched, withoutFragment(url), () => fresh(url, options)),
-		context: kvCache({ loader: createContextLoader(loaderDeps), kv: parts.kv }),
+		context: boundedContexts(loaderDeps, parts.kv),
+		webfinger: createWebFingerLoader(loaderDeps),
 	}
+}
+
+// RES-2: a document or JSON-LD context past the JSON bounds is refused before anything reads it.
+function withinBounds(remote: RemoteDocument): RemoteDocument {
+	if (!withinJsonBounds(remote.document)) {
+		throw new RefusedFetchError(new URL(remote.documentUrl), 'Document exceeds the JSON bounds')
+	}
+	return remote
+}
+
+// JSON-LD contexts, cached in the KvStore. Checked before they are cached and again on every cache hit, since an
+// entry may predate the check.
+function boundedContexts(loaderDeps: LoaderDeps, kv: DoKvStore): DocumentLoader {
+	const loader = createContextLoader(loaderDeps)
+	const cached = kvCache({ loader: async (url, options) => withinBounds(await loader(url, options)), kv })
+	return async (url, options) => withinBounds(await cached(url, options))
 }
 
 export function createKopjeFederation(deps: FederationDeps, state: FederationState): Federation<FederationState> {

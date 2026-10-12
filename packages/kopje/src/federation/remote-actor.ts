@@ -3,6 +3,7 @@ import { type Actor, getActorTypeName, type Image, isActor, Link, lookupObject }
 
 import { isTransientLoadError, loadFailureOf } from './loader'
 import type { RemoteActorInput } from '../domain/inbox'
+import { hostDomain } from '../platform/domain-name'
 import { httpUrl } from '../platform/http-url'
 import { sanitizeRemoteHtml } from '../security/html'
 
@@ -143,7 +144,7 @@ export async function remoteActorInput(actor: Actor, document: unknown): Promise
 	return {
 		uri: uri.href,
 		username,
-		domain: uri.host.toLowerCase(),
+		domain: hostDomain(uri.href),
 		actorType: getActorTypeName(actor),
 		displayName: (text(actor.name) ?? '').slice(0, DISPLAY_NAME_LIMIT),
 		note: sanitizeRemoteHtml(text(actor.summary) ?? ''),
