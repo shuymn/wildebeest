@@ -1,6 +1,8 @@
 import type { Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 
+import { mastodonError } from './errors'
+import { type Params, readParams } from './params'
 import type { Present } from '../domain/accounts'
 import type { AuthFailure, Authorized, Credential, UserCredential } from '../domain/auth'
 import { readConfig } from '../platform/config'
@@ -42,7 +44,9 @@ export function present(c: Context): Present {
 	return { origin: new URL(c.req.url).origin }
 }
 
-// The credential of a route that declares a token (scope null) or a scope.
+// The credential of a route that declares a token (scope null) or a scope. Its `now` is the time the Store judges
+// expiry by, so handlers take it immediately before the Store call, after the request body has been read: a slow
+// body must not carry a token past its expiry.
 export function credential(c: ApiContext, deps: Pick<ApiDeps, 'now'>): Credential {
 	const value = c.get('credential')
 	if (value === null) {
@@ -58,6 +62,11 @@ export function userCredential(c: ApiContext, deps: Pick<ApiDeps, 'now'>): UserC
 		throw new Error('route declares no scope for a user operation')
 	}
 	return { ...value, scope: value.scope }
+}
+
+// The credential of a route whose token is optional: null when the request sent none.
+export function optionalCredential(c: ApiContext, deps: Pick<ApiDeps, 'now'>): UserCredential | null {
+	return c.get('credential') === null ? null : userCredential(c, deps)
 }
 
 const AUTH_ERRORS: Record<AuthFailure['status'], { status: 401 | 403 | 422; message: string }> = {
@@ -84,6 +93,19 @@ export async function refuseAfterAuth(c: ApiContext, deps: ApiDeps, response: Re
 		authorized(await storeCall(c, deps, (s, b) => s.checkCredential(b, value)))
 	}
 	return response
+}
+
+// The request's parameters, or the error answer for an unreadable body (after authentication, as Mastodon orders it).
+export async function requestParams(c: ApiContext, deps: ApiDeps): Promise<Params | Response> {
+	const result = await readParams(c.req.raw)
+	if (!result.ok) {
+		return refuseAfterAuth(
+			c,
+			deps,
+			mastodonError(result.status, result.status === 413 ? 'Request body is too large' : 'Malformed request body')
+		)
+	}
+	return result.params
 }
 
 // The Web Push application server key clients subscribe with; empty until VAPID_JWK is set.

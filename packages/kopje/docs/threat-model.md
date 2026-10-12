@@ -128,7 +128,6 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   on branch `kopje/statuses`:_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
   `test/visibility.test.ts` (single status, context, history, source, `favourited_by`, timelines, account statuses,
   notifications, bookmarks, favourites). Search, the web UI, media and the object endpoint are _Planned (B4, B5, B1b)._
-  _Gap: `reblogged_by` lists private boosts (VIS-12)._
 - **VIS-2: limited stays limited.** A direct status with silent recipients (Misskey `specified`) is `limited`: shown
   only to its addressed recipients, presented as `private` by the API, never widened by an edit. _Implemented on branch
   `kopje/statuses`:_ `interpretAddressing` in `src/domain/audience.ts`; `test/audience.test.ts` ("reads Misskey
@@ -150,7 +149,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   to `public` and `unlisted` statuses and one's own `private` ones (`StatusPolicy#reblog?`). _Implemented on branch
   `kopje/statuses`:_ `viewableSql`; `test/visibility.test.ts` ("a boost of an original the viewer may not see is hidden
   with it"), `test/statuses.test.ts` ("refuses to boost direct and others’ private statuses"). Quotes and other embedded
-  objects check their target the same way: _Planned (B1b, B4)._ _Gap: see VIS-12 for write responses._
+  objects check their target the same way: _Planned (B1b, B4)._
 - **VIS-7: silent recipients see, but are not mentioned.** A silent mention grants VIS-1 access only. It never appears
   in `mentions` and never produces a mention notification. _Implemented on branch `kopje/statuses`:_
   `src/domain/status-presenter.ts`, `src/domain/notifications.ts`; `test/visibility.test.ts` ("none for a silent
@@ -163,17 +162,24 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   account's own authorize call; a pending remote follow only by an `Accept` that passes ID-6. _Planned (B4, B1b)._
 - **VIS-10: a notification is emitted once.** It is written only if the recipient is local and may see the status, and
   only when new under its natural key; a repeat inserts nothing (`update` replaces the previous one). Its push is sent
-  only for a newly inserted row. _Implemented on branch `kopje/statuses`:_ `notify` in `src/domain/notifications.ts`.
-  _Gap: no replay test._ Push: _Planned (push)._
+  only for a newly inserted row. _Implemented on branch `kopje/statuses`:_ `notify` in `src/domain/notifications.ts`;
+  `test/statuses.test.ts` ("a retry has no second side effect"), `test/timelines.test.ts` ("notifies followers who
+  asked to be notified, once"). Push: _Planned (push)._
 - **VIS-11: earlier versions keep the original audience.** Edit history and earlier versions are visible only to the
   status's original audience, and an edit of a non-public status never widens that audience (a recipient added by an
-  edit does not see earlier versions). This differs from Mastodon on purpose. _Planned (B4a fixes)._
+  edit does not see earlier versions). This differs from Mastodon on purpose. _Implemented on branch `kopje/statuses`:_
+  `editStatus` in `src/domain/statuses.ts`; `test/statuses.test.ts` ("a mention added by editing a direct status adds no
+  recipient").
 - **VIS-12: metadata reveals no hidden status.** Presenter fields never disclose a status the viewer may not see:
   `last_status_at` ignores `direct` and `limited` statuses; `in_reply_to_id` and `in_reply_to_account_id` follow an
   explicit rule for a parent the viewer may not see; `reblogged_by` lists only `public` and `unlisted` boosts and both
   interactor lists only accounts the viewer may see; a write response (such as deleting a boost) applies VIS-1 to every
   status it embeds, and `source` appears only on the viewer's own status. Aggregate counters are excepted (see accepted
-  risks). _Planned (B4a fixes)._
+  risks). Parent references follow Mastodon: `in_reply_to_id` and `in_reply_to_account_id` are shown even when the
+  parent is hidden, because they belong to the reply (its ActivityPub object carries `inReplyTo` to every recipient);
+  the parent itself stays behind VIS-1. _Implemented on branch `kopje/statuses`:_ `src/domain/status-presenter.ts`,
+  `src/domain/statuses.ts`, `ACCOUNT_COLUMNS` in `src/domain/accounts.ts`; `test/statuses.test.ts` ("review
+  regressions").
 
 ### Authorization (AUTH)
 

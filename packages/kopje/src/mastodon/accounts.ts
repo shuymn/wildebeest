@@ -1,31 +1,19 @@
 import {
 	type ApiContext,
-	type ApiDeps,
 	type ApiHandler,
 	authorized,
 	present,
 	refuseAfterAuth,
+	requestParams,
 	storeCall,
 	userCredential,
 } from './context'
 import { mastodonError } from './errors'
 import { linkHeader, pageQuery } from './pagination'
-import { type Params, parseBoolean, readParams } from './params'
+import { parseBoolean } from './params'
 import type { CredentialChanges, RelationshipResult, Visibility } from '../domain/accounts'
 
 // /api/v1/accounts (B3): credentials, lookup, search, relationships, follow, and follower lists.
-
-async function params(c: ApiContext, deps: ApiDeps): Promise<Params | Response> {
-	const result = await readParams(c.req.raw)
-	if (!result.ok) {
-		return refuseAfterAuth(
-			c,
-			deps,
-			mastodonError(result.status, result.status === 413 ? 'Request body is too large' : 'Malformed request body')
-		)
-	}
-	return result.params
-}
 
 const NOT_FOUND = () => mastodonError(404, 'Record not found')
 
@@ -44,8 +32,7 @@ const LANGUAGE = /^[a-z]{2,3}$/
 
 // Plain-text fields only. Avatar and header uploads come with media (B4) and are ignored here.
 export const updateCredentials: ApiHandler = async (c, deps) => {
-	const credential = userCredential(c, deps)
-	const p = await params(c, deps)
+	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
@@ -86,6 +73,7 @@ export const updateCredentials: ApiHandler = async (c, deps) => {
 	if (problems.length > 0) {
 		return refuseAfterAuth(c, deps, mastodonError(422, `Validation failed: ${problems.join(', ')}`))
 	}
+	const credential = userCredential(c, deps)
 	const account = authorized(
 		await storeCall(c, deps, (s, b) => s.updateCredentials(b, { credential, changes, present: present(c) }))
 	)
@@ -113,18 +101,17 @@ export const lookupAccount: ApiHandler = async (c, deps) => {
 }
 
 export const relationships: ApiHandler = async (c, deps) => {
-	const credential = userCredential(c, deps)
-	const p = await params(c, deps)
+	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
 	const ids = p.getAll('id')
+	const credential = userCredential(c, deps)
 	return c.json(authorized(await storeCall(c, deps, (s, b) => s.relationships(b, { credential, ids }))))
 }
 
 export const searchAccounts: ApiHandler = async (c, deps) => {
-	const credential = userCredential(c, deps)
-	const p = await params(c, deps)
+	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
@@ -134,6 +121,7 @@ export const searchAccounts: ApiHandler = async (c, deps) => {
 	}
 	const { limit } = pageQuery(p)
 	const offset = Math.max(Number.parseInt(p.get('offset') ?? '0', 10) || 0, 0)
+	const credential = userCredential(c, deps)
 	const accounts = await storeCall(c, deps, (s, b) =>
 		s.searchAccounts(b, {
 			credential,
@@ -160,15 +148,14 @@ function relationshipResponse(c: ApiContext, result: RelationshipResult): Respon
 }
 
 export const follow: ApiHandler = async (c, deps) => {
-	const credential = userCredential(c, deps)
-	const p = await params(c, deps)
+	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
 	// Absent keeps the follow's filter; an empty list (`languages: []`, `languages[]=`) clears it.
 	const languages = p.has('languages') ? p.getAll('languages').filter((language) => language !== '') : undefined
 	const input = {
-		credential,
+		credential: userCredential(c, deps),
 		target: c.req.param('id') ?? '',
 		reblogs: parseBoolean(p.get('reblogs')),
 		notify: parseBoolean(p.get('notify')),
@@ -179,14 +166,14 @@ export const follow: ApiHandler = async (c, deps) => {
 }
 
 export const unfollow: ApiHandler = async (c, deps) => {
-	const credential = userCredential(c, deps)
 	const target = c.req.param('id') ?? ''
+	const credential = userCredential(c, deps)
 	return relationshipResponse(c, authorized(await storeCall(c, deps, (s, b) => s.unfollow(b, { credential, target }))))
 }
 
 function followList(direction: 'followers' | 'following'): ApiHandler {
 	return async (c, deps) => {
-		const p = await params(c, deps)
+		const p = await requestParams(c, deps)
 		if (p instanceof Response) {
 			return p
 		}

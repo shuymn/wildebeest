@@ -9,7 +9,9 @@ import { sha256Hex } from '../security/tokens'
 //   public : no token is read (credential null), so a stale token a client still sends does not break the call
 //   token  : any valid token, app tokens included
 //   scope  : a token covering the scope and bound to a user
-export type RouteAccess = 'public' | 'token' | { scope: Scope }
+//   scope, optional : no token reads as anonymous; a token sent must be valid and cover the scope, and an app token
+//                     reads as anonymous (Mastodon's authorize_if_got_token!)
+export type RouteAccess = 'public' | 'token' | { scope: Scope; optional?: true }
 
 // The one middleware that reads the bearer token and declares the route's scope for every API route. It does not
 // validate the token: the Store does, in the transaction of the operation the request performs (domain/auth.ts).
@@ -21,6 +23,10 @@ export function requireAccess(access: RouteAccess) {
 		}
 		const token = bearerToken(c.req.header('authorization'))
 		if (token === undefined) {
+			if (typeof access === 'object' && access.optional === true) {
+				c.set('credential', null)
+				return next()
+			}
 			return mastodonError(401, 'The access token is invalid')
 		}
 		c.set('credential', { tokenHash: await sha256Hex(token), scope: access === 'token' ? null : access.scope })

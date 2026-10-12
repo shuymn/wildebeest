@@ -4,7 +4,10 @@ import { requireAccess, type RouteAccess } from './access'
 import * as accounts from './accounts'
 import type { ApiDeps, ApiEnv, ApiHandler } from './context'
 import * as instance from './instance'
+import * as notifications from './notifications'
 import * as oauth from './oauth'
+import * as statuses from './statuses'
+import * as timelines from './timelines'
 
 // The explicit API route table (design §4): every route names the access it requires, one middleware (requireAccess)
 // declares it, and the Store enforces it in each operation. Routes are matched in order, so fixed paths come before
@@ -64,6 +67,134 @@ export const ROUTES: readonly Route[] = [
 	},
 	{ method: 'GET', path: '/api/v1/accounts/:id/followers', access: 'public', handler: accounts.followers },
 	{ method: 'GET', path: '/api/v1/accounts/:id/following', access: 'public', handler: accounts.following },
+	{
+		method: 'GET',
+		path: '/api/v1/accounts/:id/statuses',
+		access: { scope: 'read:statuses', optional: true },
+		handler: timelines.accountStatuses,
+	},
+
+	{ method: 'POST', path: '/api/v1/statuses', access: { scope: 'write:statuses' }, handler: statuses.createStatus },
+	{
+		method: 'GET',
+		path: '/api/v1/statuses/:id',
+		access: { scope: 'read:statuses', optional: true },
+		handler: statuses.getStatus,
+	},
+	{ method: 'PUT', path: '/api/v1/statuses/:id', access: { scope: 'write:statuses' }, handler: statuses.editStatus },
+	{
+		method: 'DELETE',
+		path: '/api/v1/statuses/:id',
+		access: { scope: 'write:statuses' },
+		handler: statuses.deleteStatus,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/statuses/:id/context',
+		access: { scope: 'read:statuses', optional: true },
+		handler: statuses.statusContext,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/statuses/:id/history',
+		access: { scope: 'read:statuses', optional: true },
+		handler: statuses.statusHistory,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/statuses/:id/source',
+		access: { scope: 'read:statuses' },
+		handler: statuses.statusSource,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/statuses/:id/favourited_by',
+		access: { scope: 'read:accounts', optional: true },
+		handler: statuses.favouritedBy,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/statuses/:id/reblogged_by',
+		access: { scope: 'read:accounts', optional: true },
+		handler: statuses.rebloggedBy,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/statuses/:id/favourite',
+		access: { scope: 'write:favourites' },
+		handler: statuses.favourite,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/statuses/:id/unfavourite',
+		access: { scope: 'write:favourites' },
+		handler: statuses.unfavourite,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/statuses/:id/reblog',
+		access: { scope: 'write:statuses' },
+		handler: statuses.reblog,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/statuses/:id/unreblog',
+		access: { scope: 'write:statuses' },
+		handler: statuses.unreblog,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/statuses/:id/bookmark',
+		access: { scope: 'write:bookmarks' },
+		handler: statuses.bookmark,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/statuses/:id/unbookmark',
+		access: { scope: 'write:bookmarks' },
+		handler: statuses.unbookmark,
+	},
+
+	{ method: 'GET', path: '/api/v1/timelines/home', access: { scope: 'read:statuses' }, handler: timelines.home },
+	{
+		method: 'GET',
+		path: '/api/v1/timelines/public',
+		access: { scope: 'read:statuses', optional: true },
+		handler: timelines.publicTimeline,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/timelines/tag/:hashtag',
+		access: { scope: 'read:statuses', optional: true },
+		handler: timelines.tagTimeline,
+	},
+	{ method: 'GET', path: '/api/v1/bookmarks', access: { scope: 'read:bookmarks' }, handler: timelines.bookmarks },
+	{ method: 'GET', path: '/api/v1/favourites', access: { scope: 'read:favourites' }, handler: timelines.favourites },
+
+	{
+		method: 'GET',
+		path: '/api/v1/notifications',
+		access: { scope: 'read:notifications' },
+		handler: notifications.listNotifications,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/notifications/clear',
+		access: { scope: 'write:notifications' },
+		handler: notifications.clearNotifications,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/notifications/:id',
+		access: { scope: 'read:notifications' },
+		handler: notifications.getNotification,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/notifications/:id/dismiss',
+		access: { scope: 'write:notifications' },
+		handler: notifications.dismissNotification,
+	},
 ]
 
 export function mastodonApi(deps: ApiDeps, routes: readonly Route[] = ROUTES): Hono<ApiEnv> {

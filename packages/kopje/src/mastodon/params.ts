@@ -6,6 +6,9 @@ import { readBoundedBody } from '../platform/body'
 
 export const API_BODY_LIMIT = 1024 * 1024
 
+// The tail of an object field key after `name[`: `index][field]` or `][field]`.
+const OBJECT_FIELD = /^(\d*)\]\[([^\]]+)\]$/
+
 export class Params {
 	constructor(private readonly entries: readonly (readonly [string, string])[]) {}
 
@@ -23,6 +26,35 @@ export class Params {
 	// (RFC 6749 §3.1, §3.2). Array parameters (`name[]`) are not scalars and are never named here.
 	repeated(names: readonly string[]): string | undefined {
 		return names.find((name) => this.entries.filter(([key]) => key === name).length > 1)
+	}
+
+	// The objects of an array parameter: JSON sends `name[0][field]` (indexed), forms send `name[][field]`, where a field
+	// that repeats starts the next object (as Rack reads it).
+	objects(name: string): Record<string, string>[] {
+		const prefix = `${name}[`
+		const indexed = new Map<string, Record<string, string>>()
+		const sequential: Record<string, string>[] = []
+		for (const [key, value] of this.entries) {
+			// The name is compared as a string; only the `[index][field]` tail is a pattern.
+			const match = key.startsWith(prefix) ? OBJECT_FIELD.exec(key.slice(prefix.length)) : null
+			if (match === null) {
+				continue
+			}
+			const [, index = '', field = ''] = match
+			if (index !== '') {
+				const object = indexed.get(index) ?? {}
+				object[field] = value
+				indexed.set(index, object)
+				continue
+			}
+			const last = sequential.at(-1)
+			if (last === undefined || field in last) {
+				sequential.push({ [field]: value })
+			} else {
+				last[field] = value
+			}
+		}
+		return [...[...indexed].sort(([a], [b]) => Number(a) - Number(b)).map(([, object]) => object), ...sequential]
 	}
 
 	// Values of `name[]` and of a repeated `name`.
