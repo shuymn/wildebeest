@@ -6,6 +6,13 @@ on:
     - cron: "30 18 * * *"
   workflow_dispatch:
 
+# Deploy migrates the D1 database, and a backup export blocks it, so the two
+# never run at the same time. GitHub keeps one pending run per group, so a
+# newer run replaces a pending one rather than queueing behind it.
+concurrency:
+  group: legacy-d1
+  cancel-in-progress: false
+
 jobs:
   backup:
     runs-on: ubuntu-latest
