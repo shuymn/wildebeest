@@ -12,7 +12,14 @@ import {
 } from './context'
 import { mastodonError } from './errors'
 import { Params } from './params'
-import { type MediaChanges, SWEEP_BATCH } from '../domain/media'
+import {
+	type MediaChanges,
+	type MonthlyTransforms,
+	ORPHAN_GRACE_MS,
+	RECONCILE_PAGE,
+	type ReconcileCursor,
+	SWEEP_BATCH,
+} from '../domain/media'
 import type { MediaAttachment } from '../domain/status-presenter'
 import { readBoundedBody } from '../platform/body'
 import { accountMonthlyTransforms, readConfig } from '../platform/config'
@@ -30,9 +37,9 @@ import { StoreUnavailableError } from '../platform/store-errors'
 // Video and audio are refused with 422: the Images binding transforms images only, and serving an un-transcoded
 // container would publish its metadata (location included) as uploaded.
 //
-// Upload order: the Store reserves the row (authorization, the 30-attempts-per-30-minutes budget and the instance's
-// monthly Images budget, RES-6) before the body is read or Images is called, so an unauthenticated or over-budget
-// request costs no transformation. Processing is synchronous, so v2 answers 200 like v1 (Mastodon answers 200 when
+// Upload order: the Store reserves the row (authorization, the 30-attempts-per-30-minutes budget, and a check of the
+// monthly Images budgets, RES-6) before the body is read, and revalidates it and charges the budgets right before
+// Images is called (domain/media.ts), so an unauthenticated, over-budget or expired request costs no transformation. Processing is synchronous, so v2 answers 200 like v1 (Mastodon answers 200 when
 // processing finished in the request).
 
 const NOT_FOUND = () => mastodonError(404, 'Record not found')
@@ -91,8 +98,27 @@ const MAX_FIELDS = 16
 type MediaForm = { file: Uint8Array; params: Params } | { error: string }
 
 // The multipart body, bounded before it is parsed (RES-1). Only `file` is read as a file.
-async function readMediaForm(request: Request): Promise<MediaForm> {
-	const body = await readBoundedBody(request, MEDIA_BODY_LIMIT)
+// Reads the body within `ms` of wall time (the reservation's deadline): a client that sends its body slowly cannot
+// keep a reservation open past it.
+async function readWithin(request: Request, ms: number): Promise<Uint8Array | 'too-large' | 'expired'> {
+	let timer: ReturnType<typeof setTimeout> | null = null
+	const expired = new Promise<'expired'>((resolve) => {
+		timer = setTimeout(() => resolve('expired'), Math.max(0, ms))
+	})
+	try {
+		return await Promise.race([readBoundedBody(request, MEDIA_BODY_LIMIT), expired])
+	} finally {
+		if (timer !== null) {
+			clearTimeout(timer)
+		}
+	}
+}
+
+async function readMediaForm(request: Request, ms: number): Promise<MediaForm> {
+	const body = await readWithin(request, ms)
+	if (body === 'expired') {
+		return { error: EXPIRED_MESSAGE }
+	}
 	if (body === 'too-large') {
 		return { error: TOO_LARGE }
 	}
@@ -115,11 +141,12 @@ async function readMediaForm(request: Request): Promise<MediaForm> {
 		return { error: TOO_LARGE }
 	}
 	const fields = [...form.entries()].filter((entry): entry is [string, string] => typeof entry[1] === 'string')
-	if (fields.length > MAX_FIELDS || fields.some(([, value]) => value.length > MAX_FIELD_LENGTH)) {
+	// The bounds hold for what is used: body fields and query parameters together.
+	const all = [...fields, ...new URL(request.url).searchParams.entries()]
+	if (all.length > MAX_FIELDS || all.some(([, value]) => value.length > MAX_FIELD_LENGTH)) {
 		return { error: 'Validation failed: A form field is too long' }
 	}
-	const query = [...new URL(request.url).searchParams.entries()]
-	return { file: new Uint8Array(await file.arrayBuffer()), params: new Params([...fields, ...query]) }
+	return { file: new Uint8Array(await file.arrayBuffer()), params: new Params(all) }
 }
 
 type Failure = { status: number; error: string }
@@ -129,6 +156,12 @@ const PROCESSING_FAILURES: Record<'unsupported' | 'too_large' | 'quota' | 'faile
 	too_large: { status: 422, error: `Validation failed: File dimensions exceed ${IMAGE_MATRIX_LIMIT} pixels` },
 	quota: { status: 503, error: 'Media processing is unavailable. Try again later.' },
 	failed: { status: 500, error: 'Error processing uploaded media' },
+}
+
+function budgetRefusal(scope: 'account' | 'instance'): Response {
+	return scope === 'account'
+		? mastodonError(429, 'Your media processing budget for the month is used up')
+		: mastodonError(429, "This server's media processing budget for the month is used up")
 }
 
 // POST /api/v1/media and /api/v2/media.
@@ -146,16 +179,12 @@ export const uploadMedia: ApiHandler = async (c, deps) => {
 	)
 	if (reserved.status !== 'ok') {
 		await c.req.raw.body?.cancel()
-		return reserved.status === 'rate_limited'
-			? mastodonError(429, 'Too many requests')
-			: reserved.scope === 'account'
-				? mastodonError(429, 'Your media processing budget for the month is used up')
-				: mastodonError(429, "This server's media processing budget for the month is used up")
+		return reserved.status === 'rate_limited' ? mastodonError(429, 'Too many requests') : budgetRefusal(reserved.scope)
 	}
 	const { id, deadline } = reserved
 	let outcome: Response | MediaAttachment
 	try {
-		outcome = await processUpload(c, deps, { id, token, deadline })
+		outcome = await processUpload(c, deps, { id, token, deadline, monthlyTransforms })
 	} catch (error) {
 		await abandon(c, deps, id, token)
 		throw error
@@ -167,15 +196,16 @@ export const uploadMedia: ApiHandler = async (c, deps) => {
 	return c.json(outcome)
 }
 
-const EXPIRED = () => mastodonError(422, 'Validation failed: The upload expired')
+const EXPIRED_MESSAGE = 'Validation failed: The upload expired'
+const EXPIRED = () => mastodonError(422, EXPIRED_MESSAGE)
 
 async function processUpload(
 	c: ApiContext,
 	deps: ApiDeps,
-	upload: { id: string; token: string; deadline: number }
+	upload: { id: string; token: string; deadline: number; monthlyTransforms: MonthlyTransforms }
 ): Promise<Response | MediaAttachment> {
 	const { id, token } = upload
-	const form = await readMediaForm(c.req.raw)
+	const form = await readMediaForm(c.req.raw, upload.deadline - deps.now())
 	if ('error' in form) {
 		return mastodonError(422, form.error)
 	}
@@ -183,6 +213,23 @@ async function processUpload(
 	const problem = descriptionProblem(description)
 	if (problem !== undefined) {
 		return mastodonError(422, problem)
+	}
+	// The Store revalidates the reservation with the time now and charges the transformations to this month.
+	const started = authorized(
+		await storeCall(c, deps, (s, b) =>
+			s.startTransforms(b, {
+				credential: userCredential(c, deps),
+				id,
+				monthlyTransforms: upload.monthlyTransforms,
+				now: deps.now(),
+			})
+		)
+	)
+	if (started.status === 'expired') {
+		return EXPIRED()
+	}
+	if (started.status === 'budget_exhausted') {
+		return budgetRefusal(started.scope)
 	}
 	const processed = await processImage(deps.images(c.env), form.file)
 	if (!processed.ok) {
@@ -332,4 +379,64 @@ export function sweepSoon(c: ApiContext, deps: ApiDeps): void {
 	} catch {
 		// No execution context (not reachable in the Worker); the sweep still runs.
 	}
+}
+
+// The R2 prefixes reconciliation walks, in turn.
+const RECONCILE_PREFIXES = ['files/', 'originals/'] as const
+
+// Deletes R2 objects no row names, one page per run (the cron): an object a writer put after the sweep deleted its
+// reservation, or one a failed cleanup left. Only objects older than ORPHAN_GRACE_MS go, so an upload in progress (whose
+// row exists anyway) is never touched. The position is kept in the Store, so successive runs walk the whole bucket.
+// Returns how many objects were deleted.
+export async function reconcileMedia(env: Env, deps: SweepDeps, page = RECONCILE_PAGE): Promise<number> {
+	const store = deps.store(env)
+	const build = deps.build(env)
+	try {
+		const saved = (await callStore(() => store.reconcileCursor(build))) ?? {
+			prefix: RECONCILE_PREFIXES[0],
+			cursor: null,
+		}
+		const listed = await env.MEDIA.list({
+			prefix: saved.prefix,
+			limit: Math.min(page, RECONCILE_PAGE),
+			...(saved.cursor === null ? {} : { cursor: saved.cursor }),
+		})
+		const cutoff = deps.now() - ORPHAN_GRACE_MS
+		const old = listed.objects.filter((object) => object.uploaded.getTime() <= cutoff).map((object) => object.key)
+		const owners = old.map((key) => ({ key, ...ownerOf(key) }))
+		const ids = owners.flatMap((o) => (o.id === undefined ? [] : [o.id]))
+		const tokens = owners.flatMap((o) => (o.token === undefined ? [] : [o.token]))
+		const named = await callStore(() => store.mediaReferences(build, { ids, tokens }))
+		const orphans = owners
+			.filter(
+				(o) =>
+					(o.id !== undefined && !named.ids.includes(o.id)) ||
+					(o.token !== undefined && !named.tokens.includes(o.token))
+			)
+			.map((o) => o.key)
+		if (orphans.length > 0) {
+			await env.MEDIA.delete(orphans)
+		}
+		const index = RECONCILE_PREFIXES.indexOf(saved.prefix as (typeof RECONCILE_PREFIXES)[number])
+		const next: ReconcileCursor = listed.truncated
+			? { prefix: saved.prefix, cursor: listed.cursor }
+			: { prefix: RECONCILE_PREFIXES[(index + 1) % RECONCILE_PREFIXES.length] ?? RECONCILE_PREFIXES[0], cursor: null }
+		await callStore(() => store.saveReconcileCursor(build, next))
+		return orphans.length
+	} catch (error) {
+		if (error instanceof StoreUnavailableError) {
+			return 0
+		}
+		throw error
+	}
+}
+
+// The id or file token an R2 key belongs to; keys of another shape belong to nobody known and are left alone.
+function ownerOf(key: string): { id?: string; token?: string } {
+	const original = /^originals\/(\d{18})$/.exec(key)
+	if (original !== null) {
+		return { id: original[1] }
+	}
+	const file = /^files\/([A-Za-z0-9_-]{32,64})\/(full|small)$/.exec(key)
+	return file === null ? {} : { token: file[1] }
 }

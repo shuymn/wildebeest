@@ -5,23 +5,30 @@ import { MEDIA_COLUMNS, type MediaAttachment, type MediaRow, presentMedia } from
 import type { Db } from '../db/sql'
 import { mediaPath } from '../platform/media-files'
 
-// Local media attachments (B4b). An upload is three steps, because re-encoding and R2 are external I/O the Store does
-// not do:
-//   1. reserveMedia (Store): authorizes, applies the upload budget, and creates the row (processed = 0) with its id and
-//      file token, so the R2 keys exist in the Store before anything is written to R2;
-//   2. the Worker re-encodes the image and writes the original and the served files to R2;
-//   3. completeMedia (Store) records type, URLs and dimensions; abandonMedia marks a failed upload for deletion.
+// Local media attachments (B4b). An upload takes four Store calls, because re-encoding and R2 are external I/O the
+// Store does not do:
+//   1. reserveMedia: authorizes, counts the attempt, checks the Images budgets, and creates the row (processed = 0)
+//      with its id and file token, so the R2 keys exist in the Store before anything is written to R2;
+//   2. startTransforms, right before Images is called: revalidates the reservation with fresh time and charges the
+//      transformations to the budgets of the month they run in;
+//   3. the Worker re-encodes the image and writes the original and the served files to R2;
+//   4. completeMedia records type, URLs and dimensions; abandonMedia marks a failed upload for deletion.
 //
-// The writer (the uploading request) gets a deadline, WRITE_WINDOW_MS after the reservation: it starts no R2 write
-// after it, and completeMedia refuses after it. The reservation itself is kept until RESERVATION_MS, so the sweep never
-// deletes a row, and the objects it names, while its writer may still write. processed = 0 means a writer may still be
-// at work; completion and abandonment both set it to 1. Completion is idempotent, so a request whose completion
-// answer was lost can ask again, and abandonment never dooms a completed upload.
+// The uploading request has a deadline, WRITE_WINDOW_MS after the reservation. startTransforms and completeMedia refuse
+// after it, each judging the time the Worker took right before the call, in the transaction that would change the row;
+// the Worker starts no R2 write after it either. What this does not guarantee: a write started before the deadline may
+// still land after the sweep deleted the reservation (an HTTP Worker has no fixed wall-time limit). Such an object has
+// no row, and reconciliation (expired in R2 and unnamed by any row, after ORPHAN_GRACE_MS) deletes it, so an orphan
+// lives at most until a reconciliation run passes it.
+//
+// processed = 0 means the uploading request may still be at work; completion and abandonment both set it to 1.
+// Completion is idempotent, so a request whose completion answer was lost can ask again, and abandonment never dooms a
+// completed upload.
 //
 // Lifecycle: an unattached upload carries gc_at. It is attachable only while gc_at is in the future. A status that
 // stops using media (edit, delete) detaches it with a new grace period, so a redraft can attach it again; delete_media
-// dooms it at once. The sweep (expiredMedia, then R2 deletes, then purgeMedia) removes doomed rows and their R2 objects in
-// bounded batches. A row stays until its objects are deleted, so no R2 object is left without a row (MEDIA-2).
+// dooms it at once. The sweep (expiredMedia, then R2 deletes, then purgeMedia) removes doomed rows and their R2 objects
+// in bounded batches, objects first.
 //
 // Only the uploader reads, updates or attaches an upload, and only while it is unattached (MEDIA-1); Mastodon's
 // MediaController finds `current_account.media_attachments.where(status_id: nil)`.
@@ -31,10 +38,13 @@ const HOUR = 60 * 60 * 1000
 // Media a status no longer uses may be attached again for a day (Mastodon vacuums unattached media after a day).
 export const DETACHED_GRACE_MS = 24 * HOUR
 
-// The writer of a reservation must finish within WRITE_WINDOW_MS. A reservation that never completes (the Worker failed
-// mid-upload) is swept after RESERVATION_MS, which leaves 45 minutes for writes started before the deadline to settle.
+// The uploading request's deadline. A reservation that never completes (the Worker failed mid-upload) is swept after
+// RESERVATION_MS.
 export const WRITE_WINDOW_MS = 15 * 60 * 1000
 const RESERVATION_MS = HOUR
+
+// R2 objects no row names are deleted by reconciliation once they are this old.
+export const ORPHAN_GRACE_MS = 24 * HOUR
 
 // Mastodon's rate limit for media uploads: 30 per 30 minutes per account (RES-6). Attempts are counted, not rows: a
 // deleted or failed upload still counts, so upload-and-delete cannot loop.
@@ -44,10 +54,10 @@ export const UPLOAD_BUDGET = { count: 30, windowMs: 30 * 60 * 1000 }
 export const TRANSFORMS_PER_UPLOAD = 2
 
 // The attempt and transformation counters live in kopje_state, outside the dumped tables: each account's attempt times
-// in the window (at most UPLOAD_BUDGET.count), and the transformations reserved per UTC month, for the instance and
-// for each account. A reservation is charged to the month of its own time, also when its transformations run after
-// midnight (they run within WRITE_WINDOW_MS). Months before the previous one are pruned; the current and later months
-// are never touched by a request, so one that reaches the Store late cannot reset newer counters.
+// in the window (at most UPLOAD_BUDGET.count), and the transformations spent per UTC month, for the instance and for
+// each account. Transformations are charged when they start, to the month they run in, so the monthly ceiling holds
+// across midnight. Months before the previous one are pruned; the current and later months are never removed, so a
+// request that reaches the Store late cannot reset newer counters.
 const ATTEMPTS = 'media_attempts:'
 const TRANSFORMS = 'images_transforms:'
 const ACCOUNT_TRANSFORMS = 'images_account_transforms:'
@@ -91,9 +101,9 @@ export type MonthlyTransforms = { instance: number; account: number }
 
 // Step 1. `token` is the file token the Worker generated (32 random bytes). `monthlyTransforms` holds the instance's
 // Images budget and each account's share of it (IMAGES_MONTHLY_TRANSFORMS, IMAGES_ACCOUNT_MONTHLY_TRANSFORMS), so one
-// account (R4) cannot use up the instance's budget for everyone. All budgets are checked and charged here, in the
-// transaction that makes the reservation, so concurrent uploads cannot overshoot them and nothing reaches Images past
-// them (RES-6).
+// account (R4) cannot use up the instance's budget for everyone. The attempt is counted here and the budgets checked,
+// so an over-budget request reads no body; startTransforms checks them again and charges them, in its transaction, so
+// concurrent uploads cannot overshoot them and nothing reaches Images past them (RES-6).
 export const reserveMedia = userWriteOperation<
 	{ token: string; monthlyTransforms: MonthlyTransforms; now: number },
 	Reserved
@@ -104,30 +114,11 @@ export const reserveMedia = userWriteOperation<
 	if (attempts.length >= UPLOAD_BUDGET.count) {
 		return { status: 'rate_limited' }
 	}
-	const month = iso(now).slice(0, 7)
-	const instanceName = `${TRANSFORMS}${month}`
-	const accountName = `${ACCOUNT_TRANSFORMS}${month}:${accountId}`
-	const instanceSpent = Number(state(db, instanceName) ?? '0')
-	const accountSpent = Number(state(db, accountName) ?? '0')
-	if (accountSpent + TRANSFORMS_PER_UPLOAD > monthlyTransforms.account) {
-		return { status: 'budget_exhausted', scope: 'account' }
-	}
-	if (instanceSpent + TRANSFORMS_PER_UPLOAD > monthlyTransforms.instance) {
-		return { status: 'budget_exhausted', scope: 'instance' }
+	const refused = budgetRefusal(db, accountId, monthlyTransforms, now)
+	if (refused !== null) {
+		return refused
 	}
 	setState(db, attemptsName, JSON.stringify([...attempts, now]))
-	// Counters of months before the previous one go (at most ten local accounts, so this stays small).
-	db.run(
-		`DELETE FROM kopje_state WHERE (substr(name, 1, ?1) = ?2 AND substr(name, ?1 + 1, 7) < ?5)
-			OR (substr(name, 1, ?3) = ?4 AND substr(name, ?3 + 1, 7) < ?5)`,
-		TRANSFORMS.length,
-		TRANSFORMS,
-		ACCOUNT_TRANSFORMS.length,
-		ACCOUNT_TRANSFORMS,
-		previousMonth(now)
-	)
-	setState(db, instanceName, String(instanceSpent + TRANSFORMS_PER_UPLOAD))
-	setState(db, accountName, String(accountSpent + TRANSFORMS_PER_UPLOAD))
 	const id = allocateLocalId(db, now)
 	db.run(
 		`INSERT INTO media_attachments (id, account_id, type, url, file_token, processed, gc_at, created_at)
@@ -146,6 +137,69 @@ function previousMonth(now: number): string {
 	const date = new Date(now)
 	return iso(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() - 1, 1)).slice(0, 7)
 }
+
+function budgetNames(accountId: string, now: number): { instance: string; account: string } {
+	const month = iso(now).slice(0, 7)
+	return { instance: `${TRANSFORMS}${month}`, account: `${ACCOUNT_TRANSFORMS}${month}:${accountId}` }
+}
+
+// Whether one more upload's transformations fit the budgets of the month `now` is in.
+function budgetRefusal(
+	db: Db,
+	accountId: string,
+	monthlyTransforms: MonthlyTransforms,
+	now: number
+): { status: 'budget_exhausted'; scope: 'account' | 'instance' } | null {
+	const names = budgetNames(accountId, now)
+	if (Number(state(db, names.account) ?? '0') + TRANSFORMS_PER_UPLOAD > monthlyTransforms.account) {
+		return { status: 'budget_exhausted', scope: 'account' }
+	}
+	if (Number(state(db, names.instance) ?? '0') + TRANSFORMS_PER_UPLOAD > monthlyTransforms.instance) {
+		return { status: 'budget_exhausted', scope: 'instance' }
+	}
+	return null
+}
+
+export type Started =
+	| { status: 'ok' }
+	| { status: 'expired' }
+	| { status: 'budget_exhausted'; scope: 'account' | 'instance' }
+
+// Step 2, right before Images is called. The reservation must still be open (not completed, abandoned or past its
+// deadline at `now`), and the transformations are charged to the budgets of the month `now` is in.
+export const startTransforms = userWriteOperation<
+	{ id: string; monthlyTransforms: MonthlyTransforms; now: number },
+	Started
+>((db, { id, monthlyTransforms, now }, { accountId }) => {
+	const open = db.first<{ id: string }>(
+		'SELECT id FROM media_attachments WHERE id = ? AND account_id = ? AND processed = 0 AND created_at > ?',
+		id,
+		accountId,
+		iso(now - WRITE_WINDOW_MS)
+	)
+	if (open === undefined) {
+		return { status: 'expired' }
+	}
+	const refused = budgetRefusal(db, accountId, monthlyTransforms, now)
+	if (refused !== null) {
+		return refused
+	}
+	// Counters of months before the previous one go (at most ten local accounts, so this stays small).
+	db.run(
+		`DELETE FROM kopje_state WHERE (substr(name, 1, ?1) = ?2 AND substr(name, ?1 + 1, 7) < ?5)
+			OR (substr(name, 1, ?3) = ?4 AND substr(name, ?3 + 1, 7) < ?5)`,
+		TRANSFORMS.length,
+		TRANSFORMS,
+		ACCOUNT_TRANSFORMS.length,
+		ACCOUNT_TRANSFORMS,
+		previousMonth(now)
+	)
+	const names = budgetNames(accountId, now)
+	for (const name of [names.instance, names.account]) {
+		setState(db, name, String(Number(state(db, name) ?? '0') + TRANSFORMS_PER_UPLOAD))
+	}
+	return { status: 'ok' }
+})
 
 export type CompleteMediaInput = {
 	id: string
@@ -275,3 +329,43 @@ export const purgeMedia = writeOperation<{ ids: string[]; now: number }, number>
 		iso(now)
 	)
 )
+
+// Reconciliation (the cron, mastodon/media.ts): which of these ids and file tokens a row still names. Any row counts,
+// processing or doomed, because the sweep deletes a row's objects itself.
+export const mediaReferences = readOperation<{ ids: string[]; tokens: string[] }, { ids: string[]; tokens: string[] }>(
+	(db, { ids, tokens }) => ({
+		ids: db
+			.all<{
+				id: string
+			}>(
+				'SELECT id FROM media_attachments WHERE id IN (SELECT value FROM json_each(?))',
+				JSON.stringify(ids.slice(0, RECONCILE_PAGE))
+			)
+			.map((row) => row.id),
+		tokens: db
+			.all<{
+				token: string
+			}>(
+				'SELECT file_token AS token FROM media_attachments WHERE file_token IN (SELECT value FROM json_each(?))',
+				JSON.stringify(tokens.slice(0, RECONCILE_PAGE))
+			)
+			.map((row) => row.token),
+	})
+)
+
+// At most this many R2 objects are looked at per reconciliation run.
+export const RECONCILE_PAGE = 500
+
+const RECONCILE_CURSOR = 'media_reconcile_cursor'
+
+// Where the next reconciliation run continues: the R2 prefix and its list cursor (null: from the start).
+export type ReconcileCursor = { prefix: string; cursor: string | null }
+
+export const reconcileCursor = readOperation<undefined, ReconcileCursor | null>((db) => {
+	const value = state(db, RECONCILE_CURSOR)
+	return value === undefined ? null : (JSON.parse(value) as ReconcileCursor)
+})
+
+export const saveReconcileCursor = writeOperation<ReconcileCursor, void>((db, cursor) => {
+	setState(db, RECONCILE_CURSOR, JSON.stringify(cursor))
+})

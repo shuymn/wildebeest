@@ -157,7 +157,7 @@ describe('budget months', () => {
 		expect(names.map((n) => n.name)).toEqual(['images_transforms:2026-10', 'images_transforms:2026-11'])
 	})
 
-	it('charges the month of the reservation even when the transformation runs after midnight', async () => {
+	it('charges the month the transformations start in, even when they finish after midnight', async () => {
 		const codec = new TestCodec()
 		const h = await users({ codec })
 		const midnight = Date.parse('2026-11-01T00:00:00.000Z')

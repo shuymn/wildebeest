@@ -139,13 +139,22 @@ export const editStatus: ApiHandler = async (c, deps) => {
 		return p
 	}
 	const composed = composition(p)
-	// UpdateStatusService applies description and focus of each entry; an entry with neither changes nothing.
-	const mediaAttributes: MediaAttributes[] = p.objects('media_attributes').flatMap((a) => {
+	// UpdateStatusService applies description and focus of each entry; an entry with neither changes nothing. Entries
+	// for the same attachment collapse to one, the later value of each field winning, before anything is compared.
+	const merged = new Map<string, MediaAttributes>()
+	for (const a of p.objects('media_attributes')) {
 		const focus = parseFocus(a.focus)
-		return a.id === undefined || (a.description === undefined && focus === undefined)
-			? []
-			: [{ id: a.id, description: a.description, focus }]
-	})
+		if (a.id === undefined || (a.description === undefined && focus === undefined)) {
+			continue
+		}
+		const previous = merged.get(a.id)
+		merged.set(a.id, {
+			id: a.id,
+			description: a.description ?? previous?.description,
+			focus: focus ?? previous?.focus,
+		})
+	}
+	const mediaAttributes = [...merged.values()]
 	const problem =
 		typeof composed === 'string'
 			? composed

@@ -412,6 +412,22 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, media.updateMedia, input)
 	}
 
+	startTransforms(callerBuild: string, input: OperationInput<typeof media.startTransforms>) {
+		return this.#kernel.execute(callerBuild, media.startTransforms, input)
+	}
+
+	mediaReferences(callerBuild: string, input: OperationInput<typeof media.mediaReferences>) {
+		return this.#kernel.execute(callerBuild, media.mediaReferences, input)
+	}
+
+	reconcileCursor(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, media.reconcileCursor, undefined)
+	}
+
+	saveReconcileCursor(callerBuild: string, input: OperationInput<typeof media.saveReconcileCursor>) {
+		return this.#kernel.execute(callerBuild, media.saveReconcileCursor, input)
+	}
+
 	expiredMedia(callerBuild: string, input: OperationInput<typeof media.expiredMedia>) {
 		return this.#kernel.execute(callerBuild, media.expiredMedia, input)
 	}
