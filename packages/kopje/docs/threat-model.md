@@ -9,8 +9,7 @@ status, updates this file. IDs are never reused: an invariant that no longer app
 ## Status of an invariant
 
 Paths are relative to `packages/kopje`. **Enforced (main):** the cited source and test exist on `main`. **Implemented on
-branch `kopje/<name>`:** on a branch not yet in a PR (`kopje/ops-tools` is B6a, `kopje/statuses` is B4a). **Planned
-(stage):** not implemented; required before the stage ships.
+branch `kopje/<name>`:** on a branch not yet in a PR. **Planned (stage):** not implemented; required before the stage ships.
 
 A **Gap** note names a part that no test pins yet; that part does not count as enforced. Stages: B1b inbound activities,
 B2 delivery, B4 statuses, media and search, B5 web UI and `/setup`, B6b backups and restore, B8 cutover tools. "Push"
@@ -69,14 +68,14 @@ against their own instance. TLS is assumed between all parties.
 | Mastodon API `/api/*`                                         | R2–R4, R7  | bearer token and route access                            | main: `src/mastodon/*`, `src/domain/auth.ts`              |
 | `/oauth/authorize`                                            | R2, R6, R7 | Access JWT, Origin, consent                              | main: `src/app/authorize.tsx`                             |
 | `/oauth/token`, `/oauth/revoke`                               | R2, R3     | client credentials                                       | main: `src/mastodon/oauth.ts`                             |
-| `/admin/*` and the `kopje-admin` CLI                          | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session | `kopje/ops-tools`: `src/app/admin.ts`                     |
+| `/admin/*` and the `kopje-admin` CLI                          | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session | main: `src/app/admin.ts`                                  |
 | `/setup` and its Cloudflare API calls                         | R2, R7     | `SETUP_TOKEN`                                            | Planned (B5)                                              |
 | Web UI (profiles, permalinks, settings)                       | R2, R4, R7 | session                                                  | Planned (B5)                                              |
 | Media upload and serving, Images transformation               | R2–R4      | bearer token; capability URL for reads                   | main: `src/mastodon/media.ts`                             |
 | Web Push registration                                         | R3         | bearer token with `push`                                 | Planned (push)                                            |
 | Queue consumer, alarms, cron                                  | internal   | —                                                        | main: `src/jobs/queue.ts`, `src/platform/store-kernel.ts` |
 | Delivery doorbell and cron (`src/jobs/deliver.ts`)            | internal   | —                                                        | main: `src/jobs/deliver.ts`                               |
-| Dump import, backup restore, cutover tools                    | R5, R8     | admin authority, then digest chain and manifest          | `kopje/ops-tools` (import); Planned (B6b, B8)             |
+| Dump import, backup restore, cutover tools                    | R5, R8     | admin authority, then digest chain and manifest          | main (import); Planned (B6b, B8)                          |
 
 ## Invariants
 
@@ -139,8 +138,7 @@ against their own instance. TLS is assumed between all parties.
   if served as `application/activity+json` or `application/ld+json` with the ActivityStreams profile, as Mastodon
   requires, and only if its root is a JSON object (JSON-LD would fetch a string root through the context loader). Other
   JSON (an uploaded file, for example) is refused, and a combined or malformed Content-Type is refused. Signed-document
-  cache entries live under a versioned namespace that is bumped whenever this policy is tightened. _Implemented on
-  branch `kopje/hardening-1`:_ `createSafeLoader` and `requireObjectRoot` in `src/federation/loader.ts` (Fedify's
+  cache entries live under a versioned namespace that is bumped whenever this policy is tightened. _Enforced (main):_ `createSafeLoader` and `requireObjectRoot` in `src/federation/loader.ts` (Fedify's
   document loaders, around their caches too) with `isActivityPubMediaType` in `src/platform/media-type.ts`; JSON-LD
   contexts go through `createContextLoader`, which never yields an object; `SIGNED_DOCUMENT_PREFIX` in
   `src/federation/federation.ts`; `test/loader.test.ts`, `test/media-type.test.ts`, `test/document-root.test.ts`,
@@ -154,8 +152,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **VIS-1: one rule decides who may see a status**, Mastodon's `StatusPolicy#show?`: a suspended author's statuses are
   seen by nobody; the author sees all their own; an author who blocks the viewer hides everything from them; `public`
   and `unlisted` are seen by everyone else; `private` by accepted followers and the mentioned (silent included);
-  `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule. _Implemented
-  on branch `kopje/statuses`:_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
+  `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule. _Enforced (main):_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
   `test/visibility.test.ts` (single status, context, history, source, `favourited_by`, timelines, account statuses,
   notifications, bookmarks, favourites). _Enforced (main)_ for search: `src/domain/search.ts`;
   `test/search.test.ts` ("never returns a status the viewer may not see", "drops a boosted status that became
@@ -166,8 +163,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   became hidden still takes a slot of the viewer's own window, which reveals that something changed, not what. Media
   URLs appear only in statuses that pass the rule (see the capability URL accepted risk). The web UI is _Planned (B5)._ The object endpoint serves only what VIS-4 allows (enforced on main).
 - **VIS-2: limited stays limited.** A direct status with silent recipients (Misskey `specified`) is `limited`: shown
-  only to its addressed recipients, presented as `private` by the API, never widened by an edit. _Implemented on branch
-  `kopje/statuses`:_ `interpretAddressing` in `src/domain/audience.ts`; `test/audience.test.ts` ("reads Misskey
+  only to its addressed recipients, presented as `private` by the API, never widened by an edit. _Enforced (main):_ `interpretAddressing` in `src/domain/audience.ts`; `test/audience.test.ts` ("reads Misskey
   specified"). Use on inbound statuses: _Planned (B1b)._ Outbound: each silent recipient gets a copy of its own at
   its personal inbox naming only itself in `to` (no Mention), because Misskey derives `visibleUsers` from `to` and
   `cc` only; the copy everyone else gets never names a silent recipient. So a silent recipient learns that it is
@@ -179,7 +175,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   them alone", "never names a silent recipient in the copy for the followers"), `test/delivery-verify.test.ts` ("sends
   nothing to a silent recipient without a personal inbox", "POSTs each silent recipient a copy naming only them").
 - **VIS-3: changes reach only the original audience.** `Update` and `Delete` are addressed to the audience the status
-  already had; `Delete` carries a `Tombstone`, not the content. _Implemented on branch `kopje/statuses`:_
+  already had; `Delete` carries a `Tombstone`, not the content. _Enforced (main):_
   `src/domain/activities.ts`; `test/statuses.test.ts` ("records Create, Update and Delete for the original audience
   only"). Delivery: _Enforced (main):_ silent recipients get the activity as VIS-2 says and
   are never named in the shared copy; a `Delete` or `Undo` also reaches every inbox that received the object or may
@@ -203,16 +199,15 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/object-endpoint.test.ts`. Boosts (`Announce` ids) answer 404; Mastodon serves them.
 - **VIS-5: lists also apply the viewer's filters**, Mastodon's `StatusFilter`. Feeds, context, notifications, bookmarks,
   favourites, `favourited_by` and `reblogged_by` drop authors the viewer blocks, mutes or domain-blocks. A single status
-  by id is not filtered. _Implemented on branch `kopje/statuses`:_ `unfilteredSql` and `listableSql` in
+  by id is not filtered. _Enforced (main):_ `unfilteredSql` and `listableSql` in
   `src/domain/audience.ts`; `test/audience.test.ts`, `test/visibility.test.ts` ("blocked and muted accounts stay out of
   lists").
 - **VIS-6: a wrapper reveals nothing its target hides.** A boost is visible only if its original is; boosting is limited
-  to `public` and `unlisted` statuses and one's own `private` ones (`StatusPolicy#reblog?`). _Implemented on branch
-  `kopje/statuses`:_ `viewableSql`; `test/visibility.test.ts` ("a boost of an original the viewer may not see is hidden
+  to `public` and `unlisted` statuses and one's own `private` ones (`StatusPolicy#reblog?`). _Enforced (main):_ `viewableSql`; `test/visibility.test.ts` ("a boost of an original the viewer may not see is hidden
   with it"), `test/statuses.test.ts` ("refuses to boost direct and others’ private statuses"). Quotes and other embedded
   objects check their target the same way: _Planned (B1b, B4)._
 - **VIS-7: silent recipients see, but are not mentioned.** A silent mention grants VIS-1 access only. It never appears
-  in `mentions` and never produces a mention notification. _Implemented on branch `kopje/statuses`:_
+  in `mentions` and never produces a mention notification. _Enforced (main):_
   `src/domain/status-presenter.ts`, `src/domain/notifications.ts`; `test/visibility.test.ts` ("none for a silent
   recipient").
 - **VIS-8: a pending follow grants nothing.** A follow of a locked local account or of any remote account starts
@@ -227,12 +222,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   outbound delivery").
 - **VIS-10: a notification is emitted once.** It is written only if the recipient is local and may see the status, and
   only when new under its natural key; a repeat inserts nothing (`update` replaces the previous one). Its push is sent
-  only for a newly inserted row. _Implemented on branch `kopje/statuses`:_ `notify` in `src/domain/notifications.ts`;
+  only for a newly inserted row. _Enforced (main):_ `notify` in `src/domain/notifications.ts`;
   `test/statuses.test.ts` ("a retry has no second side effect"), `test/timelines.test.ts` ("notifies followers who
   asked to be notified, once"). Push: _Planned (push)._
 - **VIS-11: earlier versions keep the original audience.** Edit history and earlier versions are visible only to the
   status's original audience, and an edit of a non-public status never widens that audience (a recipient added by an
-  edit does not see earlier versions). This differs from Mastodon on purpose. _Implemented on branch `kopje/statuses`:_
+  edit does not see earlier versions). This differs from Mastodon on purpose. _Enforced (main):_
   `editStatus` in `src/domain/statuses.ts`; `test/statuses.test.ts` ("a mention added by editing a direct status adds no
   recipient").
 - **VIS-12: metadata reveals no hidden status.** Presenter fields never disclose a status the viewer may not see:
@@ -242,7 +237,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   status it embeds, and `source` appears only on the viewer's own status. Aggregate counters are excepted (see accepted
   risks). Parent references follow Mastodon: `in_reply_to_id` and `in_reply_to_account_id` are shown even when the
   parent is hidden, because they belong to the reply (its ActivityPub object carries `inReplyTo` to every recipient);
-  the parent itself stays behind VIS-1. _Implemented on branch `kopje/statuses`:_ `src/domain/status-presenter.ts`,
+  the parent itself stays behind VIS-1. _Enforced (main):_ `src/domain/status-presenter.ts`,
   `src/domain/statuses.ts`, `ACCOUNT_COLUMNS` in `src/domain/accounts.ts`; `test/statuses.test.ts` ("review
   regressions").
 
@@ -256,7 +251,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   tokens included) or a required user scope; one helper decides scope coverage (parents cover children, `follow` expands
   to its split scopes, nothing else is implied). _Enforced (main):_ `src/mastodon/routes.ts`, `src/security/scopes.ts`;
   `test/scopes.test.ts`, `test/vectors.test.ts` ("Mastodon's scope hierarchy"), `test/oauth.test.ts` ("scopes on
-  routes"). `kopje/statuses` adds `optional` scopes (no token reads as anonymous; a token sent must be valid).
+  routes"). Main adds `optional` scopes (no token reads as anonymous; a token sent must be valid).
 - **AUTH-3: OAuth follows the supported contract.** _Enforced (main):_ `src/app/authorize.tsx`, `src/mastodon/oauth.ts`,
   `src/domain/oauth.ts`; `test/oauth.test.ts`, `test/vectors.test.ts`. - Grants: authorization code and client
   credentials. Codes expire after 10 minutes and are single-use. PKCE is optional and S256 only; a bound code needs the
@@ -268,7 +263,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **AUTH-4: Access JWTs are verified with jose.** RS256 only; issuer, audience and `exp` required; at most 60 s clock
   tolerance; a fetched key set used for at most 7 days. Sign-in requires an email claim. _Enforced (main):_
   `src/security/access-jwt.ts`; `test/oauth.test.ts` ("Access assertion").
-- **AUTH-5: admin authority comes only from the target's own configuration.** _Implemented on branch `kopje/ops-tools`:_
+- **AUTH-5: admin authority comes only from the target's own configuration.** _Enforced (main):_
   `src/app/admin.ts`, `src/platform/store-admin.ts`, `src/platform/access-settings.ts`; `test/ops-authority.test.ts`,
   `test/admin.test.ts`, `test/dump-import.test.ts`. - Configuration is every name `/admin/config` accepts: `domain`,
   `access_aud`, `access_team_domain`, `access_admin_aud`, `admin_email`, `access_service_token_client_id`. A verified
@@ -278,12 +273,14 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   configures the Store while admin access is not usable. The Store checks this, not only the Worker. - A token import
   continues only with the one-time session credential `begin` returned; the Store keeps its SHA-256 only. An unverified
   token import idle for 15 minutes may be reset with `IMPORT_TOKEN`; an Access import never. - Secrets are compared as
-  fixed-size SHA-256 digests.
+  fixed-size SHA-256 digests, in time independent of their contents and lengths: `constantTimeEqual` in
+  `src/security/tokens.ts` and `sessionMatches` in `src/platform/store-admin.ts`; `test/ops-authority.test.ts`
+  ("constantTimeEqual").
 - **AUTH-6: a user acts only on what that user may touch.** User operations take the acting account from the validated
   viewer, never from the body or path, and check ownership or VIS-1 access to every referenced resource in the same
   transaction. Admin, setup and federation operations use their own named rules (AUTH-5, SETUP-2, ID-6). _Enforced
   (main)_ for accounts and OAuth: `src/domain/accounts.ts`, `src/domain/oauth.ts`; `test/oauth.test.ts` ("does not
-  revoke a token of another client"). _Implemented on branch `kopje/statuses`_ for statuses and notifications:
+  revoke a token of another client"). _Enforced (main)_ for statuses and notifications:
   `test/statuses.test.ts` ("cannot edit someone else's status", "gives the source for editing to the author only"),
   `test/notifications.test.ts` ("only the viewer’s own notifications").
 - **AUTH-7: opaque credentials are unguessable and stored as digests.** Client ids and secrets, codes and access tokens
@@ -306,8 +303,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **WEB-3: CORS is open only where no ambient credential exists.** Wildcard CORS without credentials applies to
   `/api/*`, `/oauth/token` and `/oauth/revoke` only (bearer tokens). `/oauth/authorize`, `/admin/*`, `/setup` and the
   web UI send no CORS headers. _Enforced (main):_ `src/app/app.ts`; `test/oauth.test.ts` ("opens the API and token
-  endpoints to browser clients, errors included"). Admin, setup and UI routes: _Planned (B5); `kopje/ops-tools` adds
-  `/admin/*` without CORS._
+  endpoints to browser clients, errors included"). Admin, setup and UI routes: _Planned (B5); `/admin/*` on main sends no CORS headers._
 - **WEB-4: the web UI applies WEB-1 to every state change.** Each form that changes state checks `Origin` and its
   session; a return or redirect target is a validated local path. _Planned (B5)._
 - **WEB-5: responses declare their type.** API and federation responses carry their exact JSON media type and
@@ -374,12 +370,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/html.test.ts`. Status content and field values: _Planned (B1b-2)._
 - **HTML-2: local text becomes HTML only by escaping and linking.** Status text and bios are escaped, then absolute
   http(s) URLs, known mentions and hashtags are linked. Display names stay plain strings. _Enforced (main)_ for bios:
-  `src/domain/plain-text.ts`; `test/accounts.test.ts` ("stores plain-text profile fields safely"). _Implemented on
-  branch `kopje/statuses`_ for status text: `src/domain/status-text.ts`; `test/status-text.test.ts`.
+  `src/domain/plain-text.ts`; `test/accounts.test.ts` ("stores plain-text profile fields safely"). _Enforced (main)_ for status text: `src/domain/status-text.ts`; `test/status-text.test.ts`.
 - **HTML-3: navigable URLs are http(s) only.** Before a profile URL, avatar, header, attachment URL, field link or app
   website is emitted, it is parsed and must be http or https; anything else becomes absent or the default. This applies
   to fetched and imported data too. _Enforced (main)_ for app websites at registration: `validWebsite` in
-  `src/mastodon/oauth.ts` (_Gap: untested_). _Implemented on branch `kopje/hardening-1`_ for the account presenter and
+  `src/mastodon/oauth.ts` (_Gap: untested_). _Enforced (main)_ for the account presenter and
   local actor documents (profile URL, avatar, header, icon, image and aliases): `httpUrl` in `src/platform/http-url.ts`,
   used by `presentAccount` in `src/domain/accounts.ts` and `localActorObject` in `src/federation/federation.ts`;
   `test/accounts.test.ts`, `test/federation.test.ts`. _Enforced (main)_ for attachment URLs
@@ -391,7 +386,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 ### Media (MEDIA)
 
 - **MEDIA-1: only the owner uses an attachment.** Only the uploader may update, delete or attach an attachment, and only
-  while it is unattached or attached to the status being edited. _Implemented on branch `kopje/statuses`_ for attaching:
+  while it is unattached or attached to the status being edited. _Enforced (main)_ for attaching:
   `attachableMedia` in `src/domain/statuses.ts`; `test/statuses.test.ts` ("attaches own unattached media").
   _Enforced (main)_ for reading, updating and deleting: `src/domain/media.ts` (an upload is
   read or updated only by its owner while unattached; it is deleted only through its owner's status with
@@ -444,13 +439,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `Content-Length` or while streaming. Each text field has a raw cap before parsing or counting (status text: 10,000
   code units). Media uploads have their own limit. _Enforced (main)_ for bodies: `src/platform/body.ts`,
   `src/mastodon/params.ts`; `test/gate.test.ts` ("refuses an inbox body over 1 MiB", "stops reading a streamed inbox
-  body"). _Gap: no API body test._ _Implemented on branch `kopje/statuses`_ for status text: `test/status-text.test.ts`
+  body"). _Gap: no API body test._ _Enforced (main)_ for status text: `test/status-text.test.ts`
   ("raw input bound"). _Enforced (main)_ for search terms (500 characters) and media (16 MB
   and 16,777,216 pixels, read with the body bound before parsing): `src/mastodon/search.ts`, `src/mastodon/media.ts`;
   `test/search.test.ts` ("bounds the query"), `test/media.test.ts` ("refuses a file over 16 MB"). _Enforced (main)_ for remote profiles: bios are cut at 50,000 code units before sanitizing and
   display names at 2,048 (`src/security/html.ts`, `src/federation/remote-actor.ts`). Other query strings: _Gap._
 - **RES-2: parsing work is bounded.** Every regex, parser and normalization over input at the RES-1 cap has an
-  adversarial fixture with a time bound. _Implemented on branch `kopje/statuses`_ for status text:
+  adversarial fixture with a time bound. _Enforced (main)_ for status text:
   `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Enforced (main)_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
   bound"). Remote HTML: _Enforced (main):_ `test/html.test.ts` ("at the raw cap
   within a generous time"). JSON-LD processing: _Planned (B1b-2)._
@@ -539,7 +534,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   delivery claims interleave", "when the purge completes before any expansion").
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
-  size of edits. _Implemented on branch `kopje/statuses`_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
+  size of edits. _Enforced (main)_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
   untested_). _Enforced (main)_ for search: statuses pass `listableSql` before `LIMIT`,
   each library source reads at most 2,500 rows through an index ordered by the status id it returns (cursors applied
   inside it), hashtags come from at most 500 entries per library source plus the newest 2,000 public statuses, and an
@@ -562,7 +557,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/instance.test.ts` ("refuses an invalid VAPID_JWK as misconfiguration").
 - **DATA-3: dumps are exact and verified.** A dump keeps exact bytes and storage classes. Import accepts only exact
   template statements with bound literals, into an empty Store with the same schema, and verification recomputes the
-  digests from the imported rows. _Implemented on branch `kopje/ops-tools`:_ `src/platform/store-dump.ts`,
+  digests from the imported rows. _Enforced (main):_ `src/platform/store-dump.ts`,
   `src/platform/store-import.ts`, `docs/dump-format.md`; `test/dump-import.test.ts`, `test/ops-regressions.test.ts`,
   `test/dump-format.test.ts`. Media tombstones (`media_orphans`) are left out of dumps (`src/platform/dump-catalog.ts`):
   they name R2 objects to delete, which a restored Store must not act on.
@@ -574,14 +569,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `OTHER`), route template and status. Diagnostic
   detail produced inside the Store from no request input is allowed, such as the raw SQLite or migration error in
   `kopje.store.upgrade.failed`, which reaches only logs and the admin health report. Tests inject marker values into
-  errors and assert they are absent. _Implemented on branch `kopje/hardening-1`:_ `errorFields` in
+  errors and assert they are absent. _Enforced (main):_ `errorFields` in
   `src/platform/error-message.ts`, used by `app.onError` (`src/app/app.ts`), the queue and spool handlers, the snapshot
   saver and the Store kernel; `test/log-redaction.test.ts`. Access failures log only jose's error code (main), and the
-  CLI never prints secrets (`kopje/ops-tools`, `test/cli.test.ts`). Later stages: _Planned (all stages)._
+  CLI never prints secrets (main, `test/cli.test.ts`). Later stages: _Planned (all stages)._
 - **DATA-6: ids stay strings end to end.** Ids never pass through JS numbers. INTEGER edge and notification ids are read
   with `CAST(id AS TEXT)` and compared with `CAST(? AS INTEGER)`. 18-digit TEXT status ids compare as TEXT; a shorter
   client cursor is zero-padded first. _Enforced (main)_ for edges: `listFollows` in `src/domain/accounts.ts`;
-  `test/accounts.test.ts` ("edge ids beyond 2^53", "keeps 18-digit ids exact"). _Implemented on branch `kopje/statuses`_
+  `test/accounts.test.ts` ("edge ids beyond 2^53", "keeps 18-digit ids exact"). _Enforced (main)_
   for status cursors: `statusCursor` in `src/domain/statuses.ts` (_Gap: untested_).
 - **DATA-7: the instance key signs only recipient-neutral fetches.** Fetches without a specific recipient are signed by
   the instance actor; fetches for a personal inbox by the recipient's key; activities by their author's key. The
@@ -601,17 +596,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   ActivityStreams (415) and a personal inbox of no local account (404) are refused before anything is spooled.
   _Enforced (main):_
   `src/app/app.ts`, `src/app/gate.ts`, `src/federation/spool.ts`; `test/gate.test.ts` ("maintenance gate"). A PITR
-  restore requires env `MAINTENANCE=full`: _Implemented on branch `kopje/ops-tools`_ (`test/admin.test.ts`, "restores
+  restore requires env `MAINTENANCE=full`: _Enforced (main)_ (`test/admin.test.ts`, "restores
   only under MAINTENANCE=full"). Replay that verifies the signature against the spool time:
   _Enforced (main):_ `src/jobs/queue.ts`, `src/federation/inbound.ts`; `test/inbox.test.ts`
   ("OPS-1"), `test/gate.test.ts` ("refuses a personal inbox of nobody").
 - **OPS-2: no upgrade runs under a dump freeze or an import.** Migrations wait while either exists. The freeze also
-  stops session writes and alarm work. _Implemented on branch `kopje/ops-tools`:_ `src/platform/store-kernel.ts`,
+  stops session writes and alarm work. _Enforced (main):_ `src/platform/store-kernel.ts`,
   `src/platform/store-flags.ts`; `test/dump-import.test.ts`, `test/ops-authority.test.ts` ("upgrades during an import").
 - **OPS-3: an unknown outcome is reconciled, not assumed.** A migration failure re-reads durable bookkeeping. Other
   operations that a client may retry after a lost response carry a stable idempotency key. _Enforced (main)_ for
-  migrations: `test/migrations.test.ts` ("re-reads bookkeeping"). _Implemented on branch `kopje/statuses`_
-  (`Idempotency-Key`, `test/statuses.test.ts`) and `kopje/ops-tools` (import chunks, `test/dump-import.test.ts`).
+  migrations: `test/migrations.test.ts` ("re-reads bookkeeping"). _Enforced (main)_
+  (`Idempotency-Key`, `test/statuses.test.ts`) and for import chunks (`test/dump-import.test.ts`).
   Deliveries: _Enforced (main):_ a claim or completion whose response is lost leaves the row
   leased until the lease ends, then it is claimed and POSTed again (the receiver deduplicates by activity id); a
   repeated completion is stale and records nothing twice; `test/deliveries.test.ts` ("OPS-3: a claim or completion
@@ -655,7 +650,7 @@ Each stage ships tests for these cases, named with the invariant IDs.
 
 Custom code is cross-checked against external vectors: RFC 7636 Appendix B and the RFC 6749 and RFC 7009 examples
 (`test/vectors.test.ts`); Fedify's draft-cavage vector and a pinned Mastodon-shaped signature
-(`test/http-signature.test.ts`); NIST SHA-256 vectors (`kopje/ops-tools`, `test/dump-format.test.ts`); the DOMPurify,
+(`test/http-signature.test.ts`); NIST SHA-256 vectors (`test/dump-format.test.ts`); the DOMPurify,
 OWASP, html5sec and sanitize-html vectors in `packages/backend`; Mastodon's `StatusPolicy`, `StatusFilter` and inbound
 activity specs, cited in test names.
 
@@ -677,7 +672,6 @@ activity specs, cited in test names.
 | Misskey with several silent recipients of one status on one server: only the first copy Misskey processes sets the note's audience, so the other silent recipients there cannot see it. Supported: one silent recipient per Misskey server | Misskey keeps the first `Create` of a note; a combined copy would name the recipients to each other, and recipient-specific object ids would split the status | Misskey honours a later copy, or a peer needs it                     |
 | A lease taken just before maintenance and not completed counts one attempt when it expires                                                                                                                                                 | Bounded by one attempt per lease; maintenance itself claims nothing (RES-5)                                                                                   | maintenance windows become frequent                                  |
 | Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured                                                                                                                             | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added                                                                         | Kopje configures logtape                                             |
-| `constantTimeEqual` on main takes time that depends on the input length                                                                                                                                                                    | No content leak is known; `kopje/ops-tools` compares fixed-size digests                                                                                       | `kopje/ops-tools` merges (then remove this row)                      |
 | Remote HTML is sanitized by sanitize-html, whose htmlparser2 is a tokenizer rather than an HTML5 tree builder                                                                                                                              | It emits only allowlisted tags with quoted, escaped attributes and escapes all other text; the parse5-checked vector suites pass                              | a vector fails, or a maintained tree-based sanitizer fits the budget |
 | Activities signed by someone other than their actor (forwarded, with LD signatures) are refused                                                                                                                                            | ID-1. Replies that reach Kopje only by forwarding (to a collection the author cannot deliver to) and deliveries through relays are missed                     | relays or forwarded replies must be supported                        |
 
