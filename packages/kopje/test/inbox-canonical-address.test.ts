@@ -106,7 +106,13 @@ describe('the canonical address of a remote account', () => {
 		const t = await setup()
 		const ali = await splitDomain(t)
 		await resolve(t, `ali@${CANONICAL}`, 'dave')
+		// The third party answers for the actor's own username too, as if it were the actor's domain.
 		serveWebFinger(t.web, 'acct:anyone@alias.example', 'acct:anyone@alias.example', ali.uri)
+		serveWebFinger(t.web, 'acct:ali@alias.example', 'acct:ali@alias.example', ali.uri)
+		expect((await resolve(t, 'anyone@alias.example', 'dave')).body.accounts.map((a) => a.acct)).toEqual([
+			`ali@${CANONICAL}`,
+		])
+		expect(await stored(t, ali.uri)).toEqual([{ username: 'ali', domain: CANONICAL, confirmed_username: 'ali' }])
 		// While the host does not answer, the alias leaves the stored address as it is.
 		t.web.fail(`https://${HOST}/.well-known/webfinger?resource=${encodeURIComponent(`acct:ali@${HOST}`)}`, 503)
 		expect((await resolve(t, 'anyone@alias.example', 'dave')).body.accounts.map((a) => a.acct)).toEqual([
