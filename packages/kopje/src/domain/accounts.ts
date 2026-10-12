@@ -1,4 +1,5 @@
 import { userReadOperation, userWriteOperation } from './auth'
+import { notify } from './notifications'
 import { readOperation } from './operation'
 import { htmlToPlainText, plainTextToHtml } from './plain-text'
 import { accountSearchText, queryTerms } from './search-text'
@@ -70,7 +71,7 @@ export type Relationship = {
 const DEFAULT_AVATAR = '/assets/avatar.png'
 const DEFAULT_HEADER = '/assets/header.png'
 
-type AccountRow = {
+export type AccountRow = {
 	id: string
 	uri: string
 	username: string
@@ -91,26 +92,35 @@ type AccountRow = {
 	last_status_at: string | null
 }
 
-const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type, a.display_name, a.note, a.url, a.avatar_url,
+export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type, a.display_name, a.note, a.url, a.avatar_url,
 	a.header_url, a.locked, a.discoverable, a.followers_count, a.following_count, a.statuses_count, a.created_at,
 	l.suspended_at,
-	(SELECT substr(s.published_at, 1, 10) FROM statuses s WHERE s.account_id = a.id ORDER BY s.id DESC LIMIT 1)
+	(SELECT substr(s.published_at, 1, 10) FROM statuses s
+		WHERE s.account_id = a.id AND s.visibility IN ('public', 'unlisted', 'private') ORDER BY s.id DESC LIMIT 1)
 		AS last_status_at`
 
-const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
+export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
+
+// A local account's url is derived from its actor URI, which carries the instance origin.
+export function accountUrl(row: { url: string | null; uri: string; username: string }): string {
+	return row.url ?? `${new URL(row.uri).origin}/@${row.username}`
+}
+
+export function acctOf(row: { username: string; domain: string | null }): string {
+	return row.domain === null ? row.username : `${row.username}@${row.domain}`
+}
 
 // A suspended account is shown redacted, as Mastodon 4.0.2's REST::AccountSerializer does: no display name, note,
 // fields or emojis, the default avatar and header, and locked, bot and discoverable false.
 export function presentAccount(row: AccountRow, { origin }: Present): Account {
 	const suspended = row.suspended_at !== null
-	// A local account's url is derived from its actor URI, which carries the instance origin.
-	const url = row.url ?? `${new URL(row.uri).origin}/@${row.username}`
+	const url = accountUrl(row)
 	const avatar = (suspended ? null : row.avatar_url) ?? `${origin}${DEFAULT_AVATAR}`
 	const header = (suspended ? null : row.header_url) ?? `${origin}${DEFAULT_HEADER}`
 	return {
 		id: row.id,
 		username: row.username,
-		acct: row.domain === null ? row.username : `${row.username}@${row.domain}`,
+		acct: acctOf(row),
 		display_name: suspended ? '' : row.display_name,
 		locked: !suspended && row.locked === 1,
 		bot: !suspended && (row.actor_type === 'Service' || row.actor_type === 'Application'),
@@ -136,15 +146,31 @@ export function presentAccount(row: AccountRow, { origin }: Present): Account {
 // API ids are 18 digits; legacy ids are UUIDs or other short strings. Anything longer is not an id.
 const MAX_ID_LENGTH = 64
 
-// Resolves an API id or a legacy id to the API id.
-export function resolveAccountId(db: Db, id: string): string | null {
+// Resolves an API id or a legacy id (the table's legacy_id) to the API id.
+export function resolveApiId(db: Db, table: 'accounts' | 'statuses', id: string): string | null {
 	if (id === '' || id.length > MAX_ID_LENGTH) {
 		return null
 	}
 	const row =
-		db.first<{ id: string }>('SELECT id FROM accounts WHERE id = ?', id) ??
-		db.first<{ id: string }>('SELECT id FROM accounts WHERE legacy_id = ?', id)
+		db.first<{ id: string }>(`SELECT id FROM ${table} WHERE id = ?`, id) ??
+		db.first<{ id: string }>(`SELECT id FROM ${table} WHERE legacy_id = ?`, id)
 	return row?.id ?? null
+}
+
+export function resolveAccountId(db: Db, id: string): string | null {
+	return resolveApiId(db, 'accounts', id)
+}
+
+// Presented accounts by id, read in one query.
+export function presentAccountsById(db: Db, ids: readonly string[], present: Present): Map<string, Account> {
+	return new Map(
+		db
+			.all<AccountRow>(
+				`SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM} WHERE a.id IN (SELECT value FROM json_each(?1))`,
+				JSON.stringify([...new Set(ids)])
+			)
+			.map((row) => [row.id, presentAccount(row, present)])
+	)
 }
 
 function accountRow(db: Db, id: string): AccountRow | undefined {
@@ -427,9 +453,10 @@ function followTarget(db: Db, viewerId: string, target: string): TargetRow | nul
 }
 
 // Follows or updates the options of an existing follow. A local unlocked target is followed at once; a locked or
-// remote target gets a pending request (a remote Accept arrives over federation). State only: delivery of the
-// Follow activity and the follow notification come with B2. As in Mastodon's FollowService, a suspended target is
-// not found, and a block either way or a domain block of the viewer forbids the follow.
+// remote target gets a pending request (a remote Accept arrives over federation). A local target is notified
+// (follow, or follow_request when locked) in the same transaction; delivery of the Follow activity comes with B2. As
+// in Mastodon's FollowService, a suspended target is not found, and a block either way or a domain block of the
+// viewer forbids the follow.
 export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, input, { accountId: viewerId }) => {
 	const target = followTarget(db, viewerId, input.target)
 	if (target === null || target.suspended === 1) {
@@ -464,6 +491,10 @@ export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, i
 			languages ?? null,
 			new Date(input.now).toISOString()
 		)
+		if (target.domain === null) {
+			const type = state === 'accepted' ? 'follow' : 'follow_request'
+			notify(db, { recipientId: target.id, type, fromId: viewerId, statusId: null, now: input.now })
+		}
 	} else {
 		db.run(
 			`UPDATE follows SET show_reblogs = COALESCE(?, show_reblogs), notify = COALESCE(?, notify),
@@ -489,6 +520,12 @@ export const unfollow = userWriteOperation<{ target: string }, RelationshipResul
 		}
 		// TODO(B2): queue an Undo of the Follow for a remote target.
 		db.run('DELETE FROM follows WHERE account_id = ? AND target_account_id = ?', viewerId, target.id)
+		// The follow's notification goes with it, as Mastodon destroys a notification with its activity.
+		db.run(
+			"DELETE FROM notifications WHERE account_id = ? AND from_account_id = ? AND type IN ('follow', 'follow_request')",
+			target.id,
+			viewerId
+		)
 		recountFollows(db, viewerId, target)
 		return relationshipResult(db, viewerId, target.id)
 	}

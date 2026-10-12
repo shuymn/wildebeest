@@ -19,6 +19,7 @@
 		"hono": "4.12.27",
 		"temporal-polyfill": "1.0.5",
 		"jose": "6.2.12",
+		"linkify-it": "6.1.0",
 		"zod": "3.25.76"
 	},
 	"devDependencies": {

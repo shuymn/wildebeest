@@ -93,6 +93,7 @@ CREATE TABLE statuses (
   reblog_of_id TEXT REFERENCES statuses (id) ON DELETE CASCADE,
   in_reply_to_uri TEXT,                           -- kept even while unresolved
   in_reply_to_id TEXT REFERENCES statuses (id) ON DELETE SET NULL,
+  in_reply_to_account_id TEXT REFERENCES accounts (id) ON DELETE SET NULL,  -- conversation partner, carried through self-replies (Mastodon)
   visibility TEXT NOT NULL CHECK (visibility IN ('public', 'unlisted', 'private', 'direct', 'limited')),  -- full Mastodon set; limited is exposed as private
   spoiler_text TEXT NOT NULL DEFAULT '',
   content TEXT NOT NULL DEFAULT '',               -- sanitized HTML
@@ -119,6 +120,7 @@ CREATE INDEX statuses_account ON statuses (account_id, id);
 CREATE INDEX statuses_feed ON statuses (account_id, id) WHERE visibility IN ('public', 'unlisted', 'private');
 CREATE UNIQUE INDEX statuses_reblog ON statuses (reblog_of_id, account_id) WHERE reblog_of_id IS NOT NULL;
 CREATE INDEX statuses_in_reply_to ON statuses (in_reply_to_id) WHERE in_reply_to_id IS NOT NULL;
+CREATE INDEX statuses_in_reply_to_account ON statuses (in_reply_to_account_id) WHERE in_reply_to_account_id IS NOT NULL;
 CREATE INDEX statuses_unresolved_reply ON statuses (in_reply_to_uri) WHERE in_reply_to_id IS NULL AND in_reply_to_uri IS NOT NULL;
 CREATE UNIQUE INDEX statuses_client_key ON statuses (account_id, client_key) WHERE client_key IS NOT NULL;
 CREATE UNIQUE INDEX statuses_legacy_id ON statuses (legacy_id) WHERE legacy_id IS NOT NULL;
