@@ -36,3 +36,5 @@ minimumReleaseAgeExclude:
   - postcss@8.5.23
   # Renovate security update: vitest@4.1.11
   - vitest@4.1.11
+  # Renovate security update: hono@4.13.7
+  - hono@4.13.7

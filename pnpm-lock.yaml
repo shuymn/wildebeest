@@ -73,8 +73,8 @@ importers:
         specifier: 4.4.1
         version: 4.4.1(@typescript-eslint/eslint-plugin@8.62.0(@typescript-eslint/parser@8.62.0(eslint@9.39.4(jiti@1.21.7))(typescript@5.9.3))(eslint@9.39.4(jiti@1.21.7))(typescript@5.9.3))(eslint@9.39.4(jiti@1.21.7))
       hono:
-        specifier: 4.12.27
-        version: 4.12.27
+        specifier: 4.13.7
+        version: 4.13.7
       parse5:
         specifier: 8.0.1
         version: 8.0.1
@@ -177,8 +177,8 @@ importers:
         specifier: 1.20.2
         version: 1.20.2(eslint@9.39.4(jiti@1.21.7))(typescript@5.9.3)
       hono:
-        specifier: 4.12.27
-        version: 4.12.27
+        specifier: 4.13.7
+        version: 4.13.7
       lorem-ipsum:
         specifier: 2.0.10
         version: 2.0.10
@@ -222,8 +222,8 @@ importers:
         specifier: 1.46.1
         version: 1.46.1
       hono:
-        specifier: 4.12.27
-        version: 4.12.27
+        specifier: 4.13.7
+        version: 4.13.7
       jose:
         specifier: 6.2.12
         version: 6.2.12
@@ -2331,8 +2331,8 @@ packages:
   hast-util-whitespace@3.0.0:
     resolution: {integrity: sha512-88JUN06ipLwsnv+dVn+OIYOvAuvBMy/Qoi6O7mQHxdPXpjy+Cd6xRkWwux7DKO+4sYILtLBRIKgsdpS2gQc7qw==}
 
-  hono@4.12.27:
-    resolution: {integrity: sha512-1yrb/+w6HWQJrUCLkJ2IF5jNIPvvFkblV5RNOYl6bV+OA6p9GLcMpHFFGTosSvHvcAUibuUukRqhlYI4z32C7Q==}
+  hono@4.13.7:
+    resolution: {integrity: sha512-c8/gF9ac8Y78/agExVocyLevgR+JlpNB444Py0FSX8pJoPdYUfUzRcXtYEYGwt6l19qIlVZPN5Mfsw9jFShmQQ==}
     engines: {node: '>=16.9.0'}
 
   html-escaper@2.0.2:
@@ -5771,7 +5771,7 @@ snapshots:
     dependencies:
       '@types/hast': 3.0.4
 
-  hono@4.12.27: {}
+  hono@4.13.7: {}
 
   html-escaper@2.0.2: {}
 
