@@ -15,6 +15,7 @@
 	"dependencies": {
 		"@fedify/fedify": "2.4.2",
 		"@fedify/vocab": "2.4.2",
+		"es-toolkit": "1.46.1",
 		"hono": "4.12.27",
 		"temporal-polyfill": "1.0.5",
 		"zod": "3.25.76"

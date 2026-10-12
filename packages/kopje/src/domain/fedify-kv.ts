@@ -1,3 +1,5 @@
+import { isEqual } from 'es-toolkit'
+
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 
@@ -38,7 +40,13 @@ export const kvCas = writeOperation<
 	{ key: string; expected: string | null; value: string | null; expiresAt: number | null; now: number },
 	boolean
 >((db, { key, expected, value, expiresAt, now }) => {
-	if ((live(db, key, now) ?? null) !== expected) {
+	// Values compare as Fedify's MemoryKvStore compares them (es-toolkit isEqual), so property order does not matter.
+	const current = live(db, key, now)
+	const equal =
+		current === undefined || expected === null
+			? current === undefined && expected === null
+			: isEqual(JSON.parse(current), JSON.parse(expected))
+	if (!equal) {
 		return false
 	}
 	if (value === null) {

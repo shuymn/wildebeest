@@ -92,4 +92,21 @@ describe('DoKvStore', () => {
 		expect(await stale.get(['k'])).toBeUndefined()
 		expect(toStoreUnavailable(await rejectionOf(stale.set(['k'], 1)))?.reason).toBe('upgrade-failed')
 	})
+
+	it('compares cas values regardless of property order, as MemoryKvStore does', async () => {
+		const store = await migratedStore()
+		const kv = new DoKvStore(
+			() => store,
+			BUILD,
+			() => 0
+		)
+		await kv.set(['cas'], { a: 1, b: { c: 2, d: [1, 2] } })
+
+		expect(await kv.cas(['cas'], { b: { d: [1, 2], c: 2 }, a: 1 }, 'swapped')).toBe(true)
+		expect(await kv.get(['cas'])).toBe('swapped')
+		expect(await kv.cas(['cas'], { a: 1 }, 'again')).toBe(false)
+		await kv.set(['null'], null)
+		expect(await kv.cas(['null'], undefined, 'x')).toBe(false)
+		expect(await kv.cas(['null'], null, 'x')).toBe(true)
+	})
 })
