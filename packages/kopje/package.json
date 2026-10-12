@@ -17,7 +17,7 @@
 		"zod": "3.25.76"
 	},
 	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "0.16.20",
+		"@cloudflare/vitest-pool-workers": "0.22.0",
 		"@cloudflare/workers-types": "4.20260627.1",
 		"miniflare": "4.20260625.0",
 		"typescript": "5.9.3",
