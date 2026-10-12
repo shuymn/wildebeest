@@ -3,7 +3,7 @@ import { Application, CryptographicKey, Endpoints, Group, Image, Organization, P
 import { Temporal } from 'temporal-polyfill'
 
 import { DoKvStore } from './kv-store'
-import { createContextLoader, createSafeLoader, type LoaderDeps, type RequestSigner } from './loader'
+import { createContextLoader, createSafeLoader, type LoaderDeps, type RequestSigner, requireObjectRoot } from './loader'
 import {
 	type CollectionKind,
 	type CollectionPage,
@@ -97,11 +97,13 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 	// A signed loader caches per signing key (design §7): what one key was shown must not reach another key or the
 	// unsigned path.
 	const signedLoader = (keyId: URL, sign: () => Promise<RequestSigner>) =>
-		kvCache({
-			loader: async (url, options) => createSafeLoader(loaderDeps, await sign())(url, options),
-			kv,
-			prefix: [...SIGNED_DOCUMENT_PREFIX, keyId.href],
-		})
+		requireObjectRoot(
+			kvCache({
+				loader: async (url, options) => createSafeLoader(loaderDeps, await sign())(url, options),
+				kv,
+				prefix: [...SIGNED_DOCUMENT_PREFIX, keyId.href],
+			})
+		)
 
 	const federation = createFederation<FederationState>({
 		kv,

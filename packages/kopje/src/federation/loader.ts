@@ -31,12 +31,15 @@ type Kind = {
 	// Whether the parsed Content-Type is acceptable, and the message when it is not.
 	accepts: (media: MediaType) => boolean
 	refusal: string
+	// Whether the document must be a JSON object (see requireObjectRoot).
+	objectRoot: boolean
 }
 
 const DOCUMENT: Kind = {
 	accept: 'application/activity+json, application/ld+json; profile="https://www.w3.org/ns/activitystreams"',
 	accepts: isActivityPubMediaType,
 	refusal: 'Not an ActivityPub document',
+	objectRoot: true,
 }
 
 const CONTEXT_TYPES = new Set(['application/ld+json', 'application/json', 'application/activity+json'])
@@ -44,6 +47,7 @@ const CONTEXT: Kind = {
 	accept: 'application/ld+json, application/json',
 	accepts: (media) => CONTEXT_TYPES.has(media.essence),
 	refusal: 'Not a JSON-LD context',
+	objectRoot: false,
 }
 
 export type LoaderDeps = {
@@ -60,6 +64,21 @@ export const dnsCheckHost = (url: URL): Promise<void> => validatePublicUrl(url.h
 // The loader of documents trusted as ActivityPub objects or keys (Fedify's document loaders).
 export function createSafeLoader(deps: LoaderDeps, sign?: RequestSigner): DocumentLoader {
 	return createLoader(deps, DOCUMENT, sign)
+}
+
+// ID-8: an ActivityPub document must be a JSON object. JSON-LD reads a string root as the URL of the real document and
+// fetches it with the context loader, which takes plain JSON, so an uploaded file could become an object or a key.
+// Applied in the loader and again around caches, whose hits do not pass through the loader.
+export function requireObjectRoot(loader: DocumentLoader): DocumentLoader {
+	return async (url, options) => assertObjectRoot(await loader(url, options))
+}
+
+function assertObjectRoot(remote: RemoteDocument): RemoteDocument {
+	const { document } = remote
+	if (typeof document !== 'object' || document === null || Array.isArray(document)) {
+		throw new FetchError(remote.documentUrl, 'Document root is not a JSON object')
+	}
+	return remote
 }
 
 // The loader of JSON-LD contexts (Fedify's context loader), which are never trusted as objects.
@@ -169,7 +188,8 @@ async function readDocument(response: Response, kind: Kind, final: URL, target: 
 	if (id !== undefined && originOf(id) !== final.origin) {
 		throw new FetchError(final, `Document id ${id} is not on ${final.origin}`)
 	}
-	return { ...remote, documentUrl: final.href }
+	const loaded = { ...remote, documentUrl: final.href }
+	return kind.objectRoot ? assertObjectRoot(loaded) : loaded
 }
 
 function originOf(url: string): string | null {
