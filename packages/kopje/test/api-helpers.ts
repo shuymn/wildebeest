@@ -32,8 +32,8 @@ const seedAccountOperation = writeOperation<SeedAccount & { now: number }, strin
 	const displayName = input.displayName ?? ''
 	db.run(
 		`INSERT INTO accounts (id, uri, username, domain, display_name, url, locked, followers_count, search_text,
-			legacy_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			legacy_id, created_at, inbox_url, shared_inbox_url)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id,
 		uri,
 		input.username,
@@ -44,7 +44,10 @@ const seedAccountOperation = writeOperation<SeedAccount & { now: number }, strin
 		input.followersCount ?? 0,
 		accountSearchText(input.username, domain, displayName),
 		input.legacyId ?? null,
-		new Date(input.now).toISOString()
+		new Date(input.now).toISOString(),
+		// A remote account has its personal inbox and its server's shared inbox, as Mastodon publishes them.
+		domain === null ? null : `${uri}/inbox`,
+		domain === null ? null : `https://${domain}/inbox`
 	)
 	if (domain === null) {
 		db.run(
@@ -157,16 +160,19 @@ export async function apiHarness(overrides: Record<string, unknown> = {}) {
 	const randomToken = () => `token-${++counter}-${crypto.randomUUID()}`
 	const now = vi.fn(() => NOW)
 	const testEnv = { ...env, ...overrides }
+	// Doorbells are recorded, never sent: the test pool's Queue would run the real consumer.
+	const doorbell = vi.fn(() => Promise.resolve())
 	const app = createApp({
 		build: () => env.CF_VERSION_METADATA.id,
 		now,
 		store: () => store,
 		fetch: team.fetch,
 		randomToken,
+		doorbell,
 	})
 	const request = async (path: string, init?: RequestInit): Promise<Response> =>
 		app.fetch(new Request(`https://kopje.test${path}`, init), testEnv, createExecutionContext())
-	return { store, team, request, now, env: testEnv }
+	return { store, team, request, now, env: testEnv, doorbell }
 }
 
 export function bearer(token: string, init: RequestInit = {}): RequestInit {

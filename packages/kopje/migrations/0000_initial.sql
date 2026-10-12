@@ -1,4 +1,4 @@
--- Kopje Store schema 0000 (25 tables). Applied by the Store DO; never edit after release (checksummed).
+-- Kopje Store schema 0000 (26 tables). Applied by the Store DO; never edit after release (checksummed).
 --
 -- Conventions
 --   IDs      : id is an 18-digit snowflake stored as TEXT (same value as the API ID); uri is the ActivityPub ID.
@@ -6,8 +6,8 @@
 --   Local    : accounts.domain IS NULL marks a local row. Local rows are authoritative in columns and have no raw.
 --              raw (received JSON) exists only on remote copies.
 --   Time     : domain timestamps are ISO 8601 UTC TEXT ('YYYY-MM-DDTHH:MM:SS.sssZ').
---              Queue-like tables (outbound_activities, deliveries, inbound_retractions, inbound_spool, fedify_kv)
---              use INTEGER epoch ms.
+--              Queue-like tables (outbound_activities, deliveries, outbound_receipts, inbound_retractions,
+--              inbound_spool, fedify_kv) use INTEGER epoch ms.
 --   FKs      : SQLite FKs are always on (foreign_keys = OFF has no effect on D1 or DO). Never rebuild a parent table
 --              (child rows would silently CASCADE away). Every child FK column is indexed, except
 --              outbound_activities.account_id (the table only holds pending rows).
@@ -315,13 +315,16 @@ CREATE TABLE outbound_activities (
   created_at INTEGER NOT NULL
 );
 
--- Per-inbox delivery state. For leased rows next_attempt_at doubles as the lease deadline.
+-- Per-inbox delivery state. A lane is (account_id, inbox_url) and is delivered in id order: only its oldest row is
+-- pending or leased, the rows behind it are queued and promoted when it settles, so the due index holds lane heads
+-- only. For leased rows next_attempt_at doubles as the lease deadline. A delivered row is deleted (its inbox goes to
+-- outbound_receipts); a gave_up row stays for the operator until retried or swept.
 CREATE TABLE deliveries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,           -- never reused, so a late completion cannot hit another row
   activity_id INTEGER NOT NULL REFERENCES outbound_activities (id) ON DELETE CASCADE,
   account_id TEXT NOT NULL,                       -- lane key (sender)
   inbox_url TEXT NOT NULL,                        -- lane key
-  state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'leased', 'done', 'gave_up')),
+  state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('queued', 'pending', 'leased', 'gave_up')),
   attempts INTEGER NOT NULL DEFAULT 0,
   next_attempt_at INTEGER NOT NULL,
   lease_token TEXT,
@@ -331,9 +334,23 @@ CREATE TABLE deliveries (
   CHECK ((state = 'leased') = (lease_token IS NOT NULL))
 );
 
-CREATE INDEX deliveries_lane ON deliveries (account_id, inbox_url, id) WHERE state IN ('pending', 'leased');
+CREATE INDEX deliveries_lane ON deliveries (account_id, inbox_url, id) WHERE state IN ('queued', 'pending', 'leased');
 CREATE INDEX deliveries_due ON deliveries (next_attempt_at) WHERE state IN ('pending', 'leased');
 CREATE INDEX deliveries_activity ON deliveries (activity_id);
+CREATE INDEX deliveries_gave_up ON deliveries (updated_at) WHERE state = 'gave_up';
+
+-- Inboxes that accepted an activity about a local object (the Create or Update of a status, an Announce): a later
+-- Delete or Undo of that object also goes to them, even if they left the audience since. Folded into the retraction's
+-- deliveries when it is recorded.
+CREATE TABLE outbound_receipts (
+  object_uri TEXT NOT NULL,
+  inbox_url TEXT NOT NULL,
+  account_id TEXT NOT NULL REFERENCES local_accounts (account_id) ON DELETE CASCADE,
+  delivered_at INTEGER NOT NULL,
+  PRIMARY KEY (object_uri, inbox_url)
+) WITHOUT ROWID;
+
+CREATE INDEX outbound_receipts_account ON outbound_receipts (account_id);
 
 -- Retraction records: Undo/Delete targets kept per (actor, ID) for 30 days.
 CREATE TABLE inbound_retractions (
