@@ -5,6 +5,8 @@ import { NOW } from './app-helpers'
 import type { Visibility } from '../src/domain/audience'
 import { allocateLocalId } from '../src/domain/ids'
 import { writeOperation } from '../src/domain/operation'
+import { htmlToPlainText } from '../src/domain/plain-text'
+import { normalizeSearchText } from '../src/domain/search-text'
 import type { StoreStub } from '../src/platform/store-client'
 
 // Fixtures for statuses, timelines and notifications: signed-in local users, remote accounts, statuses written
@@ -64,8 +66,8 @@ const seedStatusOperation = writeOperation<SeedStatus & { now: number }, string>
 			: (db.first<{ uri: string }>('SELECT uri FROM statuses WHERE id = ?', input.inReplyToId)?.uri ?? null)
 	db.run(
 		`INSERT INTO statuses (id, uri, account_id, reblog_of_id, in_reply_to_uri, in_reply_to_id, visibility, content,
-			published_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			published_at, search_text)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id,
 		input.uri ?? `https://remote.example/objects/${id}`,
 		input.accountId,
@@ -74,7 +76,8 @@ const seedStatusOperation = writeOperation<SeedStatus & { now: number }, string>
 		input.inReplyToId ?? null,
 		input.visibility,
 		input.reblogOfId === undefined ? (input.content ?? `<p>status ${id}</p>`) : '',
-		new Date(input.published ?? input.now).toISOString()
+		new Date(input.published ?? input.now).toISOString(),
+		input.reblogOfId === undefined ? normalizeSearchText(htmlToPlainText(input.content ?? '')) : null
 	)
 	for (const mention of input.mentions ?? []) {
 		db.run(

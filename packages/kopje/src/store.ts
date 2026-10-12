@@ -19,6 +19,7 @@ import { instanceInfo } from './domain/instance'
 import * as media from './domain/media'
 import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
+import { search } from './domain/search'
 import { getSetupState } from './domain/setup'
 import { saveSnapshot } from './domain/snapshot'
 import * as statuses from './domain/statuses'
@@ -417,6 +418,12 @@ export class Store extends DurableObject<Env> {
 
 	purgeMedia(callerBuild: string, input: OperationInput<typeof media.purgeMedia>) {
 		return this.#kernel.execute(callerBuild, media.purgeMedia, input)
+	}
+
+	// Search (B4b).
+
+	search(callerBuild: string, input: OperationInput<typeof search>) {
+		return this.#kernel.execute(callerBuild, search, input)
 	}
 
 	override async alarm(): Promise<void> {

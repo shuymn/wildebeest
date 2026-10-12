@@ -7,6 +7,7 @@ import * as instance from './instance'
 import * as media from './media'
 import * as notifications from './notifications'
 import * as oauth from './oauth'
+import * as search from './search'
 import * as statuses from './statuses'
 import * as timelines from './timelines'
 
@@ -176,6 +177,9 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'POST', path: '/api/v2/media', access: { scope: 'write:media' }, handler: media.uploadMedia },
 	{ method: 'GET', path: '/api/v1/media/:id', access: { scope: 'write:media' }, handler: media.getMedia },
 	{ method: 'PUT', path: '/api/v1/media/:id', access: { scope: 'write:media' }, handler: media.updateMedia },
+
+	// Unauthenticated search is refused (design §6): it would enumerate accounts and load the Store.
+	{ method: 'GET', path: '/api/v2/search', access: { scope: 'read:search' }, handler: search.search },
 
 	{
 		method: 'GET',

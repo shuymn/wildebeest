@@ -383,7 +383,11 @@ export type SearchInput = {
 
 // Local and known remote accounts whose search_text contains every term (in any of its variants). An exact username
 // ranks first, then local accounts. Suspended local accounts are not listed.
-export const searchAccounts = userReadOperation<SearchInput, Account[]>((db, input, viewer) => {
+export const searchAccounts = userReadOperation<SearchInput, Account[]>((db, input, viewer) =>
+	findAccounts(db, input, viewer.accountId)
+)
+
+export function findAccounts(db: Db, input: SearchInput, viewerId: string): Account[] {
 	const query = input.query
 		.trim()
 		.replace(/^@/, '')
@@ -398,7 +402,7 @@ export const searchAccounts = userReadOperation<SearchInput, Account[]>((db, inp
 		where.push(
 			"EXISTS (SELECT 1 FROM follows f WHERE f.account_id = ? AND f.target_account_id = a.id AND f.state = 'accepted')"
 		)
-		params.push(viewer.accountId)
+		params.push(viewerId)
 	}
 	const exactUsername = (query.split('@')[0] ?? '').toLowerCase()
 	const rows = db.all<AccountRow>(
@@ -412,7 +416,7 @@ export const searchAccounts = userReadOperation<SearchInput, Account[]>((db, inp
 		input.offset
 	)
 	return rows.map((row) => presentAccount(row, input.present))
-})
+}
 
 function escapeRegExp(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
