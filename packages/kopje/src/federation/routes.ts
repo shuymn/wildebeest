@@ -4,6 +4,7 @@ import type { Context, Handler } from 'hono'
 import { createKopjeFederation, type FederationState, nodeInfo } from './federation'
 import type { LoaderDeps } from './loader'
 import { createSnapshotSaver, snapshotKey } from './snapshot'
+import type { SnapshotSource } from '../domain/snapshot'
 import { readConfig, userKek } from '../platform/config'
 import { callStore, type StoreResolver } from '../platform/store-client'
 import type { KeyGen } from '../security/key-wrap'
@@ -38,28 +39,29 @@ export function federationHandler(deps: FederationRouteDeps): Handler<Federation
 	const saveSnapshot = createSnapshotSaver(deps.now)
 	return async (c) => {
 		const url = new URL(c.req.url)
-		const { response, canonical } = await respond(c, deps, url)
+		const { response, source } = await respond(c, deps, url)
 		const key = snapshotKey(url)
-		if (!canonical || key === null || response.status !== 200 || response.body === null) {
+		if (source === null || key === null || response.status !== 200 || response.body === null) {
 			return response
 		}
 		const body = await response.text()
 		const contentType = response.headers.get('content-type') ?? 'application/json'
-		c.executionCtx.waitUntil(saveSnapshot(deps.store(c.env), deps.build(c.env), key, { contentType, body }))
+		c.executionCtx.waitUntil(saveSnapshot(deps.store(c.env), deps.build(c.env), key, { contentType, body }, source))
 		return new Response(body, response)
 	}
 }
 
-// canonical: whether the request is one whose answer is kept. WebFinger keeps only the acct: URI and the actor URI of
-// the stored username, so the rows stay bounded by the number of actors.
-type Answer = { response: Response; canonical: boolean }
+// source: what the answer was rendered from, or null when the answer is not kept. Only canonical requests are kept:
+// WebFinger keeps only the acct: URI and the actor URI of the stored username, so the rows stay bounded by the number
+// of actors.
+type Answer = { response: Response; source: SnapshotSource | null }
 
 async function respond(c: Context<FederationEnv>, deps: FederationRouteDeps, url: URL): Promise<Answer> {
 	switch (url.pathname) {
 		case '/.well-known/nodeinfo':
-			return { response: nodeInfoLinks(c.get('domain')), canonical: true }
+			return { response: nodeInfoLinks(c.get('domain')), source: { kind: 'static' } }
 		case '/nodeinfo/2.0':
-			return { response: await nodeInfo20(c, deps), canonical: true }
+			return nodeInfo20(c, deps)
 		default:
 			return viaFedify(c, deps, url)
 	}
@@ -68,7 +70,7 @@ async function respond(c: Context<FederationEnv>, deps: FederationRouteDeps, url
 async function viaFedify(c: Context<FederationEnv>, deps: FederationRouteDeps, url: URL): Promise<Answer> {
 	const domain = c.get('domain')
 	const config = readConfig(c.env)
-	const state: FederationState = { resolvedUsername: null, storeError: null }
+	const state: FederationState = { resolvedUsername: null, source: null, storeError: null }
 	const federation = createKopjeFederation(
 		{
 			domain,
@@ -100,7 +102,7 @@ async function viaFedify(c: Context<FederationEnv>, deps: FederationRouteDeps, u
 			: url.pathname.startsWith('/ap/users/')
 				? state.resolvedUsername !== null && url.pathname === `/ap/users/${state.resolvedUsername}`
 				: true
-	return { response, canonical }
+	return { response, source: canonical ? state.source : null }
 }
 
 function canonicalWebFinger(url: URL, domain: string, username: string | null): boolean {
@@ -122,11 +124,13 @@ function nodeInfoLinks(domain: string): Response {
 }
 
 // NodeInfo 2.0 is 2.1 without software.repository and software.homepage.
-async function nodeInfo20(c: Context<FederationEnv>, deps: FederationRouteDeps): Promise<Response> {
-	const usage = await callStore(() => deps.store(c.env).nodeInfoUsage(deps.build(c.env), { now: deps.now() }))
+async function nodeInfo20(c: Context<FederationEnv>, deps: FederationRouteDeps): Promise<Answer> {
+	const now = deps.now()
+	const usage = await callStore(() => deps.store(c.env).nodeInfoUsage(deps.build(c.env), { now }))
 	const info = nodeInfo(usage)
 	const json = nodeInfoToJson({ ...info, software: { name: info.software.name, version: info.software.version } })
-	return new Response(JSON.stringify({ ...(json as object), $schema: `${NODEINFO_20}#`, version: '2.0' }), {
+	const response = new Response(JSON.stringify({ ...(json as object), $schema: `${NODEINFO_20}#`, version: '2.0' }), {
 		headers: { 'content-type': `application/json; profile="${NODEINFO_20}#"` },
 	})
+	return { response, source: { kind: 'nodeinfo', now, rendered: JSON.stringify(usage) } }
 }

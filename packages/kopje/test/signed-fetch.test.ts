@@ -29,7 +29,7 @@ async function setup() {
 			Response.json({ id: NOTE, type: 'Note' }, { headers: { 'content-type': 'application/activity+json' } })
 		)
 	}) as typeof globalThis.fetch
-	const state: FederationState = { resolvedUsername: null, storeError: null }
+	const state: FederationState = { resolvedUsername: null, source: null, storeError: null }
 	const federation = createKopjeFederation(
 		{
 			domain: DOMAIN,

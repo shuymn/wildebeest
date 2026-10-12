@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { harness } from './app-helpers'
-import { fixtureKeyGen, LEGACY, seedLocalAccount, setDomain } from './federation-helpers'
+import { fixtureKeyGen, LEGACY, LEGACY_EMPTY_KEK, seedLocalAccount, setDomain } from './federation-helpers'
 import { BUILD, freshStore, migratedStore, testKernel } from './helpers'
 import { MIGRATIONS } from '../src/db/migrations'
 import { createSnapshotSaver, SNAPSHOT_SAVE_INTERVAL_MS } from '../src/federation/snapshot'
@@ -12,6 +12,7 @@ import { storeMaintenanceError } from '../src/platform/store-errors'
 import { SNAPSHOT_MAX_BODY_BYTES } from '../src/platform/store-kernel'
 
 const DOMAIN = 'social.example'
+const STATIC = { kind: 'static' } as const
 const AP = { headers: { accept: 'application/activity+json' } }
 const offline = {
 	keygen: fixtureKeyGen,
@@ -119,6 +120,37 @@ describe('actor document snapshot', () => {
 	})
 })
 
+describe('snapshot freshness', () => {
+	it('rejects a delayed save of a document rendered before a key rotation, in any isolate', async () => {
+		const { store } = await healthyInstance()
+		const key = 'path:/ap/users/Alice'
+		const before = await store.rescueSnapshot(BUILD, key)
+		const renderedFrom = JSON.stringify(await store.localActor(BUILD, { username: 'Alice' }))
+
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec(
+				"UPDATE local_accounts SET pubkey = ? WHERE account_id = '111111111111111111'",
+				LEGACY_EMPTY_KEK.pubkey
+			)
+		})
+		// Another isolate (a fresh harness) renders and keeps the rotated document.
+		const { request } = harness(store, { USER_KEK: LEGACY.kek }, BUILD, offline)
+		expect((await request('/ap/users/Alice', AP)).status).toBe(200)
+		const after = await store.rescueSnapshot(BUILD, key)
+		expect(after?.body).not.toBe(before?.body)
+
+		// The old response's background save arrives late.
+		const late = await store.saveSnapshot(BUILD, {
+			key,
+			contentType: before?.contentType ?? '',
+			body: before?.body ?? '',
+			source: { kind: 'actor', username: 'Alice', rendered: renderedFrom },
+		})
+		expect(late).toBe(false)
+		expect(await store.rescueSnapshot(BUILD, key)).toEqual(after)
+	})
+})
+
 describe('snapshot caps', () => {
 	it('creates no rows for arbitrary handles, resources or query strings', async () => {
 		const { store } = await healthyInstance()
@@ -152,9 +184,9 @@ describe('snapshot caps', () => {
 		const store = await migratedStore()
 		const small = { contentType: 'application/activity+json', body: '{"v":1}' }
 		const big = { contentType: 'application/activity+json', body: 'x'.repeat(SNAPSHOT_MAX_BODY_BYTES + 1) }
-		expect(await store.saveSnapshot(BUILD, { key: 'path:/actor', ...small })).toBe(true)
+		expect(await store.saveSnapshot(BUILD, { source: STATIC, key: 'path:/actor', ...small })).toBe(true)
 
-		expect(await store.saveSnapshot(BUILD, { key: 'path:/actor', ...big })).toBe(false)
+		expect(await store.saveSnapshot(BUILD, { source: STATIC, key: 'path:/actor', ...big })).toBe(false)
 		// The rescue path then answers 503 rather than serving the outdated document.
 		expect(await store.rescueSnapshot(BUILD, 'path:/actor')).toBeNull()
 	})
@@ -168,11 +200,11 @@ describe('snapshot caps', () => {
 		expect(await snapshotNames(store)).not.toContain('snapshot:path:/ap/users/Alice')
 
 		const big = { contentType: 'application/json', body: 'x'.repeat(SNAPSHOT_MAX_BODY_BYTES + 1) }
-		expect(await store.saveSnapshot(BUILD, { key: 'path:/actor', ...big })).toBe(false)
-		expect(await store.saveSnapshot(BUILD, { key: 'hold', contentType: 'x', body: '{}' })).toBe(false)
-		expect(await store.saveSnapshot(BUILD, { key: `path:/${'x'.repeat(600)}`, contentType: 'x', body: '{}' })).toBe(
-			false
-		)
+		expect(await store.saveSnapshot(BUILD, { source: STATIC, key: 'path:/actor', ...big })).toBe(false)
+		expect(await store.saveSnapshot(BUILD, { source: STATIC, key: 'hold', contentType: 'x', body: '{}' })).toBe(false)
+		expect(
+			await store.saveSnapshot(BUILD, { source: STATIC, key: `path:/${'x'.repeat(600)}`, contentType: 'x', body: '{}' })
+		).toBe(false)
 		expect(await snapshotNames(store)).toEqual([])
 	})
 
@@ -188,12 +220,12 @@ describe('snapshot caps', () => {
 		const save = createSnapshotSaver(() => now)
 		const doc = { contentType: 'application/activity+json', body: 'a' }
 
-		await save(counting, BUILD, 'path:/actor', doc)
+		await save(counting, BUILD, 'path:/actor', doc, STATIC)
 		now = SNAPSHOT_SAVE_INTERVAL_MS - 1
-		await save(counting, BUILD, 'path:/actor', doc)
+		await save(counting, BUILD, 'path:/actor', doc, STATIC)
 		expect(writes).toBe(1)
 		now = SNAPSHOT_SAVE_INTERVAL_MS
-		await save(counting, BUILD, 'path:/actor', doc)
+		await save(counting, BUILD, 'path:/actor', doc, STATIC)
 		expect(writes).toBe(2)
 	})
 
@@ -203,9 +235,9 @@ describe('snapshot caps', () => {
 		const save = createSnapshotSaver(() => now)
 		const doc = (body: string) => ({ contentType: 'application/activity+json', body })
 
-		await save(store, BUILD, 'path:/actor', doc('old-key'))
+		await save(store, BUILD, 'path:/actor', doc('old-key'), STATIC)
 		now = 1
-		await save(store, BUILD, 'path:/actor', doc('new-key'))
+		await save(store, BUILD, 'path:/actor', doc('new-key'), STATIC)
 		expect(await store.rescueSnapshot(BUILD, 'path:/actor')).toEqual(doc('new-key'))
 	})
 

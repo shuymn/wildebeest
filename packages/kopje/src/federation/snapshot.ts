@@ -1,3 +1,4 @@
+import type { SnapshotSource } from '../domain/snapshot'
 import { errorMessage } from '../platform/error-message'
 import { callStore, type StoreStub } from '../platform/store-client'
 import { isSnapshotKey, sha256, type Snapshot } from '../platform/store-kernel'
@@ -35,14 +36,20 @@ function acceptable(request: Request, url: URL): boolean {
 // An unchanged document is written again at most once per interval per key; a changed one is written at once.
 export const SNAPSHOT_SAVE_INTERVAL_MS = 60 * 1000
 
-export type SnapshotSaver = (store: StoreStub, build: string, key: string, snapshot: Snapshot) => Promise<void>
+export type SnapshotSaver = (
+	store: StoreStub,
+	build: string,
+	key: string,
+	snapshot: Snapshot,
+	source: SnapshotSource
+) => Promise<void>
 
 // Remembers, per isolate, what each key last saved, so a steady document does not cost a Store write RPC on every
 // GET. Changed content is not throttled: only local data changes it, and a stale snapshot would outlive a key
 // rotation. The map is bounded like the keys (see federationHandler).
 export function createSnapshotSaver(now: () => number): SnapshotSaver {
 	const saved = new Map<string, { digest: string; at: number }>()
-	return async (store, build, key, snapshot) => {
+	return async (store, build, key, snapshot, source) => {
 		// An oversized body still goes to the Store, which drops the kept snapshot of the key.
 		if (!isSnapshotKey(key)) {
 			return
@@ -55,7 +62,7 @@ export function createSnapshotSaver(now: () => number): SnapshotSaver {
 			return
 		}
 		try {
-			await callStore(() => store.saveSnapshot(build, { key, ...snapshot }))
+			await callStore(() => store.saveSnapshot(build, { key, ...snapshot, source }))
 			saved.set(key, { digest, at: now() })
 		} catch (error) {
 			// A refused write (readonly) keeps the previous snapshot, which is what the rescue path should serve anyway.

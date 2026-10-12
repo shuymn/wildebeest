@@ -43,7 +43,7 @@ export const getInstanceDomain = readOperation<void, string | null>(
 )
 
 // A local actor by username, case-insensitively (local usernames are unique regardless of case).
-export const getLocalActor = readOperation<{ username: string }, LocalActor | null>((db, { username }) => {
+export function localActorOf(db: Db, username: string): LocalActor | null {
 	const row = db.first<ActorRow>(
 		`SELECT a.username, a.actor_type, a.display_name, a.note, a.avatar_url, a.header_url, a.locked, a.discoverable,
 			l.also_known_as, l.pubkey, a.created_at ${LOCAL_BY_USERNAME}`,
@@ -65,7 +65,11 @@ export const getLocalActor = readOperation<{ username: string }, LocalActor | nu
 		pubkey: row.pubkey,
 		createdAt: row.created_at,
 	}
-})
+}
+
+export const getLocalActor = readOperation<{ username: string }, LocalActor | null>((db, { username }) =>
+	localActorOf(db, username)
+)
 
 type KeyRow = { username: string; privkey: ArrayBuffer; privkey_salt: ArrayBuffer; pubkey: string }
 
@@ -83,7 +87,7 @@ const INSTANCE_ACTOR_KEY = 'instance_actor_key'
 
 export type EncodedKey = { privkey: string; salt: string; pubkey: string }
 
-function readInstanceKey(db: Db): EncodedKey | null {
+export function readInstanceKey(db: Db): EncodedKey | null {
 	const row = db.first<{ value: string }>('SELECT value FROM instance_settings WHERE name = ?', INSTANCE_ACTOR_KEY)
 	return row === undefined ? null : (JSON.parse(row.value) as EncodedKey)
 }
@@ -150,7 +154,7 @@ export type NodeInfoUsage = { users: number; activeMonth: number; activeHalfyear
 const DAY_MS = 24 * 60 * 60 * 1000
 
 // Usage for NodeInfo. Active means "posted in the window", the only activity the Store records for local users.
-export const getNodeInfoUsage = readOperation<{ now: number }, NodeInfoUsage>((db, { now }) => {
+export function nodeInfoUsageOf(db: Db, now: number): NodeInfoUsage {
 	const since = (days: number) => new Date(now - days * DAY_MS).toISOString()
 	const active = (days: number) =>
 		db.first<{ n: number }>(
@@ -168,4 +172,6 @@ export const getNodeInfoUsage = readOperation<{ now: number }, NodeInfoUsage>((d
 				WHERE s.reblog_of_id IS NULL`
 			)?.n ?? 0,
 	}
-})
+}
+
+export const getNodeInfoUsage = readOperation<{ now: number }, NodeInfoUsage>((db, { now }) => nodeInfoUsageOf(db, now))

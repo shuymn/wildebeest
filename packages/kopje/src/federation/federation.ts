@@ -13,6 +13,7 @@ import {
 	type NodeInfoUsage,
 	type StoredKey,
 } from '../domain/actors'
+import type { SnapshotSource } from '../domain/snapshot'
 import { PACKAGE_VERSION } from '../platform/package-version'
 import { callStore, type StoreStub } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
@@ -29,9 +30,14 @@ export const INSTANCE_ACTOR = 'kopje:instance'
 export const SOFTWARE_REPOSITORY = 'https://github.com/shuymn/wildebeest'
 
 // Per-request state the dispatchers fill in for the caller (it is also Fedify's context data): the username a
-// dispatched actor resolved to, and a Store failure. Fedify answers 500 for any error a dispatcher throws, so the
-// caller rethrows storeError to get maintenance handling (spool, snapshot, 503) instead.
-export type FederationState = { resolvedUsername: string | null; storeError: StoreUnavailableError | null }
+// dispatched actor resolved to, what the answer was rendered from (for the snapshot's freshness check), and a Store
+// failure. Fedify answers 500 for any error a dispatcher throws, so the caller rethrows storeError to get maintenance
+// handling (spool, snapshot, 503) instead.
+export type FederationState = {
+	resolvedUsername: string | null
+	source: SnapshotSource | null
+	storeError: StoreUnavailableError | null
+}
 
 export type FederationDeps = {
 	domain: string
@@ -112,7 +118,12 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 			if (identifier === INSTANCE_ACTOR) {
 				// The HTTP alias rule: the document is served at /actor, never under the /ap/users template. Other callers,
 				// such as WebFinger for https://<domain>/actor, may still resolve the instance actor.
-				return ctx.url.pathname.startsWith('/ap/users/') ? null : instanceActor(domain, await loadInstanceKey())
+				if (ctx.url.pathname.startsWith('/ap/users/')) {
+					return null
+				}
+				const key = await loadInstanceKey()
+				state.source = { kind: 'instance-actor', rendered: key.pubkey }
+				return instanceActor(domain, key)
 			}
 			const actor = await localActor(identifier)
 			// Actor URIs keep the username's case; a differently cased path is not this actor's id.
@@ -120,6 +131,7 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 				return null
 			}
 			state.resolvedUsername = actor.username
+			state.source = { kind: 'actor', username: actor.username, rendered: JSON.stringify(actor) }
 			return localActorObject(ctx, actor)
 		})
 		.mapHandle(async (_ctx, username) => (await localActor(username))?.username ?? null)
@@ -174,9 +186,12 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 			.setFirstCursor(async (_ctx, identifier) => ((await collection(kind, identifier, null)) === null ? null : '1'))
 	}
 
-	federation.setNodeInfoDispatcher('/nodeinfo/2.1', async () =>
-		nodeInfo(await rpc((s) => s.nodeInfoUsage(build, { now: deps.now() })))
-	)
+	federation.setNodeInfoDispatcher('/nodeinfo/2.1', async () => {
+		const now = deps.now()
+		const usage = await rpc((s) => s.nodeInfoUsage(build, { now }))
+		state.source = { kind: 'nodeinfo', now, rendered: JSON.stringify(usage) }
+		return nodeInfo(usage)
+	})
 
 	return federation
 }
