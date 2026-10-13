@@ -1,21 +1,19 @@
 import { fileURLToPath } from 'node:url'
 
-import { cloudflareTest } from '@cloudflare/vitest-pool-workers'
-import { supportedCompatibilityDate } from 'miniflare'
+import { cloudflareTest } from '@cloudflare/vitest-plugin'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
 	plugins: [
 		cloudflareTest({
 			wrangler: { configPath: fileURLToPath(new URL('./wrangler.jsonc', import.meta.url)) },
-			// wrangler.jsonc pins the production date, which can be newer than the local runtime supports.
+			// The suites run on wrangler.jsonc's production compatibility date: workerd accepts any date up to today.
 			// The app registration limit (5 per minute per IP in wrangler.jsonc) would throttle the suites, which register
 			// apps from one address; test/apps-budget.test.ts injects a limiter of its own. The same for sign-ins.
 			miniflare: {
-				compatibilityDate: supportedCompatibilityDate,
 				ratelimits: {
-					APP_REGISTRATION_LIMIT: { simple: { limit: 1_000_000, period: 60 } },
-					LOGIN_LIMIT: { simple: { limit: 1_000_000, period: 60 } },
+					APP_REGISTRATION_LIMIT: { namespace_id: '4201', simple: { limit: 1_000_000, period: 60 } },
+					LOGIN_LIMIT: { namespace_id: '4202', simple: { limit: 1_000_000, period: 60 } },
 				},
 			},
 		}),
