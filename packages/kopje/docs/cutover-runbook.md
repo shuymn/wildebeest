@@ -347,7 +347,10 @@ kopje-admin maintenance-worker-check <work>/export-b --domain <domain> --worker 
 ```
 
 - **Go:**
-    - `convert` exits 0 (a stop, exit 3, names its reason in the manifest; [cutover.md](cutover.md#steps));
+    - `convert` exits 0 (a stop, exit 3, names its reason in the manifest; [cutover.md](cutover.md#steps)). A real
+      export usually needs `--accept-deletions`, on `convert` and both `verify-conversion` runs, for rows legacy never
+      showed ([cutover.md](cutover.md#what-the-conversion-does)). Do not pass it blindly: run without it first, read `conversion.dropped`
+      in the manifest, and add it only when every code there is one cutover.md lists, with counts you expect;
     - the comparison with `--manifest` passes: the conversion read exactly the fingerprinted rows and notification
       counter (it refuses a file that is not a complete conversion manifest);
     - both `verify-conversion` runs are `PASS`, the second on the Store's own dump after the import. They compute their

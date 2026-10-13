@@ -158,7 +158,10 @@ migration changed stops the conversion (`statuses:author-changed-audience`).
   recipient: it stays in `raw` and is counted as `mentionsNotRecipients`.
 - A local status whose exported outbox row disagrees with its own addressing (`statuses:addressing-conflict`), and a
   boost whose outbox row has no exported audience (levels below 0002, `reblogs:audience-unknown`), stop the conversion
-  instead of being guessed. A boost's visibility is its outbox row's, by the same rule; a boost has recipients only when
+  instead of being guessed. An outbox row written before 0016 was applied (by `d1_migrations.applied_at`) holds only
+  the single target it was written with, which 0016 copied into `to` with an empty `cc`, so it agrees when that target
+  is within the status's own `to` or `cc`; the status keeps its own audience either way. Without a usable `applied_at`
+  for 0016, every row is compared as written. A boost's visibility is its outbox row's, by the same rule; a boost has recipients only when
   it is direct (the known accounts in its `to`).
 
 **Media.** Attachments point to their existing URLs (local images stay where the legacy instance stored them); nothing
@@ -181,6 +184,19 @@ over: users sign in again and clients register push again.
 the legacy code never wrote, unknown object types, statuses whose author is not local where it must be, duplicate
 URIs, lists without 18-digit ids, and the like), when rows reference accounts or statuses that do not exist and
 `--accept-deletions` is not given (`conversion.dropped`), or when no single KEK candidate unwraps every key.
+
+**What `--accept-deletions` drops.** Besides the rows bridge migrations remove (Steps), `conversion.dropped` counts rows
+the conversion leaves out because legacy never showed them, or showed them only through what is also left out:
+
+- notifications owned by a remote account (`notifications:owner-remote`): legacy notified the author of a boosted or
+  liked status whoever it was, but listed only a local user's own notifications;
+- attachments without a `url` (`attachments:without-url`): legacy showed an attachment only by its `url`;
+- statuses whose author is not among the exported accounts (`statuses:unknown-author`): legacy reached them only by
+  fetching the author live when one was shown; and with them the boosts of such statuses
+  (`reblogs:unknown-account-or-status`) and the parent link of replies to them (the reply keeps its `inReplyTo` URI);
+- rows that reference an account or status that does not exist (`*:unknown-account`, `*:unknown-status`).
+
+Read `conversion.dropped` in the manifest before passing the flag: every code there should be one of these kinds.
 
 ## Verification
 
