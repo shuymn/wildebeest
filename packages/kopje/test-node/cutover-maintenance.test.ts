@@ -343,6 +343,14 @@ describe('kopje-admin cutover-preflight', () => {
 		expect(status(report, 'preview-writes-legacy-d1')).toBe('warn')
 		expect(status(report, 'spool-binding')).toBe('todo')
 		expect(status(report, 'git-deployments')).toBe('todo')
+		// The write barrier names every writer this configuration shows, and what closes it.
+		expect(report.barrier.map((b) => b.writer)).toEqual([
+			'production deployments (custom domain, pages.dev, every deployment URL)',
+			'preview deployments (they bind the same D1)',
+			'the consumer of the legacy Queue (legacy-queue)',
+			'Pages Git builds',
+			'deploy and backup workflows, and any other Worker or job bound to the D1',
+		])
 		const text = JSON.stringify(report)
 		expect(text).not.toContain('secret-value-never-printed')
 		expect(text).not.toContain('admin@kopje.test')

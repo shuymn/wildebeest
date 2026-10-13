@@ -13,6 +13,8 @@ Do not install this package by hand: start from the instance template, which has
 - [docs/setup.md](docs/setup.md): the `/setup` wizard
 - [docs/upgrade.md](docs/upgrade.md): updates and rollback
 - [docs/backup.md](docs/backup.md): the daily encrypted backup
+- [docs/cutover-runbook.md](docs/cutover-runbook.md): moving a legacy Wildebeest instance to Kopje
+  ([docs/cutover.md](docs/cutover.md): the conversion)
 - [CHANGELOG.md](CHANGELOG.md): release notes
 
 ## What the package contains
@@ -24,7 +26,8 @@ Do not install this package by hand: start from the instance template, which has
 | `kopje/public/*`              | The static assets the Worker serves through the `ASSETS` binding                                                                                                   |
 | `kopje/migrations/*`          | The same migrations as SQL files, for reference                                                                                                                    |
 | `kopje-admin`                 | The operations CLI (Node.js 22 or later). See [docs/setup.md](docs/setup.md#running-the-admin-cli)                                                                 |
-| `dist/THIRD_PARTY_NOTICES.md` | The licenses of the packages bundled into `dist/worker.js`                                                                                                         |
+| `dist/maintenance-*.js`       | The cutover's maintenance worker and the code `kopje-admin` renders its snapshot and converts with ([docs/cutover-runbook.md](docs/cutover-runbook.md))            |
+| `dist/THIRD_PARTY_NOTICES.md` | The licenses of the packages bundled into `dist/worker.js` (the maintenance bundles hold a subset of them)                                                         |
 
 The bundle is built with wrangler from the source in the
 [repository](https://github.com/shuymn/wildebeest/tree/main/packages/kopje); an instance's `wrangler deploy` bundles it

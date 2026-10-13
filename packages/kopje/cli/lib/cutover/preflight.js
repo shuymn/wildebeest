@@ -136,6 +136,42 @@ export function readPagesProject(json, { domain, kopjeQueue } = {}) {
 		check('git-deployments', 'todo', 'the project builds from Git: pause its automatic deployments in step 1')
 	}
 
+	// The write barrier (docs/cutover-runbook.md): everything here that can write the legacy D1, and what closes it.
+	// The tools see only this project's configuration; the runbook asks for the rest (other Workers bound to the D1).
+	/** @type {{ writer: string, close: string }[]} */
+	const barrier = []
+	if (database !== undefined) {
+		barrier.push({
+			writer: 'production deployments (custom domain, pages.dev, every deployment URL)',
+			close: 'step 3: the maintenance worker becomes the production deployment; older deployment URLs are closed',
+		})
+	}
+	if (preview.d1.some((b) => b.id !== null && database !== undefined && b.id === database.id)) {
+		barrier.push({
+			writer: 'preview deployments (they bind the same D1)',
+			close: 'before step 3: remove the DATABASE binding from the preview environment, and delete preview deployments',
+		})
+	}
+	if (legacyQueue !== undefined) {
+		barrier.push({
+			writer: `the consumer of the legacy Queue (${String(legacyQueue.id)})`,
+			close: 'step 4: after draining, remove it from the Queue (wrangler queues consumer remove)',
+		})
+	}
+	for (const service of production.services) {
+		barrier.push({
+			writer: `the Worker bound as ${service.binding} (${String(service.id)})`,
+			close: 'check whether it binds the D1; if it does, stop it before step 5',
+		})
+	}
+	if (Object.keys(source).length > 0 && sourceConfig.deployments_enabled !== false) {
+		barrier.push({ writer: 'Pages Git builds', close: 'step 1: pause automatic deployments' })
+	}
+	barrier.push({
+		writer: 'deploy and backup workflows, and any other Worker or job bound to the D1',
+		close: 'step 1: disable them; list other Workers bound to the D1 in the dashboard (D1, the database, Bindings)',
+	})
+
 	return {
 		project: {
 			name: project.name,
@@ -148,6 +184,7 @@ export function readPagesProject(json, { domain, kopjeQueue } = {}) {
 		production,
 		preview,
 		kekCandidates: keks,
+		barrier,
 		checks,
 	}
 }
@@ -201,6 +238,7 @@ export async function preflight({ projectPath, exportPath, domain, kopjeQueue, e
 			'add the Worker on an admin hostname, with an Access application for /admin there (later also <domain>/admin)',
 			'set a one-time IMPORT_TOKEN secret (at least 32 characters) on the Kopje Worker; never run /setup',
 			`bind Kopje's Queue to the Pages project as ${SPOOL_QUEUE_BINDING} (production)`,
+			"create Kopje's Queue dead-letter queue; for a rollback, bind the legacy Queue to Kopje as LEGACY_QUEUE and set LEGACY_VAPID_JWK",
 		],
 		ok: !checks.some((check) => check.status === 'fail'),
 	}

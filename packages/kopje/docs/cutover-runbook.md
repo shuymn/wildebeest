@@ -6,7 +6,9 @@ instance ([cutover.md](cutover.md#supported-legacy-instances): T1, this reposito
 cloudflare/wildebeest) with one or several local users.
 
 Every step that changes a route, a binding or a resource is something you do, by the command shown. No tool here acts
-on its own, and none of them calls the Cloudflare API: they read files you saved and write files on your disk.
+on its own, and the offline tools (`cutover-preflight`, `fingerprint`, `convert`, `verify-conversion`,
+`maintenance-worker`) call no API: they read files you saved and write files on your disk. The `cutover` commands talk
+to your Kopje Worker's admin API, like the other `kopje-admin` commands.
 
 | Document                                         | What it covers                                                                       |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------ |
@@ -18,65 +20,103 @@ on its own, and none of them calls the Cloudflare API: they read files you saved
 
 ## The plan in one page
 
-| Step | What                                                                    | Duration | Rollback                                               |
-| ---- | ----------------------------------------------------------------------- | -------- | ------------------------------------------------------ |
-| 1    | Stop the legacy deploy triggers; check for running jobs                 | 1 min    | Re-enable the triggers                                 |
-| 2    | Attach a dead-letter queue to the legacy Queue                          | 1 min    | Leave it (harmless) or put the consumer back as it was |
-| 3    | Replace every Pages route with the maintenance worker                   | 2 min    | Roll the Pages project back to the legacy deployment   |
-| 4    | Drain the legacy Queue; reconcile successes, failures, DLQ              | 1–5 min  | As step 3                                              |
-| 5    | Fingerprint the legacy D1 twice; both must match                        | 2 min    | As step 3                                              |
-| 6    | Final export, convert, verify, import, verify                           | 4–8 min  | `kopje-admin import-reset`; as step 3                  |
-| 7    | Put Kopje on the domain in full maintenance                             | 1–2 min  | Move the domain back to the Pages project; as step 3   |
-| 8    | Readonly: smoke test, the owner signs in and checks                     | 3 min    | As step 7                                              |
-| 9    | **Publish** (leave maintenance); spool replays; send and receive checks | 2 min    | **None: this is the point of no return**               |
-| 10   | Enable the Store's daily backup and see one succeed                     | after    | –                                                      |
+| Step | What                                                                   | Duration | Rollback                                                                                 |
+| ---- | ---------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------- |
+| 1    | Stop the legacy deploy triggers and jobs; check for running ones       | 1 min    | Re-enable them                                                                           |
+| 2    | Attach a dead-letter queue to the legacy Queue                         | 1 min    | Leave it                                                                                 |
+| 3    | Replace every Pages route with the maintenance worker                  | 2 min    | [Rollback A](#rollback-a-before-the-import-is-complete)                                  |
+| 4    | Drain the legacy Queue, reconcile, then remove the legacy consumer     | 1–5 min  | Rollback A                                                                               |
+| 5    | Export twice; the fingerprints must match                              | 2–3 min  | Rollback A                                                                               |
+| 6    | Convert, verify, import, verify; check the maintenance snapshot        | 4–8 min  | Rollback A, or [B](#rollback-b-after-the-import-is-complete) once the import is complete |
+| 7    | Put Kopje on the domain in full maintenance                            | 1–10 min | Rollback B                                                                               |
+| 8    | Readonly: smoke test, the owner signs in and checks; fingerprint again | 3–5 min  | Rollback B                                                                               |
+| 9    | **Publish**; the spool replays; send and receive checks                | 2 min    | **None: the point of no return**                                                         |
+| 10   | Enable the Store's daily backup and see one succeed                    | after    | –                                                                                        |
 
-**Downtime** runs from step 3 (the legacy routes stop serving) to step 9 (Kopje serves). Expect 10–17 minutes. The
-limit is 30 minutes; past 45 minutes, roll back (the rollback of the step you are in, then every earlier one). Inbox
-deliveries are spooled to Kopje's Queue the whole time, so none is lost; reads and the API answer 503 with
-`Retry-After`, which peers and clients retry.
+### Timing budget
 
-**Point of no return.** Publishing (step 9) is final. Until then the cutover writes nothing to the legacy D1 (only the
-legacy consumer finishes its own queue), so a rollback loses nothing the legacy instance had; inbox requests spooled
-meanwhile wait in Kopje's Queue for the next attempt (step 3). After it, never go back to the
-legacy setup: recover with the Store's point-in-time recovery, an external backup, or a fix forward
-([upgrade.md](upgrade.md#a-version-that-changed-the-schema)).
+**Downtime** runs from step 3 (the legacy routes stop serving) to step 9 (Kopje serves). Inbox deliveries are spooled
+the whole time, so none is lost; reads and the API answer 503 with `Retry-After: 600` throughout, from the maintenance
+worker and then from Kopje.
+
+The step durations above add up to 15–35 minutes for steps 3 to 9. The design's target of 10–17 minutes holds only
+for a small database, a short legacy backlog and an instant domain move; the rehearsal measures steps 5 and 6 on the
+real data, and step 7's allowance depends on how the domain moves (a Worker route is immediate; a custom domain waits
+for its certificate). Plan the window with the rehearsal's numbers, and keep:
+
+- the limit of 30 minutes since step 3: past it, continue only if what remains is certain to finish before 45;
+- 45 minutes or more: roll back (before step 9 only).
+
+Write the start time down at step 3 and the time at the end of every step.
+
+**Point of no return.** Publishing (step 9) is final: `kopje-admin cutover publish` marks the Store published, and so
+does the first request Kopje serves with `MAINTENANCE=off`. From then on the Store refuses the cutover reset for good.
+After publication, never go back to the legacy setup: recover with the Store's point-in-time recovery, an external
+backup, or a fix forward ([upgrade.md](upgrade.md#a-version-that-changed-the-schema)).
 
 **Retention.** Keep the legacy setup (Pages project, consumer, DO Worker, Queue, KV, D1) untouched and read-only for
 14 days after publishing, as a reference. Delete nothing during that time, and nothing before a restore from a Store
 dump has been rehearsed.
 
-### Timing budget
+### The write barrier
 
-Write the start time down at step 3, and the time at the end of every step. At each go/no-go point:
+Nothing may write the legacy D1 after the final export. That is enforced by closing every writer, not by the
+fingerprint: the fingerprint (step 5, again at step 8) is a check on top of the barrier that shows nothing changed. The
+preflight lists the writers it can see (`barrier`), and the steps close them:
 
-- under 30 minutes since step 3: continue;
-- 30 to 45 minutes: continue only if the remaining steps are certain to finish before 45;
-- 45 minutes or more: roll back (before step 9 only).
-
-The rehearsal (below) measures steps 5 and 6 on the real data, which are the only ones whose duration depends on its
-size. Plan the window with its numbers.
+| Writer                                                                       | Closed at                                                                         |
+| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Deploy and backup workflows, Pages Git builds, any other job bound to the D1 | Step 1                                                                            |
+| Preview deployments, when the preview environment binds the same D1          | Before step 3: remove its `DATABASE` binding and delete the preview deployments   |
+| The production deployment (custom domain, `pages.dev`)                       | Step 3: the maintenance worker replaces it                                        |
+| Older deployments, reachable at their own `<hash>.<project>.pages.dev`       | Before step 3: protect them with the project's Access policy (or delete them)     |
+| The legacy consumer                                                          | Step 4: removed from the Queue after it drained                                   |
+| Any other Worker bound to the D1                                             | Step 1: find them in the dashboard (D1, the database, its bindings) and stop them |
 
 ## Placeholders
 
 | Placeholder      | What it is                                                                                                                                            |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `<domain>`       | The instance domain, the legacy `DOMAIN`, exactly as it is (Kopje keeps it)                                                                           |
-| `<project>`      | The legacy Pages project                                                                                                                              |
-| `<branch>`       | Its production branch                                                                                                                                 |
+| `<project>`      | The legacy Pages project; `<branch>` its production branch                                                                                            |
 | `<legacy-db>`    | The D1 database bound to the project as `DATABASE` (production)                                                                                       |
 | `<legacy-queue>` | The Queue bound as `QUEUE`; `<legacy-consumer>` the Worker that consumes it                                                                           |
-| `<kopje-worker>` | The new Kopje Worker; `<kopje-queue>` its Queue                                                                                                       |
+| `<kopje-worker>` | The new Kopje Worker; `<kopje-queue>` its Queue and `<kopje-queue>-dlq` its dead-letter queue                                                         |
 | `<admin-host>`   | A hostname of your zone for Kopje's admin API during the cutover, for example `kopje-admin.<zone>`                                                    |
+| `<admin-actor>`  | A local actor URI, `https://<domain>/ap/users/<name>`, for rollback messages that address no local actor                                              |
 | `<work>`         | A working directory on an encrypted disk. Exports and dumps hold everything, private messages and wrapped keys included: never put them anywhere else |
 
-Run the cutover tools from a checkout of this repository at the Kopje release you deploy, after `pnpm install` and
-`pnpm --filter kopje build`: `kopje-admin` below means `node packages/kopje/cli/kopje-admin.js`. They need Node.js 22
-or later. `wrangler` is the Wrangler CLI logged in to the account (`wrangler whoami`).
+`kopje-admin` is the CLI of the Kopje version you deploy: in its instance repository `npm run admin --`, or
+`npm exec --package=kopje@<version> -- kopje-admin` ([setup.md](setup.md#running-the-admin-cli)); a checkout of this
+repository at that release also works (`pnpm install`, `pnpm --filter kopje build`, then
+`node packages/kopje/cli/kopje-admin.js`). It needs Node.js 22 or later. `wrangler` is the Wrangler CLI logged in to the
+account (`wrangler whoami`).
+
+**Exporting.** One command exports every table into one file, which the tools read as they read a directory of
+per-table files. List the tables once, then export them all, `sqlite_sequence` (the notification counter) included:
+
+```sh
+kopje-admin fingerprint tables-sql > <work>/tables.sql
+wrangler d1 execute <legacy-db> --remote --json --command "$(cat <work>/tables.sql)" > <work>/tables.json
+export_d1() { # <dir>
+  mkdir -p "$1"
+  wrangler d1 export <legacy-db> --remote --output "$1/export.sql" \
+    $(jq -r '.[0].results[].name | "--table " + .' <work>/tables.json) --table sqlite_sequence
+}
+```
+
+If your D1 refuses to export `sqlite_sequence` with `--table`, read it and write the file instead:
+
+```sh
+wrangler d1 execute <legacy-db> --remote --json --command "$(kopje-admin fingerprint sequence-sql)" > <work>/seq.json
+kopje-admin fingerprint sequence-file <work>/seq.json > "<dir>/sqlite_sequence.sql"
+```
+
+`kopje-admin fingerprint export <dir>` refuses an export whose notification counter is missing (`sequence-missing`).
 
 ## Before the cutover
 
-These can be done any time before the window; none of them affects the legacy instance.
+None of this affects the legacy instance.
 
 1. **Save the Pages project's configuration** and run the preflight. With an API token that can read Pages:
 
@@ -88,29 +128,32 @@ These can be done any time before the window; none of them affects the legacy in
     ```
 
     It lists the bindings (so `<legacy-db>` and `<legacy-queue>` are the bound ones, never guessed by name), the KEK
-    secret names, and checks marked `pass`, `warn`, `fail` or `todo`. No check may be `fail`. Secret values are not in
-    that answer and are never printed.
+    secret names, the write barrier, and checks marked `pass`, `warn`, `fail` or `todo`. No check may be `fail`. Secret
+    values are not in that answer and are never printed.
 
-2. **Export once and run the preflight with it**, to learn the migration level and which KEK wraps the keys (the
-   rehearsal export will do). Put the legacy KEK values in the environment as `userKEK` / `USER_KEY` (the legacy secret
+2. **Export once** (`export_d1 <work>/export-r`) **and run the preflight with it**, to learn the migration level and
+   which KEK wraps the keys. Put the legacy KEK values in the environment as `userKEK` / `USER_KEY` (the legacy secret
    names) if you have them:
 
     ```sh
     kopje-admin cutover-preflight <work>/pages-project.json --domain <domain> --export <work>/export-r
     ```
 
-    `kek-uniform` must pass. The KEK it names is the value Kopje's `USER_KEK` must have (the empty KEK means the legacy
-    instance never set one; Kopje's health will warn about it, see the accepted risks in the threat model).
+    `kek-uniform` must pass. The KEK it names is the value Kopje's `USER_KEK` must have.
 
 3. **Deploy Kopje** from the instance template ([deploy/README.md](../../../deploy/README.md)), with:
-    - `MAINTENANCE=full` as a plain-text variable, before anything can reach it;
+    - `MAINTENANCE=full` as a plain-text variable, before anything can reach it (a Kopje that serves with
+      `MAINTENANCE=off` marks itself published once it holds data);
     - `USER_KEK` set to the KEK from step 2;
-    - `IMPORT_TOKEN` set to a fresh random value of at least 32 characters (`openssl rand -base64 33`). It begins
-      exactly one import into this empty Store; never set `SETUP_TOKEN` and never run `/setup`, which would create an
-      account and make the Store non-empty;
+    - `IMPORT_TOKEN` set to a fresh random value of at least 32 characters (`openssl rand -base64 33`). Never set
+      `SETUP_TOKEN` and never run `/setup`, which would create an account and make the Store non-empty;
+    - its Queue's dead-letter queue (`wrangler queues create <kopje-queue>-dlq`);
     - a custom domain `<admin-host>` on the Worker, and an Access application for `<admin-host>/admin` with your admin
       policy and a service token for the CLI (as [setup.md](setup.md#before-you-start) step 5). Add `<domain>/admin`
-      to the same application later, at step 7, so its AUD does not change.
+      to the same application later, at step 7, so its AUD does not change;
+    - for a rollback: a Queue producer binding `LEGACY_QUEUE` to `<legacy-queue>` in the instance's `wrangler.jsonc`,
+      and the legacy instance's `VAPID_JWK` as the secret `LEGACY_VAPID_JWK`. They are used only by
+      `kopje-admin cutover drain`.
 
     Then check it with the token: `KOPJE_ADMIN_URL=https://<admin-host> kopje-admin health --import-token` (with
     `KOPJE_IMPORT_TOKEN`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` set). The Store is empty and in bootstrap.
@@ -123,18 +166,19 @@ These can be done any time before the window; none of them affects the legacy in
     ```
 
 5. **Bind Kopje's Queue to the Pages project** as `KOPJE_QUEUE` (production environment: Settings, Bindings, Queue
-   producer, or the API). It takes effect only for new deployments, so the legacy deployment does not see it. Save the
-   project again and rerun the preflight with `--kopje-queue <kopje-queue>`: `spool-binding` must pass.
+   producer, or the API). It takes effect only for new deployments. Optionally add a Rate Limiting binding
+   `KOPJE_SPOOL_RATE_LIMIT` (per client IP), if the platform offers it to Pages; otherwise rely on a zone rate-limiting
+   rule for `POST` to `*/inbox`. Save the project again and rerun the preflight with `--kopje-queue <kopje-queue>`:
+   `spool-binding` must pass.
 
-6. **Close the other Pages URLs.** Every deployment of a Pages project stays reachable at its own
-   `<hash>.<project>.pages.dev` address, and preview branches at `<branch>.<project>.pages.dev`, each running its own
-   legacy code with its own bindings; the preflight warns when previews bind the same D1. Enable the project's access
-   policy for preview deployments (Settings, General, Access policy), then check that a deployment URL of the current
-   legacy deployment asks for Access (`curl -sI https://<hash>.<project>.pages.dev/ap/users/<user>` answers a redirect
-   to Access, not the actor). Delete preview deployments you do not need:
-   `wrangler pages deployment list --project-name <project> --environment preview`, then
-   `wrangler pages deployment delete <id> --project-name <project>`. Keep the latest production deployment: it is the
-   rollback.
+6. **Close the other Pages URLs** (the write barrier): remove the `DATABASE` binding from the preview environment if it
+   binds the same D1, delete the preview deployments
+   (`wrangler pages deployment list --project-name <project> --environment preview`, then
+   `wrangler pages deployment delete <id> --project-name <project>`), and enable the project's Access policy for
+   preview deployments (Settings, General), which also covers the `<hash>.<project>.pages.dev` address of every
+   deployment. Check that the current deployment's own URL asks for Access
+   (`curl -sI https://<hash>.<project>.pages.dev/ap/users/<user>` redirects to Access). Keep the latest production
+   deployment: it is the rollback.
 
 7. **Rehearse** (below) and plan the window with its timings.
 
@@ -142,10 +186,7 @@ These can be done any time before the window; none of them affects the legacy in
 
 Each step lists the command, the go/no-go check, the duration and the rollback. Stop at any failed check.
 
-### 1. Stop the legacy deploy triggers (1 min)
-
-Disable every workflow that deploys or touches the legacy instance, and pause Pages' own Git builds if the project has
-them (the preflight's `git-deployments`):
+### 1. Stop the legacy deploy triggers and jobs (1 min)
 
 ```sh
 gh workflow disable deploy.yml -R <owner>/<repo>
@@ -154,15 +195,16 @@ gh run list -R <owner>/<repo> --status in_progress
 gh run list -R <owner>/<repo> --status queued
 ```
 
-Pages Git builds: Settings, Builds, Branch control: disable automatic production and preview deployments.
+Pause Pages Git builds if the project has them (Settings, Builds, Branch control). Stop any other writer the preflight
+or the D1's bindings show.
 
-- **Go:** no run in progress or queued; no build running in the Pages project.
+- **Go:** no run in progress or queued; no build running; no other writer left.
 - **Rollback:** `gh workflow enable` each workflow; re-enable automatic deployments.
 
 ### 2. Attach a dead-letter queue to the legacy Queue (1 min)
 
-Without one, a message that exhausts its retries is dropped. Recreate the consumer with the settings it had (those
-below are the legacy defaults; read yours in the dashboard first) and a DLQ:
+Without one, a message that exhausts its retries is dropped. Recreate the consumer with the settings it had (read
+them in the dashboard first; these are the legacy defaults) and a DLQ:
 
 ```sh
 wrangler queues create <legacy-queue>-dlq
@@ -172,26 +214,33 @@ wrangler queues consumer add <legacy-queue> <legacy-consumer> \
 wrangler queues info <legacy-queue>
 ```
 
-- **Go:** `queues info` shows the consumer with the DLQ. Messages stay in the Queue while the consumer is replaced.
-- **Rollback:** none needed; to restore the exact previous state, add the consumer again without the DLQ.
+- **Go:** the consumer has the DLQ. Messages stay in the Queue while the consumer is replaced.
+- **Rollback:** none needed.
 
 ### 3. Replace every Pages route with the maintenance worker (2 min)
 
-Write the maintenance worker from the latest export (the rehearsal export is fine: only the local actors and their
-keys are used, and those do not change), then deploy it as the production deployment:
+Freeze account and profile changes from here until publication: tell the local users not to edit profiles, rotate
+keys or sign up. Take a fresh export, write the maintenance worker from it, check it, and deploy it as the production
+deployment. (If a full export is slow, the rows of `d1_migrations`, `actors`, `users` and `sqlite_sequence` are enough:
+export those, and the other tables with `--no-data`, into the same directory.)
 
 ```sh
-kopje-admin maintenance-worker <work>/export-r --domain <domain> --out <work>/maintenance
+export_d1 <work>/export-m
+kopje-admin maintenance-worker <work>/export-m --domain <domain> --out <work>/maintenance
+kopje-admin maintenance-worker-check <work>/export-m --domain <domain> --worker <work>/maintenance
 wrangler pages deploy <work>/maintenance --project-name <project> --branch <branch> --no-bundle --commit-dirty=true
 ```
 
 `maintenance-worker` refuses unless one KEK unwraps every local key and every actor document it renders publishes
-exactly that actor's legacy public key. The worker it writes:
+exactly that actor's legacy public key, and it reports digests of what it captured (`snapshotSha256`, `keysSha256`).
+The worker it writes:
 
-- serves the actor documents and WebFinger answers exactly as Kopje will serve them after the import (Kopje's own code
-  rendered them; same URLs, same keys);
+- serves the actor documents and WebFinger answers exactly as Kopje will serve them after the import (Kopje's own
+  code rendered them; same URLs, keys and headers; WebFinger in any case; 404 for an unknown actor);
 - spools every inbox POST, shared and personal, to `KOPJE_QUEUE` in Kopje's spool format, refusing what Kopje would
-  refuse (404 for an unknown personal inbox, 415 for other media types, 413 over 1 MiB, 503 if it cannot spool);
+  refuse (404 for an unknown personal inbox, 415 for other media types, 413 over 1 MiB) and a request without an HTTP
+  signature naming an https key (401); it answers 429 over the optional rate limit and 503 when it cannot spool or
+  Kopje's Queue holds 10,000 messages or 256 MiB;
 - answers everything else with 503 and `Retry-After: 600`. It never reads or writes the legacy bindings.
 
 Check, from outside:
@@ -205,111 +254,100 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://<hash>.<project>.pages.dev/   
 ```
 
 - **Go:** the actor and WebFinger answer 200 with the expected key id; the API answers 503 on the domain and on
-  `pages.dev`; every older deployment URL asks for Access; Kopje's Queue receives spooled messages (dashboard, Queue
-  metrics) once a peer delivers something.
+  `pages.dev`; older deployment URLs ask for Access; Kopje's Queue receives spooled messages once a peer delivers.
 - **Start the clock.**
-- **Rollback:** in the dashboard, Deployments, the previous production deployment, Rollback. Inbox requests already
-  spooled to Kopje's Queue stay there (Kopje holds them while in maintenance) and are applied at the next attempt; the
-  legacy instance does not receive them.
+- **Monitoring until step 9:** Kopje's Queue backlog (dashboard, Queue metrics) and the maintenance worker's log
+  (`wrangler pages deployment tail --project-name <project>`): `kopje.maintenance.backlog-full` and
+  `kopje.maintenance.rate-limited` mean the spool is refusing requests; peers retry them later.
+- **Rollback:** [Rollback A](#rollback-a-before-the-import-is-complete).
 
-### 4. Drain the legacy Queue and reconcile (1–5 min)
+### 4. Drain the legacy Queue, reconcile, remove the legacy consumer (1–5 min)
 
-The legacy consumer now finishes what was queued before step 3: inbox activities (written to the legacy D1) and
-deliveries. Nothing new arrives.
+The legacy consumer now finishes what was queued before step 3. Nothing new arrives.
 
 ```sh
 wrangler tail <legacy-consumer> --format json > <work>/drain.log   # in another terminal, until the backlog is 0
 wrangler queues info <legacy-queue>
 wrangler queues info <legacy-queue>-dlq
+wrangler queues consumer remove <legacy-queue> <legacy-consumer>   # once the backlog is 0
 ```
 
-- **Go:** the legacy Queue's backlog is 0 (dashboard, Queue metrics: backlog); every message in the log ended (acked
-  or retried to the end); the DLQ's count is known. A delivery in the DLQ is an outbound send a remote server refused
-  ten times, as the legacy instance would have dropped it. An inbox message in the DLQ is an activity the legacy D1
-  never got: write the count down and decide; it is not in the export.
-- **Rollback:** as step 3.
+- **Go:** the legacy Queue's backlog is 0 (dashboard, Queue metrics); every message in the log ended (acked or retried
+  to the end); the DLQ's count is known; the consumer is removed. A delivery in the DLQ is an outbound send a remote
+  server refused ten times, as the legacy instance would have dropped it. An inbox message in the DLQ is an activity
+  the legacy D1 never got: write the count down and decide; it is not in the export.
+- **Rollback:** Rollback A (it adds the consumer back).
 
-### 5. Confirm that writes stopped (2 min)
+### 5. Confirm that writes stopped (2–3 min)
 
-Fingerprint the legacy D1 twice, at least a minute apart. The queries are read-only and their answers hold counts,
-lengths and hashes only.
+Export twice, at least a minute apart, and compare the fingerprints. Every row of every table, `sqlite_sequence`
+included, is hashed whole, so any change to any row shows; the output holds table names, counts and digests only.
 
 ```sh
-kopje-admin fingerprint schema-sql > <work>/schema.sql
-wrangler d1 execute <legacy-db> --remote --json --command "$(cat <work>/schema.sql)" > <work>/schema.json
-kopje-admin fingerprint sql <work>/schema.json > <work>/fingerprint.sql
-wrangler d1 execute <legacy-db> --remote --json --command "$(cat <work>/fingerprint.sql)" > <work>/fp-1.json
+export_d1 <work>/export-a
 sleep 60
-wrangler d1 execute <legacy-db> --remote --json --command "$(cat <work>/fingerprint.sql)" > <work>/fp-2.json
-kopje-admin fingerprint compare <work>/fp-1.json <work>/fp-2.json
+export_d1 <work>/export-b
+kopje-admin fingerprint export <work>/export-a > <work>/fp-a.json
+kopje-admin fingerprint export <work>/export-b > <work>/fp-b.json
+kopje-admin fingerprint compare <work>/fp-a.json <work>/fp-b.json
 ```
 
-- **Go:** `PASS`. A `FAIL` names the tables that changed: something still writes (a route, a job, the consumer).
-  Find it, stop it, and fingerprint again.
-- **Rollback:** as step 3.
+- **Go:** `PASS`. `<work>/export-b` is the final export. A `FAIL` names the tables that changed: a writer is still
+  open. Find it, close it, and export twice again.
+- **Rollback:** Rollback A.
 
-The fingerprint sees any insert or delete, and any change to a value's length, its first, middle or last 16
-characters, or the counts of 20 frequent characters. It is a check that writing stopped, not a content check; the
-content is checked row by row in step 6.
-
-### 6. Final export, convert, import, verify (4–8 min)
-
-Export every table but the full-text index ([cutover.md](cutover.md#input-the-export)); list them from the schema
-answer of step 5:
+### 6. Convert, import, verify (4–8 min)
 
 ```sh
-mkdir <work>/export
-for t in $(jq -r '.[0].results[].t' <work>/schema.json | sort -u); do
-  wrangler d1 export <legacy-db> --remote --table "$t" --output "<work>/export/$t.sql"
-done
-```
-
-Convert, check, import, check again:
-
-```sh
-kopje-admin convert <work>/export --out <work>/out --base-time <now, ISO 8601 UTC> \
+kopje-admin convert <work>/export-b --out <work>/out --base-time <now, ISO 8601 UTC> \
   --catalog <work>/catalog.json --domain <domain>
-kopje-admin fingerprint compare <work>/fp-1.json <work>/fp-2.json --manifest <work>/out/manifest.json
-kopje-admin verify-conversion <work>/export <work>/out/kopje.dump
+kopje-admin fingerprint compare <work>/fp-a.json <work>/fp-b.json --manifest <work>/out/manifest.json
+kopje-admin verify-conversion <work>/export-b <work>/out/kopje.dump
 kopje-admin import <work>/out/kopje.dump --import-token
 kopje-admin config --import-token access_team_domain=<team>.cloudflareaccess.com access_admin_aud=<aud> \
   admin_email=<admin email> access_service_token_client_id=<client id> access_aud=<sign-in application AUD>
 kopje-admin dump <work>/imported.dump
-kopje-admin verify-conversion <work>/export <work>/imported.dump
+kopje-admin verify-conversion <work>/export-b <work>/imported.dump
+kopje-admin maintenance-worker-check <work>/export-b --domain <domain> --worker <work>/maintenance
 wrangler secret delete IMPORT_TOKEN --name <kopje-worker>
 ```
 
-- **Go:** `convert` exits 0 (a stop, exit 3, names its reason in the manifest; [cutover.md](cutover.md#steps));
-  the fingerprint comparison with `--manifest` passes, so the export holds exactly the rows the D1 had when it was
-  fingerprinted; both `verify-conversion` runs are `PASS`, the second one on the Store's own dump after the import.
-  The verification computes its expectations from the legacy export by a separate code path and compares every
-  record by hash: missing content, content rewritten to the same length, and any added, missing or changed record
-  fail.
-- `IMPORT_TOKEN` only begins an import into an empty Store without usable admin access; once the import is
-  verified the Store is not empty, and once the Access values are set it is no longer in bootstrap, so the token opens
-  nothing. Deleting the secret makes that final.
-- **Rollback:** `kopje-admin import-reset <work>/out/kopje.dump --yes` (or `--import-token` while the token import is
-  running), then as step 3.
+- **Go:**
+    - `convert` exits 0 (a stop, exit 3, names its reason in the manifest; [cutover.md](cutover.md#steps));
+    - the comparison with `--manifest` passes: the conversion read exactly the fingerprinted rows and notification
+      counter (it refuses a file that is not a complete conversion manifest);
+    - both `verify-conversion` runs are `PASS`, the second on the Store's own dump after the import. They compute their
+      expectations from the export by a separate code path and compare every record by hash;
+    - `maintenance-worker-check` says `current`: the deployed snapshot is what the final export holds. If it says
+      `stale`, generate the worker from `<work>/export-b`, deploy it as in step 3, and continue.
+- `IMPORT_TOKEN` only begins an import into an empty Store without usable admin access; once the import is verified the
+  Store is not empty, and once the Access values are set it is no longer in bootstrap. Deleting the secret makes that
+  final.
+- **Rollback:** before the import is verified, Rollback A; after, Rollback B.
 
-### 7. Put Kopje on the domain in full maintenance (1–2 min)
+### 7. Put Kopje on the domain in full maintenance (1–10 min)
 
-Kopje still has `MAINTENANCE=full`. Move `<domain>` from the Pages project to the Worker:
+Kopje still has `MAINTENANCE=full`. Move `<domain>` to the Worker, either:
 
-1. Pages project: Custom domains, `<domain>`, Remove.
-2. Kopje Worker: Settings, Domains and Routes, Add custom domain `<domain>`.
-3. Add `<domain>/admin` to the Access application of step 3 of the preparation, and create the sign-in application
-   for `<domain>/oauth/authorize` with the AUD you set as `access_aud` (if it is not there yet).
+- **a Worker route** `<domain>/*` on the zone (Settings, Domains and Routes, Add route), which keeps the existing DNS
+  record and certificate and takes effect at once (the rehearsal confirms that the route takes precedence over the
+  Pages custom domain); or
+- **a custom domain swap**: remove `<domain>` from the Pages project's custom domains, then add it to the Worker as a
+  custom domain, which waits for its certificate.
+
+Then add `<domain>/admin` to the Access application of the preparation, and create the sign-in application for
+`<domain>/oauth/authorize` with the AUD you set as `access_aud` (if it is not there yet).
 
 ```sh
 curl -sS -H 'accept: application/activity+json' https://<domain>/ap/users/<user> | cmp - <work>/actor-maintenance.json
-curl -sS -o /dev/null -w '%{http_code}\n' https://<domain>/api/v1/timelines/public   # 503
+curl -sS -o /dev/null -w '%{http_code}\n' https://<domain>/api/v1/timelines/public   # 503, with Retry-After
 ```
 
-- **Go:** the actor answers from Kopje with the same document as the maintenance snapshot; the API answers 503;
-  inbox deliveries are spooled to the same Queue.
-- **Rollback:** remove the custom domain from the Worker and add it back to the Pages project; then as step 3.
+- **Go:** the actor answers from Kopje with the same document as the maintenance snapshot; the API answers 503; inbox
+  deliveries are spooled to the same Queue.
+- **Rollback:** remove the route (or the Worker's custom domain, and add it back to the Pages project); then Rollback B.
 
-### 8. Readonly: smoke test and the owner's check (3 min)
+### 8. Readonly: smoke test and the owner's check (3–5 min)
 
 Set `MAINTENANCE=readonly` on the Worker (Settings, Variables and Secrets). Reads and sign-ins work; writes answer 503.
 
@@ -320,30 +358,36 @@ curl -sS https://<domain>/api/v1/instance | jq .uri
 ```
 
 The owner (and every local user who can) signs in again at `https://<domain>`, checks the profile, the home timeline,
-a few old posts, followers and following, and registers Web Push again in their client (push subscriptions are not
-carried over). Then fingerprint the legacy D1 once more, as in step 5 (`fp-3.json`), and compare it with `fp-2.json`:
-it must still pass, so nothing reached the legacy D1 after the export.
+a few old posts, followers and following, and registers Web Push again (push subscriptions are not carried over). Then
+take one more export and compare its fingerprint with `fp-b.json`: nothing may have reached the legacy D1 after the
+final export.
 
-- **Go:** health has no failing check; sign-in works; the data looks right; Push registration succeeds;
-  `fingerprint compare fp-2.json fp-3.json` passes.
+```sh
+export_d1 <work>/export-c
+kopje-admin fingerprint export <work>/export-c > <work>/fp-c.json
+kopje-admin fingerprint compare <work>/fp-b.json <work>/fp-c.json
+```
+
+- **Go:** health has no failing check; sign-in works; the data looks right; Push registration succeeds; the
+  fingerprints match.
 - **Rollback:** as step 7.
 
 ### 9. Publish (2 min) — the point of no return
 
-Record a PITR bookmark, then leave maintenance:
-
 ```sh
 kopje-admin pitr bookmark > <work>/bookmark-before-publish.json
+kopje-admin cutover publish --yes
 ```
 
 Set `MAINTENANCE=off` (or remove it). Spooled inbox requests are replayed by Kopje's Queue consumer, each verified
 against the time it was spooled; ones held during maintenance come due within 30 minutes. Then:
 
 - post a test status, and see it arrive at a test account you control on another server (sending);
-- from that account, like the test status, and see the notification on Kopje, with its Web Push (receiving).
+- from that account, like the test status, and see the notification on Kopje, with its Web Push (receiving and Push
+  delivery).
 
-- **Go:** both arrive; Kopje's Queue backlog falls to 0 within 30 minutes; `kopje-admin deliveries` shows no growing
-  backlog.
+- **Go:** both arrive; Kopje's Queue backlog falls to 0 within 30 minutes; its dead-letter queue stays empty;
+  `kopje-admin deliveries` shows no growing backlog.
 - **Rollback:** none. Recover forward: PITR to the bookmark ([upgrade.md](upgrade.md#a-version-that-changed-the-schema)),
   a backup, or a fix.
 
@@ -355,53 +399,131 @@ Configure the Store's daily backup ([backup.md](backup.md)) and wait for the fir
 
 Afterwards: re-enable nothing on the legacy side. Keep it read-only for 14 days, then remove it as decided separately.
 
+## Rolling back
+
+Rolling back before step 9 returns the legacy instance to service with everything it had, plus every inbox request
+accepted during the window, in the order it arrived. Spooled requests are never left in Kopje's Queue: the legacy
+instance gets them first, so an Undo or Delete it receives later applies on top of them, and a later cutover cannot
+replay them.
+
+### Rollback A: before the import is complete
+
+1. Keep the maintenance worker (or Kopje in maintenance) on the routes: requests keep being spooled.
+2. On the Kopje Worker set `CUTOVER_ROLLBACK=journal` (Settings, Variables and Secrets). Its Queue consumer now keeps
+   every spooled request in the Store's rollback journal instead of holding it; held ones come due within 30 minutes.
+3. Add the legacy consumer back with one invocation at a time, so it takes the drained requests in order:
+
+    ```sh
+    wrangler queues consumer add <legacy-queue> <legacy-consumer> --batch-size 10 --batch-timeout 30 \
+      --message-retries 10 --dead-letter-queue <legacy-queue>-dlq --max-concurrency 1
+    ```
+
+4. Drain, repeating until the journal is empty and Kopje's Queue backlog is 0 (up to 30 minutes):
+
+    ```sh
+    kopje-admin cutover drain --fallback-actor <admin-actor>
+    kopje-admin cutover status
+    ```
+
+    Each request is verified against the time it was spooled, by Kopje's rule, then sent to the legacy Queue as the
+    legacy consumer's own inbox message. A request whose key cannot be fetched right now stops the round (exit 3; run it
+    again later), so nothing after it overtakes it. A request that fails verification for good is kept, counted as
+    `unverified`: inspect it with `kopje-admin sql "SELECT spool_id, spooled_at FROM inbound_spool"` and, once decided,
+    remove it with `kopje-admin cutover discard-unverified --yes`.
+
+5. Restore the legacy routes: the Pages project's previous production deployment (Deployments, Rollback); move the
+   domain back if step 7 moved it. Then drain once more for what was spooled meanwhile, and check that
+   `cutover status` shows an empty journal.
+6. If an import was begun but not verified: `kopje-admin import-reset <work>/out/kopje.dump --yes`.
+7. Remove `CUTOVER_ROLLBACK` from the Kopje Worker; re-enable the legacy workflows and builds (step 1); restore the
+   legacy consumer's concurrency (add it again without `--max-concurrency`).
+
+### Rollback B: after the import is complete
+
+As Rollback A, steps 1 to 5 and 7, and in place of step 6:
+
+```sh
+kopje-admin cutover reset --yes   # needs MAINTENANCE=full and an empty journal
+```
+
+The reset takes the Store back to empty, keeping its configuration (domain and Access), through the same bounded reset
+an interrupted import uses; an interrupted reset is continued with `kopje-admin import-reset --yes`. The next attempt
+imports through Access (`kopje-admin import <dump>` without `--import-token`). To use an `IMPORT_TOKEN` again instead,
+remove the Access values (`kopje-admin config access_admin_aud=`) and set a new `IMPORT_TOKEN` secret. The reset is
+refused once the Store is published (`published`), during an import (`import-exists`: use `import-reset`) and while the
+journal holds requests (`journal-not-empty`).
+
+## Kopje's dead-letter queue
+
+A message that exhausts Kopje's Queue retries (100) goes to `<kopje-queue>-dlq` instead of being dropped: for example an
+accepted inbox request whose sender stayed unreachable, or a requeue that failed. Watch its message count (dashboard,
+Queues). To act on it:
+
+1. **Inspect:** the dashboard lists its messages (Queues, `<kopje-queue>-dlq`, Messages). Spool messages are binary;
+   their count and age are what matter.
+2. **Reconcile:** find the cause in the Worker's logs (`kopje.spool.replay.failed`, `kopje.queue.unknown`) and fix it.
+3. **Redrive:** consume the DLQ with the Kopje Worker until it is empty, then remove that consumer:
+
+    ```sh
+    wrangler queues consumer add <kopje-queue>-dlq <kopje-worker> --message-retries 100
+    wrangler queues consumer remove <kopje-queue>-dlq <kopje-worker>
+    ```
+
 ## Rehearsal (stage R)
 
 The rehearsal runs steps 5 and 6 against a copy, while the legacy instance keeps serving, and changes no route. It
 measures how long they take on the real data and proves the conversion passes before the window is planned.
 
-1. Deploy a second, temporary Kopje Worker (its own name, Queue and Store; `MAINTENANCE=full`; an `IMPORT_TOKEN`; an
-   Access-protected admin hostname) as in the preparation, steps 3 and 4.
-2. Time each command, as in steps 5 and 6, with `time`:
-    - the schema query and one fingerprint query (on a live instance the two answers may differ; only the time matters);
-    - the export of every table;
+1. Deploy a second, temporary Kopje Worker (its own name, Queue, dead-letter queue and Store; `MAINTENANCE=full`; an
+   `IMPORT_TOKEN`; an Access-protected admin hostname) as in the preparation, steps 3 and 4.
+2. Time each command of steps 5 and 6 with `time`:
+    - one export of every table (`export_d1`), and `fingerprint export` of it (on a live instance two fingerprints may
+      differ; only the time matters);
     - `convert`, `verify-conversion` on the dump, `import --import-token` into the temporary Store, `dump`, and
       `verify-conversion` on the Store's dump;
-    - `maintenance-worker`, and the generated worker run locally with
-      `wrangler pages dev <work>/maintenance` (a local server: request an actor and post to an inbox).
-3. Write down the numbers: export bytes, the duration of each command, the import's chunk count, the Store's size
-   (`kopje-admin capacity`). Downtime is about steps 3–4 plus these, plus steps 7–9 (5–7 minutes).
-4. Delete the temporary Worker, its Queue and its Store (`wrangler delete <temporary worker>`), and the exports.
+    - `maintenance-worker` and `maintenance-worker-check`, and the generated worker run locally with
+      `wrangler pages dev <work>/maintenance` (request an actor and post a signed request to an inbox).
+3. Exercise the rollback on the temporary Worker: `cutover reset --yes` after its import, and a drain into a test Queue.
+4. Write down the numbers: export bytes, the duration of each command, the import's chunk count, the Store's size
+   (`kopje-admin capacity`). Downtime is about steps 3 and 4 plus these, plus steps 7 to 9.
+5. Delete the temporary Worker, its Queues and its Store (`wrangler delete <temporary worker>`), and the exports.
 
 The rehearsal also confirms what only the real platform can show:
 
-- that the fingerprint and schema queries run within D1's limits on the real database, and how long they take;
-- the export's generated columns, `PRAGMA foreign_key_check` after the bridge, and the export of each table;
+- the export's duration, `--table sqlite_sequence`, its generated columns, and `PRAGMA foreign_key_check` after the
+  bridge;
 - the permissions the token needs (below);
-- that the account can delete Pages deployments and that preview protection covers deployment URLs;
-- how the Queue backlog is read (`wrangler queues info`, the dashboard), for steps 4 and 9.
+- that preview protection covers deployment URLs, that a `KOPJE_QUEUE` binding added to the project reaches only new
+  deployments, whether Pages offers a Rate Limiting binding, and that `--no-bundle` deploys the generated file as it is;
+- that a Worker route on `<domain>/*` takes precedence over the Pages custom domain, or how long the custom domain's
+  certificate takes;
+- how the Queue backlog and DLQ counts are read (`wrangler queues info`, the dashboard), and that the Queue metrics the
+  maintenance worker reads are available to the legacy project;
+- that `wrangler deploy` keeps a DLQ consumer added from the CLI, and that the Deploy button creates the DLQ.
 
 ## Permissions
 
-| Step     | Cloudflare permission                                                                                                                                                                                                                            | Other                                       |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------- |
-| Before   | Account: Cloudflare Pages Read (save the project); Pages Edit (bindings, preview protection, deleting previews); Workers Scripts Edit (deploy Kopje, secrets); Access: Apps and Policies Edit; Zone: Workers Routes or DNS Edit (`<admin-host>`) | –                                           |
-| 1        | Cloudflare Pages Edit (only to pause Git builds)                                                                                                                                                                                                 | GitHub: Actions write                       |
-| 2        | Queues Edit                                                                                                                                                                                                                                      | –                                           |
-| 3        | Cloudflare Pages Edit                                                                                                                                                                                                                            | –                                           |
-| 4        | Queues Read; Workers Tail Read                                                                                                                                                                                                                   | –                                           |
-| 5, 6     | D1: the query and export endpoints (Edit may be required even for reads; the rehearsal confirms)                                                                                                                                                 | Kopje: Access service token, `IMPORT_TOKEN` |
-| 6        | Workers Scripts Edit (delete `IMPORT_TOKEN`)                                                                                                                                                                                                     | –                                           |
-| 7        | Cloudflare Pages Edit; Workers Scripts Edit; Zone: Workers Routes / DNS Edit; Access: Apps and Policies Edit                                                                                                                                     | –                                           |
-| 8, 9, 10 | Workers Scripts Edit (variables and secrets)                                                                                                                                                                                                     | Backup storage (backup.md)                  |
+| Step     | Cloudflare permission                                                                                                                                                                                                                                                       | Other                                       |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| Before   | Account: Cloudflare Pages Read (save the project), Pages Edit (bindings, preview protection, deleting previews); Workers Scripts Edit (deploy Kopje, secrets); Queues Edit (Kopje's DLQ); Access: Apps and Policies Edit; Zone: Workers Routes or DNS Edit (`<admin-host>`) | –                                           |
+| 1        | Cloudflare Pages Edit (only to pause Git builds)                                                                                                                                                                                                                            | GitHub: Actions write                       |
+| 2, 4     | Queues Edit; Workers Tail Read                                                                                                                                                                                                                                              | –                                           |
+| 3        | Cloudflare Pages Edit                                                                                                                                                                                                                                                       | –                                           |
+| 5, 6, 8  | D1: the query and export endpoints (Edit may be required even for reads; the rehearsal confirms)                                                                                                                                                                            | Kopje: Access service token, `IMPORT_TOKEN` |
+| 6        | Workers Scripts Edit (delete `IMPORT_TOKEN`)                                                                                                                                                                                                                                | –                                           |
+| 7        | Zone: Workers Routes Edit (a route) or Cloudflare Pages Edit, Workers Scripts Edit and DNS Edit (a custom domain); Access: Apps and Policies Edit                                                                                                                           | –                                           |
+| 8, 9, 10 | Workers Scripts Edit (variables and secrets)                                                                                                                                                                                                                                | Backup storage (backup.md)                  |
+| Rollback | Workers Scripts Edit (`CUTOVER_ROLLBACK`); Queues Edit (the legacy consumer); Cloudflare Pages Edit (the previous deployment); Zone: Workers Routes Edit                                                                                                                    | Kopje: Access service token                 |
 
 ## What the tools guarantee, and what they do not
 
 - `cutover-preflight` reads the saved project file (and, with `--export`, the export) only. It prints binding names,
-  resource identifiers and variable names, never a secret value and never instance data.
+  resource identifiers, variable names and the writers it sees, never a secret value and never instance data.
+- `fingerprint` reads exports and compares fingerprints; they carry table names, counts and digests only (DATA-16).
 - `maintenance-worker` writes only `<out>/_worker.js`, refuses an existing file, and refuses keys that do not unwrap
   under one KEK or do not match the legacy public keys. The file holds the actor documents and WebFinger answers, which
-  are public anyway. The worker's only write is the spool message (threat model: OPS-6, OPS-7).
-- `fingerprint` writes SQL and compares answers; the answers carry counts, lengths and hashes only (DATA-16).
-- None of them can see a route you did not close, a job you did not stop, or a message in a DLQ: those are the
-  go/no-go checks of steps 1–5 and 8.
+  are public anyway. The worker's only write is the spool message (OPS-6, OPS-7).
+- The `cutover` commands reset the Store only before publication and only for an Access admin (OPS-8), and drain the
+  journal only in spool order, verified, keeping what fails (OPS-9).
+- None of them can see a writer outside the Pages project, a job you did not stop, or a message in a DLQ: those are the
+  go/no-go checks of steps 1 to 5 and 8.
