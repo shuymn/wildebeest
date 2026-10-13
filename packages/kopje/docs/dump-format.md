@@ -169,7 +169,11 @@ dump starts, so repeating the finish with the same cursor returns the same trail
 
 ## Import protocol
 
-All of these are `POST` under `/admin/import` with JSON, except `chunk` and `progress`:
+All of these are `POST` under `/admin/import` with JSON, except `chunk` and `progress`. Hold the Worker with
+`MAINTENANCE=full` (or `readonly`) while you import: if it serves with `MAINTENANCE=off` while the Store is empty or
+importing, the Store records that, refuses to begin or verify an import (`served-unpublished`), and needs
+`kopje-admin cutover clear-served --yes` under `MAINTENANCE=full` first, so imported data is never served before the
+Store is marked published ([cutover-runbook.md](cutover-runbook.md)).
 
 | Step     | Request                                                     | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | -------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

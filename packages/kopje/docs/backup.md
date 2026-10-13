@@ -280,8 +280,9 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
     ```
 
 4. **Import** into an empty Store whose `kopje-admin catalog` shows the manifest's `schema.migrations`. Run the same
-   Kopje version, or deploy it first. Set the instance configuration with `kopje-admin config` (an import never carries
-   it), then import:
+   Kopje version, or deploy it first, with `MAINTENANCE=full` until the restore is done (a Worker that serves with
+   `MAINTENANCE=off` from an empty Store blocks imports until `kopje-admin cutover clear-served --yes`). Set the
+   instance configuration with `kopje-admin config` (an import never carries it), then import:
 
     ```sh
     kopje-admin import dump.kopje

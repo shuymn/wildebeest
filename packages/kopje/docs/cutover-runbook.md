@@ -54,7 +54,11 @@ Kopje's Queue (at most the 30-minute requeue delay after journaling starts), the
 after the legacy consumer acknowledged the previous one.
 
 **Point of no return.** Publishing (step 9) is final: `kopje-admin cutover publish` marks the Store published, and so
-does the first request Kopje serves with `MAINTENANCE=off`. From then on the Store refuses the cutover reset for good.
+does the first request Kopje serves with `MAINTENANCE=off`; with `MAINTENANCE=off` nothing is served until the mark is
+taken (a request that cannot take it is answered as in maintenance). From then on the Store refuses the cutover reset
+and every rollback command for good. Publication is refused while a rollback is in progress (a drain runs, or the
+journal holds requests). If Kopje served with `MAINTENANCE=off` while its Store was empty or importing, no import begins
+or completes until you hold it with `MAINTENANCE=full` and run `kopje-admin cutover clear-served --yes`.
 After publication, never go back to the legacy setup: recover with the Store's point-in-time recovery, an external
 backup, or a fix forward ([upgrade.md](upgrade.md#a-version-that-changed-the-schema)).
 
@@ -428,13 +432,23 @@ them, and a later cutover cannot replay them. Everything below runs through Acce
   for good (`unverified`), or addresses no legacy account and no `--fallback <username>` is given (`noRecipient`), is
   kept: inspect with `kopje-admin sql "SELECT spool_id, spooled_at FROM inbound_spool"`, then
   `kopje-admin cutover discard-kept --yes` once decided.
+- **As Kopje would read it.** A request without the ActivityStreams context, a string id, a type or an actor is kept
+  (`unverified`): Kopje's inbox would ignore it, so the legacy instance does not get it either.
 - **Fail closed.** A Queue backlog that cannot be read stops the drain (`metrics-unavailable`); a key that cannot be
-  fetched now stops it (`key-unavailable`; run it again). One drain runs at a time.
+  fetched now stops it (`key-unavailable`; run it again). The legacy Queue is read before its dead-letter queue.
+- **One drain at a time.** A drain holds a lease for its round. A send to the legacy Queue that does not finish in 10
+  seconds is given up (`legacy-queue-timeout`) and the lease is kept until it expires (5 minutes), so no other drain
+  sends meanwhile; the request is sent again by a later round.
 - **At least once.** A request is marked as being sent before the send; a drain interrupted between the two sends it
   again, so the legacy instance may process it twice (a second Accept, a second notification).
+- **Receipts.** A handed-off request leaves a receipt outside the Store's data, so no copy of it is journaled or
+  replayed again, also after an import, a reset, or with `CUTOVER_ROLLBACK` removed. `kopje-admin cutover close --yes`
+  removes the receipts once Kopje's Queue is empty (no copy is left), which ends the rollback.
 - **Bounded.** The journal holds at most 10,000 requests and 128 MiB (lower with `CUTOVER_JOURNAL_MAX_ENTRIES` and
   `CUTOVER_JOURNAL_MAX_BYTES`); when full, requests stay in Kopje's Queue, whose backlog makes the maintenance worker
-  refuse new ones (503). Kept requests count until discarded.
+  refuse new ones (503). Kept requests count until discarded. If valid requests alone exceed the quota while the
+  barrier waits for the rest, the drain stops with `journal-full`: raise `CUTOVER_JOURNAL_MAX_*` (up to those ceilings),
+  or discard kept requests, and keep the spool rate limit on.
 
 ### Rollback A: before the import is complete
 
@@ -454,14 +468,15 @@ them, and a later cutover cannot replay them. Everything below runs through Acce
    domain back if step 7 moved it. Then drain again: requests the maintenance worker spooled while the routes changed
    are collected first (the barrier) and handed off. Those and the legacy instance's first direct requests can
    interleave for the time the routes take to change, as deliveries from different servers always can.
-7. `kopje-admin cutover status`: the journal holds nothing pending or being sent, and Kopje's Queue backlog is 0.
+7. `kopje-admin cutover status`: the journal holds nothing pending, being sent or kept, and Kopje's Queue backlog is 0.
 8. Remove `CUTOVER_ROLLBACK` from the Kopje Worker; re-enable the legacy workflows and builds (step 1); restore the
-   legacy consumer's concurrency (add it again without `--max-concurrency`). Before the next attempt, Kopje's Queue
-   backlog must still be 0.
+   legacy consumer's concurrency (add it again without `--max-concurrency`).
+9. `kopje-admin cutover close --yes`, which needs Kopje's Queue empty. Before then the receipts drop any copy of a
+   handed-off request that is still delivered; afterwards none can be left.
 
 ### Rollback B: after the import is complete
 
-As Rollback A, without step 2, and before step 8:
+As Rollback A, without step 2, and before step 9:
 
 ```sh
 kopje-admin cutover reset --yes   # needs MAINTENANCE=full and nothing pending, being sent or kept in the journal
