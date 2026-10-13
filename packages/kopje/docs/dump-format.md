@@ -158,6 +158,8 @@ dump starts, so repeating the finish with the same cursor returns the same trail
 
 ## Producing a file for import (cutover)
 
+`kopje-admin convert` does this for a legacy Wildebeest export ([cutover.md](cutover.md)).
+
 1. Read the catalog from the empty target: `GET /admin/catalog`.
 2. Build the converted data in a local SQLite database created from the same migrations. Use the target's catalog
    order for tables, columns and rows.

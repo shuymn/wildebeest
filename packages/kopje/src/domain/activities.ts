@@ -412,6 +412,50 @@ export const getLocalNote = readOperation<{ uri: string }, string | null>((db, {
 	return facts === null ? null : JSON.stringify({ '@context': CONTEXT, ...noteOf(facts) })
 })
 
+// A legacy /ap/o/<uuid> the cutover kept (docs/cutover.md): the proxy id a legacy instance gave a remote status
+// (statuses.legacy_ap_o), or the id of a local image (media_attachments.legacy_ap_o). Federation URLs do not change, so
+// they keep answering, without showing more than the status they belong to (VIS-4): a remote proxy moves to the
+// original only when that status is public and the original is https; an image is shown only with a servable status.
+// Anything else is not found.
+// location: where a remote proxy moves; image: the Image document. Both null: not found. (One shape, so the RPC type
+// stays simple.)
+export type LegacyObject = { location: string | null; image: string | null }
+
+export const getLegacyObject = readOperation<{ uuid: string; origin: string }, LegacyObject>((db, { uuid, origin }) => {
+	const remote = db.first<{ uri: string }>(
+		`SELECT s.uri FROM statuses s JOIN accounts a ON a.id = s.account_id
+		WHERE s.legacy_ap_o = ? AND a.domain IS NOT NULL AND s.reblog_of_id IS NULL AND s.visibility = 'public'`,
+		uuid
+	)
+	if (remote !== undefined) {
+		const location = httpUrl(remote.uri)
+		return { location: location?.protocol === 'https:' ? location.href : null, image: null }
+	}
+	const image = db.first<{ url: string; description: string; content_type: string | null; author: string }>(
+		`SELECT m.url, m.description, m.content_type, a.uri AS author
+		FROM media_attachments m JOIN statuses s ON s.id = m.status_id
+		JOIN local_accounts l ON l.account_id = s.account_id JOIN accounts a ON a.id = s.account_id
+		WHERE m.legacy_ap_o = ? AND s.reblog_of_id IS NULL AND ${SERVABLE}`,
+		uuid
+	)
+	const url = image === undefined ? null : httpUrl(image.url)
+	if (image === undefined || url === null) {
+		return { location: null, image: null }
+	}
+	return {
+		location: null,
+		image: JSON.stringify({
+			'@context': AS_CONTEXT,
+			id: `${origin}/ap/o/${uuid}`,
+			type: 'Image',
+			attributedTo: image.author,
+			url: url.href,
+			...(image.content_type === null ? {} : { mediaType: image.content_type }),
+			...(image.description === '' ? {} : { name: image.description }),
+		}),
+	}
+})
+
 export const OUTBOX_PAGE_SIZE = 20
 
 // Items are serialized JSON: RPC types cannot carry `unknown`.

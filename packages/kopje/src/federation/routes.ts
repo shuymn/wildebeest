@@ -69,8 +69,31 @@ async function respond(c: Context<FederationEnv>, deps: FederationRouteDeps, url
 		case '/nodeinfo/2.0':
 			return nodeInfo20(c, deps)
 		default:
-			return viaFedify(c, deps, url)
+			return LEGACY_OBJECT.test(url.pathname) ? objectOrAlias(c, deps, url) : viaFedify(c, deps, url)
 	}
+}
+
+const LEGACY_OBJECT = /^\/ap\/o\/[0-9A-Za-z-]{1,64}$/
+
+// /ap/o/<uuid>: a local status's Note (Fedify), else a legacy alias the cutover kept (domain/activities.ts,
+// getLegacyObject). A remote proxy alias moves to the original for any client; an image is a document for ActivityPub
+// clients only, as a Note is. Neither is kept as a snapshot.
+async function objectOrAlias(c: Context<FederationEnv>, deps: FederationRouteDeps, url: URL): Promise<Answer> {
+	const answer = await viaFedify(c, deps, url)
+	if (answer.response.status !== 404 && answer.response.status !== 406) {
+		return answer
+	}
+	const uuid = url.pathname.slice('/ap/o/'.length)
+	const origin = `https://${c.get('domain')}`
+	const alias = await callStore(() => deps.store(c.env).legacyObject(deps.build(c.env), { uuid, origin }))
+	if (alias.location !== null) {
+		return { response: new Response(null, { status: 301, headers: { location: alias.location } }), source: null }
+	}
+	if (alias.image !== null && answer.response.status === 404) {
+		const response = new Response(alias.image, { headers: { 'content-type': 'application/activity+json' } })
+		return { response, source: null }
+	}
+	return answer
 }
 
 async function viaFedify(c: Context<FederationEnv>, deps: FederationRouteDeps, url: URL): Promise<Answer> {
