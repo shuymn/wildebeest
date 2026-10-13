@@ -2,40 +2,88 @@
 	"name": "kopje",
 	"version": "0.0.0",
 	"description": "A Fediverse server on a single Cloudflare Worker. A spiritual successor of cloudflare/wildebeest, not affiliated with Cloudflare.",
+	"keywords": [
+		"activitypub",
+		"fediverse",
+		"mastodon",
+		"cloudflare-workers",
+		"durable-objects"
+	],
+	"homepage": "https://github.com/shuymn/wildebeest/tree/main/packages/kopje#readme",
+	"bugs": {
+		"url": "https://github.com/shuymn/wildebeest/issues"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/shuymn/wildebeest.git",
+		"directory": "packages/kopje"
+	},
 	"license": "Apache-2.0",
-	"private": true,
 	"type": "module",
+	"exports": {
+		".": {
+			"types": "./types/index.d.ts",
+			"default": "./dist/worker.js"
+		},
+		"./migrations/*": "./migrations/*",
+		"./public/*": "./public/*",
+		"./package.json": "./package.json"
+	},
+	"types": "./types/index.d.ts",
 	"bin": {
 		"kopje-admin": "./cli/kopje-admin.js"
+	},
+	"files": [
+		"dist/worker.js",
+		"dist/worker.js.map",
+		"dist/*.sql",
+		"dist/THIRD_PARTY_NOTICES.md",
+		"types/",
+		"migrations/",
+		"public/",
+		"cli/kopje-admin.js",
+		"cli/lib/",
+		"docs/backup.md",
+		"docs/dump-format.md",
+		"docs/setup.md",
+		"docs/upgrade.md",
+		"CHANGELOG.md",
+		"LICENSE"
+	],
+	"engines": {
+		"node": ">=22"
 	},
 	"scripts": {
 		"lint": "eslint src test cli test-node --quiet",
 		"test": "vitest run && vitest run -c vitest.node.config.ts",
 		"typecheck": "tsc --noEmit && tsc -p cli && tsc -p test-node",
 		"types": "wrangler types --include-runtime=false",
-		"build": "wrangler deploy --dry-run --outdir dist"
+		"build": "node scripts/build-package.mjs",
+		"prepack": "node scripts/build-package.mjs"
 	},
-	"dependencies": {
+	"devDependencies": {
+		"@cloudflare/vitest-plugin": "1.4.0",
+		"@cloudflare/workers-types": "4.20260702.1",
 		"@fedify/fedify": "2.4.2",
+		"@fedify/testing": "2.4.2",
 		"@fedify/vocab": "2.4.2",
+		"@types/sanitize-html": "2.16.2",
 		"age-encryption": "0.3.1",
 		"aws4fetch": "1.0.20",
 		"es-toolkit": "1.52.0",
 		"hono": "4.13.13",
 		"jose": "6.2.12",
 		"linkify-it": "6.1.0",
+		"parse5": "8.0.1",
 		"sanitize-html": "2.18.0",
 		"temporal-polyfill": "1.0.5",
-		"zod": "3.25.76"
-	},
-	"devDependencies": {
-		"@cloudflare/vitest-plugin": "1.4.0",
-		"@cloudflare/workers-types": "4.20260702.1",
-		"@fedify/testing": "2.4.2",
-		"@types/sanitize-html": "2.16.2",
-		"parse5": "8.0.1",
 		"typescript": "5.9.3",
 		"vitest": "4.1.11",
-		"wrangler": "4.149.0"
+		"wrangler": "4.149.0",
+		"zod": "3.25.76"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
 	}
 }

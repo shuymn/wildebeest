@@ -1,0 +1,5 @@
+node_modules/
+.wrangler/
+.dev.vars
+# Copied from the kopje package on every deploy (scripts/assets.mjs).
+public/

@@ -1,0 +1,51 @@
+// A Kopje instance. This file is the same for every install: the values that belong to the instance (its domain, the
+// Access applications, the admin) are kept in the Store and set through the /setup wizard.
+//
+// Created by the Deploy to Cloudflare button (or by `wrangler deploy`): the Worker, the Store's Durable Object
+// namespace (from "migrations"), the Queue and the R2 bucket. Rename the Queue and the bucket on the button's form, or
+// here before the first deploy, if these names are taken in your account. The rate limits, Images and the assets need no
+// resource of their own.
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "my-kopje",
+	"main": "src/index.ts",
+	// Keep these two equal to the kopje version's own wrangler.jsonc. Its release notes say when they change.
+	"compatibility_date": "2026-10-11",
+	"compatibility_flags": ["nodejs_compat"],
+	"minify": true,
+	// The kopje bundle already keeps its function names; keeping them again would wrap every function a second time.
+	"keep_names": false,
+	"upload_source_maps": true,
+	// Keep the variables set in the dashboard (MAINTENANCE, IMAGES_MONTHLY_TRANSFORMS, the backup settings) across
+	// deploys. Attach the instance's custom domain in the dashboard, not here.
+	"keep_vars": true,
+	"observability": { "enabled": true },
+	// Every deployment gets a new version id; the Worker and the Store compare it to detect a new deployment.
+	"version_metadata": { "binding": "CF_VERSION_METADATA" },
+	"durable_objects": {
+		"bindings": [{ "name": "STORE", "class_name": "Store" }],
+	},
+	// Never edit or remove this entry: it created the Store, which holds all the instance's data.
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Store"] }],
+	"queues": {
+		"producers": [{ "binding": "QUEUE", "queue": "my-kopje-queue" }],
+		"consumers": [{ "queue": "my-kopje-queue", "max_retries": 100, "max_concurrency": 4 }],
+	},
+	// namespace_id is any number unique within the account; change both if another Kopje runs in the same account.
+	"ratelimits": [
+		{ "name": "APP_REGISTRATION_LIMIT", "namespace_id": "4801", "simple": { "limit": 5, "period": 60 } },
+		{ "name": "LOGIN_LIMIT", "namespace_id": "4802", "simple": { "limit": 10, "period": 60 } },
+	],
+	"r2_buckets": [{ "binding": "MEDIA", "bucket_name": "my-kopje-media" }],
+	"images": { "binding": "IMAGES" },
+	// public/ is copied from the installed kopje package by the build command below, before every deploy.
+	"build": { "command": "node scripts/assets.mjs" },
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS",
+		"run_worker_first": ["/*", "!/assets/*"],
+	},
+	"triggers": { "crons": ["*/5 * * * *"] },
+	// The Store's schema migrations ship as text modules in the kopje package; the Store applies them itself.
+	"rules": [{ "type": "Text", "globs": ["**/*.sql"], "fallthrough": true }],
+}

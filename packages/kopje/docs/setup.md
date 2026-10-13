@@ -27,12 +27,38 @@ Some things cannot be done from the wizard. Do these in the Cloudflare dashboard
     | Account, Account Settings, Read                                      | Only when you leave the account ID empty                 |
     | Zone, Zone, Read and Zone, Bot Management, Read                      | Only to let the Bot Fight Mode check read the setting    |
 
-5. **Optional: a service token for the admin CLI** (`kopje-admin`). Create it under Access, Service credentials, and
-   keep its client ID for the Access step and its secret for the CLI.
+5. **Optional: a service token for the admin CLI** (`kopje-admin`, see [Running the admin CLI](#running-the-admin-cli)).
+   Create it under Access, Service credentials, and keep its client ID for the Access step and its secret for the CLI.
 6. **Optional: Images Paid.** Without it the account includes 5,000 Images transformations a month; an upload uses
    two. If you buy more, raise `IMAGES_MONTHLY_TRANSFORMS`.
 7. **Turn off Bot Fight Mode** for the zone (Security, Bots). It challenges other servers, which breaks federation,
    and it cannot be skipped for some paths.
+
+## Running the admin CLI
+
+`kopje-admin` comes in the `kopje` package. Run the copy of the version your instance runs, in one of two ways:
+
+- **In your instance's repository**, after `npm ci` (or `npm install`), through the template's `admin` script:
+
+    ```sh
+    npm run admin -- health
+    ```
+
+    The script runs `node node_modules/kopje/cli/kopje-admin.js`, the copy installed for the instance, by its path:
+    without the install it fails, and it never runs another `kopje-admin` from your `PATH` or npm's cache.
+
+- **Anywhere else** (for example in the empty directory of a restore), name the package and its version, the `kopje`
+  version in your instance's `package.json`:
+
+    ```sh
+    npm exec --yes --package=kopje@<version> -- kopje-admin health
+    ```
+
+Do not run `npx kopje-admin` without the install: npm would look for a package named `kopje-admin`, which is not Kopje.
+The CLI needs Node.js 22 or later and these variables: `KOPJE_ADMIN_URL` (the instance's https origin), and
+`CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` (the service token of step 5). `kopje-admin --help` lists the
+commands. These docs write `kopje-admin <command>` for either form: in the instance's repository, read it as
+`npm run admin -- <command>`.
 
 ## Running the wizard
 
@@ -84,6 +110,8 @@ Checks show pass, warning or fail, with a hint on what to fix. Each can be run a
   tag with `kopje-admin config access_aud=<tag>`, which goes through the `/admin` application.
 
 - Set up the daily backup: see [backup.md](backup.md).
+- Before the first update, read [upgrade.md](upgrade.md): how updates arrive, what the Store does on a new version,
+  and how to roll back.
 
 ## Things to check on a real account
 

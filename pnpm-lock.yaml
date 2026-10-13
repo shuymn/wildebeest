@@ -211,13 +211,25 @@ importers:
         version: 6.1.1(typescript@5.9.3)(vite@6.4.4(@types/node@24.19.2)(jiti@1.21.7)(sass@1.105.1)(yaml@2.9.1))
 
   packages/kopje:
-    dependencies:
+    devDependencies:
+      '@cloudflare/vitest-plugin':
+        specifier: 1.4.0
+        version: 1.4.0(@cloudflare/workers-types@4.20260702.1)(@types/node@24.19.2)(vitest@4.1.11)
+      '@cloudflare/workers-types':
+        specifier: 4.20260702.1
+        version: 4.20260702.1
       '@fedify/fedify':
         specifier: 2.4.2
         version: 2.4.2
+      '@fedify/testing':
+        specifier: 2.4.2
+        version: 2.4.2(@fedify/fedify@2.4.2)
       '@fedify/vocab':
         specifier: 2.4.2
         version: 2.4.2
+      '@types/sanitize-html':
+        specifier: 2.16.2
+        version: 2.16.2
       age-encryption:
         specifier: 0.3.1
         version: 0.3.1
@@ -236,31 +248,15 @@ importers:
       linkify-it:
         specifier: 6.1.0
         version: 6.1.0
+      parse5:
+        specifier: 8.0.1
+        version: 8.0.1
       sanitize-html:
         specifier: 2.18.0
         version: 2.18.0
       temporal-polyfill:
         specifier: 1.0.5
         version: 1.0.5
-      zod:
-        specifier: 3.25.76
-        version: 3.25.76
-    devDependencies:
-      '@cloudflare/vitest-plugin':
-        specifier: 1.4.0
-        version: 1.4.0(@cloudflare/workers-types@4.20260702.1)(@types/node@24.19.2)(vitest@4.1.11)
-      '@cloudflare/workers-types':
-        specifier: 4.20260702.1
-        version: 4.20260702.1
-      '@fedify/testing':
-        specifier: 2.4.2
-        version: 2.4.2(@fedify/fedify@2.4.2)
-      '@types/sanitize-html':
-        specifier: 2.16.2
-        version: 2.16.2
-      parse5:
-        specifier: 8.0.1
-        version: 8.0.1
       typescript:
         specifier: 5.9.3
         version: 5.9.3
@@ -270,6 +266,9 @@ importers:
       wrangler:
         specifier: 4.149.0
         version: 4.149.0(@cloudflare/workers-types@4.20260702.1)(@types/node@24.19.2)
+      zod:
+        specifier: 3.25.76
+        version: 3.25.76
 
 packages:
 

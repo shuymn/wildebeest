@@ -12,6 +12,7 @@ on:
       # The new system (Kopje) is built in this repository but never deployed
       # as the legacy instance.
       - "packages/kopje/**"
+      - "deploy/**"
       - "tools/**"
   repository_dispatch:
 

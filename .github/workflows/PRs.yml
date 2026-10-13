@@ -178,14 +178,15 @@ jobs:
         working-directory: packages/kopje
         run: pnpm run typecheck
 
-      # Kopje keeps its Worker under 1 MiB gzipped, well inside the Workers size limit.
-      - name: Check kopje bundle
-        working-directory: packages/kopje
-        shell: bash
-        run: |
-          pnpm run build | tee build.log
-          gzip_kib=$(sed -n 's/.*gzip: \([0-9.]*\) KiB.*/\1/p' build.log)
-          awk -v kib="$gzip_kib" 'BEGIN { if (kib == "" || kib > 1024) { print "bundle gzip size " kib " KiB exceeds 1024 KiB"; exit 1 } }'
+      # Kopje keeps its Worker under 1 MiB gzipped, well inside the Workers size limit. The check packs the npm
+      # package, checks the packed files, dry-runs the deploy/ template against the tarball and compares both bundles,
+      # runs the template in workerd, and installs the tarball (the CLI and the types). It takes a few seconds.
+      - name: Check kopje package and template
+        run: pnpm run check:kopje-package
+
+      # The release steps (publish once, recover a rerun, keep an existing GitHub release), with npm and gh stubbed.
+      - name: Test the kopje release scripts
+        run: pnpm run test:scripts
 
       - name: Install sqlite3def
         env:

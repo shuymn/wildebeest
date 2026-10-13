@@ -220,7 +220,8 @@ or to restart it: a failing backup does not stop the instance from serving.
 
 ## Restore
 
-You need the identity file, a copy of `kopje-admin`, `jq`, and read access to the bucket with your own credentials.
+You need the identity file, `kopje-admin` (run outside the instance's repository as
+[setup.md](setup.md#running-the-admin-cli) shows), `jq`, and read access to the bucket with your own credentials.
 The steps authenticate each file before anything uses it. The manifest is checked against the digest your instance
 recorded, and the dump and the media index against the manifest. Only then is any original downloaded, and local
 paths are built only from validated ids. Work in a new, empty directory so nothing existing is overwritten.
