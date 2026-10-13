@@ -60,8 +60,10 @@ const PUBLIC_HEADERS = {
 	vary: 'Accept',
 }
 
-// Pages of a signed-in user, and every answer of the sign-in flow.
-export const PRIVATE_HEADERS = { ...FRAMING, 'referrer-policy': 'no-referrer', 'cache-control': 'no-store' }
+// Pages of a signed-in user, and every answer of the sign-in flow. `same-origin`, not `no-referrer`: under
+// `no-referrer` browsers send `Origin: null` on a same-origin form post (Fetch, "serializing a request origin"), and
+// every form here is checked by its Origin (WEB-1). Other origins still get no referrer.
+export const PRIVATE_HEADERS = { ...FRAMING, 'referrer-policy': 'same-origin', 'cache-control': 'no-store' }
 
 type PageStatus = 200 | 400 | 403 | 404 | 410 | 422 | 429
 

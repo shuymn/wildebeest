@@ -115,7 +115,10 @@ describe('authorize, consent, token, API call', () => {
 		expect(consent.status).toBe(200)
 		expect(consent.headers.get('content-security-policy')).toContain("script-src 'none'")
 		expect(consent.headers.get('x-frame-options')).toBe('DENY')
+		// Not no-referrer, in the header or the page: browsers would post the decision with Origin: null.
+		expect(consent.headers.get('referrer-policy')).toBe('same-origin')
 		const html = await consent.text()
+		expect(html).toContain('<meta name="referrer" content="same-origin"/>')
 		expect(html).toContain('Test Client')
 		expect(html).toContain('@alice')
 		expect(html).toContain('name="decision" value="approve"')

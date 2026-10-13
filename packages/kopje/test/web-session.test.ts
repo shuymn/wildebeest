@@ -553,6 +553,8 @@ describe('settings page', () => {
 			expect(response.headers.get('content-type')).toBe('text/html; charset=UTF-8')
 			expect(response.headers.get('x-content-type-options')).toBe('nosniff')
 			expect(response.headers.get('x-frame-options')).toBe('DENY')
+			// Not no-referrer: browsers would post the forms with Origin: null, which the Origin check refuses.
+			expect(response.headers.get('referrer-policy')).toBe('same-origin')
 			const csp = response.headers.get('content-security-policy') ?? ''
 			expect(csp).toContain("default-src 'none'")
 			expect(csp).toContain("frame-ancestors 'none'")

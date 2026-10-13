@@ -149,7 +149,8 @@ describe('/setup sign-in with SETUP_TOKEN', () => {
 			expect(response.headers.get('x-content-type-options')).toBe('nosniff')
 			expect(response.headers.get('cache-control')).toBe('no-store')
 			expect(response.headers.get('x-frame-options')).toBe('DENY')
-			expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+			// Not no-referrer: browsers would post its forms with Origin: null, which the Origin check refuses.
+			expect(response.headers.get('referrer-policy')).toBe('same-origin')
 			const csp = response.headers.get('content-security-policy') ?? ''
 			expect(csp).toContain("default-src 'none'")
 			expect(csp).toContain("frame-ancestors 'none'")

@@ -14,7 +14,7 @@ const Layout: FC<{ title: string; children: Child }> = ({ title, children }) => 
 		<head>
 			<meta charset="utf-8" />
 			<meta name="viewport" content="width=device-width, initial-scale=1" />
-			<meta name="referrer" content="no-referrer" />
+			<meta name="referrer" content="same-origin" />
 			<title>{title}</title>
 			<style>{STYLE}</style>
 		</head>
