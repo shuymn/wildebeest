@@ -33,10 +33,16 @@ The export is only read, by a strict grammar, and nothing from it runs:
 - `PRAGMA foreign_keys`/`defer_foreign_keys` is accepted and ignored, as are index, trigger, view and virtual table
   definitions.
 - `CREATE TABLE <name> (<definition>) [WITHOUT ROWID | STRICT]` is validated (no `AS SELECT`, no subquery, nothing after
-  the definition) and run only in a scratch database, to fingerprint the schema.
+  the definition). Before it runs, its `DEFAULT`, `CHECK` and generated-column expressions must equal the canonical ones
+  for the detected level; only then does it run, in an empty scratch database that never receives a row, to fingerprint
+  the columns. Bookkeeping tables (`d1_migrations`, `sqlite_*`, `_cf_*`) never get the export's DDL: their rows are read
+  by column name into a fixed schema of the converter's own.
 - `INSERT INTO <name> [(<columns>)] VALUES (<literal>, ...)[, (...)]` is accepted with literals only: `NULL`, `TRUE`,
   `FALSE`, numbers, strings, blobs, and the `replace('<text>', '<marker>', char(<n>, ...))` form SQLite's `.dump` writes
-  for control characters. The values are decoded and bound as parameters.
+  for control characters, nested at most twice (`replace(replace('<text>','\r',char(13)),'\n',char(10))` is the most
+  it writes). The values are decoded and bound as parameters. An expansion is sized before it is built: one decoded
+  literal may hold at most 16 Mi UTF-16 units and all literals of one pass over the export at most 1 Gi
+  (`decoded-data-too-large`).
 - Anything else (`INSERT ... SELECT`, a function or expression in `VALUES`, `UPDATE`, `DELETE`, `DROP`, `ATTACH`, other
   pragmas) stops the conversion with a fixed code (`invalid-insert`, `invalid-literal`, `invalid-create-table`,
   `unexpected-statement`).
@@ -105,20 +111,32 @@ it would have stored itself (HTML-1). Source text, spoilers, sensitivity, hashta
 over; remote statuses and actors keep the legacy JSON as `raw`, byte for byte.
 
 **The audience never widens (DATA-15).** Who may read a status is what legacy allowed
-(`packages/backend/src/mastodon/status_visibility.ts`, `isVisible`): it reads the object's own `to` and `cc`, which are
-captured as exported before any bridge migration runs (0002 gives every outbox row Public by default, which 0016 turns
-into its `to`, so bridged values are never an audience).
+(`packages/backend/src/mastodon/status_visibility.ts`, `isVisible`): it reads the object's own `to` and `cc` and the
+followers collection of its stored author (`objects.original_actor_id`). All three are captured as exported, before any
+bridge migration runs: 0002 gives every outbox row Public by default, which 0016 turns into its `to`, and 0021 rewrites
+the stored author from `attributedTo`, so bridged values are never an audience. A non-public object whose author a bridge
+migration changed stops the conversion (`statuses:author-changed-audience`).
+
+- Addresses are read by legacy's rule (`getApId` in `packages/backend/src/activitypub/objects/index.ts`): a string is
+  parsed as a URL and compared in its normalized form, and an object stands for its `id`, recursively. An address legacy
+  could not read (an object with only `href`, null, a number, a relative URL), or a missing followers collection where it
+  is needed, made legacy fail on the object; such a status stops the conversion
+  (`statuses:addressing-legacy-could-not-read`) rather than being guessed. The converter is stricter than legacy in one
+  way: an unreadable address anywhere in `to` or `cc` stops it, also where legacy's search would have ended earlier.
 
 - Visibility is legacy's: public with Public in `to`; with the author's followers in `to`, unlisted when Public is also in
   `cc`, else followers-only; otherwise direct. Only the full Public URI counts, as in legacy.
 - Recipients (`status_mentions`): for public and unlisted statuses, the tagged known accounts, and the other addressed
-  known accounts as silent ones. For a followers-only status, only those of them who follow the author (legacy let only
-  followers read it). For a direct status, exactly the known accounts in `to` (silent unless tagged; a direct status with
+  known accounts as silent ones. For a followers-only status, none: legacy let a follower read it only while the follow
+  was accepted, and a recipient row would be a grant that outlives an unfollow, so in Kopje only an accepted follow,
+  checked when the status is read, lets anyone read it. The API therefore shows no mentions on a migrated followers-only
+  status (they stay in `raw`). For a direct status, exactly the known accounts in `to` (silent unless tagged; a direct status with
   a silent recipient is stored as `limited`, the same audience). A Mention tag or `cc` entry outside that set is no
   recipient: it stays in `raw` and is counted as `mentionsNotRecipients`.
 - A local status whose exported outbox row disagrees with its own addressing (`statuses:addressing-conflict`), and a
   boost whose outbox row has no exported audience (levels below 0002, `reblogs:audience-unknown`), stop the conversion
-  instead of being guessed. A boost's visibility is its outbox row's, by the same rule.
+  instead of being guessed. A boost's visibility is its outbox row's, by the same rule; a boost has recipients only when
+  it is direct (the known accounts in its `to`).
 
 **Media.** Attachments point to their existing URLs (local images stay where the legacy instance stored them); nothing
 is downloaded. Unattached local images are kept without a status.
@@ -147,19 +165,19 @@ URIs, lists without 18-digit ids, and the like), when rows reference accounts or
 the converter (only Kopje's HTML sanitizer, a runtime transformation of the Store, whose output a test pins by hand),
 taking every audience from the addressing captured before the bridge, and reads actual records from a dump. Records are keyed by AP URIs, never by assigned ids, and compared as exact values:
 
-| Category                                                                                                                           | Record                                                                |
-| ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `accounts`                                                                                                                         | locality, local username, display name, bio, avatar, header, lock     |
-| `keys`                                                                                                                             | email, wrapped key bytes, salt bytes, public key                      |
-| `raw`                                                                                                                              | the legacy JSON of every remote account and status                    |
-| `statuses`                                                                                                                         | author, content, source, spoiler, sensitivity, time                   |
-| `audience`                                                                                                                         | legacy visibility and the set of recipients, silent ones included     |
-| `replies`, `aliases`                                                                                                               | inReplyTo and the linked parent; remote proxy uuid to original URI    |
-| `counters`                                                                                                                         | the notification counter                                              |
-| `edits`, `attachments`, `media`                                                                                                    | versions in order; URLs and descriptions in order; old image ids      |
-| `boosts` (with visibility), `follows` (Follow record or NULL, reblogs, notify), `favourites`                                       | by the URIs of both ends                                              |
-| `bookmarks`, `blocks`, `mutes`, `domain_blocks`, `lists` (policy, exclusive), `list_accounts`, `notifications`, `clients` (scopes) | by URI or kept id                                                     |
-| `legacy_ids`, `settings`                                                                                                           | each expected key must resolve to the same value (extra keys allowed) |
+| Category                                                                                                                           | Record                                                                                                                  |
+| ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `accounts`                                                                                                                         | locality, local username, display name, bio, avatar, header, lock                                                       |
+| `keys`                                                                                                                             | email, wrapped key bytes, salt bytes, public key                                                                        |
+| `raw`                                                                                                                              | the legacy JSON of every remote account and status                                                                      |
+| `statuses`                                                                                                                         | author, content, source, spoiler, sensitivity, time                                                                     |
+| `audience`                                                                                                                         | legacy visibility, the recipients (silent ones included), and for a non-public status the author legacy authorized with |
+| `replies`, `aliases`                                                                                                               | inReplyTo and the linked parent; remote proxy uuid to original URI                                                      |
+| `counters`                                                                                                                         | the notification counter                                                                                                |
+| `edits`, `attachments`, `media`                                                                                                    | versions in order; URLs and descriptions in order; old image ids                                                        |
+| `boosts` (with visibility and recipients), `follows` (Follow record or NULL, reblogs, notify), `favourites`                        | by the URIs of both ends                                                                                                |
+| `bookmarks`, `blocks`, `mutes`, `domain_blocks`, `lists` (policy, exclusive), `list_accounts`, `notifications`, `clients` (scopes) | by URI or kept id                                                                                                       |
+| `legacy_ids`, `settings`                                                                                                           | each expected key must resolve to the same value (extra keys allowed)                                                   |
 
 Any missing, extra or changed record FAILs: missing content, content rewritten to the same length, a dropped
 relationship, a recipient removed or added, a widened visibility, a dropped reply link and a count difference all do
