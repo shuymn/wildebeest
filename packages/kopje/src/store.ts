@@ -686,6 +686,10 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, activities.getLocalNote, input)
 	}
 
+	legacyObject(callerBuild: string, input: OperationInput<typeof activities.getLegacyObject>) {
+		return this.#kernel.execute(callerBuild, activities.getLegacyObject, input)
+	}
+
 	outbox(callerBuild: string, input: OperationInput<typeof activities.getOutbox>) {
 		return this.#kernel.execute(callerBuild, activities.getOutbox, input)
 	}

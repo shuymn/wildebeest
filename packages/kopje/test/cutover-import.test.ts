@@ -137,4 +137,71 @@ describe('cutover import of a converted legacy export', () => {
 		expect(page.status).toBe(301)
 		expect(page.headers.get('location')).toBe(`/@alice/${unlisted?.id ?? ''}`)
 	})
+
+	it('keeps legacy /ap/o aliases without showing more than their status', async () => {
+		const { h } = await imported()
+		const alias = async (content: string) =>
+			(
+				await sql<{ legacy_ap_o: string; uri: string }>(
+					h.store,
+					'SELECT legacy_ap_o, uri FROM statuses WHERE content LIKE ?',
+					`%${content}%`
+				)
+			)[0]
+		// A public remote status: its old proxy moves to the original.
+		const remote = await alias('こんにちは')
+		const moved = await h.request(`/ap/o/${remote?.legacy_ap_o ?? ''}`, AP)
+		expect(moved.status).toBe(301)
+		expect(moved.headers.get('location')).toBe(remote?.uri)
+		expect((await h.request(`/ap/o/${remote?.legacy_ap_o ?? ''}`)).status).toBe(301)
+		// A remote DM and an unknown id answer the same 404.
+		const dm = await alias('a DM to alice')
+		expect(dm?.legacy_ap_o).toMatch(/^0f0f0f0f-/)
+		const hidden = await h.request(`/ap/o/${dm?.legacy_ap_o ?? ''}`, AP)
+		const unknown = await h.request('/ap/o/0f0f0f0f-0000-4000-8000-999999999999', AP)
+		expect([hidden.status, unknown.status]).toEqual([404, 404])
+		expect(await hidden.text()).toBe(await unknown.text())
+
+		// A local image attached to a public status is its Image document; an unattached one is not found.
+		const images = await sql<{ legacy_ap_o: string; attached: number }>(
+			h.store,
+			'SELECT legacy_ap_o, status_id IS NOT NULL AS attached FROM media_attachments WHERE legacy_ap_o IS NOT NULL ORDER BY attached DESC'
+		)
+		const image = await h.request(`/ap/o/${images[0]?.legacy_ap_o ?? ''}`, AP)
+		expect(image.status).toBe(200)
+		expect(image.headers.get('content-type')).toMatch(/^application\/activity\+json/)
+		expect(await image.json()).toEqual({
+			'@context': 'https://www.w3.org/ns/activitystreams',
+			id: `https://kopje.test/ap/o/${images[0]?.legacy_ap_o ?? ''}`,
+			type: 'Image',
+			attributedTo: 'https://kopje.test/ap/users/alice',
+			url: 'https://images.example/media/image-1/usercontent',
+			name: 'a wildebeest',
+		})
+		expect((await h.request(`/ap/o/${images[1]?.legacy_ap_o ?? ''}`, AP)).status).toBe(404)
+	})
+
+	it('serves the same actor URLs and keys, and the legacy instance settings', async () => {
+		const { h } = await imported()
+		const actor = await h.request('/ap/users/alice', AP)
+		expect(actor.status).toBe(200)
+		const [key] = await sql<{ pubkey: string }>(
+			h.store,
+			"SELECT l.pubkey FROM local_accounts l JOIN accounts a ON a.id = l.account_id WHERE a.uri = 'https://kopje.test/ap/users/alice'"
+		)
+		const document = (await actor.json()) as { id: string; publicKey: { id: string; publicKeyPem: string } }
+		expect(document.id).toBe('https://kopje.test/ap/users/alice')
+		expect(document.publicKey.id).toBe('https://kopje.test/ap/users/alice#main-key')
+		// The same key as the legacy instance served (Fedify wraps the PEM at 64 columns).
+		const bare = (pem: string) => pem.replace(/\s+/g, '')
+		expect(bare(document.publicKey.publicKeyPem)).toBe(bare(key?.pubkey ?? ''))
+		expect((await h.request('/ap/users/Bob', AP)).status).toBe(200)
+
+		const instance = (await (await h.request('/api/v1/instance')).json()) as Record<string, unknown>
+		expect(instance).toMatchObject({ title: 'Fixture Herd', short_description: 'A synthetic legacy instance' })
+		expect(instance.rules).toEqual([
+			{ id: '1', text: 'No spam' },
+			{ id: '2', text: 'スパム禁止' },
+		])
+	})
 })
