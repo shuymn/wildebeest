@@ -1,0 +1,180 @@
+name: Release kopje
+# Publishes the kopje npm package and its GitHub release for a tag kopje-v<semver> on a commit of main.
+# npm trusted publishing (OIDC) authenticates the publish, so no npm token is stored; npm adds provenance.
+# The one-time setup and the release steps are in packages/kopje/RELEASING.md.
+on:
+  push:
+    tags:
+      - 'kopje-v*'
+
+permissions: {}
+
+concurrency:
+  group: release-kopje
+  cancel-in-progress: false
+
+jobs:
+  check:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tarball: ${{ steps.pack.outputs.tarball }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Read the version from the tag
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=${TAG#kopje-v}
+          if ! printf '%s' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::$TAG is not kopje-v<semver>"
+            exit 1
+          fi
+          case $version in
+            *-*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
+          printf 'version=%s\nprerelease=%s\n' "$version" "$prerelease" | tee -a "$GITHUB_OUTPUT"
+
+      # Only reviewed code is released: the tag must point at a commit of main.
+      - name: Check that the tag is on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::the tagged commit is not on main"
+            exit 1
+          fi
+
+      - name: Extract the release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          awk -v version="$VERSION" '
+            index($0, "## [" version "]") == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' packages/kopje/CHANGELOG.md > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::packages/kopje/CHANGELOG.md has no section for $VERSION"
+            exit 1
+          fi
+          cat release-notes.md
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint:kopje
+
+      - name: Check types
+        working-directory: packages/kopje
+        run: pnpm run typecheck
+
+      - name: Test
+        env:
+          KOPJE: 'true'
+          LEGACY: 'false'
+        run: bash scripts/test-affected.sh
+
+      # The version is set only in the packed package; the repository keeps 0.0.0.
+      - name: Set the version
+        working-directory: packages/kopje
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: npm pkg set "version=$VERSION"
+
+      # Builds the bundle, packs it, and dry-runs the deploy/ template against the tarball; the tarball is what is
+      # published.
+      - name: Pack and check against the template
+        id: pack
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          pnpm run check:kopje-package --out "$RUNNER_TEMP/package"
+          tarball="kopje-$VERSION.tgz"
+          test -f "$RUNNER_TEMP/package/$tarball"
+          cp release-notes.md "$RUNNER_TEMP/package/"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kopje-package
+          path: ${{ runner.temp }}/package/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    needs: check
+    # The npm trusted publisher names this workflow and this environment.
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing and provenance
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kopje-package
+          path: package
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1 or later.
+      - name: Check the npm version
+        run: |
+          npm_version=$(npm --version)
+          if [ "$(printf '%s\n11.5.1\n' "$npm_version" | sort -V | head -n 1)" != 11.5.1 ]; then
+            echo "::error::npm $npm_version cannot use trusted publishing; it needs 11.5.1 or later"
+            exit 1
+          fi
+
+      - name: Publish
+        env:
+          TARBALL: package/${{ needs.check.outputs.tarball }}
+          DIST_TAG: ${{ needs.check.outputs.prerelease == 'true' && 'next' || 'latest' }}
+        run: npm publish "$TARBALL" --access public --provenance --tag "$DIST_TAG"
+
+  release:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    needs: [check, publish]
+    permissions:
+      contents: write # create the release
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kopje-package
+          path: package
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.check.outputs.version }}
+          PRERELEASE: ${{ needs.check.outputs.prerelease }}
+          TARBALL: package/${{ needs.check.outputs.tarball }}
+        run: |
+          args=(--repo "$GITHUB_REPOSITORY" --verify-tag --title "Kopje $VERSION" --notes-file package/release-notes.md)
+          if [ "$PRERELEASE" = true ]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$TAG" "${args[@]}" "$TARBALL"
