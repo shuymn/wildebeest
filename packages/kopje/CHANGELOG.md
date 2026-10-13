@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.1] - 2026-10-13
+
+A release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - The first release: the Mastodon API, ActivityPub federation, media, search, the `/setup` wizard, the daily
