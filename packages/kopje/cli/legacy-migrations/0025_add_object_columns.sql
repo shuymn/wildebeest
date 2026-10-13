@@ -1,0 +1,22 @@
+-- Phase 1.2: Add Mastodon-compatible columns to objects
+ALTER TABLE objects ADD COLUMN "content" TEXT;
+ALTER TABLE objects ADD COLUMN "text" TEXT;
+ALTER TABLE objects ADD COLUMN "spoiler_text" TEXT;
+ALTER TABLE objects ADD COLUMN "sensitive" INTEGER;
+ALTER TABLE objects ADD COLUMN "language" TEXT;
+ALTER TABLE objects ADD COLUMN "visibility" TEXT;
+ALTER TABLE objects ADD COLUMN "url" TEXT;
+ALTER TABLE objects ADD COLUMN "account_id" TEXT;
+ALTER TABLE objects ADD COLUMN "in_reply_to_id" TEXT;
+ALTER TABLE objects ADD COLUMN "in_reply_to_account_id" TEXT;
+ALTER TABLE objects ADD COLUMN "conversation_id" TEXT;
+ALTER TABLE objects ADD COLUMN "reblog_of_id" TEXT;
+ALTER TABLE objects ADD COLUMN "poll_id" TEXT;
+ALTER TABLE objects ADD COLUMN "application_name" TEXT;
+ALTER TABLE objects ADD COLUMN "application_website" TEXT;
+ALTER TABLE objects ADD COLUMN "replies_count" INTEGER;
+ALTER TABLE objects ADD COLUMN "reblogs_count" INTEGER;
+ALTER TABLE objects ADD COLUMN "favourites_count" INTEGER;
+ALTER TABLE objects ADD COLUMN "edited_at" DATETIME;
+ALTER TABLE objects ADD COLUMN "deleted_at" DATETIME;
+ALTER TABLE objects ADD COLUMN "updated_at" DATETIME;
