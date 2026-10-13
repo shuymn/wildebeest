@@ -98,12 +98,35 @@ function address(value, hops = 0) {
 }
 
 /**
+ * The stored author's followers as legacy's detectVisibility sees them: actorFromRow keeps the property as spelled and
+ * builds `<id>/followers` from the parsed actor id only when the property is missing; then followers.toString(). Undefined
+ * where legacy fails (no loadable actor, a null value, an unparsable id).
+ * @param {string | null} actor
+ * @param {{ present: boolean, value: unknown } | null | undefined} property
+ * @returns {string | undefined}
+ */
+export function followersOf(actor, property) {
+	if (actor === null || property === null || property === undefined || (property.present && property.value === null)) {
+		return undefined
+	}
+	if (property.present) {
+		return `${/** @type {string} */ (property.value)}`
+	}
+	if (!URL.canParse(actor)) {
+		return undefined
+	}
+	const built = `${new URL(actor).toString()}/followers`
+	return URL.canParse(built) ? new URL(built).toString() : undefined
+}
+
+/**
  * Who could read an object in legacy Wildebeest (status_visibility.ts): with Public in to, anyone; with the author's
- * followers in to, anyone (Public also in cc) or the followers; otherwise the accounts in to. 'unreadable' where legacy
- * fails on an address.
+ * followers in to, anyone (Public also in cc) or the followers; otherwise the accounts in to. Addresses are resolved as
+ * getApId does; the followers value is matched as spelled, and 'ambiguous' where matching it normalized would differ.
+ * 'unreadable' where legacy fails.
  * @param {unknown} to
  * @param {unknown} cc
- * @param {unknown} followers
+ * @param {string | undefined} followers from followersOf
  */
 export function audienceOf(to, cc, followers) {
 	const t = many(to).map((x) => address(x))
@@ -114,11 +137,15 @@ export function audienceOf(to, cc, followers) {
 	if (t.includes(PUBLIC)) {
 		return { visibility: 'public', to: t }
 	}
-	const f = address(followers)
-	if (f === undefined) {
+	if (followers === undefined) {
 		return { visibility: 'unreadable', to: [] }
 	}
-	return { visibility: t.includes(f) ? (c.includes(PUBLIC) ? 'unlisted' : 'private') : 'direct', to: t }
+	const spelled = t.indexOf(followers) !== -1
+	const resolved = address(followers)
+	if (spelled !== (resolved !== undefined && t.indexOf(resolved) !== -1)) {
+		return { visibility: 'ambiguous', to: t }
+	}
+	return { visibility: spelled ? (c.includes(PUBLIC) ? 'unlisted' : 'private') : 'direct', to: t }
 }
 
 /**
@@ -238,7 +265,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		const audience = audienceOf(
 			addressing.to,
 			addressing.cc,
-			stored === null ? undefined : source.followers.get(stored)
+			followersOf(stored, stored === null ? null : source.followers.get(stored))
 		)
 		const accountAt = (/** @type {unknown} */ x) => byAddress.get(address(x) ?? '')
 		const tagged = new Set(
@@ -255,7 +282,11 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			.filter((x) => x !== undefined && x !== author)
 		/** @type {Set<unknown>} */
 		let readers = new Set([...tagged, ...inTo, ...inCc])
-		if (audience.visibility === 'private' || audience.visibility === 'unreadable') {
+		if (
+			audience.visibility === 'private' ||
+			audience.visibility === 'unreadable' ||
+			audience.visibility === 'ambiguous'
+		) {
 			readers = new Set()
 		} else if (audience.visibility === 'direct') {
 			readers = new Set(inTo)
@@ -302,10 +333,37 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		}
 	}
 
-	// Local images: their old /ap/o/<uuid> and URL.
+	// Local images: their old /ap/o/<uuid>, URL, owner (the stored author as exported) and the status that shows them:
+	// the first local status, in export order, whose attachment names the image by id, else by URL, each image once.
+	const images = objects.filter((o) => o.type === 'Image' && o.local === 1)
+	/** @type {Map<string, string>} image id -> status URI */
+	const shownIn = new Map()
 	for (const o of objects) {
-		if (o.type === 'Image' && o.local === 1 && String(o.id).startsWith(prefix)) {
-			put('media', String(o.id).slice(prefix.length), href(parse(o.properties).url))
+		const uri = statusUri.get(String(o.id))
+		if (uri === undefined || o.local !== 1) {
+			continue
+		}
+		for (const a of many(parse(o.properties).attachment)) {
+			if (typeof a !== 'object' || a === null) {
+				continue
+			}
+			const element = /** @type {Json} */ (a)
+			const byId = images.find((i) => typeof element.id === 'string' && String(i.id) === element.id)
+			const link = href(element.url)
+			const match = byId ?? images.find((i) => link !== null && href(parse(i.properties).url) === link)
+			if (match !== undefined && !shownIn.has(String(match.id))) {
+				shownIn.set(String(match.id), uri)
+			}
+		}
+	}
+	for (const o of images) {
+		const id = String(o.id)
+		if (id.startsWith(prefix)) {
+			put('media', id.slice(prefix.length), [
+				href(parse(o.properties).url),
+				source.authors.get(id) ?? null,
+				shownIn.get(id) ?? null,
+			])
 		}
 	}
 
@@ -338,7 +396,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		const audience =
 			sent === undefined || sent === null
 				? { visibility: 'unreadable', to: [] }
-				: audienceOf(sent.to, sent.cc, source.followers.get(String(r.actor_id)))
+				: audienceOf(sent.to, sent.cc, followersOf(String(r.actor_id), source.followers.get(String(r.actor_id))))
 		// A boost reaches nobody in particular, except a direct one: the accounts in its to.
 		const recipients =
 			audience.visibility === 'direct'

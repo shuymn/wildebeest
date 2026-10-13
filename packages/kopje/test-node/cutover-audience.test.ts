@@ -4,8 +4,8 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { convert, exportOf, failing, opened, verify, workspace } from './cutover-helpers.js'
-import { legacyAudience } from '../cli/lib/cutover/convert.js'
-import { audienceOf } from '../cli/lib/cutover/verify-expect.js'
+import { legacyAudience, legacyFollowers } from '../cli/lib/cutover/convert.js'
+import { audienceOf, followersOf } from '../cli/lib/cutover/verify-expect.js'
 
 // The audience never widens (DATA-15): visibility and recipients come from the addressing as exported, as legacy
 // authorized it (packages/backend/src/mastodon/status_visibility.ts). Also ids, the notification counter, settings
@@ -105,46 +105,83 @@ describe('the audience never widens (DATA-15)', () => {
 })
 
 describe('legacy address semantics (getApId), pinned by hand', () => {
+	const ACTOR = 'https://remote.example/users/a'
 	const FOLLOWERS = 'https://remote.example/users/a/followers'
-	// to, cc, followers -> what legacy's isVisible would do: the visibility and the addresses of to, or null where it
-	// throws on an address (so nobody can read the object there).
-	const cases: [string, unknown, unknown, unknown, { visibility: string; to: string[] } | null][] = [
-		['a URL string', [PUBLIC], [], FOLLOWERS, { visibility: 'public', to: [PUBLIC] }],
-		['an object by its id', [{ id: PUBLIC }], [], FOLLOWERS, { visibility: 'public', to: [PUBLIC] }],
-		['nested ids', [{ id: { id: PUBLIC } }], [], FOLLOWERS, { visibility: 'public', to: [PUBLIC] }],
-		['a single value, not a list', PUBLIC, undefined, FOLLOWERS, { visibility: 'public', to: [PUBLIC] }],
-		['an object with only href', [{ href: PUBLIC }], [], FOLLOWERS, null],
-		['null in to', [null], [], FOLLOWERS, null],
-		['a number', [5], [], FOLLOWERS, null],
-		['a relative URL', ['users/a'], [], FOLLOWERS, null],
-		['a bad reference in cc', [FOLLOWERS], [{ href: PUBLIC }], FOLLOWERS, null],
-		['as:Public is not Public', ['as:Public'], [], FOLLOWERS, { visibility: 'direct', to: ['as:Public'] }],
+	const stored = (value: unknown) => ({ present: true, value })
+	// to, cc, the author's stored followers property (as actorFromRow reads it; null: an actor legacy cannot load) ->
+	// what legacy's isVisible would do: the visibility and the addresses of to, 'ambiguous' where the followers value
+	// matches only when normalized (or only as spelled), or null where legacy throws (so nobody can read the object).
+	type Expected = { visibility: string; to: string[] } | null
+	const cases: [string, unknown, unknown, { present: boolean; value: unknown } | null, Expected][] = [
+		['a URL string', [PUBLIC], [], stored(FOLLOWERS), { visibility: 'public', to: [PUBLIC] }],
+		['an object by its id', [{ id: PUBLIC }], [], stored(FOLLOWERS), { visibility: 'public', to: [PUBLIC] }],
+		['nested ids', [{ id: { id: PUBLIC } }], [], stored(FOLLOWERS), { visibility: 'public', to: [PUBLIC] }],
+		['a single value, not a list', PUBLIC, undefined, stored(FOLLOWERS), { visibility: 'public', to: [PUBLIC] }],
+		['an object with only href', [{ href: PUBLIC }], [], stored(FOLLOWERS), null],
+		['null in to', [null], [], stored(FOLLOWERS), null],
+		['a number', [5], [], stored(FOLLOWERS), null],
+		['a relative URL', ['users/a'], [], stored(FOLLOWERS), null],
+		['a bad reference in cc', [FOLLOWERS], [{ href: PUBLIC }], stored(FOLLOWERS), null],
+		['as:Public is not Public', ['as:Public'], [], stored(FOLLOWERS), { visibility: 'direct', to: ['as:Public'] }],
 		[
-			'normalized host and default port',
+			'an address normalized by getApId',
 			['HTTPS://Remote.Example:443/users/a/followers'],
 			[PUBLIC],
-			FOLLOWERS,
+			stored(FOLLOWERS),
 			{ visibility: 'unlisted', to: [FOLLOWERS] },
 		],
-		['followers only', [FOLLOWERS], [], FOLLOWERS, { visibility: 'private', to: [FOLLOWERS] }],
-		['followers as an object', [FOLLOWERS], [], { id: FOLLOWERS }, { visibility: 'private', to: [FOLLOWERS] }],
-		['no followers collection and no Public', ['https://kopje.test/ap/users/alice'], [], undefined, null],
-		['no followers collection but Public', [PUBLIC], [], undefined, { visibility: 'public', to: [PUBLIC] }],
+		['followers only', [FOLLOWERS], [], stored(FOLLOWERS), { visibility: 'private', to: [FOLLOWERS] }],
+		[
+			// The report's case: the stored followers value is spelled with an upper-case host and :443. Legacy compares
+			// it as spelled, so the object is direct (Bob, who follows the author but is not in to, may not read it);
+			// compared normalized it would be followers-only. Ambiguous: the conversion stops.
+			'a followers value spelled differently from its address',
+			[FOLLOWERS],
+			[],
+			stored('https://REMOTE.example:443/users/a/followers'),
+			{ visibility: 'ambiguous', to: [FOLLOWERS] },
+		],
+		[
+			'a followers object (legacy compares "[object Object]")',
+			[FOLLOWERS],
+			[],
+			stored({ id: FOLLOWERS }),
+			{ visibility: 'direct', to: [FOLLOWERS] },
+		],
+		[
+			'no followers property: built from the actor id',
+			[FOLLOWERS],
+			[],
+			{ present: false, value: undefined },
+			{ visibility: 'private', to: [FOLLOWERS] },
+		],
+		['a null followers property and no Public', [FOLLOWERS], [], stored(null), null],
+		['an actor legacy cannot load, and no Public', ['https://kopje.test/ap/users/alice'], [], null, null],
+		['an actor legacy cannot load, but Public', [PUBLIC], [], null, { visibility: 'public', to: [PUBLIC] }],
 		[
 			'addressed accounts only',
 			['https://kopje.test/ap/users/alice'],
 			[FOLLOWERS],
-			FOLLOWERS,
+			stored(FOLLOWERS),
 			{ visibility: 'direct', to: ['https://kopje.test/ap/users/alice'] },
 		],
 	]
-	for (const [name, to, cc, followers, expected] of cases) {
+	for (const [name, to, cc, property, expected] of cases) {
 		it(`${name}: the converter and the verifier both follow legacy`, () => {
-			expect(legacyAudience(to, cc, followers)).toEqual(expected)
-			const verified = audienceOf(to, cc, followers)
+			expect(legacyAudience(to, cc, legacyFollowers(ACTOR, property))).toEqual(expected)
+			const verified = audienceOf(to, cc, followersOf(ACTOR, property))
 			expect(verified.visibility === 'unreadable' ? null : verified).toEqual(expected)
 		})
 	}
+
+	it('stops on a followers value spelled differently from the address, whoever follows', async () => {
+		const exportPath = await exportOf(space.dir, { level: 39, followersSpelling: true })
+		const { ok, manifest } = await convert(space.dir, exportPath)
+		expect(ok).toBe(false)
+		expect((manifest.conversion as { problems: Record<string, number> }).problems).toEqual({
+			'statuses:followers-spelling-ambiguous': 1,
+		})
+	})
 
 	it('stops on an object legacy could not read (an href-only address)', async () => {
 		const exportPath = await exportOf(space.dir, { level: 39 })

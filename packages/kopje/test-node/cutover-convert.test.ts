@@ -158,6 +158,16 @@ describe('convert and verify-conversion', () => {
 			],
 			['a reply link is dropped', 'UPDATE statuses SET in_reply_to_id = NULL', 'replies'],
 			[
+				'an unattached image changes owner',
+				"UPDATE media_attachments SET account_id = (SELECT id FROM accounts WHERE uri LIKE '%/users/Bob') WHERE status_id IS NULL AND legacy_ap_o IS NOT NULL",
+				'media',
+			],
+			[
+				'an image moves to another status',
+				"UPDATE media_attachments SET status_id = (SELECT id FROM statuses WHERE content LIKE '%Bob says hi%') WHERE legacy_ap_o IS NOT NULL AND status_id IS NOT NULL",
+				'media',
+			],
+			[
 				'a followers-only boost gets a recipient',
 				"INSERT INTO status_mentions (status_id, account_id, silent) SELECT s.id, a.id, 1 FROM statuses s, accounts a WHERE s.uri LIKE '%000000000220' AND a.uri LIKE '%/users/r4'",
 				'boosts',

@@ -139,7 +139,8 @@ function rowCounts(db) {
 
 /**
  * @typedef {{ to: unknown, cc: unknown, kind: 'object' | 'to-cc' | 'target' }} Addressing
- * @typedef {{ objects: Map<string, Addressing>, authors: Map<string, string | null>, followers: Map<string, unknown>,
+ * @typedef {{ objects: Map<string, Addressing>, authors: Map<string, string | null>,
+ *   followers: Map<string, { present: boolean, value: unknown } | null>,
  *   outbox: Map<string, Addressing | null>, outboxByPair: Map<string, Addressing | null> }} SourceAddressing
  * @typedef {{ level: number, line: string, levelName: string, migrationsApplied: string[],
  *   schemaFingerprint: string, rowsLoaded: Record<string, number>,
@@ -440,7 +441,12 @@ function load(sources, acceptDeletions, baseTime, path) {
 				return typeof value === 'object' && value !== null ? value : null
 			})()
 		)
-		source.followers.set(String(row.id), followers?.followers)
+		// As legacy's actorFromRow reads it: unparsable properties fail the actor (null); a missing followers property is
+		// replaced from the actor id, any other value is kept as stored.
+		source.followers.set(
+			String(row.id),
+			followers === null ? null : { present: followers.followers !== undefined, value: followers.followers }
+		)
 	}
 	const outboxColumns = actual.get('outbox_objects') ?? ''
 	const hasToCc = outboxColumns.includes('"name":"cc"')
