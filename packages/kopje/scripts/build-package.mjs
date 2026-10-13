@@ -38,17 +38,27 @@ for (const input of Object.keys(meta.inputs)) {
 }
 
 const LICENSE_FILE = /^(licen[cs]e|copying|notice)(\.(md|txt|markdown))?$/i
+// Bundled packages whose license text is not in the package, each reviewed by hand: name -> the reason and where the
+// text is. Empty: every bundled package ships its license text.
+const REVIEWED_WITHOUT_LICENSE_TEXT = new Map()
 const entries = []
+const missing = []
 for (const [dir, name] of packages) {
 	const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
 	const files = readdirSync(dir)
 		.filter((file) => LICENSE_FILE.test(file))
 		.sort()
-	if (typeof manifest.license !== 'string' && files.length === 0) {
-		throw new Error(`${name}: no license field and no license file`)
+	const texts = files.map((file) => readFileSync(join(dir, file), 'utf8').trim()).filter((text) => text !== '')
+	const id = `${manifest.name ?? name}@${manifest.version}`
+	const reviewed = REVIEWED_WITHOUT_LICENSE_TEXT.get(manifest.name ?? name)
+	if (texts.length === 0 && reviewed === undefined) {
+		missing.push(`${id} (license: ${manifest.license ?? 'none'})`)
 	}
-	const texts = files.map((file) => readFileSync(join(dir, file), 'utf8').trim())
-	entries.push({ id: `${manifest.name ?? name}@${manifest.version}`, license: manifest.license ?? 'see below', texts })
+	entries.push({ id, license: manifest.license ?? 'see below', texts: reviewed === undefined ? texts : [reviewed] })
+}
+if (missing.length > 0) {
+	// A bundled package's license must travel with the bundle; review it and add it to the list above, or drop it.
+	throw new Error(`bundled packages without license text: ${missing.join(', ')}`)
 }
 // Several copies of one version (pnpm keeps one per peer set) are listed once.
 const unique = [...new Map(entries.map((entry) => [entry.id, entry])).values()].sort((a, b) => a.id.localeCompare(b.id))
