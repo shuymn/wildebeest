@@ -53,12 +53,11 @@ A rollback is not part of this budget: its drain waits for the requests held dur
 Kopje's Queue (at most the 30-minute requeue delay after journaling starts), then hands them off one at a time, each
 after the legacy consumer acknowledged the previous one.
 
-**Point of no return.** Publishing (step 9) is final: `kopje-admin cutover publish` marks the Store published, and so
-does the first request Kopje serves with `MAINTENANCE=off`; with `MAINTENANCE=off` nothing is served until the mark is
-taken (a request that cannot take it is answered as in maintenance). From then on the Store refuses the cutover reset
-and every rollback command for good. Publication is refused while a rollback is in progress (a drain runs, or the
-journal holds requests). If Kopje served with `MAINTENANCE=off` while its Store was empty or importing, no import begins
-or completes until you hold it with `MAINTENANCE=full` and run `kopje-admin cutover clear-served --yes`.
+**Point of no return.** Publishing (step 9) is final. A verified import leaves the Store unpublished: it then refuses
+every write, whatever `MAINTENANCE` says, so nothing is written or delivered (no reply, no Accept, no replayed inbox
+request) until you publish; reads and sign-ins work, for the checks of step 8. `kopje-admin publish --yes` ends that and
+marks the Store published, after which it refuses the cutover reset and every rollback command for good. Publication is
+refused while a rollback is in progress (a drain runs, or the journal holds requests).
 After publication, never go back to the legacy setup: recover with the Store's point-in-time recovery, an external
 backup, or a fix forward ([upgrade.md](upgrade.md#a-version-that-changed-the-schema)).
 
@@ -149,8 +148,7 @@ None of this affects the legacy instance.
     `kek-uniform` must pass. The KEK it names is the value Kopje's `USER_KEK` must have.
 
 3. **Deploy Kopje** from the instance template ([deploy/README.md](../../../deploy/README.md)), with:
-    - `MAINTENANCE=full` as a plain-text variable, before anything can reach it (a Kopje that serves with
-      `MAINTENANCE=off` marks itself published once it holds data);
+    - `MAINTENANCE=full` as a plain-text variable, before anything can reach it;
     - `USER_KEK` set to the KEK from step 2;
     - `IMPORT_TOKEN` set to a fresh random value of at least 32 characters (`openssl rand -base64 33`). Never set
       `SETUP_TOKEN` and never run `/setup`, which would create an account and make the Store non-empty;
@@ -162,6 +160,7 @@ None of this affects the legacy instance.
       `<legacy-queue>-dlq` in the instance's `wrangler.jsonc`, and the legacy instance's `VAPID_JWK` as the secret
       `LEGACY_VAPID_JWK`. Only `kopje-admin cutover drain` uses them: it sends to `LEGACY_QUEUE`, and reads the backlog
       of both (a Queue binding is the only way a Worker reads a Queue's backlog; nothing is ever sent to `LEGACY_DLQ`).
+      Also bind Kopje's own dead-letter queue as `KOPJE_DLQ`, read the same way by `kopje-admin cutover close`.
 
     Then check it with the token: `KOPJE_ADMIN_URL=https://<admin-host> kopje-admin health --import-token` (with
     `KOPJE_IMPORT_TOKEN`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` set). The Store is empty and in bootstrap.
@@ -362,7 +361,8 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://<domain>/api/v1/timelines/publ
 
 ### 8. Readonly: smoke test and the owner's check (3–5 min)
 
-Set `MAINTENANCE=readonly` on the Worker (Settings, Variables and Secrets). Reads and sign-ins work; writes answer 503.
+Set `MAINTENANCE=readonly` on the Worker (Settings, Variables and Secrets). Reads and sign-ins work; writes answer 503
+(the unpublished Store refuses them anyway).
 
 ```sh
 kopje-admin health
@@ -389,7 +389,7 @@ kopje-admin fingerprint compare <work>/fp-b.json <work>/fp-c.json
 
 ```sh
 kopje-admin pitr bookmark > <work>/bookmark-before-publish.json
-kopje-admin cutover publish --yes
+kopje-admin publish --yes
 ```
 
 Set `MAINTENANCE=off` (or remove it). Spooled inbox requests are replayed by Kopje's Queue consumer, each verified
@@ -436,19 +436,24 @@ them, and a later cutover cannot replay them. Everything below runs through Acce
   (`unverified`): Kopje's inbox would ignore it, so the legacy instance does not get it either.
 - **Fail closed.** A Queue backlog that cannot be read stops the drain (`metrics-unavailable`); a key that cannot be
   fetched now stops it (`key-unavailable`; run it again). The legacy Queue is read before its dead-letter queue.
-- **One drain at a time.** A drain holds a lease for its round. A send to the legacy Queue that does not finish in 10
-  seconds is given up (`legacy-queue-timeout`) and the lease is kept until it expires (5 minutes), so no other drain
-  sends meanwhile; the request is sent again by a later round.
+- **One drain at a time.** A drain holds a lease for its round, and sends nothing once too little of it is left for a
+  send to finish inside it (`lease-expiring`), however long an earlier step took. A send to the legacy Queue that does
+  not finish in 10 seconds is given up (`legacy-queue-timeout`) and the lease is kept until it expires (5 minutes), so
+  no other drain sends meanwhile; the request is sent again by a later round.
 - **At least once.** A request is marked as being sent before the send; a drain interrupted between the two sends it
   again, so the legacy instance may process it twice (a second Accept, a second notification).
 - **Receipts.** A handed-off request leaves a receipt outside the Store's data, so no copy of it is journaled or
   replayed again, also after an import, a reset, or with `CUTOVER_ROLLBACK` removed. `kopje-admin cutover close --yes`
-  removes the receipts once Kopje's Queue is empty (no copy is left), which ends the rollback.
+  removes the receipts once Kopje's Queue and its dead-letter queue are both empty (no copy is left to arrive or to be
+  redriven), which ends the rollback.
 - **Bounded.** The journal holds at most 10,000 requests and 128 MiB (lower with `CUTOVER_JOURNAL_MAX_ENTRIES` and
   `CUTOVER_JOURNAL_MAX_BYTES`); when full, requests stay in Kopje's Queue, whose backlog makes the maintenance worker
   refuse new ones (503). Kept requests count until discarded. If valid requests alone exceed the quota while the
   barrier waits for the rest, the drain stops with `journal-full`: raise `CUTOVER_JOURNAL_MAX_*` (up to those ceilings),
-  or discard kept requests, and keep the spool rate limit on.
+  or discard kept requests, and keep the spool rate limit on. If neither frees room (at the ceilings, with only valid
+  requests), `kopje-admin cutover drain --worker <dir> --unordered --yes` sends the journal's head past the collection
+  barrier, which lets the Queue's requests come in: those may then overtake an older request (ordinary delivery
+  reordering, as between any two servers). It has effect only while the journal is full.
 
 ### Rollback A: before the import is complete
 
@@ -471,7 +476,7 @@ them, and a later cutover cannot replay them. Everything below runs through Acce
 7. `kopje-admin cutover status`: the journal holds nothing pending, being sent or kept, and Kopje's Queue backlog is 0.
 8. Remove `CUTOVER_ROLLBACK` from the Kopje Worker; re-enable the legacy workflows and builds (step 1); restore the
    legacy consumer's concurrency (add it again without `--max-concurrency`).
-9. `kopje-admin cutover close --yes`, which needs Kopje's Queue empty. Before then the receipts drop any copy of a
+9. `kopje-admin cutover close --yes`, which needs Kopje's Queue and its dead-letter queue empty. Before then the receipts drop any copy of a
    handed-off request that is still delivered; afterwards none can be left.
 
 ### Rollback B: after the import is complete
@@ -482,7 +487,7 @@ As Rollback A, without step 2, and before step 9:
 kopje-admin cutover reset --yes   # needs MAINTENANCE=full and nothing pending, being sent or kept in the journal
 ```
 
-The reset takes the Store back to empty, keeping its configuration (domain and Access), through the same bounded reset
+The reset applies only to a verified import that is not published yet. It takes the Store back to empty, keeping its configuration (domain and Access), through the same bounded reset
 an interrupted import uses; an interrupted reset is continued with `kopje-admin import-reset --yes`. The next attempt
 imports through Access. The reset is refused once the Store is published (`published`), during an import
 (`import-exists`: use `import-reset`) and while the journal holds requests (`journal-not-empty`).

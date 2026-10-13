@@ -280,9 +280,8 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
     ```
 
 4. **Import** into an empty Store whose `kopje-admin catalog` shows the manifest's `schema.migrations`. Run the same
-   Kopje version, or deploy it first, with `MAINTENANCE=full` until the restore is done (a Worker that serves with
-   `MAINTENANCE=off` from an empty Store blocks imports until `kopje-admin cutover clear-served --yes`). Set the
-   instance configuration with `kopje-admin config` (an import never carries it), then import:
+   Kopje version, or deploy it first. Set the instance configuration with `kopje-admin config` (an import never carries
+   it), then import:
 
     ```sh
     kopje-admin import dump.kopje
@@ -299,4 +298,11 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
     done
     ```
 
-Restore drills into a scratch instance follow the same steps.
+6. **Publish.** The imported Store stays readonly (it accepts no write and delivers nothing) until you publish it, once
+   it looks right:
+
+    ```sh
+    kopje-admin publish --yes        # with --import-token while the Store has no admin access
+    ```
+
+Restore drills into a scratch instance follow the same steps; a drill that is not meant to serve is never published.

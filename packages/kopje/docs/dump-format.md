@@ -169,11 +169,10 @@ dump starts, so repeating the finish with the same cursor returns the same trail
 
 ## Import protocol
 
-All of these are `POST` under `/admin/import` with JSON, except `chunk` and `progress`. Hold the Worker with
-`MAINTENANCE=full` (or `readonly`) while you import: if it serves with `MAINTENANCE=off` while the Store is empty or
-importing, the Store records that, refuses to begin or verify an import (`served-unpublished`), and needs
-`kopje-admin cutover clear-served --yes` under `MAINTENANCE=full` first, so imported data is never served before the
-Store is marked published ([cutover-runbook.md](cutover-runbook.md)).
+All of these are `POST` under `/admin/import` with JSON, except `chunk` and `progress`. A verified import leaves the
+Store unpublished: it refuses every write (as in readonly) until `kopje-admin publish --yes` (`POST /admin/publish`, by
+an Access admin, or with `IMPORT_TOKEN` while the Store has no admin access), so nothing is written or delivered before
+you have checked it.
 
 | Step     | Request                                                     | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | -------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
