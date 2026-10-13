@@ -24,7 +24,6 @@ import { delimiter, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
-import { supportedCompatibilityDate } from 'miniflare'
 import { createTestHarness, experimental_readRawConfig as readRawConfig } from 'wrangler'
 
 const LIMIT_KIB = 1024
@@ -194,17 +193,10 @@ function checkSourceMap(script, what) {
 }
 
 async function smoke(app, assets) {
-	// The local runtime may not know the production compatibility date yet; run with the newest it supports.
-	const config = readRawConfig({ config: join(app, 'wrangler.jsonc') }).rawConfig
-	delete config.$schema
-	if (config.compatibility_date > supportedCompatibilityDate) {
-		config.compatibility_date = supportedCompatibilityDate
-	}
-	writeFileSync(join(app, 'wrangler.smoke.json'), JSON.stringify(config))
 	// wrangler runs the template's build command (the asset copy) in the current directory.
 	const cwd = process.cwd()
 	process.chdir(app)
-	const server = createTestHarness({ root: app, workers: [{ configPath: './wrangler.smoke.json' }] })
+	const server = createTestHarness({ root: app, workers: [{ configPath: './wrangler.jsonc' }] })
 	try {
 		await server.listen()
 		const worker = server.getWorker()

@@ -178,7 +178,7 @@ jobs:
         working-directory: packages/kopje
         run: pnpm run typecheck
 
-      # Kopje keeps its Worker under 1 MiB gzipped, well inside the 3 MiB Workers Free limit. The check packs the npm
+      # Kopje keeps its Worker under 1 MiB gzipped, well inside the Workers size limit. The check packs the npm
       # package, checks the packed files, dry-runs the deploy/ template against the tarball and compares both bundles,
       # runs the template in workerd, and installs the tarball (the CLI and the types). It takes a few seconds.
       - name: Check kopje package and template

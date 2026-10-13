@@ -17,4 +17,4 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 ### Instance changes
 
 - Store schema: `0000_initial`.
-- `wrangler.jsonc`: as in the template, compatibility date `2026-10-11`. Tested with wrangler 4.105.0.
+- `wrangler.jsonc`: as in the template, compatibility date `2026-10-11`. Tested with wrangler 4.149.0.
