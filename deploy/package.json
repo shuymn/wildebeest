@@ -3,6 +3,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
+		"admin": "node node_modules/kopje/cli/kopje-admin.js",
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev"
 	},

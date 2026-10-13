@@ -57,6 +57,13 @@ A key for `VAPID_JWK` can be made with Node.js:
 node -e "crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign']).then(k=>crypto.subtle.exportKey('jwk',k.privateKey)).then(j=>console.log(JSON.stringify(j)))"
 ```
 
+## The admin CLI
+
+After `npm ci`, `npm run admin -- <command>` runs the `kopje-admin` CLI of the installed `kopje` version, for example
+`npm run admin -- health`. See
+[setup.md](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/setup.md#running-the-admin-cli) for the
+service token and the variables it needs.
+
 ## Updates
 
 The `kopje` version in `package.json` is the instance's version. To keep it updated, install the

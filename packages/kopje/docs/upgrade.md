@@ -50,7 +50,7 @@ it with its own (both are the same script, so after the deploy both run the new 
   across a schema change, the Store stays readonly until the code and the schema match again.
 
 Check the result with the admin CLI. [setup.md](setup.md#running-the-admin-cli) says how to run it: in the instance's
-repository, `kopje-admin <command>` below is `npm exec --no -- kopje-admin <command>`.
+repository, `kopje-admin <command>` below is `npm run admin -- <command>`.
 
 ```sh
 export KOPJE_ADMIN_URL=https://example.com CF_ACCESS_CLIENT_ID=... CF_ACCESS_CLIENT_SECRET=...

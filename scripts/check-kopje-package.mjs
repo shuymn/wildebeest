@@ -26,6 +26,8 @@ import { parseArgs } from 'node:util'
 
 import { createTestHarness, experimental_readRawConfig as readRawConfig } from 'wrangler'
 
+import { withManifestVersion } from './kopje-release-lib.mjs'
+
 const LIMIT_KIB = 1024
 const TOLERANCE = 0.01
 const UNVERSIONED = '0.0.0'
@@ -39,8 +41,7 @@ const wrangler = join(bin, 'wrangler')
 const { values } = parseArgs({ options: { out: { type: 'string' }, version: { type: 'string' } } })
 
 const manifestPath = join(pkg, 'package.json')
-const originalManifest = readFileSync(manifestPath, 'utf8')
-const current = JSON.parse(originalManifest).version
+const current = JSON.parse(readFileSync(manifestPath, 'utf8')).version
 const version = values.version ?? (current === UNVERSIONED ? CHECK_VERSION : current)
 
 const work = mkdtempSync(join(tmpdir(), 'kopje-package-'))
@@ -48,28 +49,22 @@ const failures = []
 const fail = (message) => failures.push(message)
 try {
 	// 1. Build and pack, with the version set for this check only.
-	if (version !== current) {
-		writeFileSync(manifestPath, `${JSON.stringify({ ...JSON.parse(originalManifest), version }, null, '\t')}\n`)
-	}
-	let repoKiB
-	let packed
 	const out = resolve(values.out ?? join(work, 'pack'))
-	try {
-		repoKiB = gzipKiB(
+	const { repoKiB, packed } = withManifestVersion(manifestPath, version, () => {
+		const kib = gzipKiB(
 			run('node', [join(pkg, 'scripts', 'build-package.mjs')], pkg, {
 				env: { PATH: `${bin}${delimiter}${process.env.PATH}` },
 			})
 		)
 		mkdirSync(out, { recursive: true })
 		// dist/ was just built; --ignore-scripts keeps npm from building it a second time (prepack).
-		;[packed] = JSON.parse(
+		const [result] = JSON.parse(
 			run('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', out, '--loglevel', 'warn'], pkg, {
 				quiet: true,
 			})
 		)
-	} finally {
-		writeFileSync(manifestPath, originalManifest)
-	}
+		return { repoKiB: kib, packed: result }
+	})
 	const tarball = join(out, packed.filename)
 	console.log(`packed ${packed.filename}: ${packed.entryCount} files, ${(packed.size / 1024).toFixed(1)} KiB`)
 
@@ -117,6 +112,7 @@ try {
 
 	// 5. An npm install of the tarball.
 	checkInstall(tarball, join(work, 'consumer'))
+	checkAdminScript(app, join(work, 'without-install'))
 } finally {
 	rmSync(work, { recursive: true, force: true })
 }
@@ -254,17 +250,42 @@ async function smoke(app, assets) {
 	}
 }
 
+// `npm run admin` in an instance's repository runs the installed kopje's CLI, and nothing else: without the install it
+// fails even when another kopje-admin is on PATH.
+function checkAdminScript(app, bare) {
+	const help = run('npm', ['run', '--silent', 'admin', '--', '--help'], app, { quiet: true })
+	if (!help.includes('Usage: kopje-admin')) {
+		fail('`npm run admin -- --help` in the template did not print the CLI usage')
+	}
+	mkdirSync(bare, { recursive: true })
+	cpSync(join(template, 'package.json'), join(bare, 'package.json'))
+	const impostor = join(bare, 'impostor-bin')
+	mkdirSync(impostor)
+	writeFileSync(join(impostor, 'kopje-admin'), '#!/bin/sh\necho IMPOSTOR\n', { mode: 0o755 })
+	let output = ''
+	try {
+		output = execFileSync('npm', ['run', '--silent', 'admin', '--', '--help'], {
+			cwd: bare,
+			env: { ...process.env, PATH: `${impostor}${delimiter}${process.env.PATH}` },
+			encoding: 'utf8',
+			stdio: ['ignore', 'pipe', 'pipe'],
+		})
+	} catch {
+		return
+	}
+	fail(`\`npm run admin\` without the install did not fail; it printed: ${output.slice(0, 200)}`)
+}
+
 function checkInstall(tarball, dir) {
 	mkdirSync(dir, { recursive: true })
 	writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'consumer', private: true, type: 'module' }))
 	run('npm', ['install', '--no-audit', '--no-fund', '--offline', '--loglevel', 'warn', tarball], dir, { quiet: true })
-	// The forms docs/setup.md gives: the installed copy in an instance's repository, and a named package anywhere else
-	// (here the tarball stands in for kopje@<version>).
+	// The named-package form docs/setup.md gives for anywhere outside an instance's repository (the tarball stands in
+	// for kopje@<version>); the template's `npm run admin` is checked in checkAdminScript.
 	const elsewhere = join(dir, '..', 'elsewhere')
 	mkdirSync(elsewhere, { recursive: true })
 	for (const [what, command, args, cwd] of [
 		['the installed bin', join(dir, 'node_modules', '.bin', 'kopje-admin'), ['--help'], dir],
-		['npm exec --no', 'npm', ['exec', '--no', '--', 'kopje-admin', '--help'], dir],
 		[
 			'npm exec --package',
 			'npm',

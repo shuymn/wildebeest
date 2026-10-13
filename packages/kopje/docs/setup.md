@@ -38,13 +38,14 @@ Some things cannot be done from the wizard. Do these in the Cloudflare dashboard
 
 `kopje-admin` comes in the `kopje` package. Run the copy of the version your instance runs, in one of two ways:
 
-- **In your instance's repository**, after `npm ci` (or `npm install`):
+- **In your instance's repository**, after `npm ci` (or `npm install`), through the template's `admin` script:
 
     ```sh
-    npm exec --no -- kopje-admin health
+    npm run admin -- health
     ```
 
-    `--no` makes npm use the installed copy and never download one: without the install, it fails.
+    The script runs `node node_modules/kopje/cli/kopje-admin.js`, the copy installed for the instance, by its path:
+    without the install it fails, and it never runs another `kopje-admin` from your `PATH` or npm's cache.
 
 - **Anywhere else** (for example in the empty directory of a restore), name the package and its version, the `kopje`
   version in your instance's `package.json`:
@@ -56,7 +57,8 @@ Some things cannot be done from the wizard. Do these in the Cloudflare dashboard
 Do not run `npx kopje-admin` without the install: npm would look for a package named `kopje-admin`, which is not Kopje.
 The CLI needs Node.js 22 or later and these variables: `KOPJE_ADMIN_URL` (the instance's https origin), and
 `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` (the service token of step 5). `kopje-admin --help` lists the
-commands. These docs write `kopje-admin <command>` for either form.
+commands. These docs write `kopje-admin <command>` for either form: in the instance's repository, read it as
+`npm run admin -- <command>`.
 
 ## Running the wizard
 
