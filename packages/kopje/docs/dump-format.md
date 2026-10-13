@@ -190,6 +190,8 @@ you have checked it.
 - A resent chunk with `seq ≤ lastSeq` is reported as `duplicate` and is not applied again.
 - A chunk over its bounds is refused with `chunk-too-large` and nothing of it is applied. `kopje-admin import` splits
   the body within them.
+- `kopje-admin import` refuses to resume an import whose saved chunk limits exceed these bounds (an import begun by an
+  earlier version), with `import-chunks-outdated`, before sending anything: run `import-reset` and import again.
 - While an import record exists, every domain operation is refused and schema upgrades wait. `GET /admin/config`
   shows the target's own configuration, which the record holds. A failed verification
   needs `reset` and a new import. Verification or reset schedules any upgrade that waited.
@@ -204,8 +206,9 @@ bytes it receives:
 - A chunk writes its rows and every index entry they add, so it is bounded by statements as well as by bytes. A
   single row larger than the byte bound comes alone; the platform limits a stored row to 2 MB.
 - A link is a short statement, but SQLite rewrites the whole row it changes, overflow pages included, so a chunk of
-  links can rewrite many times its own size. The chunk only checks that each link's target row exists and stages the
-  link (in `kopje_state`, under names that are never dumped). Verify applies the staged links in body order, a step
+  links can rewrite many times its own size. The chunk only checks that each link's target row exists and that the link holds at most 64 KiB (it carries only key
+  values; a longer one is refused with `link-too-large`), and stages the
+  link (in `kopje_state`, under names that are never dumped). Verify reads the staged links one at a time and applies them in body order, a step
   per call that stops after the row that brings the rewritten bytes to 1 MiB or after 2,000 links; the checksums
   start in the call that applies the last of them. A link that cannot be applied (its value breaks a constraint) is
   refused at verify; the import then needs a reset.

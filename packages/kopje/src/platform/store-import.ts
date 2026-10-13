@@ -10,6 +10,7 @@ import {
 	quoteIdentifier,
 	type TableResult,
 	type TableSpec,
+	utf8Length,
 } from './dump-format'
 import { bindAll, LiteralError, textLiteral } from './dump-literals'
 import { errorMessage } from './error-message'
@@ -109,6 +110,9 @@ export function isEmpty(sql: SqlStorage, tables: readonly TableSpec[], bootstrap
 // applyStagedLinks applies the staged links in steps bounded by the bytes they rewrite.
 const LINK_PREFIX = 'import_link:'
 const LINK_RANGE = `name >= '${LINK_PREFIX}' AND name < 'import_link;'`
+// A link carries only key values (its deferred columns reference primary keys), so a longer one is refused with its
+// chunk; this bounds what a step holds in memory per link.
+export const MAX_LINK_STATEMENT_BYTES = 64 * 1024
 
 // Executes validated statements. parseStatements matched each against a template of this Store's catalog; the
 // literals are then bound as parameters (bindLiteral), which keeps the statement text short whatever the value size
@@ -121,6 +125,9 @@ export function applyStatements(sql: SqlStorage, statements: readonly ParsedStat
 		const table = quoteIdentifier(statement.table.name)
 		const bound = bind(statement.literals)
 		if (statement.kind === 'link') {
+			if (utf8Length(statement.text) > MAX_LINK_STATEMENT_BYTES) {
+				throw new ImportError('link-too-large', `a link may hold at most ${MAX_LINK_STATEMENT_BYTES} bytes`)
+			}
 			const key = bind(statement.literals.slice(statement.table.deferred.length))
 			const exists = sql.exec(`SELECT 1 FROM ${table} WHERE ${keyMatch(statement.table, key.exprs)}`, ...key.params)
 			if (exists.toArray().length === 0) {
@@ -159,22 +166,22 @@ export function hasStagedLinks(sql: SqlStorage): boolean {
 }
 
 // Applies staged links in body order, at most maxLinks, and stops once the rows they rewrote reach maxBytes (one link
-// always goes in, so a single large row still makes progress). Returns whether staged links remain.
+// always goes in, so a single large row still makes progress). Links are read one at a time, so a step holds one
+// staged link in memory whatever the budget. Returns whether staged links remain.
 export function applyStagedLinks(
 	sql: SqlStorage,
 	tables: readonly TableSpec[],
 	maxBytes: number,
 	maxLinks: number
 ): boolean {
-	const staged = sql
-		.exec<{
-			name: string
-			value: string
-		}>(`SELECT name, value FROM kopje_state WHERE ${LINK_RANGE} ORDER BY name LIMIT ?`, maxLinks)
-		.toArray()
 	let rewritten = 0
 	let last: string | null = null
-	for (const { name, value } of staged) {
+	for (let applied = 0; applied < maxLinks && rewritten < maxBytes; applied++) {
+		const next = nextStagedLink(sql, last)
+		if (next === null) {
+			break
+		}
+		const { name, value } = next
 		let statement
 		try {
 			statement = parseStatements(`${value}\n`, tables)[0]
@@ -202,14 +209,16 @@ export function applyStagedLinks(
 		}
 		rewritten += rows[0]?.size ?? 0
 		last = name
-		if (rewritten >= maxBytes) {
-			break
-		}
 	}
 	if (last !== null) {
 		sql.exec(`DELETE FROM kopje_state WHERE ${LINK_RANGE} AND name <= ?`, last)
 	}
 	return hasStagedLinks(sql)
+}
+
+function nextStagedLink(sql: SqlStorage, after: string | null): { name: string; value: string } | null {
+	const query = `SELECT name, value FROM kopje_state WHERE ${LINK_RANGE} AND name > ? ORDER BY name LIMIT 1`
+	return sql.exec<{ name: string; value: string }>(query, after ?? '').toArray()[0] ?? null
 }
 
 // Removes up to `limit` staged links (a reset). Returns how many were removed.

@@ -19,7 +19,7 @@ import {
 	tableSnapshot,
 } from './ops-helpers'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
-import type { DumpTrailer } from '../src/platform/dump-format'
+import type { DumpTrailer, TableSpec } from '../src/platform/dump-format'
 import { Sha256 } from '../src/platform/sha256'
 import {
 	type AdminOptions,
@@ -30,6 +30,7 @@ import {
 import type { StoreStub } from '../src/platform/store-client'
 import type { DumpCursor } from '../src/platform/store-dump'
 import { toStoreUnavailable } from '../src/platform/store-errors'
+import { applyStagedLinks, MAX_LINK_STATEMENT_BYTES } from '../src/platform/store-import'
 
 const TOKEN = { kind: 'import-token' } as const
 
@@ -485,6 +486,61 @@ describe('import work per call', () => {
 			expect(linked).toBe(replies)
 			expect(steps).toBeGreaterThanOrEqual(replies / 2)
 		})
+	})
+
+	it('reads staged links one at a time, stopping at the step budget', async () => {
+		const replies = 6
+		const { text } = await dumpViaRpc(await largeReplies(replies))
+		const target = await migratedStore()
+		const id = await beginImport(target, text)
+		for (const [i, chunk] of (await importChunks(text, 1 << 20)).entries()) {
+			expect(await target.importChunk(BUILD, ACCESS, id, i + 1, chunk)).toMatchObject({ ok: true })
+		}
+		await runInDurableObject(target, (_instance, state) => {
+			// Counts the staged links each query hands over.
+			const batches: number[] = []
+			const sql = new Proxy(state.storage.sql, {
+				get(target, property) {
+					if (property !== 'exec') {
+						const value = Reflect.get(target, property) as unknown
+						return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value
+					}
+					return (query: string, ...bindings: SqlStorageValue[]) => {
+						const cursor = target.exec(query, ...bindings)
+						if (!query.startsWith('SELECT name, value FROM kopje_state')) {
+							return cursor
+						}
+						const rows = cursor.toArray()
+						batches.push(rows.length)
+						return { toArray: () => rows }
+					}
+				},
+			})
+			const tables = (splitDump(text).header as { tables: TableSpec[] }).tables
+			// The budget is one large row: after it the step reads nothing more.
+			expect(applyStagedLinks(sql, tables, ROW, MAX_IMPORT_CHUNK_STATEMENTS)).toBe(true)
+			expect(Math.max(...batches)).toBe(1)
+			const linked = state.storage.sql
+				.exec<{
+					n: number
+				}>('SELECT count(*) AS n FROM statuses WHERE in_reply_to_id IS NOT NULL OR reblog_of_id IS NOT NULL')
+				.one().n
+			expect(batches.length).toBe(linked)
+		})
+	})
+
+	it('refuses a link longer than a link can be with its chunk', async () => {
+		const { text } = await dumpViaRpc(await seeded(0))
+		const target = await migratedStore()
+		const id = await beginImport(target, text)
+		const reply = /^UPDATE "statuses" SET "reblog_of_id"=NULL,"in_reply_to_id"=('\d+') WHERE "id"=('\d+');$/m.exec(text)
+		if (reply === null) throw new Error('no reply link in the dump')
+		const long = `UPDATE "statuses" SET "reblog_of_id"=NULL,"in_reply_to_id"='${'9'.repeat(MAX_LINK_STATEMENT_BYTES)}' WHERE "id"=${reply[2]};\n`
+		expect(await target.importChunk(BUILD, ACCESS, id, 1, new TextEncoder().encode(long))).toMatchObject({
+			ok: false,
+			code: 'link-too-large',
+		})
+		expect(await target.importProgress(BUILD, ACCESS)).toMatchObject({ progress: { lastSeq: 0, statements: 0 } })
 	})
 
 	it('refuses a link to a missing row with its chunk', async () => {
