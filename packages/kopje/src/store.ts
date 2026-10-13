@@ -234,10 +234,22 @@ export class Store extends DurableObject<Env> {
 
 	journalSpool(
 		callerBuild: string,
-		entry: { spooledAt: number; record: Uint8Array },
+		entry: { digest: string; spooledAt: number; record: Uint8Array },
 		limits?: { entries?: number; bytes?: number }
 	) {
 		return this.#admin.journalSpool(callerBuild, entry, limits)
+	}
+
+	handedOff(callerBuild: string, digest: string) {
+		return this.#admin.handedOff(callerBuild, digest)
+	}
+
+	closeRollback(callerBuild: string, authority: ImportAuthority) {
+		return this.#admin.closeRollback(callerBuild, authority)
+	}
+
+	clearServed(callerBuild: string, authority: ImportAuthority) {
+		return this.#admin.clearServed(callerBuild, authority)
 	}
 
 	drainLease(callerBuild: string, authority: ImportAuthority, request: { holder: string; release?: boolean }) {

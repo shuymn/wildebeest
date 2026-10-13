@@ -1,10 +1,15 @@
 import { verifySpooledRequest } from '../federation/inbound'
 import { legacyInboxMessage, legacyRecipient } from '../federation/legacy-inbox'
 import type { LoaderDeps } from '../federation/loader'
-import { decodeSpoolRecord, inflate } from '../federation/spool'
+import { decodeSpoolRecord, inflate, SPOOL_MESSAGE_LIMIT } from '../federation/spool'
 import { readConfig, userKek } from '../platform/config'
 import { PACKAGE_VERSION } from '../platform/package-version'
-import type { ImportAuthority, JournalCounts } from '../platform/store-admin'
+import {
+	type ImportAuthority,
+	JOURNAL_MAX_BYTES,
+	JOURNAL_MAX_ENTRIES,
+	type JournalCounts,
+} from '../platform/store-admin'
 import type { StoreStub } from '../platform/store-client'
 
 // The rollback drain of a cutover (docs/cutover-runbook.md, "Rolling back"): the inbox requests Kopje accepted during
@@ -32,12 +37,23 @@ export type DrainRound = {
 	// The lane is busy; run the round again shortly.
 	waiting: 'kopje-backlog' | 'legacy-backlog' | null
 	// The drain cannot go on by itself; the operator acts, then runs it again.
-	stopped: 'legacy-dlq' | 'metrics-unavailable' | 'key-unavailable' | 'legacy-queue-failed' | null
+	stopped:
+		| 'legacy-dlq'
+		| 'metrics-unavailable'
+		| 'key-unavailable'
+		| 'legacy-queue-failed'
+		| 'legacy-queue-timeout'
+		| 'journal-full'
+		| null
 	journal: JournalCounts
 }
 
 export type DrainResult = ({ ok: true } & DrainRound) | { ok: false; status: 400 | 409; code: string; message: string }
 
+// A send to the legacy Queue that takes longer is given up for this round (well inside DRAIN_LEASE_MS).
+const SEND_TIMEOUT_MS = 10_000
+// Verification in one round stops after this long (well inside DRAIN_LEASE_MS).
+const ROUND_BUDGET_MS = 60_000
 // Records one round may verify, and set aside, before it stops; it hands off at most one request.
 const MAX_EXAMINED_PER_ROUND = 50
 const MAX_KEPT_PER_ROUND = 20
@@ -64,7 +80,14 @@ type Refused = { ok: false; code: string; message: string }
 
 export async function drainJournal(
 	env: Env,
-	deps: { build: string; store: StoreStub; loader: Omit<LoaderDeps, 'userAgent'>; holder: string },
+	deps: {
+		build: string
+		store: StoreStub
+		loader: Omit<LoaderDeps, 'userAgent'>
+		holder: string
+		now?: () => number
+		sendTimeoutMs?: number
+	},
 	authority: ImportAuthority,
 	options: { accounts: unknown; fallback: unknown }
 ): Promise<DrainResult> {
@@ -109,12 +132,19 @@ export async function drainJournal(
 		}
 		return result
 	}
+	const now = deps.now ?? (() => Date.now())
+	const started = now()
+	// A send that timed out may still be in flight until this invocation ends: the lease is then kept, so no other
+	// drain starts until it has long expired (DRAIN_LEASE_MS), by which time this invocation and its send are gone.
+	let keepLease = false
 	try {
 		await call('drainLease', { holder: deps.holder })
 		try {
 			return { ok: true, ...(await round()) }
 		} finally {
-			await call('drainLease', { holder: deps.holder, release: true })
+			if (!keepLease) {
+				await call('drainLease', { holder: deps.holder, release: true })
+			}
 		}
 	} catch (error) {
 		if (error instanceof DrainRefusal) {
@@ -126,11 +156,11 @@ export async function drainJournal(
 	async function round(): Promise<DrainRound> {
 		const result: Omit<DrainRound, 'journal'> = { sent: 0, unverified: 0, noRecipient: 0, waiting: null, stopped: null }
 		const finish = async () => ({ ...result, journal: (await deps.store.cutoverStatus(deps.build)).journal })
-		const [kopjeBacklog, legacyBacklog, legacyDead] = await Promise.all([
-			backlog(env.QUEUE),
-			backlog(legacy),
-			backlog(legacyDlq),
-		])
+		// Read one after another: Kopje's Queue, the legacy Queue, and only after the legacy Queue was seen empty its
+		// dead-letter queue, so a message that left the legacy Queue for its DLQ between the readings is seen there.
+		const kopjeBacklog = await backlog(env.QUEUE)
+		const legacyBacklog = kopjeBacklog === null ? null : await backlog(legacy)
+		const legacyDead = legacyBacklog === null ? null : await backlog(legacyDlq)
 		if (kopjeBacklog === null || legacyBacklog === null || legacyDead === null) {
 			result.stopped = 'metrics-unavailable'
 			return finish()
@@ -143,10 +173,19 @@ export async function drainJournal(
 		// aside (and the journal's quota freed by the operator) without waiting.
 		const busy = kopjeBacklog > 0 ? 'kopje-backlog' : legacyBacklog > 0 ? 'legacy-backlog' : null
 		result.waiting = busy
+		if (busy === 'kopje-backlog' && (await journalFull())) {
+			// The barrier waits for requests the full journal cannot take: an operator decision, not a wait.
+			result.waiting = null
+			result.stopped = 'journal-full'
+		}
 		const loader = { ...deps.loader, userAgent: `Kopje/${PACKAGE_VERSION} (+https://${domain}/)` }
 		const known = new Set(accounts as string[])
 		const ready: string[] = []
-		for (let kept = 0, examined = 0; kept < MAX_KEPT_PER_ROUND && examined < MAX_EXAMINED_PER_ROUND; examined++) {
+		for (
+			let kept = 0, examined = 0;
+			kept < MAX_KEPT_PER_ROUND && examined < MAX_EXAMINED_PER_ROUND && now() - started < ROUND_BUDGET_MS;
+			examined++
+		) {
 			const { entry } = await call<{
 				entry: { id: string; spooledAt: number; record: Uint8Array; resend: boolean } | null
 			}>('journalNext', deps.holder, ready)
@@ -205,10 +244,11 @@ export async function drainJournal(
 				continue
 			}
 			await call('journalMark', deps.holder, entry.id, 'sending')
-			try {
-				await lane.send(body)
-			} catch {
-				result.stopped = 'legacy-queue-failed'
+			const sent = await withTimeout(lane.send(body), deps.sendTimeoutMs ?? SEND_TIMEOUT_MS)
+			if (sent !== 'sent') {
+				// The record stays 'sending' and is sent again by a later round (at least once).
+				result.stopped = sent === 'timeout' ? 'legacy-queue-timeout' : 'legacy-queue-failed'
+				keepLease = sent === 'timeout'
 				break
 			}
 			await call('journalMark', deps.holder, entry.id, 'done')
@@ -216,6 +256,41 @@ export async function drainJournal(
 			break
 		}
 		return finish()
+	}
+
+	async function journalFull(): Promise<boolean> {
+		const journal = (await deps.store.cutoverStatus(deps.build)).journal
+		const entries = journal.pending + journal.sending + journal.unverified + journal.noRecipient
+		const settings = readConfig(env)
+		const maxEntries = Math.min(
+			(settings.ok ? settings.config.CUTOVER_JOURNAL_MAX_ENTRIES : undefined) ?? JOURNAL_MAX_ENTRIES,
+			JOURNAL_MAX_ENTRIES
+		)
+		const maxBytes = Math.min(
+			(settings.ok ? settings.config.CUTOVER_JOURNAL_MAX_BYTES : undefined) ?? JOURNAL_MAX_BYTES,
+			JOURNAL_MAX_BYTES
+		)
+		return entries >= maxEntries || journal.bytes + SPOOL_MESSAGE_LIMIT > maxBytes
+	}
+}
+
+async function withTimeout(send: Promise<unknown>, ms: number): Promise<'sent' | 'failed' | 'timeout'> {
+	let timer: ReturnType<typeof setTimeout> | undefined
+	const timeout = new Promise<'timeout'>((resolve) => {
+		timer = setTimeout(() => resolve('timeout'), ms)
+	})
+	try {
+		return await Promise.race([
+			send.then(
+				() => 'sent' as const,
+				() => 'failed' as const
+			),
+			timeout,
+		])
+	} finally {
+		if (timer !== undefined) {
+			clearTimeout(timer)
+		}
 	}
 }
 

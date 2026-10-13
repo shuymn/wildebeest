@@ -1,7 +1,7 @@
 import { type DeliveryDeps, handleDoorbells } from './deliver'
 import { isDeliverMessage } from '../federation/delivery'
 import { type InboxDeps, type JobsMessage, processInbox, requestInboundJobs, ringDeliveries } from '../federation/inbox'
-import { encodeSpoolRecord, inflate, type SpoolMessage, spoolMessageOptions } from '../federation/spool'
+import { encodeSpoolRecord, inflate, spoolDigest, type SpoolMessage, spoolMessageOptions } from '../federation/spool'
 import { type Config, readConfig } from '../platform/config'
 import { errorFields } from '../platform/error-message'
 import { callStore } from '../platform/store-client'
@@ -60,13 +60,30 @@ export async function handleQueue(batch: MessageBatch, env: Env, queueDeps: Queu
 			message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
 			continue
 		}
-		// A cutover being rolled back: the request goes to the Store's rollback journal, and from there to the legacy
-		// instance (docs/cutover-runbook.md). If the Store refuses it, it is held in the Queue as in maintenance.
-		if (config.ok && config.config.CUTOVER_ROLLBACK === 'journal' && (await journal(body, env, deps, config.config))) {
+		// A request a cutover rollback already handed to the legacy instance is never journaled or replayed again, whatever
+		// the mode: a copy of it may still be in the Queue (docs/cutover-runbook.md).
+		const digest = await spoolDigest(body)
+		const handedOff = await handedOffOrUnknown(digest, env, deps)
+		if (handedOff === 'error') {
+			message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
+			continue
+		}
+		if (handedOff === true) {
+			console.log({ event: 'kopje.spool.handed-off', id: message.id })
 			message.ack()
 			continue
 		}
-		if (maintenance) {
+		// A cutover being rolled back: the request goes to the Store's rollback journal, and from there to the legacy
+		// instance. If the Store refuses it, it is held in the Queue as in maintenance.
+		if (
+			config.ok &&
+			config.config.CUTOVER_ROLLBACK === 'journal' &&
+			(await journal(body, digest, env, deps, config.config))
+		) {
+			message.ack()
+			continue
+		}
+		if (maintenance || handedOff === null) {
 			await requeue(message, body, env.QUEUE)
 			continue
 		}
@@ -183,13 +200,35 @@ async function requeue(message: Message, body: SpoolMessage, queue: Queue): Prom
 
 // A refused request (the journal at its quota, an import running) stays in the Queue as in maintenance, where it
 // counts toward the backlog that bounds spool admission.
-async function journal(body: SpoolMessage, env: Env, deps: InboxDeps, config: Config): Promise<boolean> {
+// null: the Store cannot tell now (maintenance, an upgrade); the request is held rather than replayed blind. 'error':
+// a real failure, retried.
+async function handedOffOrUnknown(digest: string, env: Env, deps: InboxDeps): Promise<boolean | null | 'error'> {
+	try {
+		return await callStore(() => deps.store(env).handedOff(deps.build(env), digest))
+	} catch (error) {
+		if (error instanceof StoreUnavailableError) {
+			return null
+		}
+		console.error({ event: 'kopje.spool.handoff-check.failed', ...errorFields(error) })
+		return 'error'
+	}
+}
+
+async function journal(
+	body: SpoolMessage,
+	digest: string,
+	env: Env,
+	deps: InboxDeps,
+	config: Config
+): Promise<boolean> {
 	try {
 		const record = await encodeSpoolRecord(body)
 		const limits = { entries: config.CUTOVER_JOURNAL_MAX_ENTRIES, bytes: config.CUTOVER_JOURNAL_MAX_BYTES }
 		const result = (await callStore(
 			() =>
-				deps.store(env).journalSpool(deps.build(env), { spooledAt: body.spooledAt, record }, limits) as Promise<unknown>
+				deps
+					.store(env)
+					.journalSpool(deps.build(env), { digest, spooledAt: body.spooledAt, record }, limits) as Promise<unknown>
 		)) as { ok: boolean; code?: string }
 		if (!result.ok) {
 			console.warn({ event: 'kopje.spool.journal.refused', code: result.code })

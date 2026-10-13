@@ -119,6 +119,24 @@ function hasActivityStreamsContext(context: unknown): boolean {
 
 // The activity as Mastodon reads it: compacted JSON with the ActivityStreams context, ids as strings or objects with
 // an id. Other types (Flag, Add, Remove, ...) and objects Kopje does not store are 'unsupported'.
+// The envelope every activity must have before anything reads it: the ActivityStreams context, a string id and type,
+// and an actor with an http(s) origin. Shared by the inbox and the cutover rollback's drain, so neither hands on an
+// activity the other would ignore.
+export function activityEnvelope(
+	json: Json
+): { ok: true; actor: string; id: string; type: string } | { ok: false; reason: 'no-context' | 'incomplete' } {
+	if (!hasActivityStreamsContext(json['@context'])) {
+		return { ok: false, reason: 'no-context' }
+	}
+	const actor = idOf(json.actor)
+	const id = typeof json.id === 'string' ? json.id : null
+	const type = typeof json.type === 'string' ? json.type : null
+	if (actor === null || originOf(actor) === null || id === null || type === null) {
+		return { ok: false, reason: 'incomplete' }
+	}
+	return { ok: true, actor, id, type }
+}
+
 export function parseActivity(body: Uint8Array): Parsed {
 	let json: unknown
 	try {
@@ -133,17 +151,13 @@ export function parseActivity(body: Uint8Array): Parsed {
 	if (!withinJsonBounds(json)) {
 		return { ok: false, reason: 'too-complex' }
 	}
-	const actor = idOf(json.actor)
-	const id = typeof json.id === 'string' ? json.id : null
-	const type = typeof json.type === 'string' ? json.type : null
 	const object = idOf(json.object)
-	const deleteOfSelf = type === 'Delete' && actor !== null && object === actor
-	if (!hasActivityStreamsContext(json['@context'])) {
-		return { ok: false, reason: 'no-context', deleteOfSelf }
+	const deleteOfSelf = json.type === 'Delete' && idOf(json.actor) !== null && object === idOf(json.actor)
+	const envelope = activityEnvelope(json)
+	if (!envelope.ok) {
+		return { ok: false, reason: envelope.reason, deleteOfSelf }
 	}
-	if (actor === null || originOf(actor) === null || id === null || type === null) {
-		return { ok: false, reason: 'incomplete', deleteOfSelf }
-	}
+	const { actor, id, type } = envelope
 	const activity = activityOf(type, id, actor, json, object)
 	if (activity === null) {
 		return { ok: false, reason: 'unsupported', deleteOfSelf }
@@ -565,11 +579,16 @@ export async function verifySpooledRequest(
 	if (!isObject(json) || !withinJsonBounds(json)) {
 		return { ok: false, transient: false, reason: 'not-an-object' }
 	}
-	const actorUri = idOf(json.actor)
-	if (actorUri === null || originOf(actorUri) === null || originOf(actorUri) === `https://${domain}`) {
+	// What Kopje's inbox would ignore is not handed to the legacy instance either.
+	const envelope = activityEnvelope(json)
+	if (!envelope.ok) {
+		return { ok: false, transient: false, reason: envelope.reason }
+	}
+	const actorUri = envelope.actor
+	if (originOf(actorUri) === `https://${domain}`) {
 		return { ok: false, transient: false, reason: 'invalid-actor' }
 	}
-	if (typeof json.id === 'string' && originOf(json.id) !== originOf(actorUri)) {
+	if (originOf(envelope.id) !== originOf(actorUri)) {
 		return { ok: false, transient: false, reason: 'foreign-id' }
 	}
 	const deps = { ...loader, budget: requestBudget(Date.now()) }

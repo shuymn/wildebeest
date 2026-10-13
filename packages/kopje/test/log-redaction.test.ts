@@ -49,7 +49,19 @@ afterEach(() => {
 	vi.restoreAllMocks()
 })
 
-const failingStore = new Proxy({}, { get: () => () => Promise.reject(secretError()) }) as StoreStub
+// Every call fails with a secret-bearing error, except the publication mark and the handoff check that precede the
+// call under test.
+const failingStore = new Proxy(
+	{},
+	{
+		get: (_target, name) =>
+			name === 'markPublished'
+				? () => Promise.resolve({ published: { at: 0, via: 'command' } })
+				: name === 'handedOff'
+					? () => Promise.resolve(false)
+					: () => Promise.reject(secretError()),
+	}
+) as StoreStub
 
 function spoolMessage(): SpoolMessage {
 	return {

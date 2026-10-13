@@ -59,7 +59,10 @@ describe('app skeleton', () => {
 	})
 
 	it('answers unexpected errors in Mastodon format', async () => {
-		const broken = { setupState: () => Promise.reject(new Error('boom')) } as unknown as StoreStub
+		const broken = {
+			setupState: () => Promise.reject(new Error('boom')),
+			markPublished: () => Promise.resolve({ published: { at: 0, via: 'command' } }),
+		} as unknown as StoreStub
 		const response = await harness(broken).request('/.well-known/webfinger')
 		expect(response.status).toBe(500)
 		expect(await response.json()).toEqual({ error: 'Internal Server Error' })

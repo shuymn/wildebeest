@@ -89,6 +89,14 @@ export async function inflate(bytes: Uint8Array): Promise<Uint8Array> {
 	return new Uint8Array(await new Response(stream).arrayBuffer())
 }
 
+// The identity of a spool message: the same for every copy the maintenance requeue makes and every redelivery, so a
+// cutover rollback's handoff receipt matches each (platform/store-admin.ts).
+export async function spoolDigest(message: SpoolMessage): Promise<string> {
+	const json = JSON.stringify({ ...message, body: toBase64(message.body) })
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json))
+	return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 // A spool message as one record of the cutover's rollback journal (inbound_spool, docs/cutover-runbook.md): the
 // message as JSON with its deflated body in base64, deflated as a whole. Nothing is lost or reinterpreted, so the
 // request can still be verified against the time it was spooled.

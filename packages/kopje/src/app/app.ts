@@ -92,18 +92,23 @@ export function createApp({
 		return spoolInbox(request, body, queue, now())
 	}
 
-	// With MAINTENANCE=off, nothing is served before the Store holds its published mark (taken only while it holds
-	// data): from then on a cutover can no longer be reset (docs/cutover-runbook.md). Only a mark that exists is
-	// remembered, per isolate, so an isolate that first saw an empty Store asks again once data arrives.
+	// Publication is a gate: with MAINTENANCE=off, a request goes on only once the Store has its published mark (taken
+	// while it holds data; after it a cutover can no longer be reset, docs/cutover-runbook.md), or once the Store has
+	// recorded that it served unmarked (it then holds no data, or an import runs, and no import begins or completes until
+	// the operator clears that). When the mark cannot be taken (the RPC fails, or a rollback is in progress) the request
+	// is answered as when the Store is unavailable: inbox requests are spooled, always-served GETs come from snapshots,
+	// the rest is 503. Only a mark that exists is remembered, per isolate, so once set it costs nothing.
 	let published = false
-	const ensurePublished = async (env: Env) => {
+	const ensurePublished = async (env: Env): Promise<boolean> => {
 		if (published) {
-			return
+			return true
 		}
 		try {
-			published = (await store(env).markPublished(build(env), 'serving')).published !== null
+			const mark = await store(env).markPublished(build(env), 'serving')
+			published = mark.published !== null
+			return mark.refused === undefined
 		} catch {
-			// A Store that cannot answer serves nothing either.
+			return false
 		}
 	}
 
@@ -125,9 +130,6 @@ export function createApp({
 			console.error({ event: 'kopje.config.invalid', issues: config.issues })
 			return mastodonError(503, 'This server is misconfigured')
 		}
-		if (config.config.MAINTENANCE === 'off') {
-			await ensurePublished(c.env)
-		}
 		const decision = decide(requestClass, config.config.MAINTENANCE)
 		if (decision === 'unavailable') {
 			return maintenanceError()
@@ -147,6 +149,9 @@ export function createApp({
 			if (decision === 'spool') {
 				return spool(c.env.QUEUE, c.req.raw, body)
 			}
+		}
+		if (config.config.MAINTENANCE === 'off' && c.req.path !== '/health' && !(await ensurePublished(c.env))) {
+			throw new StoreUnavailableError('transient')
 		}
 		await next()
 		// A successful API write may have recorded deliveries (statuses, favourites, boosts, follows): ring once it has

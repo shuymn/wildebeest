@@ -234,7 +234,8 @@ export function compareFingerprints(first, second, manifest) {
 	if (manifest !== undefined) {
 		// The exact key set: a table one side counts and the other does not differs, even at zero rows.
 		const counted = Object.keys(second.tables).filter((name) => !UNCOUNTED.has(name))
-		const listed = Object.keys(manifest.rowsLoaded).filter((name) => !UNCOUNTED.has(name))
+		// Bookkeeping tables are left out of the export's side only: a manifest that lists one differs.
+		const listed = Object.keys(manifest.rowsLoaded)
 		for (const name of new Set([...counted, ...listed])) {
 			const exported = second.tables[name]
 			const loaded = Object.hasOwn(manifest.rowsLoaded, name) ? manifest.rowsLoaded[name] : undefined

@@ -128,6 +128,11 @@ const JOURNAL = { pending: 'j:', sending: 's:', unverified: 'u:', noRecipient: '
 export const JOURNAL_MAX_ENTRIES = 10_000
 export const JOURNAL_MAX_BYTES = 128 * 1024 * 1024
 const DRAIN_LEASE = 'cutover_drain'
+// Well above one drain round (verification is bounded in time, a send times out much sooner): a round that ends
+// without releasing it (a send that timed out) keeps others out until any send it began is long gone.
+export const DRAIN_LEASE_MS = 5 * 60 * 1000
+// Handoff receipts, in kopje_state (never dumped, imported or reset).
+const RECEIPT = 'handoff:'
 const MAX_DRAIN_SKIP = 100
 
 export type JournalCounts = {
@@ -544,6 +549,12 @@ export class StoreAdmin {
 			return this.#transaction(() => {
 				const now = this.#now()
 				const flags = readFlags(this.#sql)
+				if (flags.served_unpublished !== null) {
+					throw new ImportError(
+						'served-unpublished',
+						'the Worker served with MAINTENANCE=off while this Store was unmarked; hold it with MAINTENANCE=full and clear it (cutover clear-served)'
+					)
+				}
 				if (authority.kind === 'import-token' && !this.#inBootstrap(flags)) {
 					throw new ImportError(
 						'not-bootstrap',
@@ -798,6 +809,11 @@ export class StoreAdmin {
 				if (migrations !== null) {
 					report.ok = false
 					report.problems.push(migrations)
+				}
+				if (readFlags(this.#sql).served_unpublished !== null) {
+					// The Worker served while this import ran: its data must not appear unmarked.
+					report.ok = false
+					report.problems.push('served-unpublished: the Worker served with MAINTENANCE=off during the import')
 				}
 				if (report.ok) {
 					// An import never changes configuration (domain, who administers this Store): its own rows come back exactly.
@@ -1080,15 +1096,29 @@ export class StoreAdmin {
 		}
 	}
 
-	// Idempotent; the first mark is kept. A serving mark is not taken while an import runs, or while the Store holds no
-	// data (an empty Store has published nothing, and a fresh import into it stays reversible).
-	async markPublished(callerBuild: string, via: PublishedFlag['via']): Promise<{ published: PublishedFlag | null }> {
+	// Idempotent; the first mark is kept. Refused while a rollback is in progress (a drain lease, or requests in the
+	// journal): those requests go to the legacy instance, not to a published Kopje. A serving mark is not taken while
+	// the Store holds no data or an import runs; the Store then records that it served unpublished, and no import begins
+	// or completes until the operator clears that (clearServed), so imported data is never served without the mark.
+	async markPublished(
+		callerBuild: string,
+		via: PublishedFlag['via']
+	): Promise<{ published: PublishedFlag | null; refused?: string }> {
 		this.#requireBuild(callerBuild)
 		await this.#kernel.state()
 		return this.#transaction(() => {
 			const flags = readFlags(this.#sql)
-			if (flags.published !== null || (via === 'serving' && (flags.import !== null || this.#emptyOfData()))) {
+			if (flags.published !== null) {
 				return { published: flags.published }
+			}
+			if (this.#rollbackInProgress()) {
+				return { published: null, refused: 'rollback-in-progress' }
+			}
+			if (via === 'serving' && (flags.import !== null || this.#emptyOfData())) {
+				if (flags.served_unpublished === null) {
+					writeFlag(this.#sql, 'served_unpublished', { at: this.#now() })
+				}
+				return { published: null }
 			}
 			const published = { at: this.#now(), via }
 			writeFlag(this.#sql, 'published', published)
@@ -1097,16 +1127,61 @@ export class StoreAdmin {
 		})
 	}
 
+	// The operator's word that nothing was served from this Store while it was unmarked (the Worker holds it with
+	// MAINTENANCE=full, which the admin API checks): an import may begin again.
+	async clearServed(callerBuild: string, authority: ImportAuthority): Promise<Result<{ cleared: boolean }>> {
+		this.#requireBuild(callerBuild)
+		await this.#kernel.state()
+		try {
+			return this.#transaction(() => {
+				this.#assertJournalAdmin(authority)
+				const cleared = readFlags(this.#sql).served_unpublished !== null
+				writeFlag(this.#sql, 'served_unpublished', null)
+				return { ok: true as const, cleared }
+			})
+		} catch (error) {
+			return asRefusal(error)
+		}
+	}
+
+	// Whether a spool message was handed to the legacy instance (a handoff receipt), so it is neither journaled nor
+	// replayed again.
+	async handedOff(callerBuild: string, digest: string): Promise<boolean> {
+		this.#requireBuild(callerBuild)
+		await this.#kernel.state()
+		return this.#hasReceipt(digest)
+	}
+
+	// Ends a rollback: its receipts are removed once the journal is empty and no drain runs; the Worker checks first that
+	// Kopje's Queue is empty (no copy of a handed-off request is left to arrive).
+	async closeRollback(callerBuild: string, authority: ImportAuthority): Promise<Result<{ receipts: number }>> {
+		this.#requireBuild(callerBuild)
+		await this.#kernel.state()
+		try {
+			return this.#transaction(() => {
+				this.#assertJournalAdmin(authority)
+				if (this.#rollbackInProgress()) {
+					throw new ImportError('rollback-in-progress', 'the journal holds requests or a drain runs')
+				}
+				const receipts = this.#journalCounts().done
+				this.#sql.exec("DELETE FROM kopje_state WHERE substr(name, 1, 8) = 'handoff:'")
+				return { ok: true as const, receipts }
+			})
+		} catch (error) {
+			return asRefusal(error)
+		}
+	}
+
 	// From the Worker's Queue consumer: refused once published (nothing is rolled back then), during an import, and when
 	// the journal is at its quota (the consumer then leaves the message in the Queue, whose backlog bounds admission).
 	async journalSpool(
 		callerBuild: string,
-		entry: { spooledAt: number; record: Uint8Array },
+		entry: { digest: string; spooledAt: number; record: Uint8Array },
 		limits: { entries?: number; bytes?: number } = {}
 	): Promise<Result<{ stored: boolean }>> {
 		this.#requireBuild(callerBuild)
 		await this.#kernel.state()
-		const digest = sha256Hex(entry.record)
+		const digest = entry.digest
 		const maxEntries = clamp(limits.entries, 1, JOURNAL_MAX_ENTRIES, JOURNAL_MAX_ENTRIES)
 		const maxBytes = clamp(limits.bytes, 1, JOURNAL_MAX_BYTES, JOURNAL_MAX_BYTES)
 		try {
@@ -1118,7 +1193,10 @@ export class StoreAdmin {
 				if (flags.import !== null) {
 					throw new ImportError('import-in-progress', 'an import is running')
 				}
-				if (this.#journalState(digest) !== null) {
+				if (!/^[0-9a-f]{64}$/.test(digest)) {
+					throw new ImportError('invalid-digest', 'not a spool digest')
+				}
+				if (this.#journalState(digest) !== null || this.#hasReceipt(digest)) {
 					return { ok: true as const, stored: false }
 				}
 				const held = this.#journalCounts()
@@ -1150,6 +1228,7 @@ export class StoreAdmin {
 		try {
 			return this.#transaction(() => {
 				this.#assertJournalAdmin(authority)
+				this.#assertUnpublished()
 				const now = this.#now()
 				const current = this.#drainLeaseRow()
 				const lease = current === null ? null : (JSON.parse(current) as { holder: string; until: number })
@@ -1162,7 +1241,7 @@ export class StoreAdmin {
 				if (lease !== null && lease.holder !== request.holder && lease.until > now) {
 					throw new ImportError('drain-in-progress', 'another drain holds the journal')
 				}
-				const until = now + clamp(request.leaseMs, 1000, 10 * 60 * 1000, 60 * 1000)
+				const until = now + clamp(request.leaseMs, 1000, 10 * 60 * 1000, DRAIN_LEASE_MS)
 				this.#sql.exec(
 					'INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)',
 					DRAIN_LEASE,
@@ -1186,6 +1265,7 @@ export class StoreAdmin {
 		await this.#kernel.state()
 		try {
 			this.#assertJournalAdmin(authority)
+			this.#assertUnpublished()
 			this.#assertLease(holder)
 			const skipped = skip
 				.slice(0, MAX_DRAIN_SKIP)
@@ -1230,6 +1310,7 @@ export class StoreAdmin {
 		try {
 			return this.#transaction(() => {
 				this.#assertJournalAdmin(authority)
+				this.#assertUnpublished()
 				this.#assertLease(holder)
 				const current = this.#journalState(id)
 				const allowed: string[] = state === 'done' ? [JOURNAL.sending] : [JOURNAL.pending, JOURNAL.sending]
@@ -1242,12 +1323,19 @@ export class StoreAdmin {
 					unverified: JOURNAL.unverified,
 					'no-recipient': JOURNAL.noRecipient,
 				}[state]
-				this.#sql.exec('UPDATE inbound_spool SET spool_id = ? WHERE spool_id = ?', `${target}${id}`, `${current}${id}`)
 				if (state === 'done') {
+					// Handed off: the request leaves the journal, and a receipt outside the dumped data stays.
+					this.#sql.exec('DELETE FROM inbound_spool WHERE spool_id = ?', `${current}${id}`)
 					this.#sql.exec(
-						'UPDATE inbound_spool SET fragment = ? WHERE spool_id = ?',
-						new Uint8Array(0),
-						`${target}${id}`
+						'INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)',
+						`${RECEIPT}${id}`,
+						JSON.stringify({ at: this.#now() })
+					)
+				} else {
+					this.#sql.exec(
+						'UPDATE inbound_spool SET spool_id = ? WHERE spool_id = ?',
+						`${target}${id}`,
+						`${current}${id}`
 					)
 				}
 				return { ok: true as const, journal: this.#journalCounts() }
@@ -1366,7 +1454,9 @@ export class StoreAdmin {
 			sending: count(JOURNAL.sending),
 			unverified: count(JOURNAL.unverified),
 			noRecipient: count(JOURNAL.noRecipient),
-			done: count(JOURNAL.done),
+			done: this.#sql
+				.exec<{ n: number }>("SELECT count(*) AS n FROM kopje_state WHERE substr(name, 1, 8) = 'handoff:'")
+				.one().n,
 			bytes: rows.filter((row) => row.state !== JOURNAL.done).reduce((sum, row) => sum + (row.bytes ?? 0), 0),
 			oldestSpooledAt: of(JOURNAL.pending)?.oldest ?? null,
 		}
@@ -1390,6 +1480,30 @@ export class StoreAdmin {
 			this.#sql.exec<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', DRAIN_LEASE).toArray()[0]
 				?.value ?? null
 		)
+	}
+
+	#hasReceipt(digest: string): boolean {
+		return (
+			this.#sql.exec<{ n: number }>('SELECT count(*) AS n FROM kopje_state WHERE name = ?', `${RECEIPT}${digest}`).one()
+				.n > 0
+		)
+	}
+
+	// A drain lease that has not expired, or requests in the journal (pending, being sent, kept).
+	#rollbackInProgress(): boolean {
+		const current = this.#drainLeaseRow()
+		const lease = current === null ? null : (JSON.parse(current) as { until: number })
+		const journal = this.#journalCounts()
+		return (
+			(lease !== null && lease.until > this.#now()) ||
+			journal.pending + journal.sending + journal.unverified + journal.noRecipient > 0
+		)
+	}
+
+	#assertUnpublished(): void {
+		if (readFlags(this.#sql).published !== null) {
+			throw new ImportError('published', 'this instance is published; nothing is rolled back')
+		}
 	}
 
 	#assertLease(holder: string): void {

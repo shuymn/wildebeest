@@ -47,6 +47,9 @@ Commands
                                 may verify later) or waited 45 minutes
   cutover discard-kept --yes    delete the kept requests (failed verification, or no legacy recipient), after
                                 inspecting them with sql
+  cutover close --yes           end a rollback once Kopje's Queue is empty: its handoff receipts are removed
+  cutover clear-served --yes    allow imports again after the Worker served with MAINTENANCE=off while the Store was
+                                unmarked (under MAINTENANCE=full)
   cutover reset --yes           take the Store back to empty after a completed import, keeping the configuration;
                                 only before publication, with MAINTENANCE=full and an empty journal
   pitr bookmark [--at <time>]   current bookmark, or the one for an ISO 8601 time
@@ -736,6 +739,13 @@ export async function run({
 					print(await client.post('/admin/cutover/discard-kept', { confirm: true }))
 					return 0
 				}
+				if (sub === 'close' || sub === 'clear-served') {
+					if (flags.yes !== true) {
+						throw new UsageError(`cutover ${sub} --yes`)
+					}
+					print(await client.post(`/admin/cutover/${sub}`, { confirm: true }))
+					return 0
+				}
 				if (sub === 'reset') {
 					if (flags.yes !== true) {
 						throw new UsageError('cutover reset deletes all data of the Store; pass --yes')
@@ -750,7 +760,7 @@ export async function run({
 					return 0
 				}
 				throw new UsageError(
-					'cutover status | publish --yes | drain --worker <dir> [--fallback <username>] | discard-kept --yes | reset --yes'
+					'cutover status | publish --yes | drain --worker <dir> [--fallback <username>] | discard-kept --yes | close --yes | reset --yes | clear-served --yes'
 				)
 			}
 			case 'pitr': {

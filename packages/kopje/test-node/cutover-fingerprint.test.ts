@@ -199,11 +199,17 @@ describe('the export against the conversion manifest', () => {
 			result: 'FAIL',
 			exportDiffers: [empty],
 		})
-		const extra = { ...parsed, rowsLoaded: { ...parsed.rowsLoaded, no_such_table: 0 } }
-		expect(compareFingerprints(final.fingerprint, final.fingerprint, extra)).toMatchObject({
-			result: 'FAIL',
-			exportDiffers: ['no_such_table'],
-		})
+		for (const [name, count] of [
+			['no_such_table', 0],
+			['sqlite_sequence', 999],
+			['d1_migrations', 999],
+		] as const) {
+			const extra = { ...parsed, rowsLoaded: { ...parsed.rowsLoaded, [name]: count } }
+			expect(compareFingerprints(final.fingerprint, final.fingerprint, extra), name).toMatchObject({
+				result: 'FAIL',
+				exportDiffers: [name],
+			})
+		}
 	})
 
 	it('accepts only a complete conversion manifest', async () => {

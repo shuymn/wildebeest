@@ -77,6 +77,8 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	published: 409,
 	'journal-not-empty': 409,
 	'drain-in-progress': 409,
+	'rollback-in-progress': 409,
+	'served-unpublished': 409,
 	'pitr-unavailable': 503,
 	'chunk-failed': 500,
 }
@@ -419,7 +421,49 @@ export function adminRoutes({ build, store, fetch, now, doorbell, loader }: Admi
 
 	admin.get('/cutover/status', async (c) => c.json(await stub(c).cutoverStatus(build(c.env))))
 
-	admin.post('/cutover/publish', async (c) => c.json(await stub(c).markPublished(build(c.env), 'command')))
+	admin.post('/cutover/publish', async (c) => {
+		const mark = await stub(c).markPublished(build(c.env), 'command')
+		if (mark.refused !== undefined) {
+			return c.json({ error: 'a rollback is in progress: drain or discard the journal first', code: mark.refused }, 409)
+		}
+		return c.json(mark)
+	})
+
+	// Ends a rollback, once Kopje's Queue holds nothing (read through its metrics; failing closed): no copy of a
+	// handed-off request is left to arrive, so its receipts can go.
+	admin.post('/cutover/close', async (c) => {
+		const { confirm } = await jsonBody(c)
+		if (confirm !== true) {
+			return c.json({ error: 'send {"confirm": true}' }, 400)
+		}
+		const metrics = (c.env.QUEUE as Partial<Pick<Queue, 'metrics'>>).metrics
+		let backlog: number | null = null
+		try {
+			backlog = typeof metrics === 'function' ? (await metrics.call(c.env.QUEUE)).backlogCount : null
+		} catch {
+			backlog = null
+		}
+		if (backlog !== 0) {
+			return c.json(
+				{ error: "Kopje's Queue is not empty, or its backlog cannot be read", code: 'queue-not-empty', backlog },
+				409
+			)
+		}
+		return reply(c, await stub(c).closeRollback(build(c.env), c.get('auth')))
+	})
+
+	// The operator's word that nothing was served from this Store while it was unmarked, under MAINTENANCE=full.
+	admin.post('/cutover/clear-served', async (c) => {
+		const { confirm } = await jsonBody(c)
+		const config = readConfig(c.env)
+		if (confirm !== true) {
+			return c.json({ error: 'send {"confirm": true}' }, 400)
+		}
+		if (!config.ok || config.config.MAINTENANCE !== 'full') {
+			return c.json({ error: 'set MAINTENANCE=full on the Worker first', code: 'maintenance-required' }, 409)
+		}
+		return reply(c, await stub(c).clearServed(build(c.env), c.get('auth')))
+	})
 
 	admin.post('/cutover/drain', async (c) => {
 		const { accounts, fallback } = await jsonBody(c)
