@@ -165,7 +165,9 @@ describe('cutover import of a converted legacy export', () => {
 		// A local image attached to a public status is its Image document; an unattached one is not found.
 		const images = await sql<{ legacy_ap_o: string; attached: number }>(
 			h.store,
-			'SELECT legacy_ap_o, status_id IS NOT NULL AS attached FROM media_attachments WHERE legacy_ap_o IS NOT NULL ORDER BY attached DESC'
+			`SELECT m.legacy_ap_o, m.status_id IS NOT NULL AS attached FROM media_attachments m
+			LEFT JOIN statuses s ON s.id = m.status_id
+			WHERE m.legacy_ap_o IS NOT NULL AND (s.visibility IS NULL OR s.visibility = 'public') ORDER BY attached DESC`
 		)
 		const image = await h.request(`/ap/o/${images[0]?.legacy_ap_o ?? ''}`, AP)
 		expect(image.status).toBe(200)
@@ -178,7 +180,54 @@ describe('cutover import of a converted legacy export', () => {
 			url: 'https://images.example/media/image-1/usercontent',
 			name: 'a wildebeest',
 		})
-		expect((await h.request(`/ap/o/${images[1]?.legacy_ap_o ?? ''}`, AP)).status).toBe(404)
+		expect((await h.request(`/ap/o/${images[images.length - 1]?.legacy_ap_o ?? ''}`, AP)).status).toBe(404)
+		// An image attached to a followers-only status is not served either.
+		const [hiddenRow] = await sql<{ legacy_ap_o: string }>(
+			h.store,
+			"SELECT m.legacy_ap_o FROM media_attachments m JOIN statuses s ON s.id = m.status_id WHERE s.visibility = 'private'"
+		)
+		expect(hiddenRow?.legacy_ap_o).toMatch(/^0f0f0f0f-/)
+		const hiddenImage = await h.request(`/ap/o/${hiddenRow?.legacy_ap_o ?? ''}`, AP)
+		const unknownAgain = await h.request('/ap/o/0f0f0f0f-0000-4000-8000-999999999998', AP)
+		expect([hiddenImage.status, unknownAgain.status]).toEqual([404, 404])
+		expect(await hiddenImage.text()).toBe(await unknownAgain.text())
+	})
+
+	it('lets a follow, checked when read, decide who reads a migrated followers-only status', async () => {
+		const { h } = await imported()
+		const { token } = await login(h, { email: 'bob@example.com', scope: 'read write follow' })
+		const request = (path: string, init: RequestInit = {}) => h.request(path, bearer(token, init))
+		const [status] = await sql<{ id: string; account_id: string }>(
+			h.store,
+			"SELECT id, account_id FROM statuses WHERE content LIKE '%followers only%'"
+		)
+		const [reply] = await sql<{ id: string }>(h.store, "SELECT id FROM statuses WHERE content LIKE '%Bob answers%'")
+		const id = status?.id ?? ''
+		// The status mentions Bob, but the mention grants nothing: no recipient rows.
+		expect(await sql(h.store, 'SELECT 1 FROM status_mentions WHERE status_id = ?', id)).toEqual([])
+
+		// Bob follows alice: he reads it directly, in his reply's context, through a bookmark and a notification.
+		expect((await request(`/api/v1/statuses/${id}`)).status).toBe(200)
+		expect((await request(`/api/v1/statuses/${id}/bookmark`, { method: 'POST' })).status).toBe(200)
+		const reads = async () => ({
+			status: (await request(`/api/v1/statuses/${id}`)).status,
+			context: (
+				(await (await request(`/api/v1/statuses/${reply?.id ?? ''}/context`)).json()) as { ancestors: { id: string }[] }
+			).ancestors.map((s) => s.id),
+			bookmarks: ((await (await request('/api/v1/bookmarks')).json()) as { id: string }[])
+				.map((s) => s.id)
+				.filter((x) => x === id),
+			notifications: ((await (await request('/api/v1/notifications')).json()) as { status?: { id: string } }[])
+				.map((n) => n.status?.id)
+				.filter((x) => x === id),
+		})
+		expect(await reads()).toEqual({ status: 200, context: [id], bookmarks: [id], notifications: [id] })
+
+		// After unfollowing, legacy's isVisible would deny him; so does Kopje, everywhere.
+		expect((await request(`/api/v1/accounts/${status?.account_id ?? ''}/unfollow`, { method: 'POST' })).status).toBe(
+			200
+		)
+		expect(await reads()).toEqual({ status: 404, context: [], bookmarks: [], notifications: [] })
 	})
 
 	it('serves the same actor URLs and keys, and the legacy instance settings', async () => {

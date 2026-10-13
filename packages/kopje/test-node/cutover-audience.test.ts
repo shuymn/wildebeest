@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { convert, exportOf, failing, opened, verify, workspace } from './cutover-helpers.js'
+import { legacyAudience } from '../cli/lib/cutover/convert.js'
+import { audienceOf } from '../cli/lib/cutover/verify-expect.js'
 
 // The audience never widens (DATA-15): visibility and recipients come from the addressing as exported, as legacy
 // authorized it (packages/backend/src/mastodon/status_visibility.ts). Also ids, the notification counter, settings
@@ -57,13 +59,23 @@ describe('the audience never widens (DATA-15)', () => {
 			visibility: 'direct',
 			mentions: [['https://kopje.test/ap/users/alice', 0]],
 		})
-		// Followers-only: r2 follows alice and is a recipient; r3 does not and is not.
-		expect(await statusWith(dumpPath, 'followers only')).toEqual({
-			visibility: 'private',
-			mentions: [['https://remote.example/users/r2', 0]],
-		})
+		// Followers-only: nobody is a recipient, followers or not; a follow decides when the status is read.
+		expect(await statusWith(dumpPath, 'followers only')).toEqual({ visibility: 'private', mentions: [] })
+		// A followers-only boost grants nobody either.
+		const db = await opened(dumpPath)
+		const boostMentions = db
+			.prepare(
+				"SELECT count(*) AS n FROM status_mentions m JOIN statuses s ON s.id = m.status_id WHERE s.uri LIKE '%/ap/a/bb000000-0000-4000-8000-000000000220'"
+			)
+			.get() as Row
+		expect((db.prepare("SELECT visibility FROM statuses WHERE uri LIKE '%000000000220'").get() as Row).visibility).toBe(
+			'private'
+		)
+		db.close()
+		expect(boostMentions.n).toBe(0)
 		const normalized = (manifest.conversion as { normalized: Record<string, number> }).normalized
-		expect(normalized.mentionsNotRecipients).toBe(4)
+		// r1 and r2 on the second DM, Bob on the remote DM, r2, r3 and Bob on the followers-only status.
+		expect(normalized.mentionsNotRecipients).toBe(6)
 	})
 
 	it('refuses a local status whose outbox addressing disagrees with its own', async () => {
@@ -87,7 +99,73 @@ describe('the audience never widens (DATA-15)', () => {
 		const { ok, manifest } = await convert(space.dir, exportPath)
 		expect(ok).toBe(false)
 		expect((manifest.conversion as { problems: Record<string, number> }).problems).toEqual({
-			'reblogs:audience-unknown': 2,
+			'reblogs:audience-unknown': 3,
+		})
+	})
+})
+
+describe('legacy address semantics (getApId), pinned by hand', () => {
+	const FOLLOWERS = 'https://remote.example/users/a/followers'
+	// to, cc, followers -> what legacy's isVisible would do: the visibility and the addresses of to, or null where it
+	// throws on an address (so nobody can read the object there).
+	const cases: [string, unknown, unknown, unknown, { visibility: string; to: string[] } | null][] = [
+		['a URL string', [PUBLIC], [], FOLLOWERS, { visibility: 'public', to: [PUBLIC] }],
+		['an object by its id', [{ id: PUBLIC }], [], FOLLOWERS, { visibility: 'public', to: [PUBLIC] }],
+		['nested ids', [{ id: { id: PUBLIC } }], [], FOLLOWERS, { visibility: 'public', to: [PUBLIC] }],
+		['a single value, not a list', PUBLIC, undefined, FOLLOWERS, { visibility: 'public', to: [PUBLIC] }],
+		['an object with only href', [{ href: PUBLIC }], [], FOLLOWERS, null],
+		['null in to', [null], [], FOLLOWERS, null],
+		['a number', [5], [], FOLLOWERS, null],
+		['a relative URL', ['users/a'], [], FOLLOWERS, null],
+		['a bad reference in cc', [FOLLOWERS], [{ href: PUBLIC }], FOLLOWERS, null],
+		['as:Public is not Public', ['as:Public'], [], FOLLOWERS, { visibility: 'direct', to: ['as:Public'] }],
+		[
+			'normalized host and default port',
+			['HTTPS://Remote.Example:443/users/a/followers'],
+			[PUBLIC],
+			FOLLOWERS,
+			{ visibility: 'unlisted', to: [FOLLOWERS] },
+		],
+		['followers only', [FOLLOWERS], [], FOLLOWERS, { visibility: 'private', to: [FOLLOWERS] }],
+		['followers as an object', [FOLLOWERS], [], { id: FOLLOWERS }, { visibility: 'private', to: [FOLLOWERS] }],
+		['no followers collection and no Public', ['https://kopje.test/ap/users/alice'], [], undefined, null],
+		['no followers collection but Public', [PUBLIC], [], undefined, { visibility: 'public', to: [PUBLIC] }],
+		[
+			'addressed accounts only',
+			['https://kopje.test/ap/users/alice'],
+			[FOLLOWERS],
+			FOLLOWERS,
+			{ visibility: 'direct', to: ['https://kopje.test/ap/users/alice'] },
+		],
+	]
+	for (const [name, to, cc, followers, expected] of cases) {
+		it(`${name}: the converter and the verifier both follow legacy`, () => {
+			expect(legacyAudience(to, cc, followers)).toEqual(expected)
+			const verified = audienceOf(to, cc, followers)
+			expect(verified.visibility === 'unreadable' ? null : verified).toEqual(expected)
+		})
+	}
+
+	it('stops on an object legacy could not read (an href-only address)', async () => {
+		const exportPath = await exportOf(space.dir, { level: 39 })
+		const file = join(exportPath, 'objects.sql')
+		await writeFile(
+			file,
+			(await readFile(file, 'utf8')).replace(`"to":["https://remote.example/users/r0"]`, `"to":[{"href":"${PUBLIC}"}]`)
+		)
+		const { ok, manifest } = await convert(space.dir, exportPath)
+		expect(ok).toBe(false)
+		expect((manifest.conversion as { problems: Record<string, number> }).problems).toEqual({
+			'statuses:addressing-legacy-could-not-read': 1,
+		})
+	})
+
+	it('stops when a bridge migration changes the author a non-public object was authorized with', async () => {
+		const exportPath = await exportOf(space.dir, { level: 18, authorChange: true })
+		const { ok, manifest } = await convert(space.dir, exportPath)
+		expect(ok).toBe(false)
+		expect((manifest.conversion as { problems: Record<string, number> }).problems).toEqual({
+			'statuses:author-changed-audience': 1,
 		})
 	})
 })
@@ -128,7 +206,7 @@ describe('the notification counter continues past the legacy high-water mark', (
 			{ level: 39, notificationSequence: 9007199254740993n },
 			'9007199254740994',
 		],
-		['no exported sequence (the largest id)', { level: 39 }, '9'],
+		['no exported sequence (the largest id)', { level: 39 }, '10'],
 	]
 	for (const [name, options, next] of cases) {
 		it(`with ${name}`, async () => {

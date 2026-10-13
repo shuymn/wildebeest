@@ -32,6 +32,8 @@ export type FixtureOptions = {
 	// Notifications, and the exported sqlite_sequence counter of actor_notifications (none when undefined).
 	notifications?: boolean
 	notificationSequence?: bigint
+	// A remote object whose stored author differs from its attributedTo, so 0021 rewrites it (levels below 0021).
+	authorChange?: boolean
 }
 
 export type LegacyFixture = {
@@ -111,6 +113,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		boosts = level >= 2,
 		notifications = true,
 		notificationSequence,
+		authorChange = false,
 	} = options
 	const db = line === 'T2' ? upstreamDatabase(level) : canonicalLegacyDatabase(level)
 	const columns = new Map<string, string[]>()
@@ -250,7 +253,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		}
 		insert('objects', {
 			id,
-			mastodon_id: n === 1 ? snowflake(20, 1) : 'c5a0a5f2-6a1f-4a42-8d18-2b6c0a1d9e33',
+			mastodon_id: n === 1 ? snowflake(20, 1) : `c5a0a5f2-6a1f-4a42-8d18-2b6c0a1d9e3${n}`,
 			type: 'Image',
 			cdate: cdate(20 + n),
 			original_actor_id: alice,
@@ -262,6 +265,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 	}
 	const attachedImage = image(1, true)
 	image(2, false)
+	const hiddenImage = image(3, true)
 
 	const outbox = (actor: string, object: string, minutes: number, to: string[], cc: string[]) => {
 		const id = `00000000-0000-4000-9000-${String(++objectCounter).padStart(12, '0')}`
@@ -442,18 +446,20 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		sensitive: true,
 		spoiler: 'CW: spoilers',
 	})
-	localNote({
+	const followersOnly = localNote({
 		author: alice,
 		username: 'alice',
 		minutes: 130,
 		text: 'followers only',
+		attachment: [hiddenImage],
 		to: [`${alice}/followers`],
 		cc: [],
 		mastodonId: snowflake(130, 9),
-		// r2 follows alice, r3 does not: only r2 could read this in legacy, so only r2 is a recipient.
+		// Legacy let only alice's followers read this, whatever it mentions: r2 and Bob follow alice, r3 does not.
 		tags: [
 			{ type: 'Mention', href: r(2).uri, name: '@Remote2@remote.example' },
 			{ type: 'Mention', href: r(3).uri, name: '@r3@remote.example' },
+			{ type: 'Mention', href: bob, name: '@Bob' },
 		],
 		// Lazily converted: the URL still carries the UUID the note was created with.
 		urlTail: 'e1e2e3e4-0000-4000-8000-000000000130',
@@ -516,6 +522,39 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		cc: [`${bob}/followers`],
 		mastodonId: 'f00dfeed-1234-4abc-8def-0123456789ab',
 	})
+	localNote({
+		author: bob,
+		username: 'Bob',
+		minutes: 165,
+		text: 'Bob answers the followers',
+		to: [PUBLIC],
+		cc: [`${bob}/followers`],
+		mastodonId: snowflake(165, 3),
+		inReplyTo: followersOnly,
+	})
+	if (authorChange) {
+		// Stored with author r0 but attributedTo r1, addressed to r0's followers and alice: legacy let r0's followers
+		// read it; 0021 rewrites the author to r1, under whom it would read as a DM to alice.
+		const proxy = objectId()
+		insert('objects', {
+			id: proxy,
+			mastodon_id: snowflake(168, 4),
+			type: 'Note',
+			cdate: cdate(168),
+			original_actor_id: r(0).uri,
+			original_object_id: `${r(1).uri}/statuses/author-change`,
+			properties: JSON.stringify({
+				id: `${r(1).uri}/statuses/author-change`,
+				type: 'Note',
+				attributedTo: r(1).uri,
+				content: '<p>whose followers?</p>',
+				to: [r(0).followers, alice],
+				cc: [],
+				published: iso(168),
+			}),
+			local: 0,
+		})
+	}
 	remoteNote({
 		author: 1,
 		minutes: 170,
@@ -601,6 +640,16 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 			`https://remote.example/users/r1/statuses/900/activity`,
 			[PUBLIC],
 			[alice, r(1).followers]
+		)
+		// A followers-only boost.
+		boost(
+			bob,
+			r0Post,
+			220,
+			'bb000000-0000-4000-8000-000000000220',
+			`${ORIGIN}/ap/a/bb000000-0000-4000-8000-000000000220`,
+			[`${bob}/followers`],
+			[]
 		)
 	}
 	if (withDeletions && level < 17) {
@@ -691,6 +740,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		notify('follow_request', alice, r(4).uri, null, 505)
 		notify('favourite', alice, bob, publicNote, 506)
 		notify('follow', bob, r(3).uri, null, 507)
+		notify('mention', bob, alice, followersOnly, 508)
 	}
 
 	// ---- clients, settings, subscriptions

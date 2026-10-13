@@ -62,7 +62,7 @@ describe('convert and verify-conversion', () => {
 			]) {
 				expect(categories[name]?.expected, name).toBeGreaterThan(0)
 			}
-			expect(categories.boosts?.expected ?? 0).toBe(options.level >= 2 ? 2 : 0)
+			expect(categories.boosts?.expected ?? 0).toBe(options.level >= 2 ? 3 : 0)
 			if (options.level >= 23) {
 				expect(categories.edits?.expected).toBe(1)
 			}
@@ -82,7 +82,7 @@ describe('convert and verify-conversion', () => {
 			'notifications:duplicate-merged': 1,
 			'statuses:remote-without-original-uri': 1,
 		})
-		expect(conversion.legacyIds).toMatchObject({ accounts: 2, statuses: 5, statuses_ap_o: 3, media_ap_o: 2 })
+		expect(conversion.legacyIds).toMatchObject({ accounts: 2, statuses: 6, statuses_ap_o: 3, media_ap_o: 3 })
 		const db = await opened(dumpPath)
 		const value = (sql: string) => Object.values(db.prepare(sql).get() ?? {})[0]
 		// Accepted follows without a Follow record keep uri NULL; one with an activity gets its id.
@@ -91,12 +91,12 @@ describe('convert and verify-conversion', () => {
 			'https://kopje.test/ap/a/follow-300'
 		)
 		// Old media stays at its URLs, and old Image ids are kept.
-		expect(value("SELECT count(*) FROM media_attachments WHERE url LIKE 'https://images.example/%'")).toBe(2)
+		expect(value("SELECT count(*) FROM media_attachments WHERE url LIKE 'https://images.example/%'")).toBe(3)
 		expect(value('SELECT count(*) FROM media_attachments WHERE status_id IS NULL AND legacy_ap_o IS NOT NULL')).toBe(1)
 		// Every id is 18 digits; notifications keep theirs, and the counter continues past the largest.
 		expect(value('SELECT count(*) FROM statuses WHERE length(id) <> 18')).toBe(0)
-		expect(value('SELECT group_concat(id) FROM (SELECT id FROM notifications ORDER BY id)')).toBe('1,2,3,4,6,7,8')
-		expect(value("SELECT seq FROM sqlite_sequence WHERE name = 'notifications'")).toBe(8)
+		expect(value('SELECT group_concat(id) FROM (SELECT id FROM notifications ORDER BY id)')).toBe('1,2,3,4,6,7,8,9')
+		expect(value("SELECT seq FROM sqlite_sequence WHERE name = 'notifications'")).toBe(9)
 		// The DM stays direct, and remote raw is the legacy text byte for byte.
 		expect(value("SELECT visibility FROM statuses WHERE content LIKE '%secret direct%'")).toBe('direct')
 		expect(value('SELECT count(*) FROM statuses WHERE raw IS NOT NULL')).toBe(4)
@@ -157,6 +157,16 @@ describe('convert and verify-conversion', () => {
 				'audience',
 			],
 			['a reply link is dropped', 'UPDATE statuses SET in_reply_to_id = NULL', 'replies'],
+			[
+				'a followers-only boost gets a recipient',
+				"INSERT INTO status_mentions (status_id, account_id, silent) SELECT s.id, a.id, 1 FROM statuses s, accounts a WHERE s.uri LIKE '%000000000220' AND a.uri LIKE '%/users/r4'",
+				'boosts',
+			],
+			[
+				'a followers-only status names another author',
+				"UPDATE statuses SET account_id = (SELECT id FROM accounts WHERE uri LIKE '%/users/Bob') WHERE content LIKE '%followers only%'",
+				'audience',
+			],
 			['a remote proxy alias is lost', 'UPDATE statuses SET legacy_ap_o = NULL', 'aliases'],
 			[
 				'the notification counter goes back',

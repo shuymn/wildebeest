@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 
 import { convert, exportOf, opened, verify, workspace } from './cutover-helpers.js'
 import { loadLegacyExport } from '../cli/lib/cutover/legacy-load.js'
-import { ExportError, parseStatement } from '../cli/lib/cutover/sql-script.js'
+import { ExportError, parseStatement, tableExpressions } from '../cli/lib/cutover/sql-script.js'
 
 // The converter's own safety: a strict export grammar (DATA-11), reports without content even on failure (DATA-13),
 // exclusive outputs, HTML that is never cut silently, and a size preflight.
@@ -64,6 +64,64 @@ describe('the export grammar (DATA-11)', () => {
 			expect(codeOf(() => parseStatement(statement))).toBe(code)
 		})
 	}
+
+	it('accepts the replace(replace(...)) form SQLite .dump writes, and nothing deeper', () => {
+		expect(
+			parseStatement(`INSERT INTO "t" VALUES(replace(replace('a\\r\\nb','\\r',char(13)),'\\n',char(10)))`)
+		).toMatchObject({ rows: [['a\r\nb']] })
+		// 28 levels would double 'A' into 2^28 characters.
+		let bomb = "'A'"
+		for (let i = 0; i < 28; i++) {
+			bomb = `replace(${bomb},'A',char(65,65))`
+		}
+		expect(codeOf(() => parseStatement(`INSERT INTO "t" VALUES(${bomb})`))).toBe('invalid-literal')
+	})
+
+	it('sizes an expansion before building it, and bounds the decoded data of an export', () => {
+		const wide = `char(${Array.from({ length: 64 }, () => '66').join(',')})`
+		const big = `replace(replace('${'A'.repeat(300_000)}','A',${wide}),'B',${wide})`
+		expect(codeOf(() => parseStatement(`INSERT INTO "t" VALUES(${big})`))).toBe('decoded-data-too-large')
+		const budget = { remaining: 10 }
+		expect(parseStatement(`INSERT INTO "t" VALUES('12345')`, budget)).toMatchObject({ rows: [['12345']] })
+		expect(codeOf(() => parseStatement(`INSERT INTO "t" VALUES('123456')`, budget))).toBe('decoded-data-too-large')
+	})
+
+	it('never runs the export DDL of bookkeeping tables', async () => {
+		const exportPath = await exportOf(space.dir, { level: 39 })
+		const file = join(exportPath, 'd1_migrations.sql')
+		const text = (await readFile(file, 'utf8'))
+			.replace(
+				'applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL',
+				'applied_at BLOB DEFAULT (randomblob(268435456))'
+			)
+			.replaceAll(
+				/INSERT INTO "d1_migrations" \("id","name","applied_at"\) VALUES\((\d+),('[^']+'),'[^']+'\);/g,
+				'INSERT INTO "d1_migrations" ("id","name") VALUES($1,$2);'
+			)
+		expect(text).toContain('randomblob(268435456)')
+		await writeFile(file, text)
+		const started = Date.now()
+		const { ok } = await convert(space.dir, exportPath)
+		expect(ok).toBe(true)
+		expect(Date.now() - started).toBeLessThan(10_000)
+	})
+
+	it('refuses data-table DDL whose default or check expressions differ from the canonical ones, before running it', async () => {
+		expect(tableExpressions(`CREATE TABLE "x" ("a" TEXT DEFAULT 'p', "b" INT CHECK (b > 0), "c" AS (a || 1))`)).toEqual(
+			["DEFAULT 'p'", 'CHECK (B>0)', 'AS (A||1)']
+		)
+		for (const definition of [
+			'CREATE TABLE "peers" ("domain" TEXT UNIQUE NOT NULL DEFAULT (randomblob(268435456)))',
+			'CREATE TABLE "peers" ("domain" TEXT UNIQUE NOT NULL CHECK (length(randomblob(268435456)) > 0))',
+		]) {
+			const exportPath = await exportOf(space.dir, { level: 39 }, `export-${definition.length}`)
+			const file = join(exportPath, 'peers.sql')
+			await writeFile(file, (await readFile(file, 'utf8')).replace(/CREATE TABLE "peers"[^;]*;/, `${definition};`))
+			const { ok, manifest } = await convert(space.dir, exportPath, { out: `out-${definition.length}` })
+			expect(ok).toBe(false)
+			expect(manifest.stop).toMatchObject({ code: 'schema-mismatch' })
+		}
+	})
 
 	it('refuses an export that carries such a statement before running any of it', async () => {
 		const fixture = await exportOf(space.dir, { level: 39 })
@@ -205,6 +263,27 @@ describe('HTML is never cut silently', () => {
 })
 
 describe('size preflight', () => {
+	it('refuses an export over 1 GiB in total, though each file is under the per-file limit', async () => {
+		const exportPath = await exportOf(space.dir, { level: 39 })
+		for (const name of ['zx.sql', 'zy.sql', 'zz.sql']) {
+			await writeFile(join(exportPath, name), '')
+			await truncate(join(exportPath, name), 400 * 1024 * 1024)
+		}
+		const { ok, manifest } = await convert(space.dir, exportPath)
+		expect(ok).toBe(false)
+		expect(manifest.stop).toMatchObject({ code: 'export-too-large' })
+	})
+
+	it('refuses to verify a dump over 512 MiB before reading it', async () => {
+		const exportPath = await exportOf(space.dir, { level: 39 })
+		const dump = join(space.dir, 'big.dump')
+		await writeFile(dump, '')
+		await truncate(dump, 600 * 1024 * 1024)
+		const { ok, report } = await verify(exportPath, dump)
+		expect(ok).toBe(false)
+		expect(report).toMatchObject({ result: 'FAIL', stop: { code: 'export-too-large' } })
+	})
+
 	it('refuses an export file over 512 MiB before reading it', async () => {
 		const exportPath = await exportOf(space.dir, { level: 39 })
 		const big = join(exportPath, 'zz.sql')

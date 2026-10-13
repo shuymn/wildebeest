@@ -73,12 +73,6 @@ function when(value) {
 	return Number.isNaN(ms) ? null : new Date(ms).toISOString()
 }
 
-/** @param {unknown} value */
-const ids = (value) =>
-	many(value)
-		.map(ref)
-		.filter(/** @returns {x is string} */ (x) => x !== null)
-
 /** @param {Uint8Array} bytes */
 const hex = (bytes) =>
 	Array.from(bytes, (b) => b.toString(16).padStart(2, '0'))
@@ -86,22 +80,45 @@ const hex = (bytes) =>
 		.toUpperCase()
 
 /**
- * Who could read an object in legacy Wildebeest (packages/backend/src/mastodon/status_visibility.ts): anyone with
- * Public in to; with the author's followers in to, anyone (Public also in cc) or the followers; otherwise the accounts
- * in to.
+ * An address the way legacy resolves one (getApId in packages/backend/src/activitypub/objects/index.ts): a URL string
+ * in its normalized form, or an object's id, followed through nested objects. Anything else could not be resolved by
+ * legacy, which is undefined here.
+ * @param {unknown} value
+ * @param {number} [hops]
+ * @returns {string | undefined}
+ */
+function address(value, hops = 0) {
+	if (typeof value === 'string') {
+		return URL.canParse(value) ? new URL(value).toString() : undefined
+	}
+	if (value !== null && typeof value === 'object' && !Array.isArray(value) && 'id' in value && hops < 16) {
+		return address(/** @type {{ id: unknown }} */ (value).id, hops + 1)
+	}
+	return undefined
+}
+
+/**
+ * Who could read an object in legacy Wildebeest (status_visibility.ts): with Public in to, anyone; with the author's
+ * followers in to, anyone (Public also in cc) or the followers; otherwise the accounts in to. 'unreadable' where legacy
+ * fails on an address.
  * @param {unknown} to
  * @param {unknown} cc
- * @param {string} followers
+ * @param {unknown} followers
  */
-function audienceOf(to, cc, followers) {
-	const t = ids(to)
+export function audienceOf(to, cc, followers) {
+	const t = many(to).map((x) => address(x))
+	const c = many(cc).map((x) => address(x))
+	if (t.includes(undefined) || c.includes(undefined)) {
+		return { visibility: 'unreadable', to: [] }
+	}
 	if (t.includes(PUBLIC)) {
-		return 'public'
+		return { visibility: 'public', to: t }
 	}
-	if (t.includes(followers)) {
-		return ids(cc).includes(PUBLIC) ? 'unlisted' : 'private'
+	const f = address(followers)
+	if (f === undefined) {
+		return { visibility: 'unreadable', to: [] }
 	}
-	return 'direct'
+	return { visibility: t.includes(f) ? (c.includes(PUBLIC) ? 'unlisted' : 'private') : 'direct', to: t }
 }
 
 /**
@@ -153,9 +170,13 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		}
 	}
 	const known = (/** @type {unknown} */ uri) => actors.has(String(uri))
-	const followersOf = (/** @type {string} */ uri) => {
-		const f = actors.get(uri)?.followers
-		return typeof f === 'string' ? f : `${uri}/followers`
+	/** @type {Map<string, string>} actor by its address in legacy's normalized form */
+	const byAddress = new Map()
+	for (const uri of actors.keys()) {
+		const normalized = address(uri)
+		if (normalized !== undefined) {
+			byAddress.set(normalized, uri)
+		}
 	}
 	for (const user of all('SELECT actor_id, email, privkey, privkey_salt, pubkey FROM users')) {
 		put('keys', String(user.actor_id), [
@@ -165,16 +186,6 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			String(user.pubkey),
 		])
 	}
-	/** @type {Map<string, Set<string>>} */
-	const followersByTarget = new Map()
-	for (const f of all("SELECT actor_id, target_actor_id FROM actor_following WHERE state = 'accepted'")) {
-		if (known(f.actor_id) && known(f.target_actor_id)) {
-			const set = followersByTarget.get(String(f.target_actor_id)) ?? new Set()
-			set.add(String(f.actor_id))
-			followersByTarget.set(String(f.target_actor_id), set)
-		}
-	}
-
 	// Statuses.
 	/** @type {Map<string, string>} object id -> status URI */
 	const statusUri = new Map()
@@ -218,32 +229,44 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			when(p.published) ?? when(o.cdate),
 		])
 
-		// The audience, from the object's addressing as exported. Recipients: for public and unlisted, the tagged known
-		// accounts and, silently, the other addressed ones; for followers-only, those of them who follow the author;
-		// for direct, exactly the known accounts in to (tagged ones not silent).
+		// The audience, from the object's addressing and stored author as exported. Recipients: for public and unlisted,
+		// the tagged known accounts and, silently, the other addressed ones; for followers-only, none (a follow decides);
+		// for direct, exactly the known accounts in to (tagged ones not silent). Non-public audiences also name the author
+		// legacy authorized with.
 		const addressing = source.objects.get(id) ?? { to: undefined, cc: undefined }
-		const visibility = audienceOf(addressing.to, addressing.cc, followersOf(author))
+		const stored = source.authors.get(id) ?? null
+		const audience = audienceOf(
+			addressing.to,
+			addressing.cc,
+			stored === null ? undefined : source.followers.get(stored)
+		)
+		const accountAt = (/** @type {unknown} */ x) => byAddress.get(address(x) ?? '')
 		const tagged = new Set(
 			many(p.tag)
 				.filter((t) => typeof t === 'object' && t !== null && /** @type {Json} */ (t).type === 'Mention')
-				.map((t) => ref(/** @type {Json} */ (t).href))
-				.filter((x) => x !== null && x !== author && known(x))
+				.map((t) => accountAt(/** @type {Json} */ (t).href))
+				.filter((x) => x !== undefined && x !== author)
 		)
-		const addressedTo = ids(addressing.to).filter((x) => x !== author && known(x))
-		const addressedCc = ids(addressing.cc).filter((x) => x !== author && known(x))
+		const inTo = many(addressing.to)
+			.map(accountAt)
+			.filter((x) => x !== undefined && x !== author)
+		const inCc = many(addressing.cc)
+			.map(accountAt)
+			.filter((x) => x !== undefined && x !== author)
 		/** @type {Set<unknown>} */
-		let readers = new Set([...tagged, ...addressedTo, ...addressedCc])
-		if (visibility === 'private') {
-			const followers = followersByTarget.get(author) ?? new Set()
-			readers = new Set([...readers].filter((x) => followers.has(String(x))))
-		} else if (visibility === 'direct') {
-			readers = new Set(addressedTo)
+		let readers = new Set([...tagged, ...inTo, ...inCc])
+		if (audience.visibility === 'private' || audience.visibility === 'unreadable') {
+			readers = new Set()
+		} else if (audience.visibility === 'direct') {
+			readers = new Set(inTo)
 		}
+		const open = audience.visibility === 'public' || audience.visibility === 'unlisted'
 		put('audience', uri, [
-			visibility,
+			audience.visibility,
 			[...readers]
 				.map((x) => /** @type {[string, number]} */ ([String(x), tagged.has(/** @type {string} */ (x)) ? 0 : 1]))
 				.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)),
+			open ? null : stored,
 		])
 
 		// Reply link: inReplyTo, and the status it points to (by URI, else the one legacy linked).
@@ -312,9 +335,19 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			continue
 		}
 		const sent = source.outbox.get(String(r.outbox_object_id))
-		const visibility =
-			sent === undefined || sent === null ? null : audienceOf(sent.to, sent.cc, followersOf(String(r.actor_id)))
-		put('boosts', String(r.id), [String(r.actor_id), target, visibility])
+		const audience =
+			sent === undefined || sent === null
+				? { visibility: 'unreadable', to: [] }
+				: audienceOf(sent.to, sent.cc, source.followers.get(String(r.actor_id)))
+		// A boost reaches nobody in particular, except a direct one: the accounts in its to.
+		const recipients =
+			audience.visibility === 'direct'
+				? [...new Set(audience.to.map((x) => byAddress.get(x ?? '')))]
+						.filter((x) => x !== undefined && x !== String(r.actor_id))
+						.map((x) => /** @type {[string, number]} */ ([String(x), 1]))
+						.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+				: []
+		put('boosts', String(r.id), [String(r.actor_id), target, audience.visibility, recipients])
 		statusApiIds.set(String(r.mastodon_id), [...(statusApiIds.get(String(r.mastodon_id)) ?? []), String(r.id)])
 	}
 	// Old API ids resolve to the same status (an ambiguous id is not checked).

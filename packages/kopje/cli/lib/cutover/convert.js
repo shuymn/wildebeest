@@ -131,29 +131,56 @@ function str(value) {
 }
 
 /**
- * The visibility legacy Wildebeest gave an object (packages/backend/src/mastodon/status_visibility.ts,
- * detectVisibility): Public in to; the author's followers in to, unlisted with Public in cc; otherwise direct. Only the
- * full Public URI counts, as in legacy, so nothing reads wider than it did there.
- * @param {string[]} to
- * @param {string[]} cc
- * @param {string} followers
- * @returns {'public' | 'unlisted' | 'private' | 'direct'}
+ * Legacy's reference rule (packages/backend/src/activitypub/objects/index.ts, getApId): a string is parsed as a URL
+ * and compared in its normalized form; an object stands for its `id`, recursively; anything else (an object with only
+ * `href`, null, a number) makes legacy throw, which here is null.
+ * @param {unknown} value
+ * @returns {string | null}
  */
-function legacyVisibility(to, cc, followers) {
-	if (to.includes(PUBLIC)) {
-		return 'public'
+function legacyReference(value, depth = 0) {
+	if (typeof value === 'string') {
+		try {
+			return new URL(value).href
+		} catch {
+			return null
+		}
 	}
-	if (to.includes(followers)) {
-		return cc.includes(PUBLIC) ? 'unlisted' : 'private'
+	if (typeof value === 'object' && value !== null && !Array.isArray(value) && depth < 16) {
+		const id = /** @type {Json} */ (value).id
+		return id === undefined ? null : legacyReference(id, depth + 1)
 	}
-	return 'direct'
+	return null
 }
 
-/** @param {unknown} value */
-function addresses(value) {
-	return list(value)
-		.map(idOf)
-		.filter(/** @returns {x is string} */ (x) => x !== null)
+/**
+ * Who could read an object in legacy Wildebeest (packages/backend/src/mastodon/status_visibility.ts, detectVisibility
+ * and isVisible), from its to and cc (toArray of each) and its stored author's followers collection: public with
+ * Public in to; with the followers in to, unlisted when Public is in cc, else the author's followers; otherwise the
+ * accounts in to. Only the full Public URI counts. Null where legacy would throw on a reference, so that nobody could
+ * read the object there: the conversion refuses it instead of guessing.
+ * @param {unknown} to
+ * @param {unknown} cc
+ * @param {unknown} followers
+ * @returns {{ visibility: 'public' | 'unlisted' | 'private' | 'direct', to: string[] } | null}
+ */
+export function legacyAudience(to, cc, followers) {
+	const targets = list(to).map((x) => legacyReference(x))
+	const copies = list(cc).map((x) => legacyReference(x))
+	if (targets.includes(null) || copies.includes(null)) {
+		return null
+	}
+	const t = /** @type {string[]} */ (targets)
+	if (t.includes(PUBLIC)) {
+		return { visibility: 'public', to: t }
+	}
+	const collection = legacyReference(followers)
+	if (collection === null) {
+		return null
+	}
+	if (t.includes(collection)) {
+		return { visibility: copies.includes(PUBLIC) ? 'unlisted' : 'private', to: t }
+	}
+	return { visibility: 'direct', to: t }
 }
 
 /**
@@ -596,55 +623,86 @@ export function convertLegacy(
 	)
 	const mentionInsert = insert('INSERT OR IGNORE INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, ?)')
 	const tagInsert = insert('INSERT OR IGNORE INTO status_tags (status_id, name) VALUES (?, ?)')
-	const accountIdByUri = new Map([...accounts].map(([uri, a]) => [uri, a.id]))
+	// Accounts by their URI in legacy's normalized form (legacyReference).
+	const accountByReference = new Map(
+		[...accounts].flatMap(([uri, a]) => {
+			const reference = legacyReference(uri)
+			return reference === null ? [] : [[reference, a.id]]
+		})
+	)
 	/** @type {Map<string, { parent: string | null, account: string, inReplyToUri: string | null }>} */
 	const replies = new Map()
 	for (const plan of statuses.values()) {
 		const { row, properties, local } = plan
 		const author = /** @type {NonNullable<ReturnType<typeof accountOf>>} */ (accountOf(row.original_actor_id))
-		// The audience comes from the object's own addressing as exported (legacy authorizes with it); for a local status
-		// the outbox row, where the export has one, must agree.
+		// The audience comes from the object's own addressing and its stored author as exported (legacy authorizes with
+		// them); for a local status the outbox row, where the export has one, must agree.
 		const addressing = source.objects.get(String(row.id)) ?? { to: undefined, cc: undefined, kind: 'object' }
-		const to = addresses(addressing.to)
-		const cc = addresses(addressing.cc)
-		const legacy = legacyVisibility(to, cc, author.followers)
+		const storedAuthor = source.authors.get(String(row.id)) ?? null
+		const audience = legacyAudience(
+			addressing.to,
+			addressing.cc,
+			storedAuthor === null ? undefined : source.followers.get(storedAuthor)
+		)
+		if (audience === null) {
+			count(problems, 'statuses:addressing-legacy-could-not-read')
+			continue
+		}
+		const legacy = audience.visibility
+		if (storedAuthor !== String(row.original_actor_id) && legacy !== 'public' && legacy !== 'unlisted') {
+			// A bridge migration (0021) changed the author of a non-public object: its readers would change.
+			count(problems, 'statuses:author-changed-audience')
+			continue
+		}
 		if (local) {
 			const sent = source.outboxByPair.get(`${String(row.original_actor_id)}\n${String(row.id)}`)
 			if (sent !== undefined && sent !== null) {
-				if (!Array.isArray(sent.to) || !Array.isArray(sent.cc)) {
-					count(problems, 'statuses:outbox-addressing-unreadable')
-				} else if (
-					sent.kind === 'target'
-						? !addresses(sent.to).every((x) => to.includes(x) || cc.includes(x))
-						: legacyVisibility(addresses(sent.to), addresses(sent.cc), author.followers) !== legacy
+				const outboxAudience = legacyAudience(
+					sent.to,
+					sent.cc,
+					storedAuthor === null ? undefined : source.followers.get(storedAuthor)
+				)
+				if (
+					outboxAudience === null ||
+					(sent.kind === 'target'
+						? !outboxAudience.to.every(
+								(x) =>
+									audience.to.includes(x) ||
+									list(addressing.cc)
+										.map((y) => legacyReference(y))
+										.includes(x)
+							)
+						: outboxAudience.visibility !== legacy)
 				) {
 					count(problems, 'statuses:addressing-conflict')
 				}
 			}
 		}
-		// Recipients (status_mentions). Public and unlisted: tagged known accounts, and addressed ones as silent. A
-		// followers-only or direct status grants nobody new: legacy let only the author's followers read the former and
-		// only the accounts in `to` read the latter (packages/backend/src/mastodon/status_visibility.ts, isVisible), so
-		// a Mention tag or cc entry outside that set is no recipient (it stays in raw) and is counted.
+		// Recipients (status_mentions). Public and unlisted: tagged known accounts, and addressed ones as silent. A direct
+		// status: exactly the known accounts in to, which legacy let read it without a follow. A followers-only status:
+		// none, so that only an accepted follow, checked when it is read, lets anyone read it, as legacy's isVisible did; a
+		// mention there would be a lasting grant. Tags and cc entries outside these sets stay in raw and are counted.
 		const tagged = new Set()
 		for (const tag of list(properties.tag)) {
 			if (typeof tag === 'object' && tag !== null && /** @type {Json} */ (tag).type === 'Mention') {
-				const account = accountIdByUri.get(idOf(/** @type {Json} */ (tag).href) ?? '')
+				const account = accountByReference.get(legacyReference(/** @type {Json} */ (tag).href) ?? '')
 				if (account !== undefined && account !== author.id) {
 					tagged.add(account)
 				}
 			}
 		}
-		/** @param {string[]} list */
-		const known = (list) => list.map((x) => accountIdByUri.get(x)).filter((x) => x !== undefined && x !== author.id)
-		const candidates = new Set([...tagged, ...known(to), ...known(cc)])
+		/** @param {unknown} value */
+		const known = (value) =>
+			list(value)
+				.map((x) => accountByReference.get(legacyReference(x) ?? ''))
+				.filter((x) => x !== undefined && x !== author.id)
+		const candidates = new Set([...tagged, ...known(addressing.to), ...known(addressing.cc)])
 		/** @type {Set<unknown>} */
 		let readers = candidates
 		if (legacy === 'private') {
-			const followers = acceptedFollowers.get(author.id) ?? new Set()
-			readers = new Set([...candidates].filter((a) => followers.has(String(a))))
+			readers = new Set()
 		} else if (legacy === 'direct') {
-			readers = new Set(known(to))
+			readers = new Set(known(addressing.to))
 		}
 		/** @type {Map<string, number>} */
 		const mentions = new Map()
@@ -767,11 +825,20 @@ export function convertLegacy(
 			count(problems, 'reblogs:audience-unknown')
 			continue
 		}
-		if (!Array.isArray(sent.to) || !Array.isArray(sent.cc)) {
-			count(problems, 'reblogs:outbox-addressing-unreadable')
+		const boostAudience = legacyAudience(sent.to, sent.cc, source.followers.get(String(boost.reblog.actor_id)))
+		if (boostAudience === null) {
+			count(problems, 'reblogs:addressing-legacy-could-not-read')
 			continue
 		}
-		const visibility = legacyVisibility(addresses(sent.to), addresses(sent.cc), boost.booster.followers)
+		// A direct boost reaches the accounts in its to, as legacy served it; any other boost grants nobody.
+		const boostReaders =
+			boostAudience.visibility === 'direct'
+				? [...new Set(boostAudience.to.map((r) => accountByReference.get(r)))].filter(
+						(a) => a !== undefined && a !== boost.booster.id
+					)
+				: []
+		const visibility =
+			boostAudience.visibility === 'direct' && boostReaders.length > 0 ? 'limited' : boostAudience.visibility
 		statusInsert.run(
 			boost.id,
 			boost.uri,
@@ -796,6 +863,9 @@ export function convertLegacy(
 			isoTime(boost.reblog.cdate) ?? boost.published
 		)
 		insert('UPDATE statuses SET reblog_of_id = ? WHERE id = ?').run(boost.target.id, boost.id)
+		for (const account of boostReaders) {
+			mentionInsert.run(boost.id, String(account), 1)
+		}
 	}
 
 	// ---------------------------------------------------------------- media

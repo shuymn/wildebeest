@@ -246,12 +246,14 @@ export function actualFromDump(text) {
 	for (const [id, entry] of statuses) {
 		const target = reblogOf.get(id)
 		if (target !== undefined) {
-			put('boosts', entry.uri, [entry.author, statuses.get(target)?.uri, entry.visibility])
+			const boostRecipients = (mentions.get(id) ?? []).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+			put('boosts', entry.uri, [entry.author, statuses.get(target)?.uri, entry.visibility, boostRecipients])
 			continue
 		}
 		put('statuses', entry.uri, entry.record)
 		const recipients = (mentions.get(id) ?? []).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
-		put('audience', entry.uri, [entry.visibility, recipients])
+		const open = entry.visibility === 'public' || entry.visibility === 'unlisted'
+		put('audience', entry.uri, [entry.visibility, recipients, open ? null : entry.author])
 		const parent = parentOf.get(id)
 		if (entry.inReplyTo !== null || parent !== undefined) {
 			put('replies', entry.uri, [entry.inReplyTo, parent === undefined ? null : (statuses.get(parent)?.uri ?? null)])

@@ -15,7 +15,15 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 
-import { digestOf, ExportError, parseStatement, quoteIdentifier, splitStatements } from './sql-script.js'
+import {
+	decodeBudget,
+	digestOf,
+	ExportError,
+	parseStatement,
+	quoteIdentifier,
+	splitStatements,
+	tableExpressions,
+} from './sql-script.js'
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../legacy-migrations/', import.meta.url))
 
@@ -131,8 +139,8 @@ function rowCounts(db) {
 
 /**
  * @typedef {{ to: unknown, cc: unknown, kind: 'object' | 'to-cc' | 'target' }} Addressing
- * @typedef {{ objects: Map<string, Addressing>, outbox: Map<string, Addressing | null>,
- *   outboxByPair: Map<string, Addressing | null> }} SourceAddressing
+ * @typedef {{ objects: Map<string, Addressing>, authors: Map<string, string | null>, followers: Map<string, unknown>,
+ *   outbox: Map<string, Addressing | null>, outboxByPair: Map<string, Addressing | null> }} SourceAddressing
  * @typedef {{ level: number, line: string, levelName: string, migrationsApplied: string[],
  *   schemaFingerprint: string, rowsLoaded: Record<string, number>,
  *   deletions: { migration: string, table: string, rows: number }[], foreignKeyViolations: number,
@@ -202,34 +210,31 @@ export function loadLegacyExport({ texts, acceptDeletions = false, baseTime = 0,
 function load(sources, acceptDeletions, baseTime, path) {
 	const migrations = legacyMigrations()
 
-	// Pass 1: the export's own schema, its d1_migrations rows and its sequence counter.
-	const exported = new DatabaseSync(':memory:')
-	/** @type {Set<string>} */
-	const created = new Set()
+	// Pass 1: the export's table definitions (collected, not run), its d1_migrations rows and its sequence counter.
+	// Bookkeeping tables (d1_migrations, sqlite_*, _cf_*) never get the export's DDL: their rows are read by name into
+	// a fixed schema of the converter's own.
+	/** @type {Map<string, string>} */
+	const definitions = new Map()
 	/** @type {Set<string>} */
 	const withRows = new Set()
-	/** @type {{ columns: string[] | null, rows: import('./sql-script.js').Value[][] }[]} */
+	/** @type {{ id: bigint | null, name: string }[]} */
 	const migrationRows = []
 	/** @type {string | null} */
 	let notificationSequence = null
+	let budget = decodeBudget()
 	for (const source of sources) {
 		for (const statement of splitStatements(source())) {
-			const parsed = parseStatement(statement)
+			const parsed = parseStatement(statement, budget)
 			if (parsed.kind === 'create-table') {
-				if (isSearchTable(parsed.table) || parsed.table.startsWith('sqlite_')) {
+				if (isSearchTable(parsed.table) || isBookkeeping(parsed.table)) {
 					continue
 				}
-				if (created.has(parsed.table)) {
+				if (definitions.has(parsed.table)) {
 					throw new ExportError('duplicate-table', { table: digestOf(parsed.table) })
 				}
-				created.add(parsed.table)
-				try {
-					exported.exec(parsed.sql)
-				} catch {
-					throw new ExportError('invalid-create-table', { table: digestOf(parsed.table) })
-				}
+				definitions.set(parsed.table, parsed.sql)
 			} else if (parsed.kind === 'insert') {
-				if (isSearchTable(parsed.table)) {
+				if (isSearchTable(parsed.table) || parsed.table.startsWith('_cf_')) {
 					continue
 				}
 				if (parsed.table === 'sqlite_sequence') {
@@ -247,35 +252,36 @@ function load(sources, acceptDeletions, baseTime, path) {
 					}
 					continue
 				}
-				withRows.add(parsed.table)
 				if (parsed.table === 'd1_migrations') {
-					migrationRows.push(parsed)
+					const columns = parsed.columns ?? ['id', 'name', 'applied_at']
+					if (!columns.every((c) => ['id', 'name', 'applied_at'].includes(c)) || !columns.includes('name')) {
+						throw new ExportError('invalid-migrations-table')
+					}
+					for (const row of parsed.rows) {
+						const id = row[columns.indexOf('id')]
+						const name = row[columns.indexOf('name')]
+						if (typeof name !== 'string' || (id !== undefined && typeof id !== 'bigint')) {
+							throw new ExportError('invalid-migrations-table')
+						}
+						migrationRows.push({ id: typeof id === 'bigint' ? id : null, name })
+					}
+					continue
 				}
+				withRows.add(parsed.table)
 			}
 		}
 	}
 	for (const table of withRows) {
-		if (!created.has(table)) {
+		if (!definitions.has(table)) {
 			throw new ExportError('rows-without-table', { table: digestOf(table) })
 		}
 	}
 
 	// Level: the applied names must be exactly the first canonical migrations.
-	if (!created.has('d1_migrations')) {
-		throw new ExportError('no-d1-migrations')
-	}
-	for (const { columns, rows } of migrationRows) {
-		const names = columns ?? ['id', 'name', 'applied_at']
-		const insert = exported.prepare(
-			`INSERT INTO d1_migrations (${names.map(quoteIdentifier).join(', ')}) VALUES (${names.map(() => '?').join(', ')})`
-		)
-		for (const row of rows) {
-			insert.run(...row)
-		}
-	}
-	const applied = /** @type {{ name: unknown }[]} */ (
-		exported.prepare('SELECT name FROM d1_migrations ORDER BY id').all()
-	).map((r) => String(r.name).replace(/\.sql$/, ''))
+	const applied = migrationRows
+		.map((row, i) => ({ order: row.id ?? BigInt(i), name: row.name.replace(/\.sql$/, '') }))
+		.sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0))
+		.map((row) => row.name)
 	if (applied.length === 0) {
 		throw new ExportError('no-migrations-applied')
 	}
@@ -287,15 +293,40 @@ function load(sources, acceptDeletions, baseTime, path) {
 		throw new ExportError('unsupported-level', { level })
 	}
 
-	// Schema fingerprint: the export's tables must be exactly the canonical tables at that level, column by column.
+	// Schema fingerprint. Before any supplied definition runs, its DEFAULT, CHECK and generated expressions must equal
+	// the canonical ones at that level; then it runs in an empty scratch database (never given a row) and its columns
+	// must equal the canonical columns.
 	const db = new DatabaseSync(path, { enableForeignKeyConstraints: false })
 	deterministicRandom(db)
 	applyMigrations(db, migrations.slice(0, level + 1))
 	const canonical = schemaFingerprint(db)
+	const canonicalSql = new Map(
+		/** @type {{ name: string, sql: string }[]} */ (
+			db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table'").all()
+		).map((t) => [t.name, t.sql])
+	)
+	const exported = new DatabaseSync(':memory:')
+	/** @type {string[]} */
+	const differing = []
+	for (const [table, sql] of definitions) {
+		const reference = canonicalSql.get(table)
+		if (reference === undefined || !canonical.has(table)) {
+			continue
+		}
+		if (JSON.stringify(tableExpressions(sql)) !== JSON.stringify(tableExpressions(reference))) {
+			differing.push(table)
+			continue
+		}
+		try {
+			exported.exec(sql)
+		} catch {
+			throw new ExportError('invalid-create-table', { table: digestOf(table) })
+		}
+	}
 	const actual = schemaFingerprint(exported)
-	const missing = [...canonical.keys()].filter((t) => !actual.has(t))
-	const extra = [...actual.keys()].filter((t) => !canonical.has(t))
-	const differing = [...canonical.keys()].filter((t) => actual.has(t) && actual.get(t) !== canonical.get(t))
+	const missing = [...canonical.keys()].filter((t) => !definitions.has(t))
+	const extra = [...definitions.keys()].filter((t) => !canonical.has(t))
+	differing.push(...[...canonical.keys()].filter((t) => actual.has(t) && actual.get(t) !== canonical.get(t)))
 	if (missing.length + extra.length + differing.length > 0) {
 		throw new ExportError('schema-mismatch', {
 			missing: missing.map(digestOf),
@@ -317,11 +348,12 @@ function load(sources, acceptDeletions, baseTime, path) {
 	const columnsOf = new Map()
 	/** @type {Map<string, import('node:sqlite').StatementSync>} */
 	const prepared = new Map()
+	budget = decodeBudget()
 	db.exec('BEGIN')
 	try {
 		for (const source of sources) {
 			for (const statement of splitStatements(source())) {
-				const parsed = parseStatement(statement)
+				const parsed = parseStatement(statement, budget)
 				if (parsed.kind !== 'insert' || !canonical.has(parsed.table)) {
 					continue
 				}
@@ -383,12 +415,32 @@ function load(sources, acceptDeletions, baseTime, path) {
 	// Addressing as exported, before any bridge migration fills a default (0002 gives every outbox row Public, which
 	// 0016 turns into its `to`). An object's addressing is its own JSON; an outbox row has addressing only from the level
 	// that wrote it: to/cc from 0016, a single target from 0002, none before.
+	// Legacy authorizes with the object's stored author (objects.original_actor_id) and that actor's followers
+	// collection, which 0021 may later rewrite from attributedTo; both are captured as exported too.
 	/** @type {SourceAddressing} */
-	const source = { objects: new Map(), outbox: new Map(), outboxByPair: new Map() }
-	for (const row of /** @type {{ id: string, properties: unknown }[]} */ (
-		db.prepare('SELECT id, properties FROM objects').all()
+	const source = {
+		objects: new Map(),
+		authors: new Map(),
+		followers: new Map(),
+		outbox: new Map(),
+		outboxByPair: new Map(),
+	}
+	for (const row of /** @type {{ id: string, properties: unknown, original_actor_id: unknown }[]} */ (
+		db.prepare('SELECT id, properties, original_actor_id FROM objects').all()
 	)) {
 		source.objects.set(String(row.id), addressingOf(row.properties))
+		source.authors.set(String(row.id), typeof row.original_actor_id === 'string' ? row.original_actor_id : null)
+	}
+	for (const row of /** @type {{ id: string, properties: unknown }[]} */ (
+		db.prepare('SELECT id, properties FROM actors').all()
+	)) {
+		const followers = /** @type {Record<string, unknown> | null} */ (
+			(() => {
+				const value = jsonOrInvalid(row.properties)
+				return typeof value === 'object' && value !== null ? value : null
+			})()
+		)
+		source.followers.set(String(row.id), followers?.followers)
 	}
 	const outboxColumns = actual.get('outbox_objects') ?? ''
 	const hasToCc = outboxColumns.includes('"name":"cc"')
