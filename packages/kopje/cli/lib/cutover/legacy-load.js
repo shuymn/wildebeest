@@ -449,14 +449,24 @@ function load(sources, acceptDeletions, baseTime, path) {
 						keep.push(i)
 					}
 				}
-				// A column nullable in the export only takes no NULL, nor a NULL default when a row leaves it out.
-				const strict = [...(nullable.get(parsed.table) ?? [])].map((name) => {
-					const at = listed.indexOf(name)
-					if (at === -1 && all.find((c) => c.name === name)?.dflt_value === null) {
-						throw new ExportError('null-in-not-null-column', { table: digestOf(parsed.table) })
-					}
-					return at
-				})
+				// A column nullable in the export only takes no NULL, nor a NULL default when a row leaves it out. A generated
+				// column is never inserted: the canonical table computes it, and its NOT NULL is checked by the insertion.
+				const relaxed = [...(nullable.get(parsed.table) ?? [])].map((name) => ({
+					name,
+					generated: all.find((c) => c.name === name)?.hidden !== 0,
+				}))
+				const strict = relaxed
+					.filter((c) => !c.generated)
+					.map(({ name }) => {
+						const at = listed.indexOf(name)
+						if (at === -1 && all.find((c) => c.name === name)?.dflt_value === null) {
+							throw new ExportError('null-in-not-null-column', { table: digestOf(parsed.table) })
+						}
+						return at
+					})
+				const generatedNotNull = relaxed
+					.filter((c) => c.generated)
+					.map((c) => `NOT NULL constraint failed: ${parsed.table}.${c.name}`)
 				const key = `${parsed.table}\n${keep.map((i) => listed[i]).join('\n')}`
 				let insert = prepared.get(key)
 				if (insert === undefined) {
@@ -472,7 +482,14 @@ function load(sources, acceptDeletions, baseTime, path) {
 					if (strict.some((at) => at !== -1 && row[at] === null)) {
 						throw new ExportError('null-in-not-null-column', { table: digestOf(parsed.table) })
 					}
-					insert.run(...keep.map((i) => row[i] ?? null))
+					try {
+						insert.run(...keep.map((i) => row[i] ?? null))
+					} catch (error) {
+						if (error instanceof Error && generatedNotNull.some((m) => error.message.includes(m))) {
+							throw new ExportError('null-in-not-null-column', { table: digestOf(parsed.table) })
+						}
+						throw error
+					}
 					rowsLoaded[parsed.table] = (rowsLoaded[parsed.table] ?? 0) + 1
 				}
 			}

@@ -257,6 +257,65 @@ describe('an export whose actors.type was added back by ALTER TABLE ADD COLUMN',
 		expect(errorOf(() => loadLegacyExport({ texts: texts.values() })).code).toBe('null-in-not-null-column')
 	})
 
+	describe('a generated column nullable in the export only', () => {
+		const GENERATED = `"type" TEXT NOT NULL GENERATED ALWAYS AS (json_extract(activity, '$.type')) STORED`
+		const literal = (value: unknown) =>
+			value === null
+				? 'NULL'
+				: typeof value === 'string'
+					? `'${value.replaceAll("'", "''")}'`
+					: value instanceof Uint8Array
+						? `X'${Buffer.from(value).toString('hex')}'`
+						: String(value as bigint | number)
+		// The actor_activities export with its generated type relaxed, and its rows written without that column: with a
+		// column list, or without one (values in the export's column order, generated columns left out).
+		const activities = (text: string, form: 'listed' | 'omitted' | 'bare', extra: string[] = []) => {
+			const out: string[] = []
+			for (const statement of splitStatements(text)) {
+				const parsed = parseStatement(statement)
+				if (parsed.kind === 'create-table') {
+					expect(statement).toContain(GENERATED)
+					out.push(`${statement.replace(GENERATED, GENERATED.replace(' NOT NULL', ''))};`)
+				} else if (parsed.kind === 'insert') {
+					const columns = parsed.columns ?? []
+					const keep = columns.map((c, i) => [c, i] as const).filter(([c]) => form === 'listed' || c !== 'type')
+					const values = (row: unknown[]) => `VALUES(${keep.map(([, i]) => literal(row[i])).join(',')})`
+					const list = form === 'bare' ? '' : ` (${keep.map(([c]) => `"${c}"`).join(',')})`
+					for (const row of parsed.rows) {
+						out.push(`INSERT INTO "actor_activities"${list} ${values(row)};`)
+					}
+				}
+			}
+			return `${[...out, ...extra].join('\n')}\n`
+		}
+
+		for (const form of ['listed', 'omitted', 'bare'] as const) {
+			it(`is computed by the canonical table (${form})`, async () => {
+				const fixture = await buildLegacyFixture({ level: 39 })
+				const texts = new Map(fixture.texts)
+				texts.set('actor_activities', activities(texts.get('actor_activities') ?? '', form))
+				const { db, report } = loadLegacyExport({ texts: texts.values() })
+				expect(report.nullableInExport).toEqual(['actor_activities.type'])
+				const rows = db.prepare('SELECT count(*) AS n, count(type) AS typed FROM actor_activities').get() as {
+					n: number
+					typed: number
+				}
+				db.close()
+				expect(rows.n).toBeGreaterThan(0)
+				expect(rows.typed).toBe(rows.n)
+
+				// An activity without a type computes NULL, which the canonical NOT NULL refuses.
+				const bad = `('aa-untyped','https://kopje.test/ap/users/alice','2024-03-01 09:00:00.000','{}')`
+				const extra =
+					form === 'bare'
+						? `INSERT INTO "actor_activities" VALUES${bad};`
+						: `INSERT INTO "actor_activities" ("id","actor_id","cdate","activity") VALUES${bad};`
+				texts.set('actor_activities', activities(fixture.texts.get('actor_activities') ?? '', form, [extra]))
+				expect(errorOf(() => loadLegacyExport({ texts: texts.values() })).code).toBe('null-in-not-null-column')
+			})
+		}
+	})
+
 	it('still refuses any other column difference', async () => {
 		const fixture = await buildLegacyFixture({ level: 39, actorTypeDrift: true })
 		const actors = fixture.texts.get('actors') ?? ''
