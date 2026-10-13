@@ -39,12 +39,14 @@ Commands
   catalog                       migrations and tables a dump for this Store must declare
   cutover status                the cutover's publication mark, rollback journal and import state
   cutover publish --yes         mark the instance published (step 9); no cutover reset is possible afterwards
-  cutover drain --fallback-actor <uri>
-                                rolling back: hand the requests Kopje spooled to the legacy Queue (LEGACY_QUEUE), in
-                                spool order, each verified first; those that fail for good are kept. Exits 3 when a
-                                request may verify later (run it again)
-  cutover discard-unverified --yes
-                                delete the kept requests that failed verification (after inspecting them with sql)
+  cutover drain --worker <dir> [--fallback <username>]
+                                rolling back: hand the requests Kopje spooled to the legacy Queue (LEGACY_QUEUE) one at
+                                a time, in spool order, each verified first, to a legacy account of the maintenance
+                                worker's snapshot in <dir>; waits while Kopje's or the legacy Queue holds messages.
+                                Exits 3 when it stops (the legacy DLQ holds messages, metrics cannot be read, a key
+                                may verify later) or waited 45 minutes
+  cutover discard-kept --yes    delete the kept requests (failed verification, or no legacy recipient), after
+                                inspecting them with sql
   cutover reset --yes           take the Store back to empty after a completed import, keeping the configuration;
                                 only before publication, with MAINTENANCE=full and an empty journal
   pitr bookmark [--at <time>]   current bookmark, or the one for an ISO 8601 time
@@ -135,7 +137,7 @@ function parseArgs(argv) {
 		'export',
 		'kopje-queue',
 		'manifest',
-		'fallback-actor',
+		'fallback',
 		'worker',
 	])
 	for (let i = 0; i < argv.length; i++) {
@@ -688,37 +690,50 @@ export async function run({
 					return 0
 				}
 				if (sub === 'drain') {
-					const fallbackActor = flags['fallback-actor']
-					if (typeof fallbackActor !== 'string') {
-						throw new UsageError('cutover drain --fallback-actor <local actor URI>')
+					// The legacy local accounts come from the maintenance worker's snapshot, never from a request.
+					const workerDir = flags.worker
+					const fallback = flags.fallback
+					if (typeof workerDir !== 'string' || (fallback !== undefined && typeof fallback !== 'string')) {
+						throw new UsageError('cutover drain --worker <maintenance worker dir> [--fallback <username>]')
 					}
-					const totals = { sent: 0, unverified: 0 }
+					const { snapshotIn, WORKER_FILE } = await import('./cutover/maintenance.js')
+					const accounts = snapshotIn((await io.readText(`${workerDir}/${WORKER_FILE}`)) ?? '').inboxes
+					const pause =
+						sleep ?? ((/** @type {number} */ ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms)))
+					const totals = { sent: 0, unverified: 0, noRecipient: 0 }
+					const deadline = now() + 45 * 60 * 1000
 					for (;;) {
-						const round = await client.post('/admin/cutover/drain', { fallbackActor })
+						const round = await client.post('/admin/cutover/drain', { accounts, fallback })
 						totals.sent += round.sent
 						totals.unverified += round.unverified
-						out.progress(`drained ${totals.sent}, kept ${totals.unverified}, pending ${round.pending}`)
+						totals.noRecipient += round.noRecipient
+						const { pending, sending } = round.journal
+						out.progress(`sent ${totals.sent}, kept ${totals.unverified + totals.noRecipient}, pending ${pending}`)
 						if (round.stopped !== null) {
-							print({ ...totals, pending: round.pending, unverified: round.unverifiedTotal, stopped: round.stopped })
-							out.info(`drain stopped (${round.stopped}); run it again later, nothing after that request was sent`)
+							print({ ...totals, journal: round.journal, stopped: round.stopped })
+							out.info(`drain stopped (${round.stopped}); act on it, then run it again`)
 							return 3
 						}
-						if (round.pending === 0) {
-							print({ ...totals, pending: 0, unverified: round.unverifiedTotal })
-							out.info(
-								round.unverifiedTotal === 0
-									? 'rollback journal empty'
-									: `rollback journal drained; ${round.unverifiedTotal} requests failed verification and are kept`
-							)
+						if (round.waiting === null && round.sent === 0 && pending + sending === 0) {
+							print({ ...totals, journal: round.journal })
+							out.info('rollback journal drained')
 							return 0
+						}
+						if (round.waiting !== null) {
+							if (now() > deadline) {
+								print({ ...totals, journal: round.journal, waiting: round.waiting })
+								out.info(`still waiting (${round.waiting}); run it again`)
+								return 3
+							}
+							await pause(2000)
 						}
 					}
 				}
-				if (sub === 'discard-unverified') {
+				if (sub === 'discard-kept') {
 					if (flags.yes !== true) {
-						throw new UsageError('cutover discard-unverified deletes the kept requests; pass --yes')
+						throw new UsageError('cutover discard-kept deletes the kept requests; pass --yes')
 					}
-					print(await client.post('/admin/cutover/discard-unverified', { confirm: true }))
+					print(await client.post('/admin/cutover/discard-kept', { confirm: true }))
 					return 0
 				}
 				if (sub === 'reset') {

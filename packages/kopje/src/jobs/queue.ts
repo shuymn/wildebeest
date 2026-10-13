@@ -2,7 +2,7 @@ import { type DeliveryDeps, handleDoorbells } from './deliver'
 import { isDeliverMessage } from '../federation/delivery'
 import { type InboxDeps, type JobsMessage, processInbox, requestInboundJobs, ringDeliveries } from '../federation/inbox'
 import { encodeSpoolRecord, inflate, type SpoolMessage, spoolMessageOptions } from '../federation/spool'
-import { readConfig } from '../platform/config'
+import { type Config, readConfig } from '../platform/config'
 import { errorFields } from '../platform/error-message'
 import { callStore } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
@@ -62,7 +62,7 @@ export async function handleQueue(batch: MessageBatch, env: Env, queueDeps: Queu
 		}
 		// A cutover being rolled back: the request goes to the Store's rollback journal, and from there to the legacy
 		// instance (docs/cutover-runbook.md). If the Store refuses it, it is held in the Queue as in maintenance.
-		if (config.ok && config.config.CUTOVER_ROLLBACK === 'journal' && (await journal(body, env, deps))) {
+		if (config.ok && config.config.CUTOVER_ROLLBACK === 'journal' && (await journal(body, env, deps, config.config))) {
 			message.ack()
 			continue
 		}
@@ -181,11 +181,15 @@ async function requeue(message: Message, body: SpoolMessage, queue: Queue): Prom
 	}
 }
 
-async function journal(body: SpoolMessage, env: Env, deps: InboxDeps): Promise<boolean> {
+// A refused request (the journal at its quota, an import running) stays in the Queue as in maintenance, where it
+// counts toward the backlog that bounds spool admission.
+async function journal(body: SpoolMessage, env: Env, deps: InboxDeps, config: Config): Promise<boolean> {
 	try {
 		const record = await encodeSpoolRecord(body)
+		const limits = { entries: config.CUTOVER_JOURNAL_MAX_ENTRIES, bytes: config.CUTOVER_JOURNAL_MAX_BYTES }
 		const result = (await callStore(
-			() => deps.store(env).journalSpool(deps.build(env), { spooledAt: body.spooledAt, record }) as Promise<unknown>
+			() =>
+				deps.store(env).journalSpool(deps.build(env), { spooledAt: body.spooledAt, record }, limits) as Promise<unknown>
 		)) as { ok: boolean; code?: string }
 		if (!result.ok) {
 			console.warn({ event: 'kopje.spool.journal.refused', code: result.code })

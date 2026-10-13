@@ -8,7 +8,7 @@ import { inboxDeps, NOW } from './app-helpers'
 import { fixtureKeyGen } from './federation-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { mastodonActor, RemoteWeb, signedInit, type TestActor } from './inbox-helpers'
-import { ACCESS, ADMIN_EMAIL, importViaRpc, splitDump } from './ops-helpers'
+import { ACCESS, ADMIN_AUD, ADMIN_EMAIL, importViaRpc, splitDump } from './ops-helpers'
 import { QueueSim } from './queue-sim'
 import type { LegacyInboxMessage } from '../src/federation/legacy-inbox'
 import { handleQueue } from '../src/jobs/queue'
@@ -185,199 +185,328 @@ describe('the cutover reset after a completed import (OPS-8)', () => {
 	})
 })
 
-describe('the rollback drain (OPS-9)', () => {
-	type Spooled = { queue: QueueSim; web: RemoteWeb; carol: TestActor; dave: TestActor }
+const SIGNED_SHAPE = {
+	'content-type': 'application/activity+json',
+	signature: 'keyId="https://remote.example/users/a#main-key",headers="(request-target) host date",signature="x"',
+}
 
-	// A Follow and a Create from carol to alice, and a request signed with dave's key that claims carol, spooled by the
-	// maintenance worker in that order.
-	async function spooled(): Promise<Spooled> {
-		const web = new RemoteWeb()
-		const carol = await mastodonActor(web, 'carol')
-		const dave = await mastodonActor(web, 'dave', { key: 1 })
-		const worker = createMaintenanceWorker(snapshot(), () => NOW)
-		const queue = new QueueSim()
-		const post = async (path: string, init: RequestInit) => {
-			const response = await worker.fetch!(
-				new Request(`${ORIGIN}${path}`, init) as Request<unknown, IncomingRequestCfProperties>,
-				{ [SPOOL_QUEUE_BINDING]: queue.queue },
-				{} as ExecutionContext
-			)
-			expect(response.status).toBe(202)
-		}
-		const follow = {
-			'@context': 'https://www.w3.org/ns/activitystreams',
-			id: `${carol.uri}#follows/1`,
-			type: 'Follow',
-			actor: carol.uri,
-			object: `${ORIGIN}/ap/users/alice`,
-		}
-		const create = {
-			'@context': 'https://www.w3.org/ns/activitystreams',
-			id: `${carol.uri}/statuses/1/activity`,
-			type: 'Create',
-			actor: carol.uri,
-			to: [`${ORIGIN}/ap/users/alice`],
-			object: {
-				id: `${carol.uri}/statuses/1`,
-				type: 'Note',
-				attributedTo: carol.uri,
-				to: [`${ORIGIN}/ap/users/alice`],
-				content: '<p>hello</p>',
-				attachment: [],
-				published: '2026-10-12T00:00:00Z',
-			},
-		}
-		await post('/ap/users/alice/inbox', await signedInit(carol, '/ap/users/alice/inbox', follow))
-		await post('/inbox', await signedInit(carol, '/inbox', create))
-		const forged = { ...follow, id: `${carol.uri}#follows/2` }
-		await post('/inbox', await signedInit(carol, '/inbox', forged, { keyId: dave.keyId, privateKey: dave.privateKey }))
-		return { queue, web, carol, dave }
+// A rollback: the maintenance worker spools into Kopje's Queue (`kopje`), Kopje's consumer journals, the drain hands
+// requests to a simulated legacy Queue (`legacy`, acknowledged by the test as the legacy consumer would) and reads the
+// legacy dead-letter queue (`legacyDlq`).
+async function rollback(store: StoreStub, overrides: Record<string, unknown> = {}) {
+	const web = new RemoteWeb()
+	const carol = await mastodonActor(web, 'carol')
+	const dave = await mastodonActor(web, 'dave', { key: 1 })
+	let clock = NOW
+	const worker = createMaintenanceWorker(snapshot(), () => (clock += 1000))
+	const kopje = new QueueSim()
+	const legacy = new QueueSim()
+	const legacyDlq = new QueueSim()
+	const accounts = snapshot().inboxes
+	const env = {
+		MAINTENANCE: 'full',
+		USER_KEK: 'legacy-kek',
+		LEGACY_VAPID_JWK: JSON.stringify(VAPID),
+		QUEUE: kopje.queue,
+		LEGACY_QUEUE: legacy.queue,
+		LEGACY_DLQ: legacyDlq.queue,
+		...overrides,
 	}
-
-	async function journaled(store: StoreStub, { queue, web }: Spooled) {
-		const env = {
-			...adminHarness(store, team).env,
-			MAINTENANCE: 'full',
-			CUTOVER_ROLLBACK: 'journal',
-			QUEUE: new QueueSim().queue,
-		} as Env
-		await queue.deliver((batch) =>
-			handleQueue(
-				batch,
-				env,
-				inboxDeps(() => store, web.loader)
-			)
+	const h = adminHarness(store, team, env, { keygen: fixtureKeyGen, loader: web.loader })
+	const post = async (path: string, init: RequestInit, expected = 202) => {
+		const response = await worker.fetch!(
+			new Request(`${ORIGIN}${path}`, init) as Request<unknown, IncomingRequestCfProperties>,
+			{ [SPOOL_QUEUE_BINDING]: kopje.queue },
+			{} as ExecutionContext
 		)
-		expect(queue.pending).toEqual([])
-		expect(queue.retries).toBe(0)
+		expect(response.status).toBe(expected)
 	}
-
-	function legacyQueue() {
-		const sent: LegacyInboxMessage[] = []
-		const queue = new QueueSim()
-		queue.send.mockImplementation((body: unknown) => {
-			sent.push(structuredClone(body) as LegacyInboxMessage)
-			return Promise.resolve()
-		})
-		return { sent, queue: queue.queue }
+	const spool = async (path: string, activity: Record<string, unknown>, signer: TestActor = carol) =>
+		post(path, await signedInit(signer, path, activity))
+	// Kopje's consumer, journaling or (journal: false) holding requests as in maintenance.
+	const consume = (journal = true, ready = false) =>
+		kopje.deliver(
+			(batch) =>
+				handleQueue(
+					batch,
+					{ ...h.env, ...(journal ? { CUTOVER_ROLLBACK: 'journal' } : {}) } as Env,
+					inboxDeps(() => store, web.loader)
+				),
+			{ ready }
+		)
+	const drain = async (body: Record<string, unknown> = { accounts }) => {
+		const response = await h.post(adminClaims(), '/admin/cutover/drain', body)
+		return { status: response.status, body: (await response.json()) as Record<string, any> }
 	}
+	// The legacy consumer acknowledging what reached it.
+	const handed: LegacyInboxMessage[] = []
+	const ackLegacy = () => handed.push(...legacy.pending.splice(0).map((m) => m.body as LegacyInboxMessage))
+	return { web, carol, dave, kopje, legacy, legacyDlq, h, post, spool, consume, drain, handed, ackLegacy, accounts }
+}
 
-	function drainer(store: StoreStub, web: RemoteWeb, legacy: Queue | undefined) {
-		const overrides = {
-			MAINTENANCE: 'full',
-			USER_KEK: 'legacy-kek',
-			LEGACY_VAPID_JWK: JSON.stringify(VAPID),
-			...(legacy === undefined ? {} : { LEGACY_QUEUE: legacy }),
-		}
-		const h = adminHarness(store, team, overrides, { keygen: fixtureKeyGen, loader: web.loader })
-		return () => h.post(adminClaims(), '/admin/cutover/drain', { fallbackActor: `${ORIGIN}/ap/users/alice` })
-	}
+const ctx = 'https://www.w3.org/ns/activitystreams'
+const alice = `${ORIGIN}/ap/users/alice`
+const follow = (actor: string, n: number) => ({
+	'@context': ctx,
+	id: `${actor}#follows/${n}`,
+	type: 'Follow',
+	actor,
+	object: alice,
+})
+const note = (actor: string, n: number, to: string[] = [alice]) => ({
+	'@context': ctx,
+	id: `${actor}/statuses/${n}/activity`,
+	type: 'Create',
+	actor,
+	to,
+	object: {
+		id: `${actor}/statuses/${n}`,
+		type: 'Note',
+		attributedTo: actor,
+		to,
+		content: '<p>hello</p>',
+		attachment: [],
+		published: '2026-10-12T00:00:00Z',
+	},
+})
 
-	it('journals spooled requests instead of holding them, and drains them to the legacy Queue in spool order', async () => {
+describe('the rollback drain (OPS-9)', () => {
+	it.each([
+		['Follow', 'Undo'],
+		['Create', 'Delete'],
+	])('waits for a delayed %s before draining its newer %s, then hands off one at a time', async (first, second) => {
 		const store = await importedStore()
-		const spool = await spooled()
-		await journaled(store, spool)
-		expect((await store.cutoverStatus(BUILD)).journal).toMatchObject({ pending: 3, unverified: 0 })
+		const r = await rollback(store)
+		const older = first === 'Follow' ? follow(r.carol.uri, 1) : note(r.carol.uri, 1)
+		const newer =
+			second === 'Undo'
+				? { '@context': ctx, id: `${r.carol.uri}#undo/1`, type: 'Undo', actor: r.carol.uri, object: older }
+				: {
+						'@context': ctx,
+						id: `${r.carol.uri}/statuses/1#delete`,
+						type: 'Delete',
+						actor: r.carol.uri,
+						object: { id: `${r.carol.uri}/statuses/1`, type: 'Tombstone' },
+					}
+		// The older request arrived during maintenance and is held in Kopje's Queue with the requeue delay.
+		await r.spool('/ap/users/alice/inbox', older)
+		await r.consume(false)
+		expect(r.kopje.pending).toHaveLength(1)
+		// Journaling starts; the newer request is journaled at once.
+		await r.spool('/ap/users/alice/inbox', newer)
+		await r.consume(true, true)
+		expect((await store.cutoverStatus(BUILD)).journal.pending).toBe(1)
 
-		const legacy = legacyQueue()
-		const response = await drainer(store, spool.web, legacy.queue)()
-		expect(response.status).toBe(200)
-		expect(await response.json()).toMatchObject({
-			sent: 2,
-			unverified: 1,
-			pending: 0,
-			unverifiedTotal: 1,
-			stopped: null,
+		// The collection barrier: nothing is sent while Kopje's Queue holds the delayed request.
+		expect((await r.drain()).body).toMatchObject({ sent: 0, waiting: 'kopje-backlog' })
+		expect(r.legacy.pending).toEqual([])
+		await r.consume(true)
+		expect(r.kopje.pending).toEqual([])
+
+		// The ordered lane: the older request first, the newer one only once the legacy consumer acknowledged it.
+		expect((await r.drain()).body).toMatchObject({ sent: 1, waiting: null })
+		expect((await r.drain()).body).toMatchObject({ sent: 0, waiting: 'legacy-backlog' })
+		r.ackLegacy()
+		expect((await r.drain()).body).toMatchObject({ sent: 1 })
+		r.ackLegacy()
+		expect((await r.drain()).body).toMatchObject({
+			sent: 0,
+			waiting: null,
+			journal: { pending: 0, sending: 0, done: 2 },
 		})
-		expect(legacy.sent.map((m) => m.activity.type)).toEqual(['Follow', 'Create'])
-		expect(legacy.sent[0]).toEqual({
+		expect(r.handed.map((m) => m.activity.type)).toEqual([first, second])
+		expect(r.handed[0]).toEqual({
 			type: 1,
-			actorId: `${ORIGIN}/ap/users/alice`,
-			signerId: spool.carol.uri,
-			activity: expect.objectContaining({ id: `${spool.carol.uri}#follows/1`, type: 'Follow' }),
+			actorId: alice,
+			signerId: r.carol.uri,
+			activity: expect.objectContaining({ type: first }),
 			userKEK: 'legacy-kek',
 			vapidKeys: VAPID,
 		})
-		// The shared-inbox Create goes to the local actor it addresses.
-		expect(legacy.sent[1]!.actorId).toBe(`${ORIGIN}/ap/users/alice`)
+	})
 
-		// The forged request is kept, not sent, and blocks the reset until the operator discards it.
-		expect(await store.cutoverStatus(BUILD)).toMatchObject({ journal: { pending: 0, unverified: 1 } })
+	it('holds the next request while the legacy consumer retries the previous one', async () => {
+		const store = await importedStore()
+		const r = await rollback(store)
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		await r.spool('/ap/users/alice/inbox', {
+			'@context': ctx,
+			id: `${r.carol.uri}#undo/1`,
+			type: 'Undo',
+			actor: r.carol.uri,
+			object: follow(r.carol.uri, 1),
+		})
+		await r.consume()
+		expect((await r.drain()).body).toMatchObject({ sent: 1 })
+		// The legacy consumer failed the Follow (its Accept delivery failed) and retries it: it stays in the legacy Queue.
+		for (let attempt = 0; attempt < 3; attempt++) {
+			expect((await r.drain()).body).toMatchObject({ sent: 0, waiting: 'legacy-backlog' })
+		}
+		r.ackLegacy()
+		expect((await r.drain()).body).toMatchObject({ sent: 1 })
+		r.ackLegacy()
+		expect(r.handed.map((m) => m.activity.type)).toEqual(['Follow', 'Undo'])
+	})
+
+	it('stops on a dead-lettered legacy message, and when a backlog cannot be read', async () => {
+		const store = await importedStore()
+		const r = await rollback(store)
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		await r.consume()
+		await r.legacyDlq.send({ dead: true })
+		expect((await r.drain()).body).toMatchObject({ sent: 0, stopped: 'legacy-dlq' })
+		r.legacyDlq.pending.splice(0)
+		for (const binding of ['QUEUE', 'LEGACY_QUEUE', 'LEGACY_DLQ']) {
+			const without = await rollback(store, { [binding]: { send: () => Promise.resolve() } })
+			expect((await without.drain({ accounts: without.accounts })).body, binding).toMatchObject({
+				sent: 0,
+				stopped: 'metrics-unavailable',
+			})
+		}
+		const unbound = await rollback(store, { LEGACY_DLQ: undefined })
+		const refused = await unbound.drain({ accounts: unbound.accounts })
+		expect(refused).toMatchObject({ status: 409, body: { code: 'legacy-binding-missing' } })
+		expect(r.legacy.pending).toEqual([])
+	})
+
+	it('runs one drain at a time, resends a request a crash left being sent, and never journals a handed-off one again', async () => {
+		const store = await importedStore()
+		const r = await rollback(store)
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		const original = structuredClone(r.kopje.pending[0]!.body)
+		await r.consume()
+
+		// Another drain holds the journal.
+		await store.drainLease(BUILD, authority(), { holder: 'other' })
+		expect(await r.drain()).toMatchObject({ status: 409, body: { code: 'drain-in-progress' } })
+		await store.drainLease(BUILD, authority(), { holder: 'other', release: true })
+
+		// A drain that marked the record as being sent and then died: the next one sends it again (at least once).
+		await store.drainLease(BUILD, authority(), { holder: 'crashed' })
+		const next = (await store.journalNext(BUILD, authority(), 'crashed')) as { entry: { id: string } }
+		await store.journalMark(BUILD, authority(), 'crashed', next.entry.id, 'sending')
+		await store.drainLease(BUILD, authority(), { holder: 'crashed', release: true })
+		expect((await r.drain()).body).toMatchObject({ sent: 1, journal: { sending: 0, done: 1 } })
+		r.ackLegacy()
+
+		// A late redelivery of the same spool message from Kopje's Queue is not journaled again.
+		await r.kopje.send(original)
+		await r.consume()
+		expect((await store.cutoverStatus(BUILD)).journal).toMatchObject({ pending: 0, done: 1 })
+		expect((await r.drain()).body).toMatchObject({ sent: 0, journal: { pending: 0 } })
+		expect(r.handed).toHaveLength(1)
+	})
+
+	it('chooses only a legacy account as the recipient, and keeps a request that has none', async () => {
+		const store = await importedStore()
+		const r = await rollback(store)
+		const ghost = `${ORIGIN}/ap/users/ghost`
+		// A forged request (dave's key, carol's activity), a shared-inbox Create to a missing account then alice, and one
+		// to the missing account only.
+		await r.spool('/inbox', { ...follow(r.carol.uri, 2) }, r.dave)
+		await r.spool('/inbox', note(r.carol.uri, 1, [ghost, alice]))
+		await r.spool('/inbox', note(r.carol.uri, 2, [ghost]))
+		await r.consume()
+		expect(await r.drain({ accounts: r.accounts, fallback: 'ghost' })).toMatchObject({
+			status: 400,
+			body: { code: 'invalid-fallback' },
+		})
+		for (let round = 0; round < 3; round++) {
+			await r.drain()
+			r.ackLegacy()
+		}
+		expect(r.handed.map((m) => m.actorId)).toEqual([alice])
+		expect((await store.cutoverStatus(BUILD)).journal).toMatchObject({
+			pending: 0,
+			unverified: 1,
+			noRecipient: 1,
+			done: 1,
+		})
+
+		// The kept requests block the reset until the operator discards them.
 		const full = adminHarness(store, team, { MAINTENANCE: 'full' })
-		const blocked = await full.post(adminClaims(), '/admin/cutover/reset', { confirm: true })
-		expect(await blocked.json()).toMatchObject({ code: 'journal-not-empty' })
-		expect((await full.post(adminClaims(), '/admin/cutover/discard-unverified', { confirm: true })).status).toBe(200)
+		expect(await (await full.post(adminClaims(), '/admin/cutover/reset', { confirm: true })).json()).toMatchObject({
+			code: 'journal-not-empty',
+		})
+		expect((await full.post(adminClaims(), '/admin/cutover/discard-kept', { confirm: true })).status).toBe(200)
 		expect((await resetToEmpty(full)).status).toBe(200)
-
-		// Nothing is left to replay: a later cutover's import and publication see neither request.
-		const again = await importViaRpc(store, inject('cutover').dump, 1 << 20, authority())
-		expect(again.report).toMatchObject({ ok: true })
-		// Publication replays whatever Kopje's Queue still holds: the drained requests are no longer there.
-		const env = { ...full.env, MAINTENANCE: 'off', QUEUE: new QueueSim().queue } as Env
-		await spool.queue.deliver((batch) =>
-			handleQueue(
-				batch,
-				env,
-				inboxDeps(() => store, spool.web.loader)
-			)
-		)
-		expect(
-			await count(store, 'follows f JOIN accounts a ON a.id = f.account_id WHERE a.uri = ?', spool.carol.uri)
-		).toBe(0)
-		expect(await count(store, 'statuses WHERE uri = ?', `${spool.carol.uri}/statuses/1`)).toBe(0)
 	})
 
-	it('stops at a request that may verify later, so nothing after it overtakes it', async () => {
+	it('bounds the journal under a flood of signed-looking requests; the rest stays in the Queue', async () => {
 		const store = await importedStore()
-		const spool = await spooled()
-		await journaled(store, spool)
-		spool.web.fail(spool.carol.uri, 503)
-		const legacy = legacyQueue()
-		const response = await drainer(store, spool.web, legacy.queue)()
-		expect(await response.json()).toMatchObject({ sent: 0, stopped: 'key-unavailable', pending: 3 })
-		expect(legacy.sent).toEqual([])
-	})
-
-	it('keeps the journal when the legacy Queue is not bound or refuses a message', async () => {
-		const store = await importedStore()
-		const spool = await spooled()
-		await journaled(store, spool)
-		const unbound = await drainer(store, spool.web, undefined)()
-		expect(unbound.status).toBe(409)
-		expect(await unbound.json()).toMatchObject({ code: 'legacy-binding-missing' })
-		const failing = new QueueSim()
-		failing.send.mockImplementation(() => Promise.reject(new Error('queue unavailable')))
-		const response = await drainer(store, spool.web, failing.queue)()
-		expect(await response.json()).toMatchObject({ sent: 0, stopped: 'legacy-queue-failed', pending: 2 })
+		const r = await rollback(store, { CUTOVER_JOURNAL_MAX_ENTRIES: '3' })
+		for (let n = 0; n < 6; n++) {
+			await r.post('/inbox', { method: 'POST', headers: SIGNED_SHAPE, body: JSON.stringify({ n }) })
+		}
+		await r.consume()
+		expect((await store.cutoverStatus(BUILD)).journal).toMatchObject({ pending: 3 })
+		expect(r.kopje.pending).toHaveLength(3)
+		// Nothing is sent while the Queue holds requests; the bogus ones are set aside meanwhile, still counted.
+		expect((await r.drain()).body).toMatchObject({ sent: 0, unverified: 3, waiting: 'kopje-backlog' })
+		await r.consume()
+		expect(r.kopje.pending).toHaveLength(3)
+		// The operator discards what was kept; the rest comes in, is set aside, and the Queue empties.
+		const full = adminHarness(store, team, { MAINTENANCE: 'full' })
+		await full.post(adminClaims(), '/admin/cutover/discard-kept', { confirm: true })
+		await r.consume()
+		expect(r.kopje.pending).toEqual([])
+		expect((await r.drain()).body).toMatchObject({ sent: 0, unverified: 3, waiting: null })
+		expect(r.handed).toEqual([])
 	})
 
 	it('journals nothing once the instance is published: the Queue holds the requests as in maintenance', async () => {
 		const store = await importedStore()
 		await store.markPublished(BUILD, 'command')
-		const spool = await spooled()
-		const env = {
-			...adminHarness(store, team).env,
-			MAINTENANCE: 'full',
-			CUTOVER_ROLLBACK: 'journal',
-			QUEUE: spool.queue.queue,
-		} as Env
-		await spool.queue.deliver((batch) =>
-			handleQueue(
-				batch,
-				env,
-				inboxDeps(() => store, spool.web.loader)
-			)
-		)
-		expect(spool.queue.pending).toHaveLength(3)
+		const r = await rollback(store)
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		await r.consume()
+		expect(r.kopje.pending).toHaveLength(1)
 		expect((await store.cutoverStatus(BUILD)).journal.pending).toBe(0)
 	})
 
 	it('accepts the drain from an Access admin only', async () => {
 		const store = await importedStore()
-		expect(await store.journalPage(BUILD, TOKEN, 10)).toMatchObject({ ok: false, code: 'wrong-authority' })
-		expect(await store.journalSettle(BUILD, TOKEN, { sent: [], unverified: [] })).toMatchObject({
+		expect(await store.drainLease(BUILD, TOKEN, { holder: 'x' })).toMatchObject({ ok: false, code: 'wrong-authority' })
+		expect(await store.journalNext(BUILD, TOKEN, 'x')).toMatchObject({ ok: false, code: 'wrong-authority' })
+		expect(await store.journalMark(BUILD, TOKEN, 'x', 'id', 'done')).toMatchObject({
 			ok: false,
 			code: 'wrong-authority',
 		})
+	})
+})
+
+// The first attempt as the runbook runs it: the import token sets the domain and the Access values while the Store is
+// in bootstrap, the import runs through Access, and it is interrupted; Rollback A then resets it and drains.
+describe('Rollback A from the first attempt (OPS-9)', () => {
+	it('resets an interrupted import, then journals and drains what was spooled meanwhile', async () => {
+		const store = await migratedStore()
+		const configured = await store.setConfig(BUILD, TOKEN, {
+			domain: 'kopje.test',
+			access_team_domain: team.teamDomain,
+			access_admin_aud: ADMIN_AUD,
+			admin_email: ADMIN_EMAIL,
+		})
+		expect(configured).toMatchObject({ ok: true })
+		const begun = await store.importBegin(BUILD, authority(), splitDump(inject('cutover').dump).header)
+		if (!begun.ok) throw new Error(begun.message)
+		const r = await rollback(store)
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		// During the import nothing is journaled: the request stays in Kopje's Queue.
+		await r.consume()
+		expect(r.kopje.pending).toHaveLength(1)
+
+		const full = adminHarness(store, team, { MAINTENANCE: 'full' })
+		const reset = await full.post(adminClaims(), '/admin/import/reset', { confirm: true, id: begun.progress.id })
+		expect(reset.status).toBe(200)
+		let done = ((await reset.json()) as { done: boolean }).done
+		while (!done) {
+			const step = await full.post(adminClaims(), '/admin/import/reset', { confirm: true, id: begun.progress.id })
+			done = ((await step.json()) as { done: boolean }).done
+		}
+		await r.consume()
+		expect(r.kopje.pending).toEqual([])
+		expect((await r.drain()).body).toMatchObject({ sent: 1 })
+		r.ackLegacy()
+		expect(r.handed.map((m) => [m.activity.type, m.actorId])).toEqual([['Follow', alice]])
 	})
 })

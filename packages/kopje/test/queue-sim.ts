@@ -66,9 +66,13 @@ export class QueueSim {
 		return { send: this.send, metrics: () => this.metrics() } as unknown as Queue
 	}
 
-	// Delivers everything pending as one batch, ignoring delays.
-	async deliver(handler: (batch: MessageBatch) => Promise<void> | void): Promise<void> {
-		const stored = this.pending.splice(0)
+	// Delivers everything pending as one batch, ignoring delays; with `ready`, only the messages sent without a delay
+	// (the delayed ones stay pending, as they would until their delay passes).
+	async deliver(handler: (batch: MessageBatch) => Promise<void> | void, { ready = false } = {}): Promise<void> {
+		const stored = ready ? this.pending.filter((m) => m.delaySeconds === 0) : this.pending.splice(0)
+		if (ready) {
+			this.pending = this.pending.filter((m) => m.delaySeconds !== 0)
+		}
 		const outcome = new Map<string, 'ack' | 'retry'>()
 		const settle = (id: string, value: 'ack' | 'retry') => {
 			if (!outcome.has(id)) {

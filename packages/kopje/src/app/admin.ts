@@ -76,6 +76,7 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	'import-not-found': 404,
 	published: 409,
 	'journal-not-empty': 409,
+	'drain-in-progress': 409,
 	'pitr-unavailable': 503,
 	'chunk-failed': 500,
 }
@@ -421,11 +422,13 @@ export function adminRoutes({ build, store, fetch, now, doorbell, loader }: Admi
 	admin.post('/cutover/publish', async (c) => c.json(await stub(c).markPublished(build(c.env), 'command')))
 
 	admin.post('/cutover/drain', async (c) => {
-		const { fallbackActor, max } = await jsonBody(c)
-		const result = await drainJournal(c.env, { build: build(c.env), store: stub(c), loader, now }, c.get('auth'), {
-			fallbackActor,
-			max,
-		})
+		const { accounts, fallback } = await jsonBody(c)
+		const result = await drainJournal(
+			c.env,
+			{ build: build(c.env), store: stub(c), loader, holder: crypto.randomUUID() },
+			c.get('auth'),
+			{ accounts, fallback }
+		)
 		if (!result.ok) {
 			return c.json({ error: result.message, code: result.code }, result.status)
 		}
@@ -433,12 +436,12 @@ export function adminRoutes({ build, store, fetch, now, doorbell, loader }: Admi
 		return c.json(rest)
 	})
 
-	admin.post('/cutover/discard-unverified', async (c) => {
+	admin.post('/cutover/discard-kept', async (c) => {
 		const { confirm } = await jsonBody(c)
 		if (confirm !== true) {
 			return c.json({ error: 'this deletes the kept requests; send {"confirm": true}' }, 400)
 		}
-		return reply(c, await stub(c).journalDiscardUnverified(build(c.env), c.get('auth')))
+		return reply(c, await stub(c).journalDiscardKept(build(c.env), c.get('auth')))
 	})
 
 	// Like a PITR restore, refused unless the env MAINTENANCE=full holds the instance from outside.

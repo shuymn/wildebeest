@@ -232,20 +232,34 @@ export class Store extends DurableObject<Env> {
 		return this.#admin.markPublished(callerBuild, via)
 	}
 
-	journalSpool(callerBuild: string, entry: { spooledAt: number; record: Uint8Array }) {
-		return this.#admin.journalSpool(callerBuild, entry)
+	journalSpool(
+		callerBuild: string,
+		entry: { spooledAt: number; record: Uint8Array },
+		limits?: { entries?: number; bytes?: number }
+	) {
+		return this.#admin.journalSpool(callerBuild, entry, limits)
 	}
 
-	journalPage(callerBuild: string, authority: ImportAuthority, limit: number) {
-		return this.#admin.journalPage(callerBuild, authority, limit)
+	drainLease(callerBuild: string, authority: ImportAuthority, request: { holder: string; release?: boolean }) {
+		return this.#admin.drainLease(callerBuild, authority, request)
 	}
 
-	journalSettle(callerBuild: string, authority: ImportAuthority, settled: { sent: string[]; unverified: string[] }) {
-		return this.#admin.journalSettle(callerBuild, authority, settled)
+	journalNext(callerBuild: string, authority: ImportAuthority, holder: string, skip?: string[]) {
+		return this.#admin.journalNext(callerBuild, authority, holder, skip)
 	}
 
-	journalDiscardUnverified(callerBuild: string, authority: ImportAuthority) {
-		return this.#admin.journalDiscardUnverified(callerBuild, authority)
+	journalMark(
+		callerBuild: string,
+		authority: ImportAuthority,
+		holder: string,
+		id: string,
+		state: 'sending' | 'done' | 'unverified' | 'no-recipient'
+	) {
+		return this.#admin.journalMark(callerBuild, authority, holder, id, state)
+	}
+
+	journalDiscardKept(callerBuild: string, authority: ImportAuthority) {
+		return this.#admin.journalDiscardKept(callerBuild, authority)
 	}
 
 	cutoverReset(callerBuild: string, authority: ImportAuthority) {

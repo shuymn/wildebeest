@@ -123,11 +123,22 @@ export const STALE_IMPORT_MS = 15 * 60 * 1000
 const RESET_BATCH_ROWS = 2000
 const RESET_STEPS = 20
 // Keys of the cutover's rollback journal in inbound_spool: pending, and kept after a failed verification.
-const JOURNAL_PENDING = 'j:'
-const JOURNAL_UNVERIFIED = 'u:'
-const MAX_JOURNAL_PAGE = 50
+const JOURNAL = { pending: 'j:', sending: 's:', unverified: 'u:', noRecipient: 'n:', done: 'd:' } as const
+// The journal's hard quota (an operator may set lower ones): what it holds that is not handed off yet.
+export const JOURNAL_MAX_ENTRIES = 10_000
+export const JOURNAL_MAX_BYTES = 128 * 1024 * 1024
+const DRAIN_LEASE = 'cutover_drain'
+const MAX_DRAIN_SKIP = 100
 
-export type JournalCounts = { pending: number; unverified: number; oldestSpooledAt: number | null }
+export type JournalCounts = {
+	pending: number
+	sending: number
+	unverified: number
+	noRecipient: number
+	done: number
+	bytes: number
+	oldestSpooledAt: number | null
+}
 
 export type CutoverStatus = {
 	published: PublishedFlag | null
@@ -1044,9 +1055,14 @@ export class StoreAdmin {
 	// published: set by the operator at publication (step 9), or by the Worker the first time it serves with
 	// MAINTENANCE=off. From then on the cutover reset is refused for good.
 	// The rollback journal: while the Worker's CUTOVER_ROLLBACK=journal, its Queue consumer stores every spooled inbox
-	// request here (inbound_spool, one single-part row per request, keyed by its digest) instead of holding it in the
-	// Queue; `kopje-admin cutover drain` then hands them to the legacy Queue in the order they were spooled.
-	// Rows the drain could not verify are kept under a 'u:' key for inspection until the operator discards them.
+	// request here (inbound_spool, one single-part row per request, keyed by the digest of the spool message, which
+	// stays the same across requeues and redeliveries) instead of holding it in the Queue, within a count and a byte
+	// quota; `kopje-admin cutover drain` then hands them to the legacy Queue one at a time, in the order they were
+	// spooled. The key's prefix is the record's state:
+	//   j: pending     s: being sent (marked before the send; resent after a crash: at least once)
+	//   u: kept, failed verification for good     n: kept, no legacy recipient
+	//   d: handed off (a tombstone without the request), so a late redelivery is not journaled again
+	// One drain runs at a time, under a lease.
 	// The cutover reset: after a completed import, while unpublished, takes the Store back to empty through the same
 	// bounded reset an interrupted import uses, keeping the configuration.
 
@@ -1081,14 +1097,18 @@ export class StoreAdmin {
 		})
 	}
 
-	// From the Worker's Queue consumer: refused once published (nothing is rolled back then) or during an import.
+	// From the Worker's Queue consumer: refused once published (nothing is rolled back then), during an import, and when
+	// the journal is at its quota (the consumer then leaves the message in the Queue, whose backlog bounds admission).
 	async journalSpool(
 		callerBuild: string,
-		entry: { spooledAt: number; record: Uint8Array }
+		entry: { spooledAt: number; record: Uint8Array },
+		limits: { entries?: number; bytes?: number } = {}
 	): Promise<Result<{ stored: boolean }>> {
 		this.#requireBuild(callerBuild)
 		await this.#kernel.state()
-		const key = `${JOURNAL_PENDING}${sha256Hex(entry.record)}`
+		const digest = sha256Hex(entry.record)
+		const maxEntries = clamp(limits.entries, 1, JOURNAL_MAX_ENTRIES, JOURNAL_MAX_ENTRIES)
+		const maxBytes = clamp(limits.bytes, 1, JOURNAL_MAX_BYTES, JOURNAL_MAX_BYTES)
 		try {
 			return this.#transaction(() => {
 				const flags = readFlags(this.#sql)
@@ -1098,108 +1118,160 @@ export class StoreAdmin {
 				if (flags.import !== null) {
 					throw new ImportError('import-in-progress', 'an import is running')
 				}
-				const known = this.#sql
-					.exec<{ n: number }>('SELECT count(*) AS n FROM inbound_spool WHERE spool_id = ?', key)
-					.one().n
-				if (known === 0) {
-					this.#sql.exec(
-						'INSERT INTO inbound_spool (spool_id, part, part_count, fragment, spooled_at) VALUES (?, 0, 1, ?, ?)',
-						key,
-						entry.record,
-						entry.spooledAt
-					)
+				if (this.#journalState(digest) !== null) {
+					return { ok: true as const, stored: false }
 				}
-				return { ok: true as const, stored: known === 0 }
+				const held = this.#journalCounts()
+				const entries = held.pending + held.sending + held.unverified + held.noRecipient
+				if (entries + 1 > maxEntries || held.bytes + entry.record.byteLength > maxBytes) {
+					throw new ImportError('journal-full', 'the rollback journal is at its quota')
+				}
+				this.#sql.exec(
+					'INSERT INTO inbound_spool (spool_id, part, part_count, fragment, spooled_at) VALUES (?, 0, 1, ?, ?)',
+					`${JOURNAL.pending}${digest}`,
+					entry.record,
+					entry.spooledAt
+				)
+				return { ok: true as const, stored: true }
 			})
 		} catch (error) {
 			return asRefusal(error)
 		}
 	}
 
-	// The oldest pending journal records, in spool order.
-	async journalPage(
+	// The drain's lease: one drain at a time. Taken for leaseMs, released by the holder.
+	async drainLease(
 		callerBuild: string,
 		authority: ImportAuthority,
-		limit: number
-	): Promise<Result<{ entries: { id: string; spooledAt: number; record: Uint8Array }[] }>> {
+		request: { holder: string; release?: boolean; leaseMs?: number }
+	): Promise<Result<{ until: number | null }>> {
+		this.#requireBuild(callerBuild)
+		await this.#kernel.state()
+		try {
+			return this.#transaction(() => {
+				this.#assertJournalAdmin(authority)
+				const now = this.#now()
+				const current = this.#drainLeaseRow()
+				const lease = current === null ? null : (JSON.parse(current) as { holder: string; until: number })
+				if (request.release === true) {
+					if (lease?.holder === request.holder) {
+						this.#sql.exec('DELETE FROM kopje_state WHERE name = ?', DRAIN_LEASE)
+					}
+					return { ok: true as const, until: null }
+				}
+				if (lease !== null && lease.holder !== request.holder && lease.until > now) {
+					throw new ImportError('drain-in-progress', 'another drain holds the journal')
+				}
+				const until = now + clamp(request.leaseMs, 1000, 10 * 60 * 1000, 60 * 1000)
+				this.#sql.exec(
+					'INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)',
+					DRAIN_LEASE,
+					JSON.stringify({ holder: request.holder, until })
+				)
+				return { ok: true as const, until }
+			})
+		} catch (error) {
+			return asRefusal(error)
+		}
+	}
+
+	// The next record to hand off: one being sent (a crash left it; it is sent again), else the oldest pending one.
+	async journalNext(
+		callerBuild: string,
+		authority: ImportAuthority,
+		holder: string,
+		skip: string[] = []
+	): Promise<Result<{ entry: { id: string; spooledAt: number; record: Uint8Array; resend: boolean } | null }>> {
 		this.#requireBuild(callerBuild)
 		await this.#kernel.state()
 		try {
 			this.#assertJournalAdmin(authority)
-			const rows = this.#sql
-				.exec<{ spool_id: string; fragment: ArrayBuffer; spooled_at: number }>(
-					`SELECT spool_id, fragment, spooled_at FROM inbound_spool WHERE substr(spool_id, 1, 2) = ?
-					ORDER BY spooled_at, rowid LIMIT ?`,
-					JOURNAL_PENDING,
-					clamp(limit, 1, MAX_JOURNAL_PAGE, MAX_JOURNAL_PAGE)
-				)
-				.toArray()
-			return {
-				ok: true,
-				entries: rows.map((row) => ({
-					id: row.spool_id,
-					spooledAt: row.spooled_at,
-					record: new Uint8Array(row.fragment),
-				})),
+			this.#assertLease(holder)
+			const skipped = skip
+				.slice(0, MAX_DRAIN_SKIP)
+				.flatMap((id) => [`${JOURNAL.sending}${id}`, `${JOURNAL.pending}${id}`])
+			for (const state of [JOURNAL.sending, JOURNAL.pending]) {
+				const row = this.#sql
+					.exec<{ spool_id: string; fragment: ArrayBuffer; spooled_at: number }>(
+						`SELECT spool_id, fragment, spooled_at FROM inbound_spool WHERE substr(spool_id, 1, 2) = ?
+						AND spool_id NOT IN (${['', ...skipped].map(() => '?').join(',')})
+						ORDER BY spooled_at, rowid LIMIT 1`,
+						state,
+						'',
+						...skipped
+					)
+					.toArray()[0]
+				if (row !== undefined) {
+					const entry = {
+						id: row.spool_id.slice(2),
+						spooledAt: row.spooled_at,
+						record: new Uint8Array(row.fragment),
+						resend: state === JOURNAL.sending,
+					}
+					return { ok: true, entry }
+				}
 			}
+			return { ok: true, entry: null }
 		} catch (error) {
 			return asRefusal(error)
 		}
 	}
 
-	// After the drain: records handed to the legacy Queue are removed; records that failed verification for good are
-	// kept under the 'u:' key.
-	async journalSettle(
+	// Moves a record to its next state. 'done' keeps a tombstone without the request.
+	async journalMark(
 		callerBuild: string,
 		authority: ImportAuthority,
-		settled: { sent: string[]; unverified: string[] }
-	): Promise<Result<{ sent: number; unverified: number; journal: JournalCounts }>> {
+		holder: string,
+		id: string,
+		state: 'sending' | 'done' | 'unverified' | 'no-recipient'
+	): Promise<Result<{ journal: JournalCounts }>> {
 		this.#requireBuild(callerBuild)
 		await this.#kernel.state()
 		try {
 			return this.#transaction(() => {
 				this.#assertJournalAdmin(authority)
-				const exists = (id: string) =>
-					this.#sql.exec<{ n: number }>('SELECT count(*) AS n FROM inbound_spool WHERE spool_id = ?', id).one().n > 0
-				let sent = 0
-				let unverified = 0
-				for (const id of settled.sent) {
-					if (id.startsWith(JOURNAL_PENDING) && exists(id)) {
-						this.#sql.exec('DELETE FROM inbound_spool WHERE spool_id = ?', id)
-						sent++
-					}
+				this.#assertLease(holder)
+				const current = this.#journalState(id)
+				const allowed: string[] = state === 'done' ? [JOURNAL.sending] : [JOURNAL.pending, JOURNAL.sending]
+				if (current === null || !allowed.includes(current)) {
+					throw new ImportError('journal-state', 'the record is not in a state that allows this')
 				}
-				for (const id of settled.unverified) {
-					const kept = `${JOURNAL_UNVERIFIED}${id.slice(JOURNAL_PENDING.length)}`
-					if (id.startsWith(JOURNAL_PENDING) && exists(id)) {
-						if (exists(kept)) {
-							this.#sql.exec('DELETE FROM inbound_spool WHERE spool_id = ?', id)
-						} else {
-							this.#sql.exec('UPDATE inbound_spool SET spool_id = ? WHERE spool_id = ?', kept, id)
-						}
-						unverified++
-					}
+				const target = {
+					sending: JOURNAL.sending,
+					done: JOURNAL.done,
+					unverified: JOURNAL.unverified,
+					'no-recipient': JOURNAL.noRecipient,
+				}[state]
+				this.#sql.exec('UPDATE inbound_spool SET spool_id = ? WHERE spool_id = ?', `${target}${id}`, `${current}${id}`)
+				if (state === 'done') {
+					this.#sql.exec(
+						'UPDATE inbound_spool SET fragment = ? WHERE spool_id = ?',
+						new Uint8Array(0),
+						`${target}${id}`
+					)
 				}
-				return { ok: true as const, sent, unverified, journal: this.#journalCounts() }
+				return { ok: true as const, journal: this.#journalCounts() }
 			})
 		} catch (error) {
 			return asRefusal(error)
 		}
 	}
 
-	// The operator's decision about records the drain could not verify (after inspecting them).
-	async journalDiscardUnverified(
-		callerBuild: string,
-		authority: ImportAuthority
-	): Promise<Result<{ discarded: number }>> {
+	// The operator's decision about records the drain kept (after inspecting them).
+	async journalDiscardKept(callerBuild: string, authority: ImportAuthority): Promise<Result<{ discarded: number }>> {
 		this.#requireBuild(callerBuild)
 		await this.#kernel.state()
 		try {
 			return this.#transaction(() => {
 				this.#assertJournalAdmin(authority)
-				const discarded = this.#journalCounts().unverified
-				this.#sql.exec('DELETE FROM inbound_spool WHERE substr(spool_id, 1, 2) = ?', JOURNAL_UNVERIFIED)
-				this.#log({ event: 'kopje.store.cutover.discard-unverified', discarded })
+				const counts = this.#journalCounts()
+				const discarded = counts.unverified + counts.noRecipient
+				this.#sql.exec(
+					'DELETE FROM inbound_spool WHERE substr(spool_id, 1, 2) IN (?, ?)',
+					JOURNAL.unverified,
+					JOURNAL.noRecipient
+				)
+				this.#log({ event: 'kopje.store.cutover.discard-kept', discarded })
 				return { ok: true as const, discarded }
 			})
 		} catch (error) {
@@ -1238,7 +1310,7 @@ export class StoreAdmin {
 					throw new ImportError('dump-in-progress', 'a dump is in progress')
 				}
 				const journal = this.#journalCounts()
-				if (journal.pending + journal.unverified > 0) {
+				if (journal.pending + journal.sending + journal.unverified + journal.noRecipient > 0) {
 					throw new ImportError('journal-not-empty', 'drain the rollback journal (or discard what failed) first')
 				}
 				if (this.#emptyOfData()) {
@@ -1281,17 +1353,51 @@ export class StoreAdmin {
 	}
 
 	#journalCounts(): JournalCounts {
-		const row = this.#sql
-			.exec<{ pending: number; unverified: number; oldest: number | null }>(
-				`SELECT count(*) FILTER (WHERE substr(spool_id, 1, 2) = ?) AS pending,
-				count(*) FILTER (WHERE substr(spool_id, 1, 2) = ?) AS unverified,
-				min(spooled_at) FILTER (WHERE substr(spool_id, 1, 2) = ?) AS oldest FROM inbound_spool`,
-				JOURNAL_PENDING,
-				JOURNAL_UNVERIFIED,
-				JOURNAL_PENDING
+		const rows = this.#sql
+			.exec<{ state: string; n: number; bytes: number; oldest: number | null }>(
+				`SELECT substr(spool_id, 1, 2) AS state, count(*) AS n, sum(length(fragment)) AS bytes, min(spooled_at) AS oldest
+				FROM inbound_spool WHERE substr(spool_id, 2, 1) = ':' GROUP BY state`
 			)
-			.one()
-		return { pending: row.pending, unverified: row.unverified, oldestSpooledAt: row.oldest }
+			.toArray()
+		const of = (state: string) => rows.find((row) => row.state === state)
+		const count = (state: string) => of(state)?.n ?? 0
+		return {
+			pending: count(JOURNAL.pending),
+			sending: count(JOURNAL.sending),
+			unverified: count(JOURNAL.unverified),
+			noRecipient: count(JOURNAL.noRecipient),
+			done: count(JOURNAL.done),
+			bytes: rows.filter((row) => row.state !== JOURNAL.done).reduce((sum, row) => sum + (row.bytes ?? 0), 0),
+			oldestSpooledAt: of(JOURNAL.pending)?.oldest ?? null,
+		}
+	}
+
+	// The state prefix a record has, by its id, or null.
+	#journalState(id: string): string | null {
+		const row = this.#sql
+			.exec<{ spool_id: string }>(
+				`SELECT spool_id FROM inbound_spool WHERE spool_id IN (${Object.values(JOURNAL)
+					.map(() => '?')
+					.join(',')})`,
+				...Object.values(JOURNAL).map((prefix) => `${prefix}${id}`)
+			)
+			.toArray()[0]
+		return row === undefined ? null : row.spool_id.slice(0, 2)
+	}
+
+	#drainLeaseRow(): string | null {
+		return (
+			this.#sql.exec<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', DRAIN_LEASE).toArray()[0]
+				?.value ?? null
+		)
+	}
+
+	#assertLease(holder: string): void {
+		const current = this.#drainLeaseRow()
+		const lease = current === null ? null : (JSON.parse(current) as { holder: string; until: number })
+		if (lease === null || lease.holder !== holder || lease.until <= this.#now()) {
+			throw new ImportError('drain-lease-lost', 'this drain does not hold the journal')
+		}
 	}
 
 	#assertJournalAdmin(authority: ImportAuthority): void {

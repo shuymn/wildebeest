@@ -35,20 +35,23 @@ export function legacyInboxMessage(input: {
 const PERSONAL_INBOX = /^\/ap\/users\/([^/]+)\/inbox$/
 const LOCAL_ACTOR = /^\/ap\/users\/[^/]+$/
 
-// The local actor the legacy consumer runs the activity for. Legacy has only personal inboxes, and its consumer uses
-// the recipient only to check that it exists and to refresh its timelines; the activity's effects do not depend on it.
-// A personal inbox names it; for Kopje's shared inboxes, the first local actor the activity addresses or names as its
-// object or target; otherwise the fallback the operator chose (a local actor).
+// The local actor the legacy consumer runs the activity for, among the legacy instance's local accounts (`accounts`,
+// usernames as stored, from the operator's snapshot; never from the request). Legacy has only personal inboxes, and its
+// consumer acknowledges a message whose recipient does not exist without applying it, so an unknown recipient is never
+// chosen: a personal inbox must name one of the accounts; a request to Kopje's shared inboxes goes to the first account
+// the activity addresses or names as its object or target, else to the operator's fallback account. null: none.
 export function legacyRecipient(
 	path: string,
 	activity: Record<string, unknown>,
 	domain: string,
-	fallback: string
-): string {
+	accounts: ReadonlySet<string>,
+	fallback: string | null
+): string | null {
 	const origin = `https://${domain}`
+	const actor = (username: string) => `${origin}/ap/users/${username}`
 	const personal = PERSONAL_INBOX.exec(path)?.[1]
 	if (personal !== undefined) {
-		return `${origin}/ap/users/${personal}`
+		return accounts.has(personal) ? actor(personal) : null
 	}
 	const object = activity.object
 	const candidates = [
@@ -59,10 +62,13 @@ export function legacyRecipient(
 	]
 	for (const candidate of candidates) {
 		if (isLocalActor(candidate, origin)) {
-			return candidate
+			const username = new URL(candidate).pathname.slice('/ap/users/'.length)
+			if (accounts.has(username)) {
+				return actor(username)
+			}
 		}
 	}
-	return fallback
+	return fallback !== null && accounts.has(fallback) ? actor(fallback) : null
 }
 
 export function isLocalActor(uri: string, origin: string): boolean {
