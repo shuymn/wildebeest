@@ -1,7 +1,7 @@
 import { nodeInfoToJson } from '@fedify/fedify'
 import type { Context, Handler } from 'hono'
 
-import { createKopjeFederation, type FederationState, nodeInfo } from './federation'
+import { createKopjeFederation, type FederationDeps, type FederationState, nodeInfo } from './federation'
 import type { LoaderDeps } from './loader'
 import { createSnapshotSaver, snapshotKey } from './snapshot'
 import type { SnapshotSource } from '../domain/snapshot'
@@ -99,8 +99,7 @@ async function objectOrAlias(c: Context<FederationEnv>, deps: FederationRouteDep
 async function viaFedify(c: Context<FederationEnv>, deps: FederationRouteDeps, url: URL): Promise<Answer> {
 	const domain = c.get('domain')
 	const config = readConfig(c.env)
-	const state: FederationState = { resolvedUsername: null, source: null, storeError: null }
-	const federation = createKopjeFederation(
+	const { response, state } = await fetchFederation(
 		{
 			domain,
 			build: deps.build(c.env),
@@ -110,15 +109,9 @@ async function viaFedify(c: Context<FederationEnv>, deps: FederationRouteDeps, u
 			keygen: deps.keygen,
 			loader: deps.loader,
 		},
-		state
+		c.req.raw,
+		url
 	)
-	// Fedify builds collection page links from the request URL, so the request is put on the fixed domain first.
-	const request = new Request(new URL(`${url.pathname}${url.search}`, `https://${domain}`), c.req.raw)
-	const response = await federation.fetch(request, {
-		contextData: state,
-		onNotFound: () => new Response('Not Found', { status: 404 }),
-		onNotAcceptable: () => new Response('Not Acceptable', { status: 406 }),
-	})
 	if (state.storeError !== null) {
 		throw state.storeError
 	}
@@ -132,6 +125,26 @@ async function viaFedify(c: Context<FederationEnv>, deps: FederationRouteDeps, u
 				? state.resolvedUsername !== null && url.pathname === `/ap/users/${state.resolvedUsername}`
 				: true
 	return { response, source: canonical ? state.source : null }
+}
+
+// One federation GET through Kopje's Fedify dispatchers, on the fixed domain. Shared by the Worker and the cutover's
+// maintenance worker (src/maintenance-worker.ts), so both render actor documents and WebFinger the same way. A Store
+// failure is left in state.storeError for the caller.
+export async function fetchFederation(
+	deps: FederationDeps,
+	raw: Request,
+	url: URL
+): Promise<{ response: Response; state: FederationState }> {
+	const state: FederationState = { resolvedUsername: null, source: null, storeError: null }
+	const federation = createKopjeFederation(deps, state)
+	// Fedify builds collection page links from the request URL, so the request is put on the fixed domain first.
+	const request = new Request(new URL(`${url.pathname}${url.search}`, `https://${deps.domain}`), raw)
+	const response = await federation.fetch(request, {
+		contextData: state,
+		onNotFound: () => new Response('Not Found', { status: 404 }),
+		onNotAcceptable: () => new Response('Not Acceptable', { status: 406 }),
+	})
+	return { response, state }
 }
 
 function canonicalWebFinger(url: URL, domain: string, username: string | null): boolean {
