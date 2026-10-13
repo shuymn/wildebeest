@@ -178,7 +178,7 @@ jobs:
         working-directory: packages/kopje
         run: pnpm run typecheck
 
-      # Kopje keeps its Worker under 1 MiB gzipped, well inside the 3 MiB Workers Free limit.
+      # Kopje keeps its Worker under 1 MiB gzipped, well inside the Workers size limit.
       - name: Check kopje bundle
         working-directory: packages/kopje
         shell: bash
