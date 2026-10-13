@@ -20,12 +20,12 @@ Implementation references link to [`mastodon/mastodon@v4.5.11`](https://github.c
 
 Official API documentation source: [`mastodon/documentation@960eeb05`](https://github.com/mastodon/documentation/commit/960eeb05f61209f2f7e8e97456239a3a8e143c6f) ([docs.joinmastodon.org](https://docs.joinmastodon.org/)).
 
-Local reference clones (developer machine):
+Reference sources:
 
-| Repository | Path | Pin |
-|------------|------|-----|
-| Mastodon server | `/Users/shuymn/ghq/github.com/mastodon/mastodon` | `v4.5.11` |
-| Mastodon docs | `.../mastodon/documentation` | `960eeb05` |
+| Repository | Pin |
+|------------|-----|
+| [mastodon/mastodon](https://github.com/mastodon/mastodon) | `v4.5.11` |
+| [mastodon/documentation](https://github.com/mastodon/documentation) | `960eeb05` |
 
 ## Client Compatibility
 

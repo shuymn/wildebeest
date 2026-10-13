@@ -1,7 +1,7 @@
 name: Backup
 on:
   schedule:
-    # A D1 export makes the database unresponsive for roughly 15-20s per 186MB,
+    # A D1 export makes the database unresponsive for roughly 1s per 10MB of data,
     # so this runs at a low-traffic hour. See docs/legacy-backup.md.
     - cron: "30 18 * * *"
   workflow_dispatch:
