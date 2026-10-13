@@ -467,7 +467,7 @@ export function adminRoutes({ build, store, fetch, now, doorbell, loader }: Admi
 		const { accounts, fallback, unordered } = await jsonBody(c)
 		const result = await drainJournal(
 			c.env,
-			{ build: build(c.env), store: stub(c), loader, holder: crypto.randomUUID() },
+			{ build: build(c.env), store: stub(c), loader, holder: crypto.randomUUID(), now },
 			c.get('auth'),
 			{ accounts, fallback, unordered }
 		)

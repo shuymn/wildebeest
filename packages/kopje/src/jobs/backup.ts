@@ -105,6 +105,7 @@ export type BackupOutcome =
 	| 'busy'
 	| 'waiting'
 	| 'not-due'
+	| 'unpublished'
 	| 'done'
 	| 'paused'
 	| 'failed'
@@ -239,7 +240,8 @@ class BackupJob {
 		const fingerprint = await this.#fingerprint()
 		const claim = await this.#store.backupClaim(this.#build, this.#attempt, now, RUNNER_LEASE_MS)
 		if (!claim.ok) {
-			return 'busy'
+			// Unpublished: nothing runs (no S3 call, no dump) until the instance is published.
+			return claim.code === 'unpublished' ? 'unpublished' : 'busy'
 		}
 		this.#state = claim.state
 		try {

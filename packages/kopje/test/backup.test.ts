@@ -323,6 +323,38 @@ describe('backup configuration', () => {
 		})
 	})
 
+	it('starts nothing while a verified import is unpublished, and runs once it is published (OPS-8)', async () => {
+		const h = await harness()
+		const flag = (value: string | null) =>
+			runInDurableObject(h.store, (_instance, state) => {
+				if (value === null) {
+					state.storage.sql.exec("DELETE FROM kopje_state WHERE name = 'unpublished'")
+				} else {
+					state.storage.sql.exec("INSERT OR REPLACE INTO kopje_state (name, value) VALUES ('unpublished', ?)", value)
+				}
+			})
+		await flag(JSON.stringify({ at: NOW, import: 'import-1' }))
+		const calls: string[] = []
+		const deps = {
+			build: () => BUILD,
+			store: () => h.store,
+			now: () => NOW,
+			fetch: (request: Request) => {
+				calls.push(request.url)
+				return h.s3.fetch(request)
+			},
+		}
+		expect(await scheduledBackup(h.env, deps)).toBe('unpublished')
+		// No S3 call, no runner lease, no dump freeze.
+		expect(calls).toEqual([])
+		expect((await backupState(h.store)).runner).toBeNull()
+		expect((await h.store.health(BUILD)).dump).toBeNull()
+
+		await flag(null)
+		expect(await scheduledBackup(h.env, deps)).toBe('done')
+		expect(calls.length).toBeGreaterThan(0)
+	})
+
 	it('skips under env maintenance, like the other scheduled jobs', async () => {
 		const h = await harness({ env: backupEnv({ MAINTENANCE: 'readonly' }) })
 		const outcome = await scheduledBackup(h.env, {

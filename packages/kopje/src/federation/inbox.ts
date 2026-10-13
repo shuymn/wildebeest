@@ -70,6 +70,9 @@ export async function processInbox(
 ): Promise<InboxOutcome | { status: 404; reason: string }> {
 	const build = deps.build(env)
 	const store = () => deps.store(env)
+	// Before any loader or fetch: a Store that refuses writes (an unpublished import, maintenance) holds the request as
+	// in maintenance. receiveActivity checks it again in its own transaction.
+	await callStore(() => store().inboxWritable(build))
 	const domain = live?.domain ?? (await callStore(() => store().instanceDomain(build)))
 	if (domain === null) {
 		throw new StoreUnavailableError('maintenance')

@@ -40,6 +40,7 @@ import {
 	saveBackup,
 } from './platform/backup-state'
 import { type ImportAuthority, StoreAdmin } from './platform/store-admin'
+import { readFlags } from './platform/store-flags'
 import { StoreKernel, type StoreOperation } from './platform/store-kernel'
 import { buildOf, PACKAGE_VERSION } from './version'
 
@@ -132,9 +133,15 @@ export class Store extends DurableObject<Env> {
 		return readBackupState(this.ctx.storage.sql)
 	}
 
+	// Refused while a verified import is unpublished: the scheduled backup starts only once the instance is published
+	// (an operator's rescue dump is not affected), checked in the transaction that takes the runner lease.
 	async backupClaim(_callerBuild: string, runner: string, now: number, leaseMs: number) {
 		await this.#kernel.state()
-		return this.#backupTx((sql) => claimBackup(sql, runner, now, leaseMs))
+		return this.#backupTx((sql) =>
+			readFlags(sql).unpublished !== null
+				? ({ ok: false, code: 'unpublished' } as const)
+				: claimBackup(sql, runner, now, leaseMs)
+		)
 	}
 
 	async backupSave(
@@ -266,6 +273,10 @@ export class Store extends DurableObject<Env> {
 		return this.#admin.journalMark(callerBuild, authority, holder, id, state)
 	}
 
+	journalFullStop(callerBuild: string, authority: ImportAuthority, holder: string, action: 'record' | 'check') {
+		return this.#admin.journalFullStop(callerBuild, authority, holder, action)
+	}
+
 	journalDiscardKept(callerBuild: string, authority: ImportAuthority) {
 		return this.#admin.journalDiscardKept(callerBuild, authority)
 	}
@@ -360,6 +371,10 @@ export class Store extends DurableObject<Env> {
 
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {
 		return this.#kernel.execute(callerBuild, inbox.getRemoteKey, input)
+	}
+
+	inboxWritable(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, inbox.inboxWritable, undefined)
 	}
 
 	inboxOwnerExists(callerBuild: string, input: OperationInput<typeof inbox.inboxOwnerExists>) {

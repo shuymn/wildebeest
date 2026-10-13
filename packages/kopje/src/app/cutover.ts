@@ -141,56 +141,87 @@ export async function drainJournal(
 	// The lease fences the round: it ends, and above all sends nothing, once too little of the lease is left for a send
 	// to finish inside it, however long an awaited RPC took. Counted from before the lease was taken, with a margin.
 	const deadline = started + DRAIN_LEASE_MS - LEASE_MARGIN_MS
+	const leaseEnd = started + DRAIN_LEASE_MS
 	const sendTimeout = deps.sendTimeoutMs ?? SEND_TIMEOUT_MS
 	const leaseLeft = () => deadline - now() > sendTimeout
-	// A send that timed out may still be in flight until this invocation ends: the lease is then kept, so no other
-	// drain starts until it has long expired (DRAIN_LEASE_MS), by which time this invocation and its send are gone.
+	// Every awaited call of the round is bounded by the round's deadline: past it, the round stops and sends nothing more.
+	const bounded = <T>(work: () => Promise<T>) => within(work, deadline, now)
+	// A send that timed out, or a call given up at the deadline, may still land until this invocation ends: the lease
+	// is then kept, so no other drain starts until it has expired (DRAIN_LEASE_MS).
 	let keepLease = false
 	try {
-		await call('drainLease', { holder: deps.holder })
+		await bounded(() => call('drainLease', { holder: deps.holder }))
 		try {
 			return { ok: true, ...(await round()) }
 		} finally {
 			if (!keepLease) {
-				await call('drainLease', { holder: deps.holder, release: true })
+				await within(() => call('drainLease', { holder: deps.holder, release: true }), leaseEnd, now)
 			}
 		}
 	} catch (error) {
 		if (error instanceof DrainRefusal) {
 			return refused(409, error.code, error.message)
 		}
+		if (error instanceof DrainDeadline) {
+			// Past the lease itself (even the report could not be read): nothing was sent after the deadline.
+			return refused(409, 'lease-expiring', 'the drain round ran out of time; run it again')
+		}
 		throw error
 	}
 
 	async function round(): Promise<DrainRound> {
 		const result: Omit<DrainRound, 'journal'> = { sent: 0, unverified: 0, noRecipient: 0, waiting: null, stopped: null }
-		const finish = async () => ({ ...result, journal: (await deps.store.cutoverStatus(deps.build)).journal })
+		// The report is read after the round stopped, and sends nothing: bounded by the lease itself.
+		const finish = async () => ({
+			...result,
+			journal: (await within(() => deps.store.cutoverStatus(deps.build), leaseEnd, now)).journal,
+		})
+		try {
+			await steps(result)
+		} catch (error) {
+			if (!(error instanceof DrainDeadline)) {
+				throw error
+			}
+			result.stopped = 'lease-expiring'
+			result.waiting = null
+			keepLease = true
+		}
+		return finish()
+	}
+
+	async function steps(result: Omit<DrainRound, 'journal'>): Promise<void> {
 		// Read one after another: Kopje's Queue, the legacy Queue, and only after the legacy Queue was seen empty its
 		// dead-letter queue, so a message that left the legacy Queue for its DLQ between the readings is seen there.
-		const kopjeBacklog = await backlog(env.QUEUE)
-		const legacyBacklog = kopjeBacklog === null ? null : await backlog(legacy)
-		const legacyDead = legacyBacklog === null ? null : await backlog(legacyDlq)
+		const kopjeBacklog = await bounded(() => backlog(env.QUEUE))
+		const legacyBacklog = kopjeBacklog === null ? null : await bounded(() => backlog(legacy))
+		const legacyDead = legacyBacklog === null ? null : await bounded(() => backlog(legacyDlq))
 		if (kopjeBacklog === null || legacyBacklog === null || legacyDead === null) {
 			result.stopped = 'metrics-unavailable'
-			return finish()
+			return
 		}
 		if (legacyDead > 0) {
 			result.stopped = 'legacy-dlq'
-			return finish()
+			return
 		}
 		// While the lane is busy, nothing is sent; the records are still verified, so that what fails for good is set
 		// aside (and the journal's quota freed by the operator) without waiting.
 		let busy: DrainRound['waiting'] = kopjeBacklog > 0 ? 'kopje-backlog' : legacyBacklog > 0 ? 'legacy-backlog' : null
 		result.waiting = busy
 		const full = busy === 'kopje-backlog' && (await journalFull())
-		if (full && options.unordered === true) {
-			// The operator's escape from a full journal (and only then; otherwise the drain stays ordered): the journal's head
-			// goes past the collection barrier, so it may overtake an older request still in Kopje's Queue (ordinary
-			// delivery reordering). The legacy lane still holds.
+		// The operator's escape from a full journal: only after the drain stopped on journal-full and reported it, and
+		// while the journal is still in the state of that stop (the Store checks it); otherwise the drain stays ordered.
+		const escape =
+			full &&
+			options.unordered === true &&
+			(await bounded(() => call<{ matches: boolean }>('journalFullStop', deps.holder, 'check'))).matches
+		if (escape) {
+			// The journal's head goes past the collection barrier, so it may overtake an older request still in Kopje's
+			// Queue (ordinary delivery reordering). The legacy lane still holds.
 			busy = legacyBacklog > 0 ? 'legacy-backlog' : null
 			result.waiting = busy
 		} else if (full) {
 			// The barrier waits for requests the full journal cannot take: an operator decision, not a wait.
+			await bounded(() => call('journalFullStop', deps.holder, 'record'))
 			result.waiting = null
 			result.stopped = 'journal-full'
 		}
@@ -205,9 +236,11 @@ export async function drainJournal(
 			leaseLeft();
 			examined++
 		) {
-			const { entry } = await call<{
-				entry: { id: string; spooledAt: number; record: Uint8Array; resend: boolean } | null
-			}>('journalNext', deps.holder, ready)
+			const { entry } = await bounded(() =>
+				call<{
+					entry: { id: string; spooledAt: number; record: Uint8Array; resend: boolean } | null
+				}>('journalNext', deps.holder, ready)
+			)
 			if (entry === null) {
 				break
 			}
@@ -215,20 +248,22 @@ export async function drainJournal(
 			const check =
 				message === null
 					? ({ ok: false, transient: false, reason: 'invalid-record' } as const)
-					: await verifySpooledRequest(loader, domain, {
-							url: message.url,
-							method: message.method,
-							headers: message.headers,
-							body: await inflate(message.body),
-							receivedAt: message.spooledAt,
-						})
+					: await bounded(async () =>
+							verifySpooledRequest(loader, domain, {
+								url: message.url,
+								method: message.method,
+								headers: message.headers,
+								body: await inflate(message.body),
+								receivedAt: message.spooledAt,
+							})
+						)
 			if (!check.ok) {
 				if (check.transient) {
 					result.stopped ??= busy === null ? 'key-unavailable' : null
 					break
 				}
 				console.warn({ event: 'kopje.cutover.drain.unverified', reason: check.reason })
-				await call('journalMark', deps.holder, entry.id, 'unverified')
+				await bounded(() => call('journalMark', deps.holder, entry.id, 'unverified'))
 				result.unverified++
 				kept++
 				continue
@@ -252,7 +287,7 @@ export async function drainJournal(
 						})
 			// No legacy recipient, or a message the legacy Queue cannot carry (its own inbox route had the same limit).
 			if (body === null || new TextEncoder().encode(JSON.stringify(body)).byteLength > LEGACY_MESSAGE_LIMIT) {
-				await call('journalMark', deps.holder, entry.id, 'no-recipient')
+				await bounded(() => call('journalMark', deps.holder, entry.id, 'no-recipient'))
 				result.noRecipient++
 				kept++
 				continue
@@ -266,7 +301,7 @@ export async function drainJournal(
 				result.stopped = 'lease-expiring'
 				break
 			}
-			await call('journalMark', deps.holder, entry.id, 'sending')
+			await bounded(() => call('journalMark', deps.holder, entry.id, 'sending'))
 			// The mark may have come back late: never send once the lease cannot cover the send.
 			if (!leaseLeft()) {
 				result.stopped = 'lease-expiring'
@@ -280,15 +315,14 @@ export async function drainJournal(
 				keepLease = sent === 'timeout'
 				break
 			}
-			await call('journalMark', deps.holder, entry.id, 'done')
 			result.sent = 1
+			await bounded(() => call('journalMark', deps.holder, entry.id, 'done'))
 			break
 		}
-		return finish()
 	}
 
 	async function journalFull(): Promise<boolean> {
-		const journal = (await deps.store.cutoverStatus(deps.build)).journal
+		const journal = (await bounded(() => deps.store.cutoverStatus(deps.build))).journal
 		const entries = journal.pending + journal.sending + journal.unverified + journal.noRecipient
 		const settings = readConfig(env)
 		const maxEntries = Math.min(
@@ -322,6 +356,31 @@ async function withTimeout(send: Promise<unknown>, ms: number): Promise<'sent' |
 		}
 	}
 }
+
+// Runs work, given up once the clock reaches `end` (or not started at all past it). What is given up may still land.
+async function within<T>(work: () => Promise<T>, end: number, now: () => number): Promise<T> {
+	const left = end - now()
+	if (left <= 0) {
+		throw new DrainDeadline()
+	}
+	const running = work()
+	running.catch(() => {})
+	let timer: ReturnType<typeof setTimeout> | undefined
+	try {
+		return await Promise.race([
+			running,
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(() => reject(new DrainDeadline()), left)
+			}),
+		])
+	} finally {
+		if (timer !== undefined) {
+			clearTimeout(timer)
+		}
+	}
+}
+
+class DrainDeadline extends Error {}
 
 class DrainRefusal extends Error {
 	constructor(

@@ -151,6 +151,26 @@ describe('the cutover reset after a completed import (OPS-8)', () => {
 		expect(await fresh.cutoverReset(BUILD, authority())).toMatchObject({ ok: false, code: 'not-unpublished' })
 	})
 
+	it('never publishes a Store without an import, never imports into a published one, never resets one', async () => {
+		const store = await migratedStore()
+		await setTeamAccess(store, team, { domain: 'kopje.test' })
+		// Nothing to publish before an import: a published mark never lands on a Store an import may still begin into.
+		expect(await store.publish(BUILD, authority())).toMatchObject({ ok: false, code: 'not-unpublished' })
+		expect(await store.cutoverStatus(BUILD)).toMatchObject({ published: null, empty: true })
+
+		// A published Store (here an empty one, as an earlier version could leave it) takes no import.
+		await sql(store, "INSERT INTO kopje_state (name, value) VALUES ('published', ?)", JSON.stringify({ at: NOW }))
+		const { header } = splitDump(inject('cutover').dump)
+		expect(await store.importBegin(BUILD, authority(), header)).toMatchObject({ ok: false, code: 'published' })
+		// Both marks at once (what that import used to leave): the reset still refuses.
+		await sql(
+			store,
+			"INSERT INTO kopje_state (name, value) VALUES ('unpublished', ?)",
+			JSON.stringify({ at: NOW, import: 'earlier' })
+		)
+		expect(await store.cutoverReset(BUILD, authority())).toMatchObject({ ok: false, code: 'published' })
+	})
+
 	it('leaves an incomplete import to import-reset', async () => {
 		const store = await migratedStore()
 		await setTeamAccess(store, team, { domain: 'kopje.test' })
@@ -560,6 +580,25 @@ describe('an import stays readonly until it is published (OPS-8)', () => {
 		expect(await count(store, 'follows f JOIN accounts a ON a.id = f.account_id WHERE a.uri = ?', r.carol.uri)).toBe(1)
 	})
 
+	it('fetches nothing for a request it would refuse, and holds it as in maintenance rather than retrying', async () => {
+		const store = await importedStore()
+		const r = await rollback(store, { MAINTENANCE: 'off', USER_KEK: '' })
+		// The sender's server fails: a fetch would count a retry. None is made while unpublished.
+		r.web.fail(r.carol.uri, 503)
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		await r.consume(false)
+		expect(r.web.fetched).toEqual([])
+		expect(r.kopje.retries).toBe(0)
+		expect(r.kopje.pending).toMatchObject([{ attempts: 1, body: { kind: 'spool' } }])
+
+		// The live inbox spools it too, with nothing fetched.
+		const path = '/ap/users/alice/inbox'
+		const live = await r.h.request(path, await signedInit(r.carol, path, follow(r.carol.uri, 2)))
+		expect(live.status).toBe(202)
+		expect(r.web.fetched).toEqual([])
+		expect(r.kopje.pending).toHaveLength(2)
+	})
+
 	it('lets a restore without Access import and publish with IMPORT_TOKEN', async () => {
 		const store = await migratedStore()
 		expect(await store.setConfig(BUILD, TOKEN, { domain: 'kopje.test' })).toMatchObject({ ok: true })
@@ -777,7 +816,8 @@ describe('the drain never sends past its lease, and never stays stuck (OPS-9)', 
 		const late = withCall(store, 'journalMark', async (...args: unknown[]) => {
 			const result = await (store.journalMark as (...a: unknown[]) => Promise<unknown>)(...args)
 			if (args[4] === 'sending') {
-				clock += DRAIN_LEASE_MS
+				// Past the round's deadline, inside the lease (the report is still read).
+				clock += DRAIN_LEASE_MS - 30_000
 			}
 			return result
 		})
@@ -791,6 +831,56 @@ describe('the drain never sends past its lease, and never stays stuck (OPS-9)', 
 		expect(r.legacy.pending).toEqual([])
 	})
 
+	it('gives up a call that outlasts the round, sends nothing after it, and keeps the lease', async () => {
+		const store = await importedStore()
+		const r = await rollback(store)
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		await r.consume()
+		let clock = NOW
+		// Once the lease is taken, the round's deadline is 50 ms away; the legacy Queue's reading never answers.
+		const stalled = withCall(store, 'drainLease', async (...args: unknown[]) => {
+			const result = await (store.drainLease as (...a: unknown[]) => Promise<unknown>)(...args)
+			clock = NOW + DRAIN_LEASE_MS - 60_000 - 50
+			return result
+		})
+		const legacy = { send: () => Promise.resolve(), metrics: () => new Promise(() => {}) }
+		const round = await drainJournal(
+			{ ...r.h.env, LEGACY_QUEUE: legacy } as Env,
+			{ build: BUILD, store: stalled, loader: r.web.loader, holder: 'stalled', now: () => clock },
+			authority(),
+			{ accounts: r.accounts, fallback: undefined }
+		)
+		expect(round).toMatchObject({ ok: true, sent: 0, stopped: 'lease-expiring', journal: { pending: 1 } })
+		expect(r.legacy.pending).toEqual([])
+		expect(await r.drain()).toMatchObject({ status: 409, body: { code: 'drain-in-progress' } })
+	})
+
+	it('answers without a report when even the report outlasts the lease, having sent nothing', async () => {
+		const store = await importedStore()
+		const r = await rollback(store)
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		await r.consume()
+		let clock = NOW
+		// The 'sending' mark comes back past the deadline (nothing is sent), and the report then never answers.
+		const late = withCall(
+			withCall(store, 'journalMark', async (...args: unknown[]) => {
+				const result = await (store.journalMark as (...a: unknown[]) => Promise<unknown>)(...args)
+				clock = NOW + DRAIN_LEASE_MS - 50
+				return result
+			}),
+			'cutoverStatus',
+			() => new Promise(() => {})
+		)
+		const round = await drainJournal(
+			r.h.env,
+			{ build: BUILD, store: late, loader: r.web.loader, holder: 'late', now: () => clock },
+			authority(),
+			{ accounts: r.accounts, fallback: undefined }
+		)
+		expect(round).toMatchObject({ ok: false, status: 409, code: 'lease-expiring' })
+		expect(r.legacy.pending).toEqual([])
+	})
+
 	it('keeps a journal-full stop through a transient key failure, and the CLI stops on it', async () => {
 		const store = await importedStore()
 		const r = await rollback(store, { CUTOVER_JOURNAL_MAX_ENTRIES: '1' })
@@ -801,6 +891,22 @@ describe('the drain never sends past its lease, and never stays stuck (OPS-9)', 
 		const result = await cliDrain(r, [])
 		expect(result.code, result.err).toBe(3)
 		expect(result.err).toContain('journal-full')
+	})
+
+	it('takes --unordered only after a reported journal-full stop, even on its first request', async () => {
+		const store = await importedStore()
+		const r = await rollback(store, { CUTOVER_JOURNAL_MAX_ENTRIES: '1' })
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 2))
+		await r.consume()
+		// The first request asks for the escape: the Store has no stop recorded, so the round stops and reports it.
+		const first = await cliDrain(r, ['--unordered', '--yes'])
+		expect(first.code, first.err).toBe(3)
+		expect(first.err).toContain('journal-full')
+		expect(r.legacy.pending).toEqual([])
+		// Run again with the journal as it was at the stop: now the head goes past the barrier.
+		expect((await r.drain({ accounts: r.accounts, unordered: true })).body).toMatchObject({ sent: 1 })
+		expect(r.legacy.pending).toHaveLength(1)
 	})
 
 	it('gives up after its deadline when a round makes no progress, pausing between rounds', async () => {

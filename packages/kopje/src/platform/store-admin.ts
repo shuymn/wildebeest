@@ -133,6 +133,9 @@ const DRAIN_LEASE = 'cutover_drain'
 export const DRAIN_LEASE_MS = 5 * 60 * 1000
 // Handoff receipts, in kopje_state (never dumped, imported or reset).
 const RECEIPT = 'handoff:'
+// The journal state at the drain's last journal-full stop, in kopje_state: an unordered round is allowed only while the
+// journal is still in that state.
+const FULL_STOP = 'cutover_full_stop'
 const MAX_DRAIN_SKIP = 100
 
 export type JournalCounts = {
@@ -561,6 +564,11 @@ export class StoreAdmin {
 				}
 				if (activeDump(flags, now) !== null) {
 					throw new ImportError('dump-in-progress', 'a dump is in progress')
+				}
+				if (flags.published !== null) {
+					// A published instance is never imported into again: the import would leave it both published and
+					// unpublished, and the cutover reset of an unpublished Store would then empty a published one.
+					throw new ImportError('published', 'this instance is published; restore it into a new Store')
 				}
 				if (flags.import !== null) {
 					// An Access admin resumes the same dump in whatever phase it reached. A token import is continued with
@@ -1116,6 +1124,11 @@ export class StoreAdmin {
 				if (flags.published !== null && flags.unpublished === null) {
 					return { ok: true as const, published: flags.published }
 				}
+				if (flags.unpublished === null) {
+					// Publication ends a verified import; a Store that never had one is not readonly and has nothing to
+					// publish. Refusing it keeps a published mark off a Store an import may still begin into.
+					throw new ImportError('not-unpublished', 'nothing to publish: no verified import is waiting')
+				}
 				if (this.#rollbackInProgress()) {
 					throw new ImportError('rollback-in-progress', 'the journal holds requests or a drain runs')
 				}
@@ -1151,6 +1164,7 @@ export class StoreAdmin {
 				}
 				const receipts = this.#journalCounts().done
 				this.#sql.exec("DELETE FROM kopje_state WHERE substr(name, 1, 8) = 'handoff:'")
+				this.#sql.exec('DELETE FROM kopje_state WHERE name = ?', FULL_STOP)
 				return { ok: true as const, receipts }
 			})
 		} catch (error) {
@@ -1331,6 +1345,37 @@ export class StoreAdmin {
 		}
 	}
 
+	// The drain's journal-full stop: 'record' notes the journal's state as the round stops on it; 'check' answers whether
+	// the journal is still in the state of the last recorded stop, the condition of an unordered round (the operator saw
+	// that stop, and nothing changed since).
+	async journalFullStop(
+		callerBuild: string,
+		authority: ImportAuthority,
+		holder: string,
+		action: 'record' | 'check'
+	): Promise<Result<{ matches: boolean }>> {
+		this.#requireBuild(callerBuild)
+		await this.#kernel.state()
+		try {
+			return this.#transaction(() => {
+				this.#assertJournalAdmin(authority)
+				this.#assertUnpublished()
+				this.#assertLease(holder)
+				const state = JSON.stringify(this.#journalCounts())
+				if (action === 'record') {
+					this.#sql.exec('INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)', FULL_STOP, state)
+					return { ok: true as const, matches: true }
+				}
+				const recorded = this.#sql
+					.exec<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', FULL_STOP)
+					.toArray()[0]?.value
+				return { ok: true as const, matches: recorded === state }
+			})
+		} catch (error) {
+			return asRefusal(error)
+		}
+	}
+
 	// The operator's decision about records the drain kept (after inspecting them).
 	async journalDiscardKept(callerBuild: string, authority: ImportAuthority): Promise<Result<{ discarded: number }>> {
 		this.#requireBuild(callerBuild)
@@ -1374,14 +1419,14 @@ export class StoreAdmin {
 			id = this.#transaction(() => {
 				const flags = readFlags(this.#sql)
 				this.#assertAdmin(authority, this.#currentSettings(flags))
+				if (flags.published !== null) {
+					throw new ImportError('published', 'this instance is published; it is never reset')
+				}
 				if (flags.import !== null) {
 					throw new ImportError('import-exists', `import ${flags.import.id} is running; reset it with import-reset`)
 				}
 				if (flags.unpublished === null) {
-					throw new ImportError(
-						flags.published === null ? 'not-unpublished' : 'published',
-						'only a verified import that is not published yet is reset'
-					)
+					throw new ImportError('not-unpublished', 'only a verified import that is not published yet is reset')
 				}
 				if (activeDump(flags, this.#now()) !== null) {
 					throw new ImportError('dump-in-progress', 'a dump is in progress')
