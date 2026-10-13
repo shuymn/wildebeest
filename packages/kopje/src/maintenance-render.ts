@@ -2,10 +2,14 @@ import { Db } from './db/sql'
 import { type LocalActor, localActorOf } from './domain/actors'
 import { fetchFederation } from './federation/routes'
 import { snapshotKey } from './federation/snapshot'
-import { MAINTENANCE_SNAPSHOT_FORMAT, type MaintenanceSnapshot } from './maintenance-worker'
+import { MAINTENANCE_SNAPSHOT_FORMAT, type MaintenanceSnapshot } from './maintenance'
 import type { StoreStub } from './platform/store-client'
 import { StoreUnavailableError } from './platform/store-errors'
 import { isStorableSnapshot, type Snapshot } from './platform/store-kernel'
+
+// The converter's shared functions, for the npm package, which ships no sources (cli/lib/cutover/kopje-runtime.js).
+export { normalizeSearchText } from './domain/search-text'
+export { REMOTE_HTML_RAW_LIMIT, remoteHtmlText, sanitizeRemoteHtml } from './security/html'
 
 // Renders the cutover's maintenance snapshot (src/maintenance-worker.ts) with Kopje's own code: the local actors are
 // read from the converted Store database by the Store's own query (domain/actors.ts, localActorOf), and their actor

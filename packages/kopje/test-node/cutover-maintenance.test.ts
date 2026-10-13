@@ -22,6 +22,7 @@ import {
 	externalImports,
 	gzipKiB,
 	MAINTENANCE_WORKER_LIMIT_KIB,
+	moduleExports,
 } from '../scripts/build-maintenance.mjs'
 
 // The cutover's maintenance worker as `kopje-admin maintenance-worker` writes it (OPS-7: only real keys, DATA-13:
@@ -70,9 +71,11 @@ describe('the maintenance worker bundle', () => {
 		expect(externalImports(worker)).toEqual([])
 		expect(gzipKiB(worker)).toBeLessThan(MAINTENANCE_WORKER_LIMIT_KIB)
 		expect(worker).not.toMatch(/sourceMappingURL/)
+		// A Worker module's named exports are entrypoints: the handler is the only one.
+		expect(moduleExports(worker)).toEqual(['default'])
 		// The spool binding the preflight asks for is the one the worker reads.
-		const module = (await import(join(bundleDir, 'maintenance-worker.js'))) as { SPOOL_QUEUE_BINDING: string }
-		expect(module.SPOOL_QUEUE_BINDING).toBe(SPOOL_QUEUE_BINDING)
+		const source = await readFile(fileURLToPath(new URL('../src/maintenance.ts', import.meta.url)), 'utf8')
+		expect(source).toContain(`export const SPOOL_QUEUE_BINDING = '${SPOOL_QUEUE_BINDING}'`)
 	})
 
 	it('tells a bundle with a node: import apart', () => {

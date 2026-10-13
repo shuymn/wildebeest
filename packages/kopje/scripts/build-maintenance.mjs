@@ -34,6 +34,22 @@ export function externalImports(text) {
 	return [...text.matchAll(/(?:from|import)\s*\(?\s*["']((?:node|cloudflare):[^"']+)["']/g)].map((m) => m[1])
 }
 
+// The names a bundle's final `export { ... }` gives.
+/** @param {string} text */
+export function moduleExports(text) {
+	const list = [...text.matchAll(/export\s*\{([^}]*)\}/g)].at(-1)?.[1] ?? ''
+	return list
+		.split(',')
+		.map(
+			(item) =>
+				item
+					.trim()
+					.split(/\s+as\s+/)
+					.at(-1) ?? ''
+		)
+		.filter((name) => name !== '')
+}
+
 /**
  * @param {string} outDir
  * @param {{ metafileDir?: string }} [options] also write esbuild's metafile of each bundle, as <file>.meta.json
@@ -73,6 +89,11 @@ export function buildMaintenance(outDir, { metafileDir } = {}) {
 	const imports = externalImports(worker)
 	if (imports.length > 0) {
 		throw new Error(`maintenance-worker.js must import no runtime module, but imports ${imports.join(', ')}`)
+	}
+	// The runtime reads every named export of a Worker module as an entrypoint and refuses anything else.
+	const exported = moduleExports(worker)
+	if (exported.length !== 1 || exported[0] !== 'default') {
+		throw new Error(`maintenance-worker.js must export its handler only, but exports ${exported.join(', ')}`)
 	}
 	const workerKiB = sizes['maintenance-worker.js']
 	const renderKiB = sizes['maintenance-render.js']

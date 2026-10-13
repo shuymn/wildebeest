@@ -16,7 +16,7 @@ import {
 	SPOOL_BACKLOG_MESSAGES,
 	SPOOL_QUEUE_BINDING,
 	SPOOL_RATE_LIMIT_BINDING,
-} from '../src/maintenance-worker'
+} from '../src/maintenance'
 
 // The cutover's maintenance worker (docs/cutover-runbook.md, step 3). The global setup (test-node/cutover-global-setup
 // .ts) converts a synthetic legacy export and writes its `_worker.js` with the real CLI and bundles; here the snapshot

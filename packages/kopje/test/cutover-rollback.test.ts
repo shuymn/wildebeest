@@ -12,7 +12,7 @@ import { ACCESS, ADMIN_EMAIL, importViaRpc, splitDump } from './ops-helpers'
 import { QueueSim } from './queue-sim'
 import type { LegacyInboxMessage } from '../src/federation/legacy-inbox'
 import { handleQueue } from '../src/jobs/queue'
-import { createMaintenanceWorker, type MaintenanceSnapshot, SPOOL_QUEUE_BINDING } from '../src/maintenance-worker'
+import { createMaintenanceWorker, type MaintenanceSnapshot, SPOOL_QUEUE_BINDING } from '../src/maintenance'
 import type { StoreStub } from '../src/platform/store-client'
 
 // Rolling a cutover back (docs/cutover-runbook.md, "Rolling back"), on the converted legacy dump of the global setup:
