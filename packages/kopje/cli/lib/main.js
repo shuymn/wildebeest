@@ -51,6 +51,19 @@ Commands
       --media <dir>             with --index: also check every original the index lists, decrypted under <dir> at
                                 its key (<dir>/originals/<id>)
 
+Cutover from a legacy Wildebeest instance (offline; docs/cutover.md)
+  convert <export> --out <dir> --base-time <time>
+                                convert a legacy D1 export (a directory of \`wrangler d1 export --table\` files, or one
+                                file of them) into <dir>/kopje.dump for \`import\`, with <dir>/manifest.json. Exits 3
+                                when it stops for a decision (see the manifest); prints counts and digests only
+      --accept-deletions        carry on although bridging or conversion leaves rows out (their counts are reported)
+      --catalog <file>          the target's \`catalog\` output, instead of this CLI's own schema
+      --domain <host>           refuse unless the legacy instance's domain is this one
+                                The legacy KEK candidates are read from userKEK and USER_KEY in the environment
+  verify-conversion <export> <dump file> [--accept-deletions]
+                                check a converted dump, or a dump of the Store after the import, against the legacy
+                                export (expectations computed independently). Exits 1 on FAIL
+
 Environment
   KOPJE_ADMIN_URL               base URL of the instance's admin host, e.g. https://admin.example.com
   CF_ACCESS_CLIENT_ID           Access service token client id      (sent as CF-Access-Client-Id)
@@ -74,7 +87,20 @@ function parseArgs(argv) {
 	const positional = []
 	/** @type {Record<string, string | true>} */
 	const flags = {}
-	const valued = new Set(['chunk-mib', 'lease-seconds', 'at', 'limit', 'before', 'encrypted', 'index', 'media'])
+	const valued = new Set([
+		'chunk-mib',
+		'lease-seconds',
+		'at',
+		'limit',
+		'before',
+		'encrypted',
+		'index',
+		'media',
+		'out',
+		'base-time',
+		'catalog',
+		'domain',
+	])
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i] ?? ''
 		if (arg.startsWith('--')) {
@@ -96,6 +122,58 @@ function parseArgs(argv) {
 }
 
 class UsageError extends Error {}
+
+/**
+ * convert and verify-conversion: offline, without KOPJE_ADMIN_URL. The cutover modules load node:sqlite, so they are
+ * imported only here.
+ * @param {string} command
+ * @param {string[]} rest
+ * @param {Record<string, string | true>} flags
+ * @param {{ env: Record<string, string | undefined>, print: (value: unknown) => void, info: (text: string) => void }} io
+ */
+async function cutover(command, rest, flags, { env, print, info }) {
+	const { convertExport, packageVersion, parseBaseTime, verifyConversion } = await import('./cutover/run.js')
+	const acceptDeletions = flags['accept-deletions'] === true
+	if (command === 'convert') {
+		const [exportPath] = rest
+		const { out, catalog, domain } = flags
+		if (
+			exportPath === undefined ||
+			rest.length > 1 ||
+			typeof out !== 'string' ||
+			typeof flags['base-time'] !== 'string'
+		) {
+			throw new UsageError('convert <export> --out <dir> --base-time <time> [--accept-deletions] [--catalog <file>]')
+		}
+		let baseTime
+		try {
+			baseTime = parseBaseTime(flags['base-time'])
+		} catch (error) {
+			throw new UsageError(error instanceof Error ? error.message : String(error))
+		}
+		const { ok, manifest } = await convertExport({
+			exportPath,
+			outDir: out,
+			acceptDeletions,
+			baseTime,
+			catalogPath: typeof catalog === 'string' ? catalog : undefined,
+			domain: typeof domain === 'string' ? domain : undefined,
+			env,
+			version: packageVersion(),
+		})
+		print(manifest)
+		info(ok ? `converted; import ${out}/kopje.dump` : 'conversion stopped; see the manifest')
+		return ok ? 0 : 3
+	}
+	const [exportPath, dumpPath] = rest
+	if (exportPath === undefined || dumpPath === undefined || rest.length > 2) {
+		throw new UsageError('verify-conversion <export> <dump file> [--accept-deletions]')
+	}
+	const { ok, report } = await verifyConversion({ exportPath, dumpPath, acceptDeletions, baseTime: 0, env })
+	print(report)
+	info(ok ? 'conversion verified: PASS' : 'conversion check FAILED')
+	return ok ? 0 : 1
+}
 
 /**
  * @param {Record<string, string | true>} flags
@@ -138,9 +216,13 @@ export async function run({
 	sleep,
 	platform = globalThis.process?.platform,
 }) {
-	const secrets = [env.CF_ACCESS_CLIENT_SECRET, env.KOPJE_IMPORT_TOKEN, env.CF_ACCESS_CLIENT_ID].filter(
-		/** @returns {s is string} */ (s) => typeof s === 'string'
-	)
+	const secrets = [
+		env.CF_ACCESS_CLIENT_SECRET,
+		env.KOPJE_IMPORT_TOKEN,
+		env.CF_ACCESS_CLIENT_ID,
+		env.userKEK,
+		env.USER_KEY,
+	].filter(/** @returns {s is string} */ (s) => typeof s === 'string')
 	const redact = redactor(secrets)
 	/** @param {unknown} value */
 	const print = (value) =>
@@ -213,6 +295,9 @@ export async function run({
 				return 3
 			}
 			return 0
+		}
+		if (command === 'convert' || command === 'verify-conversion') {
+			return await cutover(command, rest, flags, { env, print, info: (text) => out.info(text) })
 		}
 		const url = env.KOPJE_ADMIN_URL
 		if (url === undefined || url === '') {
