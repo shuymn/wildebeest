@@ -29,11 +29,10 @@
 		"zod": "3.25.76"
 	},
 	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "0.16.20",
+		"@cloudflare/vitest-plugin": "1.4.0",
 		"@cloudflare/workers-types": "4.20260627.1",
 		"@fedify/testing": "2.4.2",
 		"@types/sanitize-html": "2.16.2",
-		"miniflare": "4.20260625.0",
 		"parse5": "8.0.1",
 		"typescript": "5.9.3",
 		"vitest": "4.1.11",
