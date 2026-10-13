@@ -176,7 +176,11 @@ export function actualFromDump(text) {
 			}
 			case 'media_attachments': {
 				if (row.legacy_ap_o !== 'NULL') {
-					put('media', t('legacy_ap_o') ?? '', t('url'))
+					put('media', t('legacy_ap_o') ?? '', [
+						t('url'),
+						account(t('account_id'))?.uri ?? null,
+						row.status_id === 'NULL' ? null : (status(t('status_id'))?.uri ?? null),
+					])
 				}
 				const owner = status(t('status_id'))
 				if (owner !== undefined) {

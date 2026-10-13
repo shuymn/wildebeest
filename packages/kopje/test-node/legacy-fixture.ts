@@ -34,6 +34,9 @@ export type FixtureOptions = {
 	notificationSequence?: bigint
 	// A remote object whose stored author differs from its attributedTo, so 0021 rewrites it (levels below 0021).
 	authorChange?: boolean
+	// r4's followers property spelled with an upper-case host and :443, and a status of r4 to its followers as normally
+	// spelled, Bob absent from to.
+	followersSpelling?: boolean
 }
 
 export type LegacyFixture = {
@@ -114,6 +117,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		notifications = true,
 		notificationSequence,
 		authorChange = false,
+		followersSpelling = false,
 	} = options
 	const db = line === 'T2' ? upstreamDatabase(level) : canonicalLegacyDatabase(level)
 	const columns = new Map<string, string[]>()
@@ -221,7 +225,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 				summary: `<p>bio ${i}</p>`,
 				url: `https://${host}/@r${i}`,
 				inbox: `${uri}/inbox`,
-				followers: `${uri}/followers`,
+				followers: followersSpelling && i === 4 ? 'https://OTHER.example:443/users/r4/followers' : `${uri}/followers`,
 				endpoints: i === 1 ? {} : { sharedInbox: `https://${host}/inbox` },
 				icon: { type: 'Image', url: `https://files.${host}/a/${i}.png` },
 				published: '2022-01-0' + (i + 1) + 'T00:00:00Z',
@@ -575,6 +579,16 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		tags: [{ type: 'Mention', href: alice, name: '@alice@kopje.test' }],
 		summary: 'CW 注意',
 	})
+	if (followersSpelling) {
+		remoteNote({
+			author: 4,
+			minutes: 185,
+			content: '<p>for my followers, however they are spelled</p>',
+			to: [r(4).followers],
+			cc: [],
+			mastodonId: snowflake(184, 2),
+		})
+	}
 	remoteNote({
 		author: 3,
 		minutes: 190,

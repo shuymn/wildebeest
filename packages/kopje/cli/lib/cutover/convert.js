@@ -153,15 +153,40 @@ function legacyReference(value, depth = 0) {
 }
 
 /**
+ * The followers value legacy compares against (actorFromRow, then detectVisibility's followers.toString()): the stored
+ * property as it is spelled, or, where the property is missing, `<actor id>/followers` built from the parsed id. Null
+ * where legacy fails: an actor it cannot load, a null property, an unparsable id.
+ * @param {string | null} actorId
+ * @param {{ present: boolean, value: unknown } | null | undefined} stored
+ * @returns {string | null}
+ */
+export function legacyFollowers(actorId, stored) {
+	if (actorId === null || stored === null || stored === undefined) {
+		return null
+	}
+	if (stored.present) {
+		// Legacy calls toString() on whatever is stored, an object included ('[object Object]'), and so must this.
+		// eslint-disable-next-line @typescript-eslint/no-base-to-string
+		return stored.value === null ? null : String(stored.value)
+	}
+	try {
+		return new URL(`${new URL(actorId).toString()}/followers`).toString()
+	} catch {
+		return null
+	}
+}
+
+/**
  * Who could read an object in legacy Wildebeest (packages/backend/src/mastodon/status_visibility.ts, detectVisibility
- * and isVisible), from its to and cc (toArray of each) and its stored author's followers collection: public with
- * Public in to; with the followers in to, unlisted when Public is in cc, else the author's followers; otherwise the
- * accounts in to. Only the full Public URI counts. Null where legacy would throw on a reference, so that nobody could
- * read the object there: the conversion refuses it instead of guessing.
+ * and isVisible), from its to and cc (toArray of each) and its stored author: public with Public in to; with the
+ * author's followers in to, unlisted when Public is in cc, else the author's followers; otherwise the accounts in to.
+ * Addresses are normalized as getApId does, but the followers value is compared as legacy spells it; where comparing it
+ * normalized would decide otherwise, the answer is 'ambiguous' and the conversion stops rather than choose. Null where
+ * legacy would throw, so that nobody could read the object there.
  * @param {unknown} to
  * @param {unknown} cc
- * @param {unknown} followers
- * @returns {{ visibility: 'public' | 'unlisted' | 'private' | 'direct', to: string[] } | null}
+ * @param {string | null} followers the value legacyFollowers gives for the stored author
+ * @returns {{ visibility: 'public' | 'unlisted' | 'private' | 'direct' | 'ambiguous', to: string[] } | null}
  */
 export function legacyAudience(to, cc, followers) {
 	const targets = list(to).map((x) => legacyReference(x))
@@ -173,11 +198,15 @@ export function legacyAudience(to, cc, followers) {
 	if (t.includes(PUBLIC)) {
 		return { visibility: 'public', to: t }
 	}
-	const collection = legacyReference(followers)
-	if (collection === null) {
+	if (followers === null) {
 		return null
 	}
-	if (t.includes(collection)) {
+	const literal = t.includes(followers)
+	const normalized = legacyReference(followers)
+	if (literal !== (normalized !== null && t.includes(normalized))) {
+		return { visibility: 'ambiguous', to: t }
+	}
+	if (literal) {
 		return { visibility: copies.includes(PUBLIC) ? 'unlisted' : 'private', to: t }
 	}
 	return { visibility: 'direct', to: t }
@@ -642,10 +671,14 @@ export function convertLegacy(
 		const audience = legacyAudience(
 			addressing.to,
 			addressing.cc,
-			storedAuthor === null ? undefined : source.followers.get(storedAuthor)
+			legacyFollowers(storedAuthor, storedAuthor === null ? null : source.followers.get(storedAuthor))
 		)
 		if (audience === null) {
 			count(problems, 'statuses:addressing-legacy-could-not-read')
+			continue
+		}
+		if (audience.visibility === 'ambiguous') {
+			count(problems, 'statuses:followers-spelling-ambiguous')
 			continue
 		}
 		const legacy = audience.visibility
@@ -660,7 +693,7 @@ export function convertLegacy(
 				const outboxAudience = legacyAudience(
 					sent.to,
 					sent.cc,
-					storedAuthor === null ? undefined : source.followers.get(storedAuthor)
+					legacyFollowers(storedAuthor, storedAuthor === null ? null : source.followers.get(storedAuthor))
 				)
 				if (
 					outboxAudience === null ||
@@ -825,9 +858,17 @@ export function convertLegacy(
 			count(problems, 'reblogs:audience-unknown')
 			continue
 		}
-		const boostAudience = legacyAudience(sent.to, sent.cc, source.followers.get(String(boost.reblog.actor_id)))
+		const boostAudience = legacyAudience(
+			sent.to,
+			sent.cc,
+			legacyFollowers(String(boost.reblog.actor_id), source.followers.get(String(boost.reblog.actor_id)))
+		)
 		if (boostAudience === null) {
 			count(problems, 'reblogs:addressing-legacy-could-not-read')
+			continue
+		}
+		if (boostAudience.visibility === 'ambiguous') {
+			count(problems, 'reblogs:followers-spelling-ambiguous')
 			continue
 		}
 		// A direct boost reaches the accounts in its to, as legacy served it; any other boost grants nobody.
