@@ -174,25 +174,42 @@ Store unpublished: it refuses every write (as in readonly) until `kopje-admin pu
 an Access admin, or with `IMPORT_TOKEN` while the Store has no admin access), so nothing is written or delivered before
 you have checked it.
 
-| Step     | Request                                                     | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| -------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| begin    | `{ "header": {...} }`                                       | Checks migrations, catalog and emptiness, then records an import. An Access admin who sends the same header again, while that import is still running, resumes it in the phase it reached (`receiving`, `finished` or `failed` with its report). After verification, `GET /admin/import/progress?id=<id>` answers from the receipt (`verified`, with its report); begin does not, since the Store is no longer empty. A begin with `IMPORT_TOKEN` also returns `session`, the credential that continues this import |
-| chunk    | `?id=<id>&seq=<n>`, raw body of whole statements (≤ 16 MiB) | Validates every statement against the templates. Applies the chunk and the progress record in one `transactionSync`                                                                                                                                                                                                                                                                                                                                                                                                 |
-| finish   | `{ "id", "trailer" }`                                       | Checks the trailer's tables, statement count, byte count and body SHA-256 against what was received                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| verify   | `{ "id" }`, repeated until `done`                           | Recomputes row counts and checksums in the Store, then runs `PRAGMA foreign_key_check`. On success the import record gives way to a receipt and the Store serves again                                                                                                                                                                                                                                                                                                                                              |
-| progress | `GET ?id=<id>`                                              | The running import, or the receipt of the last verified one (`state: "verified"`, with its report). It includes `headerSha256` and `trailerSha256`, the digests of the header and trailer JSON as received, so a client can check that its file is the dump the Store has                                                                                                                                                                                                                                           |
-| reset    | `{ "confirm": true, "id": "<id>" }`, repeated until `done`  | Takes the Store back to before that import (see "Reset" below). Only the authority of that import may reset it. A retried request for an import already reset answers `done` again                                                                                                                                                                                                                                                                                                                                  |
+| Step     | Request                                                                                                              | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| -------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| begin    | `{ "header": {...} }`                                                                                                | Checks migrations, catalog and emptiness, then records an import. An Access admin who sends the same header again, while that import is still running, resumes it in the phase it reached (`receiving`, `finished` or `failed` with its report). After verification, `GET /admin/import/progress?id=<id>` answers from the receipt (`verified`, with its report); begin does not, since the Store is no longer empty. A begin with `IMPORT_TOKEN` also returns `session`, the credential that continues this import |
+| chunk    | `?id=<id>&seq=<n>`, raw body of whole statements: at most 2,000 in at most 4 MiB, or one statement of at most 16 MiB | Validates every statement against the templates. Applies the rows and the progress record in one `transactionSync`. A link is checked against its target row and staged, not applied (see "Bounded work" below)                                                                                                                                                                                                                                                                                                     |
+| finish   | `{ "id", "trailer" }`                                                                                                | Checks the trailer's tables, statement count, byte count and body SHA-256 against what was received                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| verify   | `{ "id" }`, repeated until `done`                                                                                    | Applies the staged links, then recomputes row counts and checksums in the Store, then runs `PRAGMA foreign_key_check`. On success the import record gives way to a receipt and the Store serves again                                                                                                                                                                                                                                                                                                               |
+| progress | `GET ?id=<id>`                                                                                                       | The running import, or the receipt of the last verified one (`state: "verified"`, with its report). It includes `headerSha256` and `trailerSha256`, the digests of the header and trailer JSON as received, so a client can check that its file is the dump the Store has                                                                                                                                                                                                                                           |
+| reset    | `{ "confirm": true, "id": "<id>" }`, repeated until `done`                                                           | Takes the Store back to before that import (see "Reset" below). Only the authority of that import may reset it. A retried request for an import already reset answers `done` again                                                                                                                                                                                                                                                                                                                                  |
 
 - Chunk numbers start at 1. The progress record holds `lastSeq` and a chain digest:
   `digest_n = hex(sha256(digest_{n-1} || chunk_n))`, with `digest_0` = the empty string.
 - After any error, read `GET /admin/import/progress` and compare `lastSeq` and `digest`. Do not assume a rollback:
   a timed-out transaction can still be durable.
 - A resent chunk with `seq ≤ lastSeq` is reported as `duplicate` and is not applied again.
+- A chunk over its bounds is refused with `chunk-too-large` and nothing of it is applied. `kopje-admin import` splits
+  the body within them.
 - While an import record exists, every domain operation is refused and schema upgrades wait. `GET /admin/config`
   shows the target's own configuration, which the record holds. A failed verification
   needs `reset` and a new import. Verification or reset schedules any upgrade that waited.
 - After verification, a receipt with the import's id, digests and report stays until the next import begins. A
   client whose verify response was lost reads the outcome there.
+
+### Bounded work
+
+Each call has to finish within the Durable Object's CPU limit, and what a call costs follows what it writes, not the
+bytes it receives:
+
+- A chunk writes its rows and every index entry they add, so it is bounded by statements as well as by bytes. A
+  single row larger than the byte bound comes alone; the platform limits a stored row to 2 MB.
+- A link is a short statement, but SQLite rewrites the whole row it changes, overflow pages included, so a chunk of
+  links can rewrite many times its own size. The chunk only checks that each link's target row exists and stages the
+  link (in `kopje_state`, under names that are never dumped). Verify applies the staged links in body order, a step
+  per call that stops after the row that brings the rewritten bytes to 1 MiB or after 2,000 links; the checksums
+  start in the call that applies the last of them. A link that cannot be applied (its value breaks a constraint) is
+  refused at verify; the import then needs a reset.
+- A reset that unlinks rows stops the call after one such step, bounded the same way.
 
 ### Authority
 
@@ -212,10 +229,12 @@ nothing except the stale-import recovery below. The CLI keeps the session in `<f
 A reset never uses `deleteAll()`:
 
 1. The import record turns into `resetting`; nothing else continues the import.
-2. Bounded transactions of at most 2,000 rows each first set the references inside a table to NULL, then delete the
-   rows, children before parents. The references are `statuses.reblog_of_id`, `statuses.in_reply_to_id`, and any
-   column the catalog defers. No delete then cascades to or updates another row. Each call runs a few transactions,
-   and the caller repeats the call until `done`.
+2. Bounded transactions of at most 2,000 rows each first drop the links the import staged, then set the references
+   inside a table to NULL, then delete the rows, children before parents. The references are
+   `statuses.reblog_of_id`, `statuses.in_reply_to_id`, and any column the catalog defers. No delete then cascades to
+   or updates another row. Setting references to NULL rewrites rows, so such a step also stops after the row that
+   brings the rewritten bytes to 1 MiB, and ends the call. Each call runs a few transactions, and the caller repeats
+   the call until `done`.
 3. The last transaction:
     - writes the configuration back exactly from the record;
     - removes the record;

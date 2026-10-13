@@ -50,14 +50,18 @@ import {
 	writeFlag,
 } from './store-flags'
 import {
+	applyStagedLinks,
 	applyStatements,
 	catalogDifference,
 	compareResults,
+	dropStagedLinks,
+	hasStagedLinks,
 	ImportError,
 	isEmpty,
 	migrationDifference,
 	parseHeader,
 	parseTrailer,
+	rowBytes,
 	type VerifyReport,
 } from './store-import'
 import type { StoreKernel } from './store-kernel'
@@ -113,7 +117,14 @@ export type QueryResult = {
 export const DEFAULT_LEASE_MS = 10 * 60 * 1000
 const MIN_LEASE_MS = 30 * 1000
 const MAX_LEASE_MS = 60 * 60 * 1000
+// The work of one RPC is bounded by what it writes, not by the bytes it receives. A chunk of more than one statement
+// holds at most MAX_IMPORT_CHUNK_STATEMENTS statements in IMPORT_CHUNK_WORK_BYTES; a single larger statement (one row,
+// which the platform limits to 2 MB stored) may come alone in up to MAX_IMPORT_CHUNK_BYTES. Staged links and the
+// reset's unlinking rewrite at most LINK_STEP_BYTES of rows per call (store-import.ts).
 export const MAX_IMPORT_CHUNK_BYTES = 16 * 1024 * 1024
+export const IMPORT_CHUNK_WORK_BYTES = 4 * 1024 * 1024
+export const MAX_IMPORT_CHUNK_STATEMENTS = 2000
+const LINK_STEP_BYTES = 1024 * 1024
 const VERIFY_STEP_BYTES = 32 * 1024 * 1024
 const MAX_QUERY_ROWS = 1000
 const MAX_QUERY_BYTES = 4 * 1024 * 1024
@@ -684,6 +695,15 @@ export class StoreAdmin {
 		} catch (error) {
 			return refuse('invalid-chunk', error instanceof DumpParseError ? error.message : 'chunk is not valid UTF-8')
 		}
+		if (
+			statements.length > MAX_IMPORT_CHUNK_STATEMENTS ||
+			(statements.length > 1 && bytes.byteLength > IMPORT_CHUNK_WORK_BYTES)
+		) {
+			return refuse(
+				'chunk-too-large',
+				`a chunk may hold at most ${MAX_IMPORT_CHUNK_STATEMENTS} statements in ${IMPORT_CHUNK_WORK_BYTES} bytes, or one statement`
+			)
+		}
 		const digest = new Sha256().update(record.digest).update(bytes).hex()
 		const bodyHash = Sha256.restore(record.bodyHash).update(bytes).save()
 		try {
@@ -696,7 +716,7 @@ export class StoreAdmin {
 				if (migrations !== null) {
 					throw new ImportError('migrations-differ', migrations)
 				}
-				applyStatements(this.#sql, statements)
+				applyStatements(this.#sql, statements, current.statements)
 				writeFlag(this.#sql, 'import', {
 					...current,
 					lastSeq: seq,
@@ -798,6 +818,19 @@ export class StoreAdmin {
 				}
 				if (record.state !== 'finished' || record.trailer === null || record.verify === null) {
 					throw new ImportError('import-not-finished', 'finish the import before verifying it')
+				}
+				// The links the chunks staged go in first, a bounded amount per call; the checksums start once none is left.
+				if (
+					hasStagedLinks(this.#sql) &&
+					applyStagedLinks(
+						this.#sql,
+						record.header.tables,
+						Math.min(budget, LINK_STEP_BYTES),
+						MAX_IMPORT_CHUNK_STATEMENTS
+					)
+				) {
+					const next = this.#touch(record)
+					return { ok: true as const, done: false, report: null, progress: progressOf(next) }
 				}
 				const step = checksumStep(this.#sql, record.header.tables, record.verify.position, budget)
 				const results = [...record.verify.results, ...step.finished]
@@ -926,10 +959,14 @@ export class StoreAdmin {
 				return { ok: true, done: true, progress: null }
 			}
 			for (let step = 0; step < maxSteps; step++) {
-				const finished = this.#transaction(() => this.#resetStep(id))
-				if (finished) {
+				const outcome = this.#transaction(() => this.#resetStep(id))
+				if (outcome === 'done') {
 					await this.#resumeDeferredUpgrade()
 					return { ok: true, done: true, progress: null }
+				}
+				if (outcome === 'unlinked') {
+					// Unlinking rewrites rows: one such step is the call's share of work.
+					break
 				}
 			}
 			return { ok: true, done: false, progress: this.#currentProgress() }
@@ -943,25 +980,30 @@ export class StoreAdmin {
 
 	// One transaction of a reset: deletes up to resetBatchRows rows of the last table (in catalog order) that still has
 	// rows; when none is left, writes the configuration back, removes the record and leaves the receipt. Returns
-	// whether the reset is complete.
-	#resetStep(id: string): boolean {
+	// whether the reset is complete, or whether the step rewrote rows (unlinked).
+	#resetStep(id: string): 'done' | 'more' | 'unlinked' {
 		const record = readFlags(this.#sql).import
 		if (record === null || record.id !== id || record.state !== 'resetting') {
 			throw new ImportError('import-not-found', 'the reset was taken over')
 		}
-		// First the references inside a table (statuses: reblog_of_id, in_reply_to_id, and any deferred column), set to
+		// Links an unfinished import staged go first.
+		if (dropStagedLinks(this.#sql, this.#resetBatchRows) > 0) {
+			this.#touch(record)
+			return 'more'
+		}
+		// Then the references inside a table (statuses: reblog_of_id, in_reply_to_id, and any deferred column), set to
 		// NULL in bounded batches: deleting a row they point at would cascade or update without bound. Then rows,
 		// children before parents, so no delete reaches another row.
 		for (const spec of record.header.tables) {
-			if (unlinkRows(this.#sql, spec, this.#resetBatchRows) > 0) {
+			if (unlinkRows(this.#sql, spec, this.#resetBatchRows, LINK_STEP_BYTES) > 0) {
 				this.#touch(record)
-				return false
+				return 'unlinked'
 			}
 		}
 		for (const spec of [...record.header.tables].reverse()) {
 			if (deleteRows(this.#sql, spec, this.#resetBatchRows) > 0) {
 				this.#touch(record)
-				return false
+				return 'more'
 			}
 		}
 		replaceBootstrapRows(this.#sql, record.bootstrap ?? [])
@@ -969,7 +1011,7 @@ export class StoreAdmin {
 		writeFlag(this.#sql, 'unpublished', null)
 		writeFlag(this.#sql, 'import_reset', { id, completedAt: this.#now() })
 		this.#log({ event: 'kopje.store.import.reset-done', id })
-		return true
+		return 'done'
 	}
 
 	// Writes the record with a fresh updatedAt: a successful step of the import (the idle clock of abandonStale).
@@ -1673,8 +1715,9 @@ function rowKey(spec: TableSpec): { key: string; columns: string } {
 	return { key: `(${columns})`, columns }
 }
 
-// Sets the deferred (self- or cyclic) references of up to `limit` rows to NULL. Returns how many rows changed.
-function unlinkRows(sql: SqlStorage, spec: TableSpec, limit: number): number {
+// Sets the deferred (self- or cyclic) references of up to `limit` rows to NULL, stopping after the row that brings the
+// rewritten bytes to `maxBytes` (SQLite rewrites each such row whole). Returns how many rows changed.
+function unlinkRows(sql: SqlStorage, spec: TableSpec, limit: number, maxBytes: number): number {
 	if (spec.deferred.length === 0) {
 		return 0
 	}
@@ -1682,13 +1725,13 @@ function unlinkRows(sql: SqlStorage, spec: TableSpec, limit: number): number {
 	const set = spec.deferred.map((c) => `${quoteIdentifier(c)} = NULL`).join(', ')
 	const linked = spec.deferred.map((c) => `${quoteIdentifier(c)} IS NOT NULL`).join(' OR ')
 	const { key, columns } = rowKey(spec)
+	const candidates = `SELECT ${columns}, ${rowBytes(spec)} AS size FROM ${table} WHERE ${linked} LIMIT ?`
+	const running = `SELECT ${columns}, size, sum(size) OVER (ROWS UNBOUNDED PRECEDING) AS total FROM (${candidates})`
+	const picked = `SELECT ${columns} FROM (${running}) WHERE total - size < ?`
 	return sql
 		.exec<{
 			n: number
-		}>(
-			`UPDATE ${table} SET ${set} WHERE ${key} IN (SELECT ${columns} FROM ${table} WHERE ${linked} LIMIT ?) RETURNING 1 AS n`,
-			limit
-		)
+		}>(`UPDATE ${table} SET ${set} WHERE ${key} IN (${picked}) RETURNING 1 AS n`, limit, maxBytes)
 		.toArray().length
 }
 

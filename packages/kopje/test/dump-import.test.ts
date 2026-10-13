@@ -21,7 +21,12 @@ import {
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import type { DumpTrailer } from '../src/platform/dump-format'
 import { Sha256 } from '../src/platform/sha256'
-import { type AdminOptions, StoreAdmin } from '../src/platform/store-admin'
+import {
+	type AdminOptions,
+	IMPORT_CHUNK_WORK_BYTES,
+	MAX_IMPORT_CHUNK_STATEMENTS,
+	StoreAdmin,
+} from '../src/platform/store-admin'
 import type { StoreStub } from '../src/platform/store-client'
 import type { DumpCursor } from '../src/platform/store-dump'
 import { toStoreUnavailable } from '../src/platform/store-errors'
@@ -393,6 +398,152 @@ describe('import', () => {
 		})
 		expect(await target.importVerify(BUILD, session, begun.progress.id)).toMatchObject({ report: { ok: true } })
 		expect(await target.adminGate(BUILD)).toMatchObject({ bootstrap: true, access: { adminAud: null } })
+	})
+})
+
+// RES-6, DATA-3: an import call's work follows what it writes, not the bytes it receives. A link statement is short,
+// but SQLite rewrites the whole row it changes, so links are staged with their chunk and applied in verify steps
+// bounded by the bytes they rewrite; a chunk is bounded by statements as well as bytes.
+describe('import work per call', () => {
+	const ROW = 300_000
+
+	function statusId(n: number): string {
+		return String(130_000_000_000_000_000n + BigInt(n))
+	}
+
+	// A source whose replies are large rows that all need a link on import.
+	async function largeReplies(replies: number): Promise<StoreStub> {
+		const source = await seeded(0)
+		await runInDurableObject(source, (_instance, state) => {
+			const sql = state.storage.sql
+			const account = sql.exec<{ id: string }>("SELECT id FROM accounts WHERE domain = 'remote.test'").one().id
+			const insert = (n: number, replyTo: number | null) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, content, published_at)
+					 VALUES (?, ?, ?, ?, ?, 'public', ?, '2026-10-12T00:00:00.000Z')`,
+					statusId(n),
+					`https://remote.test/s/large-${n}`,
+					account,
+					replyTo === null ? null : `https://remote.test/s/large-${replyTo}`,
+					replyTo === null ? null : statusId(replyTo),
+					`${n} ${'x'.repeat(ROW)}`
+				)
+			insert(0, null)
+			for (let n = 1; n <= replies; n++) {
+				insert(n, 0)
+			}
+		})
+		return source
+	}
+
+	async function linkedReplies(store: StoreStub): Promise<number> {
+		return runInDurableObject(
+			store,
+			(_instance, state) =>
+				state.storage.sql
+					.exec<{
+						n: number
+					}>("SELECT count(*) AS n FROM statuses WHERE uri LIKE '%/large-%' AND in_reply_to_id IS NOT NULL")
+					.one().n
+		)
+	}
+
+	it('stages links with their chunk and applies them in verify steps bounded by the rows they rewrite', async () => {
+		const replies = 8
+		const { text } = await dumpViaRpc(await largeReplies(replies))
+		const target = await migratedStore()
+		const id = await beginImport(target, text)
+		for (const [i, chunk] of (await importChunks(text, 1 << 20)).entries()) {
+			expect(await target.importChunk(BUILD, ACCESS, id, i + 1, chunk)).toMatchObject({ ok: true })
+		}
+		// No chunk rewrote a row for a link.
+		expect(await linkedReplies(target)).toBe(0)
+		expect(await target.importFinish(BUILD, ACCESS, id, splitDump(text).trailer)).toMatchObject({ ok: true })
+
+		// Each step stops after the row that brings its rewritten bytes to the budget: two rows of ROW bytes here.
+		const budget = ROW + ROW / 2
+		await runInDurableObject(target, async (_instance, state) => {
+			const linkedNow = () =>
+				state.storage.sql
+					.exec<{
+						n: number
+					}>("SELECT count(*) AS n FROM statuses WHERE uri LIKE '%/large-%' AND in_reply_to_id IS NOT NULL")
+					.one().n
+			let linked = 0
+			let steps = 0
+			for (;;) {
+				const step = await admin(state).importVerify(BUILD, ACCESS, id, budget)
+				if (!step.ok) throw new Error(step.message)
+				expect(linkedNow() - linked, `step ${steps}`).toBeLessThanOrEqual(2)
+				linked = linkedNow()
+				steps++
+				if (step.done) {
+					expect(step.report).toMatchObject({ ok: true })
+					break
+				}
+			}
+			expect(linked).toBe(replies)
+			expect(steps).toBeGreaterThanOrEqual(replies / 2)
+		})
+	})
+
+	it('refuses a link to a missing row with its chunk', async () => {
+		const { text } = await dumpViaRpc(await seeded(0))
+		const target = await migratedStore()
+		const id = await beginImport(target, text)
+		const link = new TextEncoder().encode(
+			`UPDATE "statuses" SET "reblog_of_id"=NULL,"in_reply_to_id"=NULL WHERE "id"='${statusId(1)}';\n`
+		)
+		expect(await target.importChunk(BUILD, ACCESS, id, 1, link)).toMatchObject({
+			ok: false,
+			code: 'link-target-missing',
+		})
+		expect(await target.importProgress(BUILD, ACCESS)).toMatchObject({ progress: { lastSeq: 0, statements: 0 } })
+	})
+
+	it('refuses verification when a staged link breaks a constraint', async () => {
+		const { text } = await dumpViaRpc(await seeded(0))
+		// The reply's link also makes it a boost, which its CHECK forbids. The trailer's body fields follow the edit, so
+		// the import reaches verification.
+		const reply = /^UPDATE "statuses" SET "reblog_of_id"=NULL,"in_reply_to_id"=('\d+') /m.exec(text)
+		if (reply === null) throw new Error('no reply link in the dump')
+		const edited = text.replace(reply[0], reply[0].replace('"reblog_of_id"=NULL', `"reblog_of_id"=${reply[1]}`))
+		const { body, trailer } = splitDump(edited) as { body: string; trailer: DumpTrailer }
+		const bytes = new TextEncoder().encode(body)
+		const fixed = {
+			...trailer,
+			body: { ...trailer.body, bytes: bytes.byteLength, sha256: new Sha256().update(bytes).hex() },
+		}
+		const target = await migratedStore()
+		const id = await beginImport(target, edited)
+		for (const [i, chunk] of (await importChunks(edited, 1 << 20)).entries()) {
+			expect(await target.importChunk(BUILD, ACCESS, id, i + 1, chunk)).toMatchObject({ ok: true })
+		}
+		expect(await target.importFinish(BUILD, ACCESS, id, fixed)).toMatchObject({ ok: true })
+		expect(await target.importVerify(BUILD, ACCESS, id)).toMatchObject({ ok: false, code: 'link-failed' })
+		expect(await target.importProgress(BUILD, ACCESS)).toMatchObject({ progress: { state: 'finished' } })
+		expect(await resetImport(target, id)).toMatchObject({ ok: true, done: true })
+	})
+
+	it('refuses a chunk over the statement or byte bound without applying it', async () => {
+		const { text } = await dumpViaRpc(await seeded(0))
+		const target = await migratedStore()
+		const id = await beginImport(target, text)
+		const row = (key: string, value: string) =>
+			`INSERT INTO "fedify_kv" ("key","value","expires_at") VALUES ('["${key}"]','"${value}"',NULL);\n`
+		const encode = (lines: string[]) => new TextEncoder().encode(lines.join(''))
+		const many = Array.from({ length: MAX_IMPORT_CHUNK_STATEMENTS + 1 }, (_, n) => row(`k${n}`, '1'))
+		expect(await target.importChunk(BUILD, ACCESS, id, 1, encode(many))).toMatchObject({
+			ok: false,
+			code: 'chunk-too-large',
+		})
+		const half = 'v'.repeat(IMPORT_CHUNK_WORK_BYTES / 2)
+		expect(await target.importChunk(BUILD, ACCESS, id, 1, encode([row('a', half), row('b', half)]))).toMatchObject({
+			ok: false,
+			code: 'chunk-too-large',
+		})
+		expect(await target.importProgress(BUILD, ACCESS)).toMatchObject({ progress: { lastSeq: 0, statements: 0 } })
+		expect(await target.importChunk(BUILD, ACCESS, id, 1, encode(many.slice(1)))).toMatchObject({ ok: true })
 	})
 })
 

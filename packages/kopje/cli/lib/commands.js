@@ -1,12 +1,21 @@
 /* global setTimeout, crypto */
 import { AdminError } from './client.js'
-import { chainDigest, readDumpFile, sha256Hex, statementChunks, utf8 } from './format.js'
+import {
+	chainDigest,
+	IMPORT_CHUNK_BYTES,
+	IMPORT_CHUNK_STATEMENTS,
+	readDumpFile,
+	sha256Hex,
+	statementChunks,
+	utf8,
+} from './format.js'
 
 /**
  * @typedef {import('./client.js').AdminClient} AdminClient
  * @typedef {import('./client.js').Json} Json
  * @typedef {import('./format.js').FileIO} FileIO
  * @typedef {{ progress(text: string): void, info(text: string): void, secret?(value: string): void }} Output
+ * @typedef {{ bytes: number, statements: number }} ChunkLimits
  */
 
 const MIB = 1024 * 1024
@@ -193,7 +202,7 @@ export async function importFromFile({
 	const file = await readDumpFile(io, path)
 	const statePath = `${path}.import.json`
 	const saved = await io.readText(statePath)
-	/** @type {{ id: string, chunkBytes: number, session?: string } | null} */
+	/** @type {{ id: string, chunkBytes: number, chunkStatements?: number, session?: string } | null} */
 	const local = saved === null ? null : JSON.parse(saved)
 	/** @type {Json} */
 	let progress
@@ -225,7 +234,12 @@ export async function importFromFile({
 		}
 		await io.writeTextAtomic(
 			statePath,
-			JSON.stringify({ id: progress.id, chunkBytes: requestedChunkBytes ?? 8 * MIB, session: begun.session })
+			JSON.stringify({
+				id: progress.id,
+				chunkBytes: requestedChunkBytes ?? IMPORT_CHUNK_BYTES,
+				chunkStatements: IMPORT_CHUNK_STATEMENTS,
+				session: begun.session,
+			})
 		)
 		out.info(
 			begun.resumed
@@ -233,13 +247,17 @@ export async function importFromFile({
 				: `import ${progress.id} begun (${file.header.tables.length} tables, ${formatBytes(file.bodyEnd - file.bodyStart)})`
 		)
 	}
-	// Chunk boundaries must be the same as in the earlier run for the digests to match.
-	const chunkBytes = local?.chunkBytes ?? requestedChunkBytes ?? 8 * MIB
+	// Chunk boundaries must be the same as in the earlier run for the digests to match. A state file without
+	// chunkStatements comes from a version that split by bytes only.
+	const chunks = {
+		bytes: local?.chunkBytes ?? requestedChunkBytes ?? IMPORT_CHUNK_BYTES,
+		statements: local === null ? IMPORT_CHUNK_STATEMENTS : (local.chunkStatements ?? Infinity),
+	}
 	if (progress.state === 'resetting') {
 		throw new Error(`import ${progress.id} is being reset; finish it with import-reset ${path} --yes`)
 	}
 	// Before an outcome or a later phase is taken as this file's, the file must be the one the Store received.
-	await checkIdentity({ io, path, file, progress, chunkBytes, whole: progress.state !== 'receiving' })
+	await checkIdentity({ io, path, file, progress, chunks, whole: progress.state !== 'receiving' })
 
 	if (progress.state === 'verified' || progress.state === 'failed') {
 		// Decided already (a lost response): report it. A failed import keeps its state file for a reset.
@@ -251,7 +269,7 @@ export async function importFromFile({
 		return report
 	}
 	if (progress.state === 'receiving') {
-		await sendChunks({ client, io, out, path, file, progress, chunkBytes, now, sleep })
+		await sendChunks({ client, io, out, path, file, progress, chunks, now, sleep })
 	}
 	await client.post('/admin/import/finish', { id: progress.id, trailer: file.trailer })
 	out.info('all chunks applied; verifying')
@@ -260,7 +278,7 @@ export async function importFromFile({
 		if (result.done) {
 			// The file may have changed while the Store verified: read it again before taking the outcome as its own.
 			const current = await readDumpFile(io, path)
-			await checkIdentity({ io, path, file: current, progress: result.progress, chunkBytes, whole: true })
+			await checkIdentity({ io, path, file: current, progress: result.progress, chunks, whole: true })
 			if (result.progress?.state === 'verified') {
 				await io.remove(statePath)
 			}
@@ -275,10 +293,10 @@ export async function importFromFile({
 /**
  * Checks that the file is the dump the Store's import received: the same header and trailer, and with `whole`, the
  * same chunks (count and chain digest), which binds the body as well.
- * @param {{ io: FileIO, path: string, file: import('./format.js').DumpFile, progress: Json, chunkBytes: number,
+ * @param {{ io: FileIO, path: string, file: import('./format.js').DumpFile, progress: Json, chunks: ChunkLimits,
  *   whole: boolean }} options
  */
-async function checkIdentity({ io, path, file, progress, chunkBytes, whole }) {
+async function checkIdentity({ io, path, file, progress, chunks, whole }) {
 	/** @param {string} what */
 	const mismatch = (what) =>
 		new Error(`import ${progress.id} on the Store does not match this file (${what}); is it the same dump?`)
@@ -293,7 +311,7 @@ async function checkIdentity({ io, path, file, progress, chunkBytes, whole }) {
 	}
 	let seq = 0
 	let digest = ''
-	for await (const chunk of statementChunks(io, path, file.bodyStart, file.bodyEnd, chunkBytes)) {
+	for await (const chunk of statementChunks(io, path, file.bodyStart, file.bodyEnd, chunks.bytes, chunks.statements)) {
 		seq++
 		digest = await chainDigest(digest, chunk.bytes)
 	}
@@ -308,15 +326,15 @@ async function checkIdentity({ io, path, file, progress, chunkBytes, whole }) {
 /**
  * Sends the chunks after the Store's last one, checking that the chunks before it match what the Store recorded.
  * @param {{ client: AdminClient, io: FileIO, out: Output, path: string, file: import('./format.js').DumpFile,
- *   progress: Json, chunkBytes: number, now: () => number, sleep: (ms: number) => Promise<void> }} options
+ *   progress: Json, chunks: ChunkLimits, now: () => number, sleep: (ms: number) => Promise<void> }} options
  */
-async function sendChunks({ client, io, out, path, file, progress, chunkBytes, now, sleep }) {
+async function sendChunks({ client, io, out, path, file, progress, chunks, now, sleep }) {
 	const total = file.bodyEnd - file.bodyStart
 	const startedAt = now()
 	let sent = 0
 	let seq = 0
 	let digest = ''
-	for await (const chunk of statementChunks(io, path, file.bodyStart, file.bodyEnd, chunkBytes)) {
+	for await (const chunk of statementChunks(io, path, file.bodyStart, file.bodyEnd, chunks.bytes, chunks.statements)) {
 		seq++
 		const previous = digest
 		digest = await chainDigest(previous, chunk.bytes)

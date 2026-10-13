@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
+import { memoryIO } from './ops-helpers'
 import {
 	chainDigest,
 	END_LINE as CLI_END,
 	HEADER_PREFIX as CLI_HEADER,
+	IMPORT_CHUNK_BYTES,
+	IMPORT_CHUNK_STATEMENTS,
+	statementChunks,
 	TRAILER_PREFIX as CLI_TRAILER,
 } from '../cli/lib/format.js'
 import {
@@ -20,6 +24,7 @@ import {
 } from '../src/platform/dump-format'
 import { readOnlyProblem } from '../src/platform/readonly-sql'
 import { Sha256, sha256Hex } from '../src/platform/sha256'
+import { IMPORT_CHUNK_WORK_BYTES, MAX_IMPORT_CHUNK_STATEMENTS } from '../src/platform/store-admin'
 
 async function subtleHex(data: Uint8Array): Promise<string> {
 	const digest = await crypto.subtle.digest('SHA-256', data)
@@ -106,10 +111,38 @@ describe('dump format', () => {
 
 	it('keeps the CLI constants and chain digest in step with the Store', async () => {
 		expect([CLI_HEADER, CLI_TRAILER, CLI_END]).toEqual([HEADER_PREFIX, TRAILER_PREFIX, END_LINE])
+		expect([IMPORT_CHUNK_BYTES, IMPORT_CHUNK_STATEMENTS]).toEqual([
+			IMPORT_CHUNK_WORK_BYTES,
+			MAX_IMPORT_CHUNK_STATEMENTS,
+		])
 		const chunk = new TextEncoder().encode('INSERT ...;\n')
 		expect(await chainDigest('abc', chunk)).toBe(new Sha256().update('abc').update(chunk).hex())
 	})
 
+	// The Store bounds a chunk's work by its statements as well as its bytes: many short rows write as many index
+	// entries as a few long ones write pages.
+	it('splits import chunks by statement count as well as by bytes', async () => {
+		const line = (n: number) => `INSERT INTO "t" ("a") VALUES (${n});\n`
+		const body = Array.from({ length: 4500 }, (_, n) => line(n)).join('')
+		const io = memoryIO(new Map([['b', new TextEncoder().encode(body)]]))
+		const counts: number[] = []
+		let joined = ''
+		for await (const chunk of statementChunks(io, 'b', 0, body.length, 1 << 20, 2000)) {
+			const text = new TextDecoder().decode(chunk.bytes)
+			counts.push(text.split('\n').length - 1)
+			joined += text
+		}
+		expect(counts).toEqual([2000, 2000, 500])
+		expect(joined).toBe(body)
+		// A single statement over the byte bound still goes alone.
+		const long = `INSERT INTO "t" ("a") VALUES ('${'x'.repeat(300)}');\n`
+		const io2 = memoryIO(new Map([['c', new TextEncoder().encode(line(1) + long + line(2))]]))
+		const sizes: number[] = []
+		for await (const chunk of statementChunks(io2, 'c', 0, line(1).length + long.length + line(2).length, 100, 2000)) {
+			sizes.push(chunk.bytes.byteLength)
+		}
+		expect(sizes).toEqual([line(1).length, long.length, line(2).length])
+	})
 	it('scans every literal form quote() produces', () => {
 		for (const literal of [
 			'NULL',

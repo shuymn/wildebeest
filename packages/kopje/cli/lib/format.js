@@ -5,6 +5,10 @@
 export const HEADER_PREFIX = '-- kopje-dump-header '
 export const TRAILER_PREFIX = '-- kopje-dump-trailer '
 export const END_LINE = '-- kopje-dump-end'
+// The Store's bounds on one import chunk (src/platform/store-admin.ts): at most this many statements in at most this
+// many bytes, or a single larger statement alone.
+export const IMPORT_CHUNK_BYTES = 4 * 1024 * 1024
+export const IMPORT_CHUNK_STATEMENTS = 2000
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder('utf-8', { fatal: true })
@@ -75,21 +79,23 @@ export async function readDumpFile(io, path) {
 }
 
 /**
- * Splits the statement body of a dump into chunks of whole statements, each at most maxBytes (a single larger
- * statement becomes its own chunk). A statement ends at ";\n" outside a quoted literal; quotes inside literals are
- * doubled, so toggling on every quote byte tracks literal boundaries. Reads the file in blocks.
+ * Splits the statement body of a dump into chunks of whole statements, each at most maxBytes and maxStatements (a
+ * single larger statement becomes its own chunk). A statement ends at ";\n" outside a quoted literal; quotes inside
+ * literals are doubled, so toggling on every quote byte tracks literal boundaries. Reads the file in blocks.
  * @param {FileIO} io
  * @param {string} path
  * @param {number} start
  * @param {number} end
  * @param {number} maxBytes
+ * @param {number} [maxStatements]
  * @returns {AsyncGenerator<{ bytes: Uint8Array, offset: number }>}
  */
-export async function* statementChunks(io, path, start, end, maxBytes) {
+export async function* statementChunks(io, path, start, end, maxBytes, maxStatements = Infinity) {
 	const BLOCK = 1024 * 1024
 	let chunkStart = start
-	// Offset (absolute) just after the last complete statement within the pending bytes.
+	// Offset (absolute) just after the last complete statement within the pending bytes, and how many there are.
 	let lastBoundary = start
+	let statements = 0
 	let inQuote = false
 	let previous = 0
 	let position = start
@@ -101,11 +107,13 @@ export async function* statementChunks(io, path, start, end, maxBytes) {
 				inQuote = !inQuote
 			} else if (byte === 0x0a && previous === 0x3b && !inQuote) {
 				const boundary = position + i + 1
-				if (boundary - chunkStart > maxBytes && lastBoundary > chunkStart) {
+				if ((boundary - chunkStart > maxBytes || statements >= maxStatements) && lastBoundary > chunkStart) {
 					yield { bytes: await io.read(path, chunkStart, lastBoundary - chunkStart), offset: chunkStart }
 					chunkStart = lastBoundary
+					statements = 0
 				}
 				lastBoundary = boundary
+				statements++
 			}
 			previous = byte
 		}

@@ -2,14 +2,17 @@ import { DUMPED_STATE, hasRows, SEQUENCE_TABLE, STATE_TABLE } from './dump-catal
 import {
 	DUMP_FORMAT,
 	type DumpHeader,
+	DumpParseError,
 	type DumpTrailer,
 	type MigrationRecord,
 	type ParsedStatement,
+	parseStatements,
 	quoteIdentifier,
 	type TableResult,
 	type TableSpec,
 } from './dump-format'
 import { bindAll, LiteralError, textLiteral } from './dump-literals'
+import { errorMessage } from './error-message'
 
 // Checks the shape of a header that came from a caller. The catalog and migrations are compared separately.
 export function parseHeader(value: unknown): DumpHeader {
@@ -99,27 +102,35 @@ export function isEmpty(sql: SqlStorage, tables: readonly TableSpec[], bootstrap
 	return tables.every((t) => !hasRows(sql, t, bootstrap?.table === t.name ? bootstrap : undefined))
 }
 
+// Link statements are not applied with their chunk. A link changes the size of its row's record, and SQLite rewrites
+// such a record whole, overflow pages included: its cost follows the size of the row it points at, not the bytes of
+// the statement, so a chunk of short links can rewrite many times its own size. A link is checked against its target
+// row and staged in kopje_state under LINK_PREFIX and its statement ordinal (never dumped: not an allowlisted name);
+// applyStagedLinks applies the staged links in steps bounded by the bytes they rewrite.
+const LINK_PREFIX = 'import_link:'
+const LINK_RANGE = `name >= '${LINK_PREFIX}' AND name < 'import_link;'`
+
 // Executes validated statements. parseStatements matched each against a template of this Store's catalog; the
 // literals are then bound as parameters (bindLiteral), which keeps the statement text short whatever the value size
-// (the platform limits a statement to 100 KB) and keeps every storage class exact.
-export function applyStatements(sql: SqlStorage, statements: readonly ParsedStatement[]): void {
+// (the platform limits a statement to 100 KB) and keeps every storage class exact. `first` is the ordinal of the
+// first statement in the body, which names the staged links in body order.
+export function applyStatements(sql: SqlStorage, statements: readonly ParsedStatement[], first: number): void {
 	const allowedState = new Set(DUMPED_STATE.map(textLiteral))
 	const columnLists = new Map<string, string>()
-	for (const statement of statements) {
+	for (const [index, statement] of statements.entries()) {
 		const table = quoteIdentifier(statement.table.name)
-		let bound
-		try {
-			bound = bindAll(statement.literals)
-		} catch (error) {
-			throw new ImportError('invalid-chunk', error instanceof LiteralError ? error.message : 'invalid literal')
-		}
+		const bound = bind(statement.literals)
 		if (statement.kind === 'link') {
-			const { deferred, key } = statement.table
-			const set = deferred.map((c, i) => `${quoteIdentifier(c)} = ${bound.exprs[i]}`).join(', ')
-			const match = key.map((c, i) => `${quoteIdentifier(c)} = ${bound.exprs[deferred.length + i]}`).join(' AND ')
-			if (sql.exec(`UPDATE ${table} SET ${set} WHERE ${match}`, ...bound.params).rowsWritten === 0) {
+			const key = bind(statement.literals.slice(statement.table.deferred.length))
+			const exists = sql.exec(`SELECT 1 FROM ${table} WHERE ${keyMatch(statement.table, key.exprs)}`, ...key.params)
+			if (exists.toArray().length === 0) {
 				throw new ImportError('link-target-missing', `link to a missing ${statement.table.name} row`)
 			}
+			sql.exec(
+				'INSERT INTO kopje_state (name, value) VALUES (?, ?)',
+				`${LINK_PREFIX}${String(first + index).padStart(16, '0')}`,
+				statement.text
+			)
 			continue
 		}
 		const name = statement.literals[0] ?? ''
@@ -138,6 +149,92 @@ export function applyStatements(sql: SqlStorage, statements: readonly ParsedStat
 		}
 		sql.exec(`INSERT INTO ${table} (${columns}) VALUES (${bound.exprs.join(',')})`, ...bound.params)
 	}
+}
+
+export function hasStagedLinks(sql: SqlStorage): boolean {
+	return (
+		sql.exec<{ found: number }>(`SELECT EXISTS (SELECT 1 FROM kopje_state WHERE ${LINK_RANGE}) AS found`).one()
+			.found === 1
+	)
+}
+
+// Applies staged links in body order, at most maxLinks, and stops once the rows they rewrote reach maxBytes (one link
+// always goes in, so a single large row still makes progress). Returns whether staged links remain.
+export function applyStagedLinks(
+	sql: SqlStorage,
+	tables: readonly TableSpec[],
+	maxBytes: number,
+	maxLinks: number
+): boolean {
+	const staged = sql
+		.exec<{
+			name: string
+			value: string
+		}>(`SELECT name, value FROM kopje_state WHERE ${LINK_RANGE} ORDER BY name LIMIT ?`, maxLinks)
+		.toArray()
+	let rewritten = 0
+	let last: string | null = null
+	for (const { name, value } of staged) {
+		let statement
+		try {
+			statement = parseStatements(`${value}\n`, tables)[0]
+		} catch (error) {
+			throw new ImportError('invalid-chunk', error instanceof DumpParseError ? error.message : 'invalid staged link')
+		}
+		if (statement?.kind !== 'link') {
+			throw new ImportError('invalid-chunk', 'a staged link is not a link statement')
+		}
+		const { deferred } = statement.table
+		const bound = bind(statement.literals)
+		const table = quoteIdentifier(statement.table.name)
+		const set = deferred.map((c, i) => `${quoteIdentifier(c)} = ${bound.exprs[i]}`).join(', ')
+		const match = keyMatch(statement.table, bound.exprs.slice(deferred.length))
+		let rows
+		try {
+			const update = `UPDATE ${table} SET ${set} WHERE ${match} RETURNING ${rowBytes(statement.table)} AS size`
+			rows = sql.exec<{ size: number }>(update, ...bound.params).toArray()
+		} catch (error) {
+			// A constraint the value breaks (a dangling reference, a CHECK): the import cannot complete.
+			throw new ImportError('link-failed', `a ${statement.table.name} link failed: ${errorMessage(error)}`)
+		}
+		if (rows.length === 0) {
+			throw new ImportError('link-target-missing', `link to a missing ${statement.table.name} row`)
+		}
+		rewritten += rows[0]?.size ?? 0
+		last = name
+		if (rewritten >= maxBytes) {
+			break
+		}
+	}
+	if (last !== null) {
+		sql.exec(`DELETE FROM kopje_state WHERE ${LINK_RANGE} AND name <= ?`, last)
+	}
+	return hasStagedLinks(sql)
+}
+
+// Removes up to `limit` staged links (a reset). Returns how many were removed.
+export function dropStagedLinks(sql: SqlStorage, limit: number): number {
+	return sql.exec(
+		`DELETE FROM kopje_state WHERE name IN (SELECT name FROM kopje_state WHERE ${LINK_RANGE} ORDER BY name LIMIT ?)`,
+		limit
+	).rowsWritten
+}
+
+function bind(literals: readonly string[]): { exprs: string[]; params: SqlStorageValue[] } {
+	try {
+		return bindAll(literals)
+	} catch (error) {
+		throw new ImportError('invalid-chunk', error instanceof LiteralError ? error.message : 'invalid literal')
+	}
+}
+
+// The stored bytes of a row, as an SQL expression: what rewriting it costs.
+export function rowBytes(spec: TableSpec): string {
+	return spec.columns.map((c) => `coalesce(octet_length(${quoteIdentifier(c)}), 0)`).join(' + ')
+}
+
+function keyMatch(spec: TableSpec, exprs: readonly string[]): string {
+	return spec.key.map((c, i) => `${quoteIdentifier(c)} = ${exprs[i]}`).join(' AND ')
 }
 
 export type VerifyReport = {
