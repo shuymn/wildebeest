@@ -19,6 +19,7 @@ import {
 	decodeBudget,
 	digestOf,
 	ExportError,
+	exportOrder,
 	parseStatement,
 	quoteIdentifier,
 	splitStatements,
@@ -223,9 +224,11 @@ function load(sources, acceptDeletions, baseTime, path) {
 	/** @type {string | null} */
 	let notificationSequence = null
 	let budget = decodeBudget()
+	const order = exportOrder()
 	for (const source of sources) {
 		for (const statement of splitStatements(source())) {
 			const parsed = parseStatement(statement, budget)
+			order(parsed)
 			if (parsed.kind === 'create-table') {
 				if (isSearchTable(parsed.table) || isBookkeeping(parsed.table)) {
 					continue

@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs'
 import { basename } from 'node:path'
 
 import { checkSizes, exportFiles } from './run.js'
-import { decodeBudget, ExportError, parseStatement, splitStatements } from './sql-script.js'
+import { decodeBudget, ExportError, exportOrder, parseStatement, splitStatements } from './sql-script.js'
 
 export const FINGERPRINT_FORMAT = 'kopje-fingerprint/2'
 const SEQUENCE_TABLE = 'sqlite_sequence'
@@ -91,11 +91,15 @@ export function fingerprintExport(exportPath) {
 	/** @type {string | null} */
 	let notificationSequence = null
 	const budget = decodeBudget()
+	const order = exportOrder()
 	for (const file of files) {
 		for (const statement of splitStatements(readFileSync(file, 'utf8'))) {
 			const parsed = parseStatement(statement, budget)
-			if (parsed.kind === 'create-table') {
-				hashes.set(parsed.table, hashes.get(parsed.table) ?? [])
+			order(parsed)
+			// The reset D1 writes before the counter rows says that sqlite_sequence was exported, as its CREATE would.
+			if (parsed.kind === 'create-table' || parsed.kind === 'sequence-reset') {
+				const table = parsed.kind === 'create-table' ? parsed.table : SEQUENCE_TABLE
+				hashes.set(table, hashes.get(table) ?? [])
 				continue
 			}
 			if (parsed.kind !== 'insert') {

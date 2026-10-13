@@ -19,6 +19,9 @@ const ORIGIN = `https://${DOMAIN}`
 const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 const IMAGES = 'https://images.example/media'
 
+// `wrangler d1 export --table sqlite_sequence` writes no CREATE TABLE for it, but a reset before the counter rows.
+const SEQUENCE_HEADER = 'PRAGMA defer_foreign_keys=TRUE;\nDELETE FROM sqlite_sequence;\n'
+
 export type FixtureOptions = {
 	level: number
 	line?: 'T1' | 'T2'
@@ -873,7 +876,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 	if (notificationSequence !== undefined) {
 		texts.set(
 			'sqlite_sequence',
-			`INSERT INTO "sqlite_sequence" ("name","seq") VALUES('actor_notifications',${notificationSequence});\n`
+			`${SEQUENCE_HEADER}INSERT INTO "sqlite_sequence" ("name","seq") VALUES('actor_notifications',${notificationSequence});\n`
 		)
 	}
 	const fixture = { level, texts, users: users.map(({ username, email, uri }) => ({ username, email, uri })) }
@@ -920,7 +923,8 @@ export function exportDatabase(
 		}[]
 		texts.set(
 			'sqlite_sequence',
-			rows.map((r) => `INSERT INTO "sqlite_sequence" ("name","seq") VALUES('${r.name}',${r.seq});\n`).join('')
+			SEQUENCE_HEADER +
+				rows.map((r) => `INSERT INTO "sqlite_sequence" ("name","seq") VALUES('${r.name}',${r.seq});\n`).join('')
 		)
 	}
 	return texts

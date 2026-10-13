@@ -140,3 +140,39 @@ describe('loading and bridging an export', () => {
 		expect(errorOf(() => loadLegacyExport({ texts: hostile.values() })).code).toBe('unexpected-statement')
 	})
 })
+
+describe('the sqlite_sequence reset D1 writes', () => {
+	const RESET = 'DELETE FROM sqlite_sequence;\n'
+	const ROW = `INSERT INTO "sqlite_sequence" ("name","seq") VALUES('actor_notifications',12);\n`
+
+	it('is accepted in exactly the form D1 writes, and no other DELETE is', () => {
+		expect(parseStatement('DELETE FROM sqlite_sequence')).toEqual({ kind: 'sequence-reset' })
+		for (const statement of [
+			'DELETE FROM "sqlite_sequence"',
+			'delete from sqlite_sequence',
+			'DELETE  FROM sqlite_sequence',
+			'DELETE FROM main.sqlite_sequence',
+			"DELETE FROM sqlite_sequence WHERE name = 'actor_notifications'",
+			'DELETE FROM sqlite_master',
+			'DELETE FROM actors',
+		]) {
+			expect(errorOf(() => parseStatement(statement)).code, statement).toBe('unexpected-statement')
+		}
+	})
+
+	it('loads the counter after it, once and before the rows, and refuses it twice or after a row', async () => {
+		const fixture = await buildLegacyFixture({ level: 39 })
+		const withSequence = (text: string) => new Map([...fixture.texts, ['sqlite_sequence', text]])
+		const { db, report } = loadLegacyExport({ texts: withSequence(`${RESET}${ROW}`).values() })
+		expect(report.notificationSequence).toBe('12')
+		db.close()
+		expect(loadLegacyExport({ texts: withSequence(RESET).values() }).report.notificationSequence).toBeNull()
+		for (const text of [`${RESET}${RESET}${ROW}`, `${ROW}${RESET}`, `${RESET}${ROW}${RESET}`]) {
+			expect(errorOf(() => loadLegacyExport({ texts: withSequence(text).values() })).code).toBe('unexpected-statement')
+		}
+		// Twice across files counts too: the order is the export's, file after file.
+		const twice = withSequence(`${RESET}${ROW}`)
+		twice.set('actors', `${RESET}${twice.get('actors') ?? ''}`)
+		expect(errorOf(() => loadLegacyExport({ texts: twice.values() })).code).toBe('unexpected-statement')
+	})
+})

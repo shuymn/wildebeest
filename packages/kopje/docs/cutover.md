@@ -28,7 +28,9 @@ Export every table except the full-text index (`search_fts` and its shadow table
 `wrangler d1 export <db> --remote --table <table> --output <table>.sql`. `d1_migrations` must be among them. The
 converter takes either a directory of such files (every `*.sql` file in it) or one file of them concatenated, as the
 legacy backup job writes it. A `sqlite_sequence` export is optional; when present, the notification counter continues
-from it instead of from the largest notification id.
+from it instead of from the largest notification id. `wrangler d1 export --table sqlite_sequence` writes no
+`CREATE TABLE` for it, but a `DELETE FROM sqlite_sequence;` before its rows; that statement is accepted as it is (below),
+so the file needs no editing.
 
 The export is only read, by a strict grammar, and nothing from it runs:
 
@@ -39,14 +41,17 @@ The export is only read, by a strict grammar, and nothing from it runs:
   for the detected level; only then does it run, in an empty scratch database that never receives a row, to fingerprint
   the columns. Bookkeeping tables (`d1_migrations`, `sqlite_*`, `_cf_*`) never get the export's DDL: their rows are read
   by column name into a fixed schema of the converter's own.
+- `DELETE FROM sqlite_sequence`, exactly as D1 writes it, is accepted once, before any `sqlite_sequence` row, and does
+  nothing (the converter reads the counter rows into a fixed schema of its own). Written any other way, a second time
+  or after a counter row, it stops the conversion (`unexpected-statement`).
 - `INSERT INTO <name> [(<columns>)] VALUES (<literal>, ...)[, (...)]` is accepted with literals only: `NULL`, `TRUE`,
   `FALSE`, numbers, strings, blobs, and the `replace('<text>', '<marker>', char(<n>, ...))` form SQLite's `.dump` writes
   for control characters, nested at most twice (`replace(replace('<text>','\r',char(13)),'\n',char(10))` is the most
   it writes). The values are decoded and bound as parameters. An expansion is sized before it is built: one decoded
   literal may hold at most 16 Mi UTF-16 units and all literals of one pass over the export at most 1 Gi
   (`decoded-data-too-large`).
-- Anything else (`INSERT ... SELECT`, a function or expression in `VALUES`, `UPDATE`, `DELETE`, `DROP`, `ATTACH`, other
-  pragmas) stops the conversion with a fixed code (`invalid-insert`, `invalid-literal`, `invalid-create-table`,
+- Anything else (`INSERT ... SELECT`, a function or expression in `VALUES`, `UPDATE`, any other `DELETE`, `DROP`,
+  `ATTACH`, other pragmas) stops the conversion with a fixed code (`invalid-insert`, `invalid-literal`, `invalid-create-table`,
   `unexpected-statement`).
 
 **Limits.** One file may hold at most 512 MiB (a JavaScript string's limit) and the whole export 1 GiB. The converter

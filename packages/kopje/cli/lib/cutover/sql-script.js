@@ -150,8 +150,13 @@ function spend(budget, units) {
 
 /**
  * @typedef {{ kind: 'pragma' } | { kind: 'create-table', table: string, sql: string } | { kind: 'ignored' }
- *   | { kind: 'insert', table: string, columns: string[] | null, rows: Value[][] }} Statement
+ *   | { kind: 'sequence-reset' } | { kind: 'insert', table: string, columns: string[] | null, rows: Value[][] }} Statement
  */
+
+// The one DELETE an export may hold: `wrangler d1 export --table sqlite_sequence` writes it, without a CREATE TABLE,
+// before the counter rows. Only this exact text is accepted, and exportOrder() admits it at most once, before any
+// sqlite_sequence row.
+const SEQUENCE_RESET = 'DELETE FROM sqlite_sequence'
 
 // A cursor over one statement.
 class Scanner {
@@ -345,6 +350,7 @@ function replaced(s, depth) {
  *   CREATE TABLE [IF NOT EXISTS] <name> ( <definition> ) [WITHOUT ROWID | STRICT, ...]
  *   CREATE [UNIQUE] INDEX | TRIGGER | VIEW | VIRTUAL TABLE ...      (ignored, never run)
  *   INSERT INTO <name> [( <column>, ... )] VALUES ( <literal>, ... ) [, ( ... )]...
+ *   DELETE FROM sqlite_sequence                                      (exactly so; see exportOrder)
  * @param {string} statement
  * @param {DecodeBudget} [budget] shared by all statements of one pass over an export
  * @returns {Statement}
@@ -352,6 +358,9 @@ function replaced(s, depth) {
 export function parseStatement(statement, budget = decodeBudget()) {
 	if (/^PRAGMA\s+(defer_foreign_keys|foreign_keys)\s*=\s*\w+$/i.test(statement)) {
 		return { kind: 'pragma' }
+	}
+	if (statement === SEQUENCE_RESET) {
+		return { kind: 'sequence-reset' }
 	}
 	if (
 		/^CREATE\s+(UNIQUE\s+)?INDEX\b|^CREATE\s+(TEMP\w*\s+)?TRIGGER\b|^CREATE\s+VIEW\b|^CREATE\s+VIRTUAL\s+TABLE\b/i.test(
@@ -442,6 +451,26 @@ export function parseStatement(statement, budget = decodeBudget()) {
 		return { kind: 'insert', table, columns, rows }
 	}
 	throw new ExportError('unexpected-statement')
+}
+
+/**
+ * A check of the order of one pass over an export's statements (all of its files, in order): the sqlite_sequence
+ * reset may appear at most once, and only before that table's rows. Call it with every parsed statement.
+ * @returns {(parsed: Statement) => void}
+ */
+export function exportOrder() {
+	let reset = false
+	let rows = false
+	return (parsed) => {
+		if (parsed.kind === 'sequence-reset') {
+			if (reset || rows) {
+				throw new ExportError('unexpected-statement')
+			}
+			reset = true
+		} else if (parsed.kind === 'insert' && parsed.table === 'sqlite_sequence') {
+			rows = true
+		}
+	}
 }
 
 /**

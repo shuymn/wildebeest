@@ -885,8 +885,9 @@ backup-verify` (index-only before any media is downloaded). `backup-verify` stop
   `verify-conversion` read export files only and make no network request; bridging the legacy schema runs the canonical
   migrations on a local copy, never on the legacy D1. Nothing from the export runs as written: a strict grammar accepts
   only validated `CREATE TABLE` (never `AS SELECT`; its default, check and generated expressions must equal the canonical
-  ones before it runs, in an empty scratch database; bookkeeping tables never get the export's DDL) and `INSERT ...
-VALUES` of literal values, decoded within nesting and size bounds and bound; any other statement, `INSERT ... SELECT` or function in `VALUES` stops with a fixed code.
+  ones before it runs, in an empty scratch database; bookkeeping tables never get the export's DDL), `INSERT ...
+VALUES` of literal values, decoded within nesting and size bounds and bound, and D1's `DELETE FROM sqlite_sequence`
+  reset, exactly so, once, before that table's rows, which runs nowhere; any other statement, `INSERT ... SELECT` or function in `VALUES` stops with a fixed code.
   Outputs are created exclusively under temporary names with mode 0600 and published with `link(2)`, so no existing
   file or symbolic link is followed or reused. _Implemented on branch `kopje/cutover-convert`:_
   `cli/lib/cutover/sql-script.js`, `cli/lib/cutover/legacy-load.js`, `cli/lib/cutover/run.js`;

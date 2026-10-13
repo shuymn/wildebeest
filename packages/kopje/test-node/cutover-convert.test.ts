@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
@@ -72,6 +72,27 @@ describe('convert and verify-conversion', () => {
 			}
 		})
 	}
+
+	it('reads sqlite_sequence as D1 exports it (a reset, then the counter rows), and refuses a second reset', async () => {
+		const exportPath = await exportOf({ level: 39, notificationSequence: 12n })
+		const file = join(exportPath, 'sqlite_sequence.sql')
+		const text = await readFile(file, 'utf8')
+		expect(text).toMatch(
+			/^PRAGMA defer_foreign_keys=TRUE;\nDELETE FROM sqlite_sequence;\nINSERT INTO "sqlite_sequence"/
+		)
+		const { ok, manifest, dumpPath } = await convert(exportPath)
+		expect(ok).toBe(true)
+		expect(manifest.source).toMatchObject({ notificationSequence: '12' })
+		expect((await verify(exportPath, dumpPath)).ok).toBe(true)
+
+		await writeFile(file, `${text}DELETE FROM sqlite_sequence;\n`)
+		const again = await convert(exportPath, { out: 'out-again' })
+		expect(again.ok).toBe(false)
+		expect(again.manifest.stop).toMatchObject({ code: 'unexpected-statement' })
+		const { ok: verified, report } = await verify(exportPath, dumpPath)
+		expect(verified).toBe(false)
+		expect(report.stop).toMatchObject({ code: 'unexpected-statement' })
+	})
 
 	it('keeps legacy ids, accepted follows without a Follow record, local media and old /ap/o ids', async () => {
 		const exportPath = await exportOf({ level: 39 })
