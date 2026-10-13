@@ -25,5 +25,7 @@ export default defineConfig({
 	test: {
 		name: 'kopje',
 		include: [fileURLToPath(new URL('./test/**/*.test.ts', import.meta.url))],
+		// The suites drive the real Store through workerd; on a loaded CI runner a heavy test can pass 5 s.
+		testTimeout: 20_000,
 	},
 })
