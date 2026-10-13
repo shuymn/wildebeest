@@ -29,8 +29,12 @@ Some things cannot be done from the wizard. Do these in the Cloudflare dashboard
 
 5. **Optional: a service token for the admin CLI** (`kopje-admin`, see [Running the admin CLI](#running-the-admin-cli)).
    Create it under Access, Service credentials, and keep its client ID for the Access step and its secret for the CLI.
-6. **Optional: Images Paid.** Without it the account includes 5,000 Images transformations a month; an upload uses
-   two. If you buy more, raise `IMAGES_MONTHLY_TRANSFORMS`.
+6. **Images.** The account needs an Images plan. An account still on the legacy Image Resizing billing (from before
+   Images and Image Resizing were merged in November 2023) has no Images binding, and the wizard's Images step fails
+   with error 9432: move the account to an Images plan under Images in the dashboard. Images already stored in
+   Cloudflare Images are billed under that plan, so check its pricing first. Images Paid is optional: without it the
+   account includes 5,000 transformations a month, and an upload uses two. If you buy more, raise
+   `IMAGES_MONTHLY_TRANSFORMS`.
 7. **Turn off Bot Fight Mode** for the zone (Security, Bots). It challenges other servers, which breaks federation,
    and it cannot be skipped for some paths.
 
@@ -115,11 +119,20 @@ Checks show pass, warning or fail, with a hint on what to fix. Each can be run a
 
 ## Things to check on a real account
 
-The wizard was tested against a fake of the Cloudflare API. These points are confirmed on the verification instance:
+The wizard was tested against a fake of the Cloudflare API. Confirmed on a verification instance:
 
-- `GET /accounts` lists the account for a token with only account-scoped permissions (Account Settings, Read).
 - `GET /accounts/{id}/access/organizations` returns `auth_domain` as `<team>.cloudflareaccess.com`.
 - Reusable policies report `app_count`, and applications list their policies with ids.
 - The application listing filters by `name` with `exact=true`, and listings accept `per_page=50`.
-- An Access application for `<domain>/admin` covers every path under `/admin/`.
-- The Images binding transforms on an account without Images Paid.
+- An Access application for `<domain>/admin` covers every path under `/admin/`, and the sign-in application covers
+  `/oauth/authorize`: without a session both redirect to the Access login.
+- The Images binding transforms on an account with the free Images plan (without Images Paid). An account on the legacy
+  Image Resizing billing gets error 9432 instead (step 6 of [Before you start](#before-you-start)).
+- A browser posts the wizard's and the web UI's forms with their `Origin`. The pages send `Referrer-Policy:
+same-origin`, because under `no-referrer` browsers send `Origin: null` on these same-origin posts.
+
+Still to confirm:
+
+- `GET /accounts` lists the account for a token with only account-scoped permissions (Account Settings, Read), when the
+  account ID is left empty. On the verification instance the lookup did not find exactly one account, and the account
+  ID was entered instead. The wizard now says whether the token reached no account or several.

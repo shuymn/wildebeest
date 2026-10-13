@@ -134,10 +134,13 @@ function queueResult(view: SetupView, now: number): CheckResult {
 		? {
 				status: 'fail',
 				text: `The probe sent at ${new Date(probe.sentAt).toISOString()} has not been received.`,
-				hint: 'Check that the Queue "kopje" exists and that this Worker is its consumer (Queues in the dashboard), and that maintenance is off.',
+				hint: 'Check that the Queue named by the QUEUE binding in wrangler.jsonc exists and that this Worker is its consumer (Queues in the dashboard), and that maintenance is off.',
 			}
 		: { status: 'warn', text: 'The probe is on its way. Reload in a few seconds.' }
 }
+
+// Images error 9432: the account still has the legacy Image Resizing billing, under which the binding is unavailable.
+const LEGACY_BILLING_ERROR = 9432
 
 function imagesResult(images: ImagesCheck | null): CheckResult | undefined {
 	if (images === null) {
@@ -167,7 +170,10 @@ function imagesResult(images: ImagesCheck | null): CheckResult | undefined {
 			return {
 				status: 'fail',
 				text: `The Images binding could not transform the test image${images.code === null ? '' : ` (error ${images.code})`}${at}.`,
-				hint: 'Check that Images is available on the account (Images, Transformations) and that the Worker has the IMAGES binding.',
+				hint:
+					images.code === LEGACY_BILLING_ERROR
+						? 'The account is on the legacy Image Resizing billing, which has no Images binding. Move it to an Images plan (Images in the dashboard), then check again.'
+						: 'Check that Images is available on the account (Images, Transformations) and that the Worker has the IMAGES binding.',
 			}
 	}
 }
@@ -602,7 +608,7 @@ export function setupRoutes(deps: SetupDeps): Hono<SetupEnv> {
 				queue: {
 					status: 'fail',
 					text: 'The probe could not be sent to the Queue.',
-					hint: 'Check that the Queue "kopje" exists and the Worker has the QUEUE binding.',
+					hint: 'Check that the Worker has the QUEUE binding and that the Queue it names in wrangler.jsonc exists.',
 				},
 			})
 		}

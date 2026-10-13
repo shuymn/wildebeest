@@ -325,6 +325,14 @@ describe('/setup steps 4 to 6: checks', () => {
 		const failed = await pageText(broken, brokenBrowser.cookie)
 		expect(failed).toContain('result fail')
 		expect(failed).toContain('error 9999')
+		expect(failed).not.toContain('legacy Image Resizing billing')
+
+		const legacy = await setupHarness({ images: fakeImages(9432) })
+		const legacyBrowser = await setupLogin(legacy)
+		await setupPost(legacy, legacyBrowser.cookie, '/setup/check/images')
+		const billing = await pageText(legacy, legacyBrowser.cookie)
+		expect(billing).toContain('result fail')
+		expect(billing).toContain('legacy Image Resizing billing')
 
 		const spent = await setupHarness({ overrides: { IMAGES_MONTHLY_TRANSFORMS: '0' } })
 		const spentBrowser = await setupLogin(spent)
