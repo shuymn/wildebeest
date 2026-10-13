@@ -64,6 +64,20 @@ Cutover from a legacy Wildebeest instance (offline; docs/cutover.md)
   verify-conversion <export> <dump file> [--accept-deletions] [--accept-truncation]
                                 check a converted dump, or a dump of the Store after the import, against the legacy
                                 export (expectations computed independently). Exits 1 on FAIL
+  cutover-preflight <pages-project.json> [--export <export>] [--domain <host>] [--kopje-queue <name>]
+                                read the legacy Pages project (as the API returns it, saved to a file) and report its
+                                bindings, the D1 to export, the KEK candidates and what Kopje needs; with --export also
+                                the migration level and which KEK unwraps every key. Exits 1 when a check fails
+  maintenance-worker <export> --domain <host> --out <dir>
+                                write <dir>/_worker.js, the maintenance worker that replaces the legacy Pages routes
+                                during the cutover: actor documents and WebFinger as Kopje renders them, every inbox
+                                POST spooled to Kopje's Queue (binding KOPJE_QUEUE). Exits 3 when it stops
+  fingerprint schema-sql        print the SQL that lists the legacy tables and columns (run it with
+                                \`wrangler d1 execute <db> --remote --json --command\`, save the answer)
+  fingerprint sql <schema.json> print the read-only fingerprint SQL for that schema (counts, lengths and hashes)
+  fingerprint compare <first.json> <second.json> [--manifest <manifest.json>]
+                                compare two fingerprint answers; with the converter's manifest, also its row counts.
+                                Exits 1 unless everything matches
 
 Environment
   KOPJE_ADMIN_URL               base URL of the instance's admin host, e.g. https://admin.example.com
@@ -101,6 +115,9 @@ function parseArgs(argv) {
 		'base-time',
 		'catalog',
 		'domain',
+		'export',
+		'kopje-queue',
+		'manifest',
 	])
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i] ?? ''
@@ -192,6 +209,109 @@ async function cutover(command, rest, flags, { env, print, info }) {
 	print(report)
 	info(ok ? 'conversion verified: PASS' : 'conversion check FAILED')
 	return ok ? 0 : 1
+}
+
+/**
+ * cutover-preflight, maintenance-worker and fingerprint: offline helpers of the cutover runbook
+ * (docs/cutover-runbook.md). They read files only and print configuration, counts and digests.
+ * @param {string} command
+ * @param {string[]} rest
+ * @param {Record<string, string | true>} flags
+ * @param {{ env: Record<string, string | undefined>, print: (value: unknown) => void, raw: (text: string) => void,
+ *   info: (text: string) => void }} io
+ */
+async function cutoverOps(command, rest, flags, { env, print, raw, info }) {
+	/** @param {string} name */
+	const text = (name) => {
+		const value = flags[name]
+		if (value === true) {
+			throw new UsageError(`--${name} needs a value`)
+		}
+		return value
+	}
+	if (command === 'cutover-preflight') {
+		const [projectPath] = rest
+		if (projectPath === undefined || rest.length > 1) {
+			throw new UsageError(
+				'cutover-preflight <pages-project.json> [--export <export>] [--domain <host>] [--kopje-queue <name>]'
+			)
+		}
+		const { preflight } = await import('./cutover/preflight.js')
+		const report = await preflight({
+			projectPath,
+			exportPath: text('export'),
+			domain: text('domain'),
+			kopjeQueue: text('kopje-queue'),
+			env,
+		})
+		print(report)
+		info(report.ok ? 'preflight: no check failed; do the todo items' : 'preflight: a check FAILED')
+		return report.ok ? 0 : 1
+	}
+	if (command === 'maintenance-worker') {
+		const [exportPath] = rest
+		const domain = text('domain')
+		const outDir = text('out')
+		if (exportPath === undefined || rest.length > 1 || domain === undefined || outDir === undefined) {
+			throw new UsageError('maintenance-worker <export> --domain <host> --out <dir>')
+		}
+		const { maintenanceWorker } = await import('./cutover/maintenance.js')
+		const { ok, report } = await maintenanceWorker({ exportPath, domain, outDir, env })
+		print(report)
+		info(ok ? `written: ${outDir}/_worker.js` : 'maintenance worker not written; see stop')
+		return ok ? 0 : 3
+	}
+	const fingerprint = await import('./cutover/fingerprint.js')
+	// node:fs only here, as the other cutover modules: the rest of the CLI goes through io.
+	const { readFileSync } = await import('node:fs')
+	const [sub, ...files] = rest
+	/**
+	 * @param {string} path
+	 * @returns {unknown}
+	 */
+	const json = (path) => {
+		try {
+			return /** @type {unknown} */ (JSON.parse(readFileSync(path, 'utf8')))
+		} catch {
+			throw new UsageError(`${path} cannot be read as JSON`)
+		}
+	}
+	try {
+		if (sub === 'schema-sql' && files.length === 0) {
+			raw(fingerprint.SCHEMA_SQL)
+			return 0
+		}
+		if (sub === 'sql' && files.length === 1) {
+			raw(fingerprint.fingerprintSql(fingerprint.schemaOf(json(/** @type {string} */ (files[0])))))
+			return 0
+		}
+		if (sub === 'compare' && files.length === 2) {
+			const manifestPath = text('manifest')
+			const rowsLoaded = manifestPath === undefined ? undefined : record(record(json(manifestPath)).source).rowsLoaded
+			const report = fingerprint.compareFingerprints(
+				fingerprint.fingerprintOf(json(/** @type {string} */ (files[0]))),
+				fingerprint.fingerprintOf(json(/** @type {string} */ (files[1]))),
+				manifestPath === undefined ? undefined : /** @type {Record<string, number>} */ (rowsLoaded ?? {})
+			)
+			print(report)
+			info(report.result === 'PASS' ? 'fingerprints match: PASS' : 'fingerprints differ: FAIL')
+			return report.result === 'PASS' ? 0 : 1
+		}
+	} catch (error) {
+		if (error instanceof fingerprint.FingerprintError) {
+			info(`fingerprint refused: ${error.code}`)
+			return 2
+		}
+		throw error
+	}
+	throw new UsageError(
+		'fingerprint schema-sql | sql <schema.json> | compare <first.json> <second.json> [--manifest <file>]'
+	)
+}
+
+/** @param {unknown} value */
+function record(value) {
+	return typeof value === 'object' && value !== null ? /** @type {Record<string, unknown>} */ (value) : {}
 }
 
 /**
@@ -317,6 +437,14 @@ export async function run({
 		}
 		if (command === 'convert' || command === 'verify-conversion') {
 			return await cutover(command, rest, flags, { env, print, info: (text) => out.info(text) })
+		}
+		if (command === 'cutover-preflight' || command === 'maintenance-worker' || command === 'fingerprint') {
+			return await cutoverOps(command, rest, flags, {
+				env,
+				print,
+				raw: (text) => stdout.write(`${text}\n`),
+				info: (text) => out.info(text),
+			})
 		}
 		const url = env.KOPJE_ADMIN_URL
 		if (url === undefined || url === '') {

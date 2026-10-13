@@ -37,12 +37,16 @@ export type FixtureOptions = {
 	// r4's followers property spelled with an upper-case host and :443, and a status of r4 to its followers as normally
 	// spelled, Bob absent from to.
 	followersSpelling?: boolean
+	// Keep the database the export was written from open and return it, as the live legacy D1 (the fingerprint suite).
+	live?: boolean
 }
 
 export type LegacyFixture = {
 	level: number
 	texts: Map<string, string>
 	users: { username: string; email: string; uri: string }[]
+	// With `live`: the database the export was written from.
+	database?: DatabaseSync
 }
 
 type Row = Record<string, SQLInputValue | undefined>
@@ -118,6 +122,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		notificationSequence,
 		authorChange = false,
 		followersSpelling = false,
+		live = false,
 	} = options
 	const db = line === 'T2' ? upstreamDatabase(level) : canonicalLegacyDatabase(level)
 	const columns = new Map<string, string[]>()
@@ -893,6 +898,10 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 			`INSERT INTO "sqlite_sequence" ("name","seq") VALUES('actor_notifications',${notificationSequence});\n`
 		)
 	}
+	const fixture = { level, texts, users: users.map(({ username, email, uri }) => ({ username, email, uri })) }
+	if (live) {
+		return { ...fixture, database: db }
+	}
 	db.close()
-	return { level, texts, users: users.map(({ username, email, uri }) => ({ username, email, uri })) }
+	return fixture
 }
