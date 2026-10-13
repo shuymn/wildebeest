@@ -1,10 +1,13 @@
 // Builds what the npm package ships in dist/: the Worker bundled by wrangler exactly as `wrangler deploy` bundles it
-// here (worker.js, its source map and the migrations as text modules), and THIRD_PARTY_NOTICES.md for every package
-// the bundle contains. The package then has no runtime dependencies: an instance installs the code that was tested.
+// here (worker.js, its source map and the migrations as text modules), the cutover's maintenance worker bundles
+// (build-maintenance.mjs), and THIRD_PARTY_NOTICES.md for every package the bundles contain. The package then has no
+// runtime dependencies: an instance installs the code that was tested.
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { buildMaintenance, MAINTENANCE_FILES } from './build-maintenance.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const dist = join(root, 'dist')
@@ -21,7 +24,20 @@ execFileSync('wrangler', ['deploy', '--dry-run', '--outdir', dist, '--metafile',
 // wrangler writes a README about the build into the output directory; it is not part of the package.
 rmSync(join(dist, 'README.md'), { force: true })
 
+buildMaintenance(dist, { metafileDir: dirname(metafile) })
+
 const meta = JSON.parse(readFileSync(metafile, 'utf8'))
+// The maintenance bundles are built from the same sources as the Worker, so they bundle a subset of its packages;
+// a package only they bundled would be missing from the notices.
+const workerInputs = new Set(Object.keys(meta.inputs))
+for (const file of MAINTENANCE_FILES) {
+	const extra = Object.keys(
+		JSON.parse(readFileSync(join(dirname(metafile), `${file}.meta.json`), 'utf8')).inputs
+	).filter((input) => input.includes('node_modules/') && !workerInputs.has(input))
+	if (extra.length > 0) {
+		throw new Error(`${file} bundles files the Worker does not: ${extra.slice(0, 5).join(', ')}`)
+	}
+}
 const packages = new Map()
 for (const input of Object.keys(meta.inputs)) {
 	const at = input.lastIndexOf('node_modules/')
@@ -76,7 +92,8 @@ writeFileSync(
 	[
 		'# Third-party notices',
 		'',
-		'dist/worker.js bundles the following packages. Their licenses and notices follow.',
+		'dist/worker.js bundles the following packages (dist/maintenance-render.js a subset of them, and',
+		'dist/maintenance-worker.js none). Their licenses and notices follow.',
 		'',
 		...sections.map((section) => `${section}\n`),
 	].join('\n')

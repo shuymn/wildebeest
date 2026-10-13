@@ -53,7 +53,7 @@ export function packageVersion() {
 }
 
 /** @param {string} path */
-function exportFiles(path) {
+export function exportFiles(path) {
 	if (statSync(path).isDirectory()) {
 		return readdirSync(path)
 			.filter((f) => f.endsWith('.sql'))
@@ -64,7 +64,7 @@ function exportFiles(path) {
 }
 
 /** @param {string[]} files */
-function checkSizes(files) {
+export function checkSizes(files) {
 	let total = 0
 	for (const file of files) {
 		const size = statSync(file).size
