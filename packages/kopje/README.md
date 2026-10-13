@@ -23,7 +23,7 @@ Do not install this package by hand: start from the instance template, which has
 | `dist/*.sql`                  | The Store's schema migrations, imported by the bundle as text modules (the `**/*.sql` Text rule in `wrangler.jsonc`)                                               |
 | `kopje/public/*`              | The static assets the Worker serves through the `ASSETS` binding                                                                                                   |
 | `kopje/migrations/*`          | The same migrations as SQL files, for reference                                                                                                                    |
-| `kopje-admin`                 | The operations CLI (Node.js 22 or later). `npx kopje-admin --help`                                                                                                 |
+| `kopje-admin`                 | The operations CLI (Node.js 22 or later). See [docs/setup.md](docs/setup.md#running-the-admin-cli)                                                                 |
 | `dist/THIRD_PARTY_NOTICES.md` | The licenses of the packages bundled into `dist/worker.js`                                                                                                         |
 
 The bundle is built with wrangler from the source in the

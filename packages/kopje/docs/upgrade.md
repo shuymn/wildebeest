@@ -49,12 +49,13 @@ it with its own (both are the same script, so after the deploy both run the new 
 - **If the Store's schema has migrations the code does not know** (`schema-diverged`), for example after a rollback
   across a schema change, the Store stays readonly until the code and the schema match again.
 
-Check the result with the admin CLI ([setup.md](setup.md), step 5, gives it a service token):
+Check the result with the admin CLI. [setup.md](setup.md#running-the-admin-cli) says how to run it: in the instance's
+repository, `kopje-admin <command>` below is `npm exec --no -- kopje-admin <command>`.
 
 ```sh
 export KOPJE_ADMIN_URL=https://example.com CF_ACCESS_CLIENT_ID=... CF_ACCESS_CLIENT_SECRET=...
-npx kopje-admin version   # the Worker's build, the Store's build, and the newest expected and applied migration
-npx kopje-admin health    # versionMatch, schema, readonly, hold, upgrading, lastBookmark
+kopje-admin version   # the Worker's build, the Store's build, and the newest expected and applied migration
+kopje-admin health    # versionMatch, schema, readonly, hold, upgrading, lastBookmark
 ```
 
 After a successful upgrade, `versionMatch` is true, `schema.status` is `current`, `readonly` is false, and
@@ -94,16 +95,16 @@ days, so the bookmark must be younger than that.
 3. **Restore the Store** to the bookmark:
 
     ```sh
-    npx kopje-admin pitr restore <lastBookmark> --yes
+    kopje-admin pitr restore <lastBookmark> --yes
     ```
 
     The Store restarts to apply it. The call answers `restoring`.
 
-4. **Check** with `npx kopje-admin health`: `schema.status` is `current`, and `versionMatch` is true.
+4. **Check** with `kopje-admin health`: `schema.status` is `current`, and `versionMatch` is true.
 5. **Remove `MAINTENANCE`** (or set it to `off`). The instance serves again; spooled inbox activities are replayed.
 6. **Pin the older version** in `package.json`, as above.
 
-To look up a bookmark for another time (within the 30 days), use `npx kopje-admin pitr bookmark --at <ISO 8601 time>`.
+To look up a bookmark for another time (within the 30 days), use `kopje-admin pitr bookmark --at <ISO 8601 time>`.
 A bookmark from after the upgrade has the newer schema, and the older code cannot use it.
 
 ### If the admin CLI cannot reach the instance
