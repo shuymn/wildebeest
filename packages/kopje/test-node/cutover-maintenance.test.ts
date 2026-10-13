@@ -2,14 +2,20 @@ import { execFile } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { exportOf, workspace, writeExport } from './cutover-helpers.js'
-import { buildLegacyFixture } from './legacy-fixture.js'
-import { checkSnapshotKeys, maintenanceWorker, WORKER_FILE } from '../cli/lib/cutover/maintenance.js'
+import { buildLegacyFixture, exportDatabase } from './legacy-fixture.js'
+import {
+	checkMaintenanceWorker,
+	checkSnapshotKeys,
+	maintenanceWorker,
+	WORKER_FILE,
+} from '../cli/lib/cutover/maintenance.js'
 import { preflight, readPagesProject, SPOOL_QUEUE_BINDING } from '../cli/lib/cutover/preflight.js'
 import {
 	buildMaintenance,
@@ -131,6 +137,93 @@ describe('kopje-admin maintenance-worker', () => {
 			bundleDir: join(space.dir, 'no-bundle'),
 		})
 		expect(missing.report.stop).toMatchObject({ code: 'bundle-missing' })
+	})
+})
+
+describe('the snapshot is fresh when it is deployed (OPS-7)', () => {
+	async function withLive() {
+		const fixture = await buildLegacyFixture({ level: 39, live: true })
+		const db = fixture.database!
+		let n = 0
+		// With `withData`, the other tables are exported without rows (`wrangler d1 export --no-data`).
+		const exportNow = (withData?: string[]) => {
+			const texts = exportDatabase(db, { sequence: true })
+			const schemaOnly = (text: string) =>
+				text
+					.split('\n')
+					.filter((line) => !line.startsWith('INSERT INTO'))
+					.join('\n')
+			return writeExport(
+				space.dir,
+				withData === undefined
+					? texts
+					: new Map([...texts].map(([table, text]) => [table, withData.includes(table) ? text : schemaOnly(text)])),
+				`export-${++n}`
+			)
+		}
+		const outDir = join(space.dir, 'pages')
+		const generated = await maintenanceWorker({
+			exportPath: await exportNow(),
+			domain: 'kopje.test',
+			outDir,
+			env: {},
+			bundleDir,
+		})
+		expect(generated.ok).toBe(true)
+		const check = async (exportPath: string) =>
+			checkMaintenanceWorker({ exportPath, domain: 'kopje.test', workerDir: outDir, env: {}, bundleDir })
+		return { db, exportNow, check, generated }
+	}
+
+	it('records what it captured, and is current against an export of the same data', async () => {
+		const { exportNow, check, generated } = await withLive()
+		expect(generated.report).toMatchObject({
+			actors: 2,
+			snapshotSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+			keysSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+		})
+		expect(await check(await exportNow())).toMatchObject({ ok: true, report: { result: 'current' } })
+	})
+
+	it('works from an export with the rows of the actors and keys alone, which is faster to take', async () => {
+		const { exportNow, check } = await withLive()
+		const small = await exportNow(['d1_migrations', 'actors', 'users', 'sqlite_sequence'])
+		expect(await check(small)).toMatchObject({ ok: true, report: { result: 'current' } })
+	})
+
+	it.each<[string, (db: DatabaseSync) => void]>([
+		[
+			'a profile changed',
+			(db) =>
+				db.exec(
+					`UPDATE actors SET properties = json_set(properties, '$.name', 'Renamed') WHERE id = 'https://kopje.test/ap/users/alice'`
+				),
+		],
+		[
+			'a key replaced',
+			(db) => {
+				// Bob's key pair moves to alice and alice's to Bob: both still unwrap, but neither document is the deployed one.
+				const rows = db
+					.prepare('SELECT actor_id, pubkey, privkey, privkey_salt FROM users ORDER BY actor_id')
+					.all() as {
+					actor_id: string
+					pubkey: string
+					privkey: Uint8Array
+					privkey_salt: Uint8Array
+				}[]
+				const [a, b] = rows as [(typeof rows)[0], (typeof rows)[0]]
+				db.exec("UPDATE users SET privkey = randomblob(32), privkey_salt = randomblob(16), pubkey = 'swap' || rowid")
+				const set = db.prepare('UPDATE users SET pubkey = ?, privkey = ?, privkey_salt = ? WHERE actor_id = ?')
+				set.run(b.pubkey, b.privkey, b.privkey_salt, a.actor_id)
+				set.run(a.pubkey, a.privkey, a.privkey_salt, b.actor_id)
+			},
+		],
+	])('is stale once %s', async (_name, write) => {
+		const { db, exportNow, check } = await withLive()
+		write(db)
+		const result = await check(await exportNow())
+		expect(result).toMatchObject({ ok: false, report: { result: 'stale' } })
+		expect(result.report.changedDocuments).toBeGreaterThan(0)
 	})
 })
 

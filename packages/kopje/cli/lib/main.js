@@ -82,12 +82,19 @@ Cutover from a legacy Wildebeest instance (offline; docs/cutover.md)
                                 write <dir>/_worker.js, the maintenance worker that replaces the legacy Pages routes
                                 during the cutover: actor documents and WebFinger as Kopje renders them, every inbox
                                 POST spooled to Kopje's Queue (binding KOPJE_QUEUE). Exits 3 when it stops
-  fingerprint schema-sql        print the SQL that lists the legacy tables and columns (run it with
-                                \`wrangler d1 execute <db> --remote --json --command\`, save the answer)
-  fingerprint sql <schema.json> print the read-only fingerprint SQL for that schema (counts, lengths and hashes)
+  maintenance-worker-check <export> --domain <host> --worker <dir>
+                                check that <dir>/_worker.js still holds what the (newer) export holds: the same local
+                                actors, keys and profiles. Exits 1 when it is stale
+  fingerprint tables-sql         print the read-only SQL that lists the tables to export (run it with
+                                \`wrangler d1 execute <db> --remote --json --command\`)
+  fingerprint sequence-sql      print the SQL that reads sqlite_sequence, and
+  fingerprint sequence-file <answer.json>
+                                turn its answer into sqlite_sequence.sql, for a D1 that does not export it with --table
+  fingerprint export <export>   fingerprint an export: per table, the row count and a digest of every row whole (no
+                                content is printed). Exits 2 when sqlite_sequence lacks the notification counter
   fingerprint compare <first.json> <second.json> [--manifest <manifest.json>]
-                                compare two fingerprint answers; with the converter's manifest, also its row counts.
-                                Exits 1 unless everything matches
+                                compare two fingerprints; with the converter's manifest, also its row counts and
+                                notification counter. Exits 1 unless everything matches
 
 Environment
   KOPJE_ADMIN_URL               base URL of the instance's admin host, e.g. https://admin.example.com
@@ -129,6 +136,7 @@ function parseArgs(argv) {
 		'kopje-queue',
 		'manifest',
 		'fallback-actor',
+		'worker',
 	])
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i] ?? ''
@@ -229,9 +237,9 @@ async function cutover(command, rest, flags, { env, print, info }) {
  * @param {string[]} rest
  * @param {Record<string, string | true>} flags
  * @param {{ env: Record<string, string | undefined>, print: (value: unknown) => void, raw: (text: string) => void,
- *   info: (text: string) => void }} io
+ *   stdoutRaw: (text: string) => void, info: (text: string) => void }} io
  */
-async function cutoverOps(command, rest, flags, { env, print, raw, info }) {
+async function cutoverOps(command, rest, flags, { env, print, raw, stdoutRaw, info }) {
 	/** @param {string} name */
 	const text = (name) => {
 		const value = flags[name]
@@ -272,6 +280,19 @@ async function cutoverOps(command, rest, flags, { env, print, raw, info }) {
 		info(ok ? `written: ${outDir}/_worker.js` : 'maintenance worker not written; see stop')
 		return ok ? 0 : 3
 	}
+	if (command === 'maintenance-worker-check') {
+		const [exportPath] = rest
+		const domain = text('domain')
+		const workerDir = text('worker')
+		if (exportPath === undefined || rest.length > 1 || domain === undefined || workerDir === undefined) {
+			throw new UsageError('maintenance-worker-check <export> --domain <host> --worker <dir>')
+		}
+		const { checkMaintenanceWorker } = await import('./cutover/maintenance.js')
+		const { ok, report } = await checkMaintenanceWorker({ exportPath, domain, workerDir, env })
+		print(report)
+		info(ok ? 'the maintenance worker is current' : 'the maintenance worker is NOT current; generate it again')
+		return ok ? 0 : 1
+	}
 	const fingerprint = await import('./cutover/fingerprint.js')
 	// node:fs only here, as the other cutover modules: the rest of the CLI goes through io.
 	const { readFileSync } = await import('node:fs')
@@ -288,41 +309,43 @@ async function cutoverOps(command, rest, flags, { env, print, raw, info }) {
 		}
 	}
 	try {
-		if (sub === 'schema-sql' && files.length === 0) {
-			raw(fingerprint.SCHEMA_SQL)
+		if (sub === 'tables-sql' && files.length === 0) {
+			raw(fingerprint.TABLES_SQL)
 			return 0
 		}
-		if (sub === 'sql' && files.length === 1) {
-			raw(fingerprint.fingerprintSql(fingerprint.schemaOf(json(/** @type {string} */ (files[0])))))
+		if (sub === 'sequence-sql' && files.length === 0) {
+			raw(fingerprint.SEQUENCE_SQL)
+			return 0
+		}
+		if (sub === 'sequence-file' && files.length === 1) {
+			stdoutRaw(fingerprint.sequenceFile(json(/** @type {string} */ (files[0]))))
+			return 0
+		}
+		if (sub === 'export' && files.length === 1) {
+			print(fingerprint.fingerprintExport(/** @type {string} */ (files[0])))
 			return 0
 		}
 		if (sub === 'compare' && files.length === 2) {
 			const manifestPath = text('manifest')
-			const rowsLoaded = manifestPath === undefined ? undefined : record(record(json(manifestPath)).source).rowsLoaded
 			const report = fingerprint.compareFingerprints(
-				fingerprint.fingerprintOf(json(/** @type {string} */ (files[0]))),
-				fingerprint.fingerprintOf(json(/** @type {string} */ (files[1]))),
-				manifestPath === undefined ? undefined : /** @type {Record<string, number>} */ (rowsLoaded ?? {})
+				fingerprint.parseFingerprint(json(/** @type {string} */ (files[0]))),
+				fingerprint.parseFingerprint(json(/** @type {string} */ (files[1]))),
+				manifestPath === undefined ? undefined : fingerprint.parseManifest(json(manifestPath))
 			)
 			print(report)
 			info(report.result === 'PASS' ? 'fingerprints match: PASS' : 'fingerprints differ: FAIL')
 			return report.result === 'PASS' ? 0 : 1
 		}
 	} catch (error) {
-		if (error instanceof fingerprint.FingerprintError) {
+		if (error instanceof fingerprint.FingerprintError || error instanceof fingerprint.ExportError) {
 			info(`fingerprint refused: ${error.code}`)
 			return 2
 		}
 		throw error
 	}
 	throw new UsageError(
-		'fingerprint schema-sql | sql <schema.json> | compare <first.json> <second.json> [--manifest <file>]'
+		'fingerprint tables-sql | sequence-sql | sequence-file <answer.json> | export <export> | compare <first.json> <second.json> [--manifest <manifest.json>]'
 	)
-}
-
-/** @param {unknown} value */
-function record(value) {
-	return typeof value === 'object' && value !== null ? /** @type {Record<string, unknown>} */ (value) : {}
 }
 
 /**
@@ -449,11 +472,17 @@ export async function run({
 		if (command === 'convert' || command === 'verify-conversion') {
 			return await cutover(command, rest, flags, { env, print, info: (text) => out.info(text) })
 		}
-		if (command === 'cutover-preflight' || command === 'maintenance-worker' || command === 'fingerprint') {
+		if (
+			command === 'cutover-preflight' ||
+			command === 'maintenance-worker' ||
+			command === 'maintenance-worker-check' ||
+			command === 'fingerprint'
+		) {
 			return await cutoverOps(command, rest, flags, {
 				env,
 				print,
 				raw: (text) => stdout.write(`${text}\n`),
+				stdoutRaw: (text) => stdout.write(text),
 				info: (text) => out.info(text),
 			})
 		}

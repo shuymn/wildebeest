@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
@@ -7,133 +7,175 @@ import { promisify } from 'node:util'
 
 import { describe, expect, it } from 'vitest'
 
-import { convert, exportOf, workspace } from './cutover-helpers.js'
-import { buildLegacyFixture } from './legacy-fixture.js'
+import { convert, workspace, writeExport } from './cutover-helpers.js'
+import { buildLegacyFixture, exportDatabase } from './legacy-fixture.js'
 import {
 	compareFingerprints,
-	fingerprintOf,
-	fingerprintSql,
-	MAX_SQL_BYTES,
-	SCHEMA_SQL,
-	schemaOf,
+	type Fingerprint,
+	fingerprintExport,
+	parseManifest,
+	sequenceFile,
+	TABLES_SQL,
 } from '../cli/lib/cutover/fingerprint.js'
 
-// Cutover step 5: the fingerprint that proves the legacy D1 stopped changing. The SQL runs here on node:sqlite against
-// a synthetic legacy database, as the operator runs it on D1 with `wrangler d1 execute --json`; the answers are passed
-// in wrangler's JSON shape. DATA-16: the answer and the comparison carry counts, lengths and hashes only.
+// Cutover step 5: two exports of the legacy D1, taken some time apart, must have equal fingerprints. Every row is
+// hashed whole (its table, every column and value with its type), so any change to a row, a value moved between rows
+// and a row added or removed change it, and sqlite_sequence pins the notification counter. DATA-16: the fingerprint and
+// the comparison carry table names, counts and digests only.
 
 const space = workspace()
 
 async function live() {
 	const fixture = await buildLegacyFixture({ level: 39, live: true })
 	const db = fixture.database!
-	const sql = fingerprintSql(schemaOf(asWrangler(db.prepare(SCHEMA_SQL).all())))
-	const take = () => fingerprintOf(asWrangler(db.prepare(sql).all()))
-	return { db, sql, take, fixture }
+	let n = 0
+	// An export of the live database as it is now, and its fingerprint.
+	const take = async (): Promise<{ path: string; fingerprint: Fingerprint }> => {
+		const path = await writeExport(space.dir, exportDatabase(db, { sequence: true }), `export-${++n}`)
+		return { path, fingerprint: fingerprintExport(path) }
+	}
+	return { db, take, fixture }
 }
 
-// `wrangler d1 execute --json` prints one entry per statement.
-function asWrangler(rows: unknown[]) {
-	return [{ results: rows, success: true, meta: {} }]
+async function changedBy(write: (db: DatabaseSync) => void) {
+	const { db, take } = await live()
+	const before = await take()
+	write(db)
+	return compareFingerprints(before.fingerprint, (await take()).fingerprint)
 }
 
-function changedBy(db: DatabaseSync, take: () => ReturnType<typeof fingerprintOf>, write: string) {
-	const before = take()
-	db.exec(write)
-	return compareFingerprints(before, take())
-}
+const firstObject = '(SELECT min(rowid) FROM objects)'
 
-describe('the fingerprint query', () => {
-	it('lists the exported tables only, and fits in one D1 statement', async () => {
-		const { db, sql } = await live()
-		const tables = [...schemaOf(db.prepare(SCHEMA_SQL).all()).keys()]
-		expect(tables).toContain('objects')
-		expect(tables).toContain('d1_migrations')
-		expect(tables.filter((t) => t.startsWith('search_fts') || t.startsWith('sqlite_'))).toEqual([])
-		expect(Buffer.byteLength(sql)).toBeLessThan(MAX_SQL_BYTES)
-		expect(sql).toMatch(/^WITH /)
-		expect(sql).not.toMatch(/\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|ATTACH|PRAGMA)\b/i)
-	})
-
-	it('gives the same answer twice while nothing writes, and counts every row', async () => {
+describe('the fingerprint of an export', () => {
+	it('is the same for two exports while nothing writes, and counts every row', async () => {
 		const { db, take } = await live()
-		const first = take()
-		const report = compareFingerprints(first, take())
-		expect(report).toMatchObject({ result: 'PASS', changed: [] })
-		const objects = first.find((t) => t.table === 'objects')!
-		expect(objects.rows).toBe((db.prepare('SELECT count(*) AS n FROM objects').get() as { n: number }).n)
-		expect(objects.rows).toBeGreaterThan(0)
+		const first = await take()
+		const second = await take()
+		expect(compareFingerprints(first.fingerprint, second.fingerprint)).toMatchObject({ result: 'PASS', changed: [] })
+		const objects = (db.prepare('SELECT count(*) AS n FROM objects').get() as { n: number }).n
+		expect(first.fingerprint.tables.objects?.rows).toBe(objects)
+		expect(objects).toBeGreaterThan(1)
+		expect(first.fingerprint.notificationSequence).toMatch(/^\d+$/)
 	})
 
-	it('answers with aggregates only (DATA-16)', async () => {
+	it('holds table names, counts and digests only (DATA-16)', async () => {
 		const { take, fixture } = await live()
-		const answer = JSON.stringify(take())
+		const text = JSON.stringify((await take()).fingerprint)
 		for (const user of fixture.users) {
-			expect(answer).not.toContain(user.email)
-			expect(answer).not.toContain(user.uri)
+			expect(text).not.toContain(user.email)
+			expect(text).not.toContain(user.uri)
 		}
-		for (const row of take()) {
-			expect(Object.keys(row).sort()).toEqual(['bytes', 'hash', 'rows', 'table'])
-		}
+		expect(text).not.toContain('kopje.test')
 	})
 
-	// Each is a write the legacy consumer or a forgotten route could make; each must FAIL the comparison.
-	it.each([
-		['an inserted row', `INSERT INTO peers (domain) VALUES ('new.example')`, 'peers'],
-		['a deleted row', 'DELETE FROM objects WHERE rowid = (SELECT max(rowid) FROM objects)', 'objects'],
-		['a counter bumped at the same length', "UPDATE actors SET cdate = replace(cdate, '09:', '19:')", 'actors'],
+	// Writes the legacy consumer or a forgotten route could make. Each must FAIL, the changed table named.
+	it.each<[string, (db: DatabaseSync) => void, string]>([
+		['an inserted row', (db) => db.exec(`INSERT INTO peers (domain) VALUES ('new.example')`), 'peers'],
+		['a deleted row', (db) => db.exec('DELETE FROM objects WHERE rowid = (SELECT max(rowid) FROM objects)'), 'objects'],
 		[
-			'two digits of a short value swapped',
-			'UPDATE objects SET cdate = substr(cdate, 1, 14) || substr(cdate, 16, 1) || substr(cdate, 15, 1) || substr(cdate, 17) WHERE rowid = (SELECT min(rowid) FROM objects)',
+			'a short value changed at the same length',
+			(db) => db.exec(`UPDATE objects SET cdate = replace(cdate, '09:', '19:') WHERE rowid = ${firstObject}`),
 			'objects',
 		],
 		[
-			'a long value rewritten at the same length in the middle',
-			"UPDATE objects SET properties = substr(properties, 1, length(properties) / 2 - 1) || 'Z' || substr(properties, length(properties) / 2 + 1) WHERE rowid = (SELECT min(rowid) FROM objects)",
+			'values swapped between two rows',
+			(db) =>
+				db.exec(`UPDATE objects SET properties = CASE rowid
+					WHEN (SELECT min(rowid) FROM objects) THEN (SELECT properties FROM objects WHERE rowid = (SELECT max(rowid) FROM objects))
+					ELSE (SELECT properties FROM objects WHERE rowid = (SELECT min(rowid) FROM objects)) END
+					WHERE rowid IN ((SELECT min(rowid) FROM objects), (SELECT max(rowid) FROM objects))`),
+			'objects',
+		],
+		[
+			'two characters swapped in the middle of a long value',
+			(db) => {
+				const row = db
+					.prepare(`SELECT rowid AS r, properties AS p FROM objects WHERE rowid = ${firstObject}`)
+					.get() as {
+					r: number
+					p: string
+				}
+				const i = Math.floor(row.p.length / 2)
+				let j = i
+				while (row.p[j] === row.p[j + 1]) {
+					j++
+				}
+				const swapped = `${row.p.slice(0, j)}${row.p[j + 1]}${row.p[j]}${row.p.slice(j + 2)}`
+				db.prepare('UPDATE objects SET properties = ? WHERE rowid = ?').run(swapped, row.r)
+			},
 			'objects',
 		],
 		[
 			'content emptied to the same length',
-			"UPDATE objects SET properties = json_set(properties, '$.content', substr('                                ', 1, length(json_extract(properties, '$.content')))) WHERE json_extract(properties, '$.content') IS NOT NULL AND rowid = (SELECT min(rowid) FROM objects WHERE json_extract(properties, '$.content') IS NOT NULL)",
+			(db) =>
+				db.exec(`UPDATE objects SET properties = json_set(properties, '$.content',
+					substr('                                                  ', 1, length(json_extract(properties, '$.content'))))
+					WHERE rowid = (SELECT min(rowid) FROM objects WHERE json_extract(properties, '$.content') IS NOT NULL)`),
 			'objects',
 		],
-		['a write that changes no value (still PASS)', 'UPDATE peers SET domain = domain', null],
-	])('%s', async (_name, write, table) => {
-		const { db, take } = await live()
-		const report = changedBy(db, take, write)
-		if (table === null) {
-			// A write that changes no value is not a change.
-			expect(report.result).toBe('PASS')
-		} else {
-			expect(report).toMatchObject({ result: 'FAIL', changed: [table] })
-		}
+		[
+			'only the notification counter moved',
+			(db) => db.exec(`UPDATE sqlite_sequence SET seq = seq + 5 WHERE name = 'actor_notifications'`),
+			'sqlite_sequence',
+		],
+	])('changes with %s', async (_name, write, table) => {
+		expect(await changedBy(write)).toMatchObject({ result: 'FAIL', changed: [table] })
 	})
 
-	it('refuses to compare answers of different schemas', async () => {
-		const { db, take } = await live()
-		const first = take()
-		db.exec('ALTER TABLE peers ADD COLUMN note TEXT')
-		const sql = fingerprintSql(schemaOf(db.prepare(SCHEMA_SQL).all()))
-		const report = compareFingerprints(first, fingerprintOf(db.prepare(sql).all()))
-		expect(report.result).toBe('FAIL')
-		expect(report.changed).toContain('#schema')
+	it('passes a write that changes no value', async () => {
+		expect(await changedBy((db) => db.exec('UPDATE peers SET domain = domain'))).toMatchObject({ result: 'PASS' })
 	})
 
-	it('checks the converted export against the fingerprinted database, by row counts', async () => {
-		const exportPath = await exportOf(space.dir, { level: 39 })
-		const { manifest } = await convert(space.dir, exportPath)
-		const { take } = await live()
-		const fingerprint = take()
-		const rowsLoaded = (manifest.source as { rowsLoaded: Record<string, number> }).rowsLoaded
-		expect(compareFingerprints(fingerprint, fingerprint, rowsLoaded)).toMatchObject({
-			result: 'PASS',
-			exportDiffers: [],
-		})
-		const short = { ...rowsLoaded, objects: (rowsLoaded.objects ?? 0) - 1 }
-		expect(compareFingerprints(fingerprint, fingerprint, short)).toMatchObject({
+	it('refuses an export without the notification counter, which the conversion would lose', async () => {
+		const { db } = await live()
+		const path = await writeExport(space.dir, exportDatabase(db), 'no-sequence')
+		expect(() => fingerprintExport(path)).toThrow(/sequence-missing/)
+	})
+})
+
+describe('the export against the conversion manifest', () => {
+	async function converted() {
+		const { db, take } = await live()
+		const final = await take()
+		const { manifest } = await convert(space.dir, final.path)
+		return { db, final, manifest: manifest as Record<string, unknown> }
+	}
+
+	it('passes when the converted export is the fingerprinted one', async () => {
+		const { final, manifest } = await converted()
+		const report = compareFingerprints(final.fingerprint, final.fingerprint, parseManifest(manifest))
+		expect(report).toMatchObject({ result: 'PASS', exportDiffers: [] })
+	})
+
+	it('fails on another count or another notification counter', async () => {
+		const { final, manifest } = await converted()
+		const parsed = parseManifest(manifest)
+		const fewer = { ...parsed, rowsLoaded: { ...parsed.rowsLoaded, objects: (parsed.rowsLoaded.objects ?? 0) - 1 } }
+		expect(compareFingerprints(final.fingerprint, final.fingerprint, fewer)).toMatchObject({
 			result: 'FAIL',
 			exportDiffers: ['objects'],
 		})
+		const counter = { ...parsed, notificationSequence: '1' }
+		expect(compareFingerprints(final.fingerprint, final.fingerprint, counter)).toMatchObject({
+			result: 'FAIL',
+			exportDiffers: ['sqlite_sequence'],
+		})
+	})
+
+	it('accepts only a complete conversion manifest', async () => {
+		const { manifest } = await converted()
+		const source = manifest.source as Record<string, unknown>
+		for (const broken of [
+			{},
+			{ migrations: [], tables: [] },
+			{ ...manifest, source: { ...source, rowsLoaded: undefined } },
+			{ ...manifest, source: { ...source, rowsLoaded: {} } },
+			{ ...manifest, source: { ...source, rowsLoaded: { objects: -1 } } },
+			{ ...manifest, result: 'stopped' },
+			{ ...manifest, tool: { command: 'kopje-admin catalog' } },
+		]) {
+			expect(() => parseManifest(broken)).toThrow(/not-a-conversion-manifest/)
+		}
 	})
 })
 
@@ -149,36 +191,39 @@ describe('kopje-admin fingerprint', () => {
 		}
 	}
 
-	it('prints the SQL and compares the answers through the real CLI', async () => {
-		const { db } = await live()
-		const schemaSql = await run(['fingerprint', 'schema-sql'])
-		expect(schemaSql.stdout.trim()).toBe(SCHEMA_SQL)
-		const schemaPath = join(space.dir, 'schema.json')
-		await writeFile(schemaPath, JSON.stringify(asWrangler(db.prepare(SCHEMA_SQL).all())))
-		const { stdout: sql, code } = await run(['fingerprint', 'sql', schemaPath])
-		expect(code).toBe(0)
-
-		const first = join(space.dir, 'first.json')
-		const second = join(space.dir, 'second.json')
-		await writeFile(first, JSON.stringify(asWrangler(db.prepare(sql.trim()).all())))
-		await writeFile(second, JSON.stringify(asWrangler(db.prepare(sql.trim()).all())))
-		const same = await run(['fingerprint', 'compare', first, second])
+	it('fingerprints and compares exports through the real CLI', async () => {
+		expect((await run(['fingerprint', 'tables-sql'])).stdout.trim()).toBe(TABLES_SQL)
+		const { db, take } = await live()
+		const first = await take()
+		const second = await take()
+		const a = join(space.dir, 'a.json')
+		const b = join(space.dir, 'b.json')
+		await writeFile(a, (await run(['fingerprint', 'export', first.path])).stdout)
+		await writeFile(b, (await run(['fingerprint', 'export', second.path])).stdout)
+		const same = await run(['fingerprint', 'compare', a, b])
 		expect(same.code).toBe(0)
 		expect(JSON.parse(same.stdout)).toMatchObject({ result: 'PASS' })
 
 		db.exec(`INSERT INTO peers (domain) VALUES ('late.example')`)
-		await writeFile(second, JSON.stringify(asWrangler(db.prepare(sql.trim()).all())))
-		const differs = await run(['fingerprint', 'compare', first, second])
+		await writeFile(b, (await run(['fingerprint', 'export', (await take()).path])).stdout)
+		const differs = await run(['fingerprint', 'compare', a, b])
 		expect(differs.code).toBe(1)
 		expect(JSON.parse(differs.stdout)).toMatchObject({ result: 'FAIL', changed: ['peers'] })
-		expect(differs.stdout).not.toContain('late.example')
+		expect(differs.stdout + (await readFile(b, 'utf8'))).not.toContain('late.example')
+
+		const notManifest = join(space.dir, 'catalog.json')
+		await writeFile(notManifest, JSON.stringify({ migrations: [], tables: [] }))
+		const refused = await run(['fingerprint', 'compare', a, a, '--manifest', notManifest])
+		expect(refused.code).toBe(2)
+		expect(refused.stderr).toContain('not-a-conversion-manifest')
 	})
 
-	it('refuses an answer that is not a fingerprint', async () => {
-		const path = join(space.dir, 'rows.json')
-		await writeFile(path, JSON.stringify(asWrangler([{ id: 'x', content: 'y' }])))
-		const result = await run(['fingerprint', 'compare', path, path])
-		expect(result.code).toBe(2)
-		expect(result.stderr).toContain('invalid-fingerprint-row')
+	it('writes sqlite_sequence from its query answer, accepting names and integers only', async () => {
+		const answer = [{ results: [{ name: 'actor_notifications', seq: 42 }], success: true, meta: {} }]
+		expect(sequenceFile(answer)).toBe(
+			`INSERT INTO "sqlite_sequence" ("name","seq") VALUES('actor_notifications',42);\n`
+		)
+		expect(() => sequenceFile([{ results: [{ name: "x'); DROP", seq: 1 }] }])).toThrow(/invalid-sequence-row/)
+		expect(() => sequenceFile([{ results: [{ name: 'x', seq: '1' }] }])).toThrow(/invalid-sequence-row/)
 	})
 })

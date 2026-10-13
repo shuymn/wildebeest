@@ -1,258 +1,266 @@
-// `kopje-admin fingerprint`: proves that the legacy D1 stopped changing (cutover step 5, docs/cutover-runbook.md).
+// `kopje-admin fingerprint`: the check that the legacy D1 stopped changing, on top of the write barrier of the cutover
+// (docs/cutover-runbook.md, step 5). It compares two exports of the database taken some time apart; equal fingerprints
+// say that nothing in the database changed between them, and the second export is the one converted.
 //
-// The operator runs read-only SQL with `wrangler d1 execute --remote --json --command`; this module only writes that
-// SQL and compares what it returned. It never connects to anything (DATA-11). The answer of the fingerprint query is
-// aggregate-only by construction: per table, the row count, the total length of the quoted values and a 31-bit hash
-// (DATA-13, DATA-16). D1 has no hash function, so the hash is pure SQL:
+// A fingerprint is computed from an export, offline, by the converter's own strict reader (sql-script.js; nothing in
+// the export runs). Every row is hashed whole, with its table, every column name and every value exactly as exported
+// (its type included), so a row's identity (its key) is bound to all of its values: a change of any value, a value
+// moved between rows, a row added or removed all change it. A table's fingerprint is the SHA-256 of its rows' hashes
+// in sorted order, so it does not depend on the order of the export. sqlite_sequence is a table like any other, which
+// pins the notification counter (actor_notifications) the converter carries over.
 //
-//   cell  = quote(value): the value's SQL literal, so types, NULL and blobs stay distinct
-//   v     = (length, polynomial hashes of the first 16 characters, the middle 16 and the last 16, and a weighted
-//            count of 20 frequent characters over the whole cell), combined mod P
-//   table = sum over cells of v * w(table, column) mod P, w a constant derived from the table and column names
-//
-// The three windows cover values of up to 48 characters completely (counters, flags, timestamps, ids); the counts and
-// the length cover the rest of longer ones. Every intermediate value stays below 2^63, so SQLite never switches to
-// floating point. The sum is over cells, so it does not depend on row order or rowids (a VACUUM does not change it).
-// Not seen: a value moved between two rows of one column, and a same-length change outside the windows of a long value
-// that keeps the counted characters' counts (characters reordered, or one rarely counted letter swapped for another).
-// That is enough to tell that writes stopped, which is all step 5 asks: any insert or delete, and any update of a
-// short value or of a value's length or counted characters, changes the result. Content integrity is checked row by
-// row afterwards, by verify-conversion (DATA-12).
+// The output holds table names, row counts and digests only (DATA-16). Computing the same hash on D1 with SQL is not
+// practical: D1 has no hash function, and a hash over whole values in SQL runs at about 1 MB/s for 2 KB rows and 0.3
+// MB/s for 8 KB rows on a workstation (node:sqlite, a recursive CTE over the characters), growing with the square of
+// the row size, far past D1's query time limit for a real database.
 
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 
-export const FINGERPRINT_VERSION = 1
+import { checkSizes, exportFiles } from './run.js'
+import { decodeBudget, ExportError, parseStatement, splitStatements } from './sql-script.js'
 
-// 2^31 - 1, prime.
-const P = 2147483647n
-const BASE = 1000003n
-const HEAD = 16
-const PAD = '~'.repeat(HEAD)
-const COUNTED = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '"', ':', ',', 'a', 'e', 'i', 'n', 'o', 's', 't']
-// Keeps a single statement well under D1's 100 KB statement limit.
-export const MAX_SQL_BYTES = 90 * 1024
+export const FINGERPRINT_FORMAT = 'kopje-fingerprint/2'
+const SEQUENCE_TABLE = 'sqlite_sequence'
+const NOTIFICATIONS = 'actor_notifications'
 
-// Lists the tables and their columns. Run it once, with `--json`, and give the result to `fingerprint sql`. Internal
-// tables (sqlite_*, D1's _cf_*), virtual tables (the full-text index) and their shadow tables are left out, as the
-// export leaves them out.
-export const SCHEMA_SQL = [
-	'SELECT m.name AS t, p.cid AS i, p.name AS c',
-	'FROM sqlite_schema AS m JOIN pragma_table_info(m.name) AS p',
+// The table list of the export loop: every table but internal ones (sqlite_*, D1's _cf_*), virtual tables (the full-text
+// index) and their shadow tables. sqlite_sequence is exported on its own (the runbook names it).
+export const TABLES_SQL = [
+	'SELECT m.name AS name FROM sqlite_schema AS m',
 	"WHERE m.type = 'table'",
 	"AND substr(m.name, 1, 7) <> 'sqlite_' AND substr(m.name, 1, 4) <> '_cf_'",
 	"AND m.sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
 	"AND NOT EXISTS (SELECT 1 FROM sqlite_schema AS v WHERE v.type = 'table' AND v.sql LIKE 'CREATE VIRTUAL TABLE%'",
 	"AND substr(m.name, 1, length(v.name) + 1) = v.name || '_')",
-	'ORDER BY m.name, p.cid',
+	'ORDER BY m.name',
 ].join(' ')
 
+// For a D1 whose sqlite_sequence cannot be exported with --table: its rows, to be turned into the export file by
+// `fingerprint sequence-file`.
+export const SEQUENCE_SQL = 'SELECT name, seq FROM sqlite_sequence ORDER BY name'
+
 export class FingerprintError extends Error {
-	/** @param {string} code */
-	constructor(code) {
+	/**
+	 * @param {string} code
+	 * @param {Record<string, unknown>} [detail]
+	 */
+	constructor(code, detail = {}) {
 		super(code)
 		this.code = code
+		this.detail = detail
 	}
 }
 
+/** @param {unknown} value */
+function typed(value) {
+	if (value === null) {
+		return ['null']
+	}
+	if (typeof value === 'bigint') {
+		return ['integer', value.toString()]
+	}
+	if (typeof value === 'number') {
+		return Number.isInteger(value) ? ['integer', String(value)] : ['real', String(value)]
+	}
+	if (typeof value === 'string') {
+		return ['text', value]
+	}
+	if (value instanceof Uint8Array) {
+		return ['blob', Array.from(value, (b) => b.toString(16).padStart(2, '0')).join('')]
+	}
+	throw new FingerprintError('invalid-value')
+}
+
 /**
- * The rows of a `wrangler d1 execute --json` answer: `[{ results: [...] }, ...]` (one entry per statement), or a plain
- * array of rows.
+ * @typedef {{ format: string, tables: Record<string, { rows: number, sha256: string }>,
+ *   notificationSequence: string | null }} Fingerprint
+ */
+
+/**
+ * The fingerprint of an export: a directory of `wrangler d1 export --table` files, or one file of them.
+ * @param {string} exportPath
+ * @returns {Fingerprint}
+ */
+export function fingerprintExport(exportPath) {
+	const files = exportFiles(exportPath)
+	checkSizes(files)
+	/** @type {Map<string, string[]>} */
+	const hashes = new Map()
+	/** @type {string | null} */
+	let notificationSequence = null
+	const budget = decodeBudget()
+	for (const file of files) {
+		for (const statement of splitStatements(readFileSync(file, 'utf8'))) {
+			const parsed = parseStatement(statement, budget)
+			if (parsed.kind === 'create-table') {
+				hashes.set(parsed.table, hashes.get(parsed.table) ?? [])
+				continue
+			}
+			if (parsed.kind !== 'insert') {
+				continue
+			}
+			const list = hashes.get(parsed.table) ?? []
+			hashes.set(parsed.table, list)
+			for (const row of parsed.rows) {
+				const columns = parsed.columns ?? row.map((_, i) => `#${i}`)
+				if (columns.length !== row.length) {
+					throw new FingerprintError('invalid-row')
+				}
+				const cells = columns
+					.map((column, i) => /** @type {[string, string[]]} */ ([column, typed(row[i])]))
+					.sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0))
+				list.push(
+					createHash('sha256')
+						.update(JSON.stringify([parsed.table, cells]))
+						.digest('hex')
+				)
+				if (parsed.table === SEQUENCE_TABLE) {
+					const name = row[columns.indexOf('name')]
+					const seq = row[columns.indexOf('seq')]
+					if (name === NOTIFICATIONS && (typeof seq === 'bigint' || typeof seq === 'number')) {
+						notificationSequence = BigInt(seq).toString()
+					}
+				}
+			}
+		}
+	}
+	// actor_notifications is AUTOINCREMENT: once it has had a row, sqlite_sequence holds its high-water mark, which the
+	// converter must carry over. An export without it loses the mark.
+	const notifications = hashes.get(NOTIFICATIONS)
+	if (notifications !== undefined && notifications.length > 0 && notificationSequence === null) {
+		throw new FingerprintError('sequence-missing', { table: NOTIFICATIONS })
+	}
+	/** @type {Fingerprint['tables']} */
+	const tables = {}
+	for (const name of [...hashes.keys()].sort()) {
+		const rows = /** @type {string[]} */ (hashes.get(name)).sort()
+		tables[name] = { rows: rows.length, sha256: createHash('sha256').update(rows.join('\n')).digest('hex') }
+	}
+	return { format: FINGERPRINT_FORMAT, tables, notificationSequence }
+}
+
+/**
  * @param {unknown} value
- * @returns {Record<string, unknown>[]}
+ * @returns {Fingerprint}
  */
-export function resultRows(value) {
-	if (!Array.isArray(value)) {
-		throw new FingerprintError('not-a-result')
+export function parseFingerprint(value) {
+	const v = /** @type {Record<string, unknown>} */ (value)
+	if (typeof v !== 'object' || v === null || v.format !== FINGERPRINT_FORMAT) {
+		throw new FingerprintError('not-a-fingerprint')
 	}
-	const list = /** @type {unknown[]} */ (value)
-	if (list.every((entry) => typeof entry === 'object' && entry !== null && 'results' in entry)) {
-		if (list.length !== 1) {
-			throw new FingerprintError('expected-one-statement')
-		}
-		/** @type {unknown} */
-		const results = /** @type {{ results: unknown }} */ (list[0]).results
-		if (!Array.isArray(results)) {
-			throw new FingerprintError('not-a-result')
-		}
-		return results.map((/** @type {unknown} */ row) => /** @type {Record<string, unknown>} */ (row))
+	const tables = /** @type {Record<string, unknown>} */ (v.tables)
+	if (typeof tables !== 'object' || tables === null) {
+		throw new FingerprintError('not-a-fingerprint')
 	}
-	return /** @type {Record<string, unknown>[]} */ (list)
-}
-
-/**
- * @param {unknown} value the answer of SCHEMA_SQL
- * @returns {Map<string, string[]>} table -> columns in order
- */
-export function schemaOf(value) {
-	/** @type {Map<string, { i: number, c: string }[]>} */
-	const tables = new Map()
-	for (const row of resultRows(value)) {
-		const { t, i, c } = /** @type {Record<string, unknown>} */ (row)
-		if (typeof t !== 'string' || typeof c !== 'string' || typeof i !== 'number' || !Number.isInteger(i) || t === '') {
-			throw new FingerprintError('invalid-schema-row')
-		}
-		const columns = tables.get(t) ?? []
-		columns.push({ i, c })
-		tables.set(t, columns)
-	}
-	if (tables.size === 0) {
-		throw new FingerprintError('empty-schema')
-	}
-	return new Map(
-		[...tables]
-			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-			.map(([t, columns]) => [t, columns.sort((a, b) => a.i - b.i).map((column) => column.c)])
-	)
-}
-
-/** @param {string} name */
-function identifier(name) {
-	return `"${name.replaceAll('"', '""')}"`
-}
-
-/** @param {string} text */
-function literal(text) {
-	return `'${text.replaceAll("'", "''")}'`
-}
-
-/** @param {string} text a number below P derived from a text */
-function weight(text) {
-	const digest = createHash('sha256').update(text).digest()
-	return (digest.readBigUInt64BE(0) % (P - 1n)) + 1n
-}
-
-/** @param {Map<string, string[]>} schema */
-export function schemaDigest(schema) {
-	const hash = createHash('sha256')
-	for (const [table, columns] of schema) {
-		hash.update(`${JSON.stringify([table, columns])}\n`)
-	}
-	return hash.digest('hex')
-}
-
-// Σ unicode(substr(<column>, i, 1)) * BASE^i mod P, over the HEAD characters of a padded value.
-/** @param {string} column */
-function polynomial(column) {
-	const terms = []
-	let power = 1n
-	for (let i = 1; i <= HEAD; i++) {
-		power = (power * BASE) % P
-		terms.push(`unicode(substr(${column}, ${i}, 1)) * ${power}`)
-	}
-	return `(${terms.join(' + ')}) % ${P}`
-}
-
-function counts() {
-	return COUNTED.map(
-		(ch, index) => `(n - length(replace(q, ${literal(ch)}, ''))) * ${(weight(`count:${index}`) % 61n) + 2n}`
-	).join(' + ')
-}
-
-/**
- * The fingerprint query for a schema: one read-only SELECT whose answer is, per table, `rows`, `bytes` (the total
- * length of the quoted values) and `hash`, plus a first row `#schema` whose hash ties the answer to this schema.
- * @param {Map<string, string[]>} schema
- */
-export function fingerprintSql(schema) {
-	const cells = []
-	const rows = []
-	for (const [table, columns] of schema) {
-		const name = literal(table)
-		for (const column of columns) {
-			const w = weight(`column:${JSON.stringify([table, column])}`)
-			cells.push(`SELECT ${name} AS t, ${w} AS w, quote(${identifier(column)}) AS q FROM ${identifier(table)}`)
-		}
-		rows.push(`SELECT ${name} AS t, count(*) AS n FROM ${identifier(table)}`)
-	}
-	const [c1, c2, c3, c4, c5] = ['length', 'head', 'tail', 'counts', 'middle'].map((part) => weight(`part:${part}`))
-	const pinned = BigInt(`0x${schemaDigest(schema).slice(0, 12)}`)
-	const sql = [
-		`WITH cells AS (${cells.join(' UNION ALL ')}),`,
-		`f AS (SELECT t, w, n, substr(q || '${PAD}', 1, ${HEAD}) AS h, substr('${PAD}' || q, -${HEAD}) AS e,`,
-		`substr(q || '${PAD}', max(1, (n - ${HEAD}) / 2 + 1), ${HEAD}) AS m, ${counts()} AS k`,
-		`FROM (SELECT t, w, q, length(q) AS n FROM cells)),`,
-		`g AS (SELECT t, sum(n) AS bytes, sum((((n % ${P}) * ${c1} % ${P} + (${polynomial('h')}) * ${c2} % ${P}`,
-		`+ (${polynomial('e')}) * ${c3} % ${P} + (${polynomial('m')}) * ${c5} % ${P} + (k % ${P}) * ${c4} % ${P}) % ${P})`,
-		`* w % ${P}) AS s FROM f GROUP BY t),`,
-		`r AS (${rows.join(' UNION ALL ')})`,
-		`SELECT '#schema' AS "table", ${schema.size} AS "rows", ${FINGERPRINT_VERSION} AS bytes, ${pinned} AS hash`,
-		`UNION ALL SELECT * FROM (SELECT r.t, r.n, coalesce(g.bytes, 0), coalesce(g.s % ${P}, 0)`,
-		'FROM r LEFT JOIN g ON g.t = r.t ORDER BY r.t)',
-	].join(' ')
-	if (new TextEncoder().encode(sql).byteLength > MAX_SQL_BYTES) {
-		throw new FingerprintError('sql-too-long')
-	}
-	return sql
-}
-
-/**
- * @typedef {{ table: string, rows: number, bytes: number, hash: number }} TableFingerprint
- */
-
-/**
- * @param {unknown} value the answer of the fingerprint query
- * @returns {TableFingerprint[]}
- */
-export function fingerprintOf(value) {
-	const tables = resultRows(value).map((row) => {
-		const { table, rows, bytes, hash } = /** @type {Record<string, unknown>} */ (row)
+	for (const entry of Object.values(tables)) {
+		const e = /** @type {Record<string, unknown>} */ (entry)
 		if (
-			typeof table !== 'string' ||
-			![rows, bytes, hash].every((n) => typeof n === 'number' && Number.isSafeInteger(n))
+			typeof e !== 'object' ||
+			e === null ||
+			!Number.isSafeInteger(e.rows) ||
+			typeof e.sha256 !== 'string' ||
+			!/^[0-9a-f]{64}$/.test(e.sha256)
 		) {
-			throw new FingerprintError('invalid-fingerprint-row')
+			throw new FingerprintError('not-a-fingerprint')
 		}
-		return { table, rows: Number(rows), bytes: Number(bytes), hash: Number(hash) }
-	})
-	if (!tables.some((t) => t.table === '#schema') || new Set(tables.map((t) => t.table)).size !== tables.length) {
-		throw new FingerprintError('invalid-fingerprint')
 	}
-	return tables.sort((a, b) => (a.table < b.table ? -1 : a.table > b.table ? 1 : 0))
-}
-
-/** @param {TableFingerprint[]} tables */
-function digestOf(tables) {
-	return createHash('sha256').update(JSON.stringify(tables)).digest('hex')
+	if (v.notificationSequence !== null && typeof v.notificationSequence !== 'string') {
+		throw new FingerprintError('not-a-fingerprint')
+	}
+	return /** @type {Fingerprint} */ (value)
 }
 
 /**
- * Compares two fingerprints of the same database. PASS only when every table has the same count, length and hash.
- * With `rowsLoaded` (from the converter's manifest, `source.rowsLoaded`), also checks that the export holds exactly the
- * rows the database had when it was fingerprinted.
- * @param {TableFingerprint[]} first
- * @param {TableFingerprint[]} second
- * @param {Record<string, number>} [rowsLoaded]
+ * The converter's manifest, checked to be a complete conversion record: a converted run with a count for every
+ * exported table.
+ * @param {unknown} value
+ * @returns {{ rowsLoaded: Record<string, number>, notificationSequence: string | null }}
  */
-export function compareFingerprints(first, second, rowsLoaded) {
-	const before = new Map(first.map((t) => [t.table, t]))
-	const after = new Map(second.map((t) => [t.table, t]))
+export function parseManifest(value) {
+	const m = /** @type {Record<string, any>} */ (value)
+	const tool = m?.tool
+	const source = m?.source
+	const rowsLoaded = source?.rowsLoaded
+	if (
+		typeof m !== 'object' ||
+		m === null ||
+		tool?.command !== 'kopje-admin convert' ||
+		m.result !== 'converted' ||
+		typeof rowsLoaded !== 'object' ||
+		rowsLoaded === null ||
+		Array.isArray(rowsLoaded) ||
+		Object.keys(rowsLoaded).length === 0 ||
+		!Object.values(rowsLoaded).every((n) => Number.isSafeInteger(n) && n >= 0) ||
+		(source.notificationSequence !== null && typeof source.notificationSequence !== 'string')
+	) {
+		throw new FingerprintError('not-a-conversion-manifest')
+	}
+	return { rowsLoaded, notificationSequence: source.notificationSequence }
+}
+
+// Tables the converter's count map does not cover: its own bookkeeping.
+const UNCOUNTED = new Set([SEQUENCE_TABLE, 'd1_migrations'])
+
+/**
+ * PASS only when both fingerprints hold the same tables with the same rows. With a manifest, the export it converted
+ * must also have exactly the fingerprinted tables and row counts, and the same notification high-water mark.
+ * @param {Fingerprint} first
+ * @param {Fingerprint} second
+ * @param {{ rowsLoaded: Record<string, number>, notificationSequence: string | null }} [manifest]
+ */
+export function compareFingerprints(first, second, manifest) {
 	/** @type {string[]} */
 	const changed = []
-	for (const name of new Set([...before.keys(), ...after.keys()])) {
-		const a = before.get(name)
-		const b = after.get(name)
-		if (a === undefined || b === undefined || a.rows !== b.rows || a.bytes !== b.bytes || a.hash !== b.hash) {
+	for (const name of new Set([...Object.keys(first.tables), ...Object.keys(second.tables)])) {
+		const a = first.tables[name]
+		const b = second.tables[name]
+		if (a === undefined || b === undefined || a.rows !== b.rows || a.sha256 !== b.sha256) {
 			changed.push(name)
 		}
 	}
 	/** @type {string[]} */
 	const exportDiffers = []
-	if (rowsLoaded !== undefined) {
-		for (const [name, count] of Object.entries(rowsLoaded)) {
-			const live = after.get(name)
-			if (live === undefined || live.rows !== count) {
+	if (manifest !== undefined) {
+		const counted = Object.keys(second.tables).filter((name) => !UNCOUNTED.has(name))
+		for (const name of new Set([...counted, ...Object.keys(manifest.rowsLoaded)])) {
+			if ((second.tables[name]?.rows ?? 0) !== (manifest.rowsLoaded[name] ?? 0)) {
 				exportDiffers.push(name)
 			}
 		}
+		if (manifest.notificationSequence !== second.notificationSequence) {
+			exportDiffers.push(SEQUENCE_TABLE)
+		}
 	}
-	const tables = second.filter((t) => t.table !== '#schema')
+	const tables = Object.values(second.tables)
 	return {
 		result: changed.length === 0 && exportDiffers.length === 0 ? 'PASS' : 'FAIL',
 		tables: tables.length,
 		rows: tables.reduce((sum, t) => sum + t.rows, 0),
 		changed: changed.sort(),
-		...(rowsLoaded === undefined ? {} : { exportDiffers: exportDiffers.sort() }),
-		firstSha256: digestOf(first),
-		secondSha256: digestOf(second),
+		...(manifest === undefined ? {} : { exportDiffers: exportDiffers.sort() }),
 	}
 }
+
+/**
+ * The sqlite_sequence export file from the answer of SEQUENCE_SQL (`wrangler d1 execute --json`), for a D1 whose
+ * sqlite_sequence cannot be exported with --table. Only names and integers are accepted.
+ * @param {unknown} value
+ */
+export function sequenceFile(value) {
+	const answer = Array.isArray(value) && value.length === 1 ? /** @type {Record<string, unknown>} */ (value[0]) : null
+	const rows = answer?.results
+	if (!Array.isArray(rows)) {
+		throw new FingerprintError('not-a-result')
+	}
+	const lines = rows.map((row) => {
+		const { name, seq } = /** @type {Record<string, unknown>} */ (row)
+		if (typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || !Number.isSafeInteger(seq)) {
+			throw new FingerprintError('invalid-sequence-row')
+		}
+		return `INSERT INTO "sqlite_sequence" ("name","seq") VALUES('${name}',${String(seq)});`
+	})
+	return `${lines.join('\n')}\n`
+}
+
+export { ExportError }
