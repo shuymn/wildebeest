@@ -51,6 +51,9 @@ export type FixtureOptions = {
 	// in `to` and an empty `cc`. 'narrowed': an unlisted status whose target was its followers; 'widened': a
 	// followers-only status with a Public target; 'unusable-time': as narrowed, with an unreadable applied_at for 0016.
 	before0016?: 'narrowed' | 'widened' | 'unusable-time'
+	// A lone surrogate (half of a character outside the BMP, as a cut string leaves it) in remote JSON text: a display
+	// name, a bio, and a status's content, content warning and attachment description.
+	loneSurrogates?: boolean
 }
 
 export type LegacyFixture = {
@@ -162,6 +165,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		actorTypeDrift = false,
 		remoteOwnedNotifications = false,
 		before0016,
+		loneSurrogates = false,
 	} = options
 	if (before0016 !== undefined && level < 16) {
 		throw new Error('before0016 needs level 16 or later')
@@ -917,6 +921,27 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 	db.exec(
 		'CREATE TABLE d1_migrations(\n\t\tid         INTEGER PRIMARY KEY AUTOINCREMENT,\n\t\tname       TEXT UNIQUE,\n\t\tapplied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL\n)'
 	)
+	if (loneSurrogates) {
+		const LONE = '\ud83d'
+		// JSON.stringify escapes the lone surrogate, so the stored JSON text itself stays well formed.
+		const edit = (table: 'actors' | 'objects', id: string, change: (p: Record<string, any>) => void) => {
+			const row = db.prepare(`SELECT properties FROM ${table} WHERE id = ?`).get(id) as { properties: string }
+			const properties = JSON.parse(row.properties) as Record<string, any>
+			change(properties)
+			db.prepare(`UPDATE ${table} SET properties = ? WHERE id = ?`).run(JSON.stringify(properties), id)
+		}
+		edit('actors', r(1).uri, (p) => {
+			p.name = `${String(p.name)} ${LONE}`
+		})
+		edit('actors', r(2).uri, (p) => {
+			p.summary = `<p>bio ${LONE}</p>`
+		})
+		edit('objects', r0Post.id, (p) => {
+			p.content = `<p>cut ${LONE}</p>`
+			p.summary = `cw ${LONE}`
+			p.attachment[1].name = `alt ${LONE}`
+		})
+	}
 	let appliedAt0016: string | null = null
 	if (before0016 !== undefined) {
 		const [note, target] = before0016 === 'widened' ? [followersOnly, PUBLIC] : [unlisted, `${alice}/followers`]

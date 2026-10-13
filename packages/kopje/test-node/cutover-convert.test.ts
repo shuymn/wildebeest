@@ -12,6 +12,7 @@ import {
 	exportOf as exportIn,
 	opened,
 	tampered as tamperedIn,
+	failing,
 	verify as verifyWith,
 	workspace,
 } from './cutover-helpers.js'
@@ -378,4 +379,28 @@ describe('rows legacy never showed, and outbox rows written before 0016', () => 
 			expect(manifest.conversion).toMatchObject({ problems: { 'statuses:addressing-conflict': 1 } })
 		})
 	}
+})
+
+describe('text with a lone surrogate', () => {
+	it('carries it with U+FFFD in its place, counted, and the independent check agrees', async () => {
+		const exportPath = await exportOf({ level: 39, loneSurrogates: true })
+		const { ok, manifest, dumpPath } = await convert(exportPath)
+		expect(manifest.stop).toBeUndefined()
+		expect(ok).toBe(true)
+		// A display name, a bio, a status's content, content warning and attachment description.
+		expect((manifest.conversion as { normalized: Record<string, number> }).normalized).toMatchObject({
+			'text:lone-surrogate-replaced': 5,
+		})
+		const db = await opened(dumpPath)
+		const value = (sql: string) => Object.values(db.prepare(sql).get() ?? {})[0]
+		expect(value("SELECT count(*) FROM accounts WHERE display_name LIKE '%\uFFFD' OR note LIKE '%\uFFFD%'")).toBe(2)
+		expect(
+			value("SELECT count(*) FROM statuses WHERE content LIKE '%cut \uFFFD%' AND spoiler_text = 'cw \uFFFD'")
+		).toBe(1)
+		expect(value("SELECT count(*) FROM media_attachments WHERE description = 'alt \uFFFD'")).toBe(1)
+		db.close()
+		const { ok: verified, categories } = await verifyWith(exportPath, dumpPath)
+		expect(failing(categories)).toEqual([])
+		expect(verified).toBe(true)
+	})
 })
