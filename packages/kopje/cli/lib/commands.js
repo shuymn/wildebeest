@@ -19,6 +19,8 @@ import {
  */
 
 const MIB = 1024 * 1024
+// The error a resumed import gives when its saved chunk limits exceed the Store's (see importFromFile).
+export const OUTDATED_CHUNKS = 'import-chunks-outdated'
 const RETRIES = 5
 
 /**
@@ -255,6 +257,18 @@ export async function importFromFile({
 	}
 	if (progress.state === 'resetting') {
 		throw new Error(`import ${progress.id} is being reset; finish it with import-reset ${path} --yes`)
+	}
+	// An import begun by an earlier version may have saved chunks larger than the Store now accepts. Its remaining
+	// chunks would all be refused, so start over: an import into an empty Store can always be reset and begun again.
+	if (
+		progress.state === 'receiving' &&
+		(chunks.bytes > IMPORT_CHUNK_BYTES || chunks.statements > IMPORT_CHUNK_STATEMENTS)
+	) {
+		throw new Error(
+			`${OUTDATED_CHUNKS}: import ${progress.id} was begun with chunks larger than the Store accepts now ` +
+				`(${IMPORT_CHUNK_STATEMENTS} statements in ${formatBytes(IMPORT_CHUNK_BYTES)}); ` +
+				`run import-reset ${path} --yes and import again`
+		)
 	}
 	// Before an outcome or a later phase is taken as this file's, the file must be the one the Store received.
 	await checkIdentity({ io, path, file, progress, chunks, whole: progress.state !== 'receiving' })

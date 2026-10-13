@@ -397,6 +397,39 @@ describe('kopje-admin', () => {
 		expect(JSON.parse(rerun.out)).toMatchObject({ ok: true })
 	})
 
+	// RES-6: a version that saved larger chunk limits cannot finish against the Store's bounds; the resume stops before
+	// sending anything and points at a reset.
+	it.each([
+		['bytes only (no statement limit)', (saved: { chunkBytes: number }) => ({ ...saved, chunkStatements: undefined })],
+		['bytes above the bound', (saved: { chunkBytes: number }) => ({ ...saved, chunkBytes: 8 * 1024 * 1024 })],
+	])('refuses to resume an import whose saved chunks are %s, until it is reset', async (_case, outdated) => {
+		const io = memoryIO()
+		expect((await cli(['dump', 'o.sql'], { fetch: edge(await sourceStore(0)).fetch, io })).code).toBe(0)
+		const target = await migratedStore()
+		let sent = 0
+		const crash = edge(target, async (request, forward) => {
+			if (new URL(request.url).pathname === '/admin/import/chunk' && ++sent > 2) {
+				throw new TypeError('network connection lost')
+			}
+			return forward()
+		})
+		const first = await cli(['import', 'o.sql', '--import-token', '--chunk-mib', '0.002'], { fetch: crash.fetch, io })
+		expect(first.code).toBe(1)
+		const sidecar = JSON.parse(new TextDecoder().decode(io.files.get('o.sql.import.json'))) as { chunkBytes: number }
+		io.files.set('o.sql.import.json', new TextEncoder().encode(JSON.stringify(outdated(sidecar))))
+
+		const watched = edge(target)
+		const resumed = await cli(['import', 'o.sql'], { fetch: watched.fetch, io })
+		expect(resumed.code).toBe(1)
+		expect(resumed.err).toMatch(/import-chunks-outdated: .*import-reset o\.sql --yes/)
+		expect(watched.seen.filter((r) => new URL(r.url).pathname === '/admin/import/chunk')).toHaveLength(0)
+
+		expect((await cli(['import-reset', 'o.sql', '--yes'], { fetch: edge(target).fetch, io })).code).toBe(0)
+		const again = await cli(['import', 'o.sql', '--import-token'], { fetch: edge(target).fetch, io })
+		expect(again.code, again.err).toBe(0)
+		expect(JSON.parse(again.out)).toMatchObject({ ok: true })
+	})
+
 	it('abandons a stranded token import only with --abandon-stale --import-token, after the idle time', async () => {
 		const io = memoryIO()
 		expect((await cli(['dump', 'k.sql'], { fetch: edge(await sourceStore(0)).fetch, io })).code).toBe(0)
