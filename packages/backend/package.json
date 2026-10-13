@@ -37,7 +37,7 @@
 		"wrangler": "4.149.0"
 	},
 	"dependencies": {
-		"cookie": "1.1.1",
+		"cookie": "2.0.1",
 		"toucan-js": "4.1.1",
 		"zod": "3.25.76"
 	}

@@ -30,8 +30,8 @@ importers:
   packages/backend:
     dependencies:
       cookie:
-        specifier: 1.1.1
-        version: 1.1.1
+        specifier: 2.0.1
+        version: 2.0.1
       toucan-js:
         specifier: 4.1.1
         version: 4.1.1
@@ -2442,6 +2442,10 @@ packages:
   cookie@1.1.1:
     resolution: {integrity: sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ==}
     engines: {node: '>=18'}
+
+  cookie@2.0.1:
+    resolution: {integrity: sha512-yuToqVvRrj6pfDXREyQAAv8SkAEk/8GS3jQRTiUMm66TVtBYmqQeoEjL2Lmq8Rpo6271vH76InTChTitEAm65w==}
+    engines: {node: '>=22'}
 
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
@@ -5688,7 +5692,7 @@ snapshots:
 
   '@types/cookie@1.0.0':
     dependencies:
-      cookie: 1.1.1
+      cookie: 2.0.1
 
   '@types/debug@4.1.12':
     dependencies:
@@ -6195,6 +6199,8 @@ snapshots:
   convert-source-map@2.0.0: {}
 
   cookie@1.1.1: {}
+
+  cookie@2.0.1: {}
 
   cross-spawn@7.0.6:
     dependencies:
