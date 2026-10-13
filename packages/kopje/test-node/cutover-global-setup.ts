@@ -1,17 +1,25 @@
 // Global setup of the Workers suites (vitest.config.ts): converts a synthetic legacy export with the real CLI code,
 // on Node (node:sqlite does not run in workerd), and hands the dump and the independently computed expectations to
-// test/cutover-import.test.ts, which imports the dump into a real Store.
+// test/cutover-import.test.ts, which imports the dump into a real Store. It also builds the cutover's maintenance
+// worker bundles (scripts/build-maintenance.mjs) and writes the `_worker.js` for the same export with the real CLI code,
+// for test/maintenance-worker.test.ts: the file is written where the Workers suite can import it.
 
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import type { TestProject } from 'vitest/node'
 
 import { buildLegacyFixture } from './legacy-fixture.js'
 import { loadLegacyExport } from '../cli/lib/cutover/legacy-load.js'
+import { maintenanceWorker } from '../cli/lib/cutover/maintenance.js'
 import { convertExport } from '../cli/lib/cutover/run.js'
 import { expectedFromLegacy } from '../cli/lib/cutover/verify-expect.js'
+import { buildMaintenance } from '../scripts/build-maintenance.mjs'
+
+// Under the package, so the Workers suite's module runner may load the generated file.
+export const MAINTENANCE_CACHE = fileURLToPath(new URL('../node_modules/.cache/kopje-maintenance/', import.meta.url))
 
 export default async function setup(project: TestProject): Promise<void> {
 	const dir = await mkdtemp(join(tmpdir(), 'kopje-cutover-setup-'))
@@ -44,6 +52,24 @@ export default async function setup(project: TestProject): Promise<void> {
 			dump: await readFile(join(dir, 'out', 'kopje.dump'), 'utf8'),
 			expected,
 		})
+
+		await rm(MAINTENANCE_CACHE, { recursive: true, force: true })
+		const bundleDir = join(MAINTENANCE_CACHE, 'bundle')
+		buildMaintenance(bundleDir)
+		const generated = await maintenanceWorker({
+			exportPath,
+			domain: 'kopje.test',
+			outDir: join(MAINTENANCE_CACHE, 'pages'),
+			env: {},
+			bundleDir,
+		})
+		if (!generated.ok) {
+			throw new Error(`maintenance worker not written: ${JSON.stringify(generated.report.stop)}`)
+		}
+		project.provide('maintenance', {
+			source: await readFile(join(MAINTENANCE_CACHE, 'pages', '_worker.js'), 'utf8'),
+			workerPath: join(MAINTENANCE_CACHE, 'pages', '_worker.js'),
+		})
 	} finally {
 		await rm(dir, { recursive: true, force: true })
 	}
@@ -52,5 +78,6 @@ export default async function setup(project: TestProject): Promise<void> {
 declare module 'vitest' {
 	export interface ProvidedContext {
 		cutover: { dump: string; expected: Record<string, Record<string, string>> }
+		maintenance: { source: string; workerPath: string }
 	}
 }

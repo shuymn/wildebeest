@@ -13,8 +13,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - The first release: the Mastodon API, ActivityPub federation, media, search, the `/setup` wizard, the daily
   encrypted backup and the `kopje-admin` CLI.
 - The instance template (`deploy/` in the repository), with the Deploy to Cloudflare button.
+- The cutover from a legacy Wildebeest instance: `convert`, `verify-conversion`, `cutover-preflight`, `fingerprint`,
+  `maintenance-worker`, `maintenance-worker-check` and `cutover` in `kopje-admin`, and
+  [docs/cutover-runbook.md](docs/cutover-runbook.md).
 
 ### Instance changes
 
 - Store schema: `0000_initial`.
-- `wrangler.jsonc`: as in the template, compatibility date `2026-10-11`. Tested with wrangler 4.149.0.
+- `wrangler.jsonc`: as in the template, compatibility date `2026-10-11`. Tested with wrangler 4.149.0. The Queue
+  consumer has a dead-letter queue (`dead_letter_queue`), which must exist before the deploy.

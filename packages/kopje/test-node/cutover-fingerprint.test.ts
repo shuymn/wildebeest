@@ -1,0 +1,282 @@
+import { execFile } from 'node:child_process'
+import { readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import type { DatabaseSync } from 'node:sqlite'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
+
+import { describe, expect, it } from 'vitest'
+
+import { convert, workspace, writeExport } from './cutover-helpers.js'
+import { buildLegacyFixture, exportDatabase } from './legacy-fixture.js'
+import {
+	compareFingerprints,
+	type Fingerprint,
+	fingerprintExport,
+	parseManifest,
+	sequenceFile,
+	TABLES_SQL,
+} from '../cli/lib/cutover/fingerprint.js'
+
+// Cutover step 5: two exports of the legacy D1, taken some time apart, must have equal fingerprints. Every row is
+// hashed whole (its table, every column and value with its type), so any change to a row, a value moved between rows
+// and a row added or removed change it, and sqlite_sequence pins the notification counter. DATA-16: the fingerprint and
+// the comparison carry table names, counts and digests only.
+
+const space = workspace()
+
+async function live() {
+	const fixture = await buildLegacyFixture({ level: 39, live: true })
+	const db = fixture.database!
+	let n = 0
+	// An export of the live database as it is now, and its fingerprint.
+	const take = async (): Promise<{ path: string; fingerprint: Fingerprint }> => {
+		const path = await writeExport(space.dir, exportDatabase(db, { sequence: true }), `export-${++n}`)
+		return { path, fingerprint: fingerprintExport(path) }
+	}
+	return { db, take, fixture }
+}
+
+async function changedBy(write: (db: DatabaseSync) => void) {
+	const { db, take } = await live()
+	const before = await take()
+	write(db)
+	return compareFingerprints(before.fingerprint, (await take()).fingerprint)
+}
+
+const firstObject = '(SELECT min(rowid) FROM objects)'
+
+describe('the fingerprint of an export', () => {
+	it('is the same for two exports while nothing writes, and counts every row', async () => {
+		const { db, take } = await live()
+		const first = await take()
+		const second = await take()
+		expect(compareFingerprints(first.fingerprint, second.fingerprint)).toMatchObject({ result: 'PASS', changed: [] })
+		const objects = (db.prepare('SELECT count(*) AS n FROM objects').get() as { n: number }).n
+		expect(first.fingerprint.tables.objects?.rows).toBe(objects)
+		expect(objects).toBeGreaterThan(1)
+		expect(first.fingerprint.notificationSequence).toMatch(/^\d+$/)
+	})
+
+	it('holds table names, counts and digests only (DATA-16)', async () => {
+		const { take, fixture } = await live()
+		const text = JSON.stringify((await take()).fingerprint)
+		for (const user of fixture.users) {
+			expect(text).not.toContain(user.email)
+			expect(text).not.toContain(user.uri)
+		}
+		expect(text).not.toContain('kopje.test')
+	})
+
+	// Writes the legacy consumer or a forgotten route could make. Each must FAIL, the changed table named.
+	it.each<[string, (db: DatabaseSync) => void, string]>([
+		['an inserted row', (db) => db.exec(`INSERT INTO peers (domain) VALUES ('new.example')`), 'peers'],
+		['a deleted row', (db) => db.exec('DELETE FROM objects WHERE rowid = (SELECT max(rowid) FROM objects)'), 'objects'],
+		[
+			'a short value changed at the same length',
+			(db) => db.exec(`UPDATE objects SET cdate = replace(cdate, '09:', '19:') WHERE rowid = ${firstObject}`),
+			'objects',
+		],
+		[
+			'values swapped between two rows',
+			(db) =>
+				db.exec(`UPDATE objects SET properties = CASE rowid
+					WHEN (SELECT min(rowid) FROM objects) THEN (SELECT properties FROM objects WHERE rowid = (SELECT max(rowid) FROM objects))
+					ELSE (SELECT properties FROM objects WHERE rowid = (SELECT min(rowid) FROM objects)) END
+					WHERE rowid IN ((SELECT min(rowid) FROM objects), (SELECT max(rowid) FROM objects))`),
+			'objects',
+		],
+		[
+			'two characters swapped in the middle of a long value',
+			(db) => {
+				const row = db
+					.prepare(`SELECT rowid AS r, properties AS p FROM objects WHERE rowid = ${firstObject}`)
+					.get() as {
+					r: number
+					p: string
+				}
+				const i = Math.floor(row.p.length / 2)
+				let j = i
+				while (row.p[j] === row.p[j + 1]) {
+					j++
+				}
+				const swapped = `${row.p.slice(0, j)}${row.p[j + 1]}${row.p[j]}${row.p.slice(j + 2)}`
+				db.prepare('UPDATE objects SET properties = ? WHERE rowid = ?').run(swapped, row.r)
+			},
+			'objects',
+		],
+		[
+			'content emptied to the same length',
+			(db) =>
+				db.exec(`UPDATE objects SET properties = json_set(properties, '$.content',
+					substr('                                                  ', 1, length(json_extract(properties, '$.content'))))
+					WHERE rowid = (SELECT min(rowid) FROM objects WHERE json_extract(properties, '$.content') IS NOT NULL)`),
+			'objects',
+		],
+		[
+			'only the notification counter moved',
+			(db) => db.exec(`UPDATE sqlite_sequence SET seq = seq + 5 WHERE name = 'actor_notifications'`),
+			'sqlite_sequence',
+		],
+	])('changes with %s', async (_name, write, table) => {
+		expect(await changedBy(write)).toMatchObject({ result: 'FAIL', changed: [table] })
+	})
+
+	it('passes a write that changes no value', async () => {
+		expect(await changedBy((db) => db.exec('UPDATE peers SET domain = domain'))).toMatchObject({ result: 'PASS' })
+	})
+
+	it('keeps the notification counter after every notification was deleted, and refuses an export without it', async () => {
+		const { db } = await live()
+		db.exec('DELETE FROM actor_notifications')
+		const counter = (
+			db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'actor_notifications'").get() as {
+				seq: number
+			}
+		).seq
+		expect(counter).toBeGreaterThan(0)
+		const withCounter = await writeExport(space.dir, exportDatabase(db, { sequence: true }), 'emptied')
+		expect(fingerprintExport(withCounter)).toMatchObject({ notificationSequence: String(counter) })
+		const without = await writeExport(space.dir, exportDatabase(db), 'emptied-without')
+		expect(() => fingerprintExport(without)).toThrow(/sequence-missing/)
+	})
+
+	it('reads an exported sqlite_sequence without a notification row as never allocated', async () => {
+		const { db } = await live()
+		db.exec('DELETE FROM actor_notifications')
+		const texts = exportDatabase(db)
+		texts.set('sqlite_sequence', '')
+		const path = await writeExport(space.dir, texts, 'never-allocated')
+		expect(fingerprintExport(path)).toMatchObject({ notificationSequence: null })
+	})
+
+	it('refuses an export without the notification counter, which the conversion would lose', async () => {
+		const { db } = await live()
+		const path = await writeExport(space.dir, exportDatabase(db), 'no-sequence')
+		expect(() => fingerprintExport(path)).toThrow(/sequence-missing/)
+	})
+})
+
+describe('the export against the conversion manifest', () => {
+	async function converted() {
+		const { db, take } = await live()
+		const final = await take()
+		const { manifest } = await convert(space.dir, final.path)
+		return { db, final, manifest: manifest as Record<string, unknown> }
+	}
+
+	it('passes when the converted export is the fingerprinted one', async () => {
+		const { final, manifest } = await converted()
+		const report = compareFingerprints(final.fingerprint, final.fingerprint, parseManifest(manifest))
+		expect(report).toMatchObject({ result: 'PASS', exportDiffers: [] })
+	})
+
+	it('fails on another count or another notification counter', async () => {
+		const { final, manifest } = await converted()
+		const parsed = parseManifest(manifest)
+		const fewer = { ...parsed, rowsLoaded: { ...parsed.rowsLoaded, objects: (parsed.rowsLoaded.objects ?? 0) - 1 } }
+		expect(compareFingerprints(final.fingerprint, final.fingerprint, fewer)).toMatchObject({
+			result: 'FAIL',
+			exportDiffers: ['objects'],
+		})
+		const counter = { ...parsed, notificationSequence: '1' }
+		expect(compareFingerprints(final.fingerprint, final.fingerprint, counter)).toMatchObject({
+			result: 'FAIL',
+			exportDiffers: ['sqlite_sequence'],
+		})
+	})
+
+	it('requires exactly the counted tables, even at zero rows', async () => {
+		const { final, manifest } = await converted()
+		const parsed = parseManifest(manifest)
+		const empty = Object.entries(parsed.rowsLoaded).find(([, n]) => n === 0)?.[0]
+		expect(empty).toBeDefined()
+		const missing = {
+			...parsed,
+			rowsLoaded: Object.fromEntries(Object.entries(parsed.rowsLoaded).filter(([t]) => t !== empty)),
+		}
+		expect(compareFingerprints(final.fingerprint, final.fingerprint, missing)).toMatchObject({
+			result: 'FAIL',
+			exportDiffers: [empty],
+		})
+		// Bookkeeping keys with the export's own counts differ too: they are not counted tables.
+		for (const [name, count] of [
+			['no_such_table', 0],
+			['sqlite_sequence', 999],
+			['d1_migrations', 999],
+			['sqlite_sequence', final.fingerprint.tables.sqlite_sequence!.rows],
+			['d1_migrations', final.fingerprint.tables.d1_migrations!.rows],
+		] as const) {
+			const extra = { ...parsed, rowsLoaded: { ...parsed.rowsLoaded, [name]: count } }
+			expect(compareFingerprints(final.fingerprint, final.fingerprint, extra), name).toMatchObject({
+				result: 'FAIL',
+				exportDiffers: [name],
+			})
+		}
+	})
+
+	it('accepts only a complete conversion manifest', async () => {
+		const { manifest } = await converted()
+		const source = manifest.source as Record<string, unknown>
+		for (const broken of [
+			{},
+			{ migrations: [], tables: [] },
+			{ ...manifest, source: { ...source, rowsLoaded: undefined } },
+			{ ...manifest, source: { ...source, rowsLoaded: {} } },
+			{ ...manifest, source: { ...source, rowsLoaded: { objects: -1 } } },
+			{ ...manifest, result: 'stopped' },
+			{ ...manifest, tool: { command: 'kopje-admin catalog' } },
+		]) {
+			expect(() => parseManifest(broken)).toThrow(/not-a-conversion-manifest/)
+		}
+	})
+})
+
+describe('kopje-admin fingerprint', () => {
+	const cli = fileURLToPath(new URL('../cli/kopje-admin.js', import.meta.url))
+	const run = async (args: string[]) => {
+		try {
+			const { stdout, stderr } = await promisify(execFile)(process.execPath, [cli, ...args])
+			return { code: 0, stdout, stderr }
+		} catch (error) {
+			const e = error as { code: number; stdout: string; stderr: string }
+			return { code: e.code, stdout: e.stdout, stderr: e.stderr }
+		}
+	}
+
+	it('fingerprints and compares exports through the real CLI', async () => {
+		expect((await run(['fingerprint', 'tables-sql'])).stdout.trim()).toBe(TABLES_SQL)
+		const { db, take } = await live()
+		const first = await take()
+		const second = await take()
+		const a = join(space.dir, 'a.json')
+		const b = join(space.dir, 'b.json')
+		await writeFile(a, (await run(['fingerprint', 'export', first.path])).stdout)
+		await writeFile(b, (await run(['fingerprint', 'export', second.path])).stdout)
+		const same = await run(['fingerprint', 'compare', a, b])
+		expect(same.code).toBe(0)
+		expect(JSON.parse(same.stdout)).toMatchObject({ result: 'PASS' })
+
+		db.exec(`INSERT INTO peers (domain) VALUES ('late.example')`)
+		await writeFile(b, (await run(['fingerprint', 'export', (await take()).path])).stdout)
+		const differs = await run(['fingerprint', 'compare', a, b])
+		expect(differs.code).toBe(1)
+		expect(JSON.parse(differs.stdout)).toMatchObject({ result: 'FAIL', changed: ['peers'] })
+		expect(differs.stdout + (await readFile(b, 'utf8'))).not.toContain('late.example')
+
+		const notManifest = join(space.dir, 'catalog.json')
+		await writeFile(notManifest, JSON.stringify({ migrations: [], tables: [] }))
+		const refused = await run(['fingerprint', 'compare', a, a, '--manifest', notManifest])
+		expect(refused.code).toBe(2)
+		expect(refused.stderr).toContain('not-a-conversion-manifest')
+	})
+
+	it('writes sqlite_sequence from its query answer, accepting names and integers only', async () => {
+		const answer = [{ results: [{ name: 'actor_notifications', seq: 42 }], success: true, meta: {} }]
+		expect(sequenceFile(answer)).toBe(
+			`INSERT INTO "sqlite_sequence" ("name","seq") VALUES('actor_notifications',42);\n`
+		)
+		expect(() => sequenceFile([{ results: [{ name: "x'); DROP", seq: 1 }] }])).toThrow(/invalid-sequence-row/)
+		expect(() => sequenceFile([{ results: [{ name: 'x', seq: '1' }] }])).toThrow(/invalid-sequence-row/)
+	})
+})

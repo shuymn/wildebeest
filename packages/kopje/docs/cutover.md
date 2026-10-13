@@ -1,5 +1,7 @@
 # Cutover from a legacy Wildebeest instance: the converter
 
+The whole cutover, step by step, is [cutover-runbook.md](cutover-runbook.md); this page documents its conversion step.
+
 `kopje-admin convert` turns the D1 database of a legacy Wildebeest instance into a Kopje dump
 ([dump-format.md](dump-format.md)) that `kopje-admin import` loads into an empty Store. `kopje-admin verify-conversion`
 checks a dump against the legacy data with expectations it computes on its own. Both run offline on the operator's

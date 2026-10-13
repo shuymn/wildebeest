@@ -2,15 +2,13 @@ import type { Handler } from 'hono'
 
 import { ringDoorbell } from './delivery'
 import { type InboundRequest, type InboxOutcome, receiveInbound } from './inbound'
+import { inboxRecipient, type InboxPrecheck, precheckInboxRequest } from './inbox-request'
 import type { LoaderDeps } from './loader'
 import { readConfig, userKek } from '../platform/config'
 import { errorFields } from '../platform/error-message'
-import { isActivityPubMediaType, parseMediaType } from '../platform/media-type'
 import { callStore, type StoreResolver } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
 import type { KeyGen } from '../security/key-wrap'
-
-export const INBOX_ROUTES = ['/inbox', '/ap/users/:username/inbox', '/actor/inbox']
 
 export type InboxDeps = {
 	build: (env: Env) => string
@@ -42,40 +40,23 @@ export async function requestInboundJobs(queue: Queue, delaySeconds?: number): P
 	}
 }
 
-const PERSONAL_INBOX = /^\/ap\/users\/([^/]+)\/inbox$/
-
-// The username a personal inbox path names, as written (Hono does not decode it either), or null for a shared inbox.
-export function inboxRecipient(path: string): string | null {
-	return PERSONAL_INBOX.exec(path)?.[1] ?? null
-}
-
-export type InboxPrecheck = 'ok' | 'not-found' | 'unsupported-media-type'
-
-// What can be refused before anything is spooled: a body that is not ActivityStreams (415), and a personal inbox that
-// does not name a local account with its exact stored username (404, ID-5). If the Store cannot answer, the request
-// passes, to be spooled and checked again on replay.
+// A personal inbox of nobody is refused before anything is spooled (inbox-request.ts). If the Store cannot answer,
+// the request passes, to be spooled and checked again on replay.
 export async function precheckInbox(
 	env: Env,
 	deps: Pick<InboxDeps, 'build' | 'store'>,
 	request: Request
 ): Promise<InboxPrecheck> {
-	const media = parseMediaType(request.headers.get('content-type') ?? '')
-	if (media === null || !isActivityPubMediaType(media)) {
-		return 'unsupported-media-type'
-	}
-	const username = inboxRecipient(new URL(request.url).pathname)
-	if (username === null) {
-		return 'ok'
-	}
-	try {
-		const exists = await callStore(() => deps.store(env).inboxOwnerExists(deps.build(env), { username }))
-		return exists ? 'ok' : 'not-found'
-	} catch (error) {
-		if (error instanceof StoreUnavailableError) {
-			return 'ok'
+	return precheckInboxRequest(request, async (username) => {
+		try {
+			return await callStore(() => deps.store(env).inboxOwnerExists(deps.build(env), { username }))
+		} catch (error) {
+			if (error instanceof StoreUnavailableError) {
+				return true
+			}
+			throw error
 		}
-		throw error
-	}
+	})
 }
 
 // Inbox processing, shared by the endpoint and spool replay. A maintenance refusal surfaces as StoreUnavailableError
@@ -89,6 +70,9 @@ export async function processInbox(
 ): Promise<InboxOutcome | { status: 404; reason: string }> {
 	const build = deps.build(env)
 	const store = () => deps.store(env)
+	// Before any loader or fetch: a Store that refuses writes (an unpublished import, maintenance) holds the request as
+	// in maintenance. receiveActivity checks it again in its own transaction.
+	await callStore(() => store().inboxWritable(build))
 	const domain = live?.domain ?? (await callStore(() => store().instanceDomain(build)))
 	if (domain === null) {
 		throw new StoreUnavailableError('maintenance')

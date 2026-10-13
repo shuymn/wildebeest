@@ -40,6 +40,7 @@ import {
 	saveBackup,
 } from './platform/backup-state'
 import { type ImportAuthority, StoreAdmin } from './platform/store-admin'
+import { readFlags } from './platform/store-flags'
 import { StoreKernel, type StoreOperation } from './platform/store-kernel'
 import { buildOf, PACKAGE_VERSION } from './version'
 
@@ -132,9 +133,15 @@ export class Store extends DurableObject<Env> {
 		return readBackupState(this.ctx.storage.sql)
 	}
 
+	// Refused while a verified import is unpublished: the scheduled backup starts only once the instance is published
+	// (an operator's rescue dump is not affected), checked in the transaction that takes the runner lease.
 	async backupClaim(_callerBuild: string, runner: string, now: number, leaseMs: number) {
 		await this.#kernel.state()
-		return this.#backupTx((sql) => claimBackup(sql, runner, now, leaseMs))
+		return this.#backupTx((sql) =>
+			readFlags(sql).unpublished !== null
+				? ({ ok: false, code: 'unpublished' } as const)
+				: claimBackup(sql, runner, now, leaseMs)
+		)
 	}
 
 	async backupSave(
@@ -223,6 +230,61 @@ export class Store extends DurableObject<Env> {
 		return this.#admin.config()
 	}
 
+	// The cutover's publication mark, rollback journal and reset (store-admin.ts, docs/cutover-runbook.md).
+	cutoverStatus(callerBuild: string) {
+		return this.#admin.cutoverStatus(callerBuild)
+	}
+
+	publish(callerBuild: string, authority: ImportAuthority) {
+		return this.#admin.publish(callerBuild, authority)
+	}
+
+	journalSpool(
+		callerBuild: string,
+		entry: { digest: string; spooledAt: number; record: Uint8Array },
+		limits?: { entries?: number; bytes?: number }
+	) {
+		return this.#admin.journalSpool(callerBuild, entry, limits)
+	}
+
+	handedOff(callerBuild: string, digest: string) {
+		return this.#admin.handedOff(callerBuild, digest)
+	}
+
+	closeRollback(callerBuild: string, authority: ImportAuthority) {
+		return this.#admin.closeRollback(callerBuild, authority)
+	}
+
+	drainLease(callerBuild: string, authority: ImportAuthority, request: { holder: string; release?: boolean }) {
+		return this.#admin.drainLease(callerBuild, authority, request)
+	}
+
+	journalNext(callerBuild: string, authority: ImportAuthority, holder: string, skip?: string[]) {
+		return this.#admin.journalNext(callerBuild, authority, holder, skip)
+	}
+
+	journalMark(
+		callerBuild: string,
+		authority: ImportAuthority,
+		holder: string,
+		id: string,
+		state: 'sending' | 'done' | 'unverified' | 'no-recipient'
+	) {
+		return this.#admin.journalMark(callerBuild, authority, holder, id, state)
+	}
+
+	journalFullStop(callerBuild: string, authority: ImportAuthority, holder: string, action: 'record' | 'check') {
+		return this.#admin.journalFullStop(callerBuild, authority, holder, action)
+	}
+
+	journalDiscardKept(callerBuild: string, authority: ImportAuthority) {
+		return this.#admin.journalDiscardKept(callerBuild, authority)
+	}
+
+	cutoverReset(callerBuild: string, authority: ImportAuthority) {
+		return this.#admin.cutoverReset(callerBuild, authority)
+	}
+
 	setConfig(callerBuild: string, authority: ImportAuthority, values: unknown) {
 		return this.#admin.setConfig(callerBuild, authority, values)
 	}
@@ -309,6 +371,10 @@ export class Store extends DurableObject<Env> {
 
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {
 		return this.#kernel.execute(callerBuild, inbox.getRemoteKey, input)
+	}
+
+	inboxWritable(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, inbox.inboxWritable, undefined)
 	}
 
 	inboxOwnerExists(callerBuild: string, input: OperationInput<typeof inbox.inboxOwnerExists>) {

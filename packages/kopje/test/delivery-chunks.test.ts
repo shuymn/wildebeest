@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD, migratedStore } from './helpers'
-import { copyConfig, dumpViaRpc, ensureAdmin, importViaRpc } from './ops-helpers'
+import { ACCESS, copyConfig, dumpViaRpc, ensureAdmin, importViaRpc } from './ops-helpers'
 import { community } from './status-helpers'
 import { claimDeliveries, EXPANSION_STEP, TARGET_CHUNK_BYTES, TARGET_CHUNK_SIZE } from '../src/domain/deliveries'
 import type { StoreStub } from '../src/platform/store-client'
@@ -195,6 +195,8 @@ describe('RES-6: target chunks', () => {
 		await copyConfig(h.store, target)
 		const { report } = await importViaRpc(target, text)
 		expect(report).toMatchObject({ ok: true, foreignKeyViolations: 0 })
+		// An imported Store is readonly until published.
+		expect(await target.publish(BUILD, ACCESS)).toMatchObject({ ok: true })
 		expect(await chunks(target)).toEqual(await chunks(h.store))
 		await drain(target)
 		for (const uri of [first.uri, second.uri]) {

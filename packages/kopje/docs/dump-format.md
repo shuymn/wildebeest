@@ -169,7 +169,10 @@ dump starts, so repeating the finish with the same cursor returns the same trail
 
 ## Import protocol
 
-All of these are `POST` under `/admin/import` with JSON, except `chunk` and `progress`:
+All of these are `POST` under `/admin/import` with JSON, except `chunk` and `progress`. A verified import leaves the
+Store unpublished: it refuses every write (as in readonly) until `kopje-admin publish --yes` (`POST /admin/publish`, by
+an Access admin, or with `IMPORT_TOKEN` while the Store has no admin access), so nothing is written or delivered before
+you have checked it.
 
 | Step     | Request                                                     | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | -------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

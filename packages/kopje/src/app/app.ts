@@ -9,12 +9,13 @@ import { publicHealth } from './health'
 import { setupRoutes } from './setup'
 import { webRoutes } from './web'
 import { ringDoorbell } from '../federation/delivery'
-import { INBOX_ROUTES, inboxHandler, precheckInbox } from '../federation/inbox'
+import { inboxHandler, precheckInbox } from '../federation/inbox'
+import { INBOX_ROUTES } from '../federation/inbox-request'
 import { createResolver } from '../federation/resolve'
 import { FEDERATION_GET_ROUTES, federationHandler, type FederationRouteDeps } from '../federation/routes'
 import { FEDERATION_PATHS, requireSetup } from '../federation/setup-gate'
 import { rescueFromSnapshot } from '../federation/snapshot'
-import { INBOX_BODY_LIMIT, spoolInbox } from '../federation/spool'
+import { createAdmission, INBOX_BODY_LIMIT, spoolInbox } from '../federation/spool'
 import { maintenanceError, mastodonError } from '../mastodon/errors'
 import { mastodonApi } from '../mastodon/routes'
 import { readBackupConfig } from '../platform/backup-config'
@@ -81,6 +82,16 @@ export function createApp({
 		app.use(path, apiCors)
 	}
 
+	// Spooling within the Queue's admission budget (federation/spool.ts): over it, or when it cannot be read, 503.
+	const admission = createAdmission(now)
+	const spool = async (queue: Queue, request: Request, body: Uint8Array) => {
+		if (await admission.full(queue)) {
+			console.warn({ event: 'kopje.spool.backlog-full' })
+			return maintenanceError()
+		}
+		return spoolInbox(request, body, queue, now())
+	}
+
 	// Maintenance gate, max(env, Store). The env mode (MAINTENANCE) is applied here. The Store applies its own readonly
 	// state to each RPC by operation kind, and a refusal arrives as StoreUnavailableError in onError: inbox requests
 	// are spooled, everything else gets 503.
@@ -116,7 +127,7 @@ export function createApp({
 				return new Response(null, { status: precheck === 'not-found' ? 404 : 415 })
 			}
 			if (decision === 'spool') {
-				return spoolInbox(c.req.raw, body, c.env.QUEUE, now())
+				return spool(c.env.QUEUE, c.req.raw, body)
 			}
 		}
 		await next()
@@ -133,15 +144,19 @@ export function createApp({
 
 	app.get('/health', (c) => publicHealth(build(c.env), readConfig(c.env), () => store(c.env), readBackupConfig(c.env)))
 
-	app.route(ADMIN_PREFIX, adminRoutes({ build, now, store, doorbell, fetch: (input, init) => fetch(input, init) }))
+	const keygen = federation.keygen ?? generateRsaKeyPair
+	const loader = federation.loader ?? { fetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, init) }
+
+	app.route(
+		ADMIN_PREFIX,
+		adminRoutes({ build, now, store, doorbell, loader, fetch: (input, init) => fetch(input, init) })
+	)
 
 	const setupGate = requireSetup(build, store)
 	for (const path of FEDERATION_PATHS) {
 		app.use(path, setupGate)
 	}
 
-	const keygen = federation.keygen ?? generateRsaKeyPair
-	const loader = federation.loader ?? { fetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, init) }
 	const inbox = inboxHandler({ build, store, now, keygen, loader })
 	for (const path of INBOX_ROUTES) {
 		app.post(path, inbox)
@@ -176,7 +191,7 @@ export function createApp({
 		if (error instanceof StoreUnavailableError) {
 			const body = c.get('requestClass') === 'inbox' ? c.get('inboxBody') : undefined
 			if (body !== undefined) {
-				return spoolInbox(c.req.raw, body, c.env.QUEUE, now())
+				return spool(c.env.QUEUE, c.req.raw, body)
 			}
 			// Actor documents, WebFinger and NodeInfo stay up from the last good snapshot.
 			if (c.get('requestClass') === 'always') {

@@ -12,6 +12,10 @@ import type { OperationKind } from './store-kernel'
 //   import      : an import in progress; nothing passes until it is verified
 //   import_receipt : the outcome of the last verified import, kept for a client whose response was lost (no effect)
 //   import_reset   : the id of the last completed reset, for the same reason (no effect)
+//   unpublished    : a verified import that the operator has not published yet; the Store is readonly meanwhile
+//                    (reads and sessions pass, writes are refused), whatever the env says, so nothing is written or
+//                    delivered before publication; only `publish` clears it
+//   published      : set by `publish`; a cutover can no longer be rolled back (docs/cutover-runbook.md)
 
 export type MaintenanceFlag = { mode: 'readonly'; at: number }
 
@@ -83,19 +87,39 @@ export type OperatorFlags = {
 	import_receipt: ImportReceipt | null
 	// The last completed reset, so a retried reset request for that import is answered instead of refused.
 	import_reset: { id: string; completedAt: number } | null
+	published: PublishedFlag | null
+	unpublished: { at: number; import: string } | null
 }
 
-export const FLAG_NAMES = ['maintenance', 'dump', 'import', 'import_receipt', 'import_reset'] as const
+export type PublishedFlag = { at: number }
+
+export const FLAG_NAMES = [
+	'maintenance',
+	'dump',
+	'import',
+	'import_receipt',
+	'import_reset',
+	'published',
+	'unpublished',
+] as const
 type FlagName = (typeof FLAG_NAMES)[number]
 
 export function readFlags(sql: SqlStorage): OperatorFlags {
-	const flags: OperatorFlags = { maintenance: null, dump: null, import: null, import_receipt: null, import_reset: null }
+	const flags: OperatorFlags = {
+		maintenance: null,
+		dump: null,
+		import: null,
+		import_receipt: null,
+		import_reset: null,
+		published: null,
+		unpublished: null,
+	}
 	for (const row of sql
 		.exec<{
 			name: FlagName
 			value: string
 		}>(
-			"SELECT name, value FROM kopje_state WHERE name IN ('maintenance', 'dump', 'import', 'import_receipt', 'import_reset')"
+			"SELECT name, value FROM kopje_state WHERE name IN ('maintenance', 'dump', 'import', 'import_receipt', 'import_reset', 'published', 'unpublished')"
 		)
 		.toArray()) {
 		flags[row.name] = JSON.parse(row.value) as never
@@ -126,5 +150,8 @@ export function admitFlags(flags: OperatorFlags, kind: OperationKind, now: numbe
 	}
 	if (kind === 'write' && flags.maintenance !== null) {
 		throw storeMaintenanceError('maintenance')
+	}
+	if (kind === 'write' && flags.unpublished !== null) {
+		throw storeMaintenanceError('unpublished')
 	}
 }

@@ -56,13 +56,23 @@ export class QueueSim {
 		return Promise.resolve()
 	})
 
-	get queue(): Queue {
-		return { send: this.send } as unknown as Queue
+	// The backlog as Queues reports it: every message not yet acknowledged, delayed ones included.
+	metrics(): Promise<QueueMetrics> {
+		const backlogBytes = this.pending.reduce((sum, m) => sum + v8SizeEstimate(m.body), 0)
+		return Promise.resolve({ backlogCount: this.pending.length, backlogBytes })
 	}
 
-	// Delivers everything pending as one batch, ignoring delays.
-	async deliver(handler: (batch: MessageBatch) => Promise<void> | void): Promise<void> {
-		const stored = this.pending.splice(0)
+	get queue(): Queue {
+		return { send: this.send, metrics: () => this.metrics() } as unknown as Queue
+	}
+
+	// Delivers everything pending as one batch, ignoring delays; with `ready`, only the messages sent without a delay
+	// (the delayed ones stay pending, as they would until their delay passes).
+	async deliver(handler: (batch: MessageBatch) => Promise<void> | void, { ready = false } = {}): Promise<void> {
+		const stored = ready ? this.pending.filter((m) => m.delaySeconds === 0) : this.pending.splice(0)
+		if (ready) {
+			this.pending = this.pending.filter((m) => m.delaySeconds !== 0)
+		}
 		const outcome = new Map<string, 'ack' | 'retry'>()
 		const settle = (id: string, value: 'ack' | 'retry') => {
 			if (!outcome.has(id)) {

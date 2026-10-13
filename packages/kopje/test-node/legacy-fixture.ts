@@ -37,12 +37,16 @@ export type FixtureOptions = {
 	// r4's followers property spelled with an upper-case host and :443, and a status of r4 to its followers as normally
 	// spelled, Bob absent from to.
 	followersSpelling?: boolean
+	// Keep the database the export was written from open and return it, as the live legacy D1 (the fingerprint suite).
+	live?: boolean
 }
 
 export type LegacyFixture = {
 	level: number
 	texts: Map<string, string>
 	users: { username: string; email: string; uri: string }[]
+	// With `live`: the database the export was written from.
+	database?: DatabaseSync
 }
 
 type Row = Record<string, SQLInputValue | undefined>
@@ -118,6 +122,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		notificationSequence,
 		authorChange = false,
 		followersSpelling = false,
+		live = false,
 	} = options
 	const db = line === 'T2' ? upstreamDatabase(level) : canonicalLegacyDatabase(level)
 	const columns = new Map<string, string[]>()
@@ -864,6 +869,27 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 	migrationNames(level).forEach((name, i) =>
 		db.prepare('INSERT INTO d1_migrations (name, applied_at) VALUES (?, ?)').run(name, cdate(-1000 + i))
 	)
+	const texts = exportDatabase(db)
+	if (notificationSequence !== undefined) {
+		texts.set(
+			'sqlite_sequence',
+			`INSERT INTO "sqlite_sequence" ("name","seq") VALUES('actor_notifications',${notificationSequence});\n`
+		)
+	}
+	const fixture = { level, texts, users: users.map(({ username, email, uri }) => ({ username, email, uri })) }
+	if (live) {
+		return { ...fixture, database: db }
+	}
+	db.close()
+	return fixture
+}
+
+// The export of a database as `wrangler d1 export --table` writes it, one text per table. With `sequence`, also
+// sqlite_sequence as the database holds it (the live D1 of the fingerprint suite).
+export function exportDatabase(
+	db: DatabaseSync,
+	{ sequence = false }: { sequence?: boolean } = {}
+): Map<string, string> {
 	const texts = new Map<string, string>()
 	const tables = db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as {
 		name: string
@@ -887,12 +913,15 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		}
 		texts.set(name, `${parts.join('\n')}\n`)
 	}
-	if (notificationSequence !== undefined) {
+	if (sequence) {
+		const rows = db.prepare('SELECT name, seq FROM sqlite_sequence ORDER BY name').all() as {
+			name: string
+			seq: number
+		}[]
 		texts.set(
 			'sqlite_sequence',
-			`INSERT INTO "sqlite_sequence" ("name","seq") VALUES('actor_notifications',${notificationSequence});\n`
+			rows.map((r) => `INSERT INTO "sqlite_sequence" ("name","seq") VALUES('${r.name}',${r.seq});\n`).join('')
 		)
 	}
-	db.close()
-	return { level, texts, users: users.map(({ username, email, uri }) => ({ username, email, uri })) }
+	return texts
 }

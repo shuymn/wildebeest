@@ -13,6 +13,7 @@ export const MAINTENANCE_REASONS = [
 	'maintenance',
 	'dump-in-progress',
 	'import-in-progress',
+	'unpublished',
 	'transient',
 ] as const
 

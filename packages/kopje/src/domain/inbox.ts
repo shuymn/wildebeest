@@ -1900,6 +1900,11 @@ export const runInboundJobs = writeOperation<{ now: number }, { pending: boolean
 	}
 )
 
+// Writes nothing: admitted only where receiveActivity would be (the Store gate refuses it while maintenance, a dump,
+// an import or an unpublished import holds writes). Checked before an inbound request is verified, so that nothing is
+// fetched, signed with a local key, for a request the Store would refuse anyway (OPS-8).
+export const inboxWritable = writeOperation<undefined, true>(() => true)
+
 // Whether a personal inbox path names a local account with its exact stored username.
 export const inboxOwnerExists = readOperation<{ username: string }, boolean>(
 	(db, { username }) =>

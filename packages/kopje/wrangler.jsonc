@@ -19,8 +19,9 @@
 	"queues": {
 		"producers": [{ "binding": "QUEUE", "queue": "kopje" }],
 		// Spool replay and delivery rounds share the consumer; max_concurrency bounds parallel rounds (RES-6). Each
-		// round makes at most 16 POSTs.
-		"consumers": [{ "queue": "kopje", "max_retries": 100, "max_concurrency": 4 }],
+		// round makes at most 16 POSTs. A message that exhausts its retries (an accepted inbox request whose sender
+		// stays unreachable) goes to the dead-letter queue instead of being lost (docs/cutover-runbook.md).
+		"consumers": [{ "queue": "kopje", "max_retries": 100, "max_concurrency": 4, "dead_letter_queue": "kopje-dlq" }],
 	},
 	// RES-6: anonymous app registration per client IP (mastodon/oauth.ts). The Rate Limiting binding needs no paid
 	// product; namespace_id is any number unique within the account.

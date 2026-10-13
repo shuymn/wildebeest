@@ -45,6 +45,7 @@ import {
 	type ImportReceipt,
 	type ImportRecord,
 	type OperatorFlags,
+	type PublishedFlag,
 	readFlags,
 	writeFlag,
 } from './store-flags'
@@ -121,6 +122,40 @@ const PITR_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
 export const STALE_IMPORT_MS = 15 * 60 * 1000
 const RESET_BATCH_ROWS = 2000
 const RESET_STEPS = 20
+// Keys of the cutover's rollback journal in inbound_spool: pending, and kept after a failed verification.
+const JOURNAL = { pending: 'j:', sending: 's:', unverified: 'u:', noRecipient: 'n:', done: 'd:' } as const
+// The journal's hard quota (an operator may set lower ones): what it holds that is not handed off yet.
+export const JOURNAL_MAX_ENTRIES = 10_000
+export const JOURNAL_MAX_BYTES = 128 * 1024 * 1024
+const DRAIN_LEASE = 'cutover_drain'
+// Well above one drain round (verification is bounded in time, a send times out much sooner): a round that ends
+// without releasing it (a send that timed out) keeps others out until any send it began is long gone.
+export const DRAIN_LEASE_MS = 5 * 60 * 1000
+// Handoff receipts, in kopje_state (never dumped, imported or reset).
+const RECEIPT = 'handoff:'
+// The journal state at the drain's last journal-full stop, in kopje_state: an unordered round is allowed only while the
+// journal is still in that state.
+const FULL_STOP = 'cutover_full_stop'
+const MAX_DRAIN_SKIP = 100
+
+export type JournalCounts = {
+	pending: number
+	sending: number
+	unverified: number
+	noRecipient: number
+	done: number
+	bytes: number
+	oldestSpooledAt: number | null
+}
+
+export type CutoverStatus = {
+	published: PublishedFlag | null
+	unpublished: boolean
+	journal: JournalCounts
+	import: { id: string; state: ImportRecord['state'] } | null
+	verifiedImport: { id: string; at: number } | null
+	empty: boolean
+}
 
 // Thrown to roll back the read-only SQL transaction.
 class Rollback extends Error {}
@@ -530,6 +565,11 @@ export class StoreAdmin {
 				if (activeDump(flags, now) !== null) {
 					throw new ImportError('dump-in-progress', 'a dump is in progress')
 				}
+				if (flags.published !== null) {
+					// A published instance is never imported into again: the import would leave it both published and
+					// unpublished, and the cutover reset of an unpublished Store would then empty a published one.
+					throw new ImportError('published', 'this instance is published; restore it into a new Store')
+				}
 				if (flags.import !== null) {
 					// An Access admin resumes the same dump in whatever phase it reached. A token import is continued with
 					// its session credential, not by beginning again.
@@ -791,6 +831,8 @@ export class StoreAdmin {
 					}
 					writeFlag(this.#sql, 'import', null)
 					writeFlag(this.#sql, 'import_receipt', completed)
+					// Imported data is readonly until the operator publishes it (publish).
+					writeFlag(this.#sql, 'unpublished', { at: this.#now(), import: record.id })
 					this.#log({ event: 'kopje.store.import.verified', id })
 					return { ok: true as const, done: true, report, progress: receiptProgress(completed) }
 				}
@@ -924,6 +966,7 @@ export class StoreAdmin {
 		}
 		replaceBootstrapRows(this.#sql, record.bootstrap ?? [])
 		writeFlag(this.#sql, 'import', null)
+		writeFlag(this.#sql, 'unpublished', null)
 		writeFlag(this.#sql, 'import_reset', { id, completedAt: this.#now() })
 		this.#log({ event: 'kopje.store.import.reset-done', id })
 		return true
@@ -1022,6 +1065,499 @@ export class StoreAdmin {
 			}
 		}
 		return null
+	}
+
+	// ---- cutover (docs/cutover-runbook.md)
+	//
+	// unpublished/published: a verified import leaves the Store unpublished (readonly through the kernel gate);
+	// `publish` clears that and sets the published mark. The cutover reset is allowed only while unpublished.
+	// The rollback journal: while the Worker's CUTOVER_ROLLBACK=journal, its Queue consumer stores every spooled inbox
+	// request here (inbound_spool, one single-part row per request, keyed by the digest of the spool message, which
+	// stays the same across requeues and redeliveries) instead of holding it in the Queue, within a count and a byte
+	// quota; `kopje-admin cutover drain` then hands them to the legacy Queue one at a time, in the order they were
+	// spooled. The key's prefix is the record's state:
+	//   j: pending     s: being sent (marked before the send; resent after a crash: at least once)
+	//   u: kept, failed verification for good     n: kept, no legacy recipient
+	//   d: handed off (a tombstone without the request), so a late redelivery is not journaled again
+	// One drain runs at a time, under a lease.
+	// The cutover reset: after a completed import, while unpublished, takes the Store back to empty through the same
+	// bounded reset an interrupted import uses, keeping the configuration.
+
+	async cutoverStatus(callerBuild: string): Promise<CutoverStatus> {
+		this.#requireBuild(callerBuild)
+		await this.#kernel.state()
+		const flags = readFlags(this.#sql)
+		return {
+			published: flags.published,
+			unpublished: flags.unpublished !== null,
+			journal: this.#journalCounts(),
+			import: flags.import === null ? null : { id: flags.import.id, state: flags.import.state },
+			verifiedImport:
+				flags.import_receipt === null ? null : { id: flags.import_receipt.id, at: flags.import_receipt.completedAt },
+			empty: this.#emptyOfData(),
+		}
+	}
+
+	// Publication: ends the readonly state a verified import leaves (unpublished) and sets the published mark, in one
+	// transaction. Idempotent. Refused while a rollback is in progress (a drain lease, or requests in the journal): those
+	// requests go to the legacy instance, not to a published Kopje. An Access admin publishes; so does IMPORT_TOKEN while
+	// the Store is in bootstrap (no usable admin access), as it may configure and import into that Store, so a restore
+	// without Access is never left readonly.
+	async publish(callerBuild: string, authority: ImportAuthority): Promise<Result<{ published: PublishedFlag }>> {
+		this.#requireBuild(callerBuild)
+		await this.#kernel.state()
+		try {
+			return this.#transaction(() => {
+				const flags = readFlags(this.#sql)
+				if (authority.kind === 'import-token') {
+					if (!this.#inBootstrap(flags, false)) {
+						throw new ImportError('not-bootstrap', 'IMPORT_TOKEN only publishes a Store without admin access')
+					}
+				} else if (authority.kind === 'access') {
+					this.#assertAdmin(authority, this.#currentSettings(flags))
+				} else {
+					throw new ImportError('wrong-authority', 'publish with Access or IMPORT_TOKEN')
+				}
+				if (flags.import !== null) {
+					throw new ImportError('import-exists', 'an import is running')
+				}
+				if (flags.published !== null && flags.unpublished === null) {
+					return { ok: true as const, published: flags.published }
+				}
+				if (flags.unpublished === null) {
+					// Publication ends a verified import; a Store that never had one is not readonly and has nothing to
+					// publish. Refusing it keeps a published mark off a Store an import may still begin into.
+					throw new ImportError('not-unpublished', 'nothing to publish: no verified import is waiting')
+				}
+				if (this.#rollbackInProgress()) {
+					throw new ImportError('rollback-in-progress', 'the journal holds requests or a drain runs')
+				}
+				const published = { at: this.#now() }
+				writeFlag(this.#sql, 'unpublished', null)
+				writeFlag(this.#sql, 'published', published)
+				this.#log({ event: 'kopje.store.published' })
+				return { ok: true as const, published }
+			})
+		} catch (error) {
+			return asRefusal(error)
+		}
+	}
+
+	// Whether a spool message was handed to the legacy instance (a handoff receipt), so it is neither journaled nor
+	// replayed again.
+	async handedOff(callerBuild: string, digest: string): Promise<boolean> {
+		this.#requireBuild(callerBuild)
+		await this.#kernel.state()
+		return this.#hasReceipt(digest)
+	}
+
+	// Ends a rollback: its receipts are removed once the journal is empty and no drain runs; the Worker checks first that
+	// Kopje's Queue is empty (no copy of a handed-off request is left to arrive).
+	async closeRollback(callerBuild: string, authority: ImportAuthority): Promise<Result<{ receipts: number }>> {
+		this.#requireBuild(callerBuild)
+		await this.#kernel.state()
+		try {
+			return this.#transaction(() => {
+				this.#assertJournalAdmin(authority)
+				if (this.#rollbackInProgress()) {
+					throw new ImportError('rollback-in-progress', 'the journal holds requests or a drain runs')
+				}
+				const receipts = this.#journalCounts().done
+				this.#sql.exec("DELETE FROM kopje_state WHERE substr(name, 1, 8) = 'handoff:'")
+				this.#sql.exec('DELETE FROM kopje_state WHERE name = ?', FULL_STOP)
+				return { ok: true as const, receipts }
+			})
+		} catch (error) {
+			return asRefusal(error)
+		}
+	}
+
+	// From the Worker's Queue consumer: refused once published (nothing is rolled back then), during an import, and when
+	// the journal is at its quota (the consumer then leaves the message in the Queue, whose backlog bounds admission).
+	async journalSpool(
+		callerBuild: string,
+		entry: { digest: string; spooledAt: number; record: Uint8Array },
+		limits: { entries?: number; bytes?: number } = {}
+	): Promise<Result<{ stored: boolean }>> {
+		this.#requireBuild(callerBuild)
+		await this.#kernel.state()
+		const digest = entry.digest
+		const maxEntries = clamp(limits.entries, 1, JOURNAL_MAX_ENTRIES, JOURNAL_MAX_ENTRIES)
+		const maxBytes = clamp(limits.bytes, 1, JOURNAL_MAX_BYTES, JOURNAL_MAX_BYTES)
+		try {
+			return this.#transaction(() => {
+				const flags = readFlags(this.#sql)
+				if (flags.published !== null) {
+					throw new ImportError('published', 'this instance is published; nothing is rolled back')
+				}
+				if (flags.import !== null) {
+					throw new ImportError('import-in-progress', 'an import is running')
+				}
+				if (!/^[0-9a-f]{64}$/.test(digest)) {
+					throw new ImportError('invalid-digest', 'not a spool digest')
+				}
+				if (this.#journalState(digest) !== null || this.#hasReceipt(digest)) {
+					return { ok: true as const, stored: false }
+				}
+				const held = this.#journalCounts()
+				const entries = held.pending + held.sending + held.unverified + held.noRecipient
+				if (entries + 1 > maxEntries || held.bytes + entry.record.byteLength > maxBytes) {
+					throw new ImportError('journal-full', 'the rollback journal is at its quota')
+				}
+				this.#sql.exec(
+					'INSERT INTO inbound_spool (spool_id, part, part_count, fragment, spooled_at) VALUES (?, 0, 1, ?, ?)',
+					`${JOURNAL.pending}${digest}`,
+					entry.record,
+					entry.spooledAt
+				)
+				return { ok: true as const, stored: true }
+			})
+		} catch (error) {
+			return asRefusal(error)
+		}
+	}
+
+	// The drain's lease: one drain at a time. Taken for leaseMs, released by the holder.
+	async drainLease(
+		callerBuild: string,
+		authority: ImportAuthority,
+		request: { holder: string; release?: boolean; leaseMs?: number }
+	): Promise<Result<{ until: number | null }>> {
+		this.#requireBuild(callerBuild)
+		await this.#kernel.state()
+		try {
+			return this.#transaction(() => {
+				this.#assertJournalAdmin(authority)
+				this.#assertUnpublished()
+				const now = this.#now()
+				const current = this.#drainLeaseRow()
+				const lease = current === null ? null : (JSON.parse(current) as { holder: string; until: number })
+				if (request.release === true) {
+					if (lease?.holder === request.holder) {
+						this.#sql.exec('DELETE FROM kopje_state WHERE name = ?', DRAIN_LEASE)
+					}
+					return { ok: true as const, until: null }
+				}
+				if (lease !== null && lease.holder !== request.holder && lease.until > now) {
+					throw new ImportError('drain-in-progress', 'another drain holds the journal')
+				}
+				const until = now + clamp(request.leaseMs, 1000, 10 * 60 * 1000, DRAIN_LEASE_MS)
+				this.#sql.exec(
+					'INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)',
+					DRAIN_LEASE,
+					JSON.stringify({ holder: request.holder, until })
+				)
+				return { ok: true as const, until }
+			})
+		} catch (error) {
+			return asRefusal(error)
+		}
+	}
+
+	// The next record to hand off: one being sent (a crash left it; it is sent again), else the oldest pending one.
+	async journalNext(
+		callerBuild: string,
+		authority: ImportAuthority,
+		holder: string,
+		skip: string[] = []
+	): Promise<Result<{ entry: { id: string; spooledAt: number; record: Uint8Array; resend: boolean } | null }>> {
+		this.#requireBuild(callerBuild)
+		await this.#kernel.state()
+		try {
+			this.#assertJournalAdmin(authority)
+			this.#assertUnpublished()
+			this.#assertLease(holder)
+			const skipped = skip
+				.slice(0, MAX_DRAIN_SKIP)
+				.flatMap((id) => [`${JOURNAL.sending}${id}`, `${JOURNAL.pending}${id}`])
+			for (const state of [JOURNAL.sending, JOURNAL.pending]) {
+				const row = this.#sql
+					.exec<{ spool_id: string; fragment: ArrayBuffer; spooled_at: number }>(
+						`SELECT spool_id, fragment, spooled_at FROM inbound_spool WHERE substr(spool_id, 1, 2) = ?
+						AND spool_id NOT IN (${['', ...skipped].map(() => '?').join(',')})
+						ORDER BY spooled_at, rowid LIMIT 1`,
+						state,
+						'',
+						...skipped
+					)
+					.toArray()[0]
+				if (row !== undefined) {
+					const entry = {
+						id: row.spool_id.slice(2),
+						spooledAt: row.spooled_at,
+						record: new Uint8Array(row.fragment),
+						resend: state === JOURNAL.sending,
+					}
+					return { ok: true, entry }
+				}
+			}
+			return { ok: true, entry: null }
+		} catch (error) {
+			return asRefusal(error)
+		}
+	}
+
+	// Moves a record to its next state. 'done' keeps a tombstone without the request.
+	async journalMark(
+		callerBuild: string,
+		authority: ImportAuthority,
+		holder: string,
+		id: string,
+		state: 'sending' | 'done' | 'unverified' | 'no-recipient'
+	): Promise<Result<{ journal: JournalCounts }>> {
+		this.#requireBuild(callerBuild)
+		await this.#kernel.state()
+		try {
+			return this.#transaction(() => {
+				this.#assertJournalAdmin(authority)
+				this.#assertUnpublished()
+				this.#assertLease(holder)
+				const current = this.#journalState(id)
+				const allowed: string[] = state === 'done' ? [JOURNAL.sending] : [JOURNAL.pending, JOURNAL.sending]
+				if (current === null || !allowed.includes(current)) {
+					throw new ImportError('journal-state', 'the record is not in a state that allows this')
+				}
+				const target = {
+					sending: JOURNAL.sending,
+					done: JOURNAL.done,
+					unverified: JOURNAL.unverified,
+					'no-recipient': JOURNAL.noRecipient,
+				}[state]
+				if (state === 'done') {
+					// Handed off: the request leaves the journal, and a receipt outside the dumped data stays.
+					this.#sql.exec('DELETE FROM inbound_spool WHERE spool_id = ?', `${current}${id}`)
+					this.#sql.exec(
+						'INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)',
+						`${RECEIPT}${id}`,
+						JSON.stringify({ at: this.#now() })
+					)
+				} else {
+					this.#sql.exec(
+						'UPDATE inbound_spool SET spool_id = ? WHERE spool_id = ?',
+						`${target}${id}`,
+						`${current}${id}`
+					)
+				}
+				return { ok: true as const, journal: this.#journalCounts() }
+			})
+		} catch (error) {
+			return asRefusal(error)
+		}
+	}
+
+	// The drain's journal-full stop: 'record' notes the journal's state as the round stops on it; 'check' answers whether
+	// the journal is still in the state of the last recorded stop, the condition of an unordered round (the operator saw
+	// that stop, and nothing changed since).
+	async journalFullStop(
+		callerBuild: string,
+		authority: ImportAuthority,
+		holder: string,
+		action: 'record' | 'check'
+	): Promise<Result<{ matches: boolean }>> {
+		this.#requireBuild(callerBuild)
+		await this.#kernel.state()
+		try {
+			return this.#transaction(() => {
+				this.#assertJournalAdmin(authority)
+				this.#assertUnpublished()
+				this.#assertLease(holder)
+				const state = JSON.stringify(this.#journalCounts())
+				if (action === 'record') {
+					this.#sql.exec('INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)', FULL_STOP, state)
+					return { ok: true as const, matches: true }
+				}
+				const recorded = this.#sql
+					.exec<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', FULL_STOP)
+					.toArray()[0]?.value
+				return { ok: true as const, matches: recorded === state }
+			})
+		} catch (error) {
+			return asRefusal(error)
+		}
+	}
+
+	// The operator's decision about records the drain kept (after inspecting them).
+	async journalDiscardKept(callerBuild: string, authority: ImportAuthority): Promise<Result<{ discarded: number }>> {
+		this.#requireBuild(callerBuild)
+		await this.#kernel.state()
+		try {
+			return this.#transaction(() => {
+				this.#assertJournalAdmin(authority)
+				const counts = this.#journalCounts()
+				const discarded = counts.unverified + counts.noRecipient
+				this.#sql.exec(
+					'DELETE FROM inbound_spool WHERE substr(spool_id, 1, 2) IN (?, ?)',
+					JOURNAL.unverified,
+					JOURNAL.noRecipient
+				)
+				this.#log({ event: 'kopje.store.cutover.discard-kept', discarded })
+				return { ok: true as const, discarded }
+			})
+		} catch (error) {
+			return asRefusal(error)
+		}
+	}
+
+	// Takes the Store back to empty after a completed import, keeping the configuration, so a new import can follow.
+	// Only by an Access admin, never once published, never while an import or a dump runs, and never while the
+	// rollback journal holds requests (they are the instance's only copy). Continued with importReset(id).
+	async cutoverReset(
+		callerBuild: string,
+		authority: ImportAuthority,
+		maxSteps = RESET_STEPS
+	): Promise<Result<{ id: string | null; done: boolean; progress: ImportProgress | null }>> {
+		this.#requireBuild(callerBuild)
+		if (authority.kind !== 'access') {
+			return refuse('wrong-authority', 'only an Access admin resets a Store after an import')
+		}
+		const state = await this.#kernel.state()
+		if (state.schema.status !== 'current' || state.held || state.upgrading) {
+			return refuse('store-not-ready', 'the Store schema is not current; check health and retry the upgrade')
+		}
+		let id: string | null
+		try {
+			id = this.#transaction(() => {
+				const flags = readFlags(this.#sql)
+				this.#assertAdmin(authority, this.#currentSettings(flags))
+				if (flags.published !== null) {
+					throw new ImportError('published', 'this instance is published; it is never reset')
+				}
+				if (flags.import !== null) {
+					throw new ImportError('import-exists', `import ${flags.import.id} is running; reset it with import-reset`)
+				}
+				if (flags.unpublished === null) {
+					throw new ImportError('not-unpublished', 'only a verified import that is not published yet is reset')
+				}
+				if (activeDump(flags, this.#now()) !== null) {
+					throw new ImportError('dump-in-progress', 'a dump is in progress')
+				}
+				const journal = this.#journalCounts()
+				if (journal.pending + journal.sending + journal.unverified + journal.noRecipient > 0) {
+					throw new ImportError('journal-not-empty', 'drain the rollback journal (or discard what failed) first')
+				}
+				if (this.#emptyOfData()) {
+					return null
+				}
+				const now = this.#now()
+				const header = buildHeader(this.#sql, this.#kernel.appliedMigrations(), this.#source, now)
+				const record: ImportRecord = {
+					id: this.#randomId(),
+					mode: 'access',
+					state: 'resetting',
+					header,
+					headerSha256: sha256Hex(JSON.stringify(header)),
+					lastSeq: 0,
+					digest: '',
+					statements: 0,
+					bytes: 0,
+					bodyHash: new Sha256().save(),
+					trailer: null,
+					verify: null,
+					report: null,
+					bootstrap: readBootstrapRows(this.#sql),
+					sessionHash: null,
+					startedAt: now,
+					updatedAt: now,
+				}
+				writeFlag(this.#sql, 'import', record)
+				writeFlag(this.#sql, 'import_receipt', null)
+				this.#log({ event: 'kopje.store.cutover.reset', id: record.id })
+				return record.id
+			})
+		} catch (error) {
+			return asRefusal(error)
+		}
+		if (id === null) {
+			return { ok: true, id: null, done: true, progress: null }
+		}
+		const result = await this.importReset(callerBuild, authority, id, false, maxSteps)
+		return result.ok ? { ...result, id } : result
+	}
+
+	#journalCounts(): JournalCounts {
+		const rows = this.#sql
+			.exec<{ state: string; n: number; bytes: number; oldest: number | null }>(
+				`SELECT substr(spool_id, 1, 2) AS state, count(*) AS n, sum(length(fragment)) AS bytes, min(spooled_at) AS oldest
+				FROM inbound_spool WHERE substr(spool_id, 2, 1) = ':' GROUP BY state`
+			)
+			.toArray()
+		const of = (state: string) => rows.find((row) => row.state === state)
+		const count = (state: string) => of(state)?.n ?? 0
+		return {
+			pending: count(JOURNAL.pending),
+			sending: count(JOURNAL.sending),
+			unverified: count(JOURNAL.unverified),
+			noRecipient: count(JOURNAL.noRecipient),
+			done: this.#sql
+				.exec<{ n: number }>("SELECT count(*) AS n FROM kopje_state WHERE substr(name, 1, 8) = 'handoff:'")
+				.one().n,
+			bytes: rows.filter((row) => row.state !== JOURNAL.done).reduce((sum, row) => sum + (row.bytes ?? 0), 0),
+			oldestSpooledAt: of(JOURNAL.pending)?.oldest ?? null,
+		}
+	}
+
+	// The state prefix a record has, by its id, or null.
+	#journalState(id: string): string | null {
+		const row = this.#sql
+			.exec<{ spool_id: string }>(
+				`SELECT spool_id FROM inbound_spool WHERE spool_id IN (${Object.values(JOURNAL)
+					.map(() => '?')
+					.join(',')})`,
+				...Object.values(JOURNAL).map((prefix) => `${prefix}${id}`)
+			)
+			.toArray()[0]
+		return row === undefined ? null : row.spool_id.slice(0, 2)
+	}
+
+	#drainLeaseRow(): string | null {
+		return (
+			this.#sql.exec<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', DRAIN_LEASE).toArray()[0]
+				?.value ?? null
+		)
+	}
+
+	#hasReceipt(digest: string): boolean {
+		return (
+			this.#sql.exec<{ n: number }>('SELECT count(*) AS n FROM kopje_state WHERE name = ?', `${RECEIPT}${digest}`).one()
+				.n > 0
+		)
+	}
+
+	// A drain lease that has not expired, or requests in the journal (pending, being sent, kept).
+	#rollbackInProgress(): boolean {
+		const current = this.#drainLeaseRow()
+		const lease = current === null ? null : (JSON.parse(current) as { until: number })
+		const journal = this.#journalCounts()
+		return (
+			(lease !== null && lease.until > this.#now()) ||
+			journal.pending + journal.sending + journal.unverified + journal.noRecipient > 0
+		)
+	}
+
+	#assertUnpublished(): void {
+		if (readFlags(this.#sql).published !== null) {
+			throw new ImportError('published', 'this instance is published; nothing is rolled back')
+		}
+	}
+
+	#assertLease(holder: string): void {
+		const current = this.#drainLeaseRow()
+		const lease = current === null ? null : (JSON.parse(current) as { holder: string; until: number })
+		if (lease === null || lease.holder !== holder || lease.until <= this.#now()) {
+			throw new ImportError('drain-lease-lost', 'this drain does not hold the journal')
+		}
+	}
+
+	#assertJournalAdmin(authority: ImportAuthority): void {
+		if (authority.kind !== 'access') {
+			throw new ImportError('wrong-authority', 'only an Access admin drains the rollback journal')
+		}
+		this.#assertAdmin(authority, this.#currentSettings(readFlags(this.#sql)))
+	}
+
+	// The Access settings in force: during an import, the Store's own ones set aside in its record.
+	#currentSettings(flags: OperatorFlags): AccessSettings {
+		return flags.import === null ? readAccessSettings(this.#sql) : this.#targetSettings(flags.import)
 	}
 
 	// Bootstrap: no import running, admin access not usable, and (for an import) no data.

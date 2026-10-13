@@ -2,7 +2,9 @@ import { type Context, Hono } from 'hono'
 import { createMiddleware } from 'hono/factory'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 
+import { drainJournal } from './cutover'
 import { healthReport } from './health'
+import type { LoaderDeps } from '../federation/loader'
 import { type AccessSettings, adminRefusal, adminUsable, normalizeTeamDomain } from '../platform/access-settings'
 import { readBackupConfig } from '../platform/backup-config'
 import { readBoundedBody } from '../platform/body'
@@ -35,13 +37,15 @@ const IMPORT_CHUNK_LIMIT = 16 * 1024 * 1024
 const TOKEN_READ_PATHS = [/^\/admin\/(health|version|catalog|config)$/]
 // The import token may name a running token import (its id and phase only) to abandon it when its session was lost.
 const TOKEN_PROGRESS_PATH = /^\/admin\/import\/progress$/
-const TOKEN_WRITE_PATHS = [/^\/admin\/import\/(begin|reset)$/, /^\/admin\/config$/]
+const TOKEN_WRITE_PATHS = [/^\/admin\/import\/(begin|reset)$/, /^\/admin\/config$/, /^\/admin\/publish$/]
 const SESSION_PATHS = [/^\/admin\/import\/(chunk|finish|verify|progress|reset)$/]
 const SESSION_SECRET = /^[A-Za-z0-9_-]{43}$/
 
 export type AdminDeps = AccessDeps & {
 	build: (env: Env) => string
 	store: StoreResolver
+	// Remote fetches of the cutover rollback drain (app/cutover.ts).
+	loader: Omit<LoaderDeps, 'userAgent'>
 	// Rings the delivery doorbell after a retry.
 	doorbell: (env: Env) => Promise<void>
 }
@@ -70,6 +74,11 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	'invalid-op-id': 400,
 	'import-id-required': 400,
 	'import-not-found': 404,
+	published: 409,
+	'journal-not-empty': 409,
+	'drain-in-progress': 409,
+	'rollback-in-progress': 409,
+	'not-unpublished': 409,
 	'pitr-unavailable': 503,
 	'chunk-failed': 500,
 }
@@ -134,7 +143,7 @@ function adminAllowed(identity: AccessIdentity, access: AccessSettings): string 
 	return adminRefusal(access, identity)
 }
 
-export function adminRoutes({ build, store, fetch, now, doorbell }: AdminDeps) {
+export function adminRoutes({ build, store, fetch, now, doorbell, loader }: AdminDeps) {
 	const admin = new Hono<AdminEnv>()
 	const stub = (c: Context<AdminEnv>): StoreStub => store(c.env)
 
@@ -405,6 +414,92 @@ export function adminRoutes({ build, store, fetch, now, doorbell }: AdminDeps) {
 	admin.post('/config', async (c) => {
 		const { values } = await jsonBody(c)
 		return reply(c, await stub(c).setConfig(build(c.env), c.get('auth'), values))
+	})
+
+	// ---- cutover (docs/cutover-runbook.md): publication, the rollback journal and drain, the reset after an import.
+	// Access admin only: the import token and import sessions never reach these paths.
+
+	admin.get('/cutover/status', async (c) => c.json(await stub(c).cutoverStatus(build(c.env))))
+
+	// Publication: ends the readonly state a verified import leaves. An Access admin, or IMPORT_TOKEN while the Store
+	// has no usable admin access (the Store checks both).
+	admin.post('/publish', async (c) => {
+		const { confirm } = await jsonBody(c)
+		if (confirm !== true) {
+			return c.json({ error: 'publishing ends the cutover for good; send {"confirm": true}' }, 400)
+		}
+		return reply(c, await stub(c).publish(build(c.env), c.get('auth')))
+	})
+
+	// Ends a rollback, once Kopje's Queue and its dead-letter queue (bound as KOPJE_DLQ, read for its metrics only) both
+	// hold nothing, read through their metrics and failing closed: no copy of a handed-off request is left to arrive
+	// or to be redriven, so its receipts can go.
+	admin.post('/cutover/close', async (c) => {
+		const { confirm } = await jsonBody(c)
+		if (confirm !== true) {
+			return c.json({ error: 'send {"confirm": true}' }, 400)
+		}
+		const backlog = async (queue: Queue | undefined): Promise<number | null> => {
+			const metrics = (queue as Partial<Pick<Queue, 'metrics'>> | undefined)?.metrics
+			try {
+				return queue !== undefined && typeof metrics === 'function' ? (await metrics.call(queue)).backlogCount : null
+			} catch {
+				return null
+			}
+		}
+		const queued = await backlog(c.env.QUEUE)
+		const dead = queued === 0 ? await backlog((c.env as { KOPJE_DLQ?: Queue }).KOPJE_DLQ) : null
+		if (queued !== 0 || dead !== 0) {
+			return c.json(
+				{
+					error: "Kopje's Queue or its dead-letter queue (KOPJE_DLQ) is not empty, or cannot be read",
+					code: 'queue-not-empty',
+					backlog: queued,
+					deadLetters: dead,
+				},
+				409
+			)
+		}
+		return reply(c, await stub(c).closeRollback(build(c.env), c.get('auth')))
+	})
+
+	admin.post('/cutover/drain', async (c) => {
+		const { accounts, fallback, unordered } = await jsonBody(c)
+		const result = await drainJournal(
+			c.env,
+			{ build: build(c.env), store: stub(c), loader, holder: crypto.randomUUID(), now },
+			c.get('auth'),
+			{ accounts, fallback, unordered }
+		)
+		if (!result.ok) {
+			return c.json({ error: result.message, code: result.code }, result.status)
+		}
+		const { ok: _ok, ...rest } = result
+		return c.json(rest)
+	})
+
+	admin.post('/cutover/discard-kept', async (c) => {
+		const { confirm } = await jsonBody(c)
+		if (confirm !== true) {
+			return c.json({ error: 'this deletes the kept requests; send {"confirm": true}' }, 400)
+		}
+		return reply(c, await stub(c).journalDiscardKept(build(c.env), c.get('auth')))
+	})
+
+	// Like a PITR restore, refused unless the env MAINTENANCE=full holds the instance from outside.
+	admin.post('/cutover/reset', async (c) => {
+		const { confirm } = await jsonBody(c)
+		if (confirm !== true) {
+			return c.json({ error: 'reset deletes all data of this Store; send {"confirm": true}' }, 400)
+		}
+		const config = readConfig(c.env)
+		if (!config.ok || config.config.MAINTENANCE !== 'full') {
+			return c.json(
+				{ error: 'set MAINTENANCE=full on the Worker before a cutover reset', code: 'maintenance-required' },
+				409
+			)
+		}
+		return reply(c, await stub(c).cutoverReset(build(c.env), c.get('auth')))
 	})
 
 	// ---- PITR

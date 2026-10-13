@@ -51,7 +51,8 @@ is not served until it is re-encoded (a restore tool for that is planned).
 
 The 5-minute cron starts a backup at the first run on or after `BACKUP_HOUR_UTC`, once per UTC day, and only on a day
 after the last successful backup's day. A clock that goes back never starts a second backup for a day that has one.
-The cron also continues a backup in progress. Nothing runs while the env sets `MAINTENANCE`.
+The cron also continues a backup in progress. Nothing runs while the env sets `MAINTENANCE`, or while an imported
+Store is not published yet.
 
 One invocation at a time holds the run. Its lease is kept in the Store and checked in the Store's transaction on every
 save. Each invocation stops 13 minutes after it starts, leaving 2 minutes of the cron's 15-minute wall time. Every
@@ -280,8 +281,10 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
     ```
 
 4. **Import** into an empty Store whose `kopje-admin catalog` shows the manifest's `schema.migrations`. Run the same
-   Kopje version, or deploy it first. Set the instance configuration with `kopje-admin config` (an import never carries
-   it), then import:
+   Kopje version, or deploy it first, with `MAINTENANCE=full` before the instance is exposed, and keep it until you
+   publish (step 6). Before the import begins, nothing else protects the empty Store: a single write, such as an app
+   registration, makes it non-empty and the import is refused. Set the instance configuration with `kopje-admin config`
+   (an import never carries it), then import:
 
     ```sh
     kopje-admin import dump.kopje
@@ -298,4 +301,13 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
     done
     ```
 
-Restore drills into a scratch instance follow the same steps.
+6. **Publish.** The imported Store stays readonly (it accepts no write and delivers nothing) until you publish it, once
+   it looks right:
+
+    ```sh
+    kopje-admin publish --yes        # with --import-token while the Store has no admin access
+    ```
+
+    Then deploy with `MAINTENANCE=off`.
+
+Restore drills into a scratch instance follow the same steps; a drill that is not meant to serve is never published.

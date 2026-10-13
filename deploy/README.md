@@ -23,7 +23,9 @@ The button copies this directory into a new repository on your GitHub or GitLab 
 Builds, and deploys it. On its form:
 
 - **Resources.** It creates the Worker, the Store's Durable Object namespace, the Queue (`my-kopje-queue`) and the R2
-  bucket (`my-kopje-media`). Change their names if your account already uses them. The rate limits, Images and the
+  bucket (`my-kopje-media`). Change their names if your account already uses them. The Queue's dead-letter queue
+  (`my-kopje-queue-dlq`) keeps the messages that exhaust their retries; if it was not created with the Queue, create
+  it with `npx wrangler queues create my-kopje-queue-dlq`. The rate limits, Images and the
   static assets need no resource of their own.
 - **Secrets.** It asks for the two secrets in `.dev.vars.example`:
     - `SETUP_TOKEN`: at least 32 random characters, for example from `openssl rand -base64 33`. It opens the `/setup`
@@ -97,6 +99,7 @@ Make a repository from this directory yourself (copy it, or download it from the
 npm install
 npx wrangler login
 npx wrangler queues create my-kopje-queue
+npx wrangler queues create my-kopje-queue-dlq
 npx wrangler r2 bucket create my-kopje-media
 npx wrangler deploy
 npx wrangler secret put SETUP_TOKEN

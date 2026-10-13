@@ -24,6 +24,9 @@ Commands
                                 the import then continues with its own session, kept in <file>.import.json (mode
                                 0600). That file must stay private: run token imports on macOS, Linux or WSL, since
                                 Windows does not honor the mode (the CLI warns there)
+  publish --yes                 end the readonly state a verified import leaves: the Store accepts writes and
+                                delivers again (no cutover reset afterwards). With --import-token while the Store has
+                                no admin access
   import-reset [<file>] --yes   take the Store back to before an import (its imported rows are deleted; schema and
                                 configuration stay); the import is the one saved for <file>, or else the running one,
                                 and a token import is reset with the session kept for <file>. An interrupted
@@ -37,6 +40,20 @@ Commands
                                 An import never changes them. With --import-token only while the Store has no
                                 usable admin access (bootstrap)
   catalog                       migrations and tables a dump for this Store must declare
+  cutover status                the cutover's publication mark, rollback journal and import state
+  cutover drain --worker <dir> [--fallback <username>] [--unordered --yes]
+                                rolling back: hand the requests Kopje spooled to the legacy Queue (LEGACY_QUEUE) one at
+                                a time, in spool order, each verified first, to a legacy account of the maintenance
+                                worker's snapshot in <dir>; waits while Kopje's or the legacy Queue holds messages.
+                                Exits 3 when it stops (the legacy DLQ holds messages, metrics cannot be read, a key
+                                may verify later) or has run 45 minutes without finishing. --unordered --yes, only after
+                                a stop on journal-full, sends the journal's head past the collection barrier (it may
+                                then overtake an older request still in Kopje's Queue)
+  cutover discard-kept --yes    delete the kept requests (failed verification, or no legacy recipient), after
+                                inspecting them with sql
+  cutover close --yes           end a rollback once Kopje's Queue is empty: its handoff receipts are removed
+  cutover reset --yes           take the Store back to empty after a completed import, keeping the configuration;
+                                only before publication, with MAINTENANCE=full and an empty journal
   pitr bookmark [--at <time>]   current bookmark, or the one for an ISO 8601 time
   pitr restore <bookmark> --yes restore the Store to a bookmark (requires MAINTENANCE=full)
   sql <query> [--limit <n>]     run a single read-only SELECT/WITH statement
@@ -64,6 +81,27 @@ Cutover from a legacy Wildebeest instance (offline; docs/cutover.md)
   verify-conversion <export> <dump file> [--accept-deletions] [--accept-truncation]
                                 check a converted dump, or a dump of the Store after the import, against the legacy
                                 export (expectations computed independently). Exits 1 on FAIL
+  cutover-preflight <pages-project.json> [--export <export>] [--domain <host>] [--kopje-queue <name>]
+                                read the legacy Pages project (as the API returns it, saved to a file) and report its
+                                bindings, the D1 to export, the KEK candidates and what Kopje needs; with --export also
+                                the migration level and which KEK unwraps every key. Exits 1 when a check fails
+  maintenance-worker <export> --domain <host> --out <dir>
+                                write <dir>/_worker.js, the maintenance worker that replaces the legacy Pages routes
+                                during the cutover: actor documents and WebFinger as Kopje renders them, every inbox
+                                POST spooled to Kopje's Queue (binding KOPJE_QUEUE). Exits 3 when it stops
+  maintenance-worker-check <export> --domain <host> --worker <dir>
+                                check that <dir>/_worker.js still holds what the (newer) export holds: the same local
+                                actors, keys and profiles. Exits 1 when it is stale
+  fingerprint tables-sql         print the read-only SQL that lists the tables to export (run it with
+                                \`wrangler d1 execute <db> --remote --json --command\`)
+  fingerprint sequence-sql      print the SQL that reads sqlite_sequence, and
+  fingerprint sequence-file <answer.json>
+                                turn its answer into sqlite_sequence.sql, for a D1 that does not export it with --table
+  fingerprint export <export>   fingerprint an export: per table, the row count and a digest of every row whole (no
+                                content is printed). Exits 2 when sqlite_sequence lacks the notification counter
+  fingerprint compare <first.json> <second.json> [--manifest <manifest.json>]
+                                compare two fingerprints; with the converter's manifest, also its row counts and
+                                notification counter. Exits 1 unless everything matches
 
 Environment
   KOPJE_ADMIN_URL               base URL of the instance's admin host, e.g. https://admin.example.com
@@ -101,6 +139,11 @@ function parseArgs(argv) {
 		'base-time',
 		'catalog',
 		'domain',
+		'export',
+		'kopje-queue',
+		'manifest',
+		'fallback',
+		'worker',
 	])
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i] ?? ''
@@ -192,6 +235,124 @@ async function cutover(command, rest, flags, { env, print, info }) {
 	print(report)
 	info(ok ? 'conversion verified: PASS' : 'conversion check FAILED')
 	return ok ? 0 : 1
+}
+
+/**
+ * cutover-preflight, maintenance-worker and fingerprint: offline helpers of the cutover runbook
+ * (docs/cutover-runbook.md). They read files only and print configuration, counts and digests.
+ * @param {string} command
+ * @param {string[]} rest
+ * @param {Record<string, string | true>} flags
+ * @param {{ env: Record<string, string | undefined>, print: (value: unknown) => void, raw: (text: string) => void,
+ *   stdoutRaw: (text: string) => void, info: (text: string) => void }} io
+ */
+async function cutoverOps(command, rest, flags, { env, print, raw, stdoutRaw, info }) {
+	/** @param {string} name */
+	const text = (name) => {
+		const value = flags[name]
+		if (value === true) {
+			throw new UsageError(`--${name} needs a value`)
+		}
+		return value
+	}
+	if (command === 'cutover-preflight') {
+		const [projectPath] = rest
+		if (projectPath === undefined || rest.length > 1) {
+			throw new UsageError(
+				'cutover-preflight <pages-project.json> [--export <export>] [--domain <host>] [--kopje-queue <name>]'
+			)
+		}
+		const { preflight } = await import('./cutover/preflight.js')
+		const report = await preflight({
+			projectPath,
+			exportPath: text('export'),
+			domain: text('domain'),
+			kopjeQueue: text('kopje-queue'),
+			env,
+		})
+		print(report)
+		info(report.ok ? 'preflight: no check failed; do the todo items' : 'preflight: a check FAILED')
+		return report.ok ? 0 : 1
+	}
+	if (command === 'maintenance-worker') {
+		const [exportPath] = rest
+		const domain = text('domain')
+		const outDir = text('out')
+		if (exportPath === undefined || rest.length > 1 || domain === undefined || outDir === undefined) {
+			throw new UsageError('maintenance-worker <export> --domain <host> --out <dir>')
+		}
+		const { maintenanceWorker } = await import('./cutover/maintenance.js')
+		const { ok, report } = await maintenanceWorker({ exportPath, domain, outDir, env })
+		print(report)
+		info(ok ? `written: ${outDir}/_worker.js` : 'maintenance worker not written; see stop')
+		return ok ? 0 : 3
+	}
+	if (command === 'maintenance-worker-check') {
+		const [exportPath] = rest
+		const domain = text('domain')
+		const workerDir = text('worker')
+		if (exportPath === undefined || rest.length > 1 || domain === undefined || workerDir === undefined) {
+			throw new UsageError('maintenance-worker-check <export> --domain <host> --worker <dir>')
+		}
+		const { checkMaintenanceWorker } = await import('./cutover/maintenance.js')
+		const { ok, report } = await checkMaintenanceWorker({ exportPath, domain, workerDir, env })
+		print(report)
+		info(ok ? 'the maintenance worker is current' : 'the maintenance worker is NOT current; generate it again')
+		return ok ? 0 : 1
+	}
+	const fingerprint = await import('./cutover/fingerprint.js')
+	// node:fs only here, as the other cutover modules: the rest of the CLI goes through io.
+	const { readFileSync } = await import('node:fs')
+	const [sub, ...files] = rest
+	/**
+	 * @param {string} path
+	 * @returns {unknown}
+	 */
+	const json = (path) => {
+		try {
+			return /** @type {unknown} */ (JSON.parse(readFileSync(path, 'utf8')))
+		} catch {
+			throw new UsageError(`${path} cannot be read as JSON`)
+		}
+	}
+	try {
+		if (sub === 'tables-sql' && files.length === 0) {
+			raw(fingerprint.TABLES_SQL)
+			return 0
+		}
+		if (sub === 'sequence-sql' && files.length === 0) {
+			raw(fingerprint.SEQUENCE_SQL)
+			return 0
+		}
+		if (sub === 'sequence-file' && files.length === 1) {
+			stdoutRaw(fingerprint.sequenceFile(json(/** @type {string} */ (files[0]))))
+			return 0
+		}
+		if (sub === 'export' && files.length === 1) {
+			print(fingerprint.fingerprintExport(/** @type {string} */ (files[0])))
+			return 0
+		}
+		if (sub === 'compare' && files.length === 2) {
+			const manifestPath = text('manifest')
+			const report = fingerprint.compareFingerprints(
+				fingerprint.parseFingerprint(json(/** @type {string} */ (files[0]))),
+				fingerprint.parseFingerprint(json(/** @type {string} */ (files[1]))),
+				manifestPath === undefined ? undefined : fingerprint.parseManifest(json(manifestPath))
+			)
+			print(report)
+			info(report.result === 'PASS' ? 'fingerprints match: PASS' : 'fingerprints differ: FAIL')
+			return report.result === 'PASS' ? 0 : 1
+		}
+	} catch (error) {
+		if (error instanceof fingerprint.FingerprintError || error instanceof fingerprint.ExportError) {
+			info(`fingerprint refused: ${error.code}`)
+			return 2
+		}
+		throw error
+	}
+	throw new UsageError(
+		'fingerprint tables-sql | sequence-sql | sequence-file <answer.json> | export <export> | compare <first.json> <second.json> [--manifest <manifest.json>]'
+	)
 }
 
 /**
@@ -318,12 +479,26 @@ export async function run({
 		if (command === 'convert' || command === 'verify-conversion') {
 			return await cutover(command, rest, flags, { env, print, info: (text) => out.info(text) })
 		}
+		if (
+			command === 'cutover-preflight' ||
+			command === 'maintenance-worker' ||
+			command === 'maintenance-worker-check' ||
+			command === 'fingerprint'
+		) {
+			return await cutoverOps(command, rest, flags, {
+				env,
+				print,
+				raw: (text) => stdout.write(`${text}\n`),
+				stdoutRaw: (text) => stdout.write(text),
+				info: (text) => out.info(text),
+			})
+		}
 		const url = env.KOPJE_ADMIN_URL
 		if (url === undefined || url === '') {
 			throw new UsageError('set KOPJE_ADMIN_URL to the admin base URL')
 		}
 		const useToken = flags['import-token'] === true
-		const tokenCommands = ['import', 'import-reset', 'config', 'health', 'version', 'catalog']
+		const tokenCommands = ['import', 'import-reset', 'config', 'health', 'version', 'catalog', 'publish']
 		if (useToken && !tokenCommands.includes(command)) {
 			throw new UsageError(`--import-token applies only to ${tokenCommands.join(', ')}`)
 		}
@@ -505,6 +680,99 @@ export async function run({
 					await io.remove(`${rest[0]}.import.json`)
 				}
 				return 0
+			}
+			case 'publish': {
+				if (flags.yes !== true) {
+					throw new UsageError(
+						'publish ends the readonly state of an import for good (no cutover reset after it); pass --yes'
+					)
+				}
+				print(await client.post('/admin/publish', { confirm: true }))
+				return 0
+			}
+			case 'cutover': {
+				const [sub] = rest
+				if (sub === 'status') {
+					print(await client.get('/admin/cutover/status'))
+					return 0
+				}
+				if (sub === 'drain') {
+					// The legacy local accounts come from the maintenance worker's snapshot, never from a request.
+					const workerDir = flags.worker
+					const fallback = flags.fallback
+					if (typeof workerDir !== 'string' || (fallback !== undefined && typeof fallback !== 'string')) {
+						throw new UsageError('cutover drain --worker <maintenance worker dir> [--fallback <username>]')
+					}
+					const { snapshotIn, WORKER_FILE } = await import('./cutover/worker-file.js')
+					const accounts = snapshotIn((await io.readText(`${workerDir}/${WORKER_FILE}`)) ?? '').inboxes
+					const pause =
+						sleep ?? ((/** @type {number} */ ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms)))
+					// Past the collection barrier, only after a stop on journal-full (the Store checks it).
+					const unordered = flags.unordered === true
+					if (unordered && flags.yes !== true) {
+						throw new UsageError('cutover drain --unordered may reorder requests; pass --yes')
+					}
+					const totals = { sent: 0, unverified: 0, noRecipient: 0 }
+					const deadline = now() + 45 * 60 * 1000
+					for (;;) {
+						const round = await client.post('/admin/cutover/drain', { accounts, fallback, unordered })
+						totals.sent += round.sent
+						totals.unverified += round.unverified
+						totals.noRecipient += round.noRecipient
+						const { pending, sending } = round.journal
+						out.progress(`sent ${totals.sent}, kept ${totals.unverified + totals.noRecipient}, pending ${pending}`)
+						if (round.stopped !== null) {
+							print({ ...totals, journal: round.journal, stopped: round.stopped })
+							out.info(`drain stopped (${round.stopped}); act on it, then run it again`)
+							return 3
+						}
+						if (round.waiting === null && round.sent === 0 && pending + sending === 0) {
+							print({ ...totals, journal: round.journal })
+							out.info('rollback journal drained')
+							return 0
+						}
+						if (round.sent > 0) {
+							continue
+						}
+						// No progress this round (a busy lane, or records set aside): pause, and give up at the deadline.
+						if (now() > deadline) {
+							print({ ...totals, journal: round.journal, waiting: round.waiting })
+							out.info(`not done after 45 minutes (${round.waiting ?? 'records set aside'}); run it again`)
+							return 3
+						}
+						await pause(2000)
+					}
+				}
+				if (sub === 'discard-kept') {
+					if (flags.yes !== true) {
+						throw new UsageError('cutover discard-kept deletes the kept requests; pass --yes')
+					}
+					print(await client.post('/admin/cutover/discard-kept', { confirm: true }))
+					return 0
+				}
+				if (sub === 'close') {
+					if (flags.yes !== true) {
+						throw new UsageError(`cutover ${sub} --yes`)
+					}
+					print(await client.post(`/admin/cutover/${sub}`, { confirm: true }))
+					return 0
+				}
+				if (sub === 'reset') {
+					if (flags.yes !== true) {
+						throw new UsageError('cutover reset deletes all data of the Store; pass --yes')
+					}
+					const started = await client.post('/admin/cutover/reset', { confirm: true })
+					let done = started.done === true
+					while (!done) {
+						out.progress(`resetting the Store (${started.id})`)
+						done = (await client.post('/admin/import/reset', { confirm: true, id: started.id })).done === true
+					}
+					out.info(started.id === null ? 'the Store is already empty' : 'the Store is empty again')
+					return 0
+				}
+				throw new UsageError(
+					'cutover status | drain --worker <dir> [--fallback <username>] [--unordered --yes] | discard-kept --yes | close --yes | reset --yes'
+				)
 			}
 			case 'pitr': {
 				if (rest[0] === 'bookmark') {

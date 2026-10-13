@@ -29,7 +29,16 @@
 	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Store"] }],
 	"queues": {
 		"producers": [{ "binding": "QUEUE", "queue": "my-kopje-queue" }],
-		"consumers": [{ "queue": "my-kopje-queue", "max_retries": 100, "max_concurrency": 4 }],
+		// A message that exhausts its retries goes to the dead-letter queue, kept for inspection and redrive
+		// (packages/kopje/docs/cutover-runbook.md, "Kopje's dead-letter queue"); create it with the Queue.
+		"consumers": [
+			{
+				"queue": "my-kopje-queue",
+				"max_retries": 100,
+				"max_concurrency": 4,
+				"dead_letter_queue": "my-kopje-queue-dlq",
+			},
+		],
 	},
 	// namespace_id is any number unique within the account; change both if another Kopje runs in the same account.
 	"ratelimits": [

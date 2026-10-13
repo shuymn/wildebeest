@@ -26,8 +26,8 @@ export function snapshotKey(url: URL): string | null {
 }
 
 // Actor documents are JSON-LD; a browser asking for HTML gets no snapshot (it would get the profile page).
-function acceptable(request: Request, url: URL): boolean {
-	if (url.pathname !== '/actor' && !ACTOR_PATH.test(url.pathname)) {
+export function acceptable(request: Request, url: URL): boolean {
+	if (!isActorPath(url)) {
 		return true
 	}
 	return /json/i.test(request.headers.get('accept') ?? '')
@@ -76,7 +76,16 @@ export function createSnapshotSaver(now: () => number): SnapshotSaver {
 
 // The rescue answer of an always-served GET, or null when there is none. Only keys of the two snapshot shapes reach
 // the Store, and only stored (size-capped) bodies come back.
-export async function rescueFromSnapshot(request: Request, store: StoreStub, build: string): Promise<Response | null> {
+export function rescueFromSnapshot(request: Request, store: StoreStub, build: string): Promise<Response | null> {
+	return answerFromSnapshot(request, (key) => store.rescueSnapshot(build, key))
+}
+
+// The answer of an always-served GET from the snapshot `find` returns for its key, or null. Shared by the rescue path
+// and the cutover's maintenance worker (src/maintenance-worker.ts), so both answer the same requests the same way.
+export async function answerFromSnapshot(
+	request: Request,
+	find: (key: string) => Promise<Snapshot | null>
+): Promise<Response | null> {
 	const url = new URL(request.url)
 	const key = snapshotKey(url)
 	if (key === null || !isSnapshotKey(key) || !acceptable(request, url)) {
@@ -84,14 +93,21 @@ export async function rescueFromSnapshot(request: Request, store: StoreStub, bui
 	}
 	let snapshot: Snapshot | null
 	try {
-		snapshot = await store.rescueSnapshot(build, key)
+		snapshot = await find(key)
 	} catch {
 		return null
 	}
 	if (snapshot === null) {
 		return null
 	}
-	return new Response(request.method === 'HEAD' ? null : snapshot.body, {
-		headers: { 'content-type': snapshot.contentType, 'access-control-allow-origin': '*' },
-	})
+	// The headers the live answer has: an actor document is negotiated by Accept; WebFinger and NodeInfo are open to
+	// browsers.
+	const headers: Record<string, string> = isActorPath(url)
+		? { 'content-type': snapshot.contentType, vary: 'Accept' }
+		: { 'content-type': snapshot.contentType, 'access-control-allow-origin': '*' }
+	return new Response(request.method === 'HEAD' ? null : snapshot.body, { headers })
+}
+
+function isActorPath(url: URL): boolean {
+	return url.pathname === '/actor' || ACTOR_PATH.test(url.pathname)
 }
