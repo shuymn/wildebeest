@@ -45,6 +45,12 @@ export type FixtureOptions = {
 	// From level 20: actors.type as an instance has it that ran an earlier form of 0020, which dropped the column; it
 	// was added back with ALTER TABLE ADD COLUMN, so it is nullable and comes after mastodon_id (actorTypeDrift below).
 	actorTypeDrift?: boolean
+	// Notifications legacy wrote for the remote author of a boosted or liked status, which it never listed.
+	remoteOwnedNotifications?: boolean
+	// From level 16: a local status's outbox row written before 0016 was applied, which 0016 left with its single target
+	// in `to` and an empty `cc`. 'narrowed': an unlisted status whose target was its followers; 'widened': a
+	// followers-only status with a Public target; 'unusable-time': as narrowed, with an unreadable applied_at for 0016.
+	before0016?: 'narrowed' | 'widened' | 'unusable-time'
 }
 
 export type LegacyFixture = {
@@ -154,7 +160,12 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		followersSpelling = false,
 		live = false,
 		actorTypeDrift = false,
+		remoteOwnedNotifications = false,
+		before0016,
 	} = options
+	if (before0016 !== undefined && level < 16) {
+		throw new Error('before0016 needs level 16 or later')
+	}
 	const db =
 		line === 'T2'
 			? upstreamDatabase(level)
@@ -479,7 +490,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 	if (has('idempotency_keys')) {
 		insert('idempotency_keys', { key: 'idem-key-1', object_id: publicNote.id, expires_at: cdate(170) })
 	}
-	localNote({
+	const unlisted = localNote({
 		author: alice,
 		username: 'alice',
 		minutes: 120,
@@ -797,6 +808,10 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		notify('follow', bob, r(3).uri, null, 507)
 		notify('mention', bob, alice, followersOnly, 508)
 	}
+	if (remoteOwnedNotifications) {
+		notify('reblog', r(0).uri, r(1).uri, r0Post, 509)
+		notify('favourite', r(0).uri, r(2).uri, r0Post, 510)
+	}
 
 	// ---- clients, settings, subscriptions
 	insert('clients', {
@@ -902,8 +917,19 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 	db.exec(
 		'CREATE TABLE d1_migrations(\n\t\tid         INTEGER PRIMARY KEY AUTOINCREMENT,\n\t\tname       TEXT UNIQUE,\n\t\tapplied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL\n)'
 	)
+	let appliedAt0016: string | null = null
+	if (before0016 !== undefined) {
+		const [note, target] = before0016 === 'widened' ? [followersOnly, PUBLIC] : [unlisted, `${alice}/followers`]
+		db.prepare(`UPDATE outbox_objects SET "to" = ?, cc = '[]' WHERE object_id = ?`).run(
+			JSON.stringify([target]),
+			note.id
+		)
+		appliedAt0016 = before0016 === 'unusable-time' ? 'not a time' : cdate(before0016 === 'widened' ? 135 : 125)
+	}
 	migrationNames(level).forEach((name, i) =>
-		db.prepare('INSERT INTO d1_migrations (name, applied_at) VALUES (?, ?)').run(name, cdate(-1000 + i))
+		db
+			.prepare('INSERT INTO d1_migrations (name, applied_at) VALUES (?, ?)')
+			.run(name, name.startsWith('0016_') && appliedAt0016 !== null ? appliedAt0016 : cdate(-1000 + i))
 	)
 	const texts = exportDatabase(db)
 	if (notificationSequence !== undefined) {

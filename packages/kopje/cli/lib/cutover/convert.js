@@ -1358,6 +1358,12 @@ export function convertLegacy(
 		if (id > maxNotification) {
 			maxNotification = id
 		}
+		// Legacy notified the author of a boosted or liked status whoever it was, a remote author too; it only ever listed
+		// a local user's own notifications, so a remote owner's were never shown.
+		if (accountOf(notification.actor_id)?.local === false) {
+			count(dropped, 'notifications:owner-remote')
+			continue
+		}
 		const recipient = localOwner(notification.actor_id, 'notifications')
 		const from = accountOf(notification.from_actor_id)
 		if (recipient === undefined) {

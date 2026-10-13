@@ -502,7 +502,8 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			highest = n.id
 		}
 		const target = n.object_id === null ? '' : statusUri.get(String(n.object_id))
-		if (!known(n.actor_id) || !known(n.from_actor_id) || target === undefined) {
+		// Legacy listed a local user's own notifications only.
+		if (!local.has(String(n.actor_id)) || !known(n.from_actor_id) || target === undefined) {
 			continue
 		}
 		const natural = `${String(n.actor_id)} ${String(n.type)} ${String(n.from_actor_id)} ${target}`

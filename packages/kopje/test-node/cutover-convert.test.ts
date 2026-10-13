@@ -312,3 +312,70 @@ describe('convert and verify-conversion', () => {
 		}
 	})
 })
+
+describe('rows legacy never showed, and outbox rows written before 0016', () => {
+	const notificationCount = async (dumpPath: string) => {
+		const db = await opened(dumpPath)
+		const n = (db.prepare('SELECT count(*) AS n FROM notifications').get() as { n: number }).n
+		db.close()
+		return n
+	}
+
+	it('drops notifications owned by a remote account, counted, and only with --accept-deletions', async () => {
+		const plain = await convert(await exportOf({ level: 39 }, 'plain'), { out: 'plain' })
+		const exportPath = await exportOf({ level: 39, remoteOwnedNotifications: true })
+		const refused = await convert(exportPath)
+		expect(refused.ok).toBe(false)
+		expect(refused.manifest.stop).toMatchObject({ code: 'conversion-refused' })
+		expect(refused.manifest.conversion).toMatchObject({
+			problems: {},
+			dropped: { 'notifications:owner-remote': 2 },
+		})
+		const { ok, dumpPath } = await convert(exportPath, { acceptDeletions: true, out: 'accepted' })
+		expect(ok).toBe(true)
+		expect(await notificationCount(dumpPath)).toBe(await notificationCount(plain.dumpPath))
+		// The independent check expects a local user's notifications only.
+		expect((await verify(exportPath, dumpPath, true)).ok).toBe(true)
+	})
+
+	it('reads a row written before 0016 as its target, which may narrow the audience of its status', async () => {
+		const exportPath = await exportOf({ level: 39, before0016: 'narrowed' })
+		const { ok, manifest, dumpPath } = await convert(exportPath)
+		expect(manifest.stop).toBeUndefined()
+		expect(ok).toBe(true)
+		const db = await opened(dumpPath)
+		const row = db.prepare("SELECT visibility FROM statuses WHERE content LIKE '%unlisted, with a CW%'").get()
+		db.close()
+		expect(row).toEqual({ visibility: 'unlisted' })
+		expect((await verify(exportPath, dumpPath)).ok).toBe(true)
+	})
+
+	// DATA-15: the status keeps its own audience; a target outside it is a conflict, and so is any row while the time of
+	// 0016 is unknown.
+	for (const [name, options, edit] of [
+		['a target that would widen the audience', { level: 39, before0016: 'widened' }, null],
+		['an unusable applied_at of 0016', { level: 39, before0016: 'unusable-time' }, null],
+		[
+			'no applied_at in d1_migrations',
+			{ level: 39, before0016: 'narrowed' },
+			(text: string) =>
+				text.replaceAll(
+					/INSERT INTO "d1_migrations" \("id","name","applied_at"\) VALUES\((\d+),('[^']+'),'[^']+'\);/g,
+					'INSERT INTO "d1_migrations" ("id","name") VALUES($1,$2);'
+				),
+		],
+	] as const) {
+		it(`stops on ${name}`, async () => {
+			const exportPath = await exportOf(options)
+			if (edit !== null) {
+				const file = join(exportPath, 'd1_migrations.sql')
+				const text = await readFile(file, 'utf8')
+				expect(edit(text)).not.toBe(text)
+				await writeFile(file, edit(text))
+			}
+			const { ok, manifest } = await convert(exportPath, { acceptDeletions: true })
+			expect(ok).toBe(false)
+			expect(manifest.conversion).toMatchObject({ problems: { 'statuses:addressing-conflict': 1 } })
+		})
+	}
+})

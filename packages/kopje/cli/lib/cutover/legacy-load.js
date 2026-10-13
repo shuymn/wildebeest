@@ -232,6 +232,19 @@ function addressingOf(text) {
 	return { to: undefined, cc: undefined, kind: /** @type {const} */ ('object') }
 }
 
+/**
+ * A legacy UTC timestamp (`YYYY-MM-DD HH:MM:SS[.fff]`, as CURRENT_TIMESTAMP and STRFTIME('%Y-%m-%d %H:%M:%f') write it)
+ * in milliseconds, or null for anything else.
+ * @param {unknown} value
+ */
+function timeOf(value) {
+	if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z?$/.test(value)) {
+		return null
+	}
+	const ms = Date.parse(`${value.replace(' ', 'T').replace(/Z$/, '')}Z`)
+	return Number.isNaN(ms) ? null : ms
+}
+
 /** @param {unknown} text */
 function jsonOrInvalid(text) {
 	try {
@@ -277,7 +290,7 @@ function load(sources, acceptDeletions, baseTime, path) {
 	const definitions = new Map()
 	/** @type {Set<string>} */
 	const withRows = new Set()
-	/** @type {{ id: bigint | null, name: string }[]} */
+	/** @type {{ id: bigint | null, name: string, appliedAt: unknown }[]} */
 	const migrationRows = []
 	/** @type {string | null} */
 	let notificationSequence = null
@@ -325,7 +338,8 @@ function load(sources, acceptDeletions, baseTime, path) {
 						if (typeof name !== 'string' || (id !== undefined && typeof id !== 'bigint')) {
 							throw new ExportError('invalid-migrations-table')
 						}
-						migrationRows.push({ id: typeof id === 'bigint' ? id : null, name })
+						const appliedAt = columns.includes('applied_at') ? row[columns.indexOf('applied_at')] : undefined
+						migrationRows.push({ id: typeof id === 'bigint' ? id : null, name, appliedAt })
 					}
 					continue
 				}
@@ -551,11 +565,25 @@ function load(sources, acceptDeletions, baseTime, path) {
 	const outboxColumns = actual.get('outbox_objects') ?? ''
 	const hasToCc = outboxColumns.includes('"name":"cc"')
 	const hasTarget = outboxColumns.includes('"name":"target"')
+	// 0016 copied each row's single target into `to` with an empty `cc`, so a row written before it was applied holds a
+	// target, not the addressing it was sent with. Without a usable time of 0016, no row is read so.
+	const toCcSince = timeOf(migrationRows.find((m) => m.name.replace(/\.sql$/, '') === migrations[16]?.name)?.appliedAt)
 	for (const row of /** @type {Record<string, unknown>[]} */ (db.prepare('SELECT * FROM outbox_objects').all())) {
 		/** @type {Addressing | null} */
 		let addressing = null
 		if (hasToCc) {
-			addressing = { to: jsonOrInvalid(row.to), cc: jsonOrInvalid(row.cc), kind: 'to-cc' }
+			const to = jsonOrInvalid(row.to)
+			const cc = jsonOrInvalid(row.cc)
+			const written = timeOf(row.cdate)
+			const beforeToCc =
+				toCcSince !== null &&
+				written !== null &&
+				written < toCcSince &&
+				Array.isArray(to) &&
+				to.length === 1 &&
+				Array.isArray(cc) &&
+				cc.length === 0
+			addressing = { to, cc, kind: beforeToCc ? 'target' : 'to-cc' }
 		} else if (hasTarget) {
 			addressing = { to: [row.target], cc: [], kind: 'target' }
 		}
