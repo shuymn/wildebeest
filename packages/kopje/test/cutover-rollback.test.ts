@@ -66,12 +66,13 @@ async function resetToEmpty(h: ReturnType<typeof adminHarness>): Promise<Respons
 	if (started.status !== 200) {
 		return started
 	}
-	const body = await started.clone().json()
+	const body: { id: string | null; done: boolean } = await started.clone().json()
 	let done = body.done
 	while (!done) {
 		const step = await h.post(adminClaims(), '/admin/import/reset', { confirm: true, id: body.id })
 		expect(step.status).toBe(200)
-		done = (await step.json()).done
+		const next: { done: boolean } = await step.json()
+		done = next.done
 	}
 	return started
 }
@@ -492,10 +493,12 @@ describe('Rollback A from the first attempt (OPS-9)', () => {
 		const full = adminHarness(store, team, { MAINTENANCE: 'full' })
 		const reset = await full.post(adminClaims(), '/admin/import/reset', { confirm: true, id: begun.progress.id })
 		expect(reset.status).toBe(200)
-		let done = (await reset.json()).done
+		const first: { done: boolean } = await reset.json()
+		let done = first.done
 		while (!done) {
 			const step = await full.post(adminClaims(), '/admin/import/reset', { confirm: true, id: begun.progress.id })
-			done = (await step.json()).done
+			const next: { done: boolean } = await step.json()
+			done = next.done
 		}
 		await r.consume()
 		expect(r.kopje.pending).toEqual([])
