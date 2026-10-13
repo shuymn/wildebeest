@@ -215,6 +215,8 @@ fieldset {
 }
 
 input[type='text'],
+input[type='password'],
+input[type='email'],
 textarea,
 select {
 	display: block;
@@ -287,6 +289,35 @@ button.danger {
 
 .problems {
 	border-color: var(--danger);
+}
+
+.result {
+	padding: 0.75rem 1rem;
+	border-radius: 0.5rem;
+	border: 1px solid var(--line);
+	border-left-width: 0.4rem;
+	background: var(--card);
+}
+
+.result.pass {
+	border-left-color: #2e7d32;
+}
+
+.result.warn {
+	border-left-color: var(--accent);
+}
+
+.result.fail {
+	border-left-color: var(--danger);
+}
+
+.steps > li {
+	margin: 1.25rem 0;
+}
+
+.state {
+	color: var(--muted);
+	font-size: 0.9rem;
 }
 
 @media (max-width: 30rem) {

@@ -70,7 +70,7 @@ against their own instance. TLS is assumed between all parties.
 | `/oauth/authorize`                                             | R2, R6, R7 | Access JWT, Origin, consent                              | main: `src/app/authorize.tsx`                                           |
 | `/oauth/token`, `/oauth/revoke`                                | R2, R3     | client credentials                                       | main: `src/mastodon/oauth.ts`                                           |
 | `/admin/*` and the `kopje-admin` CLI                           | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session | main: `src/app/admin.ts`                                                |
-| `/setup` and its Cloudflare API calls                          | R2, R7     | `SETUP_TOKEN`                                            | Planned (B5)                                                            |
+| `/setup` and its Cloudflare API calls                          | R2, R7     | `SETUP_TOKEN`, then the admin's web session (SETUP-2)    | `kopje/setup`: `src/app/setup.tsx`                                      |
 | Web UI (profiles, permalinks, settings)                        | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)          | branch `kopje/web-ui`: `src/app/web.tsx`, `src/web/*`                   |
 | Media upload and serving, Images transformation                | R2–R4      | bearer token; capability URL for reads                   | main: `src/mastodon/media.ts`                                           |
 | Web Push registration                                          | R3         | bearer token with `push`                                 | Planned (push)                                                          |
@@ -404,13 +404,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and `frame-ancestors 'none'` (no script source at all), `X-Frame-Options: DENY`; pages of a signed-in user and the
   sign-in flow send `Cache-Control: no-store` and `Referrer-Policy: no-referrer`; public pages may be kept 60 s and vary
   with `Accept`. `src/app/web.tsx`; `test/web-pages.test.ts` ("sends a CSP without script, denies framing"),
-  `test/web-session.test.ts` ("is never cached, framed or opened to other origins"). `/setup`: _Planned (B5b)._
+  `test/web-session.test.ts` ("is never cached, framed or opened to other origins"). `/setup`: _Implemented on branch
+  `kopje/setup`:_ the same CSP, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and `Cache-Control: no-store`
+  on every page; `src/app/setup.tsx`; `test/setup.test.ts` ("WEB-2, WEB-3, WEB-5: is never cached, framed, scripted
+  or opened to other origins").
 - **WEB-3: CORS is open only where no ambient credential exists.** Wildcard CORS without credentials applies to
   `/api/*`, `/oauth/token` and `/oauth/revoke` only (bearer tokens). `/oauth/authorize`, `/admin/*`, `/setup` and the
   web UI send no CORS headers. _Enforced (main):_ `src/app/app.ts`; `test/oauth.test.ts` ("opens the API and token
   endpoints to browser clients, errors included"). Admin, setup and UI routes: _Planned (B5); `/admin/*` on main sends no CORS headers._
   UI routes: _Implemented on branch `kopje/web-ui`:_ no CORS headers even for a request with a foreign `Origin`; `test/web-pages.test.ts`,
-  `test/web-session.test.ts`.
+  `test/web-session.test.ts`. `/setup`: _Implemented on branch `kopje/setup`:_ no CORS headers, preflight included;
+  `test/setup.test.ts`.
 - **WEB-4: the web UI applies WEB-1 to every state change.** Each form that changes state checks `Origin` and its
   session; a return or redirect target is a validated local path. _Implemented on branch `kopje/web-ui`:_ every POST (profile, avatar, header,
   revoking an app, signing out other sessions, sign-out) first requires `Origin` equal to the instance origin (missing,
@@ -423,7 +427,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/app/web.tsx`; `test/web-session.test.ts` ("refuses a missing, null or foreign Origin on every form", "refuses a
   missing or wrong anti-forgery token on every form", "accepts only local paths (WEB-4: unsafe return path)", "returns after sign-in only to a
   validated local path", "ignores a tampered return path in the login cookie"), `test/web-images.test.ts` ("refuses a
-  foreign, null or missing Origin and a wrong token before any transformation").
+  foreign, null or missing Origin and a wrong token before any transformation"). `/setup`: _Implemented on branch
+  `kopje/setup`:_ every POST, sign-in with `SETUP_TOKEN` included, first requires `Origin` equal to the instance origin;
+  every other POST then requires the session that authorizes it (the setup session, or after bootstrap the admin's web
+  session) and an anti-forgery token derived from it under a context of its own (`kopje-setup-csrf`). The only
+  redirect target is `/setup`. `test/setup.test.ts` ("WEB-1, WEB-4: refuse a missing, null or foreign Origin on every
+  form", "WEB-4: refuse a missing or wrong anti-forgery token on every form", "WEB-1: refuses a sign-in posted from
+  another origin, a null origin or none").
 - **WEB-5: responses declare their type.** API and federation responses carry their exact JSON media type and
   `X-Content-Type-Options: nosniff`. _Implemented on branch `kopje/inbound-statuses`:_ one middleware sets `nosniff`
   on every response (API, federation, inbox, media, errors and maintenance answers), and API and federation bodies
@@ -437,14 +447,58 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **SETUP-1: nothing is published before setup.** Federation paths answer 503 until `/setup` has fixed the domain;
   sign-in answers 503 until Access is configured. _Enforced (main):_ `src/federation/setup-gate.ts`,
   `src/app/authorize.tsx`; `test/app.test.ts` ("answers 503 on federation routes until setup has fixed the domain"),
-  `test/oauth.test.ts` ("answers 503 until Access is configured").
+  `test/oauth.test.ts` ("answers 503 until Access is configured"). The wizard's steps before the bootstrap write only a
+  draft in the setup session, so nothing is published until SETUP-3 commits; `test/setup.test.ts` ("confirms the host
+  the request came to, and refuses workers.dev, IP addresses and ports").
 - **SETUP-2: `SETUP_TOKEN` only bootstraps.** `/setup` changes require `SETUP_TOKEN`, compared as fixed-size digests.
-  Once the domain and admin exist, the token cannot change the domain, the admin or the Access configuration. _Planned
-  (B5)._
+  Once the domain and admin exist, the token cannot change the domain, the admin or the Access configuration.
+  _Implemented on branch `kopje/setup`:_ the Worker compares the token with `constantTimeEqual` (AUTH-5; it must be at
+  least 32 characters) and opens a setup session: an opaque id in a `__Host-` cookie (HttpOnly, Secure,
+  SameSite=Strict) for at most an hour, of which the Store keeps only the SHA-256. Every setup operation authorizes in
+  its own transaction: a live setup session only while nothing is bootstrapped (any configuration row or local account
+  counts), the admin's web session (a web-client token of the account whose email is `admin_email`) only afterwards.
+  After bootstrap no setup session opens, and those left authorize nothing; the admin may see the status, run the
+  checks and reconcile the Access applications (keeping `admin_email` and the domain), never change the domain or the
+  admin. Access reconciliations are coordinated by the Store, which is the authority on time: a run reserves the
+  instance-wide reconciliation (the next revision and a lease with a deadline the Store issues) before its first
+  Cloudflare call, and renews it at a checkpoint before every write; a checkpoint refuses a run that was superseded or
+  whose authority ended at the operation's own time (bootstrap ended the setup session; the admin's web session
+  expired, was signed out or suspended). Immediately before each Cloudflare request the Worker compares its clock with
+  the last deadline it was given and sends nothing with less than 15 s left; every request is aborted at the deadline
+  and after 10 s at most. A reservation is superseded only 30 s after its deadline. What is guaranteed: no request of a
+  run is in flight once a newer run may reserve, and no request is dispatched after a stale checkpoint answer, as long
+  as the Worker's and the Store's clocks differ by less than the 30 s grace minus the 10 s request bound. A
+  superseded run's late failure is recorded and shown, without changing the newer run's outcome. Before any write
+  the run checks that the team is the selected account's organization (`auth_domain`), and it changes only objects
+  whose ids it recorded or a single checked object of its name (adopting or recreating is an explicit recovery
+  choice). `test/setup-access.test.ts` ("a run paused before its reservation makes no external write after bootstrap",
+  "a run whose checkpoint answer arrives after its lease dispatches nothing; the next waits out the grace", "stops at
+  the next checkpoint when the admin's session expires during the run", "refuses a team that is not the selected
+  account’s organization, before any write", "refuses a reusable policy attached to other applications"). `src/domain/setup.ts`, `src/app/setup.tsx`; `test/setup.test.ts` ("a reused setup token opens nothing", "a
+  setup session opened before bootstrap cannot change the domain, the admin or Access", "shows the status to the
+  admin, runs the checks, and reconciles Access with a new token", "refuses a signed-in user who is not the admin",
+  "AUTH-5: refuses when SETUP_TOKEN is unset or shorter than 32 characters").
 - **SETUP-3: bootstrap happens once.** The domain and the first admin are written in one Store transaction that fails if
-  either exists, so concurrent requests cannot create two. _Planned (B5)._
+  either exists, so concurrent requests cannot create two. _Implemented on branch `kopje/setup`:_ `bootstrapInstance`
+  writes the domain, the Access configuration, `admin_email` and the admin's local account together, refuses once any
+  configuration row or local account exists, while a reconciliation runs or is unresolved (a failure, or a lease that
+  ran out without an outcome), or when the session's Access outcome is not the latest completed revision; it ends
+  every setup session. `src/domain/setup.ts`;
+  `test/setup.test.ts` ("SETUP-3: concurrent bootstraps create one admin", "SETUP-3: refuses when a domain or an
+  account exists already", "SETUP-3: writes the domain, the Access configuration and the admin together", "SETUP-3: a
+  failure at the last insert rolls the whole bootstrap back"), `test/setup-access.test.ts` ("only the latest completed
+  run bootstraps", "bootstrap waits while a run is in progress", "a failure after external write n of 4 leaves the
+  state unresolved").
 - **SETUP-4: the Cloudflare API token is transient.** It is used only within the request that received it and is never
-  stored, logged or returned. _Planned (B5)._
+  stored, logged or returned. _Implemented on branch `kopje/setup`:_ it is read from the form of one POST, sent only to
+  `api.cloudflare.com` as a bearer token, never rendered (token fields are never filled), never put in a cookie or
+  redirect; redirects are refused, not followed. A failure is reported as a fixed category with the step, the HTTP
+  status and the API's validated numeric error codes; no text of the API's answer or of a thrown error is rendered,
+  and an unexpected error is logged with `errorFields()` only (DATA-5). Only the API's answers (team, AUD tags,
+  account id) reach the Store. `src/platform/cloudflare-api.ts`, `src/app/setup.tsx`;
+  `test/setup-access.test.ts` ("SETUP-4: uses the API token in its own request only, and never stores, logs, renders
+  or redirects it", "shows no fragment of the token for an echoed error across a truncation boundary, a
+  thrown name or a redirect").
 
 ### Network (NET)
 
@@ -888,7 +942,7 @@ Each stage ships tests for these cases, named with the invariant IDs.
 | B1b inbound                | Wrong signer or actor; foreign activity id; same-origin different actor; unauthorized Undo, Accept, Update, Delete; duplicate and reordered Delete and Create; non-AS media type; private and unlisted object fetches                                                                                                                                                   |
 | B2 delivery                | Redirect of a private activity; recipient outside the audience; duplicate inbox; expired lease; stale completion; commit followed by response loss (`test/deliveries.test.ts`, `test/delivery-post.test.ts`)                                                                                                                                                            |
 | B4 statuses, media, search | Edit, source or history of another's status; history seen by a recipient added later; private boost in `reblogged_by`; hidden parent in reply fields; DM moving `last_status_at`; unbounded edits or reply tree; boost or quote of an invisible status; foreign attachment; unsafe R2 key; retained EXIF; failed transform; active media type; private status in search |
-| B5 UI and setup            | Missing, `null` and foreign Origin; framing headers; unsafe return path; session fixation and reuse after logout (`test/web-session.test.ts`, `test/web-images.test.ts`, `test/web-pages.test.ts`); reused setup token; concurrent bootstrap (B5b)                                                                                                                      |
+| B5 UI and setup            | Missing, `null` and foreign Origin; framing headers; unsafe return path; session fixation and reuse after logout (`test/web-session.test.ts`, `test/web-images.test.ts`, `test/web-pages.test.ts`); reused setup token, concurrent bootstrap, missing, `null` and foreign Origin on `/setup` (`test/setup.test.ts`, B5b)                                                |
 | B6b backup and restore     | Plaintext dump, media or manifest egress; interrupted upload; missing component; unselected manifest; restored obsolete credentials (`kopje/scheduled-backup` covers egress, interrupted uploads and changed components in `test/backup.test.ts`; selection and credential invalidation are DATA-8)                                                                     |
 | B8 cutover                 | Wrong target resources, domain or keys; writes to the source; an alternate Pages route still writable; unreconciled Queue or DLQ; changed content with unchanged length                                                                                                                                                                                                 |
 

@@ -61,7 +61,7 @@ const PUBLIC_HEADERS = {
 }
 
 // Pages of a signed-in user, and every answer of the sign-in flow.
-const PRIVATE_HEADERS = { ...FRAMING, 'referrer-policy': 'no-referrer', 'cache-control': 'no-store' }
+export const PRIVATE_HEADERS = { ...FRAMING, 'referrer-policy': 'no-referrer', 'cache-control': 'no-store' }
 
 type PageStatus = 200 | 400 | 403 | 404 | 410 | 422 | 429
 

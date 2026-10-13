@@ -29,14 +29,25 @@ const CSRF_CONTEXT = 'kopje-web-csrf\u0000'
 
 // WEB-4: the anti-forgery token of a session, sha256 under its own context. It is not the stored digest of the token
 // (that is a plain sha256 in hex), so a leaked database gives no form tokens, and it changes with every login.
-export async function csrfToken(sessionToken: string): Promise<string> {
-	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(CSRF_CONTEXT + sessionToken))
+// /setup's forms use the same construction over the setup session's secret, under a context of their own.
+export async function csrfToken(sessionToken: string, context = CSRF_CONTEXT): Promise<string> {
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(context + sessionToken))
 	return base64url.encode(new Uint8Array(digest))
 }
 
-export async function csrfMatches(sessionToken: string, sent: string | undefined): Promise<boolean> {
-	return sent !== undefined && constantTimeEqual(await csrfToken(sessionToken), sent)
+export async function csrfMatches(
+	sessionToken: string,
+	sent: string | undefined,
+	context = CSRF_CONTEXT
+): Promise<boolean> {
+	return sent !== undefined && constantTimeEqual(await csrfToken(sessionToken, context), sent)
 }
+
+export const SETUP_CSRF_CONTEXT = 'kopje-setup-csrf\u0000'
+
+// The setup session's cookie (__Host-, HttpOnly, SameSite=Strict): only an opaque id, whose SHA-256 names the session
+// in the Store (domain/setup.ts). SETUP_TOKEN itself is never kept by the browser.
+export const SETUP_COOKIE = 'kopje_setup'
 
 const MAX_RETURN_PATH = 512
 const DEFAULT_RETURN_PATH = '/settings'

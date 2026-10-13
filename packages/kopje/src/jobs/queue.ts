@@ -47,6 +47,10 @@ export async function handleQueue(batch: MessageBatch, env: Env, queueDeps: Queu
 			continue
 		}
 		const body = message.body
+		if (isSetupProbe(body)) {
+			await consumeProbe(message, body.id, env, deps)
+			continue
+		}
 		if (isJobsMessage(body)) {
 			await runJobs(message, env, deps, maintenance)
 			continue
@@ -138,6 +142,26 @@ export async function runScheduledJobs(env: Env, deps: InboxDeps): Promise<void>
 			console.error({ event: 'kopje.jobs.failed', ...errorFields(error) })
 		}
 	}
+}
+
+// /setup's Queue check (domain/setup.ts): the probe is marked as received. A transient Store refusal (maintenance, an
+// upgrade) is retried, so a received probe is not reported as lost; any other failure is logged and acked.
+async function consumeProbe(message: Message, id: string, env: Env, deps: InboxDeps): Promise<void> {
+	try {
+		await callStore(() => deps.store(env).consumeSetupProbe(deps.build(env), { id, now: deps.now() }))
+	} catch (error) {
+		if (error instanceof StoreUnavailableError) {
+			message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
+			return
+		}
+		console.error({ event: 'kopje.setup.probe_failed', id: message.id, ...errorFields(error) })
+	}
+	message.ack()
+}
+
+function isSetupProbe(body: unknown): body is { kind: 'setup-probe'; id: string } {
+	const m = body as { kind?: unknown; id?: unknown } | null
+	return typeof m === 'object' && m !== null && m.kind === 'setup-probe' && typeof m.id === 'string'
 }
 
 async function inflate(bytes: Uint8Array): Promise<Uint8Array> {
