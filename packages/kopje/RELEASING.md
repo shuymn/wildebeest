@@ -12,7 +12,10 @@ A tag `kopje-v<version>` on a commit of `main` releases the `kopje` npm package.
 4. publishes that tarball to npm through trusted publishing, with provenance (the `npm` environment), by
    `scripts/kopje-publish.mjs`. A version with a pre-release part (`1.2.0-rc.1`) gets the dist-tag `next`, any other
    `latest`;
-5. creates the GitHub release with the notes and the tarball.
+5. creates the GitHub release with the notes and the tarball (`scripts/kopje-github-release.mjs`).
+
+The publish and release steps live in `scripts/kopje-release-lib.mjs`; `pnpm run test:scripts` checks them offline,
+with npm and gh stubbed, in every pull request.
 
 No npm token is stored anywhere: npm trusts this repository's workflow through OIDC.
 

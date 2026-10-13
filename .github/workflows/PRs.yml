@@ -184,6 +184,10 @@ jobs:
       - name: Check kopje package and template
         run: pnpm run check:kopje-package
 
+      # The release steps (publish once, recover a rerun, keep an existing GitHub release), with npm and gh stubbed.
+      - name: Test the kopje release scripts
+        run: pnpm run test:scripts
+
       - name: Install sqlite3def
         env:
           GH_TOKEN: ${{ github.token }}
