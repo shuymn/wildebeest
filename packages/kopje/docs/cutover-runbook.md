@@ -49,6 +49,10 @@ for its certificate). Plan the window with the rehearsal's numbers, and keep:
 
 Write the start time down at step 3 and the time at the end of every step.
 
+A rollback is not part of this budget: its drain waits for the requests held during maintenance to come back from
+Kopje's Queue (at most the 30-minute requeue delay after journaling starts), then hands them off one at a time, each
+after the legacy consumer acknowledged the previous one.
+
 **Point of no return.** Publishing (step 9) is final: `kopje-admin cutover publish` marks the Store published, and so
 does the first request Kopje serves with `MAINTENANCE=off`. From then on the Store refuses the cutover reset for good.
 After publication, never go back to the legacy setup: recover with the Store's point-in-time recovery, an external
@@ -151,18 +155,26 @@ None of this affects the legacy instance.
     - a custom domain `<admin-host>` on the Worker, and an Access application for `<admin-host>/admin` with your admin
       policy and a service token for the CLI (as [setup.md](setup.md#before-you-start) step 5). Add `<domain>/admin`
       to the same application later, at step 7, so its AUD does not change;
-    - for a rollback: a Queue producer binding `LEGACY_QUEUE` to `<legacy-queue>` in the instance's `wrangler.jsonc`,
-      and the legacy instance's `VAPID_JWK` as the secret `LEGACY_VAPID_JWK`. They are used only by
-      `kopje-admin cutover drain`.
+    - for a rollback: Queue producer bindings `LEGACY_QUEUE` to `<legacy-queue>` and `LEGACY_DLQ` to
+      `<legacy-queue>-dlq` in the instance's `wrangler.jsonc`, and the legacy instance's `VAPID_JWK` as the secret
+      `LEGACY_VAPID_JWK`. Only `kopje-admin cutover drain` uses them: it sends to `LEGACY_QUEUE`, and reads the backlog
+      of both (a Queue binding is the only way a Worker reads a Queue's backlog; nothing is ever sent to `LEGACY_DLQ`).
 
     Then check it with the token: `KOPJE_ADMIN_URL=https://<admin-host> kopje-admin health --import-token` (with
     `KOPJE_IMPORT_TOKEN`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` set). The Store is empty and in bootstrap.
 
-4. **Set the domain** on the empty Store and save its catalog:
+4. **Configure the Store with the token, then retire the token.** Set the domain and the Access values while the Store
+   is in bootstrap; this ends bootstrap, so from here on everything, the import and a rollback included, goes through
+   Access, and the token opens nothing. The import and every rollback command then need the same authority, and no
+   command gains authority it does not already have:
 
     ```sh
-    kopje-admin config --import-token domain=<domain>
-    kopje-admin catalog --import-token > <work>/catalog.json
+    kopje-admin config --import-token domain=<domain> access_team_domain=<team>.cloudflareaccess.com \
+      access_admin_aud=<aud> admin_email=<admin email> access_service_token_client_id=<client id> \
+      access_aud=<sign-in application AUD>
+    kopje-admin health                     # through Access now
+    kopje-admin catalog > <work>/catalog.json
+    wrangler secret delete IMPORT_TOKEN --name <kopje-worker>
     ```
 
 5. **Bind Kopje's Queue to the Pages project** as `KOPJE_QUEUE` (production environment: Settings, Bindings, Queue
@@ -240,7 +252,9 @@ The worker it writes:
 - spools every inbox POST, shared and personal, to `KOPJE_QUEUE` in Kopje's spool format, refusing what Kopje would
   refuse (404 for an unknown personal inbox, 415 for other media types, 413 over 1 MiB) and a request without an HTTP
   signature naming an https key (401); it answers 429 over the optional rate limit and 503 when it cannot spool or
-  Kopje's Queue holds 10,000 messages or 256 MiB;
+  Kopje's Queue holds 10,000 messages or 256 MiB, or when that backlog cannot be read (it fails closed: on a runtime
+  without Queue metrics it spools nothing, and the window relies on senders retrying, as with any outage; the
+  rehearsal checks this);
 - answers everything else with 503 and `Retry-After: 600`. It never reads or writes the legacy bindings.
 
 Check, from outside:
@@ -303,13 +317,10 @@ kopje-admin convert <work>/export-b --out <work>/out --base-time <now, ISO 8601 
   --catalog <work>/catalog.json --domain <domain>
 kopje-admin fingerprint compare <work>/fp-a.json <work>/fp-b.json --manifest <work>/out/manifest.json
 kopje-admin verify-conversion <work>/export-b <work>/out/kopje.dump
-kopje-admin import <work>/out/kopje.dump --import-token
-kopje-admin config --import-token access_team_domain=<team>.cloudflareaccess.com access_admin_aud=<aud> \
-  admin_email=<admin email> access_service_token_client_id=<client id> access_aud=<sign-in application AUD>
+kopje-admin import <work>/out/kopje.dump
 kopje-admin dump <work>/imported.dump
 kopje-admin verify-conversion <work>/export-b <work>/imported.dump
 kopje-admin maintenance-worker-check <work>/export-b --domain <domain> --worker <work>/maintenance
-wrangler secret delete IMPORT_TOKEN --name <kopje-worker>
 ```
 
 - **Go:**
@@ -320,9 +331,8 @@ wrangler secret delete IMPORT_TOKEN --name <kopje-worker>
       expectations from the export by a separate code path and compare every record by hash;
     - `maintenance-worker-check` says `current`: the deployed snapshot is what the final export holds. If it says
       `stale`, generate the worker from `<work>/export-b`, deploy it as in step 3, and continue.
-- `IMPORT_TOKEN` only begins an import into an empty Store without usable admin access; once the import is verified the
-  Store is not empty, and once the Access values are set it is no longer in bootstrap. Deleting the secret makes that
-  final.
+- The import runs through Access (the token was retired in the preparation); an interrupted one is reset with
+  `kopje-admin import-reset <work>/out/kopje.dump --yes`.
 - **Rollback:** before the import is verified, Rollback A; after, Rollback B.
 
 ### 7. Put Kopje on the domain in full maintenance (1–10 min)
@@ -402,56 +412,66 @@ Afterwards: re-enable nothing on the legacy side. Keep it read-only for 14 days,
 ## Rolling back
 
 Rolling back before step 9 returns the legacy instance to service with everything it had, plus every inbox request
-accepted during the window, in the order it arrived. Spooled requests are never left in Kopje's Queue: the legacy
-instance gets them first, so an Undo or Delete it receives later applies on top of them, and a later cutover cannot
-replay them.
+accepted during the window, each once and in the order it arrived, before anything newer. Spooled requests are never
+left in Kopje's Queue: the legacy instance gets them first, so an Undo or Delete it receives later applies on top of
+them, and a later cutover cannot replay them. Everything below runs through Access (preparation, step 4).
+
+`kopje-admin cutover drain --worker <work>/maintenance` hands the journal to the legacy Queue through an ordered lane:
+
+- **Collection barrier.** Nothing is sent while Kopje's Queue holds any message: the requests held during maintenance
+  come back after the requeue delay (at most 30 minutes after journaling starts) and enter the journal in spool order
+  first. The drain waits meanwhile, up to 45 minutes per run.
+- **One at a time.** The next request goes only when the legacy Queue's backlog is 0: the legacy consumer has
+  acknowledged the previous one, retries included, so nothing overtakes a request it is still retrying. A request in
+  the legacy dead-letter queue stops the drain (`legacy-dlq`) until you reconcile it: decide, redrive or purge the DLQ.
+- **Verified, to a legacy account.** Each request is verified against the time it was spooled, by Kopje's rule, and goes
+  to a legacy local account from the maintenance worker's snapshot, never one named only by the request. One that fails
+  for good (`unverified`), or addresses no legacy account and no `--fallback <username>` is given (`noRecipient`), is
+  kept: inspect with `kopje-admin sql "SELECT spool_id, spooled_at FROM inbound_spool"`, then
+  `kopje-admin cutover discard-kept --yes` once decided.
+- **Fail closed.** A Queue backlog that cannot be read stops the drain (`metrics-unavailable`); a key that cannot be
+  fetched now stops it (`key-unavailable`; run it again). One drain runs at a time.
+- **At least once.** A request is marked as being sent before the send; a drain interrupted between the two sends it
+  again, so the legacy instance may process it twice (a second Accept, a second notification).
+- **Bounded.** The journal holds at most 10,000 requests and 128 MiB (lower with `CUTOVER_JOURNAL_MAX_ENTRIES` and
+  `CUTOVER_JOURNAL_MAX_BYTES`); when full, requests stay in Kopje's Queue, whose backlog makes the maintenance worker
+  refuse new ones (503). Kept requests count until discarded.
 
 ### Rollback A: before the import is complete
 
 1. Keep the maintenance worker (or Kopje in maintenance) on the routes: requests keep being spooled.
-2. On the Kopje Worker set `CUTOVER_ROLLBACK=journal` (Settings, Variables and Secrets). Its Queue consumer now keeps
-   every spooled request in the Store's rollback journal instead of holding it; held ones come due within 30 minutes.
-3. Add the legacy consumer back with one invocation at a time, so it takes the drained requests in order:
+2. If an import was begun: `kopje-admin import-reset <work>/out/kopje.dump --yes`. Nothing is journaled during an
+   import; the requests wait in Kopje's Queue meanwhile.
+3. On the Kopje Worker set `CUTOVER_ROLLBACK=journal` (Settings, Variables and Secrets).
+4. Add the legacy consumer back, one invocation at a time:
 
     ```sh
     wrangler queues consumer add <legacy-queue> <legacy-consumer> --batch-size 10 --batch-timeout 30 \
       --message-retries 10 --dead-letter-queue <legacy-queue>-dlq --max-concurrency 1
     ```
 
-4. Drain, repeating until the journal is empty and Kopje's Queue backlog is 0 (up to 30 minutes):
-
-    ```sh
-    kopje-admin cutover drain --fallback-actor <admin-actor>
-    kopje-admin cutover status
-    ```
-
-    Each request is verified against the time it was spooled, by Kopje's rule, then sent to the legacy Queue as the
-    legacy consumer's own inbox message. A request whose key cannot be fetched right now stops the round (exit 3; run it
-    again later), so nothing after it overtakes it. A request that fails verification for good is kept, counted as
-    `unverified`: inspect it with `kopje-admin sql "SELECT spool_id, spooled_at FROM inbound_spool"` and, once decided,
-    remove it with `kopje-admin cutover discard-unverified --yes`.
-
-5. Restore the legacy routes: the Pages project's previous production deployment (Deployments, Rollback); move the
-   domain back if step 7 moved it. Then drain once more for what was spooled meanwhile, and check that
-   `cutover status` shows an empty journal.
-6. If an import was begun but not verified: `kopje-admin import-reset <work>/out/kopje.dump --yes`.
-7. Remove `CUTOVER_ROLLBACK` from the Kopje Worker; re-enable the legacy workflows and builds (step 1); restore the
-   legacy consumer's concurrency (add it again without `--max-concurrency`).
+5. Drain: `kopje-admin cutover drain --worker <work>/maintenance [--fallback <username>]`, until it exits 0.
+6. Restore the legacy routes: the Pages project's previous production deployment (Deployments, Rollback); move the
+   domain back if step 7 moved it. Then drain again: requests the maintenance worker spooled while the routes changed
+   are collected first (the barrier) and handed off. Those and the legacy instance's first direct requests can
+   interleave for the time the routes take to change, as deliveries from different servers always can.
+7. `kopje-admin cutover status`: the journal holds nothing pending or being sent, and Kopje's Queue backlog is 0.
+8. Remove `CUTOVER_ROLLBACK` from the Kopje Worker; re-enable the legacy workflows and builds (step 1); restore the
+   legacy consumer's concurrency (add it again without `--max-concurrency`). Before the next attempt, Kopje's Queue
+   backlog must still be 0.
 
 ### Rollback B: after the import is complete
 
-As Rollback A, steps 1 to 5 and 7, and in place of step 6:
+As Rollback A, without step 2, and before step 8:
 
 ```sh
-kopje-admin cutover reset --yes   # needs MAINTENANCE=full and an empty journal
+kopje-admin cutover reset --yes   # needs MAINTENANCE=full and nothing pending, being sent or kept in the journal
 ```
 
 The reset takes the Store back to empty, keeping its configuration (domain and Access), through the same bounded reset
 an interrupted import uses; an interrupted reset is continued with `kopje-admin import-reset --yes`. The next attempt
-imports through Access (`kopje-admin import <dump>` without `--import-token`). To use an `IMPORT_TOKEN` again instead,
-remove the Access values (`kopje-admin config access_admin_aud=`) and set a new `IMPORT_TOKEN` secret. The reset is
-refused once the Store is published (`published`), during an import (`import-exists`: use `import-reset`) and while the
-journal holds requests (`journal-not-empty`).
+imports through Access. The reset is refused once the Store is published (`published`), during an import
+(`import-exists`: use `import-reset`) and while the journal holds requests (`journal-not-empty`).
 
 ## Kopje's dead-letter queue
 
@@ -475,15 +495,16 @@ The rehearsal runs steps 5 and 6 against a copy, while the legacy instance keeps
 measures how long they take on the real data and proves the conversion passes before the window is planned.
 
 1. Deploy a second, temporary Kopje Worker (its own name, Queue, dead-letter queue and Store; `MAINTENANCE=full`; an
-   `IMPORT_TOKEN`; an Access-protected admin hostname) as in the preparation, steps 3 and 4.
+   `IMPORT_TOKEN` for its configuration; an Access-protected admin hostname) as in the preparation, steps 3 and 4.
 2. Time each command of steps 5 and 6 with `time`:
     - one export of every table (`export_d1`), and `fingerprint export` of it (on a live instance two fingerprints may
       differ; only the time matters);
-    - `convert`, `verify-conversion` on the dump, `import --import-token` into the temporary Store, `dump`, and
+    - `convert`, `verify-conversion` on the dump, `import` into the temporary Store, `dump`, and
       `verify-conversion` on the Store's dump;
     - `maintenance-worker` and `maintenance-worker-check`, and the generated worker run locally with
       `wrangler pages dev <work>/maintenance` (request an actor and post a signed request to an inbox).
-3. Exercise the rollback on the temporary Worker: `cutover reset --yes` after its import, and a drain into a test Queue.
+3. Exercise the rollback on the temporary Worker: `cutover reset --yes` after its import, and a drain into a test Queue
+   and a test dead-letter queue bound as `LEGACY_QUEUE` and `LEGACY_DLQ`.
 4. Write down the numbers: export bytes, the duration of each command, the import's chunk count, the Store's size
    (`kopje-admin capacity`). Downtime is about steps 3 and 4 plus these, plus steps 7 to 9.
 5. Delete the temporary Worker, its Queues and its Store (`wrangler delete <temporary worker>`), and the exports.
@@ -497,23 +518,27 @@ The rehearsal also confirms what only the real platform can show:
   deployments, whether Pages offers a Rate Limiting binding, and that `--no-bundle` deploys the generated file as it is;
 - that a Worker route on `<domain>/*` takes precedence over the Pages custom domain, or how long the custom domain's
   certificate takes;
-- how the Queue backlog and DLQ counts are read (`wrangler queues info`, the dashboard), and that the Queue metrics the
-  maintenance worker reads are available to the legacy project;
+- how the Queue backlog and DLQ counts are read (`wrangler queues info`, the dashboard);
+- that the maintenance worker can read Kopje's Queue metrics on the legacy project: deploy it to a preview branch whose
+  preview environment binds `KOPJE_QUEUE` to the temporary Worker's Queue, and post a request with a signature header
+  to that preview URL. 202 means it spools; 503 with `kopje.spool.metrics-unavailable` in the log means it fails closed,
+  so during the window inbox deliveries are refused and senders retry them. Remove the preview deployment and its
+  binding afterwards (the write barrier);
+- that `wrangler queues info` counts delayed messages in the backlog (the collection barrier relies on it);
 - that `wrangler deploy` keeps a DLQ consumer added from the CLI, and that the Deploy button creates the DLQ.
 
 ## Permissions
 
-| Step     | Cloudflare permission                                                                                                                                                                                                                                                       | Other                                       |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| Before   | Account: Cloudflare Pages Read (save the project), Pages Edit (bindings, preview protection, deleting previews); Workers Scripts Edit (deploy Kopje, secrets); Queues Edit (Kopje's DLQ); Access: Apps and Policies Edit; Zone: Workers Routes or DNS Edit (`<admin-host>`) | –                                           |
-| 1        | Cloudflare Pages Edit (only to pause Git builds)                                                                                                                                                                                                                            | GitHub: Actions write                       |
-| 2, 4     | Queues Edit; Workers Tail Read                                                                                                                                                                                                                                              | –                                           |
-| 3        | Cloudflare Pages Edit                                                                                                                                                                                                                                                       | –                                           |
-| 5, 6, 8  | D1: the query and export endpoints (Edit may be required even for reads; the rehearsal confirms)                                                                                                                                                                            | Kopje: Access service token, `IMPORT_TOKEN` |
-| 6        | Workers Scripts Edit (delete `IMPORT_TOKEN`)                                                                                                                                                                                                                                | –                                           |
-| 7        | Zone: Workers Routes Edit (a route) or Cloudflare Pages Edit, Workers Scripts Edit and DNS Edit (a custom domain); Access: Apps and Policies Edit                                                                                                                           | –                                           |
-| 8, 9, 10 | Workers Scripts Edit (variables and secrets)                                                                                                                                                                                                                                | Backup storage (backup.md)                  |
-| Rollback | Workers Scripts Edit (`CUTOVER_ROLLBACK`); Queues Edit (the legacy consumer); Cloudflare Pages Edit (the previous deployment); Zone: Workers Routes Edit                                                                                                                    | Kopje: Access service token                 |
+| Step     | Cloudflare permission                                                                                                                                                                                                                                                       | Other                       |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| Before   | Account: Cloudflare Pages Read (save the project), Pages Edit (bindings, preview protection, deleting previews); Workers Scripts Edit (deploy Kopje, secrets); Queues Edit (Kopje's DLQ); Access: Apps and Policies Edit; Zone: Workers Routes or DNS Edit (`<admin-host>`) | –                           |
+| 1        | Cloudflare Pages Edit (only to pause Git builds)                                                                                                                                                                                                                            | GitHub: Actions write       |
+| 2, 4     | Queues Edit; Workers Tail Read                                                                                                                                                                                                                                              | –                           |
+| 3        | Cloudflare Pages Edit                                                                                                                                                                                                                                                       | –                           |
+| 5, 6, 8  | D1: the query and export endpoints (Edit may be required even for reads; the rehearsal confirms)                                                                                                                                                                            | Kopje: Access service token |
+| 7        | Zone: Workers Routes Edit (a route) or Cloudflare Pages Edit, Workers Scripts Edit and DNS Edit (a custom domain); Access: Apps and Policies Edit                                                                                                                           | –                           |
+| 8, 9, 10 | Workers Scripts Edit (variables and secrets)                                                                                                                                                                                                                                | Backup storage (backup.md)  |
+| Rollback | Workers Scripts Edit (`CUTOVER_ROLLBACK`); Queues Edit (the legacy consumer); Cloudflare Pages Edit (the previous deployment); Zone: Workers Routes Edit                                                                                                                    | Kopje: Access service token |
 
 ## What the tools guarantee, and what they do not
 

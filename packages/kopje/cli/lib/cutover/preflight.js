@@ -132,6 +132,13 @@ export function readPagesProject(json, { domain, kopjeQueue } = {}) {
 			? 'no KEK secret: the keys are wrapped with the empty KEK unless the export check says otherwise'
 			: `KEK secrets present: ${keks.join(', ')}; set the one that unwraps every key as USER_KEK on Kopje`
 	)
+	// The maintenance worker refuses inbox requests when it cannot read Kopje's Queue backlog (it fails closed); only a
+	// run on the project's own runtime shows whether it can.
+	check(
+		'queue-metrics',
+		'todo',
+		"in the rehearsal, check that the maintenance worker reads Kopje's Queue metrics on this project (a signed POST to a preview deployment answers 202, not 503)"
+	)
 	if (Object.keys(source).length > 0 && sourceConfig.deployments_enabled !== false) {
 		check('git-deployments', 'todo', 'the project builds from Git: pause its automatic deployments in step 1')
 	}
@@ -236,9 +243,9 @@ export async function preflight({ projectPath, exportPath, domain, kopjeQueue, e
 		kopje: [
 			'deploy Kopje (deploy/ template) with MAINTENANCE=full and USER_KEK set to the KEK the export check names',
 			'add the Worker on an admin hostname, with an Access application for /admin there (later also <domain>/admin)',
-			'set a one-time IMPORT_TOKEN secret (at least 32 characters) on the Kopje Worker; never run /setup',
+			'set a one-time IMPORT_TOKEN secret; with it set the domain and the Access values, then delete it (the import and any rollback go through Access); never run /setup',
 			`bind Kopje's Queue to the Pages project as ${SPOOL_QUEUE_BINDING} (production)`,
-			"create Kopje's Queue dead-letter queue; for a rollback, bind the legacy Queue to Kopje as LEGACY_QUEUE and set LEGACY_VAPID_JWK",
+			"create Kopje's Queue dead-letter queue; for a rollback, bind the legacy Queue and its dead-letter queue to Kopje as LEGACY_QUEUE and LEGACY_DLQ, and set LEGACY_VAPID_JWK",
 		],
 		ok: !checks.some((check) => check.status === 'fail'),
 	}

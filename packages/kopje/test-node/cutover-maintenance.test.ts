@@ -343,6 +343,7 @@ describe('kopje-admin cutover-preflight', () => {
 		expect(status(report, 'preview-writes-legacy-d1')).toBe('warn')
 		expect(status(report, 'spool-binding')).toBe('todo')
 		expect(status(report, 'git-deployments')).toBe('todo')
+		expect(status(report, 'queue-metrics')).toBe('todo')
 		// The write barrier names every writer this configuration shows, and what closes it.
 		expect(report.barrier.map((b) => b.writer)).toEqual([
 			'production deployments (custom domain, pages.dev, every deployment URL)',
