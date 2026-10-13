@@ -400,17 +400,18 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   and `null` Origin: _Implemented on branch `kopje/web-ui`:_ `test/oauth.test.ts` ("refuses a decision posted from another origin, a null
   origin or none").
 - **WEB-2: Kopje's HTML pages cannot be framed, scripted or cached.** Consent and code pages send a CSP with `script-src
-'none'` and `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and `Cache-Control:
+'none'` and `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and `Cache-Control:
 no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize.tsx`, `src/web/consent.tsx`;
   `test/oauth.test.ts` ("logs in through Access and calls the API with the token"). _Gap: only `script-src`,
   `X-Frame-Options` and escaping are asserted._ Web UI pages: _Implemented on branch `kopje/web-ui`:_ a CSP of `default-src 'none'` with only
   `style-src 'self'` (the stylesheet is a static asset), `img-src 'self' https:`, `form-action 'self'`, `base-uri 'none'`
   and `frame-ancestors 'none'` (no script source at all), `X-Frame-Options: DENY`; pages of a signed-in user and the
-  sign-in flow send `Cache-Control: no-store` and `Referrer-Policy: no-referrer`; public pages may be kept 60 s and vary
+  sign-in flow send `Cache-Control: no-store` and `Referrer-Policy: same-origin`; public pages may be kept 60 s and vary
   with `Accept`. `src/app/web.tsx`; `test/web-pages.test.ts` ("sends a CSP without script, denies framing"),
   `test/web-session.test.ts` ("is never cached, framed or opened to other origins"). `/setup`: _Implemented on branch
-  `kopje/setup`:_ the same CSP, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and `Cache-Control: no-store`
-  on every page; `src/app/setup.tsx`; `test/setup.test.ts` ("WEB-2, WEB-3, WEB-5: is never cached, framed, scripted
+  `kopje/setup`:_ the same CSP, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and `Cache-Control: no-store`
+  on every page. Not `no-referrer`: under it browsers post a same-origin form with `Origin: null`, which WEB-1's
+  Origin check refuses; `same-origin` still sends no referrer to other origins; `src/app/setup.tsx`; `test/setup.test.ts` ("WEB-2, WEB-3, WEB-5: is never cached, framed, scripted
   or opened to other origins").
 - **WEB-3: CORS is open only where no ambient credential exists.** Wildcard CORS without credentials applies to
   `/api/*`, `/oauth/token` and `/oauth/revoke` only (bearer tokens). `/oauth/authorize`, `/admin/*`, `/setup` and the

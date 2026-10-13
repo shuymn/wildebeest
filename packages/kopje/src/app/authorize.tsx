@@ -19,12 +19,13 @@ type AuthorizeEnv = { Bindings: Env }
 const ACCESS_HEADER = 'cf-access-jwt-assertion'
 const MAX_STATE = 2000
 
-// No script, no framing, no referrer: the consent page is static HTML.
+// No script, no framing, no referrer to other origins: the consent page is static HTML. Not `no-referrer`, under which
+// the browser posts the decision with `Origin: null` (see PRIVATE_HEADERS in web.tsx).
 const PAGE_HEADERS = {
 	'content-security-policy':
 		"default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
 	'x-frame-options': 'DENY',
-	'referrer-policy': 'no-referrer',
+	'referrer-policy': 'same-origin',
 	'cache-control': 'no-store',
 }
 
