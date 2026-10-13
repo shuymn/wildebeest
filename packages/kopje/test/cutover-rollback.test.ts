@@ -6,7 +6,7 @@ import { type AccessTeam, adminClaims, adminHarness, adminTeam, setTeamAccess } 
 import { sql } from './api-helpers'
 import { inboxDeps, NOW } from './app-helpers'
 import { fixtureKeyGen } from './federation-helpers'
-import { BUILD, migratedStore } from './helpers'
+import { BUILD, migratedStore, rejectionOf } from './helpers'
 import { mastodonActor, RemoteWeb, signedInit, type TestActor } from './inbox-helpers'
 import { ACCESS, ADMIN_AUD, ADMIN_EMAIL, importChunks, importViaRpc, memoryIO, splitDump } from './ops-helpers'
 import { QueueSim } from './queue-sim'
@@ -543,9 +543,9 @@ describe('an import stays readonly until it is published (OPS-8)', () => {
 		expect(r.kopje.pending).toHaveLength(1)
 		expect(await count(store, 'follows f JOIN accounts a ON a.id = f.account_id WHERE a.uri = ?', r.carol.uri)).toBe(0)
 		// Deliveries and other writes are refused as in readonly.
-		await expect(store.claimDeliveries(BUILD, { now: NOW, limit: 1, leaseMs: 1000 } as never)).rejects.toThrow(
-			/unpublished/
-		)
+		expect(
+			String(await rejectionOf(store.claimDeliveries(BUILD, { now: NOW, limit: 1, leaseMs: 1000 } as never)))
+		).toMatch(/unpublished/)
 		expect((await serve(store, { MAINTENANCE: 'off' }, '/api/v1/instance')).status).toBe(200)
 
 		const published = await r.h.post(adminClaims(), '/admin/publish', { confirm: true })
