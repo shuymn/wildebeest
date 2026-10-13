@@ -134,4 +134,5 @@ same-origin`, because under `no-referrer` browsers send `Origin: null` on these 
 Still to confirm:
 
 - `GET /accounts` lists the account for a token with only account-scoped permissions (Account Settings, Read), when the
-  account ID is left empty.
+  account ID is left empty. On the verification instance the lookup did not find exactly one account, and the account
+  ID was entered instead. The wizard now says whether the token reached no account or several.

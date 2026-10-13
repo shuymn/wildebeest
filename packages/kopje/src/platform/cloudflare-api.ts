@@ -24,6 +24,7 @@ export type ApiErrorCategory =
 	| 'malformed'
 	| 'incomplete'
 	| 'invalid_account'
+	| 'no_account'
 	| 'account_count'
 	| 'team_mismatch'
 	| 'no_service_token'
@@ -43,7 +44,8 @@ const DESCRIPTIONS: Record<ApiErrorCategory, string> = {
 	malformed: 'the Cloudflare API answered with something unexpected',
 	incomplete: 'the listing is longer than Kopje reads; nothing was changed',
 	invalid_account: 'the account ID must be 32 hexadecimal characters',
-	account_count: 'the token does not reach exactly one account; enter the account ID of the one to use',
+	no_account: 'the token reaches no account; give it Account Settings Read, or enter the account ID',
+	account_count: 'the token reaches several accounts; enter the account ID of the one to use',
 	team_mismatch: "the team is not this account's Zero Trust organization",
 	no_service_token: 'no service token of this account has that client ID',
 	ambiguous: 'several objects have this name; delete the extra ones, or create new objects',
@@ -304,7 +306,10 @@ async function findAccount(api: CloudflareApi, given: string | null): Promise<st
 	}
 	const accounts = await api.list<{ id: string }>('account', '/accounts', PAGE_SIZE.accounts)
 	const [only] = accounts
-	if (accounts.length !== 1 || only === undefined || !ACCOUNT_ID.test(only.id)) {
+	if (only === undefined) {
+		throw new CloudflareApiError('no_account', 'account')
+	}
+	if (accounts.length !== 1 || !ACCOUNT_ID.test(only.id)) {
 		throw new CloudflareApiError('account_count', 'account')
 	}
 	return only.id
