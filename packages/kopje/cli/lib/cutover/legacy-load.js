@@ -2,8 +2,10 @@
 // (0039), without ever touching the legacy D1:
 //
 //   1. the level is the d1_migrations prefix of the canonical legacy migrations (cli/legacy-migrations, a frozen copy
-//      of the repository's /migrations), and the export's schema must match the canonical schema at that level;
-//   2. the rows are loaded into a database built from the canonical migrations up to that level;
+//      of the repository's /migrations), and the export's schema must match the canonical schema at that level
+//      (columns by name; see compareColumns for the one variance accepted);
+//   2. the rows are loaded, by column name, into a database built from the canonical migrations up to that level, so
+//      the bridge always starts from the canonical schema whatever the column order of the export;
 //   3. the remaining canonical migrations are applied locally. Any migration that removes rows (0007, 0017, 0021,
 //      0034 and 0038 can) is reported with its counts, and the bridge stops unless deletions are accepted.
 //
@@ -118,6 +120,62 @@ function fingerprintDigest(tables) {
 }
 
 /**
+ * @typedef {{ name: string, type: string, notnull: number, dflt_value: unknown, pk: number, hidden: number }} Column
+ */
+
+/**
+ * @param {DatabaseSync} db
+ * @param {string} table
+ * @returns {Column[]}
+ */
+function columnsOfTable(db, table) {
+	return /** @type {Column[]} */ (
+		db
+			.prepare('SELECT name, lower(type) AS type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?)')
+			.all(table)
+	)
+}
+
+/**
+ * Compares an exported table's columns with the canonical ones by name, not position: a legacy D1 can hold a column
+ * that an earlier form of a migration dropped and that was added back with ALTER TABLE ADD COLUMN, so it sits later in
+ * the table and is nullable (docs/cutover.md). Every name must match, with the same type, default, primary key
+ * position and generated kind. NOT NULL may be missing from an exported column only; such a column is returned, and
+ * every row loaded into it must still satisfy the canonical constraint.
+ * @param {Column[]} canonical
+ * @param {Column[]} exported
+ * @returns {string[] | null} the columns that are nullable in the export only, or null when the columns differ
+ */
+function compareColumns(canonical, exported) {
+	if (canonical.length !== exported.length) {
+		return null
+	}
+	/** @type {string[]} */
+	const nullable = []
+	for (const want of canonical) {
+		const matches = exported.filter((c) => c.name === want.name)
+		const got = matches[0]
+		if (
+			matches.length !== 1 ||
+			got === undefined ||
+			got.type !== want.type ||
+			got.dflt_value !== want.dflt_value ||
+			got.pk !== want.pk ||
+			got.hidden !== want.hidden
+		) {
+			return null
+		}
+		if (got.notnull !== want.notnull) {
+			if (want.notnull !== 1 || got.notnull !== 0) {
+				return null
+			}
+			nullable.push(want.name)
+		}
+	}
+	return nullable
+}
+
+/**
  * @param {DatabaseSync} db
  * @param {LegacyMigration[]} migrations
  */
@@ -145,8 +203,8 @@ function rowCounts(db) {
  *   outbox: Map<string, Addressing | null>, outboxByPair: Map<string, Addressing | null> }} SourceAddressing
  * @typedef {{ level: number, line: string, levelName: string, migrationsApplied: string[],
  *   schemaFingerprint: string, rowsLoaded: Record<string, number>,
- *   deletions: { migration: string, table: string, rows: number }[], foreignKeyViolations: number,
- *   notificationSequence: string | null }} LegacyReport
+ *   nullableInExport: string[], deletions: { migration: string, table: string, rows: number }[],
+ *   foreignKeyViolations: number, notificationSequence: string | null }} LegacyReport
  */
 
 // 0010 inserts the legacy web UI's OAuth client, whose cdate defaults to the current time. Rows a bridge migration
@@ -298,8 +356,8 @@ function load(sources, acceptDeletions, baseTime, path) {
 	}
 
 	// Schema fingerprint. Before any supplied definition runs, its DEFAULT, CHECK and generated expressions must equal
-	// the canonical ones at that level; then it runs in an empty scratch database (never given a row) and its columns
-	// must equal the canonical columns.
+	// the canonical ones at that level, column by column; then it runs in an empty scratch database (never given a row)
+	// and its columns must equal the canonical columns by name (compareColumns).
 	const db = new DatabaseSync(path, { enableForeignKeyConstraints: false })
 	deterministicRandom(db)
 	applyMigrations(db, migrations.slice(0, level + 1))
@@ -330,7 +388,19 @@ function load(sources, acceptDeletions, baseTime, path) {
 	const actual = schemaFingerprint(exported)
 	const missing = [...canonical.keys()].filter((t) => !definitions.has(t))
 	const extra = [...definitions.keys()].filter((t) => !canonical.has(t))
-	differing.push(...[...canonical.keys()].filter((t) => actual.has(t) && actual.get(t) !== canonical.get(t)))
+	/** @type {Map<string, Set<string>>} table -> columns NOT NULL in the canonical schema only */
+	const nullable = new Map()
+	for (const table of canonical.keys()) {
+		if (!actual.has(table) || actual.get(table) === canonical.get(table)) {
+			continue
+		}
+		const columns = compareColumns(columnsOfTable(db, table), columnsOfTable(exported, table))
+		if (columns === null) {
+			differing.push(table)
+		} else if (columns.length > 0) {
+			nullable.set(table, new Set(columns))
+		}
+	}
 	if (missing.length + extra.length + differing.length > 0) {
 		throw new ExportError('schema-mismatch', {
 			missing: missing.map(digestOf),
@@ -348,7 +418,7 @@ function load(sources, acceptDeletions, baseTime, path) {
 	// the export lists them or not.
 	/** @type {Record<string, number>} */
 	const rowsLoaded = Object.fromEntries([...canonical.keys()].map((t) => [t, 0]))
-	/** @type {Map<string, { name: string, hidden: number }[]>} */
+	/** @type {Map<string, Column[]>} */
 	const columnsOf = new Map()
 	/** @type {Map<string, import('node:sqlite').StatementSync>} */
 	const prepared = new Map()
@@ -363,12 +433,11 @@ function load(sources, acceptDeletions, baseTime, path) {
 				}
 				let info = columnsOf.get(parsed.table)
 				if (info === undefined) {
-					info = /** @type {{ name: string, hidden: number }[]} */ (
-						exported.prepare('SELECT name, hidden FROM pragma_table_xinfo(?) ORDER BY cid').all(parsed.table)
-					)
+					info = columnsOfTable(exported, parsed.table)
 					columnsOf.set(parsed.table, info)
 				}
 				const all = info
+				// Without a column list, values come in the export's column order; they go in by name either way.
 				const listed = parsed.columns ?? all.filter((c) => c.hidden === 0).map((c) => c.name)
 				const keep = []
 				for (const [i, name] of listed.entries()) {
@@ -380,6 +449,14 @@ function load(sources, acceptDeletions, baseTime, path) {
 						keep.push(i)
 					}
 				}
+				// A column nullable in the export only takes no NULL, nor a NULL default when a row leaves it out.
+				const strict = [...(nullable.get(parsed.table) ?? [])].map((name) => {
+					const at = listed.indexOf(name)
+					if (at === -1 && all.find((c) => c.name === name)?.dflt_value === null) {
+						throw new ExportError('null-in-not-null-column', { table: digestOf(parsed.table) })
+					}
+					return at
+				})
 				const key = `${parsed.table}\n${keep.map((i) => listed[i]).join('\n')}`
 				let insert = prepared.get(key)
 				if (insert === undefined) {
@@ -391,6 +468,9 @@ function load(sources, acceptDeletions, baseTime, path) {
 				for (const row of parsed.rows) {
 					if (row.length !== listed.length) {
 						throw new ExportError('invalid-insert', { table: digestOf(parsed.table) })
+					}
+					if (strict.some((at) => at !== -1 && row[at] === null)) {
+						throw new ExportError('null-in-not-null-column', { table: digestOf(parsed.table) })
 					}
 					insert.run(...keep.map((i) => row[i] ?? null))
 					rowsLoaded[parsed.table] = (rowsLoaded[parsed.table] ?? 0) + 1
@@ -500,6 +580,7 @@ function load(sources, acceptDeletions, baseTime, path) {
 		levelName: migrations[level]?.name ?? '',
 		migrationsApplied: pending.map((m) => m.name),
 		schemaFingerprint: fingerprintDigest(actual),
+		nullableInExport: [...nullable].flatMap(([table, columns]) => [...columns].map((c) => `${table}.${c}`)).sort(),
 		rowsLoaded,
 		deletions,
 		foreignKeyViolations,

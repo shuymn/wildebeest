@@ -12,7 +12,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 
-import { canonicalLegacyDatabase } from '../cli/lib/cutover/legacy-load.js'
+import { canonicalLegacyDatabase, legacyMigrations } from '../cli/lib/cutover/legacy-load.js'
 
 export const DOMAIN = 'kopje.test'
 const ORIGIN = `https://${DOMAIN}`
@@ -42,6 +42,9 @@ export type FixtureOptions = {
 	followersSpelling?: boolean
 	// Keep the database the export was written from open and return it, as the live legacy D1 (the fingerprint suite).
 	live?: boolean
+	// From level 20: actors.type as an instance has it that ran an earlier form of 0020, which dropped the column; it
+	// was added back with ALTER TABLE ADD COLUMN, so it is nullable and comes after mastodon_id (actorTypeDrift below).
+	actorTypeDrift?: boolean
 }
 
 export type LegacyFixture = {
@@ -61,6 +64,30 @@ function upstreamDatabase(level: number): DatabaseSync {
 		.sort()
 		.slice(0, level + 1)) {
 		db.exec(readFileSync(`${dir}${file}`, 'utf8'))
+	}
+	return db
+}
+
+// The canonical schema up to 0019, then actors.type dropped and added back as a plain nullable column (the triggers that
+// read it set aside meanwhile), then the canonical migrations from 0020 on.
+function actorTypeDriftDatabase(level: number): DatabaseSync {
+	if (level < 20) {
+		throw new Error('actorTypeDrift needs level 20 or later')
+	}
+	const db = canonicalLegacyDatabase(19)
+	const triggers = db
+		.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'actors'")
+		.all() as { name: string; sql: string }[]
+	for (const { name } of triggers) {
+		db.exec(`DROP TRIGGER "${name}"`)
+	}
+	db.exec('ALTER TABLE `actors` DROP COLUMN `type`')
+	db.exec('ALTER TABLE `actors` ADD COLUMN `type` text')
+	for (const { sql } of triggers) {
+		db.exec(sql)
+	}
+	for (const migration of legacyMigrations().slice(20, level + 1)) {
+		db.exec(migration.sql)
 	}
 	return db
 }
@@ -126,8 +153,14 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		authorChange = false,
 		followersSpelling = false,
 		live = false,
+		actorTypeDrift = false,
 	} = options
-	const db = line === 'T2' ? upstreamDatabase(level) : canonicalLegacyDatabase(level)
+	const db =
+		line === 'T2'
+			? upstreamDatabase(level)
+			: actorTypeDrift
+				? actorTypeDriftDatabase(level)
+				: canonicalLegacyDatabase(level)
 	const columns = new Map<string, string[]>()
 	const columnsOf = (table: string): string[] => {
 		let list = columns.get(table)

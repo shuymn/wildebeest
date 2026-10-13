@@ -1,10 +1,11 @@
 import { readdirSync, readFileSync } from 'node:fs'
+import type { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
 import { buildLegacyFixture } from './legacy-fixture.js'
-import { loadLegacyExport } from '../cli/lib/cutover/legacy-load.js'
+import { canonicalLegacyDatabase, loadLegacyExport } from '../cli/lib/cutover/legacy-load.js'
 import { digestOf, ExportError, parseStatement, splitStatements } from '../cli/lib/cutover/sql-script.js'
 
 const T1_LEVELS = [0, 5, 10, 18, 23, 35, 39]
@@ -174,5 +175,119 @@ describe('the sqlite_sequence reset D1 writes', () => {
 		const twice = withSequence(`${RESET}${ROW}`)
 		twice.set('actors', `${RESET}${twice.get('actors') ?? ''}`)
 		expect(errorOf(() => loadLegacyExport({ texts: twice.values() })).code).toBe('unexpected-statement')
+	})
+})
+
+describe('an export whose actors.type was added back by ALTER TABLE ADD COLUMN', () => {
+	const columns = (db: DatabaseSync, table: string) =>
+		db.prepare('SELECT name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?)').all(table)
+	const tableSql = (db: DatabaseSync, table: string) =>
+		(db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { sql: string }).sql
+
+	for (const level of [23, 35, 39]) {
+		it(`is accepted at level ${level}, and the bridge still gives the canonical schema`, async () => {
+			const fixture = await buildLegacyFixture({ level, actorTypeDrift: true })
+			const exported = fixture.texts.get('actors') ?? ''
+			expect(exported).toMatch(/"mastodon_id" TEXT,\s*`type` text/i)
+			const { db, report } = loadLegacyExport({ texts: fixture.texts.values() })
+			expect(report.nullableInExport).toEqual(['actors.type'])
+			const canonical = canonicalLegacyDatabase(39)
+			for (const table of ['actors', 'objects', 'users']) {
+				expect(tableSql(db, table), table).toBe(tableSql(canonical, table))
+				expect(columns(db, table), table).toEqual(columns(canonical, table))
+			}
+			canonical.close()
+			const types = db.prepare('SELECT type, count(*) AS n FROM actors GROUP BY type ORDER BY type').all()
+			expect(types.length).toBeGreaterThan(0)
+			expect(types.every((t) => typeof (t as { type: unknown }).type === 'string')).toBe(true)
+			db.close()
+		})
+	}
+
+	it('loads rows without a column list in the export order, by name', async () => {
+		const fixture = await buildLegacyFixture({ level: 39, actorTypeDrift: true })
+		const read = (texts: Iterable<string>) => {
+			const { db } = loadLegacyExport({ texts })
+			const rows = db.prepare('SELECT id, type, mastodon_id, username, domain FROM actors ORDER BY id').all()
+			db.close()
+			return rows
+		}
+		const bare = new Map(fixture.texts)
+		bare.set(
+			'actors',
+			(bare.get('actors') ?? '').replaceAll(/INSERT INTO "actors" \([^)]*\) VALUES/g, 'INSERT INTO "actors" VALUES')
+		)
+		expect(bare.get('actors')).not.toContain('INSERT INTO "actors" (')
+		expect(read(bare.values())).toEqual(read(fixture.texts.values()))
+	})
+
+	it('stops with a fixed code on a row that breaks the canonical NOT NULL', async () => {
+		const fixture = await buildLegacyFixture({ level: 39, actorTypeDrift: true })
+		const nulled = new Map(fixture.texts)
+		const actors = nulled.get('actors') ?? ''
+		expect(actors).toContain(",'Person',")
+		nulled.set('actors', actors.replace(",'Person',", ',NULL,'))
+		expect(errorOf(() => loadLegacyExport({ texts: nulled.values() }))).toMatchObject({
+			code: 'null-in-not-null-column',
+			detail: { table: digestOf('actors') },
+		})
+
+		// A row that leaves the column out would get its NULL default.
+		const omitted = new Map(fixture.texts)
+		omitted.set(
+			'actors',
+			`${actors
+				.split('\n')
+				.filter((line) => !line.startsWith('INSERT'))
+				.join('\n')}\nINSERT INTO "actors" ("id","properties") VALUES('https://remote.example/u/x','{}');\n`
+		)
+		expect(errorOf(() => loadLegacyExport({ texts: omitted.values() })).code).toBe('null-in-not-null-column')
+	})
+
+	it('accepts any column that is nullable in the export only, under the same row check', async () => {
+		const fixture = await buildLegacyFixture({ level: 39, actorTypeDrift: true })
+		const texts = new Map(fixture.texts)
+		const actors = texts.get('actors') ?? ''
+		expect(actors).toContain('"cdate" DATETIME NOT NULL')
+		texts.set('actors', actors.replace('"cdate" DATETIME NOT NULL', '"cdate" DATETIME'))
+		const { db, report } = loadLegacyExport({ texts: texts.values() })
+		db.close()
+		expect(report.nullableInExport).toEqual(['actors.cdate', 'actors.type'])
+		texts.set('actors', (texts.get('actors') ?? '').replace(/(VALUES\('[^']*'),'[^']*',/, '$1,NULL,'))
+		expect(errorOf(() => loadLegacyExport({ texts: texts.values() })).code).toBe('null-in-not-null-column')
+	})
+
+	it('still refuses any other column difference', async () => {
+		const fixture = await buildLegacyFixture({ level: 39, actorTypeDrift: true })
+		const actors = fixture.texts.get('actors') ?? ''
+		const create = /CREATE TABLE[^;]*;/.exec(actors)?.[0] ?? ''
+		expect(create).toContain('`type` text')
+		for (const [name, changed] of [
+			['another type', create.replace('`type` text', '`type` integer')],
+			['a default', create.replace('`type` text', "`type` text DEFAULT 'Person'")],
+			['a check', create.replace('`type` text', "`type` text CHECK (type <> '')")],
+			[
+				'a generated column',
+				create.replace('`type` text', "`type` text GENERATED ALWAYS AS (json_extract(properties, '$.type')) VIRTUAL"),
+			],
+			['NOT NULL where the canonical column is nullable', create.replace('`domain` text', '`domain` text NOT NULL')],
+			['an extra column', create.replace('`type` text', '`type` text, "extra" TEXT')],
+			['a missing column', create.replace(', `domain` text', '')],
+			[
+				'a primary key moved',
+				create.replace('`type` text', '`type` text UNIQUE').replace(/"id" TEXT PRIMARY KEY/i, '"id" TEXT'),
+			],
+		] as const) {
+			expect(changed, name).not.toBe(create)
+			const texts = new Map(fixture.texts)
+			texts.set('actors', `${changed}\n`)
+			let code = 'accepted'
+			try {
+				loadLegacyExport({ texts: texts.values() }).db.close()
+			} catch (error) {
+				code = error instanceof ExportError ? error.code : 'failed'
+			}
+			expect(code, name).toBe('schema-mismatch')
+		}
 	})
 })

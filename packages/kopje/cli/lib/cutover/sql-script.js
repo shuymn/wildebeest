@@ -474,24 +474,95 @@ export function exportOrder() {
 }
 
 /**
- * The DEFAULT, CHECK and generated-column (AS) expressions of a CREATE TABLE statement, in order, each normalized
- * outside string literals (no whitespace or identifier quotes, upper case), so the same definition written with other
- * spacing or quoting compares equal and any other expression does not.
+ * The DEFAULT, CHECK and generated-column (AS) expressions of a CREATE TABLE statement, each normalized outside string
+ * literals (no whitespace or identifier quotes, upper case), so the same definition written with other spacing or
+ * quoting compares equal and any other expression does not. A column's expressions are keyed by its name, so the same
+ * columns in another order compare equal (ALTER TABLE ADD COLUMN appends a column, wherever another form of its
+ * migration put it); the expressions of table constraints keep their order. Comments are left out.
+ * @param {string} sql
+ * @returns {{ columns: [string, string[]][], constraints: string[] }} columns sorted by name
+ */
+export function tableExpressions(sql) {
+	/** @type {[string, string[]][]} */
+	const columns = []
+	/** @type {string[]} */
+	const constraints = []
+	for (const item of definitionItems(sql)) {
+		const first = item[0] ?? ''
+		const word = /^[A-Za-z_][A-Za-z0-9_$]*/.exec(item)?.[0] ?? ''
+		if (first !== '"' && first !== '`' && first !== '[' && /^(CONSTRAINT|PRIMARY|UNIQUE|CHECK|FOREIGN)$/i.test(word)) {
+			constraints.push(...expressionsIn(item))
+			continue
+		}
+		const s = new Scanner(item)
+		const name = s.identifier()
+		columns.push([name, expressionsIn(item.slice(s.at))])
+	}
+	columns.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+	return { columns, constraints }
+}
+
+/**
+ * The column definitions and table constraints of a CREATE TABLE statement, split at its top-level commas, trimmed,
+ * comments replaced by a space.
  * @param {string} sql
  * @returns {string[]}
  */
-export function tableExpressions(sql) {
-	const start = sql.indexOf('(')
+function definitionItems(sql) {
+	/** @type {string[]} */
+	const items = []
+	let depth = 0
+	let current = ''
+	for (let i = sql.indexOf('('); i !== -1 && i < sql.length; i++) {
+		const c = sql[i] ?? ''
+		if (c === "'" || c === '"' || c === '`') {
+			const end = skipQuoted(sql, i)
+			current += sql.slice(i, end)
+			i = end - 1
+		} else if (c === '[') {
+			const end = sql.indexOf(']', i)
+			current += sql.slice(i, end === -1 ? sql.length : end + 1)
+			i = end === -1 ? sql.length : end
+		} else if (c === '-' && sql[i + 1] === '-') {
+			const end = sql.indexOf('\n', i)
+			current += ' '
+			i = end === -1 ? sql.length : end
+		} else if (c === '/' && sql[i + 1] === '*') {
+			const end = sql.indexOf('*/', i + 2)
+			current += ' '
+			i = end === -1 ? sql.length : end + 1
+		} else if (c === '(') {
+			if (depth++ > 0) {
+				current += c
+			}
+		} else if (c === ')' && --depth === 0) {
+			break
+		} else if (c === ',' && depth === 1) {
+			items.push(current.trim())
+			current = ''
+		} else {
+			current += c
+		}
+	}
+	items.push(current.trim())
+	return items.filter((item) => item !== '')
+}
+
+/**
+ * The DEFAULT, CHECK and AS expressions of one column definition or table constraint, in order.
+ * @param {string} text
+ * @returns {string[]}
+ */
+function expressionsIn(text) {
 	/** @type {string[]} */
 	const out = []
-	let i = start + 1
 	/** @param {number} from */
 	const group = (from) => {
 		let depth = 0
-		for (let j = from; j < sql.length; j++) {
-			const c = sql[j]
+		for (let j = from; j < text.length; j++) {
+			const c = text[j]
 			if (c === "'" || c === '"' || c === '`') {
-				j = skipQuoted(sql, j) - 1
+				j = skipQuoted(text, j) - 1
 			} else if (c === '(') {
 				depth++
 			} else if (c === ')') {
@@ -501,16 +572,17 @@ export function tableExpressions(sql) {
 				}
 			}
 		}
-		return sql.length
+		return text.length
 	}
-	while (start !== -1 && i < sql.length) {
-		const c = sql[i] ?? ''
+	let i = 0
+	while (i < text.length) {
+		const c = text[i] ?? ''
 		if (c === "'" || c === '"' || c === '`') {
-			i = skipQuoted(sql, i)
+			i = skipQuoted(text, i)
 			continue
 		}
-		const word = /^[A-Za-z_]+/.exec(sql.slice(i, i + 16))?.[0]
-		if (word === undefined || /[A-Za-z0-9_$]/.test(sql[i - 1] ?? '')) {
+		const word = /^[A-Za-z_]+/.exec(text.slice(i, i + 16))?.[0]
+		if (word === undefined || /[A-Za-z0-9_$]/.test(text[i - 1] ?? '')) {
 			i++
 			continue
 		}
@@ -519,18 +591,18 @@ export function tableExpressions(sql) {
 		if (kind !== 'DEFAULT' && kind !== 'CHECK' && kind !== 'AS') {
 			continue
 		}
-		while (/\s/.test(sql[i] ?? '')) {
+		while (/\s/.test(text[i] ?? '')) {
 			i++
 		}
 		let end
-		if (sql[i] === '(') {
+		if (text[i] === '(') {
 			end = group(i)
-		} else if (sql[i] === "'") {
-			end = skipQuoted(sql, i)
+		} else if (text[i] === "'") {
+			end = skipQuoted(text, i)
 		} else {
-			end = i + (/^[-+]?[A-Za-z0-9_.]+/.exec(sql.slice(i, i + 64))?.[0].length ?? 0)
+			end = i + (/^[-+]?[A-Za-z0-9_.]+/.exec(text.slice(i, i + 64))?.[0].length ?? 0)
 		}
-		out.push(`${kind} ${normalizeExpression(sql.slice(i, end))}`)
+		out.push(`${kind} ${normalizeExpression(text.slice(i, end))}`)
 		i = end
 	}
 	return out

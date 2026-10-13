@@ -45,6 +45,8 @@ const MESSAGES = /** @type {Record<string, string>} */ ({
 	'unsupported-level': 'the export is at a migration level the converter does not support',
 	'unknown-migrations': 'd1_migrations is not a prefix of the canonical legacy migrations',
 	'schema-mismatch': 'the export schema differs from the canonical schema at its level',
+	'null-in-not-null-column':
+		'a column that is nullable in the export only holds NULL, which the canonical schema refuses',
 	'export-too-large': 'the export exceeds the size limits (docs/cutover.md)',
 })
 

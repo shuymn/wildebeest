@@ -37,8 +37,11 @@ describe('convert and verify-conversion', () => {
 		{ level: 23 },
 		{ level: 35 },
 		{ level: 39 },
+		{ level: 23, actorTypeDrift: true },
+		{ level: 39, actorTypeDrift: true },
 	]) {
-		it(`converts a ${options.line ?? 'T1'} export at level ${options.level} and the independent check passes`, async () => {
+		const name = `${options.line ?? 'T1'} export at level ${options.level}${'actorTypeDrift' in options ? ' with actors.type added back' : ''}`
+		it(`converts a ${name} and the independent check passes`, async () => {
 			const exportPath = await exportOf(options)
 			const { ok, manifest, dumpPath } = await convert(exportPath)
 			expect(manifest.stop).toBeUndefined()
