@@ -84,6 +84,8 @@ Checks show pass, warning or fail, with a hint on what to fix. Each can be run a
   tag with `kopje-admin config access_aud=<tag>`, which goes through the `/admin` application.
 
 - Set up the daily backup: see [backup.md](backup.md).
+- Before the first update, read [upgrade.md](upgrade.md): how updates arrive, what the Store does on a new version,
+  and how to roll back.
 
 ## Things to check on a real account
 
