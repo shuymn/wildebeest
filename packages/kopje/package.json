@@ -20,8 +20,8 @@
 		"@fedify/vocab": "2.4.2",
 		"age-encryption": "0.3.1",
 		"aws4fetch": "1.0.20",
-		"es-toolkit": "1.46.1",
-		"hono": "4.13.7",
+		"es-toolkit": "1.52.0",
+		"hono": "4.13.13",
 		"jose": "6.2.12",
 		"linkify-it": "6.1.0",
 		"sanitize-html": "2.18.0",
@@ -30,12 +30,12 @@
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-plugin": "1.4.0",
-		"@cloudflare/workers-types": "4.20260627.1",
+		"@cloudflare/workers-types": "4.20260702.1",
 		"@fedify/testing": "2.4.2",
 		"@types/sanitize-html": "2.16.2",
 		"parse5": "8.0.1",
 		"typescript": "5.9.3",
 		"vitest": "4.1.11",
-		"wrangler": "4.105.0"
+		"wrangler": "4.149.0"
 	}
 }
