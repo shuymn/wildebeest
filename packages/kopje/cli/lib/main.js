@@ -37,6 +37,16 @@ Commands
                                 An import never changes them. With --import-token only while the Store has no
                                 usable admin access (bootstrap)
   catalog                       migrations and tables a dump for this Store must declare
+  cutover status                the cutover's publication mark, rollback journal and import state
+  cutover publish --yes         mark the instance published (step 9); no cutover reset is possible afterwards
+  cutover drain --fallback-actor <uri>
+                                rolling back: hand the requests Kopje spooled to the legacy Queue (LEGACY_QUEUE), in
+                                spool order, each verified first; those that fail for good are kept. Exits 3 when a
+                                request may verify later (run it again)
+  cutover discard-unverified --yes
+                                delete the kept requests that failed verification (after inspecting them with sql)
+  cutover reset --yes           take the Store back to empty after a completed import, keeping the configuration;
+                                only before publication, with MAINTENANCE=full and an empty journal
   pitr bookmark [--at <time>]   current bookmark, or the one for an ISO 8601 time
   pitr restore <bookmark> --yes restore the Store to a bookmark (requires MAINTENANCE=full)
   sql <query> [--limit <n>]     run a single read-only SELECT/WITH statement
@@ -118,6 +128,7 @@ function parseArgs(argv) {
 		'export',
 		'kopje-queue',
 		'manifest',
+		'fallback-actor',
 	])
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i] ?? ''
@@ -633,6 +644,70 @@ export async function run({
 					await io.remove(`${rest[0]}.import.json`)
 				}
 				return 0
+			}
+			case 'cutover': {
+				const [sub] = rest
+				if (sub === 'status') {
+					print(await client.get('/admin/cutover/status'))
+					return 0
+				}
+				if (sub === 'publish') {
+					if (flags.yes !== true) {
+						throw new UsageError('cutover publish ends the cutover for good (no reset after it); pass --yes')
+					}
+					print(await client.post('/admin/cutover/publish'))
+					return 0
+				}
+				if (sub === 'drain') {
+					const fallbackActor = flags['fallback-actor']
+					if (typeof fallbackActor !== 'string') {
+						throw new UsageError('cutover drain --fallback-actor <local actor URI>')
+					}
+					const totals = { sent: 0, unverified: 0 }
+					for (;;) {
+						const round = await client.post('/admin/cutover/drain', { fallbackActor })
+						totals.sent += round.sent
+						totals.unverified += round.unverified
+						out.progress(`drained ${totals.sent}, kept ${totals.unverified}, pending ${round.pending}`)
+						if (round.stopped !== null) {
+							print({ ...totals, pending: round.pending, unverified: round.unverifiedTotal, stopped: round.stopped })
+							out.info(`drain stopped (${round.stopped}); run it again later, nothing after that request was sent`)
+							return 3
+						}
+						if (round.pending === 0) {
+							print({ ...totals, pending: 0, unverified: round.unverifiedTotal })
+							out.info(
+								round.unverifiedTotal === 0
+									? 'rollback journal empty'
+									: `rollback journal drained; ${round.unverifiedTotal} requests failed verification and are kept`
+							)
+							return 0
+						}
+					}
+				}
+				if (sub === 'discard-unverified') {
+					if (flags.yes !== true) {
+						throw new UsageError('cutover discard-unverified deletes the kept requests; pass --yes')
+					}
+					print(await client.post('/admin/cutover/discard-unverified', { confirm: true }))
+					return 0
+				}
+				if (sub === 'reset') {
+					if (flags.yes !== true) {
+						throw new UsageError('cutover reset deletes all data of the Store; pass --yes')
+					}
+					const started = await client.post('/admin/cutover/reset', { confirm: true })
+					let done = started.done === true
+					while (!done) {
+						out.progress(`resetting the Store (${started.id})`)
+						done = (await client.post('/admin/import/reset', { confirm: true, id: started.id })).done === true
+					}
+					out.info(started.id === null ? 'the Store is already empty' : 'the Store is empty again')
+					return 0
+				}
+				throw new UsageError(
+					'cutover status | publish --yes | drain --fallback-actor <uri> | discard-unverified --yes | reset --yes'
+				)
 			}
 			case 'pitr': {
 				if (rest[0] === 'bookmark') {

@@ -1,7 +1,7 @@
 import { type DeliveryDeps, handleDoorbells } from './deliver'
 import { isDeliverMessage } from '../federation/delivery'
 import { type InboxDeps, type JobsMessage, processInbox, requestInboundJobs, ringDeliveries } from '../federation/inbox'
-import { type SpoolMessage, spoolMessageOptions } from '../federation/spool'
+import { encodeSpoolRecord, inflate, type SpoolMessage, spoolMessageOptions } from '../federation/spool'
 import { readConfig } from '../platform/config'
 import { errorFields } from '../platform/error-message'
 import { callStore } from '../platform/store-client'
@@ -58,6 +58,12 @@ export async function handleQueue(batch: MessageBatch, env: Env, queueDeps: Queu
 		if (!isSpoolMessage(body)) {
 			console.error({ event: 'kopje.queue.unknown', id: message.id })
 			message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
+			continue
+		}
+		// A cutover being rolled back: the request goes to the Store's rollback journal, and from there to the legacy
+		// instance (docs/cutover-runbook.md). If the Store refuses it, it is held in the Queue as in maintenance.
+		if (config.ok && config.config.CUTOVER_ROLLBACK === 'journal' && (await journal(body, env, deps))) {
+			message.ack()
 			continue
 		}
 		if (maintenance) {
@@ -164,11 +170,6 @@ function isSetupProbe(body: unknown): body is { kind: 'setup-probe'; id: string 
 	return typeof m === 'object' && m !== null && m.kind === 'setup-probe' && typeof m.id === 'string'
 }
 
-async function inflate(bytes: Uint8Array): Promise<Uint8Array> {
-	const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'))
-	return new Uint8Array(await new Response(stream).arrayBuffer())
-}
-
 async function requeue(message: Message, body: SpoolMessage, queue: Queue): Promise<void> {
 	try {
 		await queue.send(body, { ...spoolMessageOptions, delaySeconds: SPOOL_REQUEUE_DELAY_SECONDS })
@@ -177,6 +178,22 @@ async function requeue(message: Message, body: SpoolMessage, queue: Queue): Prom
 		// The copy was not sent; keep the original instead (this one does count as a retry).
 		console.error({ event: 'kopje.spool.requeue.failed', id: message.id, ...errorFields(error) })
 		message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
+	}
+}
+
+async function journal(body: SpoolMessage, env: Env, deps: InboxDeps): Promise<boolean> {
+	try {
+		const record = await encodeSpoolRecord(body)
+		const result = (await callStore(
+			() => deps.store(env).journalSpool(deps.build(env), { spooledAt: body.spooledAt, record }) as Promise<unknown>
+		)) as { ok: boolean; code?: string }
+		if (!result.ok) {
+			console.warn({ event: 'kopje.spool.journal.refused', code: result.code })
+		}
+		return result.ok
+	} catch (error) {
+		console.error({ event: 'kopje.spool.journal.failed', ...errorFields(error) })
+		return false
 	}
 }
 

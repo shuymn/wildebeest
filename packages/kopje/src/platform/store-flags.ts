@@ -12,6 +12,8 @@ import type { OperationKind } from './store-kernel'
 //   import      : an import in progress; nothing passes until it is verified
 //   import_receipt : the outcome of the last verified import, kept for a client whose response was lost (no effect)
 //   import_reset   : the id of the last completed reset, for the same reason (no effect)
+//   published      : the instance has served with MAINTENANCE=off (or the operator published it): a cutover can no
+//                    longer be rolled back, so the Store refuses the cutover reset (docs/cutover-runbook.md)
 
 export type MaintenanceFlag = { mode: 'readonly'; at: number }
 
@@ -83,19 +85,29 @@ export type OperatorFlags = {
 	import_receipt: ImportReceipt | null
 	// The last completed reset, so a retried reset request for that import is answered instead of refused.
 	import_reset: { id: string; completedAt: number } | null
+	published: PublishedFlag | null
 }
 
-export const FLAG_NAMES = ['maintenance', 'dump', 'import', 'import_receipt', 'import_reset'] as const
+export type PublishedFlag = { at: number; via: 'command' | 'serving' }
+
+export const FLAG_NAMES = ['maintenance', 'dump', 'import', 'import_receipt', 'import_reset', 'published'] as const
 type FlagName = (typeof FLAG_NAMES)[number]
 
 export function readFlags(sql: SqlStorage): OperatorFlags {
-	const flags: OperatorFlags = { maintenance: null, dump: null, import: null, import_receipt: null, import_reset: null }
+	const flags: OperatorFlags = {
+		maintenance: null,
+		dump: null,
+		import: null,
+		import_receipt: null,
+		import_reset: null,
+		published: null,
+	}
 	for (const row of sql
 		.exec<{
 			name: FlagName
 			value: string
 		}>(
-			"SELECT name, value FROM kopje_state WHERE name IN ('maintenance', 'dump', 'import', 'import_receipt', 'import_reset')"
+			"SELECT name, value FROM kopje_state WHERE name IN ('maintenance', 'dump', 'import', 'import_receipt', 'import_reset', 'published')"
 		)
 		.toArray()) {
 		flags[row.name] = JSON.parse(row.value) as never

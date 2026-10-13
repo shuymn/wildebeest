@@ -3,7 +3,16 @@ import { CryptographicKey } from '@fedify/vocab'
 import { Temporal } from 'temporal-polyfill'
 
 import { createRemoteLoaders, type FederationDeps, type FederationState, type RemoteLoaders } from './federation'
-import { isTransientLoadError, loadFailureOf, RefusedFetchError, requestBudget } from './loader'
+import {
+	createContextLoader,
+	createSafeLoader,
+	isTransientLoadError,
+	type LoaderDeps,
+	loadFailureOf,
+	RefusedFetchError,
+	requestBudget,
+	requireObjectRoot,
+} from './loader'
 import { fetchActor } from './remote-actor'
 import {
 	ACTOR_TYPES,
@@ -527,4 +536,91 @@ async function prepare(
 		return { status: 202, reason: 'not-alias' }
 	}
 	return { ...activity, target: fetched.input }
+}
+
+// The cutover rollback's check of a spooled request (docs/cutover-runbook.md): the same signature verification and
+// key ownership rule as receiveInbound (ID-1, against the time the request was spooled, OPS-1), without the Store:
+// keys are fetched anew, unsigned, within the request budget and the JSON bounds, and nothing is recorded. Only the
+// request is judged here; the legacy instance applies the activity. transient: may pass if tried again later.
+export type SpoolVerification =
+	| { ok: true; actor: string; activity: Json }
+	| { ok: false; transient: boolean; reason: string }
+
+export async function verifySpooledRequest(
+	loader: LoaderDeps,
+	domain: string,
+	request: InboundRequest
+): Promise<SpoolVerification> {
+	const headers = new Headers(request.headers)
+	const media = parseMediaType(headers.get('content-type') ?? '')
+	if (media === null || !isActivityPubMediaType(media)) {
+		return { ok: false, transient: false, reason: 'not-activitystreams' }
+	}
+	let json: unknown
+	try {
+		json = JSON.parse(new TextDecoder().decode(request.body))
+	} catch {
+		return { ok: false, transient: false, reason: 'invalid-json' }
+	}
+	if (!isObject(json) || !withinJsonBounds(json)) {
+		return { ok: false, transient: false, reason: 'not-an-object' }
+	}
+	const actorUri = idOf(json.actor)
+	if (actorUri === null || originOf(actorUri) === null || originOf(actorUri) === `https://${domain}`) {
+		return { ok: false, transient: false, reason: 'invalid-actor' }
+	}
+	if (typeof json.id === 'string' && originOf(json.id) !== originOf(actorUri)) {
+		return { ok: false, transient: false, reason: 'foreign-id' }
+	}
+	const deps = { ...loader, budget: requestBudget(Date.now()) }
+	const bounded =
+		(base: DocumentLoader): DocumentLoader =>
+		async (url, options) => {
+			const remote = await base(url, options)
+			if (!withinJsonBounds(remote.document)) {
+				throw new RefusedFetchError(new URL(remote.documentUrl), 'Document exceeds the JSON bounds')
+			}
+			return remote
+		}
+	const documentLoader = requireObjectRoot(bounded(createSafeLoader(deps)))
+	const contextLoader = bounded(createContextLoader(deps))
+	const signed = new Request(request.url, { method: request.method, headers, body: request.body })
+	let verified: Awaited<ReturnType<typeof verifyRequestDetailed>>
+	try {
+		verified = await verifyRequestDetailed(signed, {
+			documentLoader,
+			contextLoader,
+			currentTime: Temporal.Instant.fromEpochMilliseconds(request.receivedAt),
+			timeWindow: TIME_WINDOW,
+		})
+	} catch (error) {
+		const failure = loadFailureOf(error)
+		if (failure === undefined) {
+			throw error
+		}
+		return { ok: false, transient: isTransientLoadError(failure), reason: 'key-unusable' }
+	}
+	if (!verified.verified) {
+		const reason = verified.reason
+		return reason.type === 'keyFetchError'
+			? { ok: false, transient: isTransientKeyFailure(reason.result), reason: 'key-unavailable' }
+			: { ok: false, transient: false, reason: reason.type }
+	}
+	const { key } = verified
+	if (key.publicKey === null || key.id === null || (key.ownerId !== null && key.ownerId.href !== actorUri)) {
+		return { ok: false, transient: false, reason: 'not-key-owner' }
+	}
+	const pem = await exportSpki(key.publicKey)
+	const fetched = await fetchActor(actorUri, documentLoader, contextLoader)
+	if (fetched.kind === 'transient') {
+		return { ok: false, transient: true, reason: 'actor-unavailable' }
+	}
+	if (fetched.kind !== 'ok' || fetched.input === null) {
+		return { ok: false, transient: false, reason: 'actor-unusable' }
+	}
+	const keys = withVerifiedReference(fetched.input.keys, fetched.actor.publicKeyIds, key, pem, actorUri)
+	if (!keys.some((listed) => listed.id === key.id?.href && listed.pem === pem)) {
+		return { ok: false, transient: false, reason: 'not-key-owner' }
+	}
+	return { ok: true, actor: actorUri, activity: json }
 }

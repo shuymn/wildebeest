@@ -223,6 +223,35 @@ export class Store extends DurableObject<Env> {
 		return this.#admin.config()
 	}
 
+	// The cutover's publication mark, rollback journal and reset (store-admin.ts, docs/cutover-runbook.md).
+	cutoverStatus(callerBuild: string) {
+		return this.#admin.cutoverStatus(callerBuild)
+	}
+
+	markPublished(callerBuild: string, via: 'command' | 'serving') {
+		return this.#admin.markPublished(callerBuild, via)
+	}
+
+	journalSpool(callerBuild: string, entry: { spooledAt: number; record: Uint8Array }) {
+		return this.#admin.journalSpool(callerBuild, entry)
+	}
+
+	journalPage(callerBuild: string, authority: ImportAuthority, limit: number) {
+		return this.#admin.journalPage(callerBuild, authority, limit)
+	}
+
+	journalSettle(callerBuild: string, authority: ImportAuthority, settled: { sent: string[]; unverified: string[] }) {
+		return this.#admin.journalSettle(callerBuild, authority, settled)
+	}
+
+	journalDiscardUnverified(callerBuild: string, authority: ImportAuthority) {
+		return this.#admin.journalDiscardUnverified(callerBuild, authority)
+	}
+
+	cutoverReset(callerBuild: string, authority: ImportAuthority) {
+		return this.#admin.cutoverReset(callerBuild, authority)
+	}
+
 	setConfig(callerBuild: string, authority: ImportAuthority, values: unknown) {
 		return this.#admin.setConfig(callerBuild, authority, values)
 	}

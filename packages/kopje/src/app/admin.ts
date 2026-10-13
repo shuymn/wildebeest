@@ -2,7 +2,9 @@ import { type Context, Hono } from 'hono'
 import { createMiddleware } from 'hono/factory'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 
+import { drainJournal } from './cutover'
 import { healthReport } from './health'
+import type { LoaderDeps } from '../federation/loader'
 import { type AccessSettings, adminRefusal, adminUsable, normalizeTeamDomain } from '../platform/access-settings'
 import { readBackupConfig } from '../platform/backup-config'
 import { readBoundedBody } from '../platform/body'
@@ -42,6 +44,8 @@ const SESSION_SECRET = /^[A-Za-z0-9_-]{43}$/
 export type AdminDeps = AccessDeps & {
 	build: (env: Env) => string
 	store: StoreResolver
+	// Remote fetches of the cutover rollback drain (app/cutover.ts).
+	loader: Omit<LoaderDeps, 'userAgent'>
 	// Rings the delivery doorbell after a retry.
 	doorbell: (env: Env) => Promise<void>
 }
@@ -70,6 +74,8 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	'invalid-op-id': 400,
 	'import-id-required': 400,
 	'import-not-found': 404,
+	published: 409,
+	'journal-not-empty': 409,
 	'pitr-unavailable': 503,
 	'chunk-failed': 500,
 }
@@ -134,7 +140,7 @@ function adminAllowed(identity: AccessIdentity, access: AccessSettings): string 
 	return adminRefusal(access, identity)
 }
 
-export function adminRoutes({ build, store, fetch, now, doorbell }: AdminDeps) {
+export function adminRoutes({ build, store, fetch, now, doorbell, loader }: AdminDeps) {
 	const admin = new Hono<AdminEnv>()
 	const stub = (c: Context<AdminEnv>): StoreStub => store(c.env)
 
@@ -405,6 +411,50 @@ export function adminRoutes({ build, store, fetch, now, doorbell }: AdminDeps) {
 	admin.post('/config', async (c) => {
 		const { values } = await jsonBody(c)
 		return reply(c, await stub(c).setConfig(build(c.env), c.get('auth'), values))
+	})
+
+	// ---- cutover (docs/cutover-runbook.md): publication, the rollback journal and drain, the reset after an import.
+	// Access admin only: the import token and import sessions never reach these paths.
+
+	admin.get('/cutover/status', async (c) => c.json(await stub(c).cutoverStatus(build(c.env))))
+
+	admin.post('/cutover/publish', async (c) => c.json(await stub(c).markPublished(build(c.env), 'command')))
+
+	admin.post('/cutover/drain', async (c) => {
+		const { fallbackActor, max } = await jsonBody(c)
+		const result = await drainJournal(c.env, { build: build(c.env), store: stub(c), loader, now }, c.get('auth'), {
+			fallbackActor,
+			max,
+		})
+		if (!result.ok) {
+			return c.json({ error: result.message, code: result.code }, result.status)
+		}
+		const { ok: _ok, ...rest } = result
+		return c.json(rest)
+	})
+
+	admin.post('/cutover/discard-unverified', async (c) => {
+		const { confirm } = await jsonBody(c)
+		if (confirm !== true) {
+			return c.json({ error: 'this deletes the kept requests; send {"confirm": true}' }, 400)
+		}
+		return reply(c, await stub(c).journalDiscardUnverified(build(c.env), c.get('auth')))
+	})
+
+	// Like a PITR restore, refused unless the env MAINTENANCE=full holds the instance from outside.
+	admin.post('/cutover/reset', async (c) => {
+		const { confirm } = await jsonBody(c)
+		if (confirm !== true) {
+			return c.json({ error: 'reset deletes all data of this Store; send {"confirm": true}' }, 400)
+		}
+		const config = readConfig(c.env)
+		if (!config.ok || config.config.MAINTENANCE !== 'full') {
+			return c.json(
+				{ error: 'set MAINTENANCE=full on the Worker before a cutover reset', code: 'maintenance-required' },
+				409
+			)
+		}
+		return reply(c, await stub(c).cutoverReset(build(c.env), c.get('auth')))
 	})
 
 	// ---- PITR

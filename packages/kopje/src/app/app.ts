@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { type Context, Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 
@@ -82,6 +82,29 @@ export function createApp({
 		app.use(path, apiCors)
 	}
 
+	// The first request this isolate serves with MAINTENANCE=off marks the Store published: from then on a cutover can
+	// no longer be reset (docs/cutover-runbook.md). One attempt per isolate, again after a failure.
+	let servingMarked = false
+	const markServing = (c: Context<AppEnv>) => {
+		if (servingMarked) {
+			return
+		}
+		servingMarked = true
+		const marked = store(c.env)
+			.markPublished(build(c.env), 'serving')
+			.then(
+				() => undefined,
+				() => {
+					servingMarked = false
+				}
+			)
+		try {
+			c.executionCtx.waitUntil(marked)
+		} catch {
+			// No execution context (a test calling app.request): the promise still settles.
+		}
+	}
+
 	// Maintenance gate, max(env, Store). The env mode (MAINTENANCE) is applied here. The Store applies its own readonly
 	// state to each RPC by operation kind, and a refusal arrives as StoreUnavailableError in onError: inbox requests
 	// are spooled, everything else gets 503.
@@ -99,6 +122,9 @@ export function createApp({
 			}
 			console.error({ event: 'kopje.config.invalid', issues: config.issues })
 			return mastodonError(503, 'This server is misconfigured')
+		}
+		if (config.config.MAINTENANCE === 'off') {
+			markServing(c)
 		}
 		const decision = decide(requestClass, config.config.MAINTENANCE)
 		if (decision === 'unavailable') {
@@ -134,15 +160,19 @@ export function createApp({
 
 	app.get('/health', (c) => publicHealth(build(c.env), readConfig(c.env), () => store(c.env), readBackupConfig(c.env)))
 
-	app.route(ADMIN_PREFIX, adminRoutes({ build, now, store, doorbell, fetch: (input, init) => fetch(input, init) }))
+	const keygen = federation.keygen ?? generateRsaKeyPair
+	const loader = federation.loader ?? { fetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, init) }
+
+	app.route(
+		ADMIN_PREFIX,
+		adminRoutes({ build, now, store, doorbell, loader, fetch: (input, init) => fetch(input, init) })
+	)
 
 	const setupGate = requireSetup(build, store)
 	for (const path of FEDERATION_PATHS) {
 		app.use(path, setupGate)
 	}
 
-	const keygen = federation.keygen ?? generateRsaKeyPair
-	const loader = federation.loader ?? { fetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, init) }
 	const inbox = inboxHandler({ build, store, now, keygen, loader })
 	for (const path of INBOX_ROUTES) {
 		app.post(path, inbox)

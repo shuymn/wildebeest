@@ -28,6 +28,11 @@ const configSchema = z.object({
 	// Each local account's share of it per month, so one account cannot lock the others out. Unset: a tenth of
 	// IMAGES_MONTHLY_TRANSFORMS (accountMonthlyTransforms).
 	IMAGES_ACCOUNT_MONTHLY_TRANSFORMS: z.coerce.number().int().min(0).optional(),
+	// Rolling a cutover back (docs/cutover-runbook.md): 'journal' makes the Queue consumer keep every spooled inbox
+	// request in the Store's rollback journal, for `kopje-admin cutover drain` to hand to the legacy instance.
+	CUTOVER_ROLLBACK: z.enum(['journal']).optional(),
+	// For that drain only: the legacy instance's VAPID_JWK, which its inbox messages carry.
+	LEGACY_VAPID_JWK: z.string().min(1).optional(),
 	// Set after /setup generates it; Web Push stays unavailable until then.
 	VAPID_JWK: z
 		.string()
