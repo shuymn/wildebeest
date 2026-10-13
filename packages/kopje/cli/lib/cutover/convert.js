@@ -11,9 +11,8 @@
 
 import { createHash } from 'node:crypto'
 
+import { normalizeSearchText, REMOTE_HTML_RAW_LIMIT, remoteHtmlText, sanitizeRemoteHtml } from './kopje-runtime.js'
 import { digestOf } from './sql-script.js'
-import { normalizeSearchText } from '../../../src/domain/search-text.ts'
-import { REMOTE_HTML_RAW_LIMIT, remoteHtmlText, sanitizeRemoteHtml } from '../../../src/security/html.ts'
 
 const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 const STATUS_TYPES = new Set(['Note', 'Article', 'Page', 'Question', 'Video', 'Audio', 'Event'])

@@ -7,7 +7,7 @@
 // Records are kept as exact values, not digests, so a change of the same length is still a difference. They hold data
 // and are never printed: reports carry counts and digests only.
 
-import { REMOTE_HTML_RAW_LIMIT, sanitizeRemoteHtml } from '../../../src/security/html.ts'
+import { REMOTE_HTML_RAW_LIMIT, sanitizeRemoteHtml } from './kopje-runtime.js'
 
 const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 const STATUS_TYPES = new Set(['Note', 'Article', 'Page', 'Question', 'Video', 'Audio', 'Event'])

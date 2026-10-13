@@ -9,7 +9,9 @@
 //   4. runs the template in workerd (wrangler's test harness): the Store starts and applies its migrations, a fetch,
 //      an asset, the scheduled and queue handlers, and the packaged version as the Store reports it;
 //   5. installs the tarball with npm into an empty project: `kopje-admin --help` runs from the installed bin, and the
-//      types check in a small consumer.
+//      types check in a small consumer;
+//   6. runs the cutover tools from that install on a synthetic legacy export: convert, verify-conversion, fingerprint
+//      export and maintenance-worker (which needs the maintenance bundles in dist/).
 //
 //   node scripts/check-kopje-package.mjs [--out <dir>] [--version <semver>]
 //     --out      keeps the tarball in <dir> (the release publishes it)
@@ -21,7 +23,7 @@ import { createHash } from 'node:crypto'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join, relative, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 
 import { createTestHarness, experimental_readRawConfig as readRawConfig } from 'wrangler'
@@ -113,6 +115,9 @@ try {
 	// 5. An npm install of the tarball.
 	checkInstall(tarball, join(work, 'consumer'))
 	checkAdminScript(app, join(work, 'without-install'))
+
+	// 6. The cutover tools, from the install.
+	await checkCutover(join(work, 'consumer'), join(work, 'cutover'))
 } finally {
 	rmSync(work, { recursive: true, force: true })
 }
@@ -327,6 +332,36 @@ function checkInstall(tarball, dir) {
 	run(join(bin, 'tsc'), ['-p', dir], dir)
 }
 
+// The cutover tools ship as CLI modules that run Kopje's code from dist/ (the package has no sources). A synthetic
+// legacy export (packages/kopje/test-node/legacy-fixture.ts) is converted, checked, fingerprinted and turned into a
+// maintenance worker by the installed CLI.
+async function checkCutover(installed, dir) {
+	const { buildLegacyFixture } = await import(pathToFileURL(join(pkg, 'test-node', 'legacy-fixture.ts')).href)
+	const fixture = await buildLegacyFixture({ level: 39, notificationSequence: 12n })
+	const exportDir = join(dir, 'export')
+	mkdirSync(exportDir, { recursive: true })
+	for (const [table, text] of fixture.texts) {
+		writeFileSync(join(exportDir, `${table}.sql`), text)
+	}
+	const cli = join(installed, 'node_modules', '.bin', 'kopje-admin')
+	const steps = [
+		['convert', exportDir, '--out', join(dir, 'out'), '--base-time', '2026-10-20T00:00:00Z'],
+		['verify-conversion', exportDir, join(dir, 'out', 'kopje.dump')],
+		['fingerprint', 'export', exportDir],
+		['maintenance-worker', exportDir, '--domain', 'kopje.test', '--out', join(dir, 'pages')],
+	]
+	for (const args of steps) {
+		try {
+			execFileSync(cli, args, { cwd: installed, stdio: ['ignore', 'pipe', 'pipe'] })
+		} catch (error) {
+			fail(`the installed \`kopje-admin ${args[0]}\` failed: ${String(error.stderr ?? error.message).slice(0, 300)}`)
+		}
+	}
+	if (!existsSync(join(dir, 'pages', '_worker.js'))) {
+		fail('the installed `kopje-admin maintenance-worker` wrote no _worker.js')
+	}
+}
+
 function sleep(ms) {
 	return new Promise((done) => setTimeout(done, ms))
 }
@@ -383,6 +418,9 @@ function compareConfigs() {
 	if (queues.size !== 1) {
 		fail(`deploy/wrangler.jsonc must produce to and consume one queue, not ${[...queues]}`)
 	}
+	if (!target.queues?.consumers?.every((consumer) => typeof consumer.dead_letter_queue === 'string')) {
+		fail('deploy/wrangler.jsonc must give its Queue consumer a dead_letter_queue')
+	}
 	if (target.keep_names !== false) {
 		fail('deploy/wrangler.jsonc must set keep_names to false: the kopje bundle already keeps the names')
 	}
@@ -398,7 +436,11 @@ function compareConfigs() {
 		migrations: config.migrations,
 		queues: {
 			producers: config.queues?.producers?.map(({ queue: _, ...rest }) => rest),
-			consumers: config.queues?.consumers?.map(({ queue: _, ...rest }) => rest),
+			// The dead-letter queue is named per instance; that there is one is the setting.
+			consumers: config.queues?.consumers?.map(({ queue: _, dead_letter_queue: dlq, ...rest }) => ({
+				...rest,
+				deadLetterQueue: dlq !== undefined,
+			})),
 		},
 		ratelimits: config.ratelimits?.map(({ namespace_id: _, ...rest }) => rest),
 		r2_buckets: config.r2_buckets?.map(({ bucket_name: _, ...rest }) => rest),
