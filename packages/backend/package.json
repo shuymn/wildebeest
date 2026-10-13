@@ -18,9 +18,9 @@
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "0.16.20",
-		"@cloudflare/workers-types": "4.20260627.1",
+		"@cloudflare/workers-types": "4.20260702.1",
 		"@types/cookie": "1.0.0",
-		"@types/node": "24.13.2",
+		"@types/node": "24.19.2",
 		"@typescript-eslint/eslint-plugin": "8.62.0",
 		"@typescript-eslint/parser": "8.62.0",
 		"@vitest/coverage-istanbul": "4.1.11",
@@ -28,13 +28,13 @@
 		"eslint-import-resolver-typescript": "4.4.5",
 		"eslint-plugin-import": "2.32.0",
 		"eslint-plugin-unused-imports": "4.4.1",
-		"hono": "4.13.7",
+		"hono": "4.13.13",
 		"parse5": "8.0.1",
 		"typescript": "5.9.3",
-		"vite": "6.4.3",
+		"vite": "6.4.4",
 		"vite-tsconfig-paths": "6.1.1",
 		"vitest": "4.1.11",
-		"wrangler": "4.105.0"
+		"wrangler": "4.149.0"
 	},
 	"dependencies": {
 		"cookie": "1.1.1",
