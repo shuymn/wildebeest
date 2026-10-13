@@ -199,10 +199,13 @@ describe('the export against the conversion manifest', () => {
 			result: 'FAIL',
 			exportDiffers: [empty],
 		})
+		// Bookkeeping keys with the export's own counts differ too: they are not counted tables.
 		for (const [name, count] of [
 			['no_such_table', 0],
 			['sqlite_sequence', 999],
 			['d1_migrations', 999],
+			['sqlite_sequence', final.fingerprint.tables.sqlite_sequence!.rows],
+			['d1_migrations', final.fingerprint.tables.d1_migrations!.rows],
 		] as const) {
 			const extra = { ...parsed, rowsLoaded: { ...parsed.rowsLoaded, [name]: count } }
 			expect(compareFingerprints(final.fingerprint, final.fingerprint, extra), name).toMatchObject({

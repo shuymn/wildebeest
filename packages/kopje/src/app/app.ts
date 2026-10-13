@@ -92,26 +92,6 @@ export function createApp({
 		return spoolInbox(request, body, queue, now())
 	}
 
-	// Publication is a gate: with MAINTENANCE=off, a request goes on only once the Store has its published mark (taken
-	// while it holds data; after it a cutover can no longer be reset, docs/cutover-runbook.md), or once the Store has
-	// recorded that it served unmarked (it then holds no data, or an import runs, and no import begins or completes until
-	// the operator clears that). When the mark cannot be taken (the RPC fails, or a rollback is in progress) the request
-	// is answered as when the Store is unavailable: inbox requests are spooled, always-served GETs come from snapshots,
-	// the rest is 503. Only a mark that exists is remembered, per isolate, so once set it costs nothing.
-	let published = false
-	const ensurePublished = async (env: Env): Promise<boolean> => {
-		if (published) {
-			return true
-		}
-		try {
-			const mark = await store(env).markPublished(build(env), 'serving')
-			published = mark.published !== null
-			return mark.refused === undefined
-		} catch {
-			return false
-		}
-	}
-
 	// Maintenance gate, max(env, Store). The env mode (MAINTENANCE) is applied here. The Store applies its own readonly
 	// state to each RPC by operation kind, and a refusal arrives as StoreUnavailableError in onError: inbox requests
 	// are spooled, everything else gets 503.
@@ -149,9 +129,6 @@ export function createApp({
 			if (decision === 'spool') {
 				return spool(c.env.QUEUE, c.req.raw, body)
 			}
-		}
-		if (config.config.MAINTENANCE === 'off' && c.req.path !== '/health' && !(await ensurePublished(c.env))) {
-			throw new StoreUnavailableError('transient')
 		}
 		await next()
 		// A successful API write may have recorded deliveries (statuses, favourites, boosts, follows): ring once it has

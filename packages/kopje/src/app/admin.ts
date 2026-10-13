@@ -37,7 +37,7 @@ const IMPORT_CHUNK_LIMIT = 16 * 1024 * 1024
 const TOKEN_READ_PATHS = [/^\/admin\/(health|version|catalog|config)$/]
 // The import token may name a running token import (its id and phase only) to abandon it when its session was lost.
 const TOKEN_PROGRESS_PATH = /^\/admin\/import\/progress$/
-const TOKEN_WRITE_PATHS = [/^\/admin\/import\/(begin|reset)$/, /^\/admin\/config$/]
+const TOKEN_WRITE_PATHS = [/^\/admin\/import\/(begin|reset)$/, /^\/admin\/config$/, /^\/admin\/publish$/]
 const SESSION_PATHS = [/^\/admin\/import\/(chunk|finish|verify|progress|reset)$/]
 const SESSION_SECRET = /^[A-Za-z0-9_-]{43}$/
 
@@ -78,7 +78,7 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	'journal-not-empty': 409,
 	'drain-in-progress': 409,
 	'rollback-in-progress': 409,
-	'served-unpublished': 409,
+	'not-unpublished': 409,
 	'pitr-unavailable': 503,
 	'chunk-failed': 500,
 }
@@ -421,57 +421,55 @@ export function adminRoutes({ build, store, fetch, now, doorbell, loader }: Admi
 
 	admin.get('/cutover/status', async (c) => c.json(await stub(c).cutoverStatus(build(c.env))))
 
-	admin.post('/cutover/publish', async (c) => {
-		const mark = await stub(c).markPublished(build(c.env), 'command')
-		if (mark.refused !== undefined) {
-			return c.json({ error: 'a rollback is in progress: drain or discard the journal first', code: mark.refused }, 409)
+	// Publication: ends the readonly state a verified import leaves. An Access admin, or IMPORT_TOKEN while the Store
+	// has no usable admin access (the Store checks both).
+	admin.post('/publish', async (c) => {
+		const { confirm } = await jsonBody(c)
+		if (confirm !== true) {
+			return c.json({ error: 'publishing ends the cutover for good; send {"confirm": true}' }, 400)
 		}
-		return c.json(mark)
+		return reply(c, await stub(c).publish(build(c.env), c.get('auth')))
 	})
 
-	// Ends a rollback, once Kopje's Queue holds nothing (read through its metrics; failing closed): no copy of a
-	// handed-off request is left to arrive, so its receipts can go.
+	// Ends a rollback, once Kopje's Queue and its dead-letter queue (bound as KOPJE_DLQ, read for its metrics only) both
+	// hold nothing, read through their metrics and failing closed: no copy of a handed-off request is left to arrive
+	// or to be redriven, so its receipts can go.
 	admin.post('/cutover/close', async (c) => {
 		const { confirm } = await jsonBody(c)
 		if (confirm !== true) {
 			return c.json({ error: 'send {"confirm": true}' }, 400)
 		}
-		const metrics = (c.env.QUEUE as Partial<Pick<Queue, 'metrics'>>).metrics
-		let backlog: number | null = null
-		try {
-			backlog = typeof metrics === 'function' ? (await metrics.call(c.env.QUEUE)).backlogCount : null
-		} catch {
-			backlog = null
+		const backlog = async (queue: Queue | undefined): Promise<number | null> => {
+			const metrics = (queue as Partial<Pick<Queue, 'metrics'>> | undefined)?.metrics
+			try {
+				return queue !== undefined && typeof metrics === 'function' ? (await metrics.call(queue)).backlogCount : null
+			} catch {
+				return null
+			}
 		}
-		if (backlog !== 0) {
+		const queued = await backlog(c.env.QUEUE)
+		const dead = queued === 0 ? await backlog((c.env as { KOPJE_DLQ?: Queue }).KOPJE_DLQ) : null
+		if (queued !== 0 || dead !== 0) {
 			return c.json(
-				{ error: "Kopje's Queue is not empty, or its backlog cannot be read", code: 'queue-not-empty', backlog },
+				{
+					error: "Kopje's Queue or its dead-letter queue (KOPJE_DLQ) is not empty, or cannot be read",
+					code: 'queue-not-empty',
+					backlog: queued,
+					deadLetters: dead,
+				},
 				409
 			)
 		}
 		return reply(c, await stub(c).closeRollback(build(c.env), c.get('auth')))
 	})
 
-	// The operator's word that nothing was served from this Store while it was unmarked, under MAINTENANCE=full.
-	admin.post('/cutover/clear-served', async (c) => {
-		const { confirm } = await jsonBody(c)
-		const config = readConfig(c.env)
-		if (confirm !== true) {
-			return c.json({ error: 'send {"confirm": true}' }, 400)
-		}
-		if (!config.ok || config.config.MAINTENANCE !== 'full') {
-			return c.json({ error: 'set MAINTENANCE=full on the Worker first', code: 'maintenance-required' }, 409)
-		}
-		return reply(c, await stub(c).clearServed(build(c.env), c.get('auth')))
-	})
-
 	admin.post('/cutover/drain', async (c) => {
-		const { accounts, fallback } = await jsonBody(c)
+		const { accounts, fallback, unordered } = await jsonBody(c)
 		const result = await drainJournal(
 			c.env,
 			{ build: build(c.env), store: stub(c), loader, holder: crypto.randomUUID() },
 			c.get('auth'),
-			{ accounts, fallback }
+			{ accounts, fallback, unordered }
 		)
 		if (!result.ok) {
 			return c.json({ error: result.message, code: result.code }, result.status)

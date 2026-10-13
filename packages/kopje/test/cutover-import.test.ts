@@ -30,6 +30,8 @@ async function imported() {
 		aud: ADMIN_AUD,
 	} as const
 	const { report } = await importViaRpc(h.store, dump, 16 * 1024, authority)
+	// What the runbook's step 9 does: an imported Store is readonly until published.
+	await h.store.publish(BUILD, authority)
 	return { h, report, dump, expected }
 }
 

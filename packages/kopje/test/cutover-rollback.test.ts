@@ -8,14 +8,15 @@ import { inboxDeps, NOW } from './app-helpers'
 import { fixtureKeyGen } from './federation-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { mastodonActor, RemoteWeb, signedInit, type TestActor } from './inbox-helpers'
-import { ACCESS, ADMIN_AUD, ADMIN_EMAIL, importChunks, importViaRpc, splitDump } from './ops-helpers'
+import { ACCESS, ADMIN_AUD, ADMIN_EMAIL, importChunks, importViaRpc, memoryIO, splitDump } from './ops-helpers'
 import { QueueSim } from './queue-sim'
-import { createApp } from '../src/app/app'
+import { run } from '../cli/lib/main.js'
 import { drainJournal } from '../src/app/cutover'
 import { parseActivity } from '../src/federation/inbound'
 import type { LegacyInboxMessage } from '../src/federation/legacy-inbox'
 import { handleQueue } from '../src/jobs/queue'
 import { createMaintenanceWorker, type MaintenanceSnapshot, SPOOL_QUEUE_BINDING } from '../src/maintenance'
+import { DRAIN_LEASE_MS } from '../src/platform/store-admin'
 import type { StoreStub } from '../src/platform/store-client'
 
 // Rolling a cutover back (docs/cutover-runbook.md, "Rolling back"), on the converted legacy dump of the global setup:
@@ -65,12 +66,12 @@ async function resetToEmpty(h: ReturnType<typeof adminHarness>): Promise<Respons
 	if (started.status !== 200) {
 		return started
 	}
-	const body = (await started.clone().json()) as { id: string | null; done: boolean }
+	const body = await started.clone().json()
 	let done = body.done
 	while (!done) {
 		const step = await h.post(adminClaims(), '/admin/import/reset', { confirm: true, id: body.id })
 		expect(step.status).toBe(200)
-		done = ((await step.json()) as { done: boolean }).done
+		done = (await step.json()).done
 	}
 	return started
 }
@@ -135,51 +136,18 @@ describe('the cutover reset after a completed import (OPS-8)', () => {
 		expect(await count(store, 'statuses')).toBeGreaterThan(0)
 	})
 
-	it('is refused for good once the instance is published, by the operator or by serving', async () => {
-		const byCommand = await importedStore()
-		const full = adminHarness(byCommand, team, { MAINTENANCE: 'full' })
-		expect((await full.post(adminClaims(), '/admin/cutover/publish')).status).toBe(200)
+	it('is refused once published, and on a Store that never had an import', async () => {
+		const store = await importedStore()
+		const full = adminHarness(store, team, { MAINTENANCE: 'full' })
+		expect((await full.post(adminClaims(), '/admin/publish', { confirm: true })).status).toBe(200)
 		const refused = await full.post(adminClaims(), '/admin/cutover/reset', { confirm: true })
 		expect(refused.status).toBe(409)
 		expect(await refused.json()).toMatchObject({ code: 'published' })
+		expect(await count(store, 'statuses')).toBeGreaterThan(0)
 
-		// Serving with MAINTENANCE=off marks it too; a Store with no data is not marked by serving.
-		const empty = await migratedStore()
-		await serve(empty, { MAINTENANCE: 'off' }, '/api/v1/instance')
-		expect((await empty.cutoverStatus(BUILD)).published).toBeNull()
-		const held = await importedStore()
-		await serve(held, { MAINTENANCE: 'readonly' }, '/api/v1/instance')
-		expect((await held.cutoverStatus(BUILD)).published).toBeNull()
-		const served = await importedStore()
-		await serve(served, { MAINTENANCE: 'off' }, '/api/v1/instance')
-		expect((await served.cutoverStatus(BUILD)).published).toMatchObject({ via: 'serving' })
-		expect(await served.cutoverReset(BUILD, authority())).toMatchObject({ ok: false, code: 'published' })
-		expect(await count(served, 'statuses')).toBeGreaterThan(0)
-	})
-
-	it('marks the Store published before an isolate that first saw it empty serves its imported data', async () => {
-		const store = await migratedStore()
-		await setTeamAccess(store, team, { domain: 'kopje.test' })
-		const h = adminHarness(store, team, { MAINTENANCE: 'off' })
-		const serve = async (path: string) => {
-			const ctx = createExecutionContext()
-			const response = await h.app.fetch(new Request(`${ORIGIN}${path}`), h.env, ctx)
-			await waitOnExecutionContext(ctx)
-			return response
-		}
-		await serve('/api/v1/instance')
-		expect((await store.cutoverStatus(BUILD)).published).toBeNull()
-		// Served unmarked while empty: no import begins until the operator clears it under MAINTENANCE=full.
-		const header = splitDump(inject('cutover').dump).header
-		expect(await store.importBegin(BUILD, authority(), header)).toMatchObject({ ok: false, code: 'served-unpublished' })
-		const full = adminHarness(store, team, { MAINTENANCE: 'full' })
-		expect((await full.post(adminClaims(), '/admin/cutover/clear-served', { confirm: true })).status).toBe(200)
-		const { report } = await importViaRpc(store, inject('cutover').dump, 1 << 20, authority())
-		expect(report).toMatchObject({ ok: true })
-		// The same app instance, so the same isolate state: the mark is taken before the answer.
-		const response = await serve('/ap/users/alice')
-		expect(response.status).not.toBe(500)
-		expect((await store.cutoverStatus(BUILD)).published).toMatchObject({ via: 'serving' })
+		const fresh = await migratedStore()
+		await setTeamAccess(fresh, team, { domain: 'kopje.test' })
+		expect(await fresh.cutoverReset(BUILD, authority())).toMatchObject({ ok: false, code: 'not-unpublished' })
 	})
 
 	it('leaves an incomplete import to import-reset', async () => {
@@ -210,6 +178,7 @@ async function rollback(store: StoreStub, overrides: Record<string, unknown> = {
 	const kopje = new QueueSim()
 	const legacy = new QueueSim()
 	const legacyDlq = new QueueSim()
+	const kopjeDlq = new QueueSim()
 	const accounts = snapshot().inboxes
 	const env = {
 		MAINTENANCE: 'full',
@@ -218,6 +187,7 @@ async function rollback(store: StoreStub, overrides: Record<string, unknown> = {
 		QUEUE: kopje.queue,
 		LEGACY_QUEUE: legacy.queue,
 		LEGACY_DLQ: legacyDlq.queue,
+		KOPJE_DLQ: kopjeDlq.queue,
 		...overrides,
 	}
 	const h = adminHarness(store, team, env, { keygen: fixtureKeyGen, loader: web.loader })
@@ -237,19 +207,35 @@ async function rollback(store: StoreStub, overrides: Record<string, unknown> = {
 			(batch) =>
 				handleQueue(
 					batch,
-					{ ...h.env, ...(journal ? { CUTOVER_ROLLBACK: 'journal' } : {}) } as Env,
+					{ ...h.env, ...(journal ? { CUTOVER_ROLLBACK: 'journal' } : {}) },
 					inboxDeps(() => store, web.loader)
 				),
 			{ ready }
 		)
 	const drain = async (body: Record<string, unknown> = { accounts }) => {
 		const response = await h.post(adminClaims(), '/admin/cutover/drain', body)
-		return { status: response.status, body: (await response.json()) as Record<string, any> }
+		return { status: response.status, body: await response.json() }
 	}
 	// The legacy consumer acknowledging what reached it.
 	const handed: LegacyInboxMessage[] = []
 	const ackLegacy = () => handed.push(...legacy.pending.splice(0).map((m) => m.body as LegacyInboxMessage))
-	return { web, carol, dave, kopje, legacy, legacyDlq, h, post, spool, consume, drain, handed, ackLegacy, accounts }
+	return {
+		web,
+		carol,
+		dave,
+		kopje,
+		legacy,
+		legacyDlq,
+		kopjeDlq,
+		h,
+		post,
+		spool,
+		consume,
+		drain,
+		handed,
+		ackLegacy,
+		accounts,
+	}
 }
 
 const ctx = 'https://www.w3.org/ns/activitystreams'
@@ -464,7 +450,7 @@ describe('the rollback drain (OPS-9)', () => {
 
 	it('journals nothing once the instance is published: the Queue holds the requests as in maintenance', async () => {
 		const store = await importedStore()
-		await store.markPublished(BUILD, 'command')
+		expect(await store.publish(BUILD, authority())).toMatchObject({ ok: true })
 		const r = await rollback(store)
 		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
 		await r.consume()
@@ -506,10 +492,10 @@ describe('Rollback A from the first attempt (OPS-9)', () => {
 		const full = adminHarness(store, team, { MAINTENANCE: 'full' })
 		const reset = await full.post(adminClaims(), '/admin/import/reset', { confirm: true, id: begun.progress.id })
 		expect(reset.status).toBe(200)
-		let done = ((await reset.json()) as { done: boolean }).done
+		let done = (await reset.json()).done
 		while (!done) {
 			const step = await full.post(adminClaims(), '/admin/import/reset', { confirm: true, id: begun.progress.id })
-			done = ((await step.json()) as { done: boolean }).done
+			done = (await step.json()).done
 		}
 		await r.consume()
 		expect(r.kopje.pending).toEqual([])
@@ -541,59 +527,56 @@ function withCall(store: StoreStub, name: string, call: (...args: unknown[]) => 
 	})
 }
 
-describe('publication is a gate (OPS-8)', () => {
-	it('answers as in maintenance when the mark cannot be taken: 503, inbox requests spooled', async () => {
+describe('an import stays readonly until it is published (OPS-8)', () => {
+	it('refuses queue replay, deliveries and writes with MAINTENANCE=off, and publishing lets them through', async () => {
 		const store = await importedStore()
-		const failing = withCall(store, 'markPublished', () => Promise.reject(new Error('transient')))
-		const queue = new QueueSim()
-		const env = { ...adminHarness(store, team).env, MAINTENANCE: 'off', QUEUE: queue.queue } as Env
-		const app = createApp({ build: () => BUILD, now: () => NOW, store: () => failing })
-		const fetchApp = async (path: string, init?: RequestInit) => {
-			const ctx = createExecutionContext()
-			const response = await app.fetch(new Request(`${ORIGIN}${path}`, init), env, ctx)
-			await waitOnExecutionContext(ctx)
-			return response
-		}
-		const read = await fetchApp('/api/v1/instance')
-		expect(read.status).toBe(503)
-		expect(read.headers.get('retry-after')).not.toBeNull()
-		const web = new RemoteWeb()
-		const carol = await mastodonActor(web, 'carol')
-		const spooled = await fetchApp('/inbox', await signedInit(carol, '/inbox', follow(carol.uri, 1)))
-		expect(spooled.status).toBe(202)
-		expect(queue.pending).toHaveLength(1)
-		expect((await store.cutoverStatus(BUILD)).published).toBeNull()
+		expect(await store.cutoverStatus(BUILD)).toMatchObject({ unpublished: true, published: null })
+		// The fixture's keys are wrapped with the empty KEK; the replay signs its fetches with alice's key.
+		const r = await rollback(store, { MAINTENANCE: 'off', USER_KEK: '' })
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		// Replay: the Store refuses the write, and the request stays in Kopje's Queue.
+		await r.consume(false)
+
+		expect(r.kopje.pending).toHaveLength(1)
+		expect(await count(store, 'follows f JOIN accounts a ON a.id = f.account_id WHERE a.uri = ?', r.carol.uri)).toBe(0)
+		// Deliveries and other writes are refused as in readonly.
+		await expect(store.claimDeliveries(BUILD, { now: NOW, limit: 1, leaseMs: 1000 } as never)).rejects.toThrow(
+			/unpublished/
+		)
+		expect((await serve(store, { MAINTENANCE: 'off' }, '/api/v1/instance')).status).toBe(200)
+
+		const published = await r.h.post(adminClaims(), '/admin/publish', { confirm: true })
+		expect(published.status).toBe(200)
+		expect(await store.cutoverStatus(BUILD)).toMatchObject({
+			unpublished: false,
+			published: { at: expect.any(Number) },
+		})
+		await r.consume(false)
+		// The replay went through (its Accept now rings the delivery doorbell).
+		expect(r.kopje.pending.map((m) => (m.body as { kind: string }).kind)).not.toContain('spool')
+		expect(await count(store, 'follows f JOIN accounts a ON a.id = f.account_id WHERE a.uri = ?', r.carol.uri)).toBe(1)
 	})
 
-	it('lets no import complete once the Worker served unmarked during it, and none begin until cleared', async () => {
-		const store = await preparedStore()
+	it('lets a restore without Access import and publish with IMPORT_TOKEN', async () => {
+		const store = await migratedStore()
+		expect(await store.setConfig(BUILD, TOKEN, { domain: 'kopje.test' })).toMatchObject({ ok: true })
 		const { header, trailer } = splitDump(inject('cutover').dump)
-		const begun = await store.importBegin(BUILD, authority(), header)
-		if (!begun.ok) throw new Error(begun.message)
-		// A request served with MAINTENANCE=off while the import runs: the Store cannot be marked, and records it.
-		await serve(store, { MAINTENANCE: 'off' }, '/api/v1/instance')
+		const begun = await store.importBegin(BUILD, TOKEN, header)
+		if (!begun.ok || begun.session === undefined) throw new Error('no session')
+		const session = { kind: 'import-session', secret: begun.session } as const
 		for (const [i, chunk] of (await importChunks(inject('cutover').dump, 1 << 20)).entries()) {
-			await store.importChunk(BUILD, authority(), begun.progress.id, i + 1, chunk)
+			await store.importChunk(BUILD, session, begun.progress.id, i + 1, chunk)
 		}
-		await store.importFinish(BUILD, authority(), begun.progress.id, trailer)
-		const verified = (await store.importVerify(BUILD, authority(), begun.progress.id)) as {
-			report: { ok: boolean; problems: string[] }
-		}
-		expect(verified.report.ok).toBe(false)
-		expect(verified.report.problems.join()).toContain('served-unpublished')
-		expect(await store.importReset(BUILD, authority(), begun.progress.id)).toMatchObject({ ok: true })
-		while (!(await store.importReset(BUILD, authority(), begun.progress.id)).ok) {
-			// continue the reset
-		}
+		await store.importFinish(BUILD, session, begun.progress.id, trailer)
+		expect(await store.importVerify(BUILD, session, begun.progress.id)).toMatchObject({ report: { ok: true } })
+		expect((await store.cutoverStatus(BUILD)).unpublished).toBe(true)
+		expect(await store.publish(BUILD, TOKEN)).toMatchObject({ ok: true })
+		expect((await store.cutoverStatus(BUILD)).unpublished).toBe(false)
+	})
 
-		// No import begins until the operator clears it, under MAINTENANCE=full.
-		expect(await store.importBegin(BUILD, authority(), header)).toMatchObject({ ok: false, code: 'served-unpublished' })
-		const off = adminHarness(store, team, { MAINTENANCE: 'readonly' })
-		expect((await off.post(adminClaims(), '/admin/cutover/clear-served', { confirm: true })).status).toBe(409)
-		const full = adminHarness(store, team, { MAINTENANCE: 'full' })
-		expect((await full.post(adminClaims(), '/admin/cutover/clear-served', { confirm: true })).status).toBe(200)
-		const { report } = await importViaRpc(store, inject('cutover').dump, 1 << 20, authority())
-		expect(report).toMatchObject({ ok: true })
+	it('does not touch a Store that never had an import', async () => {
+		const store = await migratedStore()
+		expect(await store.cutoverStatus(BUILD)).toMatchObject({ unpublished: false, published: null })
 	})
 })
 
@@ -603,16 +586,14 @@ describe('a rollback in progress blocks publication, and a publication blocks th
 		const r = await rollback(store)
 		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
 		await r.consume()
-		const refused = await r.h.post(adminClaims(), '/admin/cutover/publish')
+		const refused = await r.h.post(adminClaims(), '/admin/publish', { confirm: true })
 		expect(refused.status).toBe(409)
 		expect(await refused.json()).toMatchObject({ code: 'rollback-in-progress' })
-		// Serving with MAINTENANCE=off does not publish it either: the request is answered as in maintenance.
-		expect((await serve(store, { MAINTENANCE: 'off' }, '/api/v1/instance')).status).toBe(503)
-		expect((await store.cutoverStatus(BUILD)).published).toBeNull()
+		expect((await store.cutoverStatus(BUILD)).unpublished).toBe(true)
 
 		expect((await r.drain()).body).toMatchObject({ sent: 1 })
 		r.ackLegacy()
-		expect((await r.h.post(adminClaims(), '/admin/cutover/publish')).status).toBe(200)
+		expect((await r.h.post(adminClaims(), '/admin/publish', { confirm: true })).status).toBe(200)
 		expect(await r.drain()).toMatchObject({ status: 409, body: { code: 'published' } })
 	})
 })
@@ -657,11 +638,24 @@ describe('handoff receipts outlive the journal, an import and a reset (OPS-9)', 
 		expect(off.kopje.pending).toEqual([])
 		expect(await count(store, 'follows f JOIN accounts a ON a.id = f.account_id WHERE a.uri = ?', r.carol.uri)).toBe(0)
 
-		// Closing needs Kopje's Queue empty; then the receipts go.
+		// Closing needs Kopje's Queue and its dead-letter queue empty; then the receipts go.
 		await r.kopje.send({ kind: 'inbound-jobs' })
 		const busy = await r.h.post(adminClaims(), '/admin/cutover/close', { confirm: true })
 		expect(await busy.json()).toMatchObject({ code: 'queue-not-empty' })
 		r.kopje.pending.splice(0)
+		// A copy of the handed-off request that exhausted its retries sits in the DLQ: closing would let a redrive replay it.
+		await r.kopjeDlq.send(original)
+		expect(await (await r.h.post(adminClaims(), '/admin/cutover/close', { confirm: true })).json()).toMatchObject({
+			code: 'queue-not-empty',
+			deadLetters: 1,
+		})
+		const unbound = await rollback(store, { KOPJE_DLQ: undefined })
+		expect(await (await unbound.h.post(adminClaims(), '/admin/cutover/close', { confirm: true })).json()).toMatchObject(
+			{
+				code: 'queue-not-empty',
+			}
+		)
+		r.kopjeDlq.pending.splice(0)
 		expect(await (await r.h.post(adminClaims(), '/admin/cutover/close', { confirm: true })).json()).toMatchObject({
 			receipts: 1,
 		})
@@ -768,3 +762,103 @@ describe('the drain lane holds under timing faults (OPS-9)', () => {
 		expect(r.handed.map((m) => m.activity.type)).toEqual(['Follow', 'Undo'])
 	})
 })
+
+describe('the drain never sends past its lease, and never stays stuck (OPS-9)', () => {
+	it('sends nothing when the mark comes back after the lease ran out', async () => {
+		const store = await importedStore()
+		const r = await rollback(store)
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		await r.consume()
+		let clock = Date.now()
+		// The 'sending' mark is answered late: the Worker's clock has passed the lease when it returns.
+		const late = withCall(store, 'journalMark', async (...args: unknown[]) => {
+			const result = await (store.journalMark as (...a: unknown[]) => Promise<unknown>)(...args)
+			if (args[4] === 'sending') {
+				clock += DRAIN_LEASE_MS
+			}
+			return result
+		})
+		const round = await drainJournal(
+			r.h.env,
+			{ build: BUILD, store: late, loader: r.web.loader, holder: 'late', now: () => clock },
+			authority(),
+			{ accounts: r.accounts, fallback: undefined }
+		)
+		expect(round).toMatchObject({ ok: true, sent: 0, stopped: 'lease-expiring', journal: { sending: 1 } })
+		expect(r.legacy.pending).toEqual([])
+	})
+
+	it('keeps a journal-full stop through a transient key failure, and the CLI stops on it', async () => {
+		const store = await importedStore()
+		const r = await rollback(store, { CUTOVER_JOURNAL_MAX_ENTRIES: '1' })
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 2))
+		await r.consume()
+		r.web.fail(r.carol.uri, 503)
+		const result = await cliDrain(r, [])
+		expect(result.code).toBe(3)
+		expect(result.err).toContain('journal-full')
+	})
+
+	it('gives up after its deadline when a round makes no progress, pausing between rounds', async () => {
+		const store = await importedStore()
+		const r = await rollback(store)
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		await r.consume(false)
+		// The request stays held in Kopje's Queue: every round waits at the collection barrier.
+		const result = await cliDrain(r, [])
+		expect(result.code).toBe(3)
+		expect(result.err).toContain('not done after 45 minutes')
+		expect(result.pauses).toBeGreaterThan(0)
+	})
+
+	it('lets an unordered drain past the barrier once the journal is full, and only then', async () => {
+		const store = await importedStore()
+		const r = await rollback(store, { CUTOVER_JOURNAL_MAX_ENTRIES: '1' })
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		await r.spool('/ap/users/alice/inbox', {
+			'@context': ctx,
+			id: `${r.carol.uri}#undo/1`,
+			type: 'Undo',
+			actor: r.carol.uri,
+			object: follow(r.carol.uri, 1),
+		})
+		await r.consume()
+		expect((await r.drain()).body).toMatchObject({ stopped: 'journal-full' })
+		expect((await r.drain({ accounts: r.accounts, unordered: true })).body).toMatchObject({ sent: 1 })
+		r.ackLegacy()
+		// The journal has room again: the rest comes in and drains in order; --unordered no longer changes anything.
+		await r.consume()
+		expect(r.kopje.pending).toEqual([])
+		expect((await r.drain({ accounts: r.accounts, unordered: true })).body).toMatchObject({ sent: 1 })
+		r.ackLegacy()
+		expect(r.handed.map((m) => m.activity.type)).toEqual(['Follow', 'Undo'])
+	})
+})
+
+// `kopje-admin cutover drain` through the real CLI, against the app as an Access admin.
+async function cliDrain(r: Awaited<ReturnType<typeof rollback>>, extra: string[]) {
+	const io = memoryIO(new Map([['pages/_worker.js', new TextEncoder().encode(inject('maintenance').source)]]))
+	let clock = NOW
+	let pauses = 0
+	const out: string[] = []
+	const err: string[] = []
+	const code = await run({
+		argv: ['cutover', 'drain', '--worker', 'pages', ...extra],
+		env: { KOPJE_ADMIN_URL: 'https://admin.kopje.test' },
+		io,
+		stdout: { write: (text: string) => void out.push(text), isTTY: false },
+		stderr: { write: (text: string) => void err.push(text), isTTY: false },
+		fetch: async (input, init) => {
+			const url = new URL(String(input))
+			return r.h.as(adminClaims(), `${url.pathname}${url.search}`, init)
+		},
+		now: () => (clock += 10 * 60 * 1000),
+		sleep: () => {
+			pauses++
+			return Promise.resolve()
+		},
+		platform: 'linux',
+	})
+	return { code, out: out.join(''), err: err.join(''), pauses }
+}

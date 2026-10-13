@@ -5,6 +5,7 @@ import { decodeSpoolRecord, inflate, SPOOL_MESSAGE_LIMIT } from '../federation/s
 import { readConfig, userKek } from '../platform/config'
 import { PACKAGE_VERSION } from '../platform/package-version'
 import {
+	DRAIN_LEASE_MS,
 	type ImportAuthority,
 	JOURNAL_MAX_BYTES,
 	JOURNAL_MAX_ENTRIES,
@@ -44,12 +45,15 @@ export type DrainRound = {
 		| 'legacy-queue-failed'
 		| 'legacy-queue-timeout'
 		| 'journal-full'
+		| 'lease-expiring'
 		| null
 	journal: JournalCounts
 }
 
 export type DrainResult = ({ ok: true } & DrainRound) | { ok: false; status: 400 | 409; code: string; message: string }
 
+// What the round leaves of the lease unused, against clock differences between the Worker and the Store.
+const LEASE_MARGIN_MS = 60_000
 // A send to the legacy Queue that takes longer is given up for this round (well inside DRAIN_LEASE_MS).
 const SEND_TIMEOUT_MS = 10_000
 // Verification in one round stops after this long (well inside DRAIN_LEASE_MS).
@@ -89,7 +93,7 @@ export async function drainJournal(
 		sendTimeoutMs?: number
 	},
 	authority: ImportAuthority,
-	options: { accounts: unknown; fallback: unknown }
+	options: { accounts: unknown; fallback: unknown; unordered?: unknown }
 ): Promise<DrainResult> {
 	const config = readConfig(env)
 	const { LEGACY_QUEUE: legacy, LEGACY_DLQ: legacyDlq } = env as DrainEnv
@@ -134,6 +138,11 @@ export async function drainJournal(
 	}
 	const now = deps.now ?? (() => Date.now())
 	const started = now()
+	// The lease fences the round: it ends, and above all sends nothing, once too little of the lease is left for a send
+	// to finish inside it, however long an awaited RPC took. Counted from before the lease was taken, with a margin.
+	const deadline = started + DRAIN_LEASE_MS - LEASE_MARGIN_MS
+	const sendTimeout = deps.sendTimeoutMs ?? SEND_TIMEOUT_MS
+	const leaseLeft = () => deadline - now() > sendTimeout
 	// A send that timed out may still be in flight until this invocation ends: the lease is then kept, so no other
 	// drain starts until it has long expired (DRAIN_LEASE_MS), by which time this invocation and its send are gone.
 	let keepLease = false
@@ -171,9 +180,16 @@ export async function drainJournal(
 		}
 		// While the lane is busy, nothing is sent; the records are still verified, so that what fails for good is set
 		// aside (and the journal's quota freed by the operator) without waiting.
-		const busy = kopjeBacklog > 0 ? 'kopje-backlog' : legacyBacklog > 0 ? 'legacy-backlog' : null
+		let busy: DrainRound['waiting'] = kopjeBacklog > 0 ? 'kopje-backlog' : legacyBacklog > 0 ? 'legacy-backlog' : null
 		result.waiting = busy
-		if (busy === 'kopje-backlog' && (await journalFull())) {
+		const full = busy === 'kopje-backlog' && (await journalFull())
+		if (full && options.unordered === true) {
+			// The operator's escape from a full journal (and only then; otherwise the drain stays ordered): the journal's head
+			// goes past the collection barrier, so it may overtake an older request still in Kopje's Queue (ordinary
+			// delivery reordering). The legacy lane still holds.
+			busy = legacyBacklog > 0 ? 'legacy-backlog' : null
+			result.waiting = busy
+		} else if (full) {
 			// The barrier waits for requests the full journal cannot take: an operator decision, not a wait.
 			result.waiting = null
 			result.stopped = 'journal-full'
@@ -183,7 +199,10 @@ export async function drainJournal(
 		const ready: string[] = []
 		for (
 			let kept = 0, examined = 0;
-			kept < MAX_KEPT_PER_ROUND && examined < MAX_EXAMINED_PER_ROUND && now() - started < ROUND_BUDGET_MS;
+			kept < MAX_KEPT_PER_ROUND &&
+			examined < MAX_EXAMINED_PER_ROUND &&
+			now() - started < ROUND_BUDGET_MS &&
+			leaseLeft();
 			examined++
 		) {
 			const { entry } = await call<{
@@ -205,7 +224,7 @@ export async function drainJournal(
 						})
 			if (!check.ok) {
 				if (check.transient) {
-					result.stopped = busy === null ? 'key-unavailable' : null
+					result.stopped ??= busy === null ? 'key-unavailable' : null
 					break
 				}
 				console.warn({ event: 'kopje.cutover.drain.unverified', reason: check.reason })
@@ -243,8 +262,18 @@ export async function drainJournal(
 				ready.push(entry.id)
 				continue
 			}
+			if (!leaseLeft()) {
+				result.stopped = 'lease-expiring'
+				break
+			}
 			await call('journalMark', deps.holder, entry.id, 'sending')
-			const sent = await withTimeout(lane.send(body), deps.sendTimeoutMs ?? SEND_TIMEOUT_MS)
+			// The mark may have come back late: never send once the lease cannot cover the send.
+			if (!leaseLeft()) {
+				result.stopped = 'lease-expiring'
+				keepLease = true
+				break
+			}
+			const sent = await withTimeout(lane.send(body), sendTimeout)
 			if (sent !== 'sent') {
 				// The record stays 'sending' and is sent again by a later round (at least once).
 				result.stopped = sent === 'timeout' ? 'legacy-queue-timeout' : 'legacy-queue-failed'

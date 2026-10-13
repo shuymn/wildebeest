@@ -147,6 +147,7 @@ export type JournalCounts = {
 
 export type CutoverStatus = {
 	published: PublishedFlag | null
+	unpublished: boolean
 	journal: JournalCounts
 	import: { id: string; state: ImportRecord['state'] } | null
 	verifiedImport: { id: string; at: number } | null
@@ -549,12 +550,6 @@ export class StoreAdmin {
 			return this.#transaction(() => {
 				const now = this.#now()
 				const flags = readFlags(this.#sql)
-				if (flags.served_unpublished !== null) {
-					throw new ImportError(
-						'served-unpublished',
-						'the Worker served with MAINTENANCE=off while this Store was unmarked; hold it with MAINTENANCE=full and clear it (cutover clear-served)'
-					)
-				}
 				if (authority.kind === 'import-token' && !this.#inBootstrap(flags)) {
 					throw new ImportError(
 						'not-bootstrap',
@@ -810,11 +805,6 @@ export class StoreAdmin {
 					report.ok = false
 					report.problems.push(migrations)
 				}
-				if (readFlags(this.#sql).served_unpublished !== null) {
-					// The Worker served while this import ran: its data must not appear unmarked.
-					report.ok = false
-					report.problems.push('served-unpublished: the Worker served with MAINTENANCE=off during the import')
-				}
 				if (report.ok) {
 					// An import never changes configuration (domain, who administers this Store): its own rows come back exactly.
 					replaceBootstrapRows(this.#sql, record.bootstrap ?? [])
@@ -833,6 +823,8 @@ export class StoreAdmin {
 					}
 					writeFlag(this.#sql, 'import', null)
 					writeFlag(this.#sql, 'import_receipt', completed)
+					// Imported data is readonly until the operator publishes it (publish).
+					writeFlag(this.#sql, 'unpublished', { at: this.#now(), import: record.id })
 					this.#log({ event: 'kopje.store.import.verified', id })
 					return { ok: true as const, done: true, report, progress: receiptProgress(completed) }
 				}
@@ -966,6 +958,7 @@ export class StoreAdmin {
 		}
 		replaceBootstrapRows(this.#sql, record.bootstrap ?? [])
 		writeFlag(this.#sql, 'import', null)
+		writeFlag(this.#sql, 'unpublished', null)
 		writeFlag(this.#sql, 'import_reset', { id, completedAt: this.#now() })
 		this.#log({ event: 'kopje.store.import.reset-done', id })
 		return true
@@ -1068,8 +1061,8 @@ export class StoreAdmin {
 
 	// ---- cutover (docs/cutover-runbook.md)
 	//
-	// published: set by the operator at publication (step 9), or by the Worker the first time it serves with
-	// MAINTENANCE=off. From then on the cutover reset is refused for good.
+	// unpublished/published: a verified import leaves the Store unpublished (readonly through the kernel gate);
+	// `publish` clears that and sets the published mark. The cutover reset is allowed only while unpublished.
 	// The rollback journal: while the Worker's CUTOVER_ROLLBACK=journal, its Queue consumer stores every spooled inbox
 	// request here (inbound_spool, one single-part row per request, keyed by the digest of the spool message, which
 	// stays the same across requeues and redeliveries) instead of holding it in the Queue, within a count and a byte
@@ -1088,6 +1081,7 @@ export class StoreAdmin {
 		const flags = readFlags(this.#sql)
 		return {
 			published: flags.published,
+			unpublished: flags.unpublished !== null,
 			journal: this.#journalCounts(),
 			import: flags.import === null ? null : { id: flags.import.id, state: flags.import.state },
 			verifiedImport:
@@ -1096,48 +1090,40 @@ export class StoreAdmin {
 		}
 	}
 
-	// Idempotent; the first mark is kept. Refused while a rollback is in progress (a drain lease, or requests in the
-	// journal): those requests go to the legacy instance, not to a published Kopje. A serving mark is not taken while
-	// the Store holds no data or an import runs; the Store then records that it served unpublished, and no import begins
-	// or completes until the operator clears that (clearServed), so imported data is never served without the mark.
-	async markPublished(
-		callerBuild: string,
-		via: PublishedFlag['via']
-	): Promise<{ published: PublishedFlag | null; refused?: string }> {
-		this.#requireBuild(callerBuild)
-		await this.#kernel.state()
-		return this.#transaction(() => {
-			const flags = readFlags(this.#sql)
-			if (flags.published !== null) {
-				return { published: flags.published }
-			}
-			if (this.#rollbackInProgress()) {
-				return { published: null, refused: 'rollback-in-progress' }
-			}
-			if (via === 'serving' && (flags.import !== null || this.#emptyOfData())) {
-				if (flags.served_unpublished === null) {
-					writeFlag(this.#sql, 'served_unpublished', { at: this.#now() })
-				}
-				return { published: null }
-			}
-			const published = { at: this.#now(), via }
-			writeFlag(this.#sql, 'published', published)
-			this.#log({ event: 'kopje.store.cutover.published', via })
-			return { published }
-		})
-	}
-
-	// The operator's word that nothing was served from this Store while it was unmarked (the Worker holds it with
-	// MAINTENANCE=full, which the admin API checks): an import may begin again.
-	async clearServed(callerBuild: string, authority: ImportAuthority): Promise<Result<{ cleared: boolean }>> {
+	// Publication: ends the readonly state a verified import leaves (unpublished) and sets the published mark, in one
+	// transaction. Idempotent. Refused while a rollback is in progress (a drain lease, or requests in the journal): those
+	// requests go to the legacy instance, not to a published Kopje. An Access admin publishes; so does IMPORT_TOKEN while
+	// the Store is in bootstrap (no usable admin access), as it may configure and import into that Store, so a restore
+	// without Access is never left readonly.
+	async publish(callerBuild: string, authority: ImportAuthority): Promise<Result<{ published: PublishedFlag }>> {
 		this.#requireBuild(callerBuild)
 		await this.#kernel.state()
 		try {
 			return this.#transaction(() => {
-				this.#assertJournalAdmin(authority)
-				const cleared = readFlags(this.#sql).served_unpublished !== null
-				writeFlag(this.#sql, 'served_unpublished', null)
-				return { ok: true as const, cleared }
+				const flags = readFlags(this.#sql)
+				if (authority.kind === 'import-token') {
+					if (!this.#inBootstrap(flags, false)) {
+						throw new ImportError('not-bootstrap', 'IMPORT_TOKEN only publishes a Store without admin access')
+					}
+				} else if (authority.kind === 'access') {
+					this.#assertAdmin(authority, this.#currentSettings(flags))
+				} else {
+					throw new ImportError('wrong-authority', 'publish with Access or IMPORT_TOKEN')
+				}
+				if (flags.import !== null) {
+					throw new ImportError('import-exists', 'an import is running')
+				}
+				if (flags.published !== null && flags.unpublished === null) {
+					return { ok: true as const, published: flags.published }
+				}
+				if (this.#rollbackInProgress()) {
+					throw new ImportError('rollback-in-progress', 'the journal holds requests or a drain runs')
+				}
+				const published = { at: this.#now() }
+				writeFlag(this.#sql, 'unpublished', null)
+				writeFlag(this.#sql, 'published', published)
+				this.#log({ event: 'kopje.store.published' })
+				return { ok: true as const, published }
 			})
 		} catch (error) {
 			return asRefusal(error)
@@ -1388,11 +1374,14 @@ export class StoreAdmin {
 			id = this.#transaction(() => {
 				const flags = readFlags(this.#sql)
 				this.#assertAdmin(authority, this.#currentSettings(flags))
-				if (flags.published !== null) {
-					throw new ImportError('published', 'this instance has been published; it is never reset')
-				}
 				if (flags.import !== null) {
 					throw new ImportError('import-exists', `import ${flags.import.id} is running; reset it with import-reset`)
+				}
+				if (flags.unpublished === null) {
+					throw new ImportError(
+						flags.published === null ? 'not-unpublished' : 'published',
+						'only a verified import that is not published yet is reset'
+					)
 				}
 				if (activeDump(flags, this.#now()) !== null) {
 					throw new ImportError('dump-in-progress', 'a dump is in progress')

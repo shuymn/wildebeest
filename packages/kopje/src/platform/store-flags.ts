@@ -12,11 +12,10 @@ import type { OperationKind } from './store-kernel'
 //   import      : an import in progress; nothing passes until it is verified
 //   import_receipt : the outcome of the last verified import, kept for a client whose response was lost (no effect)
 //   import_reset   : the id of the last completed reset, for the same reason (no effect)
-//   published      : the instance has served with MAINTENANCE=off (or the operator published it): a cutover can no
-//                    longer be rolled back, so the Store refuses the cutover reset (docs/cutover-runbook.md)
-//   served_unpublished : the Worker served with MAINTENANCE=off while the Store could not be marked (empty, or an import
-//                    running); no import begins or completes until the operator clears it, so imported data is never
-//                    served unmarked
+//   unpublished    : a verified import that the operator has not published yet; the Store is readonly meanwhile
+//                    (reads and sessions pass, writes are refused), whatever the env says, so nothing is written or
+//                    delivered before publication; only `publish` clears it
+//   published      : set by `publish`; a cutover can no longer be rolled back (docs/cutover-runbook.md)
 
 export type MaintenanceFlag = { mode: 'readonly'; at: number }
 
@@ -89,10 +88,10 @@ export type OperatorFlags = {
 	// The last completed reset, so a retried reset request for that import is answered instead of refused.
 	import_reset: { id: string; completedAt: number } | null
 	published: PublishedFlag | null
-	served_unpublished: { at: number } | null
+	unpublished: { at: number; import: string } | null
 }
 
-export type PublishedFlag = { at: number; via: 'command' | 'serving' }
+export type PublishedFlag = { at: number }
 
 export const FLAG_NAMES = [
 	'maintenance',
@@ -101,7 +100,7 @@ export const FLAG_NAMES = [
 	'import_receipt',
 	'import_reset',
 	'published',
-	'served_unpublished',
+	'unpublished',
 ] as const
 type FlagName = (typeof FLAG_NAMES)[number]
 
@@ -113,14 +112,14 @@ export function readFlags(sql: SqlStorage): OperatorFlags {
 		import_receipt: null,
 		import_reset: null,
 		published: null,
-		served_unpublished: null,
+		unpublished: null,
 	}
 	for (const row of sql
 		.exec<{
 			name: FlagName
 			value: string
 		}>(
-			"SELECT name, value FROM kopje_state WHERE name IN ('maintenance', 'dump', 'import', 'import_receipt', 'import_reset', 'published', 'served_unpublished')"
+			"SELECT name, value FROM kopje_state WHERE name IN ('maintenance', 'dump', 'import', 'import_receipt', 'import_reset', 'published', 'unpublished')"
 		)
 		.toArray()) {
 		flags[row.name] = JSON.parse(row.value) as never
@@ -151,5 +150,8 @@ export function admitFlags(flags: OperatorFlags, kind: OperationKind, now: numbe
 	}
 	if (kind === 'write' && flags.maintenance !== null) {
 		throw storeMaintenanceError('maintenance')
+	}
+	if (kind === 'write' && flags.unpublished !== null) {
+		throw storeMaintenanceError('unpublished')
 	}
 }

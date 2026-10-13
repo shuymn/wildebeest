@@ -24,6 +24,9 @@ Commands
                                 the import then continues with its own session, kept in <file>.import.json (mode
                                 0600). That file must stay private: run token imports on macOS, Linux or WSL, since
                                 Windows does not honor the mode (the CLI warns there)
+  publish --yes                 end the readonly state a verified import leaves: the Store accepts writes and
+                                delivers again (no cutover reset afterwards). With --import-token while the Store has
+                                no admin access
   import-reset [<file>] --yes   take the Store back to before an import (its imported rows are deleted; schema and
                                 configuration stay); the import is the one saved for <file>, or else the running one,
                                 and a token import is reset with the session kept for <file>. An interrupted
@@ -38,18 +41,17 @@ Commands
                                 usable admin access (bootstrap)
   catalog                       migrations and tables a dump for this Store must declare
   cutover status                the cutover's publication mark, rollback journal and import state
-  cutover publish --yes         mark the instance published (step 9); no cutover reset is possible afterwards
-  cutover drain --worker <dir> [--fallback <username>]
+  cutover drain --worker <dir> [--fallback <username>] [--unordered --yes]
                                 rolling back: hand the requests Kopje spooled to the legacy Queue (LEGACY_QUEUE) one at
                                 a time, in spool order, each verified first, to a legacy account of the maintenance
                                 worker's snapshot in <dir>; waits while Kopje's or the legacy Queue holds messages.
                                 Exits 3 when it stops (the legacy DLQ holds messages, metrics cannot be read, a key
-                                may verify later) or waited 45 minutes
+                                may verify later) or has run 45 minutes without finishing. --unordered --yes, only after
+                                a stop on journal-full, sends the journal's head past the collection barrier (it may
+                                then overtake an older request still in Kopje's Queue)
   cutover discard-kept --yes    delete the kept requests (failed verification, or no legacy recipient), after
                                 inspecting them with sql
   cutover close --yes           end a rollback once Kopje's Queue is empty: its handoff receipts are removed
-  cutover clear-served --yes    allow imports again after the Worker served with MAINTENANCE=off while the Store was
-                                unmarked (under MAINTENANCE=full)
   cutover reset --yes           take the Store back to empty after a completed import, keeping the configuration;
                                 only before publication, with MAINTENANCE=full and an empty journal
   pitr bookmark [--at <time>]   current bookmark, or the one for an ISO 8601 time
@@ -496,7 +498,7 @@ export async function run({
 			throw new UsageError('set KOPJE_ADMIN_URL to the admin base URL')
 		}
 		const useToken = flags['import-token'] === true
-		const tokenCommands = ['import', 'import-reset', 'config', 'health', 'version', 'catalog']
+		const tokenCommands = ['import', 'import-reset', 'config', 'health', 'version', 'catalog', 'publish']
 		if (useToken && !tokenCommands.includes(command)) {
 			throw new UsageError(`--import-token applies only to ${tokenCommands.join(', ')}`)
 		}
@@ -679,17 +681,19 @@ export async function run({
 				}
 				return 0
 			}
+			case 'publish': {
+				if (flags.yes !== true) {
+					throw new UsageError(
+						'publish ends the readonly state of an import for good (no cutover reset after it); pass --yes'
+					)
+				}
+				print(await client.post('/admin/publish', { confirm: true }))
+				return 0
+			}
 			case 'cutover': {
 				const [sub] = rest
 				if (sub === 'status') {
 					print(await client.get('/admin/cutover/status'))
-					return 0
-				}
-				if (sub === 'publish') {
-					if (flags.yes !== true) {
-						throw new UsageError('cutover publish ends the cutover for good (no reset after it); pass --yes')
-					}
-					print(await client.post('/admin/cutover/publish'))
 					return 0
 				}
 				if (sub === 'drain') {
@@ -703,10 +707,15 @@ export async function run({
 					const accounts = snapshotIn((await io.readText(`${workerDir}/${WORKER_FILE}`)) ?? '').inboxes
 					const pause =
 						sleep ?? ((/** @type {number} */ ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms)))
+					// Past the collection barrier, only after a stop on journal-full (the Store checks it).
+					const unordered = flags.unordered === true
+					if (unordered && flags.yes !== true) {
+						throw new UsageError('cutover drain --unordered may reorder requests; pass --yes')
+					}
 					const totals = { sent: 0, unverified: 0, noRecipient: 0 }
 					const deadline = now() + 45 * 60 * 1000
 					for (;;) {
-						const round = await client.post('/admin/cutover/drain', { accounts, fallback })
+						const round = await client.post('/admin/cutover/drain', { accounts, fallback, unordered })
 						totals.sent += round.sent
 						totals.unverified += round.unverified
 						totals.noRecipient += round.noRecipient
@@ -722,14 +731,16 @@ export async function run({
 							out.info('rollback journal drained')
 							return 0
 						}
-						if (round.waiting !== null) {
-							if (now() > deadline) {
-								print({ ...totals, journal: round.journal, waiting: round.waiting })
-								out.info(`still waiting (${round.waiting}); run it again`)
-								return 3
-							}
-							await pause(2000)
+						if (round.sent > 0) {
+							continue
 						}
+						// No progress this round (a busy lane, or records set aside): pause, and give up at the deadline.
+						if (now() > deadline) {
+							print({ ...totals, journal: round.journal, waiting: round.waiting })
+							out.info(`not done after 45 minutes (${round.waiting ?? 'records set aside'}); run it again`)
+							return 3
+						}
+						await pause(2000)
 					}
 				}
 				if (sub === 'discard-kept') {
@@ -739,7 +750,7 @@ export async function run({
 					print(await client.post('/admin/cutover/discard-kept', { confirm: true }))
 					return 0
 				}
-				if (sub === 'close' || sub === 'clear-served') {
+				if (sub === 'close') {
 					if (flags.yes !== true) {
 						throw new UsageError(`cutover ${sub} --yes`)
 					}
@@ -760,7 +771,7 @@ export async function run({
 					return 0
 				}
 				throw new UsageError(
-					'cutover status | publish --yes | drain --worker <dir> [--fallback <username>] | discard-kept --yes | close --yes | reset --yes | clear-served --yes'
+					'cutover status | drain --worker <dir> [--fallback <username>] [--unordered --yes] | discard-kept --yes | close --yes | reset --yes'
 				)
 			}
 			case 'pitr': {

@@ -2,7 +2,7 @@ import { describe, expect, inject, it } from 'vitest'
 
 import { apiHarness, sql } from './api-helpers'
 import { harness, inboxDeps, NOW } from './app-helpers'
-import { migratedStore } from './helpers'
+import { BUILD, migratedStore } from './helpers'
 import { AP, mastodonActor, RemoteWeb, signedInit } from './inbox-helpers'
 import { ADMIN_AUD, ADMIN_EMAIL, importViaRpc, setAccess } from './ops-helpers'
 import { QueueSim } from './queue-sim'
@@ -90,6 +90,8 @@ async function imported() {
 	} as const
 	const { report } = await importViaRpc(h.store, dump, 16 * 1024, authority)
 	expect(report).toMatchObject({ ok: true })
+	// Published, as after step 9: the replay tests run against a Store that accepts writes.
+	expect(await h.store.publish(BUILD, authority)).toMatchObject({ ok: true })
 	return h
 }
 

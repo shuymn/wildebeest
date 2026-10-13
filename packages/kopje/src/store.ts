@@ -228,8 +228,8 @@ export class Store extends DurableObject<Env> {
 		return this.#admin.cutoverStatus(callerBuild)
 	}
 
-	markPublished(callerBuild: string, via: 'command' | 'serving') {
-		return this.#admin.markPublished(callerBuild, via)
+	publish(callerBuild: string, authority: ImportAuthority) {
+		return this.#admin.publish(callerBuild, authority)
 	}
 
 	journalSpool(
@@ -246,10 +246,6 @@ export class Store extends DurableObject<Env> {
 
 	closeRollback(callerBuild: string, authority: ImportAuthority) {
 		return this.#admin.closeRollback(callerBuild, authority)
-	}
-
-	clearServed(callerBuild: string, authority: ImportAuthority) {
-		return this.#admin.clearServed(callerBuild, authority)
 	}
 
 	drainLease(callerBuild: string, authority: ImportAuthority, request: { holder: string; release?: boolean }) {
