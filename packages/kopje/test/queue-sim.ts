@@ -56,8 +56,14 @@ export class QueueSim {
 		return Promise.resolve()
 	})
 
+	// The backlog as Queues reports it: every message not yet acknowledged, delayed ones included.
+	metrics(): Promise<QueueMetrics> {
+		const backlogBytes = this.pending.reduce((sum, m) => sum + v8SizeEstimate(m.body), 0)
+		return Promise.resolve({ backlogCount: this.pending.length, backlogBytes })
+	}
+
 	get queue(): Queue {
-		return { send: this.send } as unknown as Queue
+		return { send: this.send, metrics: () => this.metrics() } as unknown as Queue
 	}
 
 	// Delivers everything pending as one batch, ignoring delays.

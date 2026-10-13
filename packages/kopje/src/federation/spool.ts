@@ -7,6 +7,42 @@ export const INBOX_BODY_LIMIT = 1024 * 1024
 // Queue messages are limited to 128 KB; keep room for serialization overhead.
 export const SPOOL_MESSAGE_LIMIT = 120 * 1024
 
+// The spool's admission budget: no new request is accepted while the Queue holds this much; the sender retries later.
+// Shared by Kopje's maintenance gate and the cutover's maintenance worker.
+export const SPOOL_BACKLOG_MESSAGES = 10_000
+export const SPOOL_BACKLOG_BYTES = 256 * 1024 * 1024
+// How long a backlog reading is trusted, per isolate.
+const BACKLOG_READING_MS = 10_000
+
+export type Admission = { full(queue: Queue): Promise<boolean> }
+
+// The Queue's backlog, read through the binding's metrics and trusted for a few seconds per isolate. It fails closed:
+// when the occupancy cannot be read (no metrics on this runtime, or the read fails), nothing is admitted, and senders
+// retry until it can be.
+export function createAdmission(now: () => number): Admission {
+	let reading: { at: number; full: boolean } | null = null
+	return {
+		async full(queue) {
+			if (reading !== null && now() - reading.at < BACKLOG_READING_MS) {
+				return reading.full
+			}
+			const metrics = (queue as Partial<Pick<Queue, 'metrics'>>).metrics
+			if (typeof metrics !== 'function') {
+				console.warn({ event: 'kopje.spool.metrics-unavailable' })
+				return true
+			}
+			try {
+				const { backlogCount, backlogBytes } = await metrics.call(queue)
+				reading = { at: now(), full: backlogCount >= SPOOL_BACKLOG_MESSAGES || backlogBytes >= SPOOL_BACKLOG_BYTES }
+			} catch {
+				console.warn({ event: 'kopje.spool.metrics-unavailable' })
+				return true
+			}
+			return reading.full
+		},
+	}
+}
+
 // Queue send options of a spool message: v8, so the deflated body travels as bytes.
 export const spoolMessageOptions: QueueSendOptions = { contentType: 'v8' }
 

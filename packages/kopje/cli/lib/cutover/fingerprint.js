@@ -16,6 +16,7 @@
 
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import { basename } from 'node:path'
 
 import { checkSizes, exportFiles } from './run.js'
 import { decodeBudget, ExportError, parseStatement, splitStatements } from './sql-script.js'
@@ -126,10 +127,19 @@ export function fingerprintExport(exportPath) {
 		}
 	}
 	// actor_notifications is AUTOINCREMENT: once it has had a row, sqlite_sequence holds its high-water mark, which the
-	// converter must carry over. An export without it loses the mark.
+	// converter must carry over, even after every notification was deleted. So an export with the notifications table
+	// must carry sqlite_sequence itself: its rows, or its file (sqlite_sequence.sql, empty when nothing was ever
+	// allocated). Without it, "never allocated" and "counter omitted" cannot be told apart.
+	const sequenceExported = hashes.has(SEQUENCE_TABLE) || files.some((file) => basename(file) === 'sqlite_sequence.sql')
 	const notifications = hashes.get(NOTIFICATIONS)
+	if (notifications !== undefined && !sequenceExported) {
+		throw new FingerprintError('sequence-missing', { table: SEQUENCE_TABLE })
+	}
 	if (notifications !== undefined && notifications.length > 0 && notificationSequence === null) {
 		throw new FingerprintError('sequence-missing', { table: NOTIFICATIONS })
+	}
+	if (sequenceExported && !hashes.has(SEQUENCE_TABLE)) {
+		hashes.set(SEQUENCE_TABLE, [])
 	}
 	/** @type {Fingerprint['tables']} */
 	const tables = {}
@@ -222,9 +232,13 @@ export function compareFingerprints(first, second, manifest) {
 	/** @type {string[]} */
 	const exportDiffers = []
 	if (manifest !== undefined) {
+		// The exact key set: a table one side counts and the other does not differs, even at zero rows.
 		const counted = Object.keys(second.tables).filter((name) => !UNCOUNTED.has(name))
-		for (const name of new Set([...counted, ...Object.keys(manifest.rowsLoaded)])) {
-			if ((second.tables[name]?.rows ?? 0) !== (manifest.rowsLoaded[name] ?? 0)) {
+		const listed = Object.keys(manifest.rowsLoaded).filter((name) => !UNCOUNTED.has(name))
+		for (const name of new Set([...counted, ...listed])) {
+			const exported = second.tables[name]
+			const loaded = Object.hasOwn(manifest.rowsLoaded, name) ? manifest.rowsLoaded[name] : undefined
+			if (exported === undefined || loaded === undefined || exported.rows !== loaded) {
 				exportDiffers.push(name)
 			}
 		}

@@ -154,6 +154,26 @@ describe('the cutover reset after a completed import (OPS-8)', () => {
 		expect(await count(served, 'statuses')).toBeGreaterThan(0)
 	})
 
+	it('marks the Store published before an isolate that first saw it empty serves its imported data', async () => {
+		const store = await migratedStore()
+		await setTeamAccess(store, team, { domain: 'kopje.test' })
+		const h = adminHarness(store, team, { MAINTENANCE: 'off' })
+		const serve = async (path: string) => {
+			const ctx = createExecutionContext()
+			const response = await h.app.fetch(new Request(`${ORIGIN}${path}`), h.env, ctx)
+			await waitOnExecutionContext(ctx)
+			return response
+		}
+		await serve('/health')
+		expect((await store.cutoverStatus(BUILD)).published).toBeNull()
+		const { report } = await importViaRpc(store, inject('cutover').dump, 1 << 20, authority())
+		expect(report).toMatchObject({ ok: true })
+		// The same app instance, so the same isolate state: the mark is taken before the answer.
+		const response = await serve('/ap/users/alice')
+		expect(response.status).not.toBe(500)
+		expect((await store.cutoverStatus(BUILD)).published).toMatchObject({ via: 'serving' })
+	})
+
 	it('leaves an incomplete import to import-reset', async () => {
 		const store = await migratedStore()
 		await setTeamAccess(store, team, { domain: 'kopje.test' })

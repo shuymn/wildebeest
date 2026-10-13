@@ -126,6 +126,30 @@ describe('the fingerprint of an export', () => {
 		expect(await changedBy((db) => db.exec('UPDATE peers SET domain = domain'))).toMatchObject({ result: 'PASS' })
 	})
 
+	it('keeps the notification counter after every notification was deleted, and refuses an export without it', async () => {
+		const { db } = await live()
+		db.exec('DELETE FROM actor_notifications')
+		const counter = (
+			db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'actor_notifications'").get() as {
+				seq: number
+			}
+		).seq
+		expect(counter).toBeGreaterThan(0)
+		const withCounter = await writeExport(space.dir, exportDatabase(db, { sequence: true }), 'emptied')
+		expect(fingerprintExport(withCounter)).toMatchObject({ notificationSequence: String(counter) })
+		const without = await writeExport(space.dir, exportDatabase(db), 'emptied-without')
+		expect(() => fingerprintExport(without)).toThrow(/sequence-missing/)
+	})
+
+	it('reads an exported sqlite_sequence without a notification row as never allocated', async () => {
+		const { db } = await live()
+		db.exec('DELETE FROM actor_notifications')
+		const texts = exportDatabase(db)
+		texts.set('sqlite_sequence', '')
+		const path = await writeExport(space.dir, texts, 'never-allocated')
+		expect(fingerprintExport(path)).toMatchObject({ notificationSequence: null })
+	})
+
 	it('refuses an export without the notification counter, which the conversion would lose', async () => {
 		const { db } = await live()
 		const path = await writeExport(space.dir, exportDatabase(db), 'no-sequence')
@@ -159,6 +183,26 @@ describe('the export against the conversion manifest', () => {
 		expect(compareFingerprints(final.fingerprint, final.fingerprint, counter)).toMatchObject({
 			result: 'FAIL',
 			exportDiffers: ['sqlite_sequence'],
+		})
+	})
+
+	it('requires exactly the counted tables, even at zero rows', async () => {
+		const { final, manifest } = await converted()
+		const parsed = parseManifest(manifest)
+		const empty = Object.entries(parsed.rowsLoaded).find(([, n]) => n === 0)?.[0]
+		expect(empty).toBeDefined()
+		const missing = {
+			...parsed,
+			rowsLoaded: Object.fromEntries(Object.entries(parsed.rowsLoaded).filter(([t]) => t !== empty)),
+		}
+		expect(compareFingerprints(final.fingerprint, final.fingerprint, missing)).toMatchObject({
+			result: 'FAIL',
+			exportDiffers: [empty],
+		})
+		const extra = { ...parsed, rowsLoaded: { ...parsed.rowsLoaded, no_such_table: 0 } }
+		expect(compareFingerprints(final.fingerprint, final.fingerprint, extra)).toMatchObject({
+			result: 'FAIL',
+			exportDiffers: ['no_such_table'],
 		})
 	})
 

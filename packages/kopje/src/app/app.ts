@@ -1,4 +1,4 @@
-import { type Context, Hono } from 'hono'
+import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 
@@ -15,7 +15,7 @@ import { createResolver } from '../federation/resolve'
 import { FEDERATION_GET_ROUTES, federationHandler, type FederationRouteDeps } from '../federation/routes'
 import { FEDERATION_PATHS, requireSetup } from '../federation/setup-gate'
 import { rescueFromSnapshot } from '../federation/snapshot'
-import { INBOX_BODY_LIMIT, spoolInbox } from '../federation/spool'
+import { createAdmission, INBOX_BODY_LIMIT, spoolInbox } from '../federation/spool'
 import { maintenanceError, mastodonError } from '../mastodon/errors'
 import { mastodonApi } from '../mastodon/routes'
 import { readBackupConfig } from '../platform/backup-config'
@@ -82,26 +82,28 @@ export function createApp({
 		app.use(path, apiCors)
 	}
 
-	// The first request this isolate serves with MAINTENANCE=off marks the Store published: from then on a cutover can
-	// no longer be reset (docs/cutover-runbook.md). One attempt per isolate, again after a failure.
-	let servingMarked = false
-	const markServing = (c: Context<AppEnv>) => {
-		if (servingMarked) {
+	// Spooling within the Queue's admission budget (federation/spool.ts): over it, or when it cannot be read, 503.
+	const admission = createAdmission(now)
+	const spool = async (queue: Queue, request: Request, body: Uint8Array) => {
+		if (await admission.full(queue)) {
+			console.warn({ event: 'kopje.spool.backlog-full' })
+			return maintenanceError()
+		}
+		return spoolInbox(request, body, queue, now())
+	}
+
+	// With MAINTENANCE=off, nothing is served before the Store holds its published mark (taken only while it holds
+	// data): from then on a cutover can no longer be reset (docs/cutover-runbook.md). Only a mark that exists is
+	// remembered, per isolate, so an isolate that first saw an empty Store asks again once data arrives.
+	let published = false
+	const ensurePublished = async (env: Env) => {
+		if (published) {
 			return
 		}
-		servingMarked = true
-		const marked = store(c.env)
-			.markPublished(build(c.env), 'serving')
-			.then(
-				() => undefined,
-				() => {
-					servingMarked = false
-				}
-			)
 		try {
-			c.executionCtx.waitUntil(marked)
+			published = (await store(env).markPublished(build(env), 'serving')).published !== null
 		} catch {
-			// No execution context (a test calling app.request): the promise still settles.
+			// A Store that cannot answer serves nothing either.
 		}
 	}
 
@@ -124,7 +126,7 @@ export function createApp({
 			return mastodonError(503, 'This server is misconfigured')
 		}
 		if (config.config.MAINTENANCE === 'off') {
-			markServing(c)
+			await ensurePublished(c.env)
 		}
 		const decision = decide(requestClass, config.config.MAINTENANCE)
 		if (decision === 'unavailable') {
@@ -143,7 +145,7 @@ export function createApp({
 				return new Response(null, { status: precheck === 'not-found' ? 404 : 415 })
 			}
 			if (decision === 'spool') {
-				return spoolInbox(c.req.raw, body, c.env.QUEUE, now())
+				return spool(c.env.QUEUE, c.req.raw, body)
 			}
 		}
 		await next()
@@ -207,7 +209,7 @@ export function createApp({
 		if (error instanceof StoreUnavailableError) {
 			const body = c.get('requestClass') === 'inbox' ? c.get('inboxBody') : undefined
 			if (body !== undefined) {
-				return spoolInbox(c.req.raw, body, c.env.QUEUE, now())
+				return spool(c.env.QUEUE, c.req.raw, body)
 			}
 			// Actor documents, WebFinger and NodeInfo stay up from the last good snapshot.
 			if (c.get('requestClass') === 'always') {

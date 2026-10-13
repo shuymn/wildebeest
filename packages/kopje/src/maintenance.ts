@@ -1,7 +1,7 @@
 import { classifyRequest } from './app/gate'
 import { hasSignatureShape, precheckInboxRequest } from './federation/inbox-request'
 import { acceptable, answerFromSnapshot } from './federation/snapshot'
-import { INBOX_BODY_LIMIT, spoolInbox } from './federation/spool'
+import { type Admission, createAdmission, INBOX_BODY_LIMIT, spoolInbox } from './federation/spool'
 import { maintenanceError } from './mastodon/errors'
 import { readBoundedBody } from './platform/body'
 import type { Snapshot } from './platform/store-kernel'
@@ -37,11 +37,7 @@ export type MaintenanceSnapshot = {
 
 // Optional: a Rate Limiting binding of the Pages project, keyed by client IP, if the platform offers one there.
 export const SPOOL_RATE_LIMIT_BINDING = 'KOPJE_SPOOL_RATE_LIMIT'
-// The spool's admission budget: no new request is accepted while Kopje's Queue holds this much. Peers retry later.
-export const SPOOL_BACKLOG_MESSAGES = 10_000
-export const SPOOL_BACKLOG_BYTES = 256 * 1024 * 1024
-// How long a backlog reading is trusted, per isolate.
-const BACKLOG_READING_MS = 10_000
+export { SPOOL_BACKLOG_BYTES, SPOOL_BACKLOG_MESSAGES } from './federation/spool'
 
 export type MaintenanceEnv = {
 	[SPOOL_QUEUE_BINDING]?: Queue
@@ -180,32 +176,6 @@ function answerVariant(request: Request, domain: string, documents: Map<string, 
 function unavailable(status: 429 | 503 = 503): Response {
 	const response = maintenanceError()
 	return status === 503 ? response : new Response(response.body, { status, headers: response.headers })
-}
-
-type Admission = { full(queue: Queue): Promise<boolean> }
-
-// The backlog of Kopje's Queue, read through the Queue binding's metrics and trusted for a few seconds per isolate.
-// A runtime without them (an old compatibility date) admits by the rate limit alone; the runbook watches the backlog.
-function createAdmission(now: () => number): Admission {
-	let reading: { at: number; full: boolean } | null = null
-	return {
-		async full(queue) {
-			if (reading !== null && now() - reading.at < BACKLOG_READING_MS) {
-				return reading.full
-			}
-			const metrics = (queue as Partial<Pick<Queue, 'metrics'>>).metrics
-			if (typeof metrics !== 'function') {
-				return false
-			}
-			try {
-				const { backlogCount, backlogBytes } = await metrics.call(queue)
-				reading = { at: now(), full: backlogCount >= SPOOL_BACKLOG_MESSAGES || backlogBytes >= SPOOL_BACKLOG_BYTES }
-			} catch {
-				return false
-			}
-			return reading.full
-		},
-	}
 }
 
 function withHeaders(response: Response): Response {

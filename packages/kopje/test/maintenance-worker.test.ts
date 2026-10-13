@@ -1,7 +1,8 @@
 import { describe, expect, inject, it } from 'vitest'
 
 import { apiHarness, sql } from './api-helpers'
-import { inboxDeps, NOW } from './app-helpers'
+import { harness, inboxDeps, NOW } from './app-helpers'
+import { migratedStore } from './helpers'
 import { AP, mastodonActor, RemoteWeb, signedInit } from './inbox-helpers'
 import { ADMIN_AUD, ADMIN_EMAIL, importViaRpc, setAccess } from './ops-helpers'
 import { QueueSim } from './queue-sim'
@@ -351,6 +352,49 @@ describe('the spool admits only signed requests, within its budget (OPS-6)', () 
 		clock += 60_000
 		expect((await post(worker, env, SIGNED)).status).toBe(202)
 		expect(queue.pending).toHaveLength(1)
+	})
+})
+
+describe('admission fails closed when the backlog cannot be read (OPS-6)', () => {
+	const post = (worker: ExportedHandler<MaintenanceEnv>, env: MaintenanceEnv) =>
+		worker.fetch!(
+			new Request(`${ORIGIN}/inbox`, { method: 'POST', headers: SIGNED, body: '{}' }) as Request<
+				unknown,
+				IncomingRequestCfProperties
+			>,
+			env,
+			{} as ExecutionContext
+		)
+
+	it('in the maintenance worker: a Queue without metrics, or whose metrics fail, admits nothing', async () => {
+		for (const metrics of [undefined, () => Promise.reject(new Error('metrics unavailable'))]) {
+			const { worker } = maintenance()
+			const sent: unknown[] = []
+			const queue = { send: (body: unknown) => Promise.resolve(void sent.push(body)), ...(metrics ? { metrics } : {}) }
+			const response = await post(worker, { [SPOOL_QUEUE_BINDING]: queue as unknown as Queue })
+			expect(response.status).toBe(503)
+			expect(response.headers.get('retry-after')).toBe(String(MAINTENANCE_RETRY_AFTER_SECONDS))
+			expect(sent).toEqual([])
+		}
+	})
+
+	it("in Kopje's own maintenance gate: the same budget, failing closed", async () => {
+		const signed = { method: 'POST', headers: SIGNED, body: '{}' }
+		for (const queue of [
+			{ send: () => Promise.resolve() },
+			{ send: () => Promise.resolve(), metrics: () => Promise.reject(new Error('metrics unavailable')) },
+			{
+				send: () => Promise.resolve(),
+				metrics: () => Promise.resolve({ backlogCount: SPOOL_BACKLOG_MESSAGES, backlogBytes: 0 }),
+			},
+		]) {
+			const h = harness(await migratedStore(), { MAINTENANCE: 'readonly', QUEUE: queue })
+			const response = await h.request('/inbox', signed)
+			expect(response.status).toBe(503)
+			expect(response.headers.get('retry-after')).toBe(String(MAINTENANCE_RETRY_AFTER_SECONDS))
+		}
+		const open = harness(await migratedStore(), { MAINTENANCE: 'readonly' })
+		expect((await open.request('/inbox', signed)).status).toBe(202)
 	})
 })
 
