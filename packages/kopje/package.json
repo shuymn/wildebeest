@@ -85,7 +85,7 @@
 		"typescript": "5.9.3",
 		"vitest": "4.1.11",
 		"wrangler": "4.149.0",
-		"zod": "3.25.76"
+		"zod": "4.6.5"
 	},
 	"publishConfig": {
 		"access": "public",
