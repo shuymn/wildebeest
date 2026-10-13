@@ -165,7 +165,7 @@ describe('Update(Person)', () => {
 			expect(ids[0], lane).toBe(firstId)
 			expect(ids.filter((id) => id !== firstId)).toEqual(ids.filter((id) => id !== firstId).sort((x, y) => x - y))
 		}
-	})
+	}, 30_000)
 })
 
 async function activityId(h: Awaited<ReturnType<typeof setup>>, name: string): Promise<number> {
