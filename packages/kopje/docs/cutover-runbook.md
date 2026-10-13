@@ -56,8 +56,9 @@ after the legacy consumer acknowledged the previous one.
 **Point of no return.** Publishing (step 9) is final. A verified import leaves the Store unpublished: it then refuses
 every write, whatever `MAINTENANCE` says, so nothing is written or delivered (no reply, no Accept, no replayed inbox
 request) until you publish; reads and sign-ins work, for the checks of step 8. `kopje-admin publish --yes` ends that and
-marks the Store published, after which it refuses the cutover reset and every rollback command for good. Publication is
-refused while a rollback is in progress (a drain runs, or the journal holds requests).
+marks the Store published, after which it refuses the cutover reset, every rollback command and any import for good.
+Publication is refused while a rollback is in progress (a drain runs, or the journal holds requests), and on a Store
+that never had a verified import. The daily backup does not start before publication (step 10).
 After publication, never go back to the legacy setup: recover with the Store's point-in-time recovery, an external
 backup, or a fix forward ([upgrade.md](upgrade.md#a-version-that-changed-the-schema)).
 
@@ -437,9 +438,12 @@ them, and a later cutover cannot replay them. Everything below runs through Acce
 - **Fail closed.** A Queue backlog that cannot be read stops the drain (`metrics-unavailable`); a key that cannot be
   fetched now stops it (`key-unavailable`; run it again). The legacy Queue is read before its dead-letter queue.
 - **One drain at a time.** A drain holds a lease for its round, and sends nothing once too little of it is left for a
-  send to finish inside it (`lease-expiring`), however long an earlier step took. A send to the legacy Queue that does
-  not finish in 10 seconds is given up (`legacy-queue-timeout`) and the lease is kept until it expires (5 minutes), so
-  no other drain sends meanwhile; the request is sent again by a later round.
+  send to finish inside it (`lease-expiring`), however long an earlier step took. Every call of the round (a Queue
+  reading, a Store call, a key fetch) is given up at the round's deadline, and the round then stops (`lease-expiring`).
+  A send to the legacy Queue that does not finish in 10 seconds is given up (`legacy-queue-timeout`); after either, the
+  lease is kept until it expires (5 minutes), so no other drain sends meanwhile; the request is sent again by a later
+  round. A send given up this way may still reach the legacy Queue later, and the legacy consumer does not deduplicate:
+  the legacy instance may then process a request twice, or out of order with the one after it.
 - **At least once.** A request is marked as being sent before the send; a drain interrupted between the two sends it
   again, so the legacy instance may process it twice (a second Accept, a second notification).
 - **Receipts.** A handed-off request leaves a receipt outside the Store's data, so no copy of it is journaled or
@@ -453,7 +457,9 @@ them, and a later cutover cannot replay them. Everything below runs through Acce
   or discard kept requests, and keep the spool rate limit on. If neither frees room (at the ceilings, with only valid
   requests), `kopje-admin cutover drain --worker <dir> --unordered --yes` sends the journal's head past the collection
   barrier, which lets the Queue's requests come in: those may then overtake an older request (ordinary delivery
-  reordering, as between any two servers). It has effect only while the journal is full.
+  reordering, as between any two servers). It has effect only while the journal is full, and only after a drain
+  stopped on `journal-full` with the journal unchanged since: a first `--unordered` drain stops and reports it too,
+  and running the command again sends the head.
 
 ### Rollback A: before the import is complete
 
