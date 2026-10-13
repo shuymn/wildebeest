@@ -26,8 +26,8 @@ export function snapshotKey(url: URL): string | null {
 }
 
 // Actor documents are JSON-LD; a browser asking for HTML gets no snapshot (it would get the profile page).
-function acceptable(request: Request, url: URL): boolean {
-	if (url.pathname !== '/actor' && !ACTOR_PATH.test(url.pathname)) {
+export function acceptable(request: Request, url: URL): boolean {
+	if (!isActorPath(url)) {
 		return true
 	}
 	return /json/i.test(request.headers.get('accept') ?? '')
@@ -100,7 +100,14 @@ export async function answerFromSnapshot(
 	if (snapshot === null) {
 		return null
 	}
-	return new Response(request.method === 'HEAD' ? null : snapshot.body, {
-		headers: { 'content-type': snapshot.contentType, 'access-control-allow-origin': '*' },
-	})
+	// The headers the live answer has: an actor document is negotiated by Accept; WebFinger and NodeInfo are open to
+	// browsers.
+	const headers: Record<string, string> = isActorPath(url)
+		? { 'content-type': snapshot.contentType, vary: 'Accept' }
+		: { 'content-type': snapshot.contentType, 'access-control-allow-origin': '*' }
+	return new Response(request.method === 'HEAD' ? null : snapshot.body, { headers })
+}
+
+function isActorPath(url: URL): boolean {
+	return url.pathname === '/actor' || ACTOR_PATH.test(url.pathname)
 }

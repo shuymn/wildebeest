@@ -31,3 +31,26 @@ export async function precheckInboxRequest(
 	}
 	return (await ownerExists(username)) ? 'ok' : 'not-found'
 }
+
+const KEY_ID_LIMIT = 2048
+const CAVAGE_KEY_ID = /(?:^|,)\s*keyId\s*=\s*"([^"]*)"/i
+const RFC9421_KEY_ID = /;\s*keyid\s*=\s*"([^"]*)"/i
+
+// Whether the request carries an HTTP signature naming an https key: a draft-cavage `Signature` header with keyId, or
+// RFC 9421 `Signature-Input` and `Signature` with keyid. Only the shape: replay verifies the signature itself.
+export function hasSignatureShape(headers: Headers): boolean {
+	const signature = headers.get('signature')
+	if (signature === null) {
+		return false
+	}
+	const input = headers.get('signature-input')
+	const keyId = (input === null ? CAVAGE_KEY_ID.exec(signature) : RFC9421_KEY_ID.exec(input))?.[1]
+	if (keyId === undefined || keyId.length === 0 || keyId.length > KEY_ID_LIMIT) {
+		return false
+	}
+	try {
+		return new URL(keyId).protocol === 'https:'
+	} catch {
+		return false
+	}
+}

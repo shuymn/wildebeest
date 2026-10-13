@@ -10,8 +10,12 @@ import { handleQueue } from '../src/jobs/queue'
 import {
 	createMaintenanceWorker,
 	MAINTENANCE_RETRY_AFTER_SECONDS,
+	type MaintenanceEnv,
 	type MaintenanceSnapshot,
+	SPOOL_BACKLOG_BYTES,
+	SPOOL_BACKLOG_MESSAGES,
 	SPOOL_QUEUE_BINDING,
+	SPOOL_RATE_LIMIT_BINDING,
 } from '../src/maintenance-worker'
 
 // The cutover's maintenance worker (docs/cutover-runbook.md, step 3). The global setup (test-node/cutover-global-setup
@@ -30,6 +34,11 @@ declare module 'vitest' {
 }
 
 const ORIGIN = 'https://kopje.test'
+// A signature of the right shape (only replay verifies it).
+const SIGNED = {
+	'content-type': AP,
+	signature: 'keyId="https://remote.example/users/a#main-key",headers="(request-target) host date",signature="x"',
+}
 
 function snapshotOf(source: string): MaintenanceSnapshot {
 	const line = source.split('\n')[1]!
@@ -83,6 +92,24 @@ async function imported() {
 	return h
 }
 
+// The same request to Kopje after the import and to the maintenance worker: same status, the headers that matter to
+// peers and caches, and the same body.
+async function expectParity(
+	h: Awaited<ReturnType<typeof imported>>,
+	request: (path: string, init?: RequestInit) => Response | Promise<Response>,
+	path: string,
+	init: RequestInit
+) {
+	const live = await h.request(path, init)
+	const served = await request(path, init)
+	const label = `${init.method ?? 'GET'} ${path}`
+	expect(served.status, label).toBe(live.status)
+	for (const name of ['content-type', 'vary', 'cache-control', 'access-control-allow-origin', 'etag']) {
+		expect(served.headers.get(name), `${label} ${name}`).toBe(live.headers.get(name))
+	}
+	expect(await served.text(), label).toBe(await live.text())
+}
+
 // The request a peer would send for a snapshot key.
 function requestFor(key: string): [string, RequestInit] {
 	if (key.startsWith('path:')) {
@@ -115,12 +142,7 @@ describe('the maintenance snapshot (OPS-7)', () => {
 		expect(keys).toHaveLength(2)
 		for (const key of Object.keys(snapshot.documents)) {
 			const [path, init] = requestFor(key)
-			const live = await h.request(path, init)
-			const served = await request(path, init)
-			expect(served.status, key).toBe(200)
-			expect(live.status, key).toBe(200)
-			expect(served.headers.get('content-type'), key).toBe(live.headers.get('content-type'))
-			expect(await served.text(), key).toBe(await live.text())
+			await expectParity(h, request, path, init)
 		}
 		for (const { username, pubkey } of keys) {
 			const actor = (await (await request(`/ap/users/${username}`, { headers: { accept: AP } })).json()) as {
@@ -131,15 +153,41 @@ describe('the maintenance snapshot (OPS-7)', () => {
 		}
 	})
 
-	it('answers anything it has no snapshot for with 503 and Retry-After', async () => {
+	// What peers send besides the canonical requests: other ActivityPub Accept values, HEAD, WebFinger in other cases
+	// and for unknown names, actor paths in another case. Status, the headers peers and caches read, and the body
+	// equal Kopje's after the import.
+	it.each<[string, RequestInit]>([
+		[
+			'/ap/users/alice',
+			{ headers: { accept: 'application/ld+json; profile="https://www.w3.org/ns/activitystreams"' } },
+		],
+		['/ap/users/alice', { headers: { accept: 'application/json' } }],
+		['/ap/users/alice', { method: 'HEAD', headers: { accept: AP } }],
+		['/ap/users/ALICE', { headers: { accept: AP } }],
+		['/ap/users/nobody', { headers: { accept: AP } }],
+		['/ap/users/Bob', { method: 'HEAD', headers: { accept: AP } }],
+		['/.well-known/webfinger?resource=acct:ALICE@kopje.test', {}],
+		['/.well-known/webfinger?resource=acct:alice@KOPJE.test', {}],
+		['/.well-known/webfinger?resource=acct:bob@kopje.test', {}],
+		['/.well-known/webfinger?resource=acct:nobody@kopje.test', {}],
+		['/.well-known/webfinger?resource=acct:alice@other.example', {}],
+		['/.well-known/webfinger?resource=https://kopje.test/ap/users/ALICE', {}],
+		['/.well-known/webfinger?resource=https://kopje.test/@alice', {}],
+		['/.well-known/webfinger?resource=acct:alice@kopje.test', { method: 'HEAD' }],
+	])('answers %s as Kopje does (%o)', async (path, init) => {
+		const h = await imported()
+		const { request } = maintenance()
+		await expectParity(h, request, path, init)
+	})
+
+	it('answers anything it cannot tell exactly with 503 and Retry-After', async () => {
 		const { request } = maintenance()
 		for (const [path, init] of [
 			['/ap/users/alice', { headers: { accept: 'text/html' } }],
-			['/ap/users/ALICE', { headers: { accept: AP } }],
-			['/ap/users/nobody', { headers: { accept: AP } }],
 			['/actor', { headers: { accept: AP } }],
-			['/.well-known/webfinger?resource=acct:nobody@kopje.test', {}],
 			['/.well-known/webfinger?resource=https://kopje.test/actor', {}],
+			['/.well-known/webfinger?resource=https://other.example/users/a', {}],
+			['/.well-known/webfinger', {}],
 			['/.well-known/nodeinfo', {}],
 			['/nodeinfo/2.1', {}],
 			['/ap/users/alice/outbox', { headers: { accept: AP } }],
@@ -154,6 +202,20 @@ describe('the maintenance snapshot (OPS-7)', () => {
 			expect(response.headers.get('retry-after'), path).toBe(String(MAINTENANCE_RETRY_AFTER_SECONDS))
 			expect(response.headers.get('x-content-type-options'), path).toBe('nosniff')
 		}
+	})
+})
+
+// Kopje itself answers the rest of the window (steps 7 and 8) with the same maintenance answer.
+describe('Retry-After through the whole window', () => {
+	it("is on Kopje's own maintenance answers, in full and in readonly maintenance", async () => {
+		const full = await apiHarness({ MAINTENANCE: 'full' })
+		const read = await full.request('/api/v1/timelines/public')
+		expect(read.status).toBe(503)
+		expect(read.headers.get('retry-after')).toBe(String(MAINTENANCE_RETRY_AFTER_SECONDS))
+		const readonly = await apiHarness({ MAINTENANCE: 'readonly' })
+		const write = await readonly.request('/api/v1/statuses', { method: 'POST', body: '{}' })
+		expect(write.status).toBe(503)
+		expect(write.headers.get('retry-after')).toBe(String(MAINTENANCE_RETRY_AFTER_SECONDS))
 	})
 })
 
@@ -197,13 +259,13 @@ describe('the maintenance worker accepts no write but the spool (OPS-6)', () => 
 		for (let i = 0; i < noise.length; i += 65536) {
 			crypto.getRandomValues(noise.subarray(i, i + 65536))
 		}
-		expect((await request('/inbox', { method: 'POST', headers: { 'content-type': AP }, body: noise })).status).toBe(503)
+		expect((await request('/inbox', { method: 'POST', headers: SIGNED, body: noise })).status).toBe(503)
 		expect(queue.send).not.toHaveBeenCalled()
 	})
 
 	it('answers 503 rather than 202 when it cannot spool', async () => {
 		const { worker } = maintenance()
-		const init = { method: 'POST', headers: { 'content-type': AP }, body: '{}' }
+		const init = { method: 'POST', headers: SIGNED, body: '{}' }
 		const call = (env: Record<string, unknown>) =>
 			worker.fetch!(
 				new Request(`${ORIGIN}/inbox`, init) as Request<unknown, IncomingRequestCfProperties>,
@@ -213,6 +275,82 @@ describe('the maintenance worker accepts no write but the spool (OPS-6)', () => 
 		expect((await call(legacyBindings())).status).toBe(503)
 		const failing = { send: () => Promise.reject(new Error('queue unavailable')) }
 		expect((await call({ ...legacyBindings(), [SPOOL_QUEUE_BINDING]: failing })).status).toBe(503)
+	})
+})
+
+describe('the spool admits only signed requests, within its budget (OPS-6)', () => {
+	const post = (worker: ExportedHandler<MaintenanceEnv>, env: MaintenanceEnv, headers: Record<string, string>) =>
+		worker.fetch!(
+			new Request(`${ORIGIN}/inbox`, { method: 'POST', headers, body: '{}' }) as Request<
+				unknown,
+				IncomingRequestCfProperties
+			>,
+			env,
+			{} as ExecutionContext
+		)
+
+	it('refuses a request without a signature of the right shape, before anything is spooled', async () => {
+		const { worker, queue } = maintenance()
+		const env = { [SPOOL_QUEUE_BINDING]: queue.queue }
+		for (const signature of [
+			undefined,
+			'headers="date",signature="x"',
+			'keyId="http://remote.example/users/a#main-key",signature="x"',
+			'keyId="",signature="x"',
+			`keyId="https://remote.example/${'a'.repeat(2048)}",signature="x"`,
+		]) {
+			const headers: Record<string, string> = { 'content-type': AP }
+			if (signature !== undefined) {
+				headers.signature = signature
+			}
+			expect((await post(worker, env, headers)).status, String(signature)).toBe(401)
+		}
+		expect(queue.send).not.toHaveBeenCalled()
+		const rfc9421 = {
+			'content-type': AP,
+			'signature-input': 'sig1=("@method" "@target-uri");keyid="https://remote.example/users/a#main-key"',
+			signature: 'sig1=:eA==:',
+		}
+		expect((await post(worker, env, rfc9421)).status).toBe(202)
+		expect((await post(worker, env, SIGNED)).status).toBe(202)
+	})
+
+	it('answers 429 over the per-IP rate limit, when the Pages project binds one', async () => {
+		const { worker, queue } = maintenance()
+		const keys: string[] = []
+		const limiter = {
+			limit: ({ key }: { key: string }) => {
+				keys.push(key)
+				return Promise.resolve({ success: keys.length < 2 })
+			},
+		}
+		const env = { [SPOOL_QUEUE_BINDING]: queue.queue, [SPOOL_RATE_LIMIT_BINDING]: limiter }
+		const headers = { ...SIGNED, 'cf-connecting-ip': '192.0.2.1' }
+		expect((await post(worker, env, headers)).status).toBe(202)
+		const limited = await post(worker, env, headers)
+		expect(limited.status).toBe(429)
+		expect(limited.headers.get('retry-after')).toBe(String(MAINTENANCE_RETRY_AFTER_SECONDS))
+		expect(keys).toEqual(['192.0.2.1', '192.0.2.1'])
+		expect(queue.pending).toHaveLength(1)
+	})
+
+	it("answers 503 once the Queue's backlog reaches the budget, and admits again when it falls", async () => {
+		let clock = NOW
+		const worker = createMaintenanceWorker(maintenance().snapshot, () => clock)
+		const queue = new QueueSim()
+		let backlog = { backlogCount: SPOOL_BACKLOG_MESSAGES, backlogBytes: 0 }
+		const withMetrics = Object.assign(queue.queue, { metrics: () => Promise.resolve(backlog) })
+		const env = { [SPOOL_QUEUE_BINDING]: withMetrics }
+		const full = await post(worker, env, SIGNED)
+		expect(full.status).toBe(503)
+		expect(full.headers.get('retry-after')).toBe(String(MAINTENANCE_RETRY_AFTER_SECONDS))
+		backlog = { backlogCount: 0, backlogBytes: SPOOL_BACKLOG_BYTES }
+		clock += 60_000
+		expect((await post(worker, env, SIGNED)).status).toBe(503)
+		backlog = { backlogCount: 0, backlogBytes: 0 }
+		clock += 60_000
+		expect((await post(worker, env, SIGNED)).status).toBe(202)
+		expect(queue.pending).toHaveLength(1)
 	})
 })
 
@@ -303,7 +441,7 @@ describe('the generated _worker.js', () => {
 		expect(actor.status).toBe(200)
 		expect(await actor.text()).toBe(snapshotOf(source).documents['path:/ap/users/alice']!.body)
 		expect((await call('/api/v1/statuses', { method: 'POST', body: '{}' })).status).toBe(503)
-		const spooled = await call('/inbox', { method: 'POST', headers: { 'content-type': AP }, body: '{}' })
+		const spooled = await call('/inbox', { method: 'POST', headers: SIGNED, body: '{}' })
 		expect(spooled.status).toBe(202)
 		expect(queue.pending).toHaveLength(1)
 	})

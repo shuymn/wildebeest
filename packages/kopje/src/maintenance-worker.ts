@@ -1,6 +1,6 @@
 import { classifyRequest } from './app/gate'
-import { precheckInboxRequest } from './federation/inbox-request'
-import { answerFromSnapshot } from './federation/snapshot'
+import { hasSignatureShape, precheckInboxRequest } from './federation/inbox-request'
+import { acceptable, answerFromSnapshot } from './federation/snapshot'
 import { INBOX_BODY_LIMIT, spoolInbox } from './federation/spool'
 import { maintenanceError } from './mastodon/errors'
 import { readBoundedBody } from './platform/body'
@@ -22,8 +22,7 @@ import type { Snapshot } from './platform/store-kernel'
 // of the federation stack (test-node/maintenance-worker.test.ts checks the bundle).
 
 export const MAINTENANCE_SNAPSHOT_FORMAT = 1
-// Peers retry within minutes; the cutover's downtime budget is 30 minutes.
-export const MAINTENANCE_RETRY_AFTER_SECONDS = 600
+export { MAINTENANCE_RETRY_AFTER_SECONDS } from './mastodon/errors'
 // The Pages project's Queue producer binding for Kopje's Queue. Legacy instances bind their own Queue as QUEUE.
 export const SPOOL_QUEUE_BINDING = 'KOPJE_QUEUE'
 
@@ -36,7 +35,18 @@ export type MaintenanceSnapshot = {
 	documents: Record<string, Snapshot>
 }
 
-export type MaintenanceEnv = { [SPOOL_QUEUE_BINDING]?: Queue }
+// Optional: a Rate Limiting binding of the Pages project, keyed by client IP, if the platform offers one there.
+export const SPOOL_RATE_LIMIT_BINDING = 'KOPJE_SPOOL_RATE_LIMIT'
+// The spool's admission budget: no new request is accepted while Kopje's Queue holds this much. Peers retry later.
+export const SPOOL_BACKLOG_MESSAGES = 10_000
+export const SPOOL_BACKLOG_BYTES = 256 * 1024 * 1024
+// How long a backlog reading is trusted, per isolate.
+const BACKLOG_READING_MS = 10_000
+
+export type MaintenanceEnv = {
+	[SPOOL_QUEUE_BINDING]?: Queue
+	[SPOOL_RATE_LIMIT_BINDING]?: { limit(options: { key: string }): Promise<{ success: boolean }> }
+}
 
 export function createMaintenanceWorker(
 	snapshot: MaintenanceSnapshot,
@@ -51,19 +61,22 @@ export function createMaintenanceWorker(
 	) {
 		throw new Error('unsupported maintenance snapshot')
 	}
+	const domain = snapshot.domain
 	const inboxes = new Set(snapshot.inboxes)
 	const documents = new Map(Object.entries(snapshot.documents))
+	const admission = createAdmission(now)
 	return {
-		fetch: async (request, env) => withHeaders(await answer(request, env, inboxes, documents, now)),
+		fetch: async (request, env) =>
+			withHeaders(await answer(request, env, { domain, inboxes, documents }, now, admission)),
 	}
 }
 
 async function answer(
 	request: Request,
 	env: MaintenanceEnv,
-	inboxes: Set<string>,
-	documents: Map<string, Snapshot>,
-	now: () => number
+	{ domain, inboxes, documents }: { domain: string; inboxes: Set<string>; documents: Map<string, Snapshot> },
+	now: () => number,
+	admission: Admission
 ): Promise<Response> {
 	const requestClass = classifyRequest(request.method, new URL(request.url).pathname)
 	if (requestClass === 'inbox') {
@@ -75,9 +88,23 @@ async function answer(
 		if (precheck !== 'ok') {
 			return new Response(null, { status: precheck === 'not-found' ? 404 : 415 })
 		}
+		// Flooding the spool takes a signature of the right shape, within the rate limit and the backlog budget.
+		if (!hasSignatureShape(request.headers)) {
+			return new Response(null, { status: 401 })
+		}
 		const queue = env[SPOOL_QUEUE_BINDING]
 		if (queue === undefined) {
 			console.error({ event: 'kopje.maintenance.queue-missing' })
+			return unavailable()
+		}
+		const limiter = env[SPOOL_RATE_LIMIT_BINDING]
+		const client = request.headers.get('cf-connecting-ip')
+		if (limiter !== undefined && client !== null && !(await limiter.limit({ key: client })).success) {
+			console.warn({ event: 'kopje.maintenance.rate-limited' })
+			return unavailable(429)
+		}
+		if (await admission.full(queue)) {
+			console.warn({ event: 'kopje.maintenance.backlog-full' })
 			return unavailable()
 		}
 		return spoolInbox(request, body, queue, now())
@@ -87,14 +114,98 @@ async function answer(
 		if (snapshot !== null) {
 			return snapshot
 		}
+		const variant = answerVariant(request, domain, documents)
+		if (variant !== null) {
+			return variant
+		}
 	}
 	return unavailable()
 }
 
-function unavailable(): Response {
+const ACTOR_PATH = /^\/ap\/users\/[^/]+$/
+const ACCT = /^acct:([^@]+)@([^@]+)$/
+
+// The other answers Kopje's dispatchers give that the snapshot can tell exactly, since it holds every local actor:
+//   - WebFinger for acct:<user>@<domain> in any case: the user's answer, its subject the user as asked and the domain
+//     in lower case (Fedify's answer); an unknown user, another domain, or another URL of this origin but the
+//     instance actor's: 404;
+//   - an actor path that is not a local actor's exact path, asked as JSON: 404, as Kopje (actor paths keep case).
+// Anything else (a foreign URL, a malformed query) is left to 503.
+function answerVariant(request: Request, domain: string, documents: Map<string, Snapshot>): Response | null {
+	const url = new URL(request.url)
+	const body = (text: string | null) => (request.method === 'HEAD' ? null : text)
+	if (ACTOR_PATH.test(url.pathname)) {
+		if (!acceptable(request, url)) {
+			return null
+		}
+		return new Response(body('Not Found'), { status: 404, headers: { vary: 'Accept' } })
+	}
+	if (url.pathname !== '/.well-known/webfinger') {
+		return null
+	}
+	const resources = url.searchParams.getAll('resource')
+	const resource = resources.length === 1 ? resources[0]! : null
+	if (resource === null) {
+		return null
+	}
+	const notFound = () => new Response(body('Not Found'), { status: 404 })
+	const acct = ACCT.exec(resource)
+	if (acct !== null) {
+		const [, user, host] = acct as unknown as [string, string, string]
+		if (host.toLowerCase() !== domain) {
+			return notFound()
+		}
+		const canonical = [...documents.keys()].find(
+			(key) => key.toLowerCase() === `webfinger:acct:${user}@${domain}`.toLowerCase()
+		)
+		if (canonical === undefined) {
+			return notFound()
+		}
+		const snapshot = documents.get(canonical)!
+		const answer = JSON.parse(snapshot.body) as Record<string, unknown>
+		return new Response(body(JSON.stringify({ ...answer, subject: `acct:${user}@${domain}` })), {
+			headers: { 'content-type': snapshot.contentType, 'access-control-allow-origin': '*' },
+		})
+	}
+	// The instance actor's URI is answered after the import, but its key does not exist yet: 503.
+	try {
+		const target = new URL(resource)
+		return target.origin === `https://${domain}` && target.pathname !== '/actor' ? notFound() : null
+	} catch {
+		return null
+	}
+}
+
+// Kopje's own maintenance answer, Retry-After included, so the whole cutover window answers alike.
+function unavailable(status: 429 | 503 = 503): Response {
 	const response = maintenanceError()
-	response.headers.set('retry-after', String(MAINTENANCE_RETRY_AFTER_SECONDS))
-	return response
+	return status === 503 ? response : new Response(response.body, { status, headers: response.headers })
+}
+
+type Admission = { full(queue: Queue): Promise<boolean> }
+
+// The backlog of Kopje's Queue, read through the Queue binding's metrics and trusted for a few seconds per isolate.
+// A runtime without them (an old compatibility date) admits by the rate limit alone; the runbook watches the backlog.
+function createAdmission(now: () => number): Admission {
+	let reading: { at: number; full: boolean } | null = null
+	return {
+		async full(queue) {
+			if (reading !== null && now() - reading.at < BACKLOG_READING_MS) {
+				return reading.full
+			}
+			const metrics = (queue as Partial<Pick<Queue, 'metrics'>>).metrics
+			if (typeof metrics !== 'function') {
+				return false
+			}
+			try {
+				const { backlogCount, backlogBytes } = await metrics.call(queue)
+				reading = { at: now(), full: backlogCount >= SPOOL_BACKLOG_MESSAGES || backlogBytes >= SPOOL_BACKLOG_BYTES }
+			} catch {
+				return false
+			}
+			return reading.full
+		},
+	}
 }
 
 function withHeaders(response: Response): Response {
