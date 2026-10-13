@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
@@ -12,6 +12,7 @@ import {
 	exportOf as exportIn,
 	opened,
 	tampered as tamperedIn,
+	failing,
 	verify as verifyWith,
 	workspace,
 } from './cutover-helpers.js'
@@ -37,8 +38,11 @@ describe('convert and verify-conversion', () => {
 		{ level: 23 },
 		{ level: 35 },
 		{ level: 39 },
+		{ level: 23, actorTypeDrift: true },
+		{ level: 39, actorTypeDrift: true },
 	]) {
-		it(`converts a ${options.line ?? 'T1'} export at level ${options.level} and the independent check passes`, async () => {
+		const name = `${options.line ?? 'T1'} export at level ${options.level}${'actorTypeDrift' in options ? ' with actors.type added back' : ''}`
+		it(`converts a ${name} and the independent check passes`, async () => {
 			const exportPath = await exportOf(options)
 			const { ok, manifest, dumpPath } = await convert(exportPath)
 			expect(manifest.stop).toBeUndefined()
@@ -72,6 +76,27 @@ describe('convert and verify-conversion', () => {
 			}
 		})
 	}
+
+	it('reads sqlite_sequence as D1 exports it (a reset, then the counter rows), and refuses a second reset', async () => {
+		const exportPath = await exportOf({ level: 39, notificationSequence: 12n })
+		const file = join(exportPath, 'sqlite_sequence.sql')
+		const text = await readFile(file, 'utf8')
+		expect(text).toMatch(
+			/^PRAGMA defer_foreign_keys=TRUE;\nDELETE FROM sqlite_sequence;\nINSERT INTO "sqlite_sequence"/
+		)
+		const { ok, manifest, dumpPath } = await convert(exportPath)
+		expect(ok).toBe(true)
+		expect(manifest.source).toMatchObject({ notificationSequence: '12' })
+		expect((await verify(exportPath, dumpPath)).ok).toBe(true)
+
+		await writeFile(file, `${text}DELETE FROM sqlite_sequence;\n`)
+		const again = await convert(exportPath, { out: 'out-again' })
+		expect(again.ok).toBe(false)
+		expect(again.manifest.stop).toMatchObject({ code: 'unexpected-statement' })
+		const { ok: verified, report } = await verify(exportPath, dumpPath)
+		expect(verified).toBe(false)
+		expect(report.stop).toMatchObject({ code: 'unexpected-statement' })
+	})
 
 	it('keeps legacy ids, accepted follows without a Follow record, local media and old /ap/o ids', async () => {
 		const exportPath = await exportOf({ level: 39 })
@@ -286,5 +311,96 @@ describe('convert and verify-conversion', () => {
 		]) {
 			expect(manifest).not.toContain(secret)
 		}
+	})
+})
+
+describe('rows legacy never showed, and outbox rows written before 0016', () => {
+	const notificationCount = async (dumpPath: string) => {
+		const db = await opened(dumpPath)
+		const n = (db.prepare('SELECT count(*) AS n FROM notifications').get() as { n: number }).n
+		db.close()
+		return n
+	}
+
+	it('drops notifications owned by a remote account, counted, and only with --accept-deletions', async () => {
+		const plain = await convert(await exportOf({ level: 39 }, 'plain'), { out: 'plain' })
+		const exportPath = await exportOf({ level: 39, remoteOwnedNotifications: true })
+		const refused = await convert(exportPath)
+		expect(refused.ok).toBe(false)
+		expect(refused.manifest.stop).toMatchObject({ code: 'conversion-refused' })
+		expect(refused.manifest.conversion).toMatchObject({
+			problems: {},
+			dropped: { 'notifications:owner-remote': 2 },
+		})
+		const { ok, dumpPath } = await convert(exportPath, { acceptDeletions: true, out: 'accepted' })
+		expect(ok).toBe(true)
+		expect(await notificationCount(dumpPath)).toBe(await notificationCount(plain.dumpPath))
+		// The independent check expects a local user's notifications only.
+		expect((await verify(exportPath, dumpPath, true)).ok).toBe(true)
+	})
+
+	it('reads a row written before 0016 as its target, which may narrow the audience of its status', async () => {
+		const exportPath = await exportOf({ level: 39, before0016: 'narrowed' })
+		const { ok, manifest, dumpPath } = await convert(exportPath)
+		expect(manifest.stop).toBeUndefined()
+		expect(ok).toBe(true)
+		const db = await opened(dumpPath)
+		const row = db.prepare("SELECT visibility FROM statuses WHERE content LIKE '%unlisted, with a CW%'").get()
+		db.close()
+		expect(row).toEqual({ visibility: 'unlisted' })
+		expect((await verify(exportPath, dumpPath)).ok).toBe(true)
+	})
+
+	// DATA-15: the status keeps its own audience; a target outside it is a conflict, and so is any row while the time of
+	// 0016 is unknown.
+	for (const [name, options, edit] of [
+		['a target that would widen the audience', { level: 39, before0016: 'widened' }, null],
+		['an unusable applied_at of 0016', { level: 39, before0016: 'unusable-time' }, null],
+		[
+			'no applied_at in d1_migrations',
+			{ level: 39, before0016: 'narrowed' },
+			(text: string) =>
+				text.replaceAll(
+					/INSERT INTO "d1_migrations" \("id","name","applied_at"\) VALUES\((\d+),('[^']+'),'[^']+'\);/g,
+					'INSERT INTO "d1_migrations" ("id","name") VALUES($1,$2);'
+				),
+		],
+	] as const) {
+		it(`stops on ${name}`, async () => {
+			const exportPath = await exportOf(options)
+			if (edit !== null) {
+				const file = join(exportPath, 'd1_migrations.sql')
+				const text = await readFile(file, 'utf8')
+				expect(edit(text)).not.toBe(text)
+				await writeFile(file, edit(text))
+			}
+			const { ok, manifest } = await convert(exportPath, { acceptDeletions: true })
+			expect(ok).toBe(false)
+			expect(manifest.conversion).toMatchObject({ problems: { 'statuses:addressing-conflict': 1 } })
+		})
+	}
+})
+
+describe('text with a lone surrogate', () => {
+	it('carries it with U+FFFD in its place, counted, and the independent check agrees', async () => {
+		const exportPath = await exportOf({ level: 39, loneSurrogates: true })
+		const { ok, manifest, dumpPath } = await convert(exportPath)
+		expect(manifest.stop).toBeUndefined()
+		expect(ok).toBe(true)
+		// A display name, a bio, a status's content, content warning and attachment description.
+		expect((manifest.conversion as { normalized: Record<string, number> }).normalized).toMatchObject({
+			'text:lone-surrogate-replaced': 5,
+		})
+		const db = await opened(dumpPath)
+		const value = (sql: string) => Object.values(db.prepare(sql).get() ?? {})[0]
+		expect(value("SELECT count(*) FROM accounts WHERE display_name LIKE '%\uFFFD' OR note LIKE '%\uFFFD%'")).toBe(2)
+		expect(
+			value("SELECT count(*) FROM statuses WHERE content LIKE '%cut \uFFFD%' AND spoiler_text = 'cw \uFFFD'")
+		).toBe(1)
+		expect(value("SELECT count(*) FROM media_attachments WHERE description = 'alt \uFFFD'")).toBe(1)
+		db.close()
+		const { ok: verified, categories } = await verifyWith(exportPath, dumpPath)
+		expect(failing(categories)).toEqual([])
+		expect(verified).toBe(true)
 	})
 })

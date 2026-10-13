@@ -107,9 +107,22 @@ describe('the export grammar (DATA-11)', () => {
 	})
 
 	it('refuses data-table DDL whose default or check expressions differ from the canonical ones, before running it', async () => {
-		expect(tableExpressions(`CREATE TABLE "x" ("a" TEXT DEFAULT 'p', "b" INT CHECK (b > 0), "c" AS (a || 1))`)).toEqual(
-			["DEFAULT 'p'", 'CHECK (B>0)', 'AS (A||1)']
-		)
+		expect(
+			tableExpressions(
+				`CREATE TABLE "x" ("c" AS (a || 1), "a" TEXT DEFAULT 'p', -- a, comment\n "b" INT CHECK (b > 0), CHECK (a <> b))`
+			)
+		).toEqual({
+			columns: [
+				['a', ["DEFAULT 'p'"]],
+				['b', ['CHECK (B>0)']],
+				['c', ['AS (A||1)']],
+			],
+			constraints: ['CHECK (A<>B)'],
+		})
+		// By column name: the same columns in another order compare equal, an expression on another column does not.
+		const one = tableExpressions(`CREATE TABLE "x" ("a" TEXT DEFAULT 'p', "b" TEXT)`)
+		expect(tableExpressions(`CREATE TABLE x (b TEXT, \`a\` TEXT DEFAULT 'p')`)).toEqual(one)
+		expect(tableExpressions(`CREATE TABLE "x" ("a" TEXT, "b" TEXT DEFAULT 'p')`)).not.toEqual(one)
 		for (const definition of [
 			'CREATE TABLE "peers" ("domain" TEXT UNIQUE NOT NULL DEFAULT (randomblob(268435456)))',
 			'CREATE TABLE "peers" ("domain" TEXT UNIQUE NOT NULL CHECK (length(randomblob(268435456)) > 0))',

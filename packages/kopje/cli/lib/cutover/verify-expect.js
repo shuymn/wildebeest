@@ -61,8 +61,9 @@ function href(value) {
 	return null
 }
 
+// UTF-8 cannot carry a lone surrogate, so the Store holds U+FFFD in its place: compare text as it can be stored.
 /** @param {unknown} value */
-const text = (value) => (typeof value === 'string' ? value : '')
+const text = (value) => (typeof value === 'string' ? value.toWellFormed() : '')
 
 /** @param {unknown} value */
 function when(value) {
@@ -245,7 +246,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		const spoiler = isLocal ? text(p.spoiler_text) || text(p.summary) : text(p.summary) || text(p.spoiler_text)
 		const sourceText =
 			isLocal && typeof p.source === 'object' && p.source !== null && typeof p.source.content === 'string'
-				? p.source.content
+				? text(p.source.content)
 				: null
 		put('statuses', uri, [
 			author,
@@ -502,7 +503,8 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			highest = n.id
 		}
 		const target = n.object_id === null ? '' : statusUri.get(String(n.object_id))
-		if (!known(n.actor_id) || !known(n.from_actor_id) || target === undefined) {
+		// Legacy listed a local user's own notifications only.
+		if (!local.has(String(n.actor_id)) || !known(n.from_actor_id) || target === undefined) {
 			continue
 		}
 		const natural = `${String(n.actor_id)} ${String(n.type)} ${String(n.from_actor_id)} ${target}`

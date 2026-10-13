@@ -307,9 +307,21 @@ export function convertLegacy(
 	const ids = allocator(baseTime)
 	// Kopje's sanitizer cuts HTML at REMOTE_HTML_RAW_LIMIT; a longer value would lose its end, so it stops the conversion
 	// unless truncation is accepted (counted either way).
+	// Text decoded from legacy JSON can hold a lone surrogate (half of a character outside the BMP), which UTF-8, so the
+	// dump and the Store, cannot represent. A carried text field gets U+FFFD in its place here, counted, rather than
+	// wherever it is encoded.
+	/** @param {unknown} value */
+	const carried = (value) => {
+		const text = str(value)
+		const wellFormed = text.toWellFormed()
+		if (wellFormed !== text) {
+			count(normalized, 'text:lone-surrogate-replaced')
+		}
+		return wellFormed
+	}
 	/** @param {unknown} value */
 	const html = (value) => {
-		const text = str(value)
+		const text = carried(value)
 		if (text.length > REMOTE_HTML_RAW_LIMIT) {
 			count(acceptTruncation ? normalized : problems, 'html:longer-than-sanitizer-limit')
 		}
@@ -391,7 +403,7 @@ export function convertLegacy(
 		if (legacyId !== null) {
 			count(legacyCounts, 'accounts')
 		}
-		let username = str(properties.preferredUsername)
+		let username = carried(properties.preferredUsername)
 		let host = null
 		if (local) {
 			const segment = uri.slice(uri.lastIndexOf('/') + 1)
@@ -410,7 +422,7 @@ export function convertLegacy(
 				username = uri.replace(/\/+$/, '').slice(uri.replace(/\/+$/, '').lastIndexOf('/') + 1)
 			}
 		}
-		const displayName = str(properties.name)
+		const displayName = carried(properties.name)
 		const endpoints =
 			typeof properties.endpoints === 'object' && properties.endpoints !== null ? properties.endpoints : {}
 		accountInsert.run(
@@ -747,8 +759,8 @@ export function convertLegacy(
 		}
 		const visibility = legacy === 'direct' && [...mentions.values()].includes(1) ? 'limited' : legacy
 		const spoiler = local
-			? str(properties.spoiler_text) || str(properties.summary)
-			: str(properties.summary) || str(properties.spoiler_text)
+			? carried(properties.spoiler_text) || carried(properties.summary)
+			: carried(properties.summary) || carried(properties.spoiler_text)
 		const content = html(properties.content)
 		const updated = isoTime(properties.updated)
 		const edited = updated !== null && updated !== plan.published ? updated : null
@@ -774,7 +786,7 @@ export function convertLegacy(
 				typeof properties.source === 'object' &&
 				properties.source !== null &&
 				typeof properties.source.content === 'string'
-				? properties.source.content
+				? carried(properties.source.content)
 				: null,
 			properties.sensitive === true ? 1 : 0,
 			languages.length === 1 ? (languages[0] ?? null) : null,
@@ -795,7 +807,7 @@ export function convertLegacy(
 		for (const tag of list(properties.tag)) {
 			if (typeof tag === 'object' && tag !== null && /** @type {Json} */ (tag).type === 'Hashtag') {
 				tags.add(
-					str(/** @type {Json} */ (tag).name)
+					carried(/** @type {Json} */ (tag).name)
 						.replace(/^[#＃]/, '')
 						.normalize('NFKC')
 						.toLowerCase()
@@ -946,7 +958,7 @@ export function convertLegacy(
 			? JSON.stringify({ original: { width: element.width, height: element.height } })
 			: null
 	/** @param {Json} element */
-	const descriptionOf = (element) => str(element.name) || str(element.description) || str(element.summary)
+	const descriptionOf = (element) => carried(element.name) || carried(element.description) || carried(element.summary)
 	/**
 	 * @param {string} imageId
 	 */
@@ -1120,7 +1132,7 @@ export function convertLegacy(
 			editInsert.run(
 				plan.id,
 				html(properties.content),
-				str(properties.spoiler_text) || str(properties.summary),
+				carried(properties.spoiler_text) || carried(properties.summary),
 				properties.sensitive === true ? 1 : 0,
 				JSON.stringify(media),
 				isoTime(properties.updated) ?? isoTime(properties.published) ?? isoTime(revision.cdate) ?? plan.published
@@ -1357,6 +1369,12 @@ export function convertLegacy(
 		const id = /** @type {bigint} */ (notification.id)
 		if (id > maxNotification) {
 			maxNotification = id
+		}
+		// Legacy notified the author of a boosted or liked status whoever it was, a remote author too; it only ever listed
+		// a local user's own notifications, so a remote owner's were never shown.
+		if (accountOf(notification.actor_id)?.local === false) {
+			count(dropped, 'notifications:owner-remote')
+			continue
 		}
 		const recipient = localOwner(notification.actor_id, 'notifications')
 		const from = accountOf(notification.from_actor_id)

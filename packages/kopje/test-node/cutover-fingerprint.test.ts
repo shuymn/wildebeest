@@ -150,6 +150,33 @@ describe('the fingerprint of an export', () => {
 		expect(fingerprintExport(path)).toMatchObject({ notificationSequence: null })
 	})
 
+	it('reads the reset D1 writes before the counter rows, once and before them only', async () => {
+		const { db, take } = await live()
+		const { path, fingerprint } = await take()
+		const text = await readFile(join(path, 'sqlite_sequence.sql'), 'utf8')
+		expect(text).toContain('DELETE FROM sqlite_sequence;\nINSERT INTO "sqlite_sequence"')
+		expect(fingerprint.notificationSequence).toMatch(/^\d+$/)
+
+		// A reset without rows is an exported, empty sqlite_sequence, whatever its file is called.
+		db.exec('DELETE FROM actor_notifications')
+		const texts = exportDatabase(db)
+		texts.set('counters', 'DELETE FROM sqlite_sequence;\n')
+		expect(fingerprintExport(await writeExport(space.dir, texts, 'reset-only'))).toMatchObject({
+			notificationSequence: null,
+		})
+
+		for (const [name, sequence] of [
+			['twice', `DELETE FROM sqlite_sequence;\n${text}`],
+			['after the rows', `${text}DELETE FROM sqlite_sequence;\n`],
+			['quoted', text.replace('DELETE FROM sqlite_sequence;', 'DELETE FROM "sqlite_sequence";')],
+		] as const) {
+			const other = exportDatabase(db, { sequence: true })
+			other.set('sqlite_sequence', sequence)
+			const exportPath = await writeExport(space.dir, other, `reset-${name.replaceAll(' ', '-')}`)
+			expect(() => fingerprintExport(exportPath), name).toThrow(/unexpected-statement/)
+		}
+	})
+
 	it('refuses an export without the notification counter, which the conversion would lose', async () => {
 		const { db } = await live()
 		const path = await writeExport(space.dir, exportDatabase(db), 'no-sequence')

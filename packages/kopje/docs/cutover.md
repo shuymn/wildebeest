@@ -28,7 +28,9 @@ Export every table except the full-text index (`search_fts` and its shadow table
 `wrangler d1 export <db> --remote --table <table> --output <table>.sql`. `d1_migrations` must be among them. The
 converter takes either a directory of such files (every `*.sql` file in it) or one file of them concatenated, as the
 legacy backup job writes it. A `sqlite_sequence` export is optional; when present, the notification counter continues
-from it instead of from the largest notification id.
+from it instead of from the largest notification id. `wrangler d1 export --table sqlite_sequence` writes no
+`CREATE TABLE` for it, but a `DELETE FROM sqlite_sequence;` before its rows; that statement is accepted as it is (below),
+so the file needs no editing.
 
 The export is only read, by a strict grammar, and nothing from it runs:
 
@@ -39,14 +41,17 @@ The export is only read, by a strict grammar, and nothing from it runs:
   for the detected level; only then does it run, in an empty scratch database that never receives a row, to fingerprint
   the columns. Bookkeeping tables (`d1_migrations`, `sqlite_*`, `_cf_*`) never get the export's DDL: their rows are read
   by column name into a fixed schema of the converter's own.
+- `DELETE FROM sqlite_sequence`, exactly as D1 writes it, is accepted once, before any `sqlite_sequence` row, and does
+  nothing (the converter reads the counter rows into a fixed schema of its own). Written any other way, a second time
+  or after a counter row, it stops the conversion (`unexpected-statement`).
 - `INSERT INTO <name> [(<columns>)] VALUES (<literal>, ...)[, (...)]` is accepted with literals only: `NULL`, `TRUE`,
   `FALSE`, numbers, strings, blobs, and the `replace('<text>', '<marker>', char(<n>, ...))` form SQLite's `.dump` writes
   for control characters, nested at most twice (`replace(replace('<text>','\r',char(13)),'\n',char(10))` is the most
   it writes). The values are decoded and bound as parameters. An expansion is sized before it is built: one decoded
   literal may hold at most 16 Mi UTF-16 units and all literals of one pass over the export at most 1 Gi
   (`decoded-data-too-large`).
-- Anything else (`INSERT ... SELECT`, a function or expression in `VALUES`, `UPDATE`, `DELETE`, `DROP`, `ATTACH`, other
-  pragmas) stops the conversion with a fixed code (`invalid-insert`, `invalid-literal`, `invalid-create-table`,
+- Anything else (`INSERT ... SELECT`, a function or expression in `VALUES`, `UPDATE`, any other `DELETE`, `DROP`,
+  `ATTACH`, other pragmas) stops the conversion with a fixed code (`invalid-insert`, `invalid-literal`, `invalid-create-table`,
   `unexpected-statement`).
 
 **Limits.** One file may hold at most 512 MiB (a JavaScript string's limit) and the whole export 1 GiB. The converter
@@ -58,7 +63,18 @@ legacy instance reaches.
 
 1. **Level.** `d1_migrations` gives the level; the schema fingerprint (every exported table's columns, types,
    defaults and keys) must equal the canonical schema at that level. The canonical legacy migrations ship with the CLI
-   (`cli/legacy-migrations`, a byte-identical copy of the repository's frozen `/migrations`).
+   (`cli/legacy-migrations`, a byte-identical copy of the repository's frozen `/migrations`). Columns are matched by
+   name, not position, and each must have the canonical type, default, primary key position, generated kind and
+   `DEFAULT`, `CHECK` and generated expressions; table constraint expressions must match in order, and a missing or an
+   extra table or column is a mismatch (`schema-mismatch`). One variance is accepted: a column that is nullable in the
+   export where the canonical one is `NOT NULL`, as long as no row of the export holds `NULL` in it (or leaves it to a
+   `NULL` default); one that does stops the conversion (`null-in-not-null-column`). The manifest lists such columns
+   (`source.nullableInExport`). A T1 instance that ran an earlier form of 0020 has this variance in `actors.type`:
+   that form dropped the column and added it back as a generated `NOT NULL` column, which fails on a table with an
+   actor whose properties have no type; the column then came back as a plain nullable column (`ALTER TABLE ADD
+COLUMN`), after `mastodon_id`, and the final form of 0020 fills it from the properties.
+   The rows are always loaded by column name into the canonical schema, so the bridge starts from the canonical column
+   order and constraints whatever the export's.
 2. **Bridge.** The rows are loaded into a local database with the canonical schema at that level, and the remaining
    canonical migrations bring it to 0039, one at a time. `randomblob()` is replaced by a fixed stream, and rows a bridge
    migration creates with the current time (0010's web UI client) get the base time, so the result is the same on every
@@ -110,7 +126,9 @@ document to ActivityPub clients while its status is public or unlisted; anything
 
 **Content.** Status content, earlier versions and bios go through Kopje's HTML sanitizer, so the Store holds only HTML
 it would have stored itself (HTML-1). Source text, spoilers, sensitivity, hashtags, mentions and edit history carry
-over; remote statuses and actors keep the legacy JSON as `raw`, byte for byte.
+over; remote statuses and actors keep the legacy JSON as `raw`, byte for byte. A lone surrogate in carried text (half
+of a character outside the Basic Multilingual Plane, as a cut string leaves it in legacy JSON) cannot be stored as
+UTF-8, so it becomes U+FFFD, counted as `text:lone-surrogate-replaced`; `raw` keeps the escaped original.
 
 **The audience never widens (DATA-15).** Who may read a status is what legacy allowed
 (`packages/backend/src/mastodon/status_visibility.ts`, `isVisible`): it reads the object's own `to` and `cc` and the
@@ -142,7 +160,10 @@ migration changed stops the conversion (`statuses:author-changed-audience`).
   recipient: it stays in `raw` and is counted as `mentionsNotRecipients`.
 - A local status whose exported outbox row disagrees with its own addressing (`statuses:addressing-conflict`), and a
   boost whose outbox row has no exported audience (levels below 0002, `reblogs:audience-unknown`), stop the conversion
-  instead of being guessed. A boost's visibility is its outbox row's, by the same rule; a boost has recipients only when
+  instead of being guessed. An outbox row written before 0016 was applied (by `d1_migrations.applied_at`) holds only
+  the single target it was written with, which 0016 copied into `to` with an empty `cc`, so it agrees when that target
+  is within the status's own `to` or `cc`; the status keeps its own audience either way. Without a usable `applied_at`
+  for 0016, every row is compared as written. A boost's visibility is its outbox row's, by the same rule; a boost has recipients only when
   it is direct (the known accounts in its `to`).
 
 **Media.** Attachments point to their existing URLs (local images stay where the legacy instance stored them); nothing
@@ -165,6 +186,19 @@ over: users sign in again and clients register push again.
 the legacy code never wrote, unknown object types, statuses whose author is not local where it must be, duplicate
 URIs, lists without 18-digit ids, and the like), when rows reference accounts or statuses that do not exist and
 `--accept-deletions` is not given (`conversion.dropped`), or when no single KEK candidate unwraps every key.
+
+**What `--accept-deletions` drops.** Besides the rows bridge migrations remove (Steps), `conversion.dropped` counts rows
+the conversion leaves out because legacy never showed them, or showed them only through what is also left out:
+
+- notifications owned by a remote account (`notifications:owner-remote`): legacy notified the author of a boosted or
+  liked status whoever it was, but listed only a local user's own notifications;
+- attachments without a `url` (`attachments:without-url`): legacy showed an attachment only by its `url`;
+- statuses whose author is not among the exported accounts (`statuses:unknown-author`): legacy reached them only by
+  fetching the author live when one was shown; and with them the boosts of such statuses
+  (`reblogs:unknown-account-or-status`) and the parent link of replies to them (the reply keeps its `inReplyTo` URI);
+- rows that reference an account or status that does not exist (`*:unknown-account`, `*:unknown-status`).
+
+Read `conversion.dropped` in the manifest before passing the flag: every code there should be one of these kinds.
 
 ## Verification
 

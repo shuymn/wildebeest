@@ -885,8 +885,12 @@ backup-verify` (index-only before any media is downloaded). `backup-verify` stop
   `verify-conversion` read export files only and make no network request; bridging the legacy schema runs the canonical
   migrations on a local copy, never on the legacy D1. Nothing from the export runs as written: a strict grammar accepts
   only validated `CREATE TABLE` (never `AS SELECT`; its default, check and generated expressions must equal the canonical
-  ones before it runs, in an empty scratch database; bookkeeping tables never get the export's DDL) and `INSERT ...
-VALUES` of literal values, decoded within nesting and size bounds and bound; any other statement, `INSERT ... SELECT` or function in `VALUES` stops with a fixed code.
+  ones before it runs, in an empty scratch database; bookkeeping tables never get the export's DDL), `INSERT ...
+VALUES` of literal values, decoded within nesting and size bounds and bound, and D1's `DELETE FROM sqlite_sequence`
+  reset, exactly so, once, before that table's rows, which runs nowhere; any other statement, `INSERT ... SELECT` or function in `VALUES` stops with a fixed code.
+  Columns are compared by name; the only variance accepted is a column nullable in the export where the canonical one
+  is `NOT NULL`, and then a `NULL` in it stops the load (`null-in-not-null-column`); rows always go into the canonical
+  schema by column name.
   Outputs are created exclusively under temporary names with mode 0600 and published with `link(2)`, so no existing
   file or symbolic link is followed or reused. _Implemented on branch `kopje/cutover-convert`:_
   `cli/lib/cutover/sql-script.js`, `cli/lib/cutover/legacy-load.js`, `cli/lib/cutover/run.js`;
@@ -923,7 +927,10 @@ VALUES` of literal values, decoded within nesting and size bounds and bound; any
   `userKEK`, `USER_KEY`) unwraps every local key and verifies against its public key, reports which candidate by name,
   and flags an empty KEK. _Implemented on branch `kopje/cutover-convert`:_ `cli/lib/cutover/kek.js`;
   `test-node/cutover-convert.test.ts` ("checks that one KEK candidate unwraps every key", "keeps wrapped keys byte for
-  byte").
+  byte"). _Gap:_ Kopje cannot rewrap the local keys under another KEK, before or after publication. `USER_KEK` must stay
+  the KEK the converter named; a Store whose keys came over under the empty KEK keeps them wrapped under a known value,
+  which protects nothing at rest (accepted risk below), and setting `USER_KEK` later only makes every carried-over key
+  fail to unwrap.
 - **DATA-15: the cutover never widens an audience.** A converted status is visible to exactly whom legacy Wildebeest
   let read it (`packages/backend/src/mastodon/status_visibility.ts`, `isVisible`), from the object's own `to`/`cc` and
   its stored author's followers collection as exported, never from values a bridge migration filled in or rewrote (0002

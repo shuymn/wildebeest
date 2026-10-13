@@ -12,12 +12,15 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 
-import { canonicalLegacyDatabase } from '../cli/lib/cutover/legacy-load.js'
+import { canonicalLegacyDatabase, legacyMigrations } from '../cli/lib/cutover/legacy-load.js'
 
 export const DOMAIN = 'kopje.test'
 const ORIGIN = `https://${DOMAIN}`
 const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 const IMAGES = 'https://images.example/media'
+
+// `wrangler d1 export --table sqlite_sequence` writes no CREATE TABLE for it, but a reset before the counter rows.
+const SEQUENCE_HEADER = 'PRAGMA defer_foreign_keys=TRUE;\nDELETE FROM sqlite_sequence;\n'
 
 export type FixtureOptions = {
 	level: number
@@ -39,6 +42,18 @@ export type FixtureOptions = {
 	followersSpelling?: boolean
 	// Keep the database the export was written from open and return it, as the live legacy D1 (the fingerprint suite).
 	live?: boolean
+	// From level 20: actors.type as an instance has it that ran an earlier form of 0020, which dropped the column; it
+	// was added back with ALTER TABLE ADD COLUMN, so it is nullable and comes after mastodon_id (actorTypeDrift below).
+	actorTypeDrift?: boolean
+	// Notifications legacy wrote for the remote author of a boosted or liked status, which it never listed.
+	remoteOwnedNotifications?: boolean
+	// From level 16: a local status's outbox row written before 0016 was applied, which 0016 left with its single target
+	// in `to` and an empty `cc`. 'narrowed': an unlisted status whose target was its followers; 'widened': a
+	// followers-only status with a Public target; 'unusable-time': as narrowed, with an unreadable applied_at for 0016.
+	before0016?: 'narrowed' | 'widened' | 'unusable-time'
+	// A lone surrogate (half of a character outside the BMP, as a cut string leaves it) in remote JSON text: a display
+	// name, a bio, and a status's content, content warning and attachment description.
+	loneSurrogates?: boolean
 }
 
 export type LegacyFixture = {
@@ -58,6 +73,30 @@ function upstreamDatabase(level: number): DatabaseSync {
 		.sort()
 		.slice(0, level + 1)) {
 		db.exec(readFileSync(`${dir}${file}`, 'utf8'))
+	}
+	return db
+}
+
+// The canonical schema up to 0019, then actors.type dropped and added back as a plain nullable column (the triggers that
+// read it set aside meanwhile), then the canonical migrations from 0020 on.
+function actorTypeDriftDatabase(level: number): DatabaseSync {
+	if (level < 20) {
+		throw new Error('actorTypeDrift needs level 20 or later')
+	}
+	const db = canonicalLegacyDatabase(19)
+	const triggers = db
+		.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'actors'")
+		.all() as { name: string; sql: string }[]
+	for (const { name } of triggers) {
+		db.exec(`DROP TRIGGER "${name}"`)
+	}
+	db.exec('ALTER TABLE `actors` DROP COLUMN `type`')
+	db.exec('ALTER TABLE `actors` ADD COLUMN `type` text')
+	for (const { sql } of triggers) {
+		db.exec(sql)
+	}
+	for (const migration of legacyMigrations().slice(20, level + 1)) {
+		db.exec(migration.sql)
 	}
 	return db
 }
@@ -123,8 +162,20 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		authorChange = false,
 		followersSpelling = false,
 		live = false,
+		actorTypeDrift = false,
+		remoteOwnedNotifications = false,
+		before0016,
+		loneSurrogates = false,
 	} = options
-	const db = line === 'T2' ? upstreamDatabase(level) : canonicalLegacyDatabase(level)
+	if (before0016 !== undefined && level < 16) {
+		throw new Error('before0016 needs level 16 or later')
+	}
+	const db =
+		line === 'T2'
+			? upstreamDatabase(level)
+			: actorTypeDrift
+				? actorTypeDriftDatabase(level)
+				: canonicalLegacyDatabase(level)
 	const columns = new Map<string, string[]>()
 	const columnsOf = (table: string): string[] => {
 		let list = columns.get(table)
@@ -443,7 +494,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 	if (has('idempotency_keys')) {
 		insert('idempotency_keys', { key: 'idem-key-1', object_id: publicNote.id, expires_at: cdate(170) })
 	}
-	localNote({
+	const unlisted = localNote({
 		author: alice,
 		username: 'alice',
 		minutes: 120,
@@ -761,6 +812,10 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		notify('follow', bob, r(3).uri, null, 507)
 		notify('mention', bob, alice, followersOnly, 508)
 	}
+	if (remoteOwnedNotifications) {
+		notify('reblog', r(0).uri, r(1).uri, r0Post, 509)
+		notify('favourite', r(0).uri, r(2).uri, r0Post, 510)
+	}
 
 	// ---- clients, settings, subscriptions
 	insert('clients', {
@@ -866,14 +921,46 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 	db.exec(
 		'CREATE TABLE d1_migrations(\n\t\tid         INTEGER PRIMARY KEY AUTOINCREMENT,\n\t\tname       TEXT UNIQUE,\n\t\tapplied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL\n)'
 	)
+	if (loneSurrogates) {
+		const LONE = '\ud83d'
+		// JSON.stringify escapes the lone surrogate, so the stored JSON text itself stays well formed.
+		const edit = (table: 'actors' | 'objects', id: string, change: (p: Record<string, any>) => void) => {
+			const row = db.prepare(`SELECT properties FROM ${table} WHERE id = ?`).get(id) as { properties: string }
+			const properties = JSON.parse(row.properties) as Record<string, any>
+			change(properties)
+			db.prepare(`UPDATE ${table} SET properties = ? WHERE id = ?`).run(JSON.stringify(properties), id)
+		}
+		edit('actors', r(1).uri, (p) => {
+			p.name = `${String(p.name)} ${LONE}`
+		})
+		edit('actors', r(2).uri, (p) => {
+			p.summary = `<p>bio ${LONE}</p>`
+		})
+		edit('objects', r0Post.id, (p) => {
+			p.content = `<p>cut ${LONE}</p>`
+			p.summary = `cw ${LONE}`
+			p.attachment[1].name = `alt ${LONE}`
+		})
+	}
+	let appliedAt0016: string | null = null
+	if (before0016 !== undefined) {
+		const [note, target] = before0016 === 'widened' ? [followersOnly, PUBLIC] : [unlisted, `${alice}/followers`]
+		db.prepare(`UPDATE outbox_objects SET "to" = ?, cc = '[]' WHERE object_id = ?`).run(
+			JSON.stringify([target]),
+			note.id
+		)
+		appliedAt0016 = before0016 === 'unusable-time' ? 'not a time' : cdate(before0016 === 'widened' ? 135 : 125)
+	}
 	migrationNames(level).forEach((name, i) =>
-		db.prepare('INSERT INTO d1_migrations (name, applied_at) VALUES (?, ?)').run(name, cdate(-1000 + i))
+		db
+			.prepare('INSERT INTO d1_migrations (name, applied_at) VALUES (?, ?)')
+			.run(name, name.startsWith('0016_') && appliedAt0016 !== null ? appliedAt0016 : cdate(-1000 + i))
 	)
 	const texts = exportDatabase(db)
 	if (notificationSequence !== undefined) {
 		texts.set(
 			'sqlite_sequence',
-			`INSERT INTO "sqlite_sequence" ("name","seq") VALUES('actor_notifications',${notificationSequence});\n`
+			`${SEQUENCE_HEADER}INSERT INTO "sqlite_sequence" ("name","seq") VALUES('actor_notifications',${notificationSequence});\n`
 		)
 	}
 	const fixture = { level, texts, users: users.map(({ username, email, uri }) => ({ username, email, uri })) }
@@ -920,7 +1007,8 @@ export function exportDatabase(
 		}[]
 		texts.set(
 			'sqlite_sequence',
-			rows.map((r) => `INSERT INTO "sqlite_sequence" ("name","seq") VALUES('${r.name}',${r.seq});\n`).join('')
+			SEQUENCE_HEADER +
+				rows.map((r) => `INSERT INTO "sqlite_sequence" ("name","seq") VALUES('${r.name}',${r.seq});\n`).join('')
 		)
 	}
 	return texts
