@@ -927,7 +927,10 @@ VALUES` of literal values, decoded within nesting and size bounds and bound, and
   `userKEK`, `USER_KEY`) unwraps every local key and verifies against its public key, reports which candidate by name,
   and flags an empty KEK. _Implemented on branch `kopje/cutover-convert`:_ `cli/lib/cutover/kek.js`;
   `test-node/cutover-convert.test.ts` ("checks that one KEK candidate unwraps every key", "keeps wrapped keys byte for
-  byte").
+  byte"). _Gap:_ Kopje cannot rewrap the local keys under another KEK, before or after publication. `USER_KEK` must stay
+  the KEK the converter named; a Store whose keys came over under the empty KEK keeps them wrapped under a known value,
+  which protects nothing at rest (accepted risk below), and setting `USER_KEK` later only makes every carried-over key
+  fail to unwrap.
 - **DATA-15: the cutover never widens an audience.** A converted status is visible to exactly whom legacy Wildebeest
   let read it (`packages/backend/src/mastodon/status_visibility.ts`, `isVisible`), from the object's own `to`/`cc` and
   its stored author's followers collection as exported, never from values a bridge migration filled in or rewrote (0002

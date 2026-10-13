@@ -81,6 +81,11 @@ preflight lists the writers it can see (`barrier`), and the steps close them:
 | The legacy consumer                                                          | Step 4: removed from the Queue after it drained                                   |
 | Any other Worker bound to the D1                                             | Step 1: find them in the dashboard (D1, the database, its bindings) and stop them |
 
+An export is not a writer, but `wrangler d1 export` makes the D1 unavailable while it runs. Wrangler asks before it does,
+and in a non-interactive shell (a script, the `export_d1` function below run from one, CI) it answers that prompt with
+yes itself. Inside the window nothing uses the D1 any more, so that is harmless; an export taken while the legacy
+instance still serves (preparation step 2, the rehearsal) makes its requests fail for the export's duration.
+
 ## Placeholders
 
 | Placeholder      | What it is                                                                                                                                            |
@@ -121,6 +126,11 @@ kopje-admin fingerprint sequence-file <work>/seq.json > "<dir>/sqlite_sequence.s
 
 `kopje-admin fingerprint export <dir>` refuses an export whose notification counter is missing (`sequence-missing`).
 
+`wrangler d1 export` asks whether to make the database unavailable during the export, and answers yes itself when it
+does not run in a terminal (see [the write barrier](#the-write-barrier)). For `sqlite_sequence` it writes no
+`CREATE TABLE` but a `DELETE FROM sqlite_sequence;` before the counter rows: the tools accept that statement as D1
+writes it, so leave the file as it is.
+
 ## Before the cutover
 
 None of this affects the legacy instance.
@@ -146,11 +156,19 @@ None of this affects the legacy instance.
     kopje-admin cutover-preflight <work>/pages-project.json --domain <domain> --export <work>/export-r
     ```
 
-    `kek-uniform` must pass. The KEK it names is the value Kopje's `USER_KEK` must have.
+    `kek-uniform` must pass. The KEK it names is the value Kopje's `USER_KEK` must have:
+    - when it names `empty` for every local key, leave `USER_KEK` unset. `kopje-admin health` then warns
+      `USER_KEK is empty`; that is expected. Do not copy a KEK from the legacy deployment's configuration because the
+      deployment has one: a value the check does not name does not unwrap the keys, and every local key would fail;
+    - when it names `userKEK` or `USER_KEY`, set `USER_KEK` to that secret's value.
+
+    The keys move wrapped as they are (DATA-14). Under the empty KEK they are wrapped under a known value, so at rest
+    they are as readable as the Store's data. Kopje cannot rewrap them under a new KEK, after publication or before
+    (a Gap in [threat-model.md](threat-model.md), DATA-14): setting `USER_KEK` later makes them fail to unwrap.
 
 3. **Deploy Kopje** from the instance template ([deploy/README.md](../../../deploy/README.md)), with:
     - `MAINTENANCE=full` as a plain-text variable, before anything can reach it;
-    - `USER_KEK` set to the KEK from step 2;
+    - `USER_KEK` as step 2 says: the KEK it names, or unset when it names `empty`;
     - `IMPORT_TOKEN` set to a fresh random value of at least 32 characters (`openssl rand -base64 33`). Never set
       `SETUP_TOKEN` and never run `/setup`, which would create an account and make the Store non-empty;
     - its Queue's dead-letter queue (`wrangler queues create <kopje-queue>-dlq`);
@@ -165,6 +183,8 @@ None of this affects the legacy instance.
 
     Then check it with the token: `KOPJE_ADMIN_URL=https://<admin-host> kopje-admin health --import-token` (with
     `KOPJE_IMPORT_TOKEN`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` set). The Store is empty and in bootstrap.
+    The catalog the conversion targets can be fetched now, with the token, before Access is configured:
+    `kopje-admin catalog --import-token > <work>/catalog.json`.
 
 4. **Configure the Store with the token, then retire the token.** Set the domain and the Access values while the Store
    is in bootstrap; this ends bootstrap, so from here on everything, the import and a rollback included, goes through
@@ -176,7 +196,7 @@ None of this affects the legacy instance.
       access_admin_aud=<aud> admin_email=<admin email> access_service_token_client_id=<client id> \
       access_aud=<sign-in application AUD>
     kopje-admin health                     # through Access now
-    kopje-admin catalog > <work>/catalog.json
+    kopje-admin catalog > <work>/catalog.json   # unless step 3 fetched it with the token
     wrangler secret delete IMPORT_TOKEN --name <kopje-worker>
     ```
 
@@ -521,10 +541,15 @@ measures how long they take on the real data and proves the conversion passes be
 
 1. Deploy a second, temporary Kopje Worker (its own name, Queue, dead-letter queue and Store; `MAINTENANCE=full`; an
    `IMPORT_TOKEN` for its configuration; an Access-protected admin hostname) as in the preparation, steps 3 and 4.
+   The rehearsal needs Access as well as the token: with `--import-token` the CLI runs only `import`, `import-reset`,
+   `config`, `health`, `version`, `catalog` and `publish`, so `capacity`, `dump` (and with it the second
+   `verify-conversion`) and the rollback commands go through Access. Access cannot protect a `workers.dev` address,
+   so give the temporary Worker a custom domain or a route on your zone for its admin hostname, with its own Access
+   application, and configure the Store with `config --import-token` as in preparation step 4.
 2. Time each command of steps 5 and 6 with `time`:
     - one export of every table (`export_d1`), and `fingerprint export` of it (on a live instance two fingerprints may
       differ; only the time matters);
-    - `convert`, `verify-conversion` on the dump, `import` into the temporary Store, `dump`, and
+    - `convert`, `verify-conversion` on the dump, `import` into the temporary Store, `dump` (through Access), and
       `verify-conversion` on the Store's dump;
     - `maintenance-worker` and `maintenance-worker-check`, and the generated worker run locally with
       `wrangler pages dev <work>/maintenance` (request an actor and post a signed request to an inbox).
