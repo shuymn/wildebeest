@@ -170,6 +170,18 @@ function budgetRefusal(
 	return null
 }
 
+// Charges `count` transformations that are not an upload's (the /setup Images check) to the instance budget of the
+// month `now` is in. False, and nothing charged, when they do not fit (RES-6).
+export function chargeInstanceTransforms(db: Db, count: number, limit: number, now: number): boolean {
+	const name = budgetNames('', now).instance
+	const used = Number(state(db, name) ?? '0')
+	if (used + count > limit) {
+		return false
+	}
+	setState(db, name, String(used + count))
+	return true
+}
+
 export type Started =
 	| { status: 'ok' }
 	| { status: 'expired' }
