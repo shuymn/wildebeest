@@ -1,0 +1,23 @@
+-- Phase 1.1: Add Mastodon-compatible columns to actors
+ALTER TABLE actors ADD COLUMN "display_name" TEXT;
+ALTER TABLE actors ADD COLUMN "note" TEXT;
+ALTER TABLE actors ADD COLUMN "avatar" TEXT;
+ALTER TABLE actors ADD COLUMN "avatar_static" TEXT;
+ALTER TABLE actors ADD COLUMN "header" TEXT;
+ALTER TABLE actors ADD COLUMN "header_static" TEXT;
+ALTER TABLE actors ADD COLUMN "locked" INTEGER;
+ALTER TABLE actors ADD COLUMN "bot" INTEGER;
+ALTER TABLE actors ADD COLUMN "group" INTEGER;
+ALTER TABLE actors ADD COLUMN "discoverable" INTEGER;
+ALTER TABLE actors ADD COLUMN "indexable" INTEGER;
+ALTER TABLE actors ADD COLUMN "hide_collections" INTEGER;
+ALTER TABLE actors ADD COLUMN "followers_count" INTEGER;
+ALTER TABLE actors ADD COLUMN "following_count" INTEGER;
+ALTER TABLE actors ADD COLUMN "statuses_count" INTEGER;
+ALTER TABLE actors ADD COLUMN "last_status_at" TEXT;
+ALTER TABLE actors ADD COLUMN "suspended_at" DATETIME;
+ALTER TABLE actors ADD COLUMN "silenced_at" DATETIME;
+ALTER TABLE actors ADD COLUMN "uri" TEXT;
+ALTER TABLE actors ADD COLUMN "acct" TEXT;
+ALTER TABLE actors ADD COLUMN "url" TEXT;
+ALTER TABLE actors ADD COLUMN "updated_at" DATETIME;
