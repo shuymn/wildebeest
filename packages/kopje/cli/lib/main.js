@@ -750,7 +750,7 @@ export async function run({
 					return 0
 				}
 				throw new UsageError(
-					'cutover status | publish --yes | drain --fallback-actor <uri> | discard-unverified --yes | reset --yes'
+					'cutover status | publish --yes | drain --worker <dir> [--fallback <username>] | discard-kept --yes | reset --yes'
 				)
 			}
 			case 'pitr': {

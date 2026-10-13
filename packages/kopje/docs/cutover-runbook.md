@@ -87,7 +87,6 @@ preflight lists the writers it can see (`barrier`), and the steps close them:
 | `<legacy-queue>` | The Queue bound as `QUEUE`; `<legacy-consumer>` the Worker that consumes it                                                                           |
 | `<kopje-worker>` | The new Kopje Worker; `<kopje-queue>` its Queue and `<kopje-queue>-dlq` its dead-letter queue                                                         |
 | `<admin-host>`   | A hostname of your zone for Kopje's admin API during the cutover, for example `kopje-admin.<zone>`                                                    |
-| `<admin-actor>`  | A local actor URI, `https://<domain>/ap/users/<name>`, for rollback messages that address no local actor                                              |
 | `<work>`         | A working directory on an encrypted disk. Exports and dumps hold everything, private messages and wrapped keys included: never put them anywhere else |
 
 `kopje-admin` is the CLI of the Kopje version you deploy: in its instance repository `npm run admin --`, or
