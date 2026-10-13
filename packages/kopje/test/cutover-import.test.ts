@@ -61,7 +61,7 @@ describe('cutover import of a converted legacy export', () => {
 		const me = await get('/api/v1/accounts/verify_credentials')
 		expect(me).toMatchObject({ username: 'alice', acct: 'alice', locked: false })
 		expect(me.id).toMatch(/^\d{18}$/)
-		expect(me.statuses_count).toBe(6)
+		expect(me.statuses_count).toBe(7)
 		expect(me.source).toMatchObject({ privacy: 'unlisted', sensitive: true, language: 'ja' })
 
 		// Bob's legacy UUID still resolves (accounts.legacy_id), to his new id.

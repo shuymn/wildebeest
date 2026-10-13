@@ -27,6 +27,11 @@ export type FixtureOptions = {
 	withDeletions?: boolean
 	// The KEK each local user's key is wrapped with (legacy: env.userKEK, often unset, so '').
 	keks?: { alice: string; bob: string }
+	// Boosts need the audience an outbox row has from 0002 on; below that the converter refuses them. Default: level >= 2.
+	boosts?: boolean
+	// Notifications, and the exported sqlite_sequence counter of actor_notifications (none when undefined).
+	notifications?: boolean
+	notificationSequence?: bigint
 }
 
 export type LegacyFixture = {
@@ -98,7 +103,15 @@ function literal(value: SQLInputValue | undefined): string {
 }
 
 export async function buildLegacyFixture(options: FixtureOptions): Promise<LegacyFixture> {
-	const { level, line = 'T1', withDeletions = false, keks = { alice: '', bob: '' } } = options
+	const {
+		level,
+		line = 'T1',
+		withDeletions = false,
+		keks = { alice: '', bob: '' },
+		boosts = level >= 2,
+		notifications = true,
+		notificationSequence,
+	} = options
 	const db = line === 'T2' ? upstreamDatabase(level) : canonicalLegacyDatabase(level)
 	const columns = new Map<string, string[]>()
 	const columnsOf = (table: string): string[] => {
@@ -437,6 +450,11 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		to: [`${alice}/followers`],
 		cc: [],
 		mastodonId: snowflake(130, 9),
+		// r2 follows alice, r3 does not: only r2 could read this in legacy, so only r2 is a recipient.
+		tags: [
+			{ type: 'Mention', href: r(2).uri, name: '@Remote2@remote.example' },
+			{ type: 'Mention', href: r(3).uri, name: '@r3@remote.example' },
+		],
 		// Lazily converted: the URL still carries the UUID the note was created with.
 		urlTail: 'e1e2e3e4-0000-4000-8000-000000000130',
 	})
@@ -449,6 +467,19 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		cc: [],
 		mastodonId: snowflake(140, 2),
 		tags: [{ type: 'Mention', href: r(0).uri, name: '@r0@remote.example' }],
+	})
+	localNote({
+		author: alice,
+		username: 'alice',
+		minutes: 145,
+		text: '@r0 only for r0, though it tags r1 and copies r2',
+		to: [r(0).uri],
+		cc: [r(2).uri],
+		mastodonId: snowflake(145, 2),
+		tags: [
+			{ type: 'Mention', href: r(0).uri, name: '@r0@remote.example' },
+			{ type: 'Mention', href: r(1).uri, name: '@r1@remote.example' },
+		],
 	})
 	const edited = localNote({
 		author: alice,
@@ -490,7 +521,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		minutes: 170,
 		content: '<p><span class="h-card"><a href="https://kopje.test/@alice">@alice</a></span> a DM to alice</p>',
 		to: [alice],
-		cc: [],
+		cc: [bob],
 		mastodonId: snowflake(169, 5),
 		tags: [{ type: 'Mention', href: alice, name: '@alice@kopje.test' }],
 	})
@@ -552,24 +583,26 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 			insert('actor_reblogs', { id: mastodonId, actor_id: actor, object_id: note.id, cdate: cdate(minutes) })
 		}
 	}
-	boost(
-		alice,
-		r0Post,
-		200,
-		'bb000000-0000-4000-8000-000000000200',
-		`${ORIGIN}/ap/a/bb000000-0000-4000-8000-000000000200`,
-		[PUBLIC],
-		[r(0).uri, `${alice}/followers`]
-	)
-	boost(
-		r(1).uri,
-		publicNote,
-		210,
-		snowflake(210, 8),
-		`https://remote.example/users/r1/statuses/900/activity`,
-		[PUBLIC],
-		[alice, r(1).followers]
-	)
+	if (boosts) {
+		boost(
+			alice,
+			r0Post,
+			200,
+			'bb000000-0000-4000-8000-000000000200',
+			`${ORIGIN}/ap/a/bb000000-0000-4000-8000-000000000200`,
+			[PUBLIC],
+			[r(0).uri, `${alice}/followers`]
+		)
+		boost(
+			r(1).uri,
+			publicNote,
+			210,
+			snowflake(210, 8),
+			`https://remote.example/users/r1/statuses/900/activity`,
+			[PUBLIC],
+			[alice, r(1).followers]
+		)
+	}
 	if (withDeletions && level < 17) {
 		// A reblog without an outbox row: 0017 keeps only reblogs it can pair with one.
 		insert('actor_reblogs', {
@@ -649,14 +682,16 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 			object_id: object?.id ?? null,
 			cdate: cdate(minutes),
 		})
-	notify('favourite', alice, r(1).uri, publicNote, 500)
-	notify('reblog', alice, r(1).uri, publicNote, 501)
-	notify('mention', alice, r(2).uri, notes.find((n) => n.author === r(2).uri) ?? null, 502)
-	notify('follow', alice, r(2).uri, null, 503)
-	notify('follow', alice, r(2).uri, null, 504)
-	notify('follow_request', alice, r(4).uri, null, 505)
-	notify('favourite', alice, bob, publicNote, 506)
-	notify('follow', bob, r(3).uri, null, 507)
+	if (notifications) {
+		notify('favourite', alice, r(1).uri, publicNote, 500)
+		notify('reblog', alice, r(1).uri, publicNote, 501)
+		notify('mention', alice, r(2).uri, notes.find((n) => n.author === r(2).uri) ?? null, 502)
+		notify('follow', alice, r(2).uri, null, 503)
+		notify('follow', alice, r(2).uri, null, 504)
+		notify('follow_request', alice, r(4).uri, null, 505)
+		notify('favourite', alice, bob, publicNote, 506)
+		notify('follow', bob, r(3).uri, null, 507)
+	}
 
 	// ---- clients, settings, subscriptions
 	insert('clients', {
@@ -678,6 +713,8 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		cdate: cdate(601),
 	})
 	if (level >= 8) {
+		insert('server_settings', { setting_name: 'server name', setting_value: 'Fixture Herd' })
+		insert('server_settings', { setting_name: 'server description', setting_value: 'A synthetic legacy instance' })
 		insert('server_settings', { setting_name: 'extended description', setting_value: '<p>私のサーバー</p>' })
 		insert('server_rules', { text: 'No spam' })
 		insert('server_rules', { text: 'スパム禁止' })
@@ -785,6 +822,12 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 			)
 		}
 		texts.set(name, `${parts.join('\n')}\n`)
+	}
+	if (notificationSequence !== undefined) {
+		texts.set(
+			'sqlite_sequence',
+			`INSERT INTO "sqlite_sequence" ("name","seq") VALUES('actor_notifications',${notificationSequence});\n`
+		)
 	}
 	db.close()
 	return { level, texts, users: users.map(({ username, email, uri }) => ({ username, email, uri })) }

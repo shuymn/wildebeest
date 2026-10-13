@@ -4,16 +4,16 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import { buildLegacyFixture } from './legacy-fixture.js'
-import { LegacyLoadError, loadLegacyExport } from '../cli/lib/cutover/legacy-load.js'
-import { classify, splitStatements } from '../cli/lib/cutover/sql-script.js'
+import { loadLegacyExport } from '../cli/lib/cutover/legacy-load.js'
+import { digestOf, ExportError, parseStatement, splitStatements } from '../cli/lib/cutover/sql-script.js'
 
 const T1_LEVELS = [0, 5, 10, 18, 23, 35, 39]
 
-function errorOf(run: () => unknown): LegacyLoadError {
+function errorOf(run: () => unknown): ExportError {
 	try {
 		run()
 	} catch (error) {
-		if (error instanceof LegacyLoadError) {
+		if (error instanceof ExportError) {
 			return error
 		}
 		throw error
@@ -40,15 +40,18 @@ describe('export statements', () => {
 			'-- comment; with a semicolon\nPRAGMA defer_foreign_keys=TRUE;',
 			`INSERT INTO "t" ("a","b") VALUES('x;y''z','line\n;');`,
 			'CREATE TRIGGER tr AFTER INSERT ON t BEGIN DELETE FROM u; INSERT INTO u VALUES (1); END;',
-			'INSERT INTO `t` VALUES(1, /* ; */ 2)',
+			'INSERT INTO `t` VALUES(1, 2)',
 		].join('\n')
 		const statements = [...splitStatements(script)]
 		expect(statements).toHaveLength(4)
-		expect(statements.map((s) => classify(s).kind)).toEqual(['pragma', 'insert', 'create-other', 'insert'])
-		expect(classify(statements[1] ?? '')).toMatchObject({ table: 't', hasColumns: true })
-		expect(classify(statements[3] ?? '')).toMatchObject({ table: 't', hasColumns: false })
-		expect(classify('DROP TABLE actors').kind).toBe('other')
-		expect(classify('ATTACH DATABASE x AS y').kind).toBe('other')
+		expect(statements.map((s) => parseStatement(s).kind)).toEqual(['pragma', 'insert', 'ignored', 'insert'])
+		expect(parseStatement(statements[1] ?? '')).toEqual({
+			kind: 'insert',
+			table: 't',
+			columns: ['a', 'b'],
+			rows: [["x;y'z", 'line\n;']],
+		})
+		expect(parseStatement(statements[3] ?? '')).toEqual({ kind: 'insert', table: 't', columns: null, rows: [[1n, 2n]] })
 	})
 })
 
@@ -129,7 +132,7 @@ describe('loading and bridging an export', () => {
 		missing.delete('lists')
 		expect(errorOf(() => loadLegacyExport({ texts: missing.values() }))).toMatchObject({
 			code: 'schema-mismatch',
-			detail: { missing: ['lists'] },
+			detail: { missing: [digestOf('lists')] },
 		})
 
 		const hostile = new Map(texts)

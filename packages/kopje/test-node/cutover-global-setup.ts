@@ -16,7 +16,7 @@ import { expectedFromLegacy } from '../cli/lib/cutover/verify-expect.js'
 export default async function setup(project: TestProject): Promise<void> {
 	const dir = await mkdtemp(join(tmpdir(), 'kopje-cutover-setup-'))
 	try {
-		const fixture = await buildLegacyFixture({ level: 39 })
+		const fixture = await buildLegacyFixture({ level: 39, notificationSequence: 12n })
 		const exportPath = join(dir, 'export')
 		await mkdir(exportPath)
 		for (const [table, text] of fixture.texts) {
@@ -34,7 +34,11 @@ export default async function setup(project: TestProject): Promise<void> {
 			throw new Error(`fixture conversion stopped: ${JSON.stringify(manifest.stop)}`)
 		}
 		const loaded = loadLegacyExport({ texts: fixture.texts.values() })
-		const expected = expectedFromLegacy(loaded.db, { originalActorIds: loaded.originalActorIds })
+		const { records: expected } = expectedFromLegacy(loaded.db, {
+			originalActorIds: loaded.originalActorIds,
+			source: loaded.source,
+			notificationSequence: loaded.report.notificationSequence,
+		})
 		loaded.db.close()
 		project.provide('cutover', {
 			dump: await readFile(join(dir, 'out', 'kopje.dump'), 'utf8'),

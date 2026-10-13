@@ -3,7 +3,7 @@
 // refuses a dump whose header differs from its own catalog, so any drift fails at `import` begin.
 
 import { createHash } from 'node:crypto'
-import { closeSync, openSync, readdirSync, readFileSync, writeSync } from 'node:fs'
+import { closeSync, fsyncSync, openSync, readdirSync, readFileSync, writeSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 
@@ -248,7 +248,8 @@ function* scan(db, spec, selected, filter) {
  *   source: { build: string, version: string } }} options
  */
 export function writeDump(db, { path, catalog, migrations, createdAt, source }) {
-	const fd = openSync(path, 'w', 0o600)
+	// Created exclusively: an existing file or link at the path is never followed or reused.
+	const fd = openSync(path, 'wx', 0o600)
 	try {
 		const header = { format: 1, createdAt, source, migrations, tables: catalog }
 		writeSync(fd, `${HEADER_PREFIX}${JSON.stringify(header)}\n`)
@@ -302,6 +303,7 @@ export function writeDump(db, { path, catalog, migrations, createdAt, source }) 
 		writeSync(fd, pending.join(''))
 		const trailer = { tables, body: { statements, bytes, sha256: body.digest('hex') } }
 		writeSync(fd, `${TRAILER_PREFIX}${JSON.stringify(trailer)}\n${END_LINE}\n`)
+		fsyncSync(fd)
 		return trailer
 	} finally {
 		closeSync(fd)

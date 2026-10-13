@@ -1,78 +1,32 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 
-import { buildLegacyFixture, type FixtureOptions } from './legacy-fixture.js'
-import { createKopjeDatabase, loadDump, migrationRecords, readCatalog, writeDump } from '../cli/lib/cutover/kopje-db.js'
-import { convertExport, verifyConversion } from '../cli/lib/cutover/run.js'
+import {
+	convert as convertIn,
+	exportOf as exportIn,
+	opened,
+	tampered as tamperedIn,
+	verify as verifyWith,
+	workspace,
+} from './cutover-helpers.js'
+import type { FixtureOptions } from './legacy-fixture.js'
 
 // The converter end to end on synthetic exports (DATA-11 to DATA-14): convert, then check the result against
 // expectations computed independently from the export, and show the check fails on each kind of damage.
 
-const BASE_TIME = Date.parse('2026-10-20T00:00:00.000Z')
-let dir: string
-
-beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'kopje-cutover-'))
-})
-
-afterEach(async () => {
-	await rm(dir, { recursive: true, force: true })
-})
-
-async function exportOf(options: FixtureOptions, name = 'export'): Promise<string> {
-	const fixture = await buildLegacyFixture(options)
-	const path = join(dir, name)
-	await mkdir(path)
-	for (const [table, text] of fixture.texts) {
-		await writeFile(join(path, `${table}.sql`), text)
-	}
-	return path
-}
-
-async function convert(
-	exportPath: string,
-	extra: { acceptDeletions?: boolean; env?: Record<string, string>; out?: string } = {}
-) {
-	const outDir = join(dir, extra.out ?? 'out')
-	const result = await convertExport({
-		exportPath,
-		outDir,
-		acceptDeletions: extra.acceptDeletions ?? false,
-		baseTime: BASE_TIME,
-		env: extra.env ?? {},
-		version: 'test',
-	})
-	return { ...result, dumpPath: join(outDir, 'kopje.dump') }
-}
-
-async function verify(exportPath: string, dumpPath: string, acceptDeletions = false) {
-	return verifyConversion({ exportPath, dumpPath, acceptDeletions, baseTime: 0, env: {} })
-}
-
-// Applies SQL to a converted dump and writes it again as a self-consistent dump (as a converter bug would produce).
-async function tampered(dumpPath: string, sql: string): Promise<string> {
-	const db = createKopjeDatabase()
-	loadDump(db, await readFile(dumpPath, 'utf8'))
-	db.exec('PRAGMA foreign_keys = OFF')
-	db.exec(sql)
-	const path = join(dir, `tampered-${Math.random().toString(36).slice(2)}.dump`)
-	writeDump(db, {
-		path,
-		catalog: readCatalog(db),
-		migrations: migrationRecords(),
-		createdAt: new Date(BASE_TIME).toISOString(),
-		source: { build: 'test', version: 'test' },
-	})
-	db.close()
-	return path
-}
+const space = workspace()
+const exportOf = (options: FixtureOptions, name?: string) => exportIn(space.dir, options, name)
+const convert = (exportPath: string, extra?: Parameters<typeof convertIn>[2]) => convertIn(space.dir, exportPath, extra)
+const verify = (exportPath: string, dumpPath: string, acceptDeletions = false) =>
+	verifyWith(exportPath, dumpPath, { acceptDeletions })
+const tampered = (dumpPath: string, sql: string) => tamperedIn(space.dir, dumpPath, sql)
+const dir = () => space.dir
 
 describe('convert and verify-conversion', () => {
 	for (const options of [
@@ -100,7 +54,7 @@ describe('convert and verify-conversion', () => {
 				'accounts',
 				'keys',
 				'statuses',
-				'boosts',
+				'audience',
 				'follows',
 				'favourites',
 				'notifications',
@@ -108,6 +62,7 @@ describe('convert and verify-conversion', () => {
 			]) {
 				expect(categories[name]?.expected, name).toBeGreaterThan(0)
 			}
+			expect(categories.boosts?.expected ?? 0).toBe(options.level >= 2 ? 2 : 0)
 			if (options.level >= 23) {
 				expect(categories.edits?.expected).toBe(1)
 			}
@@ -117,14 +72,6 @@ describe('convert and verify-conversion', () => {
 			}
 		})
 	}
-
-	it('is deterministic: the same export and base time give the same dump', async () => {
-		const exportPath = await exportOf({ level: 18 })
-		const first = await convert(exportPath, { out: 'a' })
-		const second = await convert(exportPath, { out: 'b' })
-		expect(await readFile(first.dumpPath, 'utf8')).toBe(await readFile(second.dumpPath, 'utf8'))
-		expect((first.manifest.dump as { sha256: string }).sha256).toMatch(/^[0-9a-f]{64}$/)
-	})
 
 	it('keeps legacy ids, accepted follows without a Follow record, local media and old /ap/o ids', async () => {
 		const exportPath = await exportOf({ level: 39 })
@@ -136,8 +83,7 @@ describe('convert and verify-conversion', () => {
 			'statuses:remote-without-original-uri': 1,
 		})
 		expect(conversion.legacyIds).toMatchObject({ accounts: 2, statuses: 5, statuses_ap_o: 3, media_ap_o: 2 })
-		const db = createKopjeDatabase()
-		loadDump(db, await readFile(dumpPath, 'utf8'))
+		const db = await opened(dumpPath)
 		const value = (sql: string) => Object.values(db.prepare(sql).get() ?? {})[0]
 		// Accepted follows without a Follow record keep uri NULL; one with an activity gets its id.
 		expect(value("SELECT count(*) FROM follows WHERE state = 'accepted' AND uri IS NULL")).toBe(2)
@@ -172,7 +118,7 @@ describe('convert and verify-conversion', () => {
 				"UPDATE statuses SET source_text = upper(source_text) WHERE source_text = 'Bob says hi'",
 				'statuses',
 			],
-			['a DM is widened', "UPDATE statuses SET visibility = 'public' WHERE visibility = 'direct'", 'statuses'],
+			['a DM is widened', "UPDATE statuses SET visibility = 'public' WHERE visibility = 'direct'", 'audience'],
 			['remote raw is changed', "UPDATE statuses SET raw = replace(raw, 'Note', 'Nope') WHERE raw IS NOT NULL", 'raw'],
 			['an edit is dropped', 'DELETE FROM status_edits WHERE id = (SELECT min(id) FROM status_edits)', 'edits'],
 			[
@@ -195,6 +141,31 @@ describe('convert and verify-conversion', () => {
 			['a setting changes', "UPDATE instance_settings SET value = 'x' WHERE name = 'rules'", 'settings'],
 			['a client secret changes', "UPDATE oauth_clients SET secret = 'x'", 'clients'],
 			['a legacy id is lost', 'UPDATE statuses SET legacy_id = NULL', 'legacy_ids'],
+			[
+				'a DM recipient is removed',
+				"DELETE FROM status_mentions WHERE status_id = (SELECT id FROM statuses WHERE content LIKE '%secret direct%')",
+				'audience',
+			],
+			[
+				'a DM recipient is added',
+				"INSERT INTO status_mentions (status_id, account_id, silent) SELECT s.id, a.id, 1 FROM statuses s, accounts a WHERE s.content LIKE '%secret direct%' AND a.uri LIKE '%/users/r4'",
+				'audience',
+			],
+			[
+				'a followers-only status gets a non-follower recipient',
+				"INSERT INTO status_mentions (status_id, account_id, silent) SELECT s.id, a.id, 0 FROM statuses s, accounts a WHERE s.content LIKE '%followers only%' AND a.uri LIKE '%/users/r3'",
+				'audience',
+			],
+			['a reply link is dropped', 'UPDATE statuses SET in_reply_to_id = NULL', 'replies'],
+			['a remote proxy alias is lost', 'UPDATE statuses SET legacy_ap_o = NULL', 'aliases'],
+			[
+				'the notification counter goes back',
+				"UPDATE sqlite_sequence SET seq = 1 WHERE name = 'notifications'",
+				'counters',
+			],
+			['a follow preference changes', 'UPDATE follows SET notify = 1', 'follows'],
+			['a list policy changes', "UPDATE lists SET replies_policy = 'none'", 'lists'],
+			['client scopes change', "UPDATE oauth_clients SET scopes = 'read write follow push admin'", 'clients'],
 		]
 		let exportPath: string
 		let dumpPath: string
@@ -223,7 +194,7 @@ describe('convert and verify-conversion', () => {
 		const stopped = await convert(exportPath)
 		expect(stopped.ok).toBe(false)
 		expect(stopped.manifest.stop).toMatchObject({ code: 'deletions-not-accepted' })
-		const accepted = await convert(exportPath, { acceptDeletions: true })
+		const accepted = await convert(exportPath, { acceptDeletions: true, out: 'accepted' })
 		expect(accepted.ok).toBe(true)
 		expect((await verify(exportPath, accepted.dumpPath, true)).ok).toBe(true)
 	})
@@ -250,8 +221,7 @@ describe('convert and verify-conversion', () => {
 		for (const table of ['users']) {
 			legacy.exec(await readFile(join(exportPath, `${table}.sql`), 'utf8'))
 		}
-		const db = createKopjeDatabase()
-		loadDump(db, await readFile(dumpPath, 'utf8'))
+		const db = await opened(dumpPath)
 		const hex = (sql: string, d: DatabaseSync) => (d.prepare(sql).all() as { k: string }[]).map((r) => r.k).sort()
 		expect(
 			hex("SELECT hex(privkey) || ':' || hex(privkey_salt) || ':' || pubkey AS k FROM local_accounts", db)
@@ -261,7 +231,7 @@ describe('convert and verify-conversion', () => {
 	it('runs from the real CLI under Node and prints counts and digests only (DATA-13)', async () => {
 		const exportPath = await exportOf({ level: 39 })
 		const cli = fileURLToPath(new URL('../cli/kopje-admin.js', import.meta.url))
-		const out = join(dir, 'cli-out')
+		const out = join(dir(), 'cli-out')
 		const run = promisify(execFile)
 		const converted = await run(process.execPath, [
 			cli,

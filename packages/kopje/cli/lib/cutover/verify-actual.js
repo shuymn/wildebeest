@@ -20,6 +20,10 @@ export const CATEGORIES = [
 	'keys',
 	'raw',
 	'statuses',
+	'audience',
+	'replies',
+	'aliases',
+	'counters',
 	'edits',
 	'attachments',
 	'media',
@@ -38,7 +42,9 @@ export const CATEGORIES = [
 	'clients',
 ]
 
-const REACH = /** @type {Record<string, number>} */ ({ public: 3, unlisted: 2, private: 1, direct: 0, limited: 0 })
+// Kopje's limited is legacy's direct with silent recipients: the same audience, its mentions.
+/** @param {string | null} v */
+const legacyVisibility = (v) => (v === 'limited' ? 'direct' : v)
 
 /** @param {string | undefined} literal */
 function int(literal) {
@@ -64,10 +70,14 @@ export function actualFromDump(text) {
 	}
 	/** @type {Map<string, { uri: string, local: boolean }>} */
 	const accounts = new Map()
-	/** @type {Map<string, { uri: string, author: string, record: unknown[] | null }>} */
+	/** @type {Map<string, { uri: string, author: string, record: unknown[], visibility: string | null, inReplyTo: string | null, alias: string | null, remote: boolean }>} */
 	const statuses = new Map()
 	/** @type {Map<string, string>} */
 	const reblogOf = new Map()
+	/** @type {Map<string, string>} */
+	const parentOf = new Map()
+	/** @type {Map<string, [string, number][]>} */
+	const mentions = new Map()
 	/** @type {Map<string, unknown[]>} */
 	const edits = new Map()
 	/** @type {Map<string, [number, unknown[]][]>} */
@@ -81,8 +91,12 @@ export function actualFromDump(text) {
 			if (statement.table === 'statuses') {
 				const id = textOf(statement.where.find(([c]) => c === 'id')?.[1])
 				const target = textOf(statement.set.find(([c]) => c === 'reblog_of_id')?.[1])
+				const parent = textOf(statement.set.find(([c]) => c === 'in_reply_to_id')?.[1])
 				if (id !== null && target !== null) {
 					reblogOf.set(id, target)
+				}
+				if (id !== null && parent !== null) {
+					parentOf.set(id, parent)
 				}
 			}
 			continue
@@ -124,20 +138,17 @@ export function actualFromDump(text) {
 			}
 			case 'statuses': {
 				const uri = t('uri') ?? ''
-				const author = account(t('account_id'))?.uri ?? ''
+				const owner = account(t('account_id'))
+				const author = owner?.uri ?? ''
 				const id = t('id') ?? ''
 				statuses.set(id, {
 					uri,
 					author,
-					record: [
-						author,
-						t('content'),
-						t('source_text'),
-						t('spoiler_text'),
-						int(row.sensitive),
-						t('published_at'),
-						REACH[t('visibility') ?? ''] ?? -1,
-					],
+					record: [author, t('content'), t('source_text'), t('spoiler_text'), int(row.sensitive), t('published_at')],
+					visibility: legacyVisibility(t('visibility')),
+					inReplyTo: t('in_reply_to_uri'),
+					alias: t('legacy_ap_o'),
+					remote: owner !== undefined && !owner.local,
 				})
 				if (row.raw !== 'NULL') {
 					put('raw', `status ${uri}`, t('raw'))
@@ -148,6 +159,16 @@ export function actualFromDump(text) {
 				}
 				break
 			}
+			case 'status_mentions': {
+				const id = t('status_id') ?? ''
+				mentions.set(id, [...(mentions.get(id) ?? []), [account(t('account_id'))?.uri ?? '', Number(int(row.silent))]])
+				break
+			}
+			case 'sqlite_sequence':
+				if (t('name') === 'notifications') {
+					put('counters', 'notifications', row.seq)
+				}
+				break
 			case 'status_edits': {
 				const uri = status(t('status_id'))?.uri ?? ''
 				edits.set(uri, [...(edits.get(uri) ?? []), [t('content'), t('spoiler_text'), int(row.sensitive)]])
@@ -170,6 +191,8 @@ export function actualFromDump(text) {
 				put('follows', `${account(t('account_id'))?.uri} ${account(t('target_account_id'))?.uri}`, [
 					t('state'),
 					t('uri'),
+					int(row.show_reblogs),
+					int(row.notify),
 				])
 				break
 			case 'favourites':
@@ -192,7 +215,12 @@ export function actualFromDump(text) {
 				put('domain_blocks', `${account(t('account_id'))?.uri} ${t('domain')}`, 1)
 				break
 			case 'lists':
-				put('lists', t('id') ?? '', [account(t('account_id'))?.uri, t('title')])
+				put('lists', t('id') ?? '', [
+					account(t('account_id'))?.uri,
+					t('title'),
+					t('replies_policy'),
+					int(row.exclusive),
+				])
 				break
 			case 'list_accounts':
 				put('list_accounts', `${t('list_id')} ${account(t('account_id'))?.uri}`, 1)
@@ -209,7 +237,7 @@ export function actualFromDump(text) {
 				put('settings', t('name') ?? '', t('value'))
 				break
 			case 'oauth_clients':
-				put('clients', t('id') ?? '', [t('secret'), t('name'), t('redirect_uris')])
+				put('clients', t('id') ?? '', [t('secret'), t('name'), t('redirect_uris'), t('scopes')])
 				break
 			default:
 				break
@@ -217,10 +245,19 @@ export function actualFromDump(text) {
 	}
 	for (const [id, entry] of statuses) {
 		const target = reblogOf.get(id)
-		if (target === undefined) {
-			put('statuses', entry.uri, entry.record)
-		} else {
-			put('boosts', entry.uri, [entry.author, statuses.get(target)?.uri])
+		if (target !== undefined) {
+			put('boosts', entry.uri, [entry.author, statuses.get(target)?.uri, entry.visibility])
+			continue
+		}
+		put('statuses', entry.uri, entry.record)
+		const recipients = (mentions.get(id) ?? []).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+		put('audience', entry.uri, [entry.visibility, recipients])
+		const parent = parentOf.get(id)
+		if (entry.inReplyTo !== null || parent !== undefined) {
+			put('replies', entry.uri, [entry.inReplyTo, parent === undefined ? null : (statuses.get(parent)?.uri ?? null)])
+		}
+		if (entry.remote && entry.alias !== null) {
+			put('aliases', entry.alias, entry.uri)
 		}
 	}
 	for (const [uri, versions] of edits) {

@@ -57,10 +57,11 @@ Cutover from a legacy Wildebeest instance (offline; docs/cutover.md)
                                 file of them) into <dir>/kopje.dump for \`import\`, with <dir>/manifest.json. Exits 3
                                 when it stops for a decision (see the manifest); prints counts and digests only
       --accept-deletions        carry on although bridging or conversion leaves rows out (their counts are reported)
+      --accept-truncation       carry on although HTML longer than the sanitizer's limit loses its end (counted)
       --catalog <file>          the target's \`catalog\` output, instead of this CLI's own schema
       --domain <host>           refuse unless the legacy instance's domain is this one
                                 The legacy KEK candidates are read from userKEK and USER_KEY in the environment
-  verify-conversion <export> <dump file> [--accept-deletions]
+  verify-conversion <export> <dump file> [--accept-deletions] [--accept-truncation]
                                 check a converted dump, or a dump of the Store after the import, against the legacy
                                 export (expectations computed independently). Exits 1 on FAIL
 
@@ -133,7 +134,9 @@ class UsageError extends Error {}
  */
 async function cutover(command, rest, flags, { env, print, info }) {
 	const { convertExport, packageVersion, parseBaseTime, verifyConversion } = await import('./cutover/run.js')
+	const { ExportError } = await import('./cutover/sql-script.js')
 	const acceptDeletions = flags['accept-deletions'] === true
+	const acceptTruncation = flags['accept-truncation'] === true
 	if (command === 'convert') {
 		const [exportPath] = rest
 		const { out, catalog, domain } = flags
@@ -151,16 +154,25 @@ async function cutover(command, rest, flags, { env, print, info }) {
 		} catch (error) {
 			throw new UsageError(error instanceof Error ? error.message : String(error))
 		}
-		const { ok, manifest } = await convertExport({
-			exportPath,
-			outDir: out,
-			acceptDeletions,
-			baseTime,
-			catalogPath: typeof catalog === 'string' ? catalog : undefined,
-			domain: typeof domain === 'string' ? domain : undefined,
-			env,
-			version: packageVersion(),
-		})
+		let result
+		try {
+			result = await convertExport({
+				exportPath,
+				outDir: out,
+				acceptDeletions,
+				acceptTruncation,
+				baseTime,
+				catalogPath: typeof catalog === 'string' ? catalog : undefined,
+				domain: typeof domain === 'string' ? domain : undefined,
+				env,
+				version: packageVersion(),
+			})
+		} catch (error) {
+			// Only refusals of the output directory get here; they carry a fixed code.
+			info(`convert refused: ${error instanceof ExportError ? error.code : 'failed'}`)
+			return 3
+		}
+		const { ok, manifest } = result
 		print(manifest)
 		info(ok ? `converted; import ${out}/kopje.dump` : 'conversion stopped; see the manifest')
 		return ok ? 0 : 3
@@ -169,7 +181,14 @@ async function cutover(command, rest, flags, { env, print, info }) {
 	if (exportPath === undefined || dumpPath === undefined || rest.length > 2) {
 		throw new UsageError('verify-conversion <export> <dump file> [--accept-deletions]')
 	}
-	const { ok, report } = await verifyConversion({ exportPath, dumpPath, acceptDeletions, baseTime: 0, env })
+	const { ok, report } = await verifyConversion({
+		exportPath,
+		dumpPath,
+		acceptDeletions,
+		acceptTruncation,
+		baseTime: 0,
+		env,
+	})
 	print(report)
 	info(ok ? 'conversion verified: PASS' : 'conversion check FAILED')
 	return ok ? 0 : 1

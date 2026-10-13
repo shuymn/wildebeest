@@ -11,10 +11,11 @@
 
 import { createHash } from 'node:crypto'
 
+import { digestOf } from './sql-script.js'
 import { normalizeSearchText } from '../../../src/domain/search-text.ts'
-import { remoteHtmlText, sanitizeRemoteHtml } from '../../../src/security/html.ts'
+import { REMOTE_HTML_RAW_LIMIT, remoteHtmlText, sanitizeRemoteHtml } from '../../../src/security/html.ts'
 
-const PUBLIC_FORMS = new Set(['https://www.w3.org/ns/activitystreams#Public', 'as:Public', 'Public'])
+const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 const STATUS_TYPES = new Set(['Note', 'Article', 'Page', 'Question', 'Video', 'Audio', 'Event'])
 const EARLIEST_MS = Date.UTC(2018, 4, 10)
 const ID18 = /^[0-9]{18}$/
@@ -43,6 +44,17 @@ export const UNUSED_LEGACY_TABLES = [
 	'conversation_mutes',
 	'status_edits',
 ]
+
+// The names legacy instance settings had (packages/backend/src/config/server.ts) and where Kopje keeps them. title and
+// description are what /api/v1/instance and /api/v2/instance show. Kopje has no endpoint for the extended description
+// or the privacy policy yet; they are kept under these names for one (Mastodon's /api/v1/instance/extended_description
+// and /api/v1/instance/privacy_policy). Any other name stops the conversion: it could collide with Kopje's own settings.
+export const LEGACY_SETTINGS = /** @type {Record<string, string>} */ ({
+	'server name': 'title',
+	'server description': 'description',
+	'extended description': 'extended_description',
+	'privacy policy': 'privacy_policy',
+})
 
 /** @typedef {import('node:sqlite').DatabaseSync} DatabaseSync */
 /** @typedef {Record<string, any>} Json */
@@ -119,20 +131,22 @@ function str(value) {
 }
 
 /**
- * Mastodon's visibility of an addressed object: Public in to, Public in cc, the author's followers in to, otherwise
- * direct (Kopje's interpretAddressing, domain/audience.ts).
+ * The visibility legacy Wildebeest gave an object (packages/backend/src/mastodon/status_visibility.ts,
+ * detectVisibility): Public in to; the author's followers in to, unlisted with Public in cc; otherwise direct. Only the
+ * full Public URI counts, as in legacy, so nothing reads wider than it did there.
  * @param {string[]} to
  * @param {string[]} cc
  * @param {string} followers
+ * @returns {'public' | 'unlisted' | 'private' | 'direct'}
  */
-function visibilityOf(to, cc, followers) {
-	if (to.some((x) => PUBLIC_FORMS.has(x))) {
+function legacyVisibility(to, cc, followers) {
+	if (to.includes(PUBLIC)) {
 		return 'public'
 	}
-	if (cc.some((x) => PUBLIC_FORMS.has(x))) {
-		return 'unlisted'
+	if (to.includes(followers)) {
+		return cc.includes(PUBLIC) ? 'unlisted' : 'private'
 	}
-	return to.includes(followers) ? 'private' : 'direct'
+	return 'direct'
 }
 
 /** @param {unknown} value */
@@ -214,14 +228,14 @@ function allocator(baseTime) {
  * Converts the bridged legacy database into the (empty) Kopje database.
  * @param {DatabaseSync} legacy
  * @param {DatabaseSync} kopje
- * @param {{ baseTime: number, originalActorIds: Map<string, string>, notificationSequence: number | null,
- *   domain?: string }} options
+ * @param {{ baseTime: number, originalActorIds: Map<string, string>, notificationSequence: string | null,
+ *   source: import('./legacy-load.js').SourceAddressing, acceptTruncation?: boolean, domain?: string }} options
  * @returns {ConvertSummary}
  */
 export function convertLegacy(
 	legacy,
 	kopje,
-	{ baseTime, originalActorIds, notificationSequence, domain: expectedDomain }
+	{ baseTime, originalActorIds, notificationSequence, source, acceptTruncation = false, domain: expectedDomain }
 ) {
 	/** @type {Record<string, number>} */
 	const problems = {}
@@ -236,6 +250,16 @@ export function convertLegacy(
 		bag[code] = (bag[code] ?? 0) + n
 	}
 	const ids = allocator(baseTime)
+	// Kopje's sanitizer cuts HTML at REMOTE_HTML_RAW_LIMIT; a longer value would lose its end, so it stops the conversion
+	// unless truncation is accepted (counted either way).
+	/** @param {unknown} value */
+	const html = (value) => {
+		const text = str(value)
+		if (text.length > REMOTE_HTML_RAW_LIMIT) {
+			count(acceptTruncation ? normalized : problems, 'html:longer-than-sanitizer-limit')
+		}
+		return sanitizeRemoteHtml(text)
+	}
 	/** @param {string} table @param {string | null} time @param {string} key */
 	const localId = (table, time, key) => ids.local(table, time, key)
 	/** @param {string} table @param {string | null} time @param {string} key */
@@ -341,7 +365,7 @@ export function convertLegacy(
 			host,
 			str(actor.type) || str(properties.type) || 'Person',
 			displayName,
-			sanitizeRemoteHtml(str(properties.summary)),
+			html(properties.summary),
 			local ? null : linkOf(properties.url),
 			linkOf(typeof properties.icon === 'object' && properties.icon !== null ? properties.icon.url : properties.icon),
 			linkOf(
@@ -416,8 +440,6 @@ export function convertLegacy(
 	/** @type {Json[]} */
 	const images = []
 	/** @type {Set<string>} */
-	const legacyStatusIds = new Set()
-	/** @type {Set<string>} */
 	const statusUris = new Set()
 	const planned = []
 	for (const row of objects) {
@@ -427,7 +449,7 @@ export function convertLegacy(
 			continue
 		}
 		if (!STATUS_TYPES.has(type)) {
-			count(problems, `unsupported-object-type:${type}${row.local === 1 ? ':local' : ''}`)
+			count(problems, `unsupported-object-type:${digestOf(type)}${row.local === 1 ? ':local' : ''}`)
 			continue
 		}
 		const properties = json(row.properties)
@@ -465,10 +487,37 @@ export function convertLegacy(
 		statusUris.add(uri)
 		planned.push({ row, properties, uri, local, author: author.id, legacyApO })
 	}
+	// Boosts whose booster and original exist, with unique URIs.
+	const plannedByObject = new Map(planned.map((plan) => [String(plan.row.id), plan]))
+	const reblogs = rows(
+		`SELECT rb.id, rb.mastodon_id, rb.actor_id, rb.object_id, rb.outbox_object_id, rb.cdate,
+			ob.published_date AS ob_published
+		FROM actor_reblogs rb LEFT JOIN outbox_objects ob ON ob.id = rb.outbox_object_id ORDER BY rb.rowid`
+	)
+	const boostPlans = []
+	for (const reblog of reblogs) {
+		const booster = accountOf(reblog.actor_id)
+		if (booster === undefined || !plannedByObject.has(String(reblog.object_id))) {
+			count(dropped, 'reblogs:unknown-account-or-status')
+			continue
+		}
+		const uri = String(reblog.id)
+		if (statusUris.has(uri)) {
+			count(problems, 'duplicate-status-uri')
+			continue
+		}
+		statusUris.add(uri)
+		boostPlans.push({ reblog, booster, uri })
+	}
+
+	// Ids. Every 18-digit legacy id a status or boost keeps is reserved before any new id is drawn, so a drawn id never
+	// takes the id of a later row.
+	const keptStatus = new Set(planned.filter((plan) => ids.keep('statuses', String(plan.row.mastodon_id))))
+	const keptBoost = new Set(boostPlans.filter((boost) => ids.keep('statuses', String(boost.reblog.mastodon_id))))
 	for (const plan of planned) {
 		const mastodonId = String(plan.row.mastodon_id)
 		const published = isoTime(plan.properties.published) ?? isoTime(plan.row.cdate) ?? new Date(baseTime).toISOString()
-		const kept = ids.keep('statuses', mastodonId)
+		const kept = keptStatus.has(plan)
 		const id = kept
 			? mastodonId
 			: plan.local
@@ -482,85 +531,63 @@ export function convertLegacy(
 				legacyId = tail
 			}
 		}
-		if (legacyId !== null && legacyStatusIds.has(legacyId)) {
-			count(normalized, 'statuses:legacy-id-not-unique')
-			legacyId = null
-		}
-		if (legacyId !== null) {
-			legacyStatusIds.add(legacyId)
-			count(legacyCounts, 'statuses')
-		}
-		if (plan.legacyApO !== null) {
-			count(legacyCounts, 'statuses_ap_o')
-		}
 		statuses.set(String(plan.row.id), { ...plan, id, legacyId, published })
 		statusByUri.set(plan.uri, id)
 	}
-
-	// Boost ids.
-	const reblogs = rows(
-		`SELECT rb.id, rb.mastodon_id, rb.actor_id, rb.object_id, rb.cdate, ob."to" AS ob_to, ob.cc AS ob_cc,
-			ob.published_date AS ob_published
-		FROM actor_reblogs rb LEFT JOIN outbox_objects ob ON ob.id = rb.outbox_object_id ORDER BY rb.rowid`
-	)
-	const boosts = []
-	for (const reblog of reblogs) {
-		const booster = accountOf(reblog.actor_id)
-		const target = statuses.get(String(reblog.object_id))
-		if (booster === undefined || target === undefined) {
-			count(dropped, 'reblogs:unknown-account-or-status')
-			continue
-		}
-		const uri = String(reblog.id)
-		if (statusUris.has(uri)) {
-			count(problems, 'duplicate-status-uri')
-			continue
-		}
-		statusUris.add(uri)
+	const boosts = boostPlans.map((plan) => {
+		const { reblog, booster, uri } = plan
 		const published = isoTime(reblog.ob_published) ?? isoTime(reblog.cdate) ?? new Date(baseTime).toISOString()
 		const mastodonId = String(reblog.mastodon_id)
-		const kept = ids.keep('statuses', mastodonId)
+		const kept = keptBoost.has(plan)
 		const id = kept
 			? mastodonId
 			: booster.local
 				? ids.local('statuses', published, `reblog:${uri}`)
 				: ids.remote('statuses', published, `reblog:${uri}`)
-		let legacyId = kept ? null : mastodonId
-		if (legacyId !== null && legacyStatusIds.has(legacyId)) {
-			count(normalized, 'statuses:legacy-id-not-unique')
-			legacyId = null
-		}
-		if (legacyId !== null) {
-			legacyStatusIds.add(legacyId)
-			count(legacyCounts, 'statuses')
-		}
-		boosts.push({ reblog, booster, target, uri, id, published, legacyId })
-	}
-	// A legacy id may not equal another status's id (resolveApiId looks at ids first).
+		const target = /** @type {StatusPlan} */ (statuses.get(String(reblog.object_id)))
+		return { reblog, booster, target, uri, id, published, legacyId: kept ? null : mastodonId }
+	})
+	// A legacy id must be unique and may not equal another status's id (resolveApiId looks at ids first).
 	const allStatusIds = new Set([...[...statuses.values()].map((s) => s.id), ...boosts.map((b) => b.id)])
+	/** @type {Set<string>} */
+	const legacyStatusIds = new Set()
 	for (const plan of [...statuses.values(), ...boosts]) {
-		if (plan.legacyId !== null && allStatusIds.has(plan.legacyId)) {
+		if (plan.legacyId !== null && (allStatusIds.has(plan.legacyId) || legacyStatusIds.has(plan.legacyId))) {
 			plan.legacyId = null
 			count(normalized, 'statuses:legacy-id-not-unique')
-			count(legacyCounts, 'statuses', -1)
+		}
+		if (plan.legacyId !== null) {
+			legacyStatusIds.add(plan.legacyId)
+			count(legacyCounts, 'statuses')
+		}
+	}
+	for (const plan of statuses.values()) {
+		if (plan.legacyApO !== null) {
+			count(legacyCounts, 'statuses_ap_o')
 		}
 	}
 
 	// ---------------------------------------------------------------- statuses: rows
 	kopje.exec('BEGIN')
 	kopje.exec('PRAGMA defer_foreign_keys = ON')
-	const outboxAddressing = new Map(
-		rows('SELECT actor_id, object_id, "to", cc FROM outbox_objects ORDER BY rowid').map((o) => [
-			`${String(o.actor_id)}\n${String(o.object_id)}`,
-			o,
-		])
-	)
 	const idempotency = new Map(
 		rows('SELECT key, object_id FROM idempotency_keys ORDER BY expires_at, rowid').map((k) => [
 			String(k.object_id),
 			String(k.key),
 		])
 	)
+	// Accepted followers by followed account, for the readers of a followers-only status.
+	/** @type {Map<string, Set<string>>} */
+	const acceptedFollowers = new Map()
+	for (const follow of rows("SELECT actor_id, target_actor_id FROM actor_following WHERE state = 'accepted'")) {
+		const follower = accountOf(follow.actor_id)
+		const followed = accountOf(follow.target_actor_id)
+		if (follower !== undefined && followed !== undefined) {
+			const set = acceptedFollowers.get(followed.id) ?? new Set()
+			set.add(follower.id)
+			acceptedFollowers.set(followed.id, set)
+		}
+	}
 	const statusInsert = insert(
 		`INSERT INTO statuses (id, uri, url, account_id, in_reply_to_uri, in_reply_to_id, visibility, spoiler_text, content,
 			source_text, sensitive, language, published_at, edited_at, remote_version, client_key, raw, search_text,
@@ -575,41 +602,72 @@ export function convertLegacy(
 	for (const plan of statuses.values()) {
 		const { row, properties, local } = plan
 		const author = /** @type {NonNullable<ReturnType<typeof accountOf>>} */ (accountOf(row.original_actor_id))
-		const outbox = local ? outboxAddressing.get(`${String(row.original_actor_id)}\n${String(row.id)}`) : undefined
-		const to = addresses(outbox === undefined ? properties.to : json(`{"v":${String(outbox.to)}}`)?.v)
-		const cc = addresses(outbox === undefined ? properties.cc : json(`{"v":${String(outbox.cc)}}`)?.v)
-		let visibility = visibilityOf(to, cc, author.followers)
-		// Mentions: tagged known accounts; known accounts addressed but not tagged are silent.
-		/** @type {Map<string, number>} */
-		const mentions = new Map()
-		for (const tag of list(properties.tag)) {
-			if (typeof tag === 'object' && tag !== null && /** @type {Json} */ (tag).type === 'Mention') {
-				const account = accountIdByUri.get(idOf(/** @type {Json} */ (tag).href) ?? '')
-				if (account !== undefined) {
-					mentions.set(account, 0)
+		// The audience comes from the object's own addressing as exported (legacy authorizes with it); for a local status
+		// the outbox row, where the export has one, must agree.
+		const addressing = source.objects.get(String(row.id)) ?? { to: undefined, cc: undefined, kind: 'object' }
+		const to = addresses(addressing.to)
+		const cc = addresses(addressing.cc)
+		const legacy = legacyVisibility(to, cc, author.followers)
+		if (local) {
+			const sent = source.outboxByPair.get(`${String(row.original_actor_id)}\n${String(row.id)}`)
+			if (sent !== undefined && sent !== null) {
+				if (!Array.isArray(sent.to) || !Array.isArray(sent.cc)) {
+					count(problems, 'statuses:outbox-addressing-unreadable')
+				} else if (
+					sent.kind === 'target'
+						? !addresses(sent.to).every((x) => to.includes(x) || cc.includes(x))
+						: legacyVisibility(addresses(sent.to), addresses(sent.cc), author.followers) !== legacy
+				) {
+					count(problems, 'statuses:addressing-conflict')
 				}
 			}
 		}
-		for (const address of [...to, ...cc]) {
-			const account = accountIdByUri.get(address)
-			if (account !== undefined && account !== author.id && !mentions.has(account)) {
-				mentions.set(account, 1)
+		// Recipients (status_mentions). Public and unlisted: tagged known accounts, and addressed ones as silent. A
+		// followers-only or direct status grants nobody new: legacy let only the author's followers read the former and
+		// only the accounts in `to` read the latter (packages/backend/src/mastodon/status_visibility.ts, isVisible), so
+		// a Mention tag or cc entry outside that set is no recipient (it stays in raw) and is counted.
+		const tagged = new Set()
+		for (const tag of list(properties.tag)) {
+			if (typeof tag === 'object' && tag !== null && /** @type {Json} */ (tag).type === 'Mention') {
+				const account = accountIdByUri.get(idOf(/** @type {Json} */ (tag).href) ?? '')
+				if (account !== undefined && account !== author.id) {
+					tagged.add(account)
+				}
 			}
 		}
-		if (visibility === 'direct' && [...mentions.values()].includes(1)) {
-			visibility = 'limited'
+		/** @param {string[]} list */
+		const known = (list) => list.map((x) => accountIdByUri.get(x)).filter((x) => x !== undefined && x !== author.id)
+		const candidates = new Set([...tagged, ...known(to), ...known(cc)])
+		/** @type {Set<unknown>} */
+		let readers = candidates
+		if (legacy === 'private') {
+			const followers = acceptedFollowers.get(author.id) ?? new Set()
+			readers = new Set([...candidates].filter((a) => followers.has(String(a))))
+		} else if (legacy === 'direct') {
+			readers = new Set(known(to))
 		}
+		/** @type {Map<string, number>} */
+		const mentions = new Map()
+		for (const account of readers) {
+			mentions.set(String(account), tagged.has(account) ? 0 : 1)
+		}
+		const outside = [...candidates].filter((a) => !readers.has(a)).length
+		if (outside > 0) {
+			count(normalized, 'mentionsNotRecipients', outside)
+		}
+		const visibility = legacy === 'direct' && [...mentions.values()].includes(1) ? 'limited' : legacy
 		const spoiler = local
 			? str(properties.spoiler_text) || str(properties.summary)
 			: str(properties.summary) || str(properties.spoiler_text)
-		const content = sanitizeRemoteHtml(str(properties.content))
+		const content = html(properties.content)
 		const updated = isoTime(properties.updated)
 		const edited = updated !== null && updated !== plan.published ? updated : null
 		const contentMap = properties.contentMap
 		const languages = typeof contentMap === 'object' && contentMap !== null ? Object.keys(contentMap) : []
+		// The parent: the status at inReplyTo, else the one legacy linked.
 		const inReplyToUri = idOf(properties.inReplyTo)
 		const legacyParent = typeof row.in_reply_to_id === 'string' ? statuses.get(row.in_reply_to_id) : undefined
-		const parent = legacyParent?.id ?? (inReplyToUri === null ? undefined : statusByUri.get(inReplyToUri))
+		const parent = (inReplyToUri === null ? undefined : statusByUri.get(inReplyToUri)) ?? legacyParent?.id
 		const replyUri = inReplyToUri ?? legacyParent?.uri ?? null
 		replies.set(plan.id, { parent: parent ?? null, account: author.id, inReplyToUri: replyUri })
 		statusInsert.run(
@@ -701,14 +759,19 @@ export function convertLegacy(
 		}
 	}
 
-	// Boost rows.
+	// Boost rows. A boost's audience is its outbox row's addressing as exported; below 0002 the export has none, and
+	// the boost is refused rather than guessed.
 	for (const boost of boosts) {
-		const to = addresses(json(`{"v":${String(boost.reblog.ob_to ?? 'null')}}`)?.v)
-		const cc = addresses(json(`{"v":${String(boost.reblog.ob_cc ?? 'null')}}`)?.v)
-		const visibility = boost.reblog.ob_to === null ? 'public' : visibilityOf(to, cc, boost.booster.followers)
-		if (boost.reblog.ob_to === null) {
-			count(normalized, 'reblogs:without-outbox-row-public')
+		const sent = source.outbox.get(String(boost.reblog.outbox_object_id))
+		if (sent === undefined || sent === null) {
+			count(problems, 'reblogs:audience-unknown')
+			continue
 		}
+		if (!Array.isArray(sent.to) || !Array.isArray(sent.cc)) {
+			count(problems, 'reblogs:outbox-addressing-unreadable')
+			continue
+		}
+		const visibility = legacyVisibility(addresses(sent.to), addresses(sent.cc), boost.booster.followers)
 		statusInsert.run(
 			boost.id,
 			boost.uri,
@@ -777,16 +840,21 @@ export function convertLegacy(
 	/**
 	 * @param {string} imageId
 	 */
-	const imageMediaId = (imageId) => {
-		const image = imagesById.get(imageId)
-		if (image === undefined) {
-			return ''
+	// Every image id that is kept is reserved before media ids are drawn.
+	/** @type {Map<string, string>} */
+	const imageIds = new Map()
+	for (const [imageId, image] of imagesById) {
+		if (ids.keep('media_attachments', String(image.row.mastodon_id))) {
+			imageIds.set(imageId, String(image.row.mastodon_id))
 		}
-		const mastodonId = String(image.row.mastodon_id)
-		return ids.keep('media_attachments', mastodonId)
-			? mastodonId
-			: ids.local('media_attachments', isoTime(image.row.cdate), `image:${imageId}`)
 	}
+	for (const [imageId, image] of imagesById) {
+		if (!imageIds.has(imageId)) {
+			imageIds.set(imageId, ids.local('media_attachments', isoTime(image.row.cdate), `image:${imageId}`))
+		}
+	}
+	/** @param {string} imageId */
+	const imageMediaId = (imageId) => imageIds.get(imageId) ?? ''
 	/** @type {Map<string, { position: number, id: string, type: string, url: string, description: string, meta: string | null }[]>} */
 	const mediaByStatus = new Map()
 	for (const plan of statuses.values()) {
@@ -941,7 +1009,7 @@ export function convertLegacy(
 				})
 			editInsert.run(
 				plan.id,
-				sanitizeRemoteHtml(str(properties.content)),
+				html(properties.content),
 				str(properties.spoiler_text) || str(properties.summary),
 				properties.sensitive === true ? 1 : 0,
 				JSON.stringify(media),
@@ -1236,7 +1304,13 @@ export function convertLegacy(
 	}
 	const settingInsert = insert('INSERT INTO instance_settings (name, value) VALUES (?, ?)')
 	for (const setting of rows('SELECT setting_name, setting_value FROM server_settings ORDER BY rowid')) {
-		settingInsert.run(String(setting.setting_name), String(setting.setting_value))
+		const legacyName = String(setting.setting_name)
+		const name = Object.hasOwn(LEGACY_SETTINGS, legacyName) ? LEGACY_SETTINGS[legacyName] : undefined
+		if (name === undefined) {
+			count(problems, 'settings:unknown-name')
+			continue
+		}
+		settingInsert.run(name, String(setting.setting_value))
 	}
 	const rules = rows('SELECT id, text FROM server_rules ORDER BY id').map((r) => ({
 		id: String(r.id),
