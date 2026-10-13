@@ -53,6 +53,20 @@ const DESCRIPTIONS: Record<ApiErrorCategory, string> = {
 	no_aud: 'the Cloudflare API returned an application without an AUD tag',
 }
 
+// Thrown instead of dispatching a request when too little of the run's lease is left (DispatchFence).
+export class DispatchFenced extends Error {
+	constructor() {
+		super('the reservation does not leave time for another request')
+		this.name = 'DispatchFenced'
+	}
+}
+
+// Called immediately before each request: the abort signal the request gets, or DispatchFenced when it must not be
+// sent at all. /setup binds it to the lease deadline the Store issued (app/setup.tsx).
+export type DispatchFence = () => AbortSignal
+
+const unfenced: DispatchFence = () => AbortSignal.timeout(TIMEOUT_MS)
+
 export class CloudflareApiError extends Error {
 	constructor(
 		readonly category: ApiErrorCategory,
@@ -112,12 +126,13 @@ export type CloudflareApi = {
 	send<T>(step: string, method: 'POST' | 'PUT', path: string, body: unknown): Promise<T>
 }
 
-export function cloudflareApi(token: string, fetcher: typeof fetch): CloudflareApi {
+export function cloudflareApi(token: string, fetcher: typeof fetch, fence: DispatchFence = unfenced): CloudflareApi {
 	async function call(step: string, method: string, path: string, query: Record<string, string>, body?: unknown) {
 		const url = new URL(`${API_BASE}${path}`)
 		for (const [name, value] of Object.entries(query)) {
 			url.searchParams.set(name, value)
 		}
+		const signal = fence()
 		let response: Response
 		try {
 			response = await fetcher(url.toString(), {
@@ -129,7 +144,7 @@ export function cloudflareApi(token: string, fetcher: typeof fetch): CloudflareA
 				body: body === undefined ? undefined : JSON.stringify(body),
 				// Workers have no 'error': a redirect answers 3xx, which is refused below.
 				redirect: 'manual',
-				signal: AbortSignal.timeout(TIMEOUT_MS),
+				signal,
 			})
 		} catch {
 			throw new CloudflareApiError('unreachable', step)

@@ -17,10 +17,16 @@ import {
 	SERVICE_TOKEN_CLIENT_ID,
 	setupHarness,
 	type SetupHarness,
+	setupLogin,
 	setupPost,
+	storeWith,
+	completeWizard,
 } from './setup-helpers'
-import { setCookies } from './web-helpers'
-import { ACCESS_LEASE_MS } from '../src/domain/setup'
+import { setCookies, signIn } from './web-helpers'
+import { ACCESS_LEASE_MS, ACCESS_SUPERSEDE_GRACE_MS } from '../src/domain/setup'
+import { CloudflareApiError, cloudflareApi } from '../src/platform/cloudflare-api'
+import type { StoreStub } from '../src/platform/store-client'
+import { storeMaintenanceError } from '../src/platform/store-errors'
 import { sha256Hex } from '../src/security/tokens'
 
 // Steps 2 and 3 of /setup against a strict fake of the Cloudflare API: the organization check, managed ids and
@@ -346,24 +352,50 @@ describe('/setup Access: coordination through the Store (SETUP-2, SETUP-3)', () 
 		expect((await adminPost(h, b.cookie)).status).toBe(303)
 	})
 
-	it('a run whose lease ran out and was superseded stops before its next write', async () => {
-		const h = await setupHarness()
+	it('a run whose checkpoint answer arrives after its lease dispatches nothing; the next waits out the grace', async () => {
+		let release = () => {}
+		const gate = new Promise<void>((resolve) => {
+			release = resolve
+		})
+		let reached = () => {}
+		const reachedPromise = new Promise<void>((resolve) => {
+			reached = resolve
+		})
+		let holding = true
+		const h = await setupHarness({
+			wrapStore: (store) =>
+				storeWith(store, {
+					checkpointAccess: async (...args: unknown[]) => {
+						const answer = await (store.checkpointAccess as (...a: unknown[]) => Promise<unknown>)(...args)
+						if (holding) {
+							holding = false
+							reached()
+							await gate
+						}
+						return answer
+					},
+				}),
+		})
 		const a = await readyBrowser(h)
 		const b = await readyBrowser(h)
-		const held = h.cf.hold((method) => method === 'POST')
-		const slow = accessPost(h, a.cookie, {}, 'slow-token-0123456789')
-		await held.reached
+		const slow = accessPost(h, a.cookie, { admin_email: 'a@example.com' }, 'slow-token-0123456789')
+		await reachedPromise
 		h.advance(ACCESS_LEASE_MS + 1000)
+		const early = await accessPost(h, b.cookie, {}, 'quick-token-0123456789')
+		expect(early.status).toBe(422)
+		expect(await early.text()).toContain('Another run of this step is in progress')
+		h.advance(ACCESS_SUPERSEDE_GRACE_MS)
 		expect((await accessPost(h, b.cookie, {}, 'quick-token-0123456789')).status).toBe(200)
-		const writesBefore = h.cf.writes().length
-		held.release()
+		expect((await adminPost(h, b.cookie)).status).toBe(303)
+		release()
 		const stopped = await slow
 		expect(stopped.status).toBe(422)
-		expect(await stopped.text()).toContain('Another run replaced this one')
-		// Only the write already in flight went through.
-		expect(h.cf.writes().length - writesBefore).toBe(1)
-		expect(await accessRecord(h)).toMatchObject({ revision: 2, reservation: null, needsReconcile: false })
-		expect((await adminPost(h, b.cookie)).status).toBe(303)
+		expect(await stopped.text()).toContain('This run was stopped')
+		expect(h.cf.writes().filter((call) => call.token === 'slow-token-0123456789')).toEqual([])
+		expect(h.cf.policies.map((p) => p.include)).toEqual([[{ email: { email: ADMIN } }]])
+		const record = await accessRecord(h)
+		expect(record).toMatchObject({ revision: 2, completed: { revision: 2 }, lateFailure: { revision: 1 } })
+		expect((await settings(h)).admin_email).toBe(ADMIN)
 	})
 
 	it('an abandoned run leaves the state unresolved, and bootstrap is refused until a run completes', async () => {
@@ -379,7 +411,7 @@ describe('/setup Access: coordination through the Store (SETUP-2, SETUP-3)', () 
 			now: NOW,
 		})
 		expect(reserved.status).toBe('ok')
-		h.advance(ACCESS_LEASE_MS + 1000)
+		h.advance(ACCESS_LEASE_MS + ACCESS_SUPERSEDE_GRACE_MS + 1000)
 		expect(await pageText(h, browser.cookie)).toContain('did not finish')
 		expect((await adminPost(h, browser.cookie)).status).toBe(422)
 		expect((await accessPost(h, browser.cookie)).status).toBe(200)
@@ -484,5 +516,301 @@ describe('/setup Access: SETUP-4', () => {
 		)
 		const everything = [...texts, JSON.stringify(logs), stored].join('\n')
 		expect(fragmentsOf(API_TOKEN, everything)).toEqual([])
+	})
+})
+
+describe('/setup Access after bootstrap: the admin’s runs', () => {
+	// A bootstrapped instance and its admin, signed in to the web UI.
+	async function adminRun(wrapStore?: (store: StoreStub) => StoreStub) {
+		const h = await setupHarness({ wrapStore })
+		await completeWizard(h, await setupLogin(h))
+		const admin = await signIn(h.asApi, ADMIN)
+		const run = (extra: Record<string, string> = {}, token = 'admin-run-token-0123456789') =>
+			accessPost(h, admin.cookie, extra, token)
+		return { h, admin, run }
+	}
+
+	const holdFirstAppRead = (h: SetupHarness) =>
+		h.cf.hold((method, path) => method === 'GET' && /\/apps\/[0-9a-f-]{36}$/.test(path))
+
+	it('stops at the next checkpoint when the admin’s session expires during the run', async () => {
+		const { h, admin, run } = await adminRun()
+		await sql(
+			h.store,
+			'UPDATE oauth_tokens SET expires_at = ? WHERE token_hash = ?',
+			new Date(NOW + 60_000).toISOString(),
+			await sha256Hex(admin.session)
+		)
+		const held = holdFirstAppRead(h)
+		const running = run()
+		await held.reached
+		h.advance(70_000)
+		held.release()
+		const stopped = await running
+		expect(stopped.status).toBe(422)
+		expect(await stopped.text()).toContain('This run was stopped')
+		expect(h.cf.writes().filter((call) => call.token === 'admin-run-token-0123456789')).toEqual([])
+	})
+
+	for (const [name, end] of [
+		[
+			'signs out',
+			async (h: SetupHarness, cookie: string) => {
+				const csrf = /name="csrf" value="([^"]+)"/.exec(await pageText(h, cookie))?.[1] ?? ''
+				await h.request('/logout', {
+					method: 'POST',
+					headers: { cookie, origin: 'https://kopje.test', 'content-type': 'application/x-www-form-urlencoded' },
+					body: new URLSearchParams({ csrf }).toString(),
+				})
+			},
+		],
+		[
+			'is suspended',
+			async (h: SetupHarness) => {
+				await sql(h.store, "UPDATE local_accounts SET suspended_at = '2026-10-12T00:00:00.000Z'")
+			},
+		],
+	] as const) {
+		it(`stops at the next checkpoint when the admin ${name} during the run`, async () => {
+			const { h, admin, run } = await adminRun()
+			const held = holdFirstAppRead(h)
+			const running = run()
+			await held.reached
+			await end(h, admin.cookie)
+			held.release()
+			expect((await running).status).toBe(422)
+			expect(h.cf.writes().filter((call) => call.token === 'admin-run-token-0123456789')).toEqual([])
+		})
+	}
+
+	it('recovers from a failed run', async () => {
+		const { h, admin, run } = await adminRun()
+		h.cf.failAfterWrite(2)
+		expect((await run({ service_token_client_id: SERVICE_TOKEN_CLIENT_ID })).status).toBe(422)
+		expect(await pageText(h, admin.cookie)).toContain('did not finish')
+		expect((await run({ service_token_client_id: SERVICE_TOKEN_CLIENT_ID })).status).toBe(200)
+		expect(await pageText(h, admin.cookie)).not.toContain('did not finish')
+		expect((await settings(h)).access_service_token_client_id).toBe(SERVICE_TOKEN_CLIENT_ID)
+		expect(h.cf.policies).toHaveLength(2)
+	})
+
+	it('recovers from an abandoned run once its lease and the grace have passed', async () => {
+		const { h, admin, run } = await adminRun()
+		const credential = { tokenHash: await sha256Hex(admin.session), scope: 'write:accounts' as const, now: NOW }
+		const reserved = await h.store.reserveAccess(BUILD, {
+			authority: { kind: 'admin', credential },
+			domain: 'kopje.test',
+			adminEmail: ADMIN,
+			now: NOW,
+		})
+		expect(reserved.status).toBe('ok')
+		expect((await run()).status).toBe(422)
+		h.advance(ACCESS_LEASE_MS + ACCESS_SUPERSEDE_GRACE_MS + 1000)
+		expect(await pageText(h, admin.cookie)).toContain('did not finish')
+		expect((await run()).status).toBe(200)
+		expect(h.cf.apps).toHaveLength(2)
+	})
+
+	it('recovers from a Store refusal at a checkpoint', async () => {
+		let refuse = false
+		const { h, admin, run } = await adminRun((store) =>
+			storeWith(store, {
+				checkpointAccess: async (...args: unknown[]) => {
+					if (refuse) {
+						refuse = false
+						throw storeMaintenanceError('maintenance')
+					}
+					return (store.checkpointAccess as (...a: unknown[]) => Promise<unknown>)(...args)
+				},
+			})
+		)
+		refuse = true
+		const writes = h.cf.writes().length
+		expect((await run()).status).toBe(422)
+		expect(h.cf.writes().length).toBe(writes)
+		expect(await pageText(h, admin.cookie)).toContain('did not finish')
+		expect((await run()).status).toBe(200)
+	})
+
+	it('recovers from a Store refusal at the final completion', async () => {
+		let refuse = false
+		const { h, admin, run } = await adminRun((store) =>
+			storeWith(store, {
+				completeAccess: async (...args: unknown[]) => {
+					if (refuse) {
+						refuse = false
+						throw storeMaintenanceError('maintenance')
+					}
+					return (store.completeAccess as (...a: unknown[]) => Promise<unknown>)(...args)
+				},
+			})
+		)
+		refuse = true
+		expect((await run()).status).toBe(503)
+		expect(await pageText(h, admin.cookie)).toContain('A run of this step is in progress')
+		h.advance(ACCESS_LEASE_MS + ACCESS_SUPERSEDE_GRACE_MS + 1000)
+		expect(await pageText(h, admin.cookie)).toContain('did not finish')
+		expect((await run()).status).toBe(200)
+		expect(h.cf.apps).toHaveLength(2)
+		expect(h.cf.policies).toHaveLength(1)
+	})
+})
+
+describe('/setup Access: listing metadata', () => {
+	// A listing of pages as the given answers, recording the pages asked for.
+	function pages(answers: Record<string, unknown>[]) {
+		const asked: string[] = []
+		const fetcher = vi.fn<typeof fetch>((input) => {
+			const url = new URL(input instanceof Request ? input.url : input.toString())
+			asked.push(`${url.searchParams.get('page')}/${url.searchParams.get('per_page')}`)
+			const answer = answers[asked.length - 1] ?? { result: [] }
+			return Promise.resolve(Response.json({ success: true, errors: [], ...answer }))
+		})
+		return { api: cloudflareApi('t', fetcher), asked }
+	}
+	const items = (n: number, from = 0) => Array.from({ length: n }, (_, i) => ({ id: `${from + i}` }))
+
+	it('follows total_pages past a short page', async () => {
+		const { api, asked } = pages([
+			{ result: items(2), result_info: { page: 1, per_page: 50, total_pages: 2 } },
+			{ result: items(1, 2), result_info: { page: 2, per_page: 50, total_pages: 2 } },
+		])
+		expect(await api.list('x', '/x', 50)).toHaveLength(3)
+		expect(asked).toEqual(['1/50', '2/50'])
+	})
+
+	it('follows a clamped page size when total_pages is missing', async () => {
+		const { api, asked } = pages([
+			{ result: items(10), result_info: { per_page: 10 } },
+			{ result: items(10, 10), result_info: { per_page: 10 } },
+			{ result: items(3, 20), result_info: { per_page: 10 } },
+		])
+		expect(await api.list('x', '/x', 50)).toHaveLength(23)
+		expect(asked).toHaveLength(3)
+	})
+
+	it('reads on after full pages without metadata, and stops at a short or empty one', async () => {
+		const full = pages([{ result: items(50) }, { result: items(50, 50) }, { result: [] }])
+		expect(await full.api.list('x', '/x', 50)).toHaveLength(100)
+		expect(full.asked).toHaveLength(3)
+		const short = pages([{ result: items(7) }])
+		expect(await short.api.list('x', '/x', 50)).toHaveLength(7)
+		expect(short.asked).toHaveLength(1)
+	})
+
+	it('reads every page of accounts and service tokens', async () => {
+		const h = await setupHarness()
+		for (let i = 0; i < 59; i++) {
+			h.cf.accounts.push({ id: i.toString(16).padStart(32, 'a'), name: `a${i}`, authDomain: 'x.cloudflareaccess.com' })
+		}
+		const browser = await readyBrowser(h)
+		const refused = await accessPost(h, browser.cookie)
+		expect(await refused.text()).toContain('enter the account ID')
+		expect(h.cf.calls.filter((call) => call.path === '/accounts')).toHaveLength(2)
+
+		h.cf.accounts.splice(1)
+		h.cf.serviceTokens = [
+			...Array.from({ length: 120 }, (_, i) => ({ id: `other-${i}`, client_id: `other-${i}.access`, name: 'x' })),
+			{ id: 'ours-token', client_id: SERVICE_TOKEN_CLIENT_ID, name: 'cli' },
+		]
+		expect((await accessPost(h, browser.cookie, { service_token_client_id: SERVICE_TOKEN_CLIENT_ID })).status).toBe(200)
+		expect(h.cf.policies[1]?.include).toEqual([{ service_token: { token_id: 'ours-token' } }])
+	})
+})
+
+describe('/setup Access: validation of what Cloudflare holds and answers', () => {
+	const app = (overrides: Record<string, unknown>) => ({
+		id: crypto.randomUUID(),
+		name: 'Kopje kopje.test sign-in',
+		type: 'self_hosted',
+		domain: 'kopje.test/oauth/authorize',
+		destinations: [{ type: 'public', uri: 'kopje.test/oauth/authorize' }],
+		policies: [],
+		aud: 'f'.repeat(64),
+		...overrides,
+	})
+
+	for (const [label, overrides] of [
+		['another application type', { type: 'warp' }],
+		[
+			'an extra destination',
+			{
+				destinations: [
+					{ type: 'public', uri: 'kopje.test/oauth/authorize' },
+					{ type: 'public', uri: 'kopje.test/settings' },
+				],
+			},
+		],
+	] as const) {
+		it(`refuses to take over an application with ${label}`, async () => {
+			const h = await setupHarness()
+			h.cf.apps.push(app(overrides))
+			const browser = await readyBrowser(h)
+			const refused = await accessPost(h, browser.cookie)
+			expect(refused.status).toBe(422)
+			expect(await refused.text()).toContain('is not what Kopje expects')
+			expect(h.cf.writes()).toEqual([])
+		})
+	}
+
+	it('refuses a policy whose app_count is missing, unless adopting', async () => {
+		const h = await setupHarness()
+		h.cf.omitAppCount = true
+		h.cf.policies.push({
+			id: crypto.randomUUID(),
+			name: 'Kopje kopje.test admin',
+			decision: 'allow',
+			include: [{ everyone: {} }],
+		})
+		const browser = await readyBrowser(h)
+		const refused = await accessPost(h, browser.cookie)
+		expect(await refused.text()).toContain('attached to other applications too')
+		expect(h.cf.writes()).toEqual([])
+		expect((await accessPost(h, browser.cookie, { mode: 'adopt' })).status).toBe(200)
+	})
+
+	it('fails on a written object answered without its id, and a run again finds it', async () => {
+		const h = await setupHarness()
+		const browser = await readyBrowser(h)
+		h.cf.stripIdNext()
+		const failed = await accessPost(h, browser.cookie)
+		expect(await failed.text()).toContain('answered with something unexpected')
+		expect((await accessPost(h, browser.cookie)).status).toBe(200)
+		expect(h.cf.policies).toHaveLength(1)
+	})
+
+	it('refuses malformed answers and keeps only valid numeric error codes', async () => {
+		const answer = (body: string, status = 200) =>
+			cloudflareApi('t', () =>
+				Promise.resolve(new Response(body, { status, headers: { 'content-type': 'application/json' } }))
+			)
+		const failure = async (call: Promise<unknown>) => {
+			const error = await call.then(
+				() => null,
+				(e: unknown) => e
+			)
+			expect(error).toBeInstanceOf(CloudflareApiError)
+			return error as CloudflareApiError
+		}
+		expect((await failure(answer('not json').get('x', '/x'))).category).toBe('malformed')
+		expect((await failure(answer('{"success":true}').get('x', '/x'))).category).toBe('malformed')
+		expect((await failure(answer('{"success":true,"result":{}}').list('x', '/x', 50))).category).toBe('malformed')
+		const codes = await failure(
+			answer(
+				JSON.stringify({
+					success: false,
+					errors: [
+						{ code: 1.5 },
+						{ code: -3 },
+						{ code: '7003' },
+						{ code: 1e12 },
+						{ code: 1000, message: 'secret text' },
+					],
+				}),
+				400
+			).get('x', '/x')
+		)
+		expect(codes.codes).toEqual([1000])
+		expect(codes.message).toBe('x: the Cloudflare API refused the request [HTTP 400, codes 1000]')
 	})
 })

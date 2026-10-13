@@ -34,7 +34,7 @@ export type FakeCloudflare = {
 	policies: Item[]
 	// Every API call: method, path and the bearer token it carried.
 	calls: { method: string; path: string; token: string | null; body: unknown }[]
-	writes: () => { method: string; path: string }[]
+	writes: () => FakeCloudflare['calls']
 	// The token's accounts and their Zero Trust team.
 	accounts: { id: string; name: string; authDomain: string }[]
 	permissions: Set<Permission>
@@ -50,6 +50,11 @@ export type FakeCloudflare = {
 	hold: (match: (method: string, path: string) => boolean) => Hold
 	botSettings: Record<string, unknown> | null
 	signInAud: () => string
+	serviceTokens: { id: string; client_id: string; name: string }[]
+	// Policies are listed without app_count.
+	omitAppCount: boolean
+	// The next write is applied but answered without the object's id.
+	stripIdNext: () => void
 }
 
 const MAX_PER_PAGE: Record<string, number> = { '/accounts': 50 }
@@ -65,6 +70,7 @@ export function fakeCloudflare(team: AccessTeam): FakeCloudflare {
 	let failAfter: number | null = null
 	let redirect = false
 	let throwing = false
+	let stripId = false
 	const holds: { match: (method: string, path: string) => boolean; reached: () => void; gate: Promise<void> }[] = []
 	const audOf = () => crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '')
 	const fake: FakeCloudflare = {
@@ -99,6 +105,11 @@ export function fakeCloudflare(team: AccessTeam): FakeCloudflare {
 			return { reached: reachedPromise, release }
 		},
 		botSettings: { fight_mode: false },
+		serviceTokens: [{ id: 'token-uuid-1', client_id: SERVICE_TOKEN_CLIENT_ID, name: 'cli' }],
+		omitAppCount: false,
+		stripIdNext: () => {
+			stripId = true
+		},
 		signInAud: () => {
 			const aud = apps.find((app) => String(app.domain).endsWith('/oauth/authorize'))?.aud
 			return typeof aud === 'string' ? aud : ''
@@ -163,6 +174,11 @@ export function fakeCloudflare(team: AccessTeam): FakeCloudflare {
 					failAfter = null
 					return error(500, 10001, 'internal error')
 				}
+				if (stripId) {
+					stripId = false
+					const { id: _id, ...rest } = result as Item
+					return ok(rest)
+				}
 				return ok(result)
 			}
 
@@ -180,16 +196,20 @@ export function fakeCloudflare(team: AccessTeam): FakeCloudflare {
 					return need('org') ?? ok({ auth_domain: account.authDomain, name: account.name })
 				}
 				if (rest === '/service_tokens' && request.method === 'GET') {
-					return need('tokens') ?? page([{ id: 'token-uuid-1', client_id: SERVICE_TOKEN_CLIENT_ID, name: 'cli' }])
+					return need('tokens') ?? page(fake.serviceTokens)
 				}
 				const denied = need('apps')
 				if (denied !== null) {
 					return denied
 				}
-				const policyView = (policy: Item) => ({
-					...policy,
-					app_count: apps.filter((app) => (app.policies as { id: string }[]).some((p) => p.id === policy.id)).length,
-				})
+				const policyView = (policy: Item) =>
+					fake.omitAppCount
+						? { ...policy }
+						: {
+								...policy,
+								app_count: apps.filter((app) => (app.policies as { id: string }[]).some((p) => p.id === policy.id))
+									.length,
+							}
 				if (rest === '/policies' || rest.startsWith('/policies/')) {
 					const id = rest.slice('/policies/'.length)
 					const existing = policies.find((p) => p.id === id)
@@ -286,7 +306,13 @@ export function fakeImages(error: number | null = null): ImageCodec {
 export type SetupHarness = Awaited<ReturnType<typeof setupHarness>>
 
 export async function setupHarness(
-	options: { overrides?: Record<string, unknown>; images?: ImageCodec; store?: StoreStub } = {}
+	options: {
+		overrides?: Record<string, unknown>
+		images?: ImageCodec
+		store?: StoreStub
+		// Wraps the Store stub the app calls (tests still reach the real Store as `store`).
+		wrapStore?: (store: StoreStub) => StoreStub
+	} = {}
 ) {
 	const store = options.store ?? (await migratedStore())
 	const team = await accessTeam()
@@ -303,7 +329,7 @@ export async function setupHarness(
 	const app = createApp({
 		build: () => BUILD,
 		now: () => clock,
-		store: () => store,
+		store: () => (options.wrapStore === undefined ? store : options.wrapStore(store)),
 		fetch: cf.fetch,
 		federation: offline,
 		randomToken: () => `token-${++counter}-${crypto.randomUUID()}`,
@@ -412,6 +438,7 @@ export async function accessRecord(h: SetupHarness): Promise<{
 	completed: { revision: number; access: { adminEmail: string } } | null
 	needsReconcile: boolean
 	managed: Record<string, string>
+	lateFailure?: { revision: number; at: number }
 } | null> {
 	const [row] = await sql<{ value: string }>(h.store, "SELECT value FROM kopje_state WHERE name = 'setup_access'")
 	return row === undefined ? null : (JSON.parse(row.value) as Awaited<ReturnType<typeof accessRecord>>)
@@ -427,4 +454,19 @@ export function fragmentsOf(secret: string, text: string, length = 6): string[] 
 		}
 	}
 	return found
+}
+
+// A Store stub whose named RPCs are replaced; every other call goes to the real Store.
+export function storeWith(
+	store: StoreStub,
+	replaced: Record<string, (...args: unknown[]) => Promise<unknown>>
+): StoreStub {
+	return new Proxy(store, {
+		get(target, property) {
+			// An RPC method is taken from the stub as it is: detached from it, it does not reach the Store.
+			return typeof property === 'string' && property in replaced
+				? replaced[property]
+				: (Reflect.get(target, property) as unknown)
+		},
+	})
 }

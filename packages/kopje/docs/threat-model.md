@@ -459,13 +459,21 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   counts), the admin's web session (a web-client token of the account whose email is `admin_email`) only afterwards.
   After bootstrap no setup session opens, and those left authorize nothing; the admin may see the status, run the
   checks and reconcile the Access applications (keeping `admin_email` and the domain), never change the domain or the
-  admin. Access reconciliations are coordinated by the Store: each reserves the instance-wide reconciliation (a lease
-  and the next revision) before its first external call, renews it before every write, and stops once superseded or
-  no longer authorized, so a setup session's run cannot write to Cloudflare after bootstrap; it checks that the team
-  is the selected account's organization (`auth_domain`) before anything is written, and changes only objects whose
-  ids it recorded or a single checked object of its name (adopting or recreating is an explicit recovery choice).
-  `test/setup-access.test.ts` ("a run paused before its reservation makes no external write after bootstrap", "a run
-  whose lease ran out and was superseded stops before its next write", "refuses a team that is not the selected
+  admin. Access reconciliations are coordinated by the Store, which is the authority on time: a run reserves the
+  instance-wide reconciliation (the next revision and a lease with a deadline the Store issues) before its first
+  Cloudflare call, and renews it at a checkpoint before every write; a checkpoint refuses a run that was superseded or
+  whose authority ended at the operation's own time (bootstrap ended the setup session; the admin's web session
+  expired, was signed out or suspended). Immediately before each Cloudflare request the Worker compares its clock with
+  the last deadline it was given and sends nothing with less than 15 s left; every request is aborted at the deadline
+  and after 10 s at most. A reservation is superseded only 30 s after its deadline. What is guaranteed: no request of a
+  run is in flight once a newer run may reserve, and no request is dispatched after a stale checkpoint answer, as long
+  as the Worker's and the Store's clocks differ by less than the 30 s grace minus the 10 s request bound. A
+  superseded run's late failure is recorded and shown, without changing the newer run's outcome. Before any write
+  the run checks that the team is the selected account's organization (`auth_domain`), and it changes only objects
+  whose ids it recorded or a single checked object of its name (adopting or recreating is an explicit recovery
+  choice). `test/setup-access.test.ts` ("a run paused before its reservation makes no external write after bootstrap",
+  "a run whose checkpoint answer arrives after its lease dispatches nothing; the next waits out the grace", "stops at
+  the next checkpoint when the admin's session expires during the run", "refuses a team that is not the selected
   account’s organization, before any write", "refuses a reusable policy attached to other applications"). `src/domain/setup.ts`, `src/app/setup.tsx`; `test/setup.test.ts` ("a reused setup token opens nothing", "a
   setup session opened before bootstrap cannot change the domain, the admin or Access", "shows the status to the
   admin, runs the checks, and reconciles Access with a new token", "refuses a signed-in user who is not the admin",

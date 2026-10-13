@@ -33,8 +33,15 @@ export const getSetupState = readOperation<void, { complete: boolean }>((db) => 
 //   - SETUP-4: the Cloudflare API token never reaches the Store; only what the API returned (team, AUD tags, ids) does.
 
 export const SETUP_SESSION_MS = 60 * 60 * 1000
-// How long a reservation holds without being renewed. Each external write renews it first.
+// How long a reservation holds without being renewed. Each external write renews it first. The Store's deadline is the
+// authority: the Worker dispatches a Cloudflare request only while at least ACCESS_DISPATCH_MARGIN_MS of it is left,
+// aborts every request at the deadline, and gives each at most ACCESS_REQUEST_TIMEOUT_MS. A reservation is superseded
+// only ACCESS_SUPERSEDE_GRACE_MS after its deadline, longer than both, so whatever was dispatched under the old lease
+// has finished or been aborted before a newer run can write (and the clocks may differ by up to the rest).
 export const ACCESS_LEASE_MS = 2 * 60 * 1000
+export const ACCESS_REQUEST_TIMEOUT_MS = 10_000
+export const ACCESS_DISPATCH_MARGIN_MS = 15_000
+export const ACCESS_SUPERSEDE_GRACE_MS = 30_000
 
 const SESSION = 'setup_session:'
 // Setup sessions kept at once; the oldest goes first. Only holders of SETUP_TOKEN open them.
@@ -61,6 +68,8 @@ type AccessState = {
 	completed: { revision: number; access: AccessDraft; at: number } | null
 	needsReconcile: boolean
 	managed: ManagedIds
+	// The last failure reported by a run after a newer one had taken over (it wrote nothing after that, see above).
+	lateFailure?: { revision: number; at: number }
 }
 
 export type SetupDraft = { domain: string | null; access: AccessDraft | null; accessRevision: number | null }
@@ -138,8 +147,9 @@ function sessionNames(db: Db, order: 'ASC' | 'DESC'): string[] {
 }
 
 // The admin behind a web session: a live token of the web client whose account's email is admin_email.
-function adminAccount(db: Db, credential: UserCredential): { username: string } | null {
-	const auth = authorize(db, credential)
+// It is checked at the operation's own time, not the time the request began.
+function adminAccount(db: Db, credential: UserCredential, now: number): { username: string } | null {
+	const auth = authorize(db, { ...credential, now })
 	if (auth.status !== 'ok' || auth.viewer.accountId === null || auth.viewer.client.id !== webClientId(db)) {
 		return null
 	}
@@ -158,7 +168,7 @@ function permitted(db: Db, authority: SetupAuthority, now: number): boolean {
 	if (authority.kind === 'setup') {
 		return !bootstrapped(db) && liveSession(db, authority.sessionHash, now) !== null
 	}
-	return bootstrapped(db) && adminAccount(db, authority.credential) !== null
+	return bootstrapped(db) && adminAccount(db, authority.credential, now) !== null
 }
 
 function holderOf(authority: SetupAuthority): string {
@@ -188,17 +198,19 @@ export type AccessStatus = {
 	// running: a reservation whose lease holds; unresolved: a failure, or a lease that ran out without an outcome.
 	state: 'none' | 'running' | 'unresolved' | 'completed'
 	completedAt: number | null
+	lateFailureAt: number | null
 }
 
 function accessStatus(state: AccessState, now: number): AccessStatus {
 	const completedAt = state.completed?.at ?? null
+	const lateFailureAt = state.lateFailure?.at ?? null
 	if (state.reservation !== null) {
-		return { state: state.reservation.leaseUntil > now ? 'running' : 'unresolved', completedAt }
+		return { state: state.reservation.leaseUntil > now ? 'running' : 'unresolved', completedAt, lateFailureAt }
 	}
 	if (state.needsReconcile) {
-		return { state: 'unresolved', completedAt }
+		return { state: 'unresolved', completedAt, lateFailureAt }
 	}
-	return { state: state.completed === null ? 'none' : 'completed', completedAt }
+	return { state: state.completed === null ? 'none' : 'completed', completedAt, lateFailureAt }
 }
 
 // The draft is ready for bootstrap: nothing running or unresolved, and it saw the latest revision complete.
@@ -328,11 +340,12 @@ function planRefusal(db: Db, authority: SetupAuthority, domain: string, adminEma
 }
 
 export type ReserveResult =
-	| { status: 'ok'; revision: number; managed: ManagedIds }
+	| { status: 'ok'; revision: number; managed: ManagedIds; deadline: number }
 	| { status: 'denied' | 'busy' | 'no_domain' | 'admin_mismatch' }
 
-// Reserves the reconciliation before any external write. A live reservation of anyone makes it busy; one whose lease
-// ran out is superseded (it stays unresolved until this run completes). Every older draft stops being bootstrap-ready.
+// Reserves the reconciliation before any external call. A reservation of anyone makes it busy until its deadline plus
+// ACCESS_SUPERSEDE_GRACE_MS; after that it is superseded (it stays unresolved until this run completes). Every older
+// draft stops being bootstrap-ready. The answer carries the lease deadline the Worker fences its requests with.
 export const reserveAccess = writeOperation<
 	{ authority: SetupAuthority; domain: string; adminEmail: string; now: number },
 	ReserveResult
@@ -345,7 +358,7 @@ export const reserveAccess = writeOperation<
 		return { status: refused }
 	}
 	const state = accessState(db)
-	if (state.reservation !== null && state.reservation.leaseUntil > now) {
+	if (state.reservation !== null && now <= state.reservation.leaseUntil + ACCESS_SUPERSEDE_GRACE_MS) {
 		return { status: 'busy' }
 	}
 	const revision = state.revision + 1
@@ -355,7 +368,7 @@ export const reserveAccess = writeOperation<
 		needsReconcile: state.needsReconcile || state.reservation !== null,
 		reservation: { revision, holder: holderOf(authority), leaseUntil: now + ACCESS_LEASE_MS, domain, adminEmail },
 	} satisfies AccessState)
-	return { status: 'ok', revision, managed: state.managed }
+	return { status: 'ok', revision, managed: state.managed, deadline: now + ACCESS_LEASE_MS }
 })
 
 // The reservation of this revision, held by this authority and still authorized; null when the run must stop.
@@ -368,22 +381,23 @@ function heldReservation(db: Db, authority: SetupAuthority, revision: number, no
 	return permitted(db, authority, now) ? state : null
 }
 
-// Before each external write after the first: renews the lease and records the ids made so far. 'stop' when the run
-// was superseded, or its authority ended (bootstrap ended the setup session, the admin signed out).
+// Before each external write: renews the lease and records the ids made so far, and answers the new deadline. 'stop'
+// when the run was superseded, or its authority ended (bootstrap ended the setup session; the admin's session expired,
+// was signed out or suspended).
 export const checkpointAccess = writeOperation<
 	{ authority: SetupAuthority; revision: number; managed: ManagedIds; now: number },
-	'ok' | 'stop'
+	{ status: 'ok'; deadline: number } | { status: 'stop' }
 >((db, { authority, revision, managed, now }) => {
 	const state = heldReservation(db, authority, revision, now)
 	if (state === null || state.reservation === null) {
-		return 'stop'
+		return { status: 'stop' }
 	}
 	writeState(db, ACCESS, {
 		...state,
 		managed: { ...state.managed, ...managed },
 		reservation: { ...state.reservation, leaseUntil: now + ACCESS_LEASE_MS },
 	} satisfies AccessState)
-	return 'ok'
+	return { status: 'ok', deadline: now + ACCESS_LEASE_MS }
 })
 
 // The run's outcome. Success makes it the latest completed revision: the reserving session's draft (before bootstrap)
@@ -401,7 +415,7 @@ export const completeAccess = writeOperation<
 		return 'stop'
 	}
 	writeState(db, ACCESS, {
-		revision: state.revision,
+		...state,
 		reservation: null,
 		needsReconcile: false,
 		completed: { revision, access, at: now },
@@ -422,21 +436,27 @@ export const completeAccess = writeOperation<
 	return 'ok'
 })
 
-// A run that failed: it releases its reservation and leaves the state unresolved, keeping the ids it made.
-export const failAccess = writeOperation<{ authority: SetupAuthority; revision: number; managed: ManagedIds }, void>(
-	(db, { authority, revision, managed }) => {
-		const state = accessState(db)
-		if (state.reservation?.revision !== revision || state.reservation.holder !== holderOf(authority)) {
-			return
+// A run that failed: it releases its reservation and leaves the state unresolved, keeping the ids it made. A run
+// already superseded has its failure recorded (lateFailure) without touching the newer run's state: it dispatched
+// nothing after its deadline, and the newer run reserved only after the grace that followed.
+export const failAccess = writeOperation<
+	{ authority: SetupAuthority; revision: number; managed: ManagedIds; now: number },
+	void
+>((db, { authority, revision, managed, now }) => {
+	const state = accessState(db)
+	if (state.reservation?.revision !== revision || state.reservation.holder !== holderOf(authority)) {
+		if (revision < state.revision) {
+			writeState(db, ACCESS, { ...state, lateFailure: { revision, at: now } } satisfies AccessState)
 		}
-		writeState(db, ACCESS, {
-			...state,
-			reservation: null,
-			needsReconcile: true,
-			managed: { ...state.managed, ...managed },
-		} satisfies AccessState)
+		return
 	}
-)
+	writeState(db, ACCESS, {
+		...state,
+		reservation: null,
+		needsReconcile: true,
+		managed: { ...state.managed, ...managed },
+	} satisfies AccessState)
+})
 
 function writeAccess(db: Db, access: AccessDraft): void {
 	const rows: [string, string | null][] = [

@@ -3,6 +3,8 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 
 import { PRIVATE_HEADERS } from './web'
 import {
+	ACCESS_DISPATCH_MARGIN_MS,
+	ACCESS_REQUEST_TIMEOUT_MS,
 	type ImagesCheck,
 	type ImagesOutcome,
 	SETUP_SESSION_MS,
@@ -15,6 +17,8 @@ import {
 	botFightMode,
 	checkTeam,
 	CloudflareApiError,
+	type DispatchFence,
+	DispatchFenced,
 	cloudflareApi,
 	reconcileAccess,
 	type ReconcileHooks,
@@ -180,6 +184,13 @@ function accessResult(view: SetupView): CheckResult | undefined {
 				hint: 'Run the step again with a fresh token. Setup cannot finish until a run completes.',
 			}
 		default:
+			if (view.access?.lateFailureAt != null && view.access.state === 'completed') {
+				const at = new Date(view.access.lateFailureAt).toISOString()
+				return {
+					status: 'warn',
+					text: `A run that a newer one had replaced reported a failure at ${at}. It sent nothing after it was replaced; the newer run's outcome stands.`,
+				}
+			}
 			if (view.draft !== null && view.draft.access !== null && !view.draft.accessReady) {
 				return {
 					status: 'warn',
@@ -460,21 +471,31 @@ export function setupRoutes(deps: SetupDeps): Hono<SetupEnv> {
 				return fail('The admin changed meanwhile. Reload the page.')
 		}
 		const revision = reserved.revision
+		// The lease deadline the Store issued, renewed at each checkpoint. Every request is fenced by it.
+		let deadline = reserved.deadline
+		const fence: DispatchFence = () => {
+			const left = deadline - deps.now()
+			if (left < ACCESS_DISPATCH_MARGIN_MS) {
+				throw new DispatchFenced()
+			}
+			return AbortSignal.any([AbortSignal.timeout(ACCESS_REQUEST_TIMEOUT_MS), AbortSignal.timeout(left)])
+		}
 		const hooks: ReconcileHooks = {
 			managed: {},
 			checkpoint: async (managed) => {
 				const held = await storeCall(c, deps, (s, b) =>
 					s.checkpointAccess(b, { authority, revision, managed, now: deps.now() })
 				)
-				if (held !== 'ok') {
+				if (held.status !== 'ok') {
 					throw new ReconcileStopped()
 				}
+				deadline = held.deadline
 			},
 		}
 		let result
 		try {
 			result = await reconcileAccess(
-				cloudflareApi(apiToken, deps.fetch),
+				cloudflareApi(apiToken, deps.fetch, fence),
 				{
 					domain,
 					teamDomain,
@@ -488,9 +509,11 @@ export function setupRoutes(deps: SetupDeps): Hono<SetupEnv> {
 			)
 		} catch (error) {
 			const managed = { ...hooks.managed }
-			await storeCall(c, deps, (s, b) => s.failAccess(b, { authority, revision, managed }))
-			if (error instanceof ReconcileStopped) {
-				return fail('Another run replaced this one, or setup finished meanwhile. Nothing more was changed.')
+			await storeCall(c, deps, (s, b) => s.failAccess(b, { authority, revision, managed, now: deps.now() }))
+			if (error instanceof ReconcileStopped || error instanceof DispatchFenced) {
+				return fail(
+					'This run was stopped: another run replaced it, setup finished, or your sign-in ended. Nothing more was changed.'
+				)
 			}
 			if (error instanceof CloudflareApiError) {
 				return fail(
@@ -517,7 +540,9 @@ export function setupRoutes(deps: SetupDeps): Hono<SetupEnv> {
 			s.completeAccess(b, { authority, revision, access, managed, now: deps.now() })
 		)
 		if (completed !== 'ok') {
-			return fail('Another run replaced this one, or setup finished meanwhile. Run the step again.')
+			return fail(
+				'This run was stopped: another run replaced it, setup finished, or your sign-in ended. Run the step again.'
+			)
 		}
 		return render(c, await refreshed(c, session), {
 			access: { status: 'pass', text: `The Access applications for ${domain} are in place on ${teamDomain}.` },

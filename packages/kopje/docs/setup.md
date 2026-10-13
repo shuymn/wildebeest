@@ -56,7 +56,7 @@ itself is not kept. Then go through the steps:
     stops before changing anything and says why. Two recovery choices are on the form: take over the objects with
     Kopje's names whatever they are, or create new objects (delete the old ones in the dashboard afterwards).
 
-    Only one run of this step happens at a time. A run that fails, or is interrupted, leaves the step "did not finish",
+    Only one run of this step happens at a time; a run that stops answering holds the step for two and a half minutes. A run that fails, or is interrupted, leaves the step "did not finish",
     and setup cannot finish until a run completes. If two people run it, only the latest completed run counts, and step
     7 must be done from that browser. The API token is used only for that request and is not stored, logged or shown.
     Delete it once the step has passed.
