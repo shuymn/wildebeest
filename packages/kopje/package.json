@@ -82,7 +82,7 @@
 		"parse5": "8.0.1",
 		"sanitize-html": "2.18.0",
 		"temporal-polyfill": "1.0.5",
-		"typescript": "5.9.3",
+		"typescript": "6.0.3",
 		"vitest": "4.1.11",
 		"wrangler": "4.149.0",
 		"zod": "3.25.76"

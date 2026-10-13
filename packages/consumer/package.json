@@ -9,7 +9,7 @@
 		"@cloudflare/vitest-pool-workers": "0.16.20",
 		"@cloudflare/workers-types": "4.20260702.1",
 		"toucan-js": "4.1.1",
-		"typescript": "5.9.3",
+		"typescript": "6.0.3",
 		"vite-tsconfig-paths": "6.1.1",
 		"vitest": "4.1.11",
 		"wrangler": "4.149.0"
