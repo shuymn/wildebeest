@@ -1,0 +1,22 @@
+{
+	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
+	"extends": ["config:best-practices"],
+	"labels": ["dependencies"],
+	"packageRules": [
+		{
+			"description": "A kopje update upgrades the instance when it is merged: one pull request per version, never merged automatically. Read the release notes and docs/upgrade.md first.",
+			"matchPackageNames": ["kopje"],
+			"separateMinorPatch": true,
+			"automerge": false,
+			"labels": ["dependencies", "kopje"],
+			"prBodyNotes": [
+				"Merging this deploys the new Kopje version, which may upgrade the Store's schema. Before merging, read the release notes and https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/upgrade.md."
+			]
+		},
+		{
+			"description": "wrangler bundles and deploys the instance: review its updates too.",
+			"matchPackageNames": ["wrangler"],
+			"automerge": false
+		}
+	]
+}

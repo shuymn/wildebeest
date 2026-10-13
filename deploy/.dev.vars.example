@@ -1,0 +1,4 @@
+# Secrets of the Worker. The Deploy to Cloudflare button asks for each one; with wrangler, set them with
+# `npx wrangler secret put <NAME>`. See README.md.
+SETUP_TOKEN=
+USER_KEK=

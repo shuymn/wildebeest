@@ -1,0 +1,31 @@
+{
+	"name": "my-kopje",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev"
+	},
+	"dependencies": {
+		"kopje": "0.1.0"
+	},
+	"devDependencies": {
+		"wrangler": "4.105.0"
+	},
+	"cloudflare": {
+		"bindings": {
+			"SETUP_TOKEN": {
+				"description": "Opens the `/setup` wizard. At least 32 random characters, for example from `openssl rand -base64 33`. Remove it after setup."
+			},
+			"USER_KEK": {
+				"description": "Wraps the private keys of local accounts. A long random value, for example from `openssl rand -base64 33`. Keep a copy: keys wrapped with it cannot be read with any other value."
+			},
+			"MEDIA": {
+				"description": "R2 bucket for uploaded media. Choose a name no other Worker uses."
+			},
+			"QUEUE": {
+				"description": "Queue for federation delivery and inbox replay. Choose a name no other Worker uses; this Worker is its only consumer."
+			}
+		}
+	}
+}

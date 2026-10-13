@@ -6,7 +6,8 @@
 #
 # The second form takes KOPJE and LEGACY from the environment when CI has already decided, and otherwise
 # compares the working tree with its merge base on origin/main. Paths outside the package directories (the
-# lockfile, root config, migrations, workflows) affect both suites, and so does an empty list.
+# lockfile, root config, migrations, workflows) affect both suites, and so does an empty list. The Kopje
+# instance template (deploy/) counts as Kopje.
 set -euo pipefail
 
 suites() {
@@ -14,7 +15,7 @@ suites() {
 	while IFS= read -r path || [ -n "$path" ]; do
 		case $path in
 			'') ;;
-			packages/kopje/*) kopje=true ;;
+			packages/kopje/* | deploy/*) kopje=true ;;
 			packages/backend/* | packages/consumer/* | packages/do/* | packages/frontend/*) legacy=true ;;
 			*) kopje=true legacy=true ;;
 		esac

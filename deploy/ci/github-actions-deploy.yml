@@ -1,0 +1,46 @@
+# Deploys this instance from GitHub Actions, for installs that do not use Workers Builds. Copy this file to
+# .github/workflows/deploy.yml and add the repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID
+# (README.md, "Without the button"). It is kept outside .github/workflows so that a repository made by the Deploy to
+# Cloudflare button, which Workers Builds already deploys, does not deploy twice.
+name: Deploy
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# One deploy at a time, in order: each deploy can start a Store upgrade.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+
+      - name: Install
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            echo "::warning::no package-lock.json; commit one so every deploy installs the same tree"
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy
