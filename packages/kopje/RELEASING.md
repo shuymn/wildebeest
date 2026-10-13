@@ -6,10 +6,12 @@ A tag `kopje-v<version>` on a commit of `main` releases the `kopje` npm package.
 1. checks that the tag is `kopje-v<semver>` and points at a commit of `main`, and that `CHANGELOG.md` has a section
    `## [<version>]`, which becomes the release notes;
 2. runs the kopje lint, type checks and tests;
-3. sets the version from the tag in the package it packs (the repository keeps `0.0.0`), builds the bundle, packs it, and
-   dry-runs the `deploy/` template against that tarball (`pnpm run check:kopje-package`);
-4. publishes that tarball to npm through trusted publishing, with provenance (the `npm` environment). A version with a
-   pre-release part (`1.2.0-rc.1`) gets the dist-tag `next`, any other `latest`;
+3. packs the package with the tag's version (the repository keeps `0.0.0`) and checks it with
+   `pnpm run check:kopje-package`: the packed manifest and files, the `deploy/` template's dry run against the tarball,
+   the template running in workerd, and an npm install of the tarball (the `kopje-admin` bin and the types);
+4. publishes that tarball to npm through trusted publishing, with provenance (the `npm` environment), by
+   `scripts/kopje-publish.mjs`. A version with a pre-release part (`1.2.0-rc.1`) gets the dist-tag `next`, any other
+   `latest`;
 5. creates the GitHub release with the notes and the tarball.
 
 No npm token is stored anywhere: npm trusts this repository's workflow through OIDC.
@@ -23,8 +25,19 @@ On npmjs.com, as an owner of the `kopje` package:
     - repository: `wildebeest`
     - workflow filename: `release-kopje.yml`
     - environment: `npm`
-2. In the same settings, under Publishing access, choose "Require two-factor authentication and disallow tokens". Trusted
-   publishing keeps working; tokens can no longer publish.
+    - allowed actions: also allow **`npm publish`** (direct publishing). A publisher created after 3 September 2026
+      allows only `npm stage publish` unless you choose this, and the workflow runs `npm publish`.
+2. Release within two days of adding it. A new trusted publisher must complete its first successful publish within 2
+   days, or it expires and can no longer be used or edited; then delete it, add it again, and publish within 2 days.
+   So add the publisher just before tagging the first release.
+3. In the same settings, under Publishing access, choose "Require two-factor authentication and disallow tokens".
+   Trusted publishing keeps working; tokens can no longer publish.
+
+The publish needs npm 11.5.1 or later and Node.js 22.14.0 or later; the workflow uses Node.js 24 and checks the npm
+version. npm adds provenance itself for a trusted publish from a public repository. See npm's
+[Trusted publishing for npm packages](https://docs.npmjs.com/trusted-publishers/) (allowed actions, the 2-day expiry,
+the required versions and the publishing-access setting) and
+[npm publish](https://docs.npmjs.com/cli/v11/commands/npm-publish/).
 
 On GitHub, in the repository settings:
 
@@ -48,12 +61,28 @@ On GitHub, in the repository settings:
     git push origin kopje-v<version>
     ```
 
-3. Watch the workflow. If it fails before publishing, fix the cause on `main`, delete the tag and tag again. Once a
-   version is on npm it cannot be published again: release a new patch version instead.
+3. Watch the workflow. If it fails in the check job, nothing was published: fix the cause on `main`, delete the tag
+   and tag again.
 4. Update the template: bump `kopje` in `deploy/package.json` to the new version (Renovate opens this pull request after
    its minimum release age), and, if the release notes say so, change `deploy/wrangler.jsonc` the same way. CI dry-runs
    the template against the packed package, not against npm, so this step is what makes the Deploy to Cloudflare button
    install the new version.
+
+### If the publish or release job fails
+
+npm never replaces a published version, and a publish can succeed even when the job then fails (a timeout, a lost
+connection). The publish script therefore looks the version up on npm first:
+
+- not on npm: it publishes the tarball;
+- on npm with the same integrity as the checked tarball: it publishes nothing and succeeds;
+- on npm with another integrity: it fails. Release a new patch version instead.
+
+So after a failed publish or release job, open the workflow run and choose **Re-run failed jobs**. The jobs use the
+tarball the check job uploaded (kept for 7 days); the release job leaves an existing GitHub release as it is. Rerun
+rather than delete and push the tag again: a new run packs a new tarball, and if it differs in any byte from the
+published one, the publish job refuses it.
+
+## After the first release
 
 The first release also needs `deploy/package-lock.json`: after step 4, run `npm install --package-lock-only` in
 `deploy/` and commit the lockfile, so every new instance and every Workers Builds run installs the same tree.

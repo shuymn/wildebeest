@@ -91,21 +91,14 @@ jobs:
           LEGACY: 'false'
         run: bash scripts/test-affected.sh
 
-      # The version is set only in the packed package; the repository keeps 0.0.0.
-      - name: Set the version
-        working-directory: packages/kopje
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: npm pkg set "version=$VERSION"
-
-      # Builds the bundle, packs it, and dry-runs the deploy/ template against the tarball; the tarball is what is
-      # published.
+      # Builds the bundle with the tag's version (the repository keeps 0.0.0), packs it, checks the package, and
+      # dry-runs and runs the deploy/ template against the tarball; that tarball is what is published.
       - name: Pack and check against the template
         id: pack
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          pnpm run check:kopje-package --out "$RUNNER_TEMP/package"
+          pnpm run check:kopje-package --out "$RUNNER_TEMP/package" --version "$VERSION"
           tarball="kopje-$VERSION.tgz"
           test -f "$RUNNER_TEMP/package/$tarball"
           cp release-notes.md "$RUNNER_TEMP/package/"
@@ -128,6 +121,13 @@ jobs:
       contents: read
       id-token: write # npm trusted publishing and provenance
     steps:
+      # Only the publish script; the package itself is the checked tarball from the check job.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/kopje-publish.mjs
+          sparse-checkout-cone-mode: false
+
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: kopje-package
@@ -138,7 +138,7 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      # Trusted publishing needs npm 11.5.1 or later.
+      # Trusted publishing needs npm 11.5.1 or later (and Node.js 22.14.0 or later).
       - name: Check the npm version
         run: |
           npm_version=$(npm --version)
@@ -147,11 +147,14 @@ jobs:
             exit 1
           fi
 
+      # Publishes the tarball by its absolute path (a bare relative path would be read as a GitHub repository). A
+      # version already on npm with this tarball's integrity is not published again, so this job can be rerun after
+      # an ambiguous failure; one with another integrity fails.
       - name: Publish
         env:
-          TARBALL: package/${{ needs.check.outputs.tarball }}
+          TARBALL: ${{ github.workspace }}/package/${{ needs.check.outputs.tarball }}
           DIST_TAG: ${{ needs.check.outputs.prerelease == 'true' && 'next' || 'latest' }}
-        run: npm publish "$TARBALL" --access public --provenance --tag "$DIST_TAG"
+        run: node scripts/kopje-publish.mjs "$TARBALL" --tag "$DIST_TAG"
 
   release:
     timeout-minutes: 10
@@ -176,5 +179,10 @@ jobs:
           args=(--repo "$GITHUB_REPOSITORY" --verify-tag --title "Kopje $VERSION" --notes-file package/release-notes.md)
           if [ "$PRERELEASE" = true ]; then
             args+=(--prerelease)
+          fi
+          # A rerun after the release was made leaves it as it is.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::notice::the release $TAG exists already"
+            exit 0
           fi
           gh release create "$TAG" "${args[@]}" "$TARBALL"
