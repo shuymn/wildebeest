@@ -799,7 +799,7 @@ describe('the drain never sends past its lease, and never stays stuck (OPS-9)', 
 		await r.consume()
 		r.web.fail(r.carol.uri, 503)
 		const result = await cliDrain(r, [])
-		expect(result.code).toBe(3)
+		expect(result.code, result.err).toBe(3)
 		expect(result.err).toContain('journal-full')
 	})
 
@@ -810,7 +810,7 @@ describe('the drain never sends past its lease, and never stays stuck (OPS-9)', 
 		await r.consume(false)
 		// The request stays held in Kopje's Queue: every round waits at the collection barrier.
 		const result = await cliDrain(r, [])
-		expect(result.code).toBe(3)
+		expect(result.code, result.err).toBe(3)
 		expect(result.err).toContain('not done after 45 minutes')
 		expect(result.pauses).toBeGreaterThan(0)
 	})

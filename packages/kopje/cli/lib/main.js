@@ -703,7 +703,7 @@ export async function run({
 					if (typeof workerDir !== 'string' || (fallback !== undefined && typeof fallback !== 'string')) {
 						throw new UsageError('cutover drain --worker <maintenance worker dir> [--fallback <username>]')
 					}
-					const { snapshotIn, WORKER_FILE } = await import('./cutover/maintenance.js')
+					const { snapshotIn, WORKER_FILE } = await import('./cutover/worker-file.js')
 					const accounts = snapshotIn((await io.readText(`${workerDir}/${WORKER_FILE}`)) ?? '').inboxes
 					const pause =
 						sleep ?? ((/** @type {number} */ ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms)))
