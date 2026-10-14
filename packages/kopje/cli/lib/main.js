@@ -15,10 +15,11 @@ Commands
   maintenance on|off            enter or leave the Store's readonly maintenance
   upgrade retry                 re-run a failed schema upgrade for the current build
   media-rebuild [--dry-run]     make the served files of local media whose files are missing (a restore, the
-                                cutover's moved images) from their originals in R2, and correct their sizes; runs in
-                                readonly maintenance and before publish. Prints counts and the rows to look at; exits 3
-                                when an original is missing, a type does not match, re-encoding failed, or the Images
-                                quota or monthly budget stopped it (run it again later: made files are skipped)
+                                cutover's moved images) from their originals in R2, and correct their sizes. Runs only
+                                before publish or in maintenance ("maintenance on" or MAINTENANCE=readonly first), one
+                                call at a time. Prints counts and the rows to look at; exits 3 when an original is
+                                missing, a type does not match, re-encoding failed, the Images quota or monthly budget
+                                stopped it, or the Store is not readonly (run it again later: made files are skipped)
   dump <file>                   dump the Store to <file> (resumable)
       --chunk-mib <n>           chunk size in MiB, 0.001-16 (default 16)
       --lease-seconds <n>       freeze lease, renewed by every chunk (default 600)
@@ -705,6 +706,8 @@ export async function run({
 					throw new UsageError('media-rebuild [--dry-run]')
 				}
 				const dryRun = flags['dry-run'] === true
+				const pause =
+					sleep ?? ((/** @type {number} */ ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms)))
 				/** @type {Record<string, number>} */
 				const counts = {}
 				/** @type {unknown[]} */
@@ -713,14 +716,39 @@ export async function run({
 				let after = null
 				/** @type {string | null} */
 				let stopped = null
+				// Another call holds the rebuild lease (or one of ours gave up a step and kept it): wait for it, at most
+				// a little longer than the lease lasts.
+				let busySince = null
 				for (;;) {
-					const step = await client.post('/admin/media/rebuild', { after, dryRun })
+					let step
+					try {
+						step = await client.post('/admin/media/rebuild', { after, dryRun })
+					} catch (error) {
+						if (error instanceof AdminError && error.code === 'rebuild-needs-readonly') {
+							out.info(
+								'media-rebuild runs only before publication or in maintenance: run `kopje-admin maintenance on` (or set MAINTENANCE=readonly) first, and `maintenance off` afterwards'
+							)
+							return 3
+						}
+						if (error instanceof AdminError && error.code === 'rebuild-busy') {
+							busySince ??= now()
+							if (now() - busySince > 6 * 60 * 1000) {
+								out.info('another media-rebuild holds the lease; run it again later')
+								return 3
+							}
+							out.progress('media-rebuild: waiting for the rebuild lease')
+							await pause(5000)
+							continue
+						}
+						throw error
+					}
+					busySince = null
 					for (const [outcome, n] of Object.entries(step.counts)) {
 						counts[outcome] = (counts[outcome] ?? 0) + n
 					}
 					problems.push(...step.problems)
 					out.progress(`media-rebuild: ${JSON.stringify(counts)}`)
-					if (step.stopped !== null) {
+					if (step.stopped === 'quota' || step.stopped === 'budget') {
 						stopped = step.stopped
 						break
 					}

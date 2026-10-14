@@ -724,6 +724,10 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, mediaRebuild.rebuildRowLive, input)
 	}
 
+	mediaRebuildLease(callerBuild: string, input: OperationInput<typeof mediaRebuild.rebuildLease>) {
+		return this.#kernel.execute(callerBuild, mediaRebuild.rebuildLease, input)
+	}
+
 	chargeMediaRebuild(callerBuild: string, input: OperationInput<typeof mediaRebuild.chargeRebuild>) {
 		return this.#kernel.execute(callerBuild, mediaRebuild.chargeRebuild, input)
 	}

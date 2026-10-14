@@ -47,6 +47,7 @@ import {
 	type OperatorFlags,
 	type PublishedFlag,
 	readFlags,
+	rebuildLeaseLive,
 	writeFlag,
 } from './store-flags'
 import {
@@ -573,6 +574,7 @@ export class StoreAdmin {
 				if (authority.kind === 'access') {
 					this.#assertAdmin(authority, this.#targetSettings(flags.import))
 				}
+				this.#assertNoRebuild()
 				if (activeDump(flags, now) !== null) {
 					throw new ImportError('dump-in-progress', 'a dump is in progress')
 				}
@@ -936,6 +938,7 @@ export class StoreAdmin {
 				if (activeDump(flags, this.#now()) !== null) {
 					throw new ImportError('dump-in-progress', 'a dump is in progress')
 				}
+				this.#assertNoRebuild()
 				const record = flags.import
 				if (record === null || record.id !== id) {
 					throw new ImportError('import-not-found', 'no such import')
@@ -1174,6 +1177,7 @@ export class StoreAdmin {
 				if (this.#rollbackInProgress()) {
 					throw new ImportError('rollback-in-progress', 'the journal holds requests or a drain runs')
 				}
+				this.#assertNoRebuild()
 				const published = { at: this.#now() }
 				writeFlag(this.#sql, 'unpublished', null)
 				writeFlag(this.#sql, 'published', published)
@@ -1473,6 +1477,7 @@ export class StoreAdmin {
 				if (activeDump(flags, this.#now()) !== null) {
 					throw new ImportError('dump-in-progress', 'a dump is in progress')
 				}
+				this.#assertNoRebuild()
 				const journal = this.#journalCounts()
 				if (journal.pending + journal.sending + journal.unverified + journal.noRecipient > 0) {
 					throw new ImportError('journal-not-empty', 'drain the rollback journal (or discard what failed) first')
@@ -1574,6 +1579,13 @@ export class StoreAdmin {
 			(lease !== null && lease.until > this.#now()) ||
 			journal.pending + journal.sending + journal.unverified + journal.noRecipient > 0
 		)
+	}
+
+	// A media rebuild call holds its lease (domain/media-rebuild.ts): the rows it writes for must not change under it.
+	#assertNoRebuild(): void {
+		if (rebuildLeaseLive(this.#sql, this.#now())) {
+			throw new ImportError('rebuild-in-progress', 'a media rebuild is running; wait for it to finish')
+		}
 	}
 
 	#assertUnpublished(): void {

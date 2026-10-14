@@ -313,7 +313,10 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
     differs from the number the index marks `copied` (no originals passes only when none are expected); run it again until it prints `put <n> originals` (a put replaces the same key).
 
 6. **Rebuild the served files** from the originals, through Access (the Store must have admin access; set it with
-   `kopje-admin config` first if the restore began with the import token). It works while the Store is unpublished:
+   `kopje-admin config` first if the restore began with the import token). It runs only while the Store refuses other
+   writes, as it does until you publish, so nothing deletes media meanwhile; to rebuild later, on a published instance,
+   run `kopje-admin maintenance on` first (and `maintenance off` after). One call runs at a time, and the Store does
+   not publish while one runs:
 
     ```sh
     kopje-admin media-rebuild --dry-run   # what it would make, and the rows it cannot

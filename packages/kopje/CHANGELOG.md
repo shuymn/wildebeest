@@ -25,8 +25,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   originals, and images moved by the cutover. Each is re-encoded as an upload is, and its sizes in `meta` are corrected
   to the files made. Rows whose files exist are skipped, so it can be run again; it reports rows whose original is
   missing, whose type does not match their URLs, or that fail to re-encode, and stops on the Images quota or the
-  monthly transformation budget (exit 3). Its writes are admitted in readonly maintenance and before publication, so
-  a restore or a cutover serves its images when published ([docs/backup.md](docs/backup.md),
+  monthly transformation budget (exit 3). It writes only while nothing can delete media, before publication or in
+  maintenance (`kopje-admin maintenance on` or `MAINTENANCE=readonly`; otherwise `rebuild-needs-readonly`, exit 3), one
+  call at a time under a Store lease, during which imports, resets and publication are refused. A restore or a cutover
+  thus serves its images when published ([docs/backup.md](docs/backup.md),
   [docs/cutover-runbook.md](docs/cutover-runbook.md) step 8).
 
 ### Instance changes

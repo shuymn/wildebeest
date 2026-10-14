@@ -443,7 +443,9 @@ kopje-admin media-rebuild
 It re-encodes each such original as an upload is, writes `files/<token>/{full,small}`, and corrects the row's sizes in
 `meta` (the conversion took them from the image header, which ignores EXIF rotation); rows whose files exist are
 skipped, so it can be run again. Its writes are the only ones the unpublished Store admits, and only for the Access
-admin. Each image counts two transformations against `IMAGES_MONTHLY_TRANSFORMS`. Because it changes `meta`, a dump
+admin. It runs only while the Store refuses other writes, as here, so nothing deletes media meanwhile, and one call at a
+time under a lease: while a call holds it the Store refuses `import`, `import-reset`, `cutover reset` and `publish`
+(`rebuild-in-progress`; wait a few minutes, at most until the lease expires). Each image counts two transformations against `IMAGES_MONTHLY_TRANSFORMS`. Because it changes `meta`, a dump
 taken after it differs from the conversion there: step 6's `verify-conversion` runs before it.
 
 ```sh

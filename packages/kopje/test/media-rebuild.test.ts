@@ -8,11 +8,22 @@ import { NOW } from './app-helpers'
 import { JPEG_ORIENTATION_6, PNG_PLAIN, WIDE_PNG } from './fixtures/images'
 import { BUILD, completeSetup, migratedStore, rejectionOf } from './helpers'
 import { bytes, TestCodec } from './media-helpers'
-import { ACCESS, ADMIN_AUD, ADMIN_EMAIL, importViaRpc, memoryIO } from './ops-helpers'
+import {
+	ACCESS,
+	ADMIN_AUD,
+	ADMIN_EMAIL,
+	beginImport,
+	dumpViaRpc,
+	ensureAdmin,
+	importViaRpc,
+	memoryIO,
+	seedStore,
+} from './ops-helpers'
 import { run } from '../cli/lib/main.js'
-import { REBUILD_PAGE, SCAN_WINDOW } from '../src/domain/media-rebuild'
+import { REBUILD_LEASE_MS, REBUILD_PAGE, SCAN_WINDOW } from '../src/domain/media-rebuild'
+import { handleScheduled } from '../src/jobs/scheduled'
 import { sweepMedia } from '../src/mastodon/media'
-import { MAX_BUILDS_PER_CALL } from '../src/mastodon/media-rebuild'
+import { MAX_BUILDS_PER_CALL, rebuildMedia } from '../src/mastodon/media-rebuild'
 import { IMAGE_SIZE_LIMIT } from '../src/platform/images'
 import type { StoreStub } from '../src/platform/store-client'
 import { toStoreUnavailable } from '../src/platform/store-errors'
@@ -53,7 +64,8 @@ async function setup(options: { codec?: TestCodec; env?: Record<string, unknown>
 		)
 	})
 	const codec = options.codec ?? new TestCodec()
-	const h = adminHarness(store, team, options.env ?? {}, undefined, () => codec)
+	// The env's readonly maintenance, under which the rebuild may write, unless a test says otherwise.
+	const h = adminHarness(store, team, { MAINTENANCE: 'readonly', ...options.env }, undefined, () => codec)
 	return { ...h, store, codec }
 }
 
@@ -276,7 +288,7 @@ describe('media rebuild and the operator gate (OPS-8)', () => {
 	})
 
 	it('rebuilds in a Store that is unpublished or in readonly maintenance, where other writes stay refused', async () => {
-		const h = await setup()
+		const h = await setup({ env: { MAINTENANCE: 'off' } })
 		await runInDurableObject(h.store, (_instance, state) => {
 			state.storage.sql.exec(
 				"INSERT INTO kopje_state (name, value) VALUES ('unpublished', ?)",
@@ -328,8 +340,20 @@ describe('media rebuild authorization', () => {
 
 	it('has the Store check the admin again where it writes', async () => {
 		const h = await setup()
+		const admin = { ...ACCESS, teamDomain: team.teamDomain }
+		expect(
+			await h.store.mediaRebuildLease(BUILD, { authority: admin, holder: 'h', envHeld: true, now: NOW })
+		).toMatchObject({ status: 'ok' })
 		const charge = (authority: Parameters<StoreStub['chargeMediaRebuild']>[1]['authority']) =>
-			h.store.chargeMediaRebuild(BUILD, { authority, limit: 100, now: NOW })
+			h.store.chargeMediaRebuild(BUILD, { authority, holder: 'h', limit: 100, now: NOW })
+		expect(
+			await h.store.mediaRebuildLease(BUILD, {
+				authority: { kind: 'import-token' },
+				holder: 'x',
+				envHeld: true,
+				now: NOW,
+			})
+		).toMatchObject({ status: 'denied' })
 		expect(await charge({ kind: 'import-token' })).toMatchObject({ status: 'denied' })
 		expect(await charge({ ...ACCESS, teamDomain: team.teamDomain, aud: 'another-app' })).toMatchObject({
 			status: 'denied',
@@ -337,8 +361,12 @@ describe('media rebuild authorization', () => {
 		expect(await charge({ ...ACCESS, teamDomain: team.teamDomain, email: 'someone@kopje.test' })).toMatchObject({
 			status: 'denied',
 		})
-		expect(await charge({ ...ACCESS, teamDomain: team.teamDomain })).toEqual({ status: 'ok' })
+		expect(await charge(admin)).toEqual({ status: 'ok' })
 		expect(await transforms(h.store)).toBe(2)
+		// Only the lease's holder writes.
+		expect(
+			await h.store.chargeMediaRebuild(BUILD, { authority: admin, holder: 'other', limit: 100, now: NOW })
+		).toEqual({ status: 'lease-lost' })
 	})
 })
 
@@ -399,6 +427,14 @@ describe('kopje-admin media-rebuild', () => {
 		expect(JSON.parse(stopped.out)).toMatchObject({ 'quota-stopped': true, stopped: 'quota' })
 		expect(stopped.err).toContain('9422')
 		expect((await cli(h, ['media-rebuild', 'extra'])).code).toBe(2)
+	})
+
+	it('exits 3 and says how when the Store is not readonly', async () => {
+		const h = await setup({ env: { MAINTENANCE: 'off' } })
+		await addRow(h.store)
+		const refused = await cli(h, ['media-rebuild'])
+		expect(refused.code).toBe(3)
+		expect(refused.err).toContain('kopje-admin maintenance on')
 	})
 })
 
@@ -515,5 +551,179 @@ describe('media rebuild: races, bounds and real conversions', () => {
 		}
 		// Still unpublished: the rebuild was the only write let through.
 		expect((await store.cutoverStatus(BUILD)).unpublished).toBe(true)
+	})
+})
+
+describe('media rebuild only while nothing deletes media, one call at a time', () => {
+	const lease = (
+		store: StoreStub,
+		holder: string,
+		authority: Parameters<StoreStub['mediaRebuildLease']>[1]['authority'],
+		now = NOW
+	) => store.mediaRebuildLease(BUILD, { authority, holder, envHeld: true, now })
+	const leaseRow = (store: StoreStub) =>
+		runInDurableObject(store, (_instance, state) =>
+			state.storage.sql
+				.exec<{ value: string }>("SELECT value FROM kopje_state WHERE name = 'media_rebuild_lease'")
+				.toArray()
+				.map((row) => JSON.parse(row.value) as { holder: string; until: number })
+		)
+
+	it('is refused in a writable Store, published or not, and runs in every readonly state', async () => {
+		const h = await setup({ env: { MAINTENANCE: 'off' } })
+		const row = await addRow(h.store)
+		const refused = await h.post(adminClaims(), '/admin/media/rebuild')
+		expect(refused.status).toBe(409)
+		expect(await refused.json()).toMatchObject({ code: 'rebuild-needs-readonly' })
+		await runInDurableObject(h.store, (_instance, state) => {
+			state.storage.sql.exec(
+				"INSERT INTO kopje_state (name, value) VALUES ('published', ?)",
+				JSON.stringify({ at: NOW })
+			)
+		})
+		expect((await h.post(adminClaims(), '/admin/media/rebuild')).status).toBe(409)
+		expect(await files(row)).toEqual([false, false])
+		expect(await transforms(h.store)).toBe(0)
+		// A dry run writes nothing and runs in any state.
+		expect((await h.post(adminClaims(), '/admin/media/rebuild', { dryRun: true })).status).toBe(200)
+
+		for (const mode of ['readonly', 'full']) {
+			const held = adminHarness(h.store, team, { MAINTENANCE: mode }, undefined, () => new TestCodec())
+			const added = await addRow(h.store)
+			const step = (await (await held.post(adminClaims(), '/admin/media/rebuild')).json()) as Step
+			expect(step.counts.built).toBeGreaterThanOrEqual(1)
+			expect(await files(added)).toEqual([true, true])
+		}
+	})
+
+	it('runs only where delete_media, the sweep and reconciliation cannot delete media', async () => {
+		// The Store's own states: the sweep's first Store call is refused, before any R2 delete.
+		for (const flag of ['unpublished', 'maintenance'] as const) {
+			const h = await setup({ env: { MAINTENANCE: 'off' } })
+			await completeSetup(h.store)
+			const doomed = await addRow(h.store, { files: true, gcAt: new Date(NOW - 1000).toISOString() })
+			await runInDurableObject(h.store, (_instance, state) => {
+				state.storage.sql.exec(
+					'INSERT INTO kopje_state (name, value) VALUES (?, ?)',
+					flag,
+					JSON.stringify(flag === 'maintenance' ? { mode: 'readonly', at: NOW } : { at: NOW, import: 'i' })
+				)
+			})
+			const deps = { build: () => BUILD, now: () => NOW, store: () => h.store }
+			expect(await sweepMedia(env, deps)).toBe(0)
+			await handleScheduled(env, deps)
+			expect(await files(doomed)).toEqual([true, true])
+			const reason = toStoreUnavailable(await rejectionOf(h.store.dueOrphans(BUILD, { now: NOW })))?.reason
+			expect(reason).toBe(flag)
+		}
+		// The env's maintenance: the cron does nothing (API writes answer 503 at the gate, test/gate.test.ts).
+		const h = await setup({ env: { MAINTENANCE: 'off' } })
+		await completeSetup(h.store)
+		const doomed = await addRow(h.store, { files: true, gcAt: new Date(NOW - 1000).toISOString() })
+		for (const mode of ['readonly', 'full']) {
+			await handleScheduled({ ...env, MAINTENANCE: mode } as Env, {
+				build: () => BUILD,
+				now: () => NOW,
+				store: () => h.store,
+			})
+		}
+		expect(await files(doomed)).toEqual([true, true])
+	})
+
+	it('refuses a second call while one holds the lease, and releases it after a call', async () => {
+		const h = await setup()
+		await addRow(h.store)
+		const admin = { ...ACCESS, teamDomain: team.teamDomain }
+		expect(await lease(h.store, 'other-call', admin)).toMatchObject({ status: 'ok' })
+		const busy = await h.post(adminClaims(), '/admin/media/rebuild')
+		expect(busy.status).toBe(409)
+		expect(await busy.json()).toMatchObject({ code: 'rebuild-busy' })
+		expect(await transforms(h.store)).toBe(0)
+		await h.store.mediaRebuildLease(BUILD, {
+			authority: admin,
+			holder: 'other-call',
+			release: true,
+			envHeld: true,
+			now: NOW,
+		})
+		expect(((await (await h.post(adminClaims(), '/admin/media/rebuild')).json()) as Step).counts.built).toBe(1)
+		expect(await leaseRow(h.store)).toEqual([])
+	})
+
+	it('keeps the lease until it expires when a step is given up at the deadline', async () => {
+		const h = await setup()
+		const row = await addRow(h.store)
+		let clock = NOW
+		const bucket = {
+			head: async (key: string) => {
+				const head = await env.MEDIA.head(key)
+				// The call has run past its deadline by the time R2 answers.
+				clock = NOW + REBUILD_LEASE_MS
+				return head
+			},
+			get: (key: string, options?: R2GetOptions) => env.MEDIA.get(key, options),
+			put: (key: string, value: Uint8Array, options?: R2PutOptions) => env.MEDIA.put(key, value, options),
+			delete: (keys: string | string[]) => env.MEDIA.delete(keys),
+		} as unknown as R2Bucket
+		const admin = { ...ACCESS, teamDomain: team.teamDomain }
+		const step = await rebuildMedia(
+			{
+				build: BUILD,
+				store: h.store,
+				bucket,
+				images: new TestCodec(),
+				now: () => clock,
+				authority: admin,
+				monthlyTransforms: 100,
+				envHeld: true,
+				holder: 'given-up',
+			},
+			{ after: null, dryRun: false }
+		)
+		expect(step).toMatchObject({ ok: true, stopped: 'deadline', done: false })
+		expect(await files(row)).toEqual([false, false])
+		expect(await leaseRow(h.store)).toEqual([{ holder: 'given-up', until: NOW + REBUILD_LEASE_MS }])
+		expect(await lease(h.store, 'next-call', admin)).toMatchObject({ status: 'busy' })
+	})
+
+	it('fences imports, resets and publication while the lease is held, and is refused during an import', async () => {
+		const source = await migratedStore()
+		await seedStore(source)
+		const { text } = await dumpViaRpc(source)
+		const target = await migratedStore()
+		await runInDurableObject(target, (_instance, state) => {
+			state.storage.sql.exec(
+				"INSERT INTO kopje_state (name, value) VALUES ('unpublished', ?)",
+				JSON.stringify({ at: NOW, import: 'i' })
+			)
+		})
+		const empty = await migratedStore()
+		for (const s of [empty, target]) {
+			await ensureAdmin(s)
+			// The Store judges the lease by its own clock.
+			expect(await lease(s, 'leased', ACCESS, Date.now())).toMatchObject({ status: 'ok' })
+		}
+		// A live lease refuses the begin of an import, publication and a cutover reset.
+		const begun = await beginImport(empty, text).then(
+			() => null,
+			(error: unknown) => error
+		)
+		expect(String(begun)).toContain('rebuild-in-progress')
+		expect(await target.publish(BUILD, ACCESS)).toMatchObject({ ok: false, code: 'rebuild-in-progress' })
+		expect(await target.cutoverReset(BUILD, ACCESS)).toMatchObject({ ok: false, code: 'rebuild-in-progress' })
+		await target.mediaRebuildLease(BUILD, {
+			authority: ACCESS,
+			holder: 'leased',
+			release: true,
+			envHeld: true,
+			now: Date.now(),
+		})
+		expect(await target.publish(BUILD, ACCESS)).toMatchObject({ ok: true })
+
+		// The reverse: while an import runs, no lease is taken (and so no rebuild runs).
+		const importing = await migratedStore()
+		await beginImport(importing, text)
+		const refused = await rejectionOf(lease(importing, 'during-import', ACCESS, Date.now()))
+		expect(toStoreUnavailable(refused)?.reason).toBe('import-in-progress')
 	})
 })

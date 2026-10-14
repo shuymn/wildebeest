@@ -316,9 +316,10 @@ export function adminRoutes({ build, store, fetch, now, doorbell, loader, images
 		return c.json(rest)
 	})
 
-	// ---- media rebuild (mastodon/media-rebuild.ts): one bounded step; the CLI follows `next` until `done`. Access admin
-	// only: the import token and import sessions never reach this path, and the Store checks the admin again where it
-	// writes. It runs in readonly maintenance and before publication (platform/store-flags.ts).
+	// ---- media rebuild (mastodon/media-rebuild.ts): one bounded step under the Store's rebuild lease; the CLI follows
+	// `next` until `done`. Access admin only: the import token and import sessions never reach this path, and the Store
+	// checks the admin again where it writes. It writes only while nothing can delete media: before publication, or in
+	// the Store's or the env's maintenance (`rebuild-needs-readonly` otherwise).
 
 	admin.post('/media/rebuild', async (c) => {
 		const { after, dryRun } = await jsonBody(c)
@@ -338,6 +339,7 @@ export function adminRoutes({ build, store, fetch, now, doorbell, loader, images
 				now,
 				authority: c.get('auth'),
 				monthlyTransforms: config.ok ? config.config.IMAGES_MONTHLY_TRANSFORMS : 0,
+				envHeld: config.ok && config.config.MAINTENANCE !== 'off',
 			},
 			{ after: typeof after === 'string' ? after : null, dryRun: dryRun === true }
 		)

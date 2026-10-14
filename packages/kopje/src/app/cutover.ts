@@ -3,6 +3,7 @@ import { legacyInboxMessage, legacyRecipient } from '../federation/legacy-inbox'
 import type { LoaderDeps } from '../federation/loader'
 import { decodeSpoolRecord, inflate, SPOOL_MESSAGE_LIMIT } from '../federation/spool'
 import { readConfig, userKek } from '../platform/config'
+import { DeadlinePassed as DrainDeadline, within } from '../platform/deadline'
 import { PACKAGE_VERSION } from '../platform/package-version'
 import { readQueueBacklog } from '../platform/queue-backlog'
 import {
@@ -346,31 +347,6 @@ async function withTimeout(send: Promise<unknown>, ms: number): Promise<'sent' |
 		}
 	}
 }
-
-// Runs work, given up once the clock reaches `end` (or not started at all past it). What is given up may still land.
-async function within<T>(work: () => Promise<T>, end: number, now: () => number): Promise<T> {
-	const left = end - now()
-	if (left <= 0) {
-		throw new DrainDeadline()
-	}
-	const running = work()
-	running.catch(() => {})
-	let timer: ReturnType<typeof setTimeout> | undefined
-	try {
-		return await Promise.race([
-			running,
-			new Promise<never>((_, reject) => {
-				timer = setTimeout(() => reject(new DrainDeadline()), left)
-			}),
-		])
-	} finally {
-		if (timer !== undefined) {
-			clearTimeout(timer)
-		}
-	}
-}
-
-class DrainDeadline extends Error {}
 
 class DrainRefusal extends Error {
 	constructor(

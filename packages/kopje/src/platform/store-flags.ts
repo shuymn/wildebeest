@@ -135,6 +135,17 @@ export function writeFlag<N extends FlagName>(sql: SqlStorage, name: N, value: O
 	}
 }
 
+// The media rebuild's lease (domain/media-rebuild.ts), { holder, until }: one rebuild call at a time. While it is live
+// the Store refuses to begin or reset an import, reset a cutover or publish (store-admin.ts).
+export const REBUILD_LEASE = 'media_rebuild_lease'
+
+export function rebuildLeaseLive(sql: SqlStorage, now: number): boolean {
+	const value = sql
+		.exec<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', REBUILD_LEASE)
+		.toArray()[0]?.value
+	return value !== undefined && (JSON.parse(value) as { until: number }).until > now
+}
+
 // A dump freezes the Store only while its lease is valid, so a crashed dump cannot freeze it forever.
 export function activeDump(flags: OperatorFlags, now: number): DumpRecord | null {
 	return flags.dump !== null && now < flags.dump.leaseUntil ? flags.dump : null
