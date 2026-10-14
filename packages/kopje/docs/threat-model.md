@@ -315,12 +315,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   parent is hidden, because they belong to the reply (its ActivityPub object carries `inReplyTo` to every recipient);
   the parent itself stays behind VIS-1. _Enforced (main):_ `src/domain/status-presenter.ts`,
   `src/domain/statuses.ts`, `ACCOUNT_COLUMNS` in `src/domain/accounts.ts`; `test/statuses.test.ts` ("review
-  regressions"). A tag's `history` (`GET /api/v1/tags/:id`) counts only public and unlisted originals of accounts
-  that are not suspended, the same for every viewer, so it counts no status the caller may not see: _Implemented on
-  branch `kopje/startup-reads`:_ `getTag` in `src/domain/tags.ts`; `test/tags.test.ts` ("shows a tag with
-  seven days of history", "leaves out the statuses of a suspended account", "keeps the public history whatever
-  hidden statuses the window holds"). The rule is applied in the query with no row limit, so hidden statuses cannot
-  change the public counts.
+  regressions"). A tag's `history` (`GET /api/v1/tags/:id`) counts only public originals (as Mastodon's
+  `Trends::Tags`) of accounts that are not suspended, the same for every viewer, so it counts no status the caller may
+  not see: _Implemented on branch `kopje/startup-reads`:_ `getTag` in `src/domain/tags.ts`; `test/tags.test.ts`
+  ("shows a tag with seven days of history", "leaves out the statuses of a suspended account", "keeps the public
+  history whatever hidden statuses the window holds", "counts public statuses only"). The rule is applied in the query
+  with no row limit, so hidden statuses cannot change the public counts.
 
 ### Authorization (AUTH)
 
@@ -863,9 +863,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   LIMIT"), `test/search-edge.test.ts` (rows read stay flat as favourites, bookmarks, accounts and tagged statuses grow
   fourfold, pending follows included; `max_id` reaches past each window; an exact address outside every window is
   found). _Implemented on branch `kopje/startup-reads`:_ the peers list seeks each next domain on the (domain,
-  username) index, so it reads rows by domain returned, not by account known; a tag's history reads its statuses from
-  the last seven days only, a range of the (name, status_id) index cut by status id (the window is its bound); the
-  rules read only their setting; familiar followers reads at most 5,000 of the viewer's accepted follows and checks
+  username) index, so it reads rows by domain returned, not by account known; a tag's history reads its statuses
+  received in the last seven days only, a range of the (name, status_id) index cut by status id, so the work follows
+  the instance's own receive volume (ids carry publication time, or receipt time where a cutover kept them); the rules
+  read only their setting; familiar followers reads at most 5,000 of the viewer's accepted follows and checks
   each against the account through the pair index; `test/instance-reads.test.ts`, `test/tags.test.ts`,
   `test/account-reads.test.ts` (rows read stay flat as accounts per domain, accounts known, statuses outside the
   window, and the account's other followers grow). Context traversal and edit history:

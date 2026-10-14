@@ -19,7 +19,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   (ISO 639-1). `privacy_policy`, `terms_of_service`, `activity` and `domain_blocks` answer 404, as Mastodon does when
   none is configured or the feature is off.
 
-- `GET /api/v1/tags/:id`: any valid hashtag, with seven days of history counted from public and unlisted statuses.
+- `GET /api/v1/tags/:id`: any valid hashtag, with seven days of history counted from public statuses.
   It needs no scope; `following` is false for a signed-in viewer, since tag follows do not exist yet.
 
 - `GET /api/v1/accounts/familiar_followers`: for each requested account, the accounts the user follows that follow it

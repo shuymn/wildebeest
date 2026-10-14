@@ -25,12 +25,13 @@ describe('tags', () => {
 		const at = (daysAgo: number) => NOW - daysAgo * DAY_MS + 3_600_000
 		for (const [accountId, daysAgo, visibility] of [
 			[alice.id, 0, 'public'],
-			[alice.id, 0, 'unlisted'],
+			[alice.id, 0, 'public'],
 			[bob.id, 0, 'public'],
 			[remote, 2, 'public'],
 			[remote, 6, 'public'],
-			// Outside the window, or hidden from someone: never counted.
+			// Outside the window, unlisted, or hidden from someone: never counted.
 			[remote, 7, 'public'],
+			[bob.id, 0, 'unlisted'],
 			[alice.id, 1, 'private'],
 			[alice.id, 1, 'direct'],
 			[remote, 1, 'limited'],
@@ -57,6 +58,13 @@ describe('tags', () => {
 		})
 		// The same for a signed-in viewer, who follows no tag yet.
 		expect((await getJson<Tag>(h, '/api/v1/tags/cats', alice.token)).body).toEqual({ ...body, following: false })
+	})
+
+	it('counts public statuses only: a tag used only unlisted has no history', async () => {
+		const h = await community(['alice'])
+		await seedStatus(h.store, { accountId: h.users.alice.id, visibility: 'unlisted', tags: ['cats'] })
+		const { body } = await getJson<Tag>(h, '/api/v1/tags/cats')
+		expect(body.history.every((entry) => entry.uses === '0' && entry.accounts === '0')).toBe(true)
 	})
 
 	it('leaves out the statuses of a suspended account (VIS-12)', async () => {

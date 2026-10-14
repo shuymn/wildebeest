@@ -13,12 +13,13 @@ export type Tag = { name: string; url: string; history: TagHistory[]; following?
 const HISTORY_DAYS = 7
 const DAY_MS = 86_400_000
 
-// Seven days of uses and distinct authors, today (UTC) first, as Mastodon's TagSerializer#history. It counts public and
-// unlisted originals (Mastodon counts distributable statuses), never a status of a suspended account, so it is the
-// same for every viewer and reveals nothing a status's audience hides (VIS-12): the rule is applied in the query, with
-// no limit for hidden statuses to take up. Days come from published_at. The work is bounded by the window (RES-7): it
-// is a range of the (name, status_id) index cut by status id, which carries the publication time (domain/ids.ts), so
-// older uses of the tag are never read.
+// Seven days of uses and distinct authors, today (UTC) first, as Mastodon's TagSerializer#history. It counts public
+// originals only (Mastodon's Trends::Tags registers public statuses only), never a status of a suspended account, so
+// it is the same for every viewer and reveals nothing a status's audience hides (VIS-12): the rule is applied in the
+// query, with no limit for hidden statuses to take up. Days come from published_at. The work is a range of the
+// (name, status_id) index cut by status id (RES-7): ids carry the publication time of statuses Kopje created or
+// received (domain/ids.ts), and the receipt time of ids a cutover kept, so the range holds the tag's statuses the
+// instance received in the last seven days, and the work follows the instance's own receive volume.
 export const getTag = optionalUserReadOperation<{ name: string; now: number; present: Present }, Tag | null>(
 	(db, { name, now, present }, viewerId) => {
 		if (!isHashtagName(name)) {
@@ -30,7 +31,7 @@ export const getTag = optionalUserReadOperation<{ name: string; now: number; pre
 		const rows = db.all<{ day: string; uses: number; accounts: number }>(
 			`SELECT substr(s.published_at, 1, 10) AS day, COUNT(*) AS uses, COUNT(DISTINCT s.account_id) AS accounts
 			FROM status_tags t JOIN statuses s ON s.id = t.status_id
-			WHERE t.name = ?1 AND t.status_id >= ?2 AND s.visibility IN ('public', 'unlisted') AND s.reblog_of_id IS NULL
+			WHERE t.name = ?1 AND t.status_id >= ?2 AND s.visibility = 'public' AND s.reblog_of_id IS NULL
 				AND NOT EXISTS (SELECT 1 FROM local_accounts sus WHERE sus.account_id = s.account_id AND sus.suspended_at IS NOT NULL)
 			GROUP BY day`,
 			tag,
