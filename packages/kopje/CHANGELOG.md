@@ -16,12 +16,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   headers; and `GET`, `POST` and `DELETE /api/v1/domain_blocks` and `GET /api/v1/domain_blocks/preview`. Scopes are
   `read:blocks`, `write:blocks`, `read:mutes`, `write:mutes` or `follow`.
     - A block ends the follows between the two accounts both ways. A blocked remote account is sent an `Undo` of our
-      follow, a `Reject` of its follow, and the `Block`; an unblock sends the `Block`'s `Undo`.
+      follow, a `Reject` of its follow, and the `Block`; an unblock sends the `Block`'s `Undo`. A blocked account (or
+      one on a blocked domain) is never mentioned in or sent your statuses, including ones queued before the block.
     - A mute is not federated. It expires after its duration: it stops applying at that time, whether or not it has
       been removed yet. `muting_expires_at` in relationships shows the expiry.
-    - A domain block takes the domain as Mastodon normalizes it, refuses this instance's own domain, and removes your
-      followers on that domain, each with a `Reject` (at most 500 per request; the rest are removed by the next request
-      for the domain and receive nothing meanwhile). Your own follows of accounts there stay.
+    - A domain block takes the domain as Mastodon normalizes it and refuses this instance's own domain. As in Mastodon
+      4.5, it ends your follows to and from accounts on that domain (a `Reject` to each follower, an `Undo` of each of
+      your follows). Kopje does this in the background in bounded batches until done (the Queue and the 5-minute cron
+      continue it); meanwhile nothing of yours is delivered to the domain. Unblocking the domain stops the rest.
+    - `GET /api/v1/domain_blocks/preview` needs `write:blocks` (or `write` or `follow`), as in Mastodon.
 
 ### Changed
 
@@ -30,8 +33,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds `0001_mute_expiry` (`mutes.expires_at` and an index on it). It runs on the first request after
-  the deploy and is quick. A rollback to an earlier version needs the point-in-time restore described in
+- Store schema: adds `0001_blocks_and_mutes` (`mutes.expires_at` with an index, and the `domain_block_cleanups`
+  table). It runs on the first request after the deploy and is quick. A rollback to an earlier version needs the point-in-time restore described in
   [docs/upgrade.md](docs/upgrade.md).
 - `wrangler.jsonc`: unchanged.
 

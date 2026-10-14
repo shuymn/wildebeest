@@ -319,31 +319,45 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   that mentions or answers it. Relationships show `blocking` and `blocked_by`. A local block of a remote account
   sends, in order, the `Undo` of our follow, a `Reject` of theirs (one that withdraws it if it was accepted) and the
   `Block`; an unblock sends the `Block`'s `Undo`, which supersedes a `Block` still waiting. All go to the blocked
-  account only (NET-2). A local block always applies: the ended remote `Follow` is recorded as retracted (ID-7) only
-  within that actor's retraction cap, since the block itself refuses the actor's Follows while it lasts.
+  account only (NET-2). The blocked account is never a recipient of the blocker's statuses, as Mastodon's
+  `ProcessMentionsService` drops the mention: a new status or an edit does not mention it (the name stays text), an
+  activity that carries content (`Create`, `Update`, `Announce`) is not addressed to it when its targets are written,
+  and at each claim a row written before the block is not sent to it (its addressee or personal inbox), is sent
+  elsewhere without naming it, or is not sent at all when it would name nobody else; a `Block`, `Reject`, `Undo` or
+  `Delete` still reaches it. A local block always applies: the ended remote `Follow` is recorded as retracted (ID-7)
+  only within that actor's retraction cap, since the block itself refuses the actor's Follows while it lasts.
   _Implemented on branch `kopje/blocks-mutes`:_ `block` and `unblock` in `src/domain/blocks.ts`, the inbound `block`
-  in `src/domain/inbox.ts`, `shownSql` in `src/domain/notifications.ts`, `homeTimeline` in `src/domain/timelines.ts`;
-  `test/blocks.test.ts` ("blocks a local account", "sends a remote account Undo Follow, Reject and Block", "applies an
-  inbound Block and its Undo", "mentions of blocked and muted accounts"), `test/inbox.test.ts` ("records a Block, ends
-  both follows").
+  in `src/domain/inbox.ts`, `resolveMentions` and `editStatus` in `src/domain/statuses.ts`, `audienceTargets` and
+  `sendable` in `src/domain/deliveries.ts`, `shownSql` in `src/domain/notifications.ts`, `homeTimeline` in
+  `src/domain/timelines.ts`; `test/blocks.test.ts` ("blocks a local account", "sends a remote account Undo Follow,
+  Reject and Block", "applies an inbound Block and its Undo", "blocked recipients", "mentions of blocked and muted
+  accounts"), `test/inbox.test.ts` ("records a Block, ends both follows").
 - **VIS-14: a mute hides only for the muter, and only while it lasts.** A mute is never federated and changes nothing
   the muted account sees or may do. It keeps the muted account out of the muter's lists (VIS-5) and home, including
-  statuses that mention it, and, unless created with `notifications=false`, out of the muter's notifications (a
-  mention or reply that mentions or answers it included). A mute with a duration applies until its `expires_at`,
+  others' statuses that mention it, and, unless created with `notifications=false`, out of the muter's notifications
+  (a mention or reply that mentions or answers it included). A mute with a duration applies until its `expires_at`,
   judged at the time of each request or write (the credential's time, or the activity's), so it stops applying at its
   time whether or not the sweep has removed it; the inbound sweep removes 100 expired mutes per call (RES-4).
   _Implemented on branch `kopje/blocks-mutes`:_ `activeMuteSql` and `unfilteredSql` in `src/domain/audience.ts`,
   `shownSql` in `src/domain/notifications.ts`, `mute` in `src/domain/blocks.ts`; `test/blocks.test.ts` ("hides the
-  muted account from timelines and search", "stops applying an expired mute at its time").
-- **VIS-15: a domain block hides the domain and removes its followers.** A user's domain block matches every account
-  whose stored domain or actor host is the domain, exactly (Mastodon's `AccountDomainBlock` matches no subdomains;
-  `domainBlockMatchSql`), and hides them as VIS-5 says; following an account there is refused and a `Follow` from
-  one is rejected. The block removes the user's followers there, accepted or requested, each with a `Reject`, at most
-  500 per call (RES-6); until a later call removes the rest, the followers left are never delivered to. The user's own
-  follows of accounts there stay, as in Mastodon. The domain is normalized (lowercase, punycode, no trailing dot or
-  slash) and this instance's own domain is refused. _Implemented on branch `kopje/blocks-mutes`:_ `blockDomain` in
-  `src/domain/blocks.ts`, `audienceTargets` in `src/domain/deliveries.ts`; `test/blocks.test.ts` ("removes followers
-  there with a Reject", "removes at most 500 followers a call", "normalizes the domain").
+  muted account from timelines and search", "stops applying an expired mute at its time", "keeps the viewer's own
+  statuses in home").
+- **VIS-15: a domain block hides the domain and ends the relationships with it.** A user's domain block matches every
+  account whose stored domain or actor host is the domain, exactly (Mastodon's `AccountDomainBlock` matches no
+  subdomains; `domainBlockMatchSql`), and hides them as VIS-5 says; following an account there is refused, a `Follow`
+  from one is rejected, and none of the user's statuses mentions or is addressed to one (as VIS-13). As Mastodon
+  4.5's `AfterBlockDomainFromAccountService` does, the user's follows to and from accounts there end, in either state:
+  each follower gets a `Reject`, each of our follows an `Undo`. That is a durable cleanup (`domain_block_cleanups`,
+  progress kept as a cursor over follow ids up to the newest follow when the domain was blocked) done in batches that
+  each scan 500 follows (RES-6, RES-7): the first in the request, the rest in the rounds the Queue and the cron run
+  with the inbound jobs, until done. Until then nothing that carries content is delivered to the domain (followers
+  there are left out of a status's targets, and a row to an inbox on the domain is dropped at its claim). An unblock
+  stops the cleanup: what it removed stays removed. The domain is normalized (lowercase, punycode, no trailing dot or
+  slash) and this instance's own domain is refused. _Implemented on branch `kopje/blocks-mutes`:_ `blockDomain` and
+  `runDomainBlockCleanups` in `src/domain/blocks.ts`, `runInboundJobs` in `src/store.ts`, `audienceTargets` and
+  `sendable` in `src/domain/deliveries.ts`; `test/blocks.test.ts` ("ends our follows there with an Undo and theirs
+  with a Reject", "finishes the cleanup in later rounds", "stops the cleanup when the domain is unblocked", "reads a
+  bounded number of rows to block a domain", "normalizes the domain").
 
 ### Authorization (AUTH)
 
@@ -805,9 +819,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **RES-6: one request cannot trigger unbounded work.** An inbound activity has fixed limits on dereferences,
   recipients, collection expansion and notifications. Delivery backlog and concurrency are bounded. Anonymous app
   registration, inbox spooling and media transformations have rate or storage budgets with a visible refusal. _Planned
-  (B1b)._ Domain blocks: _Implemented on branch `kopje/blocks-mutes`:_ a domain block removes at most 500 followers
-  (each with a `Reject`) per call, so blocking a domain with many followers here stays bounded and always succeeds;
-  the rest are removed by the next call and receive nothing meanwhile (VIS-15, `test/blocks.test.ts`). App registration: _Implemented on branch `kopje/web-ui`:_ `POST /api/v1/apps` is limited to 5 per minute per client IP by the Workers
+  (B1b)._ Domain blocks: _Implemented on branch `kopje/blocks-mutes`:_ a domain block's cleanup scans at most 500 follows
+  per batch and does at most 4 batches a round, its first batch in the request, so blocking a domain stays bounded
+  however many follows the user has, and always succeeds (VIS-15, `test/blocks.test.ts`). App registration: _Implemented on branch `kopje/web-ui`:_ `POST /api/v1/apps` is limited to 5 per minute per client IP by the Workers
   Rate Limiting binding before its body is read (429), and the Store keeps at most 500 never-authorized apps (no token or
   code of a user); when full it first removes unused apps (no token of any kind) older than a day, then the oldest
   never-authorized apps older than an hour (app tokens and all), and otherwise refuses with 429. Only a user's token or

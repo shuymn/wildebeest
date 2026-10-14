@@ -1,3 +1,5 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, json, login, sql } from './api-helpers'
@@ -17,7 +19,12 @@ import {
 	type User,
 } from './status-helpers'
 import type { Relationship } from '../src/domain/accounts'
-import { DOMAIN_BLOCK_BATCH } from '../src/domain/blocks'
+import {
+	blockDomain as blockDomainOperation,
+	DOMAIN_BLOCK_BATCHES_PER_RUN,
+	DOMAIN_BLOCK_WINDOW,
+} from '../src/domain/blocks'
+import { sha256Hex } from '../src/security/tokens'
 
 // Blocks, mutes and domain blocks through the API (domain/blocks.ts, mastodon/blocks.ts): the endpoints, their scopes
 // and errors, the relationships they end and the activities they send, and how they filter timelines, search and
@@ -214,6 +221,13 @@ describe('blocks', () => {
 		expect(await statusOf('/api/v1/mutes', legacy, 'GET')).toBe(200)
 		expect(await statusOf('/api/v1/domain_blocks', readOnly, 'GET')).toBe(200)
 		expect(await statusOf('/api/v1/domain_blocks', readOnly)).toBe(403)
+		// The preview previews a write (Mastodon's DomainBlocks::PreviewsController).
+		const { token: writeBlocks } = await login(h, { email: 'alice@example.com', scope: 'write:blocks' })
+		const { token: readBlocks } = await login(h, { email: 'alice@example.com', scope: 'read:blocks' })
+		const preview = '/api/v1/domain_blocks/preview?domain=remote.example'
+		expect(await statusOf(preview, writeBlocks, 'GET')).toBe(200)
+		expect(await statusOf(preview, readBlocks, 'GET')).toBe(403)
+		expect(await statusOf(preview, legacy, 'GET')).toBe(200)
 	})
 
 	it('lists blocked accounts newest first, paged by Link headers', async () => {
@@ -267,6 +281,79 @@ describe('blocks', () => {
 		const undo = { id: `${blockId}/undo`, object: { id: blockId, type: 'Block', actor: carolUri, object: ALICE_URI } }
 		expect(await receive({ type: 'Undo', ...undo })).toMatchObject({ applied: true })
 		expect(await relationship(h, alice, carol)).toMatchObject({ blocked_by: false })
+	})
+})
+
+describe('blocked recipients (VIS-13, VIS-15)', () => {
+	it('neither mentions nor addresses an account or domain the author blocks', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const bob = await remoteAccount(h.store, 'bob')
+		await remoteAccount(h.store, 'far', 'blocked.example')
+		await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'other.example'), alice.id)
+		await relate(h, alice, `/api/v1/accounts/${bob}/block`)
+		await h.request('/api/v1/domain_blocks', bearer(alice.token, json({ domain: 'blocked.example' })))
+
+		const status = await post(h, alice, { status: '@bob@remote.example @far@blocked.example hi' })
+		expect(status.mentions).toEqual([])
+		expect(status.content).not.toContain('<a')
+		expect(await sql(h.store, 'SELECT 1 FROM status_mentions WHERE status_id = ?', status.id)).toEqual([])
+		const create = (await sent(h)).find((o) => o.activity.type === 'Create')
+		expect(create?.inboxes).toEqual(['https://other.example/inbox'])
+		// The text keeps the names as text; no Mention, to or cc names the accounts.
+		expect(JSON.stringify(create?.activity)).not.toMatch(/https:\/\/(remote|blocked)\.example\/users/)
+	})
+
+	it('drops a mention of an account blocked since when the status is edited', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const bob = await remoteAccount(h.store, 'bob')
+		const status = await post(h, alice, { status: '@bob@remote.example hi', visibility: 'private' })
+		await relate(h, alice, `/api/v1/accounts/${bob}/block`)
+		const edited = await h.request(
+			`/api/v1/statuses/${status.id}`,
+			bearer(alice.token, json({ status: '@bob@remote.example hi again' }, { method: 'PUT' }))
+		)
+		expect(edited.status).toBe(200)
+		expect(await sql(h.store, 'SELECT 1 FROM status_mentions WHERE status_id = ?', status.id)).toEqual([])
+	})
+
+	it('sends nothing queued before a block to the blocked account, but still sends it the Block', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const bob = await remoteAccount(h.store, 'bob')
+		const fan = await remoteAccount(h.store, 'fan')
+		await remoteFollows(h.store, fan, alice.id)
+		await post(h, alice, { status: '@bob@remote.example secret', visibility: 'direct' })
+		const open = await post(h, alice, { status: '@bob@remote.example hello all' })
+		await relate(h, alice, `/api/v1/accounts/${bob}/block`)
+		// All three wait in one lane (remote.example): the direct Create, the public Create, the Block.
+		expect((await sent(h)).map((o) => [o.activity.type, o.inboxes])).toEqual([
+			['Create', ['https://remote.example/inbox']],
+			['Create', ['https://remote.example/inbox']],
+			['Block', ['https://remote.example/inbox']],
+		])
+
+		const delivered: { type: string; body: string }[] = []
+		for (let round = 0; round < 5; round++) {
+			const claim = await h.store.claimDeliveries(BUILD, { now: NOW, leaseToken: `lease-${round}` })
+			for (const d of claim.deliveries) {
+				delivered.push({ type: (JSON.parse(d.body) as { type: string }).type, body: d.body })
+				await h.store.completeDelivery(BUILD, {
+					id: d.id,
+					leaseToken: `lease-${round}`,
+					now: NOW,
+					outcome: { kind: 'delivered', status: 202 },
+				})
+			}
+		}
+		// The direct status, addressed to nobody else, is not sent; the public one goes to the follower's server
+		// without naming the blocked account; the Block goes.
+		expect(delivered.map((d) => d.type)).toEqual(['Create', 'Block'])
+		const sentCreate = JSON.parse(delivered[0]!.body) as { object: { id: string; cc: string[]; tag: unknown[] } }
+		expect(sentCreate.object.id).toBe(open.uri)
+		expect(JSON.stringify(sentCreate)).not.toContain('https://remote.example/users/bob')
+		expect(await sql(h.store, 'SELECT 1 FROM deliveries')).toEqual([])
 	})
 })
 
@@ -411,6 +498,16 @@ describe('mentions of blocked and muted accounts', () => {
 		await relate(h, alice, `/api/v1/accounts/${foe.id}/unmute`)
 		expect(await ids(h, '/api/v1/timelines/home', alice.token)).toEqual([both.id, aboutFoe.id, plain.id])
 	})
+
+	it("keeps the viewer's own statuses in home, whoever they mention", async () => {
+		const h = await community(['alice', 'foe'])
+		const { alice, foe } = h.users
+		await relate(h, alice, `/api/v1/accounts/${foe.id}/mute`)
+		const own = await post(h, alice, { status: '@foe about you' })
+		expect(await ids(h, '/api/v1/timelines/home', alice.token)).toEqual([own.id])
+		await relate(h, alice, `/api/v1/accounts/${foe.id}/block`)
+		expect(await ids(h, '/api/v1/timelines/home', alice.token)).toEqual([own.id])
+	})
 })
 
 describe('domain blocks', () => {
@@ -460,7 +557,7 @@ describe('domain blocks', () => {
 		expect((await getJson(h, '/api/v1/domain_blocks', alice.token)).body).toEqual(['xn--bcher-kva.example'])
 	})
 
-	it('removes followers there with a Reject, keeps our follows, and hides the domain', async () => {
+	it('ends our follows there with an Undo and theirs with a Reject, and hides the domain', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		const fan = await remoteAccount(h.store, 'fan', 'blocked.example')
@@ -478,68 +575,150 @@ describe('domain blocks', () => {
 			alice.id,
 			star
 		)
+		await sql(h.store, 'UPDATE accounts SET followers_count = 2, following_count = 1 WHERE id = ?', alice.id)
 		const starStatus = await seedStatus(h.store, { accountId: star, visibility: 'public', content: '<p>star</p>' })
 		expect((await getJson(h, '/api/v1/domain_blocks/preview?domain=Blocked.Example', alice.token)).body).toEqual({
 			following_count: 1,
 			followers_count: 1,
 		})
 		expect((await h.request('/api/v1/domain_blocks/preview', bearer(alice.token))).status).toBe(400)
-		await sql(h.store, 'DELETE FROM outbound_activities')
 
 		expect((await blockDomain(h, alice, 'blocked.example')).status).toBe(200)
-		expect(await follows(h)).toEqual([
-			{ account_id: other, target_account_id: alice.id, state: 'accepted' },
-			{ account_id: alice.id, target_account_id: star, state: 'accepted' },
-		])
+		expect(await follows(h)).toEqual([{ account_id: other, target_account_id: alice.id, state: 'accepted' }])
 		expect((await sent(h)).map((o) => [o.activity.type, (o.activity.object as { id: string }).id, o.retracts])).toEqual(
 			[
 				['Reject', 'https://blocked.example/f/1', 1],
 				['Reject', 'https://blocked.example/f/2', 0],
+				['Undo', expect.stringMatching(/^https:\/\/kopje\.test\/ap\/users\/alice#follows\/\d+$/), 1],
 			]
 		)
-		expect(await sql(h.store, 'SELECT followers_count FROM accounts WHERE id = ?', alice.id)).toEqual([
-			{ followers_count: 1 },
+		// Counts lose the accepted edges only.
+		expect(await sql(h.store, 'SELECT followers_count, following_count FROM accounts WHERE id = ?', alice.id)).toEqual([
+			{ followers_count: 1, following_count: 0 },
 		])
-		expect(await relationship(h, alice, star)).toMatchObject({ domain_blocking: true, following: true })
+		expect(await sql(h.store, 'SELECT 1 FROM domain_block_cleanups')).toEqual([])
+		expect(await relationship(h, alice, star)).toMatchObject({ domain_blocking: true, following: false })
 		expect(await relationship(h, alice, other)).toMatchObject({ domain_blocking: false })
 		expect(await ids(h, '/api/v1/timelines/public', alice.token)).not.toContain(starStatus)
-		expect(await ids(h, '/api/v1/timelines/home', alice.token)).not.toContain(starStatus)
 		// Following an account of the domain is refused (FollowService).
 		expect((await act(h, alice, `/api/v1/accounts/${fan}/follow`)).status).toBe(403)
 	})
 
-	it(`removes at most ${DOMAIN_BLOCK_BATCH} followers a call; the rest get no deliveries and go with the next call`, async () => {
-		const h = await community(['alice'])
-		const { alice } = h.users
-		await sql(
-			h.store,
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
-			INSERT INTO accounts (id, uri, username, domain, inbox_url, shared_inbox_url)
-			SELECT printf('%018d', 300000000000000000 + i), 'https://spam.example/users/u' || i, 'u' || i, 'spam.example',
-				'https://spam.example/users/u' || i || '/inbox', 'https://spam.example/inbox' FROM n`,
-			alice.id,
-			DOMAIN_BLOCK_BATCH + 1
-		)
+	// Remote followers on spam.example, and as many on other.example, in alternating follow ids.
+	async function spamFollowers(h: ApiHarness, user: User, each: number) {
+		for (const [domain, base] of [
+			['spam.example', '300000000000000000'],
+			['other.example', '400000000000000000'],
+		] as const) {
+			await sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO accounts (id, uri, username, domain, inbox_url, shared_inbox_url)
+				SELECT printf('%018d', CAST(?2 AS INTEGER) + i), 'https://' || ?3 || '/users/u' || i, 'u' || i, ?3,
+					'https://' || ?3 || '/users/u' || i || '/inbox', 'https://' || ?3 || '/inbox' FROM n`,
+				each,
+				base,
+				domain
+			)
+		}
 		await sql(
 			h.store,
 			`INSERT INTO follows (account_id, target_account_id, state)
-			SELECT id, ?, 'accepted' FROM accounts WHERE domain = 'spam.example'`,
-			alice.id
+			SELECT id, ?, 'accepted' FROM accounts WHERE domain IN ('spam.example', 'other.example') ORDER BY username, domain`,
+			user.id
 		)
-		const fromSpam =
-			"SELECT count(*) AS n FROM follows f JOIN accounts a ON a.id = f.account_id WHERE a.domain = 'spam.example'"
+	}
+	const fromDomain = (domain: string) =>
+		`SELECT count(*) AS n FROM follows f JOIN accounts a ON a.id = f.account_id WHERE a.domain = '${domain}'`
+
+	it('finishes the cleanup in later rounds of the inbound jobs, delivering nothing to the domain meanwhile', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await spamFollowers(h, alice, DOMAIN_BLOCK_WINDOW * DOMAIN_BLOCK_BATCHES_PER_RUN)
 
 		expect((await blockDomain(h, alice, 'spam.example')).status).toBe(200)
-		expect(await sql(h.store, fromSpam)).toEqual([{ n: 1 }])
+		// The request did one batch: a window of follows, half of them on the domain.
+		expect(await sql(h.store, fromDomain('spam.example'))).toEqual([
+			{ n: DOMAIN_BLOCK_WINDOW * DOMAIN_BLOCK_BATCHES_PER_RUN - DOMAIN_BLOCK_WINDOW / 2 },
+		])
 		await post(h, alice, { status: 'not for spam' })
-		const creates = await sql(
+		const creates = await sql<{ inbox_url: string }>(
 			h.store,
 			`SELECT d.inbox_url FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id
 			WHERE json_extract(o.body, '$.activity.type') = 'Create'`
 		)
-		expect(creates).toEqual([])
+		expect(creates).toEqual([{ inbox_url: 'https://other.example/inbox' }])
 
+		// The cron and the Queue run rounds until it is done; no second request.
+		let rounds = 0
+		for (let pending = true; pending; rounds++) {
+			pending = (await h.store.runInboundJobs(BUILD, { now: NOW })).pending
+		}
+		expect(rounds).toBeGreaterThan(1)
+		expect(await sql(h.store, fromDomain('spam.example'))).toEqual([{ n: 0 }])
+		expect(await sql(h.store, fromDomain('other.example'))).toEqual([
+			{ n: DOMAIN_BLOCK_WINDOW * DOMAIN_BLOCK_BATCHES_PER_RUN },
+		])
+		expect(await sql(h.store, 'SELECT 1 FROM domain_block_cleanups')).toEqual([])
+	})
+
+	it('stops the cleanup when the domain is unblocked, keeping what it removed removed', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await spamFollowers(h, alice, DOMAIN_BLOCK_WINDOW)
 		expect((await blockDomain(h, alice, 'spam.example')).status).toBe(200)
-		expect(await sql(h.store, fromSpam)).toEqual([{ n: 0 }])
+		expect(await sql(h.store, fromDomain('spam.example'))).toEqual([{ n: DOMAIN_BLOCK_WINDOW / 2 }])
+
+		await h.request(
+			'/api/v1/domain_blocks',
+			bearer(alice.token, json({ domain: 'spam.example' }, { method: 'DELETE' }))
+		)
+		expect(await sql(h.store, 'SELECT 1 FROM domain_block_cleanups')).toEqual([])
+		expect(await h.store.runInboundJobs(BUILD, { now: NOW })).toMatchObject({ pending: false })
+		expect(await sql(h.store, fromDomain('spam.example'))).toEqual([{ n: DOMAIN_BLOCK_WINDOW / 2 }])
+	})
+
+	// Runs the domain block operation over a SqlStorage that counts the rows each statement reads.
+	async function rowsRead(h: ApiHarness, user: User, domain: string): Promise<number> {
+		const tokenHash = await sha256Hex(user.token)
+		return runInDurableObject(h.store, (_instance, state) => {
+			let read = 0
+			const real = state.storage.sql
+			const counting = {
+				exec: (query: string, ...params: SqlStorageValue[]) => {
+					const cursor = real.exec(query, ...params)
+					return {
+						toArray: () => {
+							const rows = cursor.toArray()
+							read += cursor.rowsRead
+							return rows
+						},
+						get rowsWritten() {
+							const written = cursor.rowsWritten
+							read += cursor.rowsRead
+							return written
+						},
+					}
+				},
+			} as unknown as SqlStorage
+			const result = blockDomainOperation.run(counting, {
+				credential: { tokenHash, scope: 'write:blocks', now: NOW },
+				domain,
+				now: NOW,
+			})
+			expect(result.status).toBe('ok')
+			return read
+		})
+	}
+
+	it('reads a bounded number of rows to block a domain, however many follows do not match (RES-6, RES-7)', async () => {
+		const reads: number[] = []
+		for (const each of [DOMAIN_BLOCK_WINDOW, DOMAIN_BLOCK_WINDOW * 4]) {
+			const h = await community(['alice'])
+			await spamFollowers(h, h.users.alice, each)
+			reads.push(await rowsRead(h, h.users.alice, 'nowhere.example'))
+		}
+		expect(reads[1]).toBe(reads[0])
+		expect(reads[0]).toBeLessThan(DOMAIN_BLOCK_WINDOW * 4)
 	})
 })
