@@ -1,9 +1,10 @@
 import type { World, WorldStatus } from './policy-world'
 import type { NotificationType } from '../src/domain/notifications'
 
-// The policy rules as docs/visibility.md states them, in plain TypeScript over a generated world (test/policy-world.ts).
-// Written from the documented rules, not from src/domain/audience.ts, so test/policy-oracle.test.ts compares two
-// independent statements of each rule. Accounts and statuses are indices; a viewer of null is anonymous.
+// The policy rules as docs/visibility.md states them, in plain TypeScript over a generated world
+// (test/policy-world.ts). Written from the documented rules, not from src/domain/audience.ts, so
+// test/policy-oracle.test.ts compares two independent statements of each rule. Accounts and statuses are indices; a
+// viewer of null is anonymous.
 
 export type Viewer = number | null
 

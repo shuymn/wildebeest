@@ -22,8 +22,8 @@ export function runs(numRuns: number): fc.Parameters<unknown> {
 	return seed === '' ? { numRuns } : { numRuns, seed: Number(seed) }
 }
 
-export const LOCALS = 4
-export const INSTANCE_DOMAIN = 'kopje.test'
+const LOCALS = 4
+const INSTANCE_DOMAIN = 'kopje.test'
 export const REMOTE_DOMAINS = ['one.example', 'two.example'] as const
 // What a domain block may name: each remote domain, the hosts some actor ids live on, the instance's own domain and a
 // domain nobody lives on.
@@ -40,7 +40,7 @@ const VISIBILITIES: readonly Visibility[] = ['public', 'unlisted', 'private', 'd
 const TIMES = ['2026-10-12T00:00:00.000Z', '2026-10-12T01:00:00.000Z', '2026-10-12T02:00:00.000Z'] as const
 const HOUR_MS = 3_600_000
 
-export type WorldAccount = {
+type WorldAccount = {
 	name: string
 	local: boolean
 	suspended: boolean

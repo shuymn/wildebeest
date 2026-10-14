@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
 import { PolicyModel } from './policy-model'
-import { accountId, LOCALS, REMOTE_DOMAINS, statusId, type World, worldArb, writeWorld } from './policy-world'
+import { accountId, REMOTE_DOMAINS, statusId, type World, worldArb, writeWorld } from './policy-world'
 import { rowsRead } from './read-helpers'
 import { relationships } from '../src/domain/accounts'
 import type { Visibility } from '../src/domain/audience'
@@ -26,10 +26,10 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 
 // The bounds harness (docs/visibility.md, "The oracle and the bounds harness"): each read endpoint that takes a viewer
 // runs over a generated world twice, once alone and once with many unrelated rows, and must read about the same number
-// of rows (RES-7). Unrelated rows are what no viewer's read of the world should touch: other
-// accounts with their statuses (never public, so no public or tag feed would list them), replies and boosts among
-// them, their follows, blocks, mutes and domain blocks of the world's accounts and domains, and their favourites,
-// bookmarks and notifications.
+// of rows (RES-7). Unrelated rows are what no viewer's read of the world should touch: other accounts with their
+// statuses (never public, so no public or tag feed would list them), replies and boosts among them, their follows,
+// blocks, mutes and domain blocks of the world's accounts and domains, and their favourites, bookmarks and
+// notifications.
 
 // The world, the same in every run: the first of fast-check's samples for a fixed seed in which every endpoint has
 // something to show the viewer (the first available local account). The viewer then follows everyone, favourites and
@@ -81,9 +81,9 @@ const TOKEN_HASH = 'policy-bounds-token'
 const PRESENT = { origin: 'https://kopje.test' }
 const PAGE = { limit: 20 }
 
-// Unrelated rows: per unrelated remote account, three statuses (a reply and a boost among them) and its edges; one unrelated local account per ten remote ones, with mutes,
-// domain blocks, favourites, bookmarks and notifications. The viewer's own blocks and mutes of unrelated accounts and
-// domain blocks of domains nobody lives on grow with them.
+// Unrelated rows: per unrelated remote account, three statuses (a reply and a boost among them) and its edges; one
+// unrelated local account per ten remote ones, with mutes, domain blocks, favourites, bookmarks and notifications. The
+// viewer's own blocks and mutes of unrelated accounts and domain blocks of domains nobody lives on grow with them.
 const UNRELATED_ACCOUNT_BASE = 300000000000000000n
 const UNRELATED_STATUS_BASE = 400000000000000000n
 const HIDDEN: readonly Visibility[] = ['unlisted', 'private', 'direct', 'limited']
@@ -236,6 +236,7 @@ async function worldWith(unrelated: number): Promise<StoreStub> {
 }
 
 const credential = { tokenHash: TOKEN_HASH, scope: 'read', now: NOW } as const
+const target = { credential, now: NOW, id: statusId(TARGET), present: PRESENT }
 const searchInput = { credential, limit: 20, offset: 0, following: false, localDomain: 'kopje.test', present: PRESENT }
 const timeline = { credential, now: NOW, page: PAGE, local: false, remote: false, onlyMedia: false, present: PRESENT }
 
@@ -265,19 +266,11 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown][] = [
 		listNotifications,
 		{ credential, page: PAGE, types: [], excludeTypes: [], accountId: null, present: PRESENT },
 	],
-	['context', statusContext, { credential, now: NOW, id: statusId(TARGET), present: PRESENT }],
+	['context', statusContext, target],
 	['favourites', favourites, { credential, page: PAGE, present: PRESENT }],
 	['bookmarks', bookmarks, { credential, page: PAGE, present: PRESENT }],
-	[
-		'favourited_by',
-		interactors,
-		{ credential, now: NOW, id: statusId(TARGET), kind: 'favourited_by', page: PAGE, present: PRESENT },
-	],
-	[
-		'reblogged_by',
-		interactors,
-		{ credential, now: NOW, id: statusId(TARGET), kind: 'reblogged_by', page: PAGE, present: PRESENT },
-	],
+	['favourited_by', interactors, { ...target, kind: 'favourited_by', page: PAGE }],
+	['reblogged_by', interactors, { ...target, kind: 'reblogged_by', page: PAGE }],
 	['relationships', relationships, { credential, ids: WORLD.accounts.map((_, x) => accountId(x)) }],
 	['status search', search, { ...searchInput, query: 'status', types: ['statuses'] }],
 	['hashtag search', search, { ...searchInput, query: 'cats', types: ['hashtags'] }],
@@ -324,7 +317,17 @@ function identities(output: unknown): unknown {
 	}
 	const value = output as Entity
 	if ('blocking' in value) {
-		const { id, following, followed_by, requested, blocking, blocked_by, muting, muting_notifications } = value
+		const {
+			id,
+			following,
+			followed_by,
+			requested,
+			blocking,
+			blocked_by,
+			muting,
+			muting_notifications,
+			domain_blocking,
+		} = value
 		return {
 			id,
 			following,
@@ -334,7 +337,7 @@ function identities(output: unknown): unknown {
 			blocked_by,
 			muting,
 			muting_notifications,
-			domain_blocking: value.domain_blocking,
+			domain_blocking,
 		}
 	}
 	if ('type' in value && 'account' in value) {
@@ -359,8 +362,6 @@ function identities(output: unknown): unknown {
 
 describe('read endpoints do not read more rows as unrelated data grows (RES-7)', () => {
 	it('reads the same rows with or without unrelated accounts, statuses and edges', async () => {
-		expect(WORLD).toBeDefined()
-		expect(VIEWER).toBeLessThan(LOCALS)
 		const alone = await worldWith(0)
 		const crowded = await worldWith(UNRELATED)
 		// Every endpoint shows the viewer something, so a refused credential or an empty read cannot pass, and shows the

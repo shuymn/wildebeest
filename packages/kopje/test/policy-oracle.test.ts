@@ -28,8 +28,8 @@ import type { StoreStub } from '../src/platform/store-client'
 
 // The policy oracle (docs/visibility.md, "The oracle and the bounds harness"): each fragment of src/domain/audience.ts
 // is evaluated in the Store over every relevant pair of a generated world (test/policy-world.ts) and must accept
-// exactly what the plain model of its rule (test/policy-model.ts) accepts. A failure prints the shrunk world, the
-// pairs only one side accepts, and the seed to replay it with (FC_SEED=<seed> pnpm vitest run test/policy-oracle.test.ts).
+// exactly what the plain model of its rule (test/policy-model.ts) accepts. A failure prints the shrunk world, the pairs
+// only one side accepts, and the seed to replay it with (FC_SEED=<seed> pnpm vitest run test/policy-oracle.test.ts).
 
 // Cases per property: each costs one Store round trip, so the file stays within a few seconds.
 const CASES = 150
@@ -47,8 +47,7 @@ function namer(world: World) {
 	const names = new Map<string | null, string>([[null, 'anonymous']])
 	world.accounts.forEach((account, i) => names.set(accountId(i), account.name))
 	world.statuses.forEach((status, i) => names.set(statusId(i), status.name))
-	return (...ids: (string | number | null)[]) =>
-		ids.map((id) => (typeof id === 'string' || id === null ? (names.get(id) ?? String(id)) : String(id))).join(' ')
+	return (...ids: (string | null)[]) => ids.map((id) => names.get(id) ?? String(id)).join(' ')
 }
 
 function viewers(world: World): Viewer[] {
@@ -213,11 +212,7 @@ describe('the policy fragments agree with the model of their rules', () => {
 		)
 	}
 
-	it('visibleSql (R2)', () =>
-		viewerStatusPairs(
-			(s, viewer) => visibleSql(s, viewer),
-			(m, s, viewer) => m.visible(s, viewer)
-		))
+	it('visibleSql (R2)', () => viewerStatusPairs(visibleSql, (m, s, viewer) => m.visible(s, viewer)))
 
 	it('listableSql (R8)', () => viewerStatusPairs(listableSql, (m, s, viewer) => m.listable(s, viewer), true))
 
