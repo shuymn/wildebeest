@@ -27,9 +27,9 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // The bounds harness (docs/visibility.md, "The oracle and the bounds harness"): each read endpoint that takes a viewer
 // runs over a generated world twice, once alone and once with many unrelated rows, and must read about the same number
 // of rows (RES-7). Unrelated rows are what no viewer's read of the world should touch: other accounts with their
-// statuses (never public, so no public or tag feed would list them), replies and boosts among them, their follows,
-// blocks, mutes and domain blocks of the world's accounts and domains, and their favourites, bookmarks and
-// notifications.
+// statuses (never public, so no public or tag feed would list them, though they carry the tag the tag feed reads),
+// replies and boosts among them, their follows, blocks, mutes and domain blocks of the world's accounts and domains,
+// and their favourites, bookmarks and notifications.
 
 // The world, the same in every run: the first of fast-check's samples for a fixed seed in which every endpoint has
 // something to show the viewer (the first available local account). The viewer then follows everyone, favourites and
@@ -173,6 +173,8 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 		insert(first, HIDDEN[i % HIDDEN.length] ?? 'private')
 		insert(reply, HIDDEN[(i + 1) % HIDDEN.length] ?? 'private', { replyTo: first })
 		insert(boost, 'public', { reblogOf: first })
+		// The world's tag on statuses no tag feed lists, as the writers record it (not public).
+		sql.exec("INSERT INTO status_tags (status_id, name, public) VALUES (?, 'cats', 0), (?, 'cats', 0)", first, reply)
 		// The viewer's own choices about accounts and domains the world never shows them.
 		const viewer = accountId(VIEWER)
 		if (i % 3 === 0) {

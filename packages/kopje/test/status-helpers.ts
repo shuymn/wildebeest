@@ -89,7 +89,11 @@ const seedStatusOperation = writeOperation<SeedStatus & { now: number }, string>
 		)
 	}
 	for (const tag of input.tags ?? []) {
-		db.run('INSERT INTO status_tags (status_id, name) VALUES (?, ?)', id, tag)
+		db.run(
+			"INSERT INTO status_tags (status_id, name, public) SELECT id, ?, visibility = 'public' FROM statuses WHERE id = ?",
+			tag,
+			id
+		)
 	}
 	return id
 })

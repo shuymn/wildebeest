@@ -551,6 +551,8 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		urlTail: 'd9a3c8e0-7f1b-4c2a-a4d3-8f3e2b1c0d55',
 		sensitive: true,
 		spoiler: 'CW: spoilers',
+		// A hashtag of a status that is not public: never listed on a hashtag timeline.
+		tags: [{ type: 'Hashtag', name: '#Cats', href: `${ORIGIN}/tags/cats` }],
 		// With imagesAccount: the image the public note shows, shown again.
 		attachment: imagesAccount === undefined ? undefined : [{ type: 'Image', url: `${images}/image-1/usercontent` }],
 	})

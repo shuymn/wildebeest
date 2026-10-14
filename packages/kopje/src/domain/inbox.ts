@@ -1471,6 +1471,11 @@ export function deleteStatusBatch(db: Db, statusId: string, now: number): boolea
 			WHERE id = ? AND (visibility <> 'direct' OR content <> '' OR spoiler_text <> '' OR search_text IS NOT NULL)`,
 			statusId
 		)
+		// No longer public, so its hashtags leave the index tag reads walk (status_tags.public), in the same write. A
+		// remote status holds at most MAX_STATUS_TAGS of them, and they are cleared once (later batches find none), so
+		// a batch exceeds PURGE_BATCH by that many rows at most; the budget counts them, so the rest of this batch does
+		// that much less.
+		db.run('UPDATE status_tags SET public = 0 WHERE status_id = ? AND public = 1', statusId)
 	}
 	withdrawLocalBoosts(db, { kind: 'delete', key: statusId }, 'o.id', statusId, budget, now)
 	while (budget.left() > 0) {

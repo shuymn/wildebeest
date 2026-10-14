@@ -96,9 +96,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - `VAPID_JWK` must hold the private key (`d`), not only the public point: a key without it now makes the instance
   answer 503 as misconfigured, as any invalid value does.
 
+- Hashtag timelines and a tag's history read only the statuses that can appear on them: each hashtag records whether
+  its status is public, and these reads go through an index of those hashtags, so their work no longer grows with the
+  tag's unlisted, private, direct or limited statuses. A hashtag timeline also reads each requested tag in status id
+  order from the page's cursor and stops once it has a page, so a page's work no longer grows with the tag's history.
+  What they show is unchanged. The cutover writes the mark and `verify-conversion` compares it.
+
 ### Instance changes
 
-- Store schema: adds three migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds four migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0001_blocks_and_mutes`: `mutes.expires_at` with an index, and the `domain_block_cleanups` table. It is quick.
     - `0002_web_push`: the subscription's encoding and sealed token on `push_subscriptions`, and the
@@ -106,6 +112,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0003_domain_block_form`: drops the trailing dot that earlier converters kept on a legacy domain block, so the
       block keeps applying now that blocks are compared as stored, and merges a row that then repeats a block of the
       same account. It is quick.
+    - `0004_status_tags_public`: adds `status_tags.public`, marks the hashtags of public statuses, and indexes them.
+      Its work grows linearly with the hashtags stored (one pass, with a lookup of each one's status); locally, 500,000
+      hashtags took a few seconds.
 - `wrangler.jsonc`: unchanged. Set the `VAPID_JWK` secret to turn Web Push on.
 
 ## [0.1.0-rc.3] - 2026-10-14

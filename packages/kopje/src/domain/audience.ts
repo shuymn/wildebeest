@@ -66,6 +66,13 @@ export const REQUIRES_MENTION_SQL = visibilitySetSql(requiresMention)
 // list, in this order, and SQLite uses it only for the same list.
 export const REACHES_FOLLOWERS_SQL = visibilitySetSql((visibility) => !requiresMention(visibility))
 
+// status_tags.public of a hashtag of the status `id`: whether the status is public, the only visibility hashtag timelines
+// and a tag's history count (publicConditions in timelines.ts). A status's visibility is fixed when it is written, so
+// the writers of status_tags set it with each row, and the partial index status_tags_public holds just those rows.
+export function tagPublicSql(id: string): string {
+	return `(SELECT tp.visibility = 'public' FROM statuses tp WHERE tp.id = ${id})`
+}
+
 // ---- Accounts. `x` is an expression for an account id, never a status or edge alias.
 
 // R1 (Account#unavailable?): a suspended local account is seen by nobody, and nothing of it is shown or delivered.

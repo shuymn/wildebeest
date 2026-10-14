@@ -34,6 +34,7 @@ import {
 	mentionableBySql,
 	REACHES_FOLLOWERS_SQL,
 	requiresMention,
+	tagPublicSql,
 	type Visibility,
 } from './audience'
 import { optionalUserReadOperation, userMediaDeleteOperation, userReadOperation, userWriteOperation } from './auth'
@@ -394,10 +395,11 @@ function writeMentions(
 	return mentions.map((m) => m.id).filter((id) => !previous.includes(id))
 }
 
-function writeTags(db: Db, statusId: string, tags: readonly string[]): void {
+export function writeTags(db: Db, statusId: string, tags: readonly string[]): void {
 	db.run('DELETE FROM status_tags WHERE status_id = ?', statusId)
 	db.run(
-		'INSERT INTO status_tags (status_id, name) SELECT ?1, value FROM json_each(?2) WHERE true ON CONFLICT DO NOTHING',
+		`INSERT INTO status_tags (status_id, name, public)
+		SELECT ?1, value, ${tagPublicSql('?1')} FROM json_each(?2) WHERE true ON CONFLICT DO NOTHING`,
 		statusId,
 		JSON.stringify(tags)
 	)

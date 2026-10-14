@@ -454,6 +454,16 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 				.map((t) => hashtagName(text(/** @type {Json} */ (t).name).replace(/^#/, ''))),
 			...(recordedTags.get(id) ?? []),
 		]
+		// The audience, from the object's addressing and stored author as exported.
+		const addressing = source.objects.get(id) ?? { to: undefined, cc: undefined }
+		const stored = source.authors.get(id) ?? null
+		const audience = audienceOf(
+			addressing.to,
+			addressing.cc,
+			followersOf(stored, stored === null ? null : source.followers.get(stored))
+		)
+		// Each hashtag is listed on hashtag timelines (status_tags.public) when the status is public.
+		const listed = audience.visibility === 'public' ? 1 : 0
 		put('statuses', uri, [
 			author,
 			sanitized(p.content),
@@ -463,20 +473,12 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			published,
 			languageOf(p),
 			updated !== published ? updated : null,
-			[...new Set(hashtags.filter((x) => x !== ''))].sort(),
+			[...new Set(hashtags.filter((x) => x !== ''))].sort().map((name) => [name, listed]),
 		])
 
-		// The audience, from the object's addressing and stored author as exported. Recipients: for public and unlisted,
-		// the tagged known accounts and, silently, the other addressed ones; for followers-only, none (a follow decides);
-		// for direct, exactly the known accounts in to (tagged ones not silent). Non-public audiences also name the author
-		// legacy authorized with.
-		const addressing = source.objects.get(id) ?? { to: undefined, cc: undefined }
-		const stored = source.authors.get(id) ?? null
-		const audience = audienceOf(
-			addressing.to,
-			addressing.cc,
-			followersOf(stored, stored === null ? null : source.followers.get(stored))
-		)
+		// Recipients: for public and unlisted, the tagged known accounts and, silently, the other addressed ones; for
+		// followers-only, none (a follow decides); for direct, exactly the known accounts in to (tagged ones not silent).
+		// Non-public audiences also name the author legacy authorized with.
 		const accountAt = (/** @type {unknown} */ x) => byAddress.get(address(x) ?? '')
 		const tagged = new Set(
 			many(p.tag)

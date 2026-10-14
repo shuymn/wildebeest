@@ -89,6 +89,31 @@ describe('public and tag timelines', () => {
 		expect(await ids(h, '/api/v1/timelines/tag/zzz?any[]=b')).toEqual([local.id])
 		expect(unlisted.id).not.toBe('')
 	})
+
+	it('lists the hashtags of public statuses only, as posted and edited (status_tags.public)', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const statuses: { visibility: string; id: string }[] = []
+		for (const visibility of ['public', 'unlisted', 'private', 'direct']) {
+			statuses.push({ visibility, id: (await post(h, alice, { status: `${visibility} #a`, visibility })).id })
+		}
+		const marks = async () =>
+			sql(h.store, 'SELECT status_id, name, public FROM status_tags ORDER BY status_id, name') as Promise<unknown[]>
+		const expected = (names: string[]) =>
+			statuses.flatMap(({ visibility, id }) =>
+				names.map((name) => ({ status_id: id, name, public: visibility === 'public' ? 1 : 0 }))
+			)
+		expect(await marks()).toEqual(expected(['a']))
+		for (const { visibility, id } of statuses) {
+			const response = await h.request(
+				`/api/v1/statuses/${id}`,
+				bearer(alice.token, json({ status: `${visibility} #a #b` }, { method: 'PUT' }))
+			)
+			expect(response.status).toBe(200)
+		}
+		expect(await marks()).toEqual(expected(['a', 'b']))
+		expect(await ids(h, '/api/v1/timelines/tag/b')).toEqual([statuses[0]?.id])
+	})
 })
 
 describe('account statuses', () => {

@@ -247,6 +247,97 @@ describe('Store migration runner', () => {
 		expect(large - small).toBeLessThanOrEqual(2 * (10_000 - 1000))
 	}, 60_000)
 
+	it('upgrades a Store at 0003_domain_block_form with 0004_status_tags_public: hashtags of public statuses are marked', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, 4)).upgrade()).toMatchObject({ ok: true })
+			const alice = '100000000000000001'
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice', NULL)",
+				alice
+			)
+			const visibilities = ['public', 'unlisted', 'private', 'direct', 'limited']
+			visibilities.forEach((visibility, i) => {
+				const id = String(200000000000000001n + BigInt(i))
+				sql.exec(
+					"INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES (?, ?, ?, ?, '2026-01-01T00:00:00.000Z')",
+					id,
+					`https://kopje.test/ap/o/${i}`,
+					alice,
+					visibility
+				)
+				sql.exec("INSERT INTO status_tags (status_id, name) VALUES (?, 'cats'), (?, 'dogs')", id, id)
+			})
+
+			expect(await kernel(state, MIGRATIONS.slice(0, 5)).upgrade()).toMatchObject({ ok: true, applied: [NAMES[4]] })
+			expect(
+				sql
+					.exec(
+						`SELECT s.visibility, t.name, t.public FROM status_tags t JOIN statuses s ON s.id = t.status_id
+						ORDER BY t.status_id, t.name`
+					)
+					.toArray()
+			).toEqual(
+				visibilities.flatMap((visibility) =>
+					['cats', 'dogs'].map((name) => ({ visibility, name, public: visibility === 'public' ? 1 : 0 }))
+				)
+			)
+			expect(
+				sql.exec("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'status_tags_public'").toArray()
+			).toEqual([{ sql: expect.stringContaining('WHERE public = 1') }])
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('0004_status_tags_public reads each hashtag row a bounded number of times, however many there are', async () => {
+		const migration = MIGRATIONS.find((m) => m.name === '0004_status_tags_public')!
+		const statements = migration.sql
+			.split('\n')
+			.filter((line) => !line.startsWith('--'))
+			.join('\n')
+			.split(';')
+			.filter((statement) => statement.trim() !== '')
+		const measure = async (count: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, 4)).upgrade()
+				const alice = '100000000000000001'
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice', NULL)",
+					alice
+				)
+				// Every other status public, each with two hashtags.
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+					INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+					SELECT CAST(200000000000000000 + i AS TEXT), 'https://kopje.test/ap/o/' || i, ?1,
+						CASE i % 2 WHEN 0 THEN 'public' ELSE 'private' END, '2026-01-01T00:00:00.000Z' FROM n`,
+					alice,
+					count
+				)
+				sql.exec(
+					"INSERT INTO status_tags (status_id, name) SELECT id, 'cats' FROM statuses UNION ALL SELECT id, 'dogs' FROM statuses"
+				)
+				let read = 0
+				for (const statement of statements) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				expect(sql.exec('SELECT count(*) AS n FROM status_tags WHERE public = 1').one()).toEqual({ n: count })
+				return read
+			})
+		}
+		const small = await measure(1000)
+		const large = await measure(10_000)
+		// A few reads per hashtag row added (the backfill's pass with its status lookup, the index build's pass), nothing
+		// per pair of rows.
+		const added = 2 * (10_000 - 1000)
+		expect(large - small).toBeLessThanOrEqual(5 * added)
+	}, 60_000)
+
 	it('stays readonly with exact bookkeeping when a file fails, and lets a fixed build continue', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {

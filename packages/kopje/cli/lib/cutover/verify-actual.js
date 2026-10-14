@@ -98,7 +98,7 @@ export function actualFromDump(text) {
 	const parentOf = new Map()
 	/** @type {Map<string, [string, number][]>} */
 	const mentions = new Map()
-	/** @type {Map<string, string[]>} */
+	/** @type {Map<string, [string, number][]>} status id -> its hashtags, each with status_tags.public */
 	const tags = new Map()
 	/** @type {Map<string, unknown[]>} */
 	const edits = new Map()
@@ -212,7 +212,7 @@ export function actualFromDump(text) {
 			}
 			case 'status_tags': {
 				const id = t('status_id') ?? ''
-				tags.set(id, [...(tags.get(id) ?? []), t('name') ?? ''])
+				tags.set(id, [...(tags.get(id) ?? []), [t('name') ?? '', Number(int(row.public))]])
 				break
 			}
 			case 'status_mentions': {
@@ -343,7 +343,10 @@ export function actualFromDump(text) {
 			put('boosts', entry.uri, [entry.author, statuses.get(target)?.uri, entry.visibility, boostRecipients])
 			continue
 		}
-		put('statuses', entry.uri, [...entry.record, (tags.get(id) ?? []).sort()])
+		put('statuses', entry.uri, [
+			...entry.record,
+			(tags.get(id) ?? []).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)),
+		])
 		tags.delete(id)
 		const recipients = (mentions.get(id) ?? []).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
 		const open = entry.visibility === 'public' || entry.visibility === 'unlisted'
