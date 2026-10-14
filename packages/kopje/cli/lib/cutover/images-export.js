@@ -8,14 +8,15 @@
 // earlier versions of edited statuses), and downloads each image once: the original through the Images API when a token
 // is given, else a delivery URL as found in the data (a variant, so possibly resized). Each file is checked against
 // the limits Kopje applies to uploads, by its signature, never by a header, and written under <out>/originals/<image
-// id> with mode 0600. <out>/images.json records, per image id, its digest, type, size and the file token Kopje will
-// serve it under (made once, here, with Kopje's own generator), or that it is missing. `convert --images <out>` then
+// id> with mode 0600. <out>/images.json records, per image id, its digest, type and size, or that it is missing, and a
+// secret made once for the image and kept through every later run: the converter derives each media row's file token
+// from it (mediaToken), so the converted URLs stay the same for the same images.json. `convert --images <out>` then
 // maps the references, and `verify-conversion --images <out>` checks them.
 //
 // What it prints holds counts only (DATA-13). The API token comes from the environment only (CF_IMAGES_TOKEN), is sent
 // only to the Images API, and is redacted from anything printed.
 
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import {
 	closeSync,
 	fsyncSync,
@@ -46,6 +47,9 @@ export const DELIVERY_PREFIX = 'https://imagedelivery.net/'
 // packages/backend/src/config/accounts.ts). A profile image under it is a default, not the user's: the converter
 // leaves it out, so Kopje's own default applies.
 export const UPSTREAM_ACCOUNT_HASH = 'NkfPDviynOyTAOI79ar_GQ'
+// Legacy's default avatar (packages/backend/src/config/accounts.ts), which it hotlinks from Mastodon's repository.
+export const LEGACY_DEFAULT_AVATAR =
+	'https://raw.githubusercontent.com/mastodon/mastodon/main/public/avatars/original/missing.png'
 
 export const ACCOUNT_HASH = /^[A-Za-z0-9_-]{8,64}$/
 // Images ids legacy got from the Images API are UUIDs; anything that could leave the originals directory is refused.
@@ -59,8 +63,8 @@ const SAVE_EVERY = 25
 const TIMEOUT_MS = 120_000
 
 /**
- * @typedef {{ state: 'ok', sha256: string, type: string, width: number, height: number, bytes: number, token: string,
- *   from: 'api' | 'delivery' } | { state: 'missing', reason: MissingReason }} ImageEntry
+ * @typedef {{ state: 'ok', secret: string, sha256: string, type: string, width: number, height: number, bytes: number,
+ *   from: 'api' | 'delivery' } | { state: 'missing', secret: string, reason: MissingReason }} ImageEntry
  * @typedef {'not-found' | 'unsupported-type' | 'too-large' | 'too-many-pixels' | 'unreadable'} MissingReason
  * @typedef {{ accountHash: string, domain: string, images: Map<string, ImageEntry> }} ImagesFile
  * @typedef {(url: string, init?: RequestInit) => Promise<Response>} Fetch
@@ -202,7 +206,12 @@ const REASONS = new Set(['not-found', 'unsupported-type', 'too-large', 'too-many
 
 /** @param {any} entry */
 function validEntry(entry) {
-	if (typeof entry !== 'object' || entry === null) {
+	if (
+		typeof entry !== 'object' ||
+		entry === null ||
+		typeof entry.secret !== 'string' ||
+		!TOKEN_SHAPE.test(entry.secret)
+	) {
 		return false
 	}
 	if (entry.state === 'missing') {
@@ -217,16 +226,27 @@ function validEntry(entry) {
 		dimension(entry.width) &&
 		dimension(entry.height) &&
 		Number.isInteger(entry.bytes) &&
-		typeof entry.token === 'string' &&
-		TOKEN_SHAPE.test(entry.token) &&
 		(entry.from === 'api' || entry.from === 'delivery')
 	)
 }
 
-// A file token as Kopje's upload path makes one, made with node:crypto: src/security/tokens.ts also uses a Workers-only
-// API, so the CLI cannot load it on Node. Tests pin both to TOKEN_SHAPE.
-export function fileToken() {
+// An image's secret: 32 random bytes as base64url, as Kopje's upload path makes a file token (randomToken in
+// src/security/tokens.ts, which the CLI cannot load on Node because it also uses a Workers-only API).
+export function imageSecret() {
 	return randomBytes(32).toString('base64url')
+}
+
+/**
+ * The file token of one media row showing an image: HMAC-SHA256 under the image's secret of the row's key, as base64url
+ * (43 characters, the shape of Kopje's own tokens). Keys name the reference, never an assigned id, so the token depends
+ * only on images.json and the legacy data: `profile\n<actor URI>\n<avatar|header>`, `attachment\n<status URI>\n<position>`,
+ * `image\n<Image object id>` for an unattached image, `edit\n<status URI>\n<image id>` for one only earlier versions show.
+ * Without the secret a token cannot be derived from what is public (the URIs and the image id).
+ * @param {string} secret
+ * @param {string} key
+ */
+export function mediaToken(secret, key) {
+	return createHmac('sha256', secret).update(key).digest('base64url')
 }
 
 /** @param {Uint8Array} bytes */
@@ -449,11 +469,13 @@ export async function exportImages({ exportPath, accountHash, outDir, accountId,
 				redirect: token === undefined ? 'follow' : 'error',
 				signal: AbortSignal.timeout(TIMEOUT_MS),
 			})
+			// Made once per image and kept through every state, so a recovered image gets the URLs it had.
+			const secret = before?.secret ?? imageSecret()
 			/** @type {ImageEntry} */
 			let entry
 			if (response.status === 404) {
 				await response.body?.cancel()
-				entry = { state: 'missing', reason: 'not-found' }
+				entry = { state: 'missing', secret, reason: 'not-found' }
 			} else if (!response.ok) {
 				await response.body?.cancel()
 				throw new ExportError('images-fetch-failed', { status: response.status, from })
@@ -461,7 +483,7 @@ export async function exportImages({ exportPath, accountHash, outDir, accountId,
 				const bytes = await readCapped(response, IMAGE_SIZE_LIMIT)
 				const checked = bytes === null ? null : checkImage(bytes)
 				if (bytes === null || checked === null || !checked.ok) {
-					entry = { state: 'missing', reason: checked?.ok === false ? checked.reason : 'too-large' }
+					entry = { state: 'missing', secret, reason: checked?.ok === false ? checked.reason : 'too-large' }
 				} else {
 					writeOriginal(originals, id, bytes)
 					entry = {
@@ -471,8 +493,7 @@ export async function exportImages({ exportPath, accountHash, outDir, accountId,
 						width: checked.width,
 						height: checked.height,
 						bytes: bytes.byteLength,
-						// Made once per image: a rerun keeps the token, so the converted URLs stay the same.
-						token: before?.state === 'ok' ? before.token : fileToken(),
+						secret,
 						from,
 					}
 					counts.downloaded++

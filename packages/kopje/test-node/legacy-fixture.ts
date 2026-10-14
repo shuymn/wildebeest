@@ -60,8 +60,8 @@ export type FixtureOptions = {
 	loneSurrogates?: boolean
 	// Local images in Cloudflare Images under this account hash (imagedelivery.net/<hash>/<id>/<variant>): avatars
 	// avatar-0 and avatar-1, alice's header header-0, the images image-1 to image-3, and from level 23 image-9, which
-	// only the first version of the edited status shows. Bob's header is then the upstream default, and his first
-	// status shows an image of another account.
+	// only the first version of the edited status shows; the unlisted status shows image-1 again. Bob's header is then
+	// the upstream default, and his first status shows an image of another account.
 	imagesAccount?: string
 }
 
@@ -521,6 +521,8 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		urlTail: 'd9a3c8e0-7f1b-4c2a-a4d3-8f3e2b1c0d55',
 		sensitive: true,
 		spoiler: 'CW: spoilers',
+		// With imagesAccount: the image the public note shows, shown again.
+		attachment: imagesAccount === undefined ? undefined : [{ type: 'Image', url: `${images}/image-1/usercontent` }],
 	})
 	const followersOnly = localNote({
 		author: alice,

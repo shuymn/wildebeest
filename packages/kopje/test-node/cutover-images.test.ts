@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { convert, exportOf, failing, opened, tampered, verify, workspace } from './cutover-helpers.js'
 import { FOREIGN_IMAGE } from './legacy-fixture.js'
 import { imageSize } from '../cli/lib/cutover/image-size.js'
-import { exportImages, fileToken } from '../cli/lib/cutover/images-export.js'
+import { exportImages, imageSecret, LEGACY_DEFAULT_AVATAR, mediaToken } from '../cli/lib/cutover/images-export.js'
 import { IMAGE_SIZE_LIMIT, TOKEN_SHAPE } from '../cli/lib/cutover/upload-rules.js'
 import { run } from '../cli/lib/main.js'
 import { nodeIO } from '../cli/lib/node-io.js'
@@ -172,10 +172,16 @@ describe('the image header reader', () => {
 
 describe('file tokens', () => {
 	it('have the shape the upload path makes and serves (test/cutover-upload-rules.test.ts pins the other side)', () => {
-		const token = fileToken()
+		const secret = imageSecret()
+		expect(secret).toMatch(TOKEN_SHAPE)
+		expect(imageSecret()).not.toBe(secret)
+		const token = mediaToken(secret, 'attachment\nhttps://kopje.test/ap/o/1\n0')
 		expect(token).toMatch(TOKEN_SHAPE)
 		expect(token).toMatch(FILE_TOKEN)
-		expect(fileToken()).not.toBe(token)
+		// One per row, and the same for the same row.
+		expect(mediaToken(secret, 'attachment\nhttps://kopje.test/ap/o/1\n1')).not.toBe(token)
+		expect(mediaToken(secret, 'attachment\nhttps://kopje.test/ap/o/1\n0')).toBe(token)
+		expect(mediaToken(imageSecret(), 'attachment\nhttps://kopje.test/ap/o/1\n0')).not.toBe(token)
 	})
 })
 
@@ -213,7 +219,7 @@ describe('images-export', () => {
 		})
 		expect(file.images['header-0']).toMatchObject({ type: 'image/webp', width: 1500, height: 500 })
 		for (const entry of Object.values(file.images)) {
-			expect(entry.token).toMatch(FILE_TOKEN)
+			expect(entry.secret).toMatch(TOKEN_SHAPE)
 		}
 		expect(await readFile(join(outDir, 'originals', 'avatar-1'))).toEqual(Buffer.from(FILES['avatar-1'] ?? []))
 		expect((await stat(join(outDir, 'originals', 'avatar-1'))).mode & 0o777).toBe(0o600)
@@ -258,6 +264,34 @@ describe('images-export', () => {
 		expect(idle.calls).toEqual([])
 	})
 
+	it('keeps an image secret through ok, missing and ok again, so a recovered image keeps its URLs', async () => {
+		const first = await downloaded()
+		const secret = (await imagesJson(first.outDir)).images['image-2']?.secret
+		expect(secret).toMatch(TOKEN_SHAPE)
+		const again = (answers: Record<string, Answer>) =>
+			exportImages({
+				exportPath: first.exportPath,
+				accountHash: ACCOUNT,
+				outDir: first.outDir,
+				fetch: fakeFetch(answers).fetch,
+			})
+		await rm(join(first.outDir, 'originals', 'image-2'))
+		expect((await again({ ...FILES, 'image-2': 404 })).ok).toBe(false)
+		expect((await imagesJson(first.outDir)).images['image-2']).toEqual({
+			state: 'missing',
+			secret,
+			reason: 'not-found',
+		})
+		await again({ ...FILES, 'image-2': new TextEncoder().encode('not an image') })
+		expect((await imagesJson(first.outDir)).images['image-2']).toEqual({
+			state: 'missing',
+			secret,
+			reason: 'unsupported-type',
+		})
+		expect((await again(FILES)).ok).toBe(true)
+		expect((await imagesJson(first.outDir)).images['image-2']).toMatchObject({ state: 'ok', secret })
+	})
+
 	it('marks a 404, a wrong type, an oversized file and too many pixels missing, and exits 3 for them', async () => {
 		const oversized = () =>
 			new Response(new Uint8Array(16), { headers: { 'content-length': String(IMAGE_SIZE_LIMIT + 1) } })
@@ -284,8 +318,8 @@ describe('images-export', () => {
 			missing: { total: 5, 'not-found': 1, 'unsupported-type': 1, 'too-large': 2, 'too-many-pixels': 1 },
 		})
 		const file = await imagesJson(outDir)
-		expect(file.images['avatar-1']).toEqual({ state: 'missing', reason: 'not-found' })
-		expect(file.images['image-3']).toEqual({ state: 'missing', reason: 'too-many-pixels' })
+		expect(file.images['avatar-1']).toMatchObject({ state: 'missing', reason: 'not-found' })
+		expect(file.images['image-3']).toMatchObject({ state: 'missing', reason: 'too-many-pixels' })
 		expect((await readdir(join(outDir, 'originals'))).sort()).toEqual(['avatar-0', 'image-9'])
 	})
 
@@ -349,62 +383,81 @@ describe('convert and verify-conversion with --images', () => {
 		const { ok, manifest, dumpPath, exportPath, imagesDir, file } = await converted()
 		expect(manifest.stop).toBeUndefined()
 		expect(ok).toBe(true)
-		// avatar-0, avatar-1, header-0, image-1 and image-3 (attached), image-2 (unattached), image-9 (an earlier
+		// avatar-0, avatar-1, header-0, image-1 twice and image-3 (attached), image-2 (unattached), image-9 (an earlier
 		// version); Bob's upstream default header; one foreign attachment.
 		expect(manifest.images).toEqual({
-			mapped: 7,
+			mapped: 8,
 			missing: 0,
 			upstream: 1,
 			foreign: 1,
 			unmapped: 0,
-			shared: 0,
-			originals: 7,
+			originals: 8,
 			acceptMissing: false,
 		})
-		const token = (id: string) => String(file.images[id]?.token)
 		const db = await opened(dumpPath)
 		const row = (sql: string, ...params: string[]) => db.prepare(sql).get(...params) as Record<string, unknown>
-		const media = (id: string) =>
+		const statusUri = (content: string) => String(row('SELECT uri FROM statuses WHERE content LIKE ?', content).uri)
+		// Each row's token, from the image's secret and the reference's key.
+		const token = (imageId: string, key: string) => mediaToken(String(file.images[imageId]?.secret), key)
+		const alice = `${ORIGIN}/ap/users/alice`
+		const bobUri = `${ORIGIN}/ap/users/Bob`
+		const tokens = {
+			'avatar-0': token('avatar-0', `profile\n${alice}\navatar`),
+			'header-0': token('header-0', `profile\n${alice}\nheader`),
+			'avatar-1': token('avatar-1', `profile\n${bobUri}\navatar`),
+			'image-1': token('image-1', `attachment\n${statusUri('%Wildebeest day%')}\n0`),
+			'image-1 again': token('image-1', `attachment\n${statusUri('%unlisted, with a CW%')}\n0`),
+			'image-3': token('image-3', `attachment\n${statusUri('%followers only%')}\n0`),
+			'image-2': token(
+				'image-2',
+				`image\n${String(row("SELECT 'https://kopje.test/ap/o/' || legacy_ap_o AS id FROM media_attachments WHERE status_id IS NULL AND legacy_ap_o IS NOT NULL").id)}`
+			),
+			'image-9': token('image-9', `edit\n${statusUri('%second version%')}\nimage-9`),
+		}
+		const media = (name: keyof typeof tokens) =>
 			row(
 				`SELECT m.id, a.username, m.status_id IS NOT NULL AS attached, m.gc_at, m.type, m.url, m.preview_url,
 					m.content_type, m.meta, m.processed FROM media_attachments m JOIN accounts a ON a.id = m.account_id
 				WHERE m.file_token = ?`,
-				token(id)
+				tokens[name]
 			)
+		expect(new Set(Object.values(tokens)).size).toBe(8)
 
 		// Profiles: the full file of a kept, unattached row; PNG stays PNG, JPEG becomes WebP, sized as the upload path.
-		const alice = row("SELECT avatar_url, header_url FROM accounts WHERE username = 'alice' AND domain IS NULL")
-		expect(alice).toEqual({
-			avatar_url: `${ORIGIN}/media/${token('avatar-0')}/full.png`,
-			header_url: `${ORIGIN}/media/${token('header-0')}/full.webp`,
+		const aliceRow = row("SELECT avatar_url, header_url FROM accounts WHERE username = 'alice' AND domain IS NULL")
+		expect(aliceRow).toEqual({
+			avatar_url: `${ORIGIN}/media/${tokens['avatar-0']}/full.png`,
+			header_url: `${ORIGIN}/media/${tokens['header-0']}/full.webp`,
 		})
 		const bob = row("SELECT avatar_url, header_url FROM accounts WHERE username = 'Bob' AND domain IS NULL")
-		expect(bob).toEqual({ avatar_url: `${ORIGIN}/media/${token('avatar-1')}/full.webp`, header_url: null })
+		expect(bob).toEqual({ avatar_url: `${ORIGIN}/media/${tokens['avatar-1']}/full.webp`, header_url: null })
 		expect(media('avatar-1')).toMatchObject({
 			username: 'Bob',
 			attached: 0,
 			gc_at: null,
 			type: 'image',
 			url: bob.avatar_url,
-			preview_url: `${ORIGIN}/media/${token('avatar-1')}/small.webp`,
+			preview_url: `${ORIGIN}/media/${tokens['avatar-1']}/small.webp`,
 			content_type: 'image/webp',
 			meta: JSON.stringify({ original: { width: 3840, height: 2304 }, small: { width: 640, height: 384 } }),
 			processed: 1,
 		})
 		expect(media('avatar-0')).toMatchObject({
-			url: alice.avatar_url,
+			url: aliceRow.avatar_url,
 			content_type: 'image/png',
 			meta: JSON.stringify({ original: { width: 400, height: 400 }, small: { width: 400, height: 400 } }),
 		})
 
-		// Attachments: the status's row is the image's row, with the old /ap/o id kept.
-		expect(media('image-1')).toMatchObject({
-			username: 'alice',
-			attached: 1,
-			url: `${ORIGIN}/media/${token('image-1')}/full.webp`,
-			content_type: 'image/webp',
-		})
-		expect(media('image-2')).toMatchObject({ attached: 0, url: `${ORIGIN}/media/${token('image-2')}/full.png` })
+		// Attachments: each status's row has files of its own, also when two statuses show one image.
+		for (const name of ['image-1', 'image-1 again'] as const) {
+			expect(media(name)).toMatchObject({
+				username: 'alice',
+				attached: 1,
+				url: `${ORIGIN}/media/${tokens[name]}/full.webp`,
+				content_type: 'image/webp',
+			})
+		}
+		expect(media('image-2')).toMatchObject({ attached: 0, url: `${ORIGIN}/media/${tokens['image-2']}/full.png` })
 		// An image only an earlier version shows has a row of its own, and the version names its files.
 		expect(media('image-9')).toMatchObject({ attached: 0, username: 'alice', content_type: 'image/png' })
 		const edits = (
@@ -412,8 +465,8 @@ describe('convert and verify-conversion with --images', () => {
 		).map((e) => JSON.parse(e.media_json) as { url: string; preview_url: string }[])
 		expect(edits.flat()).toContainEqual(
 			expect.objectContaining({
-				url: `${ORIGIN}/media/${token('image-9')}/full.png`,
-				preview_url: `${ORIGIN}/media/${token('image-9')}/small.png`,
+				url: `${ORIGIN}/media/${tokens['image-9']}/full.png`,
+				preview_url: `${ORIGIN}/media/${tokens['image-9']}/small.png`,
 			})
 		)
 		// Another account's image stays where it is; nothing points to Cloudflare Images under the operator's account.
@@ -422,14 +475,14 @@ describe('convert and verify-conversion with --images', () => {
 		expect(dump).not.toContain(`imagedelivery.net/${ACCOUNT}`)
 		expect(dump).not.toContain('NkfPDviynOyTAOI79ar_GQ')
 
-		// The originals, named for the R2 key originals/<media id>, byte for byte, mode 0600.
+		// One original per row, named for the R2 key originals/<media id>, byte for byte, mode 0600.
 		const out = join(space.dir, 'out', 'originals')
 		const names = (await readdir(out)).sort()
-		expect(names).toHaveLength(7)
-		for (const id of Object.keys(FILES)) {
-			const mediaId = String(media(id).id)
+		expect(names).toHaveLength(8)
+		for (const name of Object.keys(tokens) as (keyof typeof tokens)[]) {
+			const mediaId = String(media(name).id)
 			expect(names).toContain(mediaId)
-			expect(await readFile(join(out, mediaId))).toEqual(Buffer.from(FILES[id] ?? []))
+			expect(await readFile(join(out, mediaId))).toEqual(Buffer.from(FILES[name.split(' ')[0] ?? ''] ?? []))
 			expect((await stat(join(out, mediaId))).mode & 0o777).toBe(0o600)
 		}
 		db.close()
@@ -441,12 +494,43 @@ describe('convert and verify-conversion with --images', () => {
 		} = await verify(exportPath, dumpPath, { acceptDeletions: true, imagesDir })
 		expect(failing(categories)).toEqual([])
 		expect(verified).toBe(true)
-		expect(categories.media_files?.expected).toBe(7)
+		expect(categories.media_files?.expected).toBe(8)
 		expect(report.images).toEqual({ missing: 0, unmapped: 0, acceptMissing: false })
 
 		// Deterministic for a given base time and mapping.
 		const again = await convert(space.dir, exportPath, { imagesDir, acceptDeletions: true, out: 'out-again' })
 		expect(await readFile(again.dumpPath, 'utf8')).toBe(dump)
+	})
+
+	it("drops legacy's default avatar for local accounts only", async () => {
+		const exportPath = await exportFixture()
+		const actors = join(exportPath, 'actors.sql')
+		await writeFile(
+			actors,
+			(await readFile(actors, 'utf8'))
+				.replace(`https://imagedelivery.net/${ACCOUNT}/avatar-1/avatar`, LEGACY_DEFAULT_AVATAR)
+				.replace('https://files.remote.example/a/0.png', LEGACY_DEFAULT_AVATAR)
+		)
+		const imagesDir = join(space.dir, 'images')
+		const exported = await exportImages({
+			exportPath,
+			accountHash: ACCOUNT,
+			outDir: imagesDir,
+			fetch: fakeFetch(FILES).fetch,
+		})
+		expect(exported.report).toMatchObject({ images: 6 })
+		const { ok, manifest, dumpPath } = await convert(space.dir, exportPath, { imagesDir, acceptDeletions: true })
+		expect(ok).toBe(true)
+		expect(manifest.images).toMatchObject({ upstream: 2, mapped: 7 })
+		const db = await opened(dumpPath)
+		const avatar = (uri: string) =>
+			(db.prepare('SELECT avatar_url FROM accounts WHERE uri = ?').get(uri) as { avatar_url: string | null }).avatar_url
+		expect(avatar(`${ORIGIN}/ap/users/Bob`)).toBeNull()
+		expect(avatar('https://remote.example/users/r0')).toBe(LEGACY_DEFAULT_AVATAR)
+		db.close()
+		const verified = await verify(exportPath, dumpPath, { acceptDeletions: true, imagesDir })
+		expect(failing(verified.categories)).toEqual([])
+		expect(verified.ok).toBe(true)
 	})
 
 	it('without --images keeps every URL as it was', async () => {
@@ -490,7 +574,7 @@ describe('convert and verify-conversion with --images', () => {
 			out: 'out-accepted',
 		})
 		expect(ok).toBe(true)
-		expect(manifest.images).toMatchObject({ mapped: 5, missing: 2, originals: 5, acceptMissing: true })
+		expect(manifest.images).toMatchObject({ mapped: 5, missing: 3, originals: 5, acceptMissing: true })
 		const db = await opened(dumpPath)
 		const value = (sql: string) => Object.values(db.prepare(sql).get() ?? {})[0]
 		expect(value("SELECT avatar_url FROM accounts WHERE username = 'Bob' AND domain IS NULL")).toBeNull()
@@ -520,6 +604,12 @@ describe('convert and verify-conversion with --images', () => {
 				'UPDATE media_attachments SET meta = \'{"original":{"width":1,"height":1}}\' WHERE file_token IS NOT NULL',
 				['media_files'],
 			],
+			// What an edit's versions show (status_edits.media_json): a URL, a preview, a description, a size, an image.
+			["UPDATE status_edits SET media_json = replace(media_json, '/full.png', '/small.png')", ['edits']],
+			["UPDATE status_edits SET media_json = replace(media_json, '/small.png', '/small.webp')", ['edits']],
+			['UPDATE status_edits SET media_json = replace(media_json, \'"first"\', \'"changed"\')', ['edits']],
+			['UPDATE status_edits SET media_json = replace(media_json, \'"width":10,\', \'"width":11,\')', ['edits']],
+			["UPDATE status_edits SET media_json = '[]'", ['edits']],
 		]
 		for (const [sql, categories] of cases) {
 			const damaged = await tampered(space.dir, dumpPath, sql)

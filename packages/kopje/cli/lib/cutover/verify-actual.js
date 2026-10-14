@@ -58,6 +58,24 @@ function blobHex(literal) {
 }
 
 /**
+ * A media meta value in comparison form: full and preview sizes, null where absent.
+ * @param {any} meta
+ */
+function sizesOf(meta) {
+	if (typeof meta !== 'object' || meta === null) {
+		return null
+	}
+	/** @type {unknown[]} */
+	const sizes = [
+		meta.original?.width ?? null,
+		meta.original?.height ?? null,
+		meta.small?.width ?? null,
+		meta.small?.height ?? null,
+	]
+	return sizes
+}
+
+/**
  * @param {string} text the whole dump
  * @returns {Records}
  */
@@ -172,7 +190,20 @@ export function actualFromDump(text) {
 				break
 			case 'status_edits': {
 				const uri = status(t('status_id'))?.uri ?? ''
-				edits.set(uri, [...(edits.get(uri) ?? []), [t('content'), t('spoiler_text'), int(row.sensitive)]])
+				// The attachments a version shows, as its media_json presents them.
+				/** @type {any[]} */
+				let shown = []
+				try {
+					const parsed = JSON.parse(t('media_json') ?? '[]')
+					shown = Array.isArray(parsed) ? parsed : []
+				} catch {
+					shown = []
+				}
+				const media = shown.map(
+					(m) =>
+						/** @type {unknown[]} */ ([m?.url ?? null, m?.preview_url ?? null, m?.description ?? '', sizesOf(m?.meta)])
+				)
+				edits.set(uri, [...(edits.get(uri) ?? []), [t('content'), t('spoiler_text'), int(row.sensitive), media]])
 				break
 			}
 			case 'media_attachments': {
@@ -192,12 +223,7 @@ export function actualFromDump(text) {
 					} catch {
 						meta = null
 					}
-					put('media_files', t('file_token') ?? '', [
-						t('url'),
-						t('preview_url'),
-						t('content_type'),
-						[meta?.original?.width, meta?.original?.height, meta?.small?.width, meta?.small?.height],
-					])
+					put('media_files', t('file_token') ?? '', [t('url'), t('preview_url'), t('content_type'), sizesOf(meta)])
 				}
 				const owner = status(t('status_id'))
 				if (owner !== undefined) {

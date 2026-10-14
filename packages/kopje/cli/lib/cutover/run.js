@@ -308,7 +308,6 @@ export async function convertExport(options) {
 				upstream: counts.upstream,
 				foreign: counts.foreign,
 				unmapped: counts.unmapped,
-				shared: counts.shared,
 				originals: summary.images.originals.length,
 				acceptMissing: options.acceptMissingImages === true,
 			}

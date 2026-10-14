@@ -11,7 +11,7 @@
 
 import { createHash } from 'node:crypto'
 
-import { parseDeliveryUrl, UPSTREAM_ACCOUNT_HASH } from './images-export.js'
+import { LEGACY_DEFAULT_AVATAR, mediaToken, parseDeliveryUrl, UPSTREAM_ACCOUNT_HASH } from './images-export.js'
 import { normalizeSearchText, REMOTE_HTML_RAW_LIMIT, remoteHtmlText, sanitizeRemoteHtml } from './kopje-runtime.js'
 import { digestOf } from './sql-script.js'
 import { fit, FULL_EDGE, SMALL_EDGE } from './upload-rules.js'
@@ -277,8 +277,7 @@ function allocator(baseTime) {
 }
 
 /**
- * @typedef {{ mapped: number, missing: number, upstream: number, foreign: number, unmapped: number, shared: number }}
- *   ImageCounts
+ * @typedef {{ mapped: number, missing: number, upstream: number, foreign: number, unmapped: number }} ImageCounts
  * @typedef {{ problems: Record<string, number>, dropped: Record<string, number>, normalized: Record<string, number>,
  *   legacy: Record<string, number>, domain: string, localAccounts: number,
  *   images: { counts: ImageCounts, originals: [string, string][] } | null }} ConvertSummary
@@ -289,21 +288,28 @@ function allocator(baseTime) {
 /**
  * Maps the delivery URLs of the operator's Cloudflare Images account (images-export.js) to local media on the instance
  * origin, as Kopje's upload path names them: /media/<token>/{full,small}.<ext>, PNG kept as PNG and every other type
- * served as WebP (src/platform/images.ts), meta sized by the same fit. A profile image under the upstream default
- * account is a default and is dropped (Kopje's own default applies); other accounts' URLs are kept. An image that is
- * missing is dropped; a URL under the operator's account that images.json does not map is counted as unmapped.
+ * served as WebP (src/platform/images.ts), meta sized by the same fit. Every media row gets a token of its own, derived
+ * from the image's secret and the row's key (mediaToken), so each row has its own files and original and Kopje's
+ * per-row lifecycle (sweep, backup, rebuild) applies unchanged even when several rows show one image. A profile image
+ * that is one of legacy's defaults is dropped (Kopje's own default applies); other accounts' URLs are kept. An image
+ * that is missing is dropped; a URL under the operator's account that images.json does not map is counted as unmapped.
  * @param {import('./images-export.js').ImagesFile} file
  * @param {string} origin
  */
 function imageMapper(file, origin) {
 	/** @type {ImageCounts} */
-	const counts = { mapped: 0, missing: 0, upstream: 0, foreign: 0, unmapped: 0, shared: 0 }
+	const counts = { mapped: 0, missing: 0, upstream: 0, foreign: 0, unmapped: 0 }
 	/**
 	 * @param {string | null} url
 	 * @param {boolean} profile an avatar or header
+	 * @param {(imageId: string) => string} rowKey the key of the media row that will show it
 	 * @returns {MappedImage}
 	 */
-	const map = (url, profile) => {
+	const map = (url, profile, rowKey) => {
+		if (profile && url === LEGACY_DEFAULT_AVATAR) {
+			counts.upstream++
+			return { kind: 'drop' }
+		}
 		const parts = parseDeliveryUrl(url)
 		if (parts === null) {
 			return { kind: 'keep', url }
@@ -329,12 +335,13 @@ function imageMapper(file, origin) {
 		const contentType = entry.type === 'image/png' ? 'image/png' : 'image/webp'
 		const extension = contentType === 'image/png' ? 'png' : 'webp'
 		const full = fit(entry, FULL_EDGE)
+		const token = mediaToken(entry.secret, rowKey(parts.id))
 		return {
 			kind: 'mapped',
 			imageId: parts.id,
-			token: entry.token,
-			url: `${origin}/media/${entry.token}/full.${extension}`,
-			preview: `${origin}/media/${entry.token}/small.${extension}`,
+			token,
+			url: `${origin}/media/${token}/full.${extension}`,
+			preview: `${origin}/media/${token}/small.${extension}`,
 			contentType,
 			meta: JSON.stringify({ original: full, small: fit(full, SMALL_EDGE) }),
 		}
@@ -434,23 +441,11 @@ export function convertLegacy(
 	if (expectedDomain !== undefined && expectedDomain.toLowerCase() !== domain) {
 		count(problems, 'domain-differs-from-expected')
 	}
-	// With images-export's mapping, local references to the operator's Cloudflare Images become local media. Each
-	// image's file token is held by the first media row made for it; later rows that show the same image share its
-	// URLs without the token (counted as shared).
+	// With images-export's mapping, local references to the operator's Cloudflare Images become local media, one row
+	// (with its own token and original) per reference.
 	const imageMap = imageFile === undefined ? null : imageMapper(imageFile, `https://${domain}`)
-	/** @type {Map<string, string>} image id -> the media id holding its token */
-	const tokenHolders = new Map()
-	/** @param {Extract<MappedImage, { kind: 'mapped' }>} image @param {string} mediaId */
-	const holdToken = (image, mediaId) => {
-		if (tokenHolders.has(image.imageId)) {
-			if (imageMap !== null) {
-				imageMap.counts.shared++
-			}
-			return null
-		}
-		tokenHolders.set(image.imageId, mediaId)
-		return image.token
-	}
+	/** @type {[string, string][]} image id and the media id whose original it becomes */
+	const originals = []
 	/** @type {{ accountId: string, uri: string, kind: string, image: MappedImage }[]} */
 	const profileImages = []
 
@@ -494,7 +489,7 @@ export function convertLegacy(
 			if (!local || imageMap === null) {
 				return url
 			}
-			const image = imageMap.map(url, true)
+			const image = imageMap.map(url, true, () => `profile\n${uri}\n${kind}`)
 			if (image.kind === 'mapped') {
 				profileImages.push({ accountId: id, uri, kind, image })
 				return image.url
@@ -1035,7 +1030,9 @@ export function convertLegacy(
 	 */
 	const mediaInsert = (id, account, status, position, type, url, description, meta, legacyApO, created, image) => {
 		const mapped = image?.kind === 'mapped' ? image : null
-		const token = mapped === null ? null : holdToken(mapped, id)
+		if (mapped !== null) {
+			originals.push([mapped.imageId, id])
+		}
 		mediaRow.run(
 			id,
 			account,
@@ -1046,15 +1043,15 @@ export function convertLegacy(
 			mapped?.preview ?? null,
 			description,
 			meta,
-			token,
+			mapped?.token ?? null,
 			mapped?.contentType ?? null,
 			legacyApO,
 			created
 		)
 	}
-	/** @param {string | null} url @param {boolean} local */
-	const attachmentImage = (url, local) =>
-		/** @type {MappedImage} */ (local && imageMap !== null ? imageMap.map(url, false) : { kind: 'keep', url })
+	/** @param {string | null} url @param {boolean} local @param {(imageId: string) => string} rowKey */
+	const attachmentImage = (url, local, rowKey) =>
+		/** @type {MappedImage} */ (local && imageMap !== null ? imageMap.map(url, false, rowKey) : { kind: 'keep', url })
 	/** @type {Map<string, { row: Json, properties: Json, used: boolean }>} */
 	const imagesById = new Map()
 	/** @type {Map<string, string>} */
@@ -1109,7 +1106,7 @@ export function convertLegacy(
 	const imageMediaId = (imageId) => imageIds.get(imageId) ?? ''
 	/**
 	 * @typedef {{ position: number, id: string, type: string, url: string, preview: string | null, description: string,
-	 *   meta: string | null }} Attached
+	 *   meta: string | null, imageId: string | null }} Attached
 	 */
 	/** @type {Map<string, Attached[]>} */
 	const mediaByStatus = new Map()
@@ -1135,7 +1132,11 @@ export function convertLegacy(
 			if (imageId !== null) {
 				const image = /** @type {{ row: Json, properties: Json, used: boolean }} */ (imagesById.get(imageId))
 				image.used = true
-				const mapped = attachmentImage(url ?? linkOf(image.properties.url), true)
+				const mapped = attachmentImage(
+					url ?? linkOf(image.properties.url),
+					true,
+					() => `attachment\n${plan.uri}\n${position}`
+				)
 				if (mapped.kind === 'drop') {
 					return
 				}
@@ -1163,6 +1164,7 @@ export function convertLegacy(
 					type,
 					url: imageUrl,
 					preview: mapped.kind === 'mapped' ? mapped.preview : null,
+					imageId: mapped.kind === 'mapped' ? mapped.imageId : null,
 					description,
 					meta,
 				})
@@ -1170,7 +1172,7 @@ export function convertLegacy(
 					count(legacyCounts, 'media_ap_o')
 				}
 			} else if (url !== null) {
-				const mapped = attachmentImage(url, plan.local)
+				const mapped = attachmentImage(url, plan.local, () => `attachment\n${plan.uri}\n${position}`)
 				if (mapped.kind === 'drop') {
 					return
 				}
@@ -1190,6 +1192,7 @@ export function convertLegacy(
 					type,
 					url: mediaUrl,
 					preview: mapped.kind === 'mapped' ? mapped.preview : null,
+					imageId: mapped.kind === 'mapped' ? mapped.imageId : null,
 					description,
 					meta,
 				})
@@ -1204,7 +1207,7 @@ export function convertLegacy(
 			continue
 		}
 		const owner = accountOf(image.row.original_actor_id)
-		const mapped = attachmentImage(linkOf(image.properties.url), owner?.local === true)
+		const mapped = attachmentImage(linkOf(image.properties.url), owner?.local === true, () => `image\n${imageId}`)
 		if (mapped.kind === 'drop') {
 			continue
 		}
@@ -1252,7 +1255,7 @@ export function convertLegacy(
 	}
 
 	// ---------------------------------------------------------------- edits: earlier versions, then the current one
-	/** @param {Omit<Attached, 'position'>} m */
+	/** @param {Omit<Attached, 'position' | 'imageId'>} m */
 	const presented = (m) => ({
 		id: m.id,
 		type: m.type,
@@ -1270,6 +1273,8 @@ export function convertLegacy(
 	)
 	/** @type {Map<string, Json[]>} */
 	const revisions = new Map()
+	/** @type {Map<string, string>} status URI and image id -> the row of an image only earlier versions show */
+	const editedImages = new Map()
 	for (const revision of rows('SELECT object_id, properties, cdate FROM object_revisions ORDER BY id')) {
 		const plan = statuses.get(String(revision.object_id))
 		if (plan === undefined) {
@@ -1289,24 +1294,25 @@ export function convertLegacy(
 				.filter((x) => typeof x === 'object' && x !== null)
 				.flatMap((x, position) => {
 					const element = /** @type {Json} */ (x)
-					const mapped = attachmentImage(linkOf(element.url), plan.local)
+					const mapped = attachmentImage(linkOf(element.url), plan.local, (imageId) => `edit\n${plan.uri}\n${imageId}`)
 					if (mapped.kind === 'drop') {
 						return []
 					}
 					const url = mapped.url ?? ''
-					const same = current.find((m) => m.url === url)
+					const same = current.find((m) =>
+						mapped.kind === 'mapped' ? m.imageId === mapped.imageId : m.imageId === null && m.url === url
+					)
 					if (same !== undefined) {
 						return [presented(same)]
 					}
-					const id = ids.remote(
-						'media_attachments',
-						plan.published,
-						`edit:${plan.uri}#${String(revision.cdate)}#${position}`
-					)
 					if (mapped.kind !== 'mapped') {
 						return [
 							presented({
-								id,
+								id: ids.remote(
+									'media_attachments',
+									plan.published,
+									`edit:${plan.uri}#${String(revision.cdate)}#${position}`
+								),
 								type: mediaType(element),
 								url,
 								preview: null,
@@ -1315,11 +1321,15 @@ export function convertLegacy(
 							}),
 						]
 					}
-					// An image only an earlier version shows still needs a row to hold its token, so its files are made
-					// and kept: an unattached one of the author, as legacy kept such images.
-					if (!tokenHolders.has(mapped.imageId)) {
+					// An image only earlier versions show still needs a row, with its own token and original, so its files
+					// are made and kept: an unattached one of the author, as legacy kept such images. One per status.
+					const key = `${plan.uri}\n${mapped.imageId}`
+					let id = editedImages.get(key)
+					if (id === undefined) {
+						id = ids.local('media_attachments', plan.published, `edited-image:${key}`)
+						editedImages.set(key, id)
 						mediaInsert(
-							ids.local('media_attachments', plan.published, `edited-image:${mapped.imageId}`),
+							id,
 							plan.author,
 							null,
 							0,
@@ -1332,11 +1342,10 @@ export function convertLegacy(
 							mapped
 						)
 					}
-					const type = mediaType(element) === 'unknown' ? 'image' : mediaType(element)
 					return [
 						presented({
 							id,
-							type,
+							type: mediaType(element) === 'unknown' ? 'image' : mediaType(element),
 							url,
 							preview: mapped.preview,
 							description: descriptionOf(element),
@@ -1701,6 +1710,6 @@ export function convertLegacy(
 		legacy: legacyCounts,
 		domain,
 		localAccounts: users.length,
-		images: imageMap === null ? null : { counts: imageMap.counts, originals: [...tokenHolders] },
+		images: imageMap === null ? null : { counts: imageMap.counts, originals },
 	}
 }
