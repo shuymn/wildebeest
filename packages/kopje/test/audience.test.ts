@@ -263,6 +263,43 @@ describe('statusReads, the id brands and the presenter guard', () => {
 		})
 	})
 
+	it('keeps the id column its own and reads the real tables, whatever the caller names', async () => {
+		const { store, author, booster, original, boost } = await world()
+		const hidden = await seedStatus(store, { accountId: author, visibility: 'private' })
+		await block(store, author, booster)
+		await runInDurableObject(store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			const viewer = { accountId: booster, now: NOW_ISO }
+			const read = statusReads(viewer, { viewer: '?1' })
+			const named = 'a status query cannot select a column named'
+			expect(() =>
+				// @ts-expect-error the id column is the reader's
+				read.select(db, 'visible', { where: 's.id = ?2', columns: { id: 's.reblog_of_id' } }, booster, boost)
+			).toThrow(`${named} id`)
+			expect(() =>
+				read.select(db, 'visible', { where: 's.id = ?2', columns: { '"id"': 's.reblog_of_id' } }, booster, boost)
+			).toThrow(`${named} "id"`)
+			expect(() =>
+				statusReads(viewer, { viewer: '?1', now: '?2' }).notifications(
+					db,
+					// @ts-expect-error the status column is the reader's
+					{ where: 'n.account_id = ?1', columns: { status_id: "'x'" } },
+					booster,
+					NOW_ISO
+				)
+			).toThrow(`${named} status_id`)
+			// A WITH table named like a table the reader or the rule reads does not replace it.
+			const ids = (rows: { id: string }[]) => rows.map((row) => row.id)
+			const statuses = `WITH statuses (id, account_id, visibility, reblog_of_id) AS (
+				SELECT ?3, account_id, visibility, reblog_of_id FROM main.statuses WHERE id = ?2)`
+			expect(
+				ids(read.select(db, 'visible', { with: statuses, where: 's.id IN (?2, ?3)' }, booster, boost, hidden))
+			).toEqual([boost])
+			const blocks = 'WITH blocks (account_id, target_account_id) AS (SELECT NULL, NULL)'
+			expect(read.select(db, 'visible', { with: blocks, where: 's.id = ?2' }, booster, original)).toEqual([])
+		})
+	})
+
 	it('shows a boost only with an original the viewer may see, and their own boost without it', async () => {
 		const { store, author, booster, original, boost } = await world()
 		await block(store, author, booster)

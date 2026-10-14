@@ -100,7 +100,7 @@ and write response. It takes only ids the policy module made, as TypeScript bran
 out of one and nothing is parsed at run time. A caller gives the parts of each SELECT; the reader writes the rest:
 
 ```sql
-SELECT s.id AS id [, <expression> AS <column> ...] FROM <from> statuses s <join>
+SELECT s.id AS id [, <expression> AS <column> ...] FROM <from> main.statuses s <join>
 WHERE (<where>) AND (<rule over s>) AND (<and>) <tail>
 ```
 
@@ -112,7 +112,9 @@ WHERE (<where>) AND (<rule over s>) AND (<and>) <tail>
   the viewer as the recipient, which shows a status only if they may view it) as the rule.
 
 The rule is a conjunct of the SELECT's own WHERE, over the `statuses s` whose id it selects, so no condition, subquery,
-join or `WITH` table of the caller's can stand in for it. The caller's conditions go before (`where`) or after (`and`)
+join or `WITH` table of the caller's can stand in for it. The reader and the fragments name their tables with the
+`main.` schema, so a `WITH` table named `statuses` or `blocks` cannot take their place, and a further column is a plain
+identifier other than the id column (`id`, or `status_id` for notifications), refused by the types and at run time. The caller's conditions go before (`where`) or after (`and`)
 it, in the order a hand-written query would give them, so the terms, the plan and the rows read are the same. Each
 query runs only with its parameters at `viewer` and `now` bound to the context's account id and time.
 `viewableStatusId` is `canView` (R3) for one id. `ownStatusId` checks the author. The callers:
