@@ -505,8 +505,9 @@ export const relationships = userReadOperation<{ ids: string[] }, Relationship[]
 // the work never grows with the account's other followers and a match is never pushed out by them. At most
 // MAX_FAMILIAR_FOLLOWERS are shown, newest follow of the account first.
 export const MAX_FAMILIAR_FOLLOWERS_IDS = 20
-// The same window of accepted follows as the account search with following (ACCOUNT_RECENT_LIMIT).
-export const FAMILIAR_FOLLOWERS_WINDOW = 5000
+// Above Mastodon's default follow limit (7,500), which Kopje does not enforce: a match past the viewer's first 10,000
+// accepted follows (in index order, by account id) is not shown (an accepted risk).
+export const FAMILIAR_FOLLOWERS_WINDOW = 10_000
 export const MAX_FAMILIAR_FOLLOWERS = 80
 
 export type FamiliarFollowers = { id: string; accounts: Account[] }

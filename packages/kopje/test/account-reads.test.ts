@@ -165,6 +165,20 @@ describe('familiar followers', () => {
 		})
 	}
 
+	it('finds the only match past the first 5,000 of the viewer’s follows', async () => {
+		const { h, alice, target, aliceOnly } = await crowd({ aliceOnly: 5001 })
+		// The match has the highest account id, so it comes last in the index order of alice's follows.
+		const match = aliceOnly.at(-1) ?? ''
+		await sql(
+			h.store,
+			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+			match,
+			target
+		)
+		const { body } = await getJson<{ accounts: { id: string }[] }[]>(h, path(target), alice.token)
+		expect(body[0]?.accounts.map((account) => account.id)).toEqual([match])
+	}, 60_000)
+
 	it('finds an old familiar follower behind many unrelated ones', async () => {
 		const { h, alice, target, mutual } = await crowd({ mutual: 1, unrelated: FAMILIAR_FOLLOWERS_WINDOW + 200 })
 		const { body } = await getJson<{ accounts: { id: string }[] }[]>(h, path(target), alice.token)
