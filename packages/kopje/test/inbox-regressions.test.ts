@@ -788,7 +788,7 @@ describe('with outbound delivery (B2)', () => {
 		).toEqual([{ state: 'accepted' }])
 	})
 
-	it('delivers an Accept to the requester’s personal inbox once a local follow request is authorized', async () => {
+	it('delivers an Accept to the requester’s shared inbox once a local follow request is authorized', async () => {
 		const t = await together({ locked: true })
 		const bob = await mastodonActor(t.web, 'bob')
 		const bobFollow = { '@context': AS, id: nextId(bob), type: 'Follow', actor: bob.uri, object: t.aliceUri }
@@ -805,7 +805,11 @@ describe('with outbound delivery (B2)', () => {
 		expect(authorized.status).toBe(200)
 		expect(await authorized.json()).toMatchObject({ id: bobId, followed_by: true })
 		expect(await t.deliveries()).toEqual([
-			{ type: 'Accept', id: `${t.aliceUri}#accepts/follows/${sha256Hex(bobFollow.id)}`, inbox_url: `${bob.uri}/inbox` },
+			{
+				type: 'Accept',
+				id: `${t.aliceUri}#accepts/follows/${sha256Hex(bobFollow.id)}`,
+				inbox_url: 'https://mastodon.example/inbox',
+			},
 		])
 		expect(t.h.doorbell).toHaveBeenCalled()
 		expect(await count(t.h.store, "SELECT 1 FROM notifications WHERE type = 'follow_request'")).toBe(0)
@@ -847,8 +851,8 @@ describe('with outbound delivery (B2)', () => {
 		}
 		expect(await t.post(bob, move)).toBe(202)
 		expect((await t.deliveries()).map((d) => [d.type, d.inbox_url])).toEqual([
-			['Undo', `${bob.uri}/inbox`],
-			['Follow', `${bob2.uri}/inbox`],
+			['Undo', 'https://mastodon.example/inbox'],
+			['Follow', 'https://new.example/inbox'],
 		])
 
 		await sql(t.h.store, 'DELETE FROM deliveries')
@@ -863,7 +867,7 @@ describe('with outbound delivery (B2)', () => {
 				object: t.aliceUri,
 			})
 		).toBe(202)
-		expect((await t.deliveries()).map((d) => [d.type, d.inbox_url])).toEqual([['Undo', `${bob2.uri}/inbox`]])
+		expect((await t.deliveries()).map((d) => [d.type, d.inbox_url])).toEqual([['Undo', 'https://new.example/inbox']])
 		expect(await count(t.h.store, 'SELECT 1 FROM follows WHERE account_id = ?', t.alice.id)).toBe(0)
 	})
 })

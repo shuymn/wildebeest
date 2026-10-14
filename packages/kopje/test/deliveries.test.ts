@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
-import { act, community, post, remoteAccount, remoteFollows } from './status-helpers'
+import { act, community, post, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
 import { followAnswerActivity, followActivity, followUri, undoFollowActivity } from '../src/domain/activities'
 import {
 	type Claim,
@@ -379,10 +379,10 @@ describe('follows toward remote accounts', () => {
 		await act(h, alice, `/api/v1/accounts/${dave}/follow`, { reblogs: false })
 		await act(h, alice, `/api/v1/accounts/${dave}/unfollow`)
 		const sent = await rows(h.store)
-		// Both go to dave's personal inbox, in one lane, in order.
+		// Neither has to: both go to dave's shared inbox, in one lane, in order.
 		expect(sent.map((r) => [r.type, r.inbox_url, r.state])).toEqual([
-			['Follow', 'https://remote.example/users/dave/inbox', 'pending'],
-			['Undo', 'https://remote.example/users/dave/inbox', 'queued'],
+			['Follow', 'https://remote.example/inbox', 'pending'],
+			['Undo', 'https://remote.example/inbox', 'queued'],
 		])
 		expect(JSON.parse(sent[0]?.body ?? '{}')).toEqual({
 			'@context': 'https://www.w3.org/ns/activitystreams',
@@ -398,6 +398,61 @@ describe('follows toward remote accounts', () => {
 			object: { id: edge?.uri, type: 'Follow', actor, object: 'https://remote.example/users/dave' },
 		})
 		expect(h.doorbell).toHaveBeenCalled()
+	})
+
+	it('sends an activity without to to the personal inbox of a recipient without a shared inbox', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const dave = await remoteAccount(h.store, 'dave', 'remote.example')
+		await sql(h.store, 'UPDATE accounts SET shared_inbox_url = NULL WHERE id = ?', dave)
+		const theirs = await seedStatus(h.store, {
+			accountId: dave,
+			visibility: 'public',
+			uri: 'https://remote.example/n/1',
+		})
+		await act(h, alice, `/api/v1/accounts/${dave}/follow`)
+		await act(h, alice, `/api/v1/statuses/${theirs}/favourite`)
+		expect(
+			await sql(
+				h.store,
+				`SELECT json_extract(o.body, '$.activity.type') AS type, d.inbox_url, d.addressee
+				FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id ORDER BY d.id`
+			)
+		).toEqual([
+			{ type: 'Follow', inbox_url: 'https://remote.example/users/dave/inbox', addressee: null },
+			{ type: 'Like', inbox_url: 'https://remote.example/users/dave/inbox', addressee: null },
+		])
+	})
+
+	it('sends a Like to the shared inbox, and a silent recipient its copy at its personal inbox (VIS-3)', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const dave = await remoteAccount(h.store, 'dave', 'remote.example')
+		await remoteAccount(h.store, 'carol', 'carol.example')
+		const theirs = await seedStatus(h.store, {
+			accountId: dave,
+			visibility: 'public',
+			uri: 'https://remote.example/n/1',
+		})
+		await act(h, alice, `/api/v1/statuses/${theirs}/favourite`)
+		const direct = await post(h, alice, { status: '@carol@carol.example psst', visibility: 'direct' })
+		await h.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'in-flight' })
+		await h.request(`/api/v1/statuses/${direct.id}`, bearer(alice.token, json({ status: 'edited' }, { method: 'PUT' })))
+		expect(
+			await sql(
+				h.store,
+				`SELECT json_extract(o.body, '$.activity.type') AS type, d.inbox_url, d.addressee
+				FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id ORDER BY d.id`
+			)
+		).toEqual([
+			{ type: 'Like', inbox_url: 'https://remote.example/inbox', addressee: null },
+			{ type: 'Create', inbox_url: 'https://carol.example/inbox', addressee: null },
+			{
+				type: 'Update',
+				inbox_url: 'https://carol.example/users/carol/inbox',
+				addressee: 'https://carol.example/users/carol',
+			},
+		])
 	})
 
 	it('builds Follow, Undo, Accept and Reject in the intent format', () => {

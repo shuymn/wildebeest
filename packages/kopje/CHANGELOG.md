@@ -10,6 +10,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- An activity without addressing (a Follow, Accept, Reject, Like or their Undo) now goes to the recipient's shared
+  inbox when it has one, and to its personal inbox only otherwise. Some servers accept such activities at a personal
+  inbox but never process them, so a follow could stay pending. An addressed activity that reaches a recipient without
+  naming it still goes to that recipient's personal inbox.
+
 - The cutover rollback no longer reads a Queue holding only delayed messages as empty: Queues leaves a delayed message
   out of the backlog's message count, so `kopje-admin cutover drain` and `kopje-admin cutover close` now count a Queue
   as empty only when its message count and byte count are both 0, and fail closed on a malformed reading. Before, a

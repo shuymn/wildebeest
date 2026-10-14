@@ -127,8 +127,9 @@ export type DeliveryAudience = { followers: boolean; accounts: string[] }
 //   - addressed accounts named in to/cc: by shared inbox, as Mastodon's StatusReachFinder;
 //   - addressed accounts the activity reaches without naming them: on an addressed activity (one with to), a silent
 //     recipient, by its personal inbox only, with itself as addressee (none: recorded as unreachable for the
-//     operator, never sent to a shared inbox); otherwise (the object of a Like or Follow) by its personal inbox, as
-//     Mastodon delivers favourites and follows;
+//     operator, never sent to a shared inbox); otherwise (an activity without to: a Like, Follow, Accept, Reject or
+//     their Undo, each of which names its recipient through its object) by shared inbox when it has one, else its
+//     personal inbox, as some servers accept but do not process such activities at a personal inbox;
 //   - for a retraction, every inbox that received the object or may still receive it.
 // Local accounts are never delivered to over HTTP: they read the Store. A neutral copy goes once to each inbox, and a
 // personal copy once to each silent recipient. Personal copies are written first, so on a server that also gets the
@@ -175,7 +176,7 @@ export function audienceTargets(
 			add(account.shared_inbox_url ?? account.inbox_url, null)
 		} else {
 			add(
-				addressedActivity ? account.inbox_url : (account.inbox_url ?? account.shared_inbox_url),
+				addressedActivity ? account.inbox_url : (account.shared_inbox_url ?? account.inbox_url),
 				addressedActivity ? account.uri : null
 			)
 		}
