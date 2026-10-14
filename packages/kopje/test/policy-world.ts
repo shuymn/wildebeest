@@ -319,7 +319,11 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 			)
 		}
 		if (status.tagged) {
-			sql.exec("INSERT INTO status_tags (status_id, name) VALUES (?, 'cats')", statusId(i))
+			sql.exec(
+				"INSERT INTO status_tags (status_id, name, public) VALUES (?, 'cats', ?)",
+				statusId(i),
+				status.visibility === 'public' ? 1 : 0
+			)
 		}
 	})
 	for (const f of world.follows) {

@@ -451,6 +451,43 @@ describe('Update of a status (ID-6, ID-7, VIS-2)', () => {
 	})
 })
 
+describe('hashtags a hashtag timeline lists (status_tags.public)', () => {
+	it('marks the hashtags of a public status only, on Create and on Update', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const tag = (name: string) => ({ type: 'Hashtag', name: `#${name}` })
+		const open = mastodonNote(bob, { tag: [tag('cats')] })
+		const unlisted = mastodonNote(bob, { to: [`${bob.uri}/followers`], cc: [PUBLIC], tag: [tag('cats')] })
+		const followers = mastodonNote(bob, { to: [`${bob.uri}/followers`], cc: [], tag: [tag('cats')] })
+		for (const note of [open, unlisted, followers]) {
+			expect(await t.post(bob, create(bob, note))).toBe(202)
+		}
+		const rows = async () =>
+			sql(
+				t.store,
+				`SELECT s.uri, s.visibility, t.name, t.public FROM status_tags t JOIN statuses s ON s.id = t.status_id
+				ORDER BY s.uri, t.name`
+			)
+		const expected = (names: string[]) =>
+			[
+				{ uri: open.id, visibility: 'public', public: 1 },
+				{ uri: unlisted.id, visibility: 'unlisted', public: 0 },
+				{ uri: followers.id, visibility: 'private', public: 0 },
+			]
+				.flatMap((row) => names.map((name) => ({ ...row, name })))
+				.sort((a, b) => (a.uri < b.uri ? -1 : a.uri > b.uri ? 1 : a.name < b.name ? -1 : 1))
+		expect(await rows()).toEqual(expected(['cats']))
+
+		// An Update rewrites the hashtags; the status keeps its visibility, so its hashtags keep the mark.
+		for (const note of [open, unlisted, followers]) {
+			const edited = { ...note, tag: [tag('cats'), tag('dogs')] }
+			expect(await t.post(bob, update(bob, edited, '2026-10-11T13:00:00Z'))).toBe(202)
+		}
+		expect(await rows()).toEqual(expected(['cats', 'dogs']))
+	})
+})
+
 describe('Delete of a status (ID-6, RES-6)', () => {
 	it('deletes the author’s status with its children, and nothing of anyone else’s (ID-6, ID-3)', async () => {
 		const t = await setup()

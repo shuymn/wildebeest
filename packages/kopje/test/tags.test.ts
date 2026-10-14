@@ -119,7 +119,8 @@ describe('tags', () => {
 		)
 		await sql(
 			h.store,
-			`INSERT INTO status_tags (status_id, name) SELECT id, 'cats' FROM statuses WHERE id >= ? AND id < ?`,
+			`INSERT INTO status_tags (status_id, name, public)
+			SELECT id, 'cats', visibility = 'public' FROM statuses WHERE id >= ? AND id < ?`,
 			String(base),
 			String(base + BigInt(count))
 		)

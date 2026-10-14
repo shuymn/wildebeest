@@ -140,8 +140,20 @@ describe('convert and verify-conversion', () => {
 		// Hashtags as Kopje names them, once each: a received Hashtag's one leading # dropped, legacy's recorded names
 		// whole; then NFKC and lowercase.
 		expect(value('SELECT group_concat(name) FROM (SELECT name FROM status_tags ORDER BY name)')).toBe(
-			'#double,#foo,#full,#hash,#small,#wide,bare,cats,wildebeest'
+			'#double,#foo,#full,#hash,#small,#wide,bare,cats,cats,wildebeest'
 		)
+		// A hashtag is listed on hashtag timelines exactly when its status is public.
+		expect(
+			db
+				.prepare(
+					`SELECT s.visibility = 'public' AS public, t.public AS listed, count(*) AS n
+					FROM status_tags t JOIN statuses s ON s.id = t.status_id GROUP BY 1, 2 ORDER BY 1, 2`
+				)
+				.all()
+		).toEqual([
+			{ public: 0, listed: 0, n: expect.any(Number) },
+			{ public: 1, listed: 1, n: expect.any(Number) },
+		])
 		// An unset discoverable: false for a local account, as legacy had it; unknown for a remote one.
 		expect(value("SELECT discoverable FROM accounts WHERE uri LIKE '%/users/alice'")).toBe(1)
 		expect(value("SELECT discoverable FROM accounts WHERE uri LIKE '%/users/Bob'")).toBe(0)
@@ -235,6 +247,8 @@ describe('convert and verify-conversion', () => {
 			['a client loses its website', 'UPDATE oauth_clients SET website = NULL', 'clients'],
 			['a hashtag is dropped', "DELETE FROM status_tags WHERE name = 'wildebeest'", 'statuses'],
 			['a hashtag keeps its case', "UPDATE status_tags SET name = 'Cats' WHERE name = 'cats'", 'statuses'],
+			['a public hashtag is not listed', 'UPDATE status_tags SET public = 0 WHERE public = 1', 'statuses'],
+			['a hidden hashtag is listed', 'UPDATE status_tags SET public = 1 WHERE public = 0', 'statuses'],
 			[
 				'a boost gets a hashtag',
 				"INSERT INTO status_tags (status_id, name) SELECT id, 'cats' FROM statuses WHERE reblog_of_id IS NOT NULL LIMIT 1",

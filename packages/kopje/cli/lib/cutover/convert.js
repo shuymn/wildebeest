@@ -778,7 +778,10 @@ export function convertLegacy(
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	)
 	const mentionInsert = insert('INSERT OR IGNORE INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, ?)')
-	const tagInsert = insert('INSERT OR IGNORE INTO status_tags (status_id, name) VALUES (?, ?)')
+	// status_tags.public: whether the status is public, the only visibility hashtag timelines list.
+	const tagInsert = insert('INSERT OR IGNORE INTO status_tags (status_id, name, public) VALUES (?, ?, ?)')
+	/** @type {Set<string>} ids of the public statuses written */
+	const publicStatuses = new Set()
 	// Accounts by their URI in legacy's normalized form (legacyReference).
 	const accountByReference = new Map(
 		[...accounts].flatMap(([uri, a]) => {
@@ -925,9 +928,12 @@ export function convertLegacy(
 				tags.add(hashtagObjectName(carried(/** @type {Json} */ (tag).name)))
 			}
 		}
+		if (visibility === 'public') {
+			publicStatuses.add(plan.id)
+		}
 		for (const tag of tags) {
 			if (tag !== '') {
-				tagInsert.run(plan.id, tag)
+				tagInsert.run(plan.id, tag, visibility === 'public' ? 1 : 0)
 			}
 		}
 	}
@@ -936,7 +942,7 @@ export function convertLegacy(
 		// Legacy recorded the name without its #, as the status text has it (getHashtags).
 		const name = normalizeTag(carried(hashtag.value))
 		if (status !== undefined && name !== '') {
-			tagInsert.run(status.id, name)
+			tagInsert.run(status.id, name, publicStatuses.has(status.id) ? 1 : 0)
 		}
 	}
 	// Conversation partner (Mastodon's carried_over_reply_to_account_id): a reply to one's own reply keeps the partner.

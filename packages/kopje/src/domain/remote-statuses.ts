@@ -7,6 +7,7 @@ import {
 	isDistributable,
 	isPublicCollection,
 	type StatusMention,
+	tagPublicSql,
 	type Visibility,
 } from './audience'
 import { userWriteOperation } from './auth'
@@ -293,7 +294,8 @@ function writeMedia(db: Db, statusId: string, author: Author, media: readonly Re
 function writeTags(db: Db, statusId: string, tags: readonly string[]): void {
 	db.run('DELETE FROM status_tags WHERE status_id = ?', statusId)
 	db.run(
-		'INSERT INTO status_tags (status_id, name) SELECT ?1, value FROM json_each(?2) WHERE true ON CONFLICT DO NOTHING',
+		`INSERT INTO status_tags (status_id, name, public)
+		SELECT ?1, value, ${tagPublicSql('?1')} FROM json_each(?2) WHERE true ON CONFLICT DO NOTHING`,
 		statusId,
 		JSON.stringify(tags.slice(0, MAX_STATUS_TAGS))
 	)
