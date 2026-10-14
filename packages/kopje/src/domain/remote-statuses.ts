@@ -7,7 +7,6 @@ import {
 	isDistributable,
 	isPublicCollection,
 	type StatusMention,
-	tagPublicSql,
 	type Visibility,
 } from './audience'
 import { userWriteOperation } from './auth'
@@ -16,7 +15,7 @@ import { isDeleted, type RemoteActorInput, upsertRemoteActor } from './inbox'
 import { notify } from './notifications'
 import { normalizeSearchText } from './search-text'
 import { presentStatus, type Status } from './status-presenter'
-import { MAX_STATUS_EDITS, recordEdit, recountStatus } from './statuses'
+import { MAX_STATUS_EDITS, recordEdit, recountStatus, writeTags } from './statuses'
 import type { Db } from '../db/sql'
 
 // Remote statuses (B1b-2): Create, Update and the originals of boosts and search results, stored as Mastodon 4.7.3's
@@ -291,16 +290,6 @@ function writeMedia(db: Db, statusId: string, author: Author, media: readonly Re
 	}
 }
 
-function writeTags(db: Db, statusId: string, tags: readonly string[]): void {
-	db.run('DELETE FROM status_tags WHERE status_id = ?', statusId)
-	db.run(
-		`INSERT INTO status_tags (status_id, name, public)
-		SELECT ?1, value, ${tagPublicSql('?1')} FROM json_each(?2) WHERE true ON CONFLICT DO NOTHING`,
-		statusId,
-		JSON.stringify(tags.slice(0, MAX_STATUS_TAGS))
-	)
-}
-
 function searchText(input: RemoteStatusInput): string {
 	return normalizeSearchText(`${input.spoilerText} ${input.text}`)
 }
@@ -404,7 +393,7 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 		id,
 		JSON.stringify(rows.map((m) => ({ accountId: m.accountId, silent: m.silent ? 1 : 0 })))
 	)
-	writeTags(db, id, input.tags)
+	writeTags(db, id, input.tags.slice(0, MAX_STATUS_TAGS))
 	writeMedia(db, id, author, input.media, ctx)
 	recountStatus(db, parent?.id ?? null)
 	linkReplies(db, { id, uri: input.uri, accountId: author.id, replyTarget, isReply: input.inReplyTo !== null })
@@ -586,7 +575,7 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 			notify(db, { recipientId: id, type: 'mention', fromId: author.id, statusId: existing.id, now: ctx.now })
 		}
 	}
-	writeTags(db, existing.id, input.tags)
+	writeTags(db, existing.id, input.tags.slice(0, MAX_STATUS_TAGS))
 	writeMedia(db, existing.id, author, media, ctx)
 	if (significant) {
 		if (versions + (versions === 0 ? 2 : 1) > MAX_STATUS_EDITS) {

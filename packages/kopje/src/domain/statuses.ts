@@ -395,7 +395,7 @@ function writeMentions(
 	return mentions.map((m) => m.id).filter((id) => !previous.includes(id))
 }
 
-function writeTags(db: Db, statusId: string, tags: readonly string[]): void {
+export function writeTags(db: Db, statusId: string, tags: readonly string[]): void {
 	db.run('DELETE FROM status_tags WHERE status_id = ?', statusId)
 	db.run(
 		`INSERT INTO status_tags (status_id, name, public)

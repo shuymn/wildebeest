@@ -12,7 +12,6 @@ import { listableSql } from '../src/domain/audience'
 import type { Status } from '../src/domain/status-presenter'
 import { normalizeTag } from '../src/domain/tag-name'
 import { tagTimeline, type TagTimelineInput } from '../src/domain/timelines'
-import type { StoreStub } from '../src/platform/store-client'
 
 // The hashtag timeline reads each name in status id order from the index of public hashtags and stops at a page
 // (RES-7), and shows what the query it replaced showed: the same statuses, in the same order, page by page.
@@ -31,6 +30,9 @@ const QUERIES: Query[] = [
 	{ tag: 'cats', any: ['dogs'], all: [], none: [], local: true, remote: false, onlyMedia: false },
 	{ tag: 'cats', any: ['birds'], all: [], none: [], local: false, remote: true, onlyMedia: true },
 ]
+
+// A list of names as the query binds it: normalized, each once.
+const unique = (names: string[]) => JSON.stringify([...new Set(names.map(normalizeTag))])
 
 // The query before the per-name reads, as it was, with publicConditions spelled out.
 function previousSql(q: Query, ascending: boolean): string {
@@ -103,7 +105,6 @@ describe('hashtag timeline', () => {
 				for (const viewer of viewers) {
 					const credential = viewer === null ? null : { tokenHash: `${TOKEN_PREFIX}${viewer}`, scope: 'read', now }
 					for (const q of QUERIES) {
-						const unique = (names: string[]) => JSON.stringify([...new Set(names.map(normalizeTag))])
 						const previous = (page: PageQuery) => {
 							const ascending = page.minId !== undefined
 							const ids = sql
@@ -163,34 +164,6 @@ describe('hashtag timeline', () => {
 		})
 	}, 120_000)
 
-	// `count` public statuses of a remote account tagged with each of `names`, ids from `base` up.
-	async function tagged(store: StoreStub, base: bigint, count: number, names: string[]): Promise<void> {
-		await runInDurableObject(store, (_instance, state) => {
-			const sql = state.storage.sql
-			sql.exec(
-				`INSERT OR IGNORE INTO accounts (id, uri, username, domain)
-				VALUES ('100000000000000001', 'https://remote.example/users/bob', 'bob', 'remote.example')`
-			)
-			sql.exec(
-				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
-				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
-				SELECT CAST(?1 + i AS TEXT), 'https://remote.example/s/' || (?1 + i), '100000000000000001', 'public', '<p>x</p>',
-					'2026-10-01T00:00:00.000Z' FROM n`,
-				String(base),
-				count
-			)
-			for (const name of names) {
-				sql.exec(
-					`INSERT INTO status_tags (status_id, name, public)
-					SELECT id, ?3, 1 FROM statuses WHERE id >= ?1 AND id < ?2`,
-					String(base),
-					String(base + BigInt(count)),
-					name
-				)
-			}
-		})
-	}
-
 	it('reads a page, however many public statuses the tags have (RES-7)', async () => {
 		const BASE = 200000000000000000n
 		const input = (q: Partial<Query>, page: PageQuery) => ({
@@ -216,10 +189,23 @@ describe('hashtag timeline', () => {
 		]
 		const measure = async (count: number) => {
 			const store = await migratedStore()
-			// The statuses carry cats; every other one dogs too, every third birds.
-			await tagged(store, BASE, count, ['cats'])
+			// `count` public statuses of a remote account, ids from BASE up. They carry cats; every other one dogs too,
+			// every third birds.
 			await runInDurableObject(store, (_instance, state) => {
 				const sql = state.storage.sql
+				sql.exec(
+					`INSERT INTO accounts (id, uri, username, domain)
+					VALUES ('100000000000000001', 'https://remote.example/users/bob', 'bob', 'remote.example')`
+				)
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
+					INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					SELECT CAST(?1 + i AS TEXT), 'https://remote.example/s/' || (?1 + i), '100000000000000001', 'public', '<p>x</p>',
+						'2026-10-01T00:00:00.000Z' FROM n`,
+					String(BASE),
+					count
+				)
+				sql.exec("INSERT INTO status_tags (status_id, name, public) SELECT id, 'cats', 1 FROM statuses")
 				sql.exec(
 					"INSERT INTO status_tags (status_id, name, public) SELECT id, 'dogs', 1 FROM statuses WHERE CAST(id AS INTEGER) % 2 = 0"
 				)
