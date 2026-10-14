@@ -81,6 +81,10 @@ describe('dump', () => {
 
 		// An independent comparison (typed hex of every value) agrees.
 		expect(withoutState(await tableSnapshot(target))).toEqual(withoutState(await tableSnapshot(source)))
+		const mutes = 'SELECT hide_notifications, expires_at FROM mutes'
+		const read = (store: StoreStub) =>
+			runInDurableObject(store, (_instance, state) => state.storage.sql.exec(mutes).toArray())
+		expect(await read(target)).toEqual([{ hide_notifications: 0, expires_at: '2026-10-13T00:00:00.000Z' }])
 		const state = (await tableSnapshot(target)).kopje_state
 		expect(state).toContain('last_local_id=110000000000000099')
 		expect(state).not.toContain('upgrade_bookmark=source-only')
@@ -106,7 +110,7 @@ describe('dump', () => {
 		expect(text).not.toContain('kopje_migrations')
 		expect(text).not.toContain('_cf_')
 		const header = splitDump(text).header as { tables: { name: string }[]; migrations: { name: string }[] }
-		expect(header.migrations.map((m) => m.name)).toEqual(['0000_initial', '0001_mute_expiry'])
+		expect(header.migrations.map((m) => m.name)).toEqual(['0000_initial', '0001_blocks_and_mutes'])
 		// Parents come before children; sqlite_sequence is last.
 		const order = header.tables.map((t) => t.name)
 		expect(order.indexOf('accounts')).toBeLessThan(order.indexOf('local_accounts'))
@@ -682,7 +686,10 @@ describe('upgrade retry', () => {
 		})
 		expect(await store.health(BUILD)).toMatchObject({ hold: 'upgrade-failed' })
 		expect(toStoreUnavailable(await rejectionOf(store.retryUpgrade('other')))?.reason).toBe('version-mismatch')
-		expect(await store.retryUpgrade(BUILD)).toMatchObject({ ok: true, applied: ['0000_initial', '0001_mute_expiry'] })
+		expect(await store.retryUpgrade(BUILD)).toMatchObject({
+			ok: true,
+			applied: ['0000_initial', '0001_blocks_and_mutes'],
+		})
 		expect(await store.health(BUILD)).toMatchObject({ hold: null, readonly: false, schema: { status: 'current' } })
 	})
 })

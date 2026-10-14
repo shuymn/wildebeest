@@ -165,7 +165,7 @@ describe('admin endpoints', () => {
 		})
 		expect(await (await as(adminClaims(), '/admin/version')).json()).toMatchObject({
 			worker: { build: BUILD },
-			store: { build: BUILD, applied: '0001_mute_expiry', expected: '0001_mute_expiry' },
+			store: { build: BUILD, applied: '0001_blocks_and_mutes', expected: '0001_blocks_and_mutes' },
 		})
 		const capacity = (await (await as(adminClaims(), '/admin/capacity')).json()) as {
 			databaseSize: number
@@ -173,7 +173,9 @@ describe('admin endpoints', () => {
 		}
 		expect(capacity.databaseSize).toBeGreaterThan(0)
 		expect(capacity.tables).toContainEqual({ name: 'statuses', rows: 3 })
-		expect(capacity.tables).toContainEqual({ name: 'sqlite_sequence', rows: 1 })
+		expect(capacity.tables).toContainEqual({ name: 'mutes', rows: 1 })
+		// The AUTOINCREMENT counters of the seeded notifications and mutes.
+		expect(capacity.tables).toContainEqual({ name: 'sqlite_sequence', rows: 2 })
 		expect(capacity.tables.some((t) => t.name.startsWith('_cf_'))).toBe(false)
 		expect(await (await as(adminClaims(), '/admin/spool')).json()).toEqual({
 			parts: 1,
