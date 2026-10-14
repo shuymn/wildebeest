@@ -286,7 +286,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **VIS-9: only the followed side accepts.** A pending follow of a local account becomes `accepted` only by that
   account's own authorize call; a pending remote follow only by an `Accept` that passes ID-6. _Enforced (main):_ `answerFollowRequest` in `src/domain/accounts.ts` (`POST
 /api/v1/follow_requests/:id/authorize` and `/reject`, the viewer from the credential; a remote requester gets the
-  Accept or Reject at its personal inbox), and the inbound `Accept`, matched first by the `follows.uri` of our Follow;
+  Accept or Reject at its shared inbox, or its personal inbox without one), and the inbound `Accept`, matched first by the `follows.uri` of our Follow;
   `test/inbox.test.ts` ("Accept: only the target of our Follow accepts it"), `test/inbox-regressions.test.ts` ("with
   outbound delivery").
 - **VIS-10: a notification is emitted once.** It is written only if the recipient is local and may see the status, and
@@ -512,16 +512,20 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   re-checks every redirect hop (same origin, at most 5), stops at 1 MiB and 5 s for the whole load, and honours abort
   signals. _Enforced (main):_ `src/federation/loader.ts`; `test/loader.test.ts`.
 - **NET-2: deliveries reach only the audience's inboxes.** Inboxes come from the stored audience and are deduplicated by
-  shared inbox; targets pass NET-3; a non-public activity is never sent to a redirect target. Claims serialize each
-  lane; the POST timeout (30 s) is shorter than the lease (60 s), and completion requires the current lease token, so a
-  stale completion cannot settle a later claim. A lane is `(actor, inbox origin)`: everything an actor sends one
-  server, to shared and personal inboxes alike, arrives in order, so a later `Update` or `Delete` cannot overtake the
-  `Create`. The whole path from claim to POST (key loading, DNS, signing, the POST) runs under one absolute deadline,
-  the earlier of 30 s and 10 s before the lease ends; the clock is checked against it after the key is loaded and
-  right before the POST, so a late timer cannot let a POST through. _Enforced (main):_
+  shared inbox; an activity without `to` (a Like, Follow, Accept, Reject or their Undo, each naming its recipient
+  through its object) goes to the recipient's shared inbox when it has one, and moves to its distinct personal inbox on
+  the same origin (same lane, within the row's attempts) if the shared inbox answers 404, 405 or 410; targets pass
+  NET-3; a non-public activity is never sent to a redirect target. Claims serialize each lane; the POST timeout (30 s)
+  is shorter than the lease (60 s), and completion requires the current lease token, so a stale completion cannot settle
+  a later claim. A lane is `(actor, inbox origin)`: everything an actor sends one server, to shared and personal inboxes
+  alike, arrives in order, so a later `Update` or `Delete` cannot overtake the `Create`. The whole path from claim to
+  POST (key loading, DNS, signing, the POST) runs under one absolute deadline, the earlier of 30 s and 10 s before the
+  lease ends; the clock is checked against it after the key is loaded and right before the POST, so a late timer cannot
+  let a POST through. _Enforced (main):_
   `src/domain/deliveries.ts` (expansion, lanes, claims, completions), `src/federation/delivery.ts` (the POST);
   `test/deliveries.test.ts` ("NET-2: delivers a public status once per shared inbox", "NET-2: a recipient outside the
-  audience gets nothing", "NET-2: an expired lease is claimed again"), `test/delivery-post.test.ts` ("NET-2: never
+  audience gets nothing", "NET-2: an expired lease is claimed again", "moves a Follow and its Undo to the personal
+  inbox once when the shared inbox answers 404"), `test/delivery-post.test.ts` ("NET-2: never
   follows a redirect", "NET-2: times out the POST before the lease ends"), `test/delivery-regressions.test.ts` ("keeps a
   Create to a server's shared inbox ahead of an Update", "counts slow DNS and slow key loading against the budget",
   "refuses to send once the lease budget has run out").

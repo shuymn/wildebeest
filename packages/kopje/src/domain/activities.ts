@@ -21,9 +21,10 @@ import { sha256Hex } from '../platform/sha256'
 //
 // where followers means the signer's followers and accounts are the addressed accounts (silent recipients included,
 // local ones too; delivery skips local recipients). An addressed account named in to/cc is delivered to by its shared
-// inbox, any other (silent recipients, the object of a Like or a Follow) by its personal inbox (deliveries.ts). Update and Delete are addressed and delivered to the audience
-// the status already had and never wider: visibility cannot change, and a mention removed by an edit stays as a
-// silent mention. Delete carries a Tombstone, not the content.
+// inbox, a silent recipient by its personal inbox, and the recipient of an activity without to (a Like, Follow,
+// Accept, Reject or their Undo) by its shared inbox when it has one (deliveries.ts). Update and Delete are addressed
+// and delivered to the audience the status already had and never wider: visibility cannot change, and a mention
+// removed by an edit stays as a silent mention. Delete carries a Tombstone, not the content.
 
 const AS_CONTEXT = 'https://www.w3.org/ns/activitystreams'
 
@@ -324,10 +325,11 @@ export function undoAnnounceActivity(input: AnnounceInput) {
 
 // ---------------------------------------------------------------------------------------------------------------
 // Follows (Mastodon's FollowService, UnfollowService, AuthorizeFollowService and RejectFollowService). Each goes to
-// the other side's personal inbox. A follow's id is `<actor>#follows/<edge id>`. Accept and Reject are named after
-// the Follow they answer: `<actor>#accepts/follows/<sha256 of the Follow's id>`, so two generations of one follow get
-// two answers and a replayed Follow names the same one; a Follow without an id (migrated rows) falls back to the
-// edge id, as Mastodon's `#accepts/follows/<id>`.
+// the other side's shared inbox, or its personal inbox without one (audienceTargets). A follow's id is
+// `<actor>#follows/<edge id>`. Accept and Reject are named after the Follow they answer:
+// `<actor>#accepts/follows/<sha256 of the Follow's id>`, so two generations of one follow get two answers and a
+// replayed Follow names the same one; a Follow without an id (migrated rows) falls back to the edge id, as Mastodon's
+// `#accepts/follows/<id>`.
 // ---------------------------------------------------------------------------------------------------------------
 
 export type FollowActivityInput = { followUri: string; actorUri: string; targetUri: string; targetId: string }

@@ -531,8 +531,8 @@ function blockedEitherWay(db: Db, a: string, b: string): boolean {
 	)
 }
 
-// Accept or Reject of a remote Follow, as an outbound intent delivered to the follower's personal inbox (B2). Its id
-// derives from the Follow it answers (followAnswerActivity).
+// Accept or Reject of a remote Follow, as an outbound intent delivered to the follower's shared inbox, or its personal
+// inbox without one (B2). Its id derives from the Follow it answers (followAnswerActivity).
 function recordFollowAnswer(
 	db: Db,
 	kind: 'Accept' | 'Reject',

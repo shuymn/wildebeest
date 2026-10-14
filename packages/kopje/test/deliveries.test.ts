@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
-import { act, community, post, remoteAccount, remoteFollows } from './status-helpers'
+import { act, community, post, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
 import { followAnswerActivity, followActivity, followUri, undoFollowActivity } from '../src/domain/activities'
 import {
 	type Claim,
@@ -53,6 +53,7 @@ function complete(store: StoreStub, id: string, leaseToken: string, now: number,
 const OK: DeliveryOutcome = { kind: 'delivered', status: 202 }
 const FAIL: DeliveryOutcome = { kind: 'failed', status: 503, error: 'HTTP 503', permanent: false }
 const GONE: DeliveryOutcome = { kind: 'failed', status: 410, error: 'HTTP 410', permanent: true }
+const MISSING: DeliveryOutcome = { kind: 'failed', status: 404, error: 'HTTP 404', permanent: true }
 
 // Followers on two servers (two sharing fans.example's shared inbox), plus accounts that must not receive anything.
 async function audience() {
@@ -379,10 +380,10 @@ describe('follows toward remote accounts', () => {
 		await act(h, alice, `/api/v1/accounts/${dave}/follow`, { reblogs: false })
 		await act(h, alice, `/api/v1/accounts/${dave}/unfollow`)
 		const sent = await rows(h.store)
-		// Both go to dave's personal inbox, in one lane, in order.
+		// Neither has to: both go to dave's shared inbox, in one lane, in order.
 		expect(sent.map((r) => [r.type, r.inbox_url, r.state])).toEqual([
-			['Follow', 'https://remote.example/users/dave/inbox', 'pending'],
-			['Undo', 'https://remote.example/users/dave/inbox', 'queued'],
+			['Follow', 'https://remote.example/inbox', 'pending'],
+			['Undo', 'https://remote.example/inbox', 'queued'],
 		])
 		expect(JSON.parse(sent[0]?.body ?? '{}')).toEqual({
 			'@context': 'https://www.w3.org/ns/activitystreams',
@@ -398,6 +399,177 @@ describe('follows toward remote accounts', () => {
 			object: { id: edge?.uri, type: 'Follow', actor, object: 'https://remote.example/users/dave' },
 		})
 		expect(h.doorbell).toHaveBeenCalled()
+	})
+
+	it('sends an activity without to to the personal inbox of a recipient without a shared inbox', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const dave = await remoteAccount(h.store, 'dave', 'remote.example')
+		await sql(h.store, 'UPDATE accounts SET shared_inbox_url = NULL WHERE id = ?', dave)
+		const theirs = await seedStatus(h.store, {
+			accountId: dave,
+			visibility: 'public',
+			uri: 'https://remote.example/n/1',
+		})
+		await act(h, alice, `/api/v1/accounts/${dave}/follow`)
+		await act(h, alice, `/api/v1/statuses/${theirs}/favourite`)
+		expect(
+			await sql(
+				h.store,
+				`SELECT json_extract(o.body, '$.activity.type') AS type, d.inbox_url, d.addressee
+				FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id ORDER BY d.id`
+			)
+		).toEqual([
+			{ type: 'Follow', inbox_url: 'https://remote.example/users/dave/inbox', addressee: null },
+			{ type: 'Like', inbox_url: 'https://remote.example/users/dave/inbox', addressee: null },
+		])
+	})
+
+	it('sends a Like to the shared inbox, and a silent recipient its copy at its personal inbox (VIS-3)', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const dave = await remoteAccount(h.store, 'dave', 'remote.example')
+		await remoteAccount(h.store, 'carol', 'carol.example')
+		const theirs = await seedStatus(h.store, {
+			accountId: dave,
+			visibility: 'public',
+			uri: 'https://remote.example/n/1',
+		})
+		await act(h, alice, `/api/v1/statuses/${theirs}/favourite`)
+		const direct = await post(h, alice, { status: '@carol@carol.example psst', visibility: 'direct' })
+		await h.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'in-flight' })
+		await h.request(`/api/v1/statuses/${direct.id}`, bearer(alice.token, json({ status: 'edited' }, { method: 'PUT' })))
+		expect(
+			await sql(
+				h.store,
+				`SELECT json_extract(o.body, '$.activity.type') AS type, d.inbox_url, d.addressee
+				FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id ORDER BY d.id`
+			)
+		).toEqual([
+			{ type: 'Like', inbox_url: 'https://remote.example/inbox', addressee: null },
+			{ type: 'Create', inbox_url: 'https://carol.example/inbox', addressee: null },
+			{
+				type: 'Update',
+				inbox_url: 'https://carol.example/users/carol/inbox',
+				addressee: 'https://carol.example/users/carol',
+			},
+		])
+	})
+
+	it('moves a Follow and its Undo to the personal inbox once when the shared inbox answers 404', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const dave = await remoteAccount(h.store, 'dave', 'remote.example')
+		const shared = 'https://remote.example/inbox'
+		const personal = 'https://remote.example/users/dave/inbox'
+		await act(h, alice, `/api/v1/accounts/${dave}/follow`)
+		const follow = await claim(h.store, NOW, 'a')
+		expect(follow.deliveries.map((d) => d.inbox)).toEqual([shared])
+		await act(h, alice, `/api/v1/accounts/${dave}/unfollow`)
+		expect(await complete(h.store, follow.deliveries[0]?.id ?? '', 'a', NOW, MISSING)).toMatchObject({
+			status: 'retry',
+			retryAt: NOW,
+		})
+		// The same row, still first in the lane, its failed attempt counted, with the shared inbox's answer recorded.
+		expect((await rows(h.store)).map((r) => [r.id, r.type, r.inbox_url, r.state, r.attempts, r.last_status])).toEqual([
+			[follow.deliveries[0]?.id, 'Follow', personal, 'pending', 1, 404],
+			[expect.any(String), 'Undo', shared, 'queued', 0, null],
+		])
+		const sent: [string, string][] = []
+		for (const [token, outcome] of [
+			['b', OK],
+			['c', MISSING],
+			['d', OK],
+		] as const) {
+			const round = await claim(h.store, NOW, token)
+			expect(round.deliveries).toHaveLength(1)
+			const [delivery] = round.deliveries
+			sent.push([JSON.parse(delivery?.body ?? '{}').type, delivery?.inbox ?? ''])
+			await complete(h.store, delivery?.id ?? '', token, NOW, outcome)
+		}
+		expect(sent).toEqual([
+			['Follow', personal],
+			['Undo', shared],
+			['Undo', personal],
+		])
+		expect(await rows(h.store)).toEqual([])
+	})
+
+	it('gives up without a fallback when no distinct personal inbox exists, or the personal inbox answers 404', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const same = await remoteAccount(h.store, 'same', 'same.example')
+		await sql(h.store, 'UPDATE accounts SET inbox_url = shared_inbox_url WHERE id = ?', same)
+		const lone = await remoteAccount(h.store, 'lone', 'lone.example')
+		await sql(h.store, 'UPDATE accounts SET shared_inbox_url = NULL WHERE id = ?', lone)
+		await act(h, alice, `/api/v1/accounts/${same}/follow`)
+		await act(h, alice, `/api/v1/accounts/${lone}/follow`)
+		const round = await claim(h.store, NOW, 'a')
+		for (const delivery of round.deliveries) {
+			expect(await complete(h.store, delivery.id, 'a', NOW, MISSING)).toMatchObject({ status: 'gave_up' })
+		}
+		expect((await rows(h.store)).map((r) => [r.type, r.inbox_url, r.state])).toEqual([
+			['Follow', 'https://same.example/inbox', 'gave_up'],
+			['Follow', 'https://lone.example/users/lone/inbox', 'gave_up'],
+		])
+	})
+
+	it('gives up without a fallback when the personal inbox is on another origin', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const dave = await remoteAccount(h.store, 'dave', 'remote.example')
+		await sql(
+			h.store,
+			"UPDATE accounts SET inbox_url = 'https://elsewhere.example/users/dave/inbox' WHERE id = ?",
+			dave
+		)
+		await act(h, alice, `/api/v1/accounts/${dave}/follow`)
+		const round = await claim(h.store, NOW, 'a')
+		expect(round.deliveries.map((d) => d.inbox)).toEqual(['https://remote.example/inbox'])
+		expect(await complete(h.store, round.deliveries[0]?.id ?? '', 'a', NOW, MISSING)).toMatchObject({
+			status: 'gave_up',
+		})
+		expect((await rows(h.store)).map((r) => [r.inbox_url, r.state])).toEqual([
+			['https://remote.example/inbox', 'gave_up'],
+		])
+	})
+
+	it('bounds a recipient that swaps its inboxes between attempts by the attempt budget', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const dave = await remoteAccount(h.store, 'dave', 'remote.example')
+		await act(h, alice, `/api/v1/accounts/${dave}/follow`)
+		let completion: { status: string } = { status: 'retry' }
+		let posts = 0
+		while (completion.status === 'retry') {
+			const round = await claim(h.store, NOW, `t${posts}`)
+			expect(round.deliveries).toHaveLength(1)
+			posts++
+			completion = await complete(h.store, round.deliveries[0]?.id ?? '', `t${posts - 1}`, NOW, MISSING)
+			// An actor Update makes the inbox just tried its shared inbox again.
+			await sql(
+				h.store,
+				'UPDATE accounts SET inbox_url = shared_inbox_url, shared_inbox_url = inbox_url WHERE id = ?',
+				dave
+			)
+		}
+		expect(completion.status).toBe('gave_up')
+		expect(posts).toBe(MAX_ATTEMPTS)
+		expect((await rows(h.store)).map((r) => [r.state, r.attempts])).toEqual([['gave_up', MAX_ATTEMPTS]])
+	})
+
+	it('never moves an addressed activity to a personal inbox when the shared inbox answers 404', async () => {
+		const { h, alice } = await audience()
+		await post(h, alice, { status: 'hello @other@other.example' })
+		const round = await claim(h.store, NOW, 'a')
+		expect(round.deliveries.map((d) => d.inbox)).toEqual(['https://fans.example/inbox', 'https://other.example/inbox'])
+		for (const delivery of round.deliveries) {
+			expect(await complete(h.store, delivery.id, 'a', NOW, MISSING)).toMatchObject({ status: 'gave_up' })
+		}
+		expect((await rows(h.store)).map((r) => [r.inbox_url, r.state])).toEqual([
+			['https://fans.example/inbox', 'gave_up'],
+			['https://other.example/inbox', 'gave_up'],
+		])
 	})
 
 	it('builds Follow, Undo, Accept and Reject in the intent format', () => {

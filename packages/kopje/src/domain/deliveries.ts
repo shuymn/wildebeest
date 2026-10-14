@@ -30,6 +30,9 @@ import type { Db } from '../db/sql'
 //   - A failure is retried after min(30 s·2^n, 12 h), n being the attempts so far; after MAX_ATTEMPTS, or on a
 //     permanent failure, the row is gave_up: kept for the operator until retried or swept. An activity that a later
 //     one about the same object follows is superseded, and the operator may not send it again.
+//   - An activity without to that a recipient's shared inbox answers with 404, 405 or 410 moves to that recipient's
+//     personal inbox on the same origin, within its attempts (personalFallback): some servers advertise a shared
+//     inbox they have disabled.
 //   - A delivered Create, Update or Announce of a local status records its inbox in outbound_receipts, owned by the
 //     status; none is written once the status is gone or a retraction of it is pending (one still staging its
 //     targets reads them from the receipts, so they are written until it is staged).
@@ -127,8 +130,9 @@ export type DeliveryAudience = { followers: boolean; accounts: string[] }
 //   - addressed accounts named in to/cc: by shared inbox, as Mastodon's StatusReachFinder;
 //   - addressed accounts the activity reaches without naming them: on an addressed activity (one with to), a silent
 //     recipient, by its personal inbox only, with itself as addressee (none: recorded as unreachable for the
-//     operator, never sent to a shared inbox); otherwise (the object of a Like or Follow) by its personal inbox, as
-//     Mastodon delivers favourites and follows;
+//     operator, never sent to a shared inbox); otherwise (an activity without to: a Like, Follow, Accept, Reject or
+//     their Undo, each of which names its recipient through its object) by shared inbox when it has one, else its
+//     personal inbox, as some servers accept but do not process such activities at a personal inbox;
 //   - for a retraction, every inbox that received the object or may still receive it.
 // Local accounts are never delivered to over HTTP: they read the Store. A neutral copy goes once to each inbox, and a
 // personal copy once to each silent recipient. Personal copies are written first, so on a server that also gets the
@@ -175,7 +179,7 @@ export function audienceTargets(
 			add(account.shared_inbox_url ?? account.inbox_url, null)
 		} else {
 			add(
-				addressedActivity ? account.inbox_url : (account.inbox_url ?? account.shared_inbox_url),
+				addressedActivity ? account.inbox_url : (account.shared_inbox_url ?? account.inbox_url),
 				addressedActivity ? account.uri : null
 			)
 		}
@@ -822,6 +826,9 @@ export const completeDelivery = writeOperation<
 		return { status: 'delivered', nextDueAt: nextDueAt(db, now, leaseToken) }
 	}
 	const error = outcome.error.slice(0, MAX_ERROR_LENGTH)
+	if (outcome.permanent && personalFallback(db, row, now, outcome.status, error)) {
+		return { status: 'retry', retryAt: now, nextDueAt: nextDueAt(db, now, leaseToken) }
+	}
 	if (outcome.permanent || row.attempts >= MAX_ATTEMPTS) {
 		giveUp(db, row, now, outcome.status, error)
 		return { status: 'gave_up', nextDueAt: nextDueAt(db, now, leaseToken) }
@@ -838,6 +845,53 @@ export const completeDelivery = writeOperation<
 	)
 	return { status: 'retry', retryAt, nextDueAt: nextDueAt(db, now, leaseToken) }
 })
+
+// The answers by which a shared inbox is taken to be missing (not found, no POST, gone) rather than refusing the
+// activity. A server may advertise a shared inbox it has disabled (Pixelfed lists one even when its configuration
+// turns it off) while its personal inboxes still work.
+const SHARED_INBOX_MISSING = new Set([404, 405, 410])
+
+// The fallback of audienceTargets' rule for an activity without to: a row sent to its recipient's shared inbox that
+// answered SHARED_INBOX_MISSING moves, in place, to that recipient's personal inbox when it has a different one on
+// the same origin that the activity has no row or unexpanded target for. A personal inbox on another origin gets no
+// fallback (the row gives up as on any other permanent failure), so a row never changes lanes: it keeps its id and
+// its place in the lane (a later Undo stays behind it), and records the shared inbox's answer until it settles. The
+// failed attempt counts, and a row moves only while it has attempts left (MAX_ATTEMPTS): a recipient that swaps its
+// inbox URLs between attempts keeps a row alive for at most MAX_ATTEMPTS attempts, as ordinary retries do. Rows of an
+// addressed activity (followers, accounts named in to/cc) and personal copies (addressee) never move.
+function personalFallback(db: Db, row: LaneRow, now: number, status: number | null, error: string): boolean {
+	if (status === null || !SHARED_INBOX_MISSING.has(status) || row.attempts >= MAX_ATTEMPTS) {
+		return false
+	}
+	const personal = db.first<{ inbox: string }>(
+		`SELECT a.inbox_url AS inbox
+		FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id,
+			json_each(o.body, '$.audience.accounts') r JOIN accounts a ON a.id = r.value
+		WHERE d.id = CAST(?1 AS INTEGER) AND d.addressee IS NULL AND json_type(o.body, '$.activity.to') IS NOT 'array'
+			AND a.domain IS NOT NULL AND a.shared_inbox_url = d.inbox_url AND a.inbox_url <> d.inbox_url
+			AND NOT EXISTS (SELECT 1 FROM deliveries e WHERE e.activity_id = o.id AND e.inbox_url = a.inbox_url)
+			AND NOT EXISTS (SELECT 1 FROM outbound_targets c, json_each(c.targets) t
+				WHERE c.activity_id = o.id AND t.key >= c.next AND json_extract(t.value, '$.inbox') = a.inbox_url)
+		ORDER BY a.id LIMIT 1`,
+		row.id
+	)
+	if (personal === undefined || !isDeliverableInbox(personal.inbox) || laneOf(personal.inbox) !== row.lane) {
+		return false
+	}
+	db.run(
+		`UPDATE deliveries SET state = 'pending', inbox_url = ?2, lease_token = NULL, next_attempt_at = ?3,
+			last_status = ?4, last_error = ?5, updated_at = ?3
+		WHERE id = CAST(?1 AS INTEGER)`,
+		row.id,
+		personal.inbox,
+		now,
+		status,
+		`shared inbox ${error}; sent to the personal inbox`.slice(0, MAX_ERROR_LENGTH)
+	)
+	// DATA-5: no URL or identity in the log.
+	console.warn({ event: 'kopje.delivery.shared_inbox_fallback', status })
+	return true
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // Operator view (admin API and `kopje-admin deliveries`) and the sweep
