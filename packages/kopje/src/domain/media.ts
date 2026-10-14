@@ -1,7 +1,7 @@
 import { actorSnapshot, recordActorUpdate } from './actor-update'
-import { userReadOperation, userWriteOperation } from './auth'
+import { userMediaDeleteOperation, userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
-import { writeOperation } from './operation'
+import { mediaDeleteOperation } from './operation'
 import { MEDIA_COLUMNS, type MediaAttachment, type MediaRow, presentMedia } from './status-presenter'
 import type { Db } from '../db/sql'
 import { mediaPath } from '../platform/media-files'
@@ -278,7 +278,7 @@ export type Abandoned = 'abandoned' | 'kept' | 'gone'
 
 // A failed upload: doomed at once and released from its writer, so the sweep takes it right away. A completed upload is
 // never doomed here.
-export const abandonMedia = userWriteOperation<{ id: string; now: number }, Abandoned>(
+export const abandonMedia = userMediaDeleteOperation<{ id: string; now: number }, Abandoned>(
 	(db, { id, now }, { accountId }) => {
 		const row = db.first<{ processed: number; url: string }>(
 			'SELECT processed, url FROM media_attachments WHERE id = ? AND account_id = ?',
@@ -308,7 +308,7 @@ export type ProfileImage = 'avatar' | 'header'
 // Makes a completed upload of the viewer their avatar or header: the account points at its full file, the row is kept
 // for good (gc_at NULL), and the image it replaces, if it was one of the account's uploads, is doomed so the sweep
 // deletes its files. False when the upload is not the viewer's own live, unattached upload.
-export const setProfileImage = userWriteOperation<{ id: string; kind: ProfileImage; now: number }, boolean>(
+export const setProfileImage = userMediaDeleteOperation<{ id: string; kind: ProfileImage; now: number }, boolean>(
 	(db, { id, kind, now }, { accountId }) => {
 		const upload = ownUpload(db, accountId, id, now)
 		if (upload === undefined || upload.url === '') {
@@ -368,22 +368,23 @@ function setUp(db: Db): boolean {
 
 // Doomed uploads, oldest first. They cannot be attached or read any more (liveMediaSql), so the R2 objects can go
 // before the rows.
-export const expiredMedia = writeOperation<{ now: number; limit: number }, ExpiredMedia[]>((db, { now, limit }) =>
-	setUp(db)
-		? db.all<ExpiredMedia>(
-				`SELECT id, file_token AS token FROM media_attachments
+export const expiredMedia = mediaDeleteOperation<{ now: number; limit: number }, ExpiredMedia[]>(
+	(db, { now, limit }) =>
+		setUp(db)
+			? db.all<ExpiredMedia>(
+					`SELECT id, file_token AS token FROM media_attachments
 				WHERE status_id IS NULL AND gc_at IS NOT NULL AND gc_at <= ?
 				ORDER BY gc_at LIMIT ?`,
-				iso(now),
-				Math.min(limit, SWEEP_BATCH)
-			)
-		: []
+					iso(now),
+					Math.min(limit, SWEEP_BATCH)
+				)
+			: []
 )
 
 // Deletes swept rows whose R2 objects are gone; a row attached again meanwhile cannot match (it has no gc_at). A row
 // that never completed leaves a tombstone: its writer may still put an object after this, and reconciliation deletes
 // the keys again once the tombstone falls due, ORPHAN_GRACE_MS after the later of now and the writer's deadline.
-export const purgeMedia = writeOperation<{ ids: string[]; now: number }, number>((db, { ids, now }) => {
+export const purgeMedia = mediaDeleteOperation<{ ids: string[]; now: number }, number>((db, { ids, now }) => {
 	const swept = db.all<{ id: string; token: string | null; url: string; created_at: string }>(
 		`SELECT id, file_token AS token, url, created_at FROM media_attachments
 		WHERE id IN (SELECT value FROM json_each(?)) AND status_id IS NULL AND gc_at IS NOT NULL AND gc_at <= ?`,
@@ -412,7 +413,7 @@ export type Orphan = { id: string; token: string }
 
 // Reconciliation (the cron, mastodon/media.ts): tombstones that fell due. Nothing else is ever deleted by it; an R2
 // object no row names but no tombstone records stays.
-export const dueOrphans = writeOperation<{ now: number }, Orphan[]>((db, { now }) =>
+export const dueOrphans = mediaDeleteOperation<{ now: number }, Orphan[]>((db, { now }) =>
 	setUp(db)
 		? db.all<Orphan>(
 				`SELECT media_id AS id, file_token AS token FROM media_orphans WHERE delete_after <= ?
@@ -423,7 +424,7 @@ export const dueOrphans = writeOperation<{ now: number }, Orphan[]>((db, { now }
 		: []
 )
 
-export const forgetOrphans = writeOperation<{ tokens: string[] }, number>((db, { tokens }) =>
+export const forgetOrphans = mediaDeleteOperation<{ tokens: string[] }, number>((db, { tokens }) =>
 	db.run(
 		'DELETE FROM media_orphans WHERE file_token IN (SELECT value FROM json_each(?))',
 		JSON.stringify(tokens.slice(0, RECONCILE_BATCH))

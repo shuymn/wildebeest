@@ -36,7 +36,8 @@ export function adminHarness(
 	store: StoreStub,
 	team: AccessTeam,
 	overrides: Record<string, unknown> = {},
-	federation?: AppDeps['federation']
+	federation?: AppDeps['federation'],
+	images?: AppDeps['images']
 ) {
 	const testEnv = { ...env, ...overrides } as unknown as Env
 	// Doorbells are recorded, never sent: the test pool's Queue would run the real consumer.
@@ -48,6 +49,7 @@ export function adminHarness(
 		fetch: team.fetch,
 		doorbell,
 		...(federation === undefined ? {} : { federation }),
+		...(images === undefined ? {} : { images }),
 	})
 	const request = (path: string, init?: RequestInit) =>
 		app.fetch(new Request(`https://admin.kopje.test${path}`, init), testEnv, createExecutionContext())

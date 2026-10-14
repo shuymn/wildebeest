@@ -400,8 +400,9 @@ kopje-admin maintenance-worker-check <work>/export-b --domain <domain> --worker 
   the first `wrangler` that fails, or when the number put differs from what the conversion wrote (no originals passes
   only when none were written); it runs in bash also when pasted into zsh. Run the whole block again
   (a put replaces the same key). Do not import before it passes: a row whose original is not in R2 has nothing to
-  rebuild its files from (`media-rebuild` reports such rows; TODO: part 2). The images' served files appear only once `media-rebuild` has made them from these originals (TODO: part 2
-  of the Cloudflare Images move, not in this release): until then the moved avatars, headers and attachments answer 404. A rollback leaves the originals in the bucket; a later conversion with the same `images.json` and base time
+  rebuild its files from (`media-rebuild` reports such rows as `original-missing`). The images' served files are made
+  from these originals by `kopje-admin media-rebuild` in step 8; until then the moved avatars, headers and attachments
+  answer 404. A rollback leaves the originals in the bucket; a later conversion with the same `images.json` and base time
   writes the same keys again.
 - **Rollback:** before the import is verified, Rollback A; after, Rollback B.
 
@@ -432,6 +433,22 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://<domain>/api/v1/timelines/publ
 Set `MAINTENANCE=readonly` on the Worker (Settings, Variables and Secrets). Reads and sign-ins work; writes answer 503
 (the unpublished Store refuses them anyway).
 
+Make the served files of local media that has none yet, such as the images `convert --images` moved (their originals
+went to R2 in step 6), so they are served at publication:
+
+```sh
+kopje-admin media-rebuild
+```
+
+It re-encodes each such original as an upload is, writes `files/<token>/{full,small}`, and corrects the row's sizes in
+`meta` (the conversion took them from the image header, which ignores EXIF rotation); rows whose files exist are
+skipped, so it can be run again. Its writes are the only ones the unpublished Store admits, and only for the Access
+admin. It runs only while the Store refuses other writes, as here (an unpublished import needs no wait), so nothing
+deletes media meanwhile, and one call at a time under a lease: while a call holds it the Store refuses `import`,
+`import-reset`, `cutover reset`, `publish` and leaving maintenance (`rebuild-in-progress`; wait until the command has
+finished, at most until the 10-minute lease expires). Do not change `MAINTENANCE` while it runs. Each image counts two transformations against `IMAGES_MONTHLY_TRANSFORMS`. Because it changes `meta`, a dump
+taken after it differs from the conversion there: step 6's `verify-conversion` runs before it.
+
 ```sh
 kopje-admin health
 curl -sS "https://<domain>/.well-known/webfinger?resource=acct:<user>@<domain>" | jq .subject
@@ -449,8 +466,11 @@ kopje-admin fingerprint export <work>/export-c > <work>/fp-c.json
 kopje-admin fingerprint compare <work>/fp-b.json <work>/fp-c.json
 ```
 
-- **Go:** health has no failing check; sign-in works; the data looks right; Push registration succeeds; the
-  fingerprints match.
+- **Go:** `media-rebuild` exits 0 (every local image is served); health has no failing check; sign-in works; the data
+  looks right, images included; Push registration succeeds; the fingerprints match. `media-rebuild` exits 3 with the
+  rows that need a decision (`original-missing`, `type-mismatch`, `failed`) or when the Images quota or the monthly
+  budget stopped it: publishing then leaves those images unserved (404) until it is run again and succeeds, a decision
+  for the owner.
 - **Rollback:** as step 7.
 
 ### 9. Publish (2 min) — the point of no return
@@ -487,7 +507,7 @@ statuses, and of profiles until they fetch them again, keep the old `imagedelive
 `Update` for the old statuses (Mastodon would mark every one of them as edited), and changed avatars and headers are
 not announced yet (TODO: part 3, `Update(Person)`).
 
-1. Once `media-rebuild` has run (TODO: part 2), check that the instance shows its avatars, headers and attachments
+1. Once `media-rebuild` has run (step 8), check that the instance shows its avatars, headers and attachments
    from `https://<domain>/media/`.
 2. Keep the images in Cloudflare Images for a grace period of at least 30 days after publishing, while remote servers
    still show recent statuses from their copies.
@@ -617,7 +637,8 @@ measures how long they take on the real data and proves the conversion passes be
       differ; only the time matters);
     - `images-export` again on this export (only the images uploaded since), `convert` and `verify-conversion` with
       `--images`, putting the originals into the temporary Worker's media bucket, `import` into the temporary Store,
-      `dump` (through Access), and `verify-conversion` on the Store's dump;
+      `dump` (through Access), `verify-conversion` on the Store's dump, and `media-rebuild` (which spends two Images
+      transformations per image; count them against the month's allowance before the window);
     - `maintenance-worker` and `maintenance-worker-check`, and the generated worker run locally with
       `wrangler pages dev <work>/maintenance` (request an actor and post a signed request to an inbox).
 3. Exercise the rollback on the temporary Worker: `cutover reset --yes` after its import, and a drain into a test Queue

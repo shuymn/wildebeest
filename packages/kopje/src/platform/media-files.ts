@@ -3,12 +3,22 @@
 //   originals/<id>                the uploaded bytes, never served (they may carry EXIF and location)
 //   files/<token>/full            the re-encoded image that is served
 //   files/<token>/small           the re-encoded preview that is served
+//   kopje/pitr-restored/<store>   when that Store last scheduled a PITR restore (restoreMarkerKey), never served
 //
 // Every key is built here from a server-generated id or token that the Store holds; nothing from a request (file name,
 // path segment, encoded separator) chooses a key. The serving route only ever builds files/ keys, from a token that
 // matches FILE_TOKEN, so originals are not reachable from a URL.
 
 export type MediaVariant = 'full' | 'small'
+
+// Outside the Store's database, so a PITR restore does not rewind it: the media rebuild counts its settle period from
+// it (domain/media-rebuild.ts). Named by the Store's Durable Object id.
+export function restoreMarkerKey(storeId: string): string {
+	if (!/^[0-9a-f]{64}$/.test(storeId)) {
+		throw new Error('not a Durable Object id')
+	}
+	return `kopje/pitr-restored/${storeId}`
+}
 
 export const MEDIA_VARIANTS: readonly MediaVariant[] = ['full', 'small']
 

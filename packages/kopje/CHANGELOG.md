@@ -10,7 +10,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
-- The cutover can move a legacy instance's images out of Cloudflare Images (the first part of the move).
+- The cutover can move a legacy instance's images out of Cloudflare Images.
   `kopje-admin images-export` downloads the images the legacy data references under the operator's Images account,
   through the Images API with a token read from `CF_IMAGES_TOKEN` or from the delivery URLs, checks them as Kopje checks
   an upload, and records them in `images.json`; a rerun downloads only what is new. `kopje-admin convert --images`
@@ -18,9 +18,25 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   file token and an original of its own (also when several show one image), drops legacy's default profile images so
   Kopje's defaults apply, and writes the originals for R2 under their media ids;
   `verify-conversion --images` checks the result independently. A missing image stops the conversion unless
-  `--accept-missing-images` is given. The served files are not made yet, so moved images answer 404 until a later
-  release adds the rebuild step. Without `--images`, the conversion is unchanged. See docs/cutover.md ("Media") and
-  docs/cutover-runbook.md. No schema or `wrangler.jsonc` change.
+  `--accept-missing-images` is given. The served files are made by `kopje-admin media-rebuild` (below). Without `--images`, the conversion is unchanged. See docs/cutover.md ("Media") and
+  docs/cutover-runbook.md.
+- `kopje-admin media-rebuild [--dry-run]` (`POST /admin/media/rebuild`, Access admin only) makes the served files of
+  local media whose files are missing from their originals in R2: media restored from a backup, which holds only the
+  originals, and images moved by the cutover. Each is re-encoded as an upload is, and its sizes in `meta` are corrected
+  to the files made. Rows whose files exist are skipped, so it can be run again; it reports rows whose original is
+  missing, whose type does not match their URLs, or that fail to re-encode, and stops on the Images quota or the
+  monthly transformation budget (exit 3). It writes only while nothing can delete media: before publication, or once
+  the Store's maintenance (`kopje-admin maintenance on`) has lasted 20 minutes (otherwise `rebuild-needs-readonly` or
+  `rebuild-settling`, exit 3). One call runs at a time under a Store lease, during which imports, resets, publication,
+  leaving maintenance, PITR restores and every media-deleting write are refused; after a PITR restore it waits for the
+  settle period again. A restore or a cutover
+  thus serves its images when published ([docs/backup.md](docs/backup.md),
+  [docs/cutover-runbook.md](docs/cutover-runbook.md) step 8).
+
+### Instance changes
+
+- Store schema: unchanged.
+- `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.2] - 2026-10-14
 

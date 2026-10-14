@@ -30,7 +30,7 @@ import {
 	requiresMention,
 	type Visibility,
 } from './audience'
-import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
+import { optionalUserReadOperation, userMediaDeleteOperation, userReadOperation, userWriteOperation } from './auth'
 import { beginRetraction } from './deliveries'
 import { allocateLocalId } from './ids'
 import { DETACHED_GRACE_MS, liveMediaSql } from './media'
@@ -598,7 +598,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 // the media sweep deletes it and its R2 objects (the Worker starts a sweep after the call). Only the deleted status
 // itself carries its source; a boost's original is shown only if the viewer may still see it, and never with its
 // source.
-export const deleteStatus = userWriteOperation<
+export const deleteStatus = userMediaDeleteOperation<
 	{ id: string; deleteMedia: boolean; now: number; present: Present },
 	Viewed<Status>
 >((db, input, { accountId }) => {

@@ -4,7 +4,7 @@
 // worker bundles (scripts/build-maintenance.mjs) and writes the `_worker.js` for the same export with the real CLI code,
 // for test/maintenance-worker.test.ts: the file is written where the Workers suite can import it.
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -18,6 +18,7 @@ import { maintenanceWorker } from '../cli/lib/cutover/maintenance.js'
 import { convertExport } from '../cli/lib/cutover/run.js'
 import { expectedFromLegacy } from '../cli/lib/cutover/verify-expect.js'
 import { buildMaintenance } from '../scripts/build-maintenance.mjs'
+import { PNG_PLAIN } from '../test/fixtures/images.js'
 
 // Under the package, so the Workers suite's module runner may load the generated file.
 export const MAINTENANCE_CACHE = fileURLToPath(new URL('../node_modules/.cache/kopje-maintenance/', import.meta.url))
@@ -79,8 +80,9 @@ export default async function setup(project: TestProject): Promise<void> {
 }
 
 // The same export with its images in Cloudflare Images (a fake fetch answers with one small PNG for every image),
-// converted with --images, for test/cutover-images-lifecycle.test.ts.
-async function convertedWithImages(dir: string): Promise<{ dump: string }> {
+// converted with --images, for test/cutover-images-lifecycle.test.ts and test/media-rebuild.test.ts: the dump, and the
+// originals the conversion wrote for R2 (base64, by media id).
+async function convertedWithImages(dir: string): Promise<{ dump: string; originals: Record<string, string> }> {
 	const fixture = await buildLegacyFixture({
 		level: 39,
 		notificationSequence: 12n,
@@ -91,8 +93,8 @@ async function convertedWithImages(dir: string): Promise<{ dump: string }> {
 	for (const [table, text] of fixture.texts) {
 		await writeFile(join(exportPath, `${table}.sql`), text)
 	}
-	const png = new Uint8Array(45)
-	png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 8, 0, 0, 0, 8])
+	// A real PNG, so the originals can be re-encoded.
+	const png = Buffer.from(PNG_PLAIN, 'base64')
 	const imagesDir = join(dir, 'images')
 	const exported = await exportImages({
 		exportPath,
@@ -116,13 +118,17 @@ async function convertedWithImages(dir: string): Promise<{ dump: string }> {
 	if (!ok) {
 		throw new Error(`fixture conversion with images stopped: ${JSON.stringify(manifest.stop)}`)
 	}
-	return { dump: await readFile(join(outDir, 'kopje.dump'), 'utf8') }
+	const originals: Record<string, string> = {}
+	for (const name of await readdir(join(outDir, 'originals'))) {
+		originals[name] = (await readFile(join(outDir, 'originals', name))).toString('base64')
+	}
+	return { dump: await readFile(join(outDir, 'kopje.dump'), 'utf8'), originals }
 }
 
 declare module 'vitest' {
 	export interface ProvidedContext {
 		cutover: { dump: string; expected: Record<string, Record<string, string>> }
-		cutoverImages: { dump: string }
+		cutoverImages: { dump: string; originals: Record<string, string> }
 		maintenance: { source: string; workerPath: string }
 	}
 }

@@ -19,6 +19,7 @@ import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import * as inbox from './domain/inbox'
 import { instanceInfo } from './domain/instance'
 import * as media from './domain/media'
+import * as mediaRebuild from './domain/media-rebuild'
 import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
 import { resolveSearch } from './domain/remote-statuses'
@@ -39,10 +40,21 @@ import {
 	recordMedia,
 	saveBackup,
 } from './platform/backup-state'
+import { restoreMarkerKey } from './platform/media-files'
 import { type ImportAuthority, StoreAdmin } from './platform/store-admin'
 import { readFlags } from './platform/store-flags'
 import { StoreKernel, type StoreOperation } from './platform/store-kernel'
 import { buildOf, PACKAGE_VERSION } from './version'
+
+// When a PITR restore was last scheduled (store.ts pitrToBookmark), or null.
+async function lastRestore(bucket: R2Bucket, key: string): Promise<number | null> {
+	const marker = await bucket.get(key)
+	if (marker === null) {
+		return null
+	}
+	const at = (JSON.parse(await marker.text()) as { at?: unknown }).at
+	return typeof at === 'number' ? at : null
+}
 
 type OperationInput<T> = T extends StoreOperation<infer I, unknown> ? I : never
 
@@ -71,8 +83,12 @@ export class Store extends DurableObject<Env> {
 		return { ...(await this.#kernel.version()), version: PACKAGE_VERSION }
 	}
 
+	// The restore is recorded in R2 first (restoreMarkerKey): a restore rewinds the database, maintenance start and
+	// unpublished flag included, so a media rebuild counts its settle period from this record instead.
 	pitrToBookmark(callerBuild: string, bookmark: string) {
-		return this.#kernel.restoreBookmark(callerBuild, bookmark)
+		return this.#kernel.restoreBookmark(callerBuild, bookmark, async () => {
+			await this.env.MEDIA.put(restoreMarkerKey(this.ctx.id.toString()), JSON.stringify({ at: Date.now() }))
+		})
 	}
 
 	// ---- operations tooling (platform/store-admin.ts), called from /admin/*
@@ -711,6 +727,36 @@ export class Store extends DurableObject<Env> {
 
 	purgeMedia(callerBuild: string, input: OperationInput<typeof media.purgeMedia>) {
 		return this.#kernel.execute(callerBuild, media.purgeMedia, input)
+	}
+
+	// The media rebuild (domain/media-rebuild.ts), from /admin/media/rebuild. Each runs at the Store's own time, never a
+	// time the caller sends, so the lease and the fences that read it (store-admin.ts, store-flags.ts) share one clock.
+
+	mediaRebuildCandidates(
+		callerBuild: string,
+		input: Omit<OperationInput<typeof mediaRebuild.rebuildCandidates>, 'now'>
+	) {
+		return this.#kernel.execute(callerBuild, mediaRebuild.rebuildCandidates, { ...input, now: Date.now() })
+	}
+
+	mediaRebuildRowLive(callerBuild: string, input: Omit<OperationInput<typeof mediaRebuild.rebuildRowLive>, 'now'>) {
+		return this.#kernel.execute(callerBuild, mediaRebuild.rebuildRowLive, { ...input, now: Date.now() })
+	}
+
+	async mediaRebuildLease(
+		callerBuild: string,
+		input: Omit<OperationInput<typeof mediaRebuild.rebuildLease>, 'now' | 'restoredAt'>
+	) {
+		const restoredAt = await lastRestore(this.env.MEDIA, restoreMarkerKey(this.ctx.id.toString()))
+		return this.#kernel.execute(callerBuild, mediaRebuild.rebuildLease, { ...input, restoredAt, now: Date.now() })
+	}
+
+	chargeMediaRebuild(callerBuild: string, input: Omit<OperationInput<typeof mediaRebuild.chargeRebuild>, 'now'>) {
+		return this.#kernel.execute(callerBuild, mediaRebuild.chargeRebuild, { ...input, now: Date.now() })
+	}
+
+	recordMediaRebuild(callerBuild: string, input: Omit<OperationInput<typeof mediaRebuild.recordRebuild>, 'now'>) {
+		return this.#kernel.execute(callerBuild, mediaRebuild.recordRebuild, { ...input, now: Date.now() })
 	}
 
 	// Search (B4b).

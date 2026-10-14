@@ -44,8 +44,8 @@ index's digest is in the manifest. The manifest's `media` counts (`required`, `c
 much of the dump's media that is, and `kopje-admin backup-verify` reports every original that is missing. A backup can
 be complete and still lack originals: `pending` ones are copied by later backups, and `absent` ones cannot be.
 
-The served, re-encoded files (`files/` in R2) are not backed up. A restore puts the originals back, but restored media
-is not served until it is re-encoded (a restore tool for that is planned).
+The served, re-encoded files (`files/` in R2) are not backed up. A restore puts the originals back, and
+`kopje-admin media-rebuild` re-encodes them into the served files (restore step 6).
 
 ## How it runs
 
@@ -282,7 +282,7 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
 
 4. **Import** into an empty Store whose `kopje-admin catalog` shows the manifest's `schema.migrations`. Run the same
    Kopje version, or deploy it first, with `MAINTENANCE=full` before the instance is exposed, and keep it until you
-   publish (step 6). Before the import begins, nothing else protects the empty Store: a single write, such as an app
+   publish (step 7). Before the import begins, nothing else protects the empty Store: a single write, such as an app
    registration, makes it non-empty and the import is refused. Set the instance configuration with `kopje-admin config`
    (an import never carries it), then import:
 
@@ -312,7 +312,28 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
     It runs in bash also when pasted into zsh, stops at the first `wrangler` that fails, and fails when the number put
     differs from the number the index marks `copied` (no originals passes only when none are expected); run it again until it prints `put <n> originals` (a put replaces the same key).
 
-6. **Publish.** The imported Store stays readonly (it accepts no write and delivers nothing) until you publish it, once
+6. **Rebuild the served files** from the originals, through Access (the Store must have admin access; set it with
+   `kopje-admin config` first if the restore began with the import token). It runs only while the Store refuses other
+   writes, as it does until you publish, so nothing deletes media meanwhile. To rebuild later, on a published
+   instance, run `kopje-admin maintenance on`, wait 20 minutes (the rebuild refuses earlier, `rebuild-settling`, so
+   that nothing that may delete media is still running), rebuild, then `kopje-admin maintenance off`; the env
+   `MAINTENANCE` alone is not enough, and must not change during the rebuild. One call runs at a time, and the Store
+   neither publishes nor leaves maintenance while one runs:
+
+    ```sh
+    kopje-admin media-rebuild --dry-run   # what it would make, and the rows it cannot
+    kopje-admin media-rebuild
+    ```
+
+    It goes through every local media row in bounded calls and, for each whose served files are missing, re-encodes
+    its original as an upload is (metadata removed, long edge capped, a preview made), writes both files and records
+    their real sizes. Rows whose files exist are skipped, so it can be run again at any time. Each rebuilt row counts
+    two transformations against `IMAGES_MONTHLY_TRANSFORMS`. It exits 0 when every row is served, and 3 with the rows
+    that need a decision: `original-missing` (the backup did not hold it: `pending` or `absent` in the index),
+    `type-mismatch` (the original is not of the type the row's URLs name), `failed` (Images could not re-encode it), or
+    a stop on the Images quota (9422) or the monthly budget: run it again once the allowance is back.
+
+7. **Publish.** The imported Store stays readonly (it accepts no write and delivers nothing) until you publish it, once
    it looks right:
 
     ```sh

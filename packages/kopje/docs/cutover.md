@@ -227,8 +227,9 @@ are kept without a status either way. To move the images into Kopje's own media 
    Wrangler, as a backup restore does ([backup.md](backup.md)), before the import is published. The runbook's loop
    stops at the first failed put and checks the count.
 4. The served files (`files/<token>/full` and `small` in R2) are made from the originals by Kopje's own re-encoding.
-   That step, `media-rebuild`, comes with a later release (TODO: part 2 of the Cloudflare Images move); until it has run,
-   the mapped URLs answer 404. Changed avatars and headers are not announced to followers yet (TODO: part 3,
+   That step is `kopje-admin media-rebuild`, run after the import and before publication (runbook step 8); until it has
+   run, the mapped URLs answer 404. It also corrects each row's sizes, which the conversion took from the image header
+   (EXIF rotation ignored). Changed avatars and headers are not announced to followers yet (TODO: part 3,
    `Update(Person)`).
 
 **Relationships.** Follows, favourites, boosts, bookmarks, blocks, mutes, domain blocks and lists carry over. A

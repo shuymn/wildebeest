@@ -1,6 +1,6 @@
 import { errorFields, errorMessage } from './error-message'
 import { type MaintenanceReason, storeMaintenanceError } from './store-errors'
-import { activeDump, admitFlags, readFlags } from './store-flags'
+import { activeDump, admitFlags, PITR_RESTORING, readFlags, rebuildLeaseLive } from './store-flags'
 
 export type Migration = { readonly name: string; readonly sql: string }
 
@@ -8,11 +8,22 @@ export type Migration = { readonly name: string; readonly sql: string }
 //   read    : reads only
 //   session : login and Web Push registration writes, which readonly still lets through
 //   write   : any other write
-export type OperationKind = 'read' | 'session' | 'write'
+//   media-delete : a write that dooms or deletes media or picks R2 objects to delete (delete_media, the sweep and
+//             reconciliation, an upload's cleanup): a write that is also refused while the media rebuild's lease is live
+//   media-rebuild : the writes of the media rebuild only (domain/media-rebuild.ts): the instance's transformation
+//             counter and the meta of the rows it rebuilds. The operator gate (store-flags.ts admitFlags) lets them
+//             through in readonly maintenance and while a verified import is unpublished; nothing else does
+export type OperationKind = 'read' | 'session' | 'write' | 'media-delete' | 'media-rebuild'
 
 // The Store's own maintenance state is at most readonly (full is set only through the env). Readonly admits reads and
-// sessions and refuses writes.
-const READONLY_ADMITS: Record<OperationKind, boolean> = { read: true, session: true, write: false }
+// sessions and refuses writes. A held or upgrading Store refuses the media rebuild too.
+const READONLY_ADMITS: Record<OperationKind, boolean> = {
+	read: true,
+	session: true,
+	write: false,
+	'media-delete': false,
+	'media-rebuild': false,
+}
 
 // One domain operation = one RPC = one transactionSync. It runs synchronously over the Store's SQLite and must not
 // do external I/O. Timestamps and IDs come from the caller (Date.now() does not advance inside one DO request).
@@ -227,13 +238,27 @@ export class StoreKernel {
 
 	// Rescue RPC: restores the database to a bookmark on the next start and restarts the object now, so the
 	// caller sees this call fail once the restart happens. Keep MAINTENANCE=full set while doing this. It mutates, so
-	// unlike the other rescue RPCs it requires the caller's build to match.
-	async restoreBookmark(callerBuild: string, bookmark: string): Promise<void> {
+	// unlike the other rescue RPCs it requires the caller's build to match. It is refused while a media rebuild holds
+	// its lease, and marks the restore as being prepared (PITR_RESTORING) so no rebuild takes the lease meanwhile;
+	// `prepare` runs before the restore is scheduled (the Store records outside its database that a restore happened).
+	async restoreBookmark(callerBuild: string, bookmark: string, prepare?: () => Promise<void>): Promise<void> {
 		if (callerBuild !== this.build) {
 			throw storeMaintenanceError('version-mismatch')
 		}
-		this.#log({ event: 'kopje.store.pitr', bookmark })
-		await this.#ctx.storage.onNextSessionRestoreBookmark(bookmark)
+		this.#transaction(() => {
+			if (rebuildLeaseLive(readFlags(this.#sql), this.#now())) {
+				throw storeMaintenanceError('rebuild-in-progress')
+			}
+			this.#writeState(PITR_RESTORING, JSON.stringify({ at: this.#now() }))
+		})
+		try {
+			await prepare?.()
+			this.#log({ event: 'kopje.store.pitr', bookmark })
+			await this.#ctx.storage.onNextSessionRestoreBookmark(bookmark)
+		} catch (error) {
+			this.#transaction(() => this.#writeState(PITR_RESTORING, null))
+			throw error
+		}
 		this.#ctx.abort('restoring PITR bookmark')
 	}
 

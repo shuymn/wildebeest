@@ -98,7 +98,8 @@ days, so the bookmark must be younger than that.
     kopje-admin pitr restore <lastBookmark> --yes
     ```
 
-    The Store restarts to apply it. The call answers `restoring`.
+    The Store restarts to apply it. The call answers `restoring`. A restore is refused while `media-rebuild` runs;
+    after it, a media rebuild waits 20 minutes of maintenance again ([backup.md](backup.md)).
 
 4. **Check** with `kopje-admin health`: `schema.status` is `current`, and `versionMatch` is true.
 5. **Remove `MAINTENANCE`** (or set it to `off`). The instance serves again; spooled inbox activities are replayed.
