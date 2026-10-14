@@ -230,6 +230,9 @@ importers:
       '@types/sanitize-html':
         specifier: 2.16.2
         version: 2.16.2
+      acorn:
+        specifier: 8.15.0
+        version: 8.15.0
       age-encryption:
         specifier: 0.3.1
         version: 0.3.1
