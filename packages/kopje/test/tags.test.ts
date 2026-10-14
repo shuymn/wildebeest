@@ -140,6 +140,23 @@ describe('tags', () => {
 		expect((await getJson<Tag>(h, '/api/v1/tags/cats')).body).toEqual(before)
 	}, 60_000)
 
+	it('never reads the hidden statuses in the window (RES-7)', async () => {
+		const measure = async (hidden: number) => {
+			const h = await community(['alice'])
+			await tagged(h, 100, NOW + 3_600_000)
+			await tagged(h, hidden, NOW + 7_200_000, 'private')
+			return rowsRead(h, getTag, {
+				credential: null,
+				name: 'cats',
+				now: NOW + DAY_MS / 2,
+				present: { origin: 'https://kopje.test' },
+			})
+		}
+		const few = await measure(1)
+		const many = await measure(4000)
+		expect(many).toBeLessThanOrEqual(few + 10)
+	}, 60_000)
+
 	it('reads only the window: older uses of the tag are never read (RES-7)', async () => {
 		const measure = async (old: number) => {
 			const h = await community(['alice'])

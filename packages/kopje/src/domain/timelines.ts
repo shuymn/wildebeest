@@ -145,14 +145,16 @@ export const publicTimeline = optionalUserReadOperation<PublicTimelineInput, Pag
 
 export type TagTimelineInput = PublicTimelineInput & { tag: string; any: string[]; all: string[]; none: string[] }
 
-// Public statuses with the tag or any of `any`, all of `all` and none of `none` (Mastodon's TagFeed).
+// Public statuses with the tag or any of `any`, all of `all` and none of `none` (Mastodon's TagFeed). The candidates
+// are the public rows of status_tags (status_tags.public, through the partial index status_tags_public), so the read
+// never goes through the tag's unlisted, private, direct or limited statuses; publicConditions still decides each one.
 export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Status>>(
 	(db, input, { accountId: viewerId, now }) => {
 		const cursor = statusPage(input.page)
 		const tags = (names: string[]) => JSON.stringify([...new Set(names.map(normalizeTag))])
 		const rows = db.all<{ id: string }>(
 			`SELECT s.id FROM statuses s JOIN accounts pa ON pa.id = s.account_id
-		WHERE s.id IN (SELECT status_id FROM status_tags WHERE name IN (SELECT value FROM json_each(?5)))
+		WHERE s.id IN (SELECT status_id FROM status_tags WHERE public = 1 AND name IN (SELECT value FROM json_each(?5)))
 			AND NOT EXISTS (SELECT 1 FROM json_each(?6) t
 				WHERE NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id AND st.name = t.value))
 			AND NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id AND st.name IN (SELECT value FROM json_each(?7)))
