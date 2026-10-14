@@ -7,6 +7,7 @@ import * as instance from './instance'
 import * as media from './media'
 import * as notifications from './notifications'
 import * as oauth from './oauth'
+import * as placeholders from './placeholders'
 import * as search from './search'
 import * as statuses from './statuses'
 import * as tags from './tags'
@@ -59,6 +60,49 @@ export const ROUTES: readonly Route[] = [
 		handler: accounts.familiarFollowers,
 	},
 	{ method: 'GET', path: '/api/v1/tags/:id', access: { scope: 'read:follows', optional: true }, handler: tags.getTag },
+	{ method: 'GET', path: '/api/v1/filters', access: { scope: 'read:filters' }, handler: placeholders.emptyUserList },
+	{ method: 'GET', path: '/api/v2/filters', access: { scope: 'read:filters' }, handler: placeholders.emptyUserList },
+	{
+		method: 'GET',
+		path: '/api/v1/followed_tags',
+		access: { scope: 'read:follows' },
+		handler: placeholders.emptyUserList,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/featured_tags',
+		access: { scope: 'read:accounts' },
+		handler: placeholders.emptyUserList,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/accounts/:id/featured_tags',
+		access: 'public',
+		handler: placeholders.accountFeaturedTags,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/endorsements',
+		access: { scope: 'read:accounts' },
+		handler: placeholders.emptyUserList,
+	},
+	{ method: 'GET', path: '/api/v1/announcements', access: { scope: 'read' }, handler: placeholders.emptyUserList },
+	{ method: 'GET', path: '/api/v1/trends', access: 'public', handler: placeholders.emptyList },
+	{ method: 'GET', path: '/api/v1/trends/tags', access: 'public', handler: placeholders.emptyList },
+	{ method: 'GET', path: '/api/v1/trends/statuses', access: 'public', handler: placeholders.emptyList },
+	{ method: 'GET', path: '/api/v1/trends/links', access: 'public', handler: placeholders.emptyList },
+	{
+		method: 'GET',
+		path: '/api/v1/suggestions',
+		access: { scope: 'read:accounts' },
+		handler: placeholders.emptyUserList,
+	},
+	{
+		method: 'GET',
+		path: '/api/v2/suggestions',
+		access: { scope: 'read:accounts' },
+		handler: placeholders.emptyUserList,
+	},
 
 	{
 		method: 'GET',
