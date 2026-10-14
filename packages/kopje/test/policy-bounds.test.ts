@@ -81,8 +81,9 @@ const TOKEN_HASH = 'policy-bounds-token'
 const PRESENT = { origin: 'https://kopje.test' }
 const PAGE = { limit: 20 }
 
-// Unrelated rows: per unrelated remote account, three statuses (a reply and a boost among them) and its edges; one
-// unrelated local account per ten remote ones, with mutes, domain blocks, favourites, bookmarks and notifications.
+// Unrelated rows: per unrelated remote account, three statuses (a reply and a boost among them) and its edges; one unrelated local account per ten remote ones, with mutes,
+// domain blocks, favourites, bookmarks and notifications. The viewer's own blocks and mutes of unrelated accounts and
+// domain blocks of domains nobody lives on grow with them.
 const UNRELATED_ACCOUNT_BASE = 300000000000000000n
 const UNRELATED_STATUS_BASE = 400000000000000000n
 const HIDDEN: readonly Visibility[] = ['unlisted', 'private', 'direct', 'limited']
@@ -172,6 +173,22 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 		insert(first, HIDDEN[i % HIDDEN.length] ?? 'private')
 		insert(reply, HIDDEN[(i + 1) % HIDDEN.length] ?? 'private', { replyTo: first })
 		insert(boost, 'public', { reblogOf: first })
+		// The viewer's own choices about accounts and domains the world never shows them.
+		const viewer = accountId(VIEWER)
+		if (i % 3 === 0) {
+			sql.exec('INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?)', viewer, author)
+		} else if (i % 3 === 1) {
+			sql.exec(
+				'INSERT INTO mutes (account_id, target_account_id, hide_notifications, expires_at) VALUES (?, ?, ?, ?)',
+				viewer,
+				author,
+				i % 2,
+				i % 4 === 1 ? null : new Date(NOW + 3_600_000).toISOString()
+			)
+		}
+		if (i % 10 === 0) {
+			sql.exec('INSERT INTO domain_blocks (account_id, domain) VALUES (?, ?)', viewer, `unused${i}.example`)
+		}
 		// A world account other than the viewer is mentioned; the viewer never is.
 		const mentioned = (VIEWER + 1 + (i % (worldAccounts - 1))) % worldAccounts
 		sql.exec('INSERT INTO status_mentions (status_id, account_id) VALUES (?, ?)', first, accountId(mentioned))
@@ -219,6 +236,7 @@ async function worldWith(unrelated: number): Promise<StoreStub> {
 }
 
 const credential = { tokenHash: TOKEN_HASH, scope: 'read', now: NOW } as const
+const searchInput = { credential, limit: 20, offset: 0, following: false, localDomain: 'kopje.test', present: PRESENT }
 const timeline = { credential, now: NOW, page: PAGE, local: false, remote: false, onlyMedia: false, present: PRESENT }
 
 // Each endpoint with its input, as the routes call them.
@@ -261,20 +279,8 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown][] = [
 		{ credential, now: NOW, id: statusId(TARGET), kind: 'reblogged_by', page: PAGE, present: PRESENT },
 	],
 	['relationships', relationships, { credential, ids: WORLD.accounts.map((_, x) => accountId(x)) }],
-	[
-		'search',
-		search,
-		{
-			credential,
-			query: 'status',
-			types: ['statuses', 'hashtags'],
-			limit: 20,
-			offset: 0,
-			following: false,
-			localDomain: 'kopje.test',
-			present: PRESENT,
-		},
-	],
+	['status search', search, { ...searchInput, query: 'status', types: ['statuses'] }],
+	['hashtag search', search, { ...searchInput, query: 'cats', types: ['hashtags'] }],
 ]
 
 // How many rows a read may add when the unrelated rows grow from none to UNRELATED: a few for a planner's choice, far
@@ -282,7 +288,7 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown][] = [
 const ALLOWANCE = 10
 const UNRELATED = 1000
 
-// What an endpoint showed: the items of a page, the members of a context, the statuses of a search, or the entries of a
+// What an endpoint showed: the items of a page, the members of a context, the results of a search, or the entries of a
 // list, through the operation's ok result.
 function shown(output: unknown): number {
 	if (Array.isArray(output)) {
@@ -298,8 +304,8 @@ function shown(output: unknown): number {
 	if (Array.isArray(value.descendants) && Array.isArray(value.ancestors)) {
 		return value.ancestors.length + value.descendants.length
 	}
-	if (Array.isArray(value.statuses)) {
-		return value.statuses.length
+	if (Array.isArray(value.accounts) && Array.isArray(value.statuses) && Array.isArray(value.hashtags)) {
+		return value.accounts.length + value.statuses.length + value.hashtags.length
 	}
 	return 0
 }
@@ -310,11 +316,15 @@ describe('read endpoints do not read more rows as unrelated data grows (RES-7)',
 		expect(VIEWER).toBeLessThan(LOCALS)
 		const alone = await worldWith(0)
 		const crowded = await worldWith(UNRELATED)
-		// Every endpoint shows the viewer something, so a refused credential or an empty read cannot pass.
-		const outputs = await runInDurableObject(crowded, (_instance, state) =>
-			ENDPOINTS.map(([name, operation, input]) => [name, shown(operation.run(state.storage.sql, input as never))])
-		)
-		expect(outputs.filter(([, count]) => count === 0)).toEqual([])
+		// Every endpoint shows the viewer something, so a refused credential or an empty read cannot pass, and shows the
+		// same with the unrelated rows as without.
+		const outputs = async (store: StoreStub) =>
+			runInDurableObject(store, (_instance, state) =>
+				ENDPOINTS.map(([name, operation, input]) => [name, shown(operation.run(state.storage.sql, input as never))])
+			)
+		const withoutUnrelated = await outputs(alone)
+		expect(withoutUnrelated.filter(([, count]) => count === 0)).toEqual([])
+		expect(await outputs(crowded)).toEqual(withoutUnrelated)
 		const grown: string[] = []
 		for (const [name, operation, input] of ENDPOINTS) {
 			const few = await rowsRead({ store: alone }, operation, input as never)
