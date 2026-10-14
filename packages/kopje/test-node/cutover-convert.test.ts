@@ -402,8 +402,16 @@ describe('domain blocks', () => {
 			'upper.example',
 			'xn--bcher-kva.example',
 		])
-		const { ok: verified, categories } = await verifyWith(exportPath, dumpPath, { acceptDeletions: true })
+		// The check counts the dropped row on its own, and passes only with the same consent.
+		const refusedCheck = await verifyWith(exportPath, dumpPath)
+		expect(refusedCheck.ok).toBe(false)
+		expect(refusedCheck.report).toMatchObject({
+			result: 'FAIL',
+			dropped: { 'domain_blocks:invalid-domain': 1, accepted: false },
+		})
+		const { ok: verified, categories, report } = await verifyWith(exportPath, dumpPath, { acceptDeletions: true })
 		expect(failing(categories)).toEqual([])
+		expect(report).toMatchObject({ dropped: { 'domain_blocks:invalid-domain': 1, accepted: true } })
 		expect(verified).toBe(true)
 	})
 })

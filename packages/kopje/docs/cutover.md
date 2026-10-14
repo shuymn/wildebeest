@@ -298,7 +298,7 @@ taking every audience from the addressing captured before the bridge, and reads 
 
 Any missing, extra or changed record FAILs: missing content, content rewritten to the same length, a dropped
 relationship, a recipient removed or added, a widened visibility, a dropped reply link and a count difference all do
-(DATA-12). Content over the sanitizer's limit fails too unless `--accept-truncation` is given (`truncation.overLimit`). Run it twice in a cutover: on the converted dump
+(DATA-12). Content over the sanitizer's limit fails too unless `--accept-truncation` is given (`truncation.overLimit`). A domain block whose value is no domain name, which the conversion drops, fails too unless `--accept-deletions` is given (`dropped`). Run it twice in a cutover: on the converted dump
 before importing, and on a `kopje-admin dump` of the Store after the import.
 
 With `--images`, the expected avatars, headers, attachments, old image URLs and `media_files` come from `images.json`
@@ -328,5 +328,5 @@ object type) appears only as a 12-hex-digit SHA-256 prefix, and a parser or data
 | `result`, `stop` | `converted`, or `stopped` with a fixed `code`, a fixed `message` and `detail` (counts, levels, digests)                                                                                                      |
 
 `verify-conversion` prints `{ "result": "PASS" | "FAIL", "categories": { <name>: { expected, actual, missing, extra,
-changed, expectedSha256, actualSha256 } }, "truncation": { overLimit, accepted } }`. The digests are SHA-256 over the sorted records of each side, so two runs
+changed, expectedSha256, actualSha256 } }, "truncation": { overLimit, accepted }, "dropped": { <code>: count, accepted } }`. The digests are SHA-256 over the sorted records of each side, so two runs
 can be compared without seeing any record.

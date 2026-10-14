@@ -190,12 +190,15 @@ function metaSizes(meta) {
  * @param {import('node:sqlite').DatabaseSync} db the bridged legacy database
  * @param {{ originalActorIds: Map<string, string>, source: import('./legacy-load.js').SourceAddressing,
  *   notificationSequence: string | null, images?: import('./images-export.js').ImagesFile }} options
- * @returns {{ records: Records, overLimit: number, images: { missing: number, unmapped: number } }}
+ * @returns {{ records: Records, overLimit: number, images: { missing: number, unmapped: number },
+ *   dropped: Record<string, number> }} dropped: rows the conversion must leave out, which need --accept-deletions
  */
 export function expectedFromLegacy(db, { originalActorIds, source, notificationSequence, images }) {
 	/** @type {Records} */
 	const out = {}
 	let overLimit = 0
+	/** @type {Record<string, number>} */
+	const dropped = {}
 	/** @param {string} category @param {string} key @param {unknown} value */
 	const put = (category, key, value) => {
 		const records = (out[category] ??= {})
@@ -663,8 +666,13 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		}
 	}
 	for (const d of all('SELECT account_id, domain FROM domain_blocks')) {
+		if (!known(d.account_id)) {
+			continue
+		}
 		const domain = blockedDomainOf(text(d.domain))
-		if (known(d.account_id) && domain !== null) {
+		if (domain === null) {
+			dropped['domain_blocks:invalid-domain'] = (dropped['domain_blocks:invalid-domain'] ?? 0) + 1
+		} else {
 			put('domain_blocks', `${String(d.account_id)} ${domain}`, 1)
 		}
 	}
@@ -726,5 +734,5 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	for (const c of all('SELECT id, secret, name, redirect_uris, scopes FROM clients')) {
 		put('clients', String(c.id), [String(c.secret), String(c.name), String(c.redirect_uris), text(c.scopes) || 'read'])
 	}
-	return { records: out, overLimit, images: imageCounts }
+	return { records: out, overLimit, images: imageCounts, dropped }
 }
