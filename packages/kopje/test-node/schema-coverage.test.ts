@@ -7,8 +7,16 @@ import { createKopjeDatabase } from '../cli/lib/cutover/kopje-db.js'
 // Every table and column of the migrated Store schema against the cutover tools that name them by hand: the converter
 // (convert.js) writes columns of the Store schema, and the actual side of verify-conversion (verify-actual.js) reads
 // them back from a dump. A migration that adds a table or column fails here until each tool handles it or a list below
-// says why that tool leaves it alone. The dump, import and backup need no list: they read their catalog from the live
-// schema (src/platform/dump-catalog.ts, cli/lib/cutover/kopje-db.js).
+// says why that tool leaves it alone. The dump, import and backup read their catalog from the live schema
+// (src/platform/dump-catalog.ts, and its copy for the converter in cli/lib/cutover/kopje-db.js); only the tables they
+// leave out and the kopje_state names they keep are by hand, and are checked here too.
+
+// Tables neither dump catalog includes, each with why (the other tables are dumped and restored whole).
+const NOT_DUMPED: Record<string, string> = {
+	backup_media: "the backup's media index for one bucket; a restored Store starts a fresh media baseline",
+	kopje_migrations: 'the dump header carries the applied migrations; the target records its own',
+	media_orphans: 'tombstones of R2 objects to delete; a restored Store must not delete what it restores',
+}
 
 // Tables the cutover never carries: the converter writes nothing to them (docs/cutover.md, "Clients and settings").
 const NOT_CARRIED: Record<string, string> = {
@@ -314,6 +322,61 @@ function readColumns(text: string): { columns: Map<string, Set<string>>; unattri
 	return { columns, unattributed }
 }
 
+// The hand-written parts of a dump catalog source: excluded() as `name === 'table'`, `name.startsWith('prefix')` and
+// `name !== 'table'` joined by || and && (constants resolved), and DUMPED_STATE as an array of string literals.
+// Anything else in them is returned as unparsed.
+function dumpCatalog(text: string) {
+	const { code } = scan(text)
+	const constants = new Map([...code.matchAll(/\bconst (\w+) = '(\w+)'/g)].map((m) => [m[1], m[2]]))
+	const unparsed: string[] = []
+	const rule = { tables: [] as string[], prefixes: [] as string[], except: [] as string[] }
+	const body = /\bfunction excluded\(name(?::\s*string)?\)(?::\s*boolean)?\s*\{([\s\S]*?)\n\}/.exec(code)?.[1]
+	const rest = (body ?? '').replace(
+		/\bname (===|!==) ('\w+'|\w+)|\bname\.startsWith\(('\w+')\)/g,
+		(form: string, op?: string, operand?: string, prefix?: string) => {
+			const quoted = prefix ?? operand ?? ''
+			const value = /^'(\w+)'$/.exec(quoted)?.[1] ?? constants.get(quoted)
+			if (value === undefined) {
+				unparsed.push(form)
+			} else {
+				;(prefix !== undefined ? rule.prefixes : op === '===' ? rule.tables : rule.except).push(value)
+			}
+			return ''
+		}
+	)
+	if (body === undefined || !/^\s*return[\s()|&]*$/.test(rest)) {
+		unparsed.push(`excluded: ${rest.trim()}`)
+	}
+	const state = /\bconst DUMPED_STATE = \[([^\]]*)\]/.exec(code)?.[1]
+	const items = (state ?? '')
+		.split(',')
+		.map((item) => item.trim())
+		.filter((item) => item !== '')
+	if (state === undefined || !items.every((item) => /^'\w+'$/.test(item))) {
+		unparsed.push(`DUMPED_STATE: ${state}`)
+	}
+	return {
+		rule: { tables: sorted(rule.tables), prefixes: sorted(rule.prefixes), except: sorted(rule.except) },
+		dumpedState: items.map((item) => item.slice(1, -1)),
+		unparsed,
+	}
+}
+
+// The kopje_state names a source writes: every literal naming kopje_state must be an INSERT of a literal name.
+function stateNames(text: string): { names: string[]; unparsed: string[] } {
+	const names: string[] = []
+	const unparsed: string[] = []
+	for (const sql of scan(text).literals.filter((literal) => literal.includes('kopje_state'))) {
+		const name = /^INSERT\s+(?:OR\s+\w+\s+)?INTO\s+kopje_state\s*\(name,\s*value\)\s*VALUES\s*\('(\w+)',/.exec(sql)?.[1]
+		if (name === undefined) {
+			unparsed.push(sql.slice(0, 80))
+		} else {
+			names.push(name)
+		}
+	}
+	return { names, unparsed }
+}
+
 // The `table.column` names in `columns` that the schema does not have.
 function unknown(schema: Map<string, string[]>, columns: Map<string, Set<string>>): string[] {
 	return [...columns].flatMap(([table, names]) =>
@@ -402,6 +465,61 @@ describe('the read scanner', () => {
 			'const shared = (row) => row.some_column'
 		)
 		expect(readColumns(source).unattributed).toEqual(['row.some_column', 'row[key]'])
+	})
+})
+
+describe('the dump catalog scanner', () => {
+	it('reads the exclusion rule and the kept state names, resolving constants and skipping comments', () => {
+		const source = [
+			"const SEQUENCE = 'sqlite_sequence'",
+			"export const DUMPED_STATE = ['a', 'b'] as const",
+			'function excluded(name: string): boolean {',
+			"\treturn name === 'one' || (name.startsWith('sqlite_') && name !== SEQUENCE) // || name === 'commented'",
+			'}',
+		].join('\n')
+		expect(dumpCatalog(source)).toEqual({
+			rule: { tables: ['one'], prefixes: ['sqlite_'], except: ['sqlite_sequence'] },
+			dumpedState: ['a', 'b'],
+			unparsed: [],
+		})
+	})
+
+	it('reports a rule or a state list in another form', () => {
+		const source = [
+			'const DUMPED_STATE = [...OTHER]',
+			'function excluded(name) {',
+			"\treturn name === 'one' || name.endsWith('_x') || name === UNKNOWN",
+			'}',
+		].join('\n')
+		expect(dumpCatalog(source).unparsed).toEqual([
+			'name === UNKNOWN',
+			"excluded: return  || name.endsWith('_x') ||",
+			'DUMPED_STATE: ...OTHER',
+		])
+		expect(stateNames("db.exec(`INSERT INTO kopje_state (name, value) VALUES ('${name}', ?)`)").unparsed).toEqual([
+			"INSERT INTO kopje_state (name, value) VALUES ('${}', ?)",
+		])
+	})
+})
+
+describe('the dump catalogs', () => {
+	const store = dumpCatalog(source('../src/platform/dump-catalog.ts'))
+	const converter = dumpCatalog(source('../cli/lib/cutover/kopje-db.js'))
+
+	it('agree on what a dump leaves out and keeps, and each table left out says why', () => {
+		expect(store.unparsed).toEqual([])
+		expect(converter.unparsed).toEqual([])
+		expect(converter.rule).toEqual(store.rule)
+		expect(converter.dumpedState).toEqual(store.dumpedState)
+		expect(store.rule.tables).toEqual(sorted(Object.keys(NOT_DUMPED)))
+		expect(store.rule.tables.filter((table) => !schemaColumns().has(table))).toEqual([])
+	})
+
+	it('keep every kopje_state name the converter writes', () => {
+		const { names, unparsed } = stateNames(source('../cli/lib/cutover/convert.js'))
+		expect(unparsed).toEqual([])
+		expect(names.length).toBeGreaterThan(0)
+		expect(names.filter((name) => !store.dumpedState.includes(name))).toEqual([])
 	})
 })
 
