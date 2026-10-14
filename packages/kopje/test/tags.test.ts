@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { apiHarness, bearer, seedAccount, sql } from './api-helpers'
+import { type ApiHarness, apiHarness, bearer, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { appToken, DAY_MS, rowsRead, scopedToken } from './read-helpers'
-import { community, getJson, seedStatus } from './status-helpers'
-import { getTag, MAX_TAG_HISTORY_STATUSES } from '../src/domain/tags'
+import { community, getJson, seedStatus, type User } from './status-helpers'
+import { getTag } from '../src/domain/tags'
 
 // GET /api/v1/tags/:id: the Tag entity, its history (VIS-12), the optional token (AUTH-2) and the work bound (RES-7).
 
@@ -83,54 +83,69 @@ describe('tags', () => {
 		}
 	})
 
-	it('reads an optional token: none or an app token is anonymous, a bad one is refused (AUTH-2)', async () => {
+	it('needs no scope: any valid token reads it, following only for a user (AUTH-2)', async () => {
 		const h = await community(['alice'])
 		expect((await getJson<Tag>(h, '/api/v1/tags/cats', await appToken(h))).body).not.toHaveProperty('following')
+		for (const scope of ['read:statuses', 'write:statuses']) {
+			const { status, body } = await getJson<Tag>(h, '/api/v1/tags/cats', await scopedToken(h, scope))
+			expect(status).toBe(200)
+			expect(body.following).toBe(false)
+		}
 		expect((await h.request('/api/v1/tags/cats', bearer('nope'))).status).toBe(401)
-		expect((await h.request('/api/v1/tags/cats', bearer(await scopedToken(h, 'read:statuses')))).status).toBe(403)
 	})
 
-	it('reads only the window and at most MAX_TAG_HISTORY_STATUSES statuses (RES-7)', async () => {
-		const measure = async (old: number, recent: number) => {
+	// `count` statuses of alice's tagged #cats with the given visibility, published at `at`, ids from (at << 16) up.
+	async function tagged(h: ApiHarness & { users: { alice: User } }, count: number, at: number, visibility = 'public') {
+		const base = BigInt(at) << 16n
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ? - 1)
+			INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+			SELECT CAST(? + i AS TEXT), 'https://kopje.test/ap/o/t' || ? || '-' || i, ?, ?, ? FROM n`,
+			count,
+			String(base),
+			String(base),
+			h.users.alice.id,
+			visibility,
+			new Date(at).toISOString()
+		)
+		await sql(
+			h.store,
+			`INSERT INTO status_tags (status_id, name) SELECT id, 'cats' FROM statuses WHERE id >= ? AND id < ?`,
+			String(base),
+			String(base + BigInt(count))
+		)
+	}
+
+	it('keeps the public history whatever hidden statuses the window holds (VIS-12)', async () => {
+		const h = await community(['alice'])
+		await tagged(h, 1, NOW + 60_000)
+		const before = (await getJson<Tag>(h, '/api/v1/tags/cats')).body
+		expect(before.history[0]).toEqual({ day: day(0), uses: '1', accounts: '1' })
+		// Newer hidden statuses, more of them than any budget would allow.
+		let at = NOW + 3_600_000
+		for (const visibility of ['private', 'direct', 'limited']) {
+			await tagged(h, 4000, at, visibility)
+			at += 3_600_000
+		}
+		expect((await getJson<Tag>(h, '/api/v1/tags/cats')).body).toEqual(before)
+	}, 60_000)
+
+	it('reads only the window: older uses of the tag are never read (RES-7)', async () => {
+		const measure = async (old: number) => {
 			const h = await community(['alice'])
-			const insert = async (count: number, base: bigint) => {
-				await sql(
-					h.store,
-					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ? - 1)
-					INSERT INTO statuses (id, uri, account_id, visibility, published_at)
-					SELECT CAST(? + i AS TEXT), 'https://kopje.test/ap/o/t' || ? || '-' || i, ?, 'public', ? FROM n`,
-					count,
-					String(base),
-					String(base),
-					h.users.alice.id,
-					new Date(Number(base >> 16n)).toISOString()
-				)
-				await sql(
-					h.store,
-					`INSERT INTO status_tags (status_id, name) SELECT id, 'cats' FROM statuses WHERE id >= ? AND id < ?`,
-					String(base),
-					String(base + BigInt(count))
-				)
-			}
 			// Old statuses a month back, recent ones an hour into today.
-			await insert(old, BigInt(NOW - 30 * DAY_MS) << 16n)
-			if (recent > 0) {
-				await insert(recent, BigInt(NOW + 3_600_000) << 16n)
-			}
-			const read = await rowsRead(h, getTag, {
+			await tagged(h, old, NOW - 30 * DAY_MS)
+			await tagged(h, 100, NOW + 3_600_000)
+			return rowsRead(h, getTag, {
 				credential: null,
 				name: 'cats',
 				now: NOW + DAY_MS / 2,
 				present: { origin: 'https://kopje.test' },
 			})
-			const { body } = await getJson<Tag>(h, '/api/v1/tags/cats')
-			return { read, body }
 		}
-		const small = await measure(2000, 100)
-		const large = await measure(8000, 100)
-		expect(large.read).toBeLessThan(small.read * 1.5)
-
-		const capped = await measure(0, MAX_TAG_HISTORY_STATUSES + 500)
-		expect(capped.body.history[0]?.uses).toBe(String(MAX_TAG_HISTORY_STATUSES))
+		const small = await measure(2000)
+		const large = await measure(8000)
+		expect(large).toBeLessThan(small * 1.5)
 	}, 120_000)
 })
