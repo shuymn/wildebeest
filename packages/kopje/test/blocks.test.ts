@@ -525,6 +525,29 @@ describe('mentions of blocked and muted accounts', () => {
 		])
 	})
 
+	it('leaves out post notifications from a sender the recipient mutes, as home leaves the post out', async () => {
+		const h = await community(['alice', 'friend'])
+		const { alice, friend } = h.users
+		expect((await act(h, alice, `/api/v1/accounts/${friend.id}/follow`, { notify: true })).status).toBe(200)
+		const before = await post(h, friend, { status: 'before' })
+		// A mute that keeps notifications still hides the sender's posts from home (FeedInsertWorker notifies only of
+		// what home shows): none is written, and the earlier one is hidden while the mute lasts.
+		await relate(h, alice, `/api/v1/accounts/${friend.id}/mute`, { notifications: false })
+		await post(h, friend, { status: 'muted' })
+		expect(await ids(h, '/api/v1/timelines/home', alice.token)).toEqual([])
+		expect(await ids(h, '/api/v1/notifications?types[]=status', alice.token)).toEqual([])
+		expect(await sql(h.store, "SELECT status_id FROM notifications WHERE type = 'status'")).toEqual([
+			{ status_id: before.id },
+		])
+		// A mention by the same sender is still notified: the mute keeps notifications.
+		await post(h, friend, { status: '@alice hi' })
+		expect(await ids(h, '/api/v1/notifications?types[]=mention', alice.token)).toHaveLength(1)
+
+		await relate(h, alice, `/api/v1/accounts/${friend.id}/unmute`)
+		const shown = await getJson<{ status: { id: string } }[]>(h, '/api/v1/notifications?types[]=status', alice.token)
+		expect(shown.body.map((n) => n.status.id)).toEqual([before.id])
+	})
+
 	it("keeps the viewer's own statuses in home, whoever they mention", async () => {
 		const h = await community(['alice', 'foe'])
 		const { alice, foe } = h.users

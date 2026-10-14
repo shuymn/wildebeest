@@ -224,8 +224,8 @@ function silencedSql(r: string, a: string, now: string): string {
 // and the recipient may see the status. A reblog notification names the original; the boost itself (the sender's one
 // boost of it) must be visible to the recipient too, so a followers-only or direct boost is not revealed to an author
 // outside its audience. A mention is left out when its status mentions or replies to an account the recipient
-// silences (FeedManager#filter_from_mentions), and a post notification (`status`) when its status mentions an account
-// the recipient blocks or mutes, as home leaves it out (FeedInsertWorker).
+// silences (FeedManager#filter_from_mentions), and a post notification (`status`) when home would leave its status
+// out (homeFilterSql, which also hides a sender the recipient mutes without notifications).
 export function shownSql(r: string, type: string, from: string, status: string, now: string): string {
 	return `(${from} <> ${r}
 		AND ${availableSql(from)}
@@ -239,8 +239,8 @@ export function shownSql(r: string, type: string, from: string, status: string, 
 			AND (EXISTS (SELECT 1 FROM status_mentions mm WHERE mm.status_id = mt.id AND mm.silent = 0
 					AND ${silencedSql(r, 'mm.account_id', now)})
 				OR (mt.in_reply_to_account_id IS NOT NULL AND ${silencedSql(r, 'mt.in_reply_to_account_id', now)}))))
-		AND (${type} <> 'status' OR NOT EXISTS (SELECT 1 FROM status_mentions sm WHERE sm.status_id = ${status}
-			AND sm.silent = 0 AND (${blocksSql(r, 'sm.account_id')} OR ${mutesSql(r, 'sm.account_id', now)}))))`
+		AND (${type} <> 'status' OR EXISTS (SELECT 1 FROM statuses hs WHERE hs.id = ${status}
+			AND ${homeFilterSql('hs', r, now)})))`
 }
 
 // ---------------------------------------------------------------------------------------------------------------

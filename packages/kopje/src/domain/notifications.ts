@@ -9,9 +9,9 @@ import type { Db } from '../db/sql'
 // written, shown and pushed: the recipient is not its sender, the sender is not suspended, blocked (either way), muted
 // with notifications (while the mute applies), or domain-blocked by the recipient, and the recipient may see the
 // status. A mention is also left out when its status mentions or replies to an account the recipient blocks or mutes
-// with notifications (Mastodon's FeedManager#filter_from_mentions), and a post notification (`status`) when home leaves
-// its status out for mentioning an account the recipient blocks or mutes (FeedInsertWorker). Only a local recipient
-// is written one. A new notification also records a push for each of the recipient's Web Push subscriptions that wants
+// with notifications (Mastodon's FeedManager#filter_from_mentions), and a post notification (`status`) when home would
+// leave its status out (FeedInsertWorker), which includes a sender the recipient mutes. Only a local recipient is
+// written one. A new notification also records a push for each of the recipient's Web Push subscriptions that wants
 // it; domain/push.ts checks this rule again, at its own time, before each is sent (PUSH-3).
 
 export type NotificationType = 'mention' | 'status' | 'reblog' | 'favourite' | 'follow' | 'follow_request' | 'update'
