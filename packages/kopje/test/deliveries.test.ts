@@ -470,9 +470,9 @@ describe('follows toward remote accounts', () => {
 			status: 'retry',
 			retryAt: NOW,
 		})
-		// The same row, still first in the lane, with the shared inbox's answer recorded until it settles.
+		// The same row, still first in the lane, its failed attempt counted, with the shared inbox's answer recorded.
 		expect((await rows(h.store)).map((r) => [r.id, r.type, r.inbox_url, r.state, r.attempts, r.last_status])).toEqual([
-			[follow.deliveries[0]?.id, 'Follow', personal, 'pending', 0, 404],
+			[follow.deliveries[0]?.id, 'Follow', personal, 'pending', 1, 404],
 			[expect.any(String), 'Undo', shared, 'queued', 0, null],
 		])
 		const sent: [string, string][] = []
@@ -512,6 +512,50 @@ describe('follows toward remote accounts', () => {
 			['Follow', 'https://same.example/inbox', 'gave_up'],
 			['Follow', 'https://lone.example/users/lone/inbox', 'gave_up'],
 		])
+	})
+
+	it('gives up without a fallback when the personal inbox is on another origin', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const dave = await remoteAccount(h.store, 'dave', 'remote.example')
+		await sql(
+			h.store,
+			"UPDATE accounts SET inbox_url = 'https://elsewhere.example/users/dave/inbox' WHERE id = ?",
+			dave
+		)
+		await act(h, alice, `/api/v1/accounts/${dave}/follow`)
+		const round = await claim(h.store, NOW, 'a')
+		expect(round.deliveries.map((d) => d.inbox)).toEqual(['https://remote.example/inbox'])
+		expect(await complete(h.store, round.deliveries[0]?.id ?? '', 'a', NOW, MISSING)).toMatchObject({
+			status: 'gave_up',
+		})
+		expect((await rows(h.store)).map((r) => [r.inbox_url, r.state])).toEqual([
+			['https://remote.example/inbox', 'gave_up'],
+		])
+	})
+
+	it('bounds a recipient that swaps its inboxes between attempts by the attempt budget', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const dave = await remoteAccount(h.store, 'dave', 'remote.example')
+		await act(h, alice, `/api/v1/accounts/${dave}/follow`)
+		let completion: { status: string } = { status: 'retry' }
+		let posts = 0
+		while (completion.status === 'retry') {
+			const round = await claim(h.store, NOW, `t${posts}`)
+			expect(round.deliveries).toHaveLength(1)
+			posts++
+			completion = await complete(h.store, round.deliveries[0]?.id ?? '', `t${posts - 1}`, NOW, MISSING)
+			// An actor Update makes the inbox just tried its shared inbox again.
+			await sql(
+				h.store,
+				'UPDATE accounts SET inbox_url = shared_inbox_url, shared_inbox_url = inbox_url WHERE id = ?',
+				dave
+			)
+		}
+		expect(completion.status).toBe('gave_up')
+		expect(posts).toBe(MAX_ATTEMPTS)
+		expect((await rows(h.store)).map((r) => [r.state, r.attempts])).toEqual([['gave_up', MAX_ATTEMPTS]])
 	})
 
 	it('never moves an addressed activity to a personal inbox when the shared inbox answers 404', async () => {
