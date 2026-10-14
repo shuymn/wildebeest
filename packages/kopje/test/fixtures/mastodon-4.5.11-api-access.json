@@ -1,0 +1,2544 @@
+{
+	"mastodon": "4.5.11",
+	"generatedBy": "(in packages/kopje) node scripts/mastodon-scopes.mjs <checkout of Mastodon v4.5.11>",
+	"note": [
+		"Generated from config/routes.rb and app/controllers/api/** by reading the Ruby source; do not edit by hand.",
+		"token: required (doorkeeper_authorize!, require_user!, valid_doorkeeper_token?), optional (authorize_if_got_token!, or the controller reads the current user), none.",
+		"scopes: any one of them is accepted (null: no scope check). user: a token without a user is refused.",
+		"Not read: instance settings (DISALLOW_UNAUTHENTICATED_API_ACCESS, limited federation mode), serializers that read the current user.",
+		"unresolved: the Ruby could not be read with certainty; the route is not compared until an exception says why."
+	],
+	"routes": [
+		{
+			"method": "GET",
+			"path": "/api/oembed",
+			"controller": "api/oembed",
+			"action": "show",
+			"token": "none",
+			"scopes": null,
+			"user": false,
+			"guards": ["require_public_status!"]
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1_alpha/async_refreshes/:id",
+			"controller": "api/v1_alpha/async_refreshes",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/statuses/:status_id/reblogged_by",
+			"controller": "api/v1/statuses/reblogged_by_accounts",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["read", "read:accounts"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/statuses/:status_id/favourited_by",
+			"controller": "api/v1/statuses/favourited_by_accounts",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["read", "read:accounts"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/statuses/:status_id/reblog",
+			"controller": "api/v1/statuses/reblogs",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:statuses"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/statuses/:status_id/unreblog",
+			"controller": "api/v1/statuses/reblogs",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:statuses"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/statuses/:status_id/quotes/:id/revoke",
+			"controller": "api/v1/statuses/quotes",
+			"action": "revoke",
+			"token": "required",
+			"scopes": ["write", "write:statuses"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/statuses/:status_id/quotes",
+			"controller": "api/v1/statuses/quotes",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:statuses"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/statuses/:status_id/favourite",
+			"controller": "api/v1/statuses/favourites",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:favourites"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/statuses/:status_id/unfavourite",
+			"controller": "api/v1/statuses/favourites",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:favourites"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/statuses/:status_id/bookmark",
+			"controller": "api/v1/statuses/bookmarks",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:bookmarks"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/statuses/:status_id/unbookmark",
+			"controller": "api/v1/statuses/bookmarks",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:bookmarks"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/statuses/:status_id/mute",
+			"controller": "api/v1/statuses/mutes",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:mutes"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/statuses/:status_id/unmute",
+			"controller": "api/v1/statuses/mutes",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:mutes"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/statuses/:status_id/pin",
+			"controller": "api/v1/statuses/pins",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/statuses/:status_id/unpin",
+			"controller": "api/v1/statuses/pins",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/statuses/:status_id/history",
+			"controller": "api/v1/statuses/histories",
+			"action": "show",
+			"token": "optional",
+			"scopes": ["read", "read:statuses"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/statuses/:status_id/source",
+			"controller": "api/v1/statuses/sources",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:statuses"],
+			"user": false
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v1/statuses/:status_id/interaction_policy",
+			"controller": "api/v1/statuses/interaction_policies",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:statuses"],
+			"user": false
+		},
+		{
+			"method": "PUT",
+			"path": "/api/v1/statuses/:status_id/interaction_policy",
+			"controller": "api/v1/statuses/interaction_policies",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:statuses"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/statuses/:status_id/translate",
+			"controller": "api/v1/statuses/translations",
+			"action": "create",
+			"token": "required",
+			"scopes": ["read", "read:statuses"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/statuses/:id/context",
+			"controller": "api/v1/statuses",
+			"action": "context",
+			"token": "optional",
+			"scopes": ["read", "read:statuses"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/statuses",
+			"controller": "api/v1/statuses",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["read", "read:statuses"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/statuses",
+			"controller": "api/v1/statuses",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:statuses"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/statuses/:id",
+			"controller": "api/v1/statuses",
+			"action": "show",
+			"token": "optional",
+			"scopes": ["read", "read:statuses"],
+			"user": false
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v1/statuses/:id",
+			"controller": "api/v1/statuses",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:statuses"],
+			"user": true
+		},
+		{
+			"method": "PUT",
+			"path": "/api/v1/statuses/:id",
+			"controller": "api/v1/statuses",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:statuses"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/statuses/:id",
+			"controller": "api/v1/statuses",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:statuses"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/timelines/home",
+			"controller": "api/v1/timelines/home",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:statuses"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/timelines/public",
+			"controller": "api/v1/timelines/public",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:statuses"],
+			"user": true,
+			"unresolved": ["require_user! if: \"require_auth?\""]
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/timelines/link",
+			"controller": "api/v1/timelines/link",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:statuses"],
+			"user": true,
+			"unresolved": ["require_user! if: \"require_auth?\""]
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/timelines/tag/:id",
+			"controller": "api/v1/timelines/tag",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:statuses"],
+			"user": true,
+			"unresolved": ["require_user! if: \"require_auth?\""]
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/timelines/list/:id",
+			"controller": "api/v1/timelines/list",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:lists"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/streaming",
+			"controller": "api/v1/streaming",
+			"action": "index",
+			"token": "none",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/streaming/*any",
+			"controller": "api/v1/streaming",
+			"action": "index",
+			"token": "none",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/custom_emojis",
+			"controller": "api/v1/custom_emojis",
+			"action": "index",
+			"token": "none",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/suggestions",
+			"controller": "api/v1/suggestions",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:accounts"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/suggestions/:id",
+			"controller": "api/v1/suggestions",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/scheduled_statuses",
+			"controller": "api/v1/scheduled_statuses",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:statuses"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/scheduled_statuses/:id",
+			"controller": "api/v1/scheduled_statuses",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:statuses"],
+			"user": true
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v1/scheduled_statuses/:id",
+			"controller": "api/v1/scheduled_statuses",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:statuses"],
+			"user": true
+		},
+		{
+			"method": "PUT",
+			"path": "/api/v1/scheduled_statuses/:id",
+			"controller": "api/v1/scheduled_statuses",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:statuses"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/scheduled_statuses/:id",
+			"controller": "api/v1/scheduled_statuses",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:statuses"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/preferences",
+			"controller": "api/v1/preferences",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:accounts"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/annual_reports/:id/read",
+			"controller": "api/v1/annual_reports",
+			"action": "read",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/annual_reports",
+			"controller": "api/v1/annual_reports",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:accounts"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/annual_reports/:id",
+			"controller": "api/v1/annual_reports",
+			"action": "show",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v1/announcements/:announcement_id/reactions/:id",
+			"controller": "api/v1/announcements/reactions",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:favourites"],
+			"user": true
+		},
+		{
+			"method": "PUT",
+			"path": "/api/v1/announcements/:announcement_id/reactions/:id",
+			"controller": "api/v1/announcements/reactions",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:favourites"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/announcements/:announcement_id/reactions/:id",
+			"controller": "api/v1/announcements/reactions",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:favourites"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/announcements/:id/dismiss",
+			"controller": "api/v1/announcements",
+			"action": "dismiss",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/announcements",
+			"controller": "api/v1/announcements",
+			"action": "index",
+			"token": "required",
+			"scopes": null,
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/conversations/:id/read",
+			"controller": "api/v1/conversations",
+			"action": "read",
+			"token": "required",
+			"scopes": ["write", "write:conversations"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/conversations/:id/unread",
+			"controller": "api/v1/conversations",
+			"action": "unread",
+			"token": "required",
+			"scopes": ["write", "write:conversations"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/conversations",
+			"controller": "api/v1/conversations",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:statuses"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/conversations/:id",
+			"controller": "api/v1/conversations",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:conversations"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/media",
+			"controller": "api/v1/media",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:media"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/media/:id",
+			"controller": "api/v1/media",
+			"action": "show",
+			"token": "required",
+			"scopes": ["write", "write:media"],
+			"user": true
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v1/media/:id",
+			"controller": "api/v1/media",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:media"],
+			"user": true
+		},
+		{
+			"method": "PUT",
+			"path": "/api/v1/media/:id",
+			"controller": "api/v1/media",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:media"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/media/:id",
+			"controller": "api/v1/media",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:media"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/blocks",
+			"controller": "api/v1/blocks",
+			"action": "index",
+			"token": "required",
+			"scopes": ["follow", "read", "read:blocks"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/mutes",
+			"controller": "api/v1/mutes",
+			"action": "index",
+			"token": "required",
+			"scopes": ["follow", "read", "read:mutes"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/favourites",
+			"controller": "api/v1/favourites",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:favourites"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/bookmarks",
+			"controller": "api/v1/bookmarks",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:bookmarks"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/reports",
+			"controller": "api/v1/reports",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:reports"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/trends",
+			"controller": "api/v1/trends/tags",
+			"action": "index",
+			"token": "optional",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/filters",
+			"controller": "api/v1/filters",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:filters"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/filters",
+			"controller": "api/v1/filters",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:filters"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/filters/:id",
+			"controller": "api/v1/filters",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:filters"],
+			"user": true
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v1/filters/:id",
+			"controller": "api/v1/filters",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:filters"],
+			"user": true
+		},
+		{
+			"method": "PUT",
+			"path": "/api/v1/filters/:id",
+			"controller": "api/v1/filters",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:filters"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/filters/:id",
+			"controller": "api/v1/filters",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:filters"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/endorsements",
+			"controller": "api/v1/endorsements",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:accounts"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/markers",
+			"controller": "api/v1/markers",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:statuses"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/markers",
+			"controller": "api/v1/markers",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:statuses"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/profile/avatar",
+			"controller": "api/v1/profile/avatars",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/profile/header",
+			"controller": "api/v1/profile/headers",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/apps/verify_credentials",
+			"controller": "api/v1/apps/credentials",
+			"action": "show",
+			"token": "required",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/apps",
+			"controller": "api/v1/apps",
+			"action": "create",
+			"token": "none",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/trends/tags",
+			"controller": "api/v1/trends/tags",
+			"action": "index",
+			"token": "optional",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/trends/links",
+			"controller": "api/v1/trends/links",
+			"action": "index",
+			"token": "optional",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/trends/statuses",
+			"controller": "api/v1/trends/statuses",
+			"action": "index",
+			"token": "optional",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/emails/confirmations",
+			"controller": "api/v1/emails/confirmations",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": false,
+			"guards": ["require_user_owned_by_application!", "require_user_not_confirmed!"]
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/emails/check_confirmation",
+			"controller": "api/v1/emails/confirmations",
+			"action": "check",
+			"token": "required",
+			"scopes": ["read", "read:accounts"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/instance/peers",
+			"controller": "api/v1/instances/peers",
+			"action": "index",
+			"token": "none",
+			"scopes": null,
+			"user": false,
+			"guards": ["require_enabled_api!"]
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/instance/rules",
+			"controller": "api/v1/instances/rules",
+			"action": "index",
+			"token": "none",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/instance/domain_blocks",
+			"controller": "api/v1/instances/domain_blocks",
+			"action": "index",
+			"token": "optional",
+			"scopes": null,
+			"user": false,
+			"guards": ["require_enabled_api!"]
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/instance/privacy_policy",
+			"controller": "api/v1/instances/privacy_policies",
+			"action": "show",
+			"token": "none",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/instance/terms_of_service",
+			"controller": "api/v1/instances/terms_of_services",
+			"action": "show",
+			"token": "none",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/instance/extended_description",
+			"controller": "api/v1/instances/extended_descriptions",
+			"action": "show",
+			"token": "none",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/instance/translation_languages",
+			"controller": "api/v1/instances/translation_languages",
+			"action": "show",
+			"token": "none",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/instance/languages",
+			"controller": "api/v1/instances/languages",
+			"action": "show",
+			"token": "none",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/instance/activity",
+			"controller": "api/v1/instances/activity",
+			"action": "show",
+			"token": "none",
+			"scopes": null,
+			"user": false,
+			"guards": ["require_enabled_api!"]
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/instance/terms_of_service/:date",
+			"controller": "api/v1/instances/terms_of_services",
+			"action": "show",
+			"token": "none",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/instance",
+			"controller": "api/v1/instances",
+			"action": "show",
+			"token": "none",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/peers/search",
+			"controller": "api/v1/peers/search",
+			"action": "index",
+			"token": "none",
+			"scopes": null,
+			"user": false,
+			"guards": ["require_enabled_api!"]
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/domain_blocks/preview",
+			"controller": "api/v1/domain_blocks/previews",
+			"action": "show",
+			"token": "required",
+			"scopes": ["follow", "write", "write:blocks"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/domain_blocks",
+			"controller": "api/v1/domain_blocks",
+			"action": "create",
+			"token": "required",
+			"scopes": ["follow", "write", "write:blocks"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/domain_blocks",
+			"controller": "api/v1/domain_blocks",
+			"action": "show",
+			"token": "required",
+			"scopes": ["follow", "read", "read:blocks"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/domain_blocks",
+			"controller": "api/v1/domain_blocks",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["follow", "write", "write:blocks"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/directory",
+			"controller": "api/v1/directories",
+			"action": "show",
+			"token": "optional",
+			"scopes": null,
+			"user": false,
+			"guards": ["require_enabled!"]
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/follow_requests/:id/authorize",
+			"controller": "api/v1/follow_requests",
+			"action": "authorize",
+			"token": "required",
+			"scopes": ["follow", "write", "write:follows"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/follow_requests/:id/reject",
+			"controller": "api/v1/follow_requests",
+			"action": "reject",
+			"token": "required",
+			"scopes": ["follow", "write", "write:follows"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/follow_requests",
+			"controller": "api/v1/follow_requests",
+			"action": "index",
+			"token": "required",
+			"scopes": ["follow", "read", "read:follows"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/notifications/requests/accept",
+			"controller": "api/v1/notifications/requests",
+			"action": "accept_bulk",
+			"token": "required",
+			"scopes": ["write", "write:notifications"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/notifications/requests/dismiss",
+			"controller": "api/v1/notifications/requests",
+			"action": "dismiss_bulk",
+			"token": "required",
+			"scopes": ["write", "write:notifications"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/notifications/requests/merged",
+			"controller": "api/v1/notifications/requests",
+			"action": "merged?",
+			"token": "required",
+			"scopes": ["read", "read:notifications"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/notifications/requests/:id/accept",
+			"controller": "api/v1/notifications/requests",
+			"action": "accept",
+			"token": "required",
+			"scopes": ["write", "write:notifications"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/notifications/requests/:id/dismiss",
+			"controller": "api/v1/notifications/requests",
+			"action": "dismiss",
+			"token": "required",
+			"scopes": ["write", "write:notifications"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/notifications/requests",
+			"controller": "api/v1/notifications/requests",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:notifications"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/notifications/requests/:id",
+			"controller": "api/v1/notifications/requests",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:notifications"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/notifications/policy",
+			"controller": "api/v1/notifications/policies",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:notifications"],
+			"user": true
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v1/notifications/policy",
+			"controller": "api/v1/notifications/policies",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:notifications"],
+			"user": true
+		},
+		{
+			"method": "PUT",
+			"path": "/api/v1/notifications/policy",
+			"controller": "api/v1/notifications/policies",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:notifications"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/notifications/clear",
+			"controller": "api/v1/notifications",
+			"action": "clear",
+			"token": "required",
+			"scopes": ["write", "write:notifications"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/notifications/unread_count",
+			"controller": "api/v1/notifications",
+			"action": "unread_count",
+			"token": "required",
+			"scopes": ["read", "read:notifications"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/notifications/:id/dismiss",
+			"controller": "api/v1/notifications",
+			"action": "dismiss",
+			"token": "required",
+			"scopes": ["write", "write:notifications"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/notifications",
+			"controller": "api/v1/notifications",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:notifications"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/notifications/:id",
+			"controller": "api/v1/notifications",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:notifications"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/accounts/verify_credentials",
+			"controller": "api/v1/accounts/credentials",
+			"action": "show",
+			"token": "required",
+			"scopes": ["profile", "read", "read:accounts"],
+			"user": true
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v1/accounts/update_credentials",
+			"controller": "api/v1/accounts/credentials",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/accounts/search",
+			"controller": "api/v1/accounts/search",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:accounts"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/accounts/lookup",
+			"controller": "api/v1/accounts/lookup",
+			"action": "show",
+			"token": "optional",
+			"scopes": ["read", "read:accounts"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/accounts/relationships",
+			"controller": "api/v1/accounts/relationships",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:follows"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/accounts/familiar_followers",
+			"controller": "api/v1/accounts/familiar_followers",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:follows"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/accounts/:account_id/statuses",
+			"controller": "api/v1/accounts/statuses",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["read", "read:statuses"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/accounts/:account_id/followers",
+			"controller": "api/v1/accounts/follower_accounts",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["read", "read:accounts"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/accounts/:account_id/following",
+			"controller": "api/v1/accounts/following_accounts",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["read", "read:accounts"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/accounts/:account_id/lists",
+			"controller": "api/v1/accounts/lists",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:lists"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/accounts/:account_id/identity_proofs",
+			"controller": "api/v1/accounts/identity_proofs",
+			"action": "index",
+			"token": "required",
+			"scopes": null,
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/accounts/:account_id/featured_tags",
+			"controller": "api/v1/accounts/featured_tags",
+			"action": "index",
+			"token": "none",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/accounts/:account_id/endorsements",
+			"controller": "api/v1/accounts/endorsements",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["read", "read:accounts"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/accounts/:id/follow",
+			"controller": "api/v1/accounts",
+			"action": "follow",
+			"token": "required",
+			"scopes": ["follow", "write", "write:follows"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/accounts/:id/unfollow",
+			"controller": "api/v1/accounts",
+			"action": "unfollow",
+			"token": "required",
+			"scopes": ["follow", "write", "write:follows"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/accounts/:id/remove_from_followers",
+			"controller": "api/v1/accounts",
+			"action": "remove_from_followers",
+			"token": "required",
+			"scopes": ["follow", "write", "write:follows"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/accounts/:id/block",
+			"controller": "api/v1/accounts",
+			"action": "block",
+			"token": "required",
+			"scopes": ["follow", "write", "write:blocks"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/accounts/:id/unblock",
+			"controller": "api/v1/accounts",
+			"action": "unblock",
+			"token": "required",
+			"scopes": ["follow", "write", "write:blocks"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/accounts/:id/mute",
+			"controller": "api/v1/accounts",
+			"action": "mute",
+			"token": "required",
+			"scopes": ["follow", "write", "write:mutes"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/accounts/:id/unmute",
+			"controller": "api/v1/accounts",
+			"action": "unmute",
+			"token": "required",
+			"scopes": ["follow", "write", "write:mutes"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/accounts/:account_id/pin",
+			"controller": "api/v1/accounts/endorsements",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/accounts/:account_id/endorse",
+			"controller": "api/v1/accounts/endorsements",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/accounts/:account_id/unpin",
+			"controller": "api/v1/accounts/endorsements",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/accounts/:account_id/unendorse",
+			"controller": "api/v1/accounts/endorsements",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/accounts/:account_id/note",
+			"controller": "api/v1/accounts/notes",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/accounts",
+			"controller": "api/v1/accounts",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["read", "read:accounts"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/accounts",
+			"controller": "api/v1/accounts",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": false,
+			"guards": ["require_client_credentials!"]
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/accounts/:id",
+			"controller": "api/v1/accounts",
+			"action": "show",
+			"token": "optional",
+			"scopes": ["read", "read:accounts"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/tags/:id/follow",
+			"controller": "api/v1/tags",
+			"action": "follow",
+			"token": "required",
+			"scopes": ["follow", "write", "write:follows"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/tags/:id/unfollow",
+			"controller": "api/v1/tags",
+			"action": "unfollow",
+			"token": "required",
+			"scopes": ["follow", "write", "write:follows"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/tags/:id/feature",
+			"controller": "api/v1/tags",
+			"action": "feature",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/tags/:id/unfeature",
+			"controller": "api/v1/tags",
+			"action": "unfeature",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/tags/:id",
+			"controller": "api/v1/tags",
+			"action": "show",
+			"token": "optional",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/followed_tags",
+			"controller": "api/v1/followed_tags",
+			"action": "index",
+			"token": "required",
+			"scopes": ["follow", "read", "read:follows"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/lists/:list_id/accounts",
+			"controller": "api/v1/lists/accounts",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:lists"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/lists/:list_id/accounts",
+			"controller": "api/v1/lists/accounts",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:lists"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/lists/:list_id/accounts",
+			"controller": "api/v1/lists/accounts",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:lists"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/lists",
+			"controller": "api/v1/lists",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:lists"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/lists",
+			"controller": "api/v1/lists",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:lists"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/lists/:id",
+			"controller": "api/v1/lists",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:lists"],
+			"user": true
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v1/lists/:id",
+			"controller": "api/v1/lists",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:lists"],
+			"user": true
+		},
+		{
+			"method": "PUT",
+			"path": "/api/v1/lists/:id",
+			"controller": "api/v1/lists",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:lists"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/lists/:id",
+			"controller": "api/v1/lists",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:lists"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/featured_tags/suggestions",
+			"controller": "api/v1/featured_tags/suggestions",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:accounts"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/featured_tags",
+			"controller": "api/v1/featured_tags",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:accounts"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/featured_tags",
+			"controller": "api/v1/featured_tags",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/featured_tags/:id",
+			"controller": "api/v1/featured_tags",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:accounts"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/polls/:poll_id/votes",
+			"controller": "api/v1/polls/votes",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:statuses"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/polls/:id",
+			"controller": "api/v1/polls",
+			"action": "show",
+			"token": "optional",
+			"scopes": ["read", "read:statuses"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/push/subscription",
+			"controller": "api/v1/push/subscriptions",
+			"action": "create",
+			"token": "required",
+			"scopes": ["push"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/push/subscription",
+			"controller": "api/v1/push/subscriptions",
+			"action": "show",
+			"token": "required",
+			"scopes": ["push"],
+			"user": true
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v1/push/subscription",
+			"controller": "api/v1/push/subscriptions",
+			"action": "update",
+			"token": "required",
+			"scopes": ["push"],
+			"user": true
+		},
+		{
+			"method": "PUT",
+			"path": "/api/v1/push/subscription",
+			"controller": "api/v1/push/subscriptions",
+			"action": "update",
+			"token": "required",
+			"scopes": ["push"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/push/subscription",
+			"controller": "api/v1/push/subscriptions",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["push"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/accounts/:id/enable",
+			"controller": "api/v1/admin/accounts",
+			"action": "enable",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:accounts"],
+			"user": false,
+			"guards": ["require_local_account!"]
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/accounts/:id/unsensitive",
+			"controller": "api/v1/admin/accounts",
+			"action": "unsensitive",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:accounts"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/accounts/:id/unsilence",
+			"controller": "api/v1/admin/accounts",
+			"action": "unsilence",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:accounts"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/accounts/:id/unsuspend",
+			"controller": "api/v1/admin/accounts",
+			"action": "unsuspend",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:accounts"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/accounts/:id/approve",
+			"controller": "api/v1/admin/accounts",
+			"action": "approve",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:accounts"],
+			"user": false,
+			"guards": ["require_local_account!"]
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/accounts/:id/reject",
+			"controller": "api/v1/admin/accounts",
+			"action": "reject",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:accounts"],
+			"user": false,
+			"guards": ["require_local_account!"]
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/accounts/:account_id/action",
+			"controller": "api/v1/admin/account_actions",
+			"action": "create",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:accounts"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/accounts",
+			"controller": "api/v1/admin/accounts",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["admin:read", "admin:read:accounts"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/accounts/:id",
+			"controller": "api/v1/admin/accounts",
+			"action": "show",
+			"token": "optional",
+			"scopes": ["admin:read", "admin:read:accounts"],
+			"user": false
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/admin/accounts/:id",
+			"controller": "api/v1/admin/accounts",
+			"action": "destroy",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:accounts"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/reports/:id/assign_to_self",
+			"controller": "api/v1/admin/reports",
+			"action": "assign_to_self",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:reports"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/reports/:id/unassign",
+			"controller": "api/v1/admin/reports",
+			"action": "unassign",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:reports"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/reports/:id/reopen",
+			"controller": "api/v1/admin/reports",
+			"action": "reopen",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:reports"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/reports/:id/resolve",
+			"controller": "api/v1/admin/reports",
+			"action": "resolve",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:reports"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/reports",
+			"controller": "api/v1/admin/reports",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["admin:read", "admin:read:reports"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/reports/:id",
+			"controller": "api/v1/admin/reports",
+			"action": "show",
+			"token": "optional",
+			"scopes": ["admin:read", "admin:read:reports"],
+			"user": false
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v1/admin/reports/:id",
+			"controller": "api/v1/admin/reports",
+			"action": "update",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:reports"],
+			"user": false
+		},
+		{
+			"method": "PUT",
+			"path": "/api/v1/admin/reports/:id",
+			"controller": "api/v1/admin/reports",
+			"action": "update",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:reports"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/domain_allows",
+			"controller": "api/v1/admin/domain_allows",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["admin:read", "admin:read:domain_allows"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/domain_allows",
+			"controller": "api/v1/admin/domain_allows",
+			"action": "create",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:domain_allows"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/domain_allows/:id",
+			"controller": "api/v1/admin/domain_allows",
+			"action": "show",
+			"token": "optional",
+			"scopes": ["admin:read", "admin:read:domain_allows"],
+			"user": false
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/admin/domain_allows/:id",
+			"controller": "api/v1/admin/domain_allows",
+			"action": "destroy",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:domain_allows"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/domain_blocks",
+			"controller": "api/v1/admin/domain_blocks",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["admin:read", "admin:read:domain_blocks"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/domain_blocks",
+			"controller": "api/v1/admin/domain_blocks",
+			"action": "create",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:domain_blocks"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/domain_blocks/:id",
+			"controller": "api/v1/admin/domain_blocks",
+			"action": "show",
+			"token": "optional",
+			"scopes": ["admin:read", "admin:read:domain_blocks"],
+			"user": false
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v1/admin/domain_blocks/:id",
+			"controller": "api/v1/admin/domain_blocks",
+			"action": "update",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:domain_blocks"],
+			"user": false
+		},
+		{
+			"method": "PUT",
+			"path": "/api/v1/admin/domain_blocks/:id",
+			"controller": "api/v1/admin/domain_blocks",
+			"action": "update",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:domain_blocks"],
+			"user": false
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/admin/domain_blocks/:id",
+			"controller": "api/v1/admin/domain_blocks",
+			"action": "destroy",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:domain_blocks"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/email_domain_blocks",
+			"controller": "api/v1/admin/email_domain_blocks",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["admin:read", "admin:read:email_domain_blocks"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/email_domain_blocks",
+			"controller": "api/v1/admin/email_domain_blocks",
+			"action": "create",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:email_domain_blocks"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/email_domain_blocks/:id",
+			"controller": "api/v1/admin/email_domain_blocks",
+			"action": "show",
+			"token": "optional",
+			"scopes": ["admin:read", "admin:read:email_domain_blocks"],
+			"user": false
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/admin/email_domain_blocks/:id",
+			"controller": "api/v1/admin/email_domain_blocks",
+			"action": "destroy",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:email_domain_blocks"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/ip_blocks",
+			"controller": "api/v1/admin/ip_blocks",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["admin:read", "admin:read:ip_blocks"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/ip_blocks",
+			"controller": "api/v1/admin/ip_blocks",
+			"action": "create",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:ip_blocks"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/ip_blocks/:id",
+			"controller": "api/v1/admin/ip_blocks",
+			"action": "show",
+			"token": "optional",
+			"scopes": ["admin:read", "admin:read:ip_blocks"],
+			"user": false
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v1/admin/ip_blocks/:id",
+			"controller": "api/v1/admin/ip_blocks",
+			"action": "update",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:ip_blocks"],
+			"user": false
+		},
+		{
+			"method": "PUT",
+			"path": "/api/v1/admin/ip_blocks/:id",
+			"controller": "api/v1/admin/ip_blocks",
+			"action": "update",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:ip_blocks"],
+			"user": false
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/admin/ip_blocks/:id",
+			"controller": "api/v1/admin/ip_blocks",
+			"action": "destroy",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:ip_blocks"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/trends/tags/:id/approve",
+			"controller": "api/v1/admin/trends/tags",
+			"action": "approve",
+			"token": "optional",
+			"scopes": ["admin:write"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/trends/tags/:id/reject",
+			"controller": "api/v1/admin/trends/tags",
+			"action": "reject",
+			"token": "optional",
+			"scopes": ["admin:write"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/trends/tags",
+			"controller": "api/v1/admin/trends/tags",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["admin:read"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/trends/links/:id/approve",
+			"controller": "api/v1/admin/trends/links",
+			"action": "approve",
+			"token": "optional",
+			"scopes": ["admin:write"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/trends/links/:id/reject",
+			"controller": "api/v1/admin/trends/links",
+			"action": "reject",
+			"token": "optional",
+			"scopes": ["admin:write"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/trends/links",
+			"controller": "api/v1/admin/trends/links",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["admin:read"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/trends/statuses/:id/approve",
+			"controller": "api/v1/admin/trends/statuses",
+			"action": "approve",
+			"token": "optional",
+			"scopes": ["admin:write"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/trends/statuses/:id/reject",
+			"controller": "api/v1/admin/trends/statuses",
+			"action": "reject",
+			"token": "optional",
+			"scopes": ["admin:write"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/trends/statuses",
+			"controller": "api/v1/admin/trends/statuses",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["admin:read"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/trends/links/publishers/:id/approve",
+			"controller": "api/v1/admin/trends/links/preview_card_providers",
+			"action": "approve",
+			"token": "optional",
+			"scopes": ["admin:write"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/trends/links/publishers/:id/reject",
+			"controller": "api/v1/admin/trends/links/preview_card_providers",
+			"action": "reject",
+			"token": "optional",
+			"scopes": ["admin:write"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/trends/links/publishers",
+			"controller": "api/v1/admin/trends/links/preview_card_providers",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["admin:read"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/measures",
+			"controller": "api/v1/admin/measures",
+			"action": "create",
+			"token": "optional",
+			"scopes": ["admin:read"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/dimensions",
+			"controller": "api/v1/admin/dimensions",
+			"action": "create",
+			"token": "optional",
+			"scopes": ["admin:read"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/retention",
+			"controller": "api/v1/admin/retention",
+			"action": "create",
+			"token": "optional",
+			"scopes": ["admin:read"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/canonical_email_blocks/test",
+			"controller": "api/v1/admin/canonical_email_blocks",
+			"action": "test",
+			"token": "optional",
+			"scopes": ["admin:read", "admin:read:canonical_email_blocks"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/canonical_email_blocks",
+			"controller": "api/v1/admin/canonical_email_blocks",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["admin:read", "admin:read:canonical_email_blocks"],
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/v1/admin/canonical_email_blocks",
+			"controller": "api/v1/admin/canonical_email_blocks",
+			"action": "create",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:canonical_email_blocks"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/canonical_email_blocks/:id",
+			"controller": "api/v1/admin/canonical_email_blocks",
+			"action": "show",
+			"token": "optional",
+			"scopes": ["admin:read", "admin:read:canonical_email_blocks"],
+			"user": false
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v1/admin/canonical_email_blocks/:id",
+			"controller": "api/v1/admin/canonical_email_blocks",
+			"action": "destroy",
+			"token": "optional",
+			"scopes": ["admin:write", "admin:write:canonical_email_blocks"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/tags",
+			"controller": "api/v1/admin/tags",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["admin:read"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v1/admin/tags/:id",
+			"controller": "api/v1/admin/tags",
+			"action": "show",
+			"token": "optional",
+			"scopes": ["admin:read"],
+			"user": false
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v1/admin/tags/:id",
+			"controller": "api/v1/admin/tags",
+			"action": "update",
+			"token": "optional",
+			"scopes": ["admin:write"],
+			"user": false
+		},
+		{
+			"method": "PUT",
+			"path": "/api/v1/admin/tags/:id",
+			"controller": "api/v1/admin/tags",
+			"action": "update",
+			"token": "optional",
+			"scopes": ["admin:write"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v2/search",
+			"controller": "api/v2/search",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["read", "read:search"],
+			"user": false,
+			"guards": ["require_valid_pagination_options!"]
+		},
+		{
+			"method": "POST",
+			"path": "/api/v2/media",
+			"controller": "api/v2/media",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:media"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v2/suggestions",
+			"controller": "api/v2/suggestions",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:accounts"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v2/instance",
+			"controller": "api/v2/instances",
+			"action": "show",
+			"token": "none",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v2/filters/:filter_id/keywords",
+			"controller": "api/v2/filters/keywords",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:filters"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v2/filters/:filter_id/keywords",
+			"controller": "api/v2/filters/keywords",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:filters"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v2/filters/:filter_id/statuses",
+			"controller": "api/v2/filters/statuses",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:filters"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v2/filters/:filter_id/statuses",
+			"controller": "api/v2/filters/statuses",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:filters"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v2/filters",
+			"controller": "api/v2/filters",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:filters"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v2/filters",
+			"controller": "api/v2/filters",
+			"action": "create",
+			"token": "required",
+			"scopes": ["write", "write:filters"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v2/filters/:id",
+			"controller": "api/v2/filters",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:filters"],
+			"user": true
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v2/filters/:id",
+			"controller": "api/v2/filters",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:filters"],
+			"user": true
+		},
+		{
+			"method": "PUT",
+			"path": "/api/v2/filters/:id",
+			"controller": "api/v2/filters",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:filters"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v2/filters/:id",
+			"controller": "api/v2/filters",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:filters"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v2/filters/keywords/:id",
+			"controller": "api/v2/filters/keywords",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:filters"],
+			"user": true
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v2/filters/keywords/:id",
+			"controller": "api/v2/filters/keywords",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:filters"],
+			"user": true
+		},
+		{
+			"method": "PUT",
+			"path": "/api/v2/filters/keywords/:id",
+			"controller": "api/v2/filters/keywords",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:filters"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v2/filters/keywords/:id",
+			"controller": "api/v2/filters/keywords",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:filters"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v2/filters/statuses/:id",
+			"controller": "api/v2/filters/statuses",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:filters"],
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/v2/filters/statuses/:id",
+			"controller": "api/v2/filters/statuses",
+			"action": "destroy",
+			"token": "required",
+			"scopes": ["write", "write:filters"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v2/admin/accounts",
+			"controller": "api/v2/admin/accounts",
+			"action": "index",
+			"token": "optional",
+			"scopes": ["admin:read", "admin:read:accounts"],
+			"user": false
+		},
+		{
+			"method": "GET",
+			"path": "/api/v2/notifications/policy",
+			"controller": "api/v2/notifications/policies",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:notifications"],
+			"user": true
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/v2/notifications/policy",
+			"controller": "api/v2/notifications/policies",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:notifications"],
+			"user": true
+		},
+		{
+			"method": "PUT",
+			"path": "/api/v2/notifications/policy",
+			"controller": "api/v2/notifications/policies",
+			"action": "update",
+			"token": "required",
+			"scopes": ["write", "write:notifications"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v2/notifications/clear",
+			"controller": "api/v2/notifications",
+			"action": "clear",
+			"token": "required",
+			"scopes": ["write", "write:notifications"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v2/notifications/unread_count",
+			"controller": "api/v2/notifications",
+			"action": "unread_count",
+			"token": "required",
+			"scopes": ["read", "read:notifications"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/api/v2/notifications/:group_key/dismiss",
+			"controller": "api/v2/notifications",
+			"action": "dismiss",
+			"token": "required",
+			"scopes": ["write", "write:notifications"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v2/notifications/:notification_group_key/accounts",
+			"controller": "api/v2/notifications/accounts",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:notifications"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v2/notifications",
+			"controller": "api/v2/notifications",
+			"action": "index",
+			"token": "required",
+			"scopes": ["read", "read:notifications"],
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/v2/notifications/:group_key",
+			"controller": "api/v2/notifications",
+			"action": "show",
+			"token": "required",
+			"scopes": ["read", "read:notifications"],
+			"user": true
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/web/settings",
+			"controller": "api/web/settings",
+			"action": "update",
+			"token": "required",
+			"scopes": null,
+			"user": true
+		},
+		{
+			"method": "PUT",
+			"path": "/api/web/settings",
+			"controller": "api/web/settings",
+			"action": "update",
+			"token": "required",
+			"scopes": null,
+			"user": true
+		},
+		{
+			"method": "GET",
+			"path": "/api/web/embeds/:id",
+			"controller": "api/web/embeds",
+			"action": "show",
+			"token": "optional",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/web/push_subscriptions",
+			"controller": "api/web/push_subscriptions",
+			"action": "create",
+			"token": "required",
+			"scopes": null,
+			"user": true
+		},
+		{
+			"method": "PATCH",
+			"path": "/api/web/push_subscriptions/:id",
+			"controller": "api/web/push_subscriptions",
+			"action": "update",
+			"token": "required",
+			"scopes": null,
+			"user": true
+		},
+		{
+			"method": "PUT",
+			"path": "/api/web/push_subscriptions/:id",
+			"controller": "api/web/push_subscriptions",
+			"action": "update",
+			"token": "required",
+			"scopes": null,
+			"user": true
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/web/push_subscriptions/:id",
+			"controller": "api/web/push_subscriptions",
+			"action": "destroy",
+			"token": "none",
+			"scopes": null,
+			"user": false
+		},
+		{
+			"method": "POST",
+			"path": "/api/fasp/debug/v0/callback/responses",
+			"controller": "api/fasp/debug/v0/callback/responses",
+			"action": "create",
+			"token": "none",
+			"scopes": null,
+			"user": false,
+			"guards": ["require_authentication"]
+		},
+		{
+			"method": "POST",
+			"path": "/api/fasp/data_sharing/v0/backfill_requests/:backfill_request_id/continuation",
+			"controller": "api/fasp/data_sharing/v0/continuations",
+			"action": "create",
+			"token": "none",
+			"scopes": null,
+			"user": false,
+			"guards": ["require_authentication"]
+		},
+		{
+			"method": "POST",
+			"path": "/api/fasp/data_sharing/v0/backfill_requests",
+			"controller": "api/fasp/data_sharing/v0/backfill_requests",
+			"action": "create",
+			"token": "none",
+			"scopes": null,
+			"user": false,
+			"guards": ["require_authentication"]
+		},
+		{
+			"method": "POST",
+			"path": "/api/fasp/data_sharing/v0/event_subscriptions",
+			"controller": "api/fasp/data_sharing/v0/event_subscriptions",
+			"action": "create",
+			"token": "none",
+			"scopes": null,
+			"user": false,
+			"guards": ["require_authentication"]
+		},
+		{
+			"method": "DELETE",
+			"path": "/api/fasp/data_sharing/v0/event_subscriptions/:id",
+			"controller": "api/fasp/data_sharing/v0/event_subscriptions",
+			"action": "destroy",
+			"token": "none",
+			"scopes": null,
+			"user": false,
+			"guards": ["require_authentication"]
+		},
+		{
+			"method": "POST",
+			"path": "/api/fasp/registration",
+			"controller": "api/fasp/registrations",
+			"action": "create",
+			"token": "none",
+			"scopes": null,
+			"user": false
+		}
+	]
+}
