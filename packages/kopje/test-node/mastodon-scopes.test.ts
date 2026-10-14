@@ -93,4 +93,25 @@ describe('mastodon-scopes.mjs', () => {
 		expect(update).toMatchObject({ token: 'required', scopes: ['write', 'write:things'], user: true })
 		expect(update?.unresolved).toBeUndefined()
 	})
+
+	it('leaves a route unresolved when a callback names its actions in a form it cannot read', async () => {
+		await checkout({
+			'config/routes/api.rb':
+				'namespace :api do\n  namespace :v1 do\n    resources :things, only: [:index]\n  end\nend\n',
+			'app/controllers/api/v1/things_controller.rb': [
+				'class Api::V1::ThingsController < Api::BaseController',
+				'  READS = %i(index show).freeze',
+				"  before_action -> { doorkeeper_authorize! :read, :'read:things' }, only: READS",
+				'',
+				'  def index',
+				'    render json: []',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+		})
+		expect(route('/api/v1/things')?.unresolved).toEqual([
+			"unreadable only:/except: in `before_action -> { doorkeeper_authorize! :read, :'read:things' }, only: READS`",
+		])
+	})
 })

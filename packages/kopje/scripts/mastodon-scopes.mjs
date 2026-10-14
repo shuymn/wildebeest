@@ -442,7 +442,7 @@ function verbRoutes(verb, args, stack) {
 // ---- Controllers ----
 
 /**
- * @typedef {{ file: string, callback: string, args: string, only: string[] | null, except: string[] | null, conditional: string | null, nested: boolean, skip: boolean, after: boolean }} Callback
+ * @typedef {{ file: string, callback: string, args: string, only: string[] | null, except: string[] | null, conditional: string | null, nested: boolean, skip: boolean, after: boolean, unreadable: string | null }} Callback
  * @typedef {{ callbacks: Callback[], unresolved: string[], chain: string[] }} Controller
  */
 
@@ -544,6 +544,8 @@ function readController(checkout, file, cache) {
 			args: cbArgs,
 			only: options.only === undefined ? null : list(options.only),
 			except: options.except === undefined ? null : list(options.except),
+			// only:/except: literal() cannot read (a constant, an expression): the actions it runs for are unknown.
+			unreadable: [options.only, options.except].some((v) => v !== undefined && list(v) === null) ? stmt : null,
 			conditional,
 			nested: classIndent !== null && indent > classIndent,
 			file,
@@ -611,6 +613,10 @@ function access(route, checkout, cache) {
 	/** @type {Callback[]} */
 	const active = []
 	for (const cb of controller.callbacks) {
+		if (cb.unreadable !== null) {
+			unresolved.push(`unreadable only:/except: in \`${cb.unreadable}\``)
+			continue
+		}
 		if (!applies(cb, action)) continue
 		if (cb.skip) {
 			for (let i = active.length - 1; i >= 0; i--) {
