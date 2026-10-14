@@ -8,6 +8,33 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- Blocks, mutes and domain blocks in the Mastodon API, as Mastodon 4.5 has them: `POST /api/v1/accounts/:id/block`,
+  `/unblock`, `/mute` (`notifications`, default true, and `duration` in seconds, 0 for no expiry) and `/unmute`, which
+  answer the Relationship; `GET /api/v1/blocks` and `GET /api/v1/mutes` (with `mute_expires_at`), paged by Link
+  headers; and `GET`, `POST` and `DELETE /api/v1/domain_blocks` and `GET /api/v1/domain_blocks/preview`. Scopes are
+  `read:blocks`, `write:blocks`, `read:mutes`, `write:mutes` or `follow`.
+    - A block ends the follows between the two accounts both ways. A blocked remote account is sent an `Undo` of our
+      follow, a `Reject` of its follow, and the `Block`; an unblock sends the `Block`'s `Undo`.
+    - A mute is not federated. It expires after its duration: it stops applying at that time, whether or not it has
+      been removed yet. `muting_expires_at` in relationships shows the expiry.
+    - A domain block takes the domain as Mastodon normalizes it, refuses this instance's own domain, and removes your
+      followers on that domain, each with a `Reject` (at most 500 per request; the rest are removed by the next request
+      for the domain and receive nothing meanwhile). Your own follows of accounts there stay.
+
+### Changed
+
+- Home and mention notifications also leave out a status that mentions or replies to an account you block or mute
+  (for notifications, a mute that hides notifications), as Mastodon filters them.
+
+### Instance changes
+
+- Store schema: adds `0001_mute_expiry` (`mutes.expires_at` and an index on it). It runs on the first request after
+  the deploy and is quick. A rollback to an earlier version needs the point-in-time restore described in
+  [docs/upgrade.md](docs/upgrade.md).
+- `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.3] - 2026-10-14
 
 A third release candidate of the first release, published under the npm dist-tag `next`.
