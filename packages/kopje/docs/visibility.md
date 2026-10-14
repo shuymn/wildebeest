@@ -110,3 +110,25 @@ checks the generated visibility sets and that `REACHES_FOLLOWERS_SQL` is the lis
 The fragments nest: Cloudflare's SQLite refuses an expression deeper than 100 levels, and each nested `EXISTS` and
 each term of an `AND` chain adds to it. The deepest fragment, `shownSql`, compiles at a depth of about 76; keep the
 deepest terms last in a chain and prefer `JOIN ... ON` to `WHERE` for a lookup inside a subquery.
+
+## The oracle and the bounds harness
+
+`test/policy-oracle.test.ts` checks each fragment against a second statement of its rule. `test/policy-model.ts`
+states the rules of this page in plain TypeScript, without importing the module. `test/policy-world.ts` generates
+worlds with [fast-check](https://fast-check.dev/): four local accounts (one of them may be suspended), two or three
+remote accounts on two domains (some with an actor id on a subdomain or with a port), up to 22 statuses of every
+visibility with mentions (some silent), boosts and replies, accepted and pending follows, blocks both ways, mutes that
+have expired, expire at the time of the read or later, or never, with or without notifications, and domain blocks in
+their stored form, including the instance's own domain and a domain nobody lives on. Each property writes a world into
+one Store and evaluates its fragment over every pair the rule takes: every viewer (each account and the anonymous one)
+with every account or status, every owner with every account, and, for `shownSql`, every local recipient with every
+type, sender and status (or none). The set of pairs it accepts must equal the model's. A failure prints the shrunk
+world, the pairs only one side accepts, and the seed; `FC_SEED=<seed> pnpm vitest run test/policy-oracle.test.ts`
+replays it.
+
+`test/policy-bounds.test.ts` takes one generated world, for a fixed seed, in which every endpoint below shows the
+viewer something. It runs home, the public and tag feeds, account statuses, notifications, context, favourites,
+bookmarks, `favourited_by`, `reblogged_by`, relationships and status and hashtag search on that world alone, and again
+with 1,000 unrelated remote accounts and 100 unrelated local ones: their statuses (never public), replies and boosts,
+their follows, blocks, mutes and domain blocks of the world's accounts and domains, and their favourites, bookmarks and
+notifications. The rows each endpoint reads (RES-7) may grow by at most 10.
