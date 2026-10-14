@@ -87,9 +87,11 @@ can leave a second, self-consistent manifest for the same run, which retention t
 
 **Limits.** Each invocation encrypts at most 512 MiB, counted as plaintext bytes (the ciphertext is 16 bytes per
 64 KiB larger). The budget keeps the work inside the cron's 30 seconds of Worker CPU; reading the dump costs the
-Store's CPU, not the Worker's. In the Worker, age encryption plus both SHA-256 digests measured about 4 ms of CPU per
-MiB on an Apple M4 Pro (Node.js 24; 512 MiB in 2.1 s). Encrypting media copies measured about 6 ms per MiB. Workers
-CPUs are unmeasured; even four times slower, 512 MiB stays near 10 to 12 seconds.
+Store's CPU, not the Worker's. On Workers, a backup of a synthetic Store finished its dump in one invocation at about
+31 ms of Worker CPU per MiB of dump, for the whole run (streaming the dump, age encryption, both SHA-256 digests and the
+upload), so a 512 MiB dump comes to about 16 seconds. Encrypting media copies measured about 6 ms per MiB on an Apple
+M4 Pro (Node.js 24), against about 4 ms per MiB there for the dump's encryption and digests; media copies are not
+measured on Workers.
 
 - **Media** copying and the **media index** stop before the budget and continue at the next cron. An index too large
   for a whole invocation fails as `index-too-large`; that takes over a million originals.
