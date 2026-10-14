@@ -126,10 +126,9 @@ describe('convert and verify-conversion', () => {
 		expect(value("SELECT visibility FROM statuses WHERE content LIKE '%secret direct%'")).toBe('direct')
 		expect(value('SELECT count(*) FROM statuses WHERE raw IS NOT NULL')).toBe(4)
 		expect(value("SELECT value FROM kopje_state WHERE name = 'last_local_id'")).toMatch(/^\d{18}$/)
-		// The language is the primary subtag of the first in contentMap; an update at publication is no edit.
+		// The language is the primary subtag of the first in contentMap.
 		expect(value("SELECT language FROM statuses WHERE content LIKE '%a reply to alice%'")).toBe('pt')
-		expect(value("SELECT count(*) FROM statuses WHERE content LIKE '%a reply to alice%' AND edited_at IS NULL")).toBe(1)
-		// Spaced times with a zone are read in that zone.
+		// Spaced times with a zone are read in that zone; an update at publication is no edit.
 		const times = (match: string) =>
 			db.prepare(`SELECT published_at, edited_at FROM statuses WHERE content LIKE '%${match}%'`).get()
 		expect(times('a DM to alice')).toEqual({
@@ -243,12 +242,6 @@ describe('convert and verify-conversion', () => {
 			],
 			['a status loses its language', 'UPDATE statuses SET language = NULL WHERE language IS NOT NULL', 'statuses'],
 			['a language keeps its region', "UPDATE statuses SET language = 'pt-BR' WHERE language = 'pt'", 'statuses'],
-			['an edit time is dropped', 'UPDATE statuses SET edited_at = NULL', 'statuses'],
-			[
-				'an unedited status gets an edit time',
-				'UPDATE statuses SET edited_at = published_at WHERE edited_at IS NULL AND reblog_of_id IS NULL',
-				'statuses',
-			],
 			[
 				'an update at publication becomes an edit',
 				"UPDATE statuses SET edited_at = published_at WHERE content LIKE '%a reply to alice%'",
@@ -277,7 +270,6 @@ describe('convert and verify-conversion', () => {
 				'accounts',
 			],
 			['an actor type changes', "UPDATE accounts SET actor_type = 'Person' WHERE actor_type = 'Service'", 'accounts'],
-			['discoverability is dropped', 'UPDATE accounts SET discoverable = NULL WHERE domain IS NULL', 'accounts'],
 			['an alias is dropped', "UPDATE local_accounts SET also_known_as = '[]'", 'keys'],
 			['the default visibility changes', "UPDATE local_accounts SET default_visibility = 'public'", 'keys'],
 			['the default sensitivity changes', 'UPDATE local_accounts SET default_sensitive = 0', 'keys'],

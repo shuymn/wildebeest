@@ -428,7 +428,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	/** @type {Map<string, string[]>} object id -> the hashtags legacy recorded for it */
 	const recordedTags = new Map()
 	for (const h of all('SELECT value, object_id FROM note_hashtags')) {
-		recordedTags.set(String(h.object_id), [...(recordedTags.get(String(h.object_id)) ?? []), text(h.value)])
+		recordedTags.set(String(h.object_id), [...(recordedTags.get(String(h.object_id)) ?? []), hashtagName(h.value)])
 	}
 	for (const o of objects) {
 		const id = String(o.id)
@@ -452,7 +452,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			...many(p.tag)
 				.filter((t) => typeof t === 'object' && t !== null && /** @type {Json} */ (t).type === 'Hashtag')
 				.map((t) => hashtagName(text(/** @type {Json} */ (t).name).replace(/^#/, ''))),
-			...(recordedTags.get(id) ?? []).map(hashtagName),
+			...(recordedTags.get(id) ?? []),
 		]
 		put('statuses', uri, [
 			author,
