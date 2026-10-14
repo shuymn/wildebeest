@@ -66,6 +66,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   (for mention notifications, a mute that hides notifications), as Mastodon filters them; so do post notifications
   of accounts you follow with `notify`, whenever home leaves the status out.
 
+- A post notification (`notify` on a follow) is no longer created, shown or pushed for a post by an account you mute,
+  even with a mute that keeps notifications, as Mastodon creates none: home leaves that post out.
+
+- A domain block converted from a legacy instance is stored without a trailing dot, the form domain blocks are matched
+  in.
+
 - `VAPID_JWK` must hold the private key (`d`), not only the public point: a key without it now makes the instance
   answer 503 as misconfigured, as any invalid value does.
 
@@ -76,6 +82,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0001_blocks_and_mutes`: `mutes.expires_at` with an index, and the `domain_block_cleanups` table. It is quick.
     - `0002_web_push`: the subscription's encoding and sealed token on `push_subscriptions`, and the
       `push_deliveries` table.
+    - Moving the visibility rules into one module adds no migration: domain blocks are matched through the existing
+      `(account_id, domain)` index.
 - `wrangler.jsonc`: unchanged. Set the `VAPID_JWK` secret to turn Web Push on.
 
 ## [0.1.0-rc.3] - 2026-10-14
