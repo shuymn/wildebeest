@@ -310,6 +310,53 @@ function shown(output: unknown): number {
 	return 0
 }
 
+type Entity = Record<string, unknown>
+
+// What an endpoint showed, by identity and in order: statuses by id (and a boost's original), accounts by id,
+// notifications by id, type, sender and status, hashtags by name, and relationships by their flags. Other objects
+// (pages, contexts, search results, ok results) keep their shape.
+function identities(output: unknown): unknown {
+	if (Array.isArray(output)) {
+		return output.map(identities)
+	}
+	if (output === null || typeof output !== 'object') {
+		return output
+	}
+	const value = output as Entity
+	if ('blocking' in value) {
+		const { id, following, followed_by, requested, blocking, blocked_by, muting, muting_notifications } = value
+		return {
+			id,
+			following,
+			followed_by,
+			requested,
+			blocking,
+			blocked_by,
+			muting,
+			muting_notifications,
+			domain_blocking: value.domain_blocking,
+		}
+	}
+	if ('type' in value && 'account' in value) {
+		return {
+			id: value.id,
+			type: value.type,
+			account: (value.account as Entity).id,
+			status: (value.status as Entity | null | undefined)?.id ?? null,
+		}
+	}
+	if ('visibility' in value && 'account' in value) {
+		return { id: value.id, reblog: (value.reblog as Entity | null)?.id ?? null }
+	}
+	if ('acct' in value) {
+		return value.id
+	}
+	if ('history' in value && 'name' in value) {
+		return value.name
+	}
+	return Object.fromEntries(Object.entries(value).map(([key, field]) => [key, identities(field)]))
+}
+
 describe('read endpoints do not read more rows as unrelated data grows (RES-7)', () => {
 	it('reads the same rows with or without unrelated accounts, statuses and edges', async () => {
 		expect(WORLD).toBeDefined()
@@ -320,11 +367,13 @@ describe('read endpoints do not read more rows as unrelated data grows (RES-7)',
 		// same with the unrelated rows as without.
 		const outputs = async (store: StoreStub) =>
 			runInDurableObject(store, (_instance, state) =>
-				ENDPOINTS.map(([name, operation, input]) => [name, shown(operation.run(state.storage.sql, input as never))])
+				ENDPOINTS.map(([name, operation, input]) => [name, operation.run(state.storage.sql, input as never)] as const)
 			)
 		const withoutUnrelated = await outputs(alone)
-		expect(withoutUnrelated.filter(([, count]) => count === 0)).toEqual([])
-		expect(await outputs(crowded)).toEqual(withoutUnrelated)
+		expect(withoutUnrelated.filter(([, output]) => shown(output) === 0).map(([name]) => name)).toEqual([])
+		const named = (results: (readonly [string, unknown])[]) =>
+			Object.fromEntries(results.map(([name, output]) => [name, identities(output)]))
+		expect(named(await outputs(crowded))).toEqual(named(withoutUnrelated))
 		const grown: string[] = []
 		for (const [name, operation, input] of ENDPOINTS) {
 			const few = await rowsRead({ store: alone }, operation, input as never)
