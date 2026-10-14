@@ -1,0 +1,432 @@
+import { runInDurableObject } from 'cloudflare:test'
+
+import fc from 'fast-check'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+
+import { migratedStore } from './helpers'
+import { NOTIFICATION_TYPES, PolicyModel, type Viewer } from './policy-model'
+import { accountId, runs, statusId, type World, worldArb, writeWorld } from './policy-world'
+import type { Account, Page, PageQuery } from '../src/domain/accounts'
+import type { NotificationType } from '../src/domain/notifications'
+import { listNotifications } from '../src/domain/notifications'
+import { search } from '../src/domain/search'
+import type { Status } from '../src/domain/status-presenter'
+import { getStatus, interactors, statusContext } from '../src/domain/statuses'
+import {
+	accountStatuses,
+	bookmarks,
+	favourites,
+	homeTimeline,
+	publicTimeline,
+	tagTimeline,
+} from '../src/domain/timelines'
+import type { StoreStub } from '../src/platform/store-client'
+import type { StoreOperation } from '../src/platform/store-kernel'
+
+// The endpoint oracle (docs/visibility.md, "The oracle and the bounds harness"): the status read endpoints run on
+// generated worlds (test/policy-world.ts) for every available local viewer and, where the endpoint allows it, the
+// anonymous one. No endpoint may show a status (or a boosted original) the model of its rule (test/policy-model.ts)
+// does not allow the viewer. The lists whose membership is simple (public, tag, account statuses, favourites,
+// bookmarks) must also show exactly what the model allows of their members, in order, page after page.
+
+// Cases per property: each writes a world and runs every endpoint for every viewer.
+const CASES = 60
+// A small page, so the lists are read over several pages.
+const LIMIT = 3
+const PRESENT = { origin: 'https://kopje.test' }
+
+// What a world adds for the endpoints: favourites (by any account), bookmarks (by local accounts) and notifications
+// (to local accounts), all of originals, by index into the world.
+type Edges = {
+	favourites: { account: number; status: number }[]
+	bookmarks: { account: number; status: number }[]
+	notifications: { recipient: number; type: NotificationType; from: number; status: number | null }[]
+}
+
+type Case = { world: World; edges: Edges }
+
+const caseArb: fc.Arbitrary<Case> = fc
+	.record({
+		world: worldArb,
+		favourites: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 16, size: 'max' }),
+		bookmarks: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 10, size: 'max' }),
+		notifications: fc.array(
+			fc.record({
+				recipient: fc.nat(),
+				type: fc.constantFrom(...NOTIFICATION_TYPES),
+				from: fc.nat(),
+				status: fc.option(fc.nat()),
+			}),
+			{ maxLength: 16, size: 'max' }
+		),
+	})
+	.map(({ world, favourites, bookmarks, notifications }): Case => {
+		const locals = world.accounts.flatMap((account, x) => (account.local ? [x] : []))
+		const originals = world.statuses.flatMap((status, s) => (status.reblogOf === null ? [s] : []))
+		const pick = <T>(items: readonly T[], n: number): T | undefined => items[n % Math.max(items.length, 1)]
+		const unique = <T>(items: T[], key: (item: T) => string) =>
+			items.filter((item, i) => items.findIndex((other) => key(other) === key(item)) === i)
+		const edge = (accounts: readonly number[]) => (e: { account: number; status: number }) => {
+			const account = pick(accounts, e.account)
+			const status = pick(originals, e.status)
+			return account === undefined || status === undefined ? [] : [{ account, status }]
+		}
+		const key = (e: { account: number; status: number }) => `${e.account}:${e.status}`
+		return {
+			world,
+			edges: {
+				favourites: unique(favourites.flatMap(edge(world.accounts.map((_, x) => x))), key),
+				bookmarks: unique(bookmarks.flatMap(edge(locals)), key),
+				notifications: unique(
+					notifications.flatMap((n) => {
+						const recipient = pick(locals, n.recipient)
+						const from = n.from % world.accounts.length
+						const status = n.status === null ? null : (pick(originals, n.status) ?? null)
+						return recipient === undefined ? [] : [{ recipient, type: n.type, from, status }]
+					}),
+					(n) => `${n.recipient}:${n.type}:${n.from}:${n.status}`
+				),
+			},
+		}
+	})
+
+const tokenOf = (x: number) => `policy-endpoints-${x}`
+
+function writeCase(sql: SqlStorage, { world, edges }: Case): void {
+	sql.exec('DELETE FROM oauth_tokens')
+	writeWorld(sql, world)
+	world.accounts.forEach((account, x) => {
+		if (account.local) {
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'endpoints', ?, 'read')",
+				tokenOf(x),
+				accountId(x)
+			)
+		}
+	})
+	// Inserted in order, so the edge ids follow the order of the lists.
+	for (const f of edges.favourites) {
+		sql.exec('INSERT INTO favourites (account_id, status_id) VALUES (?, ?)', accountId(f.account), statusId(f.status))
+	}
+	for (const b of edges.bookmarks) {
+		sql.exec('INSERT INTO bookmarks (account_id, status_id) VALUES (?, ?)', accountId(b.account), statusId(b.status))
+	}
+	for (const n of edges.notifications) {
+		sql.exec(
+			'INSERT INTO notifications (account_id, type, from_account_id, status_id) VALUES (?, ?, ?, ?)',
+			accountId(n.recipient),
+			n.type,
+			accountId(n.from),
+			n.status === null ? null : statusId(n.status)
+		)
+	}
+}
+
+type Authorized<T> = { status: string; value?: T }
+
+function ok<T>(result: unknown, what: string): T {
+	const authorized = result as Authorized<T>
+	if (authorized.status !== 'ok') {
+		throw new Error(`${what}: ${authorized.status}`)
+	}
+	return authorized.value as T
+}
+
+// The ok value of a Viewed result, or null for not_found.
+function found<T>(result: unknown, what: string): T | null {
+	const viewed = ok<{ status: string; value?: T }>(result, what)
+	return viewed.status === 'ok' ? (viewed.value as T) : null
+}
+
+// The endpoints that showed something, over every case, so a property cannot pass by showing nothing.
+const shown = new Set<string>()
+
+describe('the status read endpoints agree with the model of their rules', () => {
+	let store: StoreStub
+	beforeAll(async () => {
+		store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('endpoints', 'secret', 'endpoints', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+		})
+	})
+
+	afterAll(() => {
+		expect([...shown].sort()).toEqual(
+			[
+				'account statuses',
+				'bookmarks',
+				'context',
+				'favourited_by',
+				'favourites',
+				'home',
+				'notifications',
+				'public',
+				'reblogged_by',
+				'status',
+				'status search',
+				'tag',
+			].sort()
+		)
+	})
+
+	it('shows no viewer a status the model does not allow, and lists exactly what it allows', async () => {
+		await fc.assert(
+			fc.asyncProperty(caseArb, async (c) => {
+				const problems = await runInDurableObject(store, (_instance, state) => check(state.storage.sql, c))
+				expect(problems).toEqual([])
+			}),
+			runs(CASES)
+		)
+	}, 60_000)
+})
+
+// Runs every endpoint for every viewer of the case and returns what disagrees with the model.
+function check(sql: SqlStorage, c: Case): string[] {
+	writeCase(sql, c)
+	const { world, edges } = c
+	const m = new PolicyModel(world)
+	const now = Date.parse(world.now)
+	const problems: string[] = []
+	const indexOf = new Map(world.statuses.map((_, s) => [statusId(s), s]))
+	const accountIndex = new Map(world.accounts.map((_, x) => [accountId(x), x]))
+	const nameOf = (viewer: Viewer) => (viewer === null ? 'anonymous' : (world.accounts[viewer]?.name ?? ''))
+	const statusName = (s: number) => m.status(s).name
+	const run = <T>(operation: StoreOperation<never, unknown>, input: unknown) => operation.run(sql, input as never) as T
+	const credentialOf = (viewer: number) => ({ tokenHash: tokenOf(viewer), scope: 'read', now }) as const
+	const optional = (viewer: Viewer) => ({ credential: viewer === null ? null : credentialOf(viewer), now })
+
+	// A shown status: the model allows it to the viewer by the endpoint's rule, and a boost shows its own original,
+	// which the viewer may see.
+	const status = (endpoint: string, viewer: Viewer, value: Status, allowed: (s: number) => boolean): number => {
+		shown.add(endpoint)
+		const s = indexOf.get(value.id)
+		if (s === undefined) {
+			problems.push(`${endpoint} ${nameOf(viewer)}: unknown status ${value.id}`)
+			return -1
+		}
+		if (!allowed(s)) {
+			problems.push(`${endpoint} ${nameOf(viewer)}: ${statusName(s)} is not allowed`)
+		}
+		if (value.reblog !== null) {
+			const o = indexOf.get(value.reblog.id)
+			if (o === undefined || o !== m.status(s).reblogOf || !m.visible(o, viewer)) {
+				problems.push(`${endpoint} ${nameOf(viewer)}: ${statusName(s)} shows original ${value.reblog.id}`)
+			}
+		}
+		return s
+	}
+
+	// Every page of a list, LIMIT at a time, older pages by the oldest cursor.
+	const pages = <T>(read: (page: PageQuery) => Page<T> | null): T[] => {
+		const items: T[] = []
+		let maxId: string | undefined
+		for (let i = 0; i < 64; i++) {
+			const page = read(maxId === undefined ? { limit: LIMIT } : { limit: LIMIT, maxId })
+			if (page === null || page.items.length === 0 || page.oldest === null) {
+				break
+			}
+			items.push(...page.items)
+			maxId = page.oldest
+		}
+		return items
+	}
+
+	// A list shows exactly `expected`, in order.
+	const equal = (endpoint: string, viewer: Viewer, actual: number[], expected: number[]) => {
+		if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+			problems.push(
+				`${endpoint} ${nameOf(viewer)}: shows [${actual.map(statusName).join(' ')}], the model [${expected.map(statusName).join(' ')}]`
+			)
+		}
+	}
+
+	const newestFirst = (statuses: number[]) => [...statuses].sort((a, b) => b - a)
+	const all = world.statuses.map((_, s) => s)
+	const locals = world.accounts.flatMap((account, x) => (account.local && !account.suspended ? [x] : []))
+	const viewers: Viewer[] = [null, ...locals]
+	const timeline = { local: false, remote: false, onlyMedia: false, present: PRESENT }
+	// Public: public originals that are not replies to others (a reply in the author's own conversation is not one).
+	// Tag (Mastodon's TagFeed): public originals with the tag, replies included.
+	const publicFeed = (s: number) => {
+		const status = m.status(s)
+		return (
+			status.visibility === 'public' &&
+			status.reblogOf === null &&
+			(status.replyTo === null || m.partner(s) === status.author)
+		)
+	}
+
+	for (const viewer of viewers) {
+		const user = viewer === null ? null : { credential: credentialOf(viewer) }
+
+		// Single status, context and who favourited or boosted it: only what the viewer may view.
+		for (const s of all) {
+			const id = statusId(s)
+			const single = found<Status>(run(getStatus, { ...optional(viewer), id, present: PRESENT }), 'status')
+			if (single !== null) {
+				status('status', viewer, single, (x) => x === s && m.viewable(x, viewer))
+			}
+			const context = found<{ ancestors: Status[]; descendants: Status[] }>(
+				run(statusContext, { ...optional(viewer), id, present: PRESENT }),
+				'context'
+			)
+			if (context !== null) {
+				if (!m.viewable(s, viewer)) {
+					problems.push(`context ${nameOf(viewer)}: answers for ${statusName(s)}`)
+				}
+				for (const member of [...context.ancestors, ...context.descendants]) {
+					status('context', viewer, member, (x) => m.listable(x, viewer))
+				}
+			}
+			const original = m.status(s).reblogOf ?? s
+			for (const kind of ['favourited_by', 'reblogged_by'] as const) {
+				const accounts = found<Page<Account>>(
+					run(interactors, { ...optional(viewer), id, kind, page: { limit: 40 }, present: PRESENT }),
+					kind
+				)
+				if (accounts === null) {
+					continue
+				}
+				if (!m.viewable(s, viewer)) {
+					problems.push(`${kind} ${nameOf(viewer)}: answers for ${statusName(s)}`)
+				}
+				for (const account of accounts.items) {
+					shown.add(kind)
+					const x = accountIndex.get(account.id)
+					const member =
+						x !== undefined &&
+						(kind === 'favourited_by'
+							? edges.favourites.some((f) => f.account === x && f.status === original)
+							: world.statuses.some(
+									(b) =>
+										b.author === x &&
+										b.reblogOf === original &&
+										(b.visibility === 'public' || b.visibility === 'unlisted')
+								))
+					if (x === undefined || !member || !m.listedFor(x, viewer)) {
+						problems.push(`${kind} ${nameOf(viewer)} ${statusName(s)}: lists ${account.id}`)
+					}
+				}
+			}
+		}
+
+		// Public and tag feeds, and every account's statuses: exactly what the model allows of their members.
+		const feed = (endpoint: string, operation: StoreOperation<never, unknown>, input: object) =>
+			pages((page) => ok<Page<Status>>(run(operation, { ...optional(viewer), ...input, page }), endpoint)).map(
+				(value) => status(endpoint, viewer, value, () => true)
+			)
+		equal(
+			'public',
+			viewer,
+			feed('public', publicTimeline, timeline),
+			newestFirst(all.filter((s) => publicFeed(s) && m.listable(s, viewer)))
+		)
+		equal(
+			'tag',
+			viewer,
+			feed('tag', tagTimeline, { ...timeline, tag: 'cats', any: [], all: [], none: [] }),
+			newestFirst(
+				all.filter((s) => {
+					const { visibility, reblogOf, tagged } = m.status(s)
+					return visibility === 'public' && reblogOf === null && tagged && m.listable(s, viewer)
+				})
+			)
+		)
+		world.accounts.forEach((_, a) => {
+			const actual = pages((page) =>
+				ok<Page<Status> | null>(
+					run(accountStatuses, {
+						...optional(viewer),
+						account: accountId(a),
+						page,
+						onlyMedia: false,
+						excludeReplies: false,
+						excludeReblogs: false,
+						pinned: false,
+						tagged: null,
+						present: PRESENT,
+					}),
+					'account statuses'
+				)
+			).map((value) => status('account statuses', viewer, value, () => true))
+			// Status.permitted_for: visible, the viewer does not block the account, and a boost's original is visible
+			// and its author not filtered.
+			const expected = all.filter((s) => {
+				const { author, reblogOf } = m.status(s)
+				return (
+					author === a &&
+					m.visible(s, viewer) &&
+					!m.blocks(viewer, a) &&
+					(reblogOf === null || (m.visible(reblogOf, viewer) && !m.filteredFor(m.status(reblogOf).author, viewer)))
+				)
+			})
+			equal(`account statuses of ${world.accounts[a]?.name}`, viewer, actual, newestFirst(expected))
+		})
+
+		if (viewer === null || user === null) {
+			continue
+		}
+
+		// Favourites and bookmarks: the viewer's, newest edge first, that the list rule allows.
+		for (const [endpoint, operation, list] of [
+			['favourites', favourites, edges.favourites],
+			['bookmarks', bookmarks, edges.bookmarks],
+		] as const) {
+			const actual = pages((page) =>
+				ok<Page<Status>>(run(operation, { ...user, page, present: PRESENT }), endpoint)
+			).map((value) => status(endpoint, viewer, value, () => true))
+			const expected = list
+				.filter((e) => e.account === viewer && m.listable(e.status, viewer))
+				.map((e) => e.status)
+				.reverse()
+			equal(endpoint, viewer, actual, expected)
+		}
+
+		// Home: nothing home hides from the viewer.
+		for (const value of pages((page) =>
+			ok<Page<Status>>(run(homeTimeline, { ...user, page, present: PRESENT }), 'home')
+		)) {
+			status('home', viewer, value, (s) => m.homeFilter(s, viewer))
+		}
+
+		// Status search over the viewer's library: only what the list rule allows.
+		const results = ok<{ statuses: Status[] }>(
+			run(search, {
+				...user,
+				query: 'status',
+				types: ['statuses'],
+				limit: 40,
+				offset: 0,
+				following: false,
+				localDomain: 'kopje.test',
+				present: PRESENT,
+			}),
+			'status search'
+		)
+		for (const value of results.statuses) {
+			status('status search', viewer, value, (s) => m.listable(s, viewer))
+		}
+
+		// Notifications: only those the notification rule shows, with statuses the viewer may view.
+		const notifications = pages((page) =>
+			ok<Page<{ type: NotificationType; account: Account; status?: Status }>>(
+				run(listNotifications, { ...user, page, types: [], excludeTypes: [], accountId: null, present: PRESENT }),
+				'notifications'
+			)
+		)
+		for (const notification of notifications) {
+			shown.add('notifications')
+			const from = accountIndex.get(notification.account.id)
+			const s =
+				notification.status === undefined
+					? null
+					: status('notifications', viewer, notification.status, (x) => m.viewable(x, viewer))
+			if (from === undefined || !m.shown(viewer, notification.type, from, s)) {
+				problems.push(`notifications ${nameOf(viewer)}: ${notification.type} from ${notification.account.id}`)
+			}
+		}
+	}
+	return problems
+}
