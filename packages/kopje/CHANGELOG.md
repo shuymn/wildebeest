@@ -52,8 +52,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   It needs no scope; `following` is false for a signed-in viewer, since tag follows do not exist yet.
 
 - `GET /api/v1/accounts/familiar_followers`: for each requested account, the accounts the user follows that follow it
-  among up to 10,000 of the user's follows (at most 20 ids and 80 accounts each), without accounts the user blocks
-  or mutes.
+  among up to 10,000 of the user's follows (at most 20 ids and 80 accounts each), without accounts the user blocks,
+  mutes (while the mute lasts) or whose domain the user blocks.
 
 - Empty answers, under the scopes Mastodon requires, for features Kopje has no data for yet: `GET /api/v1/filters`,
   `/api/v2/filters`, `/api/v1/followed_tags`, `/api/v1/featured_tags`, `/api/v1/accounts/:id/featured_tags`,

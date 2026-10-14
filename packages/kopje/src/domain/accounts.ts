@@ -1,6 +1,6 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { actorSnapshot, recordActorUpdate } from './actor-update'
-import { activeMuteSql, domainBlockMatchSql } from './audience'
+import { activeMuteSql, domainBlockMatchSql, filterTime, unfilteredSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { retractFollow } from './inbox'
 import { notify } from './notifications'
@@ -499,8 +499,9 @@ export const relationships = userReadOperation<{ ids: string[] }, Relationship[]
 // accounts the viewer follows that follow it. Both follows are accepted ones (VIS-8). It shows no more than
 // GET /api/v1/accounts/:id/followers of the account and /following of each follower show the same viewer: Kopje
 // hides no account's network (it stores no hide-collections setting, local or remote), so those lists show every
-// accepted follow and so may this. An unknown or suspended account has no entry; a suspended follower, and one the
-// viewer blocks or mutes, is left out (the viewer's blocks and mutes are read here directly).
+// accepted follow and so may this. An unknown or suspended account has no entry; a suspended follower is left out, and
+// so is one the viewer filters out of lists (unfilteredSql over the follow's account_id, the follower: a block, a
+// mute that applies at the request time, or a block of its domain).
 // Bounds (RES-3, RES-7): at most MAX_FAMILIAR_FOLLOWERS_IDS accounts. For each, the candidates are the viewer's own
 // accepted follows (at most FAMILIAR_FOLLOWERS_WINDOW, through the partial index of accepted follows), each checked
 // for an accepted follow of the account through the unique pair index (CROSS JOIN keeps SQLite to that order), so
@@ -515,7 +516,7 @@ export const MAX_FAMILIAR_FOLLOWERS = 80
 export type FamiliarFollowers = { id: string; accounts: Account[] }
 
 export const familiarFollowers = userReadOperation<{ ids: string[]; present: Present }, FamiliarFollowers[]>(
-	(db, { ids, present }, { accountId: viewerId }) => {
+	(db, { ids, present }, { accountId: viewerId, now }) => {
 		const resolved = ids
 			.slice(0, MAX_FAMILIAR_FOLLOWERS_IDS)
 			.map((id) => resolveAccountId(db, id))
@@ -532,13 +533,13 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 					FROM (SELECT target_account_id FROM follows WHERE account_id = ?2 AND state = 'accepted' LIMIT ?3) mine
 					CROSS JOIN follows x ON x.account_id = mine.target_account_id AND x.target_account_id = ?1 AND x.state = 'accepted'
 					WHERE NOT EXISTS (SELECT 1 FROM local_accounts sus WHERE sus.account_id = x.account_id AND sus.suspended_at IS NOT NULL)
-						AND NOT EXISTS (SELECT 1 FROM blocks WHERE account_id = ?2 AND target_account_id = x.account_id)
-						AND NOT EXISTS (SELECT 1 FROM mutes WHERE account_id = ?2 AND target_account_id = x.account_id)
+						AND ${unfilteredSql('x', '?2', '?5')}
 					ORDER BY x.id DESC LIMIT ?4`,
 					target,
 					viewerId,
 					FAMILIAR_FOLLOWERS_WINDOW,
-					MAX_FAMILIAR_FOLLOWERS
+					MAX_FAMILIAR_FOLLOWERS,
+					filterTime(now)
 				)
 				.map((row) => row.id)
 			const accounts = presentAccountsById(db, followers, present)

@@ -1,4 +1,5 @@
 import type { Present } from './accounts'
+import { visibleSql } from './audience'
 import { optionalUserReadOperation } from './auth'
 import { isHashtagName, normalizeTag } from './status-text'
 
@@ -14,12 +15,13 @@ const HISTORY_DAYS = 7
 const DAY_MS = 86_400_000
 
 // Seven days of uses and distinct authors, today (UTC) first, as Mastodon's TagSerializer#history. It counts public
-// originals only (Mastodon's Trends::Tags registers public statuses only), never a status of a suspended account, so
-// it is the same for every viewer and reveals nothing a status's audience hides (VIS-12): the rule is applied in the
-// query, with no limit for hidden statuses to take up. Days come from published_at. The work is a range of the
-// (name, status_id) index cut by status id (RES-7): ids carry the publication time of statuses Kopje created or
-// received (domain/ids.ts), and the receipt time of ids a cutover kept, so the range holds the tag's statuses the
-// instance received in the last seven days, and the work follows the instance's own receive volume.
+// originals only (Mastodon's Trends::Tags registers public statuses only) that anyone may see (visibleSql with no
+// viewer: never a status of a suspended account), so it is the same for every viewer and reveals nothing a status's
+// audience hides (VIS-12): the rule is applied in the query, with no limit for hidden statuses to take up. Days come
+// from published_at. The work is a range of the (name, status_id) index cut by status id (RES-7): ids carry the
+// publication time of statuses Kopje created or received (domain/ids.ts), and the receipt time of ids a cutover kept,
+// so the range holds the tag's statuses the instance received in the last seven days, and the work follows the
+// instance's own receive volume.
 export const getTag = optionalUserReadOperation<{ name: string; now: number; present: Present }, Tag | null>(
 	(db, { name, now, present }, viewerId) => {
 		if (!isHashtagName(name)) {
@@ -32,7 +34,7 @@ export const getTag = optionalUserReadOperation<{ name: string; now: number; pre
 			`SELECT substr(s.published_at, 1, 10) AS day, COUNT(*) AS uses, COUNT(DISTINCT s.account_id) AS accounts
 			FROM status_tags t JOIN statuses s ON s.id = t.status_id
 			WHERE t.name = ?1 AND t.status_id >= ?2 AND s.visibility = 'public' AND s.reblog_of_id IS NULL
-				AND NOT EXISTS (SELECT 1 FROM local_accounts sus WHERE sus.account_id = s.account_id AND sus.suspended_at IS NOT NULL)
+				AND ${visibleSql('s', 'NULL')}
 			GROUP BY day`,
 			tag,
 			(BigInt(since) << 16n).toString()

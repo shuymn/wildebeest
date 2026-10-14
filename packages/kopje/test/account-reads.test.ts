@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { apiHarness, bearer, json, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { appToken, remoteAccounts, rowsRead, scopedToken } from './read-helpers'
-import { block, community, follow, getJson, mute, remoteFollows } from './status-helpers'
+import { block, community, domainBlock, follow, getJson, mute, remoteFollows } from './status-helpers'
 import {
 	FAMILIAR_FOLLOWERS_WINDOW,
 	familiarFollowers,
@@ -121,6 +121,41 @@ describe('familiar followers', () => {
 		])
 		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?', '2026-01-01', carol.id)
 		expect((await getJson(h, path(carol.id), alice.token)).body).toEqual([])
+	})
+
+	it('shows a follower whose mute has expired, and hides one on a domain the viewer blocks', async () => {
+		const { h } = await fixture()
+		const { alice, bob, carol, dave } = h.users
+		const frank = await seedAccount(h.store, { username: 'frank', domain: 'far.example' })
+		await sql(
+			h.store,
+			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted'), (?, ?, 'accepted')",
+			alice.id,
+			frank,
+			frank,
+			carol.id
+		)
+		const shown = async () =>
+			(await getJson<{ accounts: { id: string }[] }[]>(h, path(carol.id), alice.token)).body[0]?.accounts.map(
+				(account) => account.id
+			)
+		expect(await shown()).toEqual([frank, dave.id, bob.id])
+
+		// A mute applies until its expiry, judged at the request time.
+		await sql(
+			h.store,
+			'INSERT INTO mutes (account_id, target_account_id, expires_at) VALUES (?, ?, ?), (?, ?, ?)',
+			alice.id,
+			bob.id,
+			new Date(NOW - 60_000).toISOString(),
+			alice.id,
+			dave.id,
+			new Date(NOW + 60_000).toISOString()
+		)
+		expect(await shown()).toEqual([frank, bob.id])
+
+		await domainBlock(h.store, alice.id, 'far.example')
+		expect(await shown()).toEqual([bob.id])
 	})
 
 	it('needs read:follows and a user (AUTH-2)', async () => {

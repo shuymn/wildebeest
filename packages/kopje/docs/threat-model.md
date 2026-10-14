@@ -285,11 +285,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `pending`; only `accepted` follows count, appear in follower lists, or grant `private` access. _Enforced (main):_
   `follow` in `src/domain/accounts.ts`; `test/accounts.test.ts` ("requests a locked or remote account", "lists following
   without pending requests"). `GET /api/v1/accounts/familiar_followers` reads accepted follows on both sides only,
-  leaves out followers the viewer blocks or mutes and suspended accounts, and shows no follow that the followers and
-  following lists would not show the same viewer: _Implemented on branch `kopje/startup-reads`:_
-  `familiarFollowers` in `src/domain/accounts.ts`; `test/account-reads.test.ts` ("counts accepted follows only
-  (VIS-8)", "leaves out accounts the viewer blocks or mutes", "shows no more than the followers and following lists
-  show"). _Gap:_ Kopje stores no hide-collections setting (local or remote), so neither those lists nor familiar
+  leaves out suspended accounts and the followers the viewer filters out of lists (VIS-5, VIS-14, VIS-15: blocks,
+  mutes while they apply, domain blocks; `unfilteredSql`), and shows no follow that the followers and following lists
+  would not show the same viewer: _Implemented on branch `kopje/startup-reads`:_ `familiarFollowers` in
+  `src/domain/accounts.ts`; `test/account-reads.test.ts` ("counts accepted follows only (VIS-8)", "leaves out
+  accounts the viewer blocks or mutes", "shows a follower whose mute has expired, and hides one on a domain the viewer
+  blocks", "shows no more than the followers and following lists show"). _Gap:_ Kopje stores no hide-collections setting (local or remote), so neither those lists nor familiar
   followers hide an account's network as Mastodon does for an account that hides it.
 - **VIS-9: only the followed side accepts.** A pending follow of a local account becomes `accepted` only by that
   account's own authorize call; a pending remote follow only by an `Accept` that passes ID-6. _Enforced (main):_ `answerFollowRequest` in `src/domain/accounts.ts` (`POST
