@@ -8,6 +8,10 @@ import { type KernelOptions, type Migration, StoreKernel } from '../src/platform
 // The build identity of this test run: the Workers version id that both the Worker and the Store see.
 export const BUILD = env.CF_VERSION_METADATA.id
 
+// The shipped migrations by name, in order, and the newest: what a migrated Store reports as applied.
+export const MIGRATION_NAMES = MIGRATIONS.map((m) => m.name)
+export const LATEST_MIGRATION = MIGRATION_NAMES.at(-1)
+
 // Each test gets its own Store object, so test files can run in parallel without sharing state.
 export function freshStore(): StoreStub {
 	return env.STORE.getByName(crypto.randomUUID())

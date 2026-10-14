@@ -2,7 +2,7 @@ import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { BUILD, freshStore, migratedStore, rejectionOf, testKernel } from './helpers'
+import { BUILD, freshStore, MIGRATION_NAMES, migratedStore, rejectionOf, testKernel } from './helpers'
 import {
 	ACCESS,
 	beginImport,
@@ -110,7 +110,7 @@ describe('dump', () => {
 		expect(text).not.toContain('kopje_migrations')
 		expect(text).not.toContain('_cf_')
 		const header = splitDump(text).header as { tables: { name: string }[]; migrations: { name: string }[] }
-		expect(header.migrations.map((m) => m.name)).toEqual(['0000_initial', '0001_blocks_and_mutes'])
+		expect(header.migrations.map((m) => m.name)).toEqual(MIGRATION_NAMES)
 		// Parents come before children; sqlite_sequence is last.
 		const order = header.tables.map((t) => t.name)
 		expect(order.indexOf('accounts')).toBeLessThan(order.indexOf('local_accounts'))
@@ -686,10 +686,7 @@ describe('upgrade retry', () => {
 		})
 		expect(await store.health(BUILD)).toMatchObject({ hold: 'upgrade-failed' })
 		expect(toStoreUnavailable(await rejectionOf(store.retryUpgrade('other')))?.reason).toBe('version-mismatch')
-		expect(await store.retryUpgrade(BUILD)).toMatchObject({
-			ok: true,
-			applied: ['0000_initial', '0001_blocks_and_mutes'],
-		})
+		expect(await store.retryUpgrade(BUILD)).toMatchObject({ ok: true, applied: MIGRATION_NAMES })
 		expect(await store.health(BUILD)).toMatchObject({ hold: null, readonly: false, schema: { status: 'current' } })
 	})
 })

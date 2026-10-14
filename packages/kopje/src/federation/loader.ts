@@ -9,6 +9,7 @@ import {
 
 import { readBoundedBody } from '../platform/body'
 import { errorMessage } from '../platform/error-message'
+import { publicShapeRefusal } from '../platform/http-url'
 import { isActivityPubMediaType, type MediaType, parseMediaType } from '../platform/media-type'
 
 // The document loader every remote fetch goes through, unsigned or signed. Fedify's default allows http, 16 MiB
@@ -307,9 +308,6 @@ function documentId(document: unknown): string | undefined {
 	return typeof id === 'string' ? id : undefined
 }
 
-const IPV4_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/
-
-// URL parsing has already normalized IPv4 forms like 0x7f.1 or 2130706433 to dotted quads.
 async function assertFetchable(url: URL, checkHost: (url: URL) => Promise<void>): Promise<void> {
 	assertPublicShape(url)
 	try {
@@ -319,20 +317,11 @@ async function assertFetchable(url: URL, checkHost: (url: URL) => Promise<void>)
 	}
 }
 
-// NET-1's rules that need no lookup: https, no credentials, no literal IP, no local or single-label name. Shared by
-// every outbound sink (NET-3); the DNS check (checkHost) runs after it.
+// NET-1's rules that need no lookup (publicShapeRefusal), as a refused fetch. Shared by every outbound sink (NET-3); the
+// DNS check (checkHost) runs after it.
 export function assertPublicShape(url: URL): void {
-	if (url.protocol !== 'https:') {
-		throw new RefusedFetchError(url, `Refused non-https URL: ${url.protocol}`)
-	}
-	if (url.username !== '' || url.password !== '') {
-		throw new RefusedFetchError(url, 'Refused URL with credentials')
-	}
-	const host = url.hostname
-	if (host.startsWith('[') || IPV4_LITERAL.test(host)) {
-		throw new RefusedFetchError(url, `Refused literal IP host: ${host}`)
-	}
-	if (host === 'localhost' || host.endsWith('.localhost') || !host.includes('.')) {
-		throw new RefusedFetchError(url, `Refused local host: ${host}`)
+	const refusal = publicShapeRefusal(url)
+	if (refusal !== null) {
+		throw new RefusedFetchError(url, refusal)
 	}
 }

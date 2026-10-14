@@ -6,10 +6,9 @@ import { type Params, readParams } from './params'
 import type { Present } from '../domain/accounts'
 import type { AuthFailure, Authorized, Credential, UserCredential } from '../domain/auth'
 import type { Resolved } from '../domain/remote-statuses'
-import { readConfig } from '../platform/config'
+import { webPushKeys } from '../platform/config'
 import type { ImageCodec } from '../platform/images'
 import { callStore, type StoreResolver, type StoreStub } from '../platform/store-client'
-import { vapidPublicKey } from '../platform/vapid'
 import type { Scope } from '../security/scopes'
 import type { TokenGenerator } from '../security/tokens'
 
@@ -116,7 +115,5 @@ export async function requestParams(c: ApiContext, deps: ApiDeps): Promise<Param
 
 // The Web Push application server key clients subscribe with; empty until VAPID_JWK is set.
 export function vapidKey(env: Env): string {
-	const config = readConfig(env)
-	const jwk = config.ok ? config.config.VAPID_JWK : undefined
-	return jwk === undefined ? '' : (vapidPublicKey(jwk) ?? '')
+	return webPushKeys(env)?.publicKey ?? ''
 }

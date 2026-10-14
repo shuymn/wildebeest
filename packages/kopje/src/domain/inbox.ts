@@ -11,6 +11,7 @@ import { stageRetraction } from './deliveries'
 import { insertWithFreshId, remoteId } from './ids'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
+import { pushSequence } from './push'
 import {
 	followersUri,
 	hasLocalFollowers,
@@ -157,9 +158,9 @@ export type ReceiveInput = {
 }
 
 // jobsPending: a purge, Move or status deletion has batches left; the Worker asks the Queue to continue (cron
-// continues regardless). delivers: the activity recorded deliveries (an Accept, Reject, Follow or Undo); the Worker
-// rings the doorbell. need: nothing was written; the Store needs this document to apply the activity, and the Worker
-// asks again with it in prefetched.
+// continues regardless). delivers: the activity recorded deliveries (an Accept, Reject, Follow or Undo) or pushes (a
+// notification); the Worker rings the doorbell. need: nothing was written; the Store needs this document to apply the
+// activity, and the Worker asks again with it in prefetched.
 export type ReceiveResult = {
 	applied: boolean
 	reason: string
@@ -204,6 +205,16 @@ function deliverySequence(db: Db): number {
 			IFNULL((SELECT max(id) FROM outbound_activities), 0) AS intent`
 	)
 	return row === undefined ? 0 : row.seq * 2 ** 26 + row.intent
+}
+
+// Whether anything for the doorbell was recorded since `before`: a delivery or intent, or a push of a new notification
+// (domain/push.ts).
+function outboundMark(db: Db): { deliveries: number; pushes: number } {
+	return { deliveries: deliverySequence(db), pushes: pushSequence(db) }
+}
+
+function outboundSince(db: Db, before: { deliveries: number; pushes: number }): boolean {
+	return deliverySequence(db) > before.deliveries || pushSequence(db) > before.pushes
 }
 
 function originOf(uri: string | null): string | null {
@@ -1836,9 +1847,9 @@ const HANDLERS: { [T in InboundActivity['type']]: Handler<T> } = {
 }
 
 export const receiveActivity = writeOperation<ReceiveInput, ReceiveResult>((db, input) => {
-	const before = deliverySequence(db)
+	const before = outboundMark(db)
 	const result = receive(db, input)
-	return { ...result, delivers: deliverySequence(db) > before }
+	return { ...result, delivers: outboundSince(db, before) }
 })
 
 function receive(db: Db, input: ReceiveInput): ReceiveResult {
@@ -1893,7 +1904,7 @@ function pendingPurge(db: Db, uri: string): boolean {
 // whether any job still has batches left.
 export const runInboundJobs = writeOperation<{ now: number }, { pending: boolean; delivers: boolean }>(
 	(db, { now }) => {
-		const before = deliverySequence(db)
+		const before = outboundMark(db)
 		sweep(db, now)
 		for (let batch = 0; batch < JOB_BATCHES_PER_RUN; batch++) {
 			const job = db.first<{ kind: JobKind; key: string }>(
@@ -1912,7 +1923,7 @@ export const runInboundJobs = writeOperation<{ now: number }, { pending: boolean
 		}
 		return {
 			pending: db.first('SELECT 1 AS x FROM inbound_jobs WHERE done_at IS NULL') !== undefined,
-			delivers: deliverySequence(db) > before,
+			delivers: outboundSince(db, before),
 		}
 	}
 )

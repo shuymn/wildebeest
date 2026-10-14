@@ -8,6 +8,7 @@ import * as instance from './instance'
 import * as media from './media'
 import * as notifications from './notifications'
 import * as oauth from './oauth'
+import * as push from './push'
 import * as search from './search'
 import * as statuses from './statuses'
 import * as timelines from './timelines'
@@ -247,6 +248,11 @@ export const ROUTES: readonly Route[] = [
 		access: { scope: 'write:notifications' },
 		handler: notifications.dismissNotification,
 	},
+
+	{ method: 'POST', path: '/api/v1/push/subscription', access: { scope: 'push' }, handler: push.createSubscription },
+	{ method: 'GET', path: '/api/v1/push/subscription', access: { scope: 'push' }, handler: push.getSubscription },
+	{ method: 'PUT', path: '/api/v1/push/subscription', access: { scope: 'push' }, handler: push.updateSubscription },
+	{ method: 'DELETE', path: '/api/v1/push/subscription', access: { scope: 'push' }, handler: push.deleteSubscription },
 ]
 
 export function mastodonApi(deps: ApiDeps, routes: readonly Route[] = ROUTES): Hono<ApiEnv> {

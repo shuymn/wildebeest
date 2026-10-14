@@ -12,7 +12,7 @@ import {
 	setTeamAccess,
 } from './access-helpers'
 import { NOW } from './app-helpers'
-import { BUILD, migratedStore, testKernel } from './helpers'
+import { BUILD, LATEST_MIGRATION, migratedStore, testKernel } from './helpers'
 import { ACCESS, ADMIN_EMAIL, dumpViaRpc, importChunks, seedStore, splitDump } from './ops-helpers'
 import { ACCESS_TEAM_DOMAIN } from '../src/domain/oauth'
 import { ACCESS_SETTINGS } from '../src/platform/access-settings'
@@ -165,7 +165,7 @@ describe('admin endpoints', () => {
 		})
 		expect(await (await as(adminClaims(), '/admin/version')).json()).toMatchObject({
 			worker: { build: BUILD },
-			store: { build: BUILD, applied: '0001_blocks_and_mutes', expected: '0001_blocks_and_mutes' },
+			store: { build: BUILD, applied: LATEST_MIGRATION, expected: LATEST_MIGRATION },
 		})
 		const capacity = (await (await as(adminClaims(), '/admin/capacity')).json()) as {
 			databaseSize: number

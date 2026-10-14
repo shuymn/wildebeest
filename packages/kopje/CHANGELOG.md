@@ -27,18 +27,35 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       continue it); meanwhile what you post is not delivered to followers there. Unblocking the domain stops the rest.
     - `GET /api/v1/domain_blocks/preview` needs `write:blocks` (or `write` or `follow`), as in Mastodon.
 
+- Web Push, as Mastodon 4.5 offers it. `POST`, `GET`, `PUT` and `DELETE /api/v1/push/subscription` keep one
+  subscription per access token, under the `push` scope, with Mastodon's alerts (per notification type) and policy
+  (`all`, `followed`, `follower`, `none`) and `server_key` from `VAPID_JWK`. The endpoint must be a public https URL
+  and the client keys valid, or the request answers 422. Each new notification is pushed to the recipient's
+  subscriptions that want it, from the Queue consumer, with the retries of deliveries; right before each POST, the
+  notification is checked again and the push dropped if it is gone or no longer shown. Pushes are encrypted as the
+  subscription asks (`standard`: RFC 8291 aes128gcm; otherwise the aesgcm draft most clients use), signed with VAPID
+  (RFC 8292), and carry Mastodon's payload, the subscription's access token included. A push service answering a 4xx
+  other than 408 and 429 ends the subscription, as Mastodon 4.5 does. Revoking a token or suspending an account
+  deletes its subscriptions. Without `VAPID_JWK`, the endpoints answer 404 and the instance advertises no key; Kopje
+  never makes one.
+
 ### Changed
 
 - Home and mention notifications also leave out a status that mentions or replies to an account you block or mute
   (for mention notifications, a mute that hides notifications), as Mastodon filters them; so do post notifications
   of accounts you follow with `notify`, whenever home leaves the status out.
 
+- `VAPID_JWK` must hold the private key (`d`), not only the public point: a key without it now makes the instance
+  answer 503 as misconfigured, as any invalid value does.
+
 ### Instance changes
 
-- Store schema: adds `0001_blocks_and_mutes` (`mutes.expires_at` with an index, and the `domain_block_cleanups`
-  table). It runs on the first request after the deploy and is quick. A rollback to an earlier version needs the point-in-time restore described in
-  [docs/upgrade.md](docs/upgrade.md).
-- `wrangler.jsonc`: unchanged.
+- Store schema: adds two migrations, applied in order on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0001_blocks_and_mutes`: `mutes.expires_at` with an index, and the `domain_block_cleanups` table. It is quick.
+    - `0002_web_push`: the subscription's encoding and sealed token on `push_subscriptions`, and the
+      `push_deliveries` table.
+- `wrangler.jsonc`: unchanged. Set the `VAPID_JWK` secret to turn Web Push on.
 
 ## [0.1.0-rc.3] - 2026-10-14
 

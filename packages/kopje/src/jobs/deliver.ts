@@ -1,6 +1,7 @@
+import { pushRound } from './push'
 import type { Completion } from '../domain/deliveries'
 import { CLAIM_LIMIT } from '../domain/deliveries'
-import { type PostDeps, postActivity, ringDoorbell } from '../federation/delivery'
+import { COMPLETION_MARGIN_MS, type PostDeps, postActivity, ringDoorbell } from '../federation/delivery'
 import { readConfig, userKek } from '../platform/config'
 import { errorFields } from '../platform/error-message'
 import { PACKAGE_VERSION } from '../platform/package-version'
@@ -14,9 +15,6 @@ import { createKeyring, type Signer } from '../security/keyring'
 // at once for a promoted lane head or an intent still expanding, later for a retry or a lease deadline. The cron
 // rings every 5 minutes for anything a lost doorbell left behind. There is no DLQ: what fails for good is a gave_up
 // row in the Store.
-
-// Room left in the lease after the POST's deadline, for the completion to reach the Store.
-export const COMPLETION_MARGIN_MS = 10_000
 
 export type DeliveryDeps = {
 	build: (env: Env) => string
@@ -118,34 +116,41 @@ export async function deliveryRound(env: Env, deps: DeliveryDeps): Promise<Round
 }
 
 // Handles the doorbells of one Queue batch: however many arrived, one round runs (RES-6: work per invocation is one
-// claim). In maintenance nothing is claimed and nothing is counted (RES-5); the cron resumes afterwards.
+// claim), with one round of Web Push beside it (jobs/push.ts). In maintenance nothing is claimed and nothing is
+// counted (RES-5); the cron resumes afterwards.
 export async function handleDoorbells(messages: readonly Message[], env: Env, deps: DeliveryDeps): Promise<void> {
 	const config = readConfig(env)
 	if (!config.ok || config.config.MAINTENANCE !== 'off') {
 		ackAll(messages)
 		return
 	}
-	let result: RoundResult
+	const due = (
+		await Promise.all([
+			nextDueOf(() => deliveryRound(env, deps), 'kopje.delivery.round.failed'),
+			nextDueOf(() => pushRound(env, deps), 'kopje.push.round.failed'),
+		])
+	).filter((at): at is number => at !== null)
 	try {
-		result = await deliveryRound(env, deps)
-	} catch (error) {
-		if (error instanceof StoreUnavailableError) {
-			ackAll(messages)
-			return
-		}
-		console.error({ event: 'kopje.delivery.round.failed', ...errorFields(error) })
-		// Leases are already taken or not; either way the cron resumes. A retry would only repeat the doorbell.
-		ackAll(messages)
-		return
-	}
-	try {
-		if (result.nextDueAt !== null) {
-			await ringDoorbell(env.QUEUE, (result.nextDueAt - deps.now()) / 1000)
+		if (due.length > 0) {
+			await ringDoorbell(env.QUEUE, (Math.min(...due) - deps.now()) / 1000)
 		}
 	} catch (error) {
 		console.error({ event: 'kopje.delivery.doorbell.failed', ...errorFields(error) })
 	}
 	ackAll(messages)
+}
+
+// A round's nextDueAt, or null when it failed. Leases are already taken or not; either way the cron resumes, so the
+// doorbell is acked: a retry would only repeat it.
+async function nextDueOf(round: () => Promise<{ nextDueAt: number | null }>, event: string): Promise<number | null> {
+	try {
+		return (await round()).nextDueAt
+	} catch (error) {
+		if (!(error instanceof StoreUnavailableError)) {
+			console.error({ event, ...errorFields(error) })
+		}
+		return null
+	}
 }
 
 function ackAll(messages: readonly Message[]): void {

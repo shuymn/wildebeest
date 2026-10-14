@@ -25,6 +25,7 @@ import * as media from './domain/media'
 import * as mediaRebuild from './domain/media-rebuild'
 import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
+import * as push from './domain/push'
 import { resolveSearch } from './domain/remote-statuses'
 import { search } from './domain/search'
 import * as setup from './domain/setup'
@@ -732,6 +733,36 @@ export class Store extends DurableObject<Env> {
 
 	clearNotifications(callerBuild: string, input: OperationInput<typeof notifications.clearNotifications>) {
 		return this.#kernel.execute(callerBuild, notifications.clearNotifications, input)
+	}
+
+	// Web Push: the token's subscription, and the Worker's push rounds (jobs/push.ts).
+
+	createPushSubscription(callerBuild: string, input: OperationInput<typeof push.createPushSubscription>) {
+		return this.#kernel.execute(callerBuild, push.createPushSubscription, input)
+	}
+
+	getPushSubscription(callerBuild: string, input: OperationInput<typeof push.getPushSubscription>) {
+		return this.#kernel.execute(callerBuild, push.getPushSubscription, input)
+	}
+
+	updatePushSubscription(callerBuild: string, input: OperationInput<typeof push.updatePushSubscription>) {
+		return this.#kernel.execute(callerBuild, push.updatePushSubscription, input)
+	}
+
+	deletePushSubscription(callerBuild: string, input: OperationInput<typeof push.deletePushSubscription>) {
+		return this.#kernel.execute(callerBuild, push.deletePushSubscription, input)
+	}
+
+	claimPushes(callerBuild: string, input: OperationInput<typeof push.claimPushes>) {
+		return this.#kernel.execute(callerBuild, push.claimPushes, input)
+	}
+
+	confirmPush(callerBuild: string, input: OperationInput<typeof push.confirmPush>) {
+		return this.#kernel.execute(callerBuild, push.confirmPush, input)
+	}
+
+	completePush(callerBuild: string, input: OperationInput<typeof push.completePush>) {
+		return this.#kernel.execute(callerBuild, push.completePush, input)
 	}
 
 	// Media (B4b).

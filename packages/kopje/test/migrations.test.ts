@@ -36,6 +36,7 @@ const SCHEMA_TABLES = [
 	'outbound_activities',
 	'outbound_receipts',
 	'outbound_targets',
+	'push_deliveries',
 	'push_subscriptions',
 	'remote_keys',
 	'status_edits',
@@ -106,7 +107,10 @@ describe('Store migration runner', () => {
 				remote
 			)
 
-			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({ ok: true, applied: ['0001_blocks_and_mutes'] })
+			expect(await kernel(state, MIGRATIONS.slice(0, 2)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0001_blocks_and_mutes'],
+			})
 			expect(
 				sql.exec('SELECT account_id, target_account_id, hide_notifications, expires_at FROM mutes').toArray()
 			).toEqual([{ account_id: local, target_account_id: remote, hide_notifications: 0, expires_at: null }])
@@ -126,6 +130,26 @@ describe('Store migration runner', () => {
 
 			expect(await kernel(state, MIGRATIONS).upgrade()).toEqual({ ok: true, bookmark: null, applied: [] })
 			expect(bookkeeping(state.storage.sql)).toEqual(recorded)
+		})
+	})
+
+	it('upgrades a Store at 0001_blocks_and_mutes with 0002_web_push, keeping its subscriptions', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, 2)).upgrade()).toMatchObject({
+				applied: ['0000_initial', '0001_blocks_and_mutes'],
+			})
+			sql.exec(`
+				INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('c', 's', 'n', 'urn:x', 'push');
+				INSERT INTO oauth_tokens (token_hash, kind, client_id, scopes) VALUES ('h', 'access', 'c', 'push');
+				INSERT INTO push_subscriptions (token_hash, endpoint, key_p256dh, key_auth) VALUES ('h', 'https://p.example/', 'k', 'a');
+			`)
+			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({ ok: true, applied: ['0002_web_push'] })
+			expect(sql.exec('SELECT standard, token_sealed FROM push_subscriptions').toArray()).toEqual([
+				{ standard: 0, token_sealed: '' },
+			])
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
 		})
 	})
 

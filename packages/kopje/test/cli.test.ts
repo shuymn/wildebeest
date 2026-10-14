@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { beforeAll, describe, expect, it } from 'vitest'
 
 import { type AccessTeam, accessToken, adminHarness, adminTeam, serviceClaims, setTeamAccess } from './access-helpers'
-import { BUILD, migratedStore } from './helpers'
+import { BUILD, LATEST_MIGRATION, migratedStore } from './helpers'
 import { ADMIN_AUD, ADMIN_EMAIL, memoryIO, SERVICE_CLIENT_ID, seedStore, tableSnapshot } from './ops-helpers'
 import { run } from '../cli/lib/main.js'
 import type { StoreStub } from '../src/platform/store-client'
@@ -221,9 +221,7 @@ describe('kopje-admin', () => {
 	it('runs the small commands', async () => {
 		const store = await sourceStore(0)
 		const { fetch } = edge(store)
-		expect(JSON.parse((await cli(['version'], { fetch })).out)).toMatchObject({
-			store: { applied: '0001_blocks_and_mutes' },
-		})
+		expect(JSON.parse((await cli(['version'], { fetch })).out)).toMatchObject({ store: { applied: LATEST_MIGRATION } })
 		expect((await cli(['capacity'], { fetch })).out).toMatch(/^database .*\n.* accounts$/m)
 		expect(JSON.parse((await cli(['spool'], { fetch })).out)).toMatchObject({ parts: 1 })
 		expect(JSON.parse((await cli(['maintenance', 'on'], { fetch })).out)).toEqual({ maintenance: true })
