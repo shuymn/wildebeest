@@ -86,6 +86,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   language in `contentMap` (else `nameMap`, `summaryMap`), when it is two or three letters. It used to keep the whole
   tag, and only when `contentMap` had a single language.
 
+- The cutover names hashtags as Kopje does: a received `Hashtag` tag loses only its one leading `#`, and a legacy
+  `note_hashtags` value is kept whole, both then NFKC and lowercase. It used to drop a leading `#` or `＃` from either,
+  so a tag named `＃Foo` became `foo` rather than `#foo`.
+
 - `VAPID_JWK` must hold the private key (`d`), not only the public point: a key without it now makes the instance
   answer 503 as misconfigured, as any invalid value does.
 

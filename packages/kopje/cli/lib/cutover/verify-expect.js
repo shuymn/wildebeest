@@ -95,9 +95,12 @@ function languageOf(p) {
 	return null
 }
 
-// A hashtag as status_tags names it: NFKC, lowercase, without its leading #. Empty is no hashtag.
+// A hashtag as status_tags names it: NFKC, lowercase. An ActivityPub Hashtag's name ("#name") loses its one leading #
+// first, as Kopje reads a received one (src/domain/tag-name.ts); legacy's note_hashtags hold the name without it (the
+// text after # in the status, getHashtags), so a fullwidth or small number sign there is part of the name. Empty is no
+// hashtag.
 /** @param {unknown} value */
-const hashtagName = (value) => text(value).normalize('NFKC').toLowerCase().replace(/^#/, '')
+const hashtagName = (value) => text(value).normalize('NFKC').toLowerCase()
 
 /** @param {unknown} value whether a legacy value is JSON text, as the Store requires of follows.languages */
 function isJsonText(value) {
@@ -441,9 +444,9 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		const hashtags = [
 			...many(p.tag)
 				.filter((t) => typeof t === 'object' && t !== null && /** @type {Json} */ (t).type === 'Hashtag')
-				.map((t) => /** @type {unknown} */ (/** @type {Json} */ (t).name)),
-			...(recordedTags.get(id) ?? []),
-		].map(hashtagName)
+				.map((t) => hashtagName(text(/** @type {Json} */ (t).name).replace(/^#/, ''))),
+			...(recordedTags.get(id) ?? []).map(hashtagName),
+		]
 		put('statuses', uri, [
 			author,
 			sanitized(p.content),

@@ -3,8 +3,8 @@ import { listableSql } from './audience'
 import { type UserContext, userReadOperation } from './auth'
 import { statusQueryTerms } from './search-text'
 import { presentStatuses, type Status } from './status-presenter'
-import { normalizeTag } from './status-text'
 import { statusCursor } from './statuses'
+import { normalizeTag } from './tag-name'
 import type { Db } from '../db/sql'
 
 // GET /api/v2/search (design §6, "search"): local data only, matched with instr on search_text (NFKC); no virtual

@@ -137,12 +137,13 @@ document to ActivityPub clients while its status is public or unlisted; anything
 
 **Content.** Status content, earlier versions and bios go through Kopje's HTML sanitizer, so the Store holds only HTML
 it would have stored itself (HTML-1). Source text, spoilers, sensitivity, hashtags, mentions and edit history carry
-over; hashtags (the object's `Hashtag` tags and legacy's `note_hashtags`) are named as Kopje names them (NFKC,
-lowercase, without `#`), and a status's language is read as Kopje reads a remote object's (the primary subtag of the
-first language in `contentMap`, else `nameMap`, `summaryMap`, when it is two or three letters); remote statuses and
-actors keep the legacy JSON as `raw`, byte for byte. A lone surrogate in carried text (half of a character outside the
-Basic Multilingual Plane, as a cut string leaves it in legacy JSON) cannot be stored as UTF-8, so it becomes U+FFFD,
-counted as `text:lone-surrogate-replaced`; `raw` keeps the escaped original.
+over; hashtags are named as Kopje names them (NFKC, lowercase): a `Hashtag` tag's name without the one `#` Kopje drops
+from a received one, and a `note_hashtags` value whole, as legacy recorded the name without it; and a status's language
+is read as Kopje reads a remote object's (the primary subtag of the first language in `contentMap`, else `nameMap`,
+`summaryMap`, when it is two or three letters); remote statuses and actors keep the legacy JSON as `raw`, byte for byte.
+A lone surrogate in carried text (half of a character outside the Basic Multilingual Plane, as a cut string leaves it in
+legacy JSON) cannot be stored as UTF-8, so it becomes U+FFFD, counted as `text:lone-surrogate-replaced`; `raw` keeps the
+escaped original.
 
 **The audience never widens (DATA-15).** Who may read a status is what legacy allowed
 (`packages/backend/src/mastodon/status_visibility.ts`, `isVisible`): it reads the object's own `to` and `cc` and the

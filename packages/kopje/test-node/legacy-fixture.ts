@@ -494,7 +494,15 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		to: [PUBLIC],
 		cc: [r(0).followers],
 		mastodonId: snowflake(99, 7),
-		tags: [{ type: 'Hashtag', name: '#Cats', href: 'https://remote.example/tags/cats' }],
+		// Each name with the one # Kopje drops from a received Hashtag; other number signs are part of the name.
+		tags: [
+			{ type: 'Hashtag', name: '#Cats', href: 'https://remote.example/tags/cats' },
+			{ type: 'Hashtag', name: '#ＣＡＴＳ', href: 'https://remote.example/tags/cats' },
+			{ type: 'Hashtag', name: '＃Ｆｕｌｌ', href: 'https://remote.example/tags/full' },
+			{ type: 'Hashtag', name: '﹟Small', href: 'https://remote.example/tags/small' },
+			{ type: 'Hashtag', name: '##Double', href: 'https://remote.example/tags/double' },
+			{ type: 'Hashtag', name: 'Bare', href: 'https://remote.example/tags/bare' },
+		],
 		attachment: [
 			{ type: 'Document', mediaType: 'video/mp4', url: 'https://files.remote.example/m/1.mp4', name: 'a clip' },
 			{ type: 'Document', mediaType: 'image/png', url: 'https://files.remote.example/m/2.png', name: null },
@@ -512,7 +520,10 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		attachment: [attachedImage],
 	})
 	if (has('note_hashtags')) {
-		insert('note_hashtags', { value: 'wildebeest', object_id: publicNote.id, cdate: cdate(110) })
+		// Names as legacy took them from the text after #: any number sign left in them is part of the name.
+		for (const value of ['wildebeest', 'ＷＩＬＤＥＢＥＥＳＴ', '＃Wide', '﹟Foo', '#Hash']) {
+			insert('note_hashtags', { value, object_id: publicNote.id, cdate: cdate(110) })
+		}
 	}
 	if (has('idempotency_keys')) {
 		insert('idempotency_keys', { key: 'idem-key-1', object_id: publicNote.id, expires_at: cdate(170) })

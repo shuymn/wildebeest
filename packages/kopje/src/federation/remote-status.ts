@@ -13,7 +13,8 @@ import {
 	type RemoteMediaInput,
 	type RemoteStatusInput,
 } from '../domain/remote-statuses'
-import { MAX_URL_LENGTH, normalizeTag } from '../domain/status-text'
+import { MAX_URL_LENGTH } from '../domain/status-text'
+import { hashtagObjectName } from '../domain/tag-name'
 import { httpUrl } from '../platform/http-url'
 import { withinJsonBounds } from '../platform/json-bounds'
 import { remoteHtmlText, sanitizeRemoteHtml } from '../security/html'
@@ -121,7 +122,7 @@ function hashtag(name: unknown): string | null {
 	if (typeof name !== 'string') {
 		return null
 	}
-	const normalized = normalizeTag(name.replace(/^#/, ''))
+	const normalized = hashtagObjectName(name)
 	return normalized.length <= MAX_TAG_LENGTH && TAG_NAME.test(normalized) && !/^[\p{Nd}_]+$/u.test(normalized)
 		? normalized
 		: null

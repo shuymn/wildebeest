@@ -15,6 +15,8 @@ import { LEGACY_DEFAULT_AVATAR, mediaToken, parseDeliveryUrl, UPSTREAM_ACCOUNT_H
 import { MAX_PROFILE_UPDATES } from './kopje-db.js'
 import {
 	blockedDomain,
+	hashtagObjectName,
+	normalizeTag,
 	normalizeSearchText,
 	REMOTE_HTML_RAW_LIMIT,
 	remoteHtmlText,
@@ -931,12 +933,7 @@ export function convertLegacy(
 		const tags = new Set()
 		for (const tag of list(properties.tag)) {
 			if (typeof tag === 'object' && tag !== null && /** @type {Json} */ (tag).type === 'Hashtag') {
-				tags.add(
-					carried(/** @type {Json} */ (tag).name)
-						.replace(/^[#＃]/, '')
-						.normalize('NFKC')
-						.toLowerCase()
-				)
+				tags.add(hashtagObjectName(carried(/** @type {Json} */ (tag).name)))
 			}
 		}
 		for (const tag of tags) {
@@ -947,10 +944,8 @@ export function convertLegacy(
 	}
 	for (const hashtag of rows('SELECT value, object_id FROM note_hashtags ORDER BY rowid')) {
 		const status = statuses.get(String(hashtag.object_id))
-		const name = str(hashtag.value)
-			.replace(/^[#＃]/, '')
-			.normalize('NFKC')
-			.toLowerCase()
+		// Legacy recorded the name without its #, as the status text has it (getHashtags).
+		const name = normalizeTag(carried(hashtag.value))
 		if (status !== undefined && name !== '') {
 			tagInsert.run(status.id, name)
 		}

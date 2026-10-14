@@ -126,9 +126,13 @@ describe('convert and verify-conversion', () => {
 		expect(value("SELECT visibility FROM statuses WHERE content LIKE '%secret direct%'")).toBe('direct')
 		expect(value('SELECT count(*) FROM statuses WHERE raw IS NOT NULL')).toBe(4)
 		expect(value("SELECT value FROM kopje_state WHERE name = 'last_local_id'")).toMatch(/^\d{18}$/)
-		// The language is the primary subtag of the first in contentMap; hashtags are stored normalized, once each.
+		// The language is the primary subtag of the first in contentMap.
 		expect(value("SELECT language FROM statuses WHERE content LIKE '%a reply to alice%'")).toBe('pt')
-		expect(value('SELECT group_concat(name) FROM (SELECT name FROM status_tags ORDER BY name)')).toBe('cats,wildebeest')
+		// Hashtags as Kopje names them, once each: a received Hashtag's one leading # dropped, legacy's recorded names
+		// whole; then NFKC and lowercase.
+		expect(value('SELECT group_concat(name) FROM (SELECT name FROM status_tags ORDER BY name)')).toBe(
+			'#double,#foo,#full,#hash,#small,#wide,bare,cats,wildebeest'
+		)
 		db.close()
 	})
 
@@ -231,6 +235,8 @@ describe('convert and verify-conversion', () => {
 				'UPDATE statuses SET edited_at = published_at WHERE edited_at IS NULL AND reblog_of_id IS NULL',
 				'statuses',
 			],
+			['a Hashtag keeps a second #', "UPDATE status_tags SET name = 'double' WHERE name = '#double'", 'statuses'],
+			['a recorded name loses its number sign', "UPDATE status_tags SET name = 'foo' WHERE name = '#foo'", 'statuses'],
 			['an actor type changes', "UPDATE accounts SET actor_type = 'Person' WHERE actor_type = 'Service'", 'accounts'],
 			['discoverability is dropped', 'UPDATE accounts SET discoverable = NULL WHERE domain IS NULL', 'accounts'],
 			['an alias is dropped', "UPDATE local_accounts SET also_known_as = '[]'", 'keys'],
