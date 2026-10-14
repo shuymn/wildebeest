@@ -70,14 +70,14 @@ export const REACHES_FOLLOWERS_SQL = visibilitySetSql((visibility) => !requiresM
 // and a tag's history count (publicConditions in timelines.ts). A status's visibility is fixed when it is written, so
 // the writers of status_tags set it with each row, and the partial index status_tags_public holds just those rows.
 export function tagPublicSql(id: string): string {
-	return `(SELECT tp.visibility = 'public' FROM statuses tp WHERE tp.id = ${id})`
+	return `(SELECT tp.visibility = 'public' FROM main.statuses tp WHERE tp.id = ${id})`
 }
 
 // ---- Accounts. `x` is an expression for an account id, never a status or edge alias.
 
 // R1 (Account#unavailable?): a suspended local account is seen by nobody, and nothing of it is shown or delivered.
 export function availableSql(x: string): string {
-	return `(NOT EXISTS (SELECT 1 FROM local_accounts pl WHERE pl.account_id = ${x} AND pl.suspended_at IS NOT NULL))`
+	return `(NOT EXISTS (SELECT 1 FROM main.local_accounts pl WHERE pl.account_id = ${x} AND pl.suspended_at IS NOT NULL))`
 }
 
 // The same rule for a local_accounts row `l` already joined to the account (a LEFT JOIN's NULL row, a remote account,
@@ -88,7 +88,7 @@ export function availableLocalSql(l: string): string {
 
 // Whether `owner` blocks the account `x`.
 export function blocksSql(owner: string, x: string): string {
-	return `EXISTS (SELECT 1 FROM blocks pb WHERE pb.account_id = ${owner} AND pb.target_account_id = ${x})`
+	return `EXISTS (SELECT 1 FROM main.blocks pb WHERE pb.account_id = ${owner} AND pb.target_account_id = ${x})`
 }
 
 // Whether the mute row `m` applies at `now`: an indefinite mute, or one that has not expired yet. An expired mute stops
@@ -99,12 +99,12 @@ export function activeMuteSql(m: string, now: string): string {
 
 // The mute of the account `x` by `owner` that applies at `now`, as `m`, LEFT JOINed (its options in a relationship).
 export function activeMuteJoinSql(m: string, owner: string, x: string, now: string): string {
-	return `LEFT JOIN mutes ${m} ON ${m}.account_id = ${owner} AND ${m}.target_account_id = ${x} AND ${activeMuteSql(m, now)}`
+	return `LEFT JOIN main.mutes ${m} ON ${m}.account_id = ${owner} AND ${m}.target_account_id = ${x} AND ${activeMuteSql(m, now)}`
 }
 
 // Whether `owner` mutes the account `x` at `now`; with `notifications`, only a mute that also hides notifications.
 function mutesSql(owner: string, x: string, now: string, notifications = false): string {
-	return `EXISTS (SELECT 1 FROM mutes pm WHERE pm.account_id = ${owner} AND pm.target_account_id = ${x}
+	return `EXISTS (SELECT 1 FROM main.mutes pm WHERE pm.account_id = ${owner} AND pm.target_account_id = ${x}
 		${notifications ? 'AND pm.hide_notifications = 1' : ''} AND ${activeMuteSql('pm', now)})`
 }
 
@@ -128,8 +128,8 @@ export function inDomainSql(a: string, domain: string): string {
 // Whether `owner` blocks the domain of the account `x`: two seeks of the (account_id, domain) index, however many
 // domains the owner blocks.
 export function domainBlocksSql(owner: string, x: string): string {
-	return `EXISTS (SELECT 1 FROM accounts pda
-		CROSS JOIN domain_blocks pdb ON pdb.account_id = ${owner} AND ${inDomainSql('pda', 'pdb.domain')}
+	return `EXISTS (SELECT 1 FROM main.accounts pda
+		CROSS JOIN main.domain_blocks pdb ON pdb.account_id = ${owner} AND ${inDomainSql('pda', 'pdb.domain')}
 		WHERE pda.id = ${x})`
 }
 
@@ -179,14 +179,14 @@ export function visibleSql(s: string, viewer: string): string {
 		AND (${s}.account_id IS ${viewer}
 			OR (NOT ${blocksSql(`${s}.account_id`, viewer)}
 				AND (${s}.visibility IN ${DISTRIBUTABLE_SQL}
-					OR (${s}.visibility = 'private' AND EXISTS (SELECT 1 FROM follows fo
+					OR (${s}.visibility = 'private' AND EXISTS (SELECT 1 FROM main.follows fo
 						WHERE fo.account_id IS ${viewer} AND fo.target_account_id = ${s}.account_id AND fo.state = 'accepted'))
-					OR EXISTS (SELECT 1 FROM status_mentions sm WHERE sm.status_id = ${s}.id AND sm.account_id IS ${viewer})))))`
+					OR EXISTS (SELECT 1 FROM main.status_mentions sm WHERE sm.status_id = ${s}.id AND sm.account_id IS ${viewer})))))`
 }
 
 // R3: a status may be shown by itself (GET /statuses/:id): the row is visible and, for a reblog, so is the original.
 function viewableSql(s: string, viewer: string): string {
-	return `(${visibleSql(s, viewer)} AND (${s}.reblog_of_id IS NULL OR EXISTS (SELECT 1 FROM statuses ${s}_o
+	return `(${visibleSql(s, viewer)} AND (${s}.reblog_of_id IS NULL OR EXISTS (SELECT 1 FROM main.statuses ${s}_o
 		WHERE ${s}_o.id = ${s}.reblog_of_id AND ${visibleSql(`${s}_o`, viewer)})))`
 }
 
@@ -194,7 +194,7 @@ function viewableSql(s: string, viewer: string): string {
 // its author nor a reblogged original's at `now`.
 export function listableSql(s: string, viewer: string, now: string): string {
 	return `(${visibleSql(s, viewer)} AND NOT ${filteredForSql(`${s}.account_id`, viewer, now)}
-		AND (${s}.reblog_of_id IS NULL OR EXISTS (SELECT 1 FROM statuses ${s}_o WHERE ${s}_o.id = ${s}.reblog_of_id
+		AND (${s}.reblog_of_id IS NULL OR EXISTS (SELECT 1 FROM main.statuses ${s}_o WHERE ${s}_o.id = ${s}.reblog_of_id
 			AND ${visibleSql(`${s}_o`, viewer)} AND NOT ${filteredForSql(`${s}_o.account_id`, viewer, now)})))`
 }
 
@@ -204,7 +204,7 @@ export function listableSql(s: string, viewer: string, now: string): string {
 // of a status home shows. Home's membership and the follow's options (boosts, replies, languages) are home's own.
 export function homeFilterSql(s: string, viewer: string, now: string): string {
 	return `(${listableSql(s, viewer, now)}
-		AND (${s}.account_id IS ${viewer} OR NOT EXISTS (SELECT 1 FROM status_mentions phm
+		AND (${s}.account_id IS ${viewer} OR NOT EXISTS (SELECT 1 FROM main.status_mentions phm
 			WHERE phm.status_id IN (${s}.id, ${s}.reblog_of_id) AND phm.silent = 0
 			AND (${blocksSql(viewer, 'phm.account_id')} OR ${mutesSql(viewer, 'phm.account_id', now)}))))`
 }
@@ -212,9 +212,178 @@ export function homeFilterSql(s: string, viewer: string, now: string): string {
 // The rule for one status: whether `viewerId` (null: anonymous) may see it by itself.
 export function canView(db: Db, viewerId: string | null, statusId: string): boolean {
 	return (
-		db.first(`SELECT 1 AS ok FROM statuses s WHERE s.id = ?2 AND ${viewableSql('s', '?1')}`, viewerId, statusId) !==
-		undefined
+		db.first(
+			`SELECT 1 AS ok FROM main.statuses s WHERE s.id = ?2 AND ${viewableSql('s', '?1')}`,
+			viewerId,
+			statusId
+		) !== undefined
 	)
+}
+
+// ---- Status ids the presenter accepts (status-presenter.ts). Types only: a brand costs nothing at run time, and only
+// the functions below make one: from the rows of a query they wrote with the rule in it, or after canView or the
+// author's check. test/policy.test.ts keeps every other module from making one (no cast, type argument or type
+// predicate names a brand).
+
+declare const visibleStatus: unique symbol
+declare const ownStatus: unique symbol
+
+// A status the read rule passed for the viewer: a query statusReads wrote with visibleSql, listableSql, homeFilterSql
+// or shownSql, or canView (viewableStatusId). A boost's original is judged again by the presenter.
+export type VisibleStatusId = string & { readonly [visibleStatus]: true }
+
+// A status of the viewer's own, for the response to their own write (post, edit, delete, boost): the author sees all of
+// their own (R2), but not necessarily a boosted original, which the presenter judges for them.
+export type OwnStatusId = string & { readonly [ownStatus]: true }
+
+type Visible<T> = T extends string ? VisibleStatusId : T
+
+// Rows whose column `K` holds the ids (or null) a rule passed, as StatusReads returns them.
+export type WithVisibleStatus<Row, K extends keyof Row> = { [P in keyof Row]: P extends K ? Visible<Row[P]> : Row[P] }
+
+// The read rule a status query applies: R2, R8 or R9.
+export type StatusRule = 'visible' | 'listable' | 'homeFilter'
+
+// One SELECT of statuses as StatusReads writes it, from the caller's parts:
+//   SELECT s.id AS id FROM <from> main.statuses s <join> WHERE (<where>) AND (<rule over s>) AND (<and>) <tail>
+// The rule is a conjunct of the SELECT's own WHERE, over the `statuses s` it selects the id of; the caller's conditions
+// go before or after it, so the terms keep the order (and the plan) a hand-written query would give them.
+export type StatusSelect = {
+	// Tables before `statuses s`, ending with the join to it (`bookmarks e JOIN`).
+	readonly from?: string
+	// What follows `statuses s`: the ON of that join, and further joins.
+	readonly join?: string
+	// Conditions before the rule, and after it.
+	readonly where?: string
+	readonly and?: string
+	// ORDER BY, LIMIT and OFFSET.
+	readonly tail?: string
+}
+
+// Further columns, name: expression. A name is a plain identifier, never the id column the reader selects.
+type Columns<Extra, Id extends string> = { readonly [K in keyof Extra]: string } & { readonly [K in Id]?: never }
+
+type Row = Record<string, SqlStorageValue>
+
+// The status queries of one viewer. The viewer and the time are the numbered parameters `at.viewer` and `at.now` of
+// each query (a viewer with no time, the web pages', has only `viewer` and no rule that takes a time); a query runs only
+// with them bound to the viewer's account id and time. Every query is written here: the caller gives the parts of a
+// StatusSelect, and the ids it returns are ones the rule passed for the viewer. Nothing is parsed.
+export type StatusReads = {
+	// One SELECT, after an optional WITH clause its parts may read, with further columns (name: expression) after the id.
+	select<Extra extends Row = Record<never, never>>(
+		db: Db,
+		rule: StatusRule,
+		query: StatusSelect & { readonly with?: string; readonly columns?: Columns<Extra, 'id'> },
+		...params: SqlStorageValue[]
+	): (Extra & { id: VisibleStatusId })[]
+	// SELECTs combined, each a StatusSelect under the same rule, selecting the id only:
+	//   SELECT id FROM (SELECT * FROM (<branch>) UNION [ALL] SELECT * FROM (<branch>) ...) <tail>
+	union(
+		db: Db,
+		rule: StatusRule,
+		query: { readonly all: boolean; readonly branches: readonly StatusSelect[]; readonly tail: string },
+		...params: SqlStorageValue[]
+	): { id: VisibleStatusId }[]
+	// The viewer's notifications the notification rule (R15) shows them, which shows a status only if they may view it:
+	//   SELECT n.status_id AS status_id, <columns> FROM main.notifications n WHERE (<where>) AND (<rule>) <tail>
+	notifications<Extra extends Row>(
+		db: Db,
+		query: { readonly where: string; readonly tail?: string; readonly columns: Columns<Extra, 'status_id'> },
+		...params: SqlStorageValue[]
+	): (Extra & { status_id: VisibleStatusId | null })[]
+}
+
+export function statusReads(
+	viewer: ViewerContext | null,
+	at: { readonly viewer: string; readonly now?: string }
+): StatusReads {
+	const now = () => {
+		if (viewer === null || at.now === undefined) {
+			throw new Error('this rule needs the time of the read')
+		}
+		return at.now
+	}
+	const ruleSql = (rule: StatusRule) => {
+		switch (rule) {
+			case 'visible':
+				return visibleSql('s', at.viewer)
+			case 'listable':
+				return listableSql('s', at.viewer, now())
+			case 'homeFilter':
+				return homeFilterSql('s', at.viewer, now())
+		}
+	}
+	const where = (...terms: (string | undefined)[]) =>
+		terms.flatMap((term) => (term === undefined || term.trim() === '' ? [] : [`(${term})`])).join(' AND ')
+	const columns = (extra: Record<string, string> | undefined, id: string) =>
+		Object.entries(extra ?? {})
+			.map(([name, expression]) => {
+				if (!/^[a-z_][a-z0-9_]*$/.test(name) || name === id) {
+					throw new Error(`a status query cannot select a column named ${name}`)
+				}
+				return `, ${expression} AS ${name}`
+			})
+			.join('')
+	const selectSql = (rule: string, q: StatusSelect, extra?: Record<string, string>) =>
+		`SELECT s.id AS id${columns(extra, 'id')} FROM ${q.from ?? ''} main.statuses s ${q.join ?? ''}
+		WHERE ${where(q.where, rule, q.and)} ${q.tail ?? ''}`
+	const run = <T extends Row>(db: Db, query: string, params: SqlStorageValue[]): T[] => {
+		const bound = (placeholder: string) => {
+			const index = /^\?([1-9]\d*)$/.exec(placeholder)?.[1]
+			return index === undefined ? undefined : params[Number(index) - 1]
+		}
+		if (bound(at.viewer) !== (viewer?.accountId ?? null) || (at.now !== undefined && bound(at.now) !== viewer?.now)) {
+			throw new Error("a status query must bind the viewer's account id and time")
+		}
+		return db.all<T>(query, ...params)
+	}
+	return {
+		select<Extra extends Row = Record<never, never>>(
+			db: Db,
+			rule: StatusRule,
+			query: StatusSelect & { readonly with?: string; readonly columns?: Columns<Extra, 'id'> },
+			...params: SqlStorageValue[]
+		) {
+			const sql = `${query.with ?? ''} ${selectSql(ruleSql(rule), query, query.columns)}`
+			return run<Extra & { id: VisibleStatusId }>(db, sql, params)
+		},
+		union(db, rule, query, ...params) {
+			const sql = ruleSql(rule)
+			const branches = query.branches.map((branch) => `SELECT * FROM (${selectSql(sql, branch)})`)
+			return run<{ id: VisibleStatusId }>(
+				db,
+				`SELECT id FROM (${branches.join(query.all ? ' UNION ALL ' : ' UNION ')}) ${query.tail}`,
+				params
+			)
+		},
+		notifications<Extra extends Row>(
+			db: Db,
+			query: { readonly where: string; readonly tail?: string; readonly columns: Columns<Extra, 'status_id'> },
+			...params: SqlStorageValue[]
+		) {
+			const rule = shownSql(at.viewer, 'n.type', 'n.from_account_id', 'n.status_id', now())
+			return run<Extra & { status_id: VisibleStatusId | null }>(
+				db,
+				`SELECT n.status_id AS status_id${columns(query.columns, 'status_id')} FROM main.notifications n
+				WHERE ${where(query.where, rule)} ${query.tail ?? ''}`,
+				params
+			)
+		},
+	}
+}
+
+// The status `statusId`, if `viewerId` (null: anonymous) may see it by itself (canView).
+export function viewableStatusId(db: Db, viewerId: string | null, statusId: string): VisibleStatusId | null {
+	return canView(db, viewerId, statusId) ? (statusId as VisibleStatusId) : null
+}
+
+// The status `statusId`, if it is `authorId`'s own.
+export function ownStatusId(db: Db, authorId: string, statusId: string): OwnStatusId | null {
+	return db.first('SELECT 1 AS own FROM main.statuses WHERE id = ? AND account_id = ?', statusId, authorId) ===
+		undefined
+		? null
+		: (statusId as OwnStatusId)
 }
 
 // ---- Notifications.
@@ -238,14 +407,14 @@ export function shownSql(r: string, type: string, from: string, status: string, 
 		AND NOT ${silencedSql(r, from, now)}
 		AND NOT ${blocksSql(from, r)}
 		AND NOT ${domainBlocksSql(r, from)}
-		AND (${status} IS NULL OR EXISTS (SELECT 1 FROM statuses s WHERE s.id = ${status} AND ${viewableSql('s', r)}))
-		AND (${type} <> 'reblog' OR EXISTS (SELECT 1 FROM statuses nr
+		AND (${status} IS NULL OR EXISTS (SELECT 1 FROM main.statuses s WHERE s.id = ${status} AND ${viewableSql('s', r)}))
+		AND (${type} <> 'reblog' OR EXISTS (SELECT 1 FROM main.statuses nr
 			WHERE nr.account_id = ${from} AND nr.reblog_of_id = ${status} AND ${visibleSql('nr', r)}))
-		AND (${type} <> 'mention' OR NOT EXISTS (SELECT 1 FROM statuses mt WHERE mt.id = ${status}
-			AND (EXISTS (SELECT 1 FROM status_mentions mm WHERE mm.status_id = mt.id AND mm.silent = 0
+		AND (${type} <> 'mention' OR NOT EXISTS (SELECT 1 FROM main.statuses mt WHERE mt.id = ${status}
+			AND (EXISTS (SELECT 1 FROM main.status_mentions mm WHERE mm.status_id = mt.id AND mm.silent = 0
 					AND ${silencedSql(r, 'mm.account_id', now)})
 				OR (mt.in_reply_to_account_id IS NOT NULL AND ${silencedSql(r, 'mt.in_reply_to_account_id', now)}))))
-		AND (${type} <> 'status' OR EXISTS (SELECT 1 FROM statuses hs WHERE hs.id = ${status}
+		AND (${type} <> 'status' OR EXISTS (SELECT 1 FROM main.statuses hs WHERE hs.id = ${status}
 			AND ${homeFilterSql('hs', r, now)})))`
 }
 

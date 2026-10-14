@@ -1,5 +1,5 @@
 import { type Account, findAccounts, type Present, resolveAccountId, type SearchInput } from './accounts'
-import { listableSql } from './audience'
+import { listableSql, statusReads } from './audience'
 import { type UserContext, userReadOperation } from './auth'
 import { statusQueryTerms } from './search-text'
 import { presentStatuses, type Status } from './status-presenter'
@@ -96,12 +96,14 @@ function librarySources(limit: string, cursor: (column: string) => string, menti
 			${mentioned}`
 }
 
-function searchStatuses(db: Db, input: SearchRequest, { accountId: viewerId, now }: UserContext): Status[] {
+function searchStatuses(db: Db, input: SearchRequest, viewer: UserContext): Status[] {
+	const { accountId: viewerId, now } = viewer
 	const { include, exclude } = statusQueryTerms(input.query)
 	if (include.length === 0) {
 		return []
 	}
 	const p = new Params(viewerId)
+	const read = statusReads(viewer, { viewer: '?1', now: p.add(now) })
 	const limit = p.add(LIBRARY_SOURCE_LIMIT)
 	// Cursors compare as numbers: statusCursor pads a short one and caps an over-long one (ids are 18-digit TEXT).
 	const maxCursor = statusCursor(input.maxId)
@@ -129,14 +131,18 @@ function searchStatuses(db: Db, input: SearchRequest, { accountId: viewerId, now
 		's.search_text IS NOT NULL',
 		...include.map(matches),
 		...exclude.map((variants) => `NOT ${matches(variants)}`),
-		listableSql('s', '?1', p.add(now)),
 	]
-	const ids = db
-		.all<{ id: string }>(
-			`WITH candidates(id) AS (${candidates})
-			SELECT s.id FROM candidates c JOIN statuses s ON s.id = c.id
-			WHERE ${where.join(' AND ')}
-			ORDER BY s.id DESC LIMIT ${p.add(input.limit)} OFFSET ${p.add(input.offset)}`,
+	const ids = read
+		.select(
+			db,
+			'listable',
+			{
+				with: `WITH candidates(id) AS (${candidates})`,
+				from: 'candidates c JOIN',
+				join: 'ON s.id = c.id',
+				where: where.join(' AND '),
+				tail: `ORDER BY s.id DESC LIMIT ${p.add(input.limit)} OFFSET ${p.add(input.offset)}`,
+			},
 			...p.values
 		)
 		.map((row) => row.id)

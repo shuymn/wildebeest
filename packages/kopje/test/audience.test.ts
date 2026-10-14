@@ -12,9 +12,13 @@ import {
 	canView,
 	interpretAddressing,
 	listableSql,
+	ownStatusId,
 	PUBLIC_COLLECTION,
+	statusReads,
+	viewableStatusId,
 	type Visibility,
 } from '../src/domain/audience'
+import { presentOwnStatus, presentStatuses } from '../src/domain/status-presenter'
 import type { StoreStub } from '../src/platform/store-client'
 
 const FOLLOWERS = 'https://remote.example/users/author/followers'
@@ -191,5 +195,139 @@ describe('canView and the list rule', () => {
 		const boost = await seedStatus(store, { accountId: ids.author, visibility: 'public', reblogOfId: original })
 		expect(await view(store, ids.stranger, boost)).toEqual({ show: false, list: false })
 		expect(await view(store, ids.follower, boost)).toEqual({ show: true, list: true })
+	})
+})
+
+// The ids the presenter accepts (docs/visibility.md, "Status ids the presenter accepts").
+describe('statusReads, the id brands and the presenter guard', () => {
+	const NOW_ISO = new Date(NOW).toISOString()
+	const PRESENT = { origin: 'https://kopje.test' }
+
+	async function world() {
+		const store = await migratedStore()
+		const author = await seedAccount(store, { username: 'author' })
+		const booster = await seedAccount(store, { username: 'booster' })
+		const original = await seedStatus(store, { accountId: author, visibility: 'public' })
+		const boost = await seedStatus(store, { accountId: booster, visibility: 'public', reblogOfId: original })
+		return { store, author, booster, original, boost }
+	}
+
+	// The reader writes each SELECT's projection (s.id) and puts its rule over that same `statuses s` as a conjunct of the
+	// SELECT's own WHERE; a caller supplies only the joins, its conditions and the tail.
+	it('selects only ids its rule passed, whatever the caller writes around the rule', async () => {
+		const { store, author, booster, boost } = await world()
+		const hidden = await seedStatus(store, { accountId: author, visibility: 'private' })
+		await runInDurableObject(store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			const viewer = { accountId: booster, now: NOW_ISO }
+			// `visible` takes no time; `listable` takes it at ?4.
+			const read = statusReads(viewer, { viewer: '?1' })
+			const timed = statusReads(viewer, { viewer: '?1', now: '?4' })
+			const ids = (rows: { id: string }[]) => rows.map((row) => row.id).sort()
+			const params = [booster, boost, hidden]
+			const both = { where: 's.id IN (?2, ?3)' }
+			expect(ids(read.select(db, 'visible', both, ...params))).toEqual([boost])
+			expect(ids(timed.select(db, 'listable', both, ...params, NOW_ISO))).toEqual([boost])
+			// A condition with OR stays inside its own parentheses.
+			expect(ids(read.select(db, 'visible', { where: 's.id = ?3 OR 1' }, ...params))).not.toContain(hidden)
+			// A subquery naming another `statuses s` cannot take the rule's place.
+			expect(
+				ids(read.select(db, 'visible', { where: 'EXISTS (SELECT 1 FROM statuses s WHERE s.id = ?3)' }, ...params))
+			).not.toContain(hidden)
+			// A WITH table is read by the conditions or joins only; the id is the joined status's, under the rule.
+			const permitted = { with: 'WITH permitted (id) AS (SELECT ?3)', from: 'permitted p JOIN', join: 'ON s.id = p.id' }
+			expect(read.select(db, 'visible', permitted, ...params)).toEqual([])
+			// Every branch of a union is a ruled SELECT of the id alone (a branch takes no columns).
+			const union = (branches: { where: string }[]) =>
+				ids(read.union(db, 'visible', { all: true, branches, tail: 'ORDER BY id' }, ...params))
+			expect(union([{ where: 's.id = ?2' }, { where: 's.id = ?3' }])).toEqual([boost])
+			expect(
+				read.union(
+					db,
+					'visible',
+					// @ts-expect-error a union branch has no columns: the reader projects s.id in every branch
+					{ all: true, branches: [{ where: 's.id IN (?2, ?3)', columns: { id: 's.reblog_of_id' } }], tail: '' },
+					...params
+				)
+			).toEqual([{ id: boost }])
+			// Another viewer or time in the rule's parameters.
+			const bound = "a status query must bind the viewer's account id and time"
+			expect(() => read.select(db, 'visible', both, null, boost, hidden)).toThrow(bound)
+			expect(() => timed.select(db, 'listable', both, booster, boost, hidden, '2026-10-13T00:00:00.000Z')).toThrow(
+				bound
+			)
+			// A reader without a time has no rule that needs one.
+			expect(() => statusReads(null, { viewer: '?1' }).select(db, 'listable', both, null, boost, hidden)).toThrow(
+				'this rule needs the time of the read'
+			)
+		})
+	})
+
+	it('keeps the id column its own and reads the real tables, whatever the caller names', async () => {
+		const { store, author, booster, original, boost } = await world()
+		const hidden = await seedStatus(store, { accountId: author, visibility: 'private' })
+		await block(store, author, booster)
+		await runInDurableObject(store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			const viewer = { accountId: booster, now: NOW_ISO }
+			const read = statusReads(viewer, { viewer: '?1' })
+			const named = 'a status query cannot select a column named'
+			expect(() =>
+				// @ts-expect-error the id column is the reader's
+				read.select(db, 'visible', { where: 's.id = ?2', columns: { id: 's.reblog_of_id' } }, booster, boost)
+			).toThrow(`${named} id`)
+			expect(() =>
+				read.select(db, 'visible', { where: 's.id = ?2', columns: { '"id"': 's.reblog_of_id' } }, booster, boost)
+			).toThrow(`${named} "id"`)
+			expect(() =>
+				statusReads(viewer, { viewer: '?1', now: '?2' }).notifications(
+					db,
+					// @ts-expect-error the status column is the reader's
+					{ where: 'n.account_id = ?1', columns: { status_id: "'x'" } },
+					booster,
+					NOW_ISO
+				)
+			).toThrow(`${named} status_id`)
+			// A WITH table named like a table the reader or the rule reads does not replace it.
+			const ids = (rows: { id: string }[]) => rows.map((row) => row.id)
+			const statuses = `WITH statuses (id, account_id, visibility, reblog_of_id) AS (
+				SELECT ?3, account_id, visibility, reblog_of_id FROM main.statuses WHERE id = ?2)`
+			expect(
+				ids(read.select(db, 'visible', { with: statuses, where: 's.id IN (?2, ?3)' }, booster, boost, hidden))
+			).toEqual([boost])
+			const blocks = 'WITH blocks (account_id, target_account_id) AS (SELECT NULL, NULL)'
+			expect(read.select(db, 'visible', { with: blocks, where: 's.id = ?2' }, booster, original)).toEqual([])
+		})
+	})
+
+	it('shows a boost only with an original the viewer may see, and their own boost without it', async () => {
+		const { store, author, booster, original, boost } = await world()
+		await block(store, author, booster)
+		await runInDurableObject(store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			// The boost row by itself passes the rule for its author; its original does not.
+			const read = statusReads({ accountId: booster, now: NOW_ISO }, { viewer: '?1' })
+			const rows = read.select(db, 'visible', { where: 's.id = ?2' }, booster, boost)
+			expect(rows.map((row) => row.id)).toEqual([boost])
+			const options = { ...PRESENT, viewerId: booster }
+			expect(
+				presentStatuses(
+					db,
+					rows.map((row) => row.id),
+					options
+				)
+			).toEqual([])
+			expect(viewableStatusId(db, booster, boost)).toBeNull()
+			const own = ownStatusId(db, booster, boost)
+			expect(own).toBe(boost)
+			expect(presentOwnStatus(db, own!, options)).toMatchObject({ id: boost, reblog: null })
+			// Not the viewer's own.
+			expect(ownStatusId(db, booster, original)).toBeNull()
+			// The original's author sees both.
+			const visible = viewableStatusId(db, author, boost)
+			expect(presentStatuses(db, visible === null ? [] : [visible], { ...PRESENT, viewerId: author })).toMatchObject([
+				{ id: boost, reblog: { id: original } },
+			])
+		})
 	})
 })

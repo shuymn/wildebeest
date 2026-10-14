@@ -1,5 +1,5 @@
 import { type Account, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
-import { shownSql } from './audience'
+import { shownSql, statusReads, type WithVisibleStatus } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { presentStatuses, type Status } from './status-presenter'
 import type { Db } from '../db/sql'
@@ -110,9 +110,20 @@ type NotificationRow = {
 	created_at: string
 }
 
-const NOTIFICATION_COLUMNS = 'CAST(n.id AS TEXT) AS id, n.type, n.from_account_id, n.status_id, n.created_at'
+// The columns of a notification row besides status_id, which StatusReads.notifications selects first.
+const NOTIFICATION_COLUMNS = {
+	id: 'CAST(n.id AS TEXT)',
+	type: 'n.type',
+	from_account_id: 'n.from_account_id',
+	created_at: 'n.created_at',
+}
 
-function presentNotifications(db: Db, rows: NotificationRow[], viewerId: string, present: Present): Notification[] {
+function presentNotifications(
+	db: Db,
+	rows: WithVisibleStatus<NotificationRow, 'status_id'>[],
+	viewerId: string,
+	present: Present
+): Notification[] {
 	const accounts = presentAccountsById(
 		db,
 		rows.map((row) => row.from_account_id),
@@ -149,18 +160,22 @@ export type ListNotificationsInput = {
 }
 
 export const listNotifications = userReadOperation<ListNotificationsInput, Page<Notification>>(
-	(db, input, _viewer, { accountId: viewerId, now }) => {
+	(db, input, _viewer, viewer) => {
+		const { accountId: viewerId, now } = viewer
 		const { page } = input
 		const ascending = page.minId !== undefined
-		const rows = db.all<NotificationRow>(
-			`SELECT ${NOTIFICATION_COLUMNS} FROM notifications n
-			WHERE n.account_id = ?1
-				AND (?2 IS NULL OR n.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR n.id > CAST(?3 AS INTEGER))
-				AND (?4 IS NULL OR n.type IN (SELECT value FROM json_each(?4)))
-				AND n.type NOT IN (SELECT value FROM json_each(?5))
-				AND (?6 IS NULL OR n.from_account_id = ?6)
-				AND ${shownSql('?1', 'n.type', 'n.from_account_id', 'n.status_id', '?8')}
-			ORDER BY n.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?7`,
+		const read = statusReads(viewer, { viewer: '?1', now: '?8' })
+		const rows = read.notifications<Omit<NotificationRow, 'status_id'>>(
+			db,
+			{
+				where: `n.account_id = ?1
+					AND (?2 IS NULL OR n.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR n.id > CAST(?3 AS INTEGER))
+					AND (?4 IS NULL OR n.type IN (SELECT value FROM json_each(?4)))
+					AND n.type NOT IN (SELECT value FROM json_each(?5))
+					AND (?6 IS NULL OR n.from_account_id = ?6)`,
+				tail: `ORDER BY n.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?7`,
+				columns: NOTIFICATION_COLUMNS,
+			},
 			viewerId,
 			page.maxId ?? null,
 			page.minId ?? page.sinceId ?? null,
@@ -184,14 +199,15 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 const NOTIFICATION_ID = /^\d{1,19}$/
 
 export const getNotification = userReadOperation<{ id: string; present: Present }, Notification | null>(
-	(db, { id, present }, _viewer, { accountId: viewerId, now }) => {
+	(db, { id, present }, _viewer, viewer) => {
+		const { accountId: viewerId, now } = viewer
 		if (!NOTIFICATION_ID.test(id)) {
 			return null
 		}
-		const rows = db.all<NotificationRow>(
-			`SELECT ${NOTIFICATION_COLUMNS} FROM notifications n
-			WHERE n.account_id = ?1 AND n.id = CAST(?2 AS INTEGER)
-				AND ${shownSql('?1', 'n.type', 'n.from_account_id', 'n.status_id', '?3')}`,
+		const read = statusReads(viewer, { viewer: '?1', now: '?3' })
+		const rows = read.notifications<Omit<NotificationRow, 'status_id'>>(
+			db,
+			{ where: 'n.account_id = ?1 AND n.id = CAST(?2 AS INTEGER)', columns: NOTIFICATION_COLUMNS },
 			viewerId,
 			id,
 			now

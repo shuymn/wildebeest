@@ -2,10 +2,11 @@ import { type Page, type PageQuery, type Present, resolveAccountId } from './acc
 import {
 	blocksSql,
 	filteredForSql,
-	homeFilterSql,
-	listableSql,
 	REACHES_FOLLOWERS_SQL,
 	REQUIRES_MENTION_SQL,
+	type StatusSelect,
+	statusReads,
+	type VisibleStatusId,
 	visibleSql,
 } from './audience'
 import { optionalUserReadOperation, userReadOperation } from './auth'
@@ -16,8 +17,9 @@ import type { Db } from '../db/sql'
 
 // Timelines (design §6 "timelines"): each is one query over statuses, newest first, paged by status id (18-digit
 // TEXT, compared as TEXT) or, for bookmarks and favourites, by the edge's INTEGER id. Every row passes the audience
-// rule in the query itself (audience.ts), so a page is never filled with statuses the viewer may not see. The
-// feed condition is the visibility list the partial index statuses_feed declares (REACHES_FOLLOWERS_SQL).
+// rule in the query itself (statusReads in audience.ts), so a page is never filled with statuses the viewer may not
+// see, and its ids are ones the presenter accepts. The feed condition is the visibility list the partial index
+// statuses_feed declares (REACHES_FOLLOWERS_SQL).
 
 const FEED = `s.visibility IN ${REACHES_FOLLOWERS_SQL}`
 
@@ -41,7 +43,13 @@ function cursorSql(column: string): string {
 	return `(?2 IS NULL OR ${column} < ?2) AND (?3 IS NULL OR ${column} > ?3)`
 }
 
-function statusesPage(db: Db, ids: string[], cursor: Cursor, viewerId: string | null, present: Present): Page<Status> {
+function statusesPage(
+	db: Db,
+	ids: VisibleStatusId[],
+	cursor: Cursor,
+	viewerId: string | null,
+	present: Present
+): Page<Status> {
 	if (cursor.ascending) {
 		ids.reverse()
 	}
@@ -52,7 +60,7 @@ function statusesPage(db: Db, ids: string[], cursor: Cursor, viewerId: string | 
 	}
 }
 
-function ids(rows: { id: string }[]): string[] {
+function ids<Id>(rows: { id: Id }[]): Id[] {
 	return rows.map((row) => row.id)
 }
 
@@ -63,11 +71,13 @@ function ids(rows: { id: string }[]): string[] {
 // (homeFilterSql: blocks, mutes, domain blocks, invisible originals, and a status or boosted original that mentions an
 // account the viewer blocks or mutes; the viewer's own statuses always pass, as in FeedManager#filter_from_home).
 export const homeTimeline = userReadOperation<{ page: PageQuery; present: Present }, Page<Status>>(
-	(db, { page, present }, _viewer, { accountId, now }) => {
+	(db, { page, present }, _viewer, viewer) => {
+		const { accountId, now } = viewer
 		const cursor = statusPage(page)
 		const order = cursor.ascending ? 'ASC' : 'DESC'
-		const home = `${homeFilterSql('s', '?1', '?5')}
-			AND (s.reblog_of_id IS NULL OR s.account_id = ?1 OR EXISTS (SELECT 1 FROM follows hf
+		const read = statusReads(viewer, { viewer: '?1', now: '?5' })
+		// After homeFilterSql: the follow's options.
+		const options = `(s.reblog_of_id IS NULL OR s.account_id = ?1 OR EXISTS (SELECT 1 FROM follows hf
 				WHERE hf.account_id = ?1 AND hf.target_account_id = s.account_id AND hf.show_reblogs = 1))
 			AND (s.account_id = ?1 OR s.in_reply_to_account_id IS NULL OR s.in_reply_to_account_id IN (?1, s.account_id)
 				OR EXISTS (SELECT 1 FROM follows hr
@@ -77,25 +87,38 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 			AND NOT EXISTS (SELECT 1 FROM follows hl WHERE hl.account_id = ?1 AND hl.target_account_id = s.account_id
 				AND hl.languages IS NOT NULL AND s.language IS NOT NULL
 				AND s.language NOT IN (SELECT value FROM json_each(hl.languages)))`
-		const rows = db.all<{ id: string }>(
-			`SELECT id FROM (
-				SELECT * FROM (SELECT s.id FROM statuses s
-					WHERE s.account_id IN (SELECT ?1 UNION ALL
-						SELECT target_account_id FROM follows WHERE account_id = ?1 AND state = 'accepted')
-						AND ${FEED} AND ${cursorSql('s.id')} AND ${home}
-					ORDER BY s.id ${order} LIMIT ?4)
-				UNION ALL
-				SELECT * FROM (SELECT s.id FROM statuses s
-					WHERE s.account_id = ?1 AND s.visibility IN ${REQUIRES_MENTION_SQL} AND ${cursorSql('s.id')}
-					ORDER BY s.id ${order} LIMIT ?4)
-				UNION ALL
-				SELECT * FROM (SELECT s.id FROM status_mentions m JOIN statuses s ON s.id = m.status_id
-					WHERE m.account_id = ?1 AND s.account_id <> ?1 AND s.visibility IN ${REQUIRES_MENTION_SQL}
-						AND EXISTS (SELECT 1 FROM follows df
-							WHERE df.account_id = ?1 AND df.target_account_id = s.account_id AND df.state = 'accepted')
-						AND ${cursorSql('s.id')} AND ${home}
-					ORDER BY s.id ${order} LIMIT ?4)
-			) ORDER BY id ${order} LIMIT ?4`,
+		const tail = `ORDER BY s.id ${order} LIMIT ?4`
+		const rows = read.union(
+			db,
+			'homeFilter',
+			{
+				all: true,
+				branches: [
+					{
+						where: `s.account_id IN (SELECT ?1 UNION ALL
+								SELECT target_account_id FROM follows WHERE account_id = ?1 AND state = 'accepted')
+							AND ${FEED} AND ${cursorSql('s.id')}`,
+						and: options,
+						tail,
+					},
+					// The viewer's own: no follow's options apply (nobody follows themselves).
+					{
+						where: `s.account_id = ?1 AND s.visibility IN ${REQUIRES_MENTION_SQL} AND ${cursorSql('s.id')}`,
+						tail,
+					},
+					{
+						from: 'status_mentions m JOIN',
+						join: 'ON s.id = m.status_id',
+						where: `m.account_id = ?1 AND s.account_id <> ?1 AND s.visibility IN ${REQUIRES_MENTION_SQL}
+							AND EXISTS (SELECT 1 FROM follows df
+								WHERE df.account_id = ?1 AND df.target_account_id = s.account_id AND df.state = 'accepted')
+							AND ${cursorSql('s.id')}`,
+						and: options,
+						tail,
+					},
+				],
+				tail: `ORDER BY id ${order} LIMIT ?4`,
+			},
 			accountId,
 			cursor.max,
 			cursor.min,
@@ -115,33 +138,34 @@ export type PublicTimelineInput = {
 }
 
 // Local and remote public statuses that are not boosts, and not replies except to the author's own statuses
-// (Mastodon's PublicFeed). Never unlisted, private, direct or limited.
-// The viewer is ?1 and the time its mutes are judged at is `now` (a parameter).
-function publicConditions(local: boolean, remote: boolean, onlyMedia: boolean, now: string): string {
+// (Mastodon's PublicFeed). Never unlisted, private, direct or limited. The list rule (listableSql) follows these.
+function publicConditions(local: boolean, remote: boolean, onlyMedia: boolean): string {
 	return `s.visibility = 'public' AND s.reblog_of_id IS NULL
 		${local ? 'AND pa.domain IS NULL' : ''} ${remote ? 'AND pa.domain IS NOT NULL' : ''}
-		${onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments pm WHERE pm.status_id = s.id)' : ''}
-		AND ${listableSql('s', '?1', now)}`
+		${onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments pm WHERE pm.status_id = s.id)' : ''}`
 }
 
-export const publicTimeline = optionalUserReadOperation<PublicTimelineInput, Page<Status>>(
-	(db, input, { accountId: viewerId, now }) => {
-		const cursor = statusPage(input.page)
-		const rows = db.all<{ id: string }>(
-			`SELECT s.id FROM statuses s JOIN accounts pa ON pa.id = s.account_id
-			WHERE ${publicConditions(input.local, input.remote, input.onlyMedia, '?5')}
-				AND ${NOT_A_REPLY_TO_OTHERS}
-				AND ${cursorSql('s.id')}
-			ORDER BY s.id ${cursor.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
-			viewerId,
-			cursor.max,
-			cursor.min,
-			cursor.limit,
-			now
-		)
-		return statusesPage(db, ids(rows), cursor, viewerId, input.present)
-	}
-)
+export const publicTimeline = optionalUserReadOperation<PublicTimelineInput, Page<Status>>((db, input, viewer) => {
+	const { accountId: viewerId, now } = viewer
+	const cursor = statusPage(input.page)
+	const read = statusReads(viewer, { viewer: '?1', now: '?5' })
+	const rows = read.select(
+		db,
+		'listable',
+		{
+			join: 'JOIN accounts pa ON pa.id = s.account_id',
+			where: publicConditions(input.local, input.remote, input.onlyMedia),
+			and: `${NOT_A_REPLY_TO_OTHERS} AND ${cursorSql('s.id')}`,
+			tail: `ORDER BY s.id ${cursor.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+		},
+		viewerId,
+		cursor.max,
+		cursor.min,
+		cursor.limit,
+		now
+	)
+	return statusesPage(db, ids(rows), cursor, viewerId, input.present)
+})
 
 export type TagTimelineInput = PublicTimelineInput & { tag: string; any: string[]; all: string[]; none: string[] }
 
@@ -154,39 +178,43 @@ const MAX_TAG_TIMELINE_NAMES = 5
 // status_tags_public) in status id order, with every condition applied, until it has a page: so the read never goes
 // through the tag's unlisted, private, direct or limited statuses, and it stops at the page however many statuses the
 // tag has. The pages of the names are then merged (a status may carry several) and cut to one page.
-export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Status>>(
-	(db, input, { accountId: viewerId, now }) => {
-		const cursor = statusPage(input.page)
-		const order = cursor.ascending ? 'ASC' : 'DESC'
-		const unique = (names: string[]) => [...new Set(names.map(normalizeTag))]
-		const names = unique([input.tag, ...input.any]).slice(0, MAX_TAG_TIMELINE_NAMES)
-		// ?5 all, ?6 none, ?7 now, then one parameter per name from ?8. CROSS JOIN keeps status_tags outermost, and the
-		// cursor is a plain range (no cursor: '' and ':', below and above every id of digits), so each branch starts in
-		// the index at the cursor, walks it in order and stops at LIMIT.
-		const branch = (n: number) => `SELECT * FROM (SELECT t.status_id AS id FROM status_tags t
-				CROSS JOIN statuses s ON s.id = t.status_id JOIN accounts pa ON pa.id = s.account_id
-			WHERE t.public = 1 AND t.name = ?${8 + n}
-				AND NOT EXISTS (SELECT 1 FROM json_each(?5) a
-					WHERE NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id AND st.name = a.value))
-				AND NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id
-					AND st.name IN (SELECT value FROM json_each(?6)))
-				AND ${publicConditions(input.local, input.remote, input.onlyMedia, '?7')}
-				AND t.status_id < ?2 AND t.status_id > ?3
-			ORDER BY t.status_id ${order} LIMIT ?4)`
-		const rows = db.all<{ id: string }>(
-			`SELECT id FROM (${names.map((_, n) => branch(n)).join(' UNION ')}) ORDER BY id ${order} LIMIT ?4`,
-			viewerId,
-			cursor.max ?? ':',
-			cursor.min ?? '',
-			cursor.limit,
-			JSON.stringify(unique(input.all)),
-			JSON.stringify(unique(input.none)),
-			now,
-			...names
-		)
-		return statusesPage(db, ids(rows), cursor, viewerId, input.present)
-	}
-)
+export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Status>>((db, input, viewer) => {
+	const { accountId: viewerId, now } = viewer
+	const cursor = statusPage(input.page)
+	const order = cursor.ascending ? 'ASC' : 'DESC'
+	const read = statusReads(viewer, { viewer: '?1', now: '?7' })
+	const unique = (names: string[]) => [...new Set(names.map(normalizeTag))]
+	const names = unique([input.tag, ...input.any]).slice(0, MAX_TAG_TIMELINE_NAMES)
+	// ?5 all, ?6 none, ?7 now, then one parameter per name from ?8. CROSS JOIN keeps status_tags outermost, and the
+	// cursor is a plain range (no cursor: '' and ':', below and above every id of digits), so each branch starts in
+	// the index at the cursor, walks it in order and stops at LIMIT.
+	const branch = (n: number): StatusSelect => ({
+		from: 'status_tags t CROSS JOIN',
+		join: 'ON s.id = t.status_id JOIN accounts pa ON pa.id = s.account_id',
+		where: `t.public = 1 AND t.name = ?${8 + n}
+			AND NOT EXISTS (SELECT 1 FROM json_each(?5) a
+				WHERE NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id AND st.name = a.value))
+			AND NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id
+				AND st.name IN (SELECT value FROM json_each(?6)))
+			AND ${publicConditions(input.local, input.remote, input.onlyMedia)}`,
+		and: 't.status_id < ?2 AND t.status_id > ?3',
+		tail: `ORDER BY t.status_id ${order} LIMIT ?4`,
+	})
+	const rows = read.union(
+		db,
+		'listable',
+		{ all: false, branches: names.map((_, n) => branch(n)), tail: `ORDER BY id ${order} LIMIT ?4` },
+		viewerId,
+		cursor.max ?? ':',
+		cursor.min ?? '',
+		cursor.limit,
+		JSON.stringify(unique(input.all)),
+		JSON.stringify(unique(input.none)),
+		now,
+		...names
+	)
+	return statusesPage(db, ids(rows), cursor, viewerId, input.present)
+})
 
 export type AccountStatusesInput = {
 	account: string
@@ -204,7 +232,8 @@ export type AccountStatusesInput = {
 // out. The account's own statuses are shown even if the viewer mutes it, as on its profile. exclude_replies keeps
 // replies to the account itself (threads). Pins do not exist yet: pinned=true is an empty list.
 export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, Page<Status> | null>(
-	(db, input, { accountId: viewerId, now }) => {
+	(db, input, viewer) => {
+		const { accountId: viewerId, now } = viewer
 		const accountId = resolveAccountId(db, input.account)
 		if (accountId === null) {
 			return null
@@ -213,18 +242,22 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 		if (input.pinned) {
 			return { items: [], newest: null, oldest: null }
 		}
-		const rows = db.all<{ id: string }>(
-			`SELECT s.id FROM statuses s
-			WHERE s.account_id = ?5 AND ${visibleSql('s', '?1')}
-				AND NOT ${blocksSql('?1', 's.account_id')}
-				AND (s.reblog_of_id IS NULL OR EXISTS (SELECT 1 FROM statuses o WHERE o.id = s.reblog_of_id
-					AND ${visibleSql('o', '?1')} AND NOT ${filteredForSql('o.account_id', '?1', '?7')}))
-				${input.onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments um WHERE um.status_id = s.id)' : ''}
-				${input.excludeReplies ? `AND ${NOT_A_REPLY_TO_OTHERS}` : ''}
-				${input.excludeReblogs ? 'AND s.reblog_of_id IS NULL' : ''}
-				AND (?6 IS NULL OR EXISTS (SELECT 1 FROM status_tags ut WHERE ut.status_id = s.id AND ut.name = ?6))
-				AND ${cursorSql('s.id')}
-			ORDER BY s.id ${cursor.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+		const read = statusReads(viewer, { viewer: '?1', now: '?7' })
+		const rows = read.select(
+			db,
+			'visible',
+			{
+				where: 's.account_id = ?5',
+				and: `NOT ${blocksSql('?1', 's.account_id')}
+					AND (s.reblog_of_id IS NULL OR EXISTS (SELECT 1 FROM statuses o WHERE o.id = s.reblog_of_id
+						AND ${visibleSql('o', '?1')} AND NOT ${filteredForSql('o.account_id', '?1', '?7')}))
+					${input.onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments um WHERE um.status_id = s.id)' : ''}
+					${input.excludeReplies ? `AND ${NOT_A_REPLY_TO_OTHERS}` : ''}
+					${input.excludeReblogs ? 'AND s.reblog_of_id IS NULL' : ''}
+					AND (?6 IS NULL OR EXISTS (SELECT 1 FROM status_tags ut WHERE ut.status_id = s.id AND ut.name = ?6))
+					AND ${cursorSql('s.id')}`,
+				tail: `ORDER BY s.id ${cursor.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+			},
 			viewerId,
 			cursor.max,
 			cursor.min,
@@ -241,13 +274,21 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 // visible to the viewer (say, they stopped following a private author) or that they filter is not listed.
 function edgeList(table: 'bookmarks' | 'favourites') {
 	return userReadOperation<{ page: PageQuery; present: Present }, Page<Status>>(
-		(db, { page, present }, _viewer, { accountId, now }) => {
+		(db, { page, present }, _viewer, viewer) => {
+			const { accountId, now } = viewer
 			const ascending = page.minId !== undefined
-			const rows = db.all<{ cursor: string; id: string }>(
-				`SELECT CAST(e.id AS TEXT) AS cursor, e.status_id AS id FROM ${table} e JOIN statuses s ON s.id = e.status_id
-			WHERE e.account_id = ?1 AND ${listableSql('s', '?1', '?5')}
-				AND (?2 IS NULL OR e.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR e.id > CAST(?3 AS INTEGER))
-			ORDER BY e.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+			const read = statusReads(viewer, { viewer: '?1', now: '?5' })
+			const rows = read.select<{ cursor: string }>(
+				db,
+				'listable',
+				{
+					from: `${table} e JOIN`,
+					join: 'ON s.id = e.status_id',
+					where: 'e.account_id = ?1',
+					and: '(?2 IS NULL OR e.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR e.id > CAST(?3 AS INTEGER))',
+					tail: `ORDER BY e.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+					columns: { cursor: 'CAST(e.id AS TEXT)' },
+				},
 				accountId,
 				page.maxId ?? null,
 				page.minId ?? page.sinceId ?? null,

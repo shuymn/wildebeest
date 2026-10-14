@@ -1,12 +1,12 @@
 import { type Account, type Present, presentAccountsById } from './accounts'
 import {
 	availableLocalSql,
-	canView,
 	domainBlocksSql,
 	interpretAddressing,
 	isDistributable,
 	isPublicCollection,
 	type StatusMention,
+	viewableStatusId,
 	type Visibility,
 } from './audience'
 import { userWriteOperation } from './auth'
@@ -700,10 +700,9 @@ export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db
 	const status = (id: string | undefined): ResolveResult => {
 		const author =
 			id === undefined ? undefined : db.first<{ a: string }>('SELECT account_id AS a FROM statuses WHERE id = ?', id)?.a
-		const found =
-			id === undefined || author === undefined || blocked(author) || !canView(db, accountId, id)
-				? null
-				: presentStatus(db, id, options)
+		const visible =
+			id === undefined || author === undefined || blocked(author) ? null : viewableStatusId(db, accountId, id)
+		const found = visible === null ? null : presentStatus(db, visible, options)
 		return { accounts: [], statuses: found === null ? [] : [found] }
 	}
 	switch (resolved.kind) {

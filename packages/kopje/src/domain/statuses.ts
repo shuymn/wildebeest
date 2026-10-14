@@ -29,13 +29,15 @@ import {
 	canView,
 	DISTRIBUTABLE_SQL,
 	isDistributable,
-	listableSql,
 	listedForSql,
 	mentionableBySql,
+	ownStatusId,
 	REACHES_FOLLOWERS_SQL,
 	requiresMention,
+	statusReads,
 	tagPublicSql,
 	type Visibility,
+	viewableStatusId,
 } from './audience'
 import { optionalUserReadOperation, userMediaDeleteOperation, userReadOperation, userWriteOperation } from './auth'
 import { beginRetraction } from './deliveries'
@@ -48,6 +50,8 @@ import {
 	type MediaAttachment,
 	type MediaRow,
 	presentMedia,
+	presentOwnStatus,
+	type PresentOwnOptions,
 	presentStatus,
 	presentStatuses,
 	type Status,
@@ -72,6 +76,12 @@ export function resolveStatusId(db: Db, id: string): string | null {
 
 function viewed<T>(value: T | null): Viewed<T> {
 	return value === null ? { status: 'not_found' } : { status: 'ok', value }
+}
+
+// The status `id`, if it is the viewer's own, as the response to their write about it.
+function presentOwn(db: Db, viewerId: string, id: string, options: PresentOwnOptions): Status | null {
+	const own = ownStatusId(db, viewerId, id)
+	return own === null ? null : presentOwnStatus(db, own, options)
 }
 
 type Author = {
@@ -258,7 +268,7 @@ export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusRe
 			accountId,
 			input.idempotencyKey
 		)
-		const status = existing === undefined ? null : presentStatus(db, existing.id, options)
+		const status = existing === undefined ? null : presentOwn(db, accountId, existing.id, options)
 		if (status !== null) {
 			return { status: 'ok', value: status }
 		}
@@ -342,7 +352,7 @@ export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusRe
 	if (facts !== null) {
 		recordOutbound(db, accountId, createActivity(facts), input.now)
 	}
-	const status = presentStatus(db, id, options)
+	const status = presentOwn(db, accountId, id, options)
 	if (status === null) {
 		throw new Error('created status cannot be presented')
 	}
@@ -527,7 +537,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 		JSON.stringify(media) === JSON.stringify(currentMedia.map((m) => m.id)) &&
 		!attributes.some(changesMedia)
 	const status = (): Acted<Status> => {
-		return viewed(presentStatus(db, current.id, options))
+		return viewed(presentOwn(db, accountId, current.id, options))
 	}
 	if (unchanged) {
 		return status()
@@ -616,8 +626,8 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 // Deletes an own status (or boost) and answers with it as it was, source text included, for redrafting. Its media
 // is detached, so a redraft can attach it again within the grace period; with deleteMedia it is doomed at once and
 // the media sweep deletes it and its R2 objects (the Worker starts a sweep after the call). Only the deleted status
-// itself carries its source; a boost's original is shown only if the viewer may still see it, and never with its
-// source.
+// itself carries its source; a boost's original is shown only if the viewer may still see it (presentOwnStatus), and
+// never with its source.
 export const deleteStatus = userMediaDeleteOperation<
 	{ id: string; deleteMedia: boolean; now: number; present: Present },
 	Viewed<Status>
@@ -626,12 +636,7 @@ export const deleteStatus = userMediaDeleteOperation<
 	if (current === null) {
 		return { status: 'not_found' }
 	}
-	const value = presentStatus(db, current.id, {
-		...input.present,
-		viewerId: accountId,
-		source: true,
-		withoutReblog: current.reblog_of_id !== null && !canView(db, accountId, current.reblog_of_id),
-	})
+	const value = presentOwn(db, accountId, current.id, { ...input.present, viewerId: accountId, source: true })
 	if (value === null) {
 		return { status: 'not_found' }
 	}
@@ -672,9 +677,9 @@ export const deleteStatus = userMediaDeleteOperation<
 // ---------------------------------------------------------------------------------------------------------------
 
 // The status `id` if the viewer may see it.
-function viewable(db: Db, viewerId: string | null, id: string): string | null {
+function viewable(db: Db, viewerId: string | null, id: string) {
 	const resolved = resolveStatusId(db, id)
-	return resolved !== null && canView(db, viewerId, resolved) ? resolved : null
+	return resolved === null ? null : viewableStatusId(db, viewerId, resolved)
 }
 
 export const getStatus = optionalUserReadOperation<{ id: string; present: Present }, Viewed<Status>>(
@@ -697,29 +702,38 @@ export type Context = { ancestors: Status[]; descendants: Status[] }
 // (visible, and not filtered by the viewer's blocks, mutes and domain blocks); the thread continues past members
 // that do not.
 export const statusContext = optionalUserReadOperation<{ id: string; present: Present }, Viewed<Context>>(
-	(db, { id, present }, { accountId: viewerId, now }) => {
+	(db, { id, present }, viewer) => {
+		const { accountId: viewerId, now } = viewer
 		const resolved = viewable(db, viewerId, id)
 		if (resolved === null) {
 			return { status: 'not_found' }
 		}
 		const limits = viewerId === null ? CONTEXT_LIMITS.anonymous : CONTEXT_LIMITS.user
-		const ancestors = db.all<{ id: string }>(
-			`WITH RECURSIVE up (id, depth) AS (
-				SELECT in_reply_to_id, 1 FROM statuses WHERE id = ?2 AND in_reply_to_id IS NOT NULL
-				UNION ALL
-				SELECT s.in_reply_to_id, up.depth + 1 FROM statuses s JOIN up ON s.id = up.id
-				WHERE s.in_reply_to_id IS NOT NULL AND up.depth < ?3
-			)
-			SELECT s.id FROM up JOIN statuses s ON s.id = up.id WHERE ${listableSql('s', '?1', '?4')} ORDER BY up.depth DESC`,
+		const read = statusReads(viewer, { viewer: '?1', now: '?4' })
+		const ancestors = read.select(
+			db,
+			'listable',
+			{
+				with: `WITH RECURSIVE up (id, depth) AS (
+					SELECT in_reply_to_id, 1 FROM statuses WHERE id = ?2 AND in_reply_to_id IS NOT NULL
+					UNION ALL
+					SELECT s.in_reply_to_id, up.depth + 1 FROM statuses s JOIN up ON s.id = up.id
+					WHERE s.in_reply_to_id IS NOT NULL AND up.depth < ?3
+				)`,
+				from: 'up JOIN',
+				join: 'ON s.id = up.id',
+				tail: 'ORDER BY up.depth DESC',
+			},
 			viewerId,
 			resolved,
 			limits.ancestors,
 			now
 		)
 		const tree = descendantTree(db, resolved, limits.depth, limits.traversal)
-		const descendants = db.all<{ id: string }>(
-			`SELECT s.id FROM json_each(?2) j JOIN statuses s ON s.id = j.value
-			WHERE ${listableSql('s', '?1', '?4')} ORDER BY j.key LIMIT ?3`,
+		const descendants = read.select(
+			db,
+			'listable',
+			{ from: 'json_each(?2) j JOIN', join: 'ON s.id = j.value', tail: 'ORDER BY j.key LIMIT ?3' },
 			viewerId,
 			JSON.stringify(tree),
 			limits.descendants,
@@ -905,7 +919,8 @@ function viewerUri(db: Db, accountId: string): string {
 }
 
 function presented(db: Db, id: string, viewerId: string, present: Present): Viewed<Status> {
-	return viewed(canView(db, viewerId, id) ? presentStatus(db, id, { ...present, viewerId }) : null)
+	const visible = viewableStatusId(db, viewerId, id)
+	return viewed(visible === null ? null : presentStatus(db, visible, { ...present, viewerId }))
 }
 
 type ActionInput = { id: string; now: number; present: Present }
@@ -1033,7 +1048,7 @@ export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input,
 		target.id
 	)
 	if (existing !== undefined) {
-		return viewed(presentStatus(db, existing.id, options))
+		return viewed(presentOwn(db, accountId, existing.id, options))
 	}
 	const author = localAuthor(db, accountId)
 	const requested = input.visibility ?? author.default_visibility
@@ -1061,7 +1076,7 @@ export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input,
 		announceActivity(announceOf(db, accountId, author.uri, uri, visibility, publishedAt, target)),
 		input.now
 	)
-	return viewed(presentStatus(db, id, options))
+	return viewed(presentOwn(db, accountId, id, options))
 })
 
 // The Announce of a boost by `boosterId` (boostAnnounce in activities.ts decides what it names).

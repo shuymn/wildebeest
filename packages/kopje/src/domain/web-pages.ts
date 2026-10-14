@@ -1,5 +1,5 @@
 import { type Account, ACCOUNT_COLUMNS, ACCOUNT_FROM, type AccountRow, type Present, presentAccount } from './accounts'
-import { canView, visibleSql } from './audience'
+import { statusReads, viewableStatusId } from './audience'
 import { readOperation } from './operation'
 import { presentStatus, presentStatuses, type Status } from './status-presenter'
 import { resolveStatusId } from './statuses'
@@ -32,12 +32,16 @@ export const profilePage = readOperation<{ username: string; maxId: string | nul
 		if (row.suspended_at !== null) {
 			return { status: 'suspended' }
 		}
-		const ids = db
-			.all<{ id: string }>(
-				`SELECT s.id FROM statuses s
-				WHERE s.account_id = ?2 AND s.reblog_of_id IS NULL AND ${visibleSql('s', '?1')} AND ${NOT_A_REPLY_TO_OTHERS}
-					AND (?3 IS NULL OR s.id < ?3)
-				ORDER BY s.id DESC LIMIT ?4`,
+		const read = statusReads(null, { viewer: '?1' })
+		const ids = read
+			.select(
+				db,
+				'visible',
+				{
+					where: 's.account_id = ?2 AND s.reblog_of_id IS NULL',
+					and: `${NOT_A_REPLY_TO_OTHERS} AND (?3 IS NULL OR s.id < ?3)`,
+					tail: 'ORDER BY s.id DESC LIMIT ?4',
+				},
 				null,
 				row.id,
 				maxId !== null && STATUS_ID.test(maxId) ? maxId : null,
@@ -71,29 +75,31 @@ export const statusPage = readOperation<{ username: string; id: string; present:
 		if (resolved === null) {
 			return { status: 'not_found' }
 		}
-		const row = db.first<{ in_reply_to_id: string | null; username: string }>(
-			`SELECT s.in_reply_to_id, au.username FROM statuses s JOIN accounts au ON au.id = s.account_id
-			WHERE s.id = ?2 AND au.domain IS NULL AND lower(au.username) = lower(?3) AND s.reblog_of_id IS NULL
-				AND ${visibleSql('s', '?1')}`,
+		const read = statusReads(null, { viewer: '?1' })
+		const row = read.select<{ in_reply_to_id: string | null; username: string }>(
+			db,
+			'visible',
+			{
+				join: 'JOIN accounts au ON au.id = s.account_id',
+				where: 's.id = ?2 AND au.domain IS NULL AND lower(au.username) = lower(?3) AND s.reblog_of_id IS NULL',
+				columns: { in_reply_to_id: 's.in_reply_to_id', username: 'au.username' },
+			},
 			null,
 			resolved,
 			username
-		)
+		)[0]
 		if (row === undefined) {
 			return { status: 'not_found' }
 		}
 		if (resolved !== id) {
 			return { status: 'moved', username: row.username, id: resolved }
 		}
-		const status = presentStatus(db, resolved, { ...present, viewerId: null })
+		const status = presentStatus(db, row.id, { ...present, viewerId: null })
 		if (status === null) {
 			return { status: 'not_found' }
 		}
-		const parentId = row.in_reply_to_id
-		const parent =
-			parentId !== null && canView(db, null, parentId)
-				? presentStatus(db, parentId, { ...present, viewerId: null })
-				: null
+		const parentId = row.in_reply_to_id === null ? null : viewableStatusId(db, null, row.in_reply_to_id)
+		const parent = parentId === null ? null : presentStatus(db, parentId, { ...present, viewerId: null })
 		return {
 			status: 'ok',
 			value: status,
