@@ -26,7 +26,8 @@ import type { StoreStub } from '../platform/store-client'
 // effect (R2 reads, Images, Store calls, whose writes check the lease again) are given up LEASE_MARGIN_MS before the
 // renewed lease would end; R2 writes and deletes are never given up: each is awaited to completion while a heartbeat
 // renews the lease every REBUILD_HEARTBEAT_MS, so the lease cannot end under a write this call started while the call
-// runs. If a renewal fails while a write is pending, the call reports `lease-overrun` and does not release the lease.
+// runs. Each write or delete starts only after the Store confirms the lease is still this call's; once a renewal or that
+// check fails, the call starts no further write, reports `lease-overrun` and does not release the lease.
 // A call that gave up a step keeps the lease until it expires. The bound: per row, at most two R2 reads, five Images
 // calls and five Store calls, each given up within the lease, then at most three R2 writes, each awaited.
 //
@@ -88,6 +89,9 @@ export type RebuildDeps = {
 	heartbeatMs?: number
 }
 
+// This call no longer holds the lease: it starts no further R2 write.
+class Overrun extends Error {}
+
 class Refused extends Error {
 	constructor(
 		readonly code: 'wrong-authority' | 'rebuild-lease-lost',
@@ -143,6 +147,8 @@ export async function rebuildMedia(
 			}
 		case 'busy':
 			return { ok: false, code: 'rebuild-busy', message: 'another media-rebuild call holds the lease; try again' }
+		case 'restoring':
+			return { ok: false, code: 'rebuild-busy', message: 'a PITR restore is being scheduled; try again' }
 		case 'released':
 		case 'ok':
 			break
@@ -181,11 +187,21 @@ async function pass(
 		deadline = asked + renewed.remainingMs - LEASE_MARGIN_MS
 		return renewed.remainingMs
 	}
-	// An R2 write or delete: never given up. The lease is renewed meanwhile; a failed renewal marks it lost.
-	const settled = async <T>(work: Promise<T>): Promise<T> => {
+	// An R2 write or delete: started only while the Store confirms this call holds the lease (none once a renewal
+	// failed), then never given up. The lease is renewed meanwhile; a failed renewal marks it lost.
+	const settled = async <T>(start: () => Promise<T>): Promise<T> => {
 		if (control === null) {
-			return work
+			return start()
 		}
+		if (control.lost) {
+			throw new Overrun()
+		}
+		const owned = await within(() => control.lease(false), deadline, now)
+		if (owned.status !== 'ok') {
+			control.lost = true
+			throw new Overrun()
+		}
+		const work = start()
 		const timer = setInterval(() => {
 			control.lease(false).then(
 				(renewed) => {
@@ -330,13 +346,13 @@ async function pass(
 				continue
 			}
 			const keys = [fileKey(row.token, 'full'), fileKey(row.token, 'small')] as const
-			await settled(bucket.put(keys[0], full.bytes, { httpMetadata: { contentType: full.contentType } }))
-			await settled(bucket.put(keys[1], small.bytes, { httpMetadata: { contentType: small.contentType } }))
+			await settled(() => bucket.put(keys[0], full.bytes, { httpMetadata: { contentType: full.contentType } }))
+			await settled(() => bucket.put(keys[1], small.bytes, { httpMetadata: { contentType: small.contentType } }))
 			// Defence in depth: nothing deletes rows while a rebuild holds the lease, but if the row went while the files
 			// were written, they are deleted again so nothing serves them.
 			const live = await bounded(() => store.mediaRebuildRowLive(build, { id: row.id, token: row.token }))
 			if (!live) {
-				await settled(bucket.delete([...keys]))
+				await settled(() => bucket.delete([...keys]))
 				counts.gone++
 			} else {
 				counts.built++
@@ -349,8 +365,11 @@ async function pass(
 		handled = page.next
 		return step(null, page.done)
 	} catch (error) {
+		if (error instanceof Overrun || (error instanceof DeadlinePassed && control?.lost === true)) {
+			return step('lease-overrun', false)
+		}
 		if (error instanceof DeadlinePassed) {
-			return step(control?.lost === true ? 'lease-overrun' : 'deadline', false)
+			return step('deadline', false)
 		}
 		if (error instanceof Refused) {
 			return { ok: false, code: error.code, message: error.message }

@@ -1,6 +1,6 @@
 import { errorFields, errorMessage } from './error-message'
 import { type MaintenanceReason, storeMaintenanceError } from './store-errors'
-import { activeDump, admitFlags, readFlags } from './store-flags'
+import { activeDump, admitFlags, PITR_RESTORING, readFlags, rebuildLeaseLive } from './store-flags'
 
 export type Migration = { readonly name: string; readonly sql: string }
 
@@ -238,13 +238,27 @@ export class StoreKernel {
 
 	// Rescue RPC: restores the database to a bookmark on the next start and restarts the object now, so the
 	// caller sees this call fail once the restart happens. Keep MAINTENANCE=full set while doing this. It mutates, so
-	// unlike the other rescue RPCs it requires the caller's build to match.
-	async restoreBookmark(callerBuild: string, bookmark: string): Promise<void> {
+	// unlike the other rescue RPCs it requires the caller's build to match. It is refused while a media rebuild holds
+	// its lease, and marks the restore as being prepared (PITR_RESTORING) so no rebuild takes the lease meanwhile;
+	// `prepare` runs before the restore is scheduled (the Store records outside its database that a restore happened).
+	async restoreBookmark(callerBuild: string, bookmark: string, prepare?: () => Promise<void>): Promise<void> {
 		if (callerBuild !== this.build) {
 			throw storeMaintenanceError('version-mismatch')
 		}
-		this.#log({ event: 'kopje.store.pitr', bookmark })
-		await this.#ctx.storage.onNextSessionRestoreBookmark(bookmark)
+		this.#transaction(() => {
+			if (rebuildLeaseLive(readFlags(this.#sql), this.#now())) {
+				throw storeMaintenanceError('rebuild-in-progress')
+			}
+			this.#writeState(PITR_RESTORING, JSON.stringify({ at: this.#now() }))
+		})
+		try {
+			await prepare?.()
+			this.#log({ event: 'kopje.store.pitr', bookmark })
+			await this.#ctx.storage.onNextSessionRestoreBookmark(bookmark)
+		} catch (error) {
+			this.#transaction(() => this.#writeState(PITR_RESTORING, null))
+			throw error
+		}
 		this.#ctx.abort('restoring PITR bookmark')
 	}
 

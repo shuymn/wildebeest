@@ -644,15 +644,24 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   are refused whatever the flags say (operation kind `media-delete`), and so is leaving maintenance. One call runs at a
   time under that lease, kept at the Store's clock: renewed before each row and, while an R2 write is pending, every
   minute; R2 writes and deletes are never given up but awaited to completion, so the lease cannot end under a write
-  the call started while the call runs (a failed renewal is reported as `lease-overrun` and the lease is not
-  released). Per row the other steps are bounded: two R2 reads, five Images calls and five Store calls, each given up
+  the call started while the call runs, and each starts only after the Store confirms the lease is still the call's
+  (once a renewal or that check fails, no further write starts, the call reports `lease-overrun` and the lease is not
+  released). A PITR restore is refused while the lease is live, and the lease while a restore is being scheduled
+  (`pitr_restoring`); since a restore rewinds the maintenance start and the unpublished flag, the Store records each
+  restore outside its database (`kopje/pitr-restored/<store id>` in R2, never served) before scheduling it, and the
+  rebuild counts readiness only from it: an unpublished flag from before it is not ready, and maintenance settles from
+  the later of its start and the restore. An import reset or cutover reset never writes the maintenance flag, so they
+  leave no stale start. Per row the other steps are bounded: two R2 reads, five Images calls and five Store calls, each given up
   a minute before the renewed 10-minute lease ends. As defence in depth the rebuild records the row before it writes
   the files and, once both writes have completed, asks whether the row is still live, deleting the files it wrote if
   not. It deletes nothing else. `test/media-rebuild.test.ts` ("leaves out remote, doomed and unfinished rows", "runs
   only where delete_media, the sweep and reconciliation cannot delete media", "is refused in a writable Store and
   under the env maintenance alone", "waits for maintenance to settle", "refuses leaving maintenance and every
   media-deleting write while the lease is live", "awaits a pending write past the deadline", "deletes the files it
-  wrote for a row that went while it wrote them").
+  wrote for a row that went while it wrote them", "refuses a restore while the lease is live", "counts the settle
+  period again from a restore"). Accepted residual risk: a Worker terminated in the middle of an R2 write leaves no
+  heartbeat and no record, and that one write may land after the lease expired; it is bounded to a put already in
+  flight at termination, and its file lands under the capability URL of a row that existed when the rebuild started.
 - **MEDIA-3: served images are re-encoded.** An image is served only as Images output with location metadata removed; if
   transformation fails, the upload is refused and original bytes are never served. _Enforced (main):_ outputs are PNG or WebP only, for which Images discards all metadata (the binding has no
   metadata option, and JPEG output would keep the EXIF copyright tag); `processImage` in `src/platform/images.ts` then

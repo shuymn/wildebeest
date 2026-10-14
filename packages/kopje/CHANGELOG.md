@@ -28,7 +28,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   monthly transformation budget (exit 3). It writes only while nothing can delete media: before publication, or once
   the Store's maintenance (`kopje-admin maintenance on`) has lasted 20 minutes (otherwise `rebuild-needs-readonly` or
   `rebuild-settling`, exit 3). One call runs at a time under a Store lease, during which imports, resets, publication,
-  leaving maintenance and every media-deleting write are refused. A restore or a cutover
+  leaving maintenance, PITR restores and every media-deleting write are refused; after a PITR restore it waits for the
+  settle period again. A restore or a cutover
   thus serves its images when published ([docs/backup.md](docs/backup.md),
   [docs/cutover-runbook.md](docs/cutover-runbook.md) step 8).
 

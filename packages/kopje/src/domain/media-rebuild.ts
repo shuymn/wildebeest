@@ -3,7 +3,7 @@ import { mediaRebuildOperation, readOperation } from './operation'
 import type { Db } from '../db/sql'
 import { ACCESS_SETTINGS, accessRefusal, settingsFromRows, type SettingRow } from '../platform/access-settings'
 import type { ImportAuthority } from '../platform/store-admin'
-import { REBUILD_LEASE } from '../platform/store-flags'
+import { PITR_RESTORING, PITR_RESTORING_MS, REBUILD_LEASE } from '../platform/store-flags'
 
 // The media rebuild (mastodon/media-rebuild.ts): local media whose row is complete but whose served files are not in R2
 // get them made again from their original. That is media restored from a backup (which holds only the originals) and
@@ -127,20 +127,28 @@ function flag<T>(db: Db, name: string): T | null {
 	return value === undefined ? null : (JSON.parse(value) as T)
 }
 
-// Whether the Store has refused every media-deleting write long enough (the flags of platform/store-flags.ts):
-// 'ok' while a verified import is unpublished, or once its readonly maintenance has lasted REBUILD_SETTLE_MS.
+// Whether the Store has refused every media-deleting write long enough (the flags of platform/store-flags.ts): 'ok'
+// while a verified import is unpublished, or once its readonly maintenance has lasted REBUILD_SETTLE_MS. A PITR restore
+// rewinds those flags, so both count only from the last restore (`restoredAt`, recorded outside the database): an
+// unpublished flag from before it is not ready, and maintenance settles from the later of its start and the restore.
 function readiness(
 	db: Db,
-	now: number
-): { status: 'ok' } | { status: 'needs-readonly' } | { status: 'settling'; readyAt: number } {
-	if (flag(db, 'unpublished') !== null) {
+	now: number,
+	restoredAt: number | null
+): { status: 'ok' } | { status: 'needs-readonly' } | { status: 'restoring' } | { status: 'settling'; readyAt: number } {
+	const restoring = flag<{ at: number }>(db, PITR_RESTORING)
+	if (restoring !== null && restoring.at > now - PITR_RESTORING_MS) {
+		return { status: 'restoring' }
+	}
+	const unpublished = flag<{ at: number }>(db, 'unpublished')
+	if (unpublished !== null && (restoredAt === null || unpublished.at > restoredAt)) {
 		return { status: 'ok' }
 	}
 	const maintenance = flag<{ at: number }>(db, 'maintenance')
 	if (maintenance === null) {
 		return { status: 'needs-readonly' }
 	}
-	const readyAt = maintenance.at + REBUILD_SETTLE_MS
+	const readyAt = Math.max(maintenance.at, restoredAt ?? 0) + REBUILD_SETTLE_MS
 	return now >= readyAt ? { status: 'ok' } : { status: 'settling', readyAt }
 }
 
@@ -149,15 +157,16 @@ export type RebuildLeaseResult =
 	| { status: 'released' }
 	| { status: 'needs-readonly' }
 	| { status: 'settling'; readyAt: number }
+	| { status: 'restoring' }
 	| { status: 'busy'; remainingMs: number }
 	| { status: 'denied'; reason: string }
 
 // Takes or renews the lease for `holder` (for REBUILD_LEASE_MS from the Store's `now`), or releases it. A release by a
 // holder that no longer holds it changes nothing.
 export const rebuildLease = mediaRebuildOperation<
-	{ authority: ImportAuthority; holder: string; release?: boolean; now: number },
+	{ authority: ImportAuthority; holder: string; release?: boolean; restoredAt: number | null; now: number },
 	RebuildLeaseResult
->((db, { authority, holder, release, now }) => {
+>((db, { authority, holder, release, restoredAt, now }) => {
 	const refused = adminRefused(db, authority)
 	if (refused !== null) {
 		return { status: 'denied', reason: refused }
@@ -169,7 +178,7 @@ export const rebuildLease = mediaRebuildOperation<
 		}
 		return { status: 'released' }
 	}
-	const ready = readiness(db, now)
+	const ready = readiness(db, now, restoredAt)
 	if (ready.status !== 'ok') {
 		return ready
 	}

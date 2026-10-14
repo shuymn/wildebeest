@@ -857,9 +857,76 @@ describe('media rebuild only while nothing deletes media, one call at a time', (
 		release()
 		const step = await running
 		expect(step).toMatchObject({ ok: true, stopped: 'lease-overrun', done: false })
-		expect(await files(row)).toEqual([true, true])
+		// The write already started landed; none started after the lease was lost.
+		expect(await files(row)).toEqual([true, false])
 		// Not released: the other holder keeps it.
 		expect((await leaseRow(h.store))[0]?.holder).toBe('other')
+	})
+})
+
+describe('media rebuild and PITR', () => {
+	const admin = () => ({ ...ACCESS, teamDomain: team.teamDomain })
+
+	it('refuses a restore while the lease is live, and the lease while a restore is being scheduled', async () => {
+		const h = await setup()
+		expect(await h.store.mediaRebuildLease(BUILD, { authority: admin(), holder: 'leased' })).toMatchObject({
+			status: 'ok',
+		})
+		const refused = await rejectionOf(h.store.pitrToBookmark(BUILD, 'any-bookmark'))
+		expect(toStoreUnavailable(refused)?.reason).toBe('rebuild-in-progress')
+		await h.store.mediaRebuildLease(BUILD, { authority: admin(), holder: 'leased', release: true })
+
+		await runInDurableObject(h.store, (_instance, state) => {
+			state.storage.sql.exec(
+				"INSERT INTO kopje_state (name, value) VALUES ('pitr_restoring', ?)",
+				JSON.stringify({ at: Date.now() })
+			)
+		})
+		expect(await h.store.mediaRebuildLease(BUILD, { authority: admin(), holder: 'next' })).toEqual({
+			status: 'restoring',
+		})
+		expect(await (await h.post(adminClaims(), '/admin/media/rebuild')).json()).toMatchObject({ code: 'rebuild-busy' })
+	})
+
+	it('counts the settle period again from a restore, also for an unpublished import', async () => {
+		const h = await setup()
+		// The restore is recorded outside the database before it is scheduled; Miniflare then fails to restore, which
+		// leaves the record (conservatively) and removes the restoring mark.
+		const failed = await rejectionOf(h.store.pitrToBookmark(BUILD, 'any-bookmark'))
+		expect(failed).toBeInstanceOf(Error)
+		const marker = await env.MEDIA.get(`kopje/pitr-restored/${h.store.id.toString()}`)
+		const restoredAt = (JSON.parse((await marker?.text()) ?? '{}') as { at: number }).at
+		expect(restoredAt).toBeGreaterThan(Date.now() - 60_000)
+		// The maintenance began long before: it settles again from the restore.
+		const settling = (await h.store.mediaRebuildLease(BUILD, { authority: admin(), holder: 'a' })) as {
+			status: string
+			readyAt: number
+		}
+		expect(settling).toEqual({ status: 'settling', readyAt: restoredAt + REBUILD_SETTLE_MS })
+		// An unpublished flag from before the restore is not ready either.
+		await runInDurableObject(h.store, (_instance, state) => {
+			state.storage.sql.exec("DELETE FROM kopje_state WHERE name = 'maintenance'")
+			state.storage.sql.exec(
+				"INSERT INTO kopje_state (name, value) VALUES ('unpublished', ?)",
+				JSON.stringify({ at: restoredAt - 1000, import: 'i' })
+			)
+		})
+		expect(await h.store.mediaRebuildLease(BUILD, { authority: admin(), holder: 'a' })).toEqual({
+			status: 'needs-readonly',
+		})
+		// One verified after the restore is.
+		await runInDurableObject(h.store, (_instance, state) => {
+			state.storage.sql.exec(
+				"UPDATE kopje_state SET value = ? WHERE name = 'unpublished'",
+				JSON.stringify({ at: Date.now(), import: 'j' })
+			)
+		})
+		expect(await h.store.mediaRebuildLease(BUILD, { authority: admin(), holder: 'a' })).toMatchObject({ status: 'ok' })
+		// Another Store is unaffected by this one's restore.
+		const other = await setup()
+		expect(await other.store.mediaRebuildLease(BUILD, { authority: admin(), holder: 'b' })).toMatchObject({
+			status: 'ok',
+		})
 	})
 })
 

@@ -40,10 +40,21 @@ import {
 	recordMedia,
 	saveBackup,
 } from './platform/backup-state'
+import { restoreMarkerKey } from './platform/media-files'
 import { type ImportAuthority, StoreAdmin } from './platform/store-admin'
 import { readFlags } from './platform/store-flags'
 import { StoreKernel, type StoreOperation } from './platform/store-kernel'
 import { buildOf, PACKAGE_VERSION } from './version'
+
+// When a PITR restore was last scheduled (store.ts pitrToBookmark), or null.
+async function lastRestore(bucket: R2Bucket, key: string): Promise<number | null> {
+	const marker = await bucket.get(key)
+	if (marker === null) {
+		return null
+	}
+	const at = (JSON.parse(await marker.text()) as { at?: unknown }).at
+	return typeof at === 'number' ? at : null
+}
 
 type OperationInput<T> = T extends StoreOperation<infer I, unknown> ? I : never
 
@@ -72,8 +83,12 @@ export class Store extends DurableObject<Env> {
 		return { ...(await this.#kernel.version()), version: PACKAGE_VERSION }
 	}
 
+	// The restore is recorded in R2 first (restoreMarkerKey): a restore rewinds the database, maintenance start and
+	// unpublished flag included, so a media rebuild counts its settle period from this record instead.
 	pitrToBookmark(callerBuild: string, bookmark: string) {
-		return this.#kernel.restoreBookmark(callerBuild, bookmark)
+		return this.#kernel.restoreBookmark(callerBuild, bookmark, async () => {
+			await this.env.MEDIA.put(restoreMarkerKey(this.ctx.id.toString()), JSON.stringify({ at: Date.now() }))
+		})
 	}
 
 	// ---- operations tooling (platform/store-admin.ts), called from /admin/*
@@ -728,8 +743,12 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, mediaRebuild.rebuildRowLive, { ...input, now: Date.now() })
 	}
 
-	mediaRebuildLease(callerBuild: string, input: Omit<OperationInput<typeof mediaRebuild.rebuildLease>, 'now'>) {
-		return this.#kernel.execute(callerBuild, mediaRebuild.rebuildLease, { ...input, now: Date.now() })
+	async mediaRebuildLease(
+		callerBuild: string,
+		input: Omit<OperationInput<typeof mediaRebuild.rebuildLease>, 'now' | 'restoredAt'>
+	) {
+		const restoredAt = await lastRestore(this.env.MEDIA, restoreMarkerKey(this.ctx.id.toString()))
+		return this.#kernel.execute(callerBuild, mediaRebuild.rebuildLease, { ...input, restoredAt, now: Date.now() })
 	}
 
 	chargeMediaRebuild(callerBuild: string, input: Omit<OperationInput<typeof mediaRebuild.chargeRebuild>, 'now'>) {

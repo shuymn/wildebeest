@@ -144,6 +144,12 @@ export function writeFlag<N extends FlagName>(sql: SqlStorage, name: N, value: O
 // resetting an import, resetting a cutover or publishing (store-admin.ts).
 export const REBUILD_LEASE = 'media_rebuild_lease'
 
+// Set while a PITR restore is being scheduled (store-kernel.ts restoreBookmark), so no media rebuild takes its lease;
+// the restore then rewinds it away, and a failed attempt removes it. Ignored after PITR_RESTORING_MS, should the
+// object stop in between.
+export const PITR_RESTORING = 'pitr_restoring'
+export const PITR_RESTORING_MS = 5 * 60 * 1000
+
 export function rebuildLeaseLive(flags: OperatorFlags, now: number): boolean {
 	return flags.media_rebuild_lease !== null && flags.media_rebuild_lease.until > now
 }
