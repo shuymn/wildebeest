@@ -283,7 +283,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **VIS-8: a pending follow grants nothing.** A follow of a locked local account or of any remote account starts
   `pending`; only `accepted` follows count, appear in follower lists, or grant `private` access. _Enforced (main):_
   `follow` in `src/domain/accounts.ts`; `test/accounts.test.ts` ("requests a locked or remote account", "lists following
-  without pending requests").
+  without pending requests"). `GET /api/v1/accounts/familiar_followers` reads accepted follows on both sides only,
+  and leaves out followers the viewer blocks or mutes and suspended accounts: _Implemented on branch
+  `kopje/startup-reads`:_ `familiarFollowers` in `src/domain/accounts.ts`; `test/account-reads.test.ts` ("counts
+  accepted follows only (VIS-8)", "leaves out accounts the viewer blocks or mutes").
 - **VIS-9: only the followed side accepts.** A pending follow of a local account becomes `accepted` only by that
   account's own authorize call; a pending remote follow only by an `Accept` that passes ID-6. _Enforced (main):_ `answerFollowRequest` in `src/domain/accounts.ts` (`POST
 /api/v1/follow_requests/:id/authorize` and `/reject`, the viewer from the credential; a remote requester gets the
@@ -309,7 +312,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   parent is hidden, because they belong to the reply (its ActivityPub object carries `inReplyTo` to every recipient);
   the parent itself stays behind VIS-1. _Enforced (main):_ `src/domain/status-presenter.ts`,
   `src/domain/statuses.ts`, `ACCOUNT_COLUMNS` in `src/domain/accounts.ts`; `test/statuses.test.ts` ("review
-  regressions").
+  regressions"). A tag's `history` (`GET /api/v1/tags/:id`) counts only public and unlisted originals of accounts
+  that are not suspended, the same for every viewer, so it counts no status the caller may not see: _Implemented on
+  branch `kopje/startup-reads`:_ `getTag` in `src/domain/tags.ts`; `test/tags.test.ts` ("shows a tag with
+  seven days of history", "leaves out the statuses of a suspended account").
 
 ### Authorization (AUTH)
 
@@ -725,7 +731,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
   most 40 results per type (80 for the account search), and offsets past 10,000 answer an empty page;
-  `test/search.test.ts` ("bounds the query, the limit and the offset").
+  `test/search.test.ts` ("bounds the query, the limit and the offset"). _Implemented on branch `kopje/startup-reads`:_
+  `GET /api/v1/instance/peers` lists at most 10,000 domains (`MAX_PEERS` in `src/domain/instance.ts`);
+  `familiar_followers` reads at most 20 ids and shows at most 80 accounts for each (`src/domain/accounts.ts`);
+  `test/instance-reads.test.ts` ("bounds the peers"), `test/account-reads.test.ts` ("bounds the ids, the followers
+  read and the accounts shown").
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Implemented on branch `kopje/inbound-statuses`_ for remote statuses: one
   status stores at most 4 attachments (Mastodon's limit) with 10,000 code units of description each, 100 hashtags
@@ -844,7 +854,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`src/domain/search.ts`, `findAccounts` in `src/domain/accounts.ts`); `test/search.test.ts` ("filters before
   LIMIT"), `test/search-edge.test.ts` (rows read stay flat as favourites, bookmarks, accounts and tagged statuses grow
   fourfold, pending follows included; `max_id` reaches past each window; an exact address outside every window is
-  found). Context traversal and edit history: _Planned (B4a fixes)._
+  found). _Implemented on branch `kopje/startup-reads`:_ the peers list seeks each next domain on the (domain,
+  username) index, so it reads rows by domain returned, not by account known; a tag's history reads its statuses from
+  the last seven days only, cut by status id on the (name, status_id) index, at most 10,000 of them; familiar followers
+  reads at most the 5,000 newest accepted followers of each account; `test/instance-reads.test.ts`,
+  `test/tags.test.ts`, `test/account-reads.test.ts` (rows read stay flat as accounts per domain, statuses outside the
+  window and followers grow). Context traversal and edit history:
+  _Planned (B4a fixes)._
 
 ### Data and keys (DATA)
 
@@ -1240,6 +1256,7 @@ activity specs, cited in test names.
 | Signed-fetch cache entries may outlive a remote block or key change by up to 5 minutes                                                                                                                                                                                                                | Measured CPU savings on personal inboxes                                                                                                                                                                                                                          | blocks must apply at once                                            |
 | OAuth client secrets are stored in plaintext, so R5 can act as any registered app (no user scopes)                                                                                                                                                                                                    | Matches Mastodon; app tokens carry no user authority                                                                                                                                                                                                              | app tokens gain user-level powers                                    |
 | Aggregate counters (`reblogs_count`, `favourites_count`, `replies_count`) include interactions the viewer cannot see                                                                                                                                                                                  | Mastodon parity; clients rely on the counts                                                                                                                                                                                                                       | counters must hide private interactions                              |
+| `GET /api/v1/instance/peers` lists the domain of every known remote account, including one known only from a direct or limited status, a follow or a search                                                                                                                                           | Mastodon parity (`Instance.searchable`); the instance's `domain_count` already counts the same set                                                                                                                                                                | peers must hide how a domain became known                            |
 | Non-public media is readable by anyone holding its unguessable URL; cached copies outlive deletion                                                                                                                                                                                                    | Clients and peers fetch media without credentials; URLs appear only under VIS-1                                                                                                                                                                                   | authenticated media fetch becomes interoperable                      |
 | A write of a failed upload that lands after the sweep stays a day; one landing after its tombstone stays for good                                                                                                                                                                                     | An HTTP Worker has no fixed wall-time limit; deleting unrecorded objects would destroy media after a restore                                                                                                                                                      | R2 offers conditional writes bound to a Store record                 |
 | R2 originals keep the uploaded bytes, EXIF and location included                                                                                                                                                                                                                                      | Never served (MEDIA-2); backups restore from them; they are A8                                                                                                                                                                                                    | backups can be rebuilt from re-encoded files                         |

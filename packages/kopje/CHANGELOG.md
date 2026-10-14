@@ -8,6 +8,33 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- Mastodon API endpoints that clients read at startup and that answered 404 before. `GET /api/v1/preferences` shows
+  the account's posting defaults (visibility, sensitive, language) and Mastodon's defaults for the reading preferences
+  (`reading:expand:media` `default`, `reading:expand:spoilers` false).
+
+- `GET /api/v1/instance/rules` (the rules `/api/v2/instance` shows), `/api/v1/instance/peers` (the domains of known
+  remote accounts, at most 10,000), `/api/v1/instance/extended_description` (none set) and `/api/v1/instance/languages`
+  (ISO 639-1). `privacy_policy`, `terms_of_service`, `activity` and `domain_blocks` answer 404, as Mastodon does when
+  none is configured or the feature is off.
+
+- `GET /api/v1/tags/:id`: any valid hashtag, with seven days of history counted from public and unlisted statuses.
+  `following` is false for a signed-in viewer, since tag follows do not exist yet.
+
+- `GET /api/v1/accounts/familiar_followers`: for each requested account, the accounts the user follows that follow it
+  (at most 20 ids and 80 accounts each), without accounts the user blocks or mutes.
+
+- Empty answers, under the scopes Mastodon requires, for features Kopje has no data for yet: `GET /api/v1/filters`,
+  `/api/v2/filters`, `/api/v1/followed_tags`, `/api/v1/featured_tags`, `/api/v1/accounts/:id/featured_tags`,
+  `/api/v1/endorsements`, `/api/v1/announcements`, `/api/v1/trends` (and `/trends/tags`, `/trends/statuses`,
+  `/trends/links`), `/api/v1/suggestions` and `/api/v2/suggestions`.
+
+### Instance changes
+
+- Store schema: unchanged (`0000_initial`).
+- `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.3] - 2026-10-14
 
 A third release candidate of the first release, published under the npm dist-tag `next`.
