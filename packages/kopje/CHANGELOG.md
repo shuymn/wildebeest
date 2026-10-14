@@ -14,11 +14,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   subscription per access token, under the `push` scope, with Mastodon's alerts (per notification type) and policy
   (`all`, `followed`, `follower`, `none`) and `server_key` from `VAPID_JWK`. The endpoint must be a public https URL
   and the client keys valid, or the request answers 422. Each new notification is pushed to the recipient's
-  subscriptions that want it, from the Queue consumer, with the retries of deliveries; before sending, the
-  notification is checked again and dropped if it is gone or no longer shown. Pushes are encrypted as the
+  subscriptions that want it, from the Queue consumer, with the retries of deliveries; right before each POST, the
+  notification is checked again and the push dropped if it is gone or no longer shown. Pushes are encrypted as the
   subscription asks (`standard`: RFC 8291 aes128gcm; otherwise the aesgcm draft most clients use), signed with VAPID
-  (RFC 8292), and carry Mastodon's payload, the subscription's access token included. A push service answering 404 or
-  410 ends the subscription. Revoking a token or suspending an account deletes its subscriptions. Without
+  (RFC 8292), and carry Mastodon's payload, the subscription's access token included. A push service answering a 4xx
+  other than 408 and 429 ends the subscription, as Mastodon 4.5 does. Revoking a token or suspending an account deletes its subscriptions. Without
   `VAPID_JWK`, the endpoints answer 404 and the instance advertises no key; Kopje never makes one.
 
 ### Changed

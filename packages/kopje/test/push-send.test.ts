@@ -90,6 +90,8 @@ async function pushing(names: readonly ('alice' | 'bob' | 'carol')[] = ['alice',
 	return { h, client }
 }
 
+type Harness = Awaited<ReturnType<typeof pushing>>['h']
+
 async function round(h: ApiHarness, fetch: typeof globalThis.fetch, extra: Partial<DeliveryDeps> = {}) {
 	return pushRound(h.env, roundDeps(h.store, fetch, extra))
 }
@@ -98,6 +100,23 @@ type Row = { attempts: number; state: string; next_attempt_at: number; last_stat
 
 const rows = (store: StoreStub) =>
 	sql<Row>(store, 'SELECT attempts, state, next_attempt_at, last_status FROM push_deliveries ORDER BY id')
+
+// A host check that waits until released, so a test can change the Store between the claim and the POST.
+function pausedHost() {
+	let entered: () => void = () => {}
+	let release: () => void = () => {}
+	const enteredPromise = new Promise<void>((resolve) => {
+		entered = resolve
+	})
+	const gate = new Promise<void>((resolve) => {
+		release = resolve
+	})
+	const check = async () => {
+		entered()
+		await gate
+	}
+	return { check, entered: enteredPromise, release }
+}
 
 async function pushedTypes(h: ApiHarness, client: Client): Promise<string[]> {
 	const { fetch, sent } = recordingFetch()
@@ -141,13 +160,33 @@ describe('sending a push', () => {
 		expect(await readPush(client, request)).toEqual({
 			access_token: alice.token,
 			preferred_locale: 'en',
-			notification_id: notification?.id,
+			notification_id: Number(notification?.id),
 			notification_type: 'mention',
 			icon: 'https://kopje.test/assets/avatar.png',
 			title: 'You were mentioned by bob',
 			body: '@alice hello <b>there</b>',
 		})
 		expect(await rows(h.store)).toEqual([])
+	})
+
+	it('decodes as Mastodon’s payload types: a numeric notification_id, strings elsewhere', async () => {
+		const { h, client } = await pushing()
+		await post(h, h.users.bob, { status: '@alice typed' })
+		const { fetch, sent } = recordingFetch()
+		await round(h, fetch)
+		const payload = await readPush(client, sent[0]?.request as Request)
+		expect(Object.fromEntries(Object.entries(payload).map(([key, value]) => [key, typeof value]))).toEqual({
+			access_token: 'string',
+			preferred_locale: 'string',
+			notification_id: 'number',
+			notification_type: 'string',
+			icon: 'string',
+			title: 'string',
+			body: 'string',
+		})
+		expect(Number.isSafeInteger(payload.notification_id)).toBe(true)
+		const [row] = await sql<{ id: number }>(h.store, 'SELECT id FROM notifications')
+		expect(payload.notification_id).toBe(row?.id)
 	})
 
 	it('uses aes128gcm and the vapid scheme for a standard subscription', async () => {
@@ -250,7 +289,7 @@ describe('sending a push', () => {
 		expect(payload.body).toMatch(/\.\.\.$/)
 		expect(Array.from(payload.title as string)).toHaveLength(140)
 		const content = {
-			notification_id: '1',
+			notification_id: 1,
 			notification_type: 'mention',
 			preferred_locale: 'en',
 			icon: `https://kopje.test/${'i'.repeat(5000)}`,
@@ -314,6 +353,73 @@ describe('PUSH-3: a push reveals no more than the notification', () => {
 		expect(await rows(h.store)).toEqual([])
 	})
 
+	it.each<[string, (h: Harness, status: { id: string }) => Promise<unknown>]>([
+		[
+			'the status is deleted',
+			(h, status) => h.request(`/api/v1/statuses/${status.id}`, bearer(h.users.bob.token, { method: 'DELETE' })),
+		],
+		[
+			'the recipient blocks the sender',
+			(h) =>
+				sql(
+					h.store,
+					'INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?)',
+					h.users.alice.id,
+					h.users.bob.id
+				),
+		],
+		[
+			'the status leaves the recipient’s audience',
+			async (h, status) => {
+				await sql(h.store, 'DELETE FROM status_mentions WHERE status_id = ?', status.id)
+				await sql(h.store, "UPDATE statuses SET visibility = 'direct' WHERE id = ?", status.id)
+			},
+		],
+		['the token is revoked', (h) => sql(h.store, 'DELETE FROM oauth_tokens WHERE account_id = ?', h.users.alice.id)],
+		['the subscription is replaced', (h) => subscribe(h, h.users.alice, { endpoint: 'https://push.example/new' })],
+		[
+			'the subscription turns the alert off',
+			(h) =>
+				h.request(
+					'/api/v1/push/subscription',
+					bearer(h.users.alice.token, json({ data: { alerts: { follow: true } } }, { method: 'PUT' }))
+				),
+		],
+		[
+			'the policy no longer lets the sender through',
+			(h) => sql(h.store, "UPDATE push_subscriptions SET policy = 'none'"),
+		],
+		['the notification is dismissed', (h) => sql(h.store, 'DELETE FROM notifications')],
+	])('PUSH-3: sends nothing when %s while the host check runs', async (_case, mutate) => {
+		const { h } = await pushing()
+		const status = await post(h, h.users.bob, { status: '@alice hi' })
+		const { fetch, sent } = recordingFetch()
+		const host = pausedHost()
+		const running = round(h, fetch, { checkHost: host.check })
+		await host.entered
+		await mutate(h, status)
+		host.release()
+		expect(await running).toMatchObject({ claimed: 1, settled: ['dropped'] })
+		expect(sent).toEqual([])
+		expect(await rows(h.store)).toEqual([])
+	})
+
+	it('sends what holds when it is sent: an edit during the host check is in the payload', async () => {
+		const { h, client } = await pushing()
+		const status = await post(h, h.users.bob, { status: '@alice first' })
+		const { fetch, sent } = recordingFetch()
+		const host = pausedHost()
+		const running = round(h, fetch, { checkHost: host.check })
+		await host.entered
+		await h.request(
+			`/api/v1/statuses/${status.id}`,
+			bearer(h.users.bob.token, json({ status: '@alice second' }, { method: 'PUT' }))
+		)
+		host.release()
+		expect(await running).toMatchObject({ settled: ['delivered'] })
+		expect(await readPush(client, sent[0]?.request as Request)).toMatchObject({ body: '@alice second' })
+	})
+
 	it('drops pending pushes with the token that subscribed', async () => {
 		const h = await community(['alice', 'bob'], SCOPES, {}, { VAPID_JWK: VAPID.env })
 		const { app, token } = await login(h, { email: 'alice@example.com', scope: SCOPES })
@@ -351,16 +457,36 @@ describe('settling a push', () => {
 		expect(await rows(h.store)).toEqual([])
 	})
 
-	it.each([404, 410])('deletes the subscription when the push service answers %i', async (status) => {
-		const { h } = await pushing()
-		await post(h, h.users.bob, { status: '@alice hi' })
-		await post(h, h.users.bob, { status: '@alice again' })
-		const { fetch, sent } = recordingFetch(() => new Response(null, { status }))
-		expect((await round(h, fetch)).settled).toContain('unsubscribed')
-		expect(sent.length).toBeGreaterThanOrEqual(1)
-		expect(await sql(h.store, 'SELECT id FROM push_subscriptions')).toEqual([])
-		expect(await rows(h.store)).toEqual([])
-	})
+	// Mastodon 4.5's Web::PushNotificationWorker: a 4xx other than 408 and 429 ends the subscription.
+	it.each([400, 401, 403, 404, 410, 413])(
+		'deletes the subscription and its pending pushes when the push service answers %i',
+		async (status) => {
+			const { h } = await pushing()
+			await post(h, h.users.bob, { status: '@alice hi' })
+			const { fetch, sent } = recordingFetch(() => new Response(null, { status }))
+			expect((await round(h, fetch)).settled).toEqual(['unsubscribed'])
+			expect(sent).toHaveLength(1)
+			expect(await sql(h.store, 'SELECT id FROM push_subscriptions')).toEqual([])
+			expect(await rows(h.store)).toEqual([])
+			// Nothing more is recorded for it.
+			await post(h, h.users.bob, { status: '@alice again' })
+			expect(await rows(h.store)).toEqual([])
+		}
+	)
+
+	it.each([408, 429, 500, 501, 503])(
+		'keeps the subscription and retries when the push service answers %i',
+		async (status) => {
+			const { h } = await pushing()
+			await post(h, h.users.bob, { status: '@alice hi' })
+			const { fetch } = recordingFetch(() => new Response(null, { status }))
+			expect(await round(h, fetch)).toMatchObject({ settled: ['retry'], nextDueAt: NOW + retryDelay(1) })
+			expect(await rows(h.store)).toEqual([
+				{ attempts: 1, state: 'pending', next_attempt_at: NOW + retryDelay(1), last_status: status },
+			])
+			expect(await sql(h.store, 'SELECT count(*) AS n FROM push_subscriptions')).toEqual([{ n: 1 }])
+		}
+	)
 
 	it('retries a failure with the deliveries’ backoff and gives up after their limit', async () => {
 		const { h } = await pushing()
@@ -377,15 +503,6 @@ describe('settling a push', () => {
 		const later = NOW + 60 * 60 * 1000
 		expect(await round(h, fetch, { now: () => later })).toMatchObject({ settled: ['gave_up'] })
 		expect(sent).toHaveLength(2)
-		expect(await rows(h.store)).toEqual([])
-		expect(await sql(h.store, 'SELECT count(*) AS n FROM push_subscriptions')).toEqual([{ n: 1 }])
-	})
-
-	it('drops a push the service refuses for good, keeping the subscription', async () => {
-		const { h } = await pushing()
-		await post(h, h.users.bob, { status: '@alice hi' })
-		const { fetch } = recordingFetch(() => new Response(null, { status: 400 }))
-		expect(await round(h, fetch)).toMatchObject({ settled: ['gave_up'] })
 		expect(await rows(h.store)).toEqual([])
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM push_subscriptions')).toEqual([{ n: 1 }])
 	})
@@ -413,13 +530,14 @@ describe('PUSH-2: the endpoint is an outbound sink at every send', () => {
 		expect(sent).toEqual([])
 	})
 
-	it('drops a push to a stored endpoint that no longer passes the host rules', async () => {
+	it('deletes a subscription whose stored endpoint no longer passes the host rules, sending nothing', async () => {
 		const { h } = await pushing()
 		await post(h, h.users.bob, { status: '@alice hi' })
 		await sql(h.store, "UPDATE push_subscriptions SET endpoint = 'https://10.0.0.1/send'")
 		const { fetch, sent } = recordingFetch()
-		expect(await round(h, fetch)).toMatchObject({ settled: ['gave_up'] })
+		expect(await round(h, fetch)).toMatchObject({ settled: ['unsubscribed'] })
 		expect(sent).toEqual([])
+		expect(await sql(h.store, 'SELECT id FROM push_subscriptions')).toEqual([])
 	})
 })
 
@@ -483,6 +601,31 @@ describe('the doorbell', () => {
 			title: 'bob <b>display</b> favorited your post',
 			body: 'like me',
 		})
+	})
+
+	it('RES-4: a notification fanned out to several subscriptions fills the backlog only up to its cap', async () => {
+		const { h } = await pushing()
+		const { token } = await login(h, { email: 'alice@example.com', scope: SCOPES })
+		await subscribe(h, { id: h.users.alice.id, token }, { endpoint: 'https://push.example/second' })
+		const { token: third } = await login(h, { email: 'alice@example.com', scope: SCOPES })
+		await subscribe(h, { id: h.users.alice.id, token: third }, { endpoint: 'https://push.example/third' })
+		// One below the cap.
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?3)
+			INSERT INTO notifications (account_id, type, from_account_id) SELECT ?1, 'filler-' || i, ?2 FROM n`,
+			h.users.alice.id,
+			h.users.bob.id,
+			MAX_PUSH_BACKLOG - 1
+		)
+		await sql(
+			h.store,
+			`INSERT INTO push_deliveries (subscription_id, notification_id, next_attempt_at, updated_at)
+			SELECT (SELECT min(id) FROM push_subscriptions), id, ?1, ?1 FROM notifications WHERE type GLOB 'filler-*'`,
+			NOW + 1_000_000
+		)
+		await post(h, h.users.bob, { status: '@alice fan out' })
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM push_deliveries')).toEqual([{ n: MAX_PUSH_BACKLOG }])
 	})
 
 	it('records no push beyond the backlog cap, but still the notification (RES-4)', async () => {

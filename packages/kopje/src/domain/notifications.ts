@@ -91,20 +91,27 @@ export function pushWantedSql(p: string, t: string, n: string, now: string): str
 				WHERE pf.account_id = ${n}.from_account_id AND pf.target_account_id = ${n}.account_id AND pf.state = 'accepted'))))`
 }
 
-// One push per subscription of the recipient that wants notification `id`, due at once.
+// One push per subscription of the recipient that wants notification `id`, due at once, within the room the backlog
+// has left: however many subscriptions want it, the total never passes MAX_PUSH_BACKLOG.
 function queuePushes(db: Db, id: number, now: number): void {
+	const waiting =
+		db.first<{ n: number }>('SELECT count(*) AS n FROM (SELECT 1 FROM push_deliveries LIMIT ?)', MAX_PUSH_BACKLOG)?.n ??
+		0
+	if (waiting >= MAX_PUSH_BACKLOG) {
+		return
+	}
 	db.run(
 		`INSERT INTO push_deliveries (subscription_id, notification_id, next_attempt_at, updated_at)
 		SELECT p.id, n.id, ?2, ?2 FROM notifications n
 			JOIN oauth_tokens t ON t.account_id = n.account_id
 			JOIN push_subscriptions p ON p.token_hash = t.token_hash
 		WHERE n.id = ?1 AND ${pushWantedSql('p', 't', 'n', '?3')}
-			AND (SELECT count(*) FROM (SELECT 1 FROM push_deliveries LIMIT ?4)) < ?4
+		ORDER BY p.id LIMIT ?4
 		ON CONFLICT DO NOTHING`,
 		id,
 		now,
 		new Date(now).toISOString(),
-		MAX_PUSH_BACKLOG
+		MAX_PUSH_BACKLOG - waiting
 	)
 }
 

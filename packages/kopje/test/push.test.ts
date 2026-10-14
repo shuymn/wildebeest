@@ -42,7 +42,8 @@ describe('push subscription endpoints', () => {
 		expect(created).toEqual({
 			status: 200,
 			body: {
-				id: expect.stringMatching(/^\d+$/),
+				// A JSON number, as Mastodon's REST::WebPushSubscriptionSerializer emits it.
+				id: expect.any(Number),
 				endpoint: ENDPOINT,
 				standard: true,
 				alerts: { mention: true, favourite: false, 'admin.sign_up': true },

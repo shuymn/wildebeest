@@ -2,7 +2,13 @@ import { base64url } from 'jose'
 
 import type { DeliveryDeps } from './deliver'
 import { CLAIM_LIMIT, type DeliveryOutcome } from '../domain/deliveries'
-import { type ClaimedPush, type PushCompletion, type PushContent, truncateText } from '../domain/push'
+import {
+	type ClaimedPush,
+	type ConfirmedPush,
+	type PushCompletion,
+	type PushContent,
+	truncateText,
+} from '../domain/push'
 import { COMPLETION_MARGIN_MS, postActivity, type PostDeps } from '../federation/delivery'
 import { readConfig } from '../platform/config'
 import { errorFields } from '../platform/error-message'
@@ -28,7 +34,12 @@ import {
 const TTL_SECONDS = 48 * 60 * 60
 const URGENCY = 'normal'
 
-export type PushRoundResult = { claimed: number; settled: PushCompletion['status'][]; nextDueAt: number | null }
+// settled: each push's completion, or dropped when the last check before the POST dropped it (PUSH-3).
+export type PushRoundResult = {
+	claimed: number
+	settled: (PushCompletion['status'] | 'dropped')[]
+	nextDueAt: number | null
+}
 
 const freshToken = () => crypto.randomUUID()
 
@@ -74,8 +85,13 @@ export async function pushRound(env: Env, deps: DeliveryDeps): Promise<PushRound
 	}
 	const deadline = claim.leaseUntil - COMPLETION_MARGIN_MS
 	const settled = await Promise.all(
-		claim.pushes.map(async (push): Promise<PushCompletion | null> => {
-			const outcome = await sendPush(post, push, { jwk, publicKey, subject: `${origin}/`, deadline })
+		claim.pushes.map(async (push): Promise<PushCompletion | 'dropped' | null> => {
+			const confirm = () =>
+				callStore(() => store.confirmPush(build, { id: push.id, leaseToken: claim.leaseToken, now: deps.now() }))
+			const outcome = await sendPush(post, push, { jwk, publicKey, subject: `${origin}/`, deadline }, confirm)
+			if (outcome === 'dropped') {
+				return outcome
+			}
 			try {
 				const input = { id: push.id, leaseToken: claim.leaseToken, now: deps.now(), outcome }
 				return await callStore(async (): Promise<PushCompletion> => {
@@ -89,7 +105,7 @@ export async function pushRound(env: Env, deps: DeliveryDeps): Promise<PushRound
 			}
 		})
 	)
-	const completions = settled.filter((c): c is PushCompletion => c !== null)
+	const completions = settled.filter((c): c is PushCompletion => c !== null && c !== 'dropped')
 	const failed = completions.filter((c) => c.status === 'gave_up' || c.status === 'unsubscribed')
 	if (failed.length > 0) {
 		// DATA-5: counts only, no endpoint.
@@ -101,31 +117,43 @@ export async function pushRound(env: Env, deps: DeliveryDeps): Promise<PushRound
 	].filter((at): at is number => at !== null)
 	return {
 		claimed: claim.pushes.length,
-		settled: completions.map((c) => c.status),
+		settled: settled.flatMap((c) => (c === null ? [] : [c === 'dropped' ? c : c.status])),
 		nextDueAt: due.length === 0 ? null : Math.min(...due),
 	}
 }
 
 type Signing = { jwk: JsonWebKey; publicKey: string; subject: string; deadline: number }
 
-// One push through the delivery sink. The encrypted message and its headers replace the sink's request (keeping its
-// URL, redirect rule and abort signal), prepared inside the budget as a delivery's signature is.
-function sendPush(post: PostDeps, push: ClaimedPush, signing: Signing): Promise<DeliveryOutcome> {
-	const encoding: PushEncoding = push.standard ? 'aes128gcm' : 'aesgcm'
-	return postActivity(post, {
+// One push through the delivery sink. After the host check and right before the POST (where a delivery is signed),
+// the Store confirms the push under its lease and hands over what to send (PUSH-3, confirmPush); a push it drops is
+// not sent. The encrypted message and its headers then replace the sink's request, keeping its URL (a row's endpoint
+// never changes: a new subscription is a new row), redirect rule and abort signal.
+async function sendPush(
+	post: PostDeps,
+	push: ClaimedPush,
+	signing: Signing,
+	confirm: () => Promise<ConfirmedPush | null>
+): Promise<DeliveryOutcome | 'dropped'> {
+	let dropped = false
+	const outcome = await postActivity(post, {
 		inbox: push.endpoint,
 		body: '',
 		deadline: signing.deadline,
 		signer: async () => {
-			const token = await openPushToken(signing.jwk, push.tokenHash, push.tokenSealed)
+			const current = await confirm()
+			if (current === null) {
+				dropped = true
+				return null
+			}
+			const encoding: PushEncoding = current.standard ? 'aes128gcm' : 'aesgcm'
+			const token = await openPushToken(signing.jwk, current.tokenHash, current.tokenSealed)
 			const encrypted = await encryptPush(
-				pushPayload(push.content, token ?? ''),
-				{ p256dh: base64url.decode(push.p256dh), auth: base64url.decode(push.auth) },
+				pushPayload(current.content, token ?? ''),
+				{ p256dh: base64url.decode(current.p256dh), auth: base64url.decode(current.auth) },
 				encoding
 			)
-			const url = new URL(push.endpoint)
 			const vapid = {
-				token: await vapidToken(signing.jwk, url.origin, signing.subject, post.now()),
+				token: await vapidToken(signing.jwk, new URL(push.endpoint).origin, signing.subject, post.now()),
 				publicKey: signing.publicKey,
 			}
 			return (request) =>
@@ -143,4 +171,5 @@ function sendPush(post: PostDeps, push: ClaimedPush, signing: Signing): Promise<
 				)
 		},
 	})
+	return dropped ? 'dropped' : outcome
 }

@@ -14,11 +14,12 @@ import { remoteHtmlText } from '../security/html'
 //   - Pushes are written with their notification (domain/notifications.ts, VIS-10), one per subscription that wants
 //     it, and sent by the Worker (jobs/push.ts) with the deliveries' discipline: a claim leases due rows for LEASE_MS
 //     and counts an attempt, a completion settles a row only with its lease token, a failure is retried after
-//     retryDelay, and a row is given up after MAX_ATTEMPTS or a permanent failure. A push that is sent or given up is
-//     deleted; one the push service answers 404 or 410 deletes its subscription, as Mastodon does.
-//   - PUSH-3: a claim checks again that the notification is still shown to its recipient (the notification rule,
-//     shownSql), that the subscription still wants it and its token is still valid, and that it is younger than
-//     PUSH_TTL_MS; otherwise the push is dropped unsent. A deleted or replaced notification takes its pushes along.
+//     retryDelay, and a row is given up after MAX_ATTEMPTS. A push that is sent or given up is deleted; a 4xx other
+//     than 408 and 429 deletes its subscription, as Mastodon 4.5 does.
+//   - PUSH-3: the claim, and again confirmPush right before the POST, check that the notification is still shown to
+//     its recipient (the notification rule, shownSql), that the subscription still wants it and its token is still
+//     valid, and that it is younger than PUSH_TTL_MS; otherwise the push is dropped unsent. What is sent is read at
+//     that last check. A deleted or replaced notification, or subscription, takes its pushes along.
 //   - The payload is Mastodon's (Web::NotificationSerializer): the Store composes the title, body and icon; the Worker
 //     adds the access token, which the Store holds only sealed (AUTH-7, security/web-push.ts).
 
@@ -47,18 +48,19 @@ export type PushPolicy = (typeof POLICIES)[number]
 
 export type PushData = { alerts: Record<string, boolean>; policy: PushPolicy }
 
-// The WebPushSubscription entity without server_key, which the Worker adds from VAPID_JWK.
+// The WebPushSubscription entity without server_key, which the Worker adds from VAPID_JWK. id is a JSON number, as
+// Mastodon's REST::WebPushSubscriptionSerializer emits it (subscription ids are small integers, so it is exact).
 export type StoredSubscription = {
-	id: string
+	id: number
 	endpoint: string
 	standard: boolean
 	alerts: Record<string, boolean>
 	policy: PushPolicy
 }
 
-type SubscriptionRow = { id: string; endpoint: string; standard: number; alerts: string; policy: PushPolicy }
+type SubscriptionRow = { id: number; endpoint: string; standard: number; alerts: string; policy: PushPolicy }
 
-const SUBSCRIPTION_COLUMNS = 'CAST(id AS TEXT) AS id, endpoint, standard, alerts, policy'
+const SUBSCRIPTION_COLUMNS = 'id, endpoint, standard, alerts, policy'
 
 function presentSubscription(row: SubscriptionRow): StoredSubscription {
 	return {
@@ -159,9 +161,10 @@ export function truncateText(text: string, length: number): string {
 	return chars.length <= length ? text : `${chars.slice(0, length - 3).join('')}...`
 }
 
-// The payload fields the Store composes; the Worker adds access_token.
+// The payload fields the Store composes; the Worker adds access_token. notification_id is a JSON number, as
+// Mastodon's Web::NotificationSerializer emits it (notification ids are small integers, so it is exact).
 export type PushContent = {
-	notification_id: string
+	notification_id: number
 	notification_type: string
 	preferred_locale: string
 	icon: string
@@ -169,16 +172,8 @@ export type PushContent = {
 	body: string
 }
 
-export type ClaimedPush = {
-	id: string
-	endpoint: string
-	p256dh: string
-	auth: string
-	standard: boolean
-	tokenHash: string
-	tokenSealed: string
-	content: PushContent
-}
+// A claimed push: its row and the endpoint the Worker checks the host of before anything else.
+export type ClaimedPush = { id: string; endpoint: string }
 
 export type PushClaim = {
 	leaseToken: string
@@ -187,6 +182,17 @@ export type PushClaim = {
 	origin: string | null
 	pushes: ClaimedPush[]
 	nextDueAt: number | null
+}
+
+// What is sent, read at the last moment before the POST (confirmPush).
+export type ConfirmedPush = {
+	endpoint: string
+	p256dh: string
+	auth: string
+	standard: boolean
+	tokenHash: string
+	tokenSealed: string
+	content: PushContent
 }
 
 type DueRow = { id: string; attempts: number }
@@ -198,7 +204,7 @@ type TargetRow = {
 	standard: number
 	token_hash: string
 	token_sealed: string
-	notification_id: string
+	notification_id: number
 	type: string
 	from_account_id: string
 	spoiler_text: string | null
@@ -209,7 +215,7 @@ type TargetRow = {
 function target(db: Db, id: string, now: number): TargetRow | undefined {
 	return db.first<TargetRow>(
 		`SELECT p.endpoint, p.key_p256dh, p.key_auth, p.standard, p.token_hash, p.token_sealed,
-			CAST(n.id AS TEXT) AS notification_id, n.type, n.from_account_id, s.spoiler_text, s.content
+			n.id AS notification_id, n.type, n.from_account_id, s.spoiler_text, s.content
 		FROM push_deliveries d
 			JOIN push_subscriptions p ON p.id = d.subscription_id
 			JOIN oauth_tokens t ON t.token_hash = p.token_hash
@@ -241,6 +247,15 @@ function contentOf(db: Db, row: TargetRow, origin: string): PushContent {
 	}
 }
 
+function instanceOrigin(db: Db): string | null {
+	const domain = db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'domain'")?.value
+	return domain === undefined ? null : `https://${domain}`
+}
+
+function dropPush(db: Db, id: string): void {
+	db.run('DELETE FROM push_deliveries WHERE id = CAST(? AS INTEGER)', id)
+}
+
 function nextPushDueAt(db: Db, ownLease: string | null = null): number | null {
 	return (
 		db.first<{ at: number | null }>(
@@ -262,8 +277,7 @@ export const claimPushes = writeOperation<{ now: number; leaseToken: string; lim
 	(db, { now, leaseToken, limit }) => {
 		const max = Math.max(1, Math.min(limit ?? CLAIM_LIMIT, CLAIM_LIMIT))
 		const leaseUntil = now + LEASE_MS
-		const domain = db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'domain'")?.value
-		const origin = domain === undefined ? null : `https://${domain}`
+		const origin = instanceOrigin(db)
 		const due = db.all<DueRow>(
 			`SELECT CAST(id AS TEXT) AS id, attempts FROM push_deliveries WHERE next_attempt_at <= ?
 			ORDER BY next_attempt_at, id LIMIT ?`,
@@ -273,8 +287,8 @@ export const claimPushes = writeOperation<{ now: number; leaseToken: string; lim
 		const pushes: ClaimedPush[] = []
 		for (const row of due) {
 			const push = origin === null || row.attempts >= MAX_ATTEMPTS ? undefined : target(db, row.id, now)
-			if (push === undefined || origin === null) {
-				db.run('DELETE FROM push_deliveries WHERE id = CAST(? AS INTEGER)', row.id)
+			if (push === undefined) {
+				dropPush(db, row.id)
 				continue
 			}
 			db.run(
@@ -285,18 +299,41 @@ export const claimPushes = writeOperation<{ now: number; leaseToken: string; lim
 				now,
 				row.id
 			)
-			pushes.push({
-				id: row.id,
-				endpoint: push.endpoint,
-				p256dh: push.key_p256dh,
-				auth: push.key_auth,
-				standard: push.standard === 1,
-				tokenHash: push.token_hash,
-				tokenSealed: push.token_sealed,
-				content: contentOf(db, push, origin),
-			})
+			pushes.push({ id: row.id, endpoint: push.endpoint })
 		}
 		return { leaseToken, leaseUntil, origin, pushes, nextDueAt: nextPushDueAt(db) }
+	}
+)
+
+// PUSH-3 at the moment of sending: called after the host check, right before the POST, with the claim's lease. The
+// push is sent only if its row is still under this lease (so its subscription was neither deleted nor replaced) and
+// it may still be sent now; what is sent is read here, never from the claim. Otherwise the row is dropped and null
+// returned.
+export const confirmPush = writeOperation<{ id: string; leaseToken: string; now: number }, ConfirmedPush | null>(
+	(db, { id, leaseToken, now }) => {
+		const leased = db.first(
+			"SELECT 1 AS yes FROM push_deliveries WHERE id = CAST(? AS INTEGER) AND state = 'leased' AND lease_token = ?",
+			id,
+			leaseToken
+		)
+		if (leased === undefined) {
+			return null
+		}
+		const origin = instanceOrigin(db)
+		const push = origin === null ? undefined : target(db, id, now)
+		if (push === undefined || origin === null) {
+			dropPush(db, id)
+			return null
+		}
+		return {
+			endpoint: push.endpoint,
+			p256dh: push.key_p256dh,
+			auth: push.key_auth,
+			standard: push.standard === 1,
+			tokenHash: push.token_hash,
+			tokenSealed: push.token_sealed,
+			content: contentOf(db, push, origin),
+		}
 	}
 )
 
@@ -304,14 +341,26 @@ export type PushCompletion = (
 	| { status: 'delivered' }
 	| { status: 'retry'; retryAt: number }
 	| { status: 'gave_up' }
-	// The push service no longer knows the subscription (404, 410): it is deleted.
+	// The push service refused the subscription for good: it is deleted, with its pending pushes.
 	| { status: 'unsubscribed' }
 	// The lease is no longer this one's: the row was claimed again, settled, or deleted.
 	| { status: 'stale' }
 ) & { nextDueAt: number | null }
 
-const UNSUBSCRIBED = new Set([404, 410])
+// Mastodon 4.5's Web::PushNotificationWorker: any 4xx but a timeout (408) or rate limit (429) means the subscription
+// is invalid or expired. So does an endpoint the sink refuses outright (it no longer passes the host rules).
+function unsubscribes(outcome: DeliveryOutcome): boolean {
+	if (outcome.kind !== 'failed') {
+		return false
+	}
+	if (outcome.status === null) {
+		return outcome.permanent
+	}
+	return outcome.status >= 400 && outcome.status < 500 && outcome.status !== 408 && outcome.status !== 429
+}
 
+// Settles a push: sent, it is deleted; a refusal of the subscription deletes the subscription; anything else (5xx,
+// 408, 429, a redirect, a network error) is retried with the deliveries' backoff until MAX_ATTEMPTS.
 export const completePush = writeOperation<
 	{ id: string; leaseToken: string; now: number; outcome: DeliveryOutcome },
 	PushCompletion
@@ -325,16 +374,17 @@ export const completePush = writeOperation<
 	if (row === undefined) {
 		return { status: 'stale', nextDueAt: nextPushDueAt(db, leaseToken) }
 	}
-	if (outcome.kind === 'failed' && outcome.status !== null && UNSUBSCRIBED.has(outcome.status)) {
+	if (outcome.kind === 'delivered') {
+		dropPush(db, id)
+		return { status: 'delivered', nextDueAt: nextPushDueAt(db, leaseToken) }
+	}
+	if (unsubscribes(outcome)) {
 		db.run('DELETE FROM push_subscriptions WHERE id = ?', row.subscription_id)
 		return { status: 'unsubscribed', nextDueAt: nextPushDueAt(db, leaseToken) }
 	}
-	if (outcome.kind === 'delivered' || outcome.permanent || row.attempts >= MAX_ATTEMPTS) {
-		db.run('DELETE FROM push_deliveries WHERE id = CAST(? AS INTEGER)', id)
-		return {
-			status: outcome.kind === 'delivered' ? 'delivered' : 'gave_up',
-			nextDueAt: nextPushDueAt(db, leaseToken),
-		}
+	if (row.attempts >= MAX_ATTEMPTS) {
+		dropPush(db, id)
+		return { status: 'gave_up', nextDueAt: nextPushDueAt(db, leaseToken) }
 	}
 	const retryAt = now + retryDelay(row.attempts)
 	db.run(

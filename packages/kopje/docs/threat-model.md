@@ -708,15 +708,18 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   the endpoint is an outbound sink at every send").
 - **PUSH-3: push reveals no more than notifications.** A push is sent only for a VIS-10 notification the recipient may
   still see when sending. Revoking the token or suspending the account deletes its subscriptions. A push is recorded
-  only for a new notification and a subscription whose alert and policy want it; the claim that sends it checks again,
-  in its transaction, that the notification exists and is shown to its recipient (the notification rule), that the
-  subscription still wants it with a valid token of an unsuspended account, and that it is at most 48 hours old, and
-  drops it otherwise. The payload carries only what the notification shows: the sender's name and avatar, and the
-  status's content warning or text (at most 140 characters), or the sender's note. Subscriptions and their pending
-  pushes cascade from the token, so revocation and suspension, which delete the tokens, delete them. _Enforced
-  (main):_ `claimPushes` in `src/domain/push.ts`, `migrations/0002_web_push.sql`; `test/push-send.test.ts` ("PUSH-3: a
-  push reveals no more than the notification"), `test/push.test.ts` ("PUSH-3: revoking the token or suspending the
-  account deletes its subscriptions").
+  only for a new notification and a subscription whose alert and policy want it. The claim checks again, in its
+  transaction, that the notification exists and is shown to its recipient (the notification rule), that the
+  subscription still wants it with a valid token of an unsuspended account, and that it is at most 48 hours old; and
+  the same check runs once more after the host check, right before the POST, under the claim's lease (so the
+  subscription is the same one). What is sent is read at that last check, never carried from the claim; a push that
+  fails either check is dropped unsent. The payload carries only what the notification shows: the sender's name and
+  avatar, and the status's content warning or text (at most 140 characters), or the sender's note. Subscriptions and
+  their pending pushes cascade from the token, so revocation and suspension, which delete the tokens, delete them.
+  _Enforced (main):_ `claimPushes` and `confirmPush` in `src/domain/push.ts`, `sendPush` in `src/jobs/push.ts`,
+  `migrations/0002_web_push.sql`; `test/push-send.test.ts` ("PUSH-3: a push reveals no more than the notification",
+  including "PUSH-3: sends nothing when … while the host check runs"), `test/push.test.ts` ("PUSH-3: revoking the token
+  or suspending the account deletes its subscriptions").
 - **POLL-1: votes are the voter's own.** Only the poll's author changes its definition or results. A vote is attributed
   to the verified voter, names a valid option of that poll, respects expiry and single or multiple choice, and a replay
   counts once. _Planned (polls)._
@@ -793,12 +796,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/deliveries.test.ts` ("retries after min(30 s·2^n, 12 h)"), `test/delivery-post.test.ts` ("RES-5: claims
   nothing and counts no attempt in maintenance"), `test/cli.test.ts`. Spool messages that fail terminally are kept and
   inspectable before acknowledgement: _Planned (B1b)._ Web Push: _Enforced (main):_ the deliveries' schedule and limit,
-  a push older than 48 hours is dropped, one that fails for good is deleted (404 and 410 delete the subscription, as
-  Mastodon does), and nothing is claimed in maintenance or without a `VAPID_JWK`; at most 1,000 pushes wait
-  (`MAX_PUSH_BACKLOG`), and a notification beyond that gets none (RES-4). `src/domain/push.ts`, `src/jobs/push.ts`;
-  `test/push-send.test.ts` ("retries a failure with the deliveries’ backoff and gives up after their limit", "sends
-  pushes from the delivery doorbell, and not without a VAPID_JWK or in maintenance", "records no push beyond the
-  backlog cap").
+  a push older than 48 hours is dropped, a 4xx other than 408 and 429 (or an endpoint the sink refuses outright)
+  deletes the subscription and its pending pushes, as Mastodon 4.5 does, and nothing is claimed in maintenance or
+  without a `VAPID_JWK`; at most 1,000 pushes wait (`MAX_PUSH_BACKLOG`): a notification gets only the room left,
+  counted in its transaction, however many subscriptions want it (RES-4). `src/domain/push.ts`, `src/jobs/push.ts`,
+  `queuePushes` in `src/domain/notifications.ts`; `test/push-send.test.ts` ("retries a failure with the deliveries’
+  backoff and gives up after their limit", "deletes the subscription and its pending pushes when the push service
+  answers", "keeps the subscription and retries when the push service answers", "sends pushes from the delivery
+  doorbell, and not without a VAPID_JWK or in maintenance", "RES-4: a notification fanned out to several
+  subscriptions fills the backlog only up to its cap", "records no push beyond the backlog cap").
 - **RES-6: one request cannot trigger unbounded work.** An inbound activity has fixed limits on dereferences,
   recipients, collection expansion and notifications. Delivery backlog and concurrency are bounded. Anonymous app
   registration, inbox spooling and media transformations have rate or storage budgets with a visible refusal. _Planned

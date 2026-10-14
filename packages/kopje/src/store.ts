@@ -711,6 +711,10 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, push.claimPushes, input)
 	}
 
+	confirmPush(callerBuild: string, input: OperationInput<typeof push.confirmPush>) {
+		return this.#kernel.execute(callerBuild, push.confirmPush, input)
+	}
+
 	completePush(callerBuild: string, input: OperationInput<typeof push.completePush>) {
 		return this.#kernel.execute(callerBuild, push.completePush, input)
 	}
