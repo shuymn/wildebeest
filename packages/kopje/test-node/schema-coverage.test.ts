@@ -325,6 +325,16 @@ function verifierReads({ text, nodes }: Parsed) {
 	return { columns, unattributed }
 }
 
+// The `table.column` names where a dump catalog's columns differ from the schema's, missing or extra, in every table it
+// dumps: a dumped table is dumped whole.
+function catalogGaps(schema: Map<string, string[]>, catalog: { name: string; columns: string[] }[]): string[] {
+	return catalog.flatMap(({ name, columns }) => {
+		const all = schema.get(name) ?? []
+		const differ = [...all.filter((c) => !columns.includes(c)), ...columns.filter((c) => !all.includes(c))]
+		return differ.map((c) => `${name}.${c}`)
+	})
+}
+
 // The `table.column` names in `columns` that the schema does not have.
 function unknown(schema: Map<string, string[]>, columns: Map<string, Set<string>>): string[] {
 	return [...columns].flatMap(([table, names]) =>
@@ -422,16 +432,23 @@ describe('the dump catalogs', () => {
 		DUMPED_STATE: readonly string[]
 	}>
 
-	it('match, and leave out only the tables NOT_DUMPED says why for', async () => {
+	it('match, dump every column of each table, and leave out only the tables NOT_DUMPED says why for', async () => {
 		const db = createKopjeDatabase()
 		const exec = (query: string, ...bindings: SQLInputValue[]) => ({
 			toArray: () => db.prepare(query).all(...bindings),
 		})
 		const catalog = readCatalog(db)
 		expect((await store).readCatalog({ exec })).toEqual(catalog)
+		const schema = schemaColumns()
 		const dumped = new Set(catalog.map((spec) => spec.name))
-		const left = [...schemaColumns().keys()].filter((table) => !dumped.has(table))
+		const left = [...schema.keys()].filter((table) => !dumped.has(table))
 		expect(sorted(left)).toEqual(sorted(Object.keys(NOT_DUMPED)))
+		expect(catalogGaps(schema, catalog)).toEqual([])
+		// Both catalogs leaving out the same column match each other, and still fail.
+		const withoutEmail = catalog.map((spec) =>
+			spec.name === 'local_accounts' ? { ...spec, columns: spec.columns.filter((c) => c !== 'email') } : spec
+		)
+		expect(catalogGaps(schema, withoutEmail)).toEqual(['local_accounts.email'])
 	})
 
 	it('keep every kopje_state name the converter writes', async () => {
