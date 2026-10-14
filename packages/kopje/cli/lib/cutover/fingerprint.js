@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { basename } from 'node:path'
 
-import { checkSizes, exportFiles } from './run.js'
+import { checkSizes, exportFiles } from './export-files.js'
 import { decodeBudget, ExportError, exportOrder, parseStatement, splitStatements } from './sql-script.js'
 
 export const FINGERPRINT_FORMAT = 'kopje-fingerprint/2'

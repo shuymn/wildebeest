@@ -51,6 +51,8 @@ export async function convert(
 		env?: Record<string, string>
 		out?: string
 		baseTime?: number
+		imagesDir?: string
+		acceptMissingImages?: boolean
 	} = {}
 ) {
 	const outDir = join(dir, extra.out ?? 'out')
@@ -62,6 +64,8 @@ export async function convert(
 		baseTime: extra.baseTime ?? BASE_TIME,
 		env: extra.env ?? {},
 		version: 'test',
+		imagesDir: extra.imagesDir,
+		acceptMissingImages: extra.acceptMissingImages,
 	})
 	return { ...result, dumpPath: join(outDir, 'kopje.dump') }
 }
@@ -69,7 +73,12 @@ export async function convert(
 export async function verify(
 	exportPath: string,
 	dumpPath: string,
-	options: { acceptDeletions?: boolean; acceptTruncation?: boolean } = {}
+	options: {
+		acceptDeletions?: boolean
+		acceptTruncation?: boolean
+		imagesDir?: string
+		acceptMissingImages?: boolean
+	} = {}
 ) {
 	const { ok, report } = await verifyConversion({
 		exportPath,
@@ -78,6 +87,8 @@ export async function verify(
 		acceptTruncation: options.acceptTruncation ?? false,
 		baseTime: 0,
 		env: {},
+		imagesDir: options.imagesDir,
+		acceptMissingImages: options.acceptMissingImages,
 	})
 	return { ok, report, categories: (report as { categories?: Categories }).categories ?? {} }
 }

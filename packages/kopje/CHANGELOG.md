@@ -10,6 +10,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- The cutover can move a legacy instance's images out of Cloudflare Images.
+  `kopje-admin images-export` downloads the images the legacy data references under the operator's Images account,
+  through the Images API with a token read from `CF_IMAGES_TOKEN` or from the delivery URLs, checks them as Kopje checks
+  an upload, and records them in `images.json`; a rerun downloads only what is new. `kopje-admin convert --images`
+  then maps avatars, headers, attachments and earlier versions of edited statuses to local media rows, each with a
+  file token and an original of its own (also when several show one image), drops legacy's default profile images so
+  Kopje's defaults apply, and writes the originals for R2 under their media ids;
+  `verify-conversion --images` checks the result independently. A missing image stops the conversion unless
+  `--accept-missing-images` is given. The served files are made by `kopje-admin media-rebuild` (below). Without `--images`, the conversion is unchanged. See docs/cutover.md ("Media") and
+  docs/cutover-runbook.md.
 - `kopje-admin media-rebuild [--dry-run]` (`POST /admin/media/rebuild`, Access admin only) makes the served files of
   local media whose files are missing from their originals in R2: media restored from a backup, which holds only the
   originals, and images moved by the cutover. Each is re-encoded as an upload is, and its sizes in `meta` are corrected

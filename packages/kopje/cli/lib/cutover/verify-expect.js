@@ -7,6 +7,8 @@
 // Records are kept as exact values, not digests, so a change of the same length is still a difference. They hold data
 // and are never printed: reports carry counts and digests only.
 
+import { createHmac } from 'node:crypto'
+
 import { REMOTE_HTML_RAW_LIMIT, sanitizeRemoteHtml } from './kopje-runtime.js'
 
 const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
@@ -149,13 +151,34 @@ export function audienceOf(to, cc, followers) {
 	return { visibility: spelled ? (c.includes(PUBLIC) ? 'unlisted' : 'private') : 'direct', to: t }
 }
 
+// Cloudflare Images delivery URLs (`kopje-admin images-export`), and the account cloudflare/wildebeest's default
+// images are under.
+const DELIVERY = /^https:\/\/imagedelivery\.net\/([^/]+)\/([^/]+)\/([^/]+)$/
+const UPSTREAM_DEFAULTS = 'NkfPDviynOyTAOI79ar_GQ'
+const MASTODON_MISSING_AVATAR =
+	'https://raw.githubusercontent.com/mastodon/mastodon/main/public/avatars/original/missing.png'
+
+/**
+ * A media meta value in comparison form: full and preview sizes, null where absent.
+ * @param {unknown} meta
+ */
+function metaSizes(meta) {
+	if (typeof meta !== 'object' || meta === null) {
+		return null
+	}
+	const m = /** @type {Json} */ (meta)
+	/** @type {unknown[]} */
+	const sizes = [m.original?.width ?? null, m.original?.height ?? null, m.small?.width ?? null, m.small?.height ?? null]
+	return sizes
+}
+
 /**
  * @param {import('node:sqlite').DatabaseSync} db the bridged legacy database
  * @param {{ originalActorIds: Map<string, string>, source: import('./legacy-load.js').SourceAddressing,
- *   notificationSequence: string | null }} options
- * @returns {{ records: Records, overLimit: number }}
+ *   notificationSequence: string | null, images?: import('./images-export.js').ImagesFile }} options
+ * @returns {{ records: Records, overLimit: number, images: { missing: number, unmapped: number } }}
  */
-export function expectedFromLegacy(db, { originalActorIds, source, notificationSequence }) {
+export function expectedFromLegacy(db, { originalActorIds, source, notificationSequence, images }) {
 	/** @type {Records} */
 	const out = {}
 	let overLimit = 0
@@ -177,6 +200,77 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	// Accounts and profiles.
 	const local = new Set(all('SELECT actor_id FROM users').map((u) => String(u.actor_id)))
 	const domain = [...local].map((uri) => new URL(uri).host.toLowerCase())[0] ?? ''
+
+	// With images.json: where a local reference to the operator's Cloudflare Images must point, from the mapping alone.
+	// Every media row showing a mapped image has a token of its own, HMAC-SHA256 under the image's secret of the
+	// reference's key (docs/cutover.md, "Media"), and is served from /media/<token>/{full,small}.<ext> on the instance
+	// origin, as PNG when it is a PNG and as WebP otherwise, with its type and sizes (full within 3840 pixels, the preview
+	// within 640 of that). A missing image and a default profile image are expected to be gone.
+	const imageCounts = { missing: 0, unmapped: 0 }
+	/** @param {number} width @param {number} height @param {number} edge */
+	const within = (width, height, edge) => {
+		const longest = Math.max(width, height)
+		const scale = longest > edge ? edge / longest : 1
+		return [Math.max(1, Math.round(width * scale)), Math.max(1, Math.round(height * scale))]
+	}
+	/**
+	 * What a local reference becomes: gone, kept as it is, or an image of images.json.
+	 * @param {string | null} url
+	 * @param {boolean} profile
+	 * @returns {{ gone: true } | { gone: false, url: string | null, imageId: null }
+	 *   | { gone: false, url: null, imageId: string, entry: Extract<import('./images-export.js').ImageEntry, { state: 'ok' }> }}
+	 */
+	const resolveImage = (url, profile) => {
+		if (images !== undefined && profile && url === MASTODON_MISSING_AVATAR) {
+			return { gone: true }
+		}
+		const match = images === undefined || url === null ? null : DELIVERY.exec(url)
+		if (images === undefined || match === null) {
+			return { gone: false, url, imageId: null }
+		}
+		const [, account, imageId = ''] = match
+		if (profile && account === UPSTREAM_DEFAULTS) {
+			return { gone: true }
+		}
+		if (account !== images.accountHash) {
+			return { gone: false, url, imageId: null }
+		}
+		const entry = images.images.get(imageId)
+		if (entry === undefined) {
+			imageCounts.unmapped++
+			return { gone: false, url, imageId: null }
+		}
+		if (entry.state !== 'ok') {
+			imageCounts.missing++
+			return { gone: true }
+		}
+		return { gone: false, url: null, imageId, entry }
+	}
+	/**
+	 * The files of the media row with this key showing a resolved image (registered in media_files), or the kept URL.
+	 * @param {ReturnType<typeof resolveImage>} resolved
+	 * @param {string} key
+	 * @returns {{ url: string | null, preview: string | null, meta: unknown[] | null } | undefined}
+	 */
+	const filesOf = (resolved, key) => {
+		if (resolved.gone) {
+			return undefined
+		}
+		if (resolved.imageId === null) {
+			return { url: resolved.url, preview: null, meta: null }
+		}
+		const { entry } = resolved
+		const token = createHmac('sha256', entry.secret).update(key).digest('base64url')
+		const extension = entry.type === 'image/png' ? 'png' : 'webp'
+		const [fullWidth = 0, fullHeight = 0] = within(entry.width, entry.height, 3840)
+		const files = {
+			url: `https://${domain}/media/${token}/full.${extension}`,
+			preview: `https://${domain}/media/${token}/small.${extension}`,
+			meta: [fullWidth, fullHeight, ...within(fullWidth, fullHeight, 640)],
+		}
+		put('media_files', token, [files.url, files.preview, `image/${extension}`, files.meta])
+		return files
+	}
 	/** @type {Map<string, Json>} */
 	const actors = new Map()
 	for (const actor of all('SELECT id, properties FROM actors')) {
@@ -184,13 +278,18 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		const p = parse(actor.properties)
 		actors.set(uri, p)
 		const isLocal = local.has(uri)
+		/** @param {unknown} value @param {string} kind */
+		const profileImage = (value, kind) => {
+			const url = href(typeof value === 'object' && value !== null ? /** @type {Json} */ (value).url : value)
+			return isLocal ? (filesOf(resolveImage(url, true), `profile\n${uri}\n${kind}`)?.url ?? null) : url
+		}
 		put('accounts', uri, [
 			isLocal ? 1 : 0,
 			isLocal ? text(p.preferredUsername) : null,
 			text(p.name),
 			sanitized(p.summary),
-			href(typeof p.icon === 'object' && p.icon !== null ? p.icon.url : p.icon),
-			href(typeof p.image === 'object' && p.image !== null ? p.image.url : p.image),
+			profileImage(p.icon, 'avatar'),
+			profileImage(p.image, 'header'),
 			p.manuallyApprovesFollowers === true ? 1 : 0,
 		])
 		if (!isLocal) {
@@ -231,6 +330,17 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		)
 	}
 	const byUri = new Set(statusUri.values())
+	/**
+	 * @typedef {{ imageId: string | null, link: string, url: string | null, preview: string | null, description: string,
+	 *   meta: unknown[] | null }} Shown
+	 */
+	/** @type {Map<string, Shown[]>} status URI -> its attachments now */
+	const currentMedia = new Map()
+	/** @param {Json} element the size an attachment declares, as legacy stored it */
+	const sized = (element) =>
+		typeof element.width === 'number' && typeof element.height === 'number' && element.width > 0 && element.height > 0
+			? { original: { width: element.width, height: element.height } }
+			: null
 	/** @type {Map<string, string[]>} */
 	const statusApiIds = new Map()
 	const prefix = `https://${domain}/ap/o/`
@@ -314,16 +424,38 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 				put('aliases', id.slice(prefix.length), uri)
 			}
 		}
-		const attachments = many(p.attachment)
-			.filter((a) => typeof a === 'object' && a !== null && href(/** @type {Json} */ (a).url) !== null)
-			.map((a) => [
-				href(/** @type {Json} */ (a).url),
-				text(/** @type {Json} */ (a).name) ||
-					text(/** @type {Json} */ (a).description) ||
-					text(/** @type {Json} */ (a).summary),
-			])
-		if (attachments.length > 0) {
-			put('attachments', uri, attachments)
+		// Each attachment with a URL, at its position: what the status shows now (also the last version of its edits).
+		/** @type {Shown[]} */
+		const shown = []
+		many(p.attachment).forEach((a, position) => {
+			const element = /** @type {Json} */ (a)
+			const link = typeof a === 'object' && a !== null ? href(element.url) : null
+			if (link === null) {
+				return
+			}
+			const resolved = isLocal ? resolveImage(link, false) : { gone: false, url: link, imageId: null }
+			const files = filesOf(
+				/** @type {ReturnType<typeof resolveImage>} */ (resolved),
+				`attachment\n${uri}\n${position}`
+			)
+			if (files !== undefined) {
+				shown.push({
+					imageId: resolved.gone ? null : resolved.imageId,
+					link,
+					url: files.url,
+					preview: files.preview ?? files.url,
+					description: text(element.name) || text(element.description) || text(element.summary),
+					meta: files.meta ?? metaSizes(sized(element)),
+				})
+			}
+		})
+		currentMedia.set(uri, shown)
+		if (shown.length > 0) {
+			put(
+				'attachments',
+				uri,
+				shown.map((m) => [m.url, m.description])
+			)
 		}
 		statusApiIds.set(String(o.mastodon_id), [...(statusApiIds.get(String(o.mastodon_id)) ?? []), uri])
 		if (isLocal) {
@@ -336,55 +468,89 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 
 	// Local images: their old /ap/o/<uuid>, URL, owner (the stored author as exported) and the status that shows them:
 	// the first local status, in export order, whose attachment names the image by id, else by URL, each image once.
-	const images = objects.filter((o) => o.type === 'Image' && o.local === 1)
-	/** @type {Map<string, string>} image id -> status URI */
+	const localImages = objects.filter((o) => o.type === 'Image' && o.local === 1)
+	/** @type {Map<string, { uri: string, position: number, link: string | null }>} image id -> where a status shows it */
 	const shownIn = new Map()
 	for (const o of objects) {
 		const uri = statusUri.get(String(o.id))
 		if (uri === undefined || o.local !== 1) {
 			continue
 		}
-		for (const a of many(parse(o.properties).attachment)) {
+		many(parse(o.properties).attachment).forEach((a, position) => {
 			if (typeof a !== 'object' || a === null) {
-				continue
+				return
 			}
 			const element = /** @type {Json} */ (a)
-			const byId = images.find((i) => typeof element.id === 'string' && String(i.id) === element.id)
+			const byId = localImages.find((i) => typeof element.id === 'string' && String(i.id) === element.id)
 			const link = href(element.url)
-			const match = byId ?? images.find((i) => link !== null && href(parse(i.properties).url) === link)
+			const match = byId ?? localImages.find((i) => link !== null && href(parse(i.properties).url) === link)
 			if (match !== undefined && !shownIn.has(String(match.id))) {
-				shownIn.set(String(match.id), uri)
+				shownIn.set(String(match.id), { uri, position, link })
 			}
-		}
+		})
 	}
-	for (const o of images) {
+	for (const o of localImages) {
 		const id = String(o.id)
-		if (id.startsWith(prefix)) {
-			put('media', id.slice(prefix.length), [
-				href(parse(o.properties).url),
-				source.authors.get(id) ?? null,
-				shownIn.get(id) ?? null,
-			])
+		const own = href(parse(o.properties).url)
+		const where = shownIn.get(id)
+		// Shown by a status: the image is that attachment's row; otherwise a row of its own.
+		const files =
+			where === undefined
+				? filesOf(resolveImage(own, false), `image\n${id}`)
+				: filesOf(resolveImage(where.link ?? own, false), `attachment\n${where.uri}\n${where.position}`)
+		if (id.startsWith(prefix) && files !== undefined) {
+			put('media', id.slice(prefix.length), [files.url, source.authors.get(id) ?? null, where?.uri ?? null])
 		}
 	}
 
 	// Edits: the earlier versions in order, then the current one.
 	/** @type {Map<string, unknown[]>} */
 	const history = new Map()
+	const localObjects = new Set(objects.filter((o) => o.local === 1).map((o) => String(o.id)))
 	for (const r of all('SELECT object_id, properties FROM object_revisions ORDER BY id')) {
 		const uri = statusUri.get(String(r.object_id))
 		if (uri === undefined) {
 			continue
 		}
 		const p = parse(r.properties)
+		const isLocal = localObjects.has(String(r.object_id))
+		const now = currentMedia.get(uri) ?? []
+		// Each attachment of the version: an image the status still shows is that row; an image only earlier versions
+		// show has a row of its own per status; anything else is presented as it was.
+		const media = many(p.attachment)
+			.filter((a) => typeof a === 'object' && a !== null)
+			.flatMap((a) => {
+				const element = /** @type {Json} */ (a)
+				const link = href(element.url)
+				const resolved = isLocal ? resolveImage(link, false) : { gone: false, url: link, imageId: null }
+				if (resolved.gone) {
+					return []
+				}
+				const same = now.find((m) =>
+					resolved.imageId === null ? m.imageId === null && m.url === (link ?? '') : m.imageId === resolved.imageId
+				)
+				// The URLs are the row's; the description (and a kept image's declared size) are this version's.
+				const description = text(element.name) || text(element.description) || text(element.summary)
+				if (same !== undefined) {
+					return [[same.url, same.preview, description, same.imageId === null ? metaSizes(sized(element)) : same.meta]]
+				}
+				if (resolved.imageId === null) {
+					return [[link ?? '', link ?? '', description, metaSizes(sized(element))]]
+				}
+				const files = /** @type {{ url: string, preview: string, meta: unknown[] }} */ (
+					filesOf(resolved, `edit\n${uri}\n${resolved.imageId}`)
+				)
+				return [[files.url, files.preview, description, files.meta]]
+			})
 		history.set(uri, [
 			...(history.get(uri) ?? []),
-			[sanitized(p.content), text(p.spoiler_text) || text(p.summary), p.sensitive === true ? 1 : 0],
+			[sanitized(p.content), text(p.spoiler_text) || text(p.summary), p.sensitive === true ? 1 : 0, media],
 		])
 	}
 	for (const [uri, versions] of history) {
 		const current = /** @type {unknown[]} */ (JSON.parse(out.statuses?.[uri] ?? '[]'))
-		put('edits', uri, [...versions, [current[1], current[3], current[4]]])
+		const media = (currentMedia.get(uri) ?? []).map((m) => [m.url, m.preview, m.description, m.meta])
+		put('edits', uri, [...versions, [current[1], current[3], current[4], media]])
 	}
 
 	// Boosts, with the audience of their outbox row as exported.
@@ -536,5 +702,5 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	for (const c of all('SELECT id, secret, name, redirect_uris, scopes FROM clients')) {
 		put('clients', String(c.id), [String(c.secret), String(c.name), String(c.redirect_uris), text(c.scopes) || 'read'])
 	}
-	return { records: out, overLimit }
+	return { records: out, overLimit, images: imageCounts }
 }

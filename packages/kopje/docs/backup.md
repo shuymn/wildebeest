@@ -296,10 +296,21 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
 5. **Put the originals back** into the media bucket:
 
     ```sh
+    bash -eu <<'EOF'   # bash whatever the shell; -e stops at the first put that fails
+    shopt -s nullglob   # no originals: the loop runs zero times, and the count decides
+    n=0
     for f in media/originals/*; do
-      wrangler r2 object put "kopje-media/originals/$(basename "$f")" --file "$f" --remote
+      wrangler r2 object put "kopje-media/originals/$(basename "$f")" --file "$f" --remote </dev/null
+      n=$((n + 1))
     done
+    want=$(jq '[.objects[] | select(.state == "copied")] | length' media-index.json)
+    [ "$n" -eq "$want" ] || { echo "put $n originals of $want" >&2; exit 1; }
+    echo "put $n originals"
+    EOF
     ```
+
+    It runs in bash also when pasted into zsh, stops at the first `wrangler` that fails, and fails when the number put
+    differs from the number the index marks `copied` (no originals passes only when none are expected); run it again until it prints `put <n> originals` (a put replaces the same key).
 
 6. **Rebuild the served files** from the originals, through Access (the Store must have admin access; set it with
    `kopje-admin config` first if the restore began with the import token). It works while the Store is unpublished:
