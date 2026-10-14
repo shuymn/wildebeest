@@ -13,9 +13,8 @@ import {
 import { mastodonError } from './errors'
 import { type Params, parseBoolean } from './params'
 import { ALERT_TYPES, POLICIES, type PushData, type PushPolicy, type StoredSubscription } from '../domain/push'
-import { readConfig } from '../platform/config'
+import { webPushKeys } from '../platform/config'
 import { publicShapeRefusal } from '../platform/http-url'
-import { vapidPrivateJwk } from '../platform/vapid'
 import { AUTH_SECRET_LENGTH, importClientKey, sealPushToken } from '../security/web-push'
 
 // /api/v1/push/subscription (Mastodon 4.5): the subscription of the request's own token (PUSH-1), under the push
@@ -29,12 +28,8 @@ const invalid = (what: string) => mastodonError(422, `Validation failed: ${what}
 
 const MAX_ENDPOINT_LENGTH = 2048
 
-// The JWK when Web Push is available. An invalid VAPID_JWK never gets here: the gate answers 503 (DATA-2).
-function vapidJwk(env: Env): JsonWebKey | null {
-	const config = readConfig(env)
-	const jwk = config.ok ? config.config.VAPID_JWK : undefined
-	return jwk === undefined ? null : vapidPrivateJwk(jwk)
-}
+// The JWK when Web Push is available.
+const vapidJwk = (env: Env): JsonWebKey | null => webPushKeys(env)?.jwk ?? null
 
 function present(subscription: StoredSubscription, env: Env) {
 	const { id, endpoint, standard, alerts, policy } = subscription

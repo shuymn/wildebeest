@@ -10,11 +10,10 @@ import {
 	truncateText,
 } from '../domain/push'
 import { COMPLETION_MARGIN_MS, postActivity, type PostDeps } from '../federation/delivery'
-import { readConfig } from '../platform/config'
+import { webPushKeys } from '../platform/config'
 import { errorFields } from '../platform/error-message'
 import { PACKAGE_VERSION } from '../platform/package-version'
 import { callStore } from '../platform/store-client'
-import { vapidPrivateJwk, vapidPublicKey } from '../platform/vapid'
 import {
 	encryptPush,
 	MAX_PUSH_PLAINTEXT,
@@ -60,13 +59,11 @@ export function pushPayload(content: PushContent, accessToken: string): Uint8Arr
 }
 
 export async function pushRound(env: Env, deps: DeliveryDeps): Promise<PushRoundResult> {
-	const config = readConfig(env)
-	const secret = config.ok ? config.config.VAPID_JWK : undefined
-	const jwk = secret === undefined ? null : vapidPrivateJwk(secret)
-	const publicKey = secret === undefined ? null : vapidPublicKey(secret)
-	if (jwk === null || publicKey === null) {
+	const keys = webPushKeys(env)
+	if (keys === null) {
 		return { claimed: 0, settled: [], nextDueAt: null }
 	}
+	const { jwk, publicKey } = keys
 	const build = deps.build(env)
 	const store = deps.store(env)
 	const claim = await callStore(() =>
