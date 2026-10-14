@@ -6,6 +6,8 @@ The whole cutover, step by step, is [cutover-runbook.md](cutover-runbook.md); th
 ([dump-format.md](dump-format.md)) that `kopje-admin import` loads into an empty Store. `kopje-admin verify-conversion`
 checks a dump against the legacy data with expectations it computes on its own. Both run offline on the operator's
 machine: they read files, write files, and never contact the legacy instance, Cloudflare or anything else (DATA-11).
+The one step that downloads is `kopje-admin images-export`, which fetches the legacy instance's images from Cloudflare
+Images before the conversion ("Media" below).
 
 The exports hold everything the instance knows, direct messages, emails and wrapped private keys included. Keep them,
 the dump and the working directory on an encrypted disk, and never paste them anywhere. What the commands print, and
@@ -86,12 +88,15 @@ COLUMN`), after `mastodon_id`, and the final form of 0020 fills it from the prop
 5. **Write** `<out>/kopje.dump` and `<out>/manifest.json`. Each is written under a fresh temporary name created
    exclusively with mode 0600 and published with `link(2)`, which refuses an existing name: an existing file or
    symbolic link at either name, or an output directory that is a link, makes the converter refuse (`output-exists`,
-   `output-not-a-directory`) without touching it.
+   `output-not-a-directory`) without touching it. With `--images`, `<out>/originals/` (a new directory) receives the
+   original of every mapped image, each file created exclusively with mode 0600 ("Media" below).
 
 ```
+kopje-admin images-export <export> --images-account <hash> --out <images dir> [--account-id <id>]
 kopje-admin convert <export> --out <dir> --base-time <time> [--accept-deletions] [--accept-truncation]
-                    [--catalog <file>] [--domain <host>]
+                    [--catalog <file>] [--domain <host>] [--images <images dir> [--accept-missing-images]]
 kopje-admin verify-conversion <export> <dump file> [--accept-deletions] [--accept-truncation]
+                    [--images <images dir> [--accept-missing-images]]
 ```
 
 - `--base-time` (ISO 8601 UTC) fixes the time ids are assigned against, so the same export gives the same dump. It is
@@ -103,8 +108,14 @@ kopje-admin verify-conversion <export> <dump file> [--accept-deletions] [--accep
 - `--domain` refuses an export whose local accounts are on another domain. The domain is otherwise taken as it is.
 - The KEK candidates come from the environment: the empty KEK always, and the values of `userKEK` and `USER_KEY` (the
   legacy secret names) when they are set. The values are never printed.
+- `--images` maps the references to the operator's Cloudflare Images account to local media, from what `images-export`
+  wrote to that directory. Without it, every image URL stays as it is, the legacy instance's Cloudflare Images
+  included: `--images` is needed to stop depending on Cloudflare Images. `--accept-missing-images` carries on although
+  images `images-export` could not download leave their references out; without it, `convert` stops and
+  `verify-conversion` fails on them (both counted). Pass the same `--images` to `verify-conversion`.
 - Exit codes: `convert` 0 when the dump is written, 3 when it stopped for a decision (the manifest says why), 2 on a
-  usage error; `verify-conversion` 0 on PASS, 1 on FAIL.
+  usage error; `verify-conversion` 0 on PASS, 1 on FAIL; `images-export` 0 when every image is downloaded, 3 when one
+  is missing or it refuses (a fixed code), 1 when Cloudflare answers with an error (rerun it to continue).
 
 ## What the conversion does
 
@@ -166,8 +177,50 @@ migration changed stops the conversion (`statuses:author-changed-audience`).
   for 0016, every row is compared as written. A boost's visibility is its outbox row's, by the same rule; a boost has recipients only when
   it is direct (the known accounts in its `to`).
 
-**Media.** Attachments point to their existing URLs (local images stay where the legacy instance stored them); nothing
-is downloaded. Unattached local images are kept without a status.
+**Media.** Legacy stored local images (avatars, headers, attachments) in Cloudflare Images and wrote their delivery
+URLs, `https://imagedelivery.net/<account hash>/<image id>/<variant>`, into actor properties, statuses, earlier
+versions of edited statuses and activities. Without `--images`, attachments, avatars and headers keep these URLs and
+nothing is downloaded: the media keeps working only while the images stay in Cloudflare Images. Unattached local images
+are kept without a status either way. To move the images into Kopje's own media (R2):
+
+1. `kopje-admin images-export <export> --images-account <hash> --out <images dir>` reads the export and collects every
+   image id under the operator's account hash (the `<hash>` in the URLs above) from actor and object properties and
+   the earlier versions of edited statuses: the columns whose URLs reach Kopje. Activities are not read; the converter
+   keeps only Follow and Like ids from them. It downloads each image once, the original through the Images API
+   (`GET /accounts/<account id>/images/v1/<image id>/blob`) when `--account-id` is given with an API token that can
+   read Images in `CF_IMAGES_TOKEN`, and otherwise the variant URL found in the data, which may be resized. The token
+   is read from the environment only, sent only to the API, never with a redirect, and redacted from what is printed.
+   Each file is checked as Kopje checks an upload: its type from its signature (JPEG, PNG, GIF or WebP; AVIF, SVG and
+   HEIC are refused), at most 16 MiB and 16,777,216 pixels, with dimensions read from its header. It is written to
+   `<images dir>/originals/<image id>` with mode 0600, and `<images dir>/images.json` records, per image id, its SHA-256,
+   type, size, the source, and the file token Kopje will serve it under, made once with the generator's format (32
+   random bytes, base64url). An image Cloudflare answers 404 for, or one that fails a check, is recorded as `missing`
+   with its reason. A rerun, on the same or a later export of the same instance, keeps every image whose file still has
+   its digest, and with it the token; it fetches only the rest. `images.json` is refused when it was written for
+   another account hash or domain (`images-file-differs`). Any other error answer stops the run (`images-fetch-failed`,
+   exit 1) after saving what it downloaded. It prints counts only.
+2. `convert --images <images dir>` maps each local reference under the operator's account (profiles of local accounts,
+   attachments of local statuses and of their earlier versions, unattached local images) to local media as Kopje's
+   upload path makes it: a media row with the file token, the served type (PNG stays PNG; JPEG, GIF and WebP become
+   WebP), `url` and `preview_url` at `https://<domain>/media/<token>/{full,small}.<png|webp>`, and `meta` with the
+   full size (within 3840 pixels) and the preview size (within 640) computed as the upload path sizes them. An avatar
+   or header becomes the account's profile image: an unattached row with no `gc_at`, whose full URL `avatar_url` or
+   `header_url` holds. An image that only an earlier version shows gets an unattached row too, so its files are kept.
+   Each image's token is held by its first row; a later row showing the same image shares its URLs (counted as
+   `shared`). A profile image under the account of cloudflare/wildebeest's default images (`NkfPDviynOyTAOI79ar_GQ`)
+   becomes `NULL`, so Kopje's own default applies. URLs of other accounts stay as they are (`foreign`), and so does
+   everything of remote accounts. A `missing` image's reference is left out: the avatar or header becomes `NULL`, the
+   attachment is removed. A URL under the operator's account that `images.json` does not map stops the conversion
+   (`images-unmapped`): run `images-export` on this export first. The ids and tokens depend only on the base time and
+   `images.json`, so the same inputs give the same dump.
+3. The originals go to R2 under the key Kopje keeps an original at, `originals/<media id>`: `convert` writes them to
+   `<out>/originals/<media id>`, checking each against its digest (`images-original-mismatch` when one changed), and
+   the operator puts them into the media bucket with Wrangler, as a backup restore does
+   ([backup.md](backup.md)), before the import is published.
+4. The served files (`files/<token>/full` and `small` in R2) are made from the originals by Kopje's own re-encoding.
+   That step, `media-rebuild`, comes with a later release (TODO: part 2 of the Cloudflare Images move); until it has run,
+   the mapped URLs answer 404. Changed avatars and headers are not announced to followers yet (TODO: part 3,
+   `Update(Person)`).
 
 **Relationships.** Follows, favourites, boosts, bookmarks, blocks, mutes, domain blocks and lists carry over. A
 follow's `uri` is its legacy value, or for a local follower the id of its latest Follow activity; an accepted follow
@@ -216,6 +269,7 @@ taking every audience from the addressing captured before the bridge, and reads 
 | `replies`, `aliases`                                                                                                               | inReplyTo and the linked parent; remote proxy uuid to original URI                                                                                  |
 | `counters`                                                                                                                         | the notification counter                                                                                                                            |
 | `edits`, `attachments`, `media`                                                                                                    | versions in order; URLs and descriptions in order; each old image id with its URL, its owner (the stored author) and the status showing it, or none |
+| `media_files`                                                                                                                      | with `--images`: per file token, the full and preview URLs, the served type, and the full and preview sizes                                         |
 | `boosts` (with visibility and recipients), `follows` (Follow record or NULL, reblogs, notify), `favourites`                        | by the URIs of both ends                                                                                                                            |
 | `bookmarks`, `blocks`, `mutes`, `domain_blocks`, `lists` (policy, exclusive), `list_accounts`, `notifications`, `clients` (scopes) | by URI or kept id                                                                                                                                   |
 | `legacy_ids`, `settings`                                                                                                           | each expected key must resolve to the same value (extra keys allowed)                                                                               |
@@ -224,6 +278,11 @@ Any missing, extra or changed record FAILs: missing content, content rewritten t
 relationship, a recipient removed or added, a widened visibility, a dropped reply link and a count difference all do
 (DATA-12). Content over the sanitizer's limit fails too unless `--accept-truncation` is given (`truncation.overLimit`). Run it twice in a cutover: on the converted dump
 before importing, and on a `kopje-admin dump` of the Store after the import.
+
+With `--images`, the expected avatars, headers, attachments, old image URLs and `media_files` come from `images.json`
+and the instance origin alone, by code that does not share the converter's mapping: a URL, a token, a served type or a
+size that differs fails. So does a URL under the operator's account that `images.json` does not map, and a missing
+image unless `--accept-missing-images` is given (`images.unmapped`, `images.missing`).
 
 ## Reporting format
 
@@ -243,6 +302,7 @@ object type) appears only as a 12-hex-digit SHA-256 prefix, and a parser or data
 | `tables`         | per Store table: rows and checksum, as in the dump trailer                                                                                                                                                   |
 | `dump`           | file name, SHA-256 of the file, and the trailer's body digest                                                                                                                                                |
 | `exportBytes`    | the size of the export read                                                                                                                                                                                  |
+| `images`         | with `--images`: references `mapped`, left out as `missing`, `upstream` defaults dropped, `foreign` kept, `unmapped`, rows that `shared` a token, `originals` written, `acceptMissing`                       |
 | `result`, `stop` | `converted`, or `stopped` with a fixed `code`, a fixed `message` and `detail` (counts, levels, digests)                                                                                                      |
 
 `verify-conversion` prints `{ "result": "PASS" | "FAIL", "categories": { <name>: { expected, actual, missing, extra,

@@ -8,6 +8,19 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- The cutover can move a legacy instance's images out of Cloudflare Images (the first part of the move).
+  `kopje-admin images-export` downloads the images the legacy data references under the operator's Images account,
+  through the Images API with a token read from `CF_IMAGES_TOKEN` or from the delivery URLs, checks them as Kopje checks
+  an upload, and records them in `images.json`; a rerun downloads only what is new. `kopje-admin convert --images`
+  then maps avatars, headers and attachments to local media rows with their own file tokens, drops cloudflare/
+  wildebeest's default images so Kopje's defaults apply, and writes the originals for R2 under their media ids;
+  `verify-conversion --images` checks the result independently. A missing image stops the conversion unless
+  `--accept-missing-images` is given. The served files are not made yet, so moved images answer 404 until a later
+  release adds the rebuild step. Without `--images`, the conversion is unchanged. See docs/cutover.md ("Media") and
+  docs/cutover-runbook.md. No schema or `wrangler.jsonc` change.
+
 ### Fixed
 
 - An activity without addressing (a Follow, Accept, Reject, Like or their Undo) now goes to the recipient's shared
