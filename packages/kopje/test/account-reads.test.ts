@@ -131,46 +131,78 @@ describe('familiar followers', () => {
 		expect((await h.request(path(remote), bearer(await appToken(h)))).status).toBe(422)
 	})
 
-	it('bounds the ids, the followers read and the accounts shown (RES-3, RES-7)', async () => {
-		// `count` remote accounts follow the target and are followed by alice, plus more accounts to ask about.
-		const setup = async (count: number) => {
-			const h = await community(['alice'])
-			const { alice } = h.users
-			await remoteAccounts(h, 1, count + MAX_FAMILIAR_FOLLOWERS_IDS + 6)
-			const ids = (
-				await sql<{ id: string }>(h.store, 'SELECT id FROM accounts WHERE domain IS NOT NULL ORDER BY id')
-			).map((row) => row.id)
-			const target = ids[0] ?? ''
-			const followers = ids.slice(1, count + 1)
-			await sql(
+	// Remote accounts around a target: `mutual` follow it first and are followed by alice, then `unrelated` follow it
+	// later, and alice also follows `aliceOnly` accounts that do not follow it. `spare` more accounts exist to ask about.
+	async function crowd({ mutual = 0, unrelated = 0, aliceOnly = 0, spare = 0 }) {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await remoteAccounts(h, 1, 1 + mutual + unrelated + aliceOnly + spare)
+		const ids = (
+			await sql<{ id: string }>(h.store, 'SELECT id FROM accounts WHERE domain IS NOT NULL ORDER BY id')
+		).map((row) => row.id)
+		const target = ids[0] ?? ''
+		let at = 1
+		const take = (count: number) => ids.slice(at, (at += count))
+		const groups = { mutual: take(mutual), unrelated: take(unrelated), aliceOnly: take(aliceOnly), spare: take(spare) }
+		const follows = async (followers: string[], followed: string[]) =>
+			sql(
 				h.store,
-				"INSERT INTO follows (account_id, target_account_id, state) SELECT value, ?, 'accepted' FROM json_each(?)",
-				target,
-				JSON.stringify(followers)
+				`INSERT INTO follows (account_id, target_account_id, state)
+				SELECT f.value, t.value, 'accepted' FROM json_each(?) f, json_each(?) t ORDER BY f.key, t.key`,
+				JSON.stringify(followers),
+				JSON.stringify(followed)
 			)
-			await sql(
-				h.store,
-				"INSERT INTO follows (account_id, target_account_id, state) SELECT ?, value, 'accepted' FROM json_each(?)",
-				alice.id,
-				JSON.stringify(followers)
-			)
-			const read = await rowsRead(h, familiarFollowers, {
-				credential: { tokenHash: await sha256Hex(alice.token), scope: 'read:follows', now: NOW },
-				ids: [target],
-				present: { origin: 'https://kopje.test' },
-			})
-			return { h, alice, ids, target, followers, read }
-		}
-		const { h, alice, ids, target, followers, read } = await setup(FAMILIAR_FOLLOWERS_WINDOW + 200)
-		const { body } = await getJson<unknown[]>(h, path(...ids.slice(followers.length + 1)), alice.token)
-		expect(body).toHaveLength(MAX_FAMILIAR_FOLLOWERS_IDS)
-		const shown = await getJson<{ id: string; accounts: { id: string }[] }[]>(h, path(target), alice.token)
-		// The newest follows first.
+		await follows([...groups.mutual, ...groups.unrelated], [target])
+		await follows([alice.id], [...groups.mutual, ...groups.aliceOnly])
+		return { h, alice, target, ...groups }
+	}
+
+	async function rowsReadFor({ h, alice, target }: Awaited<ReturnType<typeof crowd>>): Promise<number> {
+		return rowsRead(h, familiarFollowers, {
+			credential: { tokenHash: await sha256Hex(alice.token), scope: 'read:follows', now: NOW },
+			ids: [target],
+			present: { origin: 'https://kopje.test' },
+		})
+	}
+
+	it('finds an old familiar follower behind many unrelated ones', async () => {
+		const { h, alice, target, mutual } = await crowd({ mutual: 1, unrelated: FAMILIAR_FOLLOWERS_WINDOW + 200 })
+		const { body } = await getJson<{ accounts: { id: string }[] }[]>(h, path(target), alice.token)
+		expect(body[0]?.accounts.map((account) => account.id)).toEqual(mutual)
+	}, 60_000)
+
+	it('reads rows by the viewer’s follows, not the account’s other followers (RES-7)', async () => {
+		const fewOthers = await rowsReadFor(await crowd({ mutual: 10, unrelated: 1000 }))
+		const manyOthers = await rowsReadFor(await crowd({ mutual: 10, unrelated: 4000 }))
+		expect(manyOthers).toBeLessThan(fewOthers * 1.5)
+		// The viewer's follows are read up to the window only.
+		const atWindow = await rowsReadFor(await crowd({ aliceOnly: FAMILIAR_FOLLOWERS_WINDOW }))
+		const pastWindow = await rowsReadFor(await crowd({ aliceOnly: FAMILIAR_FOLLOWERS_WINDOW * 2 }))
+		expect(pastWindow).toBeLessThan(atWindow * 1.2)
+	}, 180_000)
+
+	it('bounds the ids and the accounts shown (RES-3)', async () => {
+		const { h, alice, target, mutual, spare } = await crowd({ mutual: MAX_FAMILIAR_FOLLOWERS + 20, spare: 25 })
+		expect((await getJson<unknown[]>(h, path(...spare), alice.token)).body).toHaveLength(MAX_FAMILIAR_FOLLOWERS_IDS)
+		const shown = await getJson<{ accounts: { id: string }[] }[]>(h, path(target), alice.token)
+		// The newest follows of the account first.
 		expect(shown.body[0]?.accounts.map((account) => account.id)).toEqual(
-			followers.slice(-MAX_FAMILIAR_FOLLOWERS).reverse()
+			mutual.slice(-MAX_FAMILIAR_FOLLOWERS).reverse()
 		)
-		// Twice the followers read about as many rows: only the window is read.
-		const larger = await setup(FAMILIAR_FOLLOWERS_WINDOW * 2)
-		expect(larger.read).toBeLessThan(read * 1.2)
-	}, 120_000)
+	}, 60_000)
+
+	it('shows no more than the followers and following lists show the same viewer', async () => {
+		const { h, remote } = await fixture()
+		const { alice, carol } = h.users
+		const listed = async (route: string) =>
+			(await getJson<{ id: string }[]>(h, route, alice.token)).body.map((account) => account.id)
+		for (const target of [remote, carol.id]) {
+			const { body } = await getJson<{ accounts: { id: string }[] }[]>(h, path(target), alice.token)
+			const followersOfTarget = await listed(`/api/v1/accounts/${target}/followers`)
+			for (const account of body[0]?.accounts ?? []) {
+				expect(followersOfTarget).toContain(account.id)
+				expect(await listed(`/api/v1/accounts/${account.id}/following`)).toContain(target)
+			}
+		}
+	})
 })
