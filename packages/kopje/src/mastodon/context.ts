@@ -9,7 +9,7 @@ import type { Resolved } from '../domain/remote-statuses'
 import { webPushKeys } from '../platform/config'
 import type { ImageCodec } from '../platform/images'
 import { callStore, type StoreResolver, type StoreStub } from '../platform/store-client'
-import type { Scope } from '../security/scopes'
+import type { RequiredScope } from '../security/scopes'
 import type { TokenGenerator } from '../security/tokens'
 
 export type ApiDeps = {
@@ -26,7 +26,7 @@ export type ApiDeps = {
 
 // The bearer token's digest and the scope the route declares, set by the access middleware (mastodon/access.ts) on
 // every API route: null on a public route. It is not validated there; the Store validates it in the operation.
-export type RequestCredential = { tokenHash: string; scope: Scope | null }
+export type RequestCredential = { tokenHash: string; scope: RequiredScope | null }
 
 export type ApiEnv = { Bindings: Env; Variables: { credential: RequestCredential | null } }
 

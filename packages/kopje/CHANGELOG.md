@@ -60,6 +60,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `/api/v1/endorsements`, `/api/v1/announcements` (any user token), `/api/v1/trends` (and `/trends/tags`,
   `/trends/statuses`, `/trends/links`), `/api/v1/suggestions` and `/api/v2/suggestions`.
 
+- The `profile` OAuth scope, as Mastodon 4.5 has it: an app may register and request it alone or with other scopes. A
+  `profile` token reads `GET /api/v1/accounts/verify_credentials` (the same answer as with `read:accounts`) and no other
+  route that requires a scope; `read` does not include `profile`.
+
 ### Changed
 
 - Home and mention notifications also leave out a status that mentions or replies to an account you block or mute

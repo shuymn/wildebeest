@@ -2,7 +2,7 @@ import type { ViewerContext } from './audience'
 import { mediaDeleteOperation, readOperation, sessionOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 import type { StoreOperation } from '../platform/store-kernel'
-import { grants, type Scope } from '../security/scopes'
+import { grantsAny, type RequiredScope } from '../security/scopes'
 
 // Token validation for API requests (design §4: "token validation and the operation in the same RPC"). A protected
 // operation takes the request's credential and checks it in the transaction that runs the operation, so a token
@@ -21,12 +21,12 @@ export type Viewer = {
 
 export type UserViewer = Viewer & { accountId: string }
 
-// What a request presents: the sha256 of its bearer token, the scope its route requires (null: any valid token,
-// app tokens included), and the request time.
-export type Credential = { tokenHash: string; scope: Scope | null; now: number }
+// What a request presents: the sha256 of its bearer token, the scope its route requires (any one of them if several;
+// null: any valid token, app tokens included), and the request time.
+export type Credential = { tokenHash: string; scope: RequiredScope | null; now: number }
 
 // A route that requires a scope also requires a user.
-export type UserCredential = Credential & { scope: Scope }
+export type UserCredential = Credential & { scope: RequiredScope }
 
 export type AuthFailure =
 	| { status: 'unauthenticated' }
@@ -63,7 +63,7 @@ export function authorize(db: Db, credential: Credential): AuthFailure | { statu
 	}
 	const scopes = row.scopes.split(' ')
 	if (credential.scope !== null) {
-		if (!grants(scopes, credential.scope)) {
+		if (!grantsAny(scopes, credential.scope)) {
 			return { status: 'insufficient_scope' }
 		}
 		if (row.account_id === null) {
