@@ -183,9 +183,7 @@ export function chargeInstanceTransforms(db: Db, count: number, limit: number, n
 }
 
 export type Started =
-	| { status: 'ok' }
-	| { status: 'expired' }
-	| { status: 'budget_exhausted'; scope: 'account' | 'instance' }
+	{ status: 'ok' } | { status: 'expired' } | { status: 'budget_exhausted'; scope: 'account' | 'instance' }
 
 // Step 2, right before Images is called. The reservation must still be open (not completed, abandoned or past its
 // deadline at `now`), and the transformations are charged to the budgets of the month `now` is in.

@@ -19,9 +19,7 @@ const READONLY_ADMITS: Record<OperationKind, boolean> = { read: true, session: t
 export type StoreOperation<I, O> = { readonly kind: OperationKind; run(sql: SqlStorage, input: I): O }
 
 export type SchemaState =
-	| { status: 'current' }
-	| { status: 'pending'; pending: string[] }
-	| { status: 'diverged'; detail: string }
+	{ status: 'current' } | { status: 'pending'; pending: string[] } | { status: 'diverged'; detail: string }
 
 // A persisted readonly flag. Cleared when a different build of the code starts (a new deployment).
 export type Hold = { reason: MaintenanceReason; build: string; detail: string; at: number }

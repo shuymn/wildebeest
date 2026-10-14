@@ -30,13 +30,11 @@ export async function buildRedirect(
 ): Promise<Response> {
 	const url = new URL(request.url)
 
-	if (
-		!(
-			url.searchParams.has('redirect_uri') &&
-			url.searchParams.has('response_type') &&
-			url.searchParams.has('client_id')
-		)
-	) {
+	if (!(
+		url.searchParams.has('redirect_uri') &&
+		url.searchParams.has('response_type') &&
+		url.searchParams.has('client_id')
+	)) {
 		return new Response('', { status: 400 })
 	}
 

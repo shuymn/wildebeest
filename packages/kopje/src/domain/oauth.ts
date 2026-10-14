@@ -182,9 +182,7 @@ export const authorizeContext = readOperation<
 })
 
 export type LoginAccount =
-	| { status: 'ok'; accountId: string; username: string }
-	| { status: 'no_account' }
-	| { status: 'suspended' }
+	{ status: 'ok'; accountId: string; username: string } | { status: 'no_account' } | { status: 'suspended' }
 
 function loginAccount(db: Db, email: string): LoginAccount {
 	const row = db.first<{ account_id: string; username: string; suspended_at: string | null }>(

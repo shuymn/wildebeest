@@ -536,7 +536,7 @@ class BackupJob {
 				}
 				cipherBytes += value.byteLength
 				await cipherWriter.write(value)
-				for (let offset = 0; offset < value.byteLength; ) {
+				for (let offset = 0; offset < value.byteLength;) {
 					const take = Math.min(this.#partBytes - filled, value.byteLength - offset)
 					part.set(value.subarray(offset, offset + take), filled)
 					filled += take
