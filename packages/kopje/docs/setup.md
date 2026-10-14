@@ -7,6 +7,9 @@ values that belong to this instance (its domain, the Access applications and the
 
 ## Before you start
 
+The account needs the Workers Paid plan. The Free plan allows 10 ms of CPU time and 50 subrequests per request, which
+signature checks on federated requests, the daily backup and media processing exceed.
+
 Some things cannot be done from the wizard. Do these in the Cloudflare dashboard first. The wizard lists them too, at
 `/setup/checklist`.
 
