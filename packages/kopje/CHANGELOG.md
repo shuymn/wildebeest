@@ -17,13 +17,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `read:blocks`, `write:blocks`, `read:mutes`, `write:mutes` or `follow`.
     - A block ends the follows between the two accounts both ways. A blocked remote account is sent an `Undo` of our
       follow, a `Reject` of its follow, and the `Block`; an unblock sends the `Block`'s `Undo`. A blocked account (or
-      one on a blocked domain) is never mentioned in or sent your statuses, including ones queued before the block.
+      one on a blocked domain) is not mentioned in, or sent, the statuses you write after the block (deliveries already
+      queued are sent as queued, as in Mastodon).
     - A mute is not federated. It expires after its duration: it stops applying at that time, whether or not it has
       been removed yet. `muting_expires_at` in relationships shows the expiry.
     - A domain block takes the domain as Mastodon normalizes it and refuses this instance's own domain. As in Mastodon
       4.5, it ends your follows to and from accounts on that domain (a `Reject` to each follower, an `Undo` of each of
       your follows). Kopje does this in the background in bounded batches until done (the Queue and the 5-minute cron
-      continue it); meanwhile nothing of yours is delivered to the domain. Unblocking the domain stops the rest.
+      continue it); meanwhile what you post is not delivered to followers there. Unblocking the domain stops the rest.
     - `GET /api/v1/domain_blocks/preview` needs `write:blocks` (or `write` or `follow`), as in Mastodon.
 
 ### Changed

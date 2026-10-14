@@ -23,6 +23,7 @@ import {
 	blockDomain as blockDomainOperation,
 	DOMAIN_BLOCK_BATCHES_PER_RUN,
 	DOMAIN_BLOCK_WINDOW,
+	runDomainBlockCleanups,
 } from '../src/domain/blocks'
 import { sha256Hex } from '../src/security/tokens'
 
@@ -318,42 +319,20 @@ describe('blocked recipients (VIS-13, VIS-15)', () => {
 		expect(await sql(h.store, 'SELECT 1 FROM status_mentions WHERE status_id = ?', status.id)).toEqual([])
 	})
 
-	it('sends nothing queued before a block to the blocked account, but still sends it the Block', async () => {
+	it('addresses a status written after a block to nobody behind the blocked account', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		const bob = await remoteAccount(h.store, 'bob')
-		const fan = await remoteAccount(h.store, 'fan')
-		await remoteFollows(h.store, fan, alice.id)
-		await post(h, alice, { status: '@bob@remote.example secret', visibility: 'direct' })
-		const open = await post(h, alice, { status: '@bob@remote.example hello all' })
+		await remoteAccount(h.store, 'carol', 'other.example')
 		await relate(h, alice, `/api/v1/accounts/${bob}/block`)
-		// All three wait in one lane (remote.example): the direct Create, the public Create, the Block.
-		expect((await sent(h)).map((o) => [o.activity.type, o.inboxes])).toEqual([
-			['Create', ['https://remote.example/inbox']],
-			['Create', ['https://remote.example/inbox']],
-			['Block', ['https://remote.example/inbox']],
-		])
+		await sql(h.store, 'DELETE FROM outbound_activities')
 
-		const delivered: { type: string; body: string }[] = []
-		for (let round = 0; round < 5; round++) {
-			const claim = await h.store.claimDeliveries(BUILD, { now: NOW, leaseToken: `lease-${round}` })
-			for (const d of claim.deliveries) {
-				delivered.push({ type: (JSON.parse(d.body) as { type: string }).type, body: d.body })
-				await h.store.completeDelivery(BUILD, {
-					id: d.id,
-					leaseToken: `lease-${round}`,
-					now: NOW,
-					outcome: { kind: 'delivered', status: 202 },
-				})
-			}
-		}
-		// The direct status, addressed to nobody else, is not sent; the public one goes to the follower's server
-		// without naming the blocked account; the Block goes.
-		expect(delivered.map((d) => d.type)).toEqual(['Create', 'Block'])
-		const sentCreate = JSON.parse(delivered[0]!.body) as { object: { id: string; cc: string[]; tag: unknown[] } }
-		expect(sentCreate.object.id).toBe(open.uri)
-		expect(JSON.stringify(sentCreate)).not.toContain('https://remote.example/users/bob')
-		expect(await sql(h.store, 'SELECT 1 FROM deliveries')).toEqual([])
+		// bob is the only recipient on remote.example: neither his personal nor his shared inbox gets it.
+		await post(h, alice, { status: '@bob@remote.example @carol@other.example secret', visibility: 'direct' })
+		await post(h, alice, { status: '@bob@remote.example just you', visibility: 'direct' })
+		expect((await sent(h)).map((o) => [o.activity.type, o.audience.accounts.length, o.inboxes])).toEqual([
+			['Create', 1, ['https://other.example/inbox']],
+		])
 	})
 })
 
@@ -678,38 +657,69 @@ describe('domain blocks', () => {
 		expect(await sql(h.store, fromDomain('spam.example'))).toEqual([{ n: DOMAIN_BLOCK_WINDOW / 2 }])
 	})
 
+	// A SqlStorage that counts the rows each statement reads.
+	function countingSql(real: SqlStorage): { sql: SqlStorage; read: () => number } {
+		let read = 0
+		const sql = {
+			exec: (query: string, ...params: SqlStorageValue[]) => {
+				const cursor = real.exec(query, ...params)
+				return {
+					toArray: () => {
+						const rows = cursor.toArray()
+						read += cursor.rowsRead
+						return rows
+					},
+					get rowsWritten() {
+						const written = cursor.rowsWritten
+						read += cursor.rowsRead
+						return written
+					},
+				}
+			},
+		} as unknown as SqlStorage
+		return { sql, read: () => read }
+	}
+
 	// Runs the domain block operation over a SqlStorage that counts the rows each statement reads.
 	async function rowsRead(h: ApiHarness, user: User, domain: string): Promise<number> {
 		const tokenHash = await sha256Hex(user.token)
 		return runInDurableObject(h.store, (_instance, state) => {
-			let read = 0
-			const real = state.storage.sql
-			const counting = {
-				exec: (query: string, ...params: SqlStorageValue[]) => {
-					const cursor = real.exec(query, ...params)
-					return {
-						toArray: () => {
-							const rows = cursor.toArray()
-							read += cursor.rowsRead
-							return rows
-						},
-						get rowsWritten() {
-							const written = cursor.rowsWritten
-							read += cursor.rowsRead
-							return written
-						},
-					}
-				},
-			} as unknown as SqlStorage
+			const { sql: counting, read } = countingSql(state.storage.sql)
 			const result = blockDomainOperation.run(counting, {
 				credential: { tokenHash, scope: 'write:blocks', now: NOW },
 				domain,
 				now: NOW,
 			})
 			expect(result.status).toBe('ok')
-			return read
+			return read()
 		})
 	}
+
+	it('picks the next cleanup through an index, however many are pending (RES-6, RES-7)', async () => {
+		const reads: number[] = []
+		for (const jobs of [20, 200]) {
+			const h = await community(['alice'])
+			await sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+				INSERT INTO domain_blocks (account_id, domain) SELECT ?1, 'd' || i || '.example' FROM n`,
+				h.users.alice.id,
+				jobs
+			)
+			await sql(
+				h.store,
+				'INSERT INTO domain_block_cleanups (domain_block_id, bound, created_at) SELECT id, 1, id FROM domain_blocks'
+			)
+			reads.push(
+				await runInDurableObject(h.store, (_instance, state) => {
+					const { sql: counting, read } = countingSql(state.storage.sql)
+					expect(runDomainBlockCleanups.run(counting, { now: NOW })).toEqual({ pending: true, delivers: false })
+					return read()
+				})
+			)
+		}
+		expect(reads[1]).toBe(reads[0])
+	})
 
 	it('reads a bounded number of rows to block a domain, however many follows do not match (RES-6, RES-7)', async () => {
 		const reads: number[] = []

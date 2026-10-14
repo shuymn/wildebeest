@@ -319,16 +319,15 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   that mentions or answers it. Relationships show `blocking` and `blocked_by`. A local block of a remote account
   sends, in order, the `Undo` of our follow, a `Reject` of theirs (one that withdraws it if it was accepted) and the
   `Block`; an unblock sends the `Block`'s `Undo`, which supersedes a `Block` still waiting. All go to the blocked
-  account only (NET-2). The blocked account is never a recipient of the blocker's statuses, as Mastodon's
-  `ProcessMentionsService` drops the mention: a new status or an edit does not mention it (the name stays text), an
-  activity that carries content (`Create`, `Update`, `Announce`) is not addressed to it when its targets are written,
-  and at each claim a row written before the block is not sent to it (its addressee or personal inbox), is sent
-  elsewhere without naming it, or is not sent at all when it would name nobody else; a `Block`, `Reject`, `Undo` or
-  `Delete` still reaches it. A local block always applies: the ended remote `Follow` is recorded as retracted (ID-7)
+  account only (NET-2). After the block, the blocked account is no recipient of the blocker's statuses: a new status
+  or an edit does not mention it (the name stays text, as Mastodon's `ProcessMentionsService` drops the mention), and
+  an activity that carries content (`Create`, `Update`, `Announce`) recorded after the block is neither addressed nor
+  delivered to it; a `Block`, `Reject`, `Undo` or `Delete` still reaches it. Deliveries queued before the block are
+  sent as queued, as in Mastodon (see the accepted risks). A local block always applies: the ended remote `Follow` is recorded as retracted (ID-7)
   only within that actor's retraction cap, since the block itself refuses the actor's Follows while it lasts.
   _Implemented on branch `kopje/blocks-mutes`:_ `block` and `unblock` in `src/domain/blocks.ts`, the inbound `block`
-  in `src/domain/inbox.ts`, `resolveMentions` and `editStatus` in `src/domain/statuses.ts`, `audienceTargets` and
-  `sendable` in `src/domain/deliveries.ts`, `shownSql` in `src/domain/notifications.ts`, `homeTimeline` in
+  in `src/domain/inbox.ts`, `resolveMentions` and `editStatus` in `src/domain/statuses.ts`, `audienceTargets` in
+  `src/domain/deliveries.ts`, `shownSql` in `src/domain/notifications.ts`, `homeTimeline` in
   `src/domain/timelines.ts`; `test/blocks.test.ts` ("blocks a local account", "sends a remote account Undo Follow,
   Reject and Block", "applies an inbound Block and its Undo", "blocked recipients", "mentions of blocked and muted
   accounts"), `test/inbox.test.ts` ("records a Block, ends both follows").
@@ -350,14 +349,15 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   each follower gets a `Reject`, each of our follows an `Undo`. That is a durable cleanup (`domain_block_cleanups`,
   progress kept as a cursor over follow ids up to the newest follow when the domain was blocked) done in batches that
   each scan 500 follows (RES-6, RES-7): the first in the request, the rest in the rounds the Queue and the cron run
-  with the inbound jobs, until done. Until then nothing that carries content is delivered to the domain (followers
-  there are left out of a status's targets, and a row to an inbox on the domain is dropped at its claim). An unblock
+  with the inbound jobs, until done; the next cleanup is picked through an index (`domain_block_cleanups_next`). Until
+  then, followers there are left out of the targets of anything that carries content recorded after the block. An
+  unblock
   stops the cleanup: what it removed stays removed. The domain is normalized (lowercase, punycode, no trailing dot or
   slash) and this instance's own domain is refused. _Implemented on branch `kopje/blocks-mutes`:_ `blockDomain` and
-  `runDomainBlockCleanups` in `src/domain/blocks.ts`, `runInboundJobs` in `src/store.ts`, `audienceTargets` and
-  `sendable` in `src/domain/deliveries.ts`; `test/blocks.test.ts` ("ends our follows there with an Undo and theirs
+  `runDomainBlockCleanups` in `src/domain/blocks.ts`, `runInboundJobs` in `src/store.ts`, `audienceTargets` in
+  `src/domain/deliveries.ts`; `test/blocks.test.ts` ("ends our follows there with an Undo and theirs
   with a Reject", "finishes the cleanup in later rounds", "stops the cleanup when the domain is unblocked", "reads a
-  bounded number of rows to block a domain", "normalizes the domain").
+  bounded number of rows to block a domain", "picks the next cleanup through an index", "normalizes the domain").
 
 ### Authorization (AUTH)
 
@@ -1312,6 +1312,7 @@ activity specs, cited in test names.
 | A web session lasts its 7 days even if the person's Access session ends or the Access policy changes                                                                                                                                                                                                  | Access verifies the person at sign-in only (design); suspension, sign-out and "sign out other sessions" end sessions at once                                                                                                                                      | sessions must follow Access policy changes                           |
 | Notifications written before a block, a mute or a domain block are hidden while it lasts, not deleted as Mastodon deletes them, so they show again after it ends                                                                                                                                      | The one notification rule hides them at read time (VIS-13 to VIS-15); deleting them would be unbounded work in the request                                                                                                                                        | a user expects them gone after an unblock                            |
 | A local block of a remote actor at its retraction cap does not record the ended Follow as retracted, so after an unblock a redelivery of that Follow is accepted as a new one                                                                                                                         | The block must apply whatever the blocked actor did to its own cap; while the block lasts its Follows are refused (VIS-13)                                                                                                                                        | redelivered Follows are seen after unblocks                          |
+| Deliveries queued before a block or a domain block (retries of them included) are still sent as queued, to the blocked account's inboxes too                                                                                                                                                          | Mastodon does not rewrite deliveries already queued either; a re-check at claim cannot tell, for a shared inbox or a follower target, which recipients it serves (VIS-13, VIS-15)                                                                                 | deliveries keep their recipients                                     |
 
 ## How to use
 

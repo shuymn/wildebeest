@@ -1,7 +1,6 @@
 import { blockedSql, domainBlockMatchSql } from './audience'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
-import { hostDomain } from '../platform/domain-name'
 
 // Outbound delivery (design §4 "outbound", NET-2, VIS-3, RES-4, RES-5, RES-6, OPS-3). deliveries is the source of
 // truth; the Queue only rings a doorbell, and the Worker does the POSTs.
@@ -89,82 +88,13 @@ function idOf(value: unknown): string | null {
 	return null
 }
 
-// Activities that carry a status (or a boost of one) to its audience. An account the signer blocks, or whose domain
-// it blocks, never receives one nor is named in one (VIS-13, VIS-15): it is left out when the targets are written,
-// and again at each claim for rows written before the block. A Block, Reject, Undo or Delete still reaches it.
+// Activities that carry a status (or a boost of one) to its audience. One written after the signer blocks an account,
+// or its domain, is not addressed to it (VIS-13, VIS-15); a Block, Reject, Undo or Delete still reaches it. Rows
+// written before the block are sent as they were queued, as Mastodon sends them.
 const CONTENT_TYPES = new Set(['Create', 'Update', 'Announce'])
 
 function carriesContent(activity: Activity): boolean {
 	return typeof activity.type === 'string' && CONTENT_TYPES.has(activity.type)
-}
-
-function objectOf(activity: Activity): Activity | null {
-	return typeof activity.object === 'object' && activity.object !== null ? (activity.object as Activity) : null
-}
-
-function mentionHrefs(tags: unknown): string[] {
-	return (Array.isArray(tags) ? tags : []).flatMap((tag: unknown) => {
-		const { type, href } = (typeof tag === 'object' && tag !== null ? tag : {}) as Record<string, unknown>
-		return type === 'Mention' && typeof href === 'string' ? [href] : []
-	})
-}
-
-// The remote accounts an activity names (its to and cc, its object's, and the object's Mention tags) that the signer
-// blocks or whose domain it blocks, with their personal inboxes.
-function blockedNamed(db: Db, signerId: string, activity: Activity): { uri: string; inbox_url: string | null }[] {
-	const object = objectOf(activity)
-	const names = new Set([
-		...uris(activity.to),
-		...uris(activity.cc),
-		...uris(object?.to),
-		...uris(object?.cc),
-		...mentionHrefs(object?.tag),
-	])
-	if (names.size === 0) {
-		return []
-	}
-	return db.all<{ uri: string; inbox_url: string | null }>(
-		`SELECT a.uri, NULLIF(a.inbox_url, '') AS inbox_url FROM accounts a
-		WHERE a.uri IN (SELECT value FROM json_each(?1)) AND a.domain IS NOT NULL AND ${blockedSql('?2', 'a')}`,
-		JSON.stringify([...names]),
-		signerId
-	)
-}
-
-// The activity without the given accounts in to, cc, the object's to and cc, and its Mention tags.
-function withoutNames(activity: Activity, names: ReadonlySet<string>): Activity {
-	const keep = (value: unknown) => (Array.isArray(value) ? uris(value).filter((uri) => !names.has(uri)) : value)
-	const object = objectOf(activity)
-	return {
-		...activity,
-		...(activity.to === undefined ? {} : { to: keep(activity.to) }),
-		...(activity.cc === undefined ? {} : { cc: keep(activity.cc) }),
-		...(object === null
-			? {}
-			: {
-					object: {
-						...object,
-						...(object.to === undefined ? {} : { to: keep(object.to) }),
-						...(object.cc === undefined ? {} : { cc: keep(object.cc) }),
-						...(Array.isArray(object.tag)
-							? {
-									tag: object.tag.filter((tag: unknown) => !mentionHrefs([tag]).some((href) => names.has(href))),
-								}
-							: {}),
-					},
-				}),
-	}
-}
-
-// Whether the host of an inbox is a domain the signer blocks (exactly, as domain blocks match).
-function inboxDomainBlocked(db: Db, signerId: string, inbox: string): boolean {
-	let host: string
-	try {
-		host = hostDomain(inbox)
-	} catch {
-		return false
-	}
-	return db.first('SELECT 1 AS x FROM domain_blocks WHERE account_id = ? AND domain = ?', signerId, host) !== undefined
 }
 
 // The local object an activity is about, and whether it retracts it.
@@ -807,30 +737,6 @@ function bodyFor(activity: string, addressee: string | null): string {
 	return JSON.stringify(parsed)
 }
 
-// The activity a row may still send, as JSON: content (carriesContent) re-checked against the signer's blocks and domain
-// blocks at the time of the claim. null when the row's recipient is blocked (its addressee, the personal inbox of a
-// blocked account it names, or an inbox on a blocked domain) or when nobody is left in to and cc without the blocked
-// accounts; otherwise without the blocked accounts it names.
-function sendable(db: Db, row: LaneRow & { addressee: string | null }, text: string): string | null {
-	const activity = JSON.parse(text) as Activity
-	if (!carriesContent(activity)) {
-		return text
-	}
-	if (inboxDomainBlocked(db, row.account_id, row.inbox_url)) {
-		return null
-	}
-	const blocked = blockedNamed(db, row.account_id, activity)
-	if (blocked.length === 0) {
-		return text
-	}
-	if (blocked.some((account) => account.uri === row.addressee || account.inbox_url === row.inbox_url)) {
-		return null
-	}
-	const kept = withoutNames(activity, new Set(blocked.map((account) => account.uri)))
-	// Addressed to nobody once the blocked accounts are left out (a direct status to them): nothing to send.
-	return [...uris(kept.to), ...uris(kept.cc)].length === 0 ? null : JSON.stringify(kept)
-}
-
 // Expands one step, then leases up to `limit` due lane heads (RES-6: a claim reads and returns a bounded number of
 // rows). An expired lease is due again; one that has used up its attempts is given up instead of claimed.
 export const claimDeliveries = writeOperation<{ now: number; leaseToken: string; limit?: number }, Claim>(
@@ -850,19 +756,6 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 				giveUp(db, row, now, null, 'lease expired')
 				continue
 			}
-			const body = db.first<{ activity: string }>(
-				"SELECT json_extract(body, '$.activity') AS activity FROM outbound_activities WHERE id = CAST(? AS INTEGER)",
-				row.activity_id
-			)
-			const activity = sendable(db, row, body?.activity ?? '{}')
-			if (activity === null) {
-				// A recipient blocked since the row was written: the row goes unsent, and the lane moves on.
-				db.run('DELETE FROM deliveries WHERE id = CAST(? AS INTEGER)', row.id)
-				promoteLane(db, row.account_id, row.lane, now)
-				dropSettledActivity(db, row.activity_id)
-				console.info({ event: 'kopje.delivery.blocked_recipient' })
-				continue
-			}
 			db.run(
 				`UPDATE deliveries SET state = 'leased', lease_token = ?, attempts = attempts + 1, next_attempt_at = ?,
 					updated_at = ?, last_error = CASE WHEN state = 'leased' THEN 'lease expired' ELSE last_error END
@@ -872,12 +765,16 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 				now,
 				row.id
 			)
+			const body = db.first<{ activity: string }>(
+				"SELECT json_extract(body, '$.activity') AS activity FROM outbound_activities WHERE id = CAST(? AS INTEGER)",
+				row.activity_id
+			)
 			claimed.push({
 				id: row.id,
 				inbox: row.inbox_url,
 				signer: row.account_id,
 				activityId: row.activity_id,
-				body: bodyFor(activity, row.addressee),
+				body: bodyFor(body?.activity ?? '{}', row.addressee),
 			})
 		}
 		const signers: Record<string, DeliverySigner> = {}
