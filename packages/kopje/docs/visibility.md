@@ -88,8 +88,8 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 A domain block is stored normalized (lowercase, punycode, no trailing dot: `blockedDomain` in
 `src/platform/domain-name.ts`, used by the API and by the cutover converter) and compared as it is with the account's
 normalized domain and actor host, so each check is two seeks of the `(account_id, domain)` index, however many domains
-the viewer blocks. Stored rows need no backfill: legacy's API only ever stored lowercase ASCII domains without a
-trailing dot, and Kopje's normalizes on insert.
+the viewer blocks. A Store converted by an earlier release may hold a block with a trailing dot; migration
+`0003_domain_block_form` removes it, merging a row that then repeats a block of the same account.
 
 ## The architecture test
 

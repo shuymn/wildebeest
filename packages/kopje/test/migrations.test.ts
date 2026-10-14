@@ -145,9 +145,58 @@ describe('Store migration runner', () => {
 				INSERT INTO oauth_tokens (token_hash, kind, client_id, scopes) VALUES ('h', 'access', 'c', 'push');
 				INSERT INTO push_subscriptions (token_hash, endpoint, key_p256dh, key_auth) VALUES ('h', 'https://p.example/', 'k', 'a');
 			`)
-			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({ ok: true, applied: ['0002_web_push'] })
+			expect(await kernel(state, MIGRATIONS.slice(0, 3)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0002_web_push'],
+			})
 			expect(sql.exec('SELECT standard, token_sealed FROM push_subscriptions').toArray()).toEqual([
 				{ standard: 0, token_sealed: '' },
+			])
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('upgrades a Store at 0002_web_push with 0003_domain_block_form: trailing dots go, and a duplicate merges', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, 3)).upgrade()).toMatchObject({ ok: true })
+			const [alice, bob] = ['100000000000000001', '100000000000000002']
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					(?, 'https://kopje.test/ap/users/alice', 'alice', NULL), (?, 'https://kopje.test/ap/users/bob', 'bob', NULL)`,
+				alice,
+				bob
+			)
+			sql.exec(
+				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES
+					(?, 'a@example.com', X'00', X'00', 'k'), (?, 'b@example.com', X'00', X'00', 'k')`,
+				alice,
+				bob
+			)
+			// A converted dotted block, and the same domain blocked again through the API later, with its cleanup.
+			sql.exec(
+				`INSERT INTO domain_blocks (id, account_id, domain) VALUES
+					(1, ?1, 'pair.example.'), (2, ?1, 'pair.example'), (3, ?1, 'dotted.example.'), (4, ?1, 'plain.example'),
+					(5, ?2, 'pair.example.')`,
+				alice,
+				bob
+			)
+			sql.exec('INSERT INTO domain_block_cleanups (domain_block_id, bound, created_at) VALUES (2, 7, 1)')
+
+			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0003_domain_block_form'],
+			})
+			expect(sql.exec('SELECT id, account_id, domain FROM domain_blocks ORDER BY id').toArray()).toEqual([
+				{ id: 1, account_id: alice, domain: 'pair.example' },
+				{ id: 3, account_id: alice, domain: 'dotted.example' },
+				{ id: 4, account_id: alice, domain: 'plain.example' },
+				{ id: 5, account_id: bob, domain: 'pair.example' },
+			])
+			// The merged row's cleanup now belongs to the block that stays.
+			expect(sql.exec('SELECT domain_block_id, bound FROM domain_block_cleanups').toArray()).toEqual([
+				{ domain_block_id: 1, bound: 7 },
 			])
 			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
 		})

@@ -1549,8 +1549,8 @@ export function convertLegacy(
 
 	// A domain block is matched as stored (domain/audience.ts, inDomainSql), so it is converted as Kopje's API stores
 	// one (blockedDomain: lowercase, punycode, no trailing dot). Rows that become the same block are merged, and a value
-	// that is no domain name is dropped, counted. Rows already stored need no backfill: legacy's API only stored
-	// lowercase ASCII names without a trailing dot (its domainPattern), and Kopje's normalizes on insert.
+	// that is no domain name is dropped, counted. A Store converted before this kept trailing dots; its migration
+	// 0003_domain_block_form brings those rows to this form.
 	const domainBlockInsert = insert(
 		'INSERT OR IGNORE INTO domain_blocks (account_id, domain, created_at) VALUES (?, ?, ?)'
 	)
