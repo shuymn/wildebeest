@@ -25,6 +25,7 @@ import {
 	DOMAIN_BLOCK_WINDOW,
 	runDomainBlockCleanups,
 } from '../src/domain/blocks'
+import { publicTimeline } from '../src/domain/timelines'
 import { sha256Hex } from '../src/security/tokens'
 
 // Blocks, mutes and domain blocks through the API (domain/blocks.ts, mastodon/blocks.ts): the endpoints, their scopes
@@ -784,6 +785,47 @@ describe('domain blocks', () => {
 				await runInDurableObject(h.store, (_instance, state) => {
 					const { sql: counting, read } = countingSql(state.storage.sql)
 					expect(runDomainBlockCleanups.run(counting, { now: NOW })).toEqual({ pending: true, delivers: false })
+					return read()
+				})
+			)
+		}
+		expect(reads[1]).toBe(reads[0])
+	})
+
+	it('matches domain blocks through their index, however many other domains the viewer blocks (RES-7)', async () => {
+		const reads: number[] = []
+		for (const blocked of [20, 2000]) {
+			const h = await community(['alice'])
+			const author = await remoteAccount(h.store, 'author', 'open.example')
+			const hidden = await remoteAccount(h.store, 'hidden', 'd1.example')
+			for (const accountId of [author, author, hidden]) {
+				await seedStatus(h.store, { accountId, visibility: 'public' })
+			}
+			await sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+				INSERT INTO domain_blocks (account_id, domain) SELECT ?1, 'd' || i || '.example' FROM n`,
+				h.users.alice.id,
+				blocked
+			)
+			const tokenHash = await sha256Hex(h.users.alice.token)
+			reads.push(
+				await runInDurableObject(h.store, (_instance, state) => {
+					const { sql: counting, read } = countingSql(state.storage.sql)
+					const result = publicTimeline.run(counting, {
+						credential: { tokenHash, scope: 'read:statuses', now: NOW },
+						page: { limit: 20 },
+						local: false,
+						remote: false,
+						onlyMedia: false,
+						now: NOW,
+						present: { origin: 'https://kopje.test' },
+					})
+					// The status on the blocked domain is left out, the others are listed.
+					expect(result.status === 'ok' && result.value.items.map((status) => status.account.id)).toEqual([
+						author,
+						author,
+					])
 					return read()
 				})
 			)
