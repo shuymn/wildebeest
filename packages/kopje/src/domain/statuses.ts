@@ -712,6 +712,7 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 		const read = statusReads(viewer, { viewer: '?1', now: '?4' })
 		const ancestors = read.all<{ id: string }, 'id'>(
 			db,
+			'id',
 			`WITH RECURSIVE up (id, depth) AS (
 				SELECT in_reply_to_id, 1 FROM statuses WHERE id = ?2 AND in_reply_to_id IS NOT NULL
 				UNION ALL
@@ -727,6 +728,7 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 		const tree = descendantTree(db, resolved, limits.depth, limits.traversal)
 		const descendants = read.all<{ id: string }, 'id'>(
 			db,
+			'id',
 			`SELECT s.id FROM json_each(?2) j JOIN statuses s ON s.id = j.value
 			WHERE ${read.listable('s')} ORDER BY j.key LIMIT ?3`,
 			viewerId,

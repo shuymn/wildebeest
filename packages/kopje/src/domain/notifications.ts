@@ -161,6 +161,7 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 		const read = statusReads(viewer, { viewer: '?1', now: '?8' })
 		const rows = read.all<NotificationRow, 'status_id'>(
 			db,
+			'status_id',
 			`SELECT ${NOTIFICATION_COLUMNS} FROM notifications n
 			WHERE n.account_id = ?1
 				AND (?2 IS NULL OR n.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR n.id > CAST(?3 AS INTEGER))
@@ -200,6 +201,7 @@ export const getNotification = userReadOperation<{ id: string; present: Present 
 		const read = statusReads(viewer, { viewer: '?1', now: '?3' })
 		const rows = read.all<NotificationRow, 'status_id'>(
 			db,
+			'status_id',
 			`SELECT ${NOTIFICATION_COLUMNS} FROM notifications n
 			WHERE n.account_id = ?1 AND n.id = CAST(?2 AS INTEGER)
 				AND ${read.shown('n.type', 'n.from_account_id', 'n.status_id')}`,

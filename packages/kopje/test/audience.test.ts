@@ -212,23 +212,49 @@ describe('statusReads, the id brands and the presenter guard', () => {
 		return { store, author, booster, original, boost }
 	}
 
-	it('runs only a query that applies a rule it made, with the viewer and the time it was given bound', async () => {
-		const { store, booster, boost } = await world()
+	it('runs only a query whose every branch selects the ids its rule judged, with the viewer and time bound', async () => {
+		const { store, booster, original, boost } = await world()
 		await runInDurableObject(store, (_instance, state) => {
 			const db = new Db(state.storage.sql)
 			const viewer = { accountId: booster, now: NOW_ISO }
 			const read = statusReads(viewer, { viewer: '?1', now: '?3' })
+			const params = [booster, boost, NOW_ISO]
 			const query = `SELECT s.id FROM statuses s WHERE s.id = ?2 AND ${read.listable('s')}`
-			expect(read.all<{ id: string }, 'id'>(db, query, booster, boost, NOW_ISO)).toEqual([{ id: boost }])
-			// No rule of this reader in the query.
-			expect(() => read.all(db, 'SELECT s.id FROM statuses s WHERE s.id = ?2', booster, boost, NOW_ISO)).toThrow(
-				'a status query must apply a read rule'
-			)
-			const other = statusReads(viewer, { viewer: '?1', now: '?3' })
-			expect(() => other.all(db, query, booster, boost, NOW_ISO)).toThrow('a status query must apply a read rule')
+			expect(read.all<{ id: string }, 'id'>(db, 'id', query, ...params)).toEqual([{ id: boost }])
+			const rejected = 'a status query must select the ids its read rule judged, in every branch'
+			const refuses = (sql: string, column = 'id') =>
+				expect(() => read.all(db, column, sql, ...params)).toThrow(rejected)
+			// No rule of this reader in the query, or one another reader made.
+			refuses('SELECT s.id FROM statuses s WHERE s.id = ?2')
+			expect(() => statusReads(viewer, { viewer: '?1', now: '?3' }).all(db, 'id', query, ...params)).toThrow(rejected)
+			// A branch without the rule, at the top or inside a subquery.
+			const bare = 'SELECT s.id FROM statuses s WHERE s.account_id = ?1'
+			refuses(`${query} UNION ALL ${bare}`)
+			refuses(`SELECT id FROM (SELECT * FROM (${query}) UNION ALL SELECT * FROM (${bare})) ORDER BY id`)
+			// A column other than the judged ids: a parameter, another alias's id, another column, or the ids under
+			// another name.
+			refuses(`SELECT ?2 AS id FROM statuses s WHERE ${read.listable('s')}`)
+			refuses(`SELECT o.id FROM statuses s JOIN statuses o ON o.id = s.reblog_of_id WHERE ${read.listable('s')}`)
+			refuses(`SELECT s.reblog_of_id AS id FROM statuses s WHERE ${read.listable('s')}`)
+			refuses(`SELECT s.id AS other, s.reblog_of_id AS id FROM statuses s WHERE ${read.listable('s')}`)
+			// Branches that each apply the rule pass, and so does a WITH clause, a comment and a string with keywords.
+			const each = `SELECT s.id FROM statuses s WHERE s.id = ?2 AND ${read.visible('s')}`
+			expect(
+				read.all<{ id: string }, 'id'>(
+					db,
+					'id',
+					`WITH c(id) AS (SELECT ?2 UNION SELECT 'x') SELECT id FROM (
+						SELECT * FROM (${query} -- a branch's comment ) UNION
+					) UNION ALL SELECT * FROM (${each} AND 'x) UNION SELECT 1' <> '')) ORDER BY id`,
+					...params
+				)
+			).toEqual([{ id: boost }, { id: boost }])
+			expect(original).not.toBe(boost)
 			// Another viewer or time in the rule's parameters.
-			expect(() => read.all(db, query, null, boost, NOW_ISO)).toThrow("must bind the viewer's account id and time")
-			expect(() => read.all(db, query, booster, boost, '2026-10-13T00:00:00.000Z')).toThrow(
+			expect(() => read.all(db, 'id', query, null, boost, NOW_ISO)).toThrow(
+				"must bind the viewer's account id and time"
+			)
+			expect(() => read.all(db, 'id', query, booster, boost, '2026-10-13T00:00:00.000Z')).toThrow(
 				"must bind the viewer's account id and time"
 			)
 			// A reader without a time has no rule that needs one.
@@ -245,6 +271,7 @@ describe('statusReads, the id brands and the presenter guard', () => {
 			const read = statusReads({ accountId: booster, now: NOW_ISO }, { viewer: '?1' })
 			const rows = read.all<{ id: string }, 'id'>(
 				db,
+				'id',
 				`SELECT s.id FROM statuses s WHERE s.id = ?2 AND ${read.visible('s')}`,
 				booster,
 				boost

@@ -98,8 +98,10 @@ and write response. It takes only ids the policy module made, as TypeScript bran
 
 `statusReads(viewer, { viewer: '?1', now: '?5' })` hands a query the status rules for one viewer as fragments over a
 statuses alias: `visible` (R2), `listable` (R8), `homeFilter` (R9) and `shown` (R15 with the viewer as the recipient,
-which shows a status only if they may view it). Its `all` runs the query only if the query contains a fragment it made
-and its parameters at `viewer` and `now` are the context's account id and time, and brands the id column of the rows.
+which shows a status only if they may view it). Its `all` runs the query only if every branch of it (each part of a
+compound SELECT, and through a subquery it selects from) selects as the id column the ids a fragment it made judged
+in that branch (`s.id`, or the status `shown` was given), and its parameters at `viewer` and `now` are the context's
+account id and time; it then brands the id column of the rows.
 `viewableStatusId` is `canView` (R3) for one id. `ownStatusId` checks the author. The callers:
 
 | Caller                                                     | Ids from                                                                       |

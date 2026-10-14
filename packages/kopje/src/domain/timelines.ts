@@ -89,6 +89,7 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 				AND s.language NOT IN (SELECT value FROM json_each(hl.languages)))`
 		const rows = read.all<{ id: string }, 'id'>(
 			db,
+			'id',
 			`SELECT id FROM (
 				SELECT * FROM (SELECT s.id FROM statuses s
 					WHERE s.account_id IN (SELECT ?1 UNION ALL
@@ -140,6 +141,7 @@ export const publicTimeline = optionalUserReadOperation<PublicTimelineInput, Pag
 	const read = statusReads(viewer, { viewer: '?1', now: '?5' })
 	const rows = read.all<{ id: string }, 'id'>(
 		db,
+		'id',
 		`SELECT s.id FROM statuses s JOIN accounts pa ON pa.id = s.account_id
 			WHERE ${publicConditions(read, input.local, input.remote, input.onlyMedia)}
 				AND ${NOT_A_REPLY_TO_OTHERS}
@@ -175,7 +177,7 @@ export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Stat
 	// ?5 all, ?6 none, ?7 now, then one parameter per name from ?8. CROSS JOIN keeps status_tags outermost, and the
 	// cursor is a plain range (no cursor: '' and ':', below and above every id of digits), so each branch starts in
 	// the index at the cursor, walks it in order and stops at LIMIT.
-	const branch = (n: number) => `SELECT * FROM (SELECT t.status_id AS id FROM status_tags t
+	const branch = (n: number) => `SELECT * FROM (SELECT s.id FROM status_tags t
 				CROSS JOIN statuses s ON s.id = t.status_id JOIN accounts pa ON pa.id = s.account_id
 			WHERE t.public = 1 AND t.name = ?${8 + n}
 				AND NOT EXISTS (SELECT 1 FROM json_each(?5) a
@@ -187,6 +189,7 @@ export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Stat
 			ORDER BY t.status_id ${order} LIMIT ?4)`
 	const rows = read.all<{ id: string }, 'id'>(
 		db,
+		'id',
 		`SELECT id FROM (${names.map((_, n) => branch(n)).join(' UNION ')}) ORDER BY id ${order} LIMIT ?4`,
 		viewerId,
 		cursor.max ?? ':',
@@ -229,6 +232,7 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 		const read = statusReads(viewer, { viewer: '?1', now: '?7' })
 		const rows = read.all<{ id: string }, 'id'>(
 			db,
+			'id',
 			`SELECT s.id FROM statuses s
 			WHERE s.account_id = ?5 AND ${read.visible('s')}
 				AND NOT ${blocksSql('?1', 's.account_id')}
@@ -262,7 +266,8 @@ function edgeList(table: 'bookmarks' | 'favourites') {
 			const read = statusReads(viewer, { viewer: '?1', now: '?5' })
 			const rows = read.all<{ cursor: string; id: string }, 'id'>(
 				db,
-				`SELECT CAST(e.id AS TEXT) AS cursor, e.status_id AS id FROM ${table} e JOIN statuses s ON s.id = e.status_id
+				'id',
+				`SELECT CAST(e.id AS TEXT) AS cursor, s.id FROM ${table} e JOIN statuses s ON s.id = e.status_id
 			WHERE e.account_id = ?1 AND ${read.listable('s')}
 				AND (?2 IS NULL OR e.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR e.id > CAST(?3 AS INTEGER))
 			ORDER BY e.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,

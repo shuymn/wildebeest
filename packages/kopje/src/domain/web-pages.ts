@@ -36,6 +36,7 @@ export const profilePage = readOperation<{ username: string; maxId: string | nul
 		const ids = read
 			.all<{ id: string }, 'id'>(
 				db,
+				'id',
 				`SELECT s.id FROM statuses s
 				WHERE s.account_id = ?2 AND s.reblog_of_id IS NULL AND ${read.visible('s')} AND ${NOT_A_REPLY_TO_OTHERS}
 					AND (?3 IS NULL OR s.id < ?3)
@@ -76,6 +77,7 @@ export const statusPage = readOperation<{ username: string; id: string; present:
 		const read = statusReads(null, { viewer: '?1' })
 		const row = read.all<{ id: string; in_reply_to_id: string | null; username: string }, 'id'>(
 			db,
+			'id',
 			`SELECT s.id, s.in_reply_to_id, au.username FROM statuses s JOIN accounts au ON au.id = s.account_id
 			WHERE s.id = ?2 AND au.domain IS NULL AND lower(au.username) = lower(?3) AND s.reblog_of_id IS NULL
 				AND ${read.visible('s')}`,

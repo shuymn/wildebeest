@@ -136,6 +136,7 @@ function searchStatuses(db: Db, input: SearchRequest, viewer: UserContext): Stat
 	const ids = read
 		.all<{ id: string }, 'id'>(
 			db,
+			'id',
 			`WITH candidates(id) AS (${candidates})
 			SELECT s.id FROM candidates c JOIN statuses s ON s.id = c.id
 			WHERE ${where.join(' AND ')}
