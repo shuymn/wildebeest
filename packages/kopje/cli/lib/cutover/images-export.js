@@ -31,10 +31,10 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 
+import { checkSizes, exportFiles } from './export-files.js'
 import { imageSize } from './image-size.js'
 import { sniffImageType } from './kopje-runtime.js'
 import { loadLegacyExport } from './legacy-load.js'
-import { checkSizes, exportFiles } from './run.js'
 import { ExportError } from './sql-script.js'
 import { IMAGE_MATRIX_LIMIT, IMAGE_SIZE_LIMIT, TOKEN_SHAPE } from './upload-rules.js'
 

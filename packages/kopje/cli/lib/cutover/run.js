@@ -11,15 +11,14 @@ import {
 	lstatSync,
 	mkdirSync,
 	openSync,
-	readdirSync,
 	readFileSync,
-	statSync,
 	unlinkSync,
 	writeSync,
 } from 'node:fs'
 import { join } from 'node:path'
 
 import { convertLegacy } from './convert.js'
+import { checkSizes, exportFiles } from './export-files.js'
 import { IMAGES_FILE, localDomain, ORIGINALS_DIR, readImagesFile, sha256Of } from './images-export.js'
 import { checkKeks } from './kek.js'
 import { createKopjeDatabase, migrationRecords, readCatalog, sha256Hex, writeDump } from './kopje-db.js'
@@ -33,13 +32,6 @@ export const DUMP_FILE = 'kopje.dump'
 export const MANIFEST_FILE = 'manifest.json'
 // With --images: the originals of the mapped images, under the media id the R2 key originals/<id> needs.
 export const ORIGINALS_OUT = 'originals'
-
-// Preflight limits. A V8 string holds at most 2^29 - 24 UTF-16 units, so one export file (or the dump verify reads)
-// must stay under 512 MiB. The whole export is capped at 1 GiB: the converter reads one file at a time but keeps the
-// legacy and the Kopje database in memory, about three times the export at peak, which stays within a workstation's
-// memory. Exports larger than that are well past the size a single-user or small legacy instance reaches.
-export const MAX_FILE_BYTES = 512 * 1024 * 1024 - 1
-export const MAX_EXPORT_BYTES = 1024 * 1024 * 1024
 
 // What a stop code means, for the manifest. Messages are fixed text; details are counts, levels and digests.
 const MESSAGES = /** @type {Record<string, string>} */ ({
@@ -59,30 +51,6 @@ const MESSAGES = /** @type {Record<string, string>} */ ({
 
 export function packageVersion() {
 	return String(JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf8')).version)
-}
-
-/** @param {string} path */
-export function exportFiles(path) {
-	if (statSync(path).isDirectory()) {
-		return readdirSync(path)
-			.filter((f) => f.endsWith('.sql'))
-			.sort()
-			.map((f) => join(path, f))
-	}
-	return [path]
-}
-
-/** @param {string[]} files */
-export function checkSizes(files) {
-	let total = 0
-	for (const file of files) {
-		const size = statSync(file).size
-		total += size
-		if (size > MAX_FILE_BYTES || total > MAX_EXPORT_BYTES) {
-			throw new ExportError('export-too-large', { files: files.length })
-		}
-	}
-	return total
 }
 
 /** @param {string} text */

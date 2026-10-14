@@ -24,10 +24,10 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { convertLegacy } from './convert.js'
+import { checkSizes, exportFiles } from './export-files.js'
 import { checkKeks } from './kek.js'
 import { createKopjeDatabase } from './kopje-db.js'
 import { loadLegacyExport } from './legacy-load.js'
-import { checkSizes, exportFiles } from './run.js'
 import { ExportError } from './sql-script.js'
 import { snapshotIn, WORKER_FILE, workerSource } from './worker-file.js'
 
