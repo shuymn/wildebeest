@@ -279,20 +279,39 @@ function writtenColumns(text: string): { columns: Map<string, Set<string>>; unpa
 	return { columns, unparsed }
 }
 
-// The columns verify-actual.js reads per table: each `case 'table':` of its switch and each `statement.table ===
-// 'table'` branch runs to the next one (the last to `default:`), and reads columns as t('column'), row.column or
-// c === 'column'.
-function readColumns(text: string): Map<string, Set<string>> {
-	const read = new Map<string, Set<string>>()
-	const starts = [...text.matchAll(/case '(\w+)':|statement\.table === '(\w+)'/g)]
-	const stop = text.indexOf('default:', starts.at(-1)?.index ?? 0)
-	starts.forEach((m, i) => {
-		const region = text.slice(m.index, starts[i + 1]?.index ?? stop)
-		const names = [...region.matchAll(/\bt\('(\w+)'\)|\brow\.(\w+)|\bc === '(\w+)'/g)]
-		const columns = names.map((r) => r[1] ?? r[2] ?? r[3] ?? '')
-		add(read, m[1] ?? m[2] ?? '', columns)
-	})
-	return read
+// A column read in verify-actual.js: t('column'), row.column, row['column'] or c === 'column' (a link statement's
+// columns), or row[...] by any other key.
+const COLUMN_READ = /\bt\('(\w+)'\)|\brow\.(\w+)|\brow\['(\w+)'\]|\bc === '(\w+)'|\brow\[/g
+// The two places that index the row by a variable: where it is built, and t, whose callers name the column.
+const ROW_BY_VARIABLE = ['row[column] = statement.literals[i]', 'textOf(row[column])']
+
+// The columns verify-actual.js reads per table, from its code without comments: each `case 'table':` of its switch and
+// each `statement.table === 'table'` branch runs to the next one (the last to `default:`). A read outside them (in a
+// shared helper, say) belongs to no table and is returned as unattributed.
+function readColumns(text: string): { columns: Map<string, Set<string>>; unattributed: string[] } {
+	const { code } = scan(text)
+	const columns = new Map<string, Set<string>>()
+	const unattributed: string[] = []
+	const starts = [...code.matchAll(/case '(\w+)':|statement\.table === '(\w+)'/g)]
+	const stop = code.indexOf('default:', starts.at(-1)?.index ?? 0)
+	const regions = starts.map((m, i) => ({
+		table: m[1] ?? m[2] ?? '',
+		start: m.index,
+		end: starts[i + 1]?.index ?? stop,
+	}))
+	for (const m of code.matchAll(COLUMN_READ)) {
+		const column = m[1] ?? m[2] ?? m[3] ?? m[4]
+		const region = regions.find((r) => r.start <= m.index && m.index < r.end)
+		if (column === undefined && ROW_BY_VARIABLE.some((form) => code.startsWith(form, m.index - form.indexOf('row[')))) {
+			continue
+		}
+		if (column === undefined || region === undefined) {
+			unattributed.push(column === undefined ? code.slice(m.index, code.indexOf(']', m.index) + 1) : m[0])
+		} else {
+			add(columns, region.table, [column])
+		}
+	}
+	return { columns, unattributed }
 }
 
 // The `table.column` names in `columns` that the schema does not have.
@@ -339,10 +358,57 @@ describe('the write scanner', () => {
 	})
 })
 
+describe('the read scanner', () => {
+	const switchOver = (cases: string, before = '') =>
+		[
+			before,
+			'for (const statement of statements) {',
+			"\tif (statement.table === 'statuses') {",
+			"\t\tconst id = statement.where.find(([c]) => c === 'id')",
+			'\t\tcontinue',
+			'\t}',
+			'\tconst row = {}',
+			"\tstatement.columns.forEach((column, i) => { row[column] = statement.literals[i] ?? 'NULL' })",
+			'\tconst t = (column) => textOf(row[column])',
+			'\tswitch (statement.table) {',
+			cases,
+			'\t\tdefault:',
+			'\t\t\tbreak',
+			'\t}',
+			'}',
+		].join('\n')
+
+	it('attributes reads to the case or link branch they are in, and skips comments', () => {
+		const source = switchOver(
+			[
+				"\t\tcase 'mutes':",
+				"\t\t\tput('mutes', [int(row.hide_notifications), null, // t('expires_at'),",
+				"\t\t\t\t/* row.commented */ row['quoted']])",
+				'\t\t\tbreak',
+			].join('\n')
+		)
+		expect(readColumns(source)).toEqual({
+			columns: new Map([
+				['statuses', new Set(['id'])],
+				['mutes', new Set(['hide_notifications', 'quoted'])],
+			]),
+			unattributed: [],
+		})
+	})
+
+	it('reports a read outside every case, and a row indexed by a variable', () => {
+		const source = switchOver(
+			["\t\tcase 'mutes':", "\t\t\tput('mutes', [shared(row), row[key]])", '\t\t\tbreak'].join('\n'),
+			'const shared = (row) => row.some_column'
+		)
+		expect(readColumns(source).unattributed).toEqual(['row.some_column', 'row[key]'])
+	})
+})
+
 describe('the Store schema in the cutover tools', () => {
 	const schema = schemaColumns()
 	const { columns: written, unparsed } = writtenColumns(source('../cli/lib/cutover/convert.js'))
-	const read = readColumns(source('../cli/lib/cutover/verify-actual.js'))
+	const { columns: read, unattributed } = readColumns(source('../cli/lib/cutover/verify-actual.js'))
 	const carried = [...schema.keys()].filter((table) => !(table in NOT_CARRIED))
 
 	it('names only tables and columns the schema has', () => {
@@ -361,6 +427,7 @@ describe('the Store schema in the cutover tools', () => {
 	})
 
 	it('verify-conversion reads each column of the tables the cutover carries, or says why not', () => {
+		expect(unattributed).toEqual([])
 		expect(sorted([...read.keys()].filter((table) => table in NOT_CARRIED))).toEqual([])
 		const unread = carried.flatMap((table) =>
 			(schema.get(table) ?? []).filter((c) => !read.get(table)?.has(c)).map((c) => `${table}.${c}`)
