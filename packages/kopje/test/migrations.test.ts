@@ -182,10 +182,7 @@ describe('Store migration runner', () => {
 			)
 			sql.exec('INSERT INTO domain_block_cleanups (domain_block_id, bound, created_at) VALUES (1, 7, 1)')
 
-			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({
-				ok: true,
-				applied: ['0003_domain_block_form'],
-			})
+			expect(await kernel(state, MIGRATIONS.slice(0, 4)).upgrade()).toMatchObject({ ok: true, applied: [NAMES[3]] })
 			expect(sql.exec('SELECT id, account_id, domain FROM domain_blocks ORDER BY id').toArray()).toEqual([
 				{ id: 2, account_id: alice, domain: 'pair.example' },
 				{ id: 3, account_id: alice, domain: 'dotted.example' },
