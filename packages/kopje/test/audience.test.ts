@@ -12,9 +12,13 @@ import {
 	canView,
 	interpretAddressing,
 	listableSql,
+	ownStatusId,
 	PUBLIC_COLLECTION,
+	statusReads,
+	viewableStatusId,
 	type Visibility,
 } from '../src/domain/audience'
+import { presentOwnStatus, presentStatuses } from '../src/domain/status-presenter'
 import type { StoreStub } from '../src/platform/store-client'
 
 const FOLLOWERS = 'https://remote.example/users/author/followers'
@@ -191,5 +195,80 @@ describe('canView and the list rule', () => {
 		const boost = await seedStatus(store, { accountId: ids.author, visibility: 'public', reblogOfId: original })
 		expect(await view(store, ids.stranger, boost)).toEqual({ show: false, list: false })
 		expect(await view(store, ids.follower, boost)).toEqual({ show: true, list: true })
+	})
+})
+
+// The ids the presenter accepts (docs/visibility.md, "Status ids the presenter accepts").
+describe('statusReads, the id brands and the presenter guard', () => {
+	const NOW_ISO = new Date(NOW).toISOString()
+	const PRESENT = { origin: 'https://kopje.test' }
+
+	async function world() {
+		const store = await migratedStore()
+		const author = await seedAccount(store, { username: 'author' })
+		const booster = await seedAccount(store, { username: 'booster' })
+		const original = await seedStatus(store, { accountId: author, visibility: 'public' })
+		const boost = await seedStatus(store, { accountId: booster, visibility: 'public', reblogOfId: original })
+		return { store, author, booster, original, boost }
+	}
+
+	it('runs only a query that applies a rule it made, with the viewer and the time it was given bound', async () => {
+		const { store, booster, boost } = await world()
+		await runInDurableObject(store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			const viewer = { accountId: booster, now: NOW_ISO }
+			const read = statusReads(viewer, { viewer: '?1', now: '?3' })
+			const query = `SELECT s.id FROM statuses s WHERE s.id = ?2 AND ${read.listable('s')}`
+			expect(read.all<{ id: string }, 'id'>(db, query, booster, boost, NOW_ISO)).toEqual([{ id: boost }])
+			// No rule of this reader in the query.
+			expect(() => read.all(db, 'SELECT s.id FROM statuses s WHERE s.id = ?2', booster, boost, NOW_ISO)).toThrow(
+				'a status query must apply a read rule'
+			)
+			const other = statusReads(viewer, { viewer: '?1', now: '?3' })
+			expect(() => other.all(db, query, booster, boost, NOW_ISO)).toThrow('a status query must apply a read rule')
+			// Another viewer or time in the rule's parameters.
+			expect(() => read.all(db, query, null, boost, NOW_ISO)).toThrow("must bind the viewer's account id and time")
+			expect(() => read.all(db, query, booster, boost, '2026-10-13T00:00:00.000Z')).toThrow(
+				"must bind the viewer's account id and time"
+			)
+			// A reader without a time has no rule that needs one.
+			expect(() => statusReads(null, { viewer: '?1' }).listable('s')).toThrow('this rule needs the time of the read')
+		})
+	})
+
+	it('shows a boost only with an original the viewer may see, and their own boost without it', async () => {
+		const { store, author, booster, original, boost } = await world()
+		await block(store, author, booster)
+		await runInDurableObject(store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			// The boost row by itself passes the rule for its author; its original does not.
+			const read = statusReads({ accountId: booster, now: NOW_ISO }, { viewer: '?1' })
+			const rows = read.all<{ id: string }, 'id'>(
+				db,
+				`SELECT s.id FROM statuses s WHERE s.id = ?2 AND ${read.visible('s')}`,
+				booster,
+				boost
+			)
+			expect(rows.map((row) => row.id)).toEqual([boost])
+			const options = { ...PRESENT, viewerId: booster }
+			expect(
+				presentStatuses(
+					db,
+					rows.map((row) => row.id),
+					options
+				)
+			).toEqual([])
+			expect(viewableStatusId(db, booster, boost)).toBeNull()
+			const own = ownStatusId(db, booster, boost)
+			expect(own).toBe(boost)
+			expect(presentOwnStatus(db, own!, options)).toMatchObject({ id: boost, reblog: null })
+			// Not the viewer's own.
+			expect(ownStatusId(db, booster, original)).toBeNull()
+			// The original's author sees both.
+			const visible = viewableStatusId(db, author, boost)
+			expect(presentStatuses(db, visible === null ? [] : [visible], { ...PRESENT, viewerId: author })).toMatchObject([
+				{ id: boost, reblog: { id: original } },
+			])
+		})
 	})
 })

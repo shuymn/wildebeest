@@ -1,5 +1,12 @@
 import { type Account, accountUrl, acctOf, type Present, presentAccountsById } from './accounts'
-import { apiVisibility, type ApiVisibility, type Visibility } from './audience'
+import {
+	apiVisibility,
+	type ApiVisibility,
+	type OwnStatusId,
+	type Visibility,
+	type VisibleStatusId,
+	visibleSql,
+} from './audience'
 import { htmlToPlainText } from './plain-text'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
@@ -7,7 +14,10 @@ import { httpUrl } from '../platform/http-url'
 // The Status entity as Mastodon 4.0.2's REST::StatusSerializer shows it. One presenter for every read path: it takes
 // a list of ids and the viewer and reads the related rows kind by kind (statuses and reblogged originals, accounts,
 // media, mentions, tags, viewer flags), each in one query over json_each, so the rows read grow with the page only.
-// It never checks visibility: callers pass ids that went through the audience rule (domain/audience.ts).
+// It takes only ids the policy module (domain/audience.ts) made: VisibleStatusId, which a read rule passed for the
+// viewer, or OwnStatusId, the viewer's own, for the response to their write. A boost's original is read through the
+// read rule for the same viewer, whichever the boost's id: a boost the viewer may see stands only with an original
+// they may see, and their own boost of an original they may no longer see is shown without it (reblog: null).
 
 export type MediaSize = { width: number; height: number; size: string; aspect: number }
 
@@ -98,13 +108,12 @@ export const STATUS_COLUMNS = `s.id, s.uri, s.url, s.account_id, s.reblog_of_id,
 
 export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
 
-export type PresentOptions = Present & {
-	viewerId: string | null
+export type PresentOptions = Present & { viewerId: string | null }
+
+export type PresentOwnOptions = PresentOptions & {
 	// DELETE answers with the source text (`text`) in place of `content`, for redrafting: on the deleted status only,
 	// never on a boost's original.
 	source?: boolean
-	// Present a boost without its original (reblog: null), for an original the viewer may no longer see.
-	withoutReblog?: boolean
 }
 
 // The columns presentMedia reads, for every query that presents media.
@@ -129,17 +138,34 @@ type MentionRow = {
 	uri: string
 }
 
-// Statuses in the order of `ids`; ids with no row are left out.
-export function presentStatuses(db: Db, ids: readonly string[], options: PresentOptions): Status[] {
+// Statuses the read rule passed for the viewer, in the order of `ids`; ids with no row, and boosts whose original the
+// viewer may not see, are left out.
+export function presentStatuses(db: Db, ids: readonly VisibleStatusId[], options: PresentOptions): Status[] {
+	return present(db, ids, options, false)
+}
+
+export function presentStatus(db: Db, id: VisibleStatusId, options: PresentOptions): Status | null {
+	return presentStatuses(db, [id], options)[0] ?? null
+}
+
+// The viewer's own status, for the response to their write; a boost of an original they may not see has reblog: null.
+export function presentOwnStatus(db: Db, id: OwnStatusId, options: PresentOwnOptions): Status | null {
+	return present(db, [id], options, true)[0] ?? null
+}
+
+function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own: boolean): Status[] {
 	if (ids.length === 0) {
 		return []
 	}
 	const idList = JSON.stringify(ids)
+	// The statuses, and the originals of the boosts among them that the viewer may see.
 	const rows = db.all<StatusRow>(
 		`SELECT ${STATUS_COLUMNS} FROM ${STATUS_FROM}
 		WHERE s.id IN (SELECT value FROM json_each(?1))
-			OR s.id IN (SELECT reblog_of_id FROM statuses WHERE id IN (SELECT value FROM json_each(?1)) AND reblog_of_id IS NOT NULL)`,
-		idList
+			OR (s.id IN (SELECT reblog_of_id FROM statuses WHERE id IN (SELECT value FROM json_each(?1)) AND reblog_of_id IS NOT NULL)
+				AND ${visibleSql('s', '?2')})`,
+		idList,
+		options.viewerId
 	)
 	const byId = new Map(rows.map((row) => [row.id, row]))
 	const all = JSON.stringify([...byId.keys()])
@@ -171,16 +197,20 @@ export function presentStatuses(db: Db, ids: readonly string[], options: Present
 	)
 	const flags = viewerFlags(db, options.viewerId, all)
 
-	const present = (row: StatusRow, top: boolean): Status | undefined => {
+	const presentRow = (row: StatusRow, top: boolean): Status | undefined => {
 		const account = accounts.get(row.account_id)
 		if (account === undefined) {
 			return undefined
 		}
 		let reblog: Status | null = null
-		if (row.reblog_of_id !== null && !(top && options.withoutReblog === true)) {
+		if (row.reblog_of_id !== null) {
 			const original = byId.get(row.reblog_of_id)
-			reblog = original === undefined ? null : (present(original, false) ?? null)
-			if (reblog === null) {
+			if (original !== undefined) {
+				reblog = presentRow(original, false) ?? null
+				if (reblog === null) {
+					return undefined
+				}
+			} else if (!(top && own)) {
 				return undefined
 			}
 		}
@@ -241,13 +271,9 @@ export function presentStatuses(db: Db, ids: readonly string[], options: Present
 
 	return ids.flatMap((id) => {
 		const row = byId.get(id)
-		const status = row === undefined ? undefined : present(row, true)
+		const status = row === undefined ? undefined : presentRow(row, true)
 		return status === undefined ? [] : [status]
 	})
-}
-
-export function presentStatus(db: Db, id: string, options: PresentOptions): Status | null {
-	return presentStatuses(db, [id], options)[0] ?? null
 }
 
 // A local status's web page is /@user/<id>; a local boost has none of its own and shows its Announce id. A remote

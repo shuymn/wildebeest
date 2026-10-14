@@ -217,6 +217,99 @@ export function canView(db: Db, viewerId: string | null, statusId: string): bool
 	)
 }
 
+// ---- Status ids the presenter accepts (status-presenter.ts). Types only: a brand costs nothing at run time, and only
+// the functions below make one, each after the rule it names has been applied for the viewer. test/policy.test.ts
+// keeps every other module from making one (no cast, type argument or type predicate names a brand).
+
+declare const visibleStatus: unique symbol
+declare const ownStatus: unique symbol
+
+// A status the read rule passed for the viewer: a query that applied visibleSql, listableSql, homeFilterSql or
+// shownSql through statusReads, or canView (viewableStatusId). A boost's original is judged again by the presenter.
+export type VisibleStatusId = string & { readonly [visibleStatus]: true }
+
+// A status of the viewer's own, for the response to their own write (post, edit, delete, boost): the author sees all of
+// their own (R2), but not necessarily a boosted original, which the presenter judges for them.
+export type OwnStatusId = string & { readonly [ownStatus]: true }
+
+type Visible<T> = T extends string ? VisibleStatusId : T
+
+// The rows of a status query (StatusReads.all): the column `K` holds the ids (or null) the rule passed.
+export type WithVisibleStatus<Row, K extends keyof Row> = { [P in keyof Row]: P extends K ? Visible<Row[P]> : Row[P] }
+
+// The status read rules for one viewer, as fragments over a statuses alias `s`, and the query that applies them. The
+// viewer and the time are the numbered parameters `viewer` and `now` of that query (a viewer with no time, the web
+// pages', has only `viewer` and no rule that takes a time). `all` runs a query only when it contains a fragment made
+// here and binds these parameters to the viewer's account id and time, so its rows are brandable: the column `K`
+// holds ids the rule passed for this viewer.
+export type StatusReads = {
+	visible(s: string): string
+	listable(s: string): string
+	homeFilter(s: string): string
+	// The notification rule (R15, with the viewer as the recipient), which shows a status only if they may view it.
+	shown(type: string, from: string, status: string): string
+	all<Row extends Record<string, SqlStorageValue>, K extends keyof Row>(
+		db: Db,
+		query: string,
+		...params: SqlStorageValue[]
+	): WithVisibleStatus<Row, K>[]
+}
+
+export function statusReads(
+	viewer: ViewerContext | null,
+	at: { readonly viewer: string; readonly now?: string }
+): StatusReads {
+	const applied: string[] = []
+	const rule = (fragment: string) => {
+		applied.push(fragment)
+		return fragment
+	}
+	const now = () => {
+		if (viewer === null || at.now === undefined) {
+			throw new Error('this rule needs the time of the read')
+		}
+		return at.now
+	}
+	const bound = (placeholder: string, params: readonly SqlStorageValue[]) => {
+		const index = /^\?([1-9]\d*)$/.exec(placeholder)?.[1]
+		return index === undefined ? undefined : params[Number(index) - 1]
+	}
+	return {
+		visible: (s) => rule(visibleSql(s, at.viewer)),
+		listable: (s) => rule(listableSql(s, at.viewer, now())),
+		homeFilter: (s) => rule(homeFilterSql(s, at.viewer, now())),
+		shown: (type, from, status) => rule(shownSql(at.viewer, type, from, status, now())),
+		all<Row extends Record<string, SqlStorageValue>, K extends keyof Row>(
+			db: Db,
+			query: string,
+			...params: SqlStorageValue[]
+		) {
+			if (!applied.some((fragment) => query.includes(fragment))) {
+				throw new Error('a status query must apply a read rule')
+			}
+			if (
+				bound(at.viewer, params) !== (viewer?.accountId ?? null) ||
+				(at.now !== undefined && bound(at.now, params) !== viewer?.now)
+			) {
+				throw new Error("a status query must bind the viewer's account id and time")
+			}
+			return db.all<Row>(query, ...params) as WithVisibleStatus<Row, K>[]
+		},
+	}
+}
+
+// The status `statusId`, if `viewerId` (null: anonymous) may see it by itself (canView).
+export function viewableStatusId(db: Db, viewerId: string | null, statusId: string): VisibleStatusId | null {
+	return canView(db, viewerId, statusId) ? (statusId as VisibleStatusId) : null
+}
+
+// The status `statusId`, if it is `authorId`'s own.
+export function ownStatusId(db: Db, authorId: string, statusId: string): OwnStatusId | null {
+	return db.first('SELECT 1 AS own FROM statuses WHERE id = ? AND account_id = ?', statusId, authorId) === undefined
+		? null
+		: (statusId as OwnStatusId)
+}
+
 // ---- Notifications.
 
 // Whether `r` blocks the account `a`, or mutes it with notifications at `now`.
