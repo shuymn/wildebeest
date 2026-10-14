@@ -101,6 +101,51 @@ describe('reset steps are bounded', () => {
 	})
 })
 
+// RES-6: unlinking rewrites each row whole, so a reset call that unlinks stops after the row that brings its rewritten
+// bytes to the step budget (1 MiB), however few rows that is.
+describe('a reset call that unlinks large rows', () => {
+	it('rewrites a bounded number of bytes', async () => {
+		const ROW = 300_000
+		const { store, id: importId } = await importing()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://r.test/u/0', 'u0', 'r.test')",
+				id(0)
+			)
+			for (let n = 1; n <= 9; n++) {
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, content, published_at)
+					 VALUES (?, ?, ?, ?, ?, 'public', ?, '2026-10-12T00:00:00.000Z')`,
+					id(n),
+					`https://r.test/s/${n}`,
+					id(0),
+					n === 1 ? null : 'https://r.test/s/1',
+					n === 1 ? null : id(1),
+					'x'.repeat(ROW)
+				)
+			}
+			const linked = () =>
+				sql.exec<{ n: number }>('SELECT count(*) AS n FROM statuses WHERE in_reply_to_id IS NOT NULL').one().n
+			const admin = new StoreAdmin(state, testKernel(state, MIGRATIONS), {
+				source: { build: BUILD, version: 't' },
+				log: () => {},
+			})
+			let calls = 0
+			while (linked() > 0) {
+				const before = linked()
+				const step = await admin.importReset(BUILD, ACCESS, importId)
+				if (!step.ok) throw new Error(step.message)
+				expect(step.done).toBe(false)
+				expect(before - linked(), `call ${calls}`).toBeLessThanOrEqual(Math.ceil((1024 * 1024) / ROW))
+				calls++
+			}
+			expect(calls).toBeGreaterThan(1)
+			expect(await admin.importReset(BUILD, ACCESS, importId)).toMatchObject({ ok: true, done: true })
+		})
+	})
+})
+
 describe('a lost upgrade wake-up', () => {
 	it('is scheduled again when a reset is retried and answered from its receipt', async () => {
 		const { store, id: importId } = await importing()

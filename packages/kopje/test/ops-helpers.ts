@@ -2,7 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { LEGACY_EMPTY_KEK } from './federation-helpers'
 import { BUILD } from './helpers'
-import { readDumpFile, statementChunks } from '../cli/lib/format.js'
+import { IMPORT_CHUNK_STATEMENTS, readDumpFile, statementChunks } from '../cli/lib/format.js'
 import { CONFIG_KEYS } from '../src/platform/access-settings'
 import { readCatalog } from '../src/platform/dump-catalog'
 import { END_LINE } from '../src/platform/dump-format'
@@ -277,7 +277,14 @@ export async function importChunks(text: string, chunkBytes: number): Promise<Ui
 	const io = memoryIO(new Map([['dump.sql', new TextEncoder().encode(text)]]))
 	const file = await readDumpFile(io, 'dump.sql')
 	const chunks: Uint8Array[] = []
-	for await (const chunk of statementChunks(io, 'dump.sql', file.bodyStart, file.bodyEnd, chunkBytes)) {
+	for await (const chunk of statementChunks(
+		io,
+		'dump.sql',
+		file.bodyStart,
+		file.bodyEnd,
+		chunkBytes,
+		IMPORT_CHUNK_STATEMENTS
+	)) {
 		chunks.push(chunk.bytes)
 	}
 	return chunks

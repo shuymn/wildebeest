@@ -821,7 +821,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   digests from the imported rows. _Enforced (main):_ `src/platform/store-dump.ts`,
   `src/platform/store-import.ts`, `docs/dump-format.md`; `test/dump-import.test.ts`, `test/ops-regressions.test.ts`,
   `test/dump-format.test.ts`. Media tombstones (`media_orphans`) are left out of dumps (`src/platform/dump-catalog.ts`):
-  they name R2 objects to delete, which a restored Store must not act on.
+  they name R2 objects to delete, which a restored Store must not act on. Each import call's work is bounded by what it
+  writes, not by the bytes it receives, so a large instance imports within the Durable Object's CPU limit: a chunk by
+  statements and bytes, and links, which rewrite whole rows, are staged and applied in verify steps bounded by the
+  bytes they rewrite, as is a reset's unlinking (`docs/dump-format.md`, "Bounded work"); `test/dump-import.test.ts`
+  ("import work per call"), `test/ops-reset-bound.test.ts`, `test/dump-format.test.ts`.
 - **DATA-4: backups leave Cloudflare only encrypted.** Dump chunks, R2 originals, media indexes and manifests are
   age-encrypted (typage, `age-encryption`) to the run's pinned recipients before upload; the identity never reaches
   Cloudflare. A media copy counts only for the bucket and recipients it was made under, so a key change re-encrypts

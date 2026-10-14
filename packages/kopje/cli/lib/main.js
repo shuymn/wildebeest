@@ -19,7 +19,7 @@ Commands
       --lease-seconds <n>       freeze lease, renewed by every chunk (default 600)
       --restart                 discard <file> and its saved cursor and start over
   import <file>                 import <file> into an empty Store and verify (resumable)
-      --chunk-mib <n>           chunk size in MiB, 0.001-16 (default 8)
+      --chunk-mib <n>           chunk size in MiB, 0.001-4 (default 4); a chunk also holds at most 2000 statements
       --import-token            begin with KOPJE_IMPORT_TOKEN (cutover into an empty Store without admin access);
                                 the import then continues with its own session, kept in <file>.import.json (mode
                                 0600). That file must stay private: run token imports on macOS, Linux or WSL, since
@@ -636,7 +636,7 @@ export async function run({
 				if (path === undefined) {
 					throw new UsageError('import <file>')
 				}
-				const chunkMib = numberFlag(flags, 'chunk-mib', 0.001, 16)
+				const chunkMib = numberFlag(flags, 'chunk-mib', 0.001, 4)
 				const report = await importFromFile({
 					client,
 					io,
