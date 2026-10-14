@@ -69,7 +69,9 @@ On GitHub, in the repository settings:
 4. Update the template: bump `kopje` in `deploy/package.json` to the new version (Renovate opens this pull request after
    its minimum release age), and, if the release notes say so, change `deploy/wrangler.jsonc` the same way. CI dry-runs
    the template against the packed package, not against npm, so this step is what makes the Deploy to Cloudflare button
-   install the new version.
+   install the new version. To try the button from a branch before merging, open
+   `https://deploy.workers.cloudflare.com/?url=https://github.com/shuymn/wildebeest/tree/<branch>/deploy`; the branch
+   name must not contain `/`, or the button cannot tell it from the directory path.
 
 ### If the publish or release job fails
 

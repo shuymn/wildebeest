@@ -30,7 +30,8 @@
 	"queues": {
 		"producers": [{ "binding": "QUEUE", "queue": "my-kopje-queue" }],
 		// A message that exhausts its retries goes to the dead-letter queue, kept for inspection and redrive
-		// (packages/kopje/docs/cutover-runbook.md, "Kopje's dead-letter queue"); create it with the Queue.
+		// (packages/kopje/docs/cutover-runbook.md, "Kopje's dead-letter queue"); create it with the Queue. The button's
+		// form does not rename it: give a second Kopje in the same account its own name here.
 		"consumers": [
 			{
 				"queue": "my-kopje-queue",
