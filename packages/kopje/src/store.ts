@@ -19,7 +19,7 @@ import { checkCredential, type Credential, type UserCredential } from './domain/
 import * as deliveries from './domain/deliveries'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import * as inbox from './domain/inbox'
-import { instanceInfo, instancePeers } from './domain/instance'
+import { instanceInfo, instancePeers, instanceRules } from './domain/instance'
 import * as media from './domain/media'
 import * as mediaRebuild from './domain/media-rebuild'
 import * as notifications from './domain/notifications'
@@ -545,6 +545,10 @@ export class Store extends DurableObject<Env> {
 
 	instanceInfo(callerBuild: string) {
 		return this.#kernel.execute(callerBuild, instanceInfo, undefined)
+	}
+
+	instanceRules(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, instanceRules, undefined)
 	}
 
 	instancePeers(callerBuild: string) {

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { apiHarness, bearer, seedAccount, setSetting } from './api-helpers'
 import { remoteAccounts, rowsRead } from './read-helpers'
 import { getJson } from './status-helpers'
-import { instancePeers, MAX_PEERS } from '../src/domain/instance'
+import { instancePeers, instanceRules, MAX_PEERS } from '../src/domain/instance'
 
 // /api/v1/instance/*: public reads clients make at startup and on an about page (AUTH-2), with the peers bounded
 // (RES-3, RES-7).
@@ -23,6 +23,19 @@ describe('instance details', () => {
 		const v2 = await getJson<{ rules: unknown }>(h, '/api/v2/instance')
 		expect(rules.body).toEqual(v2.body.rules)
 	})
+
+	it('reads only the rules setting, whatever the accounts (RES-7)', async () => {
+		const measure = async (accounts: number) => {
+			const h = await apiHarness()
+			await setSetting(h.store, 'rules', JSON.stringify(['Be kind']))
+			await remoteAccounts(h, 50, accounts / 50)
+			return rowsRead(h, instanceRules, undefined)
+		}
+		const small = await measure(1000)
+		const large = await measure(8000)
+		expect(small).toBeLessThanOrEqual(1)
+		expect(large).toBe(small)
+	}, 60_000)
 
 	it('lists each known remote domain once, in order, and no local account', async () => {
 		const h = await apiHarness()

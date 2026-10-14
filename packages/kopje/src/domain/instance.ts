@@ -40,6 +40,11 @@ export const instanceInfo = readOperation<void, InstanceInfo>((db) => {
 	}
 })
 
+// GET /api/v1/instance/rules: the rules setting alone, one row, whatever the instance holds.
+export const instanceRules = readOperation<void, InstanceRule[]>((db) =>
+	parseRules(db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'rules'")?.value)
+)
+
 // rules is a JSON array of strings or of { id?, text } objects. Anything unreadable shows as no rules.
 export function parseRules(value: string | undefined): InstanceRule[] {
 	if (value === undefined) {

@@ -87,7 +87,7 @@ export const customEmojis: ApiHandler = (c) => Promise.resolve(c.json([]))
 
 // The rest of /api/v1/instance/*, the endpoints clients read at startup and on an instance's about page.
 
-export const rules: ApiHandler = async (c, deps) => c.json((await load(c, deps)).info.rules)
+export const rules: ApiHandler = async (c, deps) => c.json(await storeCall(c, deps, (s, b) => s.instanceRules(b)))
 
 export const peers: ApiHandler = async (c, deps) => c.json(await storeCall(c, deps, (s, b) => s.instancePeers(b)))
 
