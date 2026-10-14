@@ -1,4 +1,5 @@
 import type { World, WorldStatus } from './policy-world'
+import type { NotificationType } from '../src/domain/notifications'
 
 // The policy rules as docs/visibility.md states them, in plain TypeScript over a generated world (test/policy-world.ts).
 // Written from the documented rules, not from src/domain/audience.ts, so test/policy-oracle.test.ts compares two
@@ -6,8 +7,18 @@ import type { World, WorldStatus } from './policy-world'
 
 export type Viewer = number | null
 
-export const NOTIFICATION_TYPES = ['mention', 'status', 'reblog', 'favourite', 'follow'] as const
-export type NotificationType = (typeof NOTIFICATION_TYPES)[number]
+// Every notification type the server writes; the type below fails to compile when it misses one.
+export const NOTIFICATION_TYPES = [
+	'mention',
+	'status',
+	'reblog',
+	'favourite',
+	'follow',
+	'follow_request',
+	'update',
+] as const satisfies readonly NotificationType[]
+const EVERY_TYPE: Exclude<NotificationType, (typeof NOTIFICATION_TYPES)[number]> extends never ? true : false = true
+void EVERY_TYPE
 
 export class PolicyModel {
 	constructor(readonly world: World) {}
@@ -38,7 +49,9 @@ export class PolicyModel {
 	// a domain block can name.
 	inDomain(x: number, domain: string): boolean {
 		const account = this.account(x)
-		return !account.local && (account.domain === domain || account.host === domain)
+		// The host of the actor id, lowercased, without a port or a trailing dot.
+		const host = new URL(account.uri).hostname.replace(/\.$/, '')
+		return !account.local && (account.domain === domain || host === domain)
 	}
 
 	blocks(owner: Viewer, x: Viewer): boolean {
@@ -154,6 +167,17 @@ export class PolicyModel {
 		return !mentions.some((m) => !m.silent && (this.blocks(viewer, m.account) || this.mutes(viewer, m.account)))
 	}
 
+	// The account a reply answers: the parent's author, except that an author continuing their own reply keeps
+	// talking to that reply's partner.
+	partner(s: number): number | null {
+		const { author, replyTo } = this.status(s)
+		if (replyTo === null) {
+			return null
+		}
+		const parent = this.status(replyTo)
+		return parent.author === author && parent.replyTo !== null ? this.partner(replyTo) : parent.author
+	}
+
 	// Blocks the account, or mutes it with notifications.
 	private silences(r: number, x: number): boolean {
 		return this.blocks(r, x) || this.mutes(r, x, true)
@@ -188,7 +212,7 @@ export class PolicyModel {
 					return true
 				}
 				const status = this.status(s)
-				const partner = status.replyTo === null ? null : this.status(status.replyTo).author
+				const partner = this.partner(s)
 				return (
 					!status.mentions.some((m) => !m.silent && this.silences(r, m.account)) &&
 					!(partner !== null && this.silences(r, partner))

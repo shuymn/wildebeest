@@ -34,9 +34,10 @@ import type { StoreStub } from '../src/platform/store-client'
 // Cases per property: each costs one Store round trip, so the file stays within a few seconds.
 const CASES = 150
 
-// Every account as an id, and every viewer: every account and the anonymous viewer (NULL).
-const ACCOUNTS = 'SELECT id FROM accounts'
-const VIEWERS = `(${ACCOUNTS} UNION ALL SELECT NULL)`
+// The viewers of the account rules: every account and the anonymous viewer (NULL). The status rules are checked for
+// the viewers their callers judge: a local account or the anonymous viewer.
+const VIEWERS = '(SELECT id FROM accounts UNION ALL SELECT NULL)'
+const STATUS_VIEWERS = '(SELECT account_id AS id FROM local_accounts UNION ALL SELECT NULL)'
 
 type Evaluate = (db: Db, world: World) => string[]
 type Expect = (model: PolicyModel) => string[]
@@ -52,6 +53,10 @@ function namer(world: World) {
 
 function viewers(world: World): Viewer[] {
 	return [null, ...world.accounts.map((_, i) => i)]
+}
+
+function statusViewers(world: World): Viewer[] {
+	return [null, ...world.accounts.flatMap((account, i) => (account.local ? [i] : []))]
 }
 
 function accounts(world: World): number[] {
@@ -186,20 +191,20 @@ describe('the policy fragments agree with the model of their rules', () => {
 
 	it('listedForSql (R12)', () => viewerAccountPairs(listedForSql, (m, x, viewer) => m.listedFor(x, viewer)))
 
-	// Every (viewer, status) pair, the anonymous viewer included, a status predicate accepts at the world's time.
+	// Every (viewer, status) pair, local viewers and the anonymous one, a status predicate accepts at the world's time.
 	function viewerStatusPairs(
 		fragment: (s: string, viewer: string, now: string) => string,
 		model: (m: PolicyModel, s: number, viewer: Viewer) => boolean
 	) {
 		return agree(
 			(db, world) => {
-				const query = `SELECT v.id AS x, st.id AS y FROM ${VIEWERS} v CROSS JOIN statuses st
+				const query = `SELECT v.id AS x, st.id AS y FROM ${STATUS_VIEWERS} v CROSS JOIN statuses st
 					WHERE ${fragment('st', 'v.id', '?1')}`
 				// visibleSql has no time.
 				return pairs(query, ...(query.includes('?1') ? [world.now] : []))(db, world)
 			},
 			(m) =>
-				viewers(m.world).flatMap((viewer) =>
+				statusViewers(m.world).flatMap((viewer) =>
 					statuses(m.world).flatMap((s) =>
 						model(m, s, viewer) ? [`${name(m.world, viewer)} ${m.status(s).name}`] : []
 					)
@@ -221,13 +226,13 @@ describe('the policy fragments agree with the model of their rules', () => {
 		agree(
 			(db, world) => {
 				const named = namer(world)
-				const ids = [null, ...world.accounts.map((_, i) => accountId(i))]
+				const ids = statusViewers(world).map((viewer) => (viewer === null ? null : accountId(viewer)))
 				return ids.flatMap((viewer) =>
 					world.statuses.flatMap((_, s) => (canView(db, viewer, statusId(s)) ? [named(viewer, statusId(s))] : []))
 				)
 			},
 			(m) =>
-				viewers(m.world).flatMap((viewer) =>
+				statusViewers(m.world).flatMap((viewer) =>
 					statuses(m.world).flatMap((s) =>
 						m.viewable(s, viewer) ? [`${name(m.world, viewer)} ${m.status(s).name}`] : []
 					)

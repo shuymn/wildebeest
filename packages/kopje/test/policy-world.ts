@@ -25,9 +25,15 @@ export function runs(numRuns: number): fc.Parameters<unknown> {
 export const LOCALS = 4
 export const INSTANCE_DOMAIN = 'kopje.test'
 export const REMOTE_DOMAINS = ['one.example', 'two.example'] as const
-// What a domain block may name: each remote domain, the host some actor ids live on, the instance's own domain and a
+// What a domain block may name: each remote domain, the hosts some actor ids live on, the instance's own domain and a
 // domain nobody lives on.
-export const BLOCKABLE_DOMAINS = [...REMOTE_DOMAINS, 'social.two.example', INSTANCE_DOMAIN, 'three.example'] as const
+export const BLOCKABLE_DOMAINS = [
+	...REMOTE_DOMAINS,
+	'social.one.example',
+	'social.two.example',
+	INSTANCE_DOMAIN,
+	'three.example',
+] as const
 
 const VISIBILITIES: readonly Visibility[] = ['public', 'unlisted', 'private', 'direct', 'limited']
 // The times a world may be judged at, an hour apart, so a mute's expiry falls before, at or after them.
@@ -38,9 +44,8 @@ export type WorldAccount = {
 	name: string
 	local: boolean
 	suspended: boolean
-	// Remote accounts only: the stored domain, and the host of the actor id (the same, a subdomain, or with a port).
+	// Remote accounts only: the stored domain. The actor id's host may differ from it (see HOSTS).
 	domain: string | null
-	host: string | null
 	uri: string
 }
 
@@ -52,6 +57,27 @@ export type WorldStatus = {
 	reblogOf: number | null
 	replyTo: number | null
 	tagged: boolean
+}
+
+// How an actor id's host relates to the account's stored domain: the same, a subdomain, with a port, with a trailing
+// dot (alone or with a subdomain and a port), or the other remote domain (a domain confirmed elsewhere).
+const HOSTS = ['same', 'subdomain', 'port', 'dotted', 'subdomain-dotted-port', 'elsewhere'] as const
+
+function actorHost(form: (typeof HOSTS)[number], domain: string): string {
+	switch (form) {
+		case 'same':
+			return domain
+		case 'subdomain':
+			return `social.${domain}`
+		case 'port':
+			return `${domain}:8443`
+		case 'dotted':
+			return `${domain}.`
+		case 'subdomain-dotted-port':
+			return `social.${domain}.:8443`
+		case 'elsewhere':
+			return REMOTE_DOMAINS.find((other) => other !== domain) ?? domain
+	}
 }
 
 export type World = {
@@ -86,14 +112,15 @@ function unique<T>(items: readonly T[], key: (item: T) => string): T[] {
 
 const remoteArb = fc.record({
 	domain: fc.constantFrom(...REMOTE_DOMAINS),
-	host: fc.constantFrom('same', 'subdomain', 'port'),
+	host: fc.constantFrom(...HOSTS),
 })
 
 const statusArb = fc.record({
 	author: fc.nat(),
 	visibility: fc.constantFrom(...VISIBILITIES),
 	mentions: fc.array(fc.record({ account: fc.nat(), silent: fc.boolean() }), { maxLength: 3 }),
-	kind: fc.constantFrom('original', 'reply', 'boost'),
+	// thread: a reply to one of the author's own statuses, preferably one of their replies (continuing a thread).
+	kind: fc.constantFrom('original', 'reply', 'thread', 'boost'),
 	target: fc.nat(),
 	tagged: fc.boolean(),
 })
@@ -139,24 +166,16 @@ export const worldArb: fc.Arbitrary<World> = fc
 				local: true,
 				suspended: raw.suspended === i,
 				domain: null,
-				host: null,
 				uri: `https://${INSTANCE_DOMAIN}/ap/users/l${i}`,
 			})
 		}
 		raw.remotes.forEach((remote, i) => {
-			const host =
-				remote.host === 'subdomain'
-					? `social.${remote.domain}`
-					: remote.host === 'port'
-						? `${remote.domain}:8443`
-						: remote.domain
 			accounts.push({
 				name: `R${i}`,
 				local: false,
 				suspended: false,
 				domain: remote.domain,
-				host: host.replace(/:\d+$/, ''),
-				uri: `https://${host}/users/r${i}`,
+				uri: `https://${actorHost(remote.host, remote.domain)}/users/r${i}`,
 			})
 		})
 		const n = accounts.length
@@ -166,6 +185,9 @@ export const worldArb: fc.Arbitrary<World> = fc
 			const author = raw.author % n
 			const originals = statuses.flatMap((status, index) => (status.reblogOf === null ? [index] : []))
 			const target = originals.length === 0 ? null : (originals[raw.target % originals.length] ?? null)
+			const own = originals.filter((index) => statuses[index]?.author === author)
+			const ownReplies = own.filter((index) => statuses[index]?.replyTo !== null)
+			const thread = ownReplies.length > 0 ? ownReplies : own
 			const boost = raw.kind === 'boost' && target !== null && !boosted.has(`${author}:${target}`)
 			if (boost) {
 				boosted.add(`${author}:${target}`)
@@ -179,7 +201,12 @@ export const worldArb: fc.Arbitrary<World> = fc
 					(m) => String(m.account)
 				),
 				reblogOf: boost ? target : null,
-				replyTo: raw.kind === 'reply' ? target : null,
+				replyTo:
+					raw.kind === 'reply'
+						? target
+						: raw.kind === 'thread'
+							? (thread[raw.target % Math.max(thread.length, 1)] ?? target)
+							: null,
 				tagged: !boost && raw.tagged,
 			})
 		})
@@ -254,8 +281,19 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 			)
 		}
 	})
+	// in_reply_to_account_id as statuses.ts writes it (Status#carried_over_reply_to_account_id): the parent's author,
+	// or, when the author continues their own reply, that reply's partner.
+	const partners: (string | null)[] = []
 	world.statuses.forEach((status, i) => {
-		const parent = status.replyTo === null ? null : world.statuses[status.replyTo]
+		const parent = status.replyTo === null ? undefined : world.statuses[status.replyTo]
+		const parentPartner = status.replyTo === null ? null : (partners[status.replyTo] ?? null)
+		partners.push(
+			parent === undefined
+				? null
+				: parent.author === status.author && parent.replyTo !== null
+					? parentPartner
+					: accountId(parent.author)
+		)
 		sql.exec(
 			`INSERT INTO statuses (id, uri, account_id, reblog_of_id, in_reply_to_uri, in_reply_to_id, in_reply_to_account_id,
 				visibility, content, search_text, published_at)
@@ -266,7 +304,7 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 			status.reblogOf === null ? null : statusId(status.reblogOf),
 			status.replyTo === null ? null : `https://${INSTANCE_DOMAIN}/ap/o/${status.replyTo}`,
 			status.replyTo === null ? null : statusId(status.replyTo),
-			parent === null || parent === undefined ? null : accountId(parent.author),
+			partners[i] ?? null,
 			status.visibility,
 			status.reblogOf === null ? `<p>status ${i}</p>` : '',
 			status.reblogOf === null ? `status ${i}` : null,
