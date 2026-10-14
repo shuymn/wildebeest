@@ -20,7 +20,7 @@ import * as blocks from './domain/blocks'
 import * as deliveries from './domain/deliveries'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import * as inbox from './domain/inbox'
-import { instanceInfo } from './domain/instance'
+import { instanceInfo, instancePeers, instanceRules } from './domain/instance'
 import * as media from './domain/media'
 import * as mediaRebuild from './domain/media-rebuild'
 import * as notifications from './domain/notifications'
@@ -31,6 +31,7 @@ import { search } from './domain/search'
 import * as setup from './domain/setup'
 import { saveSnapshot } from './domain/snapshot'
 import * as statuses from './domain/statuses'
+import { getTag } from './domain/tags'
 import * as timelines from './domain/timelines'
 import * as webPages from './domain/web-pages'
 import * as webSession from './domain/web-session'
@@ -551,6 +552,14 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, instanceInfo, undefined)
 	}
 
+	instanceRules(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, instanceRules, undefined)
+	}
+
+	instancePeers(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, instancePeers, undefined)
+	}
+
 	getAccount(callerBuild: string, input: { id: string; present: accounts.Present }) {
 		return this.#kernel.execute(callerBuild, accounts.getAccount, input)
 	}
@@ -567,8 +576,16 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, accounts.updateCredentials, input)
 	}
 
+	preferences(callerBuild: string, input: OperationInput<typeof accounts.preferences>) {
+		return this.#kernel.execute(callerBuild, accounts.preferences, input)
+	}
+
 	relationships(callerBuild: string, input: { credential: UserCredential; ids: string[] }) {
 		return this.#kernel.execute(callerBuild, accounts.relationships, input)
+	}
+
+	familiarFollowers(callerBuild: string, input: OperationInput<typeof accounts.familiarFollowers>) {
+		return this.#kernel.execute(callerBuild, accounts.familiarFollowers, input)
 	}
 
 	searchAccounts(callerBuild: string, input: accounts.SearchInput & { credential: UserCredential }) {
@@ -705,6 +722,10 @@ export class Store extends DurableObject<Env> {
 
 	tagTimeline(callerBuild: string, input: OperationInput<typeof timelines.tagTimeline>) {
 		return this.#kernel.execute(callerBuild, timelines.tagTimeline, input)
+	}
+
+	tag(callerBuild: string, input: OperationInput<typeof getTag>) {
+		return this.#kernel.execute(callerBuild, getTag, input)
 	}
 
 	accountStatuses(callerBuild: string, input: OperationInput<typeof timelines.accountStatuses>) {

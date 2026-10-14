@@ -1,6 +1,6 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { actorSnapshot, recordActorUpdate } from './actor-update'
-import { activeMuteSql, domainBlockMatchSql } from './audience'
+import { activeMuteSql, domainBlockMatchSql, filterTime, unfilteredSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { retractFollow } from './inbox'
 import { notify } from './notifications'
@@ -333,6 +333,32 @@ export const verifyCredentials = userReadOperation<{ present: Present }, Credent
 	(db, { present }, viewer) => credentialAccount(db, viewer.accountId, present)
 )
 
+// GET /api/v1/preferences (Mastodon's REST::PreferencesSerializer): the posting defaults the account stores, and
+// Mastodon's defaults for the reading preferences Kopje has no setting for. The language is null when none is set.
+export type Preferences = {
+	'posting:default:visibility': Visibility
+	'posting:default:sensitive': boolean
+	'posting:default:language': string | null
+	'reading:expand:media': 'default'
+	'reading:expand:spoilers': false
+}
+
+export const preferences = userReadOperation<object, Preferences | null>((db, _input, { accountId }) => {
+	const row = db.first<Omit<CredentialRow, 'follow_requests_count'>>(
+		'SELECT default_visibility, default_sensitive, default_language FROM local_accounts WHERE account_id = ?',
+		accountId
+	)
+	return row === undefined
+		? null
+		: {
+				'posting:default:visibility': row.default_visibility,
+				'posting:default:sensitive': row.default_sensitive === 1,
+				'posting:default:language': row.default_language,
+				'reading:expand:media': 'default',
+				'reading:expand:spoilers': false,
+			}
+})
+
 export type CredentialChanges = {
 	displayName?: string
 	note?: string
@@ -466,6 +492,59 @@ export const relationships = userReadOperation<{ ids: string[] }, Relationship[]
 			.map((id) => resolveAccountId(db, id))
 			.filter((id) => id !== null)
 		return relationshipsOf(db, viewerId, [...new Set(resolved)], now)
+	}
+)
+
+// GET /api/v1/accounts/familiar_followers (Mastodon's FamiliarFollowersPresenter): for each requested account, the
+// accounts the viewer follows that follow it. Both follows are accepted ones (VIS-8). It shows no more than
+// GET /api/v1/accounts/:id/followers of the account and /following of each follower show the same viewer: Kopje
+// hides no account's network (it stores no hide-collections setting, local or remote), so those lists show every
+// accepted follow and so may this. An unknown or suspended account has no entry; a suspended follower is left out, and
+// so is one the viewer filters out of lists (unfilteredSql over the follow's account_id, the follower: a block, a
+// mute that applies at the request time, or a block of its domain).
+// Bounds (RES-3, RES-7): at most MAX_FAMILIAR_FOLLOWERS_IDS accounts. For each, the candidates are the viewer's own
+// accepted follows (at most FAMILIAR_FOLLOWERS_WINDOW, through the partial index of accepted follows), each checked
+// for an accepted follow of the account through the unique pair index (CROSS JOIN keeps SQLite to that order), so
+// the work never grows with the account's other followers and a match is never pushed out by them. At most
+// MAX_FAMILIAR_FOLLOWERS are shown, newest follow of the account first.
+export const MAX_FAMILIAR_FOLLOWERS_IDS = 20
+// Above Mastodon's default follow limit (7,500), which Kopje does not enforce: a match past the viewer's first 10,000
+// accepted follows (in index order, by account id) is not shown (an accepted risk).
+export const FAMILIAR_FOLLOWERS_WINDOW = 10_000
+export const MAX_FAMILIAR_FOLLOWERS = 80
+
+export type FamiliarFollowers = { id: string; accounts: Account[] }
+
+export const familiarFollowers = userReadOperation<{ ids: string[]; present: Present }, FamiliarFollowers[]>(
+	(db, { ids, present }, { accountId: viewerId, now }) => {
+		const resolved = ids
+			.slice(0, MAX_FAMILIAR_FOLLOWERS_IDS)
+			.map((id) => resolveAccountId(db, id))
+			.filter((id) => id !== null)
+		const targets = [...new Set(resolved)].filter(
+			(id) =>
+				db.first('SELECT 1 AS suspended FROM local_accounts WHERE account_id = ? AND suspended_at IS NOT NULL', id) ===
+				undefined
+		)
+		return targets.map((target) => {
+			const followers = db
+				.all<{ id: string }>(
+					`SELECT x.account_id AS id
+					FROM (SELECT target_account_id FROM follows WHERE account_id = ?2 AND state = 'accepted' LIMIT ?3) mine
+					CROSS JOIN follows x ON x.account_id = mine.target_account_id AND x.target_account_id = ?1 AND x.state = 'accepted'
+					WHERE NOT EXISTS (SELECT 1 FROM local_accounts sus WHERE sus.account_id = x.account_id AND sus.suspended_at IS NOT NULL)
+						AND ${unfilteredSql('x', '?2', '?5')}
+					ORDER BY x.id DESC LIMIT ?4`,
+					target,
+					viewerId,
+					FAMILIAR_FOLLOWERS_WINDOW,
+					MAX_FAMILIAR_FOLLOWERS,
+					filterTime(now)
+				)
+				.map((row) => row.id)
+			const accounts = presentAccountsById(db, followers, present)
+			return { id: target, accounts: followers.flatMap((id) => accounts.get(id) ?? []) }
+		})
 	}
 )
 

@@ -8,9 +8,11 @@ import * as instance from './instance'
 import * as media from './media'
 import * as notifications from './notifications'
 import * as oauth from './oauth'
+import * as placeholders from './placeholders'
 import * as push from './push'
 import * as search from './search'
 import * as statuses from './statuses'
+import * as tags from './tags'
 import * as timelines from './timelines'
 
 // The explicit API route table (design §4): every route names the access it requires, one middleware (requireAccess)
@@ -35,6 +37,74 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'GET', path: '/api/v1/instance', access: 'public', handler: instance.instanceV1 },
 	{ method: 'GET', path: '/api/v2/instance', access: 'public', handler: instance.instanceV2 },
 	{ method: 'GET', path: '/api/v1/custom_emojis', access: 'public', handler: instance.customEmojis },
+
+	// Reads clients make at startup (instance details, preferences, tags, familiar followers), and the empty answers of
+	// features Kopje has no data for yet (mastodon/placeholders.ts). Kept before the accounts routes, so
+	// familiar_followers comes before its :id sibling.
+	{ method: 'GET', path: '/api/v1/instance/rules', access: 'public', handler: instance.rules },
+	{ method: 'GET', path: '/api/v1/instance/peers', access: 'public', handler: instance.peers },
+	{
+		method: 'GET',
+		path: '/api/v1/instance/extended_description',
+		access: 'public',
+		handler: instance.extendedDescription,
+	},
+	{ method: 'GET', path: '/api/v1/instance/languages', access: 'public', handler: instance.languages },
+	{ method: 'GET', path: '/api/v1/instance/privacy_policy', access: 'public', handler: instance.notConfigured },
+	{ method: 'GET', path: '/api/v1/instance/terms_of_service', access: 'public', handler: instance.notConfigured },
+	{ method: 'GET', path: '/api/v1/instance/activity', access: 'public', handler: instance.notConfigured },
+	{ method: 'GET', path: '/api/v1/instance/domain_blocks', access: 'public', handler: instance.notConfigured },
+	{ method: 'GET', path: '/api/v1/preferences', access: { scope: 'read:accounts' }, handler: accounts.preferences },
+	{
+		method: 'GET',
+		path: '/api/v1/accounts/familiar_followers',
+		access: { scope: 'read:follows' },
+		handler: accounts.familiarFollowers,
+	},
+	{ method: 'GET', path: '/api/v1/tags/:id', access: { optional: true }, handler: tags.getTag },
+	{ method: 'GET', path: '/api/v1/filters', access: { scope: 'read:filters' }, handler: placeholders.emptyUserList },
+	{ method: 'GET', path: '/api/v2/filters', access: { scope: 'read:filters' }, handler: placeholders.emptyUserList },
+	{
+		method: 'GET',
+		path: '/api/v1/followed_tags',
+		access: { scope: 'read:follows' },
+		handler: placeholders.emptyUserList,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/featured_tags',
+		access: { scope: 'read:accounts' },
+		handler: placeholders.emptyUserList,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/accounts/:id/featured_tags',
+		access: 'public',
+		handler: placeholders.accountFeaturedTags,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/endorsements',
+		access: { scope: 'read:accounts' },
+		handler: placeholders.emptyUserList,
+	},
+	{ method: 'GET', path: '/api/v1/announcements', access: 'token', handler: placeholders.emptyUserList },
+	{ method: 'GET', path: '/api/v1/trends', access: 'public', handler: placeholders.emptyList },
+	{ method: 'GET', path: '/api/v1/trends/tags', access: 'public', handler: placeholders.emptyList },
+	{ method: 'GET', path: '/api/v1/trends/statuses', access: 'public', handler: placeholders.emptyList },
+	{ method: 'GET', path: '/api/v1/trends/links', access: 'public', handler: placeholders.emptyList },
+	{
+		method: 'GET',
+		path: '/api/v1/suggestions',
+		access: { scope: 'read:accounts' },
+		handler: placeholders.emptyUserList,
+	},
+	{
+		method: 'GET',
+		path: '/api/v2/suggestions',
+		access: { scope: 'read:accounts' },
+		handler: placeholders.emptyUserList,
+	},
 
 	{
 		method: 'GET',

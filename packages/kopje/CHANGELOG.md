@@ -39,6 +39,27 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   deletes its subscriptions. Without `VAPID_JWK`, the endpoints answer 404 and the instance advertises no key; Kopje
   never makes one.
 
+- Mastodon API endpoints that clients read at startup and that answered 404 before. `GET /api/v1/preferences` shows
+  the account's posting defaults (visibility, sensitive, language) and Mastodon's defaults for the reading preferences
+  (`reading:expand:media` `default`, `reading:expand:spoilers` false).
+
+- `GET /api/v1/instance/rules` (the rules `/api/v2/instance` shows), `/api/v1/instance/peers` (the domains of known
+  remote accounts, at most 10,000), `/api/v1/instance/extended_description` (none set) and `/api/v1/instance/languages`
+  (ISO 639-1). `privacy_policy`, `terms_of_service`, `activity` and `domain_blocks` answer 404, as Mastodon does when
+  none is configured or the feature is off.
+
+- `GET /api/v1/tags/:id`: any valid hashtag, with seven days of history counted from public statuses.
+  It needs no scope; `following` is false for a signed-in viewer, since tag follows do not exist yet.
+
+- `GET /api/v1/accounts/familiar_followers`: for each requested account, the accounts the user follows that follow it
+  among up to 10,000 of the user's follows (at most 20 ids and 80 accounts each), without accounts the user blocks,
+  mutes (while the mute lasts) or whose domain the user blocks.
+
+- Empty answers, under the scopes Mastodon requires, for features Kopje has no data for yet: `GET /api/v1/filters`,
+  `/api/v2/filters`, `/api/v1/followed_tags`, `/api/v1/featured_tags`, `/api/v1/accounts/:id/featured_tags`,
+  `/api/v1/endorsements`, `/api/v1/announcements` (any user token), `/api/v1/trends` (and `/trends/tags`,
+  `/trends/statuses`, `/trends/links`), `/api/v1/suggestions` and `/api/v2/suggestions`.
+
 ### Changed
 
 - Home and mention notifications also leave out a status that mentions or replies to an account you block or mute

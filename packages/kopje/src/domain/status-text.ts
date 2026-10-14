@@ -20,9 +20,11 @@ const TAG_SEPARATORS = '_\\u00B7\\u30FB\\u200C'
 
 // Account::MENTION_RE: @user or @user@domain, not preceded by a word character, = or /.
 const MENTION = `(?<![=/${WORD}])@([a-z0-9_]+(?:[a-z0-9_.-]+[a-z0-9_]+)?)(?:@([${WORD}.-]+[${WORD}]+))?`
-// Tag::HASHTAG_RE: #name, not preceded by a word character, =, / or ).
-const HASHTAG = `(?<![=/)${WORD}])#([${WORD}_][${WORD}${TAG_SEPARATORS}]*[${ALPHA}${TAG_SEPARATORS}][${WORD}${TAG_SEPARATORS}]*[${WORD}_]|[${WORD}_]*[${ALPHA}][${WORD}_]*)`
+// Tag::HASHTAG_NAME_PAT, and Tag::HASHTAG_RE: #name, not preceded by a word character, =, / or ).
+const HASHTAG_NAME = `[${WORD}_][${WORD}${TAG_SEPARATORS}]*[${ALPHA}${TAG_SEPARATORS}][${WORD}${TAG_SEPARATORS}]*[${WORD}_]|[${WORD}_]*[${ALPHA}][${WORD}_]*`
+const HASHTAG = `(?<![=/)${WORD}])#(${HASHTAG_NAME})`
 const ENTITY = new RegExp(`${MENTION}|${HASHTAG}`, 'giu')
+const HASHTAG_NAME_ONLY = new RegExp(`^(?:${HASHTAG_NAME})$`, 'iu')
 
 // Bounds on the raw input, checked before anything is parsed. statusLength counts a URL as 23 characters and a remote
 // mention by its username, so the counted 500 characters say nothing about the size of the raw text: without a bound,
@@ -107,6 +109,14 @@ function normalizeDomain(domain: string): string {
 // The key two mentions of the same account share.
 export function mentionKey(mention: MentionRef): string {
 	return `${mention.username.toLowerCase()}@${mention.domain ?? ''}`
+}
+
+// Tag::HASHTAG_NAME_RE: whether `name` (without #) is a hashtag name. A status holds at most 500 characters, so no
+// hashtag is longer than 1,000 UTF-16 code units, and the pattern never runs on more than that (RES-2).
+const MAX_HASHTAG_NAME_LENGTH = 1000
+
+export function isHashtagName(name: string): boolean {
+	return name.length <= MAX_HASHTAG_NAME_LENGTH && HASHTAG_NAME_ONLY.test(name)
 }
 
 // status_tags.name: NFKC, lowercase.
