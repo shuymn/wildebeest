@@ -21,7 +21,8 @@ import { createKeyring } from '../src/security/keyring'
 // admission limits and the outbox count. Each case failed before its fix.
 
 const OK: DeliveryOutcome = { kind: 'delivered', status: 202 }
-const GONE: DeliveryOutcome = { kind: 'failed', status: 410, error: 'HTTP 410', permanent: true }
+// A permanent refusal: a 404, 405 or 410 from a shared inbox would move a Like to the personal inbox instead.
+const REFUSED: DeliveryOutcome = { kind: 'failed', status: 403, error: 'HTTP 403', permanent: true }
 const publicHost = () => Promise.resolve()
 
 type Row = {
@@ -284,7 +285,7 @@ describe('operator retry of superseded activities (RES-5)', () => {
 		})
 		await act(h, alice, `/api/v1/statuses/${theirs}/favourite`)
 		const like = await claim(h.store, NOW, 'a')
-		await complete(h.store, like.deliveries[0]?.id ?? '', 'a', NOW, GONE)
+		await complete(h.store, like.deliveries[0]?.id ?? '', 'a', NOW, REFUSED)
 		await act(h, alice, `/api/v1/statuses/${theirs}/unfavourite`)
 		const likeId = like.deliveries[0]?.id ?? ''
 		expect(await h.store.retryDeliveries(BUILD, { ids: [likeId], now: NOW })).toEqual({

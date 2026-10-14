@@ -513,7 +513,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   signals. _Enforced (main):_ `src/federation/loader.ts`; `test/loader.test.ts`.
 - **NET-2: deliveries reach only the audience's inboxes.** Inboxes come from the stored audience and are deduplicated by
   shared inbox; an activity without `to` (a Like, Follow, Accept, Reject or their Undo, each naming its recipient
-  through its object) goes to the recipient's shared inbox when it has one; targets pass NET-3; a non-public activity is never sent to a redirect target. Claims serialize each
+  through its object) goes to the recipient's shared inbox when it has one, and moves once to its distinct personal
+  inbox if the shared inbox answers 404, 405 or 410; targets pass NET-3; a non-public activity is never sent to a redirect target. Claims serialize each
   lane; the POST timeout (30 s) is shorter than the lease (60 s), and completion requires the current lease token, so a
   stale completion cannot settle a later claim. A lane is `(actor, inbox origin)`: everything an actor sends one
   server, to shared and personal inboxes alike, arrives in order, so a later `Update` or `Delete` cannot overtake the
@@ -522,7 +523,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   right before the POST, so a late timer cannot let a POST through. _Enforced (main):_
   `src/domain/deliveries.ts` (expansion, lanes, claims, completions), `src/federation/delivery.ts` (the POST);
   `test/deliveries.test.ts` ("NET-2: delivers a public status once per shared inbox", "NET-2: a recipient outside the
-  audience gets nothing", "NET-2: an expired lease is claimed again"), `test/delivery-post.test.ts` ("NET-2: never
+  audience gets nothing", "NET-2: an expired lease is claimed again", "moves a Follow and its Undo to the personal
+  inbox once when the shared inbox answers 404"), `test/delivery-post.test.ts` ("NET-2: never
   follows a redirect", "NET-2: times out the POST before the lease ends"), `test/delivery-regressions.test.ts` ("keeps a
   Create to a server's shared inbox ahead of an Update", "counts slow DNS and slow key loading against the budget",
   "refuses to send once the lease budget has run out").
