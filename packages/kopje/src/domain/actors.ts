@@ -1,5 +1,5 @@
 import { type FieldSource, fieldSources } from './accounts'
-import { availableLocalSql } from './audience'
+import { availableLocalSql, followListsShownSql } from './audience'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 import { base64ToBytes } from '../security/key-wrap'
@@ -129,16 +129,28 @@ export function decodeKey(key: EncodedKey): StoredKey {
 
 export type CollectionKind = 'followers' | 'following'
 
-export type CollectionPage = { total: number; items: { uri: string; inbox: string | null }[]; hasNext: boolean }
+// hidden: the owner hides its network, so the collection shows its size only and has no pages.
+export type CollectionPage = {
+	total: number
+	items: { uri: string; inbox: string | null }[]
+	hasNext: boolean
+	hidden: boolean
+}
 
 export const COLLECTION_PAGE_SIZE = 40
 
 // Accepted follows of a local actor, newest first, one page (1-based) at a time. page null asks for the count only.
+// A suspended actor has none, as its outbox has none. A remote server fetches these without a viewer, so an actor that
+// hides its network (followListsShownSql with no viewer) shows the count only, with no page, as Mastodon's
+// FollowerAccountsController and FollowingAccountsController show totalItems only.
 export const getCollection = readOperation<
 	{ username: string; kind: CollectionKind; page: number | null },
 	CollectionPage | null
 >((db, { username, kind, page }) => {
-	const owner = db.first<{ id: string }>(`SELECT a.id ${LOCAL_BY_USERNAME}`, username)
+	const owner = db.first<{ id: string; shown: number }>(
+		`SELECT a.id, ${followListsShownSql('a.id', 'NULL')} AS shown ${LOCAL_BY_USERNAME} AND ${availableLocalSql('l')}`,
+		username
+	)
 	if (owner === undefined) {
 		return null
 	}
@@ -146,8 +158,9 @@ export const getCollection = readOperation<
 	const total =
 		db.first<{ n: number }>(`SELECT count(*) AS n FROM follows WHERE ${self} = ? AND state = 'accepted'`, owner.id)
 			?.n ?? 0
-	if (page === null) {
-		return { total, items: [], hasNext: false }
+	const hidden = owner.shown === 0
+	if (page === null || hidden) {
+		return { total, items: [], hasNext: false, hidden }
 	}
 	const items = db.all<{ uri: string; inbox: string | null }>(
 		`SELECT a.uri, a.inbox_url AS inbox FROM follows f JOIN accounts a ON a.id = f.${other}
@@ -156,7 +169,12 @@ export const getCollection = readOperation<
 		COLLECTION_PAGE_SIZE + 1,
 		(page - 1) * COLLECTION_PAGE_SIZE
 	)
-	return { total, items: items.slice(0, COLLECTION_PAGE_SIZE), hasNext: items.length > COLLECTION_PAGE_SIZE }
+	return {
+		total,
+		items: items.slice(0, COLLECTION_PAGE_SIZE),
+		hasNext: items.length > COLLECTION_PAGE_SIZE,
+		hidden,
+	}
 })
 
 export type NodeInfoUsage = { users: number; activeMonth: number; activeHalfyear: number; localPosts: number }
