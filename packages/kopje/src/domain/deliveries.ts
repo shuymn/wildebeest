@@ -1,3 +1,4 @@
+import { domainBlockMatchSql } from './audience'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 
@@ -126,12 +127,13 @@ export function isDeliverableInbox(value: string | null): value is string {
 export type DeliveryAudience = { followers: boolean; accounts: string[] }
 
 // The targets an activity goes to (NET-2), from the stored audience only:
-//   - followers: the signer's accepted remote followers, by shared inbox when they have one (deduplicated);
+//   - followers: the signer's accepted remote followers, by shared inbox when they have one (deduplicated), except
+//     those on a domain the signer blocks (a domain block removes them in bounded batches, domain/blocks.ts);
 //   - addressed accounts named in to/cc: by shared inbox, as Mastodon's StatusReachFinder;
 //   - addressed accounts the activity reaches without naming them: on an addressed activity (one with to), a silent
 //     recipient, by its personal inbox only, with itself as addressee (none: recorded as unreachable for the
-//     operator, never sent to a shared inbox); otherwise (an activity without to: a Like, Follow, Accept, Reject or
-//     their Undo, each of which names its recipient through its object) by shared inbox when it has one, else its
+//     operator, never sent to a shared inbox); otherwise (an activity without to: a Like, Follow, Accept, Reject,
+//     Block or their Undo, each of which names its recipient through its object) by shared inbox when it has one, else its
 //     personal inbox, as some servers accept but do not process such activities at a personal inbox;
 //   - for a retraction, every inbox that received the object or may still receive it.
 // Local accounts are never delivered to over HTTP: they read the Store. A neutral copy goes once to each inbox, and a
@@ -160,7 +162,8 @@ export function audienceTargets(
 		const followers = db.all<{ inbox: string | null }>(
 			`SELECT DISTINCT COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) AS inbox
 			FROM follows f JOIN accounts a ON a.id = f.account_id
-			WHERE f.target_account_id = ? AND f.state = 'accepted' AND a.domain IS NOT NULL`,
+			WHERE f.target_account_id = ?1 AND f.state = 'accepted' AND a.domain IS NOT NULL
+				AND NOT EXISTS (SELECT 1 FROM domain_blocks d WHERE d.account_id = ?1 AND ${domainBlockMatchSql('d', 'a')})`,
 			signerId
 		)
 		for (const { inbox } of followers) {

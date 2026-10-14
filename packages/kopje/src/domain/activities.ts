@@ -22,7 +22,7 @@ import { sha256Hex } from '../platform/sha256'
 // where followers means the signer's followers and accounts are the addressed accounts (silent recipients included,
 // local ones too; delivery skips local recipients). An addressed account named in to/cc is delivered to by its shared
 // inbox, a silent recipient by its personal inbox, and the recipient of an activity without to (a Like, Follow,
-// Accept, Reject or their Undo) by its shared inbox when it has one (deliveries.ts). Update and Delete are addressed
+// Accept, Reject, Block or their Undo) by its shared inbox when it has one (deliveries.ts). Update and Delete are addressed
 // and delivered to the audience the status already had and never wider: visibility cannot change, and a mention
 // removed by an edit stays as a silent mention. Delete carries a Tombstone, not the content.
 
@@ -392,6 +392,46 @@ export function followAnswerActivity(kind: 'Accept' | 'Reject', input: FollowAns
 			},
 		},
 		audience: { followers: false, accounts: [input.followerId] },
+	} satisfies OutboundEnvelope
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Blocks (Mastodon's BlockService and UnblockService): a Block of a remote account, and its Undo, go to the blocked
+// account only, by its shared inbox or its personal inbox without one (audienceTargets), as a Follow does. A block's
+// id is `<actor>#blocks/<blocks.id>`, as Mastodon names it; a block without a stored uri (migrated rows) gets the id
+// this instance would have given it.
+// ---------------------------------------------------------------------------------------------------------------
+
+export type BlockActivityInput = { blockUri: string; actorUri: string; targetUri: string; targetId: string }
+
+export function blockUri(actorUri: string, edgeId: string): string {
+	return `${actorUri}#blocks/${edgeId}`
+}
+
+export function blockActivity(input: BlockActivityInput) {
+	return {
+		activity: {
+			'@context': AS_CONTEXT,
+			id: input.blockUri,
+			type: 'Block',
+			actor: input.actorUri,
+			object: input.targetUri,
+		},
+		audience: { followers: false, accounts: [input.targetId] },
+	} satisfies OutboundEnvelope
+}
+
+export function undoBlockActivity(input: BlockActivityInput) {
+	const { '@context': _, ...block } = blockActivity(input).activity
+	return {
+		activity: {
+			'@context': AS_CONTEXT,
+			id: `${input.blockUri}/undo`,
+			type: 'Undo',
+			actor: input.actorUri,
+			object: block,
+		},
+		audience: { followers: false, accounts: [input.targetId] },
 	} satisfies OutboundEnvelope
 }
 
