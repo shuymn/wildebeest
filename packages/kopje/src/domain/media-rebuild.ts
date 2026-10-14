@@ -10,8 +10,10 @@ import type { ImportAuthority } from '../platform/store-admin'
 //
 // The Store does not know which files exist in R2, and no column says so: an upload completes only after its files
 // are written, and a restore or a conversion writes rows whose files were never made. So the Store lists every
-// complete local row with a file token, in id order and bounded pages, and the Worker asks R2 for each. Rows that are
-// doomed (gc_at passed) are left to the sweep.
+// complete local row with a file token, in id order, and the Worker asks R2 for each. Rows that are doomed (gc_at
+// passed) are left to the sweep. One listing scans at most SCAN_WINDOW rows by id, whatever they are, and returns at
+// most REBUILD_PAGE candidates from them, with the id it scanned to: a long run of rows that are not candidates (remote,
+// doomed) costs bounded work per call and is not scanned again.
 //
 // The two writes (the transformation counter, the meta of a rebuilt row) are 'media-rebuild' operations, which the
 // operator gate admits in readonly maintenance and while a verified import is unpublished (platform/store-flags.ts),
@@ -19,8 +21,13 @@ import type { ImportAuthority } from '../platform/store-admin'
 // operations do (platform/store-admin.ts).
 
 export const REBUILD_PAGE = 50
+export const SCAN_WINDOW = 500
 
 export type RebuildRow = { id: string; token: string; contentType: string | null }
+
+// rows: the candidates; next: the id the listing scanned to (the next listing starts after it); done: nothing is after
+// it.
+export type RebuildPage = { rows: RebuildRow[]; next: string | null; done: boolean }
 
 function iso(ms: number): string {
 	return new Date(ms).toISOString()
@@ -29,15 +36,42 @@ function iso(ms: number): string {
 // Complete local media with a token that is not doomed: what is served, or should be.
 const ELIGIBLE = `file_token IS NOT NULL AND processed = 1 AND url <> '' AND (gc_at IS NULL OR gc_at > ?)`
 
-export const rebuildCandidates = readOperation<{ after: string | null; now: number }, RebuildRow[]>(
-	(db, { after, now }) =>
-		db.all<RebuildRow>(
+export const rebuildCandidates = readOperation<{ after: string | null; now: number }, RebuildPage>(
+	(db, { after, now }) => {
+		const scanned = db.all<{ id: string }>(
+			'SELECT id FROM media_attachments WHERE id > ? ORDER BY id LIMIT ?',
+			after ?? '',
+			SCAN_WINDOW
+		)
+		const last = scanned.at(-1)?.id
+		if (last === undefined) {
+			return { rows: [], next: after, done: true }
+		}
+		const rows = db.all<RebuildRow>(
 			`SELECT id, file_token AS token, content_type AS contentType FROM media_attachments
-			WHERE ${ELIGIBLE} AND id > ? ORDER BY id LIMIT ?`,
+			WHERE ${ELIGIBLE} AND id > ? AND id <= ? ORDER BY id LIMIT ?`,
 			iso(now),
 			after ?? '',
+			last,
 			REBUILD_PAGE
 		)
+		if (rows.length === REBUILD_PAGE) {
+			return { rows, next: rows.at(-1)?.id ?? last, done: false }
+		}
+		return { rows, next: last, done: scanned.length < SCAN_WINDOW }
+	}
+)
+
+// Whether a row is still a candidate with this token: the rebuild asks after its files are written (mastodon/
+// media-rebuild.ts).
+export const rebuildRowLive = readOperation<{ id: string; token: string; now: number }, boolean>(
+	(db, { id, token, now }) =>
+		db.first(
+			`SELECT 1 AS found FROM media_attachments WHERE id = ? AND file_token = ? AND ${ELIGIBLE}`,
+			id,
+			token,
+			iso(now)
+		) !== undefined
 )
 
 // The Access admin, checked against the saved configuration, as the Worker verified it. IMPORT_TOKEN and import
@@ -76,7 +110,8 @@ type Size = { width: number; height: number }
 export type RebuildRecord = { status: 'ok' } | { status: 'gone' } | { status: 'denied'; reason: string }
 
 // Records the sizes of the files the rebuild made, before they are written: the row must still be eligible with the
-// same token and type, so files are never written for a row that changed or went. Only meta changes.
+// same token and type, so files are not written for a row that changed or went. Only meta changes. A row doomed after
+// this is caught by rebuildRowLive once the files are written.
 export const recordRebuild = mediaRebuildOperation<
 	{
 		authority: ImportAuthority

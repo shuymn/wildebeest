@@ -633,8 +633,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   of served files"), `test/media-reconcile.test.ts` ("deletes nothing from R2 for a Store that knows nothing of it",
   "deletes nothing during maintenance, an import, or before setup", "deletes a late write of a failed upload").
   The media rebuild (`kopje-admin media-rebuild`, `src/mastodon/media-rebuild.ts`) builds its keys the same way, from the
-  row's id and token only, and records the row in the Store before it writes the files, so it writes none for a row
-  that went; it never deletes. `test/media-rebuild.test.ts` ("leaves out remote, doomed and unfinished rows").
+  row's id and token only. It records the row in the Store before it writes the files, and once both writes have
+  completed asks the Store again whether the row is still live: a row deleted and swept meanwhile (whose objects the
+  sweep may have deleted before the writes landed, and which leaves no tombstone once completed) has the files just
+  written deleted by the rebuild, and a deletion after that answer follows the writes, so the sweep's deletes remove
+  them. It deletes nothing else. `test/media-rebuild.test.ts` ("leaves out remote, doomed and unfinished rows",
+  "deletes the files it wrote for a row deleted and swept while it wrote them").
 - **MEDIA-3: served images are re-encoded.** An image is served only as Images output with location metadata removed; if
   transformation fails, the upload is refused and original bytes are never served. _Enforced (main):_ outputs are PNG or WebP only, for which Images discards all metadata (the binding has no
   metadata option, and JPEG output would keep the EXIF copyright tag); `processImage` in `src/platform/images.ts` then

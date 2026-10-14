@@ -1,4 +1,3 @@
-import { REBUILD_PAGE } from '../domain/media-rebuild'
 import { sniffImageType } from '../platform/image-bytes'
 import { type ImageCodec, IMAGE_SIZE_LIMIT, processImage, servedTypeOf } from '../platform/images'
 import { fileKey, MEDIA_VARIANTS, originalKey } from '../platform/media-files'
@@ -12,11 +11,17 @@ import type { StoreStub } from '../platform/store-client'
 // Each row that lacks a file: its original is read from originals/<id>; the original's type must be served as the
 // row's content_type (its URLs name that type, so a mismatch is reported and left alone, never rewritten); the
 // instance's transformation budget is charged; processImage re-encodes it as an upload does (MEDIA-3: metadata
-// stripped, long edge capped, a preview); the Store records the real sizes in meta; and only then are
-// files/<token>/{full,small} written. Images refusing for quota (9422) or the monthly budget being spent stops the call.
+// stripped, long edge capped, a preview); the Store records the real sizes in meta; only then are
+// files/<token>/{full,small} written; and once both writes have completed the Store is asked whether the row is still
+// live. A row deleted meanwhile (delete_media, then the sweep, which deletes its objects before the row) may have had
+// its objects deleted before these writes landed, and a swept row that had completed leaves no tombstone, so nothing
+// else would delete them: the rebuild deletes them itself. A deletion after that answer comes after the writes, so the
+// sweep's own deletes remove the files. Images refusing for quota (9422) or the monthly budget being spent stops the
+// call.
 //
-// Bounds per call: at most REBUILD_PAGE rows are looked at and at most MAX_BUILDS_PER_CALL are re-encoded, one at a
-// time (an original is at most 16 MB), so a call stays within a request's subrequests and memory.
+// Bounds per call: one listing (at most SCAN_WINDOW rows scanned, REBUILD_PAGE candidates) and at most
+// MAX_BUILDS_PER_CALL re-encoded, one at a time (an original is at most 16 MB), so a call stays within a request's
+// subrequests and memory.
 
 export const MAX_BUILDS_PER_CALL = 10
 
@@ -70,7 +75,7 @@ export async function rebuildMedia(
 	input: { after: string | null; dryRun: boolean }
 ): Promise<RebuildStep> {
 	const { build, store, bucket } = deps
-	const rows = await store.mediaRebuildCandidates(build, { after: input.after, now: deps.now() })
+	const page = await store.mediaRebuildCandidates(build, { after: input.after, now: deps.now() })
 	const counts = emptyCounts()
 	const problems: RebuildProblem[] = []
 	let builds = 0
@@ -89,7 +94,7 @@ export async function rebuildMedia(
 		problems.push(problem)
 	}
 
-	for (const row of rows) {
+	for (const row of page.rows) {
 		const heads = await Promise.all(MEDIA_VARIANTS.map((variant) => bucket.head(fileKey(row.token, variant))))
 		if (heads.every((head) => head !== null)) {
 			counts['skipped-existing']++
@@ -108,7 +113,8 @@ export async function rebuildMedia(
 			handled = row.id
 			continue
 		}
-		if (!input.dryRun && original.size > IMAGE_SIZE_LIMIT) {
+		// The object's size, also for a ranged read: a dry run reports what the real run would.
+		if (original.size > IMAGE_SIZE_LIMIT) {
 			await original.body.cancel()
 			report({ id: row.id, outcome: 'failed', detail: 'too_large' })
 			handled = row.id
@@ -175,10 +181,22 @@ export async function rebuildMedia(
 			handled = row.id
 			continue
 		}
-		await bucket.put(fileKey(row.token, 'full'), full.bytes, { httpMetadata: { contentType: full.contentType } })
-		await bucket.put(fileKey(row.token, 'small'), small.bytes, { httpMetadata: { contentType: small.contentType } })
+		const keys = [fileKey(row.token, 'full'), fileKey(row.token, 'small')] as const
+		await bucket.put(keys[0], full.bytes, { httpMetadata: { contentType: full.contentType } })
+		await bucket.put(keys[1], small.bytes, { httpMetadata: { contentType: small.contentType } })
+		// The row may have been doomed and swept while the files were written; the sweep's deletes may then have run
+		// before these writes landed. Both writes have completed, so asking now settles it: a row that is still live
+		// has its files, and any deletion after this answer deletes them through the sweep; a row that went gets its
+		// files deleted here, so nothing serves them again.
+		if (!(await store.mediaRebuildRowLive(build, { id: row.id, token: row.token, now: deps.now() }))) {
+			await bucket.delete([...keys])
+			counts.gone++
+			handled = row.id
+			continue
+		}
 		counts.built++
 		handled = row.id
 	}
-	return step(null, rows.length < REBUILD_PAGE)
+	handled = page.next
+	return step(null, page.done)
 }

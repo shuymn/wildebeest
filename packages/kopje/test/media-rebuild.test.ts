@@ -1,17 +1,19 @@
 import { runInDurableObject } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, inject, it } from 'vitest'
 
 import { type AccessTeam, adminClaims, adminHarness, adminTeam, serviceClaims, setTeamAccess } from './access-helpers'
 import { NOW } from './app-helpers'
 import { JPEG_ORIENTATION_6, PNG_PLAIN, WIDE_PNG } from './fixtures/images'
-import { BUILD, migratedStore, rejectionOf } from './helpers'
+import { BUILD, completeSetup, migratedStore, rejectionOf } from './helpers'
 import { bytes, TestCodec } from './media-helpers'
-import { ACCESS, memoryIO } from './ops-helpers'
+import { ACCESS, ADMIN_AUD, ADMIN_EMAIL, importViaRpc, memoryIO } from './ops-helpers'
 import { run } from '../cli/lib/main.js'
-import { REBUILD_PAGE } from '../src/domain/media-rebuild'
+import { REBUILD_PAGE, SCAN_WINDOW } from '../src/domain/media-rebuild'
+import { sweepMedia } from '../src/mastodon/media'
 import { MAX_BUILDS_PER_CALL } from '../src/mastodon/media-rebuild'
+import { IMAGE_SIZE_LIMIT } from '../src/platform/images'
 import type { StoreStub } from '../src/platform/store-client'
 import { toStoreUnavailable } from '../src/platform/store-errors'
 import { admitFlags, type OperatorFlags } from '../src/platform/store-flags'
@@ -19,6 +21,12 @@ import { randomToken } from '../src/security/tokens'
 
 // kopje-admin media-rebuild (mastodon/media-rebuild.ts): served files made again from the originals of restored or moved
 // media, MEDIA-2/MEDIA-3, and its narrow exemption from the operator gate (OPS-8).
+
+declare module 'vitest' {
+	export interface ProvidedContext {
+		cutoverImages: { dump: string; originals: Record<string, string> }
+	}
+}
 
 let team: AccessTeam
 
@@ -35,8 +43,8 @@ function mediaId(): string {
 
 type Row = { id: string; token: string }
 
-async function setup(options: { codec?: TestCodec; env?: Record<string, unknown> } = {}) {
-	const store = await migratedStore()
+async function setup(options: { codec?: TestCodec; env?: Record<string, unknown>; store?: StoreStub } = {}) {
+	const store = options.store ?? (await migratedStore())
 	await setTeamAccess(store, team)
 	await runInDurableObject(store, (_instance, state) => {
 		state.storage.sql.exec(
@@ -391,5 +399,121 @@ describe('kopje-admin media-rebuild', () => {
 		expect(JSON.parse(stopped.out)).toMatchObject({ 'quota-stopped': true, stopped: 'quota' })
 		expect(stopped.err).toContain('9422')
 		expect((await cli(h, ['media-rebuild', 'extra'])).code).toBe(2)
+	})
+})
+
+describe('media rebuild: races, bounds and real conversions', () => {
+	it('deletes the files it wrote for a row deleted and swept while it wrote them (MEDIA-2)', async () => {
+		let release = () => {}
+		let paused: () => void = () => {}
+		const reachedPut = new Promise<void>((resolve) => {
+			paused = resolve
+		})
+		const gate = new Promise<void>((resolve) => {
+			release = resolve
+		})
+		// The media bucket as the rebuild sees it: the first served file's write waits until the test releases it.
+		const bucket = {
+			head: (key: string) => env.MEDIA.head(key),
+			get: (key: string, options?: R2GetOptions) => env.MEDIA.get(key, options),
+			delete: (keys: string | string[]) => env.MEDIA.delete(keys),
+			put: async (key: string, value: Uint8Array, options?: R2PutOptions) => {
+				if (key.endsWith('/full')) {
+					paused()
+					await gate
+				}
+				return env.MEDIA.put(key, value, options)
+			},
+		}
+		const h = await setup({ env: { MEDIA: bucket } })
+		await completeSetup(h.store)
+		const row = await addRow(h.store)
+		const running = h.post(adminClaims(), '/admin/media/rebuild')
+		await reachedPut
+		// delete_media dooms it, and the sweep deletes its objects and then the row, before the write lands.
+		await runInDurableObject(h.store, (_instance, state) => {
+			state.storage.sql.exec('UPDATE media_attachments SET gc_at = ? WHERE id = ?', new Date(NOW).toISOString(), row.id)
+		})
+		const swept = await sweepMedia(env, { build: () => BUILD, now: () => NOW + 1000, store: () => h.store })
+		expect(swept).toBe(1)
+		release()
+		const step = (await (await running).json()) as Step
+		expect(step.counts).toMatchObject({ built: 0, gone: 1 })
+		expect(await files(row)).toEqual([false, false])
+	})
+
+	it('scans a bounded window of rows per call, so rows it leaves out cost bounded work', async () => {
+		const h = await setup()
+		await runInDurableObject(h.store, (_instance, state) => {
+			for (let i = 0; i < SCAN_WINDOW * 2 + 10; i++) {
+				state.storage.sql.exec(
+					"INSERT INTO media_attachments (id, account_id, type, url) VALUES (?, ?, 'image', 'https://remote.test/a.png')",
+					mediaId(),
+					ACCOUNT
+				)
+			}
+		})
+		const row = await addRow(h.store)
+		const steps: Step[] = []
+		let after: string | null = null
+		for (;;) {
+			const step = (await (await h.post(adminClaims(), '/admin/media/rebuild', { after })).json()) as Step
+			steps.push(step)
+			if (step.done) {
+				break
+			}
+			expect(step.next).not.toBe(after)
+			after = step.next
+		}
+		expect(steps).toHaveLength(3)
+		expect(steps.map((step) => step.counts.built)).toEqual([0, 0, 1])
+		expect(await files(row)).toEqual([true, true])
+	})
+
+	it('reports an original over 16 MiB as too large in a dry run as in a real run, without reading or charging it', async () => {
+		const h = await setup()
+		const large = new Uint8Array(IMAGE_SIZE_LIMIT + 1)
+		large.set(bytes(PNG_PLAIN))
+		const row = await addRow(h.store, { original: large })
+		for (const dryRun of [true, false]) {
+			const step = (await (await h.post(adminClaims(), '/admin/media/rebuild', { dryRun })).json()) as Step
+			expect(step.counts).toMatchObject({ 'would-build': 0, built: 0, failed: 1 })
+			expect(step.problems).toEqual([{ id: row.id, outcome: 'failed', detail: 'too_large' }])
+		}
+		expect(h.codec.calls).toBe(0)
+		expect(await transforms(h.store)).toBe(0)
+	})
+
+	it('serves the images of a real `convert --images` conversion once their originals are in R2, before publication', async () => {
+		const { dump, originals } = inject('cutoverImages')
+		const store = await migratedStore()
+		await setTeamAccess(store, team)
+		const authority = { ...ACCESS, teamDomain: team.teamDomain, email: ADMIN_EMAIL, aud: ADMIN_AUD } as const
+		expect((await importViaRpc(store, dump, 16 * 1024, authority)).report).toMatchObject({ ok: true })
+		expect(Object.keys(originals).length).toBeGreaterThan(0)
+		for (const [id, base64] of Object.entries(originals)) {
+			await env.MEDIA.put(`originals/${id}`, bytes(base64))
+		}
+		const h = adminHarness(store, team, {}, undefined, () => new TestCodec())
+		const step = (await (await h.post(adminClaims(), '/admin/media/rebuild')).json()) as Step
+		expect(step).toMatchObject({ done: true, stopped: null, problems: [] })
+		expect(step.counts.built).toBe(Object.keys(originals).length)
+		const rows = await runInDurableObject(store, (_instance, state) =>
+			state.storage.sql
+				.exec<{ url: string; preview_url: string }>(
+					'SELECT url, preview_url FROM media_attachments WHERE file_token IS NOT NULL'
+				)
+				.toArray()
+		)
+		expect(rows).toHaveLength(Object.keys(originals).length)
+		for (const row of rows) {
+			for (const url of [row.url, row.preview_url]) {
+				const served = await h.request(new URL(url).pathname)
+				expect(served.status).toBe(200)
+				expect(served.headers.get('content-type')).toBe('image/png')
+			}
+		}
+		// Still unpublished: the rebuild was the only write let through.
+		expect((await store.cutoverStatus(BUILD)).unpublished).toBe(true)
 	})
 })
