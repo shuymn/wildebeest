@@ -65,3 +65,25 @@ export function parseRules(value: string | undefined): InstanceRule[] {
 	}
 	return rules
 }
+
+// RES-3, RES-7: GET /api/v1/instance/peers lists at most this many domains.
+export const MAX_PEERS = 10_000
+
+// The distinct domains of known remote accounts, in order, as Mastodon's Instance.searchable lists them (Kopje has no
+// server-wide domain blocks to leave out). Each domain is found by one seek on the (domain, username) index past the
+// previous one, so the work grows with the domains returned, never with the accounts known. The same set the
+// instance's domain_count counts; it reveals no more than which servers the instance knows of.
+export const instancePeers = readOperation<void, string[]>((db) =>
+	db
+		.all<{ domain: string }>(
+			`WITH RECURSIVE peers(domain) AS (
+				SELECT (SELECT MIN(domain) FROM accounts WHERE domain IS NOT NULL)
+				UNION ALL
+				SELECT (SELECT MIN(domain) FROM accounts WHERE domain > peers.domain) FROM peers WHERE peers.domain IS NOT NULL
+				LIMIT ?1
+			)
+			SELECT domain FROM peers WHERE domain IS NOT NULL`,
+			MAX_PEERS
+		)
+		.map((row) => row.domain)
+)

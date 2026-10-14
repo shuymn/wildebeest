@@ -1,4 +1,6 @@
 import { type ApiContext, type ApiDeps, type ApiHandler, storeCall, vapidKey } from './context'
+import { mastodonError } from './errors'
+import { LANGUAGES } from './languages'
 import type { InstanceInfo } from '../domain/instance'
 
 // /api/v1/instance and /api/v2/instance in their Mastodon 4.0.2 shapes. The declared version stays 4.0.2 and
@@ -82,3 +84,23 @@ export const instanceV2: ApiHandler = async (c, deps) => {
 
 // No custom emoji yet; the route exists because clients call it at startup.
 export const customEmojis: ApiHandler = (c) => Promise.resolve(c.json([]))
+
+// The rest of /api/v1/instance/*, the endpoints clients read at startup and on an instance's about page.
+
+export const rules: ApiHandler = async (c, deps) => c.json((await load(c, deps)).info.rules)
+
+export const peers: ApiHandler = async (c, deps) => c.json(await storeCall(c, deps, (s, b) => s.instancePeers(b)))
+
+// No extended description is configured: Mastodon's answer when none is set.
+export const extendedDescription: ApiHandler = (c) => Promise.resolve(c.json({ updated_at: null, content: '' }))
+
+// Answered 404 as Mastodon answers when nothing is configured or the feature is off:
+//   - terms_of_service: none is published.
+//   - privacy_policy: none is configured. Mastodon would serve its built-in template, which describes Mastodon's data
+//     handling and is not true of Kopje, so Kopje answers as for terms of service.
+//   - activity: Mastodon's weekly counts include logins, which Kopje does not record; the API is off.
+//   - domain_blocks: Kopje has no server-wide domain blocks to show; off, as Mastodon's default (show_domain_blocks
+//     disabled).
+export const notConfigured: ApiHandler = () => Promise.resolve(mastodonError(404, 'Record not found'))
+
+export const languages: ApiHandler = (c) => Promise.resolve(c.json(LANGUAGES))
