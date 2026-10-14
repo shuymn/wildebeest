@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import mastodon from './fixtures/mastodon-4.5.11-api-access.json'
 import type { RouteAccess } from '../src/mastodon/access'
 import { ROUTES } from '../src/mastodon/routes'
-import { grants, type Scope, SCOPES } from '../src/security/scopes'
+import { grants, type RequiredScope, SCOPES } from '../src/security/scopes'
 
 // Every route of the API table (src/mastodon/routes.ts) asks of its caller what Mastodon's same route asks, read from
 // Mastodon's source by scripts/mastodon-scopes.mjs (the fixture's header says how to regenerate it). Compared:
@@ -84,11 +84,6 @@ const EXCEPTIONS: Record<string, Exception> = {
 		mastodon: 'required token, scopes read read:follows, user required',
 		reason: 'grants() lets `follow` cover read:follows everywhere; Mastodon omits follow here',
 	},
-	'GET /api/v1/accounts/verify_credentials': {
-		kopje: 'required token, scopes read read:accounts, user required',
-		mastodon: 'required token, scopes profile read read:accounts, user required',
-		reason: "Kopje has no `profile` scope (Mastodon 4.3+'s identity-only scope)",
-	},
 
 	// Mastodon's StatusPolicy#show? (Pundit) decides per viewer; Kopje's Store applies the visibility rules.
 	'GET /api/v1/statuses/:id': {
@@ -162,9 +157,11 @@ const EXCEPTIONS: Record<string, Exception> = {
 	},
 }
 
-// The scopes a token may hold to pass the route's scope: every scope Kopje issues that covers it.
-function acceptedScopes(scope: Scope, covers = grants): string[] {
-	return SCOPES.filter((s) => covers([s], scope)).toSorted()
+// The scopes a token may hold to pass the route's scope: every scope Kopje issues that covers it (any one of them if
+// the route names several).
+function acceptedScopes(required: RequiredScope, covers = grants): string[] {
+	const any = typeof required === 'string' ? [required] : required
+	return SCOPES.filter((s) => any.some((scope) => covers([s], scope))).toSorted()
 }
 
 function kopjeAccess(access: RouteAccess, covers = grants): Access {
@@ -247,6 +244,8 @@ describe(`route access matches Mastodon v${mastodon.mastodon}`, () => {
 		expect(acceptedScopes('write:blocks')).toEqual(['follow', 'write', 'write:blocks'])
 		expect(acceptedScopes('admin:read:accounts')).toEqual(['admin:read', 'admin:read:accounts'])
 		expect(acceptedScopes('push')).toEqual(['push'])
+		expect(acceptedScopes('profile')).toEqual(['profile'])
+		expect(acceptedScopes(['profile', 'read:accounts'])).toEqual(['profile', 'read', 'read:accounts'])
 	})
 
 	it('sees a scope the hierarchy wrongly lets through', () => {
