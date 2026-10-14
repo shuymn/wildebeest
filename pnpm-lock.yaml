@@ -267,8 +267,8 @@ importers:
         specifier: 4.149.0
         version: 4.149.0(@cloudflare/workers-types@5.20261011.1)(@types/node@24.19.2)
       zod:
-        specifier: 3.25.76
-        version: 3.25.76
+        specifier: 4.6.5
+        version: 4.6.5
 
 packages:
 
