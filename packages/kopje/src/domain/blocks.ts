@@ -269,7 +269,7 @@ export const listBlocks = userReadOperation<{ page: PageQuery; present: Present 
 // GET /api/v1/mutes: the accounts the viewer mutes now, by the mute's id, each with its expiry (Mastodon's
 // REST::MutedAccountSerializer).
 export const listMutes = userReadOperation<{ page: PageQuery; present: Present }, Page<MutedAccount>>(
-	(db, { page, present }, { accountId, now }) => {
+	(db, { page, present }, _viewer, { accountId, now }) => {
 		const ascending = page.minId !== undefined
 		const rows = db.all<AccountRow & { cursor: string; mute_expires_at: string | null }>(
 			`SELECT CAST(m.id AS TEXT) AS cursor, m.expires_at AS mute_expires_at, ${ACCOUNT_COLUMNS}
@@ -281,7 +281,7 @@ export const listMutes = userReadOperation<{ page: PageQuery; present: Present }
 			page.maxId ?? null,
 			page.minId ?? page.sinceId ?? null,
 			page.limit,
-			new Date(now).toISOString()
+			now
 		)
 		return edgePage(rows, ascending, (row) => ({
 			...presentAccount(row, present),

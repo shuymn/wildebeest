@@ -563,8 +563,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	const added = writeMentions(db, current.id, mentions, previous)
 	// A mention of an account the author has blocked since goes, rather than staying silent (ProcessMentionsService).
 	db.run(
-		`DELETE FROM status_mentions WHERE status_id = ?1 AND account_id IN
-			(SELECT m.account_id FROM status_mentions m WHERE m.status_id = ?1 AND ${blockedSql('?2', 'm.account_id')})`,
+		`DELETE FROM status_mentions WHERE status_id = ?1 AND ${blockedSql('?2', 'status_mentions.account_id')}`,
 		current.id,
 		accountId
 	)

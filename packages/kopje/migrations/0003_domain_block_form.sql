@@ -11,7 +11,7 @@
 --
 -- A cleanup is written only by the API's block, which never stores a trailing dot, so no merged row is expected to
 -- have one. Should one, it moves to the survivor unless the survivor has its own (UPDATE OR IGNORE keeps the first),
--- and the cleanups left on merged rows go with them.
+-- and the cleanups left on merged rows go with them (ON DELETE CASCADE).
 --
 -- The work follows the dotted rows, not the account's other blocks: each statement starts from rows ending in a dot
 -- (one pass over the table, or from the few cleanups), and finds the survivor through the (account_id, domain) index,
@@ -26,14 +26,6 @@ SET domain_block_id = (SELECT COALESCE(
         AND rtrim(y.domain, '.') = rtrim(x.domain, '.')))
   FROM domain_blocks x WHERE x.id = domain_block_cleanups.domain_block_id)
 WHERE (SELECT x.domain FROM domain_blocks x WHERE x.id = domain_block_cleanups.domain_block_id) LIKE '%.';
-
-DELETE FROM domain_block_cleanups
-WHERE domain_block_id IN (SELECT x.id FROM domain_blocks x
-  WHERE x.id = domain_block_cleanups.domain_block_id AND x.domain LIKE '%.' AND COALESCE(
-      (SELECT n.id FROM domain_blocks n WHERE n.account_id = x.account_id AND n.domain = rtrim(x.domain, '.')),
-      (SELECT min(y.id) FROM domain_blocks y WHERE y.account_id = x.account_id
-        AND y.domain >= rtrim(x.domain, '.') || '.' AND y.domain < rtrim(x.domain, '.') || '/'
-        AND rtrim(y.domain, '.') = rtrim(x.domain, '.'))) <> x.id);
 
 DELETE FROM domain_blocks WHERE id IN (SELECT x.id FROM domain_blocks x
   WHERE x.domain LIKE '%.' AND COALESCE(

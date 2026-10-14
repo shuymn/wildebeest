@@ -154,8 +154,7 @@ export function mentionableBySql(x: string, author: string): string {
 // R21 (FollowService): whether `viewer` may follow the account `x`: it is available and someone else, neither blocks
 // the other, and the viewer does not block its domain.
 export function followableBySql(x: string, viewer: string): string {
-	return `(${availableSql(x)} AND ${x} <> ${viewer} AND NOT ${blocksSql(viewer, x)} AND NOT ${blocksSql(x, viewer)}
-		AND NOT ${domainBlocksSql(viewer, x)})`
+	return `(${availableSql(x)} AND ${x} <> ${viewer} AND NOT ${blocksSql(x, viewer)} AND NOT ${blockedSql(viewer, x)})`
 }
 
 // ---- Statuses. `s` is the alias of a statuses row.
@@ -179,7 +178,7 @@ export function visibleSql(s: string, viewer: string): string {
 }
 
 // R3: a status may be shown by itself (GET /statuses/:id): the row is visible and, for a reblog, so is the original.
-export function viewableSql(s: string, viewer: string): string {
+function viewableSql(s: string, viewer: string): string {
 	return `(${visibleSql(s, viewer)} AND (${s}.reblog_of_id IS NULL OR EXISTS (SELECT 1 FROM statuses ${s}_o
 		WHERE ${s}_o.id = ${s}.reblog_of_id AND ${visibleSql(`${s}_o`, viewer)})))`
 }

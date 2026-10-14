@@ -90,8 +90,7 @@ export const domainBlocks: ApiHandler = async (c, deps) => {
 	return pageResponse(c, result, page.limit)
 }
 
-// The `domain` parameter as Mastodon normalizes it (TagManager#normalize_domain: a trailing slash dropped, the host
-// lowercased and in punycode), and a trailing dot dropped too. null when absent or not a domain name.
+// The `domain` parameter as a domain block stores it (`blockedDomain`); null when absent or not a domain name.
 function domainParam(p: Params): { domain: string | null; blank: boolean } {
 	const raw = (p.get('domain') ?? '').trim()
 	return { domain: raw === '' ? null : blockedDomain(raw), blank: raw === '' }
