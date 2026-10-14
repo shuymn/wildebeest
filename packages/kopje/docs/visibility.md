@@ -183,7 +183,7 @@ in the same order, and the same relationship flags), and the rows it reads (RES-
 `test/policy-endpoints.test.ts` runs the status read endpoints themselves on generated worlds, with favourites,
 bookmarks and notifications added, for each available local viewer and, where the endpoint answers without a token,
 the anonymous one. No endpoint may show a status the model does not allow the viewer by the endpoint's rule, and a
-boost must come with its own original, which the viewer may see:
+boost must come with its own original (never `reblog: null` on a read), which the viewer may see:
 
 | Endpoint                                                   | Asserted                                                                              |
 | ---------------------------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -193,6 +193,6 @@ boost must come with its own original, which the viewer may see:
 | single status, context                                     | nothing for a status the viewer may not view (R3); context members listable (R8)      |
 | `favourited_by`, `reblogged_by`                            | nothing for a status the viewer may not view; only listed interactors (R12)           |
 | status search                                              | listable statuses only (R8)                                                           |
-| notifications                                              | only notifications the rule shows (R15), with statuses the viewer may view            |
+| notifications                                              | only the viewer's, as written, that the rule shows (R15), with statuses they may view |
 
 Each endpoint must show something in some case, so a property cannot pass by showing nothing.
