@@ -152,33 +152,131 @@ function add(into: Map<string, Set<string>>, table: string, columns: Iterable<st
 	into.set(table, set)
 }
 
-// The columns each INSERT and UPDATE statement in a source names.
-function writtenColumns(text: string): Map<string, Set<string>> {
-	const written = new Map<string, Set<string>>()
-	for (const m of text.matchAll(/INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)\s*\(([^)]*)\)/g)) {
-		const columns = (m[2] ?? '').split(',').map((c) => c.trim())
-		add(written, m[1] ?? '', columns)
-	}
-	for (const m of text.matchAll(/UPDATE\s+(\w+)\s+SET\s/g)) {
-		// The assignments up to the statement's WHERE or end, split at commas outside parentheses.
-		const assigned: string[] = []
-		let depth = 0
-		let start = (m.index ?? 0) + m[0].length
-		for (let i = start; i <= text.length; i++) {
-			const c = text[i]
-			depth += c === '(' ? 1 : c === ')' ? -1 : 0
-			const end = depth === 0 && (c === undefined || c === ';' || c === '`' || /^\sWHERE\s/.test(text.slice(i, i + 7)))
-			if (depth === 0 && (c === ',' || end)) {
-				assigned.push(/^\s*(\w+)\s*=/.exec(text.slice(start, i))?.[1] ?? '')
-				start = i + 1
+// A JavaScript source split into its code, with comments blanked out (offsets kept), and the text of its string and
+// template literals, a template's substitutions as `${}`. A `/` after an operator, a bracket or a keyword starts a
+// regular expression literal, as in JavaScript.
+function scan(text: string): { code: string; literals: string[] } {
+	const literals: string[] = []
+	let code = ''
+	let last = ''
+	let i = 0
+	while (i < text.length) {
+		const c = text[i] ?? ''
+		const next = text[i + 1]
+		if (c === '/' && (next === '/' || next === '*')) {
+			const close = next === '/' ? text.indexOf('\n', i) : text.indexOf('*/', i + 2) + 2
+			const end = close < i + 2 ? text.length : close
+			code += text.slice(i, end).replace(/[^\n]/g, ' ')
+			i = end
+		} else if (c === "'" || c === '"' || c === '`') {
+			const end = literalEnd(text, i, literals)
+			code += text.slice(i, end)
+			last = c
+			i = end
+		} else if (c === '/' && (/^$|[(,=:[!&|?{};+\-*%<>~^]$/.test(last) || /\b(?:return|typeof|case)\s*$/.test(code))) {
+			let j = i + 1
+			for (let inClass = false; j < text.length && (inClass || text[j] !== '/'); j++) {
+				if (text[j] === '\\') {
+					j++
+				} else if (text[j] === '[' || text[j] === ']') {
+					inClass = text[j] === '['
+				}
 			}
-			if (end) {
-				break
+			code += text.slice(i, j + 1)
+			last = '/'
+			i = j + 1
+		} else {
+			code += c
+			last = /\s/.test(c) ? last : c
+			i++
+		}
+	}
+	return { code, literals }
+}
+
+// The end of the string or template literal at `start`; pushes its text to `literals`.
+function literalEnd(text: string, start: number, literals: string[]): number {
+	const quote = text[start]
+	let value = ''
+	let i = start + 1
+	while (i < text.length && text[i] !== quote) {
+		if (text[i] === '\\') {
+			value += text.slice(i, i + 2)
+			i += 2
+		} else if (quote === '`' && text.startsWith('${', i)) {
+			// A substitution: skip to its closing brace, past nested braces and literals.
+			let depth = 0
+			for (i += 2; i < text.length && (depth > 0 || text[i] !== '}'); i++) {
+				const c = text[i]
+				if (c === "'" || c === '"' || c === '`') {
+					i = literalEnd(text, i, []) - 1
+				}
+				depth += c === '{' ? 1 : c === '}' ? -1 : 0
+			}
+			value += '${}'
+			i++
+		} else {
+			value += text[i]
+			i++
+		}
+	}
+	literals.push(value)
+	return i + 1
+}
+
+// The assigned columns of an UPDATE's SET clause, up to its WHERE or end; null when an assignment has another form.
+function assignedColumns(clause: string): string[] | null {
+	const assigned: string[] = []
+	let depth = 0
+	let start = 0
+	for (let i = 0; i <= clause.length; i++) {
+		const c = clause[i]
+		if (c === "'") {
+			i = clause.indexOf("'", i + 1)
+			if (i === -1) {
+				return null
+			}
+			continue
+		}
+		depth += c === '(' ? 1 : c === ')' ? -1 : 0
+		const end = depth === 0 && (c === undefined || c === ';' || /^\sWHERE\s/.test(clause.slice(i, i + 7)))
+		if (depth === 0 && (c === ',' || end)) {
+			const column = /^\s*(\w+)\s*=/.exec(clause.slice(start, i))?.[1]
+			if (column === undefined) {
+				return null
+			}
+			assigned.push(column)
+			start = i + 1
+		}
+		if (end) {
+			return assigned
+		}
+	}
+	return null
+}
+
+// The columns each INSERT and UPDATE in the string and template literals of a source names. A literal with INSERT or
+// UPDATE in another form (a table or column list from a substitution, say) is returned as unparsed.
+function writtenColumns(text: string): { columns: Map<string, Set<string>>; unparsed: string[] } {
+	const columns = new Map<string, Set<string>>()
+	const unparsed: string[] = []
+	for (const sql of scan(text).literals) {
+		for (const m of sql.matchAll(/\b(?:INSERT|UPDATE)\b/g)) {
+			const rest = sql.slice(m.index)
+			const insert = /^INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)\s*\(([^)]*)\)/.exec(rest)
+			const insertColumns = insert?.[2]?.split(',').map((c) => c.trim())
+			const update = /^UPDATE\s+(\w+)\s+SET\s/.exec(rest)
+			const updateColumns = update === null ? null : assignedColumns(rest.slice(update[0].length))
+			if (insert !== null && insertColumns?.every((c) => /^\w+$/.test(c))) {
+				add(columns, insert[1] ?? '', insertColumns)
+			} else if (update !== null && updateColumns !== null) {
+				add(columns, update[1] ?? '', updateColumns)
+			} else {
+				unparsed.push(rest.slice(0, 80))
 			}
 		}
-		add(written, m[1] ?? '', assigned)
 	}
-	return written
+	return { columns, unparsed }
 }
 
 // The columns verify-actual.js reads per table: each `case 'table':` of its switch and each `statement.table ===
@@ -206,9 +304,44 @@ function unknown(schema: Map<string, string[]>, columns: Map<string, Set<string>
 
 const sorted = (names: Iterable<string>) => [...names].sort()
 
+describe('the write scanner', () => {
+	it('reads INSERT and UPDATE in every quote style, with or without WHERE or a semicolon', () => {
+		const source = [
+			"kopje.exec('UPDATE statuses SET retired_column = 0')",
+			'kopje.prepare("UPDATE accounts SET a = ?, b = (SELECT count(*) FROM f WHERE f.x = \'y,z\') WHERE id = ?")',
+			'kopje.exec(`\n\tUPDATE lists SET c = 1;\n\tUPDATE mutes SET d = 2\n`)',
+			"insert('INSERT OR IGNORE INTO blocks (e, f) VALUES (?, ?)')",
+			'insert(`INSERT INTO follows (g,\n\th) VALUES (${a}, ${"x"})`)',
+		].join('\n')
+		expect(writtenColumns(source)).toEqual({
+			columns: new Map([
+				['statuses', new Set(['retired_column'])],
+				['accounts', new Set(['a', 'b'])],
+				['lists', new Set(['c'])],
+				['mutes', new Set(['d'])],
+				['blocks', new Set(['e', 'f'])],
+				['follows', new Set(['g', 'h'])],
+			]),
+			unparsed: [],
+		})
+	})
+
+	it('ignores comments and regular expressions, and reports SQL it cannot read', () => {
+		const source = [
+			"// kopje.exec('UPDATE statuses SET commented = 0')",
+			"/* insert('INSERT INTO blocks (commented) VALUES (1)') */",
+			"const quote = /'/g",
+			'kopje.exec(`INSERT INTO ${table} (a) VALUES (1)`)',
+			"kopje.exec('UPDATE accounts SET ' + column + ' = 1')",
+		].join('\n')
+		expect(writtenColumns(source).columns).toEqual(new Map())
+		expect(writtenColumns(source).unparsed).toEqual(['INSERT INTO ${} (a) VALUES (1)', 'UPDATE accounts SET '])
+	})
+})
+
 describe('the Store schema in the cutover tools', () => {
 	const schema = schemaColumns()
-	const written = writtenColumns(source('../cli/lib/cutover/convert.js'))
+	const { columns: written, unparsed } = writtenColumns(source('../cli/lib/cutover/convert.js'))
 	const read = readColumns(source('../cli/lib/cutover/verify-actual.js'))
 	const carried = [...schema.keys()].filter((table) => !(table in NOT_CARRIED))
 
@@ -219,6 +352,7 @@ describe('the Store schema in the cutover tools', () => {
 	})
 
 	it('convert writes each table the cutover carries, and each of its columns or says why not', () => {
+		expect(unparsed).toEqual([])
 		expect(sorted(written.keys())).toEqual(sorted(carried))
 		const unwritten = carried.flatMap((table) =>
 			(schema.get(table) ?? []).filter((c) => !written.get(table)?.has(c)).map((c) => `${table}.${c}`)
