@@ -113,25 +113,26 @@ deepest terms last in a chain and prefer `JOIN ... ON` to `WHERE` for a lookup i
 
 ## The oracle and the bounds harness
 
-`test/policy-oracle.test.ts` checks each fragment against a second statement of its rule. `test/policy-model.ts`
-states the rules of this page in plain TypeScript, without importing the module. `test/policy-world.ts` generates
-worlds with [fast-check](https://fast-check.dev/): four local accounts (one of them may be suspended), two or three
-remote accounts on two domains (some with an actor id on a subdomain, with a port, with a trailing dot or on the other
-domain), up to 22 statuses of every visibility with mentions (some silent), boosts, replies and replies that continue
-the author's own thread (written with the conversation partner `statuses.ts` carries over), accepted and pending follows, blocks both ways, mutes that
-have expired, expire at the time of the read or later, or never, with or without notifications, and domain blocks in
-their stored form, including the instance's own domain and a domain nobody lives on. Each property writes a world into
-one Store and evaluates its fragment over every pair the rule takes: every viewer (each account and the anonymous one)
-with every account, every viewer the status rules' callers judge (each local account and the anonymous one) with every
-status, every owner with every account, and, for `shownSql`, every local recipient with every notification type,
-sender and status (or none). The set of pairs it accepts must equal the model's. A failure prints the shrunk
-world, the pairs only one side accepts, and the seed; `FC_SEED=<seed> pnpm vitest run test/policy-oracle.test.ts`
-replays it.
+`test/policy-oracle.test.ts` checks each fragment against a second statement of its rule. `test/policy-model.ts` states
+the rules of this page in plain TypeScript, without importing the module. `test/policy-world.ts` generates worlds with
+[fast-check](https://fast-check.dev/): four local accounts (one of them may be suspended), two or three remote accounts
+on two domains (some with an actor id on a subdomain, with a port, with a trailing dot or on the other domain), up to 22
+statuses of every visibility with mentions (some silent), boosts, replies and replies that continue the author's own
+thread (written with the conversation partner `statuses.ts` carries over), accepted and pending follows, blocks both
+ways, mutes that have expired, expire at the time of the read or later, or never, with or without notifications, and
+domain blocks in their stored form, including the instance's own domain and a domain nobody lives on. Each property
+writes a world into one Store and evaluates its fragment over every pair the rule takes: every viewer (each account and
+the anonymous one) with every account or status (for the list rules, `listableSql` and `homeFilterSql`, the viewers
+their callers judge: each local account and the anonymous one), every owner with every account, and, for `shownSql`,
+every local recipient with every notification type, sender and status (or none). The set of pairs it accepts must equal
+the model's. A failure prints the shrunk world, the pairs only one side accepts, and the seed; `FC_SEED=<seed> pnpm
+vitest run test/policy-oracle.test.ts` replays it.
 
-`test/policy-bounds.test.ts` takes one generated world, for a fixed seed, in which every endpoint below shows the
-viewer something. It runs home, the public and tag feeds, account statuses, notifications, context, favourites,
-bookmarks, `favourited_by`, `reblogged_by`, relationships and status and hashtag search on that world alone, and again
-with 1,000 unrelated remote accounts and 100 unrelated local ones: their statuses (never public), replies and boosts,
-their follows, blocks, mutes and domain blocks of the world's accounts and domains, and their favourites, bookmarks and
+`test/policy-bounds.test.ts` takes one generated world, for a fixed seed, in which every endpoint below shows the viewer
+something. It runs home, the public and tag feeds, account statuses, notifications, context, favourites, bookmarks,
+`favourited_by`, `reblogged_by`, relationships and status and hashtag search on that world alone, and again with 1,000
+unrelated remote accounts and 100 unrelated local ones: their statuses (never public), replies and boosts, their
+follows, blocks, mutes and domain blocks of the world's accounts and domains, and their favourites, bookmarks and
 notifications, together with the viewer's own blocks and mutes of those accounts and domain blocks of domains nobody
-lives on. Each endpoint must show the same with them as without, and the rows it reads (RES-7) may grow by at most 10.
+lives on. Each endpoint must show the same with them as without (the same statuses, accounts, notifications and hashtags
+in the same order, and the same relationship flags), and the rows it reads (RES-7) may grow by at most 10.
