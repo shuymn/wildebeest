@@ -89,6 +89,8 @@ export type OperatorFlags = {
 	import_reset: { id: string; completedAt: number } | null
 	published: PublishedFlag | null
 	unpublished: { at: number; import: string } | null
+	// The media rebuild's lease (REBUILD_LEASE below).
+	media_rebuild_lease: { holder: string; until: number } | null
 }
 
 export type PublishedFlag = { at: number }
@@ -101,6 +103,7 @@ export const FLAG_NAMES = [
 	'import_reset',
 	'published',
 	'unpublished',
+	'media_rebuild_lease',
 ] as const
 type FlagName = (typeof FLAG_NAMES)[number]
 
@@ -113,13 +116,14 @@ export function readFlags(sql: SqlStorage): OperatorFlags {
 		import_reset: null,
 		published: null,
 		unpublished: null,
+		media_rebuild_lease: null,
 	}
 	for (const row of sql
 		.exec<{
 			name: FlagName
 			value: string
 		}>(
-			"SELECT name, value FROM kopje_state WHERE name IN ('maintenance', 'dump', 'import', 'import_receipt', 'import_reset', 'published', 'unpublished')"
+			"SELECT name, value FROM kopje_state WHERE name IN ('maintenance', 'dump', 'import', 'import_receipt', 'import_reset', 'published', 'unpublished', 'media_rebuild_lease')"
 		)
 		.toArray()) {
 		flags[row.name] = JSON.parse(row.value) as never
@@ -135,15 +139,13 @@ export function writeFlag<N extends FlagName>(sql: SqlStorage, name: N, value: O
 	}
 }
 
-// The media rebuild's lease (domain/media-rebuild.ts), { holder, until }: one rebuild call at a time. While it is live
-// the Store refuses to begin or reset an import, reset a cutover or publish (store-admin.ts).
+// The media rebuild's lease (domain/media-rebuild.ts), { holder, until } at the Store's time: one rebuild call at a
+// time. While it is live the Store refuses media-deleting writes (admitFlags), leaving its maintenance, and beginning or
+// resetting an import, resetting a cutover or publishing (store-admin.ts).
 export const REBUILD_LEASE = 'media_rebuild_lease'
 
-export function rebuildLeaseLive(sql: SqlStorage, now: number): boolean {
-	const value = sql
-		.exec<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', REBUILD_LEASE)
-		.toArray()[0]?.value
-	return value !== undefined && (JSON.parse(value) as { until: number }).until > now
+export function rebuildLeaseLive(flags: OperatorFlags, now: number): boolean {
+	return flags.media_rebuild_lease !== null && flags.media_rebuild_lease.until > now
 }
 
 // A dump freezes the Store only while its lease is valid, so a crashed dump cannot freeze it forever.
@@ -153,7 +155,8 @@ export function activeDump(flags: OperatorFlags, now: number): DumpRecord | null
 
 // The operator part of the maintenance table for one operation kind. Readonly maintenance and an unpublished import
 // refuse writes, except 'media-rebuild' (store-kernel.ts), so the served files of restored or moved media can be made
-// before publication; an import or a dump in progress refuses it like any write.
+// before publication; an import or a dump in progress refuses it like any write. A media-deleting write
+// ('media-delete') is also refused while the rebuild's lease is live, whatever the other flags say.
 export function admitFlags(flags: OperatorFlags, kind: OperationKind, now: number): void {
 	if (flags.import !== null) {
 		throw storeMaintenanceError('import-in-progress')
@@ -161,10 +164,14 @@ export function admitFlags(flags: OperatorFlags, kind: OperationKind, now: numbe
 	if (kind !== 'read' && activeDump(flags, now) !== null) {
 		throw storeMaintenanceError('dump-in-progress')
 	}
-	if (kind === 'write' && flags.maintenance !== null) {
+	const write = kind === 'write' || kind === 'media-delete'
+	if (write && flags.maintenance !== null) {
 		throw storeMaintenanceError('maintenance')
 	}
-	if (kind === 'write' && flags.unpublished !== null) {
+	if (write && flags.unpublished !== null) {
 		throw storeMaintenanceError('unpublished')
+	}
+	if (kind === 'media-delete' && rebuildLeaseLive(flags, now)) {
+		throw storeMaintenanceError('rebuild-in-progress')
 	}
 }

@@ -633,16 +633,26 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   of served files"), `test/media-reconcile.test.ts` ("deletes nothing from R2 for a Store that knows nothing of it",
   "deletes nothing during maintenance, an import, or before setup", "deletes a late write of a failed upload").
   The media rebuild (`kopje-admin media-rebuild`, `src/mastodon/media-rebuild.ts`) builds its keys the same way, from the
-  row's id and token only, and writes only while nothing deletes media: the Store unpublished or in its readonly
-  maintenance, where `delete_media`, the sweep and reconciliation are refused at their first Store write (the sweep and
-  reconciliation ask the Store before any R2 delete), or the env `MAINTENANCE` readonly or full, where the cron does
-  nothing and every API write answers 503; elsewhere it is refused (`rebuild-needs-readonly`). One call runs at a time,
-  under the Store's rebuild lease (`rebuild-busy` otherwise), so no two calls write one row. As defence in depth it
-  records the row before it writes the files and, once both writes have completed, asks whether the row is still live,
-  deleting the files it wrote if not. It deletes nothing else. `test/media-rebuild.test.ts` ("leaves out remote, doomed
-  and unfinished rows", "runs only where delete_media, the sweep and reconciliation cannot delete media", "is refused in
-  a writable Store", "refuses a second call while one holds the lease", "deletes the files it wrote for a row deleted
-  and swept while it wrote them").
+  row's id and token only, and writes only while nothing deletes media: while a verified import is unpublished (the
+  import began on an empty Store and every write has been refused since, so no deletion was ever decided for a row it
+  brought), or once the Store's readonly maintenance has lasted 20 minutes (`REBUILD_SETTLE_MS`: longer than a cron
+  invocation, at most 15 minutes, or the sweep after an API delete, at most 30 seconds after its response, can still
+  run with a batch fetched before maintenance began). Otherwise it is refused (`rebuild-needs-readonly`,
+  `rebuild-settling`); the env `MAINTENANCE` alone is not enough, since the Store records no start for it, and the
+  operator must not change it during a rebuild. In those states `delete_media`, the sweep, reconciliation and an
+  upload's cleanup are refused at their first Store write, before any R2 delete; while the rebuild's lease is live they
+  are refused whatever the flags say (operation kind `media-delete`), and so is leaving maintenance. One call runs at a
+  time under that lease, kept at the Store's clock: renewed before each row and, while an R2 write is pending, every
+  minute; R2 writes and deletes are never given up but awaited to completion, so the lease cannot end under a write
+  the call started while the call runs (a failed renewal is reported as `lease-overrun` and the lease is not
+  released). Per row the other steps are bounded: two R2 reads, five Images calls and five Store calls, each given up
+  a minute before the renewed 10-minute lease ends. As defence in depth the rebuild records the row before it writes
+  the files and, once both writes have completed, asks whether the row is still live, deleting the files it wrote if
+  not. It deletes nothing else. `test/media-rebuild.test.ts` ("leaves out remote, doomed and unfinished rows", "runs
+  only where delete_media, the sweep and reconciliation cannot delete media", "is refused in a writable Store and
+  under the env maintenance alone", "waits for maintenance to settle", "refuses leaving maintenance and every
+  media-deleting write while the lease is live", "awaits a pending write past the deadline", "deletes the files it
+  wrote for a row that went while it wrote them").
 - **MEDIA-3: served images are re-encoded.** An image is served only as Images output with location metadata removed; if
   transformation fails, the upload is refused and original bytes are never served. _Enforced (main):_ outputs are PNG or WebP only, for which Images discards all metadata (the binding has no
   metadata option, and JPEG output would keep the EXIF copyright tag); `processImage` in `src/platform/images.ts` then
@@ -1101,14 +1111,15 @@ reset` takes such a
   writes, its lease, the instance's Images transformation counter and the `meta` sizes of the row it rebuilds, pass
   readonly maintenance and an unpublished import, so the images are served at publication. They federate nothing and
   enqueue nothing, a cutover reset removes them with the rest, an import or a dump in progress still refuses them, and
-  each checks the Access admin again in its transaction (the import token and sessions are refused). The rebuild writes
-  only in those readonly states (or under the env's maintenance) and under its lease (one call at a time, every step
-  bounded by the call's deadline, kept until expiry when a step was given up); while the lease is live the Store
-  refuses to begin or reset an import, reset a cutover or publish (`rebuild-in-progress`), so the rows cannot change
-  under a call. `test/media-rebuild.test.ts` ("admits only the rebuild", "rebuilds in a Store that is unpublished or in
-  readonly maintenance, where other writes stay refused", "is refused while a dump holds the Store", "is for the Access
-  admin only", "has the Store check the admin again", "keeps the lease until it expires", "fences imports, resets and
-  publication while the lease is held").
+  each checks the Access admin again in its transaction (the import token and sessions are refused). The rebuild
+  writes only in those states (after a 20-minute settle for maintenance, MEDIA-2) and under its lease, which the Store
+  takes, renews and checks at its own clock, whatever time a request carries; while the lease is live the Store
+  refuses to begin or reset an import, reset a cutover, publish or leave maintenance (`rebuild-in-progress`), and every
+  media-deleting write, so the rows cannot change under a call. `test/media-rebuild.test.ts` ("admits only the
+  rebuild", "rebuilds in a Store that is unpublished or in readonly maintenance, where other writes stay refused", "is
+  refused while a dump holds the Store", "is for the Access admin only", "has the Store check the admin again", "keeps
+  the lease until it expires", "keeps its lease by the Store clock", "fences imports, resets and publication while the
+  lease is held").
   _Implemented on branch `kopje/cutover-ops`:_ `src/platform/store-flags.ts` (`admitFlags`),
   `src/platform/store-admin.ts` (`publish`, `importBegin`, `cutoverReset`), `inboxWritable` in
   `src/federation/inbox.ts`, `backupClaim` in `src/store.ts`, `src/app/admin.ts`; `test/cutover-rollback.test.ts` ("the

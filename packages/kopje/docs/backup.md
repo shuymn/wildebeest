@@ -314,9 +314,11 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
 
 6. **Rebuild the served files** from the originals, through Access (the Store must have admin access; set it with
    `kopje-admin config` first if the restore began with the import token). It runs only while the Store refuses other
-   writes, as it does until you publish, so nothing deletes media meanwhile; to rebuild later, on a published instance,
-   run `kopje-admin maintenance on` first (and `maintenance off` after). One call runs at a time, and the Store does
-   not publish while one runs:
+   writes, as it does until you publish, so nothing deletes media meanwhile. To rebuild later, on a published
+   instance, run `kopje-admin maintenance on`, wait 20 minutes (the rebuild refuses earlier, `rebuild-settling`, so
+   that nothing that may delete media is still running), rebuild, then `kopje-admin maintenance off`; the env
+   `MAINTENANCE` alone is not enough, and must not change during the rebuild. One call runs at a time, and the Store
+   neither publishes nor leaves maintenance while one runs:
 
     ```sh
     kopje-admin media-rebuild --dry-run   # what it would make, and the rows it cannot

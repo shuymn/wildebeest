@@ -14,6 +14,7 @@ export const MAINTENANCE_REASONS = [
 	'dump-in-progress',
 	'import-in-progress',
 	'unpublished',
+	'rebuild-in-progress',
 	'transient',
 ] as const
 

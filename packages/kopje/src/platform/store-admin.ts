@@ -261,10 +261,28 @@ export class StoreAdmin {
 
 	// ---- maintenance
 
-	async setMaintenance(callerBuild: string, on: boolean): Promise<{ maintenance: boolean }> {
+	// Entering records when maintenance began (a media rebuild waits for it to settle: domain/media-rebuild.ts); entering
+	// again keeps that time. Leaving is refused while a media rebuild holds its lease.
+	async setMaintenance(callerBuild: string, on: boolean): Promise<{ maintenance: boolean } | Refusal> {
 		this.#requireBuild(callerBuild)
 		await this.#kernel.state()
-		this.#transaction(() => writeFlag(this.#sql, 'maintenance', on ? { mode: 'readonly', at: this.#now() } : null))
+		const refused = this.#transaction(() => {
+			const flags = readFlags(this.#sql)
+			if (on) {
+				if (flags.maintenance === null) {
+					writeFlag(this.#sql, 'maintenance', { mode: 'readonly', at: this.#now() })
+				}
+				return null
+			}
+			if (rebuildLeaseLive(flags, this.#now())) {
+				return refuse('rebuild-in-progress', 'a media rebuild is running; leave maintenance once it has finished')
+			}
+			writeFlag(this.#sql, 'maintenance', null)
+			return null
+		})
+		if (refused !== null) {
+			return refused
+		}
 		this.#log({ event: 'kopje.store.maintenance', on })
 		return { maintenance: on }
 	}
@@ -1583,7 +1601,7 @@ export class StoreAdmin {
 
 	// A media rebuild call holds its lease (domain/media-rebuild.ts): the rows it writes for must not change under it.
 	#assertNoRebuild(): void {
-		if (rebuildLeaseLive(this.#sql, this.#now())) {
+		if (rebuildLeaseLive(readFlags(this.#sql), this.#now())) {
 			throw new ImportError('rebuild-in-progress', 'a media rebuild is running; wait for it to finish')
 		}
 	}

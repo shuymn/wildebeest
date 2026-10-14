@@ -16,10 +16,11 @@ import { REBUILD_LEASE } from '../platform/store-flags'
 // most REBUILD_PAGE candidates from them, with the id it scanned to: a long run of rows that are not candidates (remote,
 // doomed) costs bounded work per call and is not scanned again.
 //
-// The rebuild runs only while nothing can delete media: the Store is unpublished after a verified import, or in its
-// readonly maintenance, or the Worker's env MAINTENANCE is readonly or full (which stops the cron and every API
-// write). Then no delete_media, sweep or reconciliation runs (their Store writes are refused before they touch R2), so
-// no row can go while its files are written. And one rebuild call runs at a time, under a lease kept in kopje_state
+// The rebuild runs only while nothing can delete media: the Store is unpublished after a verified import, or its
+// readonly maintenance has lasted REBUILD_SETTLE_MS. Then no delete_media, sweep or reconciliation runs (their Store
+// writes are refused before they touch R2), none decided before is still running, and while the lease is live the
+// Store also refuses leaving maintenance and every media-deleting write (platform/store-flags.ts), so no row can go
+// while its files are written. And one rebuild call runs at a time, under a lease kept in kopje_state
 // (REBUILD_LEASE), so no two calls charge and write the same row; while the lease is live the Store refuses to begin
 // an import, reset one, reset a cutover or publish (platform/store-admin.ts), so the rows cannot change under it.
 //
@@ -96,10 +97,18 @@ function adminRefused(db: Db, authority: ImportAuthority): string | null {
 	return accessRefusal(settingsFromRows(rows), authority)
 }
 
-// The rebuild's lease (REBUILD_LEASE in kopje_state; not dumped, imported or reset).
-// Well above one call (at most MAX_BUILDS_PER_CALL images, each step bounded by the call's deadline): a call that gives
-// up a step keeps the lease until anything it began is long gone.
-export const REBUILD_LEASE_MS = 5 * 60 * 1000
+// The rebuild's lease (REBUILD_LEASE in kopje_state; not dumped, imported or reset). Every rebuild operation runs at
+// the Store's own time (store.ts passes it, whatever the Worker's clock says), so acquisition, ownership and the fences
+// of store-admin.ts read one clock. A call renews it before each row and, while an R2 write it started is pending,
+// every REBUILD_HEARTBEAT_MS (mastodon/media-rebuild.ts), so it never expires under a write while the call runs.
+export const REBUILD_LEASE_MS = 10 * 60 * 1000
+
+// How long the Store's readonly maintenance must have lasted before a rebuild writes: longer than any invocation that
+// fetched a sweep or reconciliation batch before it began can still run (a cron invocation has at most 15 minutes of
+// wall time; the sweep after an API delete runs in waitUntil, at most 30 seconds after its response), so no deletion
+// decided before readonly can land during the rebuild. An unpublished import needs none: the import began on an empty
+// Store and every write has been refused since it was verified, so no deletion was ever decided for a row it brought.
+export const REBUILD_SETTLE_MS = 20 * 60 * 1000
 
 type Lease = { holder: string; until: number }
 
@@ -113,24 +122,42 @@ function holds(db: Db, holder: string, now: number): boolean {
 	return lease !== null && lease.holder === holder && lease.until > now
 }
 
-// The Store refuses other writes: a verified import is unpublished, or its readonly maintenance is on (the flags of
-// platform/store-flags.ts).
-function storeHeld(db: Db): boolean {
-	return db.first("SELECT 1 AS found FROM kopje_state WHERE name IN ('unpublished', 'maintenance')") !== undefined
+function flag<T>(db: Db, name: string): T | null {
+	const value = db.first<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', name)?.value
+	return value === undefined ? null : (JSON.parse(value) as T)
+}
+
+// Whether the Store has refused every media-deleting write long enough (the flags of platform/store-flags.ts):
+// 'ok' while a verified import is unpublished, or once its readonly maintenance has lasted REBUILD_SETTLE_MS.
+function readiness(
+	db: Db,
+	now: number
+): { status: 'ok' } | { status: 'needs-readonly' } | { status: 'settling'; readyAt: number } {
+	if (flag(db, 'unpublished') !== null) {
+		return { status: 'ok' }
+	}
+	const maintenance = flag<{ at: number }>(db, 'maintenance')
+	if (maintenance === null) {
+		return { status: 'needs-readonly' }
+	}
+	const readyAt = maintenance.at + REBUILD_SETTLE_MS
+	return now >= readyAt ? { status: 'ok' } : { status: 'settling', readyAt }
 }
 
 export type RebuildLeaseResult =
-	| { status: 'ok'; until: number | null }
+	| { status: 'ok'; remainingMs: number }
+	| { status: 'released' }
 	| { status: 'needs-readonly' }
-	| { status: 'busy'; until: number }
+	| { status: 'settling'; readyAt: number }
+	| { status: 'busy'; remainingMs: number }
 	| { status: 'denied'; reason: string }
 
-// Takes (or renews) the lease for `holder`, or releases it. `envHeld`: the Worker's env MAINTENANCE is readonly or
-// full. A release by a holder that no longer holds it changes nothing.
+// Takes or renews the lease for `holder` (for REBUILD_LEASE_MS from the Store's `now`), or releases it. A release by a
+// holder that no longer holds it changes nothing.
 export const rebuildLease = mediaRebuildOperation<
-	{ authority: ImportAuthority; holder: string; release?: boolean; envHeld: boolean; now: number },
+	{ authority: ImportAuthority; holder: string; release?: boolean; now: number },
 	RebuildLeaseResult
->((db, { authority, holder, release, envHeld, now }) => {
+>((db, { authority, holder, release, now }) => {
 	const refused = adminRefused(db, authority)
 	if (refused !== null) {
 		return { status: 'denied', reason: refused }
@@ -140,21 +167,21 @@ export const rebuildLease = mediaRebuildOperation<
 		if (lease?.holder === holder) {
 			db.run('DELETE FROM kopje_state WHERE name = ?', REBUILD_LEASE)
 		}
-		return { status: 'ok', until: null }
+		return { status: 'released' }
 	}
-	if (!envHeld && !storeHeld(db)) {
-		return { status: 'needs-readonly' }
+	const ready = readiness(db, now)
+	if (ready.status !== 'ok') {
+		return ready
 	}
 	if (lease !== null && lease.holder !== holder && lease.until > now) {
-		return { status: 'busy', until: lease.until }
+		return { status: 'busy', remainingMs: lease.until - now }
 	}
-	const until = now + REBUILD_LEASE_MS
 	db.run(
 		'INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)',
 		REBUILD_LEASE,
-		JSON.stringify({ holder, until } satisfies Lease)
+		JSON.stringify({ holder, until: now + REBUILD_LEASE_MS } satisfies Lease)
 	)
-	return { status: 'ok', until }
+	return { status: 'ok', remainingMs: REBUILD_LEASE_MS }
 })
 
 export type RebuildCharge =

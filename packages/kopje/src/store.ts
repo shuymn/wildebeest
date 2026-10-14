@@ -714,26 +714,30 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, media.purgeMedia, input)
 	}
 
-	// The media rebuild (domain/media-rebuild.ts), from /admin/media/rebuild.
+	// The media rebuild (domain/media-rebuild.ts), from /admin/media/rebuild. Each runs at the Store's own time, never a
+	// time the caller sends, so the lease and the fences that read it (store-admin.ts, store-flags.ts) share one clock.
 
-	mediaRebuildCandidates(callerBuild: string, input: OperationInput<typeof mediaRebuild.rebuildCandidates>) {
-		return this.#kernel.execute(callerBuild, mediaRebuild.rebuildCandidates, input)
+	mediaRebuildCandidates(
+		callerBuild: string,
+		input: Omit<OperationInput<typeof mediaRebuild.rebuildCandidates>, 'now'>
+	) {
+		return this.#kernel.execute(callerBuild, mediaRebuild.rebuildCandidates, { ...input, now: Date.now() })
 	}
 
-	mediaRebuildRowLive(callerBuild: string, input: OperationInput<typeof mediaRebuild.rebuildRowLive>) {
-		return this.#kernel.execute(callerBuild, mediaRebuild.rebuildRowLive, input)
+	mediaRebuildRowLive(callerBuild: string, input: Omit<OperationInput<typeof mediaRebuild.rebuildRowLive>, 'now'>) {
+		return this.#kernel.execute(callerBuild, mediaRebuild.rebuildRowLive, { ...input, now: Date.now() })
 	}
 
-	mediaRebuildLease(callerBuild: string, input: OperationInput<typeof mediaRebuild.rebuildLease>) {
-		return this.#kernel.execute(callerBuild, mediaRebuild.rebuildLease, input)
+	mediaRebuildLease(callerBuild: string, input: Omit<OperationInput<typeof mediaRebuild.rebuildLease>, 'now'>) {
+		return this.#kernel.execute(callerBuild, mediaRebuild.rebuildLease, { ...input, now: Date.now() })
 	}
 
-	chargeMediaRebuild(callerBuild: string, input: OperationInput<typeof mediaRebuild.chargeRebuild>) {
-		return this.#kernel.execute(callerBuild, mediaRebuild.chargeRebuild, input)
+	chargeMediaRebuild(callerBuild: string, input: Omit<OperationInput<typeof mediaRebuild.chargeRebuild>, 'now'>) {
+		return this.#kernel.execute(callerBuild, mediaRebuild.chargeRebuild, { ...input, now: Date.now() })
 	}
 
-	recordMediaRebuild(callerBuild: string, input: OperationInput<typeof mediaRebuild.recordRebuild>) {
-		return this.#kernel.execute(callerBuild, mediaRebuild.recordRebuild, input)
+	recordMediaRebuild(callerBuild: string, input: Omit<OperationInput<typeof mediaRebuild.recordRebuild>, 'now'>) {
+		return this.#kernel.execute(callerBuild, mediaRebuild.recordRebuild, { ...input, now: Date.now() })
 	}
 
 	// Search (B4b).

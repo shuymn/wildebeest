@@ -8,10 +8,12 @@ export type Migration = { readonly name: string; readonly sql: string }
 //   read    : reads only
 //   session : login and Web Push registration writes, which readonly still lets through
 //   write   : any other write
+//   media-delete : a write that dooms or deletes media or picks R2 objects to delete (delete_media, the sweep and
+//             reconciliation, an upload's cleanup): a write that is also refused while the media rebuild's lease is live
 //   media-rebuild : the writes of the media rebuild only (domain/media-rebuild.ts): the instance's transformation
 //             counter and the meta of the rows it rebuilds. The operator gate (store-flags.ts admitFlags) lets them
 //             through in readonly maintenance and while a verified import is unpublished; nothing else does
-export type OperationKind = 'read' | 'session' | 'write' | 'media-rebuild'
+export type OperationKind = 'read' | 'session' | 'write' | 'media-delete' | 'media-rebuild'
 
 // The Store's own maintenance state is at most readonly (full is set only through the env). Readonly admits reads and
 // sessions and refuses writes. A held or upgrading Store refuses the media rebuild too.
@@ -19,6 +21,7 @@ const READONLY_ADMITS: Record<OperationKind, boolean> = {
 	read: true,
 	session: true,
 	write: false,
+	'media-delete': false,
 	'media-rebuild': false,
 }
 

@@ -1,4 +1,4 @@
-import { readOperation, writeOperation } from './operation'
+import { mediaDeleteOperation, readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 import type { StoreOperation } from '../platform/store-kernel'
 import { grants, type Scope } from '../security/scopes'
@@ -97,6 +97,7 @@ function guarded(declare: Declare) {
 // Operations of a signed-in user, under the scope of the route.
 export const userReadOperation = guarded(readOperation)
 export const userWriteOperation = guarded(writeOperation)
+export const userMediaDeleteOperation = guarded(mediaDeleteOperation)
 
 // Checks a credential without doing anything else: lets the Worker answer an authentication failure before a
 // request error it found on its own, as Mastodon does.

@@ -17,6 +17,10 @@ export const sessionOperation = declare('session')
 
 export const writeOperation = declare('write')
 
+// A write that dooms or deletes media, or picks R2 objects to delete: refused like any write, and also while the media
+// rebuild holds its lease (platform/store-flags.ts).
+export const mediaDeleteOperation = declare('media-delete')
+
 // The media rebuild's writes only (domain/media-rebuild.ts); the gate admits them in readonly maintenance and while an
 // import is unpublished (platform/store-flags.ts). Nothing else may be declared with it.
 export const mediaRebuildOperation = declare('media-rebuild')

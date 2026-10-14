@@ -15,9 +15,9 @@ Commands
   maintenance on|off            enter or leave the Store's readonly maintenance
   upgrade retry                 re-run a failed schema upgrade for the current build
   media-rebuild [--dry-run]     make the served files of local media whose files are missing (a restore, the
-                                cutover's moved images) from their originals in R2, and correct their sizes. Runs only
-                                before publish or in maintenance ("maintenance on" or MAINTENANCE=readonly first), one
-                                call at a time. Prints counts and the rows to look at; exits 3 when an original is
+                                cutover's moved images) from their originals in R2, and correct their sizes. Writes only
+                                before publish, or 20 minutes after "maintenance on" (the env MAINTENANCE is not
+                                enough), one call at a time. Prints counts and the rows to look at; exits 3 when an original is
                                 missing, a type does not match, re-encoding failed, the Images quota or monthly budget
                                 stopped it, or the Store is not readonly (run it again later: made files are skipped)
   dump <file>                   dump the Store to <file> (resumable)
@@ -726,8 +726,12 @@ export async function run({
 					} catch (error) {
 						if (error instanceof AdminError && error.code === 'rebuild-needs-readonly') {
 							out.info(
-								'media-rebuild runs only before publication or in maintenance: run `kopje-admin maintenance on` (or set MAINTENANCE=readonly) first, and `maintenance off` afterwards'
+								'media-rebuild writes only before publication or in the Store maintenance: run `kopje-admin maintenance on`, wait 20 minutes (until nothing that may delete media is still running), run media-rebuild, then `maintenance off`'
 							)
+							return 3
+						}
+						if (error instanceof AdminError && error.code === 'rebuild-settling') {
+							out.info(`${error.message}; run it again then`)
 							return 3
 						}
 						if (error instanceof AdminError && error.code === 'rebuild-busy') {
