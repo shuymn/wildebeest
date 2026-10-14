@@ -11,6 +11,7 @@ import {
 } from './accounts'
 import {
 	announceActivity,
+	boostAnnounce,
 	type AnnounceInput,
 	createActivity,
 	deleteActivity,
@@ -1065,8 +1066,7 @@ export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input,
 	return viewed(presentStatus(db, id, options))
 })
 
-// The Announce of a boost by `boosterId`. As Mastodon allows boosting a status of an account on a domain the booster
-// blocks, the author is then left out of the addressing and the audience (VIS-15).
+// The Announce of a boost by `boosterId` (boostAnnounce in activities.ts decides what it names).
 function announceOf(
 	db: Db,
 	boosterId: string,
@@ -1076,20 +1076,12 @@ function announceOf(
 	publishedAt: string,
 	target: Target
 ): AnnounceInput {
-	return {
-		announceUri: uri,
-		actorUri,
-		visibility,
-		publishedAt,
-		objectUri: target.uri,
-		...(db.first(
-			`SELECT 1 AS x FROM accounts a WHERE a.id = ?2 AND ${blockedSql('?1', 'a')}`,
-			boosterId,
-			target.account_id
-		)
-			? { authorUri: null, authorId: null }
-			: { authorUri: target.author_uri, authorId: target.account_id }),
-	}
+	return boostAnnounce(
+		db,
+		boosterId,
+		{ announceUri: uri, actorUri, visibility, publishedAt, objectUri: target.uri },
+		{ id: target.account_id, uri: target.author_uri }
+	)
 }
 
 // Records an Undo(Announce) for every local boost of a status about to be deleted.

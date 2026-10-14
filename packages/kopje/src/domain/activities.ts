@@ -2,6 +2,7 @@ import {
 	addressingOf,
 	type Audience,
 	audienceOf,
+	blockedSql,
 	isDistributable,
 	PUBLIC_COLLECTION,
 	type Recipient,
@@ -274,6 +275,21 @@ export type AnnounceInput = {
 	// The original's author; null when the booster blocks it or its domain (VIS-15), so it is neither named nor sent.
 	authorUri: string | null
 	authorId: string | null
+}
+
+// The Announce input of a local boost by `boosterId` of a status by `author`, for every copy of that Announce (the one
+// delivered, its Undo, and the outbox's). As Mastodon allows boosting a status of an account on a domain the booster
+// blocks, the author is then left out of the addressing and the audience (VIS-15).
+export function boostAnnounce(
+	db: Db,
+	boosterId: string,
+	boost: Omit<AnnounceInput, 'authorUri' | 'authorId'>,
+	author: { id: string; uri: string }
+): AnnounceInput {
+	const blocked =
+		db.first(`SELECT 1 AS x FROM accounts a WHERE a.id = ?2 AND ${blockedSql('?1', 'a')}`, boosterId, author.id) !==
+		undefined
+	return { ...boost, authorUri: blocked ? null : author.uri, authorId: blocked ? null : author.id }
 }
 
 // A boost goes to the booster's followers and the original's author (Mastodon's TagManager#to/#cc for a reblog).
@@ -552,15 +568,20 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 			if (row.original_uri !== null && row.original_author_uri !== null && row.original_author_id !== null) {
 				items.push(
 					JSON.stringify(
-						announceActivity({
-							announceUri: row.uri,
-							actorUri: owner.uri,
-							visibility: row.visibility,
-							publishedAt: row.published_at,
-							objectUri: row.original_uri,
-							authorUri: row.original_author_uri,
-							authorId: row.original_author_id,
-						}).activity
+						announceActivity(
+							boostAnnounce(
+								db,
+								owner.id,
+								{
+									announceUri: row.uri,
+									actorUri: owner.uri,
+									visibility: row.visibility,
+									publishedAt: row.published_at,
+									objectUri: row.original_uri,
+								},
+								{ id: row.original_author_id, uri: row.original_author_uri }
+							)
+						).activity
 					)
 				)
 				continue

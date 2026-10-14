@@ -349,7 +349,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   subdomains; `domainBlockMatchSql`), and hides them as VIS-5 says; following an account there is refused, a `Follow`
   from one is rejected, and none of the user's statuses mentions or is addressed to one (as VIS-13); a boost of a
   status by an account there, which Mastodon allows, leaves its author out of the `Announce`'s addressing and audience
-  (`announceOf` in `src/domain/statuses.ts`). As Mastodon
+  (`boostAnnounce` in `src/domain/activities.ts`, for the delivered `Announce`, its `Undo` and the outbox's copy). As Mastodon
   4.5's `AfterBlockDomainFromAccountService` does, the user's follows to and from accounts there end, in either state:
   each follower gets a `Reject`, each of our follows an `Undo`. That is a durable cleanup (`domain_block_cleanups`,
   progress kept as a cursor over follow ids up to the newest follow when the domain was blocked) done in batches that

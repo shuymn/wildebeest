@@ -319,7 +319,7 @@ describe('blocked recipients (VIS-13, VIS-15)', () => {
 		expect(await sql(h.store, 'SELECT 1 FROM status_mentions WHERE status_id = ?', status.id)).toEqual([])
 	})
 
-	it('boosts a status from a blocked domain without naming or sending to its author', async () => {
+	it('boosts a status from a blocked domain without naming or sending to its author, in the outbox too', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		const bob = await remoteAccount(h.store, 'bob')
@@ -332,10 +332,15 @@ describe('blocked recipients (VIS-13, VIS-15)', () => {
 		expect((await act(h, alice, `/api/v1/statuses/${original}/reblog`)).status).toBe(200)
 		const claim = await h.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'lease' })
 		expect(claim.deliveries.map((d) => d.inbox)).toEqual(['https://other.example/inbox'])
-		const body = JSON.parse(claim.deliveries[0]!.body) as { type: string; cc: string[] }
+		const body = JSON.parse(claim.deliveries[0]!.body) as { id: string; type: string; cc: string[] }
 		expect(body.type).toBe('Announce')
 		expect(JSON.stringify(body)).not.toContain('https://remote.example/users/bob')
 		expect((await sent(h))[0]?.audience.accounts).toEqual([])
+		// The outbox serves the same Announce (one construction), without the author either.
+		const page = await h.store.outbox(BUILD, { username: 'alice', before: '~' })
+		const served = (page?.items ?? []).map((item) => JSON.parse(item) as { id: string; type: string })
+		expect(served.map((item) => [item.type, item.id])).toEqual([['Announce', body.id]])
+		expect(JSON.stringify(served)).not.toContain('https://remote.example/users/bob')
 	})
 
 	it('addresses a status written after a block to nobody behind the blocked account', async () => {
