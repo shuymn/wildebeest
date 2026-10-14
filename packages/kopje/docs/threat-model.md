@@ -954,7 +954,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Enforced (main)_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
   untested_); the tag feed's candidates are the hashtags of public statuses (`status_tags.public`, through a partial
-  index), so it never reads the tag's unlisted, private, direct or limited statuses (`test/policy-bounds.test.ts`).
+  index), so it never reads the tag's unlisted, private, direct or limited statuses, and it reads each requested tag
+  (at most five) in id order from the cursor until it has a page, so a page reads the same rows however long the tag's
+  history (`test/policy-bounds.test.ts`, `test/tag-timeline.test.ts`).
   _Enforced (main)_ for search: statuses pass `listableSql` before `LIMIT`, each library source reads at most 2,500 rows through an index ordered by the status id it returns (cursors applied
   inside it), hashtags come from at most 500 entries per library source plus the newest 2,000 public statuses, and an
   account search matches the exact address (always), at most 1,000 username-prefix candidates, the 5,000 newest

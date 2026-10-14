@@ -98,8 +98,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 - Hashtag timelines and a tag's history read only the statuses that can appear on them: each hashtag records whether
   its status is public, and these reads go through an index of those hashtags, so their work no longer grows with the
-  tag's unlisted, private, direct or limited statuses. What they show is unchanged. The cutover writes the mark and
-  `verify-conversion` compares it.
+  tag's unlisted, private, direct or limited statuses. A hashtag timeline also reads each requested tag in status id
+  order from the page's cursor and stops once it has a page, so a page's work no longer grows with the tag's history.
+  What they show is unchanged. The cutover writes the mark and `verify-conversion` compares it.
 
 ### Instance changes
 
