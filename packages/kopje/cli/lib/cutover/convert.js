@@ -1541,6 +1541,7 @@ export function convertLegacy(
 		)
 	}
 
+	// Stored as the API stores a domain block (lowercase, without a trailing dot), the form a block is matched in.
 	const domainBlockInsert = insert(
 		'INSERT OR IGNORE INTO domain_blocks (account_id, domain, created_at) VALUES (?, ?, ?)'
 	)
@@ -1551,7 +1552,7 @@ export function convertLegacy(
 		}
 		const result = domainBlockInsert.run(
 			owner.id,
-			str(block.domain).trim().toLowerCase(),
+			str(block.domain).trim().toLowerCase().replace(/\.+$/, ''),
 			isoTime(block.created_at) ?? new Date(baseTime).toISOString()
 		)
 		if (Number(result.changes) === 0) {
