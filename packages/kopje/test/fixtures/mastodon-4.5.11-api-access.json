@@ -35,7 +35,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["read", "read:accounts"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @status, :show?"]
 		},
 		{
 			"method": "GET",
@@ -44,7 +45,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["read", "read:accounts"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @status, :show?"]
 		},
 		{
 			"method": "POST",
@@ -71,7 +73,8 @@
 			"action": "revoke",
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @quote, :revoke?; authorize @status, :show?"]
 		},
 		{
 			"method": "GET",
@@ -80,7 +83,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:statuses"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @status, :show?"]
 		},
 		{
 			"method": "POST",
@@ -161,7 +165,8 @@
 			"action": "show",
 			"token": "optional",
 			"scopes": ["read", "read:statuses"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @status, :show?"]
 		},
 		{
 			"method": "GET",
@@ -170,7 +175,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read", "read:statuses"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @status, :show?"]
 		},
 		{
 			"method": "PATCH",
@@ -179,7 +185,8 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @status, :update?; authorize @status, :show?"]
 		},
 		{
 			"method": "PUT",
@@ -188,7 +195,8 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @status, :update?; authorize @status, :show?"]
 		},
 		{
 			"method": "POST",
@@ -206,7 +214,8 @@
 			"action": "context",
 			"token": "optional",
 			"scopes": ["read", "read:statuses"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @status, :show?"]
 		},
 		{
 			"method": "GET",
@@ -233,7 +242,8 @@
 			"action": "show",
 			"token": "optional",
 			"scopes": ["read", "read:statuses"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @status, :show?"]
 		},
 		{
 			"method": "PATCH",
@@ -1539,7 +1549,8 @@
 			"action": "show",
 			"token": "optional",
 			"scopes": ["read", "read:statuses"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @poll.status, :show?"]
 		},
 		{
 			"method": "POST",
@@ -1594,7 +1605,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:accounts"],
 			"user": false,
-			"guards": ["require_local_account!"]
+			"guards": ["require_local_account!"],
+			"unresolved": ["Pundit policy: authorize @account.user, :enable?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1603,7 +1615,8 @@
 			"action": "unsensitive",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:accounts"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @account, :unsensitive?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1612,7 +1625,8 @@
 			"action": "unsilence",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:accounts"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @account, :unsilence?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1621,7 +1635,8 @@
 			"action": "unsuspend",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:accounts"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @account, :unsuspend?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1631,7 +1646,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:accounts"],
 			"user": false,
-			"guards": ["require_local_account!"]
+			"guards": ["require_local_account!"],
+			"unresolved": ["Pundit policy: authorize @account.user, :approve?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1641,7 +1657,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:accounts"],
 			"user": false,
-			"guards": ["require_local_account!"]
+			"guards": ["require_local_account!"],
+			"unresolved": ["Pundit policy: authorize @account.user, :reject?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1650,7 +1667,8 @@
 			"action": "create",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:accounts"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @account, :show?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -1659,7 +1677,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:accounts"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :account, :index?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -1668,7 +1687,8 @@
 			"action": "show",
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:accounts"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @account, :show?; verify_authorized"]
 		},
 		{
 			"method": "DELETE",
@@ -1677,7 +1697,8 @@
 			"action": "destroy",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:accounts"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @account, :destroy?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1686,7 +1707,8 @@
 			"action": "assign_to_self",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:reports"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1695,7 +1717,8 @@
 			"action": "unassign",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:reports"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1704,7 +1727,8 @@
 			"action": "reopen",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:reports"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1713,7 +1737,8 @@
 			"action": "resolve",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:reports"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -1722,7 +1747,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:reports"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :report, :index?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -1731,7 +1757,8 @@
 			"action": "show",
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:reports"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @report, :show?; verify_authorized"]
 		},
 		{
 			"method": "PATCH",
@@ -1740,7 +1767,8 @@
 			"action": "update",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:reports"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"]
 		},
 		{
 			"method": "PUT",
@@ -1749,7 +1777,8 @@
 			"action": "update",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:reports"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -1758,7 +1787,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:domain_allows"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :domain_allow, :index?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1767,7 +1797,8 @@
 			"action": "create",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:domain_allows"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :domain_allow, :create?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -1776,7 +1807,8 @@
 			"action": "show",
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:domain_allows"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @domain_allow, :show?; verify_authorized"]
 		},
 		{
 			"method": "DELETE",
@@ -1785,7 +1817,8 @@
 			"action": "destroy",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:domain_allows"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @domain_allow, :destroy?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -1794,7 +1827,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:domain_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :domain_block, :index?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1803,7 +1837,8 @@
 			"action": "create",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:domain_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :domain_block, :create?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -1812,7 +1847,8 @@
 			"action": "show",
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:domain_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @domain_block, :show?; verify_authorized"]
 		},
 		{
 			"method": "PATCH",
@@ -1821,7 +1857,8 @@
 			"action": "update",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:domain_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @domain_block, :update?; verify_authorized"]
 		},
 		{
 			"method": "PUT",
@@ -1830,7 +1867,8 @@
 			"action": "update",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:domain_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @domain_block, :update?; verify_authorized"]
 		},
 		{
 			"method": "DELETE",
@@ -1839,7 +1877,8 @@
 			"action": "destroy",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:domain_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @domain_block, :destroy?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -1848,7 +1887,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:email_domain_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :email_domain_block, :index?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1857,7 +1897,8 @@
 			"action": "create",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:email_domain_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :email_domain_block, :create?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -1866,7 +1907,8 @@
 			"action": "show",
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:email_domain_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @email_domain_block, :show?; verify_authorized"]
 		},
 		{
 			"method": "DELETE",
@@ -1875,7 +1917,8 @@
 			"action": "destroy",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:email_domain_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @email_domain_block, :destroy?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -1884,7 +1927,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:ip_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :ip_block, :index?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1893,7 +1937,8 @@
 			"action": "create",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:ip_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :ip_block, :create?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -1902,7 +1947,8 @@
 			"action": "show",
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:ip_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @ip_block, :show?; verify_authorized"]
 		},
 		{
 			"method": "PATCH",
@@ -1911,7 +1957,8 @@
 			"action": "update",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:ip_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @ip_block, :update?; verify_authorized"]
 		},
 		{
 			"method": "PUT",
@@ -1920,7 +1967,8 @@
 			"action": "update",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:ip_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @ip_block, :update?; verify_authorized"]
 		},
 		{
 			"method": "DELETE",
@@ -1929,7 +1977,8 @@
 			"action": "destroy",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:ip_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @ip_block, :destroy?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1938,7 +1987,8 @@
 			"action": "approve",
 			"token": "optional",
 			"scopes": ["admin:write"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :tag, :review?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1947,7 +1997,8 @@
 			"action": "reject",
 			"token": "optional",
 			"scopes": ["admin:write"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :tag, :review?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -1965,7 +2016,8 @@
 			"action": "approve",
 			"token": "optional",
 			"scopes": ["admin:write"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :preview_card, :review?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -1974,7 +2026,8 @@
 			"action": "reject",
 			"token": "optional",
 			"scopes": ["admin:write"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :preview_card, :review?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -1992,7 +2045,8 @@
 			"action": "approve",
 			"token": "optional",
 			"scopes": ["admin:write"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize [:admin, :status], :review?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -2001,7 +2055,8 @@
 			"action": "reject",
 			"token": "optional",
 			"scopes": ["admin:write"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize [:admin, :status], :review?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -2019,7 +2074,8 @@
 			"action": "approve",
 			"token": "optional",
 			"scopes": ["admin:write"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :preview_card_provider, :review?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -2028,7 +2084,8 @@
 			"action": "reject",
 			"token": "optional",
 			"scopes": ["admin:write"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :preview_card_provider, :review?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -2037,7 +2094,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["admin:read"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :preview_card_provider, :index?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -2046,7 +2104,8 @@
 			"action": "create",
 			"token": "optional",
 			"scopes": ["admin:read"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :dashboard, :index?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -2055,7 +2114,8 @@
 			"action": "create",
 			"token": "optional",
 			"scopes": ["admin:read"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :dashboard, :index?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -2064,7 +2124,8 @@
 			"action": "create",
 			"token": "optional",
 			"scopes": ["admin:read"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :dashboard, :index?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -2073,7 +2134,8 @@
 			"action": "test",
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:canonical_email_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :canonical_email_block, :test?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -2082,7 +2144,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:canonical_email_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :canonical_email_block, :index?; verify_authorized"]
 		},
 		{
 			"method": "POST",
@@ -2091,7 +2154,8 @@
 			"action": "create",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:canonical_email_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :canonical_email_block, :create?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -2100,7 +2164,8 @@
 			"action": "show",
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:canonical_email_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @canonical_email_block, :show?; verify_authorized"]
 		},
 		{
 			"method": "DELETE",
@@ -2109,7 +2174,8 @@
 			"action": "destroy",
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:canonical_email_blocks"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @canonical_email_block, :destroy?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -2118,7 +2184,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["admin:read"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :tag, :index?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -2127,7 +2194,8 @@
 			"action": "show",
 			"token": "optional",
 			"scopes": ["admin:read"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @tag, :show?; verify_authorized"]
 		},
 		{
 			"method": "PATCH",
@@ -2136,7 +2204,8 @@
 			"action": "update",
 			"token": "optional",
 			"scopes": ["admin:write"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @tag, :update?; verify_authorized"]
 		},
 		{
 			"method": "PUT",
@@ -2145,7 +2214,8 @@
 			"action": "update",
 			"token": "optional",
 			"scopes": ["admin:write"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @tag, :update?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -2335,7 +2405,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:accounts"],
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize :account, :index?; verify_authorized"]
 		},
 		{
 			"method": "GET",
@@ -2443,7 +2514,8 @@
 			"action": "show",
 			"token": "optional",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"unresolved": ["Pundit policy: authorize @status, :show?"]
 		},
 		{
 			"method": "POST",

@@ -454,7 +454,7 @@ function verbRoutes(verb, args, stack) {
 // ---- Controllers ----
 
 /**
- * @typedef {{ file: string, callback: string, args: string, only: string[] | null, except: string[] | null, conditional: string | null, nested: boolean, skip: boolean }} Callback
+ * @typedef {{ file: string, callback: string, args: string, only: string[] | null, except: string[] | null, conditional: string | null, nested: boolean, skip: boolean, after: boolean }} Callback
  * @typedef {{ callbacks: Callback[], unresolved: string[], chain: string[] }} Controller
  */
 
@@ -525,11 +525,12 @@ function readController(checkout, file, cache) {
 			classIndent = indent + 2
 			continue
 		}
-		const m = /^(prepend_before_action|before_action|skip_before_action)\s+(.*)$/s.exec(stmt)
+		const m = /^(prepend_before_action|before_action|skip_before_action|after_action)\s+(.*)$/s.exec(stmt)
 		if (m === null) {
 			continue
 		}
 		const skip = m[1] === 'skip_before_action'
+		const after = m[1] === 'after_action'
 		const parts = splitArgs(/** @type {string} */ (m[2]))
 		const target = parts[0] ?? ''
 		let callback = ''
@@ -546,9 +547,6 @@ function readController(checkout, file, cache) {
 			}
 			continue
 		}
-		if (!TRACKED.has(callback) && !callback.startsWith('require_')) {
-			continue
-		}
 		const { options } = callArgs(parts.slice(1).join(', '))
 		const conditionKeys = Object.keys(options).filter((k) => k === 'if' || k === 'unless')
 		const conditional =
@@ -562,6 +560,7 @@ function readController(checkout, file, cache) {
 			nested: classIndent !== null && indent > classIndent,
 			file,
 			skip,
+			after,
 		})
 	}
 	const controller = {
@@ -589,6 +588,12 @@ function actionBody(text, action) {
 	const firstLine = rest.indexOf('\n') + 1
 	const next = rest.slice(firstLine).search(/^[ \t]*(def |private\b|protected\b)/m)
 	return next < 0 ? rest : rest.slice(0, firstLine + next)
+}
+
+// The last definition of a method in a controller chain (a subclass's overrides its parent's).
+/** @param {string[]} texts @param {string} name */
+function methodBody(texts, name) {
+	return texts.map((t) => actionBody(t, name)).findLast((b) => b !== null) ?? null
 }
 
 /**
@@ -661,11 +666,22 @@ function access(route, checkout, cache) {
 	const texts = controller.chain
 		.filter((f) => f !== classFile(API_BASE))
 		.map((f) => readFileSync(join(checkout, f), 'utf8'))
-	const body = texts.map((t) => actionBody(t, action)).findLast((b) => b !== null) ?? null
+	const body = methodBody(texts, action)
 	if (body === null && !/^(index|show|create|update|destroy)$/.test(action)) {
 		unresolved.push(`no def ${action} in ${file}`)
 	}
 	const validToken = body !== null && /valid_doorkeeper_token\?/.test(body)
+	// A Pundit policy (authorize in the action or in a callback it runs, or verify_authorized after it) decides on the
+	// viewer in Ruby this script does not read: unless a user is required anyway, the route is not resolved.
+	const policies = [body, ...active.filter((cb) => !cb.after).map((cb) => methodBody(texts, cb.callback))]
+		.flatMap((b) => b?.match(/\bauthorize(?:_with)?[ (][^\n]*/g) ?? [])
+		.map((call) => call.trim())
+	if (active.some((cb) => cb.after && cb.callback === 'verify_authorized')) {
+		policies.push('verify_authorized')
+	}
+	if (!user && policies.length > 0) {
+		unresolved.push(`Pundit policy: ${[...new Set(policies)].join('; ')}`)
+	}
 	// Api::BaseController reads the current user in every request; whether an action uses it is in its own chain. A
 	// controller that overrides current_user to read it only in limited federation mode reads no user.
 	const overrides = texts.map((t) => actionBody(t, 'current_user')).filter((b) => b !== null)
@@ -684,7 +700,7 @@ function access(route, checkout, cache) {
 		token = readsUser ? 'optional' : 'none'
 	}
 	const guards = active
-		.filter((cb) => !TRACKED.has(cb.callback) && cb.file !== classFile(API_BASE))
+		.filter((cb) => cb.callback.startsWith('require_') && !TRACKED.has(cb.callback) && !cb.after && cb.file !== classFile(API_BASE))
 		.map((cb) => cb.callback)
 		.filter((name, i, all) => all.indexOf(name) === i)
 	return {

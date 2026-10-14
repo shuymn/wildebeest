@@ -40,7 +40,7 @@ const EXCEPTIONS: Record<string, readonly [RouteAccess, string]> = {
 	],
 	'GET /api/v1/statuses/:id/source': [
 		{ scope: 'read:statuses' },
-		'RouteAccess has no "scope without a user" form; Mastodon serves app tokens',
+		'RouteAccess has no "scope without a user" form; Mastodon serves app tokens what StatusPolicy#show? allows',
 	],
 	'GET /api/v1/accounts/relationships': [
 		{ scope: 'read:follows' },
@@ -53,6 +53,28 @@ const EXCEPTIONS: Record<string, readonly [RouteAccess, string]> = {
 	'GET /api/v1/accounts/verify_credentials': [
 		{ scope: 'read:accounts' },
 		"Kopje has no `profile` scope (Mastodon 4.3+'s identity-only scope)",
+	],
+
+	// Mastodon's StatusPolicy#show? (Pundit) decides per viewer; Kopje's Store applies the visibility rules.
+	'GET /api/v1/statuses/:id': [
+		{ scope: 'read:statuses', optional: true },
+		"visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
+	],
+	'GET /api/v1/statuses/:id/context': [
+		{ scope: 'read:statuses', optional: true },
+		"visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
+	],
+	'GET /api/v1/statuses/:id/history': [
+		{ scope: 'read:statuses', optional: true },
+		"visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
+	],
+	'GET /api/v1/statuses/:id/favourited_by': [
+		{ scope: 'read:accounts', optional: true },
+		"visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
+	],
+	'GET /api/v1/statuses/:id/reblogged_by': [
+		{ scope: 'read:accounts', optional: true },
+		"visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
 	],
 
 	// Deliberate choices.
