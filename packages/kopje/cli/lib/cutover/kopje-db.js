@@ -52,7 +52,7 @@ export function createKopjeDatabase(path = ':memory:') {
  *   key: string[], deferred: string[], only?: { column: string, values: string[] } }} TableSpec
  */
 
-const DUMPED_STATE = ['last_local_id']
+const DUMPED_STATE = ['last_local_id', 'profile_updates']
 
 /** @param {string} name */
 function excluded(name) {

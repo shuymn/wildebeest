@@ -448,6 +448,10 @@ export function convertLegacy(
 	const originals = []
 	/** @type {{ accountId: string, uri: string, kind: string, image: MappedImage }[]} */
 	const profileImages = []
+	// Local accounts whose avatar or header the mapping changed: publication announces them (kopje_state
+	// profile_updates, src/platform/dump-catalog.ts), as other servers hold the old URLs.
+	/** @type {Set<string>} */
+	const changedProfiles = new Set()
 
 	const actors = rows('SELECT id, type, cdate, properties FROM actors ORDER BY rowid')
 	/** @type {Map<string, { id: string, local: boolean, followers: string, properties: Json, created: string | null }>} */
@@ -490,6 +494,9 @@ export function convertLegacy(
 				return url
 			}
 			const image = imageMap.map(url, true, () => `profile\n${uri}\n${kind}`)
+			if (image.kind !== 'keep') {
+				changedProfiles.add(id)
+			}
 			if (image.kind === 'mapped') {
 				profileImages.push({ accountId: id, uri, kind, image })
 				return image.url
@@ -1705,6 +1712,11 @@ export function convertLegacy(
 	).id
 	if (typeof lastLocal === 'string') {
 		kopje.prepare("INSERT OR REPLACE INTO kopje_state (name, value) VALUES ('last_local_id', ?)").run(lastLocal)
+	}
+	if (changedProfiles.size > 0) {
+		kopje
+			.prepare("INSERT INTO kopje_state (name, value) VALUES ('profile_updates', ?)")
+			.run(JSON.stringify([...changedProfiles].sort()))
 	}
 	kopje.exec('COMMIT')
 	const violations = kopje.prepare('PRAGMA foreign_key_check').all().length

@@ -229,8 +229,15 @@ are kept without a status either way. To move the images into Kopje's own media 
 4. The served files (`files/<token>/full` and `small` in R2) are made from the originals by Kopje's own re-encoding.
    That step is `kopje-admin media-rebuild`, run after the import and before publication (runbook step 8); until it has
    run, the mapped URLs answer 404. It also corrects each row's sizes, which the conversion took from the image header
-   (EXIF rotation ignored). Changed avatars and headers are not announced to followers yet (TODO: part 3,
-   `Update(Person)`).
+   (EXIF rotation ignored).
+5. Other servers keep the old avatar and header URLs in their copy of each local actor until they fetch it again. The
+   conversion lists the local accounts whose avatar or header it changed (mapped, or made `NULL`) in the dump, as the
+   `kopje_state` row `profile_updates` (a JSON array of account ids; [dump-format.md](dump-format.md)), and writes no
+   such row when nothing changed or without `--images`. Publication (`kopje-admin publish --yes`) records, in the
+   transaction that makes the Store writable, one `Update(Person)` per listed account, the one a profile edit sends: to
+   the account's followers, with the new `icon` and `image` (none where the profile now uses Kopje's default). It
+   deletes the row in the same transaction, so a repeated `publish` records nothing more and a dump of the published
+   Store never holds the row. `publish` reports the count as `profileUpdates`. A suspended account is skipped.
 
 **Relationships.** Follows, favourites, boosts, bookmarks, blocks, mutes, domain blocks and lists carry over. A
 follow's `uri` is its legacy value, or for a local follower the id of its latest Follow activity; an accepted follow
@@ -272,6 +279,7 @@ taking every audience from the addressing captured before the bridge, and reads 
 | Category                                                                                                                           | Record                                                                                                                                                                                                          |
 | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `accounts`                                                                                                                         | locality, local username, display name, bio, avatar, header, lock                                                                                                                                               |
+| `profile_updates`                                                                                                                  | with `--images`: the local accounts whose avatar or header changed, which publication announces                                                                                                                 |
 | `keys`                                                                                                                             | email, wrapped key bytes, salt bytes, public key                                                                                                                                                                |
 | `raw`                                                                                                                              | the legacy JSON of every remote account and status                                                                                                                                                              |
 | `statuses`                                                                                                                         | author, content, source, spoiler, sensitivity, time                                                                                                                                                             |

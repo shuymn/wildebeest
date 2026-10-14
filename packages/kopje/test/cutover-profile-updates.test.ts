@@ -1,0 +1,86 @@
+import { describe, expect, inject, it } from 'vitest'
+
+import { apiHarness, sql } from './api-helpers'
+import { BUILD } from './helpers'
+import { ADMIN_AUD, ADMIN_EMAIL, importViaRpc, setAccess } from './ops-helpers'
+
+// Publication announces the local profiles whose avatar or header `convert --images` changed (docs/cutover.md,
+// "Publication"): one Update(Person) each, as a profile edit sends, recorded in the publishing transaction, so a
+// repeated publication records none. The dumps come from test-node/cutover-global-setup.ts, where both local accounts'
+// images move (alice's avatar and header, Bob's avatar; Bob's upstream default header becomes Kopje's default).
+
+declare module 'vitest' {
+	export interface ProvidedContext {
+		cutover: { dump: string; expected: Record<string, Record<string, string>> }
+		cutoverImages: { dump: string; originals: Record<string, string> }
+	}
+}
+
+async function imported(dump: string) {
+	const h = await apiHarness()
+	await setAccess(h.store, { access_team_domain: h.team.teamDomain })
+	const authority = {
+		kind: 'access',
+		email: ADMIN_EMAIL,
+		commonName: null,
+		teamDomain: h.team.teamDomain,
+		aud: ADMIN_AUD,
+	} as const
+	const { report } = await importViaRpc(h.store, dump, 16 * 1024, authority)
+	expect(report).toMatchObject({ ok: true })
+	return { h, publish: () => h.store.publish(BUILD, authority) }
+}
+
+type Image = { type: string; url: string } | undefined
+
+async function updates(store: Awaited<ReturnType<typeof apiHarness>>['store']) {
+	const rows = await sql<{ body: string }>(
+		store,
+		"SELECT body FROM outbound_activities WHERE json_extract(body, '$.activity.type') = 'Update' ORDER BY id"
+	)
+	return rows.map((row) => {
+		const { activity } = JSON.parse(row.body) as {
+			activity: { actor: string; object: { id: string; type: string; icon?: Image; image?: Image } }
+		}
+		return {
+			actor: activity.actor,
+			type: activity.object.type,
+			icon: activity.object.icon,
+			image: activity.object.image,
+		}
+	})
+}
+
+describe('publication after a conversion with --images', () => {
+	it('records one Update(Person) per changed local profile, with its new images, and none when repeated', async () => {
+		const { h, publish } = await imported(inject('cutoverImages').dump)
+		expect(await updates(h.store)).toEqual([])
+		const locals = await sql<{ uri: string; avatar_url: string | null; header_url: string | null }>(
+			h.store,
+			'SELECT uri, avatar_url, header_url FROM accounts WHERE domain IS NULL ORDER BY uri'
+		)
+		expect(locals).toHaveLength(2)
+
+		expect(await publish()).toMatchObject({ ok: true, profileUpdates: 2 })
+		const image = (url: string | null) => (url === null ? undefined : { type: 'Image', url })
+		const sent = await updates(h.store)
+		expect(sent.sort((a, b) => (a.actor < b.actor ? -1 : 1))).toEqual(
+			locals.map((a) => ({ actor: a.uri, type: 'Person', icon: image(a.avatar_url), image: image(a.header_url) }))
+		)
+		// The new images are Kopje media, and a dropped default header is sent as none.
+		expect(locals.every((a) => a.avatar_url?.includes('/media/') === true)).toBe(true)
+		expect(locals.map((a) => a.header_url === null)).toEqual([true, false])
+		expect(await sql(h.store, "SELECT name FROM kopje_state WHERE name = 'profile_updates'")).toEqual([])
+
+		expect(await publish()).toMatchObject({ ok: true, profileUpdates: 0 })
+		expect(await updates(h.store)).toHaveLength(2)
+	})
+})
+
+describe('publication after a conversion without --images', () => {
+	it('records no Update', async () => {
+		const { h, publish } = await imported(inject('cutover').dump)
+		expect(await publish()).toMatchObject({ ok: true, profileUpdates: 0 })
+		expect(await updates(h.store)).toEqual([])
+	})
+})

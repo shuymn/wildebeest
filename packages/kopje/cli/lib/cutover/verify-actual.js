@@ -17,6 +17,7 @@ const SUBSET = new Set(['legacy_ids', 'settings'])
 
 export const CATEGORIES = [
 	'accounts',
+	'profile_updates',
 	'keys',
 	'raw',
 	'statuses',
@@ -101,6 +102,8 @@ export function actualFromDump(text) {
 	const edits = new Map()
 	/** @type {Map<string, [number, unknown[]][]>} */
 	const media = new Map()
+	/** @type {unknown} the kopje_state profile_updates value: ids of local accounts that publication announces */
+	let profileUpdates = []
 	const account = (/** @type {string | null} */ id) => (id === null ? undefined : accounts.get(id))
 	const status = (/** @type {string | null} */ id) => (id === null ? undefined : statuses.get(id))
 
@@ -283,6 +286,15 @@ export function actualFromDump(text) {
 			case 'instance_settings':
 				put('settings', t('name') ?? '', t('value'))
 				break
+			case 'kopje_state':
+				if (t('name') === 'profile_updates') {
+					try {
+						profileUpdates = JSON.parse(t('value') ?? '')
+					} catch {
+						profileUpdates = ['(not a list)']
+					}
+				}
+				break
 			case 'oauth_clients':
 				put('clients', t('id') ?? '', [t('secret'), t('name'), t('redirect_uris'), t('scopes')])
 				break
@@ -308,6 +320,10 @@ export function actualFromDump(text) {
 		if (entry.remote && entry.alias !== null) {
 			put('aliases', entry.alias, entry.uri)
 		}
+	}
+	for (const id of Array.isArray(profileUpdates) ? profileUpdates : ['(not a list)']) {
+		const owner = account(typeof id === 'string' ? id : null)
+		put('profile_updates', owner?.local === true ? owner.uri : `not a local account: ${String(id)}`, 1)
 	}
 	for (const [uri, versions] of edits) {
 		put('edits', uri, versions)

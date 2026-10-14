@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { convert, exportOf, failing, opened, tampered, verify, workspace } from './cutover-helpers.js'
-import { FOREIGN_IMAGE } from './legacy-fixture.js'
+import { FOREIGN_IMAGE, UPSTREAM_HEADER } from './legacy-fixture.js'
 import { imageSize } from '../cli/lib/cutover/image-size.js'
 import { exportImages, imageSecret, LEGACY_DEFAULT_AVATAR, mediaToken } from '../cli/lib/cutover/images-export.js'
 import { IMAGE_SIZE_LIMIT, TOKEN_SHAPE } from '../cli/lib/cutover/upload-rules.js'
@@ -434,6 +434,13 @@ describe('convert and verify-conversion with --images', () => {
 		})
 		const bob = row("SELECT avatar_url, header_url FROM accounts WHERE username = 'Bob' AND domain IS NULL")
 		expect(bob).toEqual({ avatar_url: `${ORIGIN}/media/${tokens['avatar-1']}/full.webp`, header_url: null })
+		// Both profiles changed, so publication announces both (kopje_state profile_updates, sorted account ids).
+		const localIds = (
+			db.prepare('SELECT id FROM accounts WHERE domain IS NULL ORDER BY id').all() as { id: string }[]
+		).map((a) => a.id)
+		expect(JSON.parse(String(row("SELECT value FROM kopje_state WHERE name = 'profile_updates'").value))).toEqual(
+			localIds
+		)
 		expect(media('avatar-1')).toMatchObject({
 			username: 'Bob',
 			attached: 0,
@@ -504,6 +511,7 @@ describe('convert and verify-conversion with --images', () => {
 		expect(failing(categories)).toEqual([])
 		expect(verified).toBe(true)
 		expect(categories.media_files?.expected).toBe(9)
+		expect(categories.profile_updates?.expected).toBe(2)
 		expect(report.images).toEqual({ missing: 0, unmapped: 0, acceptMissing: false })
 
 		// Deterministic for a given base time and mapping.
@@ -553,7 +561,45 @@ describe('convert and verify-conversion with --images', () => {
 		expect(value("SELECT header_url FROM accounts WHERE username = 'Bob' AND domain IS NULL")).toContain(
 			'NkfPDviynOyTAOI79ar_GQ'
 		)
+		// Nothing for publication to announce.
+		expect(value("SELECT count(*) FROM kopje_state WHERE name = 'profile_updates'")).toBe(0)
 		db.close()
+	})
+
+	it('lists only the local profiles whose images changed for publication to announce', async () => {
+		const exportPath = await exportFixture()
+		const actors = join(exportPath, 'actors.sql')
+		// Bob's avatar and header become images of another account, which the conversion keeps.
+		await writeFile(
+			actors,
+			(await readFile(actors, 'utf8'))
+				.replace(`https://imagedelivery.net/${ACCOUNT}/avatar-1/avatar`, FOREIGN_IMAGE)
+				.replace(UPSTREAM_HEADER, FOREIGN_IMAGE)
+		)
+		const imagesDir = join(space.dir, 'images')
+		const exported = await exportImages({
+			exportPath,
+			accountHash: ACCOUNT,
+			outDir: imagesDir,
+			fetch: fakeFetch(FILES).fetch,
+		})
+		expect(exported.ok).toBe(true)
+		const { ok, dumpPath } = await convert(space.dir, exportPath, { imagesDir, acceptDeletions: true })
+		expect(ok).toBe(true)
+		const db = await opened(dumpPath)
+		const row = (sql: string) => db.prepare(sql).get() as Record<string, unknown>
+		const alice = String(row("SELECT id FROM accounts WHERE username = 'alice' AND domain IS NULL").id)
+		expect(row("SELECT avatar_url, header_url FROM accounts WHERE username = 'Bob' AND domain IS NULL")).toEqual({
+			avatar_url: FOREIGN_IMAGE,
+			header_url: FOREIGN_IMAGE,
+		})
+		expect(JSON.parse(String(row("SELECT value FROM kopje_state WHERE name = 'profile_updates'").value))).toEqual([
+			alice,
+		])
+		db.close()
+		const verified = await verify(exportPath, dumpPath, { acceptDeletions: true, imagesDir })
+		expect(failing(verified.categories)).toEqual([])
+		expect(verified.categories.profile_updates?.expected).toBe(1)
 	})
 
 	it('refuses a URL of the operator account that images.json does not map', async () => {
@@ -608,6 +654,12 @@ describe('convert and verify-conversion with --images', () => {
 				['attachments', 'media', 'media_files'],
 			],
 			["UPDATE accounts SET avatar_url = NULL WHERE username = 'alice' AND domain IS NULL", ['accounts']],
+			// The profiles publication announces.
+			["DELETE FROM kopje_state WHERE name = 'profile_updates'", ['profile_updates']],
+			[
+				"UPDATE kopje_state SET value = (SELECT json_array(min(id)) FROM accounts WHERE domain IS NULL) WHERE name = 'profile_updates'",
+				['profile_updates'],
+			],
 			["UPDATE media_attachments SET content_type = 'image/jpeg' WHERE file_token IS NOT NULL", ['media_files']],
 			[
 				'UPDATE media_attachments SET meta = \'{"original":{"width":1,"height":1}}\' WHERE file_token IS NOT NULL',
