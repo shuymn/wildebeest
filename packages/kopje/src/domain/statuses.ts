@@ -710,27 +710,30 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 		}
 		const limits = viewerId === null ? CONTEXT_LIMITS.anonymous : CONTEXT_LIMITS.user
 		const read = statusReads(viewer, { viewer: '?1', now: '?4' })
-		const ancestors = read.all<{ id: string }, 'id'>(
+		const ancestors = read.select(
 			db,
-			'id',
-			`WITH RECURSIVE up (id, depth) AS (
-				SELECT in_reply_to_id, 1 FROM statuses WHERE id = ?2 AND in_reply_to_id IS NOT NULL
-				UNION ALL
-				SELECT s.in_reply_to_id, up.depth + 1 FROM statuses s JOIN up ON s.id = up.id
-				WHERE s.in_reply_to_id IS NOT NULL AND up.depth < ?3
-			)
-			SELECT s.id FROM up JOIN statuses s ON s.id = up.id WHERE ${read.listable('s')} ORDER BY up.depth DESC`,
+			'listable',
+			{
+				with: `WITH RECURSIVE up (id, depth) AS (
+					SELECT in_reply_to_id, 1 FROM statuses WHERE id = ?2 AND in_reply_to_id IS NOT NULL
+					UNION ALL
+					SELECT s.in_reply_to_id, up.depth + 1 FROM statuses s JOIN up ON s.id = up.id
+					WHERE s.in_reply_to_id IS NOT NULL AND up.depth < ?3
+				)`,
+				from: 'up JOIN',
+				join: 'ON s.id = up.id',
+				tail: 'ORDER BY up.depth DESC',
+			},
 			viewerId,
 			resolved,
 			limits.ancestors,
 			now
 		)
 		const tree = descendantTree(db, resolved, limits.depth, limits.traversal)
-		const descendants = read.all<{ id: string }, 'id'>(
+		const descendants = read.select(
 			db,
-			'id',
-			`SELECT s.id FROM json_each(?2) j JOIN statuses s ON s.id = j.value
-			WHERE ${read.listable('s')} ORDER BY j.key LIMIT ?3`,
+			'listable',
+			{ from: 'json_each(?2) j JOIN', join: 'ON s.id = j.value', tail: 'ORDER BY j.key LIMIT ?3' },
 			viewerId,
 			JSON.stringify(tree),
 			limits.descendants,

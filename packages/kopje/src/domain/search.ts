@@ -131,16 +131,18 @@ function searchStatuses(db: Db, input: SearchRequest, viewer: UserContext): Stat
 		's.search_text IS NOT NULL',
 		...include.map(matches),
 		...exclude.map((variants) => `NOT ${matches(variants)}`),
-		read.listable('s'),
 	]
 	const ids = read
-		.all<{ id: string }, 'id'>(
+		.select(
 			db,
-			'id',
-			`WITH candidates(id) AS (${candidates})
-			SELECT s.id FROM candidates c JOIN statuses s ON s.id = c.id
-			WHERE ${where.join(' AND ')}
-			ORDER BY s.id DESC LIMIT ${p.add(input.limit)} OFFSET ${p.add(input.offset)}`,
+			'listable',
+			{
+				with: `WITH candidates(id) AS (${candidates})`,
+				from: 'candidates c JOIN',
+				join: 'ON s.id = c.id',
+				where: where.join(' AND '),
+				tail: `ORDER BY s.id DESC LIMIT ${p.add(input.limit)} OFFSET ${p.add(input.offset)}`,
+			},
 			...p.values
 		)
 		.map((row) => row.id)

@@ -218,14 +218,15 @@ export function canView(db: Db, viewerId: string | null, statusId: string): bool
 }
 
 // ---- Status ids the presenter accepts (status-presenter.ts). Types only: a brand costs nothing at run time, and only
-// the functions below make one, each after the rule it names has been applied for the viewer. test/policy.test.ts
-// keeps every other module from making one (no cast, type argument or type predicate names a brand).
+// the functions below make one: from the rows of a query they wrote with the rule in it, or after canView or the
+// author's check. test/policy.test.ts keeps every other module from making one (no cast, type argument or type
+// predicate names a brand).
 
 declare const visibleStatus: unique symbol
 declare const ownStatus: unique symbol
 
-// A status the read rule passed for the viewer: a query that applied visibleSql, listableSql, homeFilterSql or
-// shownSql through statusReads, or canView (viewableStatusId). A boost's original is judged again by the presenter.
+// A status the read rule passed for the viewer: a query statusReads wrote with visibleSql, listableSql, homeFilterSql
+// or shownSql, or canView (viewableStatusId). A boost's original is judged again by the presenter.
 export type VisibleStatusId = string & { readonly [visibleStatus]: true }
 
 // A status of the viewer's own, for the response to their own write (post, edit, delete, boost): the author sees all of
@@ -234,134 +235,133 @@ export type OwnStatusId = string & { readonly [ownStatus]: true }
 
 type Visible<T> = T extends string ? VisibleStatusId : T
 
-// The rows of a status query (StatusReads.all): the column `K` holds the ids (or null) the rule passed.
+// Rows whose column `K` holds the ids (or null) a rule passed, as StatusReads returns them.
 export type WithVisibleStatus<Row, K extends keyof Row> = { [P in keyof Row]: P extends K ? Visible<Row[P]> : Row[P] }
 
-// The status read rules for one viewer, as fragments over a statuses alias `s`, and the query that applies them. The
-// viewer and the time are the numbered parameters `viewer` and `now` of that query (a viewer with no time, the web
-// pages', has only `viewer` and no rule that takes a time). `all` runs a query only when every branch of it selects,
-// as the column `K`, the ids a fragment made here judged in that branch (`s.id`, or the status of `shown`), and binds
-// these parameters to the viewer's account id and time, so its rows are brandable: the column `K` holds ids the rule
-// passed for this viewer.
+// The read rule a status query applies: R2, R8 or R9.
+export type StatusRule = 'visible' | 'listable' | 'homeFilter'
+
+// One SELECT of statuses as StatusReads writes it, from the caller's parts:
+//   SELECT s.id AS id FROM <from> statuses s <join> WHERE (<where>) AND (<rule over s>) AND (<and>) <tail>
+// The rule is a conjunct of the SELECT's own WHERE, over the `statuses s` it selects the id of; the caller's conditions
+// go before or after it, so the terms keep the order (and the plan) a hand-written query would give them.
+export type StatusSelect = {
+	// Tables before `statuses s`, ending with the join to it (`bookmarks e JOIN`).
+	readonly from?: string
+	// What follows `statuses s`: the ON of that join, and further joins.
+	readonly join?: string
+	// Conditions before the rule, and after it.
+	readonly where?: string
+	readonly and?: string
+	// ORDER BY, LIMIT and OFFSET.
+	readonly tail?: string
+}
+
+type Columns<Extra> = { readonly [K in keyof Extra]: string }
+
+type Row = Record<string, SqlStorageValue>
+
+// The status queries of one viewer. The viewer and the time are the numbered parameters `at.viewer` and `at.now` of
+// each query (a viewer with no time, the web pages', has only `viewer` and no rule that takes a time); a query runs only
+// with them bound to the viewer's account id and time. Every query is written here: the caller gives the parts of a
+// StatusSelect, and the ids it returns are ones the rule passed for the viewer. Nothing is parsed.
 export type StatusReads = {
-	visible(s: string): string
-	listable(s: string): string
-	homeFilter(s: string): string
-	// The notification rule (R15, with the viewer as the recipient), which shows a status only if they may view it.
-	shown(type: string, from: string, status: string): string
-	all<Row extends Record<string, SqlStorageValue>, K extends keyof Row & string>(
+	// One SELECT, after an optional WITH clause its parts may read, with further columns (name: expression) after the id.
+	select<Extra extends Row = Record<never, never>>(
 		db: Db,
-		column: K,
-		query: string,
+		rule: StatusRule,
+		query: StatusSelect & { readonly with?: string; readonly columns?: Columns<Extra> },
 		...params: SqlStorageValue[]
-	): WithVisibleStatus<Row, K>[]
+	): (Extra & { id: VisibleStatusId })[]
+	// SELECTs combined, each a StatusSelect under the same rule, selecting the id only:
+	//   SELECT id FROM (SELECT * FROM (<branch>) UNION [ALL] SELECT * FROM (<branch>) ...) <tail>
+	union(
+		db: Db,
+		rule: StatusRule,
+		query: { readonly all: boolean; readonly branches: readonly StatusSelect[]; readonly tail: string },
+		...params: SqlStorageValue[]
+	): { id: VisibleStatusId }[]
+	// The viewer's notifications the notification rule (R15) shows them, which shows a status only if they may view it:
+	//   SELECT n.status_id AS status_id, <columns> FROM notifications n WHERE (<where>) AND (<rule>) <tail>
+	notifications<Extra extends Row>(
+		db: Db,
+		query: { readonly where: string; readonly tail?: string; readonly columns: Columns<Extra> },
+		...params: SqlStorageValue[]
+	): (Extra & { status_id: VisibleStatusId | null })[]
 }
 
 export function statusReads(
 	viewer: ViewerContext | null,
 	at: { readonly viewer: string; readonly now?: string }
 ): StatusReads {
-	const applied: Ruled[] = []
-	const rule = (id: string, fragment: string) => {
-		applied.push({ id, fragment })
-		return fragment
-	}
 	const now = () => {
 		if (viewer === null || at.now === undefined) {
 			throw new Error('this rule needs the time of the read')
 		}
 		return at.now
 	}
-	const bound = (placeholder: string, params: readonly SqlStorageValue[]) => {
-		const index = /^\?([1-9]\d*)$/.exec(placeholder)?.[1]
-		return index === undefined ? undefined : params[Number(index) - 1]
+	const ruleSql = (rule: StatusRule) => {
+		switch (rule) {
+			case 'visible':
+				return visibleSql('s', at.viewer)
+			case 'listable':
+				return listableSql('s', at.viewer, now())
+			case 'homeFilter':
+				return homeFilterSql('s', at.viewer, now())
+		}
+	}
+	const where = (...terms: (string | undefined)[]) =>
+		terms.flatMap((term) => (term === undefined || term.trim() === '' ? [] : [`(${term})`])).join(' AND ')
+	const columns = (extra: Record<string, string> | undefined) =>
+		Object.entries(extra ?? {})
+			.map(([name, expression]) => `, ${expression} AS ${name}`)
+			.join('')
+	const selectSql = (rule: string, q: StatusSelect, extra?: Record<string, string>) =>
+		`SELECT s.id AS id${columns(extra)} FROM ${q.from ?? ''} statuses s ${q.join ?? ''}
+		WHERE ${where(q.where, rule, q.and)} ${q.tail ?? ''}`
+	const run = <T extends Row>(db: Db, query: string, params: SqlStorageValue[]): T[] => {
+		const bound = (placeholder: string) => {
+			const index = /^\?([1-9]\d*)$/.exec(placeholder)?.[1]
+			return index === undefined ? undefined : params[Number(index) - 1]
+		}
+		if (bound(at.viewer) !== (viewer?.accountId ?? null) || (at.now !== undefined && bound(at.now) !== viewer?.now)) {
+			throw new Error("a status query must bind the viewer's account id and time")
+		}
+		return db.all<T>(query, ...params)
 	}
 	return {
-		visible: (s) => rule(`${s}.id`, visibleSql(s, at.viewer)),
-		listable: (s) => rule(`${s}.id`, listableSql(s, at.viewer, now())),
-		homeFilter: (s) => rule(`${s}.id`, homeFilterSql(s, at.viewer, now())),
-		shown: (type, from, status) => rule(status, shownSql(at.viewer, type, from, status, now())),
-		all<Row extends Record<string, SqlStorageValue>, K extends keyof Row & string>(
+		select<Extra extends Row = Record<never, never>>(
 			db: Db,
-			column: K,
-			query: string,
+			rule: StatusRule,
+			query: StatusSelect & { readonly with?: string; readonly columns?: Columns<Extra> },
 			...params: SqlStorageValue[]
 		) {
-			if (!selectsRuled(query, column, applied)) {
-				throw new Error('a status query must select the ids its read rule judged, in every branch')
-			}
-			if (
-				bound(at.viewer, params) !== (viewer?.accountId ?? null) ||
-				(at.now !== undefined && bound(at.now, params) !== viewer?.now)
-			) {
-				throw new Error("a status query must bind the viewer's account id and time")
-			}
-			return db.all<Row>(query, ...params) as WithVisibleStatus<Row, K>[]
+			const sql = `${query.with ?? ''} ${selectSql(ruleSql(rule), query, query.columns)}`
+			return run<Extra & { id: VisibleStatusId }>(db, sql, params)
+		},
+		union(db, rule, query, ...params) {
+			const sql = ruleSql(rule)
+			const branches = query.branches.map((branch) => `SELECT * FROM (${selectSql(sql, branch)})`)
+			return run<{ id: VisibleStatusId }>(
+				db,
+				`SELECT id FROM (${branches.join(query.all ? ' UNION ALL ' : ' UNION ')}) ${query.tail}`,
+				params
+			)
+		},
+		notifications<Extra extends Row>(
+			db: Db,
+			query: { readonly where: string; readonly tail?: string; readonly columns: Columns<Extra> },
+			...params: SqlStorageValue[]
+		) {
+			const rule = shownSql(at.viewer, 'n.type', 'n.from_account_id', 'n.status_id', now())
+			return run<Extra & { status_id: VisibleStatusId | null }>(
+				db,
+				`SELECT n.status_id AS status_id${columns(query.columns)} FROM notifications n
+				WHERE ${where(query.where, rule)} ${query.tail ?? ''}`,
+				params
+			)
 		},
 	}
-}
-
-// A fragment a StatusReads made, and the status id expression it judged.
-type Ruled = { id: string; fragment: string }
-
-// `sql` with its string literals and comments blanked, so keywords, commas and parentheses can be found by position.
-function maskSql(sql: string): string {
-	return sql.replace(/'(?:[^']|'')*'|--[^\n]*/g, (text) => ' '.repeat(text.length))
-}
-
-// The parts of `sql` between the matches of `pattern` at parenthesis depth 0, string literals and comments aside. A
-// keyword matches only at the start of a word.
-function splitTop(sql: string, pattern: string, keyword = true): string[] {
-	const masked = maskSql(sql)
-	const at = new RegExp(pattern, 'iy')
-	const parts: string[] = []
-	let depth = 0
-	let start = 0
-	for (let i = 0; i < masked.length; i++) {
-		at.lastIndex = i
-		const match = depth === 0 && (!keyword || i === 0 || /\W/.test(masked[i - 1] ?? '')) ? at.exec(masked) : null
-		if (match !== null) {
-			parts.push(sql.slice(start, i))
-			start = i + match[0].length
-			i = start - 1
-		} else if (masked[i] === '(') {
-			depth++
-		} else if (masked[i] === ')') {
-			depth--
-		}
-	}
-	parts.push(sql.slice(start))
-	return parts
-}
-
-// Whether every branch of the query `sql` selects, as `column`, the ids a fragment of `applied` judged in that branch: a
-// compound SELECT is judged branch by branch (a WITH clause's tables are not branches), and a branch that selects
-// `*` or `column` from a subquery is judged by that subquery.
-function selectsRuled(sql: string, column: string, applied: readonly Ruled[]): boolean {
-	const main = splitTop(sql, 'SELECT\\b').slice(1)
-	if (main.length === 0) {
-		return false
-	}
-	const statement = `SELECT${main.join('SELECT')}`
-	return splitTop(statement, '(?:UNION\\s+ALL|UNION|INTERSECT|EXCEPT)\\b').every((branch) => {
-		const [head, ...from] = splitTop(branch, 'FROM\\b')
-		if (head === undefined || from.length === 0) {
-			return false
-		}
-		const selected = splitTop(head.trim().replace(/^SELECT\s+(?:DISTINCT\s+)?/i, ''), ',', false).map((item) =>
-			item.trim()
-		)
-		const source = from.join('FROM').trim()
-		if (selected.length === 1 && (selected[0] === '*' || selected[0] === column) && source.startsWith('(')) {
-			const inner = splitTop(source.slice(1), '\\)', false)[0] ?? ''
-			return selectsRuled(inner, column, applied)
-		}
-		return applied.some(
-			({ id, fragment }) =>
-				branch.includes(fragment) &&
-				selected.some((item) => (item === id && id.endsWith(`.${column}`)) || item === `${id} AS ${column}`)
-		)
-	})
 }
 
 // The status `statusId`, if `viewerId` (null: anonymous) may see it by itself (canView).

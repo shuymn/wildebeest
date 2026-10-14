@@ -34,13 +34,14 @@ export const profilePage = readOperation<{ username: string; maxId: string | nul
 		}
 		const read = statusReads(null, { viewer: '?1' })
 		const ids = read
-			.all<{ id: string }, 'id'>(
+			.select(
 				db,
-				'id',
-				`SELECT s.id FROM statuses s
-				WHERE s.account_id = ?2 AND s.reblog_of_id IS NULL AND ${read.visible('s')} AND ${NOT_A_REPLY_TO_OTHERS}
-					AND (?3 IS NULL OR s.id < ?3)
-				ORDER BY s.id DESC LIMIT ?4`,
+				'visible',
+				{
+					where: 's.account_id = ?2 AND s.reblog_of_id IS NULL',
+					and: `${NOT_A_REPLY_TO_OTHERS} AND (?3 IS NULL OR s.id < ?3)`,
+					tail: 'ORDER BY s.id DESC LIMIT ?4',
+				},
 				null,
 				row.id,
 				maxId !== null && STATUS_ID.test(maxId) ? maxId : null,
@@ -75,12 +76,14 @@ export const statusPage = readOperation<{ username: string; id: string; present:
 			return { status: 'not_found' }
 		}
 		const read = statusReads(null, { viewer: '?1' })
-		const row = read.all<{ id: string; in_reply_to_id: string | null; username: string }, 'id'>(
+		const row = read.select<{ in_reply_to_id: string | null; username: string }>(
 			db,
-			'id',
-			`SELECT s.id, s.in_reply_to_id, au.username FROM statuses s JOIN accounts au ON au.id = s.account_id
-			WHERE s.id = ?2 AND au.domain IS NULL AND lower(au.username) = lower(?3) AND s.reblog_of_id IS NULL
-				AND ${read.visible('s')}`,
+			'visible',
+			{
+				join: 'JOIN accounts au ON au.id = s.account_id',
+				where: 's.id = ?2 AND au.domain IS NULL AND lower(au.username) = lower(?3) AND s.reblog_of_id IS NULL',
+				columns: { in_reply_to_id: 's.in_reply_to_id', username: 'au.username' },
+			},
 			null,
 			resolved,
 			username
