@@ -530,7 +530,8 @@ function readController(checkout, file, cache) {
 		} else if (/^:[\w!?]+$/.test(target)) {
 			callback = target.slice(1)
 		} else {
-			if ([...TRACKED].some((n) => target.includes(n))) {
+			// Any form that may check a token, a user or a Pundit policy; the tracked names alone would miss `authorize`.
+			if (/doorkeeper|authorize|require_user|require_authenticated_user/.test(target)) {
 				unresolved.push(`${file}: callback \`${stmt}\``)
 			}
 			continue
