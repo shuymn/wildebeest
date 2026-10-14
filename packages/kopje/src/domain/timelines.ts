@@ -145,30 +145,44 @@ export const publicTimeline = optionalUserReadOperation<PublicTimelineInput, Pag
 
 export type TagTimelineInput = PublicTimelineInput & { tag: string; any: string[]; all: string[]; none: string[] }
 
-// Public statuses with the tag or any of `any`, all of `all` and none of `none` (Mastodon's TagFeed). The candidates
-// are the public rows of status_tags (status_tags.public, through the partial index status_tags_public), so the read
-// never goes through the tag's unlisted, private, direct or limited statuses; publicConditions still decides each one.
+// The most names a hashtag timeline reads: the tag and `any`, which the API caps at four as Mastodon's TagFeed does.
+// Each is a term of one compound SELECT, and the Store's SQLite allows five.
+const MAX_TAG_TIMELINE_NAMES = 5
+
+// Public statuses with the tag or any of `any`, all of `all` and none of `none` (Mastodon's TagFeed). Each name is
+// read on its own, from the public rows of status_tags (status_tags.public, through the partial index
+// status_tags_public) in status id order, with every condition applied, until it has a page: so the read never goes
+// through the tag's unlisted, private, direct or limited statuses, and it stops at the page however many statuses the
+// tag has. The pages of the names are then merged (a status may carry several) and cut to one page.
 export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Status>>(
 	(db, input, { accountId: viewerId, now }) => {
 		const cursor = statusPage(input.page)
-		const tags = (names: string[]) => JSON.stringify([...new Set(names.map(normalizeTag))])
+		const order = cursor.ascending ? 'ASC' : 'DESC'
+		const unique = (names: string[]) => [...new Set(names.map(normalizeTag))]
+		const names = unique([input.tag, ...input.any]).slice(0, MAX_TAG_TIMELINE_NAMES)
+		// ?5 all, ?6 none, ?7 now, then one parameter per name from ?8. CROSS JOIN keeps status_tags outermost, and the
+		// cursor is a plain range (no cursor: '' and ':', below and above every id of digits), so each branch starts in
+		// the index at the cursor, walks it in order and stops at LIMIT.
+		const branch = (n: number) => `SELECT * FROM (SELECT t.status_id AS id FROM status_tags t
+				CROSS JOIN statuses s ON s.id = t.status_id JOIN accounts pa ON pa.id = s.account_id
+			WHERE t.public = 1 AND t.name = ?${8 + n}
+				AND NOT EXISTS (SELECT 1 FROM json_each(?5) a
+					WHERE NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id AND st.name = a.value))
+				AND NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id
+					AND st.name IN (SELECT value FROM json_each(?6)))
+				AND ${publicConditions(input.local, input.remote, input.onlyMedia, '?7')}
+				AND t.status_id < ?2 AND t.status_id > ?3
+			ORDER BY t.status_id ${order} LIMIT ?4)`
 		const rows = db.all<{ id: string }>(
-			`SELECT s.id FROM statuses s JOIN accounts pa ON pa.id = s.account_id
-		WHERE s.id IN (SELECT status_id FROM status_tags WHERE public = 1 AND name IN (SELECT value FROM json_each(?5)))
-			AND NOT EXISTS (SELECT 1 FROM json_each(?6) t
-				WHERE NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id AND st.name = t.value))
-			AND NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id AND st.name IN (SELECT value FROM json_each(?7)))
-			AND ${publicConditions(input.local, input.remote, input.onlyMedia, '?8')}
-			AND ${cursorSql('s.id')}
-		ORDER BY s.id ${cursor.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+			`SELECT id FROM (${names.map((_, n) => branch(n)).join(' UNION ')}) ORDER BY id ${order} LIMIT ?4`,
 			viewerId,
-			cursor.max,
-			cursor.min,
+			cursor.max ?? ':',
+			cursor.min ?? '',
 			cursor.limit,
-			tags([input.tag, ...input.any]),
-			tags(input.all),
-			tags(input.none),
-			now
+			JSON.stringify(unique(input.all)),
+			JSON.stringify(unique(input.none)),
+			now,
+			...names
 		)
 		return statusesPage(db, ids(rows), cursor, viewerId, input.present)
 	}
