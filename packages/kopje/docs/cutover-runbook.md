@@ -303,13 +303,14 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://<hash>.<project>.pages.dev/   
 The legacy consumer now finishes what was queued before step 3. Nothing new arrives.
 
 ```sh
-wrangler tail <legacy-consumer> --format json > <work>/drain.log   # in another terminal, until the backlog is 0
+wrangler tail <legacy-consumer> --format json > <work>/drain.log   # in another terminal, until the backlog is empty
 wrangler queues info <legacy-queue>
 wrangler queues info <legacy-queue>-dlq
-wrangler queues consumer remove <legacy-queue> <legacy-consumer>   # once the backlog is 0
+wrangler queues consumer remove <legacy-queue> <legacy-consumer>   # once the backlog is empty
 ```
 
-- **Go:** the legacy Queue's backlog is 0 (dashboard, Queue metrics); every message in the log ended (acked or retried
+- **Go:** the legacy Queue's backlog is empty: 0 messages and 0 bytes (dashboard, Queue metrics; a retry waiting out its
+  delay shows only in the bytes); every message in the log ended (acked or retried
   to the end); the DLQ's count is known; the consumer is removed. A delivery in the DLQ is an outbound send a remote
   server refused ten times, as the legacy instance would have dropped it. An inbox message in the DLQ is an activity
   the legacy D1 never got: write the count down and decide; it is not in the export.
@@ -423,7 +424,7 @@ against the time it was spooled; ones held during maintenance come due within 30
 - from that account, like the test status, and see the notification on Kopje, with its Web Push (receiving and Push
   delivery).
 
-- **Go:** both arrive; Kopje's Queue backlog falls to 0 within 30 minutes; its dead-letter queue stays empty;
+- **Go:** both arrive; Kopje's Queue backlog falls to 0 messages and 0 bytes within 30 minutes; its dead-letter queue stays empty;
   `kopje-admin deliveries` shows no growing backlog.
 - **Rollback:** none. Recover forward: PITR to the bookmark ([upgrade.md](upgrade.md#a-version-that-changed-the-schema)),
   a backup, or a fix.
@@ -447,8 +448,10 @@ them, and a later cutover cannot replay them. Everything below runs through Acce
 
 - **Collection barrier.** Nothing is sent while Kopje's Queue holds any message: the requests held during maintenance
   come back after the requeue delay (at most 30 minutes after journaling starts) and enter the journal in spool order
-  first. The drain waits meanwhile, up to 45 minutes per run.
-- **One at a time.** The next request goes only when the legacy Queue's backlog is 0: the legacy consumer has
+  first. The Queue's message count leaves delayed messages out, so the Queue counts as empty only when its byte count
+  is 0 too. The drain waits meanwhile, up to 45 minutes per run.
+- **One at a time.** The next request goes only when the legacy Queue's backlog is empty (no message and no bytes,
+  which a retry waiting out its delay still shows): the legacy consumer has
   acknowledged the previous one, retries included, so nothing overtakes a request it is still retrying. A request in
   the legacy dead-letter queue stops the drain (`legacy-dlq`) until you reconcile it: decide, redrive or purge the DLQ.
 - **Verified, to a legacy account.** Each request is verified against the time it was spooled, by Kopje's rule, and goes
@@ -471,8 +474,8 @@ them, and a later cutover cannot replay them. Everything below runs through Acce
   again, so the legacy instance may process it twice (a second Accept, a second notification).
 - **Receipts.** A handed-off request leaves a receipt outside the Store's data, so no copy of it is journaled or
   replayed again, also after an import, a reset, or with `CUTOVER_ROLLBACK` removed. `kopje-admin cutover close --yes`
-  removes the receipts once Kopje's Queue and its dead-letter queue are both empty (no copy is left to arrive or to be
-  redriven), which ends the rollback.
+  removes the receipts once Kopje's Queue and its dead-letter queue are both empty, by message count and byte count (no
+  copy is left to arrive or to be redriven), which ends the rollback.
 - **Bounded.** The journal holds at most 10,000 requests and 128 MiB (lower with `CUTOVER_JOURNAL_MAX_ENTRIES` and
   `CUTOVER_JOURNAL_MAX_BYTES`); when full, requests stay in Kopje's Queue, whose backlog makes the maintenance worker
   refuse new ones (503). Kept requests count until discarded. If valid requests alone exceed the quota while the
@@ -502,7 +505,8 @@ them, and a later cutover cannot replay them. Everything below runs through Acce
    domain back if step 7 moved it. Then drain again: requests the maintenance worker spooled while the routes changed
    are collected first (the barrier) and handed off. Those and the legacy instance's first direct requests can
    interleave for the time the routes take to change, as deliveries from different servers always can.
-7. `kopje-admin cutover status`: the journal holds nothing pending, being sent or kept, and Kopje's Queue backlog is 0.
+7. `kopje-admin cutover status`: the journal holds nothing pending, being sent or kept, and Kopje's Queue backlog is 0 messages
+   and 0 bytes (dashboard, Queue metrics).
 8. Remove `CUTOVER_ROLLBACK` from the Kopje Worker; re-enable the legacy workflows and builds (step 1); restore the
    legacy consumer's concurrency (add it again without `--max-concurrency`).
 9. `kopje-admin cutover close --yes`, which needs Kopje's Queue and its dead-letter queue empty. Before then the receipts drop any copy of a
@@ -577,8 +581,12 @@ The rehearsal also confirms what only the real platform can show:
   to that preview URL. 202 means it spools; 503 with `kopje.spool.metrics-unavailable` in the log means it fails closed,
   so during the window inbox deliveries are refused and senders retry them. Remove the preview deployment and its
   binding afterwards (the write barrier);
-- that `wrangler queues info` counts delayed messages in the backlog (the collection barrier relies on it);
 - that `wrangler deploy` keeps a DLQ consumer added from the CLI, and that the Deploy button creates the DLQ.
+
+Already established on the platform: a Queue's message count leaves delayed messages out (a request requeued with a
+delay, a retry waiting out its delay) while its byte count includes them, so the collection barrier, the drain's checks
+of the legacy Queue and its DLQ, and `kopje-admin cutover close` count a Queue as empty only when both are 0.
+`wrangler queues info` shows no backlog figure: read the backlog, messages and bytes, on the dashboard (Queue metrics).
 
 ## Permissions
 

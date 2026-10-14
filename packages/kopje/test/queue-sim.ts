@@ -56,10 +56,12 @@ export class QueueSim {
 		return Promise.resolve()
 	})
 
-	// The backlog as Queues reports it: every message not yet acknowledged, delayed ones included.
+	// The backlog as Queues reports it: every message not yet acknowledged counts in the bytes, but a delayed one is
+	// left out of the count.
 	metrics(): Promise<QueueMetrics> {
 		const backlogBytes = this.pending.reduce((sum, m) => sum + v8SizeEstimate(m.body), 0)
-		return Promise.resolve({ backlogCount: this.pending.length, backlogBytes })
+		const backlogCount = this.pending.filter((m) => m.delaySeconds === 0).length
+		return Promise.resolve({ backlogCount, backlogBytes })
 	}
 
 	get queue(): Queue {
@@ -73,25 +75,27 @@ export class QueueSim {
 		if (ready) {
 			this.pending = this.pending.filter((m) => m.delaySeconds !== 0)
 		}
-		const outcome = new Map<string, 'ack' | 'retry'>()
-		const settle = (id: string, value: 'ack' | 'retry') => {
+		// A retry keeps the delay it was given (the consumer has no default retry delay, so none means immediate).
+		const outcome = new Map<string, 'ack' | { delaySeconds: number }>()
+		const settle = (id: string, value: 'ack' | { delaySeconds: number }) => {
 			if (!outcome.has(id)) {
 				outcome.set(id, value)
 			}
 		}
+		const retry = (id: string, options?: QueueRetryOptions) => settle(id, { delaySeconds: options?.delaySeconds ?? 0 })
 		const messages = stored.map((m) => ({
 			id: m.id,
 			timestamp: m.timestamp,
 			body: m.body,
 			attempts: m.attempts,
 			ack: () => settle(m.id, 'ack'),
-			retry: () => settle(m.id, 'retry'),
+			retry: (options?: QueueRetryOptions) => retry(m.id, options),
 		}))
 		const batch = {
 			queue: 'kopje',
 			messages,
 			ackAll: () => stored.forEach((m) => settle(m.id, 'ack')),
-			retryAll: () => stored.forEach((m) => settle(m.id, 'retry')),
+			retryAll: (options?: QueueRetryOptions) => stored.forEach((m) => retry(m.id, options)),
 		} as unknown as MessageBatch
 		let threw = false
 		try {
@@ -100,10 +104,10 @@ export class QueueSim {
 			threw = true
 		}
 		for (const m of stored) {
-			const result = outcome.get(m.id) ?? (threw ? 'retry' : 'ack')
-			if (result === 'retry') {
+			const result = outcome.get(m.id) ?? (threw ? { delaySeconds: 0 } : 'ack')
+			if (result !== 'ack') {
 				this.retries++
-				const next = { ...m, attempts: m.attempts + 1, retries: m.retries + 1 }
+				const next = { ...m, attempts: m.attempts + 1, retries: m.retries + 1, delaySeconds: result.delaySeconds }
 				;(next.retries > MAX_RETRIES ? this.dropped : this.pending).push(next)
 			}
 		}

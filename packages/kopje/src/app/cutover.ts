@@ -4,6 +4,7 @@ import type { LoaderDeps } from '../federation/loader'
 import { decodeSpoolRecord, inflate, SPOOL_MESSAGE_LIMIT } from '../federation/spool'
 import { readConfig, userKek } from '../platform/config'
 import { PACKAGE_VERSION } from '../platform/package-version'
+import { readQueueBacklog } from '../platform/queue-backlog'
 import {
 	DRAIN_LEASE_MS,
 	type ImportAuthority,
@@ -66,18 +67,6 @@ const LEGACY_MESSAGE_LIMIT = 120 * 1024
 const USERNAME = /^[A-Za-z0-9_]{1,64}$/
 
 type DrainEnv = Env & { LEGACY_QUEUE?: Queue; LEGACY_DLQ?: Queue }
-
-async function backlog(queue: Queue | undefined): Promise<number | null> {
-	const metrics = (queue as Partial<Pick<Queue, 'metrics'>> | undefined)?.metrics
-	if (queue === undefined || typeof metrics !== 'function') {
-		return null
-	}
-	try {
-		return (await metrics.call(queue)).backlogCount
-	} catch {
-		return null
-	}
-}
 
 type Store = StoreStub & Record<string, (...args: unknown[]) => Promise<unknown>>
 type Refused = { ok: false; code: string; message: string }
@@ -192,20 +181,21 @@ export async function drainJournal(
 	async function steps(result: Omit<DrainRound, 'journal'>): Promise<void> {
 		// Read one after another: Kopje's Queue, the legacy Queue, and only after the legacy Queue was seen empty its
 		// dead-letter queue, so a message that left the legacy Queue for its DLQ between the readings is seen there.
-		const kopjeBacklog = await bounded(() => backlog(env.QUEUE))
-		const legacyBacklog = kopjeBacklog === null ? null : await bounded(() => backlog(legacy))
-		const legacyDead = legacyBacklog === null ? null : await bounded(() => backlog(legacyDlq))
+		const kopjeBacklog = await bounded(() => readQueueBacklog(env.QUEUE))
+		const legacyBacklog = kopjeBacklog === null ? null : await bounded(() => readQueueBacklog(legacy))
+		const legacyDead = legacyBacklog === null ? null : await bounded(() => readQueueBacklog(legacyDlq))
 		if (kopjeBacklog === null || legacyBacklog === null || legacyDead === null) {
 			result.stopped = 'metrics-unavailable'
 			return
 		}
-		if (legacyDead > 0) {
+		if (!legacyDead.empty) {
 			result.stopped = 'legacy-dlq'
 			return
 		}
 		// While the lane is busy, nothing is sent; the records are still verified, so that what fails for good is set
 		// aside (and the journal's quota freed by the operator) without waiting.
-		let busy: DrainRound['waiting'] = kopjeBacklog > 0 ? 'kopje-backlog' : legacyBacklog > 0 ? 'legacy-backlog' : null
+		const legacyBusy = legacyBacklog.empty ? null : 'legacy-backlog'
+		let busy: DrainRound['waiting'] = kopjeBacklog.empty ? legacyBusy : 'kopje-backlog'
 		result.waiting = busy
 		const full = busy === 'kopje-backlog' && (await journalFull())
 		// The operator's escape from a full journal: only after the drain stopped on journal-full and reported it, and
@@ -217,7 +207,7 @@ export async function drainJournal(
 		if (escape) {
 			// The journal's head goes past the collection barrier, so it may overtake an older request still in Kopje's
 			// Queue (ordinary delivery reordering). The legacy lane still holds.
-			busy = legacyBacklog > 0 ? 'legacy-backlog' : null
+			busy = legacyBusy
 			result.waiting = busy
 		} else if (full) {
 			// The barrier waits for requests the full journal cannot take: an operator decision, not a wait.
