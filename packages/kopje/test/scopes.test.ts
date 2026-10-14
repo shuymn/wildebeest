@@ -48,7 +48,7 @@ describe('route table', () => {
 		const paths = ROUTES.map((route) => `${route.method} ${route.path}`)
 		expect(new Set(paths).size).toBe(paths.length)
 		const byId = paths.indexOf('GET /api/v1/accounts/:id')
-		for (const fixed of ['verify_credentials', 'relationships', 'search', 'lookup']) {
+		for (const fixed of ['verify_credentials', 'relationships', 'search', 'lookup', 'familiar_followers']) {
 			expect(paths.indexOf(`GET /api/v1/accounts/${fixed}`)).toBeLessThan(byId)
 		}
 	})

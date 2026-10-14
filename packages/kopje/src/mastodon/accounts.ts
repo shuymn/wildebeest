@@ -264,3 +264,21 @@ function answerFollowRequest(decision: 'authorize' | 'reject'): ApiHandler {
 
 export const authorizeFollowRequest = answerFollowRequest('authorize')
 export const rejectFollowRequest = answerFollowRequest('reject')
+
+export const preferences: ApiHandler = async (c, deps) => {
+	const credential = userCredential(c, deps)
+	const result = authorized(await storeCall(c, deps, (s, b) => s.preferences(b, { credential })))
+	return result === null ? NOT_FOUND() : c.json(result)
+}
+
+export const familiarFollowers: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const ids = p.getAll('id')
+	const credential = userCredential(c, deps)
+	return c.json(
+		authorized(await storeCall(c, deps, (s, b) => s.familiarFollowers(b, { credential, ids, present: present(c) })))
+	)
+}

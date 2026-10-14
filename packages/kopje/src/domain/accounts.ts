@@ -333,6 +333,32 @@ export const verifyCredentials = userReadOperation<{ present: Present }, Credent
 	(db, { present }, viewer) => credentialAccount(db, viewer.accountId, present)
 )
 
+// GET /api/v1/preferences (Mastodon's REST::PreferencesSerializer): the posting defaults the account stores, and
+// Mastodon's defaults for the reading preferences Kopje has no setting for. The language is null when none is set.
+export type Preferences = {
+	'posting:default:visibility': Visibility
+	'posting:default:sensitive': boolean
+	'posting:default:language': string | null
+	'reading:expand:media': 'default'
+	'reading:expand:spoilers': false
+}
+
+export const preferences = userReadOperation<object, Preferences | null>((db, _input, { accountId }) => {
+	const row = db.first<Omit<CredentialRow, 'follow_requests_count'>>(
+		'SELECT default_visibility, default_sensitive, default_language FROM local_accounts WHERE account_id = ?',
+		accountId
+	)
+	return row === undefined
+		? null
+		: {
+				'posting:default:visibility': row.default_visibility,
+				'posting:default:sensitive': row.default_sensitive === 1,
+				'posting:default:language': row.default_language,
+				'reading:expand:media': 'default',
+				'reading:expand:spoilers': false,
+			}
+})
+
 export type CredentialChanges = {
 	displayName?: string
 	note?: string
@@ -464,6 +490,53 @@ export const relationships = userReadOperation<{ ids: string[] }, Relationship[]
 			.map((id) => resolveAccountId(db, id))
 			.filter((id) => id !== null)
 		return relationshipsOf(db, viewerId, [...new Set(resolved)])
+	}
+)
+
+// GET /api/v1/accounts/familiar_followers (Mastodon's FamiliarFollowersPresenter): for each requested account, the
+// accounts the viewer follows that follow it. Both follows are accepted ones (VIS-8), and the lists are the same
+// people GET /api/v1/accounts/:id/followers already shows. An unknown or suspended account has no entry; a suspended
+// follower, and one the viewer blocks or mutes, is left out (the viewer's blocks and mutes are read here directly).
+// Bounds (RES-3, RES-7): at most MAX_FAMILIAR_FOLLOWERS_IDS accounts, and for each, at most FAMILIAR_FOLLOWERS_WINDOW of
+// its newest accepted followers are read (an account known only from other servers has at most the local ones) and at
+// most MAX_FAMILIAR_FOLLOWERS shown, newest follow first.
+export const MAX_FAMILIAR_FOLLOWERS_IDS = 20
+export const FAMILIAR_FOLLOWERS_WINDOW = 5000
+export const MAX_FAMILIAR_FOLLOWERS = 80
+
+export type FamiliarFollowers = { id: string; accounts: Account[] }
+
+export const familiarFollowers = userReadOperation<{ ids: string[]; present: Present }, FamiliarFollowers[]>(
+	(db, { ids, present }, { accountId: viewerId }) => {
+		const resolved = ids
+			.slice(0, MAX_FAMILIAR_FOLLOWERS_IDS)
+			.map((id) => resolveAccountId(db, id))
+			.filter((id) => id !== null)
+		const targets = [...new Set(resolved)].filter(
+			(id) =>
+				db.first('SELECT 1 AS suspended FROM local_accounts WHERE account_id = ? AND suspended_at IS NOT NULL', id) ===
+				undefined
+		)
+		return targets.map((target) => {
+			const followers = db
+				.all<{ id: string }>(
+					`SELECT x.account_id AS id
+					FROM (SELECT id, account_id FROM follows WHERE target_account_id = ?1 AND state = 'accepted'
+						ORDER BY id DESC LIMIT ?3) x
+					JOIN follows mine ON mine.account_id = ?2 AND mine.target_account_id = x.account_id AND mine.state = 'accepted'
+					WHERE NOT EXISTS (SELECT 1 FROM local_accounts sus WHERE sus.account_id = x.account_id AND sus.suspended_at IS NOT NULL)
+						AND NOT EXISTS (SELECT 1 FROM blocks WHERE account_id = ?2 AND target_account_id = x.account_id)
+						AND NOT EXISTS (SELECT 1 FROM mutes WHERE account_id = ?2 AND target_account_id = x.account_id)
+					ORDER BY x.id DESC LIMIT ?4`,
+					target,
+					viewerId,
+					FAMILIAR_FOLLOWERS_WINDOW,
+					MAX_FAMILIAR_FOLLOWERS
+				)
+				.map((row) => row.id)
+			const accounts = presentAccountsById(db, followers, present)
+			return { id: target, accounts: followers.flatMap((id) => accounts.get(id) ?? []) }
+		})
 	}
 )
 

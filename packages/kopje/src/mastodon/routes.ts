@@ -50,6 +50,13 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'GET', path: '/api/v1/instance/terms_of_service', access: 'public', handler: instance.notConfigured },
 	{ method: 'GET', path: '/api/v1/instance/activity', access: 'public', handler: instance.notConfigured },
 	{ method: 'GET', path: '/api/v1/instance/domain_blocks', access: 'public', handler: instance.notConfigured },
+	{ method: 'GET', path: '/api/v1/preferences', access: { scope: 'read:accounts' }, handler: accounts.preferences },
+	{
+		method: 'GET',
+		path: '/api/v1/accounts/familiar_followers',
+		access: { scope: 'read:follows' },
+		handler: accounts.familiarFollowers,
+	},
 
 	{
 		method: 'GET',

@@ -566,8 +566,16 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, accounts.updateCredentials, input)
 	}
 
+	preferences(callerBuild: string, input: OperationInput<typeof accounts.preferences>) {
+		return this.#kernel.execute(callerBuild, accounts.preferences, input)
+	}
+
 	relationships(callerBuild: string, input: { credential: UserCredential; ids: string[] }) {
 		return this.#kernel.execute(callerBuild, accounts.relationships, input)
+	}
+
+	familiarFollowers(callerBuild: string, input: OperationInput<typeof accounts.familiarFollowers>) {
+		return this.#kernel.execute(callerBuild, accounts.familiarFollowers, input)
 	}
 
 	searchAccounts(callerBuild: string, input: accounts.SearchInput & { credential: UserCredential }) {
