@@ -296,10 +296,21 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
 5. **Put the originals back** into the media bucket:
 
     ```sh
-    for f in media/originals/*; do
-      wrangler r2 object put "kopje-media/originals/$(basename "$f")" --file "$f" --remote
-    done
+    (
+      set -eu   # stops at the first put that fails
+      n=0
+      for f in media/originals/*; do
+        wrangler r2 object put "kopje-media/originals/$(basename "$f")" --file "$f" --remote
+        n=$((n + 1))
+      done
+      want=$(jq '[.objects[] | select(.state == "copied")] | length' media-index.json)
+      [ "$n" -eq "$want" ] || { echo "put $n originals of $want" >&2; exit 1; }
+      echo "put $n originals"
+    )
     ```
+
+    It stops at the first `wrangler` that fails, and fails when fewer originals were put than the index marks
+    `copied`; run it again until it prints `put <n> originals` (a put replaces the same key).
 
 6. **Publish.** The imported Store stays readonly (it accepts no write and delivers nothing) until you publish it, once
    it looks right:

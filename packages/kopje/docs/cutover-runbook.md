@@ -362,9 +362,16 @@ kopje-admin convert <work>/export-b --out <work>/out --base-time <now, ISO 8601 
   --catalog <work>/catalog.json --domain <domain> --images <work>/images
 kopje-admin fingerprint compare <work>/fp-a.json <work>/fp-b.json --manifest <work>/out/manifest.json
 kopje-admin verify-conversion <work>/export-b <work>/out/kopje.dump --images <work>/images
-for f in <work>/out/originals/*; do
-  wrangler r2 object put "<media-bucket>/originals/$(basename "$f")" --file "$f" --remote
-done
+(
+  set -eu   # stops at the first put that fails
+  n=0
+  for f in <work>/out/originals/*; do
+    wrangler r2 object put "<media-bucket>/originals/$(basename "$f")" --file "$f" --remote
+    n=$((n + 1))
+  done
+  [ "$n" -eq "$(jq .images.originals <work>/out/manifest.json)" ] || { echo "put $n originals, not all" >&2; exit 1; }
+  echo "put $n originals"
+)
 kopje-admin import <work>/out/kopje.dump
 kopje-admin dump <work>/imported.dump
 kopje-admin verify-conversion <work>/export-b <work>/imported.dump --images <work>/images
@@ -388,7 +395,10 @@ kopje-admin maintenance-worker-check <work>/export-b --domain <domain> --worker 
 - The import runs through Access (the token was retired in the preparation); an interrupted one is reset with
   `kopje-admin import-reset <work>/out/kopje.dump --yes`.
 - The originals go to `originals/<media id>` in `<media-bucket>`, where Kopje keeps every original; nothing serves
-  them. The images' served files appear only once `media-rebuild` has made them from these originals (TODO: part 2
+  them. **Go:** the block prints `put <n> originals` with `n` equal to `images.originals` in the manifest. It stops at
+  the first `wrangler` that fails, or when fewer files were put than the conversion wrote; run the whole block again
+  (a put replaces the same key). Do not import before it passes: a row whose original is not in R2 has nothing to
+  rebuild its files from (`media-rebuild` reports such rows; TODO: part 2). The images' served files appear only once `media-rebuild` has made them from these originals (TODO: part 2
   of the Cloudflare Images move, not in this release): until then the moved avatars, headers and attachments answer 404. A rollback leaves the originals in the bucket; a later conversion with the same `images.json` and base time
   writes the same keys again.
 - **Rollback:** before the import is verified, Rollback A; after, Rollback B.

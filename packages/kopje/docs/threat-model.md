@@ -937,10 +937,12 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   for R2, may carry EXIF and location data: they are created with mode 0600 like the dump, go only to
   `originals/<media id>` in R2, which no route serves (MEDIA-2), and are served only through Kopje's re-encoding
   (MEDIA-3). Each is checked by its signature against the upload path's types and limits before it is recorded, and
-  against its SHA-256 before it is copied. _Implemented on branch `kopje/images-export`:_
+  against its SHA-256 before it is copied. Each media row the converter makes has a file token of its own,
+  HMAC-SHA256 under a per-image secret that only `images.json` holds, so a token cannot be derived from the public
+  URIs and image ids, and the per-row sweep never deletes the files of another row showing the same image. _Implemented on branch `kopje/images-export`:_
   `cli/lib/cutover/images-export.js`, `cli/lib/main.js`; `test-node/cutover-images.test.ts` ("uses the Images API with
   the token when given an account id", "runs from the CLI with the token from the environment only, and never prints
-  it", "marks a 404, a wrong type, an oversized file and too many pixels missing").
+  it", "marks a 404, a wrong type, an oversized file and too many pixels missing"), `test/cutover-images-lifecycle.test.ts`.
 - **DATA-14: legacy keys are carried over as bytes, under one KEK.** Wrapped private keys, salts and public keys move
   unchanged (DATA-1; no re-wrapping, the owner's decision). The converter stops unless one KEK candidate (empty,
   `userKEK`, `USER_KEY`) unwraps every local key and verifies against its public key, reports which candidate by name,

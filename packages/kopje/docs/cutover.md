@@ -193,30 +193,38 @@ are kept without a status either way. To move the images into Kopje's own media 
    Each file is checked as Kopje checks an upload: its type from its signature (JPEG, PNG, GIF or WebP; AVIF, SVG and
    HEIC are refused), at most 16 MiB and 16,777,216 pixels, with dimensions read from its header. It is written to
    `<images dir>/originals/<image id>` with mode 0600, and `<images dir>/images.json` records, per image id, its SHA-256,
-   type, size, the source, and the file token Kopje will serve it under, made once with the generator's format (32
-   random bytes, base64url). An image Cloudflare answers 404 for, or one that fails a check, is recorded as `missing`
-   with its reason. A rerun, on the same or a later export of the same instance, keeps every image whose file still has
-   its digest, and with it the token; it fetches only the rest. `images.json` is refused when it was written for
+   type, size and source, and a secret (32 random bytes, base64url, as Kopje makes file tokens) from which the converter
+   derives the file token of every media row that shows the image. An image Cloudflare answers 404 for, or one that
+   fails a check, is recorded as `missing` with its reason. A rerun, on the same or a later export of the same instance,
+   keeps every image whose file still has its digest and fetches only the rest; an image keeps its secret through every
+   state, so one that comes back after being missing gets the same URLs. `images.json` is refused when it was written for
    another account hash or domain (`images-file-differs`). Any other error answer stops the run (`images-fetch-failed`,
    exit 1) after saving what it downloaded. It prints counts only.
 2. `convert --images <images dir>` maps each local reference under the operator's account (profiles of local accounts,
    attachments of local statuses and of their earlier versions, unattached local images) to local media as Kopje's
-   upload path makes it: a media row with the file token, the served type (PNG stays PNG; JPEG, GIF and WebP become
-   WebP), `url` and `preview_url` at `https://<domain>/media/<token>/{full,small}.<png|webp>`, and `meta` with the
-   full size (within 3840 pixels) and the preview size (within 640) computed as the upload path sizes them. An avatar
-   or header becomes the account's profile image: an unattached row with no `gc_at`, whose full URL `avatar_url` or
-   `header_url` holds. An image that only an earlier version shows gets an unattached row too, so its files are kept.
-   Each image's token is held by its first row; a later row showing the same image shares its URLs (counted as
-   `shared`). A profile image under the account of cloudflare/wildebeest's default images (`NkfPDviynOyTAOI79ar_GQ`)
-   becomes `NULL`, so Kopje's own default applies. URLs of other accounts stay as they are (`foreign`), and so does
+   upload path makes it: a media row with a file token of its own, the served type (PNG stays PNG; JPEG, GIF and WebP
+   become WebP), `url` and `preview_url` at `https://<domain>/media/<token>/{full,small}.<png|webp>`, and `meta` with
+   the full size (within 3840 pixels) and the preview size (within 640) computed as the upload path sizes them. An
+   avatar or header becomes the account's profile image: an unattached row with no `gc_at`, whose full URL
+   `avatar_url` or `header_url` holds. An image that only earlier versions of a status show gets an unattached row
+   too, one per status, so its files are kept. Every row, also when several show the same image, has its own token,
+   files and original, so Kopje's per-row lifecycle (the sweep after a deletion, backups, the rebuild) needs nothing
+   else. The token is HMAC-SHA256 under the image's secret of the row's key, base64url (43 characters, the shape of
+   Kopje's tokens): `profile\n<actor URI>\n<avatar|header>`, `attachment\n<status URI>\n<position>`,
+   `image\n<Image object id>` for an unattached image, `edit\n<status URI>\n<image id>`. A token so depends only on
+   `images.json` and the legacy data, and cannot be derived from public URIs without the secret. A local profile image
+   that is one of legacy's defaults, an image under cloudflare/wildebeest's default account
+   (`NkfPDviynOyTAOI79ar_GQ`) or Mastodon's `missing.png` that legacy hotlinked as its default avatar, becomes `NULL`,
+   so Kopje's own default applies (counted as `upstream`). URLs of other accounts stay as they are (`foreign`), and so does
    everything of remote accounts. A `missing` image's reference is left out: the avatar or header becomes `NULL`, the
    attachment is removed. A URL under the operator's account that `images.json` does not map stops the conversion
-   (`images-unmapped`): run `images-export` on this export first. The ids and tokens depend only on the base time and
-   `images.json`, so the same inputs give the same dump.
-3. The originals go to R2 under the key Kopje keeps an original at, `originals/<media id>`: `convert` writes them to
-   `<out>/originals/<media id>`, checking each against its digest (`images-original-mismatch` when one changed), and
-   the operator puts them into the media bucket with Wrangler, as a backup restore does
-   ([backup.md](backup.md)), before the import is published.
+   (`images-unmapped`): run `images-export` on this export first. The ids depend only on the base time and the tokens
+   on `images.json`, so the same inputs give the same dump.
+3. The originals go to R2 under the key Kopje keeps an original at, `originals/<media id>`: `convert` writes one per
+   row to `<out>/originals/<media id>` (`images.originals` in the manifest counts them), checking each against its
+   digest (`images-original-mismatch` when one changed), and the operator puts them into the media bucket with
+   Wrangler, as a backup restore does ([backup.md](backup.md)), before the import is published. The runbook's loop
+   stops at the first failed put and checks the count.
 4. The served files (`files/<token>/full` and `small` in R2) are made from the originals by Kopje's own re-encoding.
    That step, `media-rebuild`, comes with a later release (TODO: part 2 of the Cloudflare Images move); until it has run,
    the mapped URLs answer 404. Changed avatars and headers are not announced to followers yet (TODO: part 3,
@@ -259,20 +267,20 @@ Read `conversion.dropped` in the manifest before passing the flag: every code th
 the converter (only Kopje's HTML sanitizer, a runtime transformation of the Store, whose output a test pins by hand),
 taking every audience from the addressing captured before the bridge, and reads actual records from a dump. Records are keyed by AP URIs, never by assigned ids, and compared as exact values:
 
-| Category                                                                                                                           | Record                                                                                                                                              |
-| ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `accounts`                                                                                                                         | locality, local username, display name, bio, avatar, header, lock                                                                                   |
-| `keys`                                                                                                                             | email, wrapped key bytes, salt bytes, public key                                                                                                    |
-| `raw`                                                                                                                              | the legacy JSON of every remote account and status                                                                                                  |
-| `statuses`                                                                                                                         | author, content, source, spoiler, sensitivity, time                                                                                                 |
-| `audience`                                                                                                                         | legacy visibility, the recipients (silent ones included), and for a non-public status the author legacy authorized with                             |
-| `replies`, `aliases`                                                                                                               | inReplyTo and the linked parent; remote proxy uuid to original URI                                                                                  |
-| `counters`                                                                                                                         | the notification counter                                                                                                                            |
-| `edits`, `attachments`, `media`                                                                                                    | versions in order; URLs and descriptions in order; each old image id with its URL, its owner (the stored author) and the status showing it, or none |
-| `media_files`                                                                                                                      | with `--images`: per file token, the full and preview URLs, the served type, and the full and preview sizes                                         |
-| `boosts` (with visibility and recipients), `follows` (Follow record or NULL, reblogs, notify), `favourites`                        | by the URIs of both ends                                                                                                                            |
-| `bookmarks`, `blocks`, `mutes`, `domain_blocks`, `lists` (policy, exclusive), `list_accounts`, `notifications`, `clients` (scopes) | by URI or kept id                                                                                                                                   |
-| `legacy_ids`, `settings`                                                                                                           | each expected key must resolve to the same value (extra keys allowed)                                                                               |
+| Category                                                                                                                           | Record                                                                                                                                                                                                          |
+| ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `accounts`                                                                                                                         | locality, local username, display name, bio, avatar, header, lock                                                                                                                                               |
+| `keys`                                                                                                                             | email, wrapped key bytes, salt bytes, public key                                                                                                                                                                |
+| `raw`                                                                                                                              | the legacy JSON of every remote account and status                                                                                                                                                              |
+| `statuses`                                                                                                                         | author, content, source, spoiler, sensitivity, time                                                                                                                                                             |
+| `audience`                                                                                                                         | legacy visibility, the recipients (silent ones included), and for a non-public status the author legacy authorized with                                                                                         |
+| `replies`, `aliases`                                                                                                               | inReplyTo and the linked parent; remote proxy uuid to original URI                                                                                                                                              |
+| `counters`                                                                                                                         | the notification counter                                                                                                                                                                                        |
+| `edits`, `attachments`, `media`                                                                                                    | versions in order, each with what it shows (URL, preview, description, sizes); URLs and descriptions in order; each old image id with its URL, its owner (the stored author) and the status showing it, or none |
+| `media_files`                                                                                                                      | with `--images`: per file token, the full and preview URLs, the served type, and the full and preview sizes                                                                                                     |
+| `boosts` (with visibility and recipients), `follows` (Follow record or NULL, reblogs, notify), `favourites`                        | by the URIs of both ends                                                                                                                                                                                        |
+| `bookmarks`, `blocks`, `mutes`, `domain_blocks`, `lists` (policy, exclusive), `list_accounts`, `notifications`, `clients` (scopes) | by URI or kept id                                                                                                                                                                                               |
+| `legacy_ids`, `settings`                                                                                                           | each expected key must resolve to the same value (extra keys allowed)                                                                                                                                           |
 
 Any missing, extra or changed record FAILs: missing content, content rewritten to the same length, a dropped
 relationship, a recipient removed or added, a widened visibility, a dropped reply link and a count difference all do
@@ -302,7 +310,7 @@ object type) appears only as a 12-hex-digit SHA-256 prefix, and a parser or data
 | `tables`         | per Store table: rows and checksum, as in the dump trailer                                                                                                                                                   |
 | `dump`           | file name, SHA-256 of the file, and the trailer's body digest                                                                                                                                                |
 | `exportBytes`    | the size of the export read                                                                                                                                                                                  |
-| `images`         | with `--images`: references `mapped`, left out as `missing`, `upstream` defaults dropped, `foreign` kept, `unmapped`, rows that `shared` a token, `originals` written, `acceptMissing`                       |
+| `images`         | with `--images`: references `mapped`, left out as `missing`, `upstream` defaults dropped, `foreign` kept, `unmapped`, `originals` written (one per row), `acceptMissing`                                     |
 | `result`, `stop` | `converted`, or `stopped` with a fixed `code`, a fixed `message` and `detail` (counts, levels, digests)                                                                                                      |
 
 `verify-conversion` prints `{ "result": "PASS" | "FAIL", "categories": { <name>: { expected, actual, missing, extra,
