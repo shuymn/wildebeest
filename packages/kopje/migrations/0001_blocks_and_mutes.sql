@@ -19,3 +19,6 @@ CREATE TABLE domain_block_cleanups (
   cursor INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL                     -- epoch ms, like the other queue-like tables
 );
+
+-- The next cleanup to run, oldest first, without scanning or sorting the pending ones.
+CREATE INDEX domain_block_cleanups_next ON domain_block_cleanups (created_at, domain_block_id);
