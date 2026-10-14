@@ -39,7 +39,7 @@ export function requireAccess(access: RouteAccess) {
 	})
 }
 
-function bearerToken(header: string | undefined): string | undefined {
+export function bearerToken(header: string | undefined): string | undefined {
 	const match = /^Bearer\s+(\S+)\s*$/i.exec(header ?? '')
 	return match?.[1]
 }

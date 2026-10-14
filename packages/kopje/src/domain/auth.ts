@@ -1,4 +1,4 @@
-import { mediaDeleteOperation, readOperation, writeOperation } from './operation'
+import { mediaDeleteOperation, readOperation, sessionOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 import type { StoreOperation } from '../platform/store-kernel'
 import { grants, type Scope } from '../security/scopes'
@@ -8,12 +8,14 @@ import { grants, type Scope } from '../security/scopes'
 // revoked, or an account suspended, before the operation commits cannot act. The Worker's access middleware only
 // reads the bearer token and declares the route's scope.
 
-// The caller of an API request. accountId is null for an app token (client_credentials).
+// The caller of an API request. accountId is null for an app token (client_credentials). now is the request time
+// (the credential's), which time-bound state such as a mute's expiry is judged at.
 export type Viewer = {
 	tokenHash: string
 	scopes: string[]
 	accountId: string | null
 	client: { id: string; name: string; website: string | null }
+	now: number
 }
 
 export type UserViewer = Viewer & { accountId: string }
@@ -74,6 +76,7 @@ export function authorize(db: Db, credential: Credential): AuthFailure | { statu
 			scopes,
 			accountId: row.account_id,
 			client: { id: row.client_id, name: row.name, website: row.website },
+			now: credential.now,
 		},
 	}
 }
@@ -97,6 +100,8 @@ function guarded(declare: Declare) {
 // Operations of a signed-in user, under the scope of the route.
 export const userReadOperation = guarded(readOperation)
 export const userWriteOperation = guarded(writeOperation)
+// Web Push registration: still served while the Store is readonly, as sign-ins are.
+export const userSessionOperation = guarded(sessionOperation)
 export const userMediaDeleteOperation = guarded(mediaDeleteOperation)
 
 // Checks a credential without doing anything else: lets the Worker answer an authentication failure before a
@@ -108,21 +113,22 @@ export const checkCredential = readOperation<Credential, Authorized<Viewer>>((db
 
 // Operations of a route whose token is optional (Mastodon's authorize_if_got_token!): no credential reads as an
 // anonymous viewer; a credential must be valid and cover the route's scope (if it declares one), and an app token (no
-// user) is anonymous.
+// user) is anonymous. now is the credential's request time (null without one), as Viewer.now.
 export function optionalUserReadOperation<I, O>(
-	run: (db: Db, input: I, viewerId: string | null) => O
+	run: (db: Db, input: I, viewerId: string | null, now: number | null) => O
 ): StoreOperation<I & { credential: Credential | null }, Authorized<O>> {
 	return readOperation<I & { credential: Credential | null }, Authorized<O>>((db, input) => {
 		if (input.credential === null) {
-			return { status: 'ok', value: run(db, input, null) }
+			return { status: 'ok', value: run(db, input, null, null) }
 		}
+		const { now } = input.credential
 		const auth = authorize(db, input.credential)
 		if (auth.status === 'user_required') {
-			return { status: 'ok', value: run(db, input, null) }
+			return { status: 'ok', value: run(db, input, null, now) }
 		}
 		if (auth.status !== 'ok') {
 			return auth
 		}
-		return { status: 'ok', value: run(db, input, auth.viewer.accountId) }
+		return { status: 'ok', value: run(db, input, auth.viewer.accountId, now) }
 	})
 }

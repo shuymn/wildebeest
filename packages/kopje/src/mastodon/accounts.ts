@@ -175,7 +175,7 @@ export const searchAccounts: ApiHandler = async (c, deps) => {
 	return c.json(authorized(accounts))
 }
 
-function relationshipResponse(c: ApiContext, result: RelationshipResult): Response {
+export function relationshipResponse(c: ApiContext, result: RelationshipResult): Response {
 	switch (result.status) {
 		case 'ok':
 			return c.json(result.relationship)

@@ -20,6 +20,9 @@ Some things cannot be done from the wizard. Do these in the Cloudflare dashboard
 3. **Set the secrets** of the Worker:
     - `SETUP_TOKEN`: at least 32 random characters, for example `openssl rand -base64 33`. Only the wizard reads it.
     - `USER_KEK`: wraps the private keys of local accounts. Set it before the admin is created.
+    - `VAPID_JWK`, optional: turns on Web Push. An EC P-256 private key as a JWK; the instance template's README shows
+      how to make one. Kopje never makes or replaces it: without it, push notifications are unavailable, and replacing
+      it once clients have subscribed breaks their subscriptions.
 4. **Create an API token** for the Access step, with a short expiry (a day is plenty). The permissions it needs:
 
     | Permission                                                           | Why                                                      |

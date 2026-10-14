@@ -1,6 +1,6 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { actorSnapshot, recordActorUpdate } from './actor-update'
-import { domainBlockMatchSql } from './audience'
+import { activeMuteSql, domainBlockMatchSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { retractFollow } from './inbox'
 import { notify } from './notifications'
@@ -438,27 +438,30 @@ type RelationshipRow = {
 	blocked_by: number
 	muting: number
 	muting_notifications: number | null
+	muting_expires_at: string | null
 	domain_blocking: number
 }
 
-function relationshipsOf(db: Db, viewerId: string, accountIds: string[]): Relationship[] {
+// The viewer's relationships with each account, as they stand at `now` (an expired mute no longer counts).
+export function relationshipsOf(db: Db, viewerId: string, accountIds: string[], now: number): Relationship[] {
 	const rows = db.all<RelationshipRow>(
 		`SELECT a.id,
 			fo.state AS following, fo.show_reblogs, fo.notify, fo.languages,
 			fb.state AS followed_by,
 			EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 AND target_account_id = a.id) AS blocking,
 			EXISTS (SELECT 1 FROM blocks WHERE account_id = a.id AND target_account_id = ?1) AS blocked_by,
-			m.account_id IS NOT NULL AS muting, m.hide_notifications AS muting_notifications,
+			m.account_id IS NOT NULL AS muting, m.hide_notifications AS muting_notifications, m.expires_at AS muting_expires_at,
 			EXISTS (SELECT 1 FROM domain_blocks db WHERE db.account_id = ?1 AND ${domainBlockMatchSql('db', 'a')})
 				AS domain_blocking
 		FROM json_each(?2) j
 		JOIN accounts a ON a.id = j.value
 		LEFT JOIN follows fo ON fo.account_id = ?1 AND fo.target_account_id = a.id
 		LEFT JOIN follows fb ON fb.account_id = a.id AND fb.target_account_id = ?1
-		LEFT JOIN mutes m ON m.account_id = ?1 AND m.target_account_id = a.id
+		LEFT JOIN mutes m ON m.account_id = ?1 AND m.target_account_id = a.id AND ${activeMuteSql('m', '?3')}
 		ORDER BY j.key`,
 		viewerId,
-		JSON.stringify(accountIds)
+		JSON.stringify(accountIds),
+		new Date(now).toISOString()
 	)
 	return rows.map((row) => ({
 		id: row.id,
@@ -472,8 +475,7 @@ function relationshipsOf(db: Db, viewerId: string, accountIds: string[]): Relati
 		blocked_by: row.blocked_by === 1,
 		muting: row.muting === 1,
 		muting_notifications: row.muting_notifications === 1,
-		// Mutes have no expiry yet.
-		muting_expires_at: null,
+		muting_expires_at: row.muting_expires_at,
 		requested: row.following === 'pending',
 		domain_blocking: row.domain_blocking === 1,
 		endorsed: false,
@@ -484,12 +486,12 @@ function relationshipsOf(db: Db, viewerId: string, accountIds: string[]): Relati
 export const MAX_RELATIONSHIP_IDS = 100
 
 export const relationships = userReadOperation<{ ids: string[] }, Relationship[]>(
-	(db, { ids }, { accountId: viewerId }) => {
+	(db, { ids }, { accountId: viewerId, now }) => {
 		const resolved = ids
 			.slice(0, MAX_RELATIONSHIP_IDS)
 			.map((id) => resolveAccountId(db, id))
 			.filter((id) => id !== null)
-		return relationshipsOf(db, viewerId, [...new Set(resolved)])
+		return relationshipsOf(db, viewerId, [...new Set(resolved)], now)
 	}
 )
 
@@ -741,7 +743,7 @@ export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, i
 		)
 	}
 	recountFollows(db, viewerId, target)
-	return relationshipResult(db, viewerId, target.id)
+	return relationshipResult(db, viewerId, target.id, input.now)
 })
 
 export const unfollow = userWriteOperation<{ target: string; now: number }, RelationshipResult>(
@@ -766,7 +768,7 @@ export const unfollow = userWriteOperation<{ target: string; now: number }, Rela
 			viewerId
 		)
 		recountFollows(db, viewerId, target)
-		return relationshipResult(db, viewerId, target.id)
+		return relationshipResult(db, viewerId, target.id, now)
 	}
 )
 
@@ -795,8 +797,8 @@ function recountFollows(db: Db, viewerId: string, target: TargetRow): void {
 	}
 }
 
-function relationshipResult(db: Db, viewerId: string, targetId: string): RelationshipResult {
-	const [relationship] = relationshipsOf(db, viewerId, [targetId])
+export function relationshipResult(db: Db, viewerId: string, targetId: string, now: number): RelationshipResult {
+	const [relationship] = relationshipsOf(db, viewerId, [targetId], now)
 	return relationship === undefined ? { status: 'not_found' } : { status: 'ok', relationship }
 }
 
@@ -929,6 +931,5 @@ export const answerFollowRequest = userWriteOperation<
 			(SELECT COUNT(*) FROM follows WHERE target_account_id = ?1 AND state = 'accepted') WHERE id = ?1`,
 		viewerId
 	)
-	const [relationship] = relationshipsOf(db, viewerId, [requesterId])
-	return relationship === undefined ? { status: 'not_found' } : { status: 'ok', relationship }
+	return relationshipResult(db, viewerId, requesterId, now)
 })

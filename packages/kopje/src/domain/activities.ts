@@ -2,6 +2,7 @@ import {
 	addressingOf,
 	type Audience,
 	audienceOf,
+	blockedSql,
 	isDistributable,
 	PUBLIC_COLLECTION,
 	type Recipient,
@@ -22,7 +23,7 @@ import { sha256Hex } from '../platform/sha256'
 // where followers means the signer's followers and accounts are the addressed accounts (silent recipients included,
 // local ones too; delivery skips local recipients). An addressed account named in to/cc is delivered to by its shared
 // inbox, a silent recipient by its personal inbox, and the recipient of an activity without to (a Like, Follow,
-// Accept, Reject or their Undo) by its shared inbox when it has one (deliveries.ts). Update and Delete are addressed
+// Accept, Reject, Block or their Undo) by its shared inbox when it has one (deliveries.ts). Update and Delete are addressed
 // and delivered to the audience the status already had and never wider: visibility cannot change, and a mention
 // removed by an edit stays as a silent mention. Delete carries a Tombstone, not the content.
 
@@ -271,20 +272,37 @@ export type AnnounceInput = {
 	visibility: Visibility
 	publishedAt: string
 	objectUri: string
-	authorUri: string
-	authorId: string
+	// The original's author; null when the booster blocks it or its domain (VIS-15), so it is neither named nor sent.
+	authorUri: string | null
+	authorId: string | null
+}
+
+// The Announce input of a local boost by `boosterId` of a status by `author`, for every copy of that Announce (the one
+// delivered, its Undo, and the outbox's). As Mastodon allows boosting a status of an account on a domain the booster
+// blocks, the author is then left out of the addressing and the audience (VIS-15).
+export function boostAnnounce(
+	db: Db,
+	boosterId: string,
+	boost: Omit<AnnounceInput, 'authorUri' | 'authorId'>,
+	author: { id: string; uri: string }
+): AnnounceInput {
+	const blocked =
+		db.first(`SELECT 1 AS x FROM accounts a WHERE a.id = ?2 AND ${blockedSql('?1', 'a')}`, boosterId, author.id) !==
+		undefined
+	return { ...boost, authorUri: blocked ? null : author.uri, authorId: blocked ? null : author.id }
 }
 
 // A boost goes to the booster's followers and the original's author (Mastodon's TagManager#to/#cc for a reblog).
 function announceAddressing(input: AnnounceInput): { to: string[]; cc: string[] } {
 	const followers = followersUri(input.actorUri)
+	const author = input.authorUri === null ? [] : [input.authorUri]
 	switch (input.visibility) {
 		case 'public':
-			return { to: [PUBLIC_COLLECTION], cc: [input.authorUri, followers] }
+			return { to: [PUBLIC_COLLECTION], cc: [...author, followers] }
 		case 'unlisted':
-			return { to: [followers], cc: [PUBLIC_COLLECTION, input.authorUri] }
+			return { to: [followers], cc: [PUBLIC_COLLECTION, ...author] }
 		default:
-			return { to: [followers], cc: [input.authorUri] }
+			return { to: [followers], cc: author }
 	}
 }
 
@@ -301,7 +319,7 @@ export function announceActivity(input: AnnounceInput) {
 			cc,
 			object: input.objectUri,
 		},
-		audience: { followers: true, accounts: [input.authorId] },
+		audience: { followers: true, accounts: input.authorId === null ? [] : [input.authorId] },
 	} satisfies OutboundEnvelope
 }
 
@@ -392,6 +410,46 @@ export function followAnswerActivity(kind: 'Accept' | 'Reject', input: FollowAns
 			},
 		},
 		audience: { followers: false, accounts: [input.followerId] },
+	} satisfies OutboundEnvelope
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Blocks (Mastodon's BlockService and UnblockService): a Block of a remote account, and its Undo, go to the blocked
+// account only, by its shared inbox or its personal inbox without one (audienceTargets), as a Follow does. A block's
+// id is `<actor>#blocks/<blocks.id>`, as Mastodon names it; a block without a stored uri (migrated rows) gets the id
+// this instance would have given it.
+// ---------------------------------------------------------------------------------------------------------------
+
+export type BlockActivityInput = { blockUri: string; actorUri: string; targetUri: string; targetId: string }
+
+export function blockUri(actorUri: string, edgeId: string): string {
+	return `${actorUri}#blocks/${edgeId}`
+}
+
+export function blockActivity(input: BlockActivityInput) {
+	return {
+		activity: {
+			'@context': AS_CONTEXT,
+			id: input.blockUri,
+			type: 'Block',
+			actor: input.actorUri,
+			object: input.targetUri,
+		},
+		audience: { followers: false, accounts: [input.targetId] },
+	} satisfies OutboundEnvelope
+}
+
+export function undoBlockActivity(input: BlockActivityInput) {
+	const { '@context': _, ...block } = blockActivity(input).activity
+	return {
+		activity: {
+			'@context': AS_CONTEXT,
+			id: `${input.blockUri}/undo`,
+			type: 'Undo',
+			actor: input.actorUri,
+			object: block,
+		},
+		audience: { followers: false, accounts: [input.targetId] },
 	} satisfies OutboundEnvelope
 }
 
@@ -510,15 +568,20 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 			if (row.original_uri !== null && row.original_author_uri !== null && row.original_author_id !== null) {
 				items.push(
 					JSON.stringify(
-						announceActivity({
-							announceUri: row.uri,
-							actorUri: owner.uri,
-							visibility: row.visibility,
-							publishedAt: row.published_at,
-							objectUri: row.original_uri,
-							authorUri: row.original_author_uri,
-							authorId: row.original_author_id,
-						}).activity
+						announceActivity(
+							boostAnnounce(
+								db,
+								owner.id,
+								{
+									announceUri: row.uri,
+									actorUri: owner.uri,
+									visibility: row.visibility,
+									publishedAt: row.published_at,
+									objectUri: row.original_uri,
+								},
+								{ id: row.original_author_id, uri: row.original_author_uri }
+							)
+						).activity
 					)
 				)
 				continue

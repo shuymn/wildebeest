@@ -65,7 +65,7 @@ against their own instance. TLS is assumed between all parties.
 | Actor, `/actor`, WebFinger, NodeInfo, followers and following  | R1, R2     | none (public)                                            | main: `src/federation/*`                                                                                                                                                                                                              |
 | `/ap/o/:uuid`, status documents and the outbox                 | R1, R2     | none (VIS-4)                                             | main: `src/federation/federation.ts`                                                                                                                                                                                                  |
 | Outbound document fetches                                      | R1 answers | final URL and parsed id (ID-2)                           | main: `src/federation/loader.ts`                                                                                                                                                                                                      |
-| Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                      | main (deliveries); Planned (B4, push)                                                                                                                                                                                                 |
+| Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                      | main (deliveries, Web Push: `src/jobs/push.ts`); Planned (B4)                                                                                                                                                                         |
 | Mastodon API `/api/*`                                          | R2–R4, R7  | bearer token and route access                            | main: `src/mastodon/*`, `src/domain/auth.ts`                                                                                                                                                                                          |
 | `/oauth/authorize`                                             | R2, R6, R7 | Access JWT, Origin, consent                              | main: `src/app/authorize.tsx`                                                                                                                                                                                                         |
 | `/oauth/token`, `/oauth/revoke`                                | R2, R3     | client credentials                                       | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                         |
@@ -73,7 +73,7 @@ against their own instance. TLS is assumed between all parties.
 | `/setup` and its Cloudflare API calls                          | R2, R7     | `SETUP_TOKEN`, then the admin's web session (SETUP-2)    | `kopje/setup`: `src/app/setup.tsx`                                                                                                                                                                                                    |
 | Web UI (profiles, permalinks, settings)                        | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)          | branch `kopje/web-ui`: `src/app/web.tsx`, `src/web/*`                                                                                                                                                                                 |
 | Media upload and serving, Images transformation                | R2–R4      | bearer token; capability URL for reads                   | main: `src/mastodon/media.ts`                                                                                                                                                                                                         |
-| Web Push registration                                          | R3         | bearer token with `push`                                 | Planned (push)                                                                                                                                                                                                                        |
+| Web Push registration                                          | R3         | bearer token with `push`                                 | main: `src/mastodon/push.ts`, `src/domain/push.ts`                                                                                                                                                                                    |
 | Queue consumer, alarms, cron                                   | internal   | —                                                        | main: `src/jobs/queue.ts`, `src/platform/store-kernel.ts`                                                                                                                                                                             |
 | Delivery doorbell and cron (`src/jobs/deliver.ts`)             | internal   | —                                                        | main: `src/jobs/deliver.ts`                                                                                                                                                                                                           |
 | Dump import, backup restore, cutover tools                     | R5, R8     | admin authority, then digest chain and manifest          | main (import, convert, verify-conversion: DATA-11 to DATA-15); `kopje/scheduled-backup` (`backup-verify`); `kopje/cutover-ops` (`cutover-preflight`, `maintenance-worker`, `fingerprint`, `cutover`: OPS-4, OPS-7 to OPS-10, DATA-16) |
@@ -253,7 +253,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   private, direct, limited, boosts, remote, another author and nothing", "hides the statuses of a suspended account").
 - **VIS-5: lists also apply the viewer's filters**, Mastodon's `StatusFilter`. Feeds, context, notifications, bookmarks,
   favourites, `favourited_by` and `reblogged_by` drop authors the viewer blocks, mutes or domain-blocks. A single status
-  by id is not filtered. _Enforced (main):_ `unfilteredSql` and `listableSql` in
+  by id is not filtered. A mute counts only until it expires (VIS-14), and home also drops a status or boosted
+  original that mentions an account the viewer blocks or mutes (`FeedManager#filter_from_home`; VIS-13, VIS-14). _Enforced (main):_ `unfilteredSql` and `listableSql` in
   `src/domain/audience.ts`; `test/audience.test.ts`, `test/visibility.test.ts` ("blocked and muted accounts stay out of
   lists"). _Implemented on branch `kopje/inbound-statuses`:_ a domain block matches an account by its stored domain
   and by the host of its actor id, both normalized (lowercase, no port, no trailing dot; `domainBlockMatchSql`), everywhere a domain block applies (lists, notifications,
@@ -300,7 +301,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   only when new under its natural key; a repeat inserts nothing (`update` replaces the previous one). Its push is sent
   only for a newly inserted row. _Enforced (main):_ `notify` in `src/domain/notifications.ts`;
   `test/statuses.test.ts` ("a retry has no second side effect"), `test/timelines.test.ts` ("notifies followers who
-  asked to be notified, once"). Push: _Planned (push)._
+  asked to be notified, once"). Push: _Enforced (main):_ `notify` records pushes for the row it inserted only, never for a
+  repeat (`queuePushes` in `src/domain/notifications.ts`); `test/push-send.test.ts` ("pushes every notification type
+  Kopje emits, once each (VIS-10)").
 - **VIS-11: earlier versions keep the original audience.** Edit history and earlier versions are visible only to the
   status's original audience, and an edit of a non-public status never widens that audience (a recipient added by an
   edit does not see earlier versions). This differs from Mastodon on purpose. _Enforced (main):_
@@ -321,6 +324,58 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   ("shows a tag with seven days of history", "leaves out the statuses of a suspended account", "keeps the public
   history whatever hidden statuses the window holds", "counts public statuses only"). The rule is applied in the query
   with no row limit, so hidden statuses cannot change the public counts.
+- **VIS-13: a block cuts both ways, as Mastodon's does.** A block (local, or a remote `Block` that passes ID-6)
+  ends the follows between the two accounts in both directions and in either state; while it lasts neither may
+  follow the other (a remote `Follow` is answered with a `Reject`), the blocked account sees nothing of the blocker
+  (VIS-1) and cannot favourite or boost the blocker's statuses, and nothing from the blocked account reaches the
+  blocker: no list shows it (VIS-5), and no notification of it is written or shown, including a mention or reply
+  that mentions or answers it and a post notification (`notify`) of a status that mentions it. Relationships show `blocking` and `blocked_by`. A local block of a remote account
+  sends, in order, the `Undo` of our follow, a `Reject` of theirs (one that withdraws it if it was accepted) and the
+  `Block`; an unblock sends the `Block`'s `Undo`, which supersedes a `Block` still waiting. All go to the blocked
+  account only (NET-2). After the block, the blocked account is no recipient of the blocker's statuses: a new status
+  or an edit does not mention it (the name stays text, as Mastodon's `ProcessMentionsService` drops the mention), and
+  an activity that carries content (`Create`, `Update`, `Announce`) recorded after the block is neither addressed nor
+  delivered to it; a `Block`, `Reject`, `Undo` or `Delete` still reaches it. Deliveries queued before the block are
+  sent as queued, as in Mastodon (see the accepted risks). A local block always applies: the ended remote `Follow` is recorded as retracted (ID-7)
+  only within that actor's retraction cap, since the block itself refuses the actor's Follows while it lasts.
+  _Implemented on branch `kopje/blocks-mutes`:_ `block` and `unblock` in `src/domain/blocks.ts`, the inbound `block`
+  in `src/domain/inbox.ts`, `resolveMentions` and `editStatus` in `src/domain/statuses.ts`, `audienceTargets` in
+  `src/domain/deliveries.ts`, `shownSql` in `src/domain/notifications.ts`, `homeTimeline` in
+  `src/domain/timelines.ts`; `test/blocks.test.ts` ("blocks a local account", "sends a remote account Undo Follow,
+  Reject and Block", "applies an inbound Block and its Undo", "blocked recipients", "mentions of blocked and muted
+  accounts"), `test/inbox.test.ts` ("records a Block, ends both follows").
+- **VIS-14: a mute hides only for the muter, and only while it lasts.** A mute is never federated and changes nothing
+  the muted account sees or may do. It keeps the muted account out of the muter's lists (VIS-5) and home, including
+  others' statuses that mention it, and, unless created with `notifications=false`, out of the muter's notifications
+  (a mention or reply that mentions or answers it included); a post notification (`notify`) of a status that
+  mentions it is left out whether or not the mute hides notifications, as home leaves the status out. A mute with a duration applies until its `expires_at`,
+  judged at the time of each request or write (the credential's time, or the activity's), so it stops applying at its
+  time whether or not the sweep has removed it; the inbound sweep removes 100 expired mutes per call (RES-4). A `Move`
+  carries the muter's active mutes to the target with their expiry, replacing an expired mute of the target but never
+  an active one (`move` in `src/domain/inbox.ts`; `test/inbox.test.ts`, "carries an active mute over an expired one").
+  _Implemented on branch `kopje/blocks-mutes`:_ `activeMuteSql` and `unfilteredSql` in `src/domain/audience.ts`,
+  `shownSql` in `src/domain/notifications.ts`, `mute` in `src/domain/blocks.ts`; `test/blocks.test.ts` ("hides the
+  muted account from timelines and search", "stops applying an expired mute at its time", "keeps the viewer's own
+  statuses in home").
+- **VIS-15: a domain block hides the domain and ends the relationships with it.** A user's domain block matches every
+  account whose stored domain or actor host is the domain, exactly (Mastodon's `AccountDomainBlock` matches no
+  subdomains; `domainBlockMatchSql`), and hides them as VIS-5 says; following an account there is refused, a `Follow`
+  from one is rejected, and none of the user's statuses mentions or is addressed to one (as VIS-13); a boost of a
+  status by an account there, which Mastodon allows, leaves its author out of the `Announce`'s addressing and audience
+  (`boostAnnounce` in `src/domain/activities.ts`, for the delivered `Announce`, its `Undo` and the outbox's copy).
+  As Mastodon 4.5's `AfterBlockDomainFromAccountService` does, the user's follows to and from accounts there end, in either state:
+  each follower gets a `Reject`, each of our follows an `Undo`. That is a durable cleanup (`domain_block_cleanups`,
+  progress kept as a cursor over follow ids up to the newest follow when the domain was blocked) done in batches that
+  each scan 500 follows (RES-6, RES-7): the first in the request, the rest in the rounds the Queue and the cron run
+  with the inbound jobs, until done; the next cleanup is picked through an index (`domain_block_cleanups_next`). Until
+  then, followers there are left out of the targets of anything that carries content recorded after the block. An
+  unblock
+  stops the cleanup: what it removed stays removed. The domain is normalized (lowercase, punycode, no trailing dot or
+  slash) and this instance's own domain is refused. _Implemented on branch `kopje/blocks-mutes`:_ `blockDomain` and
+  `runDomainBlockCleanups` in `src/domain/blocks.ts`, `runInboundJobs` in `src/store.ts`, `audienceTargets` in
+  `src/domain/deliveries.ts`; `test/blocks.test.ts` ("ends our follows there with an Undo and theirs
+  with a Reject", "finishes the cleanup in later rounds", "stops the cleanup when the domain is unblocked", "reads a
+  bounded number of rows to block a domain", "picks the next cleanup through an index", "normalizes the domain").
 
 ### Authorization (AUTH)
 
@@ -372,6 +427,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **AUTH-7: opaque credentials are unguessable and stored as digests.** Client ids and secrets, codes and access tokens
   are 32 random bytes. Codes and access tokens are stored and looked up only by their full SHA-256. _Enforced (main):_
   `src/security/tokens.ts`, `src/domain/oauth.ts`; `test/oauth.test.ts` ("stores only digests of tokens and codes").
+  A Web Push subscription also keeps the access token it was made with, for the payload's `access_token` (Mastodon's),
+  only sealed: AES-GCM under a key derived from `VAPID_JWK`, which the Store never holds, bound to the token's digest.
+  _Enforced (main):_ `sealPushToken` in `src/security/web-push.ts`; `test/web-push-crypto.test.ts` ("opens a sealed
+  token only with its key and digest (AUTH-7)").
 - **AUTH-8: a web session is an OAuth token of the web UI, and nothing else.** The web UI is an ordinary OAuth client
   of the instance: `/login` sends the browser to `/oauth/authorize` (Access, WEB-1) with a PKCE S256 challenge. The
   Store keeps the attempt (state, challenge, return path, and the digest of the session cookie the request carried)
@@ -527,7 +586,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   re-checks every redirect hop (same origin, at most 5), stops at 1 MiB and 5 s for the whole load, and honours abort
   signals. _Enforced (main):_ `src/federation/loader.ts`; `test/loader.test.ts`.
 - **NET-2: deliveries reach only the audience's inboxes.** Inboxes come from the stored audience and are deduplicated by
-  shared inbox; an activity without `to` (a Like, Follow, Accept, Reject or their Undo, each naming its recipient
+  shared inbox; an activity without `to` (a Like, Follow, Accept, Reject, Block or their Undo, each naming its recipient
   through its object) goes to the recipient's shared inbox when it has one, and moves to its distinct personal inbox on
   the same origin (same lane, within the row's attempts) if the shared inbox answers 404, 405 or 410; targets pass
   NET-3; a non-public activity is never sent to a redirect target. Claims serialize each lane; the POST timeout (30 s)
@@ -551,7 +610,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Enforced (main)_ for documents and the Fedify rule: `test/fedify-usage.test.ts` ("never sends or queues through
   Fedify"). Deliveries: _Enforced (main):_ `assertPublicShape` and the DNS check before every
   POST, no redirects, 30 s (`postActivity` in `src/federation/delivery.ts`); `test/delivery-post.test.ts` ("NET-3:
-  refuses inboxes that fail the public-host rules"). Media and push: _Planned (B4, push)._
+  refuses inboxes that fail the public-host rules"). Web Push: _Enforced (main):_ the same sink before every POST
+  (`sendPush` in `src/jobs/push.ts`), and the rules that need no lookup at registration (`publicShapeRefusal` in
+  `src/platform/http-url.ts`, shared with `assertPublicShape`); `test/push.test.ts` ("NET-3: refuses endpoints that are
+  not public https URLs"), `test/push-send.test.ts` ("PUSH-2: the endpoint is an outbound sink at every send", "never
+  follows a redirect, and retries instead"). Media: _Planned (B4)._
 - **NET-4: signed fetches stay with their signer.** A document fetched with a signature is cached under a key that
   includes the signing key id and is never served to another key or to the unsigned path. _Enforced (main):_
   `signedLoader` in `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("caches signed documents per signing
@@ -700,11 +763,33 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 ### Web Push and polls (PUSH, POLL)
 
 - **PUSH-1: a subscription belongs to its token.** Subscription operations require the `push` scope and select the
-  subscription by the authenticated token, never by an id from the request. _Planned (push)._
-- **PUSH-2: endpoints are outbound sinks.** A push endpoint passes NET-3 at registration and at every send. _Planned
-  (push)._
+  subscription by the authenticated token, never by an id from the request. _Enforced (main):_ the four routes declare
+  `{ scope: 'push' }` (`src/mastodon/routes.ts`), and every operation selects by the viewer's `tokenHash`
+  (`src/domain/push.ts`); `test/push.test.ts` ("PUSH-1: another token, of another user or the same one, cannot read,
+  change or delete a subscription", "requires the push scope and a user").
+- **PUSH-2: endpoints are outbound sinks.** A push endpoint passes NET-3 at registration and at every send. At
+  registration the rules that need no lookup (https, no credentials, no literal IP, no local or single-label name, at
+  most 2,048 characters); at every send the delivery sink, which adds the DNS check, refuses redirects and keeps the
+  delivery budget, as for an inbox. _Enforced (main):_ `src/mastodon/push.ts`, `sendPush` in `src/jobs/push.ts`;
+  `test/push.test.ts` ("NET-3: refuses endpoints that are not public https URLs"), `test/push-send.test.ts` ("PUSH-2:
+  the endpoint is an outbound sink at every send").
 - **PUSH-3: push reveals no more than notifications.** A push is sent only for a VIS-10 notification the recipient may
-  still see when sending. Revoking the token or suspending the account deletes its subscriptions. _Planned (push)._
+  still see when sending. Revoking the token or suspending the account deletes its subscriptions. A push is recorded
+  only for a new notification and a subscription whose alert and policy want it. The claim checks again, in its
+  transaction, that the notification exists and is shown to its recipient (the notification rule, judged at the time
+  of the check: a mute that has begun or expired since counts as it stands, and so does the rule for mentions of a
+  blocked or muted account), that the
+  subscription still wants it with a valid token of an unsuspended account, and that it is at most 48 hours old; and
+  the same check runs once more after the host check, right before the POST, under the claim's lease (so the
+  subscription is the same one). What is sent is read at that last check, never carried from the claim; a push that
+  fails either check is dropped unsent. The payload carries only what the notification shows: the sender's name and
+  avatar, and the status's content warning or text (at most 140 characters), or the sender's note. Subscriptions and
+  their pending pushes cascade from the token, so revocation and suspension, which delete the tokens, delete them.
+  _Enforced (main):_ `claimPushes` and `confirmPush` in `src/domain/push.ts`, `sendPush` in `src/jobs/push.ts`,
+  `migrations/0002_web_push.sql`; `test/push-send.test.ts` ("PUSH-3: a push reveals no more than the notification",
+  including "PUSH-3: sends nothing when … while the host check runs", "PUSH-3: applies the mention rule at sending",
+  "PUSH-3: judges a mute at the time of sending"), `test/push.test.ts` ("PUSH-3: revoking the token
+  or suspending the account deletes its subscriptions").
 - **POLL-1: votes are the voter's own.** Only the poll's author changes its definition or results. A vote is attributed
   to the verified voter, names a valid option of that poll, respects expiry and single or multiple choice, and a replay
   counts once. _Planned (polls)._
@@ -739,11 +824,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
   most 40 results per type (80 for the account search), and offsets past 10,000 answer an empty page;
-  `test/search.test.ts` ("bounds the query, the limit and the offset"). _Implemented on branch `kopje/startup-reads`:_
-  `GET /api/v1/instance/peers` lists at most 10,000 domains (`MAX_PEERS` in `src/domain/instance.ts`);
-  `familiar_followers` reads at most 20 ids and shows at most 80 accounts for each (`src/domain/accounts.ts`);
-  `test/instance-reads.test.ts` ("bounds the peers"), `test/account-reads.test.ts` ("bounds the ids, the followers
-  read and the accounts shown").
+  `test/search.test.ts` ("bounds the query, the limit and the offset"). _Implemented on branch `kopje/blocks-mutes`:_
+  the domain block list (`GET /api/v1/domain_blocks`) returns at most 200 domains, as Mastodon's does
+  (`src/mastodon/blocks.ts`). _Implemented on branch `kopje/startup-reads`:_ `GET /api/v1/instance/peers` lists at most
+  10,000 domains (`MAX_PEERS` in `src/domain/instance.ts`); `familiar_followers` reads at most 20 ids and shows at
+  most 80 accounts for each (`src/domain/accounts.ts`); `test/instance-reads.test.ts` ("bounds the peers"),
+  `test/account-reads.test.ts` ("bounds the ids and the accounts shown").
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Implemented on branch `kopje/inbound-statuses`_ for remote statuses: one
   status stores at most 4 attachments (Mastodon's limit) with 10,000 code units of description each, 100 hashtags
@@ -784,11 +870,22 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Enforced (main):_ `src/domain/deliveries.ts`, `src/jobs/deliver.ts`;
   `test/deliveries.test.ts` ("retries after min(30 s·2^n, 12 h)"), `test/delivery-post.test.ts` ("RES-5: claims
   nothing and counts no attempt in maintenance"), `test/cli.test.ts`. Spool messages that fail terminally are kept and
-  inspectable before acknowledgement: _Planned (B1b)._
+  inspectable before acknowledgement: _Planned (B1b)._ Web Push: _Enforced (main):_ the deliveries' schedule and limit,
+  a push older than 48 hours is dropped, a 4xx other than 408 and 429 (or an endpoint the sink refuses outright)
+  deletes the subscription and its pending pushes, as Mastodon 4.5 does, and nothing is claimed in maintenance or
+  without a `VAPID_JWK`; at most 1,000 pushes wait (`MAX_PUSH_BACKLOG`): a notification gets only the room left,
+  counted in its transaction, however many subscriptions want it (RES-4). `src/domain/push.ts`, `src/jobs/push.ts`,
+  `queuePushes` in `src/domain/notifications.ts`; `test/push-send.test.ts` ("retries a failure with the deliveries’
+  backoff and gives up after their limit", "deletes the subscription and its pending pushes when the push service
+  answers", "keeps the subscription and retries when the push service answers", "sends pushes from the delivery
+  doorbell, and not without a VAPID_JWK or in maintenance", "RES-4: a notification fanned out to several
+  subscriptions fills the backlog only up to its cap", "records no push beyond the backlog cap").
 - **RES-6: one request cannot trigger unbounded work.** An inbound activity has fixed limits on dereferences,
   recipients, collection expansion and notifications. Delivery backlog and concurrency are bounded. Anonymous app
   registration, inbox spooling and media transformations have rate or storage budgets with a visible refusal. _Planned
-  (B1b)._ App registration: _Implemented on branch `kopje/web-ui`:_ `POST /api/v1/apps` is limited to 5 per minute per client IP by the Workers
+  (B1b)._ Domain blocks: _Implemented on branch `kopje/blocks-mutes`:_ a domain block's cleanup scans at most 500 follows
+  per batch and does at most 4 batches a round, its first batch in the request, so blocking a domain stays bounded
+  however many follows the user has, and always succeeds (VIS-15, `test/blocks.test.ts`). App registration: _Implemented on branch `kopje/web-ui`:_ `POST /api/v1/apps` is limited to 5 per minute per client IP by the Workers
   Rate Limiting binding before its body is read (429), and the Store keeps at most 500 never-authorized apps (no token or
   code of a user); when full it first removes unused apps (no token of any kind) older than a day, then the oldest
   never-authorized apps older than an hour (app tokens and all), and otherwise refuses with 429. Only a user's token or
@@ -879,8 +976,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   are never cached, and never appear in responses or logs. _Enforced (main):_ `src/security/key-wrap.ts`,
   `src/security/keyring.ts`; `test/keyring.test.ts`, `test/health-keys.test.ts`.
 - **DATA-2: VAPID keys are never regenerated implicitly.** `VAPID_JWK` is a secret that Kopje only reads; an invalid
-  value is a misconfiguration. _Enforced (main):_ `src/platform/vapid.ts`, `src/platform/config.ts`;
-  `test/instance.test.ts` ("refuses an invalid VAPID_JWK as misconfiguration").
+  value, one without its private scalar included, is a misconfiguration, and without one Web Push is unavailable
+  rather than keyed anew. _Enforced (main):_ `src/platform/vapid.ts`, `src/platform/config.ts`, `src/mastodon/push.ts`;
+  `test/instance.test.ts` ("refuses an invalid VAPID_JWK as misconfiguration"), `test/push.test.ts` ("DATA-2: without a
+  VAPID_JWK, push is unavailable and no key is made", "refuses a VAPID_JWK without its private key as
+  misconfiguration (DATA-2)").
 - **DATA-3: dumps are exact and verified.** A dump keeps exact bytes and storage classes. Import accepts only exact
   template statements with bound literals, into an empty Store with the same schema, and verification recomputes the
   digests from the imported rows. Of `kopje_state` it restores only the names the dump declares, which must be among
@@ -1054,7 +1154,9 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   Deliveries: _Enforced (main):_ a claim or completion whose response is lost leaves the row
   leased until the lease ends, then it is claimed and POSTed again (the receiver deduplicates by activity id); a
   repeated completion is stale and records nothing twice; `test/deliveries.test.ts` ("OPS-3: a claim or completion
-  whose response is lost"), `test/delivery-post.test.ts` ("OPS-3: a lost completion"). Push: _Planned (push)._
+  whose response is lost"), `test/delivery-post.test.ts` ("OPS-3: a lost completion"). Push: _Enforced (main):_ the
+  same leases and completions (`claimPushes`, `completePush` in `src/domain/push.ts`), so a client may get a push
+  twice; `test/push-send.test.ts` ("OPS-3: a lost completion leaves the push leased until the lease ends").
 - **OPS-5: the backup never leaves the Store frozen or a recorded backup inconsistent.**
     - **Freeze.** The dump freeze ends as soon as the last chunk is read, before the remaining parts are uploaded, in
       the Store transaction that checks the freeze lease by the Store's clock and records the media membership. If the
@@ -1287,6 +1389,9 @@ activity specs, cited in test names.
 | An app token (`client_credentials`) of an app no user has authorized may stop working under registration pressure: the app is evicted with its tokens                                                                                                                                                 | Anyone can get an app token without a user; letting app tokens protect an app would let them fill the budget for good. Clients re-register, as after Mastodon's vacuum                                                                                            | logged-out clients are seen to lose their app tokens                 |
 | Two first sign-ins of one browser that overlap (the second starts before the first's session cookie arrives) leave two sessions; signing out ends only the one in the cookie                                                                                                                          | Both belong to the same person in the same browser, the other token is in no cookie or response any more, and it expires with its 7-day lifetime; binding them would need a server-side browser identity before sign-in                                           | a session token is seen to leak this way                             |
 | A web session lasts its 7 days even if the person's Access session ends or the Access policy changes                                                                                                                                                                                                  | Access verifies the person at sign-in only (design); suspension, sign-out and "sign out other sessions" end sessions at once                                                                                                                                      | sessions must follow Access policy changes                           |
+| Notifications written before a block, a mute or a domain block are hidden while it lasts, not deleted as Mastodon deletes them, so they show again after it ends                                                                                                                                      | The one notification rule hides them at read time (VIS-13 to VIS-15); deleting them would be unbounded work in the request                                                                                                                                        | a user expects them gone after an unblock                            |
+| A local block of a remote actor at its retraction cap does not record the ended Follow as retracted, so after an unblock a redelivery of that Follow is accepted as a new one                                                                                                                         | The block must apply whatever the blocked actor did to its own cap; while the block lasts its Follows are refused (VIS-13)                                                                                                                                        | redelivered Follows are seen after unblocks                          |
+| Deliveries queued before a block or a domain block (retries of them included) are still sent as queued, to the blocked account's inboxes too                                                                                                                                                          | Mastodon does not rewrite deliveries already queued either; a re-check at claim cannot tell, for a shared inbox or a follower target, which recipients it serves (VIS-13, VIS-15)                                                                                 | deliveries keep their recipients                                     |
 
 ## How to use
 

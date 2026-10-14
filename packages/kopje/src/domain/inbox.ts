@@ -1,9 +1,17 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
-import { canView, domainBlockMatchSql, isDistributable, isPublicCollection, type Visibility } from './audience'
+import {
+	activeMuteSql,
+	canView,
+	domainBlockMatchSql,
+	isDistributable,
+	isPublicCollection,
+	type Visibility,
+} from './audience'
 import { stageRetraction } from './deliveries'
 import { insertWithFreshId, remoteId } from './ids'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
+import { pushSequence } from './push'
 import {
 	followersUri,
 	hasLocalFollowers,
@@ -56,7 +64,8 @@ export const RETRACTION_TTL_MS = 30 * 24 * 60 * 60 * 1000
 // At most this many live retractions per actor (RES-4): a remote can name any number of ids of its own origin. An
 // actor's own deletion does not depend on it (inbound_jobs).
 export const MAX_RETRACTIONS_PER_ACTOR = 10_000
-// Expired retractions and finished jobs removed per call (RES-4), so the sweep stays bounded and keeps up.
+// Expired retractions, finished jobs and expired mutes removed per call (RES-4), so the sweep stays bounded and
+// keeps up.
 export const SWEEP_BATCH = 100
 // A stored key is trusted this long after its actor document was fetched; after that the Worker fetches it again.
 // A deleted actor's own Delete is the one exception (federation/inbound.ts).
@@ -149,9 +158,9 @@ export type ReceiveInput = {
 }
 
 // jobsPending: a purge, Move or status deletion has batches left; the Worker asks the Queue to continue (cron
-// continues regardless). delivers: the activity recorded deliveries (an Accept, Reject, Follow or Undo); the Worker
-// rings the doorbell. need: nothing was written; the Store needs this document to apply the activity, and the Worker
-// asks again with it in prefetched.
+// continues regardless). delivers: the activity recorded deliveries (an Accept, Reject, Follow or Undo) or pushes (a
+// notification); the Worker rings the doorbell. need: nothing was written; the Store needs this document to apply the
+// activity, and the Worker asks again with it in prefetched.
 export type ReceiveResult = {
 	applied: boolean
 	reason: string
@@ -196,6 +205,16 @@ function deliverySequence(db: Db): number {
 			IFNULL((SELECT max(id) FROM outbound_activities), 0) AS intent`
 	)
 	return row === undefined ? 0 : row.seq * 2 ** 26 + row.intent
+}
+
+// Whether anything for the doorbell was recorded since `before`: a delivery or intent, or a push of a new notification
+// (domain/push.ts).
+function outboundMark(db: Db): { deliveries: number; pushes: number } {
+	return { deliveries: deliverySequence(db), pushes: pushSequence(db) }
+}
+
+function outboundSince(db: Db, before: { deliveries: number; pushes: number }): boolean {
+	return deliverySequence(db) > before.deliveries || pushSequence(db) > before.pushes
 }
 
 function originOf(uri: string | null): string | null {
@@ -445,6 +464,13 @@ function sweep(db: Db, now: number): void {
 		`DELETE FROM inbound_jobs WHERE (kind, key) IN
 			(SELECT kind, key FROM inbound_jobs WHERE expires_at <= ? ORDER BY expires_at LIMIT ?)`,
 		now,
+		SWEEP_BATCH
+	)
+	// Expired mutes no longer apply (activeMuteSql); their rows go here, through the partial index on expires_at.
+	db.run(
+		`DELETE FROM mutes WHERE id IN
+			(SELECT id FROM mutes WHERE expires_at <= ? ORDER BY expires_at LIMIT ?)`,
+		new Date(now).toISOString(),
 		SWEEP_BATCH
 	)
 }
@@ -925,10 +951,12 @@ const move: Handler<'Move'> = (db, actor, activity, input) => {
 		...carried
 	)
 	db.run(
-		`INSERT INTO mutes (account_id, target_account_id, hide_notifications, created_at)
-		SELECT m.account_id, ?2, m.hide_notifications, ?3 FROM mutes m
-		WHERE m.target_account_id = ?1 AND m.account_id <> ?2 ORDER BY m.id LIMIT ?4
-		ON CONFLICT DO NOTHING`,
+		`INSERT INTO mutes (account_id, target_account_id, hide_notifications, expires_at, created_at)
+		SELECT m.account_id, ?2, m.hide_notifications, m.expires_at, ?3 FROM mutes m
+		WHERE m.target_account_id = ?1 AND m.account_id <> ?2 AND ${activeMuteSql('m', '?3')} ORDER BY m.id LIMIT ?4
+		ON CONFLICT (account_id, target_account_id) DO UPDATE SET hide_notifications = excluded.hide_notifications,
+			expires_at = excluded.expires_at, created_at = excluded.created_at
+		WHERE NOT ${activeMuteSql('mutes', '?3')}`,
 		actor.id,
 		targetId,
 		...carried
@@ -1819,9 +1847,9 @@ const HANDLERS: { [T in InboundActivity['type']]: Handler<T> } = {
 }
 
 export const receiveActivity = writeOperation<ReceiveInput, ReceiveResult>((db, input) => {
-	const before = deliverySequence(db)
+	const before = outboundMark(db)
 	const result = receive(db, input)
-	return { ...result, delivers: deliverySequence(db) > before }
+	return { ...result, delivers: outboundSince(db, before) }
 })
 
 function receive(db: Db, input: ReceiveInput): ReceiveResult {
@@ -1876,7 +1904,7 @@ function pendingPurge(db: Db, uri: string): boolean {
 // whether any job still has batches left.
 export const runInboundJobs = writeOperation<{ now: number }, { pending: boolean; delivers: boolean }>(
 	(db, { now }) => {
-		const before = deliverySequence(db)
+		const before = outboundMark(db)
 		sweep(db, now)
 		for (let batch = 0; batch < JOB_BATCHES_PER_RUN; batch++) {
 			const job = db.first<{ kind: JobKind; key: string }>(
@@ -1895,7 +1923,7 @@ export const runInboundJobs = writeOperation<{ now: number }, { pending: boolean
 		}
 		return {
 			pending: db.first('SELECT 1 AS x FROM inbound_jobs WHERE done_at IS NULL') !== undefined,
-			delivers: deliverySequence(db) > before,
+			delivers: outboundSince(db, before),
 		}
 	}
 )

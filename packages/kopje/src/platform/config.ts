@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 import { MAINTENANCE_MODES } from './maintenance'
-import { vapidPublicKey } from './vapid'
+import { vapidPrivateJwk, vapidPublicKey } from './vapid'
 
 function binding<T>(name: string) {
 	return z.custom<T>((value) => typeof value === 'object' && value !== null, `binding ${name} is missing`)
@@ -36,10 +36,10 @@ const configSchema = z.object({
 	CUTOVER_JOURNAL_MAX_BYTES: z.coerce.number().int().min(1).optional(),
 	// For that drain only: the legacy instance's VAPID_JWK, which its inbox messages carry.
 	LEGACY_VAPID_JWK: z.string().min(1).optional(),
-	// Set after /setup generates it; Web Push stays unavailable until then.
+	// Web Push's key, set by the operator and never generated (DATA-2): Web Push is unavailable without it.
 	VAPID_JWK: z
 		.string()
-		.refine((value) => vapidPublicKey(value) !== null, 'must be an EC P-256 JWK')
+		.refine((value) => vapidPublicKey(value) !== null, 'must be an EC P-256 private key JWK')
 		.optional(),
 })
 
@@ -74,4 +74,14 @@ export function readConfig(env: object): ConfigResult {
 		parsed.set(env, result)
 	}
 	return result
+}
+
+// The VAPID keys when Web Push is available: VAPID_JWK is set (an invalid one fails readConfig, and the gate answers
+// 503, DATA-2). jwk signs VAPID tokens and seals push tokens; publicKey is the server_key clients subscribe with.
+export function webPushKeys(env: object): { jwk: JsonWebKey; publicKey: string } | null {
+	const config = readConfig(env)
+	const secret = config.ok ? config.config.VAPID_JWK : undefined
+	const jwk = secret === undefined ? null : vapidPrivateJwk(secret)
+	const publicKey = secret === undefined ? null : vapidPublicKey(secret)
+	return jwk === null || publicKey === null ? null : { jwk, publicKey }
 }

@@ -16,6 +16,7 @@ import {
 	listLocalKeys,
 } from './domain/actors'
 import { checkCredential, type Credential, type UserCredential } from './domain/auth'
+import * as blocks from './domain/blocks'
 import * as deliveries from './domain/deliveries'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import * as inbox from './domain/inbox'
@@ -24,6 +25,7 @@ import * as media from './domain/media'
 import * as mediaRebuild from './domain/media-rebuild'
 import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
+import * as push from './domain/push'
 import { resolveSearch } from './domain/remote-statuses'
 import { search } from './domain/search'
 import * as setup from './domain/setup'
@@ -387,8 +389,11 @@ export class Store extends DurableObject<Env> {
 		}
 	}
 
-	runInboundJobs(callerBuild: string, input: OperationInput<typeof inbox.runInboundJobs>) {
-		return this.#kernel.execute(callerBuild, inbox.runInboundJobs, input)
+	// A round of the inbound jobs and of the domain block cleanups (domain/blocks.ts), each in its own transaction.
+	async runInboundJobs(callerBuild: string, input: OperationInput<typeof inbox.runInboundJobs>) {
+		const inbound = await this.#kernel.execute(callerBuild, inbox.runInboundJobs, input)
+		const cleanups = await this.#kernel.execute(callerBuild, blocks.runDomainBlockCleanups, input)
+		return { pending: inbound.pending || cleanups.pending, delivers: inbound.delivers || cleanups.delivers }
 	}
 
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {
@@ -607,6 +612,48 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, accounts.listFollows, input)
 	}
 
+	// Blocks, mutes and domain blocks (domain/blocks.ts).
+
+	block(callerBuild: string, input: OperationInput<typeof blocks.block>) {
+		return this.#kernel.execute(callerBuild, blocks.block, input)
+	}
+
+	unblock(callerBuild: string, input: OperationInput<typeof blocks.unblock>) {
+		return this.#kernel.execute(callerBuild, blocks.unblock, input)
+	}
+
+	mute(callerBuild: string, input: OperationInput<typeof blocks.mute>) {
+		return this.#kernel.execute(callerBuild, blocks.mute, input)
+	}
+
+	unmute(callerBuild: string, input: OperationInput<typeof blocks.unmute>) {
+		return this.#kernel.execute(callerBuild, blocks.unmute, input)
+	}
+
+	listBlocks(callerBuild: string, input: OperationInput<typeof blocks.listBlocks>) {
+		return this.#kernel.execute(callerBuild, blocks.listBlocks, input)
+	}
+
+	listMutes(callerBuild: string, input: OperationInput<typeof blocks.listMutes>) {
+		return this.#kernel.execute(callerBuild, blocks.listMutes, input)
+	}
+
+	listDomainBlocks(callerBuild: string, input: OperationInput<typeof blocks.listDomainBlocks>) {
+		return this.#kernel.execute(callerBuild, blocks.listDomainBlocks, input)
+	}
+
+	blockDomain(callerBuild: string, input: OperationInput<typeof blocks.blockDomain>) {
+		return this.#kernel.execute(callerBuild, blocks.blockDomain, input)
+	}
+
+	unblockDomain(callerBuild: string, input: OperationInput<typeof blocks.unblockDomain>) {
+		return this.#kernel.execute(callerBuild, blocks.unblockDomain, input)
+	}
+
+	previewDomainBlock(callerBuild: string, input: OperationInput<typeof blocks.previewDomainBlock>) {
+		return this.#kernel.execute(callerBuild, blocks.previewDomainBlock, input)
+	}
+
 	// Statuses, timelines and notifications (B4a).
 
 	createStatus(callerBuild: string, input: OperationInput<typeof statuses.createStatus>) {
@@ -707,6 +754,36 @@ export class Store extends DurableObject<Env> {
 
 	clearNotifications(callerBuild: string, input: OperationInput<typeof notifications.clearNotifications>) {
 		return this.#kernel.execute(callerBuild, notifications.clearNotifications, input)
+	}
+
+	// Web Push: the token's subscription, and the Worker's push rounds (jobs/push.ts).
+
+	createPushSubscription(callerBuild: string, input: OperationInput<typeof push.createPushSubscription>) {
+		return this.#kernel.execute(callerBuild, push.createPushSubscription, input)
+	}
+
+	getPushSubscription(callerBuild: string, input: OperationInput<typeof push.getPushSubscription>) {
+		return this.#kernel.execute(callerBuild, push.getPushSubscription, input)
+	}
+
+	updatePushSubscription(callerBuild: string, input: OperationInput<typeof push.updatePushSubscription>) {
+		return this.#kernel.execute(callerBuild, push.updatePushSubscription, input)
+	}
+
+	deletePushSubscription(callerBuild: string, input: OperationInput<typeof push.deletePushSubscription>) {
+		return this.#kernel.execute(callerBuild, push.deletePushSubscription, input)
+	}
+
+	claimPushes(callerBuild: string, input: OperationInput<typeof push.claimPushes>) {
+		return this.#kernel.execute(callerBuild, push.claimPushes, input)
+	}
+
+	confirmPush(callerBuild: string, input: OperationInput<typeof push.confirmPush>) {
+		return this.#kernel.execute(callerBuild, push.confirmPush, input)
+	}
+
+	completePush(callerBuild: string, input: OperationInput<typeof push.completePush>) {
+		return this.#kernel.execute(callerBuild, push.completePush, input)
 	}
 
 	// Media (B4b).

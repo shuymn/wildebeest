@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { apiHarness } from './api-helpers'
 import { harness as appHarness } from './app-helpers'
-import { BUILD, migratedStore } from './helpers'
+import { BUILD, LATEST_MIGRATION, migratedStore } from './helpers'
 import { copyConfig, importViaRpc, memoryIO, seedStore, tableSnapshot } from './ops-helpers'
 import { S3Mock } from './s3-mock'
 import { signatureOf } from './sigv4'
@@ -387,7 +387,7 @@ describe('backup run', () => {
 			id: expect.stringMatching(/^2026-10-13-[0-9a-f]{8}$/),
 			createdAt: new Date(NOW).toISOString(),
 			kopje: { version: expect.any(String), build: BUILD },
-			schema: { version: '0000_initial' },
+			schema: { version: LATEST_MIGRATION },
 			recipients: [recipient],
 			media: { required: 2, copied: 1, pending: 0, absent: 1 },
 		})

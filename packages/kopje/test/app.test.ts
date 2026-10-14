@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
 
 import { harness } from './app-helpers'
-import { BUILD, completeSetup, freshStore, migratedStore } from './helpers'
+import { BUILD, completeSetup, freshStore, LATEST_MIGRATION, migratedStore } from './helpers'
 import { healthReport } from '../src/app/health'
 import { readConfig } from '../src/platform/config'
 import type { StoreStub } from '../src/platform/store-client'
@@ -43,7 +43,7 @@ describe('app skeleton', () => {
 			checks: {
 				env: { ok: true },
 				store: { ok: true },
-				schema: { ok: true, status: 'current', applied: '0000_initial', expected: '0000_initial' },
+				schema: { ok: true, status: 'current', applied: LATEST_MIGRATION, expected: LATEST_MIGRATION },
 				database: { ok: true, size: expect.any(Number) },
 			},
 		})
