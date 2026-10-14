@@ -14,7 +14,7 @@ import { sweepMedia } from '../src/mastodon/media'
 
 declare module 'vitest' {
 	export interface ProvidedContext {
-		cutoverImages: { dump: string }
+		cutoverImages: { dump: string; originals: Record<string, string> }
 	}
 }
 
@@ -34,7 +34,7 @@ describe('media moved from Cloudflare Images', () => {
 		expect(report).toMatchObject({ ok: true })
 		await h.store.publish(BUILD, authority)
 
-		// The objects the runbook puts (originals) and part 2's rebuild makes (files), for every moved row.
+		// The objects the runbook puts (originals) and media-rebuild makes (files), for every moved row.
 		const rows = await sql<{ id: string; file_token: string; content: string | null }>(
 			h.store,
 			`SELECT m.id, m.file_token, s.content FROM media_attachments m LEFT JOIN statuses s ON s.id = m.status_id
