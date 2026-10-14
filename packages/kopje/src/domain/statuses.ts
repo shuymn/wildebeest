@@ -1059,13 +1059,17 @@ export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input,
 	recordOutbound(
 		db,
 		accountId,
-		announceActivity(announceOf(author.uri, uri, visibility, publishedAt, target)),
+		announceActivity(announceOf(db, accountId, author.uri, uri, visibility, publishedAt, target)),
 		input.now
 	)
 	return viewed(presentStatus(db, id, options))
 })
 
+// The Announce of a boost by `boosterId`. As Mastodon allows boosting a status of an account on a domain the booster
+// blocks, the author is then left out of the addressing and the audience (VIS-15).
 function announceOf(
+	db: Db,
+	boosterId: string,
 	actorUri: string,
 	uri: string,
 	visibility: Visibility,
@@ -1078,8 +1082,13 @@ function announceOf(
 		visibility,
 		publishedAt,
 		objectUri: target.uri,
-		authorUri: target.author_uri,
-		authorId: target.account_id,
+		...(db.first(
+			`SELECT 1 AS x FROM accounts a WHERE a.id = ?2 AND ${blockedSql('?1', 'a')}`,
+			boosterId,
+			target.account_id
+		)
+			? { authorUri: null, authorId: null }
+			: { authorUri: target.author_uri, authorId: target.account_id }),
 	}
 }
 
@@ -1100,6 +1109,8 @@ function undoLocalBoosts(db: Db, originalId: string, now: number): void {
 	)
 	for (const boost of boosts) {
 		const announce = announceOf(
+			db,
+			boost.account_id,
 			viewerUri(db, boost.account_id),
 			boost.uri,
 			boost.visibility,
@@ -1137,7 +1148,15 @@ export function withdrawLocalBoost(db: Db, boostId: string, now: number, maxRows
 	if (boost === undefined || target === undefined) {
 		return true
 	}
-	const announce = announceOf(viewerUri(db, boost.account_id), boost.uri, boost.visibility, boost.published_at, target)
+	const announce = announceOf(
+		db,
+		boost.account_id,
+		viewerUri(db, boost.account_id),
+		boost.uri,
+		boost.visibility,
+		boost.published_at,
+		target
+	)
 	return beginRetraction(db, boost.account_id, undoAnnounceActivity(announce), now, maxRows)
 }
 
@@ -1156,7 +1175,9 @@ function removeReblog(db: Db, accountId: string, reblogId: string, originalId: s
 		recordOutbound(
 			db,
 			accountId,
-			undoAnnounceActivity(announceOf(viewerUri(db, accountId), row.uri, row.visibility, row.published_at, target)),
+			undoAnnounceActivity(
+				announceOf(db, accountId, viewerUri(db, accountId), row.uri, row.visibility, row.published_at, target)
+			),
 			now
 		)
 	}

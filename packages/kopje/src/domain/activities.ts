@@ -271,20 +271,22 @@ export type AnnounceInput = {
 	visibility: Visibility
 	publishedAt: string
 	objectUri: string
-	authorUri: string
-	authorId: string
+	// The original's author; null when the booster blocks it or its domain (VIS-15), so it is neither named nor sent.
+	authorUri: string | null
+	authorId: string | null
 }
 
 // A boost goes to the booster's followers and the original's author (Mastodon's TagManager#to/#cc for a reblog).
 function announceAddressing(input: AnnounceInput): { to: string[]; cc: string[] } {
 	const followers = followersUri(input.actorUri)
+	const author = input.authorUri === null ? [] : [input.authorUri]
 	switch (input.visibility) {
 		case 'public':
-			return { to: [PUBLIC_COLLECTION], cc: [input.authorUri, followers] }
+			return { to: [PUBLIC_COLLECTION], cc: [...author, followers] }
 		case 'unlisted':
-			return { to: [followers], cc: [PUBLIC_COLLECTION, input.authorUri] }
+			return { to: [followers], cc: [PUBLIC_COLLECTION, ...author] }
 		default:
-			return { to: [followers], cc: [input.authorUri] }
+			return { to: [followers], cc: author }
 	}
 }
 
@@ -301,7 +303,7 @@ export function announceActivity(input: AnnounceInput) {
 			cc,
 			object: input.objectUri,
 		},
-		audience: { followers: true, accounts: [input.authorId] },
+		audience: { followers: true, accounts: input.authorId === null ? [] : [input.authorId] },
 	} satisfies OutboundEnvelope
 }
 

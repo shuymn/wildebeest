@@ -319,6 +319,25 @@ describe('blocked recipients (VIS-13, VIS-15)', () => {
 		expect(await sql(h.store, 'SELECT 1 FROM status_mentions WHERE status_id = ?', status.id)).toEqual([])
 	})
 
+	it('boosts a status from a blocked domain without naming or sending to its author', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const bob = await remoteAccount(h.store, 'bob')
+		await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'other.example'), alice.id)
+		const original = await seedStatus(h.store, { accountId: bob, visibility: 'public' })
+		await h.request('/api/v1/domain_blocks', bearer(alice.token, json({ domain: 'remote.example' })))
+		await sql(h.store, 'DELETE FROM outbound_activities')
+
+		// As in Mastodon, the boost is allowed; the author is left out of it.
+		expect((await act(h, alice, `/api/v1/statuses/${original}/reblog`)).status).toBe(200)
+		const claim = await h.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'lease' })
+		expect(claim.deliveries.map((d) => d.inbox)).toEqual(['https://other.example/inbox'])
+		const body = JSON.parse(claim.deliveries[0]!.body) as { type: string; cc: string[] }
+		expect(body.type).toBe('Announce')
+		expect(JSON.stringify(body)).not.toContain('https://remote.example/users/bob')
+		expect((await sent(h))[0]?.audience.accounts).toEqual([])
+	})
+
 	it('addresses a status written after a block to nobody behind the blocked account', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
