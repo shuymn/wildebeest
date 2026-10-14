@@ -943,7 +943,9 @@ const move: Handler<'Move'> = (db, actor, activity, input) => {
 		`INSERT INTO mutes (account_id, target_account_id, hide_notifications, expires_at, created_at)
 		SELECT m.account_id, ?2, m.hide_notifications, m.expires_at, ?3 FROM mutes m
 		WHERE m.target_account_id = ?1 AND m.account_id <> ?2 AND ${activeMuteSql('m', '?3')} ORDER BY m.id LIMIT ?4
-		ON CONFLICT DO NOTHING`,
+		ON CONFLICT (account_id, target_account_id) DO UPDATE SET hide_notifications = excluded.hide_notifications,
+			expires_at = excluded.expires_at, created_at = excluded.created_at
+		WHERE NOT ${activeMuteSql('mutes', '?3')}`,
 		actor.id,
 		targetId,
 		...carried

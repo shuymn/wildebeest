@@ -337,7 +337,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   (a mention or reply that mentions or answers it included); a post notification (`notify`) of a status that
   mentions it is left out whether or not the mute hides notifications, as home leaves the status out. A mute with a duration applies until its `expires_at`,
   judged at the time of each request or write (the credential's time, or the activity's), so it stops applying at its
-  time whether or not the sweep has removed it; the inbound sweep removes 100 expired mutes per call (RES-4).
+  time whether or not the sweep has removed it; the inbound sweep removes 100 expired mutes per call (RES-4). A `Move`
+  carries the muter's active mutes to the target with their expiry, replacing an expired mute of the target but never
+  an active one (`move` in `src/domain/inbox.ts`; `test/inbox.test.ts`, "carries an active mute over an expired one").
   _Implemented on branch `kopje/blocks-mutes`:_ `activeMuteSql` and `unfilteredSql` in `src/domain/audience.ts`,
   `shownSql` in `src/domain/notifications.ts`, `mute` in `src/domain/blocks.ts`; `test/blocks.test.ts` ("hides the
   muted account from timelines and search", "stops applying an expired mute at its time", "keeps the viewer's own
