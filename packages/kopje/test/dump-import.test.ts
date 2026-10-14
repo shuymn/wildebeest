@@ -81,6 +81,10 @@ describe('dump', () => {
 
 		// An independent comparison (typed hex of every value) agrees.
 		expect(withoutState(await tableSnapshot(target))).toEqual(withoutState(await tableSnapshot(source)))
+		const mutes = 'SELECT hide_notifications, expires_at FROM mutes'
+		const read = (store: StoreStub) =>
+			runInDurableObject(store, (_instance, state) => state.storage.sql.exec(mutes).toArray())
+		expect(await read(target)).toEqual([{ hide_notifications: 0, expires_at: '2026-10-13T00:00:00.000Z' }])
 		const state = (await tableSnapshot(target)).kopje_state
 		expect(state).toContain('last_local_id=110000000000000099')
 		expect(state).not.toContain('upgrade_bookmark=source-only')

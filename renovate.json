@@ -91,6 +91,13 @@
 			"allowedVersions": "<0.23.0"
 		},
 		{
+			"description": "kopje is this repository's own package: bump the deploy/ template as soon as a version is on npm, release candidates included",
+			"matchPackageNames": ["kopje"],
+			"matchFileNames": ["deploy/package.json"],
+			"minimumReleaseAge": null,
+			"ignoreUnstable": false
+		},
+		{
 			"description": "Update Kopje (packages/kopje and the deploy/ template) in pull requests of its own, apart from the legacy packages",
 			"matchFileNames": ["packages/kopje/**", "deploy/**"],
 			"additionalBranchPrefix": "kopje-",

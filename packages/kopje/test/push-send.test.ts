@@ -390,6 +390,10 @@ describe('PUSH-3: a push reveals no more than the notification', () => {
 			(h) => sql(h.store, "UPDATE push_subscriptions SET policy = 'none'"),
 		],
 		['the notification is dismissed', (h) => sql(h.store, 'DELETE FROM notifications')],
+		[
+			'the recipient mutes the sender with notifications',
+			(h) => act(h, h.users.alice, `/api/v1/accounts/${h.users.bob.id}/mute`, { notifications: true }),
+		],
 	])('PUSH-3: sends nothing when %s while the host check runs', async (_case, mutate) => {
 		const { h } = await pushing()
 		const status = await post(h, h.users.bob, { status: '@alice hi' })
@@ -403,6 +407,41 @@ describe('PUSH-3: a push reveals no more than the notification', () => {
 		expect(sent).toEqual([])
 		expect(await rows(h.store)).toEqual([])
 	})
+
+	it('PUSH-3: applies the mention rule at sending: a mentioned account blocked meanwhile drops the push', async () => {
+		const { h } = await pushing(['alice', 'bob', 'carol'])
+		await post(h, h.users.bob, { status: '@alice @carol hi' })
+		const { fetch, sent } = recordingFetch()
+		const host = pausedHost()
+		const running = round(h, fetch, { checkHost: host.check })
+		await host.entered
+		await act(h, h.users.alice, `/api/v1/accounts/${h.users.carol.id}/block`)
+		host.release()
+		expect(await running).toMatchObject({ claimed: 1, settled: ['dropped'] })
+		expect(sent).toEqual([])
+	})
+
+	it.each([
+		['has expired', NOW + 30_000, ['delivered'], 1],
+		['still applies', NOW + 120_000, [], 0],
+	])(
+		'PUSH-3: judges a mute at the time of sending: one made after the notification that %s',
+		async (_case, expires, settled, count) => {
+			const { h } = await pushing()
+			await post(h, h.users.bob, { status: '@alice hi' })
+			await sql(
+				h.store,
+				'INSERT INTO mutes (account_id, target_account_id, hide_notifications, expires_at) VALUES (?, ?, 1, ?)',
+				h.users.alice.id,
+				h.users.bob.id,
+				new Date(expires).toISOString()
+			)
+			const { fetch, sent } = recordingFetch()
+			expect(await round(h, fetch, { now: () => NOW + 60_000 })).toMatchObject({ settled })
+			expect(sent).toHaveLength(count)
+			expect(await rows(h.store)).toEqual([])
+		}
+	)
 
 	it('sends what holds when it is sent: an edit during the host check is in the payload', async () => {
 		const { h, client } = await pushing()

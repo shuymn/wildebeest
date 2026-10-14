@@ -1,3 +1,4 @@
+import { blockedSql, domainBlockMatchSql } from './audience'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 
@@ -87,6 +88,15 @@ function idOf(value: unknown): string | null {
 	return null
 }
 
+// Activities that carry a status (or a boost of one) to its audience. One written after the signer blocks an account,
+// or its domain, is not addressed to it (VIS-13, VIS-15); a Block, Reject, Undo or Delete still reaches it. Rows
+// written before the block are sent as they were queued, as Mastodon sends them.
+const CONTENT_TYPES = new Set(['Create', 'Update', 'Announce'])
+
+function carriesContent(activity: Activity): boolean {
+	return typeof activity.type === 'string' && CONTENT_TYPES.has(activity.type)
+}
+
 // The local object an activity is about, and whether it retracts it.
 // retracts: the activity withdraws work already sent, so it supersedes what it names and admission never refuses it.
 // A Reject withdraws only when it ends a follow we had accepted (withdraws); a Reject of a request never accepted (a
@@ -126,12 +136,14 @@ export function isDeliverableInbox(value: string | null): value is string {
 export type DeliveryAudience = { followers: boolean; accounts: string[] }
 
 // The targets an activity goes to (NET-2), from the stored audience only:
-//   - followers: the signer's accepted remote followers, by shared inbox when they have one (deduplicated);
-//   - addressed accounts named in to/cc: by shared inbox, as Mastodon's StatusReachFinder;
+//   - followers: the signer's accepted remote followers, by shared inbox when they have one (deduplicated), except
+//     those on a domain the signer blocks (a domain block removes them in bounded batches, domain/blocks.ts);
+//   - addressed accounts named in to/cc: by shared inbox, as Mastodon's StatusReachFinder; for an activity that carries
+//     content, not the accounts the signer blocks or whose domain it blocks (carriesContent);
 //   - addressed accounts the activity reaches without naming them: on an addressed activity (one with to), a silent
 //     recipient, by its personal inbox only, with itself as addressee (none: recorded as unreachable for the
-//     operator, never sent to a shared inbox); otherwise (an activity without to: a Like, Follow, Accept, Reject or
-//     their Undo, each of which names its recipient through its object) by shared inbox when it has one, else its
+//     operator, never sent to a shared inbox); otherwise (an activity without to: a Like, Follow, Accept, Reject,
+//     Block or their Undo, each of which names its recipient through its object) by shared inbox when it has one, else its
 //     personal inbox, as some servers accept but do not process such activities at a personal inbox;
 //   - for a retraction, every inbox that received the object or may still receive it.
 // Local accounts are never delivered to over HTTP: they read the Store. A neutral copy goes once to each inbox, and a
@@ -160,7 +172,8 @@ export function audienceTargets(
 		const followers = db.all<{ inbox: string | null }>(
 			`SELECT DISTINCT COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) AS inbox
 			FROM follows f JOIN accounts a ON a.id = f.account_id
-			WHERE f.target_account_id = ? AND f.state = 'accepted' AND a.domain IS NOT NULL`,
+			WHERE f.target_account_id = ?1 AND f.state = 'accepted' AND a.domain IS NOT NULL
+				AND NOT EXISTS (SELECT 1 FROM domain_blocks d WHERE d.account_id = ?1 AND ${domainBlockMatchSql('d', 'a')})`,
 			signerId
 		)
 		for (const { inbox } of followers) {
@@ -170,9 +183,13 @@ export function audienceTargets(
 	const named = new Set([...uris(activity.to), ...uris(activity.cc)])
 	const addressedActivity = Array.isArray(activity.to)
 	const addressed = db.all<{ uri: string; inbox_url: string | null; shared_inbox_url: string | null }>(
-		`SELECT uri, NULLIF(inbox_url, '') AS inbox_url, NULLIF(shared_inbox_url, '') AS shared_inbox_url FROM accounts
-		WHERE id IN (SELECT value FROM json_each(?)) AND domain IS NOT NULL ORDER BY id`,
-		JSON.stringify(audience.accounts)
+		`SELECT a.uri, NULLIF(a.inbox_url, '') AS inbox_url, NULLIF(a.shared_inbox_url, '') AS shared_inbox_url
+		FROM accounts a
+		WHERE a.id IN (SELECT value FROM json_each(?1)) AND a.domain IS NOT NULL AND NOT (?2 AND ${blockedSql('?3', 'a')})
+		ORDER BY a.id`,
+		JSON.stringify(audience.accounts),
+		carriesContent(activity) ? 1 : 0,
+		signerId
 	)
 	for (const account of addressed) {
 		if (named.has(account.uri)) {

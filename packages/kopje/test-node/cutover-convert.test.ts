@@ -209,6 +209,7 @@ describe('convert and verify-conversion', () => {
 				'counters',
 			],
 			['a follow preference changes', 'UPDATE follows SET notify = 1', 'follows'],
+			['a mute gets an expiry', "UPDATE mutes SET expires_at = '2026-01-01T00:00:00.000Z'", 'mutes'],
 			['a list policy changes', "UPDATE lists SET replies_policy = 'none'", 'lists'],
 			['client scopes change', "UPDATE oauth_clients SET scopes = 'read write follow push admin'", 'clients'],
 		]

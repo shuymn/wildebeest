@@ -224,7 +224,7 @@ function target(db: Db, id: string, now: number): TargetRow | undefined {
 			LEFT JOIN statuses s ON s.id = n.status_id
 		WHERE d.id = CAST(?1 AS INTEGER) AND l.suspended_at IS NULL AND n.created_at > ?3
 			AND ${pushWantedSql('p', 't', 'n', '?2')}
-			AND ${shownSql('n.account_id', 'n.type', 'n.from_account_id', 'n.status_id')}`,
+			AND ${shownSql('n.account_id', 'n.type', 'n.from_account_id', 'n.status_id', '?2')}`,
 		id,
 		new Date(now).toISOString(),
 		new Date(now - PUSH_TTL_MS).toISOString()

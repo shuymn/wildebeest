@@ -173,7 +173,9 @@ describe('admin endpoints', () => {
 		}
 		expect(capacity.databaseSize).toBeGreaterThan(0)
 		expect(capacity.tables).toContainEqual({ name: 'statuses', rows: 3 })
-		expect(capacity.tables).toContainEqual({ name: 'sqlite_sequence', rows: 1 })
+		expect(capacity.tables).toContainEqual({ name: 'mutes', rows: 1 })
+		// The AUTOINCREMENT counters of the seeded notifications and mutes.
+		expect(capacity.tables).toContainEqual({ name: 'sqlite_sequence', rows: 2 })
 		expect(capacity.tables.some((t) => t.name.startsWith('_cf_'))).toBe(false)
 		expect(await (await as(adminClaims(), '/admin/spool')).json()).toEqual({
 			parts: 1,

@@ -17,7 +17,7 @@ import {
 	signedInit,
 	type TestActor,
 } from './inbox-helpers'
-import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, RETRACTION_TTL_MS } from '../src/domain/inbox'
+import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, RETRACTION_TTL_MS, SWEEP_BATCH } from '../src/domain/inbox'
 import { handleQueue } from '../src/jobs/queue'
 import { sha256Hex } from '../src/platform/sha256'
 import type { StoreStub } from '../src/platform/store-client'
@@ -493,6 +493,66 @@ describe('Block and Move', () => {
 		expect(await sql(t.store, 'SELECT account_id, target_account_id FROM mutes ORDER BY id')).toEqual([
 			{ account_id: DAVE, target_account_id: bobId },
 			{ account_id: DAVE, target_account_id: bob2Id },
+		])
+	})
+
+	it('carries an active mute over an expired one of the target, never over an active one', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bob2 = await mastodonActor(t.web, 'bob2', { origin: 'https://new.example', key: 2, extra: {} })
+		t.web.serve(bob2.uri, { ...bob2.document, alsoKnownAs: [bob.uri] })
+		await t.post(bob, follow(bob, DAVE_URI))
+		const bobId = (await accountId(t.store, bob.uri))!
+		const bob2Id = '333333333333333333'
+		await sql(
+			t.store,
+			"INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, 'bob2', 'new.example')",
+			bob2Id,
+			bob2.uri
+		)
+		// More expired mutes than one sweep removes, all older than dave's expired mute of bob2, so it survives the Move's sweep.
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT printf('%018d', CAST('400000000000000000' AS INTEGER) + i), 'https://x.example/users/x' || i, 'x' || i, 'x.example' FROM n`,
+			SWEEP_BATCH + 50
+		)
+		await sql(
+			t.store,
+			`INSERT INTO mutes (account_id, target_account_id, expires_at)
+			SELECT ?, id, '2026-01-01T00:00:00.000Z' FROM accounts WHERE domain = 'x.example'`,
+			DAVE
+		)
+		await sql(
+			t.store,
+			`INSERT INTO mutes (account_id, target_account_id, hide_notifications, expires_at) VALUES
+				(?1, ?3, 1, NULL), (?1, ?4, 0, '2026-06-01T00:00:00.000Z'),
+				(?2, ?3, 1, NULL), (?2, ?4, 0, '2027-01-01T00:00:00.000Z')`,
+			DAVE,
+			ALICE,
+			bobId,
+			bob2Id
+		)
+		const move = {
+			'@context': AS,
+			id: `${bob.uri}#moves/1`,
+			type: 'Move',
+			actor: bob.uri,
+			object: bob.uri,
+			target: bob2.uri,
+		}
+		expect(await t.post(bob, move)).toBe(202)
+
+		expect(
+			await sql(
+				t.store,
+				'SELECT account_id, hide_notifications, expires_at FROM mutes WHERE target_account_id = ? ORDER BY account_id',
+				bob2Id
+			)
+		).toEqual([
+			{ account_id: ALICE, hide_notifications: 0, expires_at: '2027-01-01T00:00:00.000Z' },
+			{ account_id: DAVE, hide_notifications: 1, expires_at: null },
 		])
 	})
 
