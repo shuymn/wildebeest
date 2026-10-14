@@ -1,12 +1,11 @@
 import { type Account, type Present, presentAccountsById } from './accounts'
 import {
-	availableLocalSql,
-	domainBlocksSql,
+	findableBySql,
 	interpretAddressing,
 	isDistributable,
 	isPublicCollection,
 	type StatusMention,
-	viewableStatusId,
+	statusReads,
 	type Visibility,
 } from './audience'
 import { userWriteOperation } from './auth'
@@ -685,24 +684,32 @@ export type ResolveInput = { query: string; resolved: Resolved; now: number; ori
 export type ResolveResult = { accounts: Account[]; statuses: Status[] }
 
 // Stores what was resolved with the validation of inbound activities (ID-3, ID-7, HTML-1, HTML-3, RES-4), then answers
-// with it only if the viewer may see it (VIS-1): a private object a server answered the instance actor with is
-// stored with its audience and shown to nobody else.
-export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db, input, { accountId }) => {
+// with it only if search would show it to the viewer (VIS-1): an account only if account search would find it
+// (findableBySql, R14), a status only if status search would list it (listableSql, R8). A private object a server
+// answered the instance actor with is stored with its audience and shown to nobody else.
+export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db, input, _viewer, context) => {
 	const { resolved, now, origin } = input
+	const { accountId } = context
 	const options = { ...input.present, viewerId: accountId }
-	// What the viewer domain-blocks (by the account's domain or its actor's host) is not answered.
-	const blocked = (id: string) =>
-		db.first(`SELECT 1 AS x WHERE ${domainBlocksSql('?1', '?2')}`, accountId, id) !== undefined
 	const account = (id: string | undefined): ResolveResult => {
-		const found = id === undefined || blocked(id) ? undefined : presentAccountsById(db, [id], input.present).get(id)
+		const findable =
+			id !== undefined && db.first(`SELECT 1 AS found WHERE ${findableBySql('?2', '?1')}`, accountId, id) !== undefined
+		const found = findable ? presentAccountsById(db, [id], input.present).get(id) : undefined
 		return { accounts: found === undefined ? [] : [found], statuses: [] }
 	}
 	const status = (id: string | undefined): ResolveResult => {
-		const author =
-			id === undefined ? undefined : db.first<{ a: string }>('SELECT account_id AS a FROM statuses WHERE id = ?', id)?.a
-		const visible =
-			id === undefined || author === undefined || blocked(author) ? null : viewableStatusId(db, accountId, id)
-		const found = visible === null ? null : presentStatus(db, visible, options)
+		const [listed] =
+			id === undefined
+				? []
+				: statusReads(context, { viewer: '?1', now: '?2' }).select(
+						db,
+						'listable',
+						{ where: 's.id = ?3' },
+						accountId,
+						context.now,
+						id
+					)
+		const found = listed === undefined ? null : presentStatus(db, listed.id, options)
 		return { accounts: [], statuses: found === null ? [] : [found] }
 	}
 	switch (resolved.kind) {
@@ -724,8 +731,7 @@ export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db
 		case 'none': {
 			const byUri = db.first<{ kind: string; id: string }>(
 				`SELECT 'status' AS kind, id FROM statuses WHERE uri = ?1 AND reblog_of_id IS NULL
-				UNION ALL SELECT 'account', a.id FROM accounts a LEFT JOIN local_accounts l ON l.account_id = a.id
-					WHERE a.uri = ?1 AND ${availableLocalSql('l')}
+				UNION ALL SELECT 'account', id FROM accounts WHERE uri = ?1
 				LIMIT 1`,
 				input.query
 			)

@@ -164,6 +164,13 @@ export function followableBySql(x: string, viewer: string): string {
 	return `(${availableSql(x)} AND ${x} <> ${viewer} AND NOT ${blocksSql(x, viewer)} AND NOT ${blockedSql(viewer, x)})`
 }
 
+// R14 (Account::Search): whether `viewer` finds the account `x` by account search or by search resolution: it is
+// available, and the viewer does not block its domain. Mastodon's search leaves out suspended accounts only; Kopje
+// also leaves out what the viewer's domain block hides everywhere else.
+export function findableBySql(x: string, viewer: string): string {
+	return `(${availableSql(x)} AND NOT ${domainBlocksSql(viewer, x)})`
+}
+
 // Whether the account `x` hides its network (Account#hide_collections). Only a local account stores the setting; Kopje
 // does not learn a remote account's, so a remote account hides nothing.
 function hidesCollectionsSql(x: string): string {

@@ -894,6 +894,25 @@ describe('search with resolve=true (NET-4, VIS-1)', () => {
 		expect((await t.api<unknown[]>('/api/v1/timelines/public', null)).body).toEqual([])
 	})
 
+	it('answers a status only when status search would list it: not of an author the viewer blocks or mutes', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const note = mastodonNote(bob, { content: '<p>found</p>' })
+		t.web.serve(note.id, { '@context': AS, ...note })
+		const found = async (as: 'alice' | 'dave' = 'alice') =>
+			(await t.api<{ statuses: unknown[] }>(`/api/v2/search?resolve=true&q=${encodeURIComponent(note.id)}`, as)).body
+				.statuses
+		expect(await found()).toHaveLength(1)
+		const bobId = (await accountId(t.store, bob.uri))!
+		await sql(t.store, 'INSERT INTO mutes (account_id, target_account_id) VALUES (?, ?)', ALICE, bobId)
+		expect(await found()).toEqual([])
+		await sql(t.store, 'DELETE FROM mutes')
+		await sql(t.store, 'INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?)', ALICE, bobId)
+		expect(await found()).toEqual([])
+		// Others still find it.
+		expect(await found('dave')).toHaveLength(1)
+	})
+
 	it('resolves user@domain through WebFinger and an actor URL, and never fetches a local URL', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')

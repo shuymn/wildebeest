@@ -2,11 +2,11 @@ import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFo
 import { actorSnapshot, recordActorUpdate } from './actor-update'
 import {
 	activeMuteJoinSql,
-	availableLocalSql,
 	availableSql,
 	blocksSql,
 	domainBlocksSql,
 	filteredForSql,
+	findableBySql,
 	followableBySql,
 	followListedSql,
 	followListsShownSql,
@@ -575,7 +575,8 @@ export type SearchInput = {
 }
 
 // Local and known remote accounts whose search_text contains every term (in any of its variants). An exact username
-// ranks first, then local accounts. Suspended local accounts are not listed.
+// ranks first, then local accounts. Only accounts the viewer may find are listed (findableBySql, R14): not suspended,
+// and not on a domain the viewer blocks.
 export const searchAccounts = userReadOperation<SearchInput, Account[]>((db, input, viewer) =>
 	findAccounts(db, input, viewer.accountId)
 )
@@ -630,9 +631,8 @@ export function findAccounts(db: Db, input: SearchInput, viewerId: string): Acco
 	const ids = db
 		.all<{ id: string }>(
 			`WITH candidates(id) AS (${candidates})
-			SELECT a.id FROM candidates c JOIN accounts a ON a.id = c.id LEFT JOIN local_accounts l ON l.account_id = a.id
-			WHERE ${availableLocalSql('l')} AND NOT ${domainBlocksSql('?', 'a.id')}
-				AND ${where.join(' AND ')}
+			SELECT a.id FROM candidates c JOIN accounts a ON a.id = c.id
+			WHERE ${findableBySql('a.id', '?')} AND ${where.join(' AND ')}
 			ORDER BY lower(a.username) = ? DESC, a.domain IS NULL DESC, a.followers_count DESC, a.id
 			LIMIT ? OFFSET ?`,
 			...candidateParams,
