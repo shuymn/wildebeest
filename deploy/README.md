@@ -14,8 +14,8 @@ through the `/setup` wizard.
 ## Before you deploy
 
 Read [setup.md](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/setup.md), "Before you start". You
-need a zone on the account for the instance's domain, and a Zero Trust organization. Kopje cannot run on a
-`workers.dev` address.
+need the Workers Paid plan, a zone on the account for the instance's domain, and a Zero Trust organization. Kopje
+cannot run on a `workers.dev` address.
 
 ## Deploy with the button
 
