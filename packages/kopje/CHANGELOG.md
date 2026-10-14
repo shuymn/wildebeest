@@ -78,6 +78,21 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   domain name is dropped and counted (`domain_blocks:invalid-domain`), so the conversion stops on it until
   `--accept-deletions`.
 
+- `verify-conversion` also compares hashtags, status language and edit time, actor type and discoverability, each
+  local account's aliases and posting defaults (visibility, sensitivity, language), follow languages, the Like and
+  Block records of favourites and blocks, and client websites.
+
+- The cutover converts a status's language as Kopje reads one from a remote object: the primary subtag of the first
+  language in `contentMap` (else `nameMap`, `summaryMap`), when it is two or three letters. It used to keep the whole
+  tag, and only when `contentMap` had a single language.
+
+- The cutover names hashtags as Kopje does: a received `Hashtag` tag loses only its one leading `#`, and a legacy
+  `note_hashtags` value is kept whole, both then NFKC and lowercase. It used to drop a leading `#` or `＃` from either,
+  so a tag named `＃Foo` became `foo` rather than `#foo`.
+
+- The cutover carries a local account that never set `discoverable` as not discoverable, as legacy showed and published
+  it, rather than as unset. A remote account that omits it stays unset, as Kopje stores a fetched actor.
+
 - `VAPID_JWK` must hold the private key (`d`), not only the public point: a key without it now makes the instance
   answer 503 as misconfigured, as any invalid value does.
 

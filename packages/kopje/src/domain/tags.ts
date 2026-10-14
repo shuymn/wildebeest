@@ -1,7 +1,8 @@
 import type { Present } from './accounts'
 import { visibleSql } from './audience'
 import { optionalUserReadOperation } from './auth'
-import { isHashtagName, normalizeTag } from './status-text'
+import { isHashtagName } from './status-text'
+import { normalizeTag } from './tag-name'
 
 // A hashtag as GET /api/v1/tags/:id shows it (Mastodon 4.0.2's Tag entity). Kopje has no tags table: any valid name is
 // a tag, used or not, as Mastodon builds an unsaved Tag for a name it has never seen. The name is the normalized one

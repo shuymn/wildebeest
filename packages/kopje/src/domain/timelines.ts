@@ -10,8 +10,8 @@ import {
 } from './audience'
 import { optionalUserReadOperation, userReadOperation } from './auth'
 import { presentStatuses, type Status } from './status-presenter'
-import { normalizeTag } from './status-text'
 import { statusCursor } from './statuses'
+import { normalizeTag } from './tag-name'
 import type { Db } from '../db/sql'
 
 // Timelines (design §6 "timelines"): each is one query over statuses, newest first, paged by status id (18-digit

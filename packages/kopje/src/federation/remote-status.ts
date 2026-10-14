@@ -2,6 +2,7 @@ import type { DocumentLoader } from '@fedify/fedify'
 
 import { isTransientLoadError } from './loader'
 import { isPublicCollection } from '../domain/audience'
+import { languageOf } from '../domain/language'
 import {
 	MAX_MEDIA_DESCRIPTION_LENGTH,
 	MAX_SPOILER_LENGTH,
@@ -13,7 +14,8 @@ import {
 	type RemoteMediaInput,
 	type RemoteStatusInput,
 } from '../domain/remote-statuses'
-import { MAX_URL_LENGTH, normalizeTag } from '../domain/status-text'
+import { MAX_URL_LENGTH } from '../domain/status-text'
+import { hashtagObjectName } from '../domain/tag-name'
 import { httpUrl } from '../platform/http-url'
 import { withinJsonBounds } from '../platform/json-bounds'
 import { remoteHtmlText, sanitizeRemoteHtml } from '../security/html'
@@ -65,19 +67,6 @@ function languageString(object: Json, key: string): string | null {
 	return isObject(map) ? text(Object.values(map)[0]) : null
 }
 
-function languageOf(object: Json): string | null {
-	for (const key of ['contentMap', 'nameMap', 'summaryMap']) {
-		const map = object[key]
-		const tag = isObject(map) ? Object.keys(map)[0] : undefined
-		if (tag !== undefined) {
-			// The primary subtag, as stored for local statuses (ISO 639).
-			const primary = tag.split(/[-_]/)[0]?.toLowerCase() ?? ''
-			return /^[a-z]{2,3}$/.test(primary) ? primary : null
-		}
-	}
-	return null
-}
-
 function httpString(value: string | null): string | null {
 	return value === null || value.length > MAX_URL_LENGTH ? null : (httpUrl(value)?.href ?? null)
 }
@@ -121,7 +110,7 @@ function hashtag(name: unknown): string | null {
 	if (typeof name !== 'string') {
 		return null
 	}
-	const normalized = normalizeTag(name.replace(/^#/, ''))
+	const normalized = hashtagObjectName(name)
 	return normalized.length <= MAX_TAG_LENGTH && TAG_NAME.test(normalized) && !/^[\p{Nd}_]+$/u.test(normalized)
 		? normalized
 		: null

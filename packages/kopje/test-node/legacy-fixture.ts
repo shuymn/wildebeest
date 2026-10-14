@@ -126,6 +126,13 @@ const BASE = Date.parse('2024-03-01T09:00:00.000Z')
 const at = (minutes: number) => new Date(BASE + minutes * 60_000)
 const cdate = (minutes: number) => at(minutes).toISOString().replace('T', ' ').replace('Z', '')
 const iso = (minutes: number) => at(minutes).toISOString()
+// The time in legacy's spaced form with a zone, as legacy may keep one: 'YYYY-MM-DD HH:MM:SS+09:00' or '...Z'.
+const spaced = (minutes: number, zone: 'Z' | `${'+' | '-'}${string}`) => {
+	const offset =
+		zone === 'Z' ? 0 : (zone.startsWith('-') ? -1 : 1) * (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(4)))
+	const local = new Date(at(minutes).getTime() + offset * 60_000).toISOString()
+	return `${local.slice(0, 19).replace('T', ' ')}${zone}`
+}
 const snowflake = (minutes: number, low: number) => ((BigInt(at(minutes).getTime()) << 16n) | BigInt(low)).toString()
 
 async function wrappedKey(kek: string) {
@@ -235,7 +242,8 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 			following: `${user.uri}/following`,
 			followers: `${user.uri}/followers`,
 			url: `${ORIGIN}/@${user.username}`,
-			discoverable: true,
+			// Bob never set it: legacy showed and published false.
+			discoverable: i === 0 ? true : undefined,
 			manuallyApprovesFollowers: i === 1,
 			icon: { type: 'Image', url: `${images}/avatar-${i}/avatar` },
 			image:
@@ -439,6 +447,11 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		inReplyTo?: Note
 		summary?: string
 		lostOriginal?: boolean
+		// Default: { ja: content }.
+		contentMap?: Record<string, string>
+		// Defaults: published a minute before `minutes`, not updated.
+		published?: string
+		updated?: string
 	}
 	const remoteNote = (input: RemoteNote): Note => {
 		const proxy = objectId()
@@ -450,14 +463,15 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 			type: 'Note',
 			summary: input.summary ?? null,
 			inReplyTo: input.inReplyTo?.uri ?? null,
-			published: iso(input.minutes - 1),
+			published: input.published ?? iso(input.minutes - 1),
+			updated: input.updated,
 			url: `https://${author.host}/@r${input.author}/${100 + objectCounter}`,
 			attributedTo: author.uri,
 			to: input.to,
 			cc: input.cc,
 			sensitive: input.summary !== undefined,
 			content: input.content,
-			contentMap: { ja: input.content },
+			contentMap: input.contentMap ?? { ja: input.content },
 			attachment: input.attachment ?? [],
 			tag: input.tags ?? [],
 		}
@@ -492,7 +506,15 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		to: [PUBLIC],
 		cc: [r(0).followers],
 		mastodonId: snowflake(99, 7),
-		tags: [{ type: 'Hashtag', name: '#Cats', href: 'https://remote.example/tags/cats' }],
+		// Each name with the one # Kopje drops from a received Hashtag; other number signs are part of the name.
+		tags: [
+			{ type: 'Hashtag', name: '#Cats', href: 'https://remote.example/tags/cats' },
+			{ type: 'Hashtag', name: '#ＣＡＴＳ', href: 'https://remote.example/tags/cats' },
+			{ type: 'Hashtag', name: '＃Ｆｕｌｌ', href: 'https://remote.example/tags/full' },
+			{ type: 'Hashtag', name: '﹟Small', href: 'https://remote.example/tags/small' },
+			{ type: 'Hashtag', name: '##Double', href: 'https://remote.example/tags/double' },
+			{ type: 'Hashtag', name: 'Bare', href: 'https://remote.example/tags/bare' },
+		],
 		attachment: [
 			{ type: 'Document', mediaType: 'video/mp4', url: 'https://files.remote.example/m/1.mp4', name: 'a clip' },
 			{ type: 'Document', mediaType: 'image/png', url: 'https://files.remote.example/m/2.png', name: null },
@@ -510,7 +532,10 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		attachment: [attachedImage],
 	})
 	if (has('note_hashtags')) {
-		insert('note_hashtags', { value: 'wildebeest', object_id: publicNote.id, cdate: cdate(110) })
+		// Names as legacy took them from the text after #: any number sign left in them is part of the name.
+		for (const value of ['wildebeest', 'ＷＩＬＤＥＢＥＥＳＴ', '＃Wide', '﹟Foo', '#Hash']) {
+			insert('note_hashtags', { value, object_id: publicNote.id, cdate: cdate(110) })
+		}
 	}
 	if (has('idempotency_keys')) {
 		insert('idempotency_keys', { key: 'idem-key-1', object_id: publicNote.id, expires_at: cdate(170) })
@@ -658,6 +683,9 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		cc: [bob],
 		mastodonId: snowflake(169, 5),
 		tags: [{ type: 'Mention', href: alice, name: '@alice@kopje.test' }],
+		// Spaced times with zones: published in UTC (Z), edited later at a non-zero offset.
+		published: spaced(169, 'Z'),
+		updated: spaced(175, '+05:30'),
 	})
 	remoteNote({
 		author: 2,
@@ -669,6 +697,11 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		inReplyTo: publicNote,
 		tags: [{ type: 'Mention', href: alice, name: '@alice@kopje.test' }],
 		summary: 'CW 注意',
+		// Two languages with regions: Kopje keeps the first one's primary subtag.
+		contentMap: { 'pt-BR': '<p>uma resposta</p>', en: '<p>a reply to alice</p>' },
+		// Updated at its publication, both spaced at other offsets: no edit.
+		published: spaced(179, '+09:00'),
+		updated: spaced(179, '+00:00'),
 	})
 	if (followersSpelling) {
 		remoteNote({
@@ -688,6 +721,8 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		cc: [PUBLIC],
 		mastodonId: snowflake(189, 6),
 		lostOriginal: true,
+		// Edited, the time spaced and in UTC (Z).
+		updated: spaced(195, 'Z'),
 	})
 	if (withDeletions && level < 21) {
 		// A second copy of r0's post whose original_object_id is the first copy's id: 0021 removes it.

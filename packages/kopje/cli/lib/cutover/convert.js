@@ -15,6 +15,9 @@ import { LEGACY_DEFAULT_AVATAR, mediaToken, parseDeliveryUrl, UPSTREAM_ACCOUNT_H
 import { MAX_PROFILE_UPDATES } from './kopje-db.js'
 import {
 	blockedDomain,
+	hashtagObjectName,
+	languageOf,
+	normalizeTag,
 	normalizeSearchText,
 	REMOTE_HTML_RAW_LIMIT,
 	remoteHtmlText,
@@ -550,7 +553,9 @@ export function convertLegacy(
 			profileImage(properties.icon, 'avatar'),
 			profileImage(properties.image, 'header'),
 			properties.manuallyApprovesFollowers === true ? 1 : 0,
-			typeof properties.discoverable === 'boolean' ? (properties.discoverable ? 1 : 0) : null,
+			// Unset: legacy showed and published a local actor as not discoverable; Kopje stores a remote actor that omits it
+			// as unknown (NULL).
+			typeof properties.discoverable === 'boolean' ? (properties.discoverable ? 1 : 0) : local ? 0 : null,
 			local ? null : typeof properties.inbox === 'string' ? properties.inbox : null,
 			local ? null : typeof endpoints.sharedInbox === 'string' ? endpoints.sharedInbox : null,
 			local ? null : String(actor.properties),
@@ -597,7 +602,7 @@ export function convertLegacy(
 			String(user.pubkey),
 			JSON.stringify(list(account.properties.alsoKnownAs).filter((x) => typeof x === 'string')),
 			visibility,
-			preference?.posting_default_sensitive ? 1 : 0,
+			preference?.posting_default_sensitive === 1 ? 1 : 0,
 			preference?.posting_default_language ?? null,
 			isoTime(user.cdate) ?? account.created ?? new Date(baseTime).toISOString()
 		)
@@ -874,9 +879,8 @@ export function convertLegacy(
 			: carried(properties.summary) || carried(properties.spoiler_text)
 		const content = html(properties.content)
 		const updated = isoTime(properties.updated)
+		// An update at the publication time is no edit, as Kopje stores an incoming status (src/domain/remote-statuses.ts).
 		const edited = updated !== null && updated !== plan.published ? updated : null
-		const contentMap = properties.contentMap
-		const languages = typeof contentMap === 'object' && contentMap !== null ? Object.keys(contentMap) : []
 		// The parent: the status at inReplyTo, else the one legacy linked.
 		const inReplyToUri = idOf(properties.inReplyTo)
 		const legacyParent = typeof row.in_reply_to_id === 'string' ? statuses.get(row.in_reply_to_id) : undefined
@@ -900,7 +904,8 @@ export function convertLegacy(
 				? carried(properties.source.content)
 				: null,
 			properties.sensitive === true ? 1 : 0,
-			languages.length === 1 ? (languages[0] ?? null) : null,
+			// As Kopje stores a received status's language.
+			languageOf(properties),
 			plan.published,
 			edited,
 			local ? null : (edited ?? plan.published),
@@ -917,12 +922,7 @@ export function convertLegacy(
 		const tags = new Set()
 		for (const tag of list(properties.tag)) {
 			if (typeof tag === 'object' && tag !== null && /** @type {Json} */ (tag).type === 'Hashtag') {
-				tags.add(
-					carried(/** @type {Json} */ (tag).name)
-						.replace(/^[#＃]/, '')
-						.normalize('NFKC')
-						.toLowerCase()
-				)
+				tags.add(hashtagObjectName(carried(/** @type {Json} */ (tag).name)))
 			}
 		}
 		for (const tag of tags) {
@@ -933,10 +933,8 @@ export function convertLegacy(
 	}
 	for (const hashtag of rows('SELECT value, object_id FROM note_hashtags ORDER BY rowid')) {
 		const status = statuses.get(String(hashtag.object_id))
-		const name = str(hashtag.value)
-			.replace(/^[#＃]/, '')
-			.normalize('NFKC')
-			.toLowerCase()
+		// Legacy recorded the name without its #, as the status text has it (getHashtags).
+		const name = normalizeTag(carried(hashtag.value))
 		if (status !== undefined && name !== '') {
 			tagInsert.run(status.id, name)
 		}

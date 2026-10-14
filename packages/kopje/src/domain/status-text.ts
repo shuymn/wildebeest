@@ -1,6 +1,7 @@
 import { LinkifyIt } from 'linkify-it'
 
 import { escapeHtml } from './plain-text'
+import { normalizeTag } from './tag-name'
 
 // Plain status text to safe HTML, as Mastodon 4's TextFormatter does: everything is escaped; http(s) URLs, mentions
 // of known accounts and hashtags become links; blank lines separate paragraphs and single newlines become <br />.
@@ -117,11 +118,6 @@ const MAX_HASHTAG_NAME_LENGTH = 1000
 
 export function isHashtagName(name: string): boolean {
 	return name.length <= MAX_HASHTAG_NAME_LENGTH && HASHTAG_NAME_ONLY.test(name)
-}
-
-// status_tags.name: NFKC, lowercase.
-export function normalizeTag(name: string): string {
-	return name.normalize('NFKC').toLowerCase()
 }
 
 // A resolved mention: the account's profile URL and username. Unresolved mentions stay text.

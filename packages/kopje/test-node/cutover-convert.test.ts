@@ -126,6 +126,26 @@ describe('convert and verify-conversion', () => {
 		expect(value("SELECT visibility FROM statuses WHERE content LIKE '%secret direct%'")).toBe('direct')
 		expect(value('SELECT count(*) FROM statuses WHERE raw IS NOT NULL')).toBe(4)
 		expect(value("SELECT value FROM kopje_state WHERE name = 'last_local_id'")).toMatch(/^\d{18}$/)
+		// The language is the primary subtag of the first in contentMap.
+		expect(value("SELECT language FROM statuses WHERE content LIKE '%a reply to alice%'")).toBe('pt')
+		// Spaced times with a zone are read in that zone; an update at publication is no edit.
+		const times = (match: string) =>
+			db.prepare(`SELECT published_at, edited_at FROM statuses WHERE content LIKE '%${match}%'`).get()
+		expect(times('a DM to alice')).toEqual({
+			published_at: '2024-03-01T11:49:00.000Z',
+			edited_at: '2024-03-01T11:55:00.000Z',
+		})
+		expect(times('a reply to alice')).toEqual({ published_at: '2024-03-01T11:59:00.000Z', edited_at: null })
+		expect(times('lost its original id')).toMatchObject({ edited_at: '2024-03-01T12:15:00.000Z' })
+		// Hashtags as Kopje names them, once each: a received Hashtag's one leading # dropped, legacy's recorded names
+		// whole; then NFKC and lowercase.
+		expect(value('SELECT group_concat(name) FROM (SELECT name FROM status_tags ORDER BY name)')).toBe(
+			'#double,#foo,#full,#hash,#small,#wide,bare,cats,wildebeest'
+		)
+		// An unset discoverable: false for a local account, as legacy had it; unknown for a remote one.
+		expect(value("SELECT discoverable FROM accounts WHERE uri LIKE '%/users/alice'")).toBe(1)
+		expect(value("SELECT discoverable FROM accounts WHERE uri LIKE '%/users/Bob'")).toBe(0)
+		expect(value('SELECT count(*) FROM accounts WHERE domain IS NOT NULL AND discoverable IS NOT NULL')).toBe(0)
 		db.close()
 	})
 
@@ -212,6 +232,51 @@ describe('convert and verify-conversion', () => {
 			['a mute gets an expiry', "UPDATE mutes SET expires_at = '2026-01-01T00:00:00.000Z'", 'mutes'],
 			['a list policy changes', "UPDATE lists SET replies_policy = 'none'", 'lists'],
 			['client scopes change', "UPDATE oauth_clients SET scopes = 'read write follow push admin'", 'clients'],
+			['a client loses its website', 'UPDATE oauth_clients SET website = NULL', 'clients'],
+			['a hashtag is dropped', "DELETE FROM status_tags WHERE name = 'wildebeest'", 'statuses'],
+			['a hashtag keeps its case', "UPDATE status_tags SET name = 'Cats' WHERE name = 'cats'", 'statuses'],
+			[
+				'a boost gets a hashtag',
+				"INSERT INTO status_tags (status_id, name) SELECT id, 'cats' FROM statuses WHERE reblog_of_id IS NOT NULL LIMIT 1",
+				'statuses',
+			],
+			['a status loses its language', 'UPDATE statuses SET language = NULL WHERE language IS NOT NULL', 'statuses'],
+			['a language keeps its region', "UPDATE statuses SET language = 'pt-BR' WHERE language = 'pt'", 'statuses'],
+			[
+				'an update at publication becomes an edit',
+				"UPDATE statuses SET edited_at = published_at WHERE content LIKE '%a reply to alice%'",
+				'statuses',
+			],
+			[
+				'a time with an offset is read as UTC',
+				"UPDATE statuses SET published_at = '2024-03-01T20:59:00.000Z' WHERE content LIKE '%a reply to alice%'",
+				'statuses',
+			],
+			[
+				'an edit time at an offset is dropped',
+				"UPDATE statuses SET edited_at = NULL WHERE content LIKE '%a DM to alice%'",
+				'statuses',
+			],
+			['a Hashtag keeps a second #', "UPDATE status_tags SET name = 'double' WHERE name = '#double'", 'statuses'],
+			['a recorded name loses its number sign', "UPDATE status_tags SET name = 'foo' WHERE name = '#foo'", 'statuses'],
+			[
+				'an unset local discoverable becomes unknown',
+				"UPDATE accounts SET discoverable = NULL WHERE uri LIKE '%/users/Bob'",
+				'accounts',
+			],
+			[
+				'an unset remote discoverable becomes false',
+				'UPDATE accounts SET discoverable = 0 WHERE domain IS NOT NULL',
+				'accounts',
+			],
+			['an actor type changes', "UPDATE accounts SET actor_type = 'Person' WHERE actor_type = 'Service'", 'accounts'],
+			['an alias is dropped', "UPDATE local_accounts SET also_known_as = '[]'", 'keys'],
+			['the default visibility changes', "UPDATE local_accounts SET default_visibility = 'public'", 'keys'],
+			['the default sensitivity changes', 'UPDATE local_accounts SET default_sensitive = 0', 'keys'],
+			['the default language is dropped', 'UPDATE local_accounts SET default_language = NULL', 'keys'],
+			['a follow loses its languages', 'UPDATE follows SET languages = NULL', 'follows'],
+			['a favourite loses its Like record', 'UPDATE favourites SET uri = NULL', 'favourites'],
+			['a block loses its Block record', 'UPDATE blocks SET uri = NULL', 'blocks'],
 		]
 		let exportPath: string
 		let dumpPath: string
