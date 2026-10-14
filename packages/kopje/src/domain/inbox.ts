@@ -1,5 +1,12 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
-import { canView, domainBlockMatchSql, isDistributable, isPublicCollection, type Visibility } from './audience'
+import {
+	activeMuteSql,
+	canView,
+	domainBlockMatchSql,
+	isDistributable,
+	isPublicCollection,
+	type Visibility,
+} from './audience'
 import { stageRetraction } from './deliveries'
 import { insertWithFreshId, remoteId } from './ids'
 import { notify } from './notifications'
@@ -56,7 +63,8 @@ export const RETRACTION_TTL_MS = 30 * 24 * 60 * 60 * 1000
 // At most this many live retractions per actor (RES-4): a remote can name any number of ids of its own origin. An
 // actor's own deletion does not depend on it (inbound_jobs).
 export const MAX_RETRACTIONS_PER_ACTOR = 10_000
-// Expired retractions and finished jobs removed per call (RES-4), so the sweep stays bounded and keeps up.
+// Expired retractions, finished jobs and expired mutes removed per call (RES-4), so the sweep stays bounded and
+// keeps up.
 export const SWEEP_BATCH = 100
 // A stored key is trusted this long after its actor document was fetched; after that the Worker fetches it again.
 // A deleted actor's own Delete is the one exception (federation/inbound.ts).
@@ -447,6 +455,13 @@ function sweep(db: Db, now: number): void {
 		now,
 		SWEEP_BATCH
 	)
+	// Expired mutes no longer apply (activeMuteSql); their rows go here, through the partial index on expires_at.
+	db.run(
+		`DELETE FROM mutes WHERE id IN
+			(SELECT id FROM mutes WHERE expires_at <= ? ORDER BY expires_at LIMIT ?)`,
+		new Date(now).toISOString(),
+		SWEEP_BATCH
+	)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -467,7 +482,7 @@ function localAccount(db: Db, uri: string | null): LocalRow | undefined {
 	)
 }
 
-function recountLocal(db: Db, ids: Iterable<string>): void {
+export function recountLocal(db: Db, ids: Iterable<string>): void {
 	for (const id of new Set(ids)) {
 		db.run(
 			`UPDATE accounts SET
@@ -925,9 +940,9 @@ const move: Handler<'Move'> = (db, actor, activity, input) => {
 		...carried
 	)
 	db.run(
-		`INSERT INTO mutes (account_id, target_account_id, hide_notifications, created_at)
-		SELECT m.account_id, ?2, m.hide_notifications, ?3 FROM mutes m
-		WHERE m.target_account_id = ?1 AND m.account_id <> ?2 ORDER BY m.id LIMIT ?4
+		`INSERT INTO mutes (account_id, target_account_id, hide_notifications, expires_at, created_at)
+		SELECT m.account_id, ?2, m.hide_notifications, m.expires_at, ?3 FROM mutes m
+		WHERE m.target_account_id = ?1 AND m.account_id <> ?2 AND ${activeMuteSql('m', '?3')} ORDER BY m.id LIMIT ?4
 		ON CONFLICT DO NOTHING`,
 		actor.id,
 		targetId,

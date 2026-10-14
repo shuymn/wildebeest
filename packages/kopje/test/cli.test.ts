@@ -221,7 +221,9 @@ describe('kopje-admin', () => {
 	it('runs the small commands', async () => {
 		const store = await sourceStore(0)
 		const { fetch } = edge(store)
-		expect(JSON.parse((await cli(['version'], { fetch })).out)).toMatchObject({ store: { applied: '0000_initial' } })
+		expect(JSON.parse((await cli(['version'], { fetch })).out)).toMatchObject({
+			store: { applied: '0001_mute_expiry' },
+		})
 		expect((await cli(['capacity'], { fetch })).out).toMatch(/^database .*\n.* accounts$/m)
 		expect(JSON.parse((await cli(['spool'], { fetch })).out)).toMatchObject({ parts: 1 })
 		expect(JSON.parse((await cli(['maintenance', 'on'], { fetch })).out)).toEqual({ maintenance: true })

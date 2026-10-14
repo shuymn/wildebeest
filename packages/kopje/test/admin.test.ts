@@ -165,7 +165,7 @@ describe('admin endpoints', () => {
 		})
 		expect(await (await as(adminClaims(), '/admin/version')).json()).toMatchObject({
 			worker: { build: BUILD },
-			store: { build: BUILD, applied: '0000_initial', expected: '0000_initial' },
+			store: { build: BUILD, applied: '0001_mute_expiry', expected: '0001_mute_expiry' },
 		})
 		const capacity = (await (await as(adminClaims(), '/admin/capacity')).json()) as {
 			databaseSize: number

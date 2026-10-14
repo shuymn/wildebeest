@@ -72,12 +72,26 @@ export function domainBlockMatchSql(d: string, a: string): string {
 	return `(${a}.domain IS NOT NULL AND rtrim(lower(${d}.domain), '.') IN (rtrim(lower(${a}.domain), '.'), ${uriHostSql(`${a}.uri`)}))`
 }
 
+// The time the filters below judge mutes at, as SQL compares it (ISO 8601 UTC, like expires_at): the request time, or
+// null for an anonymous viewer, who filters nothing.
+export function filterTime(now: number | null): string | null {
+	return now === null ? null : new Date(now).toISOString()
+}
+
+// Whether the mute row `m` applies at `now` (an SQL expression for an ISO 8601 UTC time): an indefinite mute, or one
+// that has not expired yet. An expired mute stops applying at its time, whether or not it has been removed yet.
+export function activeMuteSql(m: string, now: string): string {
+	return `(${m}.expires_at IS NULL OR ${m}.expires_at > ${now})`
+}
+
 // StatusFilter: what the viewer chose not to see in lists (feeds, context, notifications, bookmarks): authors they
-// block, mute, or whose domain they block. Their own statuses always pass; an anonymous viewer filters nothing.
-export function unfilteredSql(s: string, viewer: string): string {
+// block, mute (while the mute applies at `now`), or whose domain they block. Their own statuses always pass; an
+// anonymous viewer filters nothing.
+export function unfilteredSql(s: string, viewer: string, now: string): string {
 	return `(${viewer} IS NULL OR ${s}.account_id IS ${viewer} OR NOT (
 		EXISTS (SELECT 1 FROM blocks vb WHERE vb.account_id IS ${viewer} AND vb.target_account_id = ${s}.account_id)
-		OR EXISTS (SELECT 1 FROM mutes vm WHERE vm.account_id IS ${viewer} AND vm.target_account_id = ${s}.account_id)
+		OR EXISTS (SELECT 1 FROM mutes vm WHERE vm.account_id IS ${viewer} AND vm.target_account_id = ${s}.account_id
+			AND ${activeMuteSql('vm', now)})
 		OR EXISTS (SELECT 1 FROM domain_blocks vd JOIN accounts va ON va.id = ${s}.account_id
 			WHERE vd.account_id IS ${viewer} AND ${domainBlockMatchSql('vd', 'va')})))`
 }
@@ -88,11 +102,11 @@ export function viewableSql(s: string, viewer: string): string {
 		WHERE ${s}_o.id = ${s}.reblog_of_id AND ${visibleSql(`${s}_o`, viewer)})))`
 }
 
-// A status may be listed: viewable, and neither it nor a reblogged original is filtered by the viewer.
-export function listableSql(s: string, viewer: string): string {
-	return `(${visibleSql(s, viewer)} AND ${unfilteredSql(s, viewer)}
+// A status may be listed: viewable, and neither it nor a reblogged original is filtered by the viewer at `now`.
+export function listableSql(s: string, viewer: string, now: string): string {
+	return `(${visibleSql(s, viewer)} AND ${unfilteredSql(s, viewer, now)}
 		AND (${s}.reblog_of_id IS NULL OR EXISTS (SELECT 1 FROM statuses ${s}_o WHERE ${s}_o.id = ${s}.reblog_of_id
-			AND ${visibleSql(`${s}_o`, viewer)} AND ${unfilteredSql(`${s}_o`, viewer)})))`
+			AND ${visibleSql(`${s}_o`, viewer)} AND ${unfilteredSql(`${s}_o`, viewer, now)})))`
 }
 
 // The rule for one status: whether `viewerId` (null: anonymous) may see it by itself.

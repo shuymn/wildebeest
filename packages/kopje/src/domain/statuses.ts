@@ -22,9 +22,11 @@ import {
 	updateActivity,
 } from './activities'
 import {
+	activeMuteSql,
 	type ApiVisibility,
 	canView,
 	domainBlockMatchSql,
+	filterTime,
 	isDistributable,
 	listableSql,
 	requiresMention,
@@ -677,7 +679,7 @@ export type Context = { ancestors: Status[]; descendants: Status[] }
 // (visible, and not filtered by the viewer's blocks, mutes and domain blocks); the thread continues past members
 // that do not.
 export const statusContext = optionalUserReadOperation<{ id: string; present: Present }, Viewed<Context>>(
-	(db, { id, present }, viewerId) => {
+	(db, { id, present }, viewerId, now) => {
 		const resolved = viewable(db, viewerId, id)
 		if (resolved === null) {
 			return { status: 'not_found' }
@@ -690,18 +692,20 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 				SELECT s.in_reply_to_id, up.depth + 1 FROM statuses s JOIN up ON s.id = up.id
 				WHERE s.in_reply_to_id IS NOT NULL AND up.depth < ?3
 			)
-			SELECT s.id FROM up JOIN statuses s ON s.id = up.id WHERE ${listableSql('s', '?1')} ORDER BY up.depth DESC`,
+			SELECT s.id FROM up JOIN statuses s ON s.id = up.id WHERE ${listableSql('s', '?1', '?4')} ORDER BY up.depth DESC`,
 			viewerId,
 			resolved,
-			limits.ancestors
+			limits.ancestors,
+			filterTime(now)
 		)
 		const tree = descendantTree(db, resolved, limits.depth, limits.traversal)
 		const descendants = db.all<{ id: string }>(
 			`SELECT s.id FROM json_each(?2) j JOIN statuses s ON s.id = j.value
-			WHERE ${listableSql('s', '?1')} ORDER BY j.key LIMIT ?3`,
+			WHERE ${listableSql('s', '?1', '?4')} ORDER BY j.key LIMIT ?3`,
 			viewerId,
 			JSON.stringify(tree),
-			limits.descendants
+			limits.descendants,
+			filterTime(now)
 		)
 		const options = { ...present, viewerId }
 		return {
@@ -1181,7 +1185,7 @@ export type InteractorsInput = { id: string; kind: 'favourited_by' | 'reblogged_
 // listed (Mastodon's RebloggedByAccountsController); reblogs_count still counts every boost, as Mastodon's does. Favourites page by the favourite's id; boosts by
 // the boost's status id.
 export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Page<Account>>>(
-	(db, { id, kind, page, present }, viewerId) => {
+	(db, { id, kind, page, present }, viewerId, now) => {
 		const resolved = viewable(db, viewerId, id)
 		const target = resolved === null ? null : originalId(db, resolved)
 		if (target === null) {
@@ -1192,7 +1196,8 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 		const excluded = `(?1 IS NULL OR NOT (
 			EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 AND target_account_id = a.id)
 			OR EXISTS (SELECT 1 FROM blocks WHERE account_id = a.id AND target_account_id = ?1)
-			OR EXISTS (SELECT 1 FROM mutes WHERE account_id = ?1 AND target_account_id = a.id)
+			OR EXISTS (SELECT 1 FROM mutes m WHERE m.account_id = ?1 AND m.target_account_id = a.id
+				AND ${activeMuteSql('m', '?6')})
 			OR EXISTS (SELECT 1 FROM domain_blocks db WHERE db.account_id = ?1 AND ${domainBlockMatchSql('db', 'a')})))`
 		const lower = page.minId ?? page.sinceId ?? null
 		const rows =
@@ -1207,7 +1212,8 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 						target,
 						page.maxId ?? null,
 						lower,
-						page.limit
+						page.limit,
+						filterTime(now)
 					)
 				: db.all<AccountRow & { cursor: string }>(
 						`SELECT r.id AS cursor, ${ACCOUNT_COLUMNS}
@@ -1219,7 +1225,8 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 						target,
 						statusCursor(page.maxId),
 						statusCursor(lower ?? undefined),
-						page.limit
+						page.limit,
+						filterTime(now)
 					)
 		if (ascending) {
 			rows.reverse()

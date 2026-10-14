@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { seedAccount, sql } from './api-helpers'
+import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
 import { block, domainBlock, mute, remoteFollows, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
@@ -114,9 +115,10 @@ describe('canView and the list rule', () => {
 		return runInDurableObject(store, (_instance, state) => {
 			const db = new Db(state.storage.sql)
 			const listed = db.first(
-				`SELECT 1 AS yes FROM statuses s WHERE s.id = ?2 AND ${listableSql('s', '?1')}`,
+				`SELECT 1 AS yes FROM statuses s WHERE s.id = ?2 AND ${listableSql('s', '?1', '?3')}`,
 				viewer,
-				status
+				status,
+				new Date(NOW).toISOString()
 			)
 			return { show: canView(db, viewer, status), list: listed !== undefined }
 		})

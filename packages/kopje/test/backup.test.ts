@@ -387,7 +387,7 @@ describe('backup run', () => {
 			id: expect.stringMatching(/^2026-10-13-[0-9a-f]{8}$/),
 			createdAt: new Date(NOW).toISOString(),
 			kopje: { version: expect.any(String), build: BUILD },
-			schema: { version: '0000_initial' },
+			schema: { version: '0001_mute_expiry' },
 			recipients: [recipient],
 			media: { required: 2, copied: 1, pending: 0, absent: 1 },
 		})

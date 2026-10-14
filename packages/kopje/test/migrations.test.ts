@@ -7,6 +7,10 @@ import { MIGRATIONS } from '../src/db/migrations'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
 
+// The shipped migrations, in order; test-only files are named after them (9999_*).
+const NAMES = MIGRATIONS.map((m) => m.name)
+const LATEST = NAMES.at(-1)
+
 const SCHEMA_TABLES = [
 	'accounts',
 	'blocks',
@@ -61,7 +65,7 @@ describe('Store migration runner', () => {
 		const store = freshStore()
 
 		const before = await store.health(BUILD)
-		expect(before.schema).toMatchObject({ status: 'pending', pending: ['0000_initial'], applied: [] })
+		expect(before.schema).toMatchObject({ status: 'pending', pending: NAMES, applied: [] })
 		expect(before.readonly).toBe(true)
 
 		// Detecting the pending file scheduled an immediate alarm; nothing else upgrades the schema.
@@ -69,7 +73,7 @@ describe('Store migration runner', () => {
 		expect(await runDurableObjectAlarm(store)).toBe(false)
 
 		const after = await store.health(BUILD)
-		expect(after.schema).toMatchObject({ status: 'current', applied: ['0000_initial'] })
+		expect(after.schema).toMatchObject({ status: 'current', applied: NAMES })
 		expect(after.readonly).toBe(false)
 		expect(after.lastBookmark).toEqual(expect.any(String))
 		expect(after.databaseSize).toBeGreaterThan(0)
@@ -79,10 +83,43 @@ describe('Store migration runner', () => {
 		})
 	})
 
+	it('0001 adds mute expiry to a Store with data, keeping every mute indefinite', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			expect(await kernel(state, MIGRATIONS.slice(0, 1)).upgrade()).toMatchObject({ ok: true, applied: [NAMES[0]] })
+			const sql = state.storage.sql
+			const [local, remote] = ['100000000000000001', '100000000000000002']
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					(?, 'https://kopje.test/ap/users/alice', 'alice', NULL), (?, 'https://remote.test/users/bob', 'bob', 'remote.test')`,
+				local,
+				remote
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+				local
+			)
+			sql.exec(
+				"INSERT INTO mutes (account_id, target_account_id, hide_notifications, created_at) VALUES (?, ?, 0, '2026-01-01T00:00:00.000Z')",
+				local,
+				remote
+			)
+
+			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({ ok: true, applied: ['0001_mute_expiry'] })
+			expect(
+				sql.exec('SELECT account_id, target_account_id, hide_notifications, expires_at FROM mutes').toArray()
+			).toEqual([{ account_id: local, target_account_id: remote, hide_notifications: 0, expires_at: null }])
+			expect(
+				sql.exec("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'mutes_expires'").toArray()
+			).toEqual([{ sql: expect.stringContaining('WHERE expires_at IS NOT NULL') }])
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
 	it('treats a re-run as a no-op', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
-			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({ ok: true, applied: ['0000_initial'] })
+			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({ ok: true, applied: NAMES })
 			const recorded = bookkeeping(state.storage.sql)
 
 			expect(await kernel(state, MIGRATIONS).upgrade()).toEqual({ ok: true, bookmark: null, applied: [] })
@@ -95,13 +132,13 @@ describe('Store migration runner', () => {
 		await runInDurableObject(store, async (_instance, state) => {
 			const broken = [
 				...MIGRATIONS,
-				{ name: '0001_broken', sql: 'CREATE TABLE half_done (a); INSERT INTO missing VALUES (1);' },
+				{ name: '9999_broken', sql: 'CREATE TABLE half_done (a); INSERT INTO missing VALUES (1);' },
 			]
 			const k = kernel(state, broken)
 
 			const result = await k.upgrade()
 			expect(result).toMatchObject({ ok: false, reason: 'upgrade-failed', bookmark: expect.any(String) })
-			expect(bookkeeping(state.storage.sql).map((m) => m.name)).toEqual(['0000_initial'])
+			expect(bookkeeping(state.storage.sql).map((m) => m.name)).toEqual(NAMES)
 			expect(tableNames(state.storage.sql)).not.toContain('half_done')
 			expect(await k.health(BUILD)).toMatchObject({ readonly: true, hold: 'upgrade-failed' })
 			await expect(k.execute(BUILD, countSettings, undefined)).rejects.toThrow('schema-pending')
@@ -110,15 +147,15 @@ describe('Store migration runner', () => {
 			expect(await k.upgrade()).toMatchObject({ ok: false, detail: 'held' })
 			expect(await kernel(state, broken).version()).toEqual({
 				build: BUILD,
-				expected: '0001_broken',
-				applied: '0000_initial',
+				expected: '9999_broken',
+				applied: LATEST,
 			})
 
 			// A fix-forward deploy (new build, corrected file) clears the hold and upgrades.
-			const fixed = [...MIGRATIONS, { name: '0001_fixed', sql: 'CREATE TABLE fixed (a);' }]
+			const fixed = [...MIGRATIONS, { name: '9999_fixed', sql: 'CREATE TABLE fixed (a);' }]
 			expect(await kernel(state, fixed, { build: 'next' }).upgrade()).toMatchObject({
 				ok: true,
-				applied: ['0001_fixed'],
+				applied: ['9999_fixed'],
 			})
 		})
 	})
@@ -127,23 +164,23 @@ describe('Store migration runner', () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
 			let thrown = false
-			// Throws once, right after the transaction that recorded 0001_extra committed.
+			// Throws once, right after the transaction that recorded 9999_extra committed.
 			const timesOutAfterCommit = <T>(fn: () => T): T => {
 				const value = state.storage.transactionSync(fn)
-				if (!thrown && bookkeeping(state.storage.sql).some((m) => m.name === '0001_extra')) {
+				if (!thrown && bookkeeping(state.storage.sql).some((m) => m.name === '9999_extra')) {
 					thrown = true
 					throw new Error('Durable Object storage operation exceeded timeout')
 				}
 				return value
 			}
-			const k = kernel(state, [...MIGRATIONS, { name: '0001_extra', sql: 'CREATE TABLE extra (a);' }], {
+			const k = kernel(state, [...MIGRATIONS, { name: '9999_extra', sql: 'CREATE TABLE extra (a);' }], {
 				transaction: timesOutAfterCommit,
 			})
 
 			const result = await k.upgrade()
 			expect(result).toMatchObject({ ok: false, reason: 'upgrade-failed' })
-			expect(result.ok === false && result.detail).toContain('0001_extra (recorded: true)')
-			expect(bookkeeping(state.storage.sql).map((m) => m.name)).toEqual(['0000_initial', '0001_extra'])
+			expect(result.ok === false && result.detail).toContain('9999_extra (recorded: true)')
+			expect(bookkeeping(state.storage.sql).map((m) => m.name)).toEqual([...NAMES, '9999_extra'])
 			expect(tableNames(state.storage.sql)).toContain('extra')
 
 			// The schema is complete but the Store stays readonly: reads pass, writes are refused.
@@ -168,7 +205,7 @@ describe('Store migration runner', () => {
 		})
 	})
 
-	const EXTRA = [...MIGRATIONS, { name: '0001_extra', sql: 'CREATE TABLE extra (a);' }]
+	const EXTRA = [...MIGRATIONS, { name: '9999_extra', sql: 'CREATE TABLE extra (a);' }]
 	const failAt = (target: string) => (phase: string) => {
 		if (phase === target) {
 			throw new Error(`injected ${phase} failure`)
@@ -176,9 +213,9 @@ describe('Store migration runner', () => {
 	}
 
 	it.each([
-		['bookmark', 'bookmark-failed', ['0000_initial']],
-		['apply', 'upgrade-failed', ['0000_initial']],
-		['verify', 'verify-failed', ['0000_initial', '0001_extra']],
+		['bookmark', 'bookmark-failed', NAMES],
+		['apply', 'upgrade-failed', NAMES],
+		['verify', 'verify-failed', [...NAMES, '9999_extra']],
 	])('stays readonly after a %s failure, also in a fresh kernel', async (phase, reason, recorded) => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
@@ -260,7 +297,7 @@ describe('Store migration runner', () => {
 		await runInDurableObject(store, async (_instance, state) => {
 			await kernel(state, MIGRATIONS).upgrade()
 			await state.storage.deleteAlarm()
-			const edited = [{ name: '0000_initial', sql: `${MIGRATIONS[0]?.sql}\n-- edited` }]
+			const edited = [{ name: '0000_initial', sql: `${MIGRATIONS[0]?.sql}\n-- edited` }, ...MIGRATIONS.slice(1)]
 			const k = kernel(state, edited)
 
 			expect(await k.health(BUILD)).toMatchObject({ schema: { status: 'diverged' }, readonly: true })

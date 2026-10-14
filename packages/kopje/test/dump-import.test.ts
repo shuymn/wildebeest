@@ -106,7 +106,7 @@ describe('dump', () => {
 		expect(text).not.toContain('kopje_migrations')
 		expect(text).not.toContain('_cf_')
 		const header = splitDump(text).header as { tables: { name: string }[]; migrations: { name: string }[] }
-		expect(header.migrations.map((m) => m.name)).toEqual(['0000_initial'])
+		expect(header.migrations.map((m) => m.name)).toEqual(['0000_initial', '0001_mute_expiry'])
 		// Parents come before children; sqlite_sequence is last.
 		const order = header.tables.map((t) => t.name)
 		expect(order.indexOf('accounts')).toBeLessThan(order.indexOf('local_accounts'))
@@ -682,7 +682,7 @@ describe('upgrade retry', () => {
 		})
 		expect(await store.health(BUILD)).toMatchObject({ hold: 'upgrade-failed' })
 		expect(toStoreUnavailable(await rejectionOf(store.retryUpgrade('other')))?.reason).toBe('version-mismatch')
-		expect(await store.retryUpgrade(BUILD)).toMatchObject({ ok: true, applied: ['0000_initial'] })
+		expect(await store.retryUpgrade(BUILD)).toMatchObject({ ok: true, applied: ['0000_initial', '0001_mute_expiry'] })
 		expect(await store.health(BUILD)).toMatchObject({ hold: null, readonly: false, schema: { status: 'current' } })
 	})
 })
