@@ -214,7 +214,10 @@ describe('images-export', () => {
 			].map((path) => `https://imagedelivery.net/${ACCOUNT}/${path}`)
 		)
 		for (const { init } of calls) {
-			expect(new Headers(init?.headers).has('authorization')).toBe(false)
+			const headers = new Headers(init?.headers)
+			expect(headers.has('authorization')).toBe(false)
+			// Naming WebP or AVIF would make Images re-encode the stored image into that format.
+			expect(headers.get('accept')).not.toMatch(/webp|avif/)
 		}
 		const file = await imagesJson(outDir)
 		expect(file).toMatchObject({ accountHash: ACCOUNT, domain: 'kopje.test' })

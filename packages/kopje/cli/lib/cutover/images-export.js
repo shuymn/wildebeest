@@ -461,11 +461,10 @@ export async function exportImages({ exportPath, accountHash, outDir, accountId,
 					? `${DELIVERY_PREFIX}${accountHash}/${id}/${variant}`
 					: `https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v1/${id}/blob`
 			const response = await fetch(url, {
-				// The API token goes to the API only, and never follows a redirect elsewhere.
-				headers:
-					token === undefined
-						? { accept: 'image/webp,image/png,image/jpeg,image/gif' }
-						: { authorization: `Bearer ${token}` },
+				// The API token goes to the API only, and never follows a redirect elsewhere. A delivery URL is asked for
+				// any type: Images converts to WebP or AVIF only for a client that names them, so the variant keeps the
+				// stored format instead of being re-encoded lossily.
+				headers: token === undefined ? { accept: '*/*' } : { authorization: `Bearer ${token}` },
 				redirect: token === undefined ? 'follow' : 'error',
 				signal: AbortSignal.timeout(TIMEOUT_MS),
 			})
