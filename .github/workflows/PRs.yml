@@ -24,7 +24,7 @@ concurrency:
 
 env:
   SQLDEF_VERSION: v3.11.26
-  OCTOCOV_VERSION: v0.75.8
+  OCTOCOV_VERSION: v0.83.3
 
 jobs:
   # Decides which test suites a pull request can affect, so a kopje-only change skips the legacy suites and
