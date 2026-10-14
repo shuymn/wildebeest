@@ -1302,8 +1302,16 @@ export function convertLegacy(
 					const same = current.find((m) =>
 						mapped.kind === 'mapped' ? m.imageId === mapped.imageId : m.imageId === null && m.url === url
 					)
+					// The row the status shows now, with what this version said of it: its own description, and for an
+					// image kept where it was, the size it declared.
 					if (same !== undefined) {
-						return [presented(same)]
+						return [
+							presented({
+								...same,
+								description: descriptionOf(element),
+								meta: same.imageId === null ? metaOf(element) : same.meta,
+							}),
+						]
 					}
 					if (mapped.kind !== 'mapped') {
 						return [

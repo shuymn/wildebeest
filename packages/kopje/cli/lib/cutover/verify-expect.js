@@ -529,10 +529,11 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 				const same = now.find((m) =>
 					resolved.imageId === null ? m.imageId === null && m.url === (link ?? '') : m.imageId === resolved.imageId
 				)
-				if (same !== undefined) {
-					return [[same.url, same.preview, same.description, same.meta]]
-				}
+				// The URLs are the row's; the description (and a kept image's declared size) are this version's.
 				const description = text(element.name) || text(element.description) || text(element.summary)
+				if (same !== undefined) {
+					return [[same.url, same.preview, description, same.imageId === null ? metaSizes(sized(element)) : same.meta]]
+				}
 				if (resolved.imageId === null) {
 					return [[link ?? '', link ?? '', description, metaSizes(sized(element))]]
 				}

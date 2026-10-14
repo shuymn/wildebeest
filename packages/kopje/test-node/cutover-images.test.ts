@@ -97,6 +97,7 @@ const FILES: Record<string, Uint8Array> = {
 	'image-1': gif(800, 600),
 	'image-2': png(64, 32),
 	'image-3': jpeg(1024, 768),
+	'image-8': png(30, 20),
 	'image-9': png(10, 20),
 }
 
@@ -189,7 +190,7 @@ describe('images-export', () => {
 	it('downloads each image once from its delivery URL, checks it and records it', async () => {
 		const { ok, report, outDir, calls } = await downloaded()
 		expect(ok).toBe(true)
-		expect(report).toMatchObject({ images: 7, downloaded: 7, kept: 0, from: 'delivery', malformedUrls: 0 })
+		expect(report).toMatchObject({ images: 8, downloaded: 8, kept: 0, from: 'delivery', malformedUrls: 0 })
 		// The variant as found in the data, no credentials; the foreign and upstream accounts are not fetched.
 		expect(calls.map((c) => c.url).sort()).toEqual(
 			[
@@ -199,6 +200,7 @@ describe('images-export', () => {
 				'image-1/usercontent',
 				'image-2/usercontent',
 				'image-3/usercontent',
+				'image-8/usercontent',
 				'image-9/usercontent',
 			].map((path) => `https://imagedelivery.net/${ACCOUNT}/${path}`)
 		)
@@ -230,7 +232,7 @@ describe('images-export', () => {
 	it('uses the Images API with the token when given an account id, and never follows a redirect with it', async () => {
 		const { ok, report, calls, outDir } = await downloaded(FILES, { token: 'images-api-token-value' })
 		expect(ok).toBe(true)
-		expect(report).toMatchObject({ from: 'api', downloaded: 7 })
+		expect(report).toMatchObject({ from: 'api', downloaded: 8 })
 		for (const { url, init } of calls) {
 			expect(url).toMatch(
 				new RegExp(`^https://api\\.cloudflare\\.com/client/v4/accounts/${ACCOUNT_ID}/images/v1/[a-z0-9-]+/blob$`)
@@ -254,7 +256,7 @@ describe('images-export', () => {
 			fetch,
 		})
 		expect(again.ok).toBe(true)
-		expect(again.report).toMatchObject({ images: 7, kept: 5, downloaded: 2 })
+		expect(again.report).toMatchObject({ images: 8, kept: 6, downloaded: 2 })
 		expect(calls.map((c) => c.url.split('/')[4]).sort()).toEqual(['image-2', 'image-3'])
 		expect(await imagesJson(first.outDir)).toEqual(before)
 		expect(await readFile(join(first.outDir, 'originals', 'image-2'))).toEqual(Buffer.from(FILES['image-2'] ?? []))
@@ -314,13 +316,13 @@ describe('images-export', () => {
 		})
 		expect(ok).toBe(false)
 		expect(report).toMatchObject({
-			downloaded: 2,
+			downloaded: 3,
 			missing: { total: 5, 'not-found': 1, 'unsupported-type': 1, 'too-large': 2, 'too-many-pixels': 1 },
 		})
 		const file = await imagesJson(outDir)
 		expect(file.images['avatar-1']).toMatchObject({ state: 'missing', reason: 'not-found' })
 		expect(file.images['image-3']).toMatchObject({ state: 'missing', reason: 'too-many-pixels' })
-		expect((await readdir(join(outDir, 'originals'))).sort()).toEqual(['avatar-0', 'image-9'])
+		expect((await readdir(join(outDir, 'originals'))).sort()).toEqual(['avatar-0', 'image-8', 'image-9'])
 	})
 
 	it('stops on a server error, keeping what it downloaded, and refuses another instance or account', async () => {
@@ -359,9 +361,9 @@ describe('images-export', () => {
 		expect(calls).toEqual([])
 		const code = await run({ ...common, argv: [...args, '--account-id', ACCOUNT_ID], env: { CF_IMAGES_TOKEN: token } })
 		expect(code).toBe(0)
-		expect(calls).toHaveLength(7)
+		expect(calls).toHaveLength(8)
 		const printed = output.join('')
-		expect(printed).toContain('"downloaded": 7')
+		expect(printed).toContain('"downloaded": 8')
 		for (const secret of [token, 'kopje.test', ACCOUNT, 'avatar-0']) {
 			expect(printed).not.toContain(secret)
 		}
@@ -383,15 +385,15 @@ describe('convert and verify-conversion with --images', () => {
 		const { ok, manifest, dumpPath, exportPath, imagesDir, file } = await converted()
 		expect(manifest.stop).toBeUndefined()
 		expect(ok).toBe(true)
-		// avatar-0, avatar-1, header-0, image-1 twice and image-3 (attached), image-2 (unattached), image-9 (an earlier
-		// version); Bob's upstream default header; one foreign attachment.
+		// avatar-0, avatar-1, header-0, image-1 twice, image-3 and image-8 (attached; image-8 also in the earlier version),
+		// image-2 (unattached), image-9 (an earlier version only); Bob's upstream default header; one foreign attachment.
 		expect(manifest.images).toEqual({
-			mapped: 8,
+			mapped: 10,
 			missing: 0,
 			upstream: 1,
 			foreign: 1,
 			unmapped: 0,
-			originals: 8,
+			originals: 9,
 			acceptMissing: false,
 		})
 		const db = await opened(dumpPath)
@@ -412,6 +414,7 @@ describe('convert and verify-conversion with --images', () => {
 				'image-2',
 				`image\n${String(row("SELECT 'https://kopje.test/ap/o/' || legacy_ap_o AS id FROM media_attachments WHERE status_id IS NULL AND legacy_ap_o IS NOT NULL").id)}`
 			),
+			'image-8': token('image-8', `attachment\n${statusUri('%second version%')}\n0`),
 			'image-9': token('image-9', `edit\n${statusUri('%second version%')}\nimage-9`),
 		}
 		const media = (name: keyof typeof tokens) =>
@@ -421,7 +424,7 @@ describe('convert and verify-conversion with --images', () => {
 				WHERE m.file_token = ?`,
 				tokens[name]
 			)
-		expect(new Set(Object.values(tokens)).size).toBe(8)
+		expect(new Set(Object.values(tokens)).size).toBe(9)
 
 		// Profiles: the full file of a kept, unattached row; PNG stays PNG, JPEG becomes WebP, sized as the upload path.
 		const aliceRow = row("SELECT avatar_url, header_url FROM accounts WHERE username = 'alice' AND domain IS NULL")
@@ -462,13 +465,19 @@ describe('convert and verify-conversion with --images', () => {
 		expect(media('image-9')).toMatchObject({ attached: 0, username: 'alice', content_type: 'image/png' })
 		const edits = (
 			db.prepare('SELECT media_json FROM status_edits ORDER BY rowid').all() as { media_json: string }[]
-		).map((e) => JSON.parse(e.media_json) as { url: string; preview_url: string }[])
+		).map((e) => JSON.parse(e.media_json) as { url: string; preview_url: string; description: string | null }[])
 		expect(edits.flat()).toContainEqual(
 			expect.objectContaining({
 				url: `${ORIGIN}/media/${tokens['image-9']}/full.png`,
 				preview_url: `${ORIGIN}/media/${tokens['image-9']}/small.png`,
 			})
 		)
+		// Both versions show image-8's row, each with the description it had then.
+		const image8 = `${ORIGIN}/media/${tokens['image-8']}/full.png`
+		expect(edits.map((version) => version.filter((m) => m.url === image8).map((m) => m.description))).toEqual([
+			['before'],
+			['after'],
+		])
 		// Another account's image stays where it is; nothing points to Cloudflare Images under the operator's account.
 		expect(row('SELECT count(*) AS n FROM media_attachments WHERE url = ?', FOREIGN_IMAGE).n).toBe(1)
 		const dump = await readFile(dumpPath, 'utf8')
@@ -478,7 +487,7 @@ describe('convert and verify-conversion with --images', () => {
 		// One original per row, named for the R2 key originals/<media id>, byte for byte, mode 0600.
 		const out = join(space.dir, 'out', 'originals')
 		const names = (await readdir(out)).sort()
-		expect(names).toHaveLength(8)
+		expect(names).toHaveLength(9)
 		for (const name of Object.keys(tokens) as (keyof typeof tokens)[]) {
 			const mediaId = String(media(name).id)
 			expect(names).toContain(mediaId)
@@ -494,7 +503,7 @@ describe('convert and verify-conversion with --images', () => {
 		} = await verify(exportPath, dumpPath, { acceptDeletions: true, imagesDir })
 		expect(failing(categories)).toEqual([])
 		expect(verified).toBe(true)
-		expect(categories.media_files?.expected).toBe(8)
+		expect(categories.media_files?.expected).toBe(9)
 		expect(report.images).toEqual({ missing: 0, unmapped: 0, acceptMissing: false })
 
 		// Deterministic for a given base time and mapping.
@@ -518,10 +527,10 @@ describe('convert and verify-conversion with --images', () => {
 			outDir: imagesDir,
 			fetch: fakeFetch(FILES).fetch,
 		})
-		expect(exported.report).toMatchObject({ images: 6 })
+		expect(exported.report).toMatchObject({ images: 7 })
 		const { ok, manifest, dumpPath } = await convert(space.dir, exportPath, { imagesDir, acceptDeletions: true })
 		expect(ok).toBe(true)
-		expect(manifest.images).toMatchObject({ upstream: 2, mapped: 7 })
+		expect(manifest.images).toMatchObject({ upstream: 2, mapped: 9 })
 		const db = await opened(dumpPath)
 		const avatar = (uri: string) =>
 			(db.prepare('SELECT avatar_url FROM accounts WHERE uri = ?').get(uri) as { avatar_url: string | null }).avatar_url
@@ -574,7 +583,7 @@ describe('convert and verify-conversion with --images', () => {
 			out: 'out-accepted',
 		})
 		expect(ok).toBe(true)
-		expect(manifest.images).toMatchObject({ mapped: 5, missing: 3, originals: 5, acceptMissing: true })
+		expect(manifest.images).toMatchObject({ mapped: 7, missing: 3, originals: 6, acceptMissing: true })
 		const db = await opened(dumpPath)
 		const value = (sql: string) => Object.values(db.prepare(sql).get() ?? {})[0]
 		expect(value("SELECT avatar_url FROM accounts WHERE username = 'Bob' AND domain IS NULL")).toBeNull()
@@ -610,6 +619,8 @@ describe('convert and verify-conversion with --images', () => {
 			['UPDATE status_edits SET media_json = replace(media_json, \'"first"\', \'"changed"\')', ['edits']],
 			['UPDATE status_edits SET media_json = replace(media_json, \'"width":10,\', \'"width":11,\')', ['edits']],
 			["UPDATE status_edits SET media_json = '[]'", ['edits']],
+			// An earlier version given the description the image has now.
+			['UPDATE status_edits SET media_json = replace(media_json, \'"before"\', \'"after"\')', ['edits']],
 		]
 		for (const [sql, categories] of cases) {
 			const damaged = await tampered(space.dir, dumpPath, sql)

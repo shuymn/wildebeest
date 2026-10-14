@@ -60,7 +60,8 @@ export type FixtureOptions = {
 	loneSurrogates?: boolean
 	// Local images in Cloudflare Images under this account hash (imagedelivery.net/<hash>/<id>/<variant>): avatars
 	// avatar-0 and avatar-1, alice's header header-0, the images image-1 to image-3, and from level 23 image-9, which
-	// only the first version of the edited status shows; the unlisted status shows image-1 again. Bob's header is then
+	// only the first version of the edited status shows, and image-8, which both versions of it show, described
+	// 'before' and then 'after'; the unlisted status shows image-1 again. Bob's header is then
 	// the upstream default, and his first status shows an image of another account.
 	imagesAccount?: string
 }
@@ -574,6 +575,11 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		cc: [`${alice}/followers`],
 		mastodonId: snowflake(150, 4),
 		inReplyTo: r0Post,
+		// With imagesAccount: image-8, whose description the edit changed.
+		attachment:
+			imagesAccount === undefined
+				? undefined
+				: [{ type: 'Image', url: `${images}/image-8/usercontent`, name: 'after' }],
 	})
 	if (level >= 23) {
 		const firstVersion = {
@@ -583,7 +589,12 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 			spoiler_text: '',
 			sensitive: false,
 			attachment:
-				imagesAccount === undefined ? [] : [{ type: 'Image', url: `${images}/image-9/usercontent`, name: 'first' }],
+				imagesAccount === undefined
+					? []
+					: [
+							{ type: 'Image', url: `${images}/image-8/usercontent`, name: 'before' },
+							{ type: 'Image', url: `${images}/image-9/usercontent`, name: 'first' },
+						],
 			published: iso(150),
 		}
 		insert('object_revisions', { object_id: edited.id, properties: JSON.stringify(firstVersion), cdate: cdate(155) })

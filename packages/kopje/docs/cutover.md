@@ -207,7 +207,8 @@ are kept without a status either way. To move the images into Kopje's own media 
    the full size (within 3840 pixels) and the preview size (within 640) computed as the upload path sizes them. An
    avatar or header becomes the account's profile image: an unattached row with no `gc_at`, whose full URL
    `avatar_url` or `header_url` holds. An image that only earlier versions of a status show gets an unattached row
-   too, one per status, so its files are kept. Every row, also when several show the same image, has its own token,
+   too, one per status, so its files are kept. An earlier version that shows an image the status still shows names that
+   row's files, with the description that version had. Every row, also when several show the same image, has its own token,
    files and original, so Kopje's per-row lifecycle (the sweep after a deletion, backups, the rebuild) needs nothing
    else. The token is HMAC-SHA256 under the image's secret of the row's key, base64url (43 characters, the shape of
    Kopje's tokens): `profile\n<actor URI>\n<avatar|header>`, `attachment\n<status URI>\n<position>`,

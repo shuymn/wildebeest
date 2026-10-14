@@ -362,16 +362,17 @@ kopje-admin convert <work>/export-b --out <work>/out --base-time <now, ISO 8601 
   --catalog <work>/catalog.json --domain <domain> --images <work>/images
 kopje-admin fingerprint compare <work>/fp-a.json <work>/fp-b.json --manifest <work>/out/manifest.json
 kopje-admin verify-conversion <work>/export-b <work>/out/kopje.dump --images <work>/images
-(
-  set -eu   # stops at the first put that fails
-  n=0
-  for f in <work>/out/originals/*; do
-    wrangler r2 object put "<media-bucket>/originals/$(basename "$f")" --file "$f" --remote
-    n=$((n + 1))
-  done
-  [ "$n" -eq "$(jq .images.originals <work>/out/manifest.json)" ] || { echo "put $n originals, not all" >&2; exit 1; }
-  echo "put $n originals"
-)
+bash -eu <<'EOF'   # bash whatever the shell; -e stops at the first put that fails
+shopt -s nullglob   # no originals: the loop runs zero times, and the count decides
+n=0
+for f in <work>/out/originals/*; do
+  wrangler r2 object put "<media-bucket>/originals/$(basename "$f")" --file "$f" --remote </dev/null
+  n=$((n + 1))
+done
+want=$(jq .images.originals <work>/out/manifest.json)
+[ "$n" -eq "$want" ] || { echo "put $n originals of $want" >&2; exit 1; }
+echo "put $n originals"
+EOF
 kopje-admin import <work>/out/kopje.dump
 kopje-admin dump <work>/imported.dump
 kopje-admin verify-conversion <work>/export-b <work>/imported.dump --images <work>/images
@@ -396,7 +397,8 @@ kopje-admin maintenance-worker-check <work>/export-b --domain <domain> --worker 
   `kopje-admin import-reset <work>/out/kopje.dump --yes`.
 - The originals go to `originals/<media id>` in `<media-bucket>`, where Kopje keeps every original; nothing serves
   them. **Go:** the block prints `put <n> originals` with `n` equal to `images.originals` in the manifest. It stops at
-  the first `wrangler` that fails, or when fewer files were put than the conversion wrote; run the whole block again
+  the first `wrangler` that fails, or when the number put differs from what the conversion wrote (no originals passes
+  only when none were written); it runs in bash also when pasted into zsh. Run the whole block again
   (a put replaces the same key). Do not import before it passes: a row whose original is not in R2 has nothing to
   rebuild its files from (`media-rebuild` reports such rows; TODO: part 2). The images' served files appear only once `media-rebuild` has made them from these originals (TODO: part 2
   of the Cloudflare Images move, not in this release): until then the moved avatars, headers and attachments answer 404. A rollback leaves the originals in the bucket; a later conversion with the same `images.json` and base time
