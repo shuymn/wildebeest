@@ -98,6 +98,8 @@ export function actualFromDump(text) {
 	const parentOf = new Map()
 	/** @type {Map<string, [string, number][]>} */
 	const mentions = new Map()
+	/** @type {Map<string, string[]>} */
+	const tags = new Map()
 	/** @type {Map<string, unknown[]>} */
 	const edits = new Map()
 	/** @type {Map<string, [number, unknown[]][]>} */
@@ -143,6 +145,8 @@ export function actualFromDump(text) {
 					t('avatar_url'),
 					t('header_url'),
 					int(row.locked),
+					t('actor_type'),
+					int(row.discoverable),
 				])
 				if (row.raw !== 'NULL') {
 					put('raw', `account ${uri}`, t('raw'))
@@ -155,7 +159,23 @@ export function actualFromDump(text) {
 			}
 			case 'local_accounts': {
 				const owner = account(t('account_id'))
-				put('keys', owner?.uri ?? '', [t('email'), blobHex(row.privkey), blobHex(row.privkey_salt), t('pubkey')])
+				/** @type {unknown} */
+				let aliases
+				try {
+					aliases = JSON.parse(t('also_known_as') ?? '')
+				} catch {
+					aliases = '(not JSON)'
+				}
+				put('keys', owner?.uri ?? '', [
+					t('email'),
+					blobHex(row.privkey),
+					blobHex(row.privkey_salt),
+					t('pubkey'),
+					aliases,
+					t('default_visibility'),
+					int(row.default_sensitive),
+					t('default_language'),
+				])
 				break
 			}
 			case 'statuses': {
@@ -166,7 +186,16 @@ export function actualFromDump(text) {
 				statuses.set(id, {
 					uri,
 					author,
-					record: [author, t('content'), t('source_text'), t('spoiler_text'), int(row.sensitive), t('published_at')],
+					record: [
+						author,
+						t('content'),
+						t('source_text'),
+						t('spoiler_text'),
+						int(row.sensitive),
+						t('published_at'),
+						t('language'),
+						t('edited_at'),
+					],
 					visibility: legacyVisibility(t('visibility')),
 					inReplyTo: t('in_reply_to_uri'),
 					alias: t('legacy_ap_o'),
@@ -179,6 +208,11 @@ export function actualFromDump(text) {
 				if (row.legacy_id !== 'NULL') {
 					put('legacy_ids', `status ${t('legacy_id') ?? ''}`, uri)
 				}
+				break
+			}
+			case 'status_tags': {
+				const id = t('status_id') ?? ''
+				tags.set(id, [...(tags.get(id) ?? []), t('name') ?? ''])
 				break
 			}
 			case 'status_mentions': {
@@ -243,16 +277,17 @@ export function actualFromDump(text) {
 					t('uri'),
 					int(row.show_reblogs),
 					int(row.notify),
+					t('languages'),
 				])
 				break
 			case 'favourites':
-				put('favourites', `${account(t('account_id'))?.uri} ${status(t('status_id'))?.uri}`, 1)
+				put('favourites', `${account(t('account_id'))?.uri} ${status(t('status_id'))?.uri}`, [t('uri')])
 				break
 			case 'bookmarks':
 				put('bookmarks', `${account(t('account_id'))?.uri} ${status(t('status_id'))?.uri}`, 1)
 				break
 			case 'blocks':
-				put('blocks', `${account(t('account_id'))?.uri} ${account(t('target_account_id'))?.uri}`, 1)
+				put('blocks', `${account(t('account_id'))?.uri} ${account(t('target_account_id'))?.uri}`, [t('uri')])
 				break
 			case 'mutes':
 				put('mutes', `${account(t('account_id'))?.uri} ${account(t('target_account_id'))?.uri}`, [
@@ -295,7 +330,7 @@ export function actualFromDump(text) {
 				}
 				break
 			case 'oauth_clients':
-				put('clients', t('id') ?? '', [t('secret'), t('name'), t('redirect_uris'), t('scopes')])
+				put('clients', t('id') ?? '', [t('secret'), t('name'), t('redirect_uris'), t('scopes'), t('website')])
 				break
 			default:
 				break
@@ -308,7 +343,8 @@ export function actualFromDump(text) {
 			put('boosts', entry.uri, [entry.author, statuses.get(target)?.uri, entry.visibility, boostRecipients])
 			continue
 		}
-		put('statuses', entry.uri, entry.record)
+		put('statuses', entry.uri, [...entry.record, (tags.get(id) ?? []).sort()])
+		tags.delete(id)
 		const recipients = (mentions.get(id) ?? []).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
 		const open = entry.visibility === 'public' || entry.visibility === 'unlisted'
 		put('audience', entry.uri, [entry.visibility, recipients, open ? null : entry.author])
@@ -319,6 +355,10 @@ export function actualFromDump(text) {
 		if (entry.remote && entry.alias !== null) {
 			put('aliases', entry.alias, entry.uri)
 		}
+	}
+	// Hashtags of a boost or of no status are records of their own, so they fail as extra ones.
+	for (const [id, names] of tags) {
+		put('statuses', `hashtags of ${statuses.get(id)?.uri ?? `no status ${id}`}`, names)
 	}
 	// A repeated id is a record of its own, so it fails as an extra one.
 	const listed = new Set()

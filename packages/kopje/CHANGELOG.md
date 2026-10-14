@@ -78,6 +78,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   domain name is dropped and counted (`domain_blocks:invalid-domain`), so the conversion stops on it until
   `--accept-deletions`.
 
+- `verify-conversion` also compares hashtags, status language and edit time, actor type and discoverability, each
+  local account's aliases and posting defaults (visibility, sensitivity, language), follow languages, the Like and
+  Block records of favourites and blocks, and client websites.
+
 - The cutover converts a status's language as Kopje reads one from a remote object: the primary subtag of the first
   language in `contentMap` (else `nameMap`, `summaryMap`), when it is two or three letters. It used to keep the whole
   tag, and only when `contentMap` had a single language.

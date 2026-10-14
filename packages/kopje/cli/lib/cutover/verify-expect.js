@@ -77,6 +77,41 @@ function when(value) {
 	return Number.isNaN(ms) ? null : new Date(ms).toISOString()
 }
 
+/**
+ * The language a status declares, as Kopje reads one from an object (src/federation/remote-status.ts): the first tag of
+ * its contentMap, else nameMap, else summaryMap, cut to its primary subtag in lowercase, when that is two or three
+ * letters (ISO 639). Legacy itself never showed a language.
+ * @param {Json} p
+ */
+function languageOf(p) {
+	for (const key of ['contentMap', 'nameMap', 'summaryMap']) {
+		const map = p[key]
+		const first = typeof map === 'object' && map !== null && !Array.isArray(map) ? Object.keys(map)[0] : undefined
+		if (first !== undefined) {
+			const primary = (first.split(/[-_]/)[0] ?? '').toLowerCase()
+			return /^[a-z]{2,3}$/.test(primary) ? primary : null
+		}
+	}
+	return null
+}
+
+// A hashtag as status_tags names it: NFKC, lowercase, without its leading #. Empty is no hashtag.
+/** @param {unknown} value */
+const hashtagName = (value) => text(value).normalize('NFKC').toLowerCase().replace(/^#/, '')
+
+/** @param {unknown} value whether a legacy value is JSON text, as the Store requires of follows.languages */
+function isJsonText(value) {
+	if (typeof value !== 'string') {
+		return false
+	}
+	try {
+		JSON.parse(value)
+		return true
+	} catch {
+		return false
+	}
+}
+
 /** @param {Uint8Array} bytes */
 const hex = (bytes) =>
 	Array.from(bytes, (b) => b.toString(16).padStart(2, '0'))
@@ -290,7 +325,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	}
 	/** @type {Map<string, Json>} */
 	const actors = new Map()
-	for (const actor of all('SELECT id, properties FROM actors')) {
+	for (const actor of all('SELECT id, type, properties FROM actors')) {
 		const uri = String(actor.id)
 		const p = parse(actor.properties)
 		actors.set(uri, p)
@@ -316,6 +351,9 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			profileImage(p.icon, 'avatar'),
 			profileImage(p.image, 'header'),
 			p.manuallyApprovesFollowers === true ? 1 : 0,
+			// Legacy showed the type of the actors row; the properties' type where the row has none.
+			text(actor.type) || text(p.type) || 'Person',
+			typeof p.discoverable === 'boolean' ? (p.discoverable ? 1 : 0) : null,
 		])
 		if (!isLocal) {
 			put('raw', `account ${uri}`, String(actor.properties))
@@ -330,12 +368,20 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			byAddress.set(normalized, uri)
 		}
 	}
+	// The local account: its keys, its aliases (the actor's alsoKnownAs) and its posting defaults (actor_preferences as
+	// legacy read them, their defaults where a user has no row).
+	const preferences = new Map(all('SELECT * FROM actor_preferences').map((p) => [String(p.id), p]))
 	for (const user of all('SELECT actor_id, email, privkey, privkey_salt, pubkey FROM users')) {
+		const preference = preferences.get(String(user.actor_id))
 		put('keys', String(user.actor_id), [
 			String(user.email),
 			hex(user.privkey),
 			hex(user.privkey_salt),
 			String(user.pubkey),
+			many(actors.get(String(user.actor_id))?.alsoKnownAs).filter((x) => typeof x === 'string'),
+			text(preference?.posting_default_visibility) || 'public',
+			preference?.posting_default_sensitive === 1 ? 1 : 0,
+			typeof preference?.posting_default_language === 'string' ? preference.posting_default_language : null,
 		])
 	}
 	// Statuses.
@@ -369,6 +415,11 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	/** @type {Map<string, string[]>} */
 	const statusApiIds = new Map()
 	const prefix = `https://${domain}/ap/o/`
+	/** @type {Map<string, string[]>} object id -> the hashtags legacy recorded for it */
+	const recordedTags = new Map()
+	for (const h of all('SELECT value, object_id FROM note_hashtags')) {
+		recordedTags.set(String(h.object_id), [...(recordedTags.get(String(h.object_id)) ?? []), text(h.value)])
+	}
 	for (const o of objects) {
 		const id = String(o.id)
 		const uri = statusUri.get(id)
@@ -383,13 +434,26 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			isLocal && typeof p.source === 'object' && p.source !== null && typeof p.source.content === 'string'
 				? text(p.source.content)
 				: null
+		// Hashtags: the object's Hashtag tags and the ones legacy recorded for it. An edit time equal to the publication
+		// time is no edit.
+		const published = when(p.published) ?? when(o.cdate)
+		const updated = when(p.updated)
+		const hashtags = [
+			...many(p.tag)
+				.filter((t) => typeof t === 'object' && t !== null && /** @type {Json} */ (t).type === 'Hashtag')
+				.map((t) => /** @type {unknown} */ (/** @type {Json} */ (t).name)),
+			...(recordedTags.get(id) ?? []),
+		].map(hashtagName)
 		put('statuses', uri, [
 			author,
 			sanitized(p.content),
 			sourceText,
 			spoiler,
 			p.sensitive === true ? 1 : 0,
-			when(p.published) ?? when(o.cdate),
+			published,
+			languageOf(p),
+			updated !== published ? updated : null,
+			[...new Set(hashtags.filter((x) => x !== ''))].sort(),
 		])
 
 		// The audience, from the object's addressing and stored author as exported. Recipients: for public and unlisted,
@@ -620,13 +684,17 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	}
 
 	// Relationships, by URI, with their preferences.
+	// The Follow and Like activities each account sent, by their object.
 	/** @type {Map<string, string[]>} */
 	const follows = new Map()
+	/** @type {Map<string, string[]>} */
+	const likes = new Map()
 	for (const a of all('SELECT actor_id, activity FROM actor_activities ORDER BY cdate, rowid')) {
 		const body = parse(a.activity)
-		if (body.type === 'Follow' && typeof body.id === 'string') {
+		const sent = body.type === 'Follow' ? follows : body.type === 'Like' ? likes : undefined
+		if (sent !== undefined && typeof body.id === 'string') {
 			const key = `${String(a.actor_id)} ${ref(body.object) ?? ''}`
-			follows.set(key, [...(follows.get(key) ?? []), body.id])
+			sent.set(key, [...(sent.get(key) ?? []), body.id])
 		}
 	}
 	for (const f of all('SELECT * FROM actor_following')) {
@@ -640,12 +708,22 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 				: local.has(String(f.actor_id))
 					? (follows.get(key)?.at(-1) ?? null)
 					: null
-		put('follows', key, [String(f.state), record, f.show_reblogs === 0 ? 0 : 1, f.notify === 1 ? 1 : 0])
+		put('follows', key, [
+			String(f.state),
+			record,
+			f.show_reblogs === 0 ? 0 : 1,
+			f.notify === 1 ? 1 : 0,
+			isJsonText(f.languages) ? f.languages : null,
+		])
 	}
+	// A local account's favourite keeps its last Like, which names the status by its URI (or, earlier, its legacy id).
 	for (const f of all('SELECT actor_id, object_id FROM actor_favourites')) {
 		const target = statusUri.get(String(f.object_id))
 		if (known(f.actor_id) && target !== undefined) {
-			put('favourites', `${String(f.actor_id)} ${target}`, 1)
+			const like = local.has(String(f.actor_id))
+				? (likes.get(`${String(f.actor_id)} ${target}`) ?? likes.get(`${String(f.actor_id)} ${String(f.object_id)}`))
+				: undefined
+			put('favourites', `${String(f.actor_id)} ${target}`, [like?.at(-1) ?? null])
 		}
 	}
 	for (const b of all('SELECT account_id, status_id FROM bookmarks')) {
@@ -654,9 +732,12 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			put('bookmarks', `${String(b.account_id)} ${target}`, 1)
 		}
 	}
-	for (const b of all('SELECT account_id, target_account_id FROM blocks')) {
+	for (const b of all('SELECT account_id, target_account_id, uri FROM blocks')) {
 		if (known(b.account_id) && known(b.target_account_id) && b.account_id !== b.target_account_id) {
-			put('blocks', `${String(b.account_id)} ${String(b.target_account_id)}`, 1)
+			// The Block activity's id, which an unblock undoes.
+			put('blocks', `${String(b.account_id)} ${String(b.target_account_id)}`, [
+				typeof b.uri === 'string' ? b.uri : null,
+			])
 		}
 	}
 	for (const m of all('SELECT account_id, target_account_id, hide_notifications FROM mutes')) {
@@ -731,8 +812,14 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	if (rules.length > 0) {
 		put('settings', 'rules', JSON.stringify(rules))
 	}
-	for (const c of all('SELECT id, secret, name, redirect_uris, scopes FROM clients')) {
-		put('clients', String(c.id), [String(c.secret), String(c.name), String(c.redirect_uris), text(c.scopes) || 'read'])
+	for (const c of all('SELECT id, secret, name, redirect_uris, website, scopes FROM clients')) {
+		put('clients', String(c.id), [
+			String(c.secret),
+			String(c.name),
+			String(c.redirect_uris),
+			text(c.scopes) || 'read',
+			typeof c.website === 'string' ? c.website : null,
+		])
 	}
 	return { records: out, overLimit, images: imageCounts, dropped }
 }

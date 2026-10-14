@@ -215,6 +215,31 @@ describe('convert and verify-conversion', () => {
 			['a mute gets an expiry', "UPDATE mutes SET expires_at = '2026-01-01T00:00:00.000Z'", 'mutes'],
 			['a list policy changes', "UPDATE lists SET replies_policy = 'none'", 'lists'],
 			['client scopes change', "UPDATE oauth_clients SET scopes = 'read write follow push admin'", 'clients'],
+			['a client loses its website', 'UPDATE oauth_clients SET website = NULL', 'clients'],
+			['a hashtag is dropped', "DELETE FROM status_tags WHERE name = 'wildebeest'", 'statuses'],
+			['a hashtag keeps its case', "UPDATE status_tags SET name = 'Cats' WHERE name = 'cats'", 'statuses'],
+			[
+				'a boost gets a hashtag',
+				"INSERT INTO status_tags (status_id, name) SELECT id, 'cats' FROM statuses WHERE reblog_of_id IS NOT NULL LIMIT 1",
+				'statuses',
+			],
+			['a status loses its language', 'UPDATE statuses SET language = NULL WHERE language IS NOT NULL', 'statuses'],
+			['a language keeps its region', "UPDATE statuses SET language = 'pt-BR' WHERE language = 'pt'", 'statuses'],
+			['an edit time is dropped', 'UPDATE statuses SET edited_at = NULL', 'statuses'],
+			[
+				'an unedited status gets an edit time',
+				'UPDATE statuses SET edited_at = published_at WHERE edited_at IS NULL AND reblog_of_id IS NULL',
+				'statuses',
+			],
+			['an actor type changes', "UPDATE accounts SET actor_type = 'Person' WHERE actor_type = 'Service'", 'accounts'],
+			['discoverability is dropped', 'UPDATE accounts SET discoverable = NULL WHERE domain IS NULL', 'accounts'],
+			['an alias is dropped', "UPDATE local_accounts SET also_known_as = '[]'", 'keys'],
+			['the default visibility changes', "UPDATE local_accounts SET default_visibility = 'public'", 'keys'],
+			['the default sensitivity changes', 'UPDATE local_accounts SET default_sensitive = 0', 'keys'],
+			['the default language is dropped', 'UPDATE local_accounts SET default_language = NULL', 'keys'],
+			['a follow loses its languages', 'UPDATE follows SET languages = NULL', 'follows'],
+			['a favourite loses its Like record', 'UPDATE favourites SET uri = NULL', 'favourites'],
+			['a block loses its Block record', 'UPDATE blocks SET uri = NULL', 'blocks'],
 		]
 		let exportPath: string
 		let dumpPath: string
