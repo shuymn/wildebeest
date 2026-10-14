@@ -1,5 +1,5 @@
 import { type Page, type PageQuery, type Present, resolveAccountId } from './accounts'
-import { listableSql, unfilteredSql, visibleSql } from './audience'
+import { activeMuteSql, filterTime, listableSql, unfilteredSql, visibleSql } from './audience'
 import { optionalUserReadOperation, userReadOperation } from './auth'
 import { presentStatuses, type Status } from './status-presenter'
 import { normalizeTag } from './status-text'
@@ -53,12 +53,18 @@ function ids(rows: { id: string }[]): string[] {
 // public, unlisted and private; direct and limited statuses of their own, and of followed accounts that address
 // them. Boosts from follows with show_reblogs off, replies (of others) in conversations with accounts the viewer does
 // not follow, and posts outside a follow's languages are left out, and so is anything the list rule hides (blocks,
-// mutes, domain blocks, invisible originals).
+// mutes, domain blocks, invisible originals) and, as FeedManager#filter_from_home does, a status or boosted original
+// that mentions an account the viewer blocks or mutes (the viewer's own statuses always pass, as there).
 export const homeTimeline = userReadOperation<{ page: PageQuery; present: Present }, Page<Status>>(
-	(db, { page, present }, { accountId }) => {
+	(db, { page, present }, { accountId, now }) => {
 		const cursor = statusPage(page)
 		const order = cursor.ascending ? 'ASC' : 'DESC'
-		const home = `${listableSql('s', '?1')}
+		const home = `${listableSql('s', '?1', '?5')}
+			AND (s.account_id = ?1 OR NOT EXISTS (SELECT 1 FROM status_mentions hm
+				WHERE hm.status_id IN (s.id, s.reblog_of_id) AND hm.silent = 0
+				AND (EXISTS (SELECT 1 FROM blocks hb WHERE hb.account_id = ?1 AND hb.target_account_id = hm.account_id)
+					OR EXISTS (SELECT 1 FROM mutes hmu WHERE hmu.account_id = ?1 AND hmu.target_account_id = hm.account_id
+						AND ${activeMuteSql('hmu', '?5')}))))
 			AND (s.reblog_of_id IS NULL OR s.account_id = ?1 OR EXISTS (SELECT 1 FROM follows hf
 				WHERE hf.account_id = ?1 AND hf.target_account_id = s.account_id AND hf.show_reblogs = 1))
 			AND (s.account_id = ?1 OR s.in_reply_to_account_id IS NULL OR s.in_reply_to_account_id IN (?1, s.account_id)
@@ -91,7 +97,8 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 			accountId,
 			cursor.max,
 			cursor.min,
-			cursor.limit
+			cursor.limit,
+			new Date(now).toISOString()
 		)
 		return statusesPage(db, ids(rows), cursor, accountId, present)
 	}
@@ -107,33 +114,37 @@ export type PublicTimelineInput = {
 
 // Local and remote public statuses that are not boosts, and not replies except to the author's own statuses
 // (Mastodon's PublicFeed). Never unlisted, private, direct or limited.
-function publicConditions(local: boolean, remote: boolean, onlyMedia: boolean): string {
+// The viewer is ?1 and the time its mutes are judged at is `now` (a parameter).
+function publicConditions(local: boolean, remote: boolean, onlyMedia: boolean, now: string): string {
 	return `s.visibility = 'public' AND s.reblog_of_id IS NULL
 		${local ? 'AND pa.domain IS NULL' : ''} ${remote ? 'AND pa.domain IS NOT NULL' : ''}
 		${onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments pm WHERE pm.status_id = s.id)' : ''}
-		AND ${listableSql('s', '?1')}`
+		AND ${listableSql('s', '?1', now)}`
 }
 
-export const publicTimeline = optionalUserReadOperation<PublicTimelineInput, Page<Status>>((db, input, viewerId) => {
-	const cursor = statusPage(input.page)
-	const rows = db.all<{ id: string }>(
-		`SELECT s.id FROM statuses s JOIN accounts pa ON pa.id = s.account_id
-			WHERE ${publicConditions(input.local, input.remote, input.onlyMedia)}
+export const publicTimeline = optionalUserReadOperation<PublicTimelineInput, Page<Status>>(
+	(db, input, viewerId, now) => {
+		const cursor = statusPage(input.page)
+		const rows = db.all<{ id: string }>(
+			`SELECT s.id FROM statuses s JOIN accounts pa ON pa.id = s.account_id
+			WHERE ${publicConditions(input.local, input.remote, input.onlyMedia, '?5')}
 				AND ${NOT_A_REPLY_TO_OTHERS}
 				AND ${cursorSql('s.id')}
 			ORDER BY s.id ${cursor.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
-		viewerId,
-		cursor.max,
-		cursor.min,
-		cursor.limit
-	)
-	return statusesPage(db, ids(rows), cursor, viewerId, input.present)
-})
+			viewerId,
+			cursor.max,
+			cursor.min,
+			cursor.limit,
+			filterTime(now)
+		)
+		return statusesPage(db, ids(rows), cursor, viewerId, input.present)
+	}
+)
 
 export type TagTimelineInput = PublicTimelineInput & { tag: string; any: string[]; all: string[]; none: string[] }
 
 // Public statuses with the tag or any of `any`, all of `all` and none of `none` (Mastodon's TagFeed).
-export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Status>>((db, input, viewerId) => {
+export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Status>>((db, input, viewerId, now) => {
 	const cursor = statusPage(input.page)
 	const tags = (names: string[]) => JSON.stringify([...new Set(names.map(normalizeTag))])
 	const rows = db.all<{ id: string }>(
@@ -142,7 +153,7 @@ export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Stat
 			AND NOT EXISTS (SELECT 1 FROM json_each(?6) t
 				WHERE NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id AND st.name = t.value))
 			AND NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id AND st.name IN (SELECT value FROM json_each(?7)))
-			AND ${publicConditions(input.local, input.remote, input.onlyMedia)}
+			AND ${publicConditions(input.local, input.remote, input.onlyMedia, '?8')}
 			AND ${cursorSql('s.id')}
 		ORDER BY s.id ${cursor.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 		viewerId,
@@ -151,7 +162,8 @@ export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Stat
 		cursor.limit,
 		tags([input.tag, ...input.any]),
 		tags(input.all),
-		tags(input.none)
+		tags(input.none),
+		filterTime(now)
 	)
 	return statusesPage(db, ids(rows), cursor, viewerId, input.present)
 })
@@ -172,7 +184,7 @@ export type AccountStatusesInput = {
 // out. The account's own statuses are shown even if the viewer mutes it, as on its profile. exclude_replies keeps
 // replies to the account itself (threads). Pins do not exist yet: pinned=true is an empty list.
 export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, Page<Status> | null>(
-	(db, input, viewerId) => {
+	(db, input, viewerId, now) => {
 		const accountId = resolveAccountId(db, input.account)
 		if (accountId === null) {
 			return null
@@ -186,7 +198,7 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 			WHERE s.account_id = ?5 AND ${visibleSql('s', '?1')}
 				AND NOT EXISTS (SELECT 1 FROM blocks ub WHERE ub.account_id IS ?1 AND ub.target_account_id = s.account_id)
 				AND (s.reblog_of_id IS NULL OR EXISTS (SELECT 1 FROM statuses o WHERE o.id = s.reblog_of_id
-					AND ${visibleSql('o', '?1')} AND ${unfilteredSql('o', '?1')}))
+					AND ${visibleSql('o', '?1')} AND ${unfilteredSql('o', '?1', '?7')}))
 				${input.onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments um WHERE um.status_id = s.id)' : ''}
 				${input.excludeReplies ? `AND ${NOT_A_REPLY_TO_OTHERS}` : ''}
 				${input.excludeReblogs ? 'AND s.reblog_of_id IS NULL' : ''}
@@ -198,7 +210,8 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 			cursor.min,
 			cursor.limit,
 			accountId,
-			input.tagged === null ? null : normalizeTag(input.tagged)
+			input.tagged === null ? null : normalizeTag(input.tagged),
+			filterTime(now)
 		)
 		return statusesPage(db, ids(rows), cursor, viewerId, input.present)
 	}
@@ -208,17 +221,18 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 // visible to the viewer (say, they stopped following a private author) or that they filter is not listed.
 function edgeList(table: 'bookmarks' | 'favourites') {
 	return userReadOperation<{ page: PageQuery; present: Present }, Page<Status>>(
-		(db, { page, present }, { accountId }) => {
+		(db, { page, present }, { accountId, now }) => {
 			const ascending = page.minId !== undefined
 			const rows = db.all<{ cursor: string; id: string }>(
 				`SELECT CAST(e.id AS TEXT) AS cursor, e.status_id AS id FROM ${table} e JOIN statuses s ON s.id = e.status_id
-			WHERE e.account_id = ?1 AND ${listableSql('s', '?1')}
+			WHERE e.account_id = ?1 AND ${listableSql('s', '?1', '?5')}
 				AND (?2 IS NULL OR e.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR e.id > CAST(?3 AS INTEGER))
 			ORDER BY e.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 				accountId,
 				page.maxId ?? null,
 				page.minId ?? page.sinceId ?? null,
-				page.limit
+				page.limit,
+				new Date(now).toISOString()
 			)
 			if (ascending) {
 				rows.reverse()

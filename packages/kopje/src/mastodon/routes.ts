@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 
 import { requireAccess, type RouteAccess } from './access'
 import * as accounts from './accounts'
+import * as blocks from './blocks'
 import type { ApiDeps, ApiEnv, ApiHandler } from './context'
 import * as instance from './instance'
 import * as media from './media'
@@ -92,6 +93,29 @@ export const ROUTES: readonly Route[] = [
 		path: '/api/v1/accounts/:id/statuses',
 		access: { scope: 'read:statuses', optional: true },
 		handler: timelines.accountStatuses,
+	},
+
+	// Blocks, mutes and domain blocks (mastodon/blocks.ts).
+	{ method: 'POST', path: '/api/v1/accounts/:id/block', access: { scope: 'write:blocks' }, handler: blocks.block },
+	{ method: 'POST', path: '/api/v1/accounts/:id/unblock', access: { scope: 'write:blocks' }, handler: blocks.unblock },
+	{ method: 'POST', path: '/api/v1/accounts/:id/mute', access: { scope: 'write:mutes' }, handler: blocks.mute },
+	{ method: 'POST', path: '/api/v1/accounts/:id/unmute', access: { scope: 'write:mutes' }, handler: blocks.unmute },
+	{ method: 'GET', path: '/api/v1/blocks', access: { scope: 'read:blocks' }, handler: blocks.blocks },
+	{ method: 'GET', path: '/api/v1/mutes', access: { scope: 'read:mutes' }, handler: blocks.mutes },
+	{
+		method: 'GET',
+		path: '/api/v1/domain_blocks/preview',
+		// As Mastodon's DomainBlocks::PreviewsController: it previews a write.
+		access: { scope: 'write:blocks' },
+		handler: blocks.previewDomainBlock,
+	},
+	{ method: 'GET', path: '/api/v1/domain_blocks', access: { scope: 'read:blocks' }, handler: blocks.domainBlocks },
+	{ method: 'POST', path: '/api/v1/domain_blocks', access: { scope: 'write:blocks' }, handler: blocks.blockDomain },
+	{
+		method: 'DELETE',
+		path: '/api/v1/domain_blocks',
+		access: { scope: 'write:blocks' },
+		handler: blocks.unblockDomain,
 	},
 
 	{ method: 'POST', path: '/api/v1/statuses', access: { scope: 'write:statuses' }, handler: statuses.createStatus },

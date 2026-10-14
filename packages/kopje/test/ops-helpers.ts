@@ -72,6 +72,14 @@ line2 ✓ 🦬'),
 			LEGACY_EMPTY_KEK.salt,
 			LEGACY_EMPTY_KEK.pubkey
 		)
+		// A mute with an expiry (0001): the dump must carry it, or the mute would become indefinite.
+		sql.exec(
+			`INSERT INTO mutes (account_id, target_account_id, hide_notifications, expires_at, created_at)
+			 VALUES (?, ?, 0, '2026-10-13T00:00:00.000Z', ?)`,
+			id(1),
+			id(2),
+			now
+		)
 		// The reply arrives first with its parent unresolved, then the parent, then the link is resolved.
 		sql.exec(
 			`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, visibility, content, published_at)

@@ -255,11 +255,10 @@ export function actualFromDump(text) {
 				put('blocks', `${account(t('account_id'))?.uri} ${account(t('target_account_id'))?.uri}`, 1)
 				break
 			case 'mutes':
-				put(
-					'mutes',
-					`${account(t('account_id'))?.uri} ${account(t('target_account_id'))?.uri}`,
-					int(row.hide_notifications)
-				)
+				put('mutes', `${account(t('account_id'))?.uri} ${account(t('target_account_id'))?.uri}`, [
+					int(row.hide_notifications),
+					t('expires_at'),
+				])
 				break
 			case 'domain_blocks':
 				put('domain_blocks', `${account(t('account_id'))?.uri} ${t('domain')}`, 1)

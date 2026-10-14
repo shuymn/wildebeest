@@ -253,7 +253,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   private, direct, limited, boosts, remote, another author and nothing", "hides the statuses of a suspended account").
 - **VIS-5: lists also apply the viewer's filters**, Mastodon's `StatusFilter`. Feeds, context, notifications, bookmarks,
   favourites, `favourited_by` and `reblogged_by` drop authors the viewer blocks, mutes or domain-blocks. A single status
-  by id is not filtered. _Enforced (main):_ `unfilteredSql` and `listableSql` in
+  by id is not filtered. A mute counts only until it expires (VIS-14), and home also drops a status or boosted
+  original that mentions an account the viewer blocks or mutes (`FeedManager#filter_from_home`; VIS-13, VIS-14). _Enforced (main):_ `unfilteredSql` and `listableSql` in
   `src/domain/audience.ts`; `test/audience.test.ts`, `test/visibility.test.ts` ("blocked and muted accounts stay out of
   lists"). _Implemented on branch `kopje/inbound-statuses`:_ a domain block matches an account by its stored domain
   and by the host of its actor id, both normalized (lowercase, no port, no trailing dot; `domainBlockMatchSql`), everywhere a domain block applies (lists, notifications,
@@ -310,6 +311,58 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   the parent itself stays behind VIS-1. _Enforced (main):_ `src/domain/status-presenter.ts`,
   `src/domain/statuses.ts`, `ACCOUNT_COLUMNS` in `src/domain/accounts.ts`; `test/statuses.test.ts` ("review
   regressions").
+- **VIS-13: a block cuts both ways, as Mastodon's does.** A block (local, or a remote `Block` that passes ID-6)
+  ends the follows between the two accounts in both directions and in either state; while it lasts neither may
+  follow the other (a remote `Follow` is answered with a `Reject`), the blocked account sees nothing of the blocker
+  (VIS-1) and cannot favourite or boost the blocker's statuses, and nothing from the blocked account reaches the
+  blocker: no list shows it (VIS-5), and no notification of it is written or shown, including a mention or reply
+  that mentions or answers it and a post notification (`notify`) of a status that mentions it. Relationships show `blocking` and `blocked_by`. A local block of a remote account
+  sends, in order, the `Undo` of our follow, a `Reject` of theirs (one that withdraws it if it was accepted) and the
+  `Block`; an unblock sends the `Block`'s `Undo`, which supersedes a `Block` still waiting. All go to the blocked
+  account only (NET-2). After the block, the blocked account is no recipient of the blocker's statuses: a new status
+  or an edit does not mention it (the name stays text, as Mastodon's `ProcessMentionsService` drops the mention), and
+  an activity that carries content (`Create`, `Update`, `Announce`) recorded after the block is neither addressed nor
+  delivered to it; a `Block`, `Reject`, `Undo` or `Delete` still reaches it. Deliveries queued before the block are
+  sent as queued, as in Mastodon (see the accepted risks). A local block always applies: the ended remote `Follow` is recorded as retracted (ID-7)
+  only within that actor's retraction cap, since the block itself refuses the actor's Follows while it lasts.
+  _Implemented on branch `kopje/blocks-mutes`:_ `block` and `unblock` in `src/domain/blocks.ts`, the inbound `block`
+  in `src/domain/inbox.ts`, `resolveMentions` and `editStatus` in `src/domain/statuses.ts`, `audienceTargets` in
+  `src/domain/deliveries.ts`, `shownSql` in `src/domain/notifications.ts`, `homeTimeline` in
+  `src/domain/timelines.ts`; `test/blocks.test.ts` ("blocks a local account", "sends a remote account Undo Follow,
+  Reject and Block", "applies an inbound Block and its Undo", "blocked recipients", "mentions of blocked and muted
+  accounts"), `test/inbox.test.ts` ("records a Block, ends both follows").
+- **VIS-14: a mute hides only for the muter, and only while it lasts.** A mute is never federated and changes nothing
+  the muted account sees or may do. It keeps the muted account out of the muter's lists (VIS-5) and home, including
+  others' statuses that mention it, and, unless created with `notifications=false`, out of the muter's notifications
+  (a mention or reply that mentions or answers it included); a post notification (`notify`) of a status that
+  mentions it is left out whether or not the mute hides notifications, as home leaves the status out. A mute with a duration applies until its `expires_at`,
+  judged at the time of each request or write (the credential's time, or the activity's), so it stops applying at its
+  time whether or not the sweep has removed it; the inbound sweep removes 100 expired mutes per call (RES-4). A `Move`
+  carries the muter's active mutes to the target with their expiry, replacing an expired mute of the target but never
+  an active one (`move` in `src/domain/inbox.ts`; `test/inbox.test.ts`, "carries an active mute over an expired one").
+  _Implemented on branch `kopje/blocks-mutes`:_ `activeMuteSql` and `unfilteredSql` in `src/domain/audience.ts`,
+  `shownSql` in `src/domain/notifications.ts`, `mute` in `src/domain/blocks.ts`; `test/blocks.test.ts` ("hides the
+  muted account from timelines and search", "stops applying an expired mute at its time", "keeps the viewer's own
+  statuses in home").
+- **VIS-15: a domain block hides the domain and ends the relationships with it.** A user's domain block matches every
+  account whose stored domain or actor host is the domain, exactly (Mastodon's `AccountDomainBlock` matches no
+  subdomains; `domainBlockMatchSql`), and hides them as VIS-5 says; following an account there is refused, a `Follow`
+  from one is rejected, and none of the user's statuses mentions or is addressed to one (as VIS-13); a boost of a
+  status by an account there, which Mastodon allows, leaves its author out of the `Announce`'s addressing and audience
+  (`boostAnnounce` in `src/domain/activities.ts`, for the delivered `Announce`, its `Undo` and the outbox's copy).
+  As Mastodon 4.5's `AfterBlockDomainFromAccountService` does, the user's follows to and from accounts there end, in either state:
+  each follower gets a `Reject`, each of our follows an `Undo`. That is a durable cleanup (`domain_block_cleanups`,
+  progress kept as a cursor over follow ids up to the newest follow when the domain was blocked) done in batches that
+  each scan 500 follows (RES-6, RES-7): the first in the request, the rest in the rounds the Queue and the cron run
+  with the inbound jobs, until done; the next cleanup is picked through an index (`domain_block_cleanups_next`). Until
+  then, followers there are left out of the targets of anything that carries content recorded after the block. An
+  unblock
+  stops the cleanup: what it removed stays removed. The domain is normalized (lowercase, punycode, no trailing dot or
+  slash) and this instance's own domain is refused. _Implemented on branch `kopje/blocks-mutes`:_ `blockDomain` and
+  `runDomainBlockCleanups` in `src/domain/blocks.ts`, `runInboundJobs` in `src/store.ts`, `audienceTargets` in
+  `src/domain/deliveries.ts`; `test/blocks.test.ts` ("ends our follows there with an Undo and theirs
+  with a Reject", "finishes the cleanup in later rounds", "stops the cleanup when the domain is unblocked", "reads a
+  bounded number of rows to block a domain", "picks the next cleanup through an index", "normalizes the domain").
 
 ### Authorization (AUTH)
 
@@ -513,7 +566,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   re-checks every redirect hop (same origin, at most 5), stops at 1 MiB and 5 s for the whole load, and honours abort
   signals. _Enforced (main):_ `src/federation/loader.ts`; `test/loader.test.ts`.
 - **NET-2: deliveries reach only the audience's inboxes.** Inboxes come from the stored audience and are deduplicated by
-  shared inbox; an activity without `to` (a Like, Follow, Accept, Reject or their Undo, each naming its recipient
+  shared inbox; an activity without `to` (a Like, Follow, Accept, Reject, Block or their Undo, each naming its recipient
   through its object) goes to the recipient's shared inbox when it has one, and moves to its distinct personal inbox on
   the same origin (same lane, within the row's attempts) if the shared inbox answers 404, 405 or 410; targets pass
   NET-3; a non-public activity is never sent to a redirect target. Claims serialize each lane; the POST timeout (30 s)
@@ -725,7 +778,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
   most 40 results per type (80 for the account search), and offsets past 10,000 answer an empty page;
-  `test/search.test.ts` ("bounds the query, the limit and the offset").
+  `test/search.test.ts` ("bounds the query, the limit and the offset"). _Implemented on branch `kopje/blocks-mutes`:_ the domain block list
+  (`GET /api/v1/domain_blocks`) returns at most 200 domains, as Mastodon's does (`src/mastodon/blocks.ts`).
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Implemented on branch `kopje/inbound-statuses`_ for remote statuses: one
   status stores at most 4 attachments (Mastodon's limit) with 10,000 code units of description each, 100 hashtags
@@ -770,7 +824,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **RES-6: one request cannot trigger unbounded work.** An inbound activity has fixed limits on dereferences,
   recipients, collection expansion and notifications. Delivery backlog and concurrency are bounded. Anonymous app
   registration, inbox spooling and media transformations have rate or storage budgets with a visible refusal. _Planned
-  (B1b)._ App registration: _Implemented on branch `kopje/web-ui`:_ `POST /api/v1/apps` is limited to 5 per minute per client IP by the Workers
+  (B1b)._ Domain blocks: _Implemented on branch `kopje/blocks-mutes`:_ a domain block's cleanup scans at most 500 follows
+  per batch and does at most 4 batches a round, its first batch in the request, so blocking a domain stays bounded
+  however many follows the user has, and always succeeds (VIS-15, `test/blocks.test.ts`). App registration: _Implemented on branch `kopje/web-ui`:_ `POST /api/v1/apps` is limited to 5 per minute per client IP by the Workers
   Rate Limiting binding before its body is read (429), and the Store keeps at most 500 never-authorized apps (no token or
   code of a user); when full it first removes unused apps (no token of any kind) older than a day, then the oldest
   never-authorized apps older than an hour (app tokens and all), and otherwise refuses with 429. Only a user's token or
@@ -1259,6 +1315,9 @@ activity specs, cited in test names.
 | An app token (`client_credentials`) of an app no user has authorized may stop working under registration pressure: the app is evicted with its tokens                                                                                                                                                 | Anyone can get an app token without a user; letting app tokens protect an app would let them fill the budget for good. Clients re-register, as after Mastodon's vacuum                                                                                            | logged-out clients are seen to lose their app tokens                 |
 | Two first sign-ins of one browser that overlap (the second starts before the first's session cookie arrives) leave two sessions; signing out ends only the one in the cookie                                                                                                                          | Both belong to the same person in the same browser, the other token is in no cookie or response any more, and it expires with its 7-day lifetime; binding them would need a server-side browser identity before sign-in                                           | a session token is seen to leak this way                             |
 | A web session lasts its 7 days even if the person's Access session ends or the Access policy changes                                                                                                                                                                                                  | Access verifies the person at sign-in only (design); suspension, sign-out and "sign out other sessions" end sessions at once                                                                                                                                      | sessions must follow Access policy changes                           |
+| Notifications written before a block, a mute or a domain block are hidden while it lasts, not deleted as Mastodon deletes them, so they show again after it ends                                                                                                                                      | The one notification rule hides them at read time (VIS-13 to VIS-15); deleting them would be unbounded work in the request                                                                                                                                        | a user expects them gone after an unblock                            |
+| A local block of a remote actor at its retraction cap does not record the ended Follow as retracted, so after an unblock a redelivery of that Follow is accepted as a new one                                                                                                                         | The block must apply whatever the blocked actor did to its own cap; while the block lasts its Follows are refused (VIS-13)                                                                                                                                        | redelivered Follows are seen after unblocks                          |
+| Deliveries queued before a block or a domain block (retries of them included) are still sent as queued, to the blocked account's inboxes too                                                                                                                                                          | Mastodon does not rewrite deliveries already queued either; a re-check at claim cannot tell, for a shared inbox or a follower target, which recipients it serves (VIS-13, VIS-15)                                                                                 | deliveries keep their recipients                                     |
 
 ## How to use
 

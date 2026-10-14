@@ -8,6 +8,38 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- Blocks, mutes and domain blocks in the Mastodon API, as Mastodon 4.5 has them: `POST /api/v1/accounts/:id/block`,
+  `/unblock`, `/mute` (`notifications`, default true, and `duration` in seconds, 0 for no expiry) and `/unmute`, which
+  answer the Relationship; `GET /api/v1/blocks` and `GET /api/v1/mutes` (with `mute_expires_at`), paged by Link
+  headers; and `GET`, `POST` and `DELETE /api/v1/domain_blocks` and `GET /api/v1/domain_blocks/preview`. Scopes are
+  `read:blocks`, `write:blocks`, `read:mutes`, `write:mutes` or `follow`.
+    - A block ends the follows between the two accounts both ways. A blocked remote account is sent an `Undo` of our
+      follow, a `Reject` of its follow, and the `Block`; an unblock sends the `Block`'s `Undo`. A blocked account (or
+      one on a blocked domain) is not mentioned in, or sent, the statuses you write after the block (deliveries already
+      queued are sent as queued, as in Mastodon).
+    - A mute is not federated. It expires after its duration: it stops applying at that time, whether or not it has
+      been removed yet. `muting_expires_at` in relationships shows the expiry.
+    - A domain block takes the domain as Mastodon normalizes it and refuses this instance's own domain. As in Mastodon
+      4.5, it ends your follows to and from accounts on that domain (a `Reject` to each follower, an `Undo` of each of
+      your follows). Kopje does this in the background in bounded batches until done (the Queue and the 5-minute cron
+      continue it); meanwhile what you post is not delivered to followers there. Unblocking the domain stops the rest.
+    - `GET /api/v1/domain_blocks/preview` needs `write:blocks` (or `write` or `follow`), as in Mastodon.
+
+### Changed
+
+- Home and mention notifications also leave out a status that mentions or replies to an account you block or mute
+  (for mention notifications, a mute that hides notifications), as Mastodon filters them; so do post notifications
+  of accounts you follow with `notify`, whenever home leaves the status out.
+
+### Instance changes
+
+- Store schema: adds `0001_blocks_and_mutes` (`mutes.expires_at` with an index, and the `domain_block_cleanups`
+  table). It runs on the first request after the deploy and is quick. A rollback to an earlier version needs the point-in-time restore described in
+  [docs/upgrade.md](docs/upgrade.md).
+- `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.3] - 2026-10-14
 
 A third release candidate of the first release, published under the npm dist-tag `next`.

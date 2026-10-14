@@ -1,13 +1,16 @@
 import { type Account, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
-import { domainBlockMatchSql, viewableSql, visibleSql } from './audience'
+import { activeMuteSql, domainBlockMatchSql, viewableSql, visibleSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { presentStatuses, type Status } from './status-presenter'
 import type { Db } from '../db/sql'
 
 // Notifications of local users (Mastodon 4.0.2 v1). They are written by the operation that causes them, in its
 // transaction, and read in pages in the Store. One rule decides both whether a notification is written and whether
-// it is shown: the recipient is local and not its sender, the sender is not suspended, blocked, muted with
-// notifications, or domain-blocked by the recipient, and the recipient may see the status (audience rule).
+// it is shown: the recipient is local and not its sender, the sender is not suspended, blocked (either way), muted
+// with notifications (while the mute applies), or domain-blocked by the recipient, and the recipient may see the
+// status (audience rule). A mention is also left out when its status mentions or replies to an account the recipient
+// blocks or mutes with notifications (Mastodon's FeedManager#filter_from_mentions), and a post notification (`status`)
+// when home leaves its status out for mentioning an account the recipient blocks or mutes (FeedInsertWorker).
 
 export type NotificationType = 'mention' | 'status' | 'reblog' | 'favourite' | 'follow' | 'follow_request' | 'update'
 
@@ -19,20 +22,35 @@ export type Notification = {
 	status?: Status
 }
 
-// Whether the recipient `r` is shown a notification of `type` from `from` about `status` (SQL expressions or
-// parameters). A reblog notification names the original; the boost itself (the sender's one boost of it) must be
-// visible to the recipient too, so a followers-only or direct boost is not revealed to an author outside its audience.
-function shownSql(r: string, type: string, from: string, status: string): string {
+// Whether the recipient `r` blocks the account `a`, or mutes it with notifications at `now` (SQL expressions).
+function silencedSql(r: string, a: string, now: string): string {
+	return `(EXISTS (SELECT 1 FROM blocks xb WHERE xb.account_id = ${r} AND xb.target_account_id = ${a})
+		OR EXISTS (SELECT 1 FROM mutes xm WHERE xm.account_id = ${r} AND xm.target_account_id = ${a}
+			AND xm.hide_notifications = 1 AND ${activeMuteSql('xm', now)}))`
+}
+
+// Whether the recipient `r` is shown a notification of `type` from `from` about `status` at `now` (SQL expressions or
+// parameters; now is an ISO 8601 time). A reblog notification names the original; the boost itself (the sender's one
+// boost of it) must be visible to the recipient too, so a followers-only or direct boost is not revealed to an author
+// outside its audience.
+function shownSql(r: string, type: string, from: string, status: string, now: string): string {
 	return `(${from} <> ${r}
 		AND NOT EXISTS (SELECT 1 FROM local_accounts ns WHERE ns.account_id = ${from} AND ns.suspended_at IS NOT NULL)
-		AND NOT EXISTS (SELECT 1 FROM blocks nb WHERE nb.account_id = ${r} AND nb.target_account_id = ${from})
+		AND NOT ${silencedSql(r, from, now)}
 		AND NOT EXISTS (SELECT 1 FROM blocks nbb WHERE nbb.account_id = ${from} AND nbb.target_account_id = ${r})
-		AND NOT EXISTS (SELECT 1 FROM mutes nm WHERE nm.account_id = ${r} AND nm.target_account_id = ${from} AND nm.hide_notifications = 1)
 		AND NOT EXISTS (SELECT 1 FROM domain_blocks nd JOIN accounts na ON na.id = ${from}
 			WHERE nd.account_id = ${r} AND ${domainBlockMatchSql('nd', 'na')})
 		AND (${status} IS NULL OR EXISTS (SELECT 1 FROM statuses s WHERE s.id = ${status} AND ${viewableSql('s', r)}))
 		AND (${type} <> 'reblog' OR EXISTS (SELECT 1 FROM statuses nr
-			WHERE nr.account_id = ${from} AND nr.reblog_of_id = ${status} AND ${visibleSql('nr', r)})))`
+			WHERE nr.account_id = ${from} AND nr.reblog_of_id = ${status} AND ${visibleSql('nr', r)}))
+		AND (${type} <> 'mention' OR NOT EXISTS (SELECT 1 FROM statuses mt WHERE mt.id = ${status}
+			AND (EXISTS (SELECT 1 FROM status_mentions mm WHERE mm.status_id = mt.id AND mm.silent = 0
+					AND ${silencedSql(r, 'mm.account_id', now)})
+				OR (mt.in_reply_to_account_id IS NOT NULL AND ${silencedSql(r, 'mt.in_reply_to_account_id', now)}))))
+		AND (${type} <> 'status' OR NOT EXISTS (SELECT 1 FROM status_mentions sm WHERE sm.status_id = ${status}
+			AND sm.silent = 0 AND (EXISTS (SELECT 1 FROM blocks sb WHERE sb.account_id = ${r} AND sb.target_account_id = sm.account_id)
+				OR EXISTS (SELECT 1 FROM mutes smu WHERE smu.account_id = ${r} AND smu.target_account_id = sm.account_id
+					AND ${activeMuteSql('smu', now)})))))`
 }
 
 export type NotifyInput = {
@@ -57,7 +75,7 @@ export function notify(db: Db, input: NotifyInput): void {
 	db.run(
 		`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at)
 		SELECT ?1, ?2, ?3, ?4, ?5
-		WHERE EXISTS (SELECT 1 FROM local_accounts WHERE account_id = ?1) AND ${shownSql('?1', '?2', '?3', '?4')}
+		WHERE EXISTS (SELECT 1 FROM local_accounts WHERE account_id = ?1) AND ${shownSql('?1', '?2', '?3', '?4', '?5')}
 		ON CONFLICT DO NOTHING`,
 		input.recipientId,
 		input.type,
@@ -114,7 +132,7 @@ export type ListNotificationsInput = {
 }
 
 export const listNotifications = userReadOperation<ListNotificationsInput, Page<Notification>>(
-	(db, input, { accountId: viewerId }) => {
+	(db, input, { accountId: viewerId, now }) => {
 		const { page } = input
 		const ascending = page.minId !== undefined
 		const rows = db.all<NotificationRow>(
@@ -124,7 +142,7 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 				AND (?4 IS NULL OR n.type IN (SELECT value FROM json_each(?4)))
 				AND n.type NOT IN (SELECT value FROM json_each(?5))
 				AND (?6 IS NULL OR n.from_account_id = ?6)
-				AND ${shownSql('?1', 'n.type', 'n.from_account_id', 'n.status_id')}
+				AND ${shownSql('?1', 'n.type', 'n.from_account_id', 'n.status_id', '?8')}
 			ORDER BY n.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?7`,
 			viewerId,
 			page.maxId ?? null,
@@ -132,7 +150,8 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 			input.types.length === 0 ? null : JSON.stringify(input.types),
 			JSON.stringify(input.excludeTypes),
 			input.accountId,
-			page.limit
+			page.limit,
+			new Date(now).toISOString()
 		)
 		if (ascending) {
 			rows.reverse()
@@ -148,15 +167,17 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 const NOTIFICATION_ID = /^\d{1,19}$/
 
 export const getNotification = userReadOperation<{ id: string; present: Present }, Notification | null>(
-	(db, { id, present }, { accountId: viewerId }) => {
+	(db, { id, present }, { accountId: viewerId, now }) => {
 		if (!NOTIFICATION_ID.test(id)) {
 			return null
 		}
 		const rows = db.all<NotificationRow>(
 			`SELECT ${NOTIFICATION_COLUMNS} FROM notifications n
-			WHERE n.account_id = ?1 AND n.id = CAST(?2 AS INTEGER) AND ${shownSql('?1', 'n.type', 'n.from_account_id', 'n.status_id')}`,
+			WHERE n.account_id = ?1 AND n.id = CAST(?2 AS INTEGER)
+				AND ${shownSql('?1', 'n.type', 'n.from_account_id', 'n.status_id', '?3')}`,
 			viewerId,
-			id
+			id,
+			new Date(now).toISOString()
 		)
 		return presentNotifications(db, rows, viewerId, present)[0] ?? null
 	}

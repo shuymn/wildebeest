@@ -644,7 +644,8 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	}
 	for (const m of all('SELECT account_id, target_account_id, hide_notifications FROM mutes')) {
 		if (known(m.account_id) && known(m.target_account_id) && m.account_id !== m.target_account_id) {
-			put('mutes', `${String(m.account_id)} ${String(m.target_account_id)}`, m.hide_notifications === 0 ? 0 : 1)
+			// Legacy never wrote an expiry: a converted mute is indefinite.
+			put('mutes', `${String(m.account_id)} ${String(m.target_account_id)}`, [m.hide_notifications === 0 ? 0 : 1, null])
 		}
 	}
 	for (const d of all('SELECT account_id, domain FROM domain_blocks')) {

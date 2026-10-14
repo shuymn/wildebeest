@@ -48,7 +48,7 @@ export type SearchRequest = {
 
 export type SearchResults = { accounts: Account[]; statuses: Status[]; hashtags: Hashtag[] }
 
-export const search = userReadOperation<SearchRequest, SearchResults>((db, input, { accountId: viewerId }) => {
+export const search = userReadOperation<SearchRequest, SearchResults>((db, input, { accountId: viewerId, now }) => {
 	const accountInput: SearchInput = {
 		query: input.query,
 		limit: input.limit,
@@ -59,8 +59,8 @@ export const search = userReadOperation<SearchRequest, SearchResults>((db, input
 	}
 	return {
 		accounts: input.types.includes('accounts') ? findAccounts(db, accountInput, viewerId) : [],
-		statuses: input.types.includes('statuses') ? searchStatuses(db, input, viewerId) : [],
-		hashtags: input.types.includes('hashtags') ? searchHashtags(db, input, viewerId) : [],
+		statuses: input.types.includes('statuses') ? searchStatuses(db, input, viewerId, now) : [],
+		hashtags: input.types.includes('hashtags') ? searchHashtags(db, input, viewerId, now) : [],
 	}
 })
 
@@ -96,7 +96,7 @@ function librarySources(limit: string, cursor: (column: string) => string, menti
 			${mentioned}`
 }
 
-function searchStatuses(db: Db, input: SearchRequest, viewerId: string): Status[] {
+function searchStatuses(db: Db, input: SearchRequest, viewerId: string, now: number): Status[] {
 	const { include, exclude } = statusQueryTerms(input.query)
 	if (include.length === 0) {
 		return []
@@ -129,7 +129,7 @@ function searchStatuses(db: Db, input: SearchRequest, viewerId: string): Status[
 		's.search_text IS NOT NULL',
 		...include.map(matches),
 		...exclude.map((variants) => `NOT ${matches(variants)}`),
-		listableSql('s', '?1'),
+		listableSql('s', '?1', p.add(new Date(now).toISOString())),
 	]
 	const ids = db
 		.all<{ id: string }>(
@@ -148,7 +148,7 @@ const PREFIX_END = '\u{10FFFF}'
 
 // Tags whose name starts with the query, from the statuses in the two windows that the viewer may see (see above), exact
 // match first, then shorter names.
-function searchHashtags(db: Db, input: SearchRequest, viewerId: string): Hashtag[] {
+function searchHashtags(db: Db, input: SearchRequest, viewerId: string, now: number): Hashtag[] {
 	const prefix = normalizeTag(input.query.trim().replace(/^#/, ''))
 	if (prefix === '' || /\s/.test(prefix)) {
 		return []
@@ -159,7 +159,7 @@ function searchHashtags(db: Db, input: SearchRequest, viewerId: string): Hashtag
 		`WITH library(id) AS (${librarySources('?4', () => '', false)}),
 		public(id) AS (SELECT id FROM statuses WHERE visibility = 'public' AND reblog_of_id IS NULL ORDER BY id DESC LIMIT ?5),
 		candidates(id) AS (SELECT id FROM library UNION SELECT id FROM public),
-		visible(id) AS (SELECT s.id FROM candidates c JOIN statuses s ON s.id = c.id WHERE ${listableSql('s', '?1')})
+		visible(id) AS (SELECT s.id FROM candidates c JOIN statuses s ON s.id = c.id WHERE ${listableSql('s', '?1', '?8')})
 		SELECT DISTINCT t.name FROM visible v CROSS JOIN status_tags t ON t.status_id = v.id AND t.name >= ?2 AND t.name < ?3
 		ORDER BY t.name = ?2 DESC, length(t.name), t.name LIMIT ?6 OFFSET ?7`,
 		viewerId,
@@ -168,7 +168,8 @@ function searchHashtags(db: Db, input: SearchRequest, viewerId: string): Hashtag
 		HASHTAG_LIBRARY_LIMIT,
 		HASHTAG_PUBLIC_WINDOW,
 		input.limit,
-		input.offset
+		input.offset,
+		new Date(now).toISOString()
 	)
 	return rows.map(({ name }) => ({
 		name,

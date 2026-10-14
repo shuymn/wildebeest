@@ -11,6 +11,7 @@ import {
 } from './accounts'
 import {
 	announceActivity,
+	boostAnnounce,
 	type AnnounceInput,
 	createActivity,
 	deleteActivity,
@@ -22,9 +23,12 @@ import {
 	updateActivity,
 } from './activities'
 import {
+	activeMuteSql,
 	type ApiVisibility,
+	blockedSql,
 	canView,
 	domainBlockMatchSql,
+	filterTime,
 	isDistributable,
 	listableSql,
 	requiresMention,
@@ -91,8 +95,14 @@ function localAuthor(db: Db, accountId: string): Author {
 type ResolvedMention = { id: string; uri: string; url: string | null; username: string; domain: string | null }
 
 // Mentions are resolved against accounts already known; nothing is fetched. A mention of the instance's own host is a
-// local mention. Suspended local accounts are not mentioned (their mention stays text).
-function resolveMentions(db: Db, refs: readonly MentionRef[], localHost: string): Map<string, ResolvedMention> {
+// local mention. Suspended local accounts, and accounts the author blocks or whose domain it blocks, are not mentioned
+// (their mention stays text, as Mastodon's ProcessMentionsService drops it).
+function resolveMentions(
+	db: Db,
+	refs: readonly MentionRef[],
+	localHost: string,
+	authorId: string
+): Map<string, ResolvedMention> {
 	if (refs.length === 0) {
 		return new Map()
 	}
@@ -106,8 +116,9 @@ function resolveMentions(db: Db, refs: readonly MentionRef[], localHost: string)
 		FROM json_each(?1) j
 		JOIN accounts a ON a.domain IS json_extract(j.value, '$.d') AND lower(a.username) = json_extract(j.value, '$.u')
 		LEFT JOIN local_accounts l ON l.account_id = a.id
-		WHERE l.suspended_at IS NULL`,
-		JSON.stringify(wanted)
+		WHERE l.suspended_at IS NULL AND NOT ${blockedSql('?2', 'a')}`,
+		JSON.stringify(wanted),
+		authorId
 	)
 	return new Map(rows.map(({ key, ...row }) => [key, row]))
 }
@@ -122,7 +133,7 @@ type Composed = {
 function compose(db: Db, text: string, author: Author, origin: string): Composed {
 	const parsed = parseStatusText(text)
 	const localHost = new URL(author.uri).host
-	const resolved = resolveMentions(db, parsed.mentions, localHost)
+	const resolved = resolveMentions(db, parsed.mentions, localHost, author.id)
 	const content = renderStatusHtml(parsed.segments, {
 		mention: (ref) => {
 			const account = resolved.get(mentionKey(ref))
@@ -549,6 +560,14 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 		? composed.mentions
 		: composed.mentions.filter((mention) => previous.includes(mention.id))
 	const added = writeMentions(db, current.id, mentions, previous)
+	// A mention of an account the author has blocked since goes, rather than staying silent (ProcessMentionsService).
+	db.run(
+		`DELETE FROM status_mentions WHERE status_id = ?1 AND account_id IN
+			(SELECT a.id FROM status_mentions m JOIN accounts a ON a.id = m.account_id
+			WHERE m.status_id = ?1 AND ${blockedSql('?2', 'a')})`,
+		current.id,
+		accountId
+	)
 	writeTags(db, current.id, composed.tags)
 	attachMedia(db, current.id, media, input.now)
 	for (const a of attributes) {
@@ -677,7 +696,7 @@ export type Context = { ancestors: Status[]; descendants: Status[] }
 // (visible, and not filtered by the viewer's blocks, mutes and domain blocks); the thread continues past members
 // that do not.
 export const statusContext = optionalUserReadOperation<{ id: string; present: Present }, Viewed<Context>>(
-	(db, { id, present }, viewerId) => {
+	(db, { id, present }, viewerId, now) => {
 		const resolved = viewable(db, viewerId, id)
 		if (resolved === null) {
 			return { status: 'not_found' }
@@ -690,18 +709,20 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 				SELECT s.in_reply_to_id, up.depth + 1 FROM statuses s JOIN up ON s.id = up.id
 				WHERE s.in_reply_to_id IS NOT NULL AND up.depth < ?3
 			)
-			SELECT s.id FROM up JOIN statuses s ON s.id = up.id WHERE ${listableSql('s', '?1')} ORDER BY up.depth DESC`,
+			SELECT s.id FROM up JOIN statuses s ON s.id = up.id WHERE ${listableSql('s', '?1', '?4')} ORDER BY up.depth DESC`,
 			viewerId,
 			resolved,
-			limits.ancestors
+			limits.ancestors,
+			filterTime(now)
 		)
 		const tree = descendantTree(db, resolved, limits.depth, limits.traversal)
 		const descendants = db.all<{ id: string }>(
 			`SELECT s.id FROM json_each(?2) j JOIN statuses s ON s.id = j.value
-			WHERE ${listableSql('s', '?1')} ORDER BY j.key LIMIT ?3`,
+			WHERE ${listableSql('s', '?1', '?4')} ORDER BY j.key LIMIT ?3`,
 			viewerId,
 			JSON.stringify(tree),
-			limits.descendants
+			limits.descendants,
+			filterTime(now)
 		)
 		const options = { ...present, viewerId }
 		return {
@@ -1039,28 +1060,28 @@ export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input,
 	recordOutbound(
 		db,
 		accountId,
-		announceActivity(announceOf(author.uri, uri, visibility, publishedAt, target)),
+		announceActivity(announceOf(db, accountId, author.uri, uri, visibility, publishedAt, target)),
 		input.now
 	)
 	return viewed(presentStatus(db, id, options))
 })
 
+// The Announce of a boost by `boosterId` (boostAnnounce in activities.ts decides what it names).
 function announceOf(
+	db: Db,
+	boosterId: string,
 	actorUri: string,
 	uri: string,
 	visibility: Visibility,
 	publishedAt: string,
 	target: Target
 ): AnnounceInput {
-	return {
-		announceUri: uri,
-		actorUri,
-		visibility,
-		publishedAt,
-		objectUri: target.uri,
-		authorUri: target.author_uri,
-		authorId: target.account_id,
-	}
+	return boostAnnounce(
+		db,
+		boosterId,
+		{ announceUri: uri, actorUri, visibility, publishedAt, objectUri: target.uri },
+		{ id: target.account_id, uri: target.author_uri }
+	)
 }
 
 // Records an Undo(Announce) for every local boost of a status about to be deleted.
@@ -1080,6 +1101,8 @@ function undoLocalBoosts(db: Db, originalId: string, now: number): void {
 	)
 	for (const boost of boosts) {
 		const announce = announceOf(
+			db,
+			boost.account_id,
 			viewerUri(db, boost.account_id),
 			boost.uri,
 			boost.visibility,
@@ -1117,7 +1140,15 @@ export function withdrawLocalBoost(db: Db, boostId: string, now: number, maxRows
 	if (boost === undefined || target === undefined) {
 		return true
 	}
-	const announce = announceOf(viewerUri(db, boost.account_id), boost.uri, boost.visibility, boost.published_at, target)
+	const announce = announceOf(
+		db,
+		boost.account_id,
+		viewerUri(db, boost.account_id),
+		boost.uri,
+		boost.visibility,
+		boost.published_at,
+		target
+	)
 	return beginRetraction(db, boost.account_id, undoAnnounceActivity(announce), now, maxRows)
 }
 
@@ -1136,7 +1167,9 @@ function removeReblog(db: Db, accountId: string, reblogId: string, originalId: s
 		recordOutbound(
 			db,
 			accountId,
-			undoAnnounceActivity(announceOf(viewerUri(db, accountId), row.uri, row.visibility, row.published_at, target)),
+			undoAnnounceActivity(
+				announceOf(db, accountId, viewerUri(db, accountId), row.uri, row.visibility, row.published_at, target)
+			),
 			now
 		)
 	}
@@ -1181,7 +1214,7 @@ export type InteractorsInput = { id: string; kind: 'favourited_by' | 'reblogged_
 // listed (Mastodon's RebloggedByAccountsController); reblogs_count still counts every boost, as Mastodon's does. Favourites page by the favourite's id; boosts by
 // the boost's status id.
 export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Page<Account>>>(
-	(db, { id, kind, page, present }, viewerId) => {
+	(db, { id, kind, page, present }, viewerId, now) => {
 		const resolved = viewable(db, viewerId, id)
 		const target = resolved === null ? null : originalId(db, resolved)
 		if (target === null) {
@@ -1192,7 +1225,8 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 		const excluded = `(?1 IS NULL OR NOT (
 			EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 AND target_account_id = a.id)
 			OR EXISTS (SELECT 1 FROM blocks WHERE account_id = a.id AND target_account_id = ?1)
-			OR EXISTS (SELECT 1 FROM mutes WHERE account_id = ?1 AND target_account_id = a.id)
+			OR EXISTS (SELECT 1 FROM mutes m WHERE m.account_id = ?1 AND m.target_account_id = a.id
+				AND ${activeMuteSql('m', '?6')})
 			OR EXISTS (SELECT 1 FROM domain_blocks db WHERE db.account_id = ?1 AND ${domainBlockMatchSql('db', 'a')})))`
 		const lower = page.minId ?? page.sinceId ?? null
 		const rows =
@@ -1207,7 +1241,8 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 						target,
 						page.maxId ?? null,
 						lower,
-						page.limit
+						page.limit,
+						filterTime(now)
 					)
 				: db.all<AccountRow & { cursor: string }>(
 						`SELECT r.id AS cursor, ${ACCOUNT_COLUMNS}
@@ -1219,7 +1254,8 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 						target,
 						statusCursor(page.maxId),
 						statusCursor(lower ?? undefined),
-						page.limit
+						page.limit,
+						filterTime(now)
 					)
 		if (ascending) {
 			rows.reverse()
