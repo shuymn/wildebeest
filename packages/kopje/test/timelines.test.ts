@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
-import { act, community, follow, getJson, ids, post, remoteAccount, seedStatus } from './status-helpers'
+import { act, block, community, follow, getJson, ids, post, remoteAccount, seedStatus } from './status-helpers'
 
 describe('timeline paging', () => {
 	it('pages home with max_id, since_id and min_id and a Link header', async () => {
@@ -57,6 +57,18 @@ describe('home', () => {
 		await act(h, alice, `/api/v1/accounts/${bob.id}/follow`, { reblogs: false })
 		expect(await ids(h, '/api/v1/timelines/home', alice.token)).toEqual([thread.id, own.id])
 		expect(replyToCarol.id).not.toBe('')
+	})
+})
+
+describe('home: the viewer’s own direct and limited statuses', () => {
+	it('applies the home rule to an own direct boost (a converted Store keeps legacy direct boosts)', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const original = await post(h, bob, { status: 'bob' })
+		const boost = await seedStatus(h.store, { accountId: alice.id, visibility: 'direct', reblogOfId: original.id })
+		expect(await ids(h, '/api/v1/timelines/home', alice.token)).toEqual([boost])
+		await block(h.store, bob.id, alice.id)
+		expect(await ids(h, '/api/v1/timelines/home', alice.token)).toEqual([])
 	})
 })
 

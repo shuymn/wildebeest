@@ -86,7 +86,7 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 					ORDER BY s.id ${order} LIMIT ?4)
 				UNION ALL
 				SELECT * FROM (SELECT s.id FROM statuses s
-					WHERE s.account_id = ?1 AND s.visibility IN ${REQUIRES_MENTION_SQL} AND ${cursorSql('s.id')}
+					WHERE s.account_id = ?1 AND s.visibility IN ${REQUIRES_MENTION_SQL} AND ${cursorSql('s.id')} AND ${home}
 					ORDER BY s.id ${order} LIMIT ?4)
 				UNION ALL
 				SELECT * FROM (SELECT s.id FROM status_mentions m JOIN statuses s ON s.id = m.status_id

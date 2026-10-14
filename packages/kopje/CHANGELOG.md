@@ -102,6 +102,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   order from the page's cursor and stops once it has a page, so a page's work no longer grows with the tag's history.
   What they show is unchanged. The cutover writes the mark and `verify-conversion` compares it.
 
+### Fixed
+
+- Home applies its rule to your own direct and limited statuses too. A converted Store can hold a legacy direct boost
+  of yours, and home used to list it with its original even when you may no longer see the original (its author
+  blocks you or is suspended, or it is private and you no longer follow its author) or you filter its author; such a
+  boost is now left out, as your other boosts are.
+
 ### Instance changes
 
 - Store schema: adds four migrations, applied in order on the first request after the deploy; a rollback to an earlier
