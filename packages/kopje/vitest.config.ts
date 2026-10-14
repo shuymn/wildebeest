@@ -27,5 +27,7 @@ export default defineConfig({
 		include: [fileURLToPath(new URL('./test/**/*.test.ts', import.meta.url))],
 		// The suites drive the real Store through workerd; on a loaded CI runner a heavy test can pass 5 s.
 		testTimeout: 20_000,
+		// FC_SEED replays a property test's run (test/policy-world.ts).
+		provide: { fcSeed: process.env.FC_SEED ?? '' },
 	},
 })
