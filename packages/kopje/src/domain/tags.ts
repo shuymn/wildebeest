@@ -23,7 +23,7 @@ const DAY_MS = 86_400_000
 // so the range holds the tag's statuses the instance received in the last seven days, and the work follows the
 // instance's own receive volume.
 export const getTag = optionalUserReadOperation<{ name: string; now: number; present: Present }, Tag | null>(
-	(db, { name, now, present }, viewerId) => {
+	(db, { name, now, present }, { accountId: viewerId }) => {
 		if (!isHashtagName(name)) {
 			return null
 		}

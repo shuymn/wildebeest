@@ -1,4 +1,4 @@
-import { blockedSql, domainBlockMatchSql } from './audience'
+import { blockedSql, domainBlocksSql } from './audience'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 
@@ -173,7 +173,7 @@ export function audienceTargets(
 			`SELECT DISTINCT COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) AS inbox
 			FROM follows f JOIN accounts a ON a.id = f.account_id
 			WHERE f.target_account_id = ?1 AND f.state = 'accepted' AND a.domain IS NOT NULL
-				AND NOT EXISTS (SELECT 1 FROM domain_blocks d WHERE d.account_id = ?1 AND ${domainBlockMatchSql('d', 'a')})`,
+				AND NOT ${domainBlocksSql('?1', 'a.id')}`,
 			signerId
 		)
 		for (const { inbox } of followers) {
@@ -185,7 +185,7 @@ export function audienceTargets(
 	const addressed = db.all<{ uri: string; inbox_url: string | null; shared_inbox_url: string | null }>(
 		`SELECT a.uri, NULLIF(a.inbox_url, '') AS inbox_url, NULLIF(a.shared_inbox_url, '') AS shared_inbox_url
 		FROM accounts a
-		WHERE a.id IN (SELECT value FROM json_each(?1)) AND a.domain IS NOT NULL AND NOT (?2 AND ${blockedSql('?3', 'a')})
+		WHERE a.id IN (SELECT value FROM json_each(?1)) AND a.domain IS NOT NULL AND NOT (?2 AND ${blockedSql('?3', 'a.id')})
 		ORDER BY a.id`,
 		JSON.stringify(audience.accounts),
 		carriesContent(activity) ? 1 : 0,

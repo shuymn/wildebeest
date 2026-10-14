@@ -1,4 +1,5 @@
 import { type FieldSource, fieldSources } from './accounts'
+import { availableLocalSql } from './audience'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 import { base64ToBytes } from '../security/key-wrap'
@@ -172,7 +173,8 @@ export function nodeInfoUsageOf(db: Db, now: number): NodeInfoUsage {
 			since(days)
 		)?.n ?? 0
 	return {
-		users: db.first<{ n: number }>('SELECT count(*) AS n FROM local_accounts WHERE suspended_at IS NULL')?.n ?? 0,
+		users:
+			db.first<{ n: number }>(`SELECT count(*) AS n FROM local_accounts l WHERE ${availableLocalSql('l')}`)?.n ?? 0,
 		activeMonth: active(30),
 		activeHalfyear: active(180),
 		localPosts:

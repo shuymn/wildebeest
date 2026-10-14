@@ -50,6 +50,7 @@ export const publicTimeline: ApiHandler = async (c, deps) => {
 	const result = await storeCall(c, deps, (s, b) =>
 		s.publicTimeline(b, {
 			credential,
+			now: deps.now(),
 			page,
 			local: parseBoolean(p.get('local')) ?? false,
 			remote: parseBoolean(p.get('remote')) ?? false,
@@ -75,6 +76,7 @@ export const tagTimeline: ApiHandler = async (c, deps) => {
 	const result = await storeCall(c, deps, (s, b) =>
 		s.tagTimeline(b, {
 			credential,
+			now: deps.now(),
 			page,
 			tag: c.req.param('hashtag') ?? '',
 			any: tags('any'),
@@ -101,6 +103,7 @@ export const accountStatuses: ApiHandler = async (c, deps) => {
 		await storeCall(c, deps, (s, b) =>
 			s.accountStatuses(b, {
 				credential,
+				now: deps.now(),
 				account: c.req.param('id') ?? '',
 				page,
 				onlyMedia: parseBoolean(p.get('only_media')) ?? false,

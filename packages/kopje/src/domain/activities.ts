@@ -2,7 +2,10 @@ import {
 	addressingOf,
 	type Audience,
 	audienceOf,
+	availableLocalSql,
+	availableSql,
 	blockedSql,
+	DISTRIBUTABLE_SQL,
 	isDistributable,
 	PUBLIC_COLLECTION,
 	type Recipient,
@@ -286,9 +289,7 @@ export function boostAnnounce(
 	boost: Omit<AnnounceInput, 'authorUri' | 'authorId'>,
 	author: { id: string; uri: string }
 ): AnnounceInput {
-	const blocked =
-		db.first(`SELECT 1 AS x FROM accounts a WHERE a.id = ?2 AND ${blockedSql('?1', 'a')}`, boosterId, author.id) !==
-		undefined
+	const blocked = db.first(`SELECT 1 AS x WHERE ${blockedSql('?1', '?2')}`, boosterId, author.id) !== undefined
 	return { ...boost, authorUri: blocked ? null : author.uri, authorId: blocked ? null : author.id }
 }
 
@@ -459,7 +460,7 @@ export function undoBlockActivity(input: BlockActivityInput) {
 // ---------------------------------------------------------------------------------------------------------------
 
 // Public, unlisted, local, and not by a suspended account. Anything else answers as missing.
-const SERVABLE = `s.visibility IN ('public', 'unlisted') AND l.suspended_at IS NULL`
+const SERVABLE = `s.visibility IN ${DISTRIBUTABLE_SQL} AND ${availableLocalSql('l')}`
 
 // The Note as serialized JSON-LD.
 export const getLocalNote = readOperation<{ uri: string }, string | null>((db, { uri }) => {
@@ -527,7 +528,7 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 	(db, { username, before }) => {
 		const owner = db.first<{ id: string; uri: string }>(
 			`SELECT a.id, a.uri FROM accounts a JOIN local_accounts l ON l.account_id = a.id
-			WHERE a.domain IS NULL AND a.username = ? AND l.suspended_at IS NULL`,
+			WHERE a.domain IS NULL AND a.username = ? AND ${availableLocalSql('l')}`,
 			username
 		)
 		if (owner === undefined) {
@@ -536,8 +537,7 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 		const listed = `FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id
 			LEFT JOIN statuses o ON o.id = s.reblog_of_id
 			WHERE s.account_id = ?1 AND ${SERVABLE}
-				AND (s.reblog_of_id IS NULL OR (o.visibility IN ('public', 'unlisted')
-					AND NOT EXISTS (SELECT 1 FROM local_accounts ol WHERE ol.account_id = o.account_id AND ol.suspended_at IS NOT NULL)))`
+				AND (s.reblog_of_id IS NULL OR (o.visibility IN ${DISTRIBUTABLE_SQL} AND ${availableSql('o.account_id')}))`
 		// The count only for the collection itself; a page does not need it.
 		if (before === null) {
 			return {

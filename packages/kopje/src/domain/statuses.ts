@@ -23,14 +23,16 @@ import {
 	updateActivity,
 } from './activities'
 import {
-	activeMuteSql,
 	type ApiVisibility,
 	blockedSql,
+	blocksSql,
 	canView,
-	domainBlockMatchSql,
-	filterTime,
+	DISTRIBUTABLE_SQL,
 	isDistributable,
 	listableSql,
+	listedForSql,
+	mentionableBySql,
+	REACHES_FOLLOWERS_SQL,
 	requiresMention,
 	type Visibility,
 } from './audience'
@@ -115,8 +117,7 @@ function resolveMentions(
 		`SELECT json_extract(j.value, '$.key') AS key, a.id, a.uri, a.url, a.username, a.domain
 		FROM json_each(?1) j
 		JOIN accounts a ON a.domain IS json_extract(j.value, '$.d') AND lower(a.username) = json_extract(j.value, '$.u')
-		LEFT JOIN local_accounts l ON l.account_id = a.id
-		WHERE l.suspended_at IS NULL AND NOT ${blockedSql('?2', 'a')}`,
+		WHERE ${mentionableBySql('a.id', '?2')}`,
 		JSON.stringify(wanted),
 		authorId
 	)
@@ -194,7 +195,7 @@ function attachMedia(db: Db, statusId: string, mediaIds: readonly string[], now:
 export function recountStatuses(db: Db, accountId: string): void {
 	db.run(
 		`UPDATE accounts SET statuses_count = (SELECT COUNT(*) FROM statuses
-			WHERE account_id = ?1 AND visibility IN ('public', 'unlisted', 'private'))
+			WHERE account_id = ?1 AND visibility IN ${REACHES_FOLLOWERS_SQL})
 		WHERE id = ?1 AND domain IS NULL`,
 		accountId
 	)
@@ -207,7 +208,7 @@ export function recountStatus(db: Db, statusId: string | null): void {
 	}
 	db.run(
 		`UPDATE statuses SET
-			replies_count = (SELECT COUNT(*) FROM statuses r WHERE r.in_reply_to_id = ?1 AND r.visibility IN ('public', 'unlisted')),
+			replies_count = (SELECT COUNT(*) FROM statuses r WHERE r.in_reply_to_id = ?1 AND r.visibility IN ${DISTRIBUTABLE_SQL}),
 			reblogs_count = (SELECT COUNT(*) FROM statuses r WHERE r.reblog_of_id = ?1),
 			favourites_count = (SELECT COUNT(*) FROM favourites f WHERE f.status_id = ?1)
 		WHERE id = ?1`,
@@ -563,8 +564,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	// A mention of an account the author has blocked since goes, rather than staying silent (ProcessMentionsService).
 	db.run(
 		`DELETE FROM status_mentions WHERE status_id = ?1 AND account_id IN
-			(SELECT a.id FROM status_mentions m JOIN accounts a ON a.id = m.account_id
-			WHERE m.status_id = ?1 AND ${blockedSql('?2', 'a')})`,
+			(SELECT m.account_id FROM status_mentions m WHERE m.status_id = ?1 AND ${blockedSql('?2', 'm.account_id')})`,
 		current.id,
 		accountId
 	)
@@ -677,7 +677,7 @@ function viewable(db: Db, viewerId: string | null, id: string): string | null {
 }
 
 export const getStatus = optionalUserReadOperation<{ id: string; present: Present }, Viewed<Status>>(
-	(db, { id, present }, viewerId) => {
+	(db, { id, present }, { accountId: viewerId }) => {
 		const resolved = viewable(db, viewerId, id)
 		return viewed(resolved === null ? null : presentStatus(db, resolved, { ...present, viewerId }))
 	}
@@ -696,7 +696,7 @@ export type Context = { ancestors: Status[]; descendants: Status[] }
 // (visible, and not filtered by the viewer's blocks, mutes and domain blocks); the thread continues past members
 // that do not.
 export const statusContext = optionalUserReadOperation<{ id: string; present: Present }, Viewed<Context>>(
-	(db, { id, present }, viewerId, now) => {
+	(db, { id, present }, { accountId: viewerId, now }) => {
 		const resolved = viewable(db, viewerId, id)
 		if (resolved === null) {
 			return { status: 'not_found' }
@@ -713,7 +713,7 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 			viewerId,
 			resolved,
 			limits.ancestors,
-			filterTime(now)
+			now
 		)
 		const tree = descendantTree(db, resolved, limits.depth, limits.traversal)
 		const descendants = db.all<{ id: string }>(
@@ -722,7 +722,7 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 			viewerId,
 			JSON.stringify(tree),
 			limits.descendants,
-			filterTime(now)
+			now
 		)
 		const options = { ...present, viewerId }
 		return {
@@ -799,7 +799,7 @@ export type StatusEdit = {
 
 // Edit history, oldest first. A status never edited has one entry: itself.
 export const statusHistory = optionalUserReadOperation<{ id: string; present: Present }, Viewed<StatusEdit[]>>(
-	(db, { id, present }, viewerId) => {
+	(db, { id, present }, { accountId: viewerId }) => {
 		const resolved = viewable(db, viewerId, id)
 		const status = resolved === null ? null : presentStatus(db, resolved, { ...present, viewerId })
 		if (resolved === null || status === null) {
@@ -896,10 +896,7 @@ function originalId(db: Db, id: string): string | null {
 }
 
 function blocksAuthor(db: Db, viewerId: string, authorId: string): boolean {
-	return (
-		db.first('SELECT 1 AS yes FROM blocks WHERE account_id = ? AND target_account_id = ?', viewerId, authorId) !==
-		undefined
-	)
+	return db.first(`SELECT 1 AS yes WHERE ${blocksSql('?1', '?2')}`, viewerId, authorId) !== undefined
 }
 
 function viewerUri(db: Db, accountId: string): string {
@@ -1214,7 +1211,7 @@ export type InteractorsInput = { id: string; kind: 'favourited_by' | 'reblogged_
 // listed (Mastodon's RebloggedByAccountsController); reblogs_count still counts every boost, as Mastodon's does. Favourites page by the favourite's id; boosts by
 // the boost's status id.
 export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Page<Account>>>(
-	(db, { id, kind, page, present }, viewerId, now) => {
+	(db, { id, kind, page, present }, { accountId: viewerId, now }) => {
 		const resolved = viewable(db, viewerId, id)
 		const target = resolved === null ? null : originalId(db, resolved)
 		if (target === null) {
@@ -1222,19 +1219,14 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 		}
 		const ascending = page.minId !== undefined
 		const order = ascending ? 'ASC' : 'DESC'
-		const excluded = `(?1 IS NULL OR NOT (
-			EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 AND target_account_id = a.id)
-			OR EXISTS (SELECT 1 FROM blocks WHERE account_id = a.id AND target_account_id = ?1)
-			OR EXISTS (SELECT 1 FROM mutes m WHERE m.account_id = ?1 AND m.target_account_id = a.id
-				AND ${activeMuteSql('m', '?6')})
-			OR EXISTS (SELECT 1 FROM domain_blocks db WHERE db.account_id = ?1 AND ${domainBlockMatchSql('db', 'a')})))`
+		const listed = listedForSql('a.id', '?1', '?6')
 		const lower = page.minId ?? page.sinceId ?? null
 		const rows =
 			kind === 'favourited_by'
 				? db.all<AccountRow & { cursor: string }>(
 						`SELECT CAST(f.id AS TEXT) AS cursor, ${ACCOUNT_COLUMNS}
 						FROM favourites f JOIN accounts a ON a.id = f.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
-						WHERE f.status_id = ?2 AND l.suspended_at IS NULL AND ${excluded}
+						WHERE f.status_id = ?2 AND ${listed}
 							AND (?3 IS NULL OR f.id < CAST(?3 AS INTEGER)) AND (?4 IS NULL OR f.id > CAST(?4 AS INTEGER))
 						ORDER BY f.id ${order} LIMIT ?5`,
 						viewerId,
@@ -1242,12 +1234,12 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 						page.maxId ?? null,
 						lower,
 						page.limit,
-						filterTime(now)
+						now
 					)
 				: db.all<AccountRow & { cursor: string }>(
 						`SELECT r.id AS cursor, ${ACCOUNT_COLUMNS}
 						FROM statuses r JOIN accounts a ON a.id = r.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
-						WHERE r.reblog_of_id = ?2 AND r.visibility IN ('public', 'unlisted') AND l.suspended_at IS NULL AND ${excluded}
+						WHERE r.reblog_of_id = ?2 AND r.visibility IN ${DISTRIBUTABLE_SQL} AND ${listed}
 							AND (?3 IS NULL OR r.id < ?3) AND (?4 IS NULL OR r.id > ?4)
 						ORDER BY r.id ${order} LIMIT ?5`,
 						viewerId,
@@ -1255,7 +1247,7 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 						statusCursor(page.maxId),
 						statusCursor(lower ?? undefined),
 						page.limit,
-						filterTime(now)
+						now
 					)
 		if (ascending) {
 			rows.reverse()

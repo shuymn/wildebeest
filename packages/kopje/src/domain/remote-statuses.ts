@@ -1,7 +1,8 @@
 import { type Account, type Present, presentAccountsById } from './accounts'
 import {
+	availableLocalSql,
 	canView,
-	domainBlockMatchSql,
+	domainBlocksSql,
 	interpretAddressing,
 	isDistributable,
 	isPublicCollection,
@@ -700,12 +701,7 @@ export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db
 	const options = { ...input.present, viewerId: accountId }
 	// What the viewer domain-blocks (by the account's domain or its actor's host) is not answered.
 	const blocked = (id: string) =>
-		db.first(
-			`SELECT 1 AS x FROM accounts a JOIN domain_blocks d ON d.account_id = ?1
-			WHERE a.id = ?2 AND ${domainBlockMatchSql('d', 'a')}`,
-			accountId,
-			id
-		) !== undefined
+		db.first(`SELECT 1 AS x WHERE ${domainBlocksSql('?1', '?2')}`, accountId, id) !== undefined
 	const account = (id: string | undefined): ResolveResult => {
 		const found = id === undefined || blocked(id) ? undefined : presentAccountsById(db, [id], input.present).get(id)
 		return { accounts: found === undefined ? [] : [found], statuses: [] }
@@ -739,7 +735,7 @@ export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db
 			const byUri = db.first<{ kind: string; id: string }>(
 				`SELECT 'status' AS kind, id FROM statuses WHERE uri = ?1 AND reblog_of_id IS NULL
 				UNION ALL SELECT 'account', a.id FROM accounts a LEFT JOIN local_accounts l ON l.account_id = a.id
-					WHERE a.uri = ?1 AND l.suspended_at IS NULL
+					WHERE a.uri = ?1 AND ${availableLocalSql('l')}
 				LIMIT 1`,
 				input.query
 			)

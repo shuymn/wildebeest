@@ -191,7 +191,7 @@ export const deleteStatus: ApiHandler = async (c, deps) => {
 export const getStatus: ApiHandler = async (c, deps) => {
 	const credential = optionalCredential(c, deps)
 	const result = await storeCall(c, deps, (s, b) =>
-		s.getStatus(b, { credential, id: statusId(c), present: present(c) })
+		s.getStatus(b, { credential, id: statusId(c), now: deps.now(), present: present(c) })
 	)
 	return viewedResponse(c, authorized(result))
 }
@@ -199,7 +199,7 @@ export const getStatus: ApiHandler = async (c, deps) => {
 export const statusContext: ApiHandler = async (c, deps) => {
 	const credential = optionalCredential(c, deps)
 	const result = await storeCall(c, deps, (s, b) =>
-		s.statusContext(b, { credential, id: statusId(c), present: present(c) })
+		s.statusContext(b, { credential, id: statusId(c), now: deps.now(), present: present(c) })
 	)
 	return viewedResponse(c, authorized(result))
 }
@@ -207,7 +207,7 @@ export const statusContext: ApiHandler = async (c, deps) => {
 export const statusHistory: ApiHandler = async (c, deps) => {
 	const credential = optionalCredential(c, deps)
 	const result = await storeCall(c, deps, (s, b) =>
-		s.statusHistory(b, { credential, id: statusId(c), present: present(c) })
+		s.statusHistory(b, { credential, id: statusId(c), now: deps.now(), present: present(c) })
 	)
 	return viewedResponse(c, authorized(result))
 }
@@ -265,7 +265,7 @@ function interactors(kind: 'favourited_by' | 'reblogged_by'): ApiHandler {
 		const credential = optionalCredential(c, deps)
 		const result = authorized(
 			await storeCall(c, deps, (s, b) =>
-				s.interactors(b, { credential, id: statusId(c), kind, page, present: present(c) })
+				s.interactors(b, { credential, id: statusId(c), kind, page, now: deps.now(), present: present(c) })
 			)
 		)
 		if (result.status !== 'ok') {

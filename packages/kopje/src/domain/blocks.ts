@@ -19,7 +19,7 @@ import {
 	undoBlockActivity,
 	undoFollowActivity,
 } from './activities'
-import { activeMuteSql, domainBlockMatchSql } from './audience'
+import { activeMuteSql, inDomainSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { retractFollow } from './inbox'
 import { writeOperation } from './operation'
@@ -37,7 +37,7 @@ import type { Db } from '../db/sql'
 //     actor's Follows while it lasts.
 //   - A mute is local only. It hides notifications too unless notifications=false, and expires after duration seconds
 //     (0: never); an expired mute stops applying at its time (activeMuteSql) and is swept later.
-//   - A domain block hides every account of that domain (domainBlockMatchSql: its stored domain or its actor's host,
+//   - A domain block hides every account of that domain (inDomainSql: its stored domain or its actor's host,
 //     exactly, as Mastodon's AccountDomainBlock matches), and ends the user's follows to and from accounts there, in
 //     either state (AfterBlockDomainFromAccountService: a Reject to each follower, an Undo of each of our follows).
 //     That is a durable cleanup (domain_block_cleanups) done in batches that each scan DOMAIN_BLOCK_WINDOW follows by
@@ -332,8 +332,7 @@ function cleanupBatch(db: Db, cleanup: Cleanup, now: number): boolean {
 		const ended = db.all<{ follower: string; target: string; other: string; other_uri: string }>(
 			`SELECT f.account_id AS follower, f.target_account_id AS target, a.id AS other, a.uri AS other_uri
 			FROM follows f JOIN accounts a ON a.id = IIF(f.account_id = ?1, f.target_account_id, f.account_id)
-				JOIN (SELECT ?2 AS domain) d
-			WHERE f.id > ?3 AND f.id <= ?4 AND ?1 IN (f.account_id, f.target_account_id) AND ${domainBlockMatchSql('d', 'a')}
+			WHERE f.id > ?3 AND f.id <= ?4 AND ?1 IN (f.account_id, f.target_account_id) AND ${inDomainSql('a', '?2')}
 			ORDER BY f.id`,
 			cleanup.account_id,
 			cleanup.domain,
@@ -418,8 +417,8 @@ export const previewDomainBlock = userReadOperation<
 >((db, { domain }, { accountId }) => {
 	const count = (anchor: string, other: string) =>
 		db.first<{ n: number }>(
-			`SELECT COUNT(*) AS n FROM follows f JOIN accounts a ON a.id = f.${other} JOIN (SELECT ?2 AS domain) d
-			WHERE f.${anchor} = ?1 AND f.state = 'accepted' AND ${domainBlockMatchSql('d', 'a')}`,
+			`SELECT COUNT(*) AS n FROM follows f JOIN accounts a ON a.id = f.${other}
+			WHERE f.${anchor} = ?1 AND f.state = 'accepted' AND ${inDomainSql('a', '?2')}`,
 			accountId,
 			domain
 		)?.n ?? 0
