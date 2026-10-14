@@ -92,7 +92,10 @@ const caseArb: fc.Arbitrary<Case> = fc
 
 const tokenOf = (x: number) => `policy-endpoints-${x}`
 
-function writeCase(sql: SqlStorage, { world, edges }: Case): void {
+type SeededNotification = Edges['notifications'][number]
+
+// Writes the case and returns the notifications it seeded, by id.
+function writeCase(sql: SqlStorage, { world, edges }: Case): Map<string, SeededNotification> {
 	sql.exec('DELETE FROM oauth_tokens')
 	writeWorld(sql, world)
 	world.accounts.forEach((account, x) => {
@@ -111,15 +114,21 @@ function writeCase(sql: SqlStorage, { world, edges }: Case): void {
 	for (const b of edges.bookmarks) {
 		sql.exec('INSERT INTO bookmarks (account_id, status_id) VALUES (?, ?)', accountId(b.account), statusId(b.status))
 	}
+	const notifications = new Map<string, SeededNotification>()
 	for (const n of edges.notifications) {
-		sql.exec(
-			'INSERT INTO notifications (account_id, type, from_account_id, status_id) VALUES (?, ?, ?, ?)',
-			accountId(n.recipient),
-			n.type,
-			accountId(n.from),
-			n.status === null ? null : statusId(n.status)
-		)
+		const { id } = sql
+			.exec<{ id: string }>(
+				`INSERT INTO notifications (account_id, type, from_account_id, status_id) VALUES (?, ?, ?, ?)
+				RETURNING CAST(id AS TEXT) AS id`,
+				accountId(n.recipient),
+				n.type,
+				accountId(n.from),
+				n.status === null ? null : statusId(n.status)
+			)
+			.one()
+		notifications.set(id, n)
 	}
+	return notifications
 }
 
 type Authorized<T> = { status: string; value?: T }
@@ -184,7 +193,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 
 // Runs every endpoint for every viewer of the case and returns what disagrees with the model.
 function check(sql: SqlStorage, c: Case): string[] {
-	writeCase(sql, c)
+	const seeded = writeCase(sql, c)
 	const { world, edges } = c
 	const m = new PolicyModel(world)
 	const now = Date.parse(world.now)
@@ -198,7 +207,7 @@ function check(sql: SqlStorage, c: Case): string[] {
 	const optional = (viewer: Viewer) => ({ credential: viewer === null ? null : credentialOf(viewer), now })
 
 	// A shown status: the model allows it to the viewer by the endpoint's rule, and a boost shows its own original,
-	// which the viewer may see.
+	// which the viewer may see (a read never shows a boost without it).
 	const status = (endpoint: string, viewer: Viewer, value: Status, allowed: (s: number) => boolean): number => {
 		shown.add(endpoint)
 		const s = indexOf.get(value.id)
@@ -209,11 +218,10 @@ function check(sql: SqlStorage, c: Case): string[] {
 		if (!allowed(s)) {
 			problems.push(`${endpoint} ${nameOf(viewer)}: ${statusName(s)} is not allowed`)
 		}
-		if (value.reblog !== null) {
-			const o = indexOf.get(value.reblog.id)
-			if (o === undefined || o !== m.status(s).reblogOf || !m.visible(o, viewer)) {
-				problems.push(`${endpoint} ${nameOf(viewer)}: ${statusName(s)} shows original ${value.reblog.id}`)
-			}
+		const { reblogOf } = m.status(s)
+		const original = value.reblog === null ? null : (indexOf.get(value.reblog.id) ?? -1)
+		if (original !== reblogOf || (original !== null && !m.visible(original, viewer))) {
+			problems.push(`${endpoint} ${nameOf(viewer)}: ${statusName(s)} shows original ${value.reblog?.id ?? 'none'}`)
 		}
 		return s
 	}
@@ -409,9 +417,10 @@ function check(sql: SqlStorage, c: Case): string[] {
 			status('status search', viewer, value, (s) => m.listable(s, viewer))
 		}
 
-		// Notifications: only those the notification rule shows, with statuses the viewer may view.
+		// Notifications: only the viewer's, as seeded, that the notification rule shows, with statuses the viewer may
+		// view.
 		const notifications = pages((page) =>
-			ok<Page<{ type: NotificationType; account: Account; status?: Status }>>(
+			ok<Page<{ id: string; type: NotificationType; account: Account; status?: Status }>>(
 				run(listNotifications, { ...user, page, types: [], excludeTypes: [], accountId: null, present: PRESENT }),
 				'notifications'
 			)
@@ -423,6 +432,16 @@ function check(sql: SqlStorage, c: Case): string[] {
 				notification.status === undefined
 					? null
 					: status('notifications', viewer, notification.status, (x) => m.viewable(x, viewer))
+			const row = seeded.get(notification.id)
+			if (
+				row === undefined ||
+				row.recipient !== viewer ||
+				row.type !== notification.type ||
+				row.from !== from ||
+				row.status !== s
+			) {
+				problems.push(`notifications ${nameOf(viewer)}: ${notification.id} is not a notification seeded for them`)
+			}
 			if (from === undefined || !m.shown(viewer, notification.type, from, s)) {
 				problems.push(`notifications ${nameOf(viewer)}: ${notification.type} from ${notification.account.id}`)
 			}
