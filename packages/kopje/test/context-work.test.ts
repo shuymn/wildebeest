@@ -65,7 +65,12 @@ async function rowsRead(store: StoreStub, signedIn: boolean): Promise<{ read: nu
 			},
 		} as unknown as SqlStorage
 		const credential = signedIn ? { tokenHash: 't', scope: 'read:statuses' as const, now: NOW } : null
-		const result = statusContext.run(counting, { credential, id: ROOT, present: { origin: 'https://kopje.test' } })
+		const result = statusContext.run(counting, {
+			credential,
+			id: ROOT,
+			now: NOW,
+			present: { origin: 'https://kopje.test' },
+		})
 		if (result.status !== 'ok' || result.value.status !== 'ok') {
 			throw new Error('context failed')
 		}

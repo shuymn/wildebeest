@@ -69,9 +69,9 @@
 	"devDependencies": {
 		"@cloudflare/vitest-plugin": "1.4.0",
 		"@cloudflare/workers-types": "5.20261011.1",
-		"@fedify/fedify": "2.4.2",
-		"@fedify/testing": "2.4.2",
-		"@fedify/vocab": "2.4.2",
+		"@fedify/fedify": "2.4.3",
+		"@fedify/testing": "2.4.3",
+		"@fedify/vocab": "2.4.3",
 		"@types/sanitize-html": "2.16.2",
 		"acorn": "8.15.0",
 		"age-encryption": "0.3.1",
@@ -86,7 +86,7 @@
 		"typescript": "7.0.2",
 		"vitest": "5.0.3",
 		"wrangler": "4.149.0",
-		"zod": "4.6.5"
+		"zod": "4.6.6"
 	},
 	"publishConfig": {
 		"access": "public",

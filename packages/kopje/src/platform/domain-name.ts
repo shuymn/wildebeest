@@ -25,6 +25,14 @@ export function normalizeDomain(raw: string): string | null {
 	return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host) ? host : null
 }
 
+// A domain to block, as Kopje stores domain blocks and matches them (domain/audience.ts, inDomainSql): Mastodon's
+// TagManager#normalize_domain (a trailing slash dropped, the host lowercased and in punycode) with a trailing dot
+// dropped too, then normalizeDomain. The API stores what this returns, and the cutover converts legacy rows with it.
+// null when it is not a domain name.
+export function blockedDomain(raw: string): string | null {
+	return normalizeDomain(raw.trim().replace(/\/$/, '').replace(/\.$/, ''))
+}
+
 // The domain an actor id's host gives an account, as Mastodon takes it (Addressable::URI#normalized_host, without the
 // port): the hostname, lowercase and punycode, without a trailing dot or a port. The id itself is kept whole for
 // origin checks. A host the normalizer refuses (the loader refuses such hosts anyway) is used as the URL parser reads

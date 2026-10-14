@@ -1,7 +1,8 @@
+import type { ViewerContext } from './audience'
 import { mediaDeleteOperation, readOperation, sessionOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 import type { StoreOperation } from '../platform/store-kernel'
-import { grants, type Scope } from '../security/scopes'
+import { grantsAny, type RequiredScope } from '../security/scopes'
 
 // Token validation for API requests (design §4: "token validation and the operation in the same RPC"). A protected
 // operation takes the request's credential and checks it in the transaction that runs the operation, so a token
@@ -20,12 +21,12 @@ export type Viewer = {
 
 export type UserViewer = Viewer & { accountId: string }
 
-// What a request presents: the sha256 of its bearer token, the scope its route requires (null: any valid token,
-// app tokens included), and the request time.
-export type Credential = { tokenHash: string; scope: Scope | null; now: number }
+// What a request presents: the sha256 of its bearer token, the scope its route requires (any one of them if several;
+// null: any valid token, app tokens included), and the request time.
+export type Credential = { tokenHash: string; scope: RequiredScope | null; now: number }
 
 // A route that requires a scope also requires a user.
-export type UserCredential = Credential & { scope: Scope }
+export type UserCredential = Credential & { scope: RequiredScope }
 
 export type AuthFailure =
 	| { status: 'unauthenticated' }
@@ -62,7 +63,7 @@ export function authorize(db: Db, credential: Credential): AuthFailure | { statu
 	}
 	const scopes = row.scopes.split(' ')
 	if (credential.scope !== null) {
-		if (!grants(scopes, credential.scope)) {
+		if (!grantsAny(scopes, credential.scope)) {
 			return { status: 'insufficient_scope' }
 		}
 		if (row.account_id === null) {
@@ -81,11 +82,19 @@ export function authorize(db: Db, credential: Credential): AuthFailure | { statu
 	}
 }
 
+// The viewer context of a signed-in user.
+export type UserContext = ViewerContext & { readonly accountId: string }
+
+// The only place a ViewerContext is made: the viewer a credential names (or none), judged at its request time.
+function contextOf<A extends string | null>(accountId: A, now: number): ViewerContext & { readonly accountId: A } {
+	return { accountId, now: new Date(now).toISOString() }
+}
+
 type Declare = typeof readOperation
 
 function guarded(declare: Declare) {
 	return <I, O>(
-		run: (db: Db, input: I, viewer: UserViewer) => O
+		run: (db: Db, input: I, viewer: UserViewer, context: UserContext) => O
 	): StoreOperation<I & { credential: UserCredential }, Authorized<O>> =>
 		declare<I & { credential: UserCredential }, Authorized<O>>((db, input) => {
 			const auth = authorize(db, input.credential)
@@ -93,7 +102,8 @@ function guarded(declare: Declare) {
 				return auth
 			}
 			// authorize() refuses a token without an account when a scope is required.
-			return { status: 'ok', value: run(db, input, auth.viewer as UserViewer) }
+			const viewer = auth.viewer as UserViewer
+			return { status: 'ok', value: run(db, input, viewer, contextOf(viewer.accountId, viewer.now)) }
 		})
 }
 
@@ -113,22 +123,23 @@ export const checkCredential = readOperation<Credential, Authorized<Viewer>>((db
 
 // Operations of a route whose token is optional (Mastodon's authorize_if_got_token!): no credential reads as an
 // anonymous viewer; a credential must be valid and cover the route's scope (if it declares one), and an app token (no
-// user) is anonymous. now is the credential's request time (null without one), as Viewer.now.
+// user) is anonymous. The context's time is the credential's request time, or the request time the input carries
+// when there is no credential.
 export function optionalUserReadOperation<I, O>(
-	run: (db: Db, input: I, viewerId: string | null, now: number | null) => O
-): StoreOperation<I & { credential: Credential | null }, Authorized<O>> {
-	return readOperation<I & { credential: Credential | null }, Authorized<O>>((db, input) => {
+	run: (db: Db, input: I, context: ViewerContext) => O
+): StoreOperation<I & { credential: Credential | null; now: number }, Authorized<O>> {
+	return readOperation<I & { credential: Credential | null; now: number }, Authorized<O>>((db, input) => {
 		if (input.credential === null) {
-			return { status: 'ok', value: run(db, input, null, null) }
+			return { status: 'ok', value: run(db, input, contextOf(null, input.now)) }
 		}
 		const { now } = input.credential
 		const auth = authorize(db, input.credential)
 		if (auth.status === 'user_required') {
-			return { status: 'ok', value: run(db, input, null, now) }
+			return { status: 'ok', value: run(db, input, contextOf(null, now)) }
 		}
 		if (auth.status !== 'ok') {
 			return auth
 		}
-		return { status: 'ok', value: run(db, input, auth.viewer.accountId, now) }
+		return { status: 'ok', value: run(db, input, contextOf(auth.viewer.accountId, now)) }
 	})
 }

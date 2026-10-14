@@ -382,6 +382,40 @@ describe('rows legacy never showed, and outbox rows written before 0016', () => 
 	}
 })
 
+describe('domain blocks', () => {
+	it('stores them as the API does, merges what becomes one block, drops a non-domain counted, and verifies', async () => {
+		const exportPath = await exportOf({ level: 39, domainBlockSpellings: true })
+		const refused = await convert(exportPath)
+		expect(refused.ok).toBe(false)
+		expect(refused.manifest.conversion).toMatchObject({ dropped: { 'domain_blocks:invalid-domain': 1 } })
+		const { ok, manifest, dumpPath } = await convert(exportPath, { acceptDeletions: true, out: 'accepted' })
+		expect(ok).toBe(true)
+		expect((manifest.conversion as { normalized: Record<string, number> }).normalized).toMatchObject({
+			'domain_blocks:case-duplicate-merged': 1,
+		})
+		const db = await opened(dumpPath)
+		const domains = db.prepare('SELECT domain FROM domain_blocks ORDER BY domain').all() as { domain: string }[]
+		db.close()
+		expect(domains.map((row) => row.domain)).toEqual([
+			'spam.example',
+			'trailing.example',
+			'upper.example',
+			'xn--bcher-kva.example',
+		])
+		// The check counts the dropped row on its own, and passes only with the same consent.
+		const refusedCheck = await verifyWith(exportPath, dumpPath)
+		expect(refusedCheck.ok).toBe(false)
+		expect(refusedCheck.report).toMatchObject({
+			result: 'FAIL',
+			dropped: { 'domain_blocks:invalid-domain': 1, accepted: false },
+		})
+		const { ok: verified, categories, report } = await verifyWith(exportPath, dumpPath, { acceptDeletions: true })
+		expect(failing(categories)).toEqual([])
+		expect(report).toMatchObject({ dropped: { 'domain_blocks:invalid-domain': 1, accepted: true } })
+		expect(verified).toBe(true)
+	})
+})
+
 describe('text with a lone surrogate', () => {
 	it('carries it with U+FFFD in its place, counted, and the independent check agrees', async () => {
 		const exportPath = await exportOf({ level: 39, loneSurrogates: true })

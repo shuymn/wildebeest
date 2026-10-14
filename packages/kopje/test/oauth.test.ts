@@ -819,6 +819,48 @@ describe('scopes on routes', () => {
 		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(token))).status).toBe(403)
 	})
 
+	it('registers and authorizes the profile scope, which reads only verify_credentials', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h, { scopes: 'profile' })
+		const consent = await (await consentPage(h, app, { scope: 'profile' })).text()
+		expect(consent).toContain('<code>profile</code>')
+		const code = await authorizationCode(h, app, { scope: 'profile' })
+		const exchanged = await exchange(h, app, code)
+		expect(exchanged.status).toBe(200)
+		const { access_token: token, scope } = await exchanged.json<{ access_token: string; scope: string }>()
+		expect(scope).toBe('profile')
+
+		// The same answer as a read:accounts token gets.
+		const me = await h.request('/api/v1/accounts/verify_credentials', bearer(token))
+		expect(me.status).toBe(200)
+		const reader = await login(h, { app: await registerApp(h, { scopes: 'read:accounts' }), scope: 'read:accounts' })
+		const full = await h.request('/api/v1/accounts/verify_credentials', bearer(reader.token))
+		expect(await me.json()).toEqual(await full.json())
+
+		for (const [path, init] of [
+			['/api/v1/preferences', {}],
+			['/api/v1/timelines/home', {}],
+			[`/api/v1/accounts/${h.aliceId}/statuses`, {}],
+			['/api/v1/accounts/update_credentials', json({ display_name: 'A' }, { method: 'PATCH' })],
+			['/api/v1/push/subscription', {}],
+		] as const) {
+			const denied = await h.request(path, bearer(token, init))
+			expect(denied.status, path).toBe(403)
+			expect(await denied.json(), path).toEqual({ error: 'This action is outside the authorized scopes' })
+		}
+	})
+
+	it('keeps profile apart from read: neither covers the other', async () => {
+		const h = await withAlice()
+		const reader = await registerApp(h, { scopes: 'read' })
+		const refused = await decide(h, reader, 'approve', { scope: 'profile' })
+		expect(new URL(refused.headers.get('location')!).searchParams.get('error')).toBe('invalid_scope')
+		const both = await registerApp(h, { scopes: 'profile read' })
+		const { token } = await login(h, { app: both, scope: 'profile read' })
+		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(token))).status).toBe(200)
+		expect((await h.request('/api/v1/timelines/home', bearer(token))).status).toBe(200)
+	})
+
 	it('needs a valid token on protected routes and ignores tokens on public ones', async () => {
 		const h = await withAlice()
 		expect((await h.request('/api/v1/accounts/verify_credentials')).status).toBe(401)

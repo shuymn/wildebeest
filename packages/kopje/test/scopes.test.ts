@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { ROUTES } from '../src/mastodon/routes'
-import { grants, parseScopes, type Scope, withinScopes } from '../src/security/scopes'
+import { grants, grantsAny, parseScopes, type Scope, withinScopes } from '../src/security/scopes'
 
 describe('scope hierarchy', () => {
 	it.each<[string[], Scope, boolean]>([
@@ -22,6 +22,11 @@ describe('scope hierarchy', () => {
 		[['admin:read'], 'admin:read:accounts', true],
 		[['admin:read'], 'read:accounts', false],
 		[['read'], 'admin:read:accounts', false],
+		[['profile'], 'profile', true],
+		[['profile'], 'read:accounts', false],
+		[['profile'], 'read', false],
+		[['read'], 'profile', false],
+		[['read:accounts'], 'profile', false],
 		[[], 'read', false],
 	])('%j covers %s: %s', (granted, required, expected) => {
 		expect(grants(granted, required)).toBe(expected)
@@ -34,12 +39,28 @@ describe('scope hierarchy', () => {
 		expect(parseScopes('read+write:media')).toEqual(['read', 'write:media'])
 		expect(parseScopes('read everything')).toBeNull()
 		expect(parseScopes('read:*')).toBeNull()
+		expect(parseScopes('profile')).toEqual(['profile'])
+		expect(parseScopes('profile read:statuses')).toEqual(['profile', 'read:statuses'])
+		expect(parseScopes('profile:read')).toBeNull()
+	})
+
+	it('accepts any one of several required scopes', () => {
+		const verifyCredentials = ['profile', 'read:accounts'] as const
+		expect(grantsAny(['profile'], verifyCredentials)).toBe(true)
+		expect(grantsAny(['read'], verifyCredentials)).toBe(true)
+		expect(grantsAny(['read:accounts'], verifyCredentials)).toBe(true)
+		expect(grantsAny(['read:statuses', 'write'], verifyCredentials)).toBe(false)
+		expect(grantsAny(['profile'], 'read:statuses')).toBe(false)
+		expect(grantsAny([], [])).toBe(false)
 	})
 
 	it('checks requested scopes against registered ones through the hierarchy', () => {
 		expect(withinScopes(['read:accounts', 'write:follows'], ['read', 'write'])).toBe(true)
 		expect(withinScopes(['read:accounts'], ['follow'])).toBe(false)
 		expect(withinScopes(['read'], ['read:accounts'])).toBe(false)
+		expect(withinScopes(['profile'], ['read'])).toBe(false)
+		expect(withinScopes(['read:accounts'], ['profile'])).toBe(false)
+		expect(withinScopes(['profile'], ['profile', 'read'])).toBe(true)
 	})
 })
 

@@ -153,6 +153,103 @@ describe('Store migration runner', () => {
 		})
 	})
 
+	it('upgrades a Store at 0002_web_push with 0003_domain_block_form: trailing dots go, and a duplicate merges', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, 3)).upgrade()).toMatchObject({ ok: true })
+			const [alice, bob] = ['100000000000000001', '100000000000000002']
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					(?, 'https://kopje.test/ap/users/alice', 'alice', NULL), (?, 'https://kopje.test/ap/users/bob', 'bob', NULL)`,
+				alice,
+				bob
+			)
+			sql.exec(
+				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES
+					(?, 'a@example.com', X'00', X'00', 'k'), (?, 'b@example.com', X'00', X'00', 'k')`,
+				alice,
+				bob
+			)
+			// A converted dotted block with a cleanup, and the same domain blocked again through the API; two dotted
+			// spellings of one domain; a dotted block alone; one already in form; another account's dotted block.
+			sql.exec(
+				`INSERT INTO domain_blocks (id, account_id, domain) VALUES
+					(1, ?1, 'pair.example.'), (2, ?1, 'pair.example'), (3, ?1, 'dotted.example.'), (4, ?1, 'plain.example'),
+					(5, ?2, 'pair.example.'), (6, ?1, 'twin.example..'), (7, ?1, 'twin.example.')`,
+				alice,
+				bob
+			)
+			sql.exec('INSERT INTO domain_block_cleanups (domain_block_id, bound, created_at) VALUES (1, 7, 1)')
+
+			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0003_domain_block_form'],
+			})
+			expect(sql.exec('SELECT id, account_id, domain FROM domain_blocks ORDER BY id').toArray()).toEqual([
+				{ id: 2, account_id: alice, domain: 'pair.example' },
+				{ id: 3, account_id: alice, domain: 'dotted.example' },
+				{ id: 4, account_id: alice, domain: 'plain.example' },
+				{ id: 5, account_id: bob, domain: 'pair.example' },
+				{ id: 6, account_id: alice, domain: 'twin.example' },
+			])
+			// The merged row's cleanup now belongs to the block that stays.
+			expect(sql.exec('SELECT domain_block_id, bound FROM domain_block_cleanups').toArray()).toEqual([
+				{ domain_block_id: 2, bound: 7 },
+			])
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('0003_domain_block_form reads each block in form once, however many an account holds (RES-7)', async () => {
+		const migration = MIGRATIONS.find((m) => m.name === '0003_domain_block_form')!
+		const statements = migration.sql
+			.split('\n')
+			.filter((line) => !line.startsWith('--'))
+			.join('\n')
+			.split(';')
+			.filter((statement) => statement.trim() !== '')
+		const measure = async (normal: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, 3)).upgrade()
+				const alice = '100000000000000001'
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice', NULL)",
+					alice
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+					alice
+				)
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+					INSERT INTO domain_blocks (account_id, domain) SELECT ?1, 'd' || i || '.example' FROM n`,
+					alice,
+					normal
+				)
+				sql.exec(
+					"INSERT INTO domain_blocks (account_id, domain) VALUES (?1, 'd1.example.'), (?1, 'new.example.'), (?1, 'new.example..')",
+					alice
+				)
+				let read = 0
+				for (const statement of statements) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				expect(sql.exec("SELECT count(*) AS n FROM domain_blocks WHERE domain LIKE '%.'").one()).toEqual({ n: 0 })
+				expect(sql.exec('SELECT count(*) AS n FROM domain_blocks').one()).toEqual({ n: normal + 1 })
+				return read
+			})
+		}
+		const small = await measure(1000)
+		const large = await measure(10_000)
+		// One pass over the table per statement that looks for dotted rows; nothing per pair of rows.
+		expect(large - small).toBeLessThanOrEqual(2 * (10_000 - 1000))
+	}, 60_000)
+
 	it('stays readonly with exact bookkeeping when a file fails, and lets a fixed build continue', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {

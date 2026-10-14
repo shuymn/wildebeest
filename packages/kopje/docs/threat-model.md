@@ -191,7 +191,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **VIS-1: one rule decides who may see a status**, Mastodon's `StatusPolicy#show?`: a suspended author's statuses are
   seen by nobody; the author sees all their own; an author who blocks the viewer hides everything from them; `public`
   and `unlisted` are seen by everyone else; `private` by accepted followers and the mentioned (silent included);
-  `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule. _Enforced (main):_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
+  `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule, from the one policy module (`docs/visibility.md`; `test/policy.test.ts` keeps the rule out of other modules). _Enforced (main):_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
   `test/visibility.test.ts` (single status, context, history, source, `favourited_by`, timelines, account statuses,
   notifications, bookmarks, favourites). _Enforced (main)_ for search: `src/domain/search.ts`;
   `test/search.test.ts` ("never returns a status the viewer may not see", "drops a boosted status that became
@@ -254,10 +254,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **VIS-5: lists also apply the viewer's filters**, Mastodon's `StatusFilter`. Feeds, context, notifications, bookmarks,
   favourites, `favourited_by` and `reblogged_by` drop authors the viewer blocks, mutes or domain-blocks. A single status
   by id is not filtered. A mute counts only until it expires (VIS-14), and home also drops a status or boosted
-  original that mentions an account the viewer blocks or mutes (`FeedManager#filter_from_home`; VIS-13, VIS-14). _Enforced (main):_ `unfilteredSql` and `listableSql` in
+  original that mentions an account the viewer blocks or mutes (`FeedManager#filter_from_home`; VIS-13, VIS-14). _Enforced (main):_ `filteredForSql`, `listableSql` and `homeFilterSql` in
   `src/domain/audience.ts`; `test/audience.test.ts`, `test/visibility.test.ts` ("blocked and muted accounts stay out of
   lists"). _Implemented on branch `kopje/inbound-statuses`:_ a domain block matches an account by its stored domain
-  and by the host of its actor id, both normalized (lowercase, no port, no trailing dot; `domainBlockMatchSql`), everywhere a domain block applies (lists, notifications,
+  and by the host of its actor id, the account's side normalized (lowercase, no port, no trailing dot) and compared with the block's stored, normalized domain through its index (`inDomainSql`, `domainBlocksSql`), everywhere a domain block applies (lists, notifications,
   relationships, inbound Follows and Moves, account search and search resolution), so an account confirmed under
   another WebFinger domain cannot escape a block of the server it lives on; `test/inbox-canonical-address.test.ts`
   ("applies a block of the actor’s host on every path", "never lets a third-party alias replace a confirmed domain or
@@ -272,7 +272,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   boost of an unlisted original stays out of the public timelines. The boost's own audience is kept: the known
   accounts its `to` and `cc` address are its silent recipients (bounded like a status's), so the audience rule
   decides who sees the wrapper, and a reblog notification is written and shown only while its recipient may see the
-  sender's boost as well as the original (`shownSql` in `src/domain/notifications.ts`, for local boosts too);
+  sender's boost as well as the original (`shownSql` in `src/domain/audience.ts`, for local boosts too);
   `test/inbox-statuses.test.ts` ("VIS-6: a boost of a private, direct or unfetchable object stores nothing", "VIS-6:
   a boost of an unlisted object stays out of the public timelines"), `test/inbox-statuses-edge.test.ts` ("notifies a
   local author of a private boost only if they may see the boost", "hides an already written notification once its
@@ -286,7 +286,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `follow` in `src/domain/accounts.ts`; `test/accounts.test.ts` ("requests a locked or remote account", "lists following
   without pending requests"). `GET /api/v1/accounts/familiar_followers` reads accepted follows on both sides only,
   leaves out suspended accounts and the followers the viewer filters out of lists (VIS-5, VIS-14, VIS-15: blocks,
-  mutes while they apply, domain blocks; `unfilteredSql`), and shows no follow that the followers and following lists
+  mutes while they apply, domain blocks; `filteredForSql`), and shows no follow that the followers and following lists
   would not show the same viewer: _Implemented on branch `kopje/startup-reads`:_ `familiarFollowers` in
   `src/domain/accounts.ts`; `test/account-reads.test.ts` ("counts accepted follows only (VIS-8)", "leaves out
   accounts the viewer blocks or mutes", "shows a follower whose mute has expired, and hides one on a domain the viewer
@@ -341,7 +341,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   only within that actor's retraction cap, since the block itself refuses the actor's Follows while it lasts.
   _Implemented on branch `kopje/blocks-mutes`:_ `block` and `unblock` in `src/domain/blocks.ts`, the inbound `block`
   in `src/domain/inbox.ts`, `resolveMentions` and `editStatus` in `src/domain/statuses.ts`, `audienceTargets` in
-  `src/domain/deliveries.ts`, `shownSql` in `src/domain/notifications.ts`, `homeTimeline` in
+  `src/domain/deliveries.ts`, `shownSql` and `homeFilterSql` in `src/domain/audience.ts`, `homeTimeline` in
   `src/domain/timelines.ts`; `test/blocks.test.ts` ("blocks a local account", "sends a remote account Undo Follow,
   Reject and Block", "applies an inbound Block and its Undo", "blocked recipients", "mentions of blocked and muted
   accounts"), `test/inbox.test.ts` ("records a Block, ends both follows").
@@ -349,18 +349,19 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   the muted account sees or may do. It keeps the muted account out of the muter's lists (VIS-5) and home, including
   others' statuses that mention it, and, unless created with `notifications=false`, out of the muter's notifications
   (a mention or reply that mentions or answers it included); a post notification (`notify`) of a status that
-  mentions it is left out whether or not the mute hides notifications, as home leaves the status out. A mute with a duration applies until its `expires_at`,
+  mentions it, or that the muted account wrote, is left out whether or not the mute hides notifications, as home leaves the status out (Mastodon's `FeedInsertWorker`), and so is its push. A mute with a duration applies until its `expires_at`,
   judged at the time of each request or write (the credential's time, or the activity's), so it stops applying at its
   time whether or not the sweep has removed it; the inbound sweep removes 100 expired mutes per call (RES-4). A `Move`
   carries the muter's active mutes to the target with their expiry, replacing an expired mute of the target but never
   an active one (`move` in `src/domain/inbox.ts`; `test/inbox.test.ts`, "carries an active mute over an expired one").
-  _Implemented on branch `kopje/blocks-mutes`:_ `activeMuteSql` and `unfilteredSql` in `src/domain/audience.ts`,
-  `shownSql` in `src/domain/notifications.ts`, `mute` in `src/domain/blocks.ts`; `test/blocks.test.ts` ("hides the
+  _Implemented on branch `kopje/blocks-mutes`:_ `activeMuteSql`, `filteredForSql`, `homeFilterSql` and `shownSql` in
+  `src/domain/audience.ts`, `mute` in `src/domain/blocks.ts`; `test/blocks.test.ts` ("hides the
   muted account from timelines and search", "stops applying an expired mute at its time", "keeps the viewer's own
-  statuses in home").
+  statuses in home", "leaves out post notifications from a sender the recipient mutes"), `test/push-send.test.ts`
+  ("PUSH-3: pushes no post notification of a sender the recipient mutes").
 - **VIS-15: a domain block hides the domain and ends the relationships with it.** A user's domain block matches every
   account whose stored domain or actor host is the domain, exactly (Mastodon's `AccountDomainBlock` matches no
-  subdomains; `domainBlockMatchSql`), and hides them as VIS-5 says; following an account there is refused, a `Follow`
+  subdomains; `inDomainSql`, `domainBlocksSql`), and hides them as VIS-5 says; following an account there is refused, a `Follow`
   from one is rejected, and none of the user's statuses mentions or is addressed to one (as VIS-13); a boost of a
   status by an account there, which Mastodon allows, leaves its author out of the `Announce`'s addressing and audience
   (`boostAnnounce` in `src/domain/activities.ts`, for the delivered `Announce`, its `Undo` and the outbox's copy).
@@ -385,8 +386,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `userReadOperation` and `userWriteOperation` in `src/domain/auth.ts`; `test/store-auth.test.ts`, `test/oauth.test.ts`
   ("refuses a token that survived the suspension").
 - **AUTH-2: every API route declares its access.** Each Mastodon API route is `public`, `token` (any valid token, app
-  tokens included) or a required user scope; one helper decides scope coverage (parents cover children, `follow` expands
-  to its split scopes, nothing else is implied). _Enforced (main):_ `src/mastodon/routes.ts`, `src/security/scopes.ts`;
+  tokens included) or a required user scope, or any one of several (`GET /api/v1/accounts/verify_credentials`:
+  `profile` or `read:accounts`); one helper decides scope coverage (parents cover children, `follow` expands to its
+  split scopes, nothing else is implied: `read` does not cover `profile`, which covers nothing else). _Enforced (main):_ `src/mastodon/routes.ts`, `src/security/scopes.ts`;
   `test/scopes.test.ts`, `test/vectors.test.ts` ("Mastodon's scope hierarchy"), `test/oauth.test.ts` ("scopes on
   routes"). Main adds `optional` scopes (no token reads as anonymous; a token sent must be valid). _Implemented on
   branch `kopje/startup-reads`:_ an `optional` route may declare no scope (`GET /api/v1/tags/:id`: any valid token,

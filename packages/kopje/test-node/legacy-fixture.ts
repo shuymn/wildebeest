@@ -64,6 +64,9 @@ export type FixtureOptions = {
 	// 'before' and then 'after'; the unlisted status shows image-1 again. Bob's header is then
 	// the upstream default, and his first status shows an image of another account.
 	imagesAccount?: string
+	// More of alice's domain blocks, spelled as legacy never stored them: 'spam.example.' (the same block as
+	// 'Spam.Example' once normalized), 'Upper.Example', 'trailing.example.', 'bücher.example', and 'not a domain'.
+	domainBlockSpellings?: boolean
 }
 
 export type LegacyFixture = {
@@ -177,6 +180,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		before0016,
 		loneSurrogates = false,
 		imagesAccount,
+		domainBlockSpellings = false,
 	} = options
 	const images = imagesAccount === undefined ? IMAGES : `https://imagedelivery.net/${imagesAccount}`
 	if (before0016 !== undefined && level < 16) {
@@ -923,6 +927,17 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		domain: 'Spam.Example',
 		created_at: cdate(703),
 	})
+	if (domainBlockSpellings) {
+		const spellings = ['spam.example.', 'Upper.Example', 'trailing.example.', 'bücher.example', 'not a domain']
+		spellings.forEach((domain, i) => {
+			insert('domain_blocks', {
+				id: `b0000000-0000-4000-8000-0000000001${String(i).padStart(2, '0')}`,
+				account_id: alice,
+				domain,
+				created_at: cdate(710 + i),
+			})
+		})
+	}
 	insert('bookmarks', {
 		id: 'b0000000-0000-4000-8000-000000000005',
 		account_id: alice,

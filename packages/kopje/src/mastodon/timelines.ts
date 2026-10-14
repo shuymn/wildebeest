@@ -1,5 +1,4 @@
 import {
-	type ApiContext,
 	type ApiHandler,
 	authorized,
 	optionalCredential,
@@ -9,9 +8,8 @@ import {
 	userCredential,
 } from './context'
 import { mastodonError } from './errors'
-import { linkHeader, pageQuery } from './pagination'
+import { pageQuery, pageResponse } from './pagination'
 import { parseBoolean } from './params'
-import type { Page } from '../domain/accounts'
 
 // Timelines (B4a): home, public, hashtag, an account's statuses, bookmarks and favourites. Status lists default to
 // 20 and allow up to 40, as Mastodon's.
@@ -20,14 +18,6 @@ const STATUS_LIMIT = 20
 const MAX_STATUS_LIMIT = 40
 // Mastodon reads at most 4 extra tags each for any[], all[] and none[].
 const MAX_EXTRA_TAGS = 4
-
-function pageResponse<T>(c: ApiContext, page: Page<T>, limit: number): Response {
-	const link = linkHeader(c.req.url, { ...page, count: page.items.length }, limit)
-	if (link !== undefined) {
-		c.header('Link', link)
-	}
-	return c.json(page.items as object)
-}
 
 export const home: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)
@@ -50,6 +40,7 @@ export const publicTimeline: ApiHandler = async (c, deps) => {
 	const result = await storeCall(c, deps, (s, b) =>
 		s.publicTimeline(b, {
 			credential,
+			now: deps.now(),
 			page,
 			local: parseBoolean(p.get('local')) ?? false,
 			remote: parseBoolean(p.get('remote')) ?? false,
@@ -75,6 +66,7 @@ export const tagTimeline: ApiHandler = async (c, deps) => {
 	const result = await storeCall(c, deps, (s, b) =>
 		s.tagTimeline(b, {
 			credential,
+			now: deps.now(),
 			page,
 			tag: c.req.param('hashtag') ?? '',
 			any: tags('any'),
@@ -101,6 +93,7 @@ export const accountStatuses: ApiHandler = async (c, deps) => {
 		await storeCall(c, deps, (s, b) =>
 			s.accountStatuses(b, {
 				credential,
+				now: deps.now(),
 				account: c.req.param('id') ?? '',
 				page,
 				onlyMedia: parseBoolean(p.get('only_media')) ?? false,
