@@ -321,9 +321,13 @@ export function actualFromDump(text) {
 			put('aliases', entry.alias, entry.uri)
 		}
 	}
-	for (const id of Array.isArray(profileUpdates) ? profileUpdates : ['(not a list)']) {
+	// A repeated id is a record of its own, so it fails as an extra one.
+	const listed = new Set()
+	for (const [index, id] of (Array.isArray(profileUpdates) ? profileUpdates : ['(not a list)']).entries()) {
 		const owner = account(typeof id === 'string' ? id : null)
-		put('profile_updates', owner?.local === true ? owner.uri : `not a local account: ${String(id)}`, 1)
+		const key = owner?.local === true ? owner.uri : `not a local account: ${String(id)}`
+		put('profile_updates', listed.has(key) ? `repeated at ${index}: ${key}` : key, 1)
+		listed.add(key)
 	}
 	for (const [uri, versions] of edits) {
 		put('edits', uri, versions)

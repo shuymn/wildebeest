@@ -138,7 +138,7 @@ These are excluded because they must not be restored blindly:
 
 The importer refuses a `kopje_state` row whose name is not allowlisted. `profile_updates` is written only by
 `convert --images`: a JSON array of the ids of the local accounts whose avatar or header the conversion changed
-(the importer refuses any other value, `state-invalid`). Publication sends each an `Update(Person)` and deletes the
+(the importer refuses any other value, a repeated id, or more than 100 ids, `state-invalid`). Publication sends each an `Update(Person)` and deletes the
 row ([cutover.md](cutover.md), "Media"), so a dump of a published Store does not hold it.
 
 ## Trailer

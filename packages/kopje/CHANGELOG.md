@@ -36,7 +36,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   whose avatar or header the conversion changed, so other servers show the new profile images before Cloudflare Images
   is retired. `convert --images` lists those accounts in the dump (the `kopje_state` row `profile_updates`), which
   `verify-conversion` checks; `kopje-admin publish` queues the Updates in its transaction, reports them as
-  `profileUpdates`, and queues none when repeated. A dump that declares fewer restorable `kopje_state` names, such
+  `profileUpdates`, and queues none when repeated; it is refused while a dump runs (`dump-in-progress`). The list
+  holds at most 100 distinct accounts: more changed profiles stop the conversion (`profile-updates-over-limit`). A dump that declares fewer restorable `kopje_state` names, such
   as one from 0.1.0-rc.2, is still accepted ([docs/cutover.md](docs/cutover.md), "Media").
 
 ### Instance changes

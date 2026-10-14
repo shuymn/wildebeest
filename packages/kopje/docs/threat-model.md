@@ -1112,8 +1112,8 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   in for the checks before publication. `publish` (an Access admin, or `IMPORT_TOKEN` while the Store has no
   usable admin access, so a restore without Access completes) clears that state and sets the published mark in one
   transaction, which also records the `Update(Person)` of each local profile a cutover conversion changed (the
-  `profile_updates` row, deleted with it, so a repeated publish records none; `test/cutover-profile-updates.test.ts`);
-  it is refused while a drain holds its lease or the journal holds requests, and on a Store that never had
+  `profile_updates` row, at most 100 distinct ids, deleted with it, so a repeated publish records none;
+  `test/cutover-profile-updates.test.ts`); it is refused while a dump holds its freeze, while a drain holds its lease or the journal holds requests, and on a Store that never had
   a verified import, and an import never begins into a published Store, so the two marks never coexist. `cutover
 reset` takes such a
   Store back to empty through the bounded import reset, keeping its configuration: only an Access admin, only under env

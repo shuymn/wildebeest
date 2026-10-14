@@ -1,4 +1,11 @@
-import { hasRows, parseProfileUpdates, PROFILE_UPDATES, SEQUENCE_TABLE, STATE_TABLE } from './dump-catalog'
+import {
+	hasRows,
+	MAX_PROFILE_UPDATES,
+	parseProfileUpdates,
+	PROFILE_UPDATES,
+	SEQUENCE_TABLE,
+	STATE_TABLE,
+} from './dump-catalog'
 import {
 	DUMP_FORMAT,
 	type DumpHeader,
@@ -155,7 +162,10 @@ export function applyStatements(sql: SqlStorage, statements: readonly ParsedStat
 				throw new ImportError('state-not-allowed', `kopje_state ${name} is not restorable`)
 			}
 			if (name === textLiteral(PROFILE_UPDATES) && parseProfileUpdates(bound.params[1]) === null) {
-				throw new ImportError('state-invalid', `kopje_state ${PROFILE_UPDATES} is not a list of account ids`)
+				throw new ImportError(
+					'state-invalid',
+					`kopje_state ${PROFILE_UPDATES} is not a list of at most ${MAX_PROFILE_UPDATES} distinct account ids`
+				)
 			}
 		}
 		if (statement.table.name === SEQUENCE_TABLE) {

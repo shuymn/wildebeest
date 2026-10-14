@@ -19,6 +19,7 @@ import {
 	tableSnapshot,
 } from './ops-helpers'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
+import { MAX_PROFILE_UPDATES } from '../src/platform/dump-catalog'
 import type { DumpTrailer, TableSpec } from '../src/platform/dump-format'
 import { Sha256 } from '../src/platform/sha256'
 import {
@@ -358,13 +359,20 @@ describe('import', () => {
 			ok: false,
 			code: 'state-not-allowed',
 		})
-		const profiles = new TextEncoder().encode(
-			`INSERT INTO "kopje_state" ("name","value") VALUES ('profile_updates','{"id":"1"}');\n`
-		)
-		expect(await target.importChunk(BUILD, ACCESS, id, 1, profiles)).toMatchObject({
-			ok: false,
-			code: 'state-invalid',
-		})
+		// Not a list, a repeated id, more ids than publication announces.
+		for (const value of [
+			{ id: '1' },
+			['1', '2', '1'],
+			Array.from({ length: MAX_PROFILE_UPDATES + 1 }, (_, i) => String(i)),
+		]) {
+			const profiles = new TextEncoder().encode(
+				`INSERT INTO "kopje_state" ("name","value") VALUES ('profile_updates','${JSON.stringify(value)}');\n`
+			)
+			expect(await target.importChunk(BUILD, ACCESS, id, 1, profiles)).toMatchObject({
+				ok: false,
+				code: 'state-invalid',
+			})
+		}
 		expect(await target.importProgress(BUILD, ACCESS)).toMatchObject({ progress: { lastSeq: 0, statements: 0 } })
 	})
 

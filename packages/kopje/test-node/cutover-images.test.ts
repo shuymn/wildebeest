@@ -6,8 +6,17 @@ import { describe, expect, it } from 'vitest'
 
 import { convert, exportOf, failing, opened, tampered, verify, workspace } from './cutover-helpers.js'
 import { FOREIGN_IMAGE, UPSTREAM_HEADER } from './legacy-fixture.js'
+import { convertLegacy } from '../cli/lib/cutover/convert.js'
 import { imageSize } from '../cli/lib/cutover/image-size.js'
-import { exportImages, imageSecret, LEGACY_DEFAULT_AVATAR, mediaToken } from '../cli/lib/cutover/images-export.js'
+import {
+	exportImages,
+	imageSecret,
+	LEGACY_DEFAULT_AVATAR,
+	mediaToken,
+	readImagesFile,
+} from '../cli/lib/cutover/images-export.js'
+import { createKopjeDatabase, MAX_PROFILE_UPDATES } from '../cli/lib/cutover/kopje-db.js'
+import { loadLegacyExport } from '../cli/lib/cutover/legacy-load.js'
 import { IMAGE_SIZE_LIMIT, TOKEN_SHAPE } from '../cli/lib/cutover/upload-rules.js'
 import { run } from '../cli/lib/main.js'
 import { nodeIO } from '../cli/lib/node-io.js'
@@ -550,6 +559,63 @@ describe('convert and verify-conversion with --images', () => {
 		expect(verified.ok).toBe(true)
 	})
 
+	it('stops when more local profiles changed than publication announces', async () => {
+		// The converter stops where the Store's importer refuses (src/platform/dump-catalog.ts, Workers types only).
+		const catalog = await readFile(new URL('../src/platform/dump-catalog.ts', import.meta.url), 'utf8')
+		expect(catalog).toContain(`export const MAX_PROFILE_UPDATES = ${MAX_PROFILE_UPDATES}\n`)
+		const exportPath = await exportFixture()
+		const imagesDir = join(space.dir, 'images')
+		const exported = await exportImages({
+			exportPath,
+			accountHash: ACCOUNT,
+			outDir: imagesDir,
+			fetch: fakeFetch(FILES).fetch,
+		})
+		expect(exported.ok).toBe(true)
+		const names = (await readdir(exportPath)).filter((f) => f.endsWith('.sql'))
+		const loaded = loadLegacyExport({
+			texts: await Promise.all(names.map((f) => readFile(join(exportPath, f), 'utf8'))),
+			acceptDeletions: true,
+		})
+		// MAX_PROFILE_UPDATES copies of Bob, whose avatar maps and whose default header is dropped, beside alice and Bob.
+		const bob = `${ORIGIN}/ap/users/Bob`
+		for (let i = 0; i < MAX_PROFILE_UPDATES; i++) {
+			const name = `Copy${i}`
+			const uri = `${ORIGIN}/ap/users/${name}`
+			// privkey and privkey_salt are unique in legacy.
+			const byte = i.toString(16).padStart(2, '0')
+			for (const [table, key] of [
+				['actors', 'id'],
+				['users', 'actor_id'],
+			] as const) {
+				loaded.db.exec(`CREATE TEMP TABLE copy AS SELECT * FROM ${table} WHERE ${key} = '${bob}'`)
+				loaded.db.exec(
+					table === 'actors'
+						? `UPDATE copy SET id = '${uri}', mastodon_id = '${name}', username = '${name.toLowerCase()}',
+							properties = replace(replace(properties, '${bob}', '${uri}'), '"preferredUsername":"Bob"',
+								'"preferredUsername":"${name}"')`
+						: `UPDATE copy SET id = '${name}', actor_id = '${uri}', email = '${name}@example.com',
+							privkey = privkey || X'${byte}', privkey_salt = privkey_salt || X'${byte}'`
+				)
+				loaded.db.exec(`INSERT INTO ${table} SELECT * FROM copy; DROP TABLE copy`)
+			}
+		}
+		const images = readImagesFile(imagesDir)
+		if (images === null) {
+			throw new Error('no images.json')
+		}
+		const summary = convertLegacy(loaded.db, createKopjeDatabase(), {
+			images,
+			baseTime: Date.parse('2026-10-20T00:00:00.000Z'),
+			originalActorIds: loaded.originalActorIds,
+			notificationSequence: loaded.report.notificationSequence,
+			source: loaded.source,
+		})
+		loaded.db.close()
+		expect(summary.localAccounts).toBe(MAX_PROFILE_UPDATES + 2)
+		expect(summary.problems).toEqual({ 'profile-updates-over-limit': 1 })
+	})
+
 	it('without --images keeps every URL as it was', async () => {
 		const exportPath = await exportFixture()
 		const { ok, manifest, dumpPath } = await convert(space.dir, exportPath, { acceptDeletions: true })
@@ -658,6 +724,15 @@ describe('convert and verify-conversion with --images', () => {
 			["DELETE FROM kopje_state WHERE name = 'profile_updates'", ['profile_updates']],
 			[
 				"UPDATE kopje_state SET value = (SELECT json_array(min(id)) FROM accounts WHERE domain IS NULL) WHERE name = 'profile_updates'",
+				['profile_updates'],
+			],
+			// A repeated id, and an id that is no local account.
+			[
+				"UPDATE kopje_state SET value = (SELECT json_array(min(id), min(id), max(id)) FROM accounts WHERE domain IS NULL) WHERE name = 'profile_updates'",
+				['profile_updates'],
+			],
+			[
+				"UPDATE kopje_state SET value = (SELECT json_insert(value, '$[#]', 'no-such-account') FROM kopje_state WHERE name = 'profile_updates') WHERE name = 'profile_updates'",
 				['profile_updates'],
 			],
 			["UPDATE media_attachments SET content_type = 'image/jpeg' WHERE file_token IS NOT NULL", ['media_files']],

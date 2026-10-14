@@ -77,6 +77,41 @@ describe('publication after a conversion with --images', () => {
 	})
 })
 
+describe('publication during a dump', () => {
+	it('is refused while the dump holds its freeze, so the dump is of the unpublished Store throughout', async () => {
+		const { h, publish } = await imported(inject('cutoverImages').dump)
+		const started = await h.store.dumpStart(BUILD)
+		if (!started.ok) {
+			throw new Error(started.message)
+		}
+		const first = await h.store.dumpNext(BUILD, started.cursor, 4096)
+		if (!first.ok || first.done) {
+			throw new Error('expected a dump of several chunks')
+		}
+		let text = started.headerLine + new TextDecoder().decode(first.chunk)
+		expect(await publish()).toMatchObject({ ok: false, code: 'dump-in-progress' })
+		expect(await updates(h.store)).toEqual([])
+		let cursor = first.cursor
+		for (;;) {
+			const step = await h.store.dumpNext(BUILD, cursor, 4096)
+			if (!step.ok) {
+				throw new Error(step.message)
+			}
+			text += new TextDecoder().decode(step.chunk)
+			cursor = step.cursor
+			if (step.done) {
+				break
+			}
+		}
+		const finished = await h.store.dumpFinish(BUILD, cursor)
+		expect(finished).toMatchObject({ ok: true })
+		// The dump still lists the profiles to announce, and the Store has recorded no Update.
+		expect(text).toMatch(/^INSERT INTO "kopje_state" \("name","value"\) VALUES \('profile_updates',/m)
+
+		expect(await publish()).toMatchObject({ ok: true, profileUpdates: 2 })
+	})
+})
+
 describe('publication after a conversion without --images', () => {
 	it('records no Update', async () => {
 		const { h, publish } = await imported(inject('cutover').dump)

@@ -1168,7 +1168,7 @@ export class StoreAdmin {
 
 	// Publication: ends the readonly state a verified import leaves (unpublished) and sets the published mark, in one
 	// transaction, which also records the Updates of the profiles a cutover conversion changed (onPublish), so a
-	// repeated publication records none. Idempotent. Refused while a rollback is in progress (a drain lease, or requests in the journal): those
+	// repeated publication records none. Idempotent. Refused while a dump holds its freeze. Refused while a rollback is in progress (a drain lease, or requests in the journal): those
 	// requests go to the legacy instance, not to a published Kopje. An Access admin publishes; so does IMPORT_TOKEN while
 	// the Store is in bootstrap (no usable admin access), as it may configure and import into that Store, so a restore
 	// without Access is never left readonly.
@@ -1200,6 +1200,11 @@ export class StoreAdmin {
 					// Publication ends a verified import; a Store that never had one is not readonly and has nothing to
 					// publish. Refusing it keeps a published mark off a Store an import may still begin into.
 					throw new ImportError('not-unpublished', 'nothing to publish: no verified import is waiting')
+				}
+				// A rescue dump's freeze holds: publication makes the Store writable and records profile Updates, which
+				// would mix states within the dump.
+				if (activeDump(flags, this.#now()) !== null) {
+					throw new ImportError('dump-in-progress', 'a dump is in progress')
 				}
 				if (this.#rollbackInProgress()) {
 					throw new ImportError('rollback-in-progress', 'the journal holds requests or a drain runs')

@@ -53,6 +53,8 @@ export function createKopjeDatabase(path = ':memory:') {
  */
 
 const DUMPED_STATE = ['last_local_id', 'profile_updates']
+// At most this many local accounts in profile_updates, as the Store accepts (src/platform/dump-catalog.ts).
+export const MAX_PROFILE_UPDATES = 100
 
 /** @param {string} name */
 function excluded(name) {
