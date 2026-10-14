@@ -164,6 +164,29 @@ export function followableBySql(x: string, viewer: string): string {
 	return `(${availableSql(x)} AND ${x} <> ${viewer} AND NOT ${blocksSql(x, viewer)} AND NOT ${blockedSql(viewer, x)})`
 }
 
+// Whether the account `x` hides its network (Account#hide_collections). Only a local account stores the setting; Kopje
+// does not learn a remote account's, so a remote account hides nothing.
+function hidesCollectionsSql(x: string): string {
+	return `EXISTS (SELECT 1 FROM main.local_accounts ph WHERE ph.account_id = ${x} AND ph.hide_collections = 1)`
+}
+
+// R13 (FollowerAccountsController#hide_results?): whether `viewer` (NULL: anonymous) is shown the followers and
+// following of `owner`: the owner is available and, unless the viewer is the owner, neither hides its network nor
+// blocks the viewer.
+export function followListsShownSql(owner: string, viewer: string): string {
+	return `(${availableSql(owner)}
+		AND (${owner} IS ${viewer} OR (NOT ${hidesCollectionsSql(owner)} AND NOT ${blocksSql(owner, viewer)})))`
+}
+
+// R13 (Account#excluded_from_timeline_account_ids): whether the account `x` is listed among the followers or following
+// of `owner` to `viewer` at `now`. An anonymous viewer and the owner see every entry; anyone else does not see an
+// account they block or mute (while the mute applies), or one that blocks them. A suspended account stays listed (and
+// is presented redacted), as Mastodon lists it.
+export function followListedSql(x: string, owner: string, viewer: string, now: string): string {
+	return `(${viewer} IS NULL OR ${viewer} IS ${owner}
+		OR NOT (${blocksSql(viewer, x)} OR ${blocksSql(x, viewer)} OR ${mutesSql(viewer, x, now)}))`
+}
+
 // ---- Statuses. `s` is the alias of a statuses row.
 
 // R2 (StatusPolicy#show?): whether `viewer` may see the row itself.

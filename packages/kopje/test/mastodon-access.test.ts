@@ -128,16 +128,6 @@ const EXCEPTIONS: Record<string, Exception> = {
 		mastodon: 'optional token, scopes read read:accounts, no user required',
 		reason: 'a stale token is not read (access.ts); Mastodon checks a token sent',
 	},
-	'GET /api/v1/accounts/:id/followers': {
-		kopje: 'none token, scopes any, no user required',
-		mastodon: 'optional token, scopes read read:accounts, no user required',
-		reason: 'a stale token is not read (access.ts); Mastodon checks a token sent',
-	},
-	'GET /api/v1/accounts/:id/following': {
-		kopje: 'none token, scopes any, no user required',
-		mastodon: 'optional token, scopes read read:accounts, no user required',
-		reason: 'a stale token is not read (access.ts); Mastodon checks a token sent',
-	},
 	'GET /api/v2/search': {
 		kopje: 'required token, scopes read read:search, user required',
 		mastodon: 'optional token, scopes read read:search, no user required',

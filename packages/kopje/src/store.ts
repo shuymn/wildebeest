@@ -608,7 +608,7 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, accounts.answerFollowRequest, input)
 	}
 
-	listFollows(callerBuild: string, input: accounts.ListFollowsInput) {
+	listFollows(callerBuild: string, input: OperationInput<typeof accounts.listFollows>) {
 		return this.#kernel.execute(callerBuild, accounts.listFollows, input)
 	}
 

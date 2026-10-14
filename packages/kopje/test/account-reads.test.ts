@@ -123,6 +123,16 @@ describe('familiar followers', () => {
 		expect((await getJson(h, path(carol.id), alice.token)).body).toEqual([])
 	})
 
+	it('leaves out an account that hides its network, and a follower that hides its own', async () => {
+		const { h, remote } = await fixture()
+		const { alice, bob, carol, dave } = h.users
+		await sql(h.store, 'UPDATE local_accounts SET hide_collections = 1 WHERE account_id = ?', bob.id)
+		const { body } = await getJson<{ accounts: { id: string }[] }[]>(h, path(remote), alice.token)
+		expect(body[0]?.accounts.map((account) => account.id)).toEqual([dave.id, carol.id])
+		await sql(h.store, 'UPDATE local_accounts SET hide_collections = 1 WHERE account_id = ?', carol.id)
+		expect((await getJson(h, path(carol.id), alice.token)).body).toEqual([])
+	})
+
 	it('shows a follower whose mute has expired, and hides one on a domain the viewer blocks', async () => {
 		const { h } = await fixture()
 		const { alice, bob, carol, dave } = h.users

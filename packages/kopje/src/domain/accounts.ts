@@ -8,9 +8,11 @@ import {
 	domainBlocksSql,
 	filteredForSql,
 	followableBySql,
+	followListedSql,
+	followListsShownSql,
 	REACHES_FOLLOWERS_SQL,
 } from './audience'
-import { userReadOperation, userWriteOperation } from './auth'
+import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
 import { retractFollow } from './inbox'
 import { notify } from './notifications'
 import { readOperation } from './operation'
@@ -514,11 +516,11 @@ export const relationships = userReadOperation<{ ids: string[] }, Relationship[]
 
 // GET /api/v1/accounts/familiar_followers (Mastodon's FamiliarFollowersPresenter): for each requested account, the
 // accounts the viewer follows that follow it. Both follows are accepted ones (VIS-8). It shows no more than
-// GET /api/v1/accounts/:id/followers of the account and /following of each follower show the same viewer: Kopje
-// hides no account's network (it stores no hide-collections setting, local or remote), so those lists show every
-// accepted follow and so may this. An unknown or suspended account has no entry; a suspended follower is left out, and
-// so is one the viewer filters out of lists (filteredForSql: a block, a mute that applies at the request time, or a
-// block of its domain).
+// GET /api/v1/accounts/:id/followers of the account and /following of each follower show the same viewer
+// (followListsShownSql, R13): an account whose followers the viewer is not shown (unknown, suspended, hiding its
+// network or blocking the viewer) has no entry, and a follower whose following the viewer is not shown is left out, as
+// Mastodon's FamiliarFollowersPresenter leaves out accounts that hide their network. So is a follower the viewer
+// filters out of lists (filteredForSql: a block, a mute that applies at the request time, or a block of its domain).
 // Bounds (RES-3, RES-7): at most MAX_FAMILIAR_FOLLOWERS_IDS accounts. For each, the candidates are the viewer's own
 // accepted follows (at most FAMILIAR_FOLLOWERS_WINDOW, through the partial index of accepted follows), each checked
 // for an accepted follow of the account through the unique pair index (CROSS JOIN keeps SQLite to that order), so
@@ -539,7 +541,7 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 			.map((id) => resolveAccountId(db, id))
 			.filter((id) => id !== null)
 		const targets = [...new Set(resolved)].filter(
-			(id) => db.first(`SELECT 1 AS available WHERE ${availableSql('?1')}`, id) !== undefined
+			(id) => db.first(`SELECT 1 AS shown WHERE ${followListsShownSql('?1', '?2')}`, id, viewerId) !== undefined
 		)
 		return targets.map((target) => {
 			const followers = db
@@ -547,7 +549,7 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 					`SELECT x.account_id AS id
 					FROM (SELECT target_account_id FROM follows WHERE account_id = ?2 AND state = 'accepted' LIMIT ?3) mine
 					CROSS JOIN follows x ON x.account_id = mine.target_account_id AND x.target_account_id = ?1 AND x.state = 'accepted'
-					WHERE ${availableSql('x.account_id')} AND NOT ${filteredForSql('x.account_id', '?2', '?5')}
+					WHERE ${followListsShownSql('x.account_id', '?2')} AND NOT ${filteredForSql('x.account_id', '?2', '?5')}
 					ORDER BY x.id DESC LIMIT ?4`,
 					target,
 					viewerId,
@@ -825,11 +827,19 @@ export type ListFollowsInput = {
 	present: Present
 }
 
-export const listFollows = readOperation<ListFollowsInput, Page<Account> | null>(
-	(db, { account, direction, page, present }) => {
+// GET /api/v1/accounts/:id/followers and /following as the viewer (null: anonymous) may see them (R13, Mastodon's
+// FollowerAccountsController and FollowingAccountsController): accepted follows, newest first. Nothing is listed when
+// the account is suspended, or, to anyone but itself, when it hides its network or blocks the viewer
+// (followListsShownSql). Others do not see the accounts they block, mute or are blocked by (followListedSql), left out
+// before LIMIT. An unknown account is not found.
+export const listFollows = optionalUserReadOperation<ListFollowsInput, Page<Account> | null>(
+	(db, { account, direction, page, present }, { accountId: viewerId, now }) => {
 		const id = resolveAccountId(db, account)
 		if (id === null) {
 			return null
+		}
+		if (db.first(`SELECT 1 AS shown WHERE ${followListsShownSql('?1', '?2')}`, id, viewerId) === undefined) {
+			return { items: [], newest: null, oldest: null }
 		}
 		const [anchor, other] =
 			direction === 'followers' ? ['target_account_id', 'account_id'] : ['account_id', 'target_account_id']
@@ -840,11 +850,14 @@ export const listFollows = readOperation<ListFollowsInput, Page<Account> | null>
 		FROM follows f JOIN accounts a ON a.id = f.${other} LEFT JOIN local_accounts l ON l.account_id = a.id
 		WHERE f.${anchor} = ?1 AND f.state = 'accepted'
 			AND (?2 IS NULL OR f.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR f.id > CAST(?3 AS INTEGER))
+			AND ${followListedSql('a.id', '?1', '?5', '?6')}
 		ORDER BY f.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			id,
 			page.maxId ?? null,
 			lower,
-			page.limit
+			page.limit,
+			viewerId,
+			now
 		)
 		if (ascending) {
 			rows.reverse()

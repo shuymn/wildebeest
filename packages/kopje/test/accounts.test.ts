@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, apiHarness, bearer, form, json, login, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { appToken, scopedToken } from './read-helpers'
+import { block, community, domainBlock, follow, getJson, mute, remoteFollows } from './status-helpers'
 
 type Account = Record<string, unknown> & { id: string }
 
@@ -508,6 +510,107 @@ describe('follower lists', () => {
 		const pending = await h.request(`/api/v1/accounts/${star}/following`)
 		expect(await pending.json()).toEqual([])
 		expect((await h.request('/api/v1/accounts/999999999999999999/followers')).status).toBe(404)
+	})
+})
+
+describe('follower lists for the viewer (R13)', () => {
+	// carol is followed by alice, bob, dave and the remote erin, and follows them all.
+	async function network() {
+		const h = await community(['alice', 'bob', 'carol', 'dave'])
+		const { alice, bob, carol, dave } = h.users
+		const erin = await seedAccount(h.store, { username: 'erin', domain: 'remote.example' })
+		for (const user of [alice, bob, dave]) {
+			await follow(h, user, carol.id)
+			await follow(h, carol, user.id)
+		}
+		await remoteFollows(h.store, erin, carol.id)
+		await sql(
+			h.store,
+			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+			carol.id,
+			erin
+		)
+		const ids = async (direction: 'followers' | 'following', token?: string) => {
+			const { status, body } = await getJson<{ id: string }[]>(h, `/api/v1/accounts/${carol.id}/${direction}`, token)
+			expect(status).toBe(200)
+			return body.map((account) => account.id).sort()
+		}
+		return { h, erin, ids }
+	}
+
+	it('leaves out, for a signed-in viewer, the accounts they block, mute or are blocked by', async () => {
+		const { h, erin, ids } = await network()
+		const { alice, bob, carol, dave } = h.users
+		await block(h.store, alice.id, bob.id)
+		await mute(h.store, alice.id, dave.id)
+		await block(h.store, erin, alice.id)
+		// A domain block is not a reason (Mastodon leaves out accounts only).
+		await domainBlock(h.store, alice.id, 'remote.example')
+		for (const direction of ['followers', 'following'] as const) {
+			expect(await ids(direction, alice.token)).toEqual([alice.id].sort())
+			expect(await ids(direction)).toEqual([alice.id, bob.id, dave.id, erin].sort())
+			// The owner sees every entry, whatever it blocks or mutes.
+			expect(await ids(direction, carol.token)).toEqual([alice.id, bob.id, dave.id, erin].sort())
+		}
+		// A mute that has expired no longer applies.
+		await sql(
+			h.store,
+			'UPDATE mutes SET expires_at = ? WHERE account_id = ?',
+			new Date(NOW - 1000).toISOString(),
+			alice.id
+		)
+		expect(await ids('followers', alice.token)).toEqual([alice.id, dave.id].sort())
+	})
+
+	it('lists a suspended account, redacted', async () => {
+		const { h, ids } = await network()
+		const { bob, carol } = h.users
+		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?', '2026-01-01', bob.id)
+		const { body } = await getJson<{ id: string; suspended?: boolean }[]>(h, `/api/v1/accounts/${carol.id}/followers`)
+		expect(body.find((account) => account.id === bob.id)).toMatchObject({ suspended: true, display_name: '' })
+		expect(await ids('following')).toContain(bob.id)
+	})
+
+	it('lists nothing of a suspended account, of one that blocks the viewer, or that hides its network', async () => {
+		const { h, ids } = await network()
+		const { alice, bob, carol } = h.users
+		await block(h.store, carol.id, alice.id)
+		for (const direction of ['followers', 'following'] as const) {
+			expect(await ids(direction, alice.token)).toEqual([])
+			expect(await ids(direction, bob.token)).not.toEqual([])
+		}
+
+		const hide = await h.request(
+			'/api/v1/accounts/update_credentials',
+			bearer(carol.token, json({ hide_collections: true }, { method: 'PATCH' }))
+		)
+		expect(hide.status).toBe(200)
+		for (const direction of ['followers', 'following'] as const) {
+			expect(await ids(direction, bob.token)).toEqual([])
+			expect(await ids(direction)).toEqual([])
+			// The owner still sees its own.
+			expect(await ids(direction, carol.token)).not.toEqual([])
+		}
+
+		await sql(
+			h.store,
+			'UPDATE local_accounts SET hide_collections = 0, suspended_at = ? WHERE account_id = ?',
+			'2026-01-01',
+			carol.id
+		)
+		for (const direction of ['followers', 'following'] as const) {
+			expect(await ids(direction)).toEqual([])
+		}
+	})
+
+	it('reads an optional token: an invalid one or one without read:accounts is refused, an app token is anonymous', async () => {
+		const { h } = await network()
+		const { carol } = h.users
+		expect((await h.request(`/api/v1/accounts/${carol.id}/followers`, bearer('nope'))).status).toBe(401)
+		const statusesOnly = await scopedToken(h, 'read:statuses')
+		expect((await h.request(`/api/v1/accounts/${carol.id}/following`, bearer(statusesOnly))).status).toBe(403)
+		const app = await appToken(h)
+		expect((await h.request(`/api/v1/accounts/${carol.id}/following`, bearer(app))).status).toBe(200)
 	})
 })
 
