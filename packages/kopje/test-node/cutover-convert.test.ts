@@ -129,6 +129,15 @@ describe('convert and verify-conversion', () => {
 		// The language is the primary subtag of the first in contentMap; an update at publication is no edit.
 		expect(value("SELECT language FROM statuses WHERE content LIKE '%a reply to alice%'")).toBe('pt')
 		expect(value("SELECT count(*) FROM statuses WHERE content LIKE '%a reply to alice%' AND edited_at IS NULL")).toBe(1)
+		// Spaced times with a zone are read in that zone.
+		const times = (match: string) =>
+			db.prepare(`SELECT published_at, edited_at FROM statuses WHERE content LIKE '%${match}%'`).get()
+		expect(times('a DM to alice')).toEqual({
+			published_at: '2024-03-01T11:49:00.000Z',
+			edited_at: '2024-03-01T11:55:00.000Z',
+		})
+		expect(times('a reply to alice')).toEqual({ published_at: '2024-03-01T11:59:00.000Z', edited_at: null })
+		expect(times('lost its original id')).toMatchObject({ edited_at: '2024-03-01T12:15:00.000Z' })
 		// Hashtags as Kopje names them, once each: a received Hashtag's one leading # dropped, legacy's recorded names
 		// whole; then NFKC and lowercase.
 		expect(value('SELECT group_concat(name) FROM (SELECT name FROM status_tags ORDER BY name)')).toBe(
@@ -243,6 +252,16 @@ describe('convert and verify-conversion', () => {
 			[
 				'an update at publication becomes an edit',
 				"UPDATE statuses SET edited_at = published_at WHERE content LIKE '%a reply to alice%'",
+				'statuses',
+			],
+			[
+				'a time with an offset is read as UTC',
+				"UPDATE statuses SET published_at = '2024-03-01T20:59:00.000Z' WHERE content LIKE '%a reply to alice%'",
+				'statuses',
+			],
+			[
+				'an edit time at an offset is dropped',
+				"UPDATE statuses SET edited_at = NULL WHERE content LIKE '%a DM to alice%'",
 				'statuses',
 			],
 			['a Hashtag keeps a second #', "UPDATE status_tags SET name = 'double' WHERE name = '#double'", 'statuses'],

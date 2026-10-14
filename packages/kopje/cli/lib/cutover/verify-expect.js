@@ -68,12 +68,17 @@ function href(value) {
 /** @param {unknown} value */
 const text = (value) => (typeof value === 'string' ? value.toWellFormed() : '')
 
-/** @param {unknown} value */
+/**
+ * A time as an ISO string. Legacy writes 'YYYY-MM-DD HH:MM[:SS[.fff]]' (cdate, in UTC) and may keep a time in that form
+ * with its zone ('Z' or '+09:00'); a time without a zone is UTC. Anything else is read as written.
+ * @param {unknown} value
+ */
 function when(value) {
 	if (typeof value !== 'string' || value === '') {
 		return null
 	}
-	const ms = Date.parse(/^\d{4}-\d{2}-\d{2} /.test(value) ? `${value.replace(' ', 'T')}Z` : value)
+	const spaced = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)(Z|[+-]\d{2}:\d{2})?$/.exec(value)
+	const ms = Date.parse(spaced === null ? value : `${spaced[1]}T${spaced[2]}${spaced[3] ?? 'Z'}`)
 	return Number.isNaN(ms) ? null : new Date(ms).toISOString()
 }
 
