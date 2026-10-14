@@ -77,10 +77,20 @@ Cutover from a legacy Wildebeest instance (offline; docs/cutover.md)
       --accept-truncation       carry on although HTML longer than the sanitizer's limit loses its end (counted)
       --catalog <file>          the target's \`catalog\` output, instead of this CLI's own schema
       --domain <host>           refuse unless the legacy instance's domain is this one
+      --images <dir>            move the images in Cloudflare Images that images-export downloaded to <dir> into local
+                                media; their originals are written to <out>/originals/<media id> for R2
+      --accept-missing-images   carry on although images missing from <dir> leave references out (counted)
                                 The legacy KEK candidates are read from userKEK and USER_KEY in the environment
   verify-conversion <export> <dump file> [--accept-deletions] [--accept-truncation]
+                    [--images <dir> [--accept-missing-images]]
                                 check a converted dump, or a dump of the Store after the import, against the legacy
                                 export (expectations computed independently). Exits 1 on FAIL
+  images-export <export> --images-account <hash> --out <dir> [--account-id <id>]
+                                download the legacy instance's images from Cloudflare Images (the account hash of its
+                                imagedelivery.net URLs) to <dir>/originals with <dir>/images.json, resumable: a rerun
+                                (on a later export) downloads only what is not there yet. With --account-id and
+                                CF_IMAGES_TOKEN the originals come from the Images API, else from the delivery URLs.
+                                Exits 3 when an image is missing
   cutover-preflight <pages-project.json> [--export <export>] [--domain <host>] [--kopje-queue <name>]
                                 read the legacy Pages project (as the API returns it, saved to a file) and report its
                                 bindings, the D1 to export, the KEK candidates and what Kopje needs; with --export also
@@ -108,6 +118,7 @@ Environment
   CF_ACCESS_CLIENT_ID           Access service token client id      (sent as CF-Access-Client-Id)
   CF_ACCESS_CLIENT_SECRET       Access service token client secret  (sent as CF-Access-Client-Secret)
   KOPJE_IMPORT_TOKEN            the IMPORT_TOKEN secret, used only with --import-token
+  CF_IMAGES_TOKEN               an API token that can read Cloudflare Images, used only by images-export --account-id
 `
 
 /**
@@ -144,6 +155,9 @@ function parseArgs(argv) {
 		'manifest',
 		'fallback',
 		'worker',
+		'images',
+		'images-account',
+		'account-id',
 	])
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i] ?? ''
@@ -180,6 +194,11 @@ async function cutover(command, rest, flags, { env, print, info }) {
 	const { ExportError } = await import('./cutover/sql-script.js')
 	const acceptDeletions = flags['accept-deletions'] === true
 	const acceptTruncation = flags['accept-truncation'] === true
+	const acceptMissingImages = flags['accept-missing-images'] === true
+	const imagesDir = typeof flags.images === 'string' ? flags.images : undefined
+	if (acceptMissingImages && imagesDir === undefined) {
+		throw new UsageError('--accept-missing-images applies only with --images <dir>')
+	}
 	if (command === 'convert') {
 		const [exportPath] = rest
 		const { out, catalog, domain } = flags
@@ -209,6 +228,8 @@ async function cutover(command, rest, flags, { env, print, info }) {
 				domain: typeof domain === 'string' ? domain : undefined,
 				env,
 				version: packageVersion(),
+				imagesDir,
+				acceptMissingImages,
 			})
 		} catch (error) {
 			// Only refusals of the output directory get here; they carry a fixed code.
@@ -231,10 +252,62 @@ async function cutover(command, rest, flags, { env, print, info }) {
 		acceptTruncation,
 		baseTime: 0,
 		env,
+		imagesDir,
+		acceptMissingImages,
 	})
 	print(report)
 	info(ok ? 'conversion verified: PASS' : 'conversion check FAILED')
 	return ok ? 0 : 1
+}
+
+/**
+ * images-export: downloads the legacy instance's images from Cloudflare Images (offline but for those downloads).
+ * @param {string[]} rest
+ * @param {Record<string, string | true>} flags
+ * @param {{ env: Record<string, string | undefined>, fetch: import('./client.js').Fetch, print: (value: unknown) => void,
+ *   info: (text: string) => void, progress: (text: string) => void }} io
+ */
+async function imagesExport(rest, flags, { env, fetch, print, info, progress }) {
+	const [exportPath] = rest
+	const accountHash = flags['images-account']
+	const outDir = flags.out
+	const accountId = flags['account-id']
+	const token = env.CF_IMAGES_TOKEN === '' ? undefined : env.CF_IMAGES_TOKEN
+	if (
+		exportPath === undefined ||
+		rest.length > 1 ||
+		typeof accountHash !== 'string' ||
+		typeof outDir !== 'string' ||
+		accountId === true
+	) {
+		throw new UsageError('images-export <export> --images-account <hash> --out <dir> [--account-id <id>]')
+	}
+	if (accountId !== undefined && token === undefined) {
+		throw new UsageError('images-export --account-id needs CF_IMAGES_TOKEN in the environment')
+	}
+	const { exportImages } = await import('./cutover/images-export.js')
+	const { ExportError } = await import('./cutover/sql-script.js')
+	try {
+		const { ok, report } = await exportImages({
+			exportPath,
+			accountHash,
+			outDir,
+			accountId,
+			token: accountId === undefined ? undefined : token,
+			fetch,
+			progress,
+		})
+		print(report)
+		info(ok ? `images exported; convert with --images ${outDir}` : 'images exported, some are missing; see the counts')
+		return ok ? 0 : 3
+	} catch (error) {
+		if (error instanceof ExportError) {
+			const status = typeof error.detail.status === 'number' ? ` (HTTP ${error.detail.status})` : ''
+			info(`images-export refused: ${error.code}${status}`)
+			return error.code === 'images-fetch-failed' ? 1 : 3
+		}
+		throw error
+	}
 }
 
 /**
@@ -402,6 +475,7 @@ export async function run({
 		env.CF_ACCESS_CLIENT_ID,
 		env.userKEK,
 		env.USER_KEY,
+		env.CF_IMAGES_TOKEN,
 	].filter(/** @returns {s is string} */ (s) => typeof s === 'string')
 	const redact = redactor(secrets)
 	/** @param {unknown} value */
@@ -478,6 +552,15 @@ export async function run({
 		}
 		if (command === 'convert' || command === 'verify-conversion') {
 			return await cutover(command, rest, flags, { env, print, info: (text) => out.info(text) })
+		}
+		if (command === 'images-export') {
+			return await imagesExport(rest, flags, {
+				env,
+				fetch: fetch ?? ((input, init) => globalThis.fetch(input, init)),
+				print,
+				info: (text) => out.info(text),
+				progress: (text) => out.progress(text),
+			})
 		}
 		if (
 			command === 'cutover-preflight' ||

@@ -9,9 +9,9 @@
 
 import { readFileSync } from 'node:fs'
 
+import { checkSizes, exportFiles } from './export-files.js'
 import { checkKeks } from './kek.js'
 import { loadLegacyExport } from './legacy-load.js'
-import { checkSizes, exportFiles } from './run.js'
 import { ExportError } from './sql-script.js'
 
 export const SPOOL_QUEUE_BINDING = 'KOPJE_QUEUE'

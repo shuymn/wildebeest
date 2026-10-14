@@ -20,18 +20,18 @@ to your Kopje Worker's admin API, like the other `kopje-admin` commands.
 
 ## The plan in one page
 
-| Step | What                                                                   | Duration | Rollback                                                                                 |
-| ---- | ---------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------- |
-| 1    | Stop the legacy deploy triggers and jobs; check for running ones       | 1 min    | Re-enable them                                                                           |
-| 2    | Attach a dead-letter queue to the legacy Queue                         | 1 min    | Leave it                                                                                 |
-| 3    | Replace every Pages route with the maintenance worker                  | 2 min    | [Rollback A](#rollback-a-before-the-import-is-complete)                                  |
-| 4    | Drain the legacy Queue, reconcile, then remove the legacy consumer     | 1–5 min  | Rollback A                                                                               |
-| 5    | Export twice; the fingerprints must match                              | 2–3 min  | Rollback A                                                                               |
-| 6    | Convert, verify, import, verify; check the maintenance snapshot        | 4–8 min  | Rollback A, or [B](#rollback-b-after-the-import-is-complete) once the import is complete |
-| 7    | Put Kopje on the domain in full maintenance                            | 1–10 min | Rollback B                                                                               |
-| 8    | Readonly: smoke test, the owner signs in and checks; fingerprint again | 3–5 min  | Rollback B                                                                               |
-| 9    | **Publish**; the spool replays; send and receive checks                | 2 min    | **None: the point of no return**                                                         |
-| 10   | Enable the Store's daily backup and see one succeed                    | after    | –                                                                                        |
+| Step | What                                                                                                 | Duration | Rollback                                                                                 |
+| ---- | ---------------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------- |
+| 1    | Stop the legacy deploy triggers and jobs; check for running ones                                     | 1 min    | Re-enable them                                                                           |
+| 2    | Attach a dead-letter queue to the legacy Queue                                                       | 1 min    | Leave it                                                                                 |
+| 3    | Replace every Pages route with the maintenance worker                                                | 2 min    | [Rollback A](#rollback-a-before-the-import-is-complete)                                  |
+| 4    | Drain the legacy Queue, reconcile, then remove the legacy consumer                                   | 1–5 min  | Rollback A                                                                               |
+| 5    | Export twice; the fingerprints must match                                                            | 2–3 min  | Rollback A                                                                               |
+| 6    | Fetch new images; convert, verify, put the originals, import, verify; check the maintenance snapshot | 4–8 min  | Rollback A, or [B](#rollback-b-after-the-import-is-complete) once the import is complete |
+| 7    | Put Kopje on the domain in full maintenance                                                          | 1–10 min | Rollback B                                                                               |
+| 8    | Readonly: smoke test, the owner signs in and checks; fingerprint again                               | 3–5 min  | Rollback B                                                                               |
+| 9    | **Publish**; the spool replays; send and receive checks                                              | 2 min    | **None: the point of no return**                                                         |
+| 10   | Enable the Store's daily backup and see one succeed                                                  | after    | –                                                                                        |
 
 ### Timing budget
 
@@ -64,7 +64,8 @@ backup, or a fix forward ([upgrade.md](upgrade.md#a-version-that-changed-the-sch
 
 **Retention.** Keep the legacy setup (Pages project, consumer, DO Worker, Queue, KV, D1) untouched and read-only for
 14 days after publishing, as a reference. Delete nothing during that time, and nothing before a restore from a Store
-dump has been rehearsed.
+dump has been rehearsed. Keep the images in Cloudflare Images for at least 30 days
+([after the cutover](#after-the-cutover-retire-cloudflare-images)).
 
 ### The write barrier
 
@@ -96,6 +97,9 @@ instance still serves (preparation step 2, the rehearsal) makes its requests fai
 | `<legacy-queue>` | The Queue bound as `QUEUE`; `<legacy-consumer>` the Worker that consumes it                                                                           |
 | `<kopje-worker>` | The new Kopje Worker; `<kopje-queue>` its Queue and `<kopje-queue>-dlq` its dead-letter queue                                                         |
 | `<admin-host>`   | A hostname of your zone for Kopje's admin API during the cutover, for example `kopje-admin.<zone>`                                                    |
+| `<media-bucket>` | Kopje's R2 bucket for media, bound to the Worker as `MEDIA`                                                                                           |
+| `<images-hash>`  | The legacy Cloudflare Images account hash: the path segment after `https://imagedelivery.net/` in the legacy instance's image URLs                    |
+| `<account-id>`   | The Cloudflare account id (32 hex digits) that holds those images                                                                                     |
 | `<work>`         | A working directory on an encrypted disk. Exports and dumps hold everything, private messages and wrapped keys included: never put them anywhere else |
 
 `kopje-admin` is the CLI of the Kopje version you deploy: in its instance repository `npm run admin --`, or
@@ -215,7 +219,23 @@ None of this affects the legacy instance.
    (`curl -sI https://<hash>.<project>.pages.dev/ap/users/<user>` redirects to Access). Keep the latest production
    deployment: it is the rollback.
 
-7. **Rehearse** (below) and plan the window with its timings.
+7. **Download the images** from Cloudflare Images, so the cutover moves them into Kopje's media
+   ([cutover.md](cutover.md#what-the-conversion-does), "Media"). With an API token that can read Images (Account:
+   Cloudflare Images Read) in the environment only, never on the command line:
+
+    ```sh
+    read -rs CF_IMAGES_TOKEN && export CF_IMAGES_TOKEN
+    kopje-admin images-export <work>/export-r --images-account <images-hash> --out <work>/images \
+      --account-id <account-id>
+    ```
+
+    Without `--account-id` and the token it downloads the delivery URLs the data names instead, which may be resized
+    variants. It prints counts; `missing.total` must be 0, or each missing image accepted (the cutover then needs
+    `--accept-missing-images`, and the references are left out). An interrupted run continues where it stopped when run
+    again. `<work>/images` holds the originals, EXIF and location included: keep it with the exports. Step 6 runs it
+    again on the final export, which downloads only images uploaded since.
+
+8. **Rehearse** (below) and plan the window with its timings.
 
 ## The cutover
 
@@ -337,17 +357,32 @@ kopje-admin fingerprint compare <work>/fp-a.json <work>/fp-b.json
 ### 6. Convert, import, verify (4–8 min)
 
 ```sh
+kopje-admin images-export <work>/export-b --images-account <images-hash> --out <work>/images --account-id <account-id>
 kopje-admin convert <work>/export-b --out <work>/out --base-time <now, ISO 8601 UTC> \
-  --catalog <work>/catalog.json --domain <domain>
+  --catalog <work>/catalog.json --domain <domain> --images <work>/images
 kopje-admin fingerprint compare <work>/fp-a.json <work>/fp-b.json --manifest <work>/out/manifest.json
-kopje-admin verify-conversion <work>/export-b <work>/out/kopje.dump
+kopje-admin verify-conversion <work>/export-b <work>/out/kopje.dump --images <work>/images
+bash -eu <<'EOF'   # bash whatever the shell; -e stops at the first put that fails
+shopt -s nullglob   # no originals: the loop runs zero times, and the count decides
+n=0
+for f in <work>/out/originals/*; do
+  wrangler r2 object put "<media-bucket>/originals/$(basename "$f")" --file "$f" --remote </dev/null
+  n=$((n + 1))
+done
+want=$(jq .images.originals <work>/out/manifest.json)
+[ "$n" -eq "$want" ] || { echo "put $n originals of $want" >&2; exit 1; }
+echo "put $n originals"
+EOF
 kopje-admin import <work>/out/kopje.dump
 kopje-admin dump <work>/imported.dump
-kopje-admin verify-conversion <work>/export-b <work>/imported.dump
+kopje-admin verify-conversion <work>/export-b <work>/imported.dump --images <work>/images
 kopje-admin maintenance-worker-check <work>/export-b --domain <domain> --worker <work>/maintenance
 ```
 
 - **Go:**
+    - `images-export` exits 0, having downloaded only the images uploaded since the preparation (`downloaded`), or 3
+      with only missing images you accepted in the preparation; pass `--accept-missing-images` to `convert` and both
+      `verify-conversion` runs then;
     - `convert` exits 0 (a stop, exit 3, names its reason in the manifest; [cutover.md](cutover.md#steps)). A real
       export usually needs `--accept-deletions`, on `convert` and both `verify-conversion` runs, for rows legacy never
       showed ([cutover.md](cutover.md#what-the-conversion-does)). Do not pass it blindly: run without it first, read `conversion.dropped`
@@ -360,6 +395,14 @@ kopje-admin maintenance-worker-check <work>/export-b --domain <domain> --worker 
       `stale`, generate the worker from `<work>/export-b`, deploy it as in step 3, and continue.
 - The import runs through Access (the token was retired in the preparation); an interrupted one is reset with
   `kopje-admin import-reset <work>/out/kopje.dump --yes`.
+- The originals go to `originals/<media id>` in `<media-bucket>`, where Kopje keeps every original; nothing serves
+  them. **Go:** the block prints `put <n> originals` with `n` equal to `images.originals` in the manifest. It stops at
+  the first `wrangler` that fails, or when the number put differs from what the conversion wrote (no originals passes
+  only when none were written); it runs in bash also when pasted into zsh. Run the whole block again
+  (a put replaces the same key). Do not import before it passes: a row whose original is not in R2 has nothing to
+  rebuild its files from (`media-rebuild` reports such rows; TODO: part 2). The images' served files appear only once `media-rebuild` has made them from these originals (TODO: part 2
+  of the Cloudflare Images move, not in this release): until then the moved avatars, headers and attachments answer 404. A rollback leaves the originals in the bucket; a later conversion with the same `images.json` and base time
+  writes the same keys again.
 - **Rollback:** before the import is verified, Rollback A; after, Rollback B.
 
 ### 7. Put Kopje on the domain in full maintenance (1–10 min)
@@ -436,6 +479,22 @@ Configure the Store's daily backup ([backup.md](backup.md)) and wait for the fir
 - **Done:** `kopje-admin health` shows `checks.backup.lastSuccess`.
 
 Afterwards: re-enable nothing on the legacy side. Keep it read-only for 14 days, then remove it as decided separately.
+
+## After the cutover: retire Cloudflare Images
+
+The converted Store no longer names the legacy instance's Cloudflare Images, but other servers do: their copies of old
+statuses, and of profiles until they fetch them again, keep the old `imagedelivery.net` URLs. Kopje does not send an
+`Update` for the old statuses (Mastodon would mark every one of them as edited), and changed avatars and headers are
+not announced yet (TODO: part 3, `Update(Person)`).
+
+1. Once `media-rebuild` has run (TODO: part 2), check that the instance shows its avatars, headers and attachments
+   from `https://<domain>/media/`.
+2. Keep the images in Cloudflare Images for a grace period of at least 30 days after publishing, while remote servers
+   still show recent statuses from their copies.
+3. Then delete them, the image ids `<work>/images/images.json` lists (`DELETE /accounts/<account-id>/images/v1/<id>`
+   with a token that can edit Images, or the dashboard), and delete the API tokens used for Images. **Accepted risk:**
+   from then on, remote copies of old statuses show no images.
+4. Delete `<work>/images` with the exports: its originals keep EXIF and location data.
 
 ## Rolling back
 
@@ -556,8 +615,9 @@ measures how long they take on the real data and proves the conversion passes be
 2. Time each command of steps 5 and 6 with `time`:
     - one export of every table (`export_d1`), and `fingerprint export` of it (on a live instance two fingerprints may
       differ; only the time matters);
-    - `convert`, `verify-conversion` on the dump, `import` into the temporary Store, `dump` (through Access), and
-      `verify-conversion` on the Store's dump;
+    - `images-export` again on this export (only the images uploaded since), `convert` and `verify-conversion` with
+      `--images`, putting the originals into the temporary Worker's media bucket, `import` into the temporary Store,
+      `dump` (through Access), and `verify-conversion` on the Store's dump;
     - `maintenance-worker` and `maintenance-worker-check`, and the generated worker run locally with
       `wrangler pages dev <work>/maintenance` (request an actor and post a signed request to an inbox).
 3. Exercise the rollback on the temporary Worker: `cutover reset --yes` after its import, and a drain into a test Queue
@@ -590,16 +650,18 @@ of the legacy Queue and its DLQ, and `kopje-admin cutover close` count a Queue a
 
 ## Permissions
 
-| Step     | Cloudflare permission                                                                                                                                                                                                                                                       | Other                       |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
-| Before   | Account: Cloudflare Pages Read (save the project), Pages Edit (bindings, preview protection, deleting previews); Workers Scripts Edit (deploy Kopje, secrets); Queues Edit (Kopje's DLQ); Access: Apps and Policies Edit; Zone: Workers Routes or DNS Edit (`<admin-host>`) | –                           |
-| 1        | Cloudflare Pages Edit (only to pause Git builds)                                                                                                                                                                                                                            | GitHub: Actions write       |
-| 2, 4     | Queues Edit; Workers Tail Read                                                                                                                                                                                                                                              | –                           |
-| 3        | Cloudflare Pages Edit                                                                                                                                                                                                                                                       | –                           |
-| 5, 6, 8  | D1: the query and export endpoints (Edit may be required even for reads; the rehearsal confirms)                                                                                                                                                                            | Kopje: Access service token |
-| 7        | Zone: Workers Routes Edit (a route) or Cloudflare Pages Edit, Workers Scripts Edit and DNS Edit (a custom domain); Access: Apps and Policies Edit                                                                                                                           | –                           |
-| 8, 9, 10 | Workers Scripts Edit (variables and secrets)                                                                                                                                                                                                                                | Backup storage (backup.md)  |
-| Rollback | Workers Scripts Edit (`CUTOVER_ROLLBACK`); Queues Edit (the legacy consumer); Cloudflare Pages Edit (the previous deployment); Zone: Workers Routes Edit                                                                                                                    | Kopje: Access service token |
+| Step     | Cloudflare permission                                                                                                                                                                                                                                                                                                 | Other                       |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| Before   | Account: Cloudflare Pages Read (save the project), Pages Edit (bindings, preview protection, deleting previews); Workers Scripts Edit (deploy Kopje, secrets); Queues Edit (Kopje's DLQ); Access: Apps and Policies Edit; Zone: Workers Routes or DNS Edit (`<admin-host>`); Cloudflare Images Read (`images-export`) | –                           |
+| 1        | Cloudflare Pages Edit (only to pause Git builds)                                                                                                                                                                                                                                                                      | GitHub: Actions write       |
+| 2, 4     | Queues Edit; Workers Tail Read                                                                                                                                                                                                                                                                                        | –                           |
+| 3        | Cloudflare Pages Edit                                                                                                                                                                                                                                                                                                 | –                           |
+| 5, 6, 8  | D1: the query and export endpoints (Edit may be required even for reads; the rehearsal confirms)                                                                                                                                                                                                                      | Kopje: Access service token |
+| 6        | Cloudflare Images Read (`images-export --account-id`); Workers R2 Storage Edit (putting the originals)                                                                                                                                                                                                                | –                           |
+| 7        | Zone: Workers Routes Edit (a route) or Cloudflare Pages Edit, Workers Scripts Edit and DNS Edit (a custom domain); Access: Apps and Policies Edit                                                                                                                                                                     | –                           |
+| After    | Cloudflare Images Edit (deleting the images after the grace period)                                                                                                                                                                                                                                                   | –                           |
+| 8, 9, 10 | Workers Scripts Edit (variables and secrets)                                                                                                                                                                                                                                                                          | Backup storage (backup.md)  |
+| Rollback | Workers Scripts Edit (`CUTOVER_ROLLBACK`); Queues Edit (the legacy consumer); Cloudflare Pages Edit (the previous deployment); Zone: Workers Routes Edit                                                                                                                                                              | Kopje: Access service token |
 
 ## What the tools guarantee, and what they do not
 

@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url'
 import type { TestProject } from 'vitest/node'
 
 import { buildLegacyFixture } from './legacy-fixture.js'
+import { exportImages } from '../cli/lib/cutover/images-export.js'
 import { loadLegacyExport } from '../cli/lib/cutover/legacy-load.js'
 import { maintenanceWorker } from '../cli/lib/cutover/maintenance.js'
 import { convertExport } from '../cli/lib/cutover/run.js'
@@ -53,6 +54,8 @@ export default async function setup(project: TestProject): Promise<void> {
 			expected,
 		})
 
+		project.provide('cutoverImages', await convertedWithImages(dir))
+
 		await rm(MAINTENANCE_CACHE, { recursive: true, force: true })
 		const bundleDir = join(MAINTENANCE_CACHE, 'bundle')
 		buildMaintenance(bundleDir)
@@ -75,9 +78,51 @@ export default async function setup(project: TestProject): Promise<void> {
 	}
 }
 
+// The same export with its images in Cloudflare Images (a fake fetch answers with one small PNG for every image),
+// converted with --images, for test/cutover-images-lifecycle.test.ts.
+async function convertedWithImages(dir: string): Promise<{ dump: string }> {
+	const fixture = await buildLegacyFixture({
+		level: 39,
+		notificationSequence: 12n,
+		imagesAccount: 'OperatorAccount0123',
+	})
+	const exportPath = join(dir, 'export-images')
+	await mkdir(exportPath)
+	for (const [table, text] of fixture.texts) {
+		await writeFile(join(exportPath, `${table}.sql`), text)
+	}
+	const png = new Uint8Array(45)
+	png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 8, 0, 0, 0, 8])
+	const imagesDir = join(dir, 'images')
+	const exported = await exportImages({
+		exportPath,
+		accountHash: 'OperatorAccount0123',
+		outDir: imagesDir,
+		fetch: () => Promise.resolve(new Response(png)),
+	})
+	if (!exported.ok) {
+		throw new Error(`fixture images not exported: ${JSON.stringify(exported.report)}`)
+	}
+	const outDir = join(dir, 'out-images')
+	const { ok, manifest } = await convertExport({
+		exportPath,
+		outDir,
+		acceptDeletions: false,
+		baseTime: Date.parse('2026-10-20T00:00:00.000Z'),
+		env: {},
+		version: 'test',
+		imagesDir,
+	})
+	if (!ok) {
+		throw new Error(`fixture conversion with images stopped: ${JSON.stringify(manifest.stop)}`)
+	}
+	return { dump: await readFile(join(outDir, 'kopje.dump'), 'utf8') }
+}
+
 declare module 'vitest' {
 	export interface ProvidedContext {
 		cutover: { dump: string; expected: Record<string, Record<string, string>> }
+		cutoverImages: { dump: string }
 		maintenance: { source: string; workerPath: string }
 	}
 }

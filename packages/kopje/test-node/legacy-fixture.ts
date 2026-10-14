@@ -18,6 +18,10 @@ export const DOMAIN = 'kopje.test'
 const ORIGIN = `https://${DOMAIN}`
 const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 const IMAGES = 'https://images.example/media'
+// The account cloudflare/wildebeest's default header is under.
+export const UPSTREAM_HEADER =
+	'https://imagedelivery.net/NkfPDviynOyTAOI79ar_GQ/b24caf12-5230-48c4-0bf7-2f40063bd400/header'
+export const FOREIGN_IMAGE = 'https://imagedelivery.net/OtherAccount0123/foreign-1/public'
 
 // `wrangler d1 export --table sqlite_sequence` writes no CREATE TABLE for it, but a reset before the counter rows.
 const SEQUENCE_HEADER = 'PRAGMA defer_foreign_keys=TRUE;\nDELETE FROM sqlite_sequence;\n'
@@ -54,6 +58,12 @@ export type FixtureOptions = {
 	// A lone surrogate (half of a character outside the BMP, as a cut string leaves it) in remote JSON text: a display
 	// name, a bio, and a status's content, content warning and attachment description.
 	loneSurrogates?: boolean
+	// Local images in Cloudflare Images under this account hash (imagedelivery.net/<hash>/<id>/<variant>): avatars
+	// avatar-0 and avatar-1, alice's header header-0, the images image-1 to image-3, and from level 23 image-9, which
+	// only the first version of the edited status shows, and image-8, which both versions of it show, described
+	// 'before' and then 'after'; the unlisted status shows image-1 again. Bob's header is then
+	// the upstream default, and his first status shows an image of another account.
+	imagesAccount?: string
 }
 
 export type LegacyFixture = {
@@ -166,7 +176,9 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		remoteOwnedNotifications = false,
 		before0016,
 		loneSurrogates = false,
+		imagesAccount,
 	} = options
+	const images = imagesAccount === undefined ? IMAGES : `https://imagedelivery.net/${imagesAccount}`
 	if (before0016 !== undefined && level < 16) {
 		throw new Error('before0016 needs level 16 or later')
 	}
@@ -221,8 +233,13 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 			url: `${ORIGIN}/@${user.username}`,
 			discoverable: true,
 			manuallyApprovesFollowers: i === 1,
-			icon: { type: 'Image', url: `${IMAGES}/avatar-${i}/avatar` },
-			image: i === 0 ? { type: 'Image', url: `${IMAGES}/header-${i}/header` } : undefined,
+			icon: { type: 'Image', url: `${images}/avatar-${i}/avatar` },
+			image:
+				i === 0
+					? { type: 'Image', url: `${images}/header-${i}/header` }
+					: imagesAccount === undefined
+						? undefined
+						: { type: 'Image', url: UPSTREAM_HEADER },
 			alsoKnownAs: i === 0 ? ['https://old.example/users/alice'] : undefined,
 			publicKey: { id: `${user.uri}#main-key`, owner: user.uri, publicKeyPem: user.key.pubkey },
 		}
@@ -307,7 +324,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		const properties = {
 			type: 'Image',
 			id,
-			url: `${IMAGES}/image-${n}/usercontent`,
+			url: `${images}/image-${n}/usercontent`,
 			description: attachedTo ? 'a wildebeest' : '',
 			mediaType: 'image/jpeg',
 		}
@@ -505,6 +522,8 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		urlTail: 'd9a3c8e0-7f1b-4c2a-a4d3-8f3e2b1c0d55',
 		sensitive: true,
 		spoiler: 'CW: spoilers',
+		// With imagesAccount: the image the public note shows, shown again.
+		attachment: imagesAccount === undefined ? undefined : [{ type: 'Image', url: `${images}/image-1/usercontent` }],
 	})
 	const followersOnly = localNote({
 		author: alice,
@@ -556,6 +575,11 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		cc: [`${alice}/followers`],
 		mastodonId: snowflake(150, 4),
 		inReplyTo: r0Post,
+		// With imagesAccount: image-8, whose description the edit changed.
+		attachment:
+			imagesAccount === undefined
+				? undefined
+				: [{ type: 'Image', url: `${images}/image-8/usercontent`, name: 'after' }],
 	})
 	if (level >= 23) {
 		const firstVersion = {
@@ -564,7 +588,13 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 			content: '<p>edited text, first version</p>',
 			spoiler_text: '',
 			sensitive: false,
-			attachment: [],
+			attachment:
+				imagesAccount === undefined
+					? []
+					: [
+							{ type: 'Image', url: `${images}/image-8/usercontent`, name: 'before' },
+							{ type: 'Image', url: `${images}/image-9/usercontent`, name: 'first' },
+						],
 			published: iso(150),
 		}
 		insert('object_revisions', { object_id: edited.id, properties: JSON.stringify(firstVersion), cdate: cdate(155) })
@@ -581,6 +611,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		to: [PUBLIC],
 		cc: [`${bob}/followers`],
 		mastodonId: 'f00dfeed-1234-4abc-8def-0123456789ab',
+		attachment: imagesAccount === undefined ? undefined : [{ type: 'Image', url: FOREIGN_IMAGE }],
 	})
 	localNote({
 		author: bob,
