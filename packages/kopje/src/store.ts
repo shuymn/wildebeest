@@ -29,6 +29,7 @@ import { search } from './domain/search'
 import * as setup from './domain/setup'
 import { saveSnapshot } from './domain/snapshot'
 import * as statuses from './domain/statuses'
+import { getTag } from './domain/tags'
 import * as timelines from './domain/timelines'
 import * as webPages from './domain/web-pages'
 import * as webSession from './domain/web-session'
@@ -670,6 +671,10 @@ export class Store extends DurableObject<Env> {
 
 	tagTimeline(callerBuild: string, input: OperationInput<typeof timelines.tagTimeline>) {
 		return this.#kernel.execute(callerBuild, timelines.tagTimeline, input)
+	}
+
+	tag(callerBuild: string, input: OperationInput<typeof getTag>) {
+		return this.#kernel.execute(callerBuild, getTag, input)
 	}
 
 	accountStatuses(callerBuild: string, input: OperationInput<typeof timelines.accountStatuses>) {

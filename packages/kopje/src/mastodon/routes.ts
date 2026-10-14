@@ -9,6 +9,7 @@ import * as notifications from './notifications'
 import * as oauth from './oauth'
 import * as search from './search'
 import * as statuses from './statuses'
+import * as tags from './tags'
 import * as timelines from './timelines'
 
 // The explicit API route table (design §4): every route names the access it requires, one middleware (requireAccess)
@@ -57,6 +58,7 @@ export const ROUTES: readonly Route[] = [
 		access: { scope: 'read:follows' },
 		handler: accounts.familiarFollowers,
 	},
+	{ method: 'GET', path: '/api/v1/tags/:id', access: { scope: 'read:follows', optional: true }, handler: tags.getTag },
 
 	{
 		method: 'GET',
