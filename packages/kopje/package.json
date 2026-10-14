@@ -76,6 +76,7 @@
 		"age-encryption": "0.3.1",
 		"aws4fetch": "1.0.20",
 		"es-toolkit": "1.52.0",
+		"fast-check": "4.10.2",
 		"hono": "4.13.13",
 		"jose": "6.2.12",
 		"linkify-it": "6.1.0",
