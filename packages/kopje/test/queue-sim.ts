@@ -56,10 +56,12 @@ export class QueueSim {
 		return Promise.resolve()
 	})
 
-	// The backlog as Queues reports it: every message not yet acknowledged, delayed ones included.
+	// The backlog as Queues reports it: every message not yet acknowledged counts in the bytes, but a delayed one is
+	// left out of the count.
 	metrics(): Promise<QueueMetrics> {
 		const backlogBytes = this.pending.reduce((sum, m) => sum + v8SizeEstimate(m.body), 0)
-		return Promise.resolve({ backlogCount: this.pending.length, backlogBytes })
+		const backlogCount = this.pending.filter((m) => m.delaySeconds === 0).length
+		return Promise.resolve({ backlogCount, backlogBytes })
 	}
 
 	get queue(): Queue {

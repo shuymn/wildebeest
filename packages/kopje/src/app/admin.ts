@@ -10,6 +10,7 @@ import { readBackupConfig } from '../platform/backup-config'
 import { readBoundedBody } from '../platform/body'
 import { readConfig } from '../platform/config'
 import { errorMessage } from '../platform/error-message'
+import { readQueueBacklog } from '../platform/queue-backlog'
 import type { ImportAuthority } from '../platform/store-admin'
 import type { StoreResolver, StoreStub } from '../platform/store-client'
 import { toStoreUnavailable } from '../platform/store-errors'
@@ -432,30 +433,23 @@ export function adminRoutes({ build, store, fetch, now, doorbell, loader }: Admi
 	})
 
 	// Ends a rollback, once Kopje's Queue and its dead-letter queue (bound as KOPJE_DLQ, read for its metrics only) both
-	// hold nothing, read through their metrics and failing closed: no copy of a handed-off request is left to arrive
-	// or to be redriven, so its receipts can go.
+	// hold nothing (no message counted and no bytes, which a delayed message still shows), read through their metrics and
+	// failing closed: no copy of a handed-off request is left to arrive or to be redriven, so its receipts can go.
 	admin.post('/cutover/close', async (c) => {
 		const { confirm } = await jsonBody(c)
 		if (confirm !== true) {
 			return c.json({ error: 'send {"confirm": true}' }, 400)
 		}
-		const backlog = async (queue: Queue | undefined): Promise<number | null> => {
-			const metrics = (queue as Partial<Pick<Queue, 'metrics'>> | undefined)?.metrics
-			try {
-				return queue !== undefined && typeof metrics === 'function' ? (await metrics.call(queue)).backlogCount : null
-			} catch {
-				return null
-			}
-		}
-		const queued = await backlog(c.env.QUEUE)
-		const dead = queued === 0 ? await backlog((c.env as { KOPJE_DLQ?: Queue }).KOPJE_DLQ) : null
-		if (queued !== 0 || dead !== 0) {
+		const queued = await readQueueBacklog(c.env.QUEUE)
+		const dead = queued?.empty ? await readQueueBacklog((c.env as { KOPJE_DLQ?: Queue }).KOPJE_DLQ) : null
+		if (!queued?.empty || !dead?.empty) {
 			return c.json(
 				{
-					error: "Kopje's Queue or its dead-letter queue (KOPJE_DLQ) is not empty, or cannot be read",
+					error:
+						"Kopje's Queue or its dead-letter queue (KOPJE_DLQ) is not empty (a delayed message shows only in its bytes), or cannot be read",
 					code: 'queue-not-empty',
-					backlog: queued,
-					deadLetters: dead,
+					backlog: queued?.count ?? null,
+					deadLetters: dead?.count ?? null,
 				},
 				409
 			)

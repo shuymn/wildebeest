@@ -8,6 +8,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Fixed
+
+- The cutover rollback no longer reads a Queue holding only delayed messages as empty: Queues leaves a delayed message
+  out of the backlog's message count, so `kopje-admin cutover drain` and `kopje-admin cutover close` now count a Queue
+  as empty only when its message count and byte count are both 0, and fail closed on a malformed reading. Before, a
+  drain could finish while an older request was still delayed in Kopje's Queue, and `cutover close` could remove the
+  handoff receipts while a delayed copy of a handed-off request remained.
+
 ## [0.1.0-rc.1] - 2026-10-13
 
 A release candidate of the first release, published under the npm dist-tag `next`.

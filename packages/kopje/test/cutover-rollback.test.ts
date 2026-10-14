@@ -945,6 +945,106 @@ describe('the drain never sends past its lease, and never stays stuck (OPS-9)', 
 	})
 })
 
+// Queues leaves a delayed message out of backlogCount and counts it in backlogBytes only.
+const reading = (metrics: unknown) => ({ send: () => Promise.resolve(), metrics: () => Promise.resolve(metrics) })
+const delayedOnly = reading({ backlogCount: 0, backlogBytes: 2048 })
+
+describe('a Queue holding only delayed messages is not empty (OPS-9)', () => {
+	it("holds the drain on Kopje's Queue, the legacy Queue and the legacy DLQ", async () => {
+		const store = await importedStore()
+		const r = await rollback(store)
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		await r.spool('/ap/users/alice/inbox', {
+			'@context': ctx,
+			id: `${r.carol.uri}#undo/1`,
+			type: 'Undo',
+			actor: r.carol.uri,
+			object: follow(r.carol.uri, 1),
+		})
+		await r.consume()
+		const lane = async (overrides: Record<string, unknown>) => {
+			const other = await rollback(store, overrides)
+			return (await other.drain({ accounts: other.accounts })).body
+		}
+		// The collection barrier: a delayed request in Kopje's Queue may be older than the journal's head.
+		expect(await lane({ QUEUE: delayedOnly, LEGACY_QUEUE: r.legacy.queue })).toMatchObject({
+			sent: 0,
+			waiting: 'kopje-backlog',
+			stopped: null,
+		})
+		expect(r.legacy.pending).toEqual([])
+		expect((await r.drain()).body).toMatchObject({ sent: 1 })
+		r.ackLegacy()
+		// A legacy retry with a delay: the next request waits for it.
+		expect(await lane({ QUEUE: r.kopje.queue, LEGACY_QUEUE: delayedOnly })).toMatchObject({
+			sent: 0,
+			waiting: 'legacy-backlog',
+		})
+		// A dead-lettered legacy message stops the drain whatever its count reads.
+		expect(await lane({ QUEUE: r.kopje.queue, LEGACY_QUEUE: r.legacy.queue, LEGACY_DLQ: delayedOnly })).toMatchObject({
+			sent: 0,
+			stopped: 'legacy-dlq',
+		})
+		expect(r.legacy.pending).toEqual([])
+		expect((await r.drain()).body).toMatchObject({ sent: 1 })
+		r.ackLegacy()
+		expect(r.handed.map((m) => m.activity.type)).toEqual(['Follow', 'Undo'])
+	})
+
+	it("refuses to close the rollback while a delayed copy may sit in Kopje's Queue or its DLQ", async () => {
+		const store = await importedStore()
+		const r = await rollback(store)
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		await r.consume()
+		expect((await r.drain()).body).toMatchObject({ sent: 1 })
+		r.ackLegacy()
+		const close = async (overrides: Record<string, unknown>) =>
+			(await (await rollback(store, overrides)).h.post(adminClaims(), '/admin/cutover/close', { confirm: true })).json()
+		expect(await close({ QUEUE: delayedOnly })).toMatchObject({ code: 'queue-not-empty', backlog: 0 })
+		expect(await close({ KOPJE_DLQ: delayedOnly })).toMatchObject({
+			code: 'queue-not-empty',
+			backlog: 0,
+			deadLetters: 0,
+		})
+		expect((await store.cutoverStatus(BUILD)).journal.done).toBe(1)
+		expect(await close({})).toMatchObject({ receipts: 1 })
+	})
+
+	it('fails closed on a reading with a missing or malformed field', async () => {
+		const store = await importedStore()
+		const r = await rollback(store)
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		await r.consume()
+		const malformed = [
+			{ backlogBytes: 0 },
+			{ backlogCount: 0 },
+			{ backlogCount: '0', backlogBytes: 0 },
+			{ backlogCount: 0, backlogBytes: Number.NaN },
+			{ backlogCount: -1, backlogBytes: 0 },
+			{ backlogCount: 0, backlogBytes: Number.POSITIVE_INFINITY },
+			null,
+		]
+		for (const metrics of malformed) {
+			for (const binding of ['QUEUE', 'LEGACY_QUEUE', 'LEGACY_DLQ']) {
+				const other = await rollback(store, { [binding]: reading(metrics) })
+				expect(
+					(await other.drain({ accounts: other.accounts })).body,
+					`${binding} ${JSON.stringify(metrics)}`
+				).toMatchObject({
+					sent: 0,
+					stopped: 'metrics-unavailable',
+				})
+			}
+			for (const binding of ['QUEUE', 'KOPJE_DLQ']) {
+				const other = await rollback(store, { [binding]: reading(metrics) })
+				const closed = await other.h.post(adminClaims(), '/admin/cutover/close', { confirm: true })
+				expect(await closed.json(), `${binding} ${JSON.stringify(metrics)}`).toMatchObject({ code: 'queue-not-empty' })
+			}
+		}
+		expect(r.legacy.pending).toEqual([])
+	})
+})
+
 // `kopje-admin cutover drain` through the real CLI, against the app as an Access admin.
 async function cliDrain(r: Awaited<ReturnType<typeof rollback>>, extra: string[]) {
 	const io = memoryIO(new Map([['pages/_worker.js', new TextEncoder().encode(inject('maintenance').source)]]))

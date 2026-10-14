@@ -1079,8 +1079,9 @@ reset` takes such a
   admission; refused once published or during an import). `cutover drain` hands them off through an ordered lane:
   nothing is sent while Kopje's Queue holds any message (the collection barrier, so a request held with the requeue
   delay cannot arrive after a newer one), and the next request only once the legacy Queue's backlog is 0 (the legacy
-  consumer acknowledged the previous one, retries included); a message in the legacy dead-letter queue stops it; every
-  backlog reading fails closed. Each request is verified against its spool time without the Store (Kopje's signature
+  consumer acknowledged the previous one, retries included); a message in the legacy dead-letter queue stops it. A
+  backlog counts as empty only when both its message count and its byte count are 0 (Queues leaves a delayed message
+  out of the count), and every backlog reading fails closed, also on a missing or malformed field. Each request is verified against its spool time without the Store (Kopje's signature
   and key-ownership rule) and goes to a legacy local account from the operator's snapshot, never one the request alone
   names; one that fails for good, or has no legacy recipient, is kept until the operator discards it. The drain hands
   on only what Kopje's inbox would read (the shared activity envelope: context, id, type, actor), reads the legacy
@@ -1096,7 +1097,10 @@ reset` takes such a
   legacy DLQ and unreadable backlogs stopping it, a concurrent drain, a crash while sending, a late redelivery,
   recipients, a flood against the quotas; "Rollback A from the first attempt"; "handoff receipts outlive the journal,
   an import and a reset"; "the drain lane holds under timing faults": a suspended send, a message dead-lettered between
-  the readings, activities without context or id, valid requests over the quota),
+  the readings, activities without context or id, valid requests over the quota; "a Queue holding only delayed
+  messages is not empty": a reading of 0 messages with bytes holding the barrier and the legacy lane, stopping on the
+  legacy DLQ and refusing `cutover close`, and a missing or malformed field failing closed), `test/queue-sim.ts` (a
+  delayed message counted in the bytes only, as Queues reports it),
   `packages/consumer/test/rollback-drain.test.ts` (drained Follow/Undo and Create/Delete, a Follow retried after a
   failed Accept then its Undo, a missing recipient through the legacy consumer). Residuals: delivery is at least once
   (a crash between the send and its record repeats one request); a send given up at its timeout may still reach the
@@ -1104,7 +1108,8 @@ reset` takes such a
   deduplicate (fixing that needs a change to the legacy runtime, which this cutover does not make); while the legacy
   routes come back, requests spooled
   just before and the legacy instance's first direct requests can interleave, as deliveries from different servers can
-  at any time; the order also relies on the legacy Queue's backlog counting a message until it is acknowledged. Gap:
+  at any time; the order also relies on the legacy Queue's backlog (its message count or its byte count) showing a message until it
+  is acknowledged. Gap:
   when valid requests alone exceed the journal's quota while the collection barrier waits for the rest, the drain
   stops with `journal-full` and the operator raises `CUTOVER_JOURNAL_MAX_*` (up to the Store's ceilings) or discards
   kept requests, with the spool rate limit on; if neither frees room (at the ceilings, with only valid requests), the
