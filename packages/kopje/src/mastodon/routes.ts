@@ -105,7 +105,8 @@ export const ROUTES: readonly Route[] = [
 	{
 		method: 'GET',
 		path: '/api/v1/domain_blocks/preview',
-		access: { scope: 'read:blocks' },
+		// As Mastodon's DomainBlocks::PreviewsController: it previews a write.
+		access: { scope: 'write:blocks' },
 		handler: blocks.previewDomainBlock,
 	},
 	{ method: 'GET', path: '/api/v1/domain_blocks', access: { scope: 'read:blocks' }, handler: blocks.domainBlocks },

@@ -54,16 +54,17 @@ function ids(rows: { id: string }[]): string[] {
 // them. Boosts from follows with show_reblogs off, replies (of others) in conversations with accounts the viewer does
 // not follow, and posts outside a follow's languages are left out, and so is anything the list rule hides (blocks,
 // mutes, domain blocks, invisible originals) and, as FeedManager#filter_from_home does, a status or boosted original
-// that mentions an account the viewer blocks or mutes.
+// that mentions an account the viewer blocks or mutes (the viewer's own statuses always pass, as there).
 export const homeTimeline = userReadOperation<{ page: PageQuery; present: Present }, Page<Status>>(
 	(db, { page, present }, { accountId, now }) => {
 		const cursor = statusPage(page)
 		const order = cursor.ascending ? 'ASC' : 'DESC'
 		const home = `${listableSql('s', '?1', '?5')}
-			AND NOT EXISTS (SELECT 1 FROM status_mentions hm WHERE hm.status_id IN (s.id, s.reblog_of_id) AND hm.silent = 0
+			AND (s.account_id = ?1 OR NOT EXISTS (SELECT 1 FROM status_mentions hm
+				WHERE hm.status_id IN (s.id, s.reblog_of_id) AND hm.silent = 0
 				AND (EXISTS (SELECT 1 FROM blocks hb WHERE hb.account_id = ?1 AND hb.target_account_id = hm.account_id)
 					OR EXISTS (SELECT 1 FROM mutes hmu WHERE hmu.account_id = ?1 AND hmu.target_account_id = hm.account_id
-						AND ${activeMuteSql('hmu', '?5')})))
+						AND ${activeMuteSql('hmu', '?5')}))))
 			AND (s.reblog_of_id IS NULL OR s.account_id = ?1 OR EXISTS (SELECT 1 FROM follows hf
 				WHERE hf.account_id = ?1 AND hf.target_account_id = s.account_id AND hf.show_reblogs = 1))
 			AND (s.account_id = ?1 OR s.in_reply_to_account_id IS NULL OR s.in_reply_to_account_id IN (?1, s.account_id)
