@@ -85,6 +85,40 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R22 addressing            | `addressingOf` and `boostAnnounce` (`blockedSql`).                                                                                                                                                                              |
 | R23 delivery targets      | `audienceTargets` in `deliveries.ts`: `domainBlocksSql` on followers, `blockedSql` on addressed accounts for content.                                                                                                           |
 
+## Status ids the presenter accepts
+
+The status presenter (`src/domain/status-presenter.ts`) turns ids into Mastodon `Status` entities for every read path
+and write response. It takes only ids the policy module made, as TypeScript brands (types only, nothing at run time):
+
+| Type                       | Made by                                                           | Meaning                                                                |
+| -------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `VisibleStatusId`          | `statusReads(viewer, at).all`, `viewableStatusId(db, viewer, id)` | The read rule passed this status for the viewer.                       |
+| `OwnStatusId`              | `ownStatusId(db, author, id)`                                     | The status is the viewer's own (R2: the author sees all of their own). |
+| `WithVisibleStatus<Row,K>` | `statusReads(viewer, at).all`                                     | A query's rows, whose column `K` holds `VisibleStatusId`s (or null).   |
+
+`statusReads(viewer, { viewer: '?1', now: '?5' })` hands a query the status rules for one viewer as fragments over a
+statuses alias: `visible` (R2), `listable` (R8), `homeFilter` (R9) and `shown` (R15 with the viewer as the recipient,
+which shows a status only if they may view it). Its `all` runs the query only if the query contains a fragment it made
+and its parameters at `viewer` and `now` are the context's account id and time, and brands the id column of the rows.
+`viewableStatusId` is `canView` (R3) for one id. `ownStatusId` checks the author. The callers:
+
+| Caller                                                     | Ids from                                                                       |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| home                                                       | `homeFilter`, in every branch of its membership                                |
+| public and tag feeds, bookmarks and favourites, context    | `listable`                                                                     |
+| account statuses                                           | `visible`, and `visible` with `filteredForSql` for a boosted original          |
+| status search                                              | `listable`                                                                     |
+| notifications (list and one)                               | `shown`                                                                        |
+| web profile and status pages                               | `visible` with no viewer; the parent through `viewableStatusId(db, null, ...)` |
+| single status, history, actions (favourite, bookmark, ...) | `viewableStatusId`                                                             |
+| search resolution                                          | `viewableStatusId`, after the domain block of the author                       |
+| post, edit, delete, boost (and their repeats)              | `ownStatusId`, then `presentOwnStatus`                                         |
+
+The presenter reads a boost's original through `visibleSql` for the same viewer, whatever brand the boost's id has: a
+`VisibleStatusId` boost whose original the viewer may not see is left out (R3), and an `OwnStatusId` boost is shown
+with `reblog: null`, as the response to deleting a boost of an original the viewer may no longer see. Only
+`presentOwnStatus` takes `source` (the source text a delete answers with).
+
 A domain block is stored normalized (lowercase, punycode, no trailing dot: `blockedDomain` in
 `src/platform/domain-name.ts`, used by the API and by the cutover converter) and compared as it is with the account's
 normalized domain and actor host, so each check is two seeks of the `(account_id, domain)` index, however many domains
@@ -104,7 +138,13 @@ module:
   `deliveries.ts`;
 - inserts into `status_mentions` outside its listed writers: `statuses.ts`, `remote-statuses.ts` and `inbox.ts`.
 
-An allowed file that no longer matches fails the test too, so the list does not outlive its reason. The test also
+An allowed file that no longer matches fails the test too, so the list does not outlive its reason.
+
+It also keeps the status id brands with the policy module. Elsewhere, `VisibleStatusId`, `OwnStatusId` and
+`WithVisibleStatus` may be named only in an import or as the type of a function parameter: a cast, a type argument
+(`db.all<{ id: VisibleStatusId }>`), a type predicate, an alias or an annotated variable or result could make one from
+a plain string. The presenter is called only from `src/domain/`, where ESLint refuses an `any` argument
+(`eslint.config.js`), so no `any` reaches its parameters. The test also
 checks the generated visibility sets and that `REACHES_FOLLOWERS_SQL` is the list of the `statuses_feed` index.
 
 The fragments nest: Cloudflare's SQLite refuses an expression deeper than 100 levels, and each nested `EXISTS` and
@@ -137,3 +177,20 @@ follows, blocks, mutes and domain blocks of the world's accounts and domains, an
 notifications, together with the viewer's own blocks and mutes of those accounts and domain blocks of domains nobody
 lives on. Each endpoint must show the same with them as without (the same statuses, accounts, notifications and hashtags
 in the same order, and the same relationship flags), and the rows it reads (RES-7) may grow by at most 10.
+
+`test/policy-endpoints.test.ts` runs the status read endpoints themselves on generated worlds, with favourites,
+bookmarks and notifications added, for each available local viewer and, where the endpoint answers without a token,
+the anonymous one. No endpoint may show a status the model does not allow the viewer by the endpoint's rule, and a
+boost must come with its own original, which the viewer may see:
+
+| Endpoint                                                   | Asserted                                                                              |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| public feed, tag feed, account statuses (of every account) | exactly the model's members the rule allows (R10, R11), newest first, over pages of 3 |
+| favourites, bookmarks                                      | exactly the viewer's edges the list rule allows (R8), newest edge first, over pages   |
+| home                                                       | no status home hides (R9)                                                             |
+| single status, context                                     | nothing for a status the viewer may not view (R3); context members listable (R8)      |
+| `favourited_by`, `reblogged_by`                            | nothing for a status the viewer may not view; only listed interactors (R12)           |
+| status search                                              | listable statuses only (R8)                                                           |
+| notifications                                              | only notifications the rule shows (R15), with statuses the viewer may view            |
+
+Each endpoint must show something in some case, so a property cannot pass by showing nothing.
