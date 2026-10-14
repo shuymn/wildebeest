@@ -179,7 +179,7 @@ function parse<Name extends string>(sources: Record<Name, string>): Record<Name,
 				}
 			}
 		}
-		visit(acorn.parse(text, { ecmaVersion: 'latest', sourceType: 'module', locations: true }), [])
+		visit(acorn.parse(text, { ecmaVersion: 'latest', sourceType: 'module' }), [])
 		return [name, { text, nodes }] as const
 	})
 	return Object.fromEntries(parsed) as Record<Name, Parsed>
@@ -239,12 +239,10 @@ function converterWrites({ text, nodes }: Parsed) {
 			continue
 		}
 		const { callee } = node
-		const computed = callee.type === 'MemberExpression' && named(callee.object, 'kopje') && callee.computed
+		const onKopje = callee.type === 'MemberExpression' && named(callee.object, 'kopje')
+		const computed = onKopje && callee.computed
 		const runs =
-			named(callee, 'insert') ||
-			(callee.type === 'MemberExpression' &&
-				named(callee.object, 'kopje') &&
-				(named(callee.property, 'exec') || named(callee.property, 'prepare')))
+			named(callee, 'insert') || (onKopje && (named(callee.property, 'exec') || named(callee.property, 'prepare')))
 		const sql = runs && !computed ? literal(node.arguments[0]) : undefined
 		if (computed || (runs && sql === undefined)) {
 			unparsed.push(text.slice(node.start, node.end))
@@ -364,6 +362,8 @@ const files = parse({
 	convert: source('../cli/lib/cutover/convert.js'),
 	verify: source('../cli/lib/cutover/verify-actual.js'),
 })
+const schema = schemaColumns()
+const converted = converterWrites(files.convert)
 
 describe('the source scanners', () => {
 	const fixtures = parse({
@@ -463,7 +463,6 @@ describe('the dump catalogs', () => {
 		})
 		const catalog = readCatalog(db)
 		expect((await store).readCatalog({ exec })).toEqual(catalog)
-		const schema = schemaColumns()
 		const dumped = new Set(catalog.map((spec) => spec.name))
 		const left = [...schema.keys()].filter((table) => !dumped.has(table))
 		expect(sorted(left)).toEqual(sorted(Object.keys(NOT_DUMPED)))
@@ -477,7 +476,7 @@ describe('the dump catalogs', () => {
 
 	it('keep every kopje_state name the converter writes', async () => {
 		const { DUMPED_STATE } = await store
-		const { stateNames, unparsed } = converterWrites(files.convert)
+		const { stateNames, unparsed } = converted
 		expect(unparsed).toEqual([])
 		expect(stateNames.length).toBeGreaterThan(0)
 		expect(stateNames.filter((name) => !DUMPED_STATE.includes(name))).toEqual([])
@@ -485,8 +484,7 @@ describe('the dump catalogs', () => {
 })
 
 describe('the Store schema in the cutover tools', () => {
-	const schema = schemaColumns()
-	const { columns: written, unparsed } = converterWrites(files.convert)
+	const { columns: written, unparsed } = converted
 	const { columns: read, unattributed, categories } = verifierReads(files.verify)
 	const carried = [...schema.keys()].filter((table) => !(table in NOT_CARRIED))
 
