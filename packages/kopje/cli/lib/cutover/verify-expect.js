@@ -356,7 +356,9 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			p.manuallyApprovesFollowers === true ? 1 : 0,
 			// Legacy showed the type of the actors row; the properties' type where the row has none.
 			text(actor.type) || text(p.type) || 'Person',
-			typeof p.discoverable === 'boolean' ? (p.discoverable ? 1 : 0) : null,
+			// Unset: a local account stays undiscoverable, as legacy showed and published it (false); a remote one is unknown,
+			// as Kopje stores a fetched actor that omits it (src/federation/remote-actor.ts).
+			typeof p.discoverable === 'boolean' ? (p.discoverable ? 1 : 0) : isLocal ? 0 : null,
 		])
 		if (!isLocal) {
 			put('raw', `account ${uri}`, String(actor.properties))
@@ -438,7 +440,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 				? text(p.source.content)
 				: null
 		// Hashtags: the object's Hashtag tags and the ones legacy recorded for it. An edit time equal to the publication
-		// time is no edit.
+		// time is stored as none, as Kopje stores an incoming status (src/domain/remote-statuses.ts).
 		const published = when(p.published) ?? when(o.cdate)
 		const updated = when(p.updated)
 		const hashtags = [

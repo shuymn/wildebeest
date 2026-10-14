@@ -90,6 +90,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `note_hashtags` value is kept whole, both then NFKC and lowercase. It used to drop a leading `#` or `＃` from either,
   so a tag named `＃Foo` became `foo` rather than `#foo`.
 
+- The cutover carries a local account that never set `discoverable` as not discoverable, as legacy showed and published
+  it, rather than as unset. A remote account that omits it stays unset, as Kopje stores a fetched actor.
+
 - `VAPID_JWK` must hold the private key (`d`), not only the public point: a key without it now makes the instance
   answer 503 as misconfigured, as any invalid value does.
 

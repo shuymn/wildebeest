@@ -235,7 +235,8 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 			following: `${user.uri}/following`,
 			followers: `${user.uri}/followers`,
 			url: `${ORIGIN}/@${user.username}`,
-			discoverable: true,
+			// Bob never set it: legacy showed and published false.
+			discoverable: i === 0 ? true : undefined,
 			manuallyApprovesFollowers: i === 1,
 			icon: { type: 'Image', url: `${images}/avatar-${i}/avatar` },
 			image:
@@ -441,6 +442,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		lostOriginal?: boolean
 		// Default: { ja: content }.
 		contentMap?: Record<string, string>
+		updated?: string
 	}
 	const remoteNote = (input: RemoteNote): Note => {
 		const proxy = objectId()
@@ -453,6 +455,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 			summary: input.summary ?? null,
 			inReplyTo: input.inReplyTo?.uri ?? null,
 			published: iso(input.minutes - 1),
+			updated: input.updated,
 			url: `https://${author.host}/@r${input.author}/${100 + objectCounter}`,
 			attributedTo: author.uri,
 			to: input.to,
@@ -684,6 +687,8 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		summary: 'CW 注意',
 		// Two languages with regions: Kopje keeps the first one's primary subtag.
 		contentMap: { 'pt-BR': '<p>uma resposta</p>', en: '<p>a reply to alice</p>' },
+		// Updated at its publication: no edit.
+		updated: iso(179),
 	})
 	if (followersSpelling) {
 		remoteNote({

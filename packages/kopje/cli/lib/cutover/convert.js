@@ -568,7 +568,9 @@ export function convertLegacy(
 			profileImage(properties.icon, 'avatar'),
 			profileImage(properties.image, 'header'),
 			properties.manuallyApprovesFollowers === true ? 1 : 0,
-			typeof properties.discoverable === 'boolean' ? (properties.discoverable ? 1 : 0) : null,
+			// Unset: legacy showed and published a local actor as not discoverable; Kopje stores a remote actor that omits it
+			// as unknown (NULL).
+			typeof properties.discoverable === 'boolean' ? (properties.discoverable ? 1 : 0) : local ? 0 : null,
 			local ? null : typeof properties.inbox === 'string' ? properties.inbox : null,
 			local ? null : typeof endpoints.sharedInbox === 'string' ? endpoints.sharedInbox : null,
 			local ? null : String(actor.properties),
@@ -892,6 +894,7 @@ export function convertLegacy(
 			: carried(properties.summary) || carried(properties.spoiler_text)
 		const content = html(properties.content)
 		const updated = isoTime(properties.updated)
+		// An update at the publication time is no edit, as Kopje stores an incoming status (src/domain/remote-statuses.ts).
 		const edited = updated !== null && updated !== plan.published ? updated : null
 		// The parent: the status at inReplyTo, else the one legacy linked.
 		const inReplyToUri = idOf(properties.inReplyTo)
