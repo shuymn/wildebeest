@@ -189,8 +189,7 @@ export type RemoteObject<T extends ApObject> = Remote<T> & {
 }
 
 type CacheResult<T extends ApObject> =
-	| { created: true; object: RemoteObject<T> }
-	| { created: false; object: RemoteObject<T> | null }
+	{ created: true; object: RemoteObject<T> } | { created: false; object: RemoteObject<T> | null }
 
 // Cache a remote object, given either embedded in a signed activity or by URL.
 //

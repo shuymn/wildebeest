@@ -234,9 +234,7 @@ export type CreateStatusInput = {
 }
 
 export type CreateStatusResult =
-	| { status: 'ok'; value: Status }
-	| { status: 'reply_not_found' }
-	| { status: 'invalid'; error: string }
+	{ status: 'ok'; value: Status } | { status: 'reply_not_found' } | { status: 'invalid'; error: string }
 
 export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusResult>((db, input, { accountId }) => {
 	const options = { ...input.present, viewerId: accountId }

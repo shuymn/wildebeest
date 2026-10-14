@@ -102,8 +102,7 @@ function authorizationError(
 const AUTHORIZE_PARAMS = ['response_type', 'scope', 'state', 'code_challenge', 'code_challenge_method', 'decision']
 
 type Checked =
-	| { request: AuthorizationRequest; email: string; firstParty: boolean }
-	| { response: Response | Promise<Response> }
+	{ request: AuthorizationRequest; email: string; firstParty: boolean } | { response: Response | Promise<Response> }
 
 // Access first, then the client: nothing about registered clients is disclosed to a caller Access did not admit.
 async function check(
