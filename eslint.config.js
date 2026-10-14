@@ -125,4 +125,12 @@ export default [
 			'@typescript-eslint/require-await': 'warn',
 		},
 	},
+	{
+		// Kopje's domain modules: an `any` passed as an argument would satisfy any parameter type, including the
+		// branded status ids the status presenter accepts (packages/kopje/docs/visibility.md).
+		files: ['packages/kopje/src/domain/**/*.ts'],
+		rules: {
+			'@typescript-eslint/no-unsafe-argument': 'error',
+		},
+	},
 ]

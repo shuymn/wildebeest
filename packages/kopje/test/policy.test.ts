@@ -148,6 +148,85 @@ describe('policy boundary', () => {
 	})
 })
 
+// The status ids the presenter accepts (VisibleStatusId, OwnStatusId, and WithVisibleStatus for a query's rows) are
+// types only, made by the policy module after it applied a rule for the viewer. Elsewhere a brand's name may only
+// constrain a value the policy module made: in an import, or as the type of a function parameter. Any other mention (a
+// cast, a type argument such as db.all<{ id: VisibleStatusId }>, a type predicate, an alias, an annotated variable or
+// return type) could make one from a plain string. The presenter is called only from the domain modules, where ESLint
+// refuses an `any` argument (eslint.config.js), so no `any` reaches its parameters either.
+const BRAND = /\b(?:VisibleStatusId|OwnStatusId|WithVisibleStatus)\b/g
+const IMPORT = /^import\s[\s\S]*?\sfrom\s+'[^']*'/gm
+const COMMENT_LINE = /^\s*\/\/.*$/gm
+// `name: Brand`, `name?: readonly Brand[]` or `name: WithVisibleStatus<...>[]`, ending the parameter.
+const PARAMETER_BEFORE = /(?<!\b(?:const|let|var)\s+)\b\w+\??:\s*(?:readonly\s+)?$/
+const PARAMETER_AFTER = /^(?:<[^<>]*>)?(?:\[\])?\s*[,)]/
+const PRESENTER = '../src/domain/status-presenter.ts'
+const PRESENTS = /\bpresent(?:Own)?Status(?:es)?\b/
+
+function brandViolations(files: Record<string, string>): string[] {
+	const found: string[] = []
+	for (const [file, source] of Object.entries(files)) {
+		if (file === POLICY) {
+			continue
+		}
+		// Imports and comment lines are blanked, keeping their line breaks.
+		const code = source.replace(IMPORT, (text) => text.replace(/[^\n]/g, '')).replace(COMMENT_LINE, '')
+		for (const match of code.matchAll(BRAND)) {
+			const before = code.slice(0, match.index)
+			const after = code.slice(match.index + match[0].length)
+			if (!PARAMETER_BEFORE.test(before) || !PARAMETER_AFTER.test(after)) {
+				const line = before.split('\n').length
+				found.push(`${file}:${line} names ${match[0]} outside a parameter type`)
+			}
+		}
+		if (!file.startsWith('../src/domain/') && PRESENTS.test(code)) {
+			found.push(`${file} presents statuses outside the domain modules`)
+		}
+	}
+	return found
+}
+
+describe('status id brands', () => {
+	it('are made by the policy module only, and the presenter takes nothing else', () => {
+		expect(Object.keys(sources)).toContain(PRESENTER)
+		expect(brandViolations(sources)).toEqual([])
+	})
+
+	it('detects a brand made outside the policy module', () => {
+		const files = {
+			[POLICY]: 'export function f(id: string) { return id as VisibleStatusId }',
+			'../src/domain/ok.ts': `// A comment may name VisibleStatusId.
+import {
+	type OwnStatusId,
+	type VisibleStatusId,
+} from './audience'
+function f(db: Db, ids: readonly VisibleStatusId[], id?: OwnStatusId) {}
+function g(
+	rows: WithVisibleStatus<Row, 'id'>[],
+	id: VisibleStatusId
+) {}`,
+			'../src/domain/cast.ts': "import { x } from './x'\n\npresentStatus(db, id as VisibleStatusId, options)",
+			'../src/domain/double.ts': 'presentStatuses(db, ids as unknown as OwnStatusId[], options)',
+			'../src/domain/argument.ts': 'const rows = db.all<{ id: VisibleStatusId }>(query)',
+			'../src/domain/alias.ts': 'type Row = { id: VisibleStatusId }',
+			'../src/domain/predicate.ts': 'function f(id: string): id is VisibleStatusId { return true }',
+			'../src/domain/variable.ts': 'const id: VisibleStatusId = make()',
+			'../src/domain/result.ts': 'function f(id: string): VisibleStatusId[] { return [] }',
+			'../src/mastodon/routes.ts': 'presentStatuses(db, ids, options)',
+		}
+		expect(brandViolations(files)).toEqual([
+			'../src/domain/cast.ts:3 names VisibleStatusId outside a parameter type',
+			'../src/domain/double.ts:1 names OwnStatusId outside a parameter type',
+			'../src/domain/argument.ts:1 names VisibleStatusId outside a parameter type',
+			'../src/domain/alias.ts:1 names VisibleStatusId outside a parameter type',
+			'../src/domain/predicate.ts:1 names VisibleStatusId outside a parameter type',
+			'../src/domain/variable.ts:1 names VisibleStatusId outside a parameter type',
+			'../src/domain/result.ts:1 names VisibleStatusId outside a parameter type',
+			'../src/mastodon/routes.ts presents statuses outside the domain modules',
+		])
+	})
+})
+
 describe('the guarded spellings', () => {
 	const rule = (name: string) => RULES.find((r) => r.name === name)!.pattern
 	const SPELLINGS = (t: string) => [t, `"${t}"`, `\`${t}\``, `[${t}]`, `main.${t}`, `main."${t}"`, `"main" . [${t}]`]
