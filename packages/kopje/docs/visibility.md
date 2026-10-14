@@ -85,9 +85,11 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R22 addressing            | `addressingOf` and `boostAnnounce` (`blockedSql`).                                                                                                                                                                              |
 | R23 delivery targets      | `audienceTargets` in `deliveries.ts`: `domainBlocksSql` on followers, `blockedSql` on addressed accounts for content.                                                                                                           |
 
-A domain block is stored normalized (lowercase, punycode, no trailing dot) and compared as it is with the account's
+A domain block is stored normalized (lowercase, punycode, no trailing dot: `blockedDomain` in
+`src/platform/domain-name.ts`, used by the API and by the cutover converter) and compared as it is with the account's
 normalized domain and actor host, so each check is two seeks of the `(account_id, domain)` index, however many domains
-the viewer blocks.
+the viewer blocks. Stored rows need no backfill: legacy's API only ever stored lowercase ASCII domains without a
+trailing dot, and Kopje's normalizes on insert.
 
 ## The architecture test
 

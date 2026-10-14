@@ -69,8 +69,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - A post notification (`notify` on a follow) is no longer created, shown or pushed for a post by an account you mute,
   even with a mute that keeps notifications, as Mastodon creates none: home leaves that post out.
 
-- A domain block converted from a legacy instance is stored without a trailing dot, the form domain blocks are matched
-  in.
+- The cutover converts a legacy domain block as Kopje's API stores one: lowercase, in punycode and without a trailing
+  dot, the form domain blocks are matched in. Rows that become the same block are merged, and a value that is no
+  domain name is dropped and counted (`domain_blocks:invalid-domain`), so the conversion stops on it until
+  `--accept-deletions`.
 
 - `VAPID_JWK` must hold the private key (`d`), not only the public point: a key without it now makes the instance
   answer 503 as misconfigured, as any invalid value does.
