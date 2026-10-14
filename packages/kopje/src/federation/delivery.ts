@@ -18,6 +18,8 @@ import { errorFields } from '../platform/error-message'
 //     410; Mastodon's wider rule spares servers that refuse an activity for good.
 export const DELIVERY_TIMEOUT_MS = 30_000
 export const ACTIVITY_CONTENT_TYPE = 'application/activity+json'
+// Room left in the lease after the POST's deadline, for the completion to reach the Store.
+export const COMPLETION_MARGIN_MS = 10_000
 
 if (DELIVERY_TIMEOUT_MS >= LEASE_MS) {
 	throw new Error('a delivery must time out before its lease ends')

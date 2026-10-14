@@ -7,7 +7,9 @@ import type { Db } from '../db/sql'
 // Notifications of local users (Mastodon 4.0.2 v1). They are written by the operation that causes them, in its
 // transaction, and read in pages in the Store. One rule decides both whether a notification is written and whether
 // it is shown: the recipient is local and not its sender, the sender is not suspended, blocked, muted with
-// notifications, or domain-blocked by the recipient, and the recipient may see the status (audience rule).
+// notifications, or domain-blocked by the recipient, and the recipient may see the status (audience rule). A new
+// notification also records a push for each of the recipient's Web Push subscriptions that wants it; domain/push.ts
+// checks this rule again before each is sent (PUSH-3).
 
 export type NotificationType = 'mention' | 'status' | 'reblog' | 'favourite' | 'follow' | 'follow_request' | 'update'
 
@@ -22,7 +24,7 @@ export type Notification = {
 // Whether the recipient `r` is shown a notification of `type` from `from` about `status` (SQL expressions or
 // parameters). A reblog notification names the original; the boost itself (the sender's one boost of it) must be
 // visible to the recipient too, so a followers-only or direct boost is not revealed to an author outside its audience.
-function shownSql(r: string, type: string, from: string, status: string): string {
+export function shownSql(r: string, type: string, from: string, status: string): string {
 	return `(${from} <> ${r}
 		AND NOT EXISTS (SELECT 1 FROM local_accounts ns WHERE ns.account_id = ${from} AND ns.suspended_at IS NOT NULL)
 		AND NOT EXISTS (SELECT 1 FROM blocks nb WHERE nb.account_id = ${r} AND nb.target_account_id = ${from})
@@ -54,16 +56,55 @@ export function notify(db: Db, input: NotifyInput): void {
 			input.statusId
 		)
 	}
-	db.run(
+	const inserted = db.all<{ id: number }>(
 		`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at)
 		SELECT ?1, ?2, ?3, ?4, ?5
 		WHERE EXISTS (SELECT 1 FROM local_accounts WHERE account_id = ?1) AND ${shownSql('?1', '?2', '?3', '?4')}
-		ON CONFLICT DO NOTHING`,
+		ON CONFLICT DO NOTHING RETURNING id`,
 		input.recipientId,
 		input.type,
 		input.fromId,
 		input.statusId,
 		new Date(input.now).toISOString()
+	)
+	// VIS-10: a push only for a row inserted now, never for a repeat.
+	for (const { id } of inserted) {
+		queuePushes(db, id, input.now)
+	}
+}
+
+// At most this many pushes wait at once (RES-4); a notification beyond it gets no push, but is still written.
+export const MAX_PUSH_BACKLOG = 1000
+
+// Whether subscription `p`, made with access token `t`, wants a push of notification `n` (table aliases), as Mastodon's
+// Web::PushSubscription#pushable? decides it: the token is the recipient's and still valid at `now` (an ISO time), the
+// subscription's alert for the type is on, and its policy lets the sender through (followed: the recipient follows
+// the sender; follower: the sender follows the recipient; none: nothing).
+export function pushWantedSql(p: string, t: string, n: string, now: string): string {
+	return `(${t}.kind = 'access' AND ${t}.account_id = ${n}.account_id
+		AND (${t}.expires_at IS NULL OR ${t}.expires_at > ${now})
+		AND json_extract(${p}.alerts, '$."' || ${n}.type || '"') IS 1
+		AND (${p}.policy = 'all'
+			OR (${p}.policy = 'followed' AND EXISTS (SELECT 1 FROM follows pf
+				WHERE pf.account_id = ${n}.account_id AND pf.target_account_id = ${n}.from_account_id AND pf.state = 'accepted'))
+			OR (${p}.policy = 'follower' AND EXISTS (SELECT 1 FROM follows pf
+				WHERE pf.account_id = ${n}.from_account_id AND pf.target_account_id = ${n}.account_id AND pf.state = 'accepted'))))`
+}
+
+// One push per subscription of the recipient that wants notification `id`, due at once.
+function queuePushes(db: Db, id: number, now: number): void {
+	db.run(
+		`INSERT INTO push_deliveries (subscription_id, notification_id, next_attempt_at, updated_at)
+		SELECT p.id, n.id, ?2, ?2 FROM notifications n
+			JOIN oauth_tokens t ON t.account_id = n.account_id
+			JOIN push_subscriptions p ON p.token_hash = t.token_hash
+		WHERE n.id = ?1 AND ${pushWantedSql('p', 't', 'n', '?3')}
+			AND (SELECT count(*) FROM (SELECT 1 FROM push_deliveries LIMIT ?4)) < ?4
+		ON CONFLICT DO NOTHING`,
+		id,
+		now,
+		new Date(now).toISOString(),
+		MAX_PUSH_BACKLOG
 	)
 }
 
