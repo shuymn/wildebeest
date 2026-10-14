@@ -188,7 +188,8 @@ are kept without a status either way. To move the images into Kopje's own media 
    the earlier versions of edited statuses: the columns whose URLs reach Kopje. Activities are not read; the converter
    keeps only Follow and Like ids from them. It downloads each image once, the original through the Images API
    (`GET /accounts/<account id>/images/v1/<image id>/blob`) when `--account-id` is given with an API token that can
-   read Images in `CF_IMAGES_TOKEN`, and otherwise the variant URL found in the data, which may be resized. The token
+   read Images in `CF_IMAGES_TOKEN`, and otherwise the variant URL found in the data, which may be resized; it asks for
+   any type, so Images serves the stored format rather than converting it to WebP or AVIF. The token
    is read from the environment only, sent only to the API, never with a redirect, and redacted from what is printed.
    Each file is checked as Kopje checks an upload: its type from its signature (JPEG, PNG, GIF or WebP; AVIF, SVG and
    HEIC are refused), at most 16 MiB and 16,777,216 pixels, with dimensions read from its header. It is written to
