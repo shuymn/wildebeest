@@ -2,6 +2,7 @@ import type { DocumentLoader } from '@fedify/fedify'
 
 import { isTransientLoadError } from './loader'
 import { isPublicCollection } from '../domain/audience'
+import { languageOf } from '../domain/language'
 import {
 	MAX_MEDIA_DESCRIPTION_LENGTH,
 	MAX_SPOILER_LENGTH,
@@ -64,19 +65,6 @@ function languageString(object: Json, key: string): string | null {
 	}
 	const map = object[`${key}Map`]
 	return isObject(map) ? text(Object.values(map)[0]) : null
-}
-
-function languageOf(object: Json): string | null {
-	for (const key of ['contentMap', 'nameMap', 'summaryMap']) {
-		const map = object[key]
-		const tag = isObject(map) ? Object.keys(map)[0] : undefined
-		if (tag !== undefined) {
-			// The primary subtag, as stored for local statuses (ISO 639).
-			const primary = tag.split(/[-_]/)[0]?.toLowerCase() ?? ''
-			return /^[a-z]{2,3}$/.test(primary) ? primary : null
-		}
-	}
-	return null
 }
 
 function httpString(value: string | null): string | null {

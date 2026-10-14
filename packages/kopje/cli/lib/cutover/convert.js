@@ -16,6 +16,7 @@ import { MAX_PROFILE_UPDATES } from './kopje-db.js'
 import {
 	blockedDomain,
 	hashtagObjectName,
+	languageOf,
 	normalizeTag,
 	normalizeSearchText,
 	REMOTE_HTML_RAW_LIMIT,
@@ -138,22 +139,6 @@ function linkOf(value) {
 /** @param {unknown} value */
 function str(value) {
 	return typeof value === 'string' ? value : ''
-}
-
-/**
- * A status's language as Kopje stores one it receives (src/federation/remote-status.ts, languageOf): from the first
- * language map of contentMap, nameMap and summaryMap, the primary subtag of its first tag, lowercased, if that is ISO
- * 639 (two or three letters); else none.
- * @param {Json} properties
- * @returns {string | null}
- */
-function statusLanguage(properties) {
-	const map = [properties.contentMap, properties.nameMap, properties.summaryMap].find(
-		(m) => typeof m === 'object' && m !== null && !Array.isArray(m) && Object.keys(m).length > 0
-	)
-	const tag = map === undefined ? '' : (Object.keys(map)[0] ?? '')
-	const primary = (tag.split(/[-_]/)[0] ?? '').toLowerCase()
-	return /^[a-z]{2,3}$/.test(primary) ? primary : null
 }
 
 /**
@@ -919,7 +904,8 @@ export function convertLegacy(
 				? carried(properties.source.content)
 				: null,
 			properties.sensitive === true ? 1 : 0,
-			statusLanguage(properties),
+			// As Kopje stores a received status's language.
+			languageOf(properties),
 			plan.published,
 			edited,
 			local ? null : (edited ?? plan.published),

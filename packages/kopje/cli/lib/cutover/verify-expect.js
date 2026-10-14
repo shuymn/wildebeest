@@ -83,9 +83,9 @@ function when(value) {
 }
 
 /**
- * The language a status declares, as Kopje reads one from an object (src/federation/remote-status.ts): the first tag of
- * its contentMap, else nameMap, else summaryMap, cut to its primary subtag in lowercase, when that is two or three
- * letters (ISO 639). Legacy itself never showed a language.
+ * The language a status declares, as Kopje reads one from an object (src/domain/language.ts), written out here on its
+ * own: the first tag of its contentMap, else nameMap, else summaryMap, cut to its primary subtag in lowercase, when that
+ * is two or three letters (ISO 639). Legacy itself never showed a language.
  * @param {Json} p
  */
 function languageOf(p) {
