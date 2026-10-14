@@ -19,6 +19,7 @@ import {
 	tableSnapshot,
 } from './ops-helpers'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
+import { MAX_PROFILE_UPDATES } from '../src/platform/dump-catalog'
 import type { DumpTrailer, TableSpec } from '../src/platform/dump-format'
 import { Sha256 } from '../src/platform/sha256'
 import {
@@ -358,7 +359,56 @@ describe('import', () => {
 			ok: false,
 			code: 'state-not-allowed',
 		})
+		// Not a list, a repeated id, more ids than publication announces.
+		for (const value of [
+			{ id: '1' },
+			['1', '2', '1'],
+			Array.from({ length: MAX_PROFILE_UPDATES + 1 }, (_, i) => String(i)),
+		]) {
+			const profiles = new TextEncoder().encode(
+				`INSERT INTO "kopje_state" ("name","value") VALUES ('profile_updates','${JSON.stringify(value)}');\n`
+			)
+			expect(await target.importChunk(BUILD, ACCESS, id, 1, profiles)).toMatchObject({
+				ok: false,
+				code: 'state-invalid',
+			})
+		}
 		expect(await target.importProgress(BUILD, ACCESS)).toMatchObject({ progress: { lastSeq: 0, statements: 0 } })
+	})
+
+	// A dump written before profile_updates was restorable declares only last_local_id: it is accepted, and holds to
+	// what it declares. A dump declaring a name this Store does not restore is refused.
+	it('accepts a dump that restores fewer kopje_state names, and only those', async () => {
+		const { text } = await dumpViaRpc(await seeded(0))
+		const header = splitDump(text).header as { tables: TableSpec[] }
+		const only = (values: string[]) => ({
+			...header,
+			tables: header.tables.map((t) => (t.name === 'kopje_state' ? { ...t, only: { column: 'name', values } } : t)),
+		})
+		const unknown = await migratedStore()
+		await ensureAdmin(unknown)
+		expect(await unknown.importBegin(BUILD, ACCESS, only(['last_local_id', 'profile_updates', 'hold']))).toMatchObject({
+			code: 'catalog-differs',
+		})
+
+		const target = await migratedStore()
+		await ensureAdmin(target)
+		const begun = await target.importBegin(BUILD, ACCESS, only(['last_local_id']))
+		if (!begun.ok) {
+			throw new Error(begun.code)
+		}
+		const id = begun.progress.id
+		const profiles = new TextEncoder().encode(
+			`INSERT INTO "kopje_state" ("name","value") VALUES ('profile_updates','["1"]');\n`
+		)
+		expect(await target.importChunk(BUILD, ACCESS, id, 1, profiles)).toMatchObject({
+			ok: false,
+			code: 'state-not-allowed',
+		})
+		const last = new TextEncoder().encode(
+			`INSERT INTO "kopje_state" ("name","value") VALUES ('last_local_id','110000000000000001');\n`
+		)
+		expect(await target.importChunk(BUILD, ACCESS, id, 1, last)).toMatchObject({ ok: true })
 	})
 
 	// A reset names its import; a serving Store has none, so there is nothing a reset could apply to.

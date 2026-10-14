@@ -17,6 +17,7 @@ const SUBSET = new Set(['legacy_ids', 'settings'])
 
 export const CATEGORIES = [
 	'accounts',
+	'profile_updates',
 	'keys',
 	'raw',
 	'statuses',
@@ -101,6 +102,8 @@ export function actualFromDump(text) {
 	const edits = new Map()
 	/** @type {Map<string, [number, unknown[]][]>} */
 	const media = new Map()
+	/** @type {unknown} the kopje_state profile_updates value: ids of local accounts that publication announces */
+	let profileUpdates = []
 	const account = (/** @type {string | null} */ id) => (id === null ? undefined : accounts.get(id))
 	const status = (/** @type {string | null} */ id) => (id === null ? undefined : statuses.get(id))
 
@@ -283,6 +286,15 @@ export function actualFromDump(text) {
 			case 'instance_settings':
 				put('settings', t('name') ?? '', t('value'))
 				break
+			case 'kopje_state':
+				if (t('name') === 'profile_updates') {
+					try {
+						profileUpdates = JSON.parse(t('value') ?? '')
+					} catch {
+						profileUpdates = ['(not a list)']
+					}
+				}
+				break
 			case 'oauth_clients':
 				put('clients', t('id') ?? '', [t('secret'), t('name'), t('redirect_uris'), t('scopes')])
 				break
@@ -308,6 +320,14 @@ export function actualFromDump(text) {
 		if (entry.remote && entry.alias !== null) {
 			put('aliases', entry.alias, entry.uri)
 		}
+	}
+	// A repeated id is a record of its own, so it fails as an extra one.
+	const listed = new Set()
+	for (const [index, id] of (Array.isArray(profileUpdates) ? profileUpdates : ['(not a list)']).entries()) {
+		const owner = account(typeof id === 'string' ? id : null)
+		const key = owner?.local === true ? owner.uri : `not a local account: ${String(id)}`
+		put('profile_updates', listed.has(key) ? `repeated at ${index}: ${key}` : key, 1)
+		listed.add(key)
 	}
 	for (const [uri, versions] of edits) {
 		put('edits', uri, versions)

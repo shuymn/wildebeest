@@ -12,8 +12,36 @@ import { bindAll, readColumn, textLiteral, valueLiteral } from './dump-literals'
 //   _cf_*                 platform internals
 //   sqlite_* internals    except sqlite_sequence (AUTOINCREMENT counters), which is restored by name
 export const STATE_TABLE = 'kopje_state'
-export const DUMPED_STATE = ['last_local_id'] as const
+export const DUMPED_STATE = ['last_local_id', 'profile_updates'] as const
 export const SEQUENCE_TABLE = 'sqlite_sequence'
+
+// The local accounts whose avatar or header a cutover conversion changed (`convert --images`): a JSON array of account
+// ids, which publication announces with an Update each and then deletes (domain/actor-update.ts). Only a converted dump
+// holds it, so a Store dumped after publication never does. Publication records them all in one transaction, so the
+// list holds distinct ids and at most MAX_PROFILE_UPDATES of them, far above the local accounts of the single-user or
+// small instance Kopje is for (the converter stops above it: cli/lib/cutover/kopje-db.js).
+export const PROFILE_UPDATES = 'profile_updates'
+export const MAX_PROFILE_UPDATES = 100
+
+// The account ids of a PROFILE_UPDATES value, or null when it is not a JSON array of at most MAX_PROFILE_UPDATES
+// distinct non-empty strings.
+export function parseProfileUpdates(value: unknown): string[] | null {
+	if (typeof value !== 'string') {
+		return null
+	}
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(value)
+	} catch {
+		return null
+	}
+	return Array.isArray(parsed) &&
+		parsed.length <= MAX_PROFILE_UPDATES &&
+		new Set(parsed).size === parsed.length &&
+		parsed.every((id) => typeof id === 'string' && id !== '')
+		? (parsed as string[])
+		: null
+}
 
 function excluded(name: string): boolean {
 	return (

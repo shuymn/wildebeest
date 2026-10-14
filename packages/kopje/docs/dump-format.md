@@ -46,16 +46,17 @@ Kopje schema.
 			"order": { "by": "key", "columns": ["name"] },
 			"key": ["name"],
 			"deferred": [],
-			"only": { "column": "name", "values": ["last_local_id"] }
+			"only": { "column": "name", "values": ["last_local_id", "profile_updates"] }
 		}
 	]
 }
 ```
 
 - `migrations` must equal the target Store's applied migrations: same names and checksums, in the same order.
-- `tables` must equal the target Store's catalog exactly. The cutover tool should not derive it. It should fetch it
-  from the empty target with `GET /admin/catalog` (or `kopje-admin catalog`) and copy `migrations` and `tables`
-  from there.
+- `tables` must equal the target Store's catalog exactly, except that the `kopje_state` names in `only` may be a
+  subset of the target's (a dump written before a name became restorable); the importer then accepts only the names
+  the dump lists. The cutover tool should not derive it. It should fetch it from the empty target with
+  `GET /admin/catalog` (or `kopje-admin catalog`) and copy `migrations` and `tables` from there.
 - The catalog is read from the live schema:
     - All tables are included except `kopje_migrations`, `media_orphans`, `backup_media`, `_cf_*`, and `sqlite_*`
       other than `sqlite_sequence`.
@@ -127,15 +128,18 @@ counter for that name. They come last, after the AUTOINCREMENT inserts that crea
 
 These are excluded because they must not be restored blindly:
 
-| Excluded                                       | Why                                                                                                                                                    |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `kopje_migrations`                             | The header carries it. The target's own migration runner recreates it                                                                                  |
-| `kopje_state` except `last_local_id`           | `hold`, `upgrade` and `upgrade_bookmark` (a bookmark belongs to the source object), `maintenance`, `dump` and `import` describe one object at one time |
-| `media_orphans`                                | Tombstones of R2 objects to delete; a restored Store must not delete what it restores                                                                  |
-| `backup_media`                                 | The scheduled backup's media index for one bucket ([backup.md](backup.md)); a restored Store starts a fresh media baseline                             |
-| `_cf_*`, `sqlite_*` (except `sqlite_sequence`) | Platform and SQLite internals                                                                                                                          |
+| Excluded                                                   | Why                                                                                                                                                    |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `kopje_migrations`                                         | The header carries it. The target's own migration runner recreates it                                                                                  |
+| `kopje_state` except `last_local_id` and `profile_updates` | `hold`, `upgrade` and `upgrade_bookmark` (a bookmark belongs to the source object), `maintenance`, `dump` and `import` describe one object at one time |
+| `media_orphans`                                            | Tombstones of R2 objects to delete; a restored Store must not delete what it restores                                                                  |
+| `backup_media`                                             | The scheduled backup's media index for one bucket ([backup.md](backup.md)); a restored Store starts a fresh media baseline                             |
+| `_cf_*`, `sqlite_*` (except `sqlite_sequence`)             | Platform and SQLite internals                                                                                                                          |
 
-The importer refuses a `kopje_state` row whose name is not allowlisted.
+The importer refuses a `kopje_state` row whose name is not allowlisted. `profile_updates` is written only by
+`convert --images`: a JSON array of the ids of the local accounts whose avatar or header the conversion changed
+(the importer refuses any other value, a repeated id, or more than 100 ids, `state-invalid`). Publication sends each an `Update(Person)` and deletes the
+row ([cutover.md](cutover.md), "Media"), so a dump of a published Store does not hold it.
 
 ## Trailer
 

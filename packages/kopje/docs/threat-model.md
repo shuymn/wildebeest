@@ -235,7 +235,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   every state"). Peer limitation: Misskey ignores `Update` of a Note, so edits do not reach Misskey users.
   A profile change (API or settings page, images and fields included) records an `Update` of the actor to Public for
   the followers, only when the published document changed; it replaces the earlier actor Updates still waiting, and
-  is never turned into a Create. A suspended actor sends none. _Implemented on branch `kopje/web-ui`:_
+  is never turned into a Create. A suspended actor sends none. Publication of a cutover records the same Update for
+  each local profile whose images the conversion changed (OPS-8). _Implemented on branch `kopje/web-ui`:_
   `src/domain/actor-update.ts`, `enqueueActivity` in `src/domain/deliveries.ts`; `test/actor-update.test.ts`.
 - **VIS-4: the object endpoint serves public and unlisted local statuses only.** `/ap/o/:uuid` and status documents
   answer for local `public` and `unlisted` statuses, as Mastodon does for an unauthenticated fetch. `private`, `direct`,
@@ -856,7 +857,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/instance.test.ts` ("refuses an invalid VAPID_JWK as misconfiguration").
 - **DATA-3: dumps are exact and verified.** A dump keeps exact bytes and storage classes. Import accepts only exact
   template statements with bound literals, into an empty Store with the same schema, and verification recomputes the
-  digests from the imported rows. _Enforced (main):_ `src/platform/store-dump.ts`,
+  digests from the imported rows. Of `kopje_state` it restores only the names the dump declares, which must be among
+  the Store's (`last_local_id`, `profile_updates`). _Enforced (main):_ `src/platform/store-dump.ts`,
   `src/platform/store-import.ts`, `docs/dump-format.md`; `test/dump-import.test.ts`, `test/ops-regressions.test.ts`,
   `test/dump-format.test.ts`. Media tombstones (`media_orphans`) are left out of dumps (`src/platform/dump-catalog.ts`):
   they name R2 objects to delete, which a restored Store must not act on. Each import call's work is bounded by what it
@@ -1109,7 +1111,9 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   (an operator's rescue dump still works). Reads and sessions pass, so imported data can be read and the owner can sign
   in for the checks before publication. `publish` (an Access admin, or `IMPORT_TOKEN` while the Store has no
   usable admin access, so a restore without Access completes) clears that state and sets the published mark in one
-  transaction; it is refused while a drain holds its lease or the journal holds requests, and on a Store that never had
+  transaction, which also records the `Update(Person)` of each local profile a cutover conversion changed (the
+  `profile_updates` row, at most 100 distinct ids, deleted with it, so a repeated publish records none;
+  `test/cutover-profile-updates.test.ts`); it is refused while a dump holds its freeze, while a drain holds its lease or the journal holds requests, and on a Store that never had
   a verified import, and an import never begins into a published Store, so the two marks never coexist. `cutover
 reset` takes such a
   Store back to empty through the bounded import reset, keeping its configuration: only an Access admin, only under env

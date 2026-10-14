@@ -281,7 +281,15 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		/** @param {unknown} value @param {string} kind */
 		const profileImage = (value, kind) => {
 			const url = href(typeof value === 'object' && value !== null ? /** @type {Json} */ (value).url : value)
-			return isLocal ? (filesOf(resolveImage(url, true), `profile\n${uri}\n${kind}`)?.url ?? null) : url
+			if (!isLocal) {
+				return url
+			}
+			const converted = filesOf(resolveImage(url, true), `profile\n${uri}\n${kind}`)?.url ?? null
+			// A local profile whose image changed is announced at publication (the dump's profile_updates).
+			if (converted !== url) {
+				put('profile_updates', uri, 1)
+			}
+			return converted
 		}
 		put('accounts', uri, [
 			isLocal ? 1 : 0,

@@ -84,6 +84,9 @@ export type AdminOptions = {
 	randomId?: () => string
 	// Rows deleted per reset transaction (tests make it small).
 	resetBatchRows?: number
+	// Runs in the publication's transaction, once the Store is published; returns how many profile Updates it recorded,
+	// or null when the stored list is malformed (store.ts: domain/actor-update.ts announceConvertedProfiles).
+	onPublish?: (sql: SqlStorage, now: number) => number | null
 }
 
 // Who asks for an import or configuration change (see the import section of StoreAdmin).
@@ -194,6 +197,7 @@ export class StoreAdmin {
 	readonly #log: NonNullable<AdminOptions['log']>
 	readonly #randomId: () => string
 	readonly #resetBatchRows: number
+	readonly #onPublish: NonNullable<AdminOptions['onPublish']>
 
 	constructor(ctx: DurableObjectState, kernel: StoreKernel, options: AdminOptions) {
 		this.#ctx = ctx
@@ -206,6 +210,7 @@ export class StoreAdmin {
 		this.#log = options.log ?? ((entry) => console.log(entry))
 		this.#randomId = options.randomId ?? (() => crypto.randomUUID())
 		this.#resetBatchRows = options.resetBatchRows ?? RESET_BATCH_ROWS
+		this.#onPublish = options.onPublish ?? (() => 0)
 	}
 
 	// ---- inspection (read-only, any caller build)
@@ -1162,11 +1167,15 @@ export class StoreAdmin {
 	}
 
 	// Publication: ends the readonly state a verified import leaves (unpublished) and sets the published mark, in one
-	// transaction. Idempotent. Refused while a rollback is in progress (a drain lease, or requests in the journal): those
+	// transaction, which also records the Updates of the profiles a cutover conversion changed (onPublish), so a
+	// repeated publication records none. Idempotent. Refused while a dump holds its freeze. Refused while a rollback is in progress (a drain lease, or requests in the journal): those
 	// requests go to the legacy instance, not to a published Kopje. An Access admin publishes; so does IMPORT_TOKEN while
 	// the Store is in bootstrap (no usable admin access), as it may configure and import into that Store, so a restore
 	// without Access is never left readonly.
-	async publish(callerBuild: string, authority: ImportAuthority): Promise<Result<{ published: PublishedFlag }>> {
+	async publish(
+		callerBuild: string,
+		authority: ImportAuthority
+	): Promise<Result<{ published: PublishedFlag; profileUpdates: number }>> {
 		this.#requireBuild(callerBuild)
 		await this.#kernel.state()
 		try {
@@ -1185,12 +1194,17 @@ export class StoreAdmin {
 					throw new ImportError('import-exists', 'an import is running')
 				}
 				if (flags.published !== null && flags.unpublished === null) {
-					return { ok: true as const, published: flags.published }
+					return { ok: true as const, published: flags.published, profileUpdates: 0 }
 				}
 				if (flags.unpublished === null) {
 					// Publication ends a verified import; a Store that never had one is not readonly and has nothing to
 					// publish. Refusing it keeps a published mark off a Store an import may still begin into.
 					throw new ImportError('not-unpublished', 'nothing to publish: no verified import is waiting')
+				}
+				// A rescue dump's freeze holds: publication makes the Store writable and records profile Updates, which
+				// would mix states within the dump.
+				if (activeDump(flags, this.#now()) !== null) {
+					throw new ImportError('dump-in-progress', 'a dump is in progress')
 				}
 				if (this.#rollbackInProgress()) {
 					throw new ImportError('rollback-in-progress', 'the journal holds requests or a drain runs')
@@ -1199,8 +1213,14 @@ export class StoreAdmin {
 				const published = { at: this.#now() }
 				writeFlag(this.#sql, 'unpublished', null)
 				writeFlag(this.#sql, 'published', published)
-				this.#log({ event: 'kopje.store.published' })
-				return { ok: true as const, published }
+				const profileUpdates = this.#onPublish(this.#sql, published.at)
+				if (profileUpdates === null) {
+					// Refused before anything is kept: the transaction rolls back, so the Store stays unpublished and the
+					// list stays for the operator to inspect.
+					throw new ImportError('state-invalid', 'the profile update list is malformed')
+				}
+				this.#log({ event: 'kopje.store.published', profileUpdates })
+				return { ok: true as const, published, profileUpdates }
 			})
 		} catch (error) {
 			return asRefusal(error)

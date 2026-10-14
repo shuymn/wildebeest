@@ -480,6 +480,10 @@ kopje-admin pitr bookmark > <work>/bookmark-before-publish.json
 kopje-admin publish --yes
 ```
 
+With `--images`, publication also queues one `Update(Person)` for each local account whose avatar or header the
+conversion changed, to its followers, so their servers show the new profile images (`profileUpdates` in the output
+counts them; a repeated `publish` queues none). They are delivered once maintenance is off.
+
 Set `MAINTENANCE=off` (or remove it). Spooled inbox requests are replayed by Kopje's Queue consumer, each verified
 against the time it was spooled; ones held during maintenance come due within 30 minutes. Then:
 
@@ -488,7 +492,7 @@ against the time it was spooled; ones held during maintenance come due within 30
   delivery).
 
 - **Go:** both arrive; Kopje's Queue backlog falls to 0 messages and 0 bytes within 30 minutes; its dead-letter queue stays empty;
-  `kopje-admin deliveries` shows no growing backlog.
+  `kopje-admin deliveries` shows no growing backlog, and with `--images` the profile Updates leave it.
 - **Rollback:** none. Recover forward: PITR to the bookmark ([upgrade.md](upgrade.md#a-version-that-changed-the-schema)),
   a backup, or a fix.
 
@@ -503,9 +507,10 @@ Afterwards: re-enable nothing on the legacy side. Keep it read-only for 14 days,
 ## After the cutover: retire Cloudflare Images
 
 The converted Store no longer names the legacy instance's Cloudflare Images, but other servers do: their copies of old
-statuses, and of profiles until they fetch them again, keep the old `imagedelivery.net` URLs. Kopje does not send an
-`Update` for the old statuses (Mastodon would mark every one of them as edited), and changed avatars and headers are
-not announced yet (TODO: part 3, `Update(Person)`).
+statuses keep the old `imagedelivery.net` URLs. Kopje does not send an `Update` for the old statuses (Mastodon would
+mark every one of them as edited). Changed avatars and headers reach followers' servers at publication (step 9); a
+server that follows no local account, or that has not processed its Update, shows the old profile images until it
+fetches the actor again.
 
 1. Once `media-rebuild` has run (step 8), check that the instance shows its avatars, headers and attachments
    from `https://<domain>/media/`.
@@ -513,7 +518,7 @@ not announced yet (TODO: part 3, `Update(Person)`).
    still show recent statuses from their copies.
 3. Then delete them, the image ids `<work>/images/images.json` lists (`DELETE /accounts/<account-id>/images/v1/<id>`
    with a token that can edit Images, or the dashboard), and delete the API tokens used for Images. **Accepted risk:**
-   from then on, remote copies of old statuses show no images.
+   from then on, remote copies of old statuses show no images, and neither do profiles a server has not refetched.
 4. Delete `<work>/images` with the exports: its originals keep EXIF and location data.
 
 ## Rolling back
