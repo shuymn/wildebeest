@@ -13,7 +13,13 @@ import { createHash } from 'node:crypto'
 
 import { LEGACY_DEFAULT_AVATAR, mediaToken, parseDeliveryUrl, UPSTREAM_ACCOUNT_HASH } from './images-export.js'
 import { MAX_PROFILE_UPDATES } from './kopje-db.js'
-import { normalizeSearchText, REMOTE_HTML_RAW_LIMIT, remoteHtmlText, sanitizeRemoteHtml } from './kopje-runtime.js'
+import {
+	blockedDomain,
+	normalizeSearchText,
+	REMOTE_HTML_RAW_LIMIT,
+	remoteHtmlText,
+	sanitizeRemoteHtml,
+} from './kopje-runtime.js'
 import { digestOf } from './sql-script.js'
 import { fit, FULL_EDGE, SMALL_EDGE } from './upload-rules.js'
 
@@ -1541,6 +1547,10 @@ export function convertLegacy(
 		)
 	}
 
+	// A domain block is matched as stored (domain/audience.ts, inDomainSql), so it is converted as Kopje's API stores
+	// one (blockedDomain: lowercase, punycode, no trailing dot). Rows that become the same block are merged, and a value
+	// that is no domain name is dropped, counted. A Store converted before this kept trailing dots; its migration
+	// 0003_domain_block_form brings those rows to this form.
 	const domainBlockInsert = insert(
 		'INSERT OR IGNORE INTO domain_blocks (account_id, domain, created_at) VALUES (?, ?, ?)'
 	)
@@ -1549,9 +1559,14 @@ export function convertLegacy(
 		if (owner === undefined) {
 			continue
 		}
+		const domain = blockedDomain(str(block.domain))
+		if (domain === null) {
+			count(dropped, 'domain_blocks:invalid-domain')
+			continue
+		}
 		const result = domainBlockInsert.run(
 			owner.id,
-			str(block.domain).trim().toLowerCase(),
+			domain,
 			isoTime(block.created_at) ?? new Date(baseTime).toISOString()
 		)
 		if (Number(result.changes) === 0) {

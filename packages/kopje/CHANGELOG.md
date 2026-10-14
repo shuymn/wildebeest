@@ -70,16 +70,27 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   (for mention notifications, a mute that hides notifications), as Mastodon filters them; so do post notifications
   of accounts you follow with `notify`, whenever home leaves the status out.
 
+- A post notification (`notify` on a follow) is no longer created, shown or pushed for a post by an account you mute,
+  even with a mute that keeps notifications, as Mastodon creates none: home leaves that post out.
+
+- The cutover converts a legacy domain block as Kopje's API stores one: lowercase, in punycode and without a trailing
+  dot, the form domain blocks are matched in. Rows that become the same block are merged, and a value that is no
+  domain name is dropped and counted (`domain_blocks:invalid-domain`), so the conversion stops on it until
+  `--accept-deletions`.
+
 - `VAPID_JWK` must hold the private key (`d`), not only the public point: a key without it now makes the instance
   answer 503 as misconfigured, as any invalid value does.
 
 ### Instance changes
 
-- Store schema: adds two migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds three migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0001_blocks_and_mutes`: `mutes.expires_at` with an index, and the `domain_block_cleanups` table. It is quick.
     - `0002_web_push`: the subscription's encoding and sealed token on `push_subscriptions`, and the
       `push_deliveries` table.
+    - `0003_domain_block_form`: drops the trailing dot that earlier converters kept on a legacy domain block, so the
+      block keeps applying now that blocks are compared as stored, and merges a row that then repeats a block of the
+      same account. It is quick.
 - `wrangler.jsonc`: unchanged. Set the `VAPID_JWK` secret to turn Web Push on.
 
 ## [0.1.0-rc.3] - 2026-10-14

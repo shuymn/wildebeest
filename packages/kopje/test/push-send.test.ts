@@ -443,6 +443,25 @@ describe('PUSH-3: a push reveals no more than the notification', () => {
 		}
 	)
 
+	it('PUSH-3: pushes no post notification of a sender the recipient mutes, notifications kept or not', async () => {
+		const { h } = await pushing()
+		const { alice, bob } = h.users
+		await act(h, alice, `/api/v1/accounts/${bob.id}/follow`, { notify: true })
+		await act(h, alice, `/api/v1/accounts/${bob.id}/mute`, { notifications: false })
+		await post(h, bob, { status: 'news' })
+		expect(await rows(h.store)).toEqual([])
+
+		// Muted after the push was recorded: not sent, as the rule is judged again at sending.
+		await act(h, alice, `/api/v1/accounts/${bob.id}/unmute`)
+		await post(h, bob, { status: 'more news' })
+		expect(await rows(h.store)).toHaveLength(1)
+		await act(h, alice, `/api/v1/accounts/${bob.id}/mute`, { notifications: false })
+		const { fetch, sent } = recordingFetch()
+		expect(await round(h, fetch)).toMatchObject({ settled: [] })
+		expect(sent).toEqual([])
+		expect(await rows(h.store)).toEqual([])
+	})
+
 	it('sends what holds when it is sent: an edit during the host check is in the payload', async () => {
 		const { h, client } = await pushing()
 		const status = await post(h, h.users.bob, { status: '@alice first' })

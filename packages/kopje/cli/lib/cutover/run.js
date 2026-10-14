@@ -353,7 +353,7 @@ export async function verifyConversion(options) {
 			texts: files.map((file) => () => readFileSync(file, 'utf8')),
 			acceptDeletions: options.acceptDeletions,
 		})
-		const { records, overLimit, images } = expectedFromLegacy(db, {
+		const { records, overLimit, images, dropped } = expectedFromLegacy(db, {
 			originalActorIds,
 			source: addressing,
 			notificationSequence: source.notificationSequence,
@@ -366,6 +366,12 @@ export async function verifyConversion(options) {
 		)
 		report.truncation = { overLimit, accepted: options.acceptTruncation === true }
 		if (overLimit > 0 && options.acceptTruncation !== true) {
+			report.result = 'FAIL'
+		}
+		// Rows the conversion leaves out, counted here on their own: a dump made with --accept-deletions passes only
+		// with it.
+		report.dropped = { ...dropped, accepted: options.acceptDeletions === true }
+		if (Object.keys(dropped).length > 0 && options.acceptDeletions !== true) {
 			report.result = 'FAIL'
 		}
 		if (options.imagesDir !== undefined) {

@@ -1,6 +1,6 @@
 import { type Account, findAccounts, type Present, resolveAccountId, type SearchInput } from './accounts'
 import { listableSql } from './audience'
-import { userReadOperation } from './auth'
+import { type UserContext, userReadOperation } from './auth'
 import { statusQueryTerms } from './search-text'
 import { presentStatuses, type Status } from './status-presenter'
 import { normalizeTag } from './status-text'
@@ -48,7 +48,7 @@ export type SearchRequest = {
 
 export type SearchResults = { accounts: Account[]; statuses: Status[]; hashtags: Hashtag[] }
 
-export const search = userReadOperation<SearchRequest, SearchResults>((db, input, { accountId: viewerId, now }) => {
+export const search = userReadOperation<SearchRequest, SearchResults>((db, input, _viewer, context) => {
 	const accountInput: SearchInput = {
 		query: input.query,
 		limit: input.limit,
@@ -58,9 +58,9 @@ export const search = userReadOperation<SearchRequest, SearchResults>((db, input
 		present: input.present,
 	}
 	return {
-		accounts: input.types.includes('accounts') ? findAccounts(db, accountInput, viewerId) : [],
-		statuses: input.types.includes('statuses') ? searchStatuses(db, input, viewerId, now) : [],
-		hashtags: input.types.includes('hashtags') ? searchHashtags(db, input, viewerId, now) : [],
+		accounts: input.types.includes('accounts') ? findAccounts(db, accountInput, context.accountId) : [],
+		statuses: input.types.includes('statuses') ? searchStatuses(db, input, context) : [],
+		hashtags: input.types.includes('hashtags') ? searchHashtags(db, input, context) : [],
 	}
 })
 
@@ -96,7 +96,7 @@ function librarySources(limit: string, cursor: (column: string) => string, menti
 			${mentioned}`
 }
 
-function searchStatuses(db: Db, input: SearchRequest, viewerId: string, now: number): Status[] {
+function searchStatuses(db: Db, input: SearchRequest, { accountId: viewerId, now }: UserContext): Status[] {
 	const { include, exclude } = statusQueryTerms(input.query)
 	if (include.length === 0) {
 		return []
@@ -129,7 +129,7 @@ function searchStatuses(db: Db, input: SearchRequest, viewerId: string, now: num
 		's.search_text IS NOT NULL',
 		...include.map(matches),
 		...exclude.map((variants) => `NOT ${matches(variants)}`),
-		listableSql('s', '?1', p.add(new Date(now).toISOString())),
+		listableSql('s', '?1', p.add(now)),
 	]
 	const ids = db
 		.all<{ id: string }>(
@@ -148,7 +148,7 @@ const PREFIX_END = '\u{10FFFF}'
 
 // Tags whose name starts with the query, from the statuses in the two windows that the viewer may see (see above), exact
 // match first, then shorter names.
-function searchHashtags(db: Db, input: SearchRequest, viewerId: string, now: number): Hashtag[] {
+function searchHashtags(db: Db, input: SearchRequest, { accountId: viewerId, now }: UserContext): Hashtag[] {
 	const prefix = normalizeTag(input.query.trim().replace(/^#/, ''))
 	if (prefix === '' || /\s/.test(prefix)) {
 		return []
@@ -169,7 +169,7 @@ function searchHashtags(db: Db, input: SearchRequest, viewerId: string, now: num
 		HASHTAG_PUBLIC_WINDOW,
 		input.limit,
 		input.offset,
-		new Date(now).toISOString()
+		now
 	)
 	return rows.map(({ name }) => ({
 		name,

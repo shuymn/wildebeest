@@ -1,8 +1,11 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import {
 	activeMuteSql,
+	availableLocalSql,
+	blockedSql,
+	blocksSql,
 	canView,
-	domainBlockMatchSql,
+	followableBySql,
 	isDistributable,
 	isPublicCollection,
 	type Visibility,
@@ -258,7 +261,7 @@ export function isDeletedActor(db: Db, uri: string, now: number): boolean {
 //   - otherwise, a changed username included, the address falls back to the actor's host until it is confirmed again.
 // Inbound documents never carry a confirmation (Gap: inbound processing does not look up WebFinger), so they keep a
 // confirmed address while the username is unchanged and never set one. Domain blocks also match the actor's host
-// (domainBlockMatchSql in audience.ts).
+// (inDomainSql in audience.ts).
 export function accountDomain(
 	stored: { domain: string; confirmed_username: string | null } | undefined,
 	actor: RemoteActorInput
@@ -487,7 +490,7 @@ function localAccount(db: Db, uri: string | null): LocalRow | undefined {
 		return undefined
 	}
 	return db.first<LocalRow>(
-		`SELECT a.id, a.uri, a.locked, l.suspended_at IS NOT NULL AS suspended
+		`SELECT a.id, a.uri, a.locked, NOT ${availableLocalSql('l')} AS suspended
 		FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.domain IS NULL AND a.uri = ?`,
 		uri
 	)
@@ -546,17 +549,6 @@ function unfollowRemote(
 	)
 }
 
-function blockedEitherWay(db: Db, a: string, b: string): boolean {
-	return (
-		db.first(
-			`SELECT 1 AS x FROM blocks WHERE (account_id = ?1 AND target_account_id = ?2)
-				OR (account_id = ?2 AND target_account_id = ?1)`,
-			a,
-			b
-		) !== undefined
-	)
-}
-
 // Accept or Reject of a remote Follow, as an outbound intent delivered to the follower's shared inbox, or its personal
 // inbox without one (B2). Its id derives from the Follow it answers (followAnswerActivity).
 function recordFollowAnswer(
@@ -602,7 +594,7 @@ const follow: Handler<'Follow'> = (db, actor, activity, { now }) => {
 		return ignored('retracted')
 	}
 	// The follower blocks the target: Mastodon would not have sent this; nothing is recorded.
-	if (db.first('SELECT 1 AS x FROM blocks WHERE account_id = ? AND target_account_id = ?', actor.id, target.id)) {
+	if (db.first(`SELECT 1 AS x WHERE ${blocksSql('?1', '?2')}`, actor.id, target.id)) {
 		return ignored('blocked')
 	}
 	const existing = db.first<{ id: string; state: string; uri: string | null }>(
@@ -610,13 +602,7 @@ const follow: Handler<'Follow'> = (db, actor, activity, { now }) => {
 		actor.id,
 		target.id
 	)
-	const blocked = db.first(
-		`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 AND target_account_id = ?2)
-			OR EXISTS (SELECT 1 FROM domain_blocks d JOIN accounts a ON a.id = ?2
-				WHERE d.account_id = ?1 AND ${domainBlockMatchSql('d', 'a')})`,
-		target.id,
-		actor.id
-	)
+	const blocked = db.first(`SELECT 1 AS x WHERE ${blockedSql('?1', '?2')}`, target.id, actor.id)
 	if (blocked !== undefined) {
 		// Refused with a Reject. The id is recorded as dead, so a replay sends no second Reject (ID-7); if it cannot be
 		// recorded, no Reject is recorded either.
@@ -1018,15 +1004,8 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 		if (local !== undefined) {
 			unfollowRemote(db, local, source, now)
 		}
-		const barred =
-			follower.id === target.id ||
-			blockedEitherWay(db, follower.id, target.id) ||
-			db.first(
-				`SELECT 1 AS x FROM domain_blocks d JOIN accounts a ON a.id = ?2 WHERE d.account_id = ?1 AND ${domainBlockMatchSql('d', 'a')}`,
-				follower.id,
-				target.id
-			) !== undefined
-		if (barred) {
+		// FollowService: a follow the follower could not make itself is not made for it.
+		if (db.first(`SELECT 1 AS x WHERE ${followableBySql('?2', '?1')}`, follower.id, target.id) === undefined) {
 			continue
 		}
 		const state = target.local === 1 && target.locked === 0 ? 'accepted' : 'pending'
@@ -1523,7 +1502,7 @@ function deliveredTo(db: Db, recipient: string | null | undefined): string | nul
 	return (
 		db.first<{ id: string }>(
 			`SELECT a.id FROM accounts a JOIN local_accounts l ON l.account_id = a.id
-			WHERE a.domain IS NULL AND a.username = ? AND l.suspended_at IS NULL`,
+			WHERE a.domain IS NULL AND a.username = ? AND ${availableLocalSql('l')}`,
 			recipient
 		)?.id ?? null
 	)

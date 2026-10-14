@@ -1,3 +1,4 @@
+import { availableLocalSql } from './audience'
 import { readOperation } from './operation'
 
 // What the instance endpoints show, from instance_settings (the only settings store) and cached counters.
@@ -24,7 +25,7 @@ export const instanceInfo = readOperation<void, InstanceInfo>((db) => {
 	)
 	const counts = db.first<{ users: number; statuses: number | null; domains: number }>(
 		`SELECT
-			(SELECT COUNT(*) FROM local_accounts WHERE suspended_at IS NULL) AS users,
+			(SELECT COUNT(*) FROM local_accounts l WHERE ${availableLocalSql('l')}) AS users,
 			(SELECT SUM(statuses_count) FROM accounts WHERE domain IS NULL) AS statuses,
 			(SELECT COUNT(DISTINCT domain) FROM accounts WHERE domain IS NOT NULL) AS domains`
 	)

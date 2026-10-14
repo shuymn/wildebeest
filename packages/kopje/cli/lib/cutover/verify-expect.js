@@ -8,6 +8,7 @@
 // and are never printed: reports carry counts and digests only.
 
 import { createHmac } from 'node:crypto'
+import { domainToASCII } from 'node:url'
 
 import { REMOTE_HTML_RAW_LIMIT, sanitizeRemoteHtml } from './kopje-runtime.js'
 
@@ -100,6 +101,19 @@ function address(value, hops = 0) {
 	return undefined
 }
 
+// A domain block's domain as Kopje stores it, worked out here on its own: a trailing slash and a trailing dot dropped,
+// lowercased, IDNA to ASCII (punycode), and only a hostname of two or more labels, not an IPv4 address. null when it
+// is no domain name (the converter drops the row).
+/** @param {string} raw */
+function blockedDomainOf(raw) {
+	const name = raw.trim().replace(/\/$/, '').replace(/\.$/, '')
+	if (name === '' || name.endsWith('.') || /[\s/\\?#@:[\]%]/.test(name)) {
+		return null
+	}
+	const ascii = domainToASCII(name)
+	return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(ascii) && !/^\d{1,3}(\.\d{1,3}){3}$/.test(ascii) ? ascii : null
+}
+
 /**
  * The stored author's followers as legacy's detectVisibility sees them: actorFromRow keeps the property as spelled and
  * builds `<id>/followers` from the parsed actor id only when the property is missing; then followers.toString(). Undefined
@@ -176,12 +190,15 @@ function metaSizes(meta) {
  * @param {import('node:sqlite').DatabaseSync} db the bridged legacy database
  * @param {{ originalActorIds: Map<string, string>, source: import('./legacy-load.js').SourceAddressing,
  *   notificationSequence: string | null, images?: import('./images-export.js').ImagesFile }} options
- * @returns {{ records: Records, overLimit: number, images: { missing: number, unmapped: number } }}
+ * @returns {{ records: Records, overLimit: number, images: { missing: number, unmapped: number },
+ *   dropped: Record<string, number> }} dropped: rows the conversion must leave out, which need --accept-deletions
  */
 export function expectedFromLegacy(db, { originalActorIds, source, notificationSequence, images }) {
 	/** @type {Records} */
 	const out = {}
 	let overLimit = 0
+	/** @type {Record<string, number>} */
+	const dropped = {}
 	/** @param {string} category @param {string} key @param {unknown} value */
 	const put = (category, key, value) => {
 		const records = (out[category] ??= {})
@@ -649,8 +666,14 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		}
 	}
 	for (const d of all('SELECT account_id, domain FROM domain_blocks')) {
-		if (known(d.account_id)) {
-			put('domain_blocks', `${String(d.account_id)} ${text(d.domain).trim().toLowerCase()}`, 1)
+		if (!known(d.account_id)) {
+			continue
+		}
+		const domain = blockedDomainOf(text(d.domain))
+		if (domain === null) {
+			dropped['domain_blocks:invalid-domain'] = (dropped['domain_blocks:invalid-domain'] ?? 0) + 1
+		} else {
+			put('domain_blocks', `${String(d.account_id)} ${domain}`, 1)
 		}
 	}
 	for (const l of all('SELECT id, account_id, title, replies_policy, exclusive FROM lists')) {
@@ -711,5 +734,5 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	for (const c of all('SELECT id, secret, name, redirect_uris, scopes FROM clients')) {
 		put('clients', String(c.id), [String(c.secret), String(c.name), String(c.redirect_uris), text(c.scopes) || 'read'])
 	}
-	return { records: out, overLimit, images: imageCounts }
+	return { records: out, overLimit, images: imageCounts, dropped }
 }

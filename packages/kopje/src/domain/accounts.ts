@@ -1,6 +1,15 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { actorSnapshot, recordActorUpdate } from './actor-update'
-import { activeMuteSql, domainBlockMatchSql, filterTime, unfilteredSql } from './audience'
+import {
+	activeMuteJoinSql,
+	availableLocalSql,
+	availableSql,
+	blocksSql,
+	domainBlocksSql,
+	filteredForSql,
+	followableBySql,
+	REACHES_FOLLOWERS_SQL,
+} from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { retractFollow } from './inbox'
 import { notify } from './notifications'
@@ -122,7 +131,7 @@ export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type,
 	a.header_url, a.locked, a.discoverable, a.followers_count, a.following_count, a.statuses_count, a.created_at,
 	l.suspended_at,
 	(SELECT substr(s.published_at, 1, 10) FROM statuses s
-		WHERE s.account_id = a.id AND s.visibility IN ('public', 'unlisted', 'private') ORDER BY s.id DESC LIMIT 1)
+		WHERE s.account_id = a.id AND s.visibility IN ${REACHES_FOLLOWERS_SQL} ORDER BY s.id DESC LIMIT 1)
 		AS last_status_at,
 	l.fields AS local_fields,
 	CASE WHEN a.domain IS NOT NULL THEN a.raw -> '$.attachment' END AS attachment`
@@ -448,16 +457,15 @@ export function relationshipsOf(db: Db, viewerId: string, accountIds: string[], 
 		`SELECT a.id,
 			fo.state AS following, fo.show_reblogs, fo.notify, fo.languages,
 			fb.state AS followed_by,
-			EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 AND target_account_id = a.id) AS blocking,
-			EXISTS (SELECT 1 FROM blocks WHERE account_id = a.id AND target_account_id = ?1) AS blocked_by,
+			${blocksSql('?1', 'a.id')} AS blocking,
+			${blocksSql('a.id', '?1')} AS blocked_by,
 			m.account_id IS NOT NULL AS muting, m.hide_notifications AS muting_notifications, m.expires_at AS muting_expires_at,
-			EXISTS (SELECT 1 FROM domain_blocks db WHERE db.account_id = ?1 AND ${domainBlockMatchSql('db', 'a')})
-				AS domain_blocking
+			${domainBlocksSql('?1', 'a.id')} AS domain_blocking
 		FROM json_each(?2) j
 		JOIN accounts a ON a.id = j.value
 		LEFT JOIN follows fo ON fo.account_id = ?1 AND fo.target_account_id = a.id
 		LEFT JOIN follows fb ON fb.account_id = a.id AND fb.target_account_id = ?1
-		LEFT JOIN mutes m ON m.account_id = ?1 AND m.target_account_id = a.id AND ${activeMuteSql('m', '?3')}
+		${activeMuteJoinSql('m', '?1', 'a.id', '?3')}
 		ORDER BY j.key`,
 		viewerId,
 		JSON.stringify(accountIds),
@@ -500,8 +508,8 @@ export const relationships = userReadOperation<{ ids: string[] }, Relationship[]
 // GET /api/v1/accounts/:id/followers of the account and /following of each follower show the same viewer: Kopje
 // hides no account's network (it stores no hide-collections setting, local or remote), so those lists show every
 // accepted follow and so may this. An unknown or suspended account has no entry; a suspended follower is left out, and
-// so is one the viewer filters out of lists (unfilteredSql over the follow's account_id, the follower: a block, a
-// mute that applies at the request time, or a block of its domain).
+// so is one the viewer filters out of lists (filteredForSql: a block, a mute that applies at the request time, or a
+// block of its domain).
 // Bounds (RES-3, RES-7): at most MAX_FAMILIAR_FOLLOWERS_IDS accounts. For each, the candidates are the viewer's own
 // accepted follows (at most FAMILIAR_FOLLOWERS_WINDOW, through the partial index of accepted follows), each checked
 // for an accepted follow of the account through the unique pair index (CROSS JOIN keeps SQLite to that order), so
@@ -516,15 +524,13 @@ export const MAX_FAMILIAR_FOLLOWERS = 80
 export type FamiliarFollowers = { id: string; accounts: Account[] }
 
 export const familiarFollowers = userReadOperation<{ ids: string[]; present: Present }, FamiliarFollowers[]>(
-	(db, { ids, present }, { accountId: viewerId, now }) => {
+	(db, { ids, present }, _viewer, { accountId: viewerId, now }) => {
 		const resolved = ids
 			.slice(0, MAX_FAMILIAR_FOLLOWERS_IDS)
 			.map((id) => resolveAccountId(db, id))
 			.filter((id) => id !== null)
 		const targets = [...new Set(resolved)].filter(
-			(id) =>
-				db.first('SELECT 1 AS suspended FROM local_accounts WHERE account_id = ? AND suspended_at IS NOT NULL', id) ===
-				undefined
+			(id) => db.first(`SELECT 1 AS available WHERE ${availableSql('?1')}`, id) !== undefined
 		)
 		return targets.map((target) => {
 			const followers = db
@@ -532,14 +538,13 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 					`SELECT x.account_id AS id
 					FROM (SELECT target_account_id FROM follows WHERE account_id = ?2 AND state = 'accepted' LIMIT ?3) mine
 					CROSS JOIN follows x ON x.account_id = mine.target_account_id AND x.target_account_id = ?1 AND x.state = 'accepted'
-					WHERE NOT EXISTS (SELECT 1 FROM local_accounts sus WHERE sus.account_id = x.account_id AND sus.suspended_at IS NOT NULL)
-						AND ${unfilteredSql('x', '?2', '?5')}
+					WHERE ${availableSql('x.account_id')} AND NOT ${filteredForSql('x.account_id', '?2', '?5')}
 					ORDER BY x.id DESC LIMIT ?4`,
 					target,
 					viewerId,
 					FAMILIAR_FOLLOWERS_WINDOW,
 					MAX_FAMILIAR_FOLLOWERS,
-					filterTime(now)
+					now
 				)
 				.map((row) => row.id)
 			const accounts = presentAccountsById(db, followers, present)
@@ -615,8 +620,7 @@ export function findAccounts(db: Db, input: SearchInput, viewerId: string): Acco
 		.all<{ id: string }>(
 			`WITH candidates(id) AS (${candidates})
 			SELECT a.id FROM candidates c JOIN accounts a ON a.id = c.id LEFT JOIN local_accounts l ON l.account_id = a.id
-			WHERE l.suspended_at IS NULL
-				AND NOT EXISTS (SELECT 1 FROM domain_blocks db WHERE db.account_id = ? AND ${domainBlockMatchSql('db', 'a')})
+			WHERE ${availableLocalSql('l')} AND NOT ${domainBlocksSql('?', 'a.id')}
 				AND ${where.join(' AND ')}
 			ORDER BY lower(a.username) = ? DESC, a.domain IS NULL DESC, a.followers_count DESC, a.id
 			LIMIT ? OFFSET ?`,
@@ -658,9 +662,8 @@ type TargetRow = {
 	id: string
 	domain: string | null
 	locked: number
-	blocked: number
-	suspended: number
-	domain_blocked: number
+	available: number
+	followable: number
 }
 
 function followTarget(db: Db, viewerId: string, target: string): TargetRow | null {
@@ -670,13 +673,9 @@ function followTarget(db: Db, viewerId: string, target: string): TargetRow | nul
 	}
 	return (
 		db.first<TargetRow>(
-			`SELECT a.id, a.domain, a.locked,
-				EXISTS (SELECT 1 FROM blocks WHERE (account_id = ?1 AND target_account_id = a.id)
-					OR (account_id = a.id AND target_account_id = ?1)) AS blocked,
-				l.suspended_at IS NOT NULL AS suspended,
-				EXISTS (SELECT 1 FROM domain_blocks db WHERE db.account_id = ?1 AND ${domainBlockMatchSql('db', 'a')})
-					AS domain_blocked
-			FROM accounts a LEFT JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?2`,
+			`SELECT a.id, a.domain, a.locked, ${availableSql('a.id')} AS available,
+				${followableBySql('a.id', '?1')} AS followable
+			FROM accounts a WHERE a.id = ?2`,
 			viewerId,
 			id
 		) ?? null
@@ -691,10 +690,10 @@ function followTarget(db: Db, viewerId: string, target: string): TargetRow | nul
 // viewer forbids the follow.
 export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, input, { accountId: viewerId }) => {
 	const target = followTarget(db, viewerId, input.target)
-	if (target === null || target.suspended === 1) {
+	if (target === null || target.available === 0) {
 		return { status: 'not_found' }
 	}
-	if (target.id === viewerId || target.blocked === 1 || target.domain_blocked === 1) {
+	if (target.followable === 0) {
 		return { status: 'forbidden' }
 	}
 	// undefined keeps the current filter; null or an empty list means every language (no filter).

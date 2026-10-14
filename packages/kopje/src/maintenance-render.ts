@@ -9,6 +9,7 @@ import { isStorableSnapshot, type Snapshot } from './platform/store-kernel'
 
 // The converter's shared functions, for the npm package, which ships no sources (cli/lib/cutover/kopje-runtime.js).
 export { normalizeSearchText } from './domain/search-text'
+export { blockedDomain } from './platform/domain-name'
 export { sniffImageType } from './platform/image-bytes'
 export { REMOTE_HTML_RAW_LIMIT, remoteHtmlText, sanitizeRemoteHtml } from './security/html'
 

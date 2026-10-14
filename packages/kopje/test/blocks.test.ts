@@ -25,6 +25,7 @@ import {
 	DOMAIN_BLOCK_WINDOW,
 	runDomainBlockCleanups,
 } from '../src/domain/blocks'
+import { publicTimeline } from '../src/domain/timelines'
 import { sha256Hex } from '../src/security/tokens'
 
 // Blocks, mutes and domain blocks through the API (domain/blocks.ts, mastodon/blocks.ts): the endpoints, their scopes
@@ -525,6 +526,29 @@ describe('mentions of blocked and muted accounts', () => {
 		])
 	})
 
+	it('leaves out post notifications from a sender the recipient mutes, as home leaves the post out', async () => {
+		const h = await community(['alice', 'friend'])
+		const { alice, friend } = h.users
+		expect((await act(h, alice, `/api/v1/accounts/${friend.id}/follow`, { notify: true })).status).toBe(200)
+		const before = await post(h, friend, { status: 'before' })
+		// A mute that keeps notifications still hides the sender's posts from home (FeedInsertWorker notifies only of
+		// what home shows): none is written, and the earlier one is hidden while the mute lasts.
+		await relate(h, alice, `/api/v1/accounts/${friend.id}/mute`, { notifications: false })
+		await post(h, friend, { status: 'muted' })
+		expect(await ids(h, '/api/v1/timelines/home', alice.token)).toEqual([])
+		expect(await ids(h, '/api/v1/notifications?types[]=status', alice.token)).toEqual([])
+		expect(await sql(h.store, "SELECT status_id FROM notifications WHERE type = 'status'")).toEqual([
+			{ status_id: before.id },
+		])
+		// A mention by the same sender is still notified: the mute keeps notifications.
+		await post(h, friend, { status: '@alice hi' })
+		expect(await ids(h, '/api/v1/notifications?types[]=mention', alice.token)).toHaveLength(1)
+
+		await relate(h, alice, `/api/v1/accounts/${friend.id}/unmute`)
+		const shown = await getJson<{ status: { id: string } }[]>(h, '/api/v1/notifications?types[]=status', alice.token)
+		expect(shown.body.map((n) => n.status.id)).toEqual([before.id])
+	})
+
 	it("keeps the viewer's own statuses in home, whoever they mention", async () => {
 		const h = await community(['alice', 'foe'])
 		const { alice, foe } = h.users
@@ -761,6 +785,47 @@ describe('domain blocks', () => {
 				await runInDurableObject(h.store, (_instance, state) => {
 					const { sql: counting, read } = countingSql(state.storage.sql)
 					expect(runDomainBlockCleanups.run(counting, { now: NOW })).toEqual({ pending: true, delivers: false })
+					return read()
+				})
+			)
+		}
+		expect(reads[1]).toBe(reads[0])
+	})
+
+	it('matches domain blocks through their index, however many other domains the viewer blocks (RES-7)', async () => {
+		const reads: number[] = []
+		for (const blocked of [20, 2000]) {
+			const h = await community(['alice'])
+			const author = await remoteAccount(h.store, 'author', 'open.example')
+			const hidden = await remoteAccount(h.store, 'hidden', 'd1.example')
+			for (const accountId of [author, author, hidden]) {
+				await seedStatus(h.store, { accountId, visibility: 'public' })
+			}
+			await sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+				INSERT INTO domain_blocks (account_id, domain) SELECT ?1, 'd' || i || '.example' FROM n`,
+				h.users.alice.id,
+				blocked
+			)
+			const tokenHash = await sha256Hex(h.users.alice.token)
+			reads.push(
+				await runInDurableObject(h.store, (_instance, state) => {
+					const { sql: counting, read } = countingSql(state.storage.sql)
+					const result = publicTimeline.run(counting, {
+						credential: { tokenHash, scope: 'read:statuses', now: NOW },
+						page: { limit: 20 },
+						local: false,
+						remote: false,
+						onlyMedia: false,
+						now: NOW,
+						present: { origin: 'https://kopje.test' },
+					})
+					// The status on the blocked domain is left out, the others are listed.
+					expect(result.status === 'ok' && result.value.items.map((status) => status.account.id)).toEqual([
+						author,
+						author,
+					])
 					return read()
 				})
 			)
