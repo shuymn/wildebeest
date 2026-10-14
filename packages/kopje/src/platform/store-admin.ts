@@ -84,9 +84,9 @@ export type AdminOptions = {
 	randomId?: () => string
 	// Rows deleted per reset transaction (tests make it small).
 	resetBatchRows?: number
-	// Runs in the publication's transaction, once the Store is published; returns how many profile Updates it recorded
-	// (store.ts: domain/actor-update.ts announceConvertedProfiles).
-	onPublish?: (sql: SqlStorage, now: number) => number
+	// Runs in the publication's transaction, once the Store is published; returns how many profile Updates it recorded,
+	// or null when the stored list is malformed (store.ts: domain/actor-update.ts announceConvertedProfiles).
+	onPublish?: (sql: SqlStorage, now: number) => number | null
 }
 
 // Who asks for an import or configuration change (see the import section of StoreAdmin).
@@ -1214,6 +1214,11 @@ export class StoreAdmin {
 				writeFlag(this.#sql, 'unpublished', null)
 				writeFlag(this.#sql, 'published', published)
 				const profileUpdates = this.#onPublish(this.#sql, published.at)
+				if (profileUpdates === null) {
+					// Refused before anything is kept: the transaction rolls back, so the Store stays unpublished and the
+					// list stays for the operator to inspect.
+					throw new ImportError('state-invalid', 'the profile update list is malformed')
+				}
 				this.#log({ event: 'kopje.store.published', profileUpdates })
 				return { ok: true as const, published, profileUpdates }
 			})

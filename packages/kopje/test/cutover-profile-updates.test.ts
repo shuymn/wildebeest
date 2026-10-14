@@ -75,6 +75,21 @@ describe('publication after a conversion with --images', () => {
 		expect(await publish()).toMatchObject({ ok: true, profileUpdates: 0 })
 		expect(await updates(h.store)).toHaveLength(2)
 	})
+
+	it('is refused, keeping the Store unpublished and the list, when the stored list is malformed', async () => {
+		const { h, publish } = await imported(inject('cutoverImages').dump)
+		// A list written by an earlier build that a stricter parser rejects (here: a repeated id).
+		await sql(h.store, 'UPDATE kopje_state SET value = \'["1","1"]\' WHERE name = \'profile_updates\'')
+
+		expect(await publish()).toMatchObject({ ok: false, code: 'state-invalid' })
+		expect(await updates(h.store)).toEqual([])
+		expect(await sql(h.store, "SELECT value FROM kopje_state WHERE name = 'profile_updates'")).toEqual([
+			{ value: '["1","1"]' },
+		])
+		expect(await sql(h.store, "SELECT name FROM kopje_state WHERE name IN ('unpublished', 'published')")).toEqual([
+			{ name: 'unpublished' },
+		])
+	})
 })
 
 describe('publication during a dump', () => {

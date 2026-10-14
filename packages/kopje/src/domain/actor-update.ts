@@ -119,15 +119,20 @@ export function recordActorUpdate(db: Db, accountId: string, before: string | nu
 // At publication, in its transaction: the local accounts whose avatar or header a cutover conversion changed
 // (PROFILE_UPDATES) get the Update a profile edit sends, since other servers keep the old image URLs in their copy of
 // the actor until they fetch it again. The list is deleted with it, so publishing again records nothing more. Returns
-// how many Updates it recorded (none for a suspended or missing account).
-export function announceConvertedProfiles(db: Db, now: number): number {
+// how many Updates it recorded (none for a suspended or missing account), or null for a malformed list, which the
+// caller refuses before anything is kept.
+export function announceConvertedProfiles(db: Db, now: number): number | null {
 	const row = db.first<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', PROFILE_UPDATES)
 	if (row === undefined) {
 		return 0
 	}
+	const accountIds = parseProfileUpdates(row.value)
+	if (accountIds === null) {
+		return null
+	}
 	db.run('DELETE FROM kopje_state WHERE name = ?', PROFILE_UPDATES)
 	let recorded = 0
-	for (const accountId of parseProfileUpdates(row.value) ?? []) {
+	for (const accountId of accountIds) {
 		if (recordActorUpdate(db, accountId, null, now)) {
 			recorded++
 		}
