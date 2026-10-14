@@ -190,8 +190,6 @@ const VERBS = new Set(['get', 'post', 'put', 'patch', 'delete', 'match'])
  *   module: string,
  *   defaults?: Record<string, unknown>,
  *   controller?: string,
- *   memberPath?: string,
- *   collectionPath?: string,
  *   param?: string,
  *   unknown?: string,
  *   pendingDefaults?: RawRoute[],
@@ -226,8 +224,8 @@ function interpret(text, stack, routes, checkout, file) {
 	const base = stack.length
 	for (const { text: stmt } of statements(text)) {
 		const top = /** @type {Frame} */ (stack.at(-1))
-		const opensBlock = /\bdo(\s*\|[^|]*\|)?$/.test(stmt)
-		const head = opensBlock ? stmt.replace(/\s*\bdo(\s*\|[^|]*\|)?$/, '') : stmt
+		const head = stmt.replace(/\s*\bdo(\s*\|[^|]*\|)?$/, '')
+		const opensBlock = head !== stmt
 		if (stmt === 'end') {
 			if (stack.length <= base) {
 				// The `end` of Rails.application.routes.draw.
@@ -250,13 +248,11 @@ function interpret(text, stack, routes, checkout, file) {
 			interpret(readFileSync(drawn, 'utf8'), stack, routes, checkout, `config/routes/${draw}.rb`)
 			continue
 		}
-		const frame = enter(name, args, top, stmt)
-		if (frame === 'verb') {
-			for (const route of verbRoutes(name, args, stack)) {
-				routes.push(route)
-			}
+		if (VERBS.has(name)) {
+			routes.push(...verbRoutes(name, args, stack))
 			continue
 		}
+		const frame = enter(name, args, top, stmt)
 		if (frame !== null && 'defaultRoutes' in frame) {
 			if (opensBlock) {
 				stack.push({ ...frame.frame, pendingDefaults: frame.defaultRoutes })
@@ -290,12 +286,12 @@ function inherited(stack) {
 }
 
 /**
- * The frame a scoping statement opens, the default routes of a resource, 'verb' for a route, or null.
+ * The frame a scoping statement opens, the default routes of a resource, or null.
  * @param {string} name
  * @param {ReturnType<typeof callArgs>} args
  * @param {Frame} top
  * @param {string} stmt
- * @returns {Frame | 'verb' | null | { frame: Frame, defaultRoutes: RawRoute[] }}
+ * @returns {Frame | null | { frame: Frame, defaultRoutes: RawRoute[] }}
  */
 function enter(name, args, top, stmt) {
 	const first = args.positional[0]
@@ -325,16 +321,13 @@ function enter(name, args, top, stmt) {
 		}
 		return {
 			kind: name,
-			path: name === 'member' ? /** @type {string} */ (top.memberPath) : /** @type {string} */ (top.collectionPath),
+			path: name === 'member' ? `${top.path}/:${top.param}` : top.path,
 			module: top.module,
 			controller: top.controller,
 		}
 	}
 	if ((name === 'resources' || name === 'resource') && typeof first === 'string') {
 		return resourceFrame(name === 'resources', first, options, top, stmt)
-	}
-	if (VERBS.has(name)) {
-		return 'verb'
 	}
 	return null
 }
@@ -343,7 +336,7 @@ function enter(name, args, top, stmt) {
 /** @param {Frame} top */
 function nestedPath(top) {
 	if (top.kind === 'resources') {
-		return `${top.collectionPath}/:${singular(top.path.split('/').at(-1) ?? '')}_${top.param ?? 'id'}`
+		return `${top.path}/:${singular(top.path.split('/').at(-1) ?? '')}_${top.param ?? 'id'}`
 	}
 	return top.path
 }
@@ -397,8 +390,6 @@ function resourceFrame(isPlural, name, options, top, stmt) {
 		path,
 		module,
 		controller,
-		collectionPath: path,
-		memberPath: `${path}/:${param}`,
 		param,
 	}
 	return { frame, defaultRoutes }
@@ -415,7 +406,7 @@ function verbRoutes(verb, args, stack) {
 	const { defaults, unresolved } = inherited(stack)
 	const options = { ...defaults, ...args.options }
 	const first = args.positional[0]
-	const base = top.kind === 'member' || top.kind === 'collection' ? top.path : nestedPath(top)
+	const base = nestedPath(top)
 	const segment = typeof first === 'string' ? first : ''
 	if (typeof first !== 'string') {
 		unresolved.push(`path ${JSON.stringify(first)}`)
@@ -433,9 +424,6 @@ function verbRoutes(verb, args, stack) {
 		action = segment
 	} else {
 		unresolved.push(`target ${JSON.stringify(to ?? null)}`)
-	}
-	if (typeof options.controller === 'string' && controller === null) {
-		controller = `${top.module}${options.controller}`
 	}
 	let methods = [verb.toUpperCase()]
 	if (verb === 'match') {
@@ -542,7 +530,7 @@ function readController(checkout, file, cache) {
 		} else if (/^:[\w!?]+$/.test(target)) {
 			callback = target.slice(1)
 		} else {
-			if (/doorkeeper|authorize|require_user/.test(target)) {
+			if ([...TRACKED].some((n) => target.includes(n))) {
 				unresolved.push(`${file}: callback \`${stmt}\``)
 			}
 			continue
@@ -699,10 +687,14 @@ function access(route, checkout, cache) {
 	} else {
 		token = readsUser ? 'optional' : 'none'
 	}
-	const guards = active
-		.filter((cb) => cb.callback.startsWith('require_') && !TRACKED.has(cb.callback) && !cb.after && cb.file !== classFile(API_BASE))
-		.map((cb) => cb.callback)
-		.filter((name, i, all) => all.indexOf(name) === i)
+	const guards = [
+		...new Set(
+			active
+				.filter((cb) => cb.callback.startsWith('require_') && !TRACKED.has(cb.callback))
+				.filter((cb) => !cb.after && cb.file !== classFile(API_BASE))
+				.map((cb) => cb.callback)
+		),
+	]
 	return {
 		...entry,
 		token,
@@ -714,19 +706,6 @@ function access(route, checkout, cache) {
 }
 
 // ---- Output ----
-
-// JSON as Prettier formats it: tab indented, an array of plain values on one line when it fits in 120 columns.
-/** @param {unknown} value */
-function format(value) {
-	const item = String.raw`(?:"(?:[^"\\\n]|\\.)*"|null|true|false|-?\d+)`
-	const plain = new RegExp(String.raw`\[\n\s*((?:${item},\n\s*)*${item})\n\s*\]`, 'g')
-	const text = JSON.stringify(value, null, '\t')
-	return `${text.replace(plain, (match, /** @type {string} */ items, /** @type {number} */ offset) => {
-		const prefix = text.slice(text.lastIndexOf('\n', offset) + 1, offset)
-		const inline = `[${items.split(/,\n\s*/).join(', ')}]`
-		return `${prefix.replace(/\t/g, '  ')}${inline},`.length <= 120 ? inline : match
-	})}\n`
-}
 
 /** @param {string} checkout */
 function version(checkout) {
@@ -767,7 +746,9 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(
 	}
 	const table = mastodonAccessTable(resolve(checkout))
 	const target = out ?? join(root, 'test', 'fixtures', `mastodon-${table.mastodon}-api-access.json`)
-	writeFileSync(target, format(table))
+	const prettier = await import('prettier')
+	const config = await prettier.resolveConfig(fileURLToPath(import.meta.url))
+	writeFileSync(target, await prettier.format(JSON.stringify(table), { ...config, parser: 'json' }))
 	const unresolved = table.routes.filter((r) => 'unresolved' in r).length
 	console.log(`${target}: ${table.routes.length} routes, ${unresolved} unresolved`)
 }
