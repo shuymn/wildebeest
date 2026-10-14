@@ -14,6 +14,11 @@ Commands
                                 put given-up deliveries back in their lanes with fresh attempts
   maintenance on|off            enter or leave the Store's readonly maintenance
   upgrade retry                 re-run a failed schema upgrade for the current build
+  media-rebuild [--dry-run]     make the served files of local media whose files are missing (a restore, the
+                                cutover's moved images) from their originals in R2, and correct their sizes; runs in
+                                readonly maintenance and before publish. Prints counts and the rows to look at; exits 3
+                                when an original is missing, a type does not match, re-encoding failed, or the Images
+                                quota or monthly budget stopped it (run it again later: made files are skipped)
   dump <file>                   dump the Store to <file> (resumable)
       --chunk-mib <n>           chunk size in MiB, 0.001-16 (default 16)
       --lease-seconds <n>       freeze lease, renewed by every chunk (default 600)
@@ -611,6 +616,45 @@ export async function run({
 				}
 				print(await client.post('/admin/upgrade/retry'))
 				return 0
+			}
+			case 'media-rebuild': {
+				if (rest.length > 0) {
+					throw new UsageError('media-rebuild [--dry-run]')
+				}
+				const dryRun = flags['dry-run'] === true
+				/** @type {Record<string, number>} */
+				const counts = {}
+				/** @type {unknown[]} */
+				const problems = []
+				/** @type {string | null} */
+				let after = null
+				/** @type {string | null} */
+				let stopped = null
+				for (;;) {
+					const step = await client.post('/admin/media/rebuild', { after, dryRun })
+					for (const [outcome, n] of Object.entries(step.counts)) {
+						counts[outcome] = (counts[outcome] ?? 0) + n
+					}
+					problems.push(...step.problems)
+					out.progress(`media-rebuild: ${JSON.stringify(counts)}`)
+					if (step.stopped !== null) {
+						stopped = step.stopped
+						break
+					}
+					if (step.done) {
+						break
+					}
+					after = step.next
+				}
+				print({ dryRun, ...counts, 'quota-stopped': stopped !== null, stopped, problems })
+				if (stopped !== null) {
+					out.info(
+						stopped === 'quota'
+							? 'stopped: Images refused for quota (9422); run it again once the allowance renews'
+							: 'stopped: the monthly transformation budget (IMAGES_MONTHLY_TRANSFORMS) is spent; raise it or wait'
+					)
+				}
+				return stopped !== null || problems.length > 0 ? 3 : 0
 			}
 			case 'dump': {
 				const path = rest[0]

@@ -145,11 +145,12 @@ export function createApp({
 	app.get('/health', (c) => publicHealth(build(c.env), readConfig(c.env), () => store(c.env), readBackupConfig(c.env)))
 
 	const keygen = federation.keygen ?? generateRsaKeyPair
+	const images = seams.images ?? ((env: Env) => imagesCodec(env.IMAGES))
 	const loader = federation.loader ?? { fetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, init) }
 
 	app.route(
 		ADMIN_PREFIX,
-		adminRoutes({ build, now, store, doorbell, loader, fetch: (input, init) => fetch(input, init) })
+		adminRoutes({ build, now, store, doorbell, loader, images, fetch: (input, init) => fetch(input, init) })
 	)
 
 	const setupGate = requireSetup(build, store)
@@ -171,7 +172,7 @@ export function createApp({
 		now,
 		store,
 		randomToken: seams.randomToken ?? randomToken,
-		images: seams.images ?? ((env: Env) => imagesCodec(env.IMAGES)),
+		images,
 		resolve: createResolver({ build, store, now, keygen, loader }),
 	}
 	app.get(MEDIA_ROUTE, serveMedia)

@@ -8,6 +8,22 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- `kopje-admin media-rebuild [--dry-run]` (`POST /admin/media/rebuild`, Access admin only) makes the served files of
+  local media whose files are missing from their originals in R2: media restored from a backup, which holds only the
+  originals, and images moved by the cutover. Each is re-encoded as an upload is, and its sizes in `meta` are corrected
+  to the files made. Rows whose files exist are skipped, so it can be run again; it reports rows whose original is
+  missing, whose type does not match their URLs, or that fail to re-encode, and stops on the Images quota or the
+  monthly transformation budget (exit 3). Its writes are admitted in readonly maintenance and before publication, so
+  a restore or a cutover serves its images when published ([docs/backup.md](docs/backup.md),
+  [docs/cutover-runbook.md](docs/cutover-runbook.md) step 8).
+
+### Instance changes
+
+- Store schema: unchanged.
+- `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.2] - 2026-10-14
 
 A second release candidate of the first release, published under the npm dist-tag `next`.

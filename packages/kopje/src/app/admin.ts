@@ -5,11 +5,13 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { drainJournal } from './cutover'
 import { healthReport } from './health'
 import type { LoaderDeps } from '../federation/loader'
+import { rebuildMedia } from '../mastodon/media-rebuild'
 import { type AccessSettings, adminRefusal, adminUsable, normalizeTeamDomain } from '../platform/access-settings'
 import { readBackupConfig } from '../platform/backup-config'
 import { readBoundedBody } from '../platform/body'
 import { readConfig } from '../platform/config'
 import { errorMessage } from '../platform/error-message'
+import type { ImageCodec } from '../platform/images'
 import { readQueueBacklog } from '../platform/queue-backlog'
 import type { ImportAuthority } from '../platform/store-admin'
 import type { StoreResolver, StoreStub } from '../platform/store-client'
@@ -49,6 +51,8 @@ export type AdminDeps = AccessDeps & {
 	loader: Omit<LoaderDeps, 'userAgent'>
 	// Rings the delivery doorbell after a retry.
 	doorbell: (env: Env) => Promise<void>
+	// Re-encoding for the media rebuild.
+	images: (env: Env) => ImageCodec
 }
 
 type AdminVariables = { auth: ImportAuthority }
@@ -144,7 +148,7 @@ function adminAllowed(identity: AccessIdentity, access: AccessSettings): string 
 	return adminRefusal(access, identity)
 }
 
-export function adminRoutes({ build, store, fetch, now, doorbell, loader }: AdminDeps) {
+export function adminRoutes({ build, store, fetch, now, doorbell, loader, images }: AdminDeps) {
 	const admin = new Hono<AdminEnv>()
 	const stub = (c: Context<AdminEnv>): StoreStub => store(c.env)
 
@@ -310,6 +314,34 @@ export function adminRoutes({ build, store, fetch, now, doorbell, loader }: Admi
 		}
 		const { ok: _ok, ...rest } = result
 		return c.json(rest)
+	})
+
+	// ---- media rebuild (mastodon/media-rebuild.ts): one bounded step; the CLI follows `next` until `done`. Access admin
+	// only: the import token and import sessions never reach this path, and the Store checks the admin again where it
+	// writes. It runs in readonly maintenance and before publication (platform/store-flags.ts).
+
+	admin.post('/media/rebuild', async (c) => {
+		const { after, dryRun } = await jsonBody(c)
+		if (
+			(after !== undefined && after !== null && (typeof after !== 'string' || !/^\d{18}$/.test(after))) ||
+			(dryRun !== undefined && typeof dryRun !== 'boolean')
+		) {
+			return c.json({ error: 'expected {"after"?: media id, "dryRun"?: boolean}' }, 400)
+		}
+		const config = readConfig(c.env)
+		const result = await rebuildMedia(
+			{
+				build: build(c.env),
+				store: stub(c),
+				bucket: c.env.MEDIA,
+				images: images(c.env),
+				now,
+				authority: c.get('auth'),
+				monthlyTransforms: config.ok ? config.config.IMAGES_MONTHLY_TRANSFORMS : 0,
+			},
+			{ after: typeof after === 'string' ? after : null, dryRun: dryRun === true }
+		)
+		return reply(c, result)
 	})
 
 	// ---- dump

@@ -16,3 +16,7 @@ export const readOperation = declare('read')
 export const sessionOperation = declare('session')
 
 export const writeOperation = declare('write')
+
+// The media rebuild's writes only (domain/media-rebuild.ts); the gate admits them in readonly maintenance and while an
+// import is unpublished (platform/store-flags.ts). Nothing else may be declared with it.
+export const mediaRebuildOperation = declare('media-rebuild')

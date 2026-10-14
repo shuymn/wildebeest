@@ -93,6 +93,11 @@ const OUTPUT: Record<ImageType, OutputType> = {
 	'image/avif': 'image/webp',
 }
 
+// The type an image of `type` is served as.
+export function servedTypeOf(type: ImageType): OutputType {
+	return OUTPUT[type]
+}
+
 export type Size = { width: number; height: number }
 
 export type EncodedImage = { bytes: Uint8Array; contentType: OutputType } & Size

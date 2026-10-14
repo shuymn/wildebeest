@@ -19,6 +19,7 @@ import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import * as inbox from './domain/inbox'
 import { instanceInfo } from './domain/instance'
 import * as media from './domain/media'
+import * as mediaRebuild from './domain/media-rebuild'
 import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
 import { resolveSearch } from './domain/remote-statuses'
@@ -711,6 +712,20 @@ export class Store extends DurableObject<Env> {
 
 	purgeMedia(callerBuild: string, input: OperationInput<typeof media.purgeMedia>) {
 		return this.#kernel.execute(callerBuild, media.purgeMedia, input)
+	}
+
+	// The media rebuild (domain/media-rebuild.ts), from /admin/media/rebuild.
+
+	mediaRebuildCandidates(callerBuild: string, input: OperationInput<typeof mediaRebuild.rebuildCandidates>) {
+		return this.#kernel.execute(callerBuild, mediaRebuild.rebuildCandidates, input)
+	}
+
+	chargeMediaRebuild(callerBuild: string, input: OperationInput<typeof mediaRebuild.chargeRebuild>) {
+		return this.#kernel.execute(callerBuild, mediaRebuild.chargeRebuild, input)
+	}
+
+	recordMediaRebuild(callerBuild: string, input: OperationInput<typeof mediaRebuild.recordRebuild>) {
+		return this.#kernel.execute(callerBuild, mediaRebuild.recordRebuild, input)
 	}
 
 	// Search (B4b).

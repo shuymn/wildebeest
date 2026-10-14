@@ -140,7 +140,9 @@ export function activeDump(flags: OperatorFlags, now: number): DumpRecord | null
 	return flags.dump !== null && now < flags.dump.leaseUntil ? flags.dump : null
 }
 
-// The operator part of the maintenance table for one operation kind.
+// The operator part of the maintenance table for one operation kind. Readonly maintenance and an unpublished import
+// refuse writes, except 'media-rebuild' (store-kernel.ts), so the served files of restored or moved media can be made
+// before publication; an import or a dump in progress refuses it like any write.
 export function admitFlags(flags: OperatorFlags, kind: OperationKind, now: number): void {
 	if (flags.import !== null) {
 		throw storeMaintenanceError('import-in-progress')
