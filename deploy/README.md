@@ -23,10 +23,12 @@ The button copies this directory into a new repository on your GitHub or GitLab 
 Builds, and deploys it. On its form:
 
 - **Resources.** It creates the Worker, the Store's Durable Object namespace, the Queue (`my-kopje-queue`) and the R2
-  bucket (`my-kopje-media`). Change their names if your account already uses them. The Queue's dead-letter queue
-  (`my-kopje-queue-dlq`) keeps the messages that exhaust their retries; if it was not created with the Queue, create
-  it with `npx wrangler queues create my-kopje-queue-dlq`. The rate limits, Images and the
-  static assets need no resource of their own.
+  bucket (`my-kopje-media`). Change their names if your account already uses them. The Queue's dead-letter queue keeps
+  the messages that exhaust their retries. The form does not rename it: it is created as `my-kopje-queue-dlq` whatever
+  you call the Queue. For a second Kopje in the same account, give it its own: in the new repository's
+  `wrangler.jsonc`, change `dead_letter_queue` to a new name, create that queue with
+  `npx wrangler queues create <name>`, and change the two rate-limit `namespace_id`s too. The rate limits, Images and
+  the static assets need no resource of their own.
 - **Secrets.** It asks for the two secrets in `.dev.vars.example`:
     - `SETUP_TOKEN`: at least 32 random characters, for example from `openssl rand -base64 33`. It opens the `/setup`
       wizard. Remove it once setup is finished.
