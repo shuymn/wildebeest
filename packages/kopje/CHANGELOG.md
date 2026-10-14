@@ -8,18 +8,23 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.3] - 2026-10-14
+
+A third release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
-- The cutover can move a legacy instance's images out of Cloudflare Images.
-  `kopje-admin images-export` downloads the images the legacy data references under the operator's Images account,
-  through the Images API with a token read from `CF_IMAGES_TOKEN` or from the delivery URLs, checks them as Kopje checks
-  an upload, and records them in `images.json`; a rerun downloads only what is new. `kopje-admin convert --images`
-  then maps avatars, headers, attachments and earlier versions of edited statuses to local media rows, each with a
-  file token and an original of its own (also when several show one image), drops legacy's default profile images so
-  Kopje's defaults apply, and writes the originals for R2 under their media ids;
+- The cutover can move a legacy instance's images out of Cloudflare Images. `kopje-admin images-export` downloads the
+  images the legacy data references under the operator's Images account, through the Images API with a token read
+  from `CF_IMAGES_TOKEN`, or else from the delivery URLs, which give copies in the stored format that may be resized.
+  It checks them as Kopje checks an upload and records them in `images.json`; a rerun downloads only what is new.
+  `kopje-admin convert --images` then maps avatars, headers, attachments and earlier versions of edited statuses to
+  local media rows, each with a file token and an original of its own (also when several show one image), drops
+  legacy's default profile images so Kopje's defaults apply, and writes the originals for R2 under their media ids.
   `verify-conversion --images` checks the result independently. A missing image stops the conversion unless
-  `--accept-missing-images` is given. The served files are made by `kopje-admin media-rebuild` (below). Without `--images`, the conversion is unchanged. See docs/cutover.md ("Media") and
-  docs/cutover-runbook.md.
+  `--accept-missing-images` is given. The served files are made by `kopje-admin media-rebuild` (below). Without
+  `--images`, the conversion is unchanged. See docs/cutover.md ("Media") and docs/cutover-runbook.md.
+
 - `kopje-admin media-rebuild [--dry-run]` (`POST /admin/media/rebuild`, Access admin only) makes the served files of
   local media whose files are missing from their originals in R2: media restored from a backup, which holds only the
   originals, and images moved by the cutover. Each is re-encoded as an upload is, and its sizes in `meta` are corrected
@@ -29,20 +34,27 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   the Store's maintenance (`kopje-admin maintenance on`) has lasted 20 minutes (otherwise `rebuild-needs-readonly` or
   `rebuild-settling`, exit 3). One call runs at a time under a Store lease, during which imports, resets, publication,
   leaving maintenance, PITR restores and every media-deleting write are refused; after a PITR restore it waits for the
-  settle period again. A restore or a cutover
-  thus serves its images when published ([docs/backup.md](docs/backup.md),
-  [docs/cutover-runbook.md](docs/cutover-runbook.md) step 8).
+  settle period again. A restore or a cutover thus serves its images when published
+  ([docs/backup.md](docs/backup.md), [docs/cutover-runbook.md](docs/cutover-runbook.md) step 8).
+
 - Publication of a cutover converted with `--images` sends an `Update(Person)` to the followers of each local account
   whose avatar or header the conversion changed, so other servers show the new profile images before Cloudflare Images
   is retired. `convert --images` lists those accounts in the dump (the `kopje_state` row `profile_updates`), which
   `verify-conversion` checks; `kopje-admin publish` queues the Updates in its transaction, reports them as
   `profileUpdates`, and queues none when repeated; it is refused while a dump runs (`dump-in-progress`). The list
-  holds at most 100 distinct accounts: more changed profiles stop the conversion (`profile-updates-over-limit`). A dump that declares fewer restorable `kopje_state` names, such
-  as one from 0.1.0-rc.2, is still accepted ([docs/cutover.md](docs/cutover.md), "Media").
+  holds at most 100 distinct accounts: more changed profiles stop the conversion (`profile-updates-over-limit`). A dump
+  that declares fewer restorable `kopje_state` names, such as one from 0.1.0-rc.2, is still accepted
+  ([docs/cutover.md](docs/cutover.md), "Media").
+
+### Changed
+
+- The setup guide and the instance template's README state that Kopje needs the Workers Paid plan: the Free plan's
+  10 ms of CPU time and 50 subrequests per request are exceeded by signature checks on federated requests, the daily
+  backup and media processing.
 
 ### Instance changes
 
-- Store schema: unchanged.
+- Store schema: unchanged (`0000_initial`).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.2] - 2026-10-14
