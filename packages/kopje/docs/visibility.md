@@ -72,7 +72,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R7 filtered               | `filteredForSql`, inside `listableSql`, account statuses (boosted originals), familiar followers.                                                                                                                               |
 | R8 listable               | `listableSql`: public, tag, bookmarks, favourites, context, status and hashtag search.                                                                                                                                          |
 | R9 home                   | `homeFilterSql` in `homeTimeline`, with its membership and the follow's options.                                                                                                                                                |
-| R10 public and tag feeds  | `publicConditions` in `timelines.ts` on `listableSql`.                                                                                                                                                                          |
+| R10 public and tag feeds  | `publicConditions` in `timelines.ts` on `listableSql`; the tag feed and a tag's history take their candidates from the hashtags of public statuses (`status_tags.public`, written with `tagPublicSql`).                         |
 | R11 account statuses      | `visibleSql`, `blocksSql` (the viewer blocks the account), and `visibleSql` with `filteredForSql` for a boosted original.                                                                                                       |
 | R12 listed accounts       | `listedForSql` in `favourited_by` and `reblogged_by` (`DISTRIBUTABLE_SQL` boosts only).                                                                                                                                         |
 | R14 account search        | `availableLocalSql` and `domainBlocksSql` in `findAccounts`; search resolution answers no account or status on a domain the viewer blocks.                                                                                      |
@@ -131,7 +131,8 @@ vitest run test/policy-oracle.test.ts` replays it.
 `test/policy-bounds.test.ts` takes one generated world, for a fixed seed, in which every endpoint below shows the viewer
 something. It runs home, the public and tag feeds, account statuses, notifications, context, favourites, bookmarks,
 `favourited_by`, `reblogged_by`, relationships and status and hashtag search on that world alone, and again with 1,000
-unrelated remote accounts and 100 unrelated local ones: their statuses (never public), replies and boosts, their
+unrelated remote accounts and 100 unrelated local ones: their statuses (never public, though they carry the hashtag the
+tag feed reads), replies and boosts, their
 follows, blocks, mutes and domain blocks of the world's accounts and domains, and their favourites, bookmarks and
 notifications, together with the viewer's own blocks and mutes of those accounts and domain blocks of domains nobody
 lives on. Each endpoint must show the same with them as without (the same statuses, accounts, notifications and hashtags

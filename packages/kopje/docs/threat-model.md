@@ -953,8 +953,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Enforced (main)_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
-  untested_). _Enforced (main)_ for search: statuses pass `listableSql` before `LIMIT`,
-  each library source reads at most 2,500 rows through an index ordered by the status id it returns (cursors applied
+  untested_); the tag feed's candidates are the hashtags of public statuses (`status_tags.public`, through a partial
+  index), so it never reads the tag's unlisted, private, direct or limited statuses (`test/policy-bounds.test.ts`).
+  _Enforced (main)_ for search: statuses pass `listableSql` before `LIMIT`, each library source reads at most 2,500 rows through an index ordered by the status id it returns (cursors applied
   inside it), hashtags come from at most 500 entries per library source plus the newest 2,000 public statuses, and an
   account search matches the exact address (always), at most 1,000 username-prefix candidates, the 5,000 newest
   accounts and the local ones, or with `following` the exact address and up to 5,000 accepted follows through a
@@ -963,9 +964,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   LIMIT"), `test/search-edge.test.ts` (rows read stay flat as favourites, bookmarks, accounts and tagged statuses grow
   fourfold, pending follows included; `max_id` reaches past each window; an exact address outside every window is
   found). _Implemented on branch `kopje/startup-reads`:_ the peers list seeks each next domain on the (domain,
-  username) index, so it reads rows by domain returned, not by account known; a tag's history reads its statuses
-  received in the last seven days only, a range of the (name, status_id) index cut by status id, so the work follows
-  the instance's own receive volume (ids carry publication time, or receipt time where a cutover kept them); the rules
+  username) index, so it reads rows by domain returned, not by account known; a tag's history reads its public statuses
+  received in the last seven days only, a range of the (name, status_id) index of public hashtags cut by status id, so
+  the work follows the instance's own receive volume (ids carry publication time, or receipt time where a cutover kept them); the rules
   read only their setting; familiar followers reads at most 10,000 of the viewer's accepted follows (above
   Mastodon's default follow limit of 7,500) and checks each against the account through the pair index; `test/instance-reads.test.ts`, `test/tags.test.ts`,
   `test/account-reads.test.ts` (rows read stay flat as accounts per domain, accounts known, statuses outside the
