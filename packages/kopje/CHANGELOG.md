@@ -20,15 +20,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   none is configured or the feature is off.
 
 - `GET /api/v1/tags/:id`: any valid hashtag, with seven days of history counted from public and unlisted statuses.
-  `following` is false for a signed-in viewer, since tag follows do not exist yet.
+  It needs no scope; `following` is false for a signed-in viewer, since tag follows do not exist yet.
 
 - `GET /api/v1/accounts/familiar_followers`: for each requested account, the accounts the user follows that follow it
-  (at most 20 ids and 80 accounts each), without accounts the user blocks or mutes.
+  among up to 5,000 of the user's follows (at most 20 ids and 80 accounts each), without accounts the user blocks
+  or mutes.
 
 - Empty answers, under the scopes Mastodon requires, for features Kopje has no data for yet: `GET /api/v1/filters`,
   `/api/v2/filters`, `/api/v1/followed_tags`, `/api/v1/featured_tags`, `/api/v1/accounts/:id/featured_tags`,
-  `/api/v1/endorsements`, `/api/v1/announcements`, `/api/v1/trends` (and `/trends/tags`, `/trends/statuses`,
-  `/trends/links`), `/api/v1/suggestions` and `/api/v2/suggestions`.
+  `/api/v1/endorsements`, `/api/v1/announcements` (any user token), `/api/v1/trends` (and `/trends/tags`,
+  `/trends/statuses`, `/trends/links`), `/api/v1/suggestions` and `/api/v2/suggestions`.
 
 ### Instance changes
 

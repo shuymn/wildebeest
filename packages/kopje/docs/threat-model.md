@@ -284,9 +284,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `pending`; only `accepted` follows count, appear in follower lists, or grant `private` access. _Enforced (main):_
   `follow` in `src/domain/accounts.ts`; `test/accounts.test.ts` ("requests a locked or remote account", "lists following
   without pending requests"). `GET /api/v1/accounts/familiar_followers` reads accepted follows on both sides only,
-  and leaves out followers the viewer blocks or mutes and suspended accounts: _Implemented on branch
-  `kopje/startup-reads`:_ `familiarFollowers` in `src/domain/accounts.ts`; `test/account-reads.test.ts` ("counts
-  accepted follows only (VIS-8)", "leaves out accounts the viewer blocks or mutes").
+  leaves out followers the viewer blocks or mutes and suspended accounts, and shows no follow that the followers and
+  following lists would not show the same viewer: _Implemented on branch `kopje/startup-reads`:_
+  `familiarFollowers` in `src/domain/accounts.ts`; `test/account-reads.test.ts` ("counts accepted follows only
+  (VIS-8)", "leaves out accounts the viewer blocks or mutes", "shows no more than the followers and following lists
+  show"). _Gap:_ Kopje stores no hide-collections setting (local or remote), so neither those lists nor familiar
+  followers hide an account's network as Mastodon does for an account that hides it.
 - **VIS-9: only the followed side accepts.** A pending follow of a local account becomes `accepted` only by that
   account's own authorize call; a pending remote follow only by an `Accept` that passes ID-6. _Enforced (main):_ `answerFollowRequest` in `src/domain/accounts.ts` (`POST
 /api/v1/follow_requests/:id/authorize` and `/reject`, the viewer from the credential; a remote requester gets the
@@ -315,7 +318,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   regressions"). A tag's `history` (`GET /api/v1/tags/:id`) counts only public and unlisted originals of accounts
   that are not suspended, the same for every viewer, so it counts no status the caller may not see: _Implemented on
   branch `kopje/startup-reads`:_ `getTag` in `src/domain/tags.ts`; `test/tags.test.ts` ("shows a tag with
-  seven days of history", "leaves out the statuses of a suspended account").
+  seven days of history", "leaves out the statuses of a suspended account", "keeps the public history whatever
+  hidden statuses the window holds"). The rule is applied in the query with no row limit, so hidden statuses cannot
+  change the public counts.
 
 ### Authorization (AUTH)
 
@@ -327,7 +332,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   tokens included) or a required user scope; one helper decides scope coverage (parents cover children, `follow` expands
   to its split scopes, nothing else is implied). _Enforced (main):_ `src/mastodon/routes.ts`, `src/security/scopes.ts`;
   `test/scopes.test.ts`, `test/vectors.test.ts` ("Mastodon's scope hierarchy"), `test/oauth.test.ts` ("scopes on
-  routes"). Main adds `optional` scopes (no token reads as anonymous; a token sent must be valid).
+  routes"). Main adds `optional` scopes (no token reads as anonymous; a token sent must be valid). _Implemented on
+  branch `kopje/startup-reads`:_ an `optional` route may declare no scope (`GET /api/v1/tags/:id`: any valid token,
+  app tokens read as anonymous), and a `token` route may still require a user (`GET /api/v1/announcements`: any user
+  token, whatever its scopes; app tokens 422); `test/tags.test.ts`, `test/placeholders.test.ts`.
 - **AUTH-3: OAuth follows the supported contract.** _Enforced (main):_ `src/app/authorize.tsx`, `src/mastodon/oauth.ts`,
   `src/domain/oauth.ts`; `test/oauth.test.ts`, `test/vectors.test.ts`. - Grants: authorization code and client
   credentials. Codes expire after 10 minutes and are single-use. PKCE is optional and S256 only; a bound code needs the
@@ -856,10 +864,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   fourfold, pending follows included; `max_id` reaches past each window; an exact address outside every window is
   found). _Implemented on branch `kopje/startup-reads`:_ the peers list seeks each next domain on the (domain,
   username) index, so it reads rows by domain returned, not by account known; a tag's history reads its statuses from
-  the last seven days only, cut by status id on the (name, status_id) index, at most 10,000 of them; familiar followers
-  reads at most the 5,000 newest accepted followers of each account; `test/instance-reads.test.ts`,
-  `test/tags.test.ts`, `test/account-reads.test.ts` (rows read stay flat as accounts per domain, statuses outside the
-  window and followers grow). Context traversal and edit history:
+  the last seven days only, a range of the (name, status_id) index cut by status id (the window is its bound); the
+  rules read only their setting; familiar followers reads at most 5,000 of the viewer's accepted follows and checks
+  each against the account through the pair index; `test/instance-reads.test.ts`, `test/tags.test.ts`,
+  `test/account-reads.test.ts` (rows read stay flat as accounts per domain, accounts known, statuses outside the
+  window, and the account's other followers grow). Context traversal and edit history:
   _Planned (B4a fixes)._
 
 ### Data and keys (DATA)
