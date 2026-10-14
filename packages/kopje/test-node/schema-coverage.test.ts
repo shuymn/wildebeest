@@ -1,9 +1,26 @@
 import { readFileSync } from 'node:fs'
 import type { SQLInputValue } from 'node:sqlite'
 
+import { SyntaxKind, type Node, type SourceFile } from 'typescript/unstable/ast'
+import {
+	isBinaryExpression,
+	isCallExpression,
+	isCaseClause,
+	isElementAccessExpression,
+	isIdentifier,
+	isIfStatement,
+	isNoSubstitutionTemplateLiteral,
+	isPropertyAccessExpression,
+	isStringLiteral,
+	isSwitchStatement,
+	isVariableDeclaration,
+} from 'typescript/unstable/ast/is'
+import { createVirtualFileSystem } from 'typescript/unstable/fs'
+import { API } from 'typescript/unstable/sync'
 import { describe, expect, it } from 'vitest'
 
 import { createKopjeDatabase, readCatalog } from '../cli/lib/cutover/kopje-db.js'
+import { splitStatements } from '../cli/lib/cutover/sql-script.js'
 
 // Every table and column of the migrated Store schema against the cutover tools that name them by hand: the converter
 // (convert.js) writes columns of the Store schema, and the actual side of verify-conversion (verify-actual.js) reads
@@ -161,76 +178,49 @@ function add(into: Map<string, Set<string>>, table: string, columns: Iterable<st
 	into.set(table, set)
 }
 
-// A JavaScript source split into its code, with comments blanked out (offsets kept), and the text of its string and
-// template literals, a template's substitutions as `${}`. A `/` after an operator, a bracket or a keyword starts a
-// regular expression literal, as in JavaScript.
-function scan(text: string): { code: string; literals: string[] } {
-	const literals: string[] = []
-	let code = ''
-	let last = ''
-	let i = 0
-	while (i < text.length) {
-		const c = text[i] ?? ''
-		const next = text[i + 1]
-		if (c === '/' && (next === '/' || next === '*')) {
-			const close = next === '/' ? text.indexOf('\n', i) : text.indexOf('*/', i + 2) + 2
-			const end = close < i + 2 ? text.length : close
-			code += text.slice(i, end).replace(/[^\n]/g, ' ')
-			i = end
-		} else if (c === "'" || c === '"' || c === '`') {
-			const end = literalEnd(text, i, literals)
-			code += text.slice(i, end)
-			last = c
-			i = end
-		} else if (c === '/' && (/^$|[(,=:[!&|?{};+\-*%<>~^]$/.test(last) || /\b(?:return|typeof|case)\s*$/.test(code))) {
-			let j = i + 1
-			for (let inClass = false; j < text.length && (inClass || text[j] !== '/'); j++) {
-				if (text[j] === '\\') {
-					j++
-				} else if (text[j] === '[' || text[j] === ']') {
-					inClass = text[j] === '['
-				}
-			}
-			code += text.slice(i, j + 1)
-			last = '/'
-			i = j + 1
-		} else {
-			code += c
-			last = /\s/.test(c) ? last : c
-			i++
-		}
+// JavaScript sources, by name, parsed by the TypeScript compiler in a virtual project of their own.
+function parse<Name extends string>(sources: Record<Name, string>): Record<Name, SourceFile> {
+	const files: Record<string, string> = {
+		'/src/tsconfig.json': JSON.stringify({ compilerOptions: { allowJs: true, noLib: true }, include: ['*.js'] }),
 	}
-	return { code, literals }
+	for (const [name, text] of Object.entries<string>(sources)) {
+		files[`/src/${name}.js`] = text
+	}
+	const api = new API({ cwd: '/src', fs: createVirtualFileSystem(files) })
+	try {
+		const program = api.updateSnapshot({ openProject: '/src/tsconfig.json' }).getProjects()[0]?.program
+		const parsed = Object.keys(sources).map((name) => [name, program?.getSourceFile(`/src/${name}.js`)] as const)
+		if (parsed.some(([, file]) => file === undefined)) {
+			throw new Error('a source did not parse')
+		}
+		return Object.fromEntries(parsed) as Record<Name, SourceFile>
+	} finally {
+		api.close()
+	}
 }
 
-// The end of the string or template literal at `start`; pushes its text to `literals`.
-function literalEnd(text: string, start: number, literals: string[]): number {
-	const quote = text[start]
-	let value = ''
-	let i = start + 1
-	while (i < text.length && text[i] !== quote) {
-		if (text[i] === '\\') {
-			value += text.slice(i, i + 2)
-			i += 2
-		} else if (quote === '`' && text.startsWith('${', i)) {
-			// A substitution: skip to its closing brace, past nested braces and literals.
-			let depth = 0
-			for (i += 2; i < text.length && (depth > 0 || text[i] !== '}'); i++) {
-				const c = text[i]
-				if (c === "'" || c === '"' || c === '`') {
-					i = literalEnd(text, i, []) - 1
-				}
-				depth += c === '{' ? 1 : c === '}' ? -1 : 0
-			}
-			value += '${}'
-			i++
-		} else {
-			value += text[i]
-			i++
+function descendants(root: Node): Node[] {
+	const all: Node[] = []
+	const visit = (node: Node) => {
+		all.push(node)
+		node.forEachChild(visit)
+	}
+	root.forEachChild(visit)
+	return all
+}
+
+const literal = (node: Node | undefined) =>
+	node !== undefined && (isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined
+const named = (node: Node, name: string) => isIdentifier(node) && node.text === name
+const snippet = (node: Node) => node.getText().replace(/\s+/g, ' ')
+
+function enclosedBy(node: Node, test: (ancestor: Node) => boolean): boolean {
+	for (let at: Node | undefined = node.parent; at !== undefined; at = at.parent) {
+		if (test(at)) {
+			return true
 		}
 	}
-	literals.push(value)
-	return i + 1
+	return false
 }
 
 // The assigned columns of an UPDATE's SET clause, up to its WHERE or end; null when an assignment has another form.
@@ -248,7 +238,7 @@ function assignedColumns(clause: string): string[] | null {
 			continue
 		}
 		depth += c === '(' ? 1 : c === ')' ? -1 : 0
-		const end = depth === 0 && (c === undefined || c === ';' || /^\sWHERE\s/.test(clause.slice(i, i + 7)))
+		const end = depth === 0 && (c === undefined || /^\sWHERE\s/.test(clause.slice(i, i + 7)))
 		if (depth === 0 && (c === ',' || end)) {
 			const column = /^\s*(\w+)\s*=/.exec(clause.slice(start, i))?.[1]
 			if (column === undefined) {
@@ -264,78 +254,108 @@ function assignedColumns(clause: string): string[] | null {
 	return null
 }
 
-// The columns each INSERT and UPDATE in the string and template literals of a source names. A literal with INSERT or
-// UPDATE in another form (a table or column list from a substitution, say) is returned as unparsed.
-function writtenColumns(text: string): { columns: Map<string, Set<string>>; unparsed: string[] } {
+// What convert.js writes to the Kopje database. Its SQL runs through insert(sql), kopje.exec(sql) and
+// kopje.prepare(sql) (insert wraps the last); the SQL must be one literal, split into statements by the cutover's own
+// splitter. An INSERT or UPDATE adds its columns, an INSERT into kopje_state its one literal name; any other argument,
+// statement or kopje_state row is unparsed.
+function converterWrites(file: SourceFile) {
 	const columns = new Map<string, Set<string>>()
+	const stateNames: string[] = []
 	const unparsed: string[] = []
-	for (const sql of scan(text).literals) {
-		for (const m of sql.matchAll(/\b(?:INSERT|UPDATE)\b/g)) {
-			const rest = sql.slice(m.index)
-			const insert = /^INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)\s*\(([^)]*)\)/.exec(rest)
-			const insertColumns = insert?.[2]?.split(',').map((c) => c.trim())
-			const update = /^UPDATE\s+(\w+)\s+SET\s/.exec(rest)
-			const updateColumns = update === null ? null : assignedColumns(rest.slice(update[0].length))
-			if (insert !== null && insertColumns?.every((c) => /^\w+$/.test(c))) {
-				add(columns, insert[1] ?? '', insertColumns)
-			} else if (update !== null && updateColumns !== null) {
-				add(columns, update[1] ?? '', updateColumns)
-			} else {
-				unparsed.push(rest.slice(0, 80))
-			}
-		}
-	}
-	return { columns, unparsed }
-}
-
-// A column read in verify-actual.js: t('column'), row.column, row['column'] or c === 'column' (a link statement's
-// columns), or row[...] by any other key.
-const COLUMN_READ = /\bt\('(\w+)'\)|\brow\.(\w+)|\brow\['(\w+)'\]|\bc === '(\w+)'|\brow\[/g
-// The two places that index the row by a variable: where it is built, and t, whose callers name the column.
-const ROW_BY_VARIABLE = ['row[column] = statement.literals[i]', 'textOf(row[column])']
-
-// The columns verify-actual.js reads per table, from its code without comments: each `case 'table':` of its switch and
-// each `statement.table === 'table'` branch runs to the next one (the last to `default:`). A read outside them (in a
-// shared helper, say) belongs to no table and is returned as unattributed.
-function readColumns(text: string): { columns: Map<string, Set<string>>; unattributed: string[] } {
-	const { code } = scan(text)
-	const columns = new Map<string, Set<string>>()
-	const unattributed: string[] = []
-	const starts = [...code.matchAll(/case '(\w+)':|statement\.table === '(\w+)'/g)]
-	const stop = code.indexOf('default:', starts.at(-1)?.index ?? 0)
-	const regions = starts.map((m, i) => ({
-		table: m[1] ?? m[2] ?? '',
-		start: m.index,
-		end: starts[i + 1]?.index ?? stop,
-	}))
-	for (const m of code.matchAll(COLUMN_READ)) {
-		const column = m[1] ?? m[2] ?? m[3] ?? m[4]
-		const region = regions.find((r) => r.start <= m.index && m.index < r.end)
-		if (column === undefined && ROW_BY_VARIABLE.some((form) => code.startsWith(form, m.index - form.indexOf('row[')))) {
+	for (const node of descendants(file)) {
+		const callee = isCallExpression(node) ? node.expression : undefined
+		const runs =
+			callee !== undefined &&
+			(named(callee, 'insert') ||
+				(isPropertyAccessExpression(callee) &&
+					named(callee.expression, 'kopje') &&
+					['exec', 'prepare'].includes(callee.name.text)))
+		if (
+			!runs ||
+			!isCallExpression(node) ||
+			enclosedBy(node, (at) => isVariableDeclaration(at) && named(at.name, 'insert'))
+		) {
 			continue
 		}
-		if (column === undefined || region === undefined) {
-			unattributed.push(column === undefined ? code.slice(m.index, code.indexOf(']', m.index) + 1) : m[0])
+		const sql = literal(node.arguments[0])
+		for (const statement of sql === undefined ? [] : splitStatements(sql)) {
+			const insert = /^INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)\s*\(([^)]*)\)\s*VALUES\s*([\s\S]*)$/.exec(statement)
+			const update = /^UPDATE\s+(\w+)\s+SET\s+([\s\S]*)$/.exec(statement)
+			const inserted = insert?.[2]?.split(',').map((c) => c.trim())
+			const assigned = update === null ? null : assignedColumns(update[2] ?? '')
+			const state =
+				insert?.[1] === 'kopje_state' ? /^\(\s*'(\w+)'\s*,\s*\?\s*\)$/.exec(insert[3] ?? '')?.[1] : undefined
+			if (insert !== null && inserted?.every((c) => /^\w+$/.test(c)) && (insert[1] !== 'kopje_state' || state)) {
+				add(columns, insert[1] ?? '', inserted)
+				if (state !== undefined) {
+					stateNames.push(state)
+				}
+			} else if (update !== null && assigned !== null && update[1] !== 'kopje_state') {
+				add(columns, update[1] ?? '', assigned)
+			} else if (!/^(?:SELECT|DELETE|PRAGMA|BEGIN|COMMIT)\b/.test(statement)) {
+				unparsed.push(statement)
+			}
+		}
+		if (sql === undefined) {
+			unparsed.push(snippet(node))
+		}
+	}
+	return { columns, stateNames, unparsed }
+}
+
+const isTableOfStatement = (node: Node) =>
+	isPropertyAccessExpression(node) && named(node.expression, 'statement') && node.name.text === 'table'
+
+// The table a node of verify-actual.js reads for: the case clause of `switch (statement.table)` around it, or the
+// block of `if (statement.table === 'table')` around it.
+function tableOf(node: Node): string | undefined {
+	for (let at: Node | undefined = node; at?.parent !== undefined; at = at.parent) {
+		const up = at.parent
+		if (isCaseClause(at) && isSwitchStatement(up.parent) && isTableOfStatement(up.parent.expression)) {
+			return literal(at.expression)
+		}
+		const test = isIfStatement(up) && up.thenStatement.pos === at.pos ? up.expression : undefined
+		if (test !== undefined && isBinaryExpression(test) && isTableOfStatement(test.left)) {
+			return test.operatorToken.kind === SyntaxKind.EqualsEqualsEqualsToken ? literal(test.right) : undefined
+		}
+	}
+	return undefined
+}
+
+// The columns verify-actual.js reads per table: t('column'), row.column, row['column'], and c === 'column' (a link
+// statement's columns). A read outside a case clause or link block, or row[...] by a variable other than where the row
+// is built (row[column] = ...) and in t itself, is unattributed.
+function verifierReads(file: SourceFile) {
+	const columns = new Map<string, Set<string>>()
+	const unattributed: string[] = []
+	for (const node of descendants(file)) {
+		let column: string | undefined
+		if (isCallExpression(node) && named(node.expression, 't')) {
+			column = literal(node.arguments[0])
+		} else if (isPropertyAccessExpression(node) && named(node.expression, 'row')) {
+			column = node.name.text
+		} else if (isElementAccessExpression(node) && named(node.expression, 'row')) {
+			column = literal(node.argumentExpression)
+			const built = isBinaryExpression(node.parent) && node.parent.left.pos === node.pos
+			if (
+				column === undefined &&
+				(built || enclosedBy(node, (at) => isVariableDeclaration(at) && named(at.name, 't')))
+			) {
+				continue
+			}
+		} else if (isBinaryExpression(node) && named(node.left, 'c')) {
+			column = literal(node.right)
 		} else {
-			add(columns, region.table, [column])
+			continue
+		}
+		const table = column === undefined ? undefined : tableOf(node)
+		if (column === undefined || table === undefined) {
+			unattributed.push(snippet(node))
+		} else {
+			add(columns, table, [column])
 		}
 	}
 	return { columns, unattributed }
-}
-
-// The kopje_state names a source writes: every literal naming kopje_state must be an INSERT of a literal name.
-function stateNames(text: string): { names: string[]; unparsed: string[] } {
-	const names: string[] = []
-	const unparsed: string[] = []
-	for (const sql of scan(text).literals.filter((literal) => literal.includes('kopje_state'))) {
-		const name = /^INSERT\s+(?:OR\s+\w+\s+)?INTO\s+kopje_state\s*\(name,\s*value\)\s*VALUES\s*\('(\w+)',/.exec(sql)?.[1]
-		if (name === undefined) {
-			unparsed.push(sql.slice(0, 80))
-		} else {
-			names.push(name)
-		}
-	}
-	return { names, unparsed }
 }
 
 // The `table.column` names in `columns` that the schema does not have.
@@ -347,85 +367,81 @@ function unknown(schema: Map<string, string[]>, columns: Map<string, Set<string>
 
 const sorted = (names: Iterable<string>) => [...names].sort()
 
-describe('the write scanner', () => {
-	it('reads INSERT and UPDATE in every quote style, with or without WHERE or a semicolon', () => {
-		const source = [
+const files = parse({
+	convert: source('../cli/lib/cutover/convert.js'),
+	verify: source('../cli/lib/cutover/verify-actual.js'),
+})
+
+describe('the source scanners', () => {
+	const fixtures = parse({
+		writes: [
+			'const insert = (sql) => kopje.prepare(sql)',
 			"kopje.exec('UPDATE statuses SET retired_column = 0')",
 			'kopje.prepare("UPDATE accounts SET a = ?, b = (SELECT count(*) FROM f WHERE f.x = \'y,z\') WHERE id = ?")',
 			'kopje.exec(`\n\tUPDATE lists SET c = 1;\n\tUPDATE mutes SET d = 2\n`)',
 			"insert('INSERT OR IGNORE INTO blocks (e, f) VALUES (?, ?)')",
-			'insert(`INSERT INTO follows (g,\n\th) VALUES (${a}, ${"x"})`)',
-		].join('\n')
-		expect(writtenColumns(source)).toEqual({
-			columns: new Map([
-				['statuses', new Set(['retired_column'])],
-				['accounts', new Set(['a', 'b'])],
-				['lists', new Set(['c'])],
-				['mutes', new Set(['d'])],
-				['blocks', new Set(['e', 'f'])],
-				['follows', new Set(['g', 'h'])],
-			]),
-			unparsed: [],
-		})
-	})
-
-	it('ignores comments and regular expressions, and reports SQL it cannot read', () => {
-		const source = [
+			'kopje.prepare("INSERT OR REPLACE INTO kopje_state (name, value) VALUES (\'kept\', ?)")',
 			"// kopje.exec('UPDATE statuses SET commented = 0')",
-			"/* insert('INSERT INTO blocks (commented) VALUES (1)') */",
-			"const quote = /'/g",
+			"const message = 'INSERT INTO statuses (new_column) VALUES (1)'",
+			"if (failed) throw new Error('UPDATE failed')",
 			'kopje.exec(`INSERT INTO ${table} (a) VALUES (1)`)',
 			"kopje.exec('UPDATE accounts SET ' + column + ' = 1')",
-		].join('\n')
-		expect(writtenColumns(source).columns).toEqual(new Map())
-		expect(writtenColumns(source).unparsed).toEqual(['INSERT INTO ${} (a) VALUES (1)', 'UPDATE accounts SET '])
-	})
-})
-
-describe('the read scanner', () => {
-	const switchOver = (cases: string, before = '') =>
-		[
-			before,
+			'insert(sql)',
+			"kopje.prepare(\"INSERT INTO kopje_state (name, value) VALUES ('a', ?), ('b', ?)\")",
+		].join('\n'),
+		reads: [
+			'const shared = (row) => row.some_column',
 			'for (const statement of statements) {',
 			"\tif (statement.table === 'statuses') {",
-			"\t\tconst id = statement.where.find(([c]) => c === 'id')",
+			"\t\tstatement.where.find(([c]) => c === 'id')",
 			'\t\tcontinue',
 			'\t}',
 			'\tconst row = {}',
 			"\tstatement.columns.forEach((column, i) => { row[column] = statement.literals[i] ?? 'NULL' })",
 			'\tconst t = (column) => textOf(row[column])',
+			"\tt('stray')",
 			'\tswitch (statement.table) {',
-			cases,
+			"\t\tcase 'mutes':",
+			"\t\t\tput('mutes', [int(row.hide_notifications), null, // t('expires_at'),",
+			"\t\t\t\t/* row.commented */ row['quoted'], \"t('in_a_string')\", row[key]])",
+			'\t\t\tbreak',
 			'\t\tdefault:',
 			'\t\t\tbreak',
 			'\t}',
 			'}',
-		].join('\n')
-
-	it('attributes reads to the case or link branch they are in, and skips comments', () => {
-		const source = switchOver(
-			[
-				"\t\tcase 'mutes':",
-				"\t\t\tput('mutes', [int(row.hide_notifications), null, // t('expires_at'),",
-				"\t\t\t\t/* row.commented */ row['quoted']])",
-				'\t\t\tbreak',
-			].join('\n')
-		)
-		expect(readColumns(source)).toEqual({
-			columns: new Map([
-				['statuses', new Set(['id'])],
-				['mutes', new Set(['hide_notifications', 'quoted'])],
-			]),
-			unattributed: [],
-		})
+		].join('\n'),
 	})
 
-	it('reports a read outside every case, and a row indexed by a variable', () => {
-		const source = switchOver(
-			["\t\tcase 'mutes':", "\t\t\tput('mutes', [shared(row), row[key]])", '\t\t\tbreak'].join('\n'),
-			'const shared = (row) => row.some_column'
+	it('take SQL only from literal arguments of the calls that run it, statement by statement', () => {
+		const { columns, stateNames, unparsed } = converterWrites(fixtures.writes)
+		expect(columns).toEqual(
+			new Map([
+				['statuses', new Set(['retired_column'])],
+				['accounts', new Set(['a', 'b'])],
+				['lists', new Set(['c'])],
+				['mutes', new Set(['d'])],
+				['blocks', new Set(['e', 'f'])],
+				['kopje_state', new Set(['name', 'value'])],
+			])
 		)
-		expect(readColumns(source).unattributed).toEqual(['row.some_column', 'row[key]'])
+		expect(stateNames).toEqual(['kept'])
+		expect(unparsed).toEqual([
+			'kopje.exec(`INSERT INTO ${table} (a) VALUES (1)`)',
+			"kopje.exec('UPDATE accounts SET ' + column + ' = 1')",
+			'insert(sql)',
+			"INSERT INTO kopje_state (name, value) VALUES ('a', ?), ('b', ?)",
+		])
+	})
+
+	it('attribute reads to their case clause or link block, and report every other read', () => {
+		const { columns, unattributed } = verifierReads(fixtures.reads)
+		expect(columns).toEqual(
+			new Map([
+				['statuses', new Set(['id'])],
+				['mutes', new Set(['hide_notifications', 'quoted'])],
+			])
+		)
+		expect(unattributed).toEqual(['row.some_column', "t('stray')", 'row[key]'])
 	})
 })
 
@@ -453,17 +469,17 @@ describe('the dump catalogs', () => {
 
 	it('keep every kopje_state name the converter writes', async () => {
 		const { DUMPED_STATE } = await store
-		const { names, unparsed } = stateNames(source('../cli/lib/cutover/convert.js'))
+		const { stateNames, unparsed } = converterWrites(files.convert)
 		expect(unparsed).toEqual([])
-		expect(names.length).toBeGreaterThan(0)
-		expect(names.filter((name) => !DUMPED_STATE.includes(name))).toEqual([])
+		expect(stateNames.length).toBeGreaterThan(0)
+		expect(stateNames.filter((name) => !DUMPED_STATE.includes(name))).toEqual([])
 	})
 })
 
 describe('the Store schema in the cutover tools', () => {
 	const schema = schemaColumns()
-	const { columns: written, unparsed } = writtenColumns(source('../cli/lib/cutover/convert.js'))
-	const { columns: read, unattributed } = readColumns(source('../cli/lib/cutover/verify-actual.js'))
+	const { columns: written, unparsed } = converterWrites(files.convert)
+	const { columns: read, unattributed } = verifierReads(files.verify)
 	const carried = [...schema.keys()].filter((table) => !(table in NOT_CARRIED))
 
 	it('names only tables and columns the schema has', () => {
