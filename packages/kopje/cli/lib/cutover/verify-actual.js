@@ -27,6 +27,7 @@ export const CATEGORIES = [
 	'edits',
 	'attachments',
 	'media',
+	'media_files',
 	'boosts',
 	'legacy_ids',
 	'follows',
@@ -180,6 +181,22 @@ export function actualFromDump(text) {
 						t('url'),
 						account(t('account_id'))?.uri ?? null,
 						row.status_id === 'NULL' ? null : (status(t('status_id'))?.uri ?? null),
+					])
+				}
+				// Local media served from R2 (B4b), as `convert --images` makes it from Cloudflare Images.
+				if (row.file_token !== undefined && row.file_token !== 'NULL') {
+					/** @type {any} */
+					let meta = null
+					try {
+						meta = JSON.parse(t('meta') ?? 'null')
+					} catch {
+						meta = null
+					}
+					put('media_files', t('file_token') ?? '', [
+						t('url'),
+						t('preview_url'),
+						t('content_type'),
+						[meta?.original?.width, meta?.original?.height, meta?.small?.width, meta?.small?.height],
 					])
 				}
 				const owner = status(t('status_id'))

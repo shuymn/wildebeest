@@ -20,6 +20,7 @@ import {
 import { join } from 'node:path'
 
 import { convertLegacy } from './convert.js'
+import { IMAGES_FILE, localDomain, ORIGINALS_DIR, readImagesFile, sha256Of } from './images-export.js'
 import { checkKeks } from './kek.js'
 import { createKopjeDatabase, migrationRecords, readCatalog, sha256Hex, writeDump } from './kopje-db.js'
 import { loadLegacyExport } from './legacy-load.js'
@@ -30,6 +31,8 @@ import { expectedFromLegacy } from './verify-expect.js'
 export const CONVERTER_VERSION = '2'
 export const DUMP_FILE = 'kopje.dump'
 export const MANIFEST_FILE = 'manifest.json'
+// With --images: the originals of the mapped images, under the media id the R2 key originals/<id> needs.
+export const ORIGINALS_OUT = 'originals'
 
 // Preflight limits. A V8 string holds at most 2^29 - 24 UTF-16 units, so one export file (or the dump verify reads)
 // must stay under 512 MiB. The whole export is capped at 1 GiB: the converter reads one file at a time but keeps the
@@ -48,6 +51,10 @@ const MESSAGES = /** @type {Record<string, string>} */ ({
 	'null-in-not-null-column':
 		'a column that is nullable in the export only holds NULL, which the canonical schema refuses',
 	'export-too-large': 'the export exceeds the size limits (docs/cutover.md)',
+	'images-file-invalid': `the images directory has no ${IMAGES_FILE} that images-export wrote`,
+	'images-domain-unclear': 'the local accounts are not on exactly one domain',
+	'images-other-instance': `${IMAGES_FILE} was written for another instance`,
+	'images-original-mismatch': 'a downloaded original is gone or no longer matches its digest; run images-export again',
 })
 
 export function packageVersion() {
@@ -105,7 +112,7 @@ export function parseBaseTime(value) {
  * output yet.
  * @param {string} outDir
  */
-function prepareOutput(outDir) {
+function prepareOutput(outDir, names = [DUMP_FILE, MANIFEST_FILE]) {
 	let info = null
 	try {
 		info = lstatSync(outDir)
@@ -116,7 +123,7 @@ function prepareOutput(outDir) {
 	if (info.isSymbolicLink() || !info.isDirectory()) {
 		throw new ExportError('output-not-a-directory')
 	}
-	for (const name of [DUMP_FILE, MANIFEST_FILE]) {
+	for (const name of names) {
 		let exists = true
 		try {
 			lstatSync(join(outDir, name))
@@ -157,12 +164,12 @@ function publish(outDir, name, write) {
 
 /**
  * @param {string} path
- * @param {string} text
+ * @param {string | Uint8Array} data
  */
-function writeExclusive(path, text) {
+function writeExclusive(path, data) {
 	const fd = openSync(path, 'wx', 0o600)
 	try {
-		writeSync(fd, text)
+		writeSync(fd, typeof data === 'string' ? new TextEncoder().encode(data) : data)
 		fsyncSync(fd)
 	} finally {
 		closeSync(fd)
@@ -171,8 +178,49 @@ function writeExclusive(path, text) {
 
 /**
  * @typedef {{ exportPath: string, acceptDeletions: boolean, acceptTruncation?: boolean, baseTime: number,
- *   env: Record<string, string | undefined> }} SourceOptions
+ *   env: Record<string, string | undefined>, imagesDir?: string, acceptMissingImages?: boolean }} SourceOptions
  */
+
+/**
+ * The mapping images-export wrote, for the instance the export is of.
+ * @param {string} dir
+ * @param {string} domain
+ */
+function imagesFor(dir, domain) {
+	const file = readImagesFile(dir)
+	if (file === null) {
+		throw new ExportError('images-file-invalid')
+	}
+	if (file.domain !== domain) {
+		throw new ExportError('images-other-instance')
+	}
+	return file
+}
+
+/**
+ * Copies each mapped original to <out>/originals/<media id> (created exclusively, mode 0600), checking its digest.
+ * @param {string} imagesDir
+ * @param {import('./images-export.js').ImagesFile} file
+ * @param {[string, string][]} originals image id and media id
+ * @param {string} outDir
+ */
+function writeOriginals(imagesDir, file, originals, outDir) {
+	const dir = join(outDir, ORIGINALS_OUT)
+	mkdirSync(dir, { mode: 0o700 })
+	for (const [imageId, mediaId] of originals) {
+		const entry = file.images.get(imageId)
+		let bytes
+		try {
+			bytes = readFileSync(join(imagesDir, ORIGINALS_DIR, imageId))
+		} catch {
+			throw new ExportError('images-original-mismatch')
+		}
+		if (entry?.state !== 'ok' || sha256Of(bytes) !== entry.sha256) {
+			throw new ExportError('images-original-mismatch')
+		}
+		writeExclusive(join(dir, mediaId), bytes)
+	}
+}
 
 /** @param {unknown} error */
 function stopOf(error) {
@@ -192,8 +240,8 @@ function stopOf(error) {
  * @returns {Promise<{ ok: boolean, manifest: Record<string, unknown> }>}
  */
 export async function convertExport(options) {
-	const { outDir, baseTime, env, acceptDeletions, acceptTruncation = false, catalogPath, version } = options
-	prepareOutput(outDir)
+	const { outDir, baseTime, env, acceptDeletions, acceptTruncation = false, catalogPath, version, imagesDir } = options
+	prepareOutput(outDir, imagesDir === undefined ? undefined : [DUMP_FILE, MANIFEST_FILE, ORIGINALS_OUT])
 	const manifest = /** @type {Record<string, any>} */ ({
 		tool: { command: 'kopje-admin convert', converter: CONVERTER_VERSION, version },
 		baseTime: new Date(baseTime).toISOString(),
@@ -221,8 +269,10 @@ export async function convertExport(options) {
 		const kek = await checkKeks(users, env)
 		manifest.kek = kek
 
+		const images = imagesDir === undefined ? undefined : imagesFor(imagesDir, localDomain(legacy))
 		const kopje = createKopjeDatabase()
 		const summary = convertLegacy(legacy, kopje, {
+			images,
 			baseTime,
 			originalActorIds,
 			notificationSequence: report.notificationSequence,
@@ -250,6 +300,25 @@ export async function convertExport(options) {
 		if (!kek.uniform) {
 			reasons.push('kek.users')
 		}
+		if (summary.images !== null) {
+			const { counts } = summary.images
+			manifest.images = {
+				mapped: counts.mapped,
+				missing: counts.missing,
+				upstream: counts.upstream,
+				foreign: counts.foreign,
+				unmapped: counts.unmapped,
+				shared: counts.shared,
+				originals: summary.images.originals.length,
+				acceptMissing: options.acceptMissingImages === true,
+			}
+			if (counts.unmapped > 0) {
+				reasons.push('images-unmapped')
+			}
+			if (counts.missing > 0 && options.acceptMissingImages !== true) {
+				reasons.push('images-missing (pass --accept-missing-images)')
+			}
+		}
 		if (reasons.length > 0) {
 			kopje.close()
 			throw new ExportError('conversion-refused', { reasons })
@@ -264,6 +333,9 @@ export async function convertExport(options) {
 				throw new ExportError('catalog-migrations-differ')
 			}
 			catalog = target.tables
+		}
+		if (images !== undefined && imagesDir !== undefined && summary.images !== null) {
+			writeOriginals(imagesDir, images, summary.images.originals, outDir)
 		}
 		/** @type {{ current: ReturnType<typeof writeDump> | null }} */
 		const trailer = { current: null }
@@ -314,10 +386,11 @@ export async function verifyConversion(options) {
 			texts: files.map((file) => () => readFileSync(file, 'utf8')),
 			acceptDeletions: options.acceptDeletions,
 		})
-		const { records, overLimit } = expectedFromLegacy(db, {
+		const { records, overLimit, images } = expectedFromLegacy(db, {
 			originalActorIds,
 			source: addressing,
 			notificationSequence: source.notificationSequence,
+			images: options.imagesDir === undefined ? undefined : imagesFor(options.imagesDir, localDomain(db)),
 		})
 		db.close()
 		const actual = actualFromDump(readFileSync(options.dumpPath, 'utf8'))
@@ -327,6 +400,12 @@ export async function verifyConversion(options) {
 		report.truncation = { overLimit, accepted: options.acceptTruncation === true }
 		if (overLimit > 0 && options.acceptTruncation !== true) {
 			report.result = 'FAIL'
+		}
+		if (options.imagesDir !== undefined) {
+			report.images = { ...images, acceptMissing: options.acceptMissingImages === true }
+			if (images.unmapped > 0 || (images.missing > 0 && options.acceptMissingImages !== true)) {
+				report.result = 'FAIL'
+			}
 		}
 		return { ok: report.result === 'PASS', report }
 	} catch (error) {
