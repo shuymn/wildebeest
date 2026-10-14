@@ -24,7 +24,11 @@ export async function scopedToken(h: ApiHarness, scope: string): Promise<string>
 }
 
 // Runs a read operation over a SqlStorage that counts the rows each statement reads.
-export async function rowsRead<I>(h: ApiHarness, operation: StoreOperation<I, unknown>, input: I): Promise<number> {
+export async function rowsRead<I>(
+	h: Pick<ApiHarness, 'store'>,
+	operation: StoreOperation<I, unknown>,
+	input: I
+): Promise<number> {
 	return runInDurableObject(h.store, (_instance, state) => {
 		let read = 0
 		const real = state.storage.sql
