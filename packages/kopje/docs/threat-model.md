@@ -65,7 +65,7 @@ against their own instance. TLS is assumed between all parties.
 | Actor, `/actor`, WebFinger, NodeInfo, followers and following  | R1, R2     | none (public)                                            | main: `src/federation/*`                                                                                                                                                                                                              |
 | `/ap/o/:uuid`, status documents and the outbox                 | R1, R2     | none (VIS-4)                                             | main: `src/federation/federation.ts`                                                                                                                                                                                                  |
 | Outbound document fetches                                      | R1 answers | final URL and parsed id (ID-2)                           | main: `src/federation/loader.ts`                                                                                                                                                                                                      |
-| Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                      | main (deliveries); Planned (B4, push)                                                                                                                                                                                                 |
+| Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                      | main (deliveries, Web Push: `src/jobs/push.ts`); Planned (B4)                                                                                                                                                                         |
 | Mastodon API `/api/*`                                          | R2–R4, R7  | bearer token and route access                            | main: `src/mastodon/*`, `src/domain/auth.ts`                                                                                                                                                                                          |
 | `/oauth/authorize`                                             | R2, R6, R7 | Access JWT, Origin, consent                              | main: `src/app/authorize.tsx`                                                                                                                                                                                                         |
 | `/oauth/token`, `/oauth/revoke`                                | R2, R3     | client credentials                                       | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                         |
@@ -73,7 +73,7 @@ against their own instance. TLS is assumed between all parties.
 | `/setup` and its Cloudflare API calls                          | R2, R7     | `SETUP_TOKEN`, then the admin's web session (SETUP-2)    | `kopje/setup`: `src/app/setup.tsx`                                                                                                                                                                                                    |
 | Web UI (profiles, permalinks, settings)                        | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)          | branch `kopje/web-ui`: `src/app/web.tsx`, `src/web/*`                                                                                                                                                                                 |
 | Media upload and serving, Images transformation                | R2–R4      | bearer token; capability URL for reads                   | main: `src/mastodon/media.ts`                                                                                                                                                                                                         |
-| Web Push registration                                          | R3         | bearer token with `push`                                 | Planned (push)                                                                                                                                                                                                                        |
+| Web Push registration                                          | R3         | bearer token with `push`                                 | main: `src/mastodon/push.ts`, `src/domain/push.ts`                                                                                                                                                                                    |
 | Queue consumer, alarms, cron                                   | internal   | —                                                        | main: `src/jobs/queue.ts`, `src/platform/store-kernel.ts`                                                                                                                                                                             |
 | Delivery doorbell and cron (`src/jobs/deliver.ts`)             | internal   | —                                                        | main: `src/jobs/deliver.ts`                                                                                                                                                                                                           |
 | Dump import, backup restore, cutover tools                     | R5, R8     | admin authority, then digest chain and manifest          | main (import, convert, verify-conversion: DATA-11 to DATA-15); `kopje/scheduled-backup` (`backup-verify`); `kopje/cutover-ops` (`cutover-preflight`, `maintenance-worker`, `fingerprint`, `cutover`: OPS-4, OPS-7 to OPS-10, DATA-16) |
@@ -294,7 +294,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   only when new under its natural key; a repeat inserts nothing (`update` replaces the previous one). Its push is sent
   only for a newly inserted row. _Enforced (main):_ `notify` in `src/domain/notifications.ts`;
   `test/statuses.test.ts` ("a retry has no second side effect"), `test/timelines.test.ts` ("notifies followers who
-  asked to be notified, once"). Push: _Planned (push)._
+  asked to be notified, once"). Push: _Enforced (main):_ `notify` records pushes for the row it inserted only, never for a
+  repeat (`queuePushes` in `src/domain/notifications.ts`); `test/push-send.test.ts` ("pushes every notification type
+  Kopje emits, once each (VIS-10)").
 - **VIS-11: earlier versions keep the original audience.** Edit history and earlier versions are visible only to the
   status's original audience, and an edit of a non-public status never widens that audience (a recipient added by an
   edit does not see earlier versions). This differs from Mastodon on purpose. _Enforced (main):_
@@ -358,6 +360,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **AUTH-7: opaque credentials are unguessable and stored as digests.** Client ids and secrets, codes and access tokens
   are 32 random bytes. Codes and access tokens are stored and looked up only by their full SHA-256. _Enforced (main):_
   `src/security/tokens.ts`, `src/domain/oauth.ts`; `test/oauth.test.ts` ("stores only digests of tokens and codes").
+  A Web Push subscription also keeps the access token it was made with, for the payload's `access_token` (Mastodon's),
+  only sealed: AES-GCM under a key derived from `VAPID_JWK`, which the Store never holds, bound to the token's digest.
+  _Enforced (main):_ `sealPushToken` in `src/security/web-push.ts`; `test/web-push-crypto.test.ts` ("opens a sealed
+  token only with its key and digest (AUTH-7)").
 - **AUTH-8: a web session is an OAuth token of the web UI, and nothing else.** The web UI is an ordinary OAuth client
   of the instance: `/login` sends the browser to `/oauth/authorize` (Access, WEB-1) with a PKCE S256 challenge. The
   Store keeps the attempt (state, challenge, return path, and the digest of the session cookie the request carried)
@@ -537,7 +543,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Enforced (main)_ for documents and the Fedify rule: `test/fedify-usage.test.ts` ("never sends or queues through
   Fedify"). Deliveries: _Enforced (main):_ `assertPublicShape` and the DNS check before every
   POST, no redirects, 30 s (`postActivity` in `src/federation/delivery.ts`); `test/delivery-post.test.ts` ("NET-3:
-  refuses inboxes that fail the public-host rules"). Media and push: _Planned (B4, push)._
+  refuses inboxes that fail the public-host rules"). Web Push: _Enforced (main):_ the same sink before every POST
+  (`sendPush` in `src/jobs/push.ts`), and the rules that need no lookup at registration (`publicShapeRefusal` in
+  `src/platform/http-url.ts`, shared with `assertPublicShape`); `test/push.test.ts` ("NET-3: refuses endpoints that are
+  not public https URLs"), `test/push-send.test.ts` ("PUSH-2: the endpoint is an outbound sink at every send", "never
+  follows a redirect, and retries instead"). Media: _Planned (B4)._
 - **NET-4: signed fetches stay with their signer.** A document fetched with a signature is cached under a key that
   includes the signing key id and is never served to another key or to the unsigned path. _Enforced (main):_
   `signedLoader` in `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("caches signed documents per signing
@@ -686,11 +696,27 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 ### Web Push and polls (PUSH, POLL)
 
 - **PUSH-1: a subscription belongs to its token.** Subscription operations require the `push` scope and select the
-  subscription by the authenticated token, never by an id from the request. _Planned (push)._
-- **PUSH-2: endpoints are outbound sinks.** A push endpoint passes NET-3 at registration and at every send. _Planned
-  (push)._
+  subscription by the authenticated token, never by an id from the request. _Enforced (main):_ the four routes declare
+  `{ scope: 'push' }` (`src/mastodon/routes.ts`), and every operation selects by the viewer's `tokenHash`
+  (`src/domain/push.ts`); `test/push.test.ts` ("PUSH-1: another token, of another user or the same one, cannot read,
+  change or delete a subscription", "requires the push scope and a user").
+- **PUSH-2: endpoints are outbound sinks.** A push endpoint passes NET-3 at registration and at every send. At
+  registration the rules that need no lookup (https, no credentials, no literal IP, no local or single-label name, at
+  most 2,048 characters); at every send the delivery sink, which adds the DNS check, refuses redirects and keeps the
+  delivery budget, as for an inbox. _Enforced (main):_ `src/mastodon/push.ts`, `sendPush` in `src/jobs/push.ts`;
+  `test/push.test.ts` ("NET-3: refuses endpoints that are not public https URLs"), `test/push-send.test.ts` ("PUSH-2:
+  the endpoint is an outbound sink at every send").
 - **PUSH-3: push reveals no more than notifications.** A push is sent only for a VIS-10 notification the recipient may
-  still see when sending. Revoking the token or suspending the account deletes its subscriptions. _Planned (push)._
+  still see when sending. Revoking the token or suspending the account deletes its subscriptions. A push is recorded
+  only for a new notification and a subscription whose alert and policy want it; the claim that sends it checks again,
+  in its transaction, that the notification exists and is shown to its recipient (the notification rule), that the
+  subscription still wants it with a valid token of an unsuspended account, and that it is at most 48 hours old, and
+  drops it otherwise. The payload carries only what the notification shows: the sender's name and avatar, and the
+  status's content warning or text (at most 140 characters), or the sender's note. Subscriptions and their pending
+  pushes cascade from the token, so revocation and suspension, which delete the tokens, delete them. _Enforced
+  (main):_ `claimPushes` in `src/domain/push.ts`, `migrations/0002_web_push.sql`; `test/push-send.test.ts` ("PUSH-3: a
+  push reveals no more than the notification"), `test/push.test.ts` ("PUSH-3: revoking the token or suspending the
+  account deletes its subscriptions").
 - **POLL-1: votes are the voter's own.** Only the poll's author changes its definition or results. A vote is attributed
   to the verified voter, names a valid option of that poll, respects expiry and single or multiple choice, and a replay
   counts once. _Planned (polls)._
@@ -766,7 +792,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Enforced (main):_ `src/domain/deliveries.ts`, `src/jobs/deliver.ts`;
   `test/deliveries.test.ts` ("retries after min(30 s·2^n, 12 h)"), `test/delivery-post.test.ts` ("RES-5: claims
   nothing and counts no attempt in maintenance"), `test/cli.test.ts`. Spool messages that fail terminally are kept and
-  inspectable before acknowledgement: _Planned (B1b)._
+  inspectable before acknowledgement: _Planned (B1b)._ Web Push: _Enforced (main):_ the deliveries' schedule and limit,
+  a push older than 48 hours is dropped, one that fails for good is deleted (404 and 410 delete the subscription, as
+  Mastodon does), and nothing is claimed in maintenance or without a `VAPID_JWK`; at most 1,000 pushes wait
+  (`MAX_PUSH_BACKLOG`), and a notification beyond that gets none (RES-4). `src/domain/push.ts`, `src/jobs/push.ts`;
+  `test/push-send.test.ts` ("retries a failure with the deliveries’ backoff and gives up after their limit", "sends
+  pushes from the delivery doorbell, and not without a VAPID_JWK or in maintenance", "records no push beyond the
+  backlog cap").
 - **RES-6: one request cannot trigger unbounded work.** An inbound activity has fixed limits on dereferences,
   recipients, collection expansion and notifications. Delivery backlog and concurrency are bounded. Anonymous app
   registration, inbox spooling and media transformations have rate or storage budgets with a visible refusal. _Planned
@@ -853,8 +885,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   are never cached, and never appear in responses or logs. _Enforced (main):_ `src/security/key-wrap.ts`,
   `src/security/keyring.ts`; `test/keyring.test.ts`, `test/health-keys.test.ts`.
 - **DATA-2: VAPID keys are never regenerated implicitly.** `VAPID_JWK` is a secret that Kopje only reads; an invalid
-  value is a misconfiguration. _Enforced (main):_ `src/platform/vapid.ts`, `src/platform/config.ts`;
-  `test/instance.test.ts` ("refuses an invalid VAPID_JWK as misconfiguration").
+  value, one without its private scalar included, is a misconfiguration, and without one Web Push is unavailable
+  rather than keyed anew. _Enforced (main):_ `src/platform/vapid.ts`, `src/platform/config.ts`, `src/mastodon/push.ts`;
+  `test/instance.test.ts` ("refuses an invalid VAPID_JWK as misconfiguration"), `test/push.test.ts` ("DATA-2: without a
+  VAPID_JWK, push is unavailable and no key is made", "refuses a VAPID_JWK without its private key as
+  misconfiguration (DATA-2)").
 - **DATA-3: dumps are exact and verified.** A dump keeps exact bytes and storage classes. Import accepts only exact
   template statements with bound literals, into an empty Store with the same schema, and verification recomputes the
   digests from the imported rows. Of `kopje_state` it restores only the names the dump declares, which must be among
@@ -1028,7 +1063,9 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   Deliveries: _Enforced (main):_ a claim or completion whose response is lost leaves the row
   leased until the lease ends, then it is claimed and POSTed again (the receiver deduplicates by activity id); a
   repeated completion is stale and records nothing twice; `test/deliveries.test.ts` ("OPS-3: a claim or completion
-  whose response is lost"), `test/delivery-post.test.ts` ("OPS-3: a lost completion"). Push: _Planned (push)._
+  whose response is lost"), `test/delivery-post.test.ts` ("OPS-3: a lost completion"). Push: _Enforced (main):_ the
+  same leases and completions (`claimPushes`, `completePush` in `src/domain/push.ts`), so a client may get a push
+  twice; `test/push-send.test.ts` ("OPS-3: a lost completion leaves the push leased until the lease ends").
 - **OPS-5: the backup never leaves the Store frozen or a recorded backup inconsistent.**
     - **Freeze.** The dump freeze ends as soon as the last chunk is read, before the remaining parts are uploaded, in
       the Store transaction that checks the freeze lease by the Store's clock and records the media membership. If the

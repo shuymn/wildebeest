@@ -173,6 +173,8 @@ None of this affects the legacy instance.
 3. **Deploy Kopje** from the instance template ([deploy/README.md](../../../deploy/README.md)), with:
     - `MAINTENANCE=full` as a plain-text variable, before anything can reach it;
     - `USER_KEK` as step 2 says: the KEK it names, or unset when it names `empty`;
+    - `VAPID_JWK`, which Web Push needs ([deploy/README.md](../../../deploy/README.md) shows how to make one). Clients
+      register again at step 8 whatever the key, since subscriptions are not carried over;
     - `IMPORT_TOKEN` set to a fresh random value of at least 32 characters (`openssl rand -base64 33`). Never set
       `SETUP_TOKEN` and never run `/setup`, which would create an account and make the Store non-empty;
     - its Queue's dead-letter queue (`wrangler queues create <kopje-queue>-dlq`);

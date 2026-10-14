@@ -8,6 +8,30 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- Web Push, as Mastodon 4.5 offers it. `POST`, `GET`, `PUT` and `DELETE /api/v1/push/subscription` keep one
+  subscription per access token, under the `push` scope, with Mastodon's alerts (per notification type) and policy
+  (`all`, `followed`, `follower`, `none`) and `server_key` from `VAPID_JWK`. The endpoint must be a public https URL
+  and the client keys valid, or the request answers 422. Each new notification is pushed to the recipient's
+  subscriptions that want it, from the Queue consumer, with the retries of deliveries; before sending, the
+  notification is checked again and dropped if it is gone or no longer shown. Pushes are encrypted as the
+  subscription asks (`standard`: RFC 8291 aes128gcm; otherwise the aesgcm draft most clients use), signed with VAPID
+  (RFC 8292), and carry Mastodon's payload, the subscription's access token included. A push service answering 404 or
+  410 ends the subscription. Revoking a token or suspending an account deletes its subscriptions. Without
+  `VAPID_JWK`, the endpoints answer 404 and the instance advertises no key; Kopje never makes one.
+
+### Changed
+
+- `VAPID_JWK` must hold the private key (`d`), not only the public point: a key without it now makes the instance
+  answer 503 as misconfigured, as any invalid value does.
+
+### Instance changes
+
+- Store schema: adds `0002_web_push` (the Store applies it on the first call after the deploy; a rollback across it
+  needs the point-in-time restore in [docs/upgrade.md](docs/upgrade.md)).
+- `wrangler.jsonc`: unchanged. Set the `VAPID_JWK` secret to turn Web Push on.
+
 ## [0.1.0-rc.3] - 2026-10-14
 
 A third release candidate of the first release, published under the npm dist-tag `next`.
