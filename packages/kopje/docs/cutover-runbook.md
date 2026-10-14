@@ -389,6 +389,19 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://<domain>/api/v1/timelines/publ
 Set `MAINTENANCE=readonly` on the Worker (Settings, Variables and Secrets). Reads and sign-ins work; writes answer 503
 (the unpublished Store refuses them anyway).
 
+Make the served files of local media that has none yet, such as the images `convert --images` moved (their originals
+went to R2 in step 6), so they are served at publication:
+
+```sh
+kopje-admin media-rebuild
+```
+
+It re-encodes each such original as an upload is, writes `files/<token>/{full,small}`, and corrects the row's sizes in
+`meta` (the conversion took them from the image header, which ignores EXIF rotation); rows whose files exist are
+skipped, so it can be run again. Its writes are the only ones the unpublished Store admits, and only for the Access
+admin. Each image counts two transformations against `IMAGES_MONTHLY_TRANSFORMS`. Because it changes `meta`, a dump
+taken after it differs from the conversion there: step 6's `verify-conversion` runs before it.
+
 ```sh
 kopje-admin health
 curl -sS "https://<domain>/.well-known/webfinger?resource=acct:<user>@<domain>" | jq .subject
@@ -406,8 +419,11 @@ kopje-admin fingerprint export <work>/export-c > <work>/fp-c.json
 kopje-admin fingerprint compare <work>/fp-b.json <work>/fp-c.json
 ```
 
-- **Go:** health has no failing check; sign-in works; the data looks right; Push registration succeeds; the
-  fingerprints match.
+- **Go:** `media-rebuild` exits 0 (every local image is served); health has no failing check; sign-in works; the data
+  looks right, images included; Push registration succeeds; the fingerprints match. `media-rebuild` exits 3 with the
+  rows that need a decision (`original-missing`, `type-mismatch`, `failed`) or when the Images quota or the monthly
+  budget stopped it: publishing then leaves those images unserved (404) until it is run again and succeeds, a decision
+  for the owner.
 - **Rollback:** as step 7.
 
 ### 9. Publish (2 min) — the point of no return

@@ -632,6 +632,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   nothing it restores. `test/image-bytes.test.ts` ("media keys"), `test/media.test.ts` ("serves only well-formed paths
   of served files"), `test/media-reconcile.test.ts` ("deletes nothing from R2 for a Store that knows nothing of it",
   "deletes nothing during maintenance, an import, or before setup", "deletes a late write of a failed upload").
+  The media rebuild (`kopje-admin media-rebuild`, `src/mastodon/media-rebuild.ts`) builds its keys the same way, from the
+  row's id and token only, and records the row in the Store before it writes the files, so it writes none for a row
+  that went; it never deletes. `test/media-rebuild.test.ts` ("leaves out remote, doomed and unfinished rows").
 - **MEDIA-3: served images are re-encoded.** An image is served only as Images output with location metadata removed; if
   transformation fails, the upload is refused and original bytes are never served. _Enforced (main):_ outputs are PNG or WebP only, for which Images discards all metadata (the binding has no
   metadata option, and JPEG output would keep the EXIF copyright tag); `processImage` in `src/platform/images.ts` then
@@ -640,7 +643,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   otherwise; `test/image-bytes.test.ts` ("refuses every EXIF block", "refuses XMP, IPTC, comments"),
   `test/media.test.ts` ("re-encodes an image without its location", "refuses a failed transformation", "refuses an
   output that keeps ..."). Tests use Miniflare's local Images binding (sharp); the production binding's output is
-  verified on the verification instance (B9).
+  verified on the verification instance (B9). The media rebuild, which makes the served files of restored or moved
+  media from their originals, goes through the same `processImage` and writes nothing for an original that fails, and
+  never serves an original instead; it refuses an original whose served type differs from the row's (its URLs name that
+  type). `test/media-rebuild.test.ts` ("makes both files ... and corrects meta", "reports a missing original and a type
+  mismatch").
 - **MEDIA-4: media cannot run as instance content.** Uploads are accepted by detected type from an allowlist and served
   with their stored type and `nosniff`; HTML, SVG and other active types are never served from the instance origin.
   _Enforced (main):_ `sniffImageType` (JPEG, PNG, GIF, WebP, AVIF by signature, and Images
@@ -1069,6 +1076,14 @@ reset` takes such a
   `MAINTENANCE=full`, only while unpublished (never while the published mark exists, whatever else is set, never for a
   Store that had no import), never during
   an import or a dump, never while the journal holds requests; once published every rollback command is refused.
+  One exemption, by its own operation kind (`media-rebuild` in `src/platform/store-kernel.ts`): the media rebuild's two
+  writes, the instance's Images transformation counter and the `meta` sizes of the row it rebuilds, pass readonly
+  maintenance and an unpublished import, so the images are served at publication. They federate nothing and enqueue
+  nothing, a cutover reset removes them with the rest, an import or a dump in progress still refuses them, and each
+  checks the Access admin again in its transaction (the import token and sessions are refused);
+  `test/media-rebuild.test.ts` ("admits only the rebuild", "rebuilds in a Store that is unpublished or in readonly
+  maintenance, where other writes stay refused", "is refused while a dump holds the Store", "is for the Access admin
+  only", "has the Store check the admin again").
   _Implemented on branch `kopje/cutover-ops`:_ `src/platform/store-flags.ts` (`admitFlags`),
   `src/platform/store-admin.ts` (`publish`, `importBegin`, `cutoverReset`), `inboxWritable` in
   `src/federation/inbox.ts`, `backupClaim` in `src/store.ts`, `src/app/admin.ts`; `test/cutover-rollback.test.ts` ("the
