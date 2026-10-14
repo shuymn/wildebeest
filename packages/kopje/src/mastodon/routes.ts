@@ -109,7 +109,7 @@ export const ROUTES: readonly Route[] = [
 	{
 		method: 'GET',
 		path: '/api/v1/accounts/verify_credentials',
-		access: { scope: 'read:accounts' },
+		access: { scope: ['profile', 'read:accounts'] },
 		handler: accounts.verifyCredentials,
 	},
 	{

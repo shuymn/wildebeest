@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { apiHarness, decide, form, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import scopeDoc from '../../../docs/mastodon-api-spec/client-api/auth-oauth.md?raw'
-import { grants, type Scope, withinScopes } from '../src/security/scopes'
+import { grants, type Scope, SCOPES, withinScopes } from '../src/security/scopes'
 import { PKCE_CHALLENGE, PKCE_VERIFIER, pkceChallenge } from '../src/security/tokens'
 
 // Hand-written protocol code checked against the examples of the standards and of Mastodon's API docs.
@@ -27,7 +27,6 @@ describe('RFC 7636 Appendix B', () => {
 })
 
 // The parent and child scopes of the "Scope Hierarchy" table in docs/mastodon-api-spec/client-api/auth-oauth.md.
-// `profile` (Mastodon 4.3) is outside the 4.0.2 API that Kopje declares.
 function documentedHierarchy(): [Scope, Scope[]][] {
 	const section = scopeDoc.slice(scopeDoc.indexOf('### Scope Hierarchy'), scopeDoc.indexOf('### Special Scopes'))
 	return [...section.matchAll(/^\| `([^`]+)` \| (.+) \|$/gm)].map((match) => [
@@ -62,6 +61,16 @@ describe("Mastodon's scope hierarchy", () => {
 				}
 			}
 		}
+	})
+
+	it('issues every documented scope, the special ones included', () => {
+		const special = scopeDoc.slice(scopeDoc.indexOf('### Special Scopes'), scopeDoc.indexOf('### Default Scope'))
+		const documented = [
+			...hierarchy.flatMap(([parent, children]) => [parent, ...children]),
+			...[...special.matchAll(/^\| `([^`]+)` \|/gm)].map((match) => match[1]!),
+		]
+		expect(documented).toContain('profile')
+		expect(documented.filter((scope) => !SCOPES.includes(scope as Scope))).toEqual([])
 	})
 })
 

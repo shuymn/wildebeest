@@ -385,8 +385,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `userReadOperation` and `userWriteOperation` in `src/domain/auth.ts`; `test/store-auth.test.ts`, `test/oauth.test.ts`
   ("refuses a token that survived the suspension").
 - **AUTH-2: every API route declares its access.** Each Mastodon API route is `public`, `token` (any valid token, app
-  tokens included) or a required user scope; one helper decides scope coverage (parents cover children, `follow` expands
-  to its split scopes, nothing else is implied). _Enforced (main):_ `src/mastodon/routes.ts`, `src/security/scopes.ts`;
+  tokens included) or a required user scope, or any one of several (`GET /api/v1/accounts/verify_credentials`:
+  `profile` or `read:accounts`); one helper decides scope coverage (parents cover children, `follow` expands to its
+  split scopes, nothing else is implied: `read` does not cover `profile`, which covers nothing else). _Enforced (main):_ `src/mastodon/routes.ts`, `src/security/scopes.ts`;
   `test/scopes.test.ts`, `test/vectors.test.ts` ("Mastodon's scope hierarchy"), `test/oauth.test.ts` ("scopes on
   routes"). Main adds `optional` scopes (no token reads as anonymous; a token sent must be valid). _Implemented on
   branch `kopje/startup-reads`:_ an `optional` route may declare no scope (`GET /api/v1/tags/:id`: any valid token,
