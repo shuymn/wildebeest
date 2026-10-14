@@ -89,6 +89,24 @@
 			"description": "Hold @cloudflare/vitest-pool-workers below 0.23.0, which was published by hand without the provenance of earlier releases; the package was renamed to @cloudflare/vitest-plugin, which replaces it",
 			"matchPackageNames": ["@cloudflare/vitest-pool-workers"],
 			"allowedVersions": "<0.23.0"
+		},
+		{
+			"description": "Update Kopje (packages/kopje and the deploy/ template) in pull requests of its own, apart from the legacy packages",
+			"matchFileNames": ["packages/kopje/**", "deploy/**"],
+			"additionalBranchPrefix": "kopje-",
+			"commitMessageSuffix": "(kopje)"
+		},
+		{
+			"description": "The legacy packages and their Terraform are frozen until the cutover to Kopje: minor and patch updates only",
+			"matchFileNames": [
+				"packages/backend/**",
+				"packages/consumer/**",
+				"packages/do/**",
+				"packages/frontend/**",
+				"tf/**"
+			],
+			"matchUpdateTypes": ["major"],
+			"enabled": false
 		}
 	]
 }
