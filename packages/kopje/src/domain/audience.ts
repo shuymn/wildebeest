@@ -72,6 +72,13 @@ export function domainBlockMatchSql(d: string, a: string): string {
 	return `(${a}.domain IS NOT NULL AND rtrim(lower(${d}.domain), '.') IN (rtrim(lower(${a}.domain), '.'), ${uriHostSql(`${a}.uri`)}))`
 }
 
+// Whether `owner` (an SQL expression for a local account id) blocks the account row `a`, or blocks its domain. Such an
+// account is never a recipient of the owner's statuses (Mastodon's ProcessMentionsService drops the mention).
+export function blockedSql(owner: string, a: string): string {
+	return `(EXISTS (SELECT 1 FROM blocks ob WHERE ob.account_id = ${owner} AND ob.target_account_id = ${a}.id)
+		OR EXISTS (SELECT 1 FROM domain_blocks od WHERE od.account_id = ${owner} AND ${domainBlockMatchSql('od', a)}))`
+}
+
 // The time the filters below judge mutes at, as SQL compares it (ISO 8601 UTC, like expires_at): the request time, or
 // null for an anonymous viewer, who filters nothing.
 export function filterTime(now: number | null): string | null {

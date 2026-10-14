@@ -24,6 +24,7 @@ import {
 import {
 	activeMuteSql,
 	type ApiVisibility,
+	blockedSql,
 	canView,
 	domainBlockMatchSql,
 	filterTime,
@@ -93,8 +94,14 @@ function localAuthor(db: Db, accountId: string): Author {
 type ResolvedMention = { id: string; uri: string; url: string | null; username: string; domain: string | null }
 
 // Mentions are resolved against accounts already known; nothing is fetched. A mention of the instance's own host is a
-// local mention. Suspended local accounts are not mentioned (their mention stays text).
-function resolveMentions(db: Db, refs: readonly MentionRef[], localHost: string): Map<string, ResolvedMention> {
+// local mention. Suspended local accounts, and accounts the author blocks or whose domain it blocks, are not mentioned
+// (their mention stays text, as Mastodon's ProcessMentionsService drops it).
+function resolveMentions(
+	db: Db,
+	refs: readonly MentionRef[],
+	localHost: string,
+	authorId: string
+): Map<string, ResolvedMention> {
 	if (refs.length === 0) {
 		return new Map()
 	}
@@ -108,8 +115,9 @@ function resolveMentions(db: Db, refs: readonly MentionRef[], localHost: string)
 		FROM json_each(?1) j
 		JOIN accounts a ON a.domain IS json_extract(j.value, '$.d') AND lower(a.username) = json_extract(j.value, '$.u')
 		LEFT JOIN local_accounts l ON l.account_id = a.id
-		WHERE l.suspended_at IS NULL`,
-		JSON.stringify(wanted)
+		WHERE l.suspended_at IS NULL AND NOT ${blockedSql('?2', 'a')}`,
+		JSON.stringify(wanted),
+		authorId
 	)
 	return new Map(rows.map(({ key, ...row }) => [key, row]))
 }
@@ -124,7 +132,7 @@ type Composed = {
 function compose(db: Db, text: string, author: Author, origin: string): Composed {
 	const parsed = parseStatusText(text)
 	const localHost = new URL(author.uri).host
-	const resolved = resolveMentions(db, parsed.mentions, localHost)
+	const resolved = resolveMentions(db, parsed.mentions, localHost, author.id)
 	const content = renderStatusHtml(parsed.segments, {
 		mention: (ref) => {
 			const account = resolved.get(mentionKey(ref))
@@ -551,6 +559,14 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 		? composed.mentions
 		: composed.mentions.filter((mention) => previous.includes(mention.id))
 	const added = writeMentions(db, current.id, mentions, previous)
+	// A mention of an account the author has blocked since goes, rather than staying silent (ProcessMentionsService).
+	db.run(
+		`DELETE FROM status_mentions WHERE status_id = ?1 AND account_id IN
+			(SELECT a.id FROM status_mentions m JOIN accounts a ON a.id = m.account_id
+			WHERE m.status_id = ?1 AND ${blockedSql('?2', 'a')})`,
+		current.id,
+		accountId
+	)
 	writeTags(db, current.id, composed.tags)
 	attachMedia(db, current.id, media, input.now)
 	for (const a of attributes) {
