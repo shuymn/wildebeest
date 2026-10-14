@@ -238,13 +238,14 @@ function converterWrites({ text, nodes }: Parsed) {
 			continue
 		}
 		const { callee } = node
+		const computed = callee.type === 'MemberExpression' && named(callee.object, 'kopje') && callee.computed
 		const runs =
 			named(callee, 'insert') ||
 			(callee.type === 'MemberExpression' &&
 				named(callee.object, 'kopje') &&
 				(named(callee.property, 'exec') || named(callee.property, 'prepare')))
-		const sql = runs ? literal(node.arguments[0]) : undefined
-		if (runs && sql === undefined) {
+		const sql = runs && !computed ? literal(node.arguments[0]) : undefined
+		if (computed || (runs && sql === undefined)) {
 			unparsed.push(text.slice(node.start, node.end))
 		}
 		for (const statement of sql === undefined ? [] : splitStatements(sql)) {
@@ -253,7 +254,9 @@ function converterWrites({ text, nodes }: Parsed) {
 			const inserted = insert?.[2]?.split(',').map((c) => c.trim())
 			const assigned = update === null ? null : assignedColumns(update[2] ?? '')
 			const state =
-				insert?.[1] === 'kopje_state' ? /^\(\s*'(\w+)'\s*,\s*\?\s*\)$/.exec(insert[3] ?? '')?.[1] : undefined
+				insert?.[1] === 'kopje_state' && inserted?.join() === 'name,value'
+					? /^\(\s*'(\w+)'\s*,\s*\?\s*\)$/.exec(insert[3] ?? '')?.[1]
+					: undefined
 			if (insert !== null && inserted?.every((c) => /^\w+$/.test(c)) && (insert[1] !== 'kopje_state' || state)) {
 				add(columns, insert[1] ?? '', inserted)
 				if (state !== undefined) {
@@ -365,6 +368,8 @@ describe('the source scanners', () => {
 			"kopje.exec('UPDATE accounts SET ' + column + ' = 1')",
 			'insert(sql)',
 			"kopje.prepare(\"INSERT INTO kopje_state (name, value) VALUES ('a', ?), ('b', ?)\")",
+			'kopje.prepare("INSERT INTO kopje_state (value, name) VALUES (?, \'c\')")',
+			"kopje['prepare']('INSERT INTO hidden (a) VALUES (1)')",
 		].join('\n'),
 		reads: [
 			'const shared = (row) => row.some_column',
@@ -407,6 +412,8 @@ describe('the source scanners', () => {
 			"kopje.exec('UPDATE accounts SET ' + column + ' = 1')",
 			'insert(sql)',
 			"INSERT INTO kopje_state (name, value) VALUES ('a', ?), ('b', ?)",
+			"INSERT INTO kopje_state (value, name) VALUES (?, 'c')",
+			"kopje['prepare']('INSERT INTO hidden (a) VALUES (1)')",
 		])
 	})
 
