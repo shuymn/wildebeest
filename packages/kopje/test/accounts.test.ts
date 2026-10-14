@@ -36,9 +36,18 @@ describe('credentials', () => {
 			following_count: 0,
 			statuses_count: 0,
 			last_status_at: null,
+			hide_collections: false,
 			emojis: [],
 			fields: [],
-			source: { privacy: 'public', sensitive: false, language: null, note: '', fields: [], follow_requests_count: 0 },
+			source: {
+				privacy: 'public',
+				sensitive: false,
+				language: null,
+				note: '',
+				fields: [],
+				follow_requests_count: 0,
+				hide_collections: false,
+			},
 			role: { id: '-99', name: '', permissions: '0', color: '', highlighted: false },
 		})
 	})
@@ -87,6 +96,35 @@ describe('credentials', () => {
 		const response = await h.request('/api/v1/accounts/update_credentials', bearer(h.token, { method: 'PATCH', body }))
 		expect(response.status).toBe(200)
 		expect(await response.json()).toMatchObject({ display_name: 'Alice A.', source: { privacy: 'private' } })
+	})
+
+	it('hides the network with hide_collections, shown on the account and in source', async () => {
+		const h = await aliceSession()
+		const hide = await h.request(
+			'/api/v1/accounts/update_credentials',
+			bearer(h.token, json({ hide_collections: true }, { method: 'PATCH' }))
+		)
+		expect(await hide.json()).toMatchObject({ hide_collections: true, source: { hide_collections: true } })
+		const [row] = await sql<{ hide_collections: number }>(
+			h.store,
+			'SELECT hide_collections FROM local_accounts WHERE account_id = ?',
+			h.aliceId
+		)
+		expect(row?.hide_collections).toBe(1)
+		expect(await (await h.request(`/api/v1/accounts/${h.aliceId}`)).json()).toMatchObject({ hide_collections: true })
+		// Left out, it stays as it is; false shows the network again.
+		const other = await h.request(
+			'/api/v1/accounts/update_credentials',
+			bearer(h.token, json({ display_name: 'Alice A.' }, { method: 'PATCH' }))
+		)
+		expect(await other.json()).toMatchObject({ hide_collections: true })
+		const show = new FormData()
+		show.set('hide_collections', 'false')
+		const shown = await h.request(
+			'/api/v1/accounts/update_credentials',
+			bearer(h.token, { method: 'PATCH', body: show })
+		)
+		expect(await shown.json()).toMatchObject({ hide_collections: false, source: { hide_collections: false } })
 	})
 
 	it('refuses invalid values without changing anything', async () => {

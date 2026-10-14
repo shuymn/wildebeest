@@ -48,6 +48,9 @@ export type Account = {
 	following_count: number
 	statuses_count: number
 	last_status_at: string | null
+	// Whether the account hides its network (Account#hide_collections): set by a local account; null for a remote
+	// account, whose setting Kopje does not learn.
+	hide_collections: boolean | null
 	emojis: []
 	fields: Field[]
 	suspended?: true
@@ -75,6 +78,7 @@ export type CredentialAccount = Account & {
 		note: string
 		fields: (FieldSource & { verified_at: null })[]
 		follow_requests_count: number
+		hide_collections: boolean
 	}
 	role: { id: string; name: string; permissions: string; color: string; highlighted: boolean }
 }
@@ -121,8 +125,9 @@ export type AccountRow = {
 	created_at: string
 	suspended_at: string | null
 	last_status_at: string | null
-	// local_accounts.fields; null for a remote account.
+	// local_accounts.fields and hide_collections; null for a remote account.
 	local_fields: string | null
+	hide_collections: number | null
 	// A remote account's `attachment`, as JSON (fields are read from raw, as the design keeps them).
 	attachment: string | null
 }
@@ -133,7 +138,7 @@ export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type,
 	(SELECT substr(s.published_at, 1, 10) FROM statuses s
 		WHERE s.account_id = a.id AND s.visibility IN ${REACHES_FOLLOWERS_SQL} ORDER BY s.id DESC LIMIT 1)
 		AS last_status_at,
-	l.fields AS local_fields,
+	l.fields AS local_fields, l.hide_collections,
 	CASE WHEN a.domain IS NOT NULL THEN a.raw -> '$.attachment' END AS attachment`
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
@@ -181,6 +186,7 @@ export function presentAccount(row: AccountRow, { origin }: Present): Account {
 		following_count: row.following_count,
 		statuses_count: row.statuses_count,
 		last_status_at: row.last_status_at,
+		hide_collections: row.hide_collections === null ? null : row.hide_collections === 1,
 		emojis: [],
 		fields: suspended
 			? []
@@ -332,6 +338,7 @@ export function credentialAccount(db: Db, accountId: string, present: Present): 
 			note: htmlToPlainText(row.note),
 			fields: fieldSources(row.local_fields).map((field) => ({ ...field, verified_at: null })),
 			follow_requests_count: local.follow_requests_count,
+			hide_collections: row.hide_collections === 1,
 		},
 		// Every user has Mastodon's default role (id -99) until roles exist. permissions is a string (design §4).
 		role: { id: '-99', name: '', permissions: '0', color: '', highlighted: false },
@@ -374,6 +381,7 @@ export type CredentialChanges = {
 	locked?: boolean
 	bot?: boolean
 	discoverable?: boolean
+	hideCollections?: boolean
 	privacy?: Visibility
 	sensitive?: boolean
 	language?: string | null
@@ -418,13 +426,14 @@ export const updateCredentials = userWriteOperation<
 		`UPDATE local_accounts SET default_visibility = COALESCE(?, default_visibility),
 			default_sensitive = COALESCE(?, default_sensitive),
 			default_language = CASE WHEN ? THEN ? ELSE default_language END,
-			fields = COALESCE(?, fields)
+			fields = COALESCE(?, fields), hide_collections = COALESCE(?, hide_collections)
 		WHERE account_id = ?`,
 		changes.privacy ?? null,
 		bit(changes.sensitive),
 		changes.language === undefined ? 0 : 1,
 		changes.language ?? null,
 		changes.fields === undefined ? null : JSON.stringify(changes.fields.slice(0, MAX_FIELDS)),
+		bit(changes.hideCollections),
 		accountId
 	)
 	// Other servers learn of the change (Update(Person)), only if the published document changed.
