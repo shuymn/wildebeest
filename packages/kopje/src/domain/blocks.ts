@@ -21,7 +21,8 @@ import {
 } from './activities'
 import { activeMuteSql, domainBlockMatchSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
-import { recountLocal, retractFollow } from './inbox'
+import { retractFollow } from './inbox'
+import { writeOperation } from './operation'
 import type { Db } from '../db/sql'
 
 // Blocks, mutes and domain blocks of local users (Mastodon 4.5's BlockService, UnblockService, MuteService,
@@ -37,12 +38,16 @@ import type { Db } from '../db/sql'
 //   - A mute is local only. It hides notifications too unless notifications=false, and expires after duration seconds
 //     (0: never); an expired mute stops applying at its time (activeMuteSql) and is swept later.
 //   - A domain block hides every account of that domain (domainBlockMatchSql: its stored domain or its actor's host,
-//     exactly, as Mastodon's AccountDomainBlock matches) and removes the user's followers there, accepted or
-//     requested, each with a Reject, at most DOMAIN_BLOCK_BATCH per call (RES-6). Followers left over are never
-//     delivered to (audienceTargets) and are removed by the next call for the domain. The user's own follows of
-//     accounts there stay, as in Mastodon.
+//     exactly, as Mastodon's AccountDomainBlock matches), and ends the user's follows to and from accounts there, in
+//     either state (AfterBlockDomainFromAccountService: a Reject to each follower, an Undo of each of our follows).
+//     That is a durable cleanup (domain_block_cleanups) done in batches that each scan DOMAIN_BLOCK_WINDOW follows by
+//     id (RES-6, RES-7): the first in the request, the rest by runDomainBlockCleanups, which the Queue and the cron
+//     run with the inbound jobs. Meanwhile nothing that carries content is delivered to the domain (deliveries.ts).
+//     An unblock deletes the cleanup with the block: what was removed stays removed, and the rest stays.
 
-export const DOMAIN_BLOCK_BATCH = 500
+// Follows rows one cleanup batch scans, and batches one runDomainBlockCleanups call does at most.
+export const DOMAIN_BLOCK_WINDOW = 500
+export const DOMAIN_BLOCK_BATCHES_PER_RUN = 4
 
 type Party = { id: string; uri: string; local: number }
 
@@ -52,8 +57,10 @@ function party(db: Db, id: string): Party | undefined {
 
 // Ends the follow of `follower` to `target` in either state, with its follow notifications, as UnfollowService and
 // RejectFollowService do: a local follower's follow of a remote target is undone there, and a remote follower of a
-// local target is sent a Reject (one that withdraws the follow if it had been accepted, deliveries.ts).
-function endFollow(db: Db, follower: Party, target: Party, now: number): void {
+// local target is sent a Reject (one that withdraws the follow if it had been accepted, deliveries.ts). The local
+// sides' counts lose the removed edge if it was accepted (a remote account's counts are its server's). Returns
+// whether an activity was recorded.
+function endFollow(db: Db, follower: Party, target: Party, now: number): boolean {
 	const edge = db.first<{ id: string; uri: string | null; state: string }>(
 		`DELETE FROM follows WHERE account_id = ? AND target_account_id = ?
 		RETURNING CAST(id AS TEXT) AS id, uri, state`,
@@ -61,13 +68,23 @@ function endFollow(db: Db, follower: Party, target: Party, now: number): void {
 		target.id
 	)
 	if (edge === undefined) {
-		return
+		return false
 	}
 	db.run(
 		"DELETE FROM notifications WHERE account_id = ? AND from_account_id = ? AND type IN ('follow', 'follow_request')",
 		target.id,
 		follower.id
 	)
+	if (edge.state === 'accepted') {
+		db.run(
+			'UPDATE accounts SET following_count = max(following_count - 1, 0) WHERE id = ? AND domain IS NULL',
+			follower.id
+		)
+		db.run(
+			'UPDATE accounts SET followers_count = max(followers_count - 1, 0) WHERE id = ? AND domain IS NULL',
+			target.id
+		)
+	}
 	if (follower.local === 1 && target.local === 0) {
 		recordOutbound(
 			db,
@@ -80,7 +97,9 @@ function endFollow(db: Db, follower: Party, target: Party, now: number): void {
 			}),
 			now
 		)
-	} else if (follower.local === 0 && target.local === 1) {
+		return true
+	}
+	if (follower.local === 0 && target.local === 1) {
 		if (edge.uri !== null) {
 			retractFollow(db, follower.uri, edge.uri, now)
 		}
@@ -97,7 +116,9 @@ function endFollow(db: Db, follower: Party, target: Party, now: number): void {
 			now,
 			{ withdraws: edge.state === 'accepted' }
 		)
+		return true
 	}
+	return false
 }
 
 type Target = { status: 'ok'; viewer: Party; target: Party } | { status: 'not_found' } | { status: 'forbidden' }
@@ -149,7 +170,6 @@ export const block = userWriteOperation<RelationInput, RelationshipResult>((db, 
 				input.now
 			)
 		}
-		recountLocal(db, [viewer.id, target.id])
 	}
 	return relationshipResult(db, viewer.id, target.id, input.now)
 })
@@ -293,38 +313,89 @@ function isLocalDomain(db: Db, domain: string): boolean {
 	return own !== undefined && own.toLowerCase() === domain
 }
 
-// The user's followers, accepted or requested, on `domain` (as a domain block matches them).
-function followersOn(db: Db, accountId: string, domain: string, limit: number): Party[] {
-	return db.all<Party>(
-		`SELECT a.id, a.uri, 0 AS local, a.locked FROM follows f JOIN accounts a ON a.id = f.account_id
-			JOIN (SELECT ?2 AS domain) d
-		WHERE f.target_account_id = ?1 AND ${domainBlockMatchSql('d', 'a')}
-		ORDER BY f.id LIMIT ?3`,
-		accountId,
-		domain,
-		limit
-	)
+type Cleanup = { domain_block_id: number; account_id: string; domain: string; bound: number; cursor: number }
+
+// One batch of a cleanup: the next DOMAIN_BLOCK_WINDOW follows by id (whoever's they are, so the rows read are bounded
+// however few match), of which the user's follows to and from accounts of the domain end. The cleanup is done when
+// the scan reaches its bound. Returns whether an activity was recorded.
+function cleanupBatch(db: Db, cleanup: Cleanup, now: number): boolean {
+	const last = db.first<{ last: number | null }>(
+		'SELECT max(id) AS last FROM (SELECT id FROM follows WHERE id > ? AND id <= ? ORDER BY id LIMIT ?)',
+		cleanup.cursor,
+		cleanup.bound,
+		DOMAIN_BLOCK_WINDOW
+	)?.last
+	const user = party(db, cleanup.account_id)
+	let recorded = false
+	if (last != null && user !== undefined) {
+		const ended = db.all<{ follower: string; target: string; other: string; other_uri: string }>(
+			`SELECT f.account_id AS follower, f.target_account_id AS target, a.id AS other, a.uri AS other_uri
+			FROM follows f JOIN accounts a ON a.id = IIF(f.account_id = ?1, f.target_account_id, f.account_id)
+				JOIN (SELECT ?2 AS domain) d
+			WHERE f.id > ?3 AND f.id <= ?4 AND ?1 IN (f.account_id, f.target_account_id) AND ${domainBlockMatchSql('d', 'a')}
+			ORDER BY f.id`,
+			cleanup.account_id,
+			cleanup.domain,
+			cleanup.cursor,
+			last
+		)
+		for (const edge of ended) {
+			const other = { id: edge.other, uri: edge.other_uri, local: 0 }
+			const ends = edge.follower === user.id ? endFollow(db, user, other, now) : endFollow(db, other, user, now)
+			recorded = ends || recorded
+		}
+	}
+	if (last == null || last >= cleanup.bound) {
+		db.run('DELETE FROM domain_block_cleanups WHERE domain_block_id = ?', cleanup.domain_block_id)
+	} else {
+		db.run('UPDATE domain_block_cleanups SET cursor = ? WHERE domain_block_id = ?', last, cleanup.domain_block_id)
+	}
+	return recorded
 }
 
-// POST /api/v1/domain_blocks (Account#block_domain! and AfterBlockDomainFromAccountService): records the block, then
-// removes a batch of the user's followers on the domain, each with a Reject. `domain` is normalized by the caller.
+const NEXT_CLEANUP = `SELECT c.domain_block_id, d.account_id, d.domain, c.bound, c.cursor
+	FROM domain_block_cleanups c JOIN domain_blocks d ON d.id = c.domain_block_id
+	ORDER BY c.created_at, c.domain_block_id LIMIT 1`
+
+// The cleanups' next batches, oldest cleanup first, at most DOMAIN_BLOCK_BATCHES_PER_RUN (the Queue and the cron call
+// it with the inbound jobs, store.ts). pending: a cleanup has batches left; delivers: activities were recorded.
+export const runDomainBlockCleanups = writeOperation<{ now: number }, { pending: boolean; delivers: boolean }>(
+	(db, { now }) => {
+		let delivers = false
+		for (let batch = 0; batch < DOMAIN_BLOCK_BATCHES_PER_RUN; batch++) {
+			const cleanup = db.first<Cleanup>(NEXT_CLEANUP)
+			if (cleanup === undefined) {
+				break
+			}
+			delivers = cleanupBatch(db, cleanup, now) || delivers
+		}
+		return { pending: db.first(NEXT_CLEANUP) !== undefined, delivers }
+	}
+)
+
+// POST /api/v1/domain_blocks (Account#block_domain! and AfterBlockDomainFromAccountService): records the block and
+// its cleanup, and does the cleanup's first batch. `domain` is normalized by the caller. Blocking a domain already
+// blocked changes nothing.
 export const blockDomain = userWriteOperation<{ domain: string; now: number }, DomainBlockResult>(
 	(db, { domain, now }, { accountId }) => {
 		if (isLocalDomain(db, domain)) {
 			return { status: 'local' }
 		}
-		db.run(
-			'INSERT INTO domain_blocks (account_id, domain, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
+		const created = db.first<{ id: number }>(
+			'INSERT INTO domain_blocks (account_id, domain, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING RETURNING id',
 			accountId,
 			domain,
 			new Date(now).toISOString()
 		)
-		const viewer = party(db, accountId)
-		if (viewer !== undefined) {
-			for (const follower of followersOn(db, accountId, domain, DOMAIN_BLOCK_BATCH)) {
-				endFollow(db, follower, viewer, now)
-			}
-			recountLocal(db, [accountId])
+		const bound = db.first<{ bound: number | null }>('SELECT max(id) AS bound FROM follows')?.bound
+		if (created !== undefined && bound != null) {
+			db.run(
+				'INSERT INTO domain_block_cleanups (domain_block_id, bound, created_at) VALUES (?, ?, ?)',
+				created.id,
+				bound,
+				now
+			)
+			cleanupBatch(db, { domain_block_id: created.id, account_id: accountId, domain, bound, cursor: 0 }, now)
 		}
 		return { status: 'ok' }
 	}

@@ -16,6 +16,7 @@ const SCHEMA_TABLES = [
 	'blocks',
 	'bookmarks',
 	'deliveries',
+	'domain_block_cleanups',
 	'domain_blocks',
 	'favourites',
 	'fedify_kv',
@@ -83,7 +84,7 @@ describe('Store migration runner', () => {
 		})
 	})
 
-	it('0001 adds mute expiry to a Store with data, keeping every mute indefinite', async () => {
+	it('0001 adds mute expiry and domain block cleanups to a Store with data, keeping every mute indefinite', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
 			expect(await kernel(state, MIGRATIONS.slice(0, 1)).upgrade()).toMatchObject({ ok: true, applied: [NAMES[0]] })
@@ -105,13 +106,14 @@ describe('Store migration runner', () => {
 				remote
 			)
 
-			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({ ok: true, applied: ['0001_mute_expiry'] })
+			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({ ok: true, applied: ['0001_blocks_and_mutes'] })
 			expect(
 				sql.exec('SELECT account_id, target_account_id, hide_notifications, expires_at FROM mutes').toArray()
 			).toEqual([{ account_id: local, target_account_id: remote, hide_notifications: 0, expires_at: null }])
 			expect(
 				sql.exec("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'mutes_expires'").toArray()
 			).toEqual([{ sql: expect.stringContaining('WHERE expires_at IS NOT NULL') }])
+			expect(tableNames(sql)).toContain('domain_block_cleanups')
 			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
 		})
 	})

@@ -222,7 +222,7 @@ describe('kopje-admin', () => {
 		const store = await sourceStore(0)
 		const { fetch } = edge(store)
 		expect(JSON.parse((await cli(['version'], { fetch })).out)).toMatchObject({
-			store: { applied: '0001_mute_expiry' },
+			store: { applied: '0001_blocks_and_mutes' },
 		})
 		expect((await cli(['capacity'], { fetch })).out).toMatch(/^database .*\n.* accounts$/m)
 		expect(JSON.parse((await cli(['spool'], { fetch })).out)).toMatchObject({ parts: 1 })

@@ -43,7 +43,7 @@ describe('app skeleton', () => {
 			checks: {
 				env: { ok: true },
 				store: { ok: true },
-				schema: { ok: true, status: 'current', applied: '0001_mute_expiry', expected: '0001_mute_expiry' },
+				schema: { ok: true, status: 'current', applied: '0001_blocks_and_mutes', expected: '0001_blocks_and_mutes' },
 				database: { ok: true, size: expect.any(Number) },
 			},
 		})

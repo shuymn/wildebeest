@@ -387,8 +387,11 @@ export class Store extends DurableObject<Env> {
 		}
 	}
 
-	runInboundJobs(callerBuild: string, input: OperationInput<typeof inbox.runInboundJobs>) {
-		return this.#kernel.execute(callerBuild, inbox.runInboundJobs, input)
+	// A round of the inbound jobs and of the domain block cleanups (domain/blocks.ts), each in its own transaction.
+	async runInboundJobs(callerBuild: string, input: OperationInput<typeof inbox.runInboundJobs>) {
+		const inbound = await this.#kernel.execute(callerBuild, inbox.runInboundJobs, input)
+		const cleanups = await this.#kernel.execute(callerBuild, blocks.runDomainBlockCleanups, input)
+		return { pending: inbound.pending || cleanups.pending, delivers: inbound.delivers || cleanups.delivers }
 	}
 
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {

@@ -482,7 +482,7 @@ function localAccount(db: Db, uri: string | null): LocalRow | undefined {
 	)
 }
 
-export function recountLocal(db: Db, ids: Iterable<string>): void {
+function recountLocal(db: Db, ids: Iterable<string>): void {
 	for (const id of new Set(ids)) {
 		db.run(
 			`UPDATE accounts SET
