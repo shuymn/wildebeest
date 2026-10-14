@@ -1,22 +1,8 @@
 import { readFileSync } from 'node:fs'
 import type { SQLInputValue } from 'node:sqlite'
 
-import { SyntaxKind, type Node, type SourceFile } from 'typescript/unstable/ast'
-import {
-	isBinaryExpression,
-	isCallExpression,
-	isCaseClause,
-	isElementAccessExpression,
-	isIdentifier,
-	isIfStatement,
-	isNoSubstitutionTemplateLiteral,
-	isPropertyAccessExpression,
-	isStringLiteral,
-	isSwitchStatement,
-	isVariableDeclaration,
-} from 'typescript/unstable/ast/is'
-import { createVirtualFileSystem } from 'typescript/unstable/fs'
-import { API } from 'typescript/unstable/sync'
+import * as acorn from 'acorn'
+import type { AnyNode } from 'acorn'
 import { describe, expect, it } from 'vitest'
 
 import { createKopjeDatabase, readCatalog } from '../cli/lib/cutover/kopje-db.js'
@@ -178,50 +164,35 @@ function add(into: Map<string, Set<string>>, table: string, columns: Iterable<st
 	into.set(table, set)
 }
 
-// JavaScript sources, by name, parsed by the TypeScript compiler in a virtual project of their own.
-function parse<Name extends string>(sources: Record<Name, string>): Record<Name, SourceFile> {
-	const files: Record<string, string> = {
-		'/src/tsconfig.json': JSON.stringify({ compilerOptions: { allowJs: true, noLib: true }, include: ['*.js'] }),
-	}
-	for (const [name, text] of Object.entries<string>(sources)) {
-		files[`/src/${name}.js`] = text
-	}
-	const api = new API({ cwd: '/src', fs: createVirtualFileSystem(files) })
-	try {
-		const program = api.updateSnapshot({ openProject: '/src/tsconfig.json' }).getProjects()[0]?.program
-		const parsed = Object.keys(sources).map((name) => [name, program?.getSourceFile(`/src/${name}.js`)] as const)
-		if (parsed.some(([, file]) => file === undefined)) {
-			throw new Error('a source did not parse')
+// A JavaScript source parsed by acorn: each node with its ancestors, nearest first.
+type Parsed = { text: string; nodes: { node: AnyNode; parents: AnyNode[] }[] }
+
+function parse<Name extends string>(sources: Record<Name, string>): Record<Name, Parsed> {
+	const parsed = Object.entries<string>(sources).map(([name, text]) => {
+		const nodes: Parsed['nodes'] = []
+		const visit = (node: AnyNode, parents: AnyNode[]) => {
+			nodes.push({ node, parents })
+			for (const child of Object.values(node).flat()) {
+				if (typeof child === 'object' && child !== null && typeof child.type === 'string') {
+					visit(child as AnyNode, [node, ...parents])
+				}
+			}
 		}
-		return Object.fromEntries(parsed) as Record<Name, SourceFile>
-	} finally {
-		api.close()
-	}
+		visit(acorn.parse(text, { ecmaVersion: 'latest', sourceType: 'module', locations: true }), [])
+		return [name, { text, nodes }] as const
+	})
+	return Object.fromEntries(parsed) as Record<Name, Parsed>
 }
 
-function descendants(root: Node): Node[] {
-	const all: Node[] = []
-	const visit = (node: Node) => {
-		all.push(node)
-		node.forEachChild(visit)
-	}
-	root.forEachChild(visit)
-	return all
-}
-
-const literal = (node: Node | undefined) =>
-	node !== undefined && (isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined
-const named = (node: Node, name: string) => isIdentifier(node) && node.text === name
-const snippet = (node: Node) => node.getText().replace(/\s+/g, ' ')
-
-function enclosedBy(node: Node, test: (ancestor: Node) => boolean): boolean {
-	for (let at: Node | undefined = node.parent; at !== undefined; at = at.parent) {
-		if (test(at)) {
-			return true
-		}
-	}
-	return false
-}
+const literal = (node: AnyNode | null | undefined) =>
+	node?.type === 'Literal' && typeof node.value === 'string'
+		? node.value
+		: node?.type === 'TemplateLiteral' && node.expressions.length === 0
+			? (node.quasis[0]?.value.cooked ?? undefined)
+			: undefined
+const named = (node: AnyNode | null | undefined, name: string) => node?.type === 'Identifier' && node.name === name
+const declaredIn = (parents: AnyNode[], name: string) =>
+	parents.some((p) => p.type === 'VariableDeclarator' && named(p.id, name))
 
 // The assigned columns of an UPDATE's SET clause, up to its WHERE or end; null when an assignment has another form.
 function assignedColumns(clause: string): string[] | null {
@@ -258,26 +229,24 @@ function assignedColumns(clause: string): string[] | null {
 // kopje.prepare(sql) (insert wraps the last); the SQL must be one literal, split into statements by the cutover's own
 // splitter. An INSERT or UPDATE adds its columns, an INSERT into kopje_state its one literal name; any other argument,
 // statement or kopje_state row is unparsed.
-function converterWrites(file: SourceFile) {
+function converterWrites({ text, nodes }: Parsed) {
 	const columns = new Map<string, Set<string>>()
 	const stateNames: string[] = []
 	const unparsed: string[] = []
-	for (const node of descendants(file)) {
-		const callee = isCallExpression(node) ? node.expression : undefined
-		const runs =
-			callee !== undefined &&
-			(named(callee, 'insert') ||
-				(isPropertyAccessExpression(callee) &&
-					named(callee.expression, 'kopje') &&
-					['exec', 'prepare'].includes(callee.name.text)))
-		if (
-			!runs ||
-			!isCallExpression(node) ||
-			enclosedBy(node, (at) => isVariableDeclaration(at) && named(at.name, 'insert'))
-		) {
+	for (const { node, parents } of nodes) {
+		if (node.type !== 'CallExpression' || declaredIn(parents, 'insert')) {
 			continue
 		}
-		const sql = literal(node.arguments[0])
+		const { callee } = node
+		const runs =
+			named(callee, 'insert') ||
+			(callee.type === 'MemberExpression' &&
+				named(callee.object, 'kopje') &&
+				(named(callee.property, 'exec') || named(callee.property, 'prepare')))
+		const sql = runs ? literal(node.arguments[0]) : undefined
+		if (runs && sql === undefined) {
+			unparsed.push(text.slice(node.start, node.end))
+		}
 		for (const statement of sql === undefined ? [] : splitStatements(sql)) {
 			const insert = /^INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)\s*\(([^)]*)\)\s*VALUES\s*([\s\S]*)$/.exec(statement)
 			const update = /^UPDATE\s+(\w+)\s+SET\s+([\s\S]*)$/.exec(statement)
@@ -296,27 +265,25 @@ function converterWrites(file: SourceFile) {
 				unparsed.push(statement)
 			}
 		}
-		if (sql === undefined) {
-			unparsed.push(snippet(node))
-		}
 	}
 	return { columns, stateNames, unparsed }
 }
 
-const isTableOfStatement = (node: Node) =>
-	isPropertyAccessExpression(node) && named(node.expression, 'statement') && node.name.text === 'table'
+const isTableOfStatement = (node: AnyNode) =>
+	node.type === 'MemberExpression' && named(node.object, 'statement') && named(node.property, 'table')
 
 // The table a node of verify-actual.js reads for: the case clause of `switch (statement.table)` around it, or the
 // block of `if (statement.table === 'table')` around it.
-function tableOf(node: Node): string | undefined {
-	for (let at: Node | undefined = node; at?.parent !== undefined; at = at.parent) {
-		const up = at.parent
-		if (isCaseClause(at) && isSwitchStatement(up.parent) && isTableOfStatement(up.parent.expression)) {
-			return literal(at.expression)
+function tableOf(chain: AnyNode[]): string | undefined {
+	for (const [i, at] of chain.entries()) {
+		const up = chain[i + 1]
+		if (at.type === 'SwitchCase' && up?.type === 'SwitchStatement' && isTableOfStatement(up.discriminant)) {
+			return literal(at.test)
 		}
-		const test = isIfStatement(up) && up.thenStatement.pos === at.pos ? up.expression : undefined
-		if (test !== undefined && isBinaryExpression(test) && isTableOfStatement(test.left)) {
-			return test.operatorToken.kind === SyntaxKind.EqualsEqualsEqualsToken ? literal(test.right) : undefined
+		if (up?.type === 'IfStatement' && up.consequent === at && up.test.type === 'BinaryExpression') {
+			if (isTableOfStatement(up.test.left)) {
+				return up.test.operator === '===' ? literal(up.test.right) : undefined
+			}
 		}
 	}
 	return undefined
@@ -325,32 +292,32 @@ function tableOf(node: Node): string | undefined {
 // The columns verify-actual.js reads per table: t('column'), row.column, row['column'], and c === 'column' (a link
 // statement's columns). A read outside a case clause or link block, or row[...] by a variable other than where the row
 // is built (row[column] = ...) and in t itself, is unattributed.
-function verifierReads(file: SourceFile) {
+function verifierReads({ text, nodes }: Parsed) {
 	const columns = new Map<string, Set<string>>()
 	const unattributed: string[] = []
-	for (const node of descendants(file)) {
+	for (const { node, parents } of nodes) {
 		let column: string | undefined
-		if (isCallExpression(node) && named(node.expression, 't')) {
+		if (node.type === 'CallExpression' && named(node.callee, 't')) {
 			column = literal(node.arguments[0])
-		} else if (isPropertyAccessExpression(node) && named(node.expression, 'row')) {
-			column = node.name.text
-		} else if (isElementAccessExpression(node) && named(node.expression, 'row')) {
-			column = literal(node.argumentExpression)
-			const built = isBinaryExpression(node.parent) && node.parent.left.pos === node.pos
-			if (
-				column === undefined &&
-				(built || enclosedBy(node, (at) => isVariableDeclaration(at) && named(at.name, 't')))
-			) {
+		} else if (node.type === 'MemberExpression' && named(node.object, 'row')) {
+			column = node.computed
+				? literal(node.property)
+				: node.property.type === 'Identifier'
+					? node.property.name
+					: undefined
+			const parent = parents[0]
+			const built = parent?.type === 'AssignmentExpression' && parent.left === node
+			if (column === undefined && node.computed && (built || declaredIn(parents, 't'))) {
 				continue
 			}
-		} else if (isBinaryExpression(node) && named(node.left, 'c')) {
+		} else if (node.type === 'BinaryExpression' && named(node.left, 'c')) {
 			column = literal(node.right)
 		} else {
 			continue
 		}
-		const table = column === undefined ? undefined : tableOf(node)
+		const table = column === undefined ? undefined : tableOf([node, ...parents])
 		if (column === undefined || table === undefined) {
-			unattributed.push(snippet(node))
+			unattributed.push(text.slice(node.start, node.end).replace(/\s+/g, ' '))
 		} else {
 			add(columns, table, [column])
 		}
