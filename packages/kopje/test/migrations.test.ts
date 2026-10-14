@@ -109,7 +109,7 @@ describe('Store migration runner', () => {
 
 			expect(await kernel(state, MIGRATIONS.slice(0, 2)).upgrade()).toMatchObject({
 				ok: true,
-				applied: ['0001_blocks_and_mutes'],
+				applied: [NAMES[1]],
 			})
 			expect(
 				sql.exec('SELECT account_id, target_account_id, hide_notifications, expires_at FROM mutes').toArray()
@@ -138,14 +138,14 @@ describe('Store migration runner', () => {
 		await runInDurableObject(store, async (_instance, state) => {
 			const sql = state.storage.sql
 			expect(await kernel(state, MIGRATIONS.slice(0, 2)).upgrade()).toMatchObject({
-				applied: ['0000_initial', '0001_blocks_and_mutes'],
+				applied: NAMES.slice(0, 2),
 			})
 			sql.exec(`
 				INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('c', 's', 'n', 'urn:x', 'push');
 				INSERT INTO oauth_tokens (token_hash, kind, client_id, scopes) VALUES ('h', 'access', 'c', 'push');
 				INSERT INTO push_subscriptions (token_hash, endpoint, key_p256dh, key_auth) VALUES ('h', 'https://p.example/', 'k', 'a');
 			`)
-			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({ ok: true, applied: ['0002_web_push'] })
+			expect(await kernel(state, MIGRATIONS.slice(0, 3)).upgrade()).toMatchObject({ ok: true, applied: [NAMES[2]] })
 			expect(sql.exec('SELECT standard, token_sealed FROM push_subscriptions').toArray()).toEqual([
 				{ standard: 0, token_sealed: '' },
 			])
