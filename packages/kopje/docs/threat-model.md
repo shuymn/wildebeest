@@ -316,7 +316,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   follow the other (a remote `Follow` is answered with a `Reject`), the blocked account sees nothing of the blocker
   (VIS-1) and cannot favourite or boost the blocker's statuses, and nothing from the blocked account reaches the
   blocker: no list shows it (VIS-5), and no notification of it is written or shown, including a mention or reply
-  that mentions or answers it. Relationships show `blocking` and `blocked_by`. A local block of a remote account
+  that mentions or answers it and a post notification (`notify`) of a status that mentions it. Relationships show `blocking` and `blocked_by`. A local block of a remote account
   sends, in order, the `Undo` of our follow, a `Reject` of theirs (one that withdraws it if it was accepted) and the
   `Block`; an unblock sends the `Block`'s `Undo`, which supersedes a `Block` still waiting. All go to the blocked
   account only (NET-2). After the block, the blocked account is no recipient of the blocker's statuses: a new status
@@ -334,7 +334,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **VIS-14: a mute hides only for the muter, and only while it lasts.** A mute is never federated and changes nothing
   the muted account sees or may do. It keeps the muted account out of the muter's lists (VIS-5) and home, including
   others' statuses that mention it, and, unless created with `notifications=false`, out of the muter's notifications
-  (a mention or reply that mentions or answers it included). A mute with a duration applies until its `expires_at`,
+  (a mention or reply that mentions or answers it included); a post notification (`notify`) of a status that
+  mentions it is left out whether or not the mute hides notifications, as home leaves the status out. A mute with a duration applies until its `expires_at`,
   judged at the time of each request or write (the credential's time, or the activity's), so it stops applying at its
   time whether or not the sweep has removed it; the inbound sweep removes 100 expired mutes per call (RES-4).
   _Implemented on branch `kopje/blocks-mutes`:_ `activeMuteSql` and `unfilteredSql` in `src/domain/audience.ts`,

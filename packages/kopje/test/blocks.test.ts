@@ -497,6 +497,29 @@ describe('mentions of blocked and muted accounts', () => {
 		expect(await ids(h, '/api/v1/timelines/home', alice.token)).toEqual([both.id, aboutFoe.id, plain.id])
 	})
 
+	it('leaves out post notifications (notify=true) that home leaves out, written and shown', async () => {
+		const h = await community(['alice', 'friend', 'foe', 'mutee'])
+		const { alice, friend, foe, mutee } = h.users
+		expect((await act(h, alice, `/api/v1/accounts/${friend.id}/follow`, { notify: true })).status).toBe(200)
+		const early = await post(h, friend, { status: '@foe early' })
+		expect(await ids(h, '/api/v1/notifications?types[]=status', alice.token)).toHaveLength(1)
+
+		await relate(h, alice, `/api/v1/accounts/${foe.id}/block`)
+		// A mute that keeps notifications still filters home, and so the post notification.
+		await relate(h, alice, `/api/v1/accounts/${mutee.id}/mute`, { notifications: false })
+		expect(await ids(h, '/api/v1/notifications?types[]=status', alice.token)).toEqual([])
+		await post(h, friend, { status: '@foe hello' })
+		await post(h, friend, { status: '@mutee hey' })
+		const plain = await post(h, friend, { status: 'plain' })
+		const shown = await getJson<{ status: { id: string } }[]>(h, '/api/v1/notifications?types[]=status', alice.token)
+		expect(shown.body.map((n) => n.status.id)).toEqual([plain.id])
+		// None was written for the filtered posts.
+		expect(await sql(h.store, "SELECT status_id FROM notifications WHERE type = 'status' ORDER BY id")).toEqual([
+			{ status_id: early.id },
+			{ status_id: plain.id },
+		])
+	})
+
 	it("keeps the viewer's own statuses in home, whoever they mention", async () => {
 		const h = await community(['alice', 'foe'])
 		const { alice, foe } = h.users

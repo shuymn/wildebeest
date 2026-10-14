@@ -9,7 +9,8 @@ import type { Db } from '../db/sql'
 // it is shown: the recipient is local and not its sender, the sender is not suspended, blocked (either way), muted
 // with notifications (while the mute applies), or domain-blocked by the recipient, and the recipient may see the
 // status (audience rule). A mention is also left out when its status mentions or replies to an account the recipient
-// blocks or mutes with notifications (Mastodon's FeedManager#filter_from_mentions).
+// blocks or mutes with notifications (Mastodon's FeedManager#filter_from_mentions), and a post notification (`status`)
+// when home leaves its status out for mentioning an account the recipient blocks or mutes (FeedInsertWorker).
 
 export type NotificationType = 'mention' | 'status' | 'reblog' | 'favourite' | 'follow' | 'follow_request' | 'update'
 
@@ -45,7 +46,11 @@ function shownSql(r: string, type: string, from: string, status: string, now: st
 		AND (${type} <> 'mention' OR NOT EXISTS (SELECT 1 FROM statuses mt WHERE mt.id = ${status}
 			AND (EXISTS (SELECT 1 FROM status_mentions mm WHERE mm.status_id = mt.id AND mm.silent = 0
 					AND ${silencedSql(r, 'mm.account_id', now)})
-				OR (mt.in_reply_to_account_id IS NOT NULL AND ${silencedSql(r, 'mt.in_reply_to_account_id', now)})))))`
+				OR (mt.in_reply_to_account_id IS NOT NULL AND ${silencedSql(r, 'mt.in_reply_to_account_id', now)}))))
+		AND (${type} <> 'status' OR NOT EXISTS (SELECT 1 FROM status_mentions sm WHERE sm.status_id = ${status}
+			AND sm.silent = 0 AND (EXISTS (SELECT 1 FROM blocks sb WHERE sb.account_id = ${r} AND sb.target_account_id = sm.account_id)
+				OR EXISTS (SELECT 1 FROM mutes smu WHERE smu.account_id = ${r} AND smu.target_account_id = sm.account_id
+					AND ${activeMuteSql('smu', now)})))))`
 }
 
 export type NotifyInput = {

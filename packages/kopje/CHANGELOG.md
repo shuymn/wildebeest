@@ -30,7 +30,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 ### Changed
 
 - Home and mention notifications also leave out a status that mentions or replies to an account you block or mute
-  (for notifications, a mute that hides notifications), as Mastodon filters them.
+  (for mention notifications, a mute that hides notifications), as Mastodon filters them; so do post notifications
+  of accounts you follow with `notify`, whenever home leaves the status out.
 
 ### Instance changes
 
