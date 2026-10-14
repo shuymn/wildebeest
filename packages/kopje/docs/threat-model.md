@@ -1099,8 +1099,9 @@ reset` takes such a
   an import and a reset"; "the drain lane holds under timing faults": a suspended send, a message dead-lettered between
   the readings, activities without context or id, valid requests over the quota; "a Queue holding only delayed
   messages is not empty": a reading of 0 messages with bytes holding the barrier and the legacy lane, stopping on the
-  legacy DLQ and refusing `cutover close`, and a missing or malformed field failing closed), `test/queue-sim.ts` (a
-  delayed message counted in the bytes only, as Queues reports it),
+  legacy DLQ and refusing `cutover close`, a legacy retry with a delay holding the next request, and a missing or
+  malformed field failing closed), `test/queue-sim.ts` (a message sent or retried with a delay counted in the bytes
+  only, as Queues reports it),
   `packages/consumer/test/rollback-drain.test.ts` (drained Follow/Undo and Create/Delete, a Follow retried after a
   failed Accept then its Undo, a missing recipient through the legacy consumer). Residuals: delivery is at least once
   (a crash between the send and its record repeats one request); a send given up at its timeout may still reach the

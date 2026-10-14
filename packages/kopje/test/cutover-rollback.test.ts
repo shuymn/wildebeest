@@ -991,6 +991,34 @@ describe('a Queue holding only delayed messages is not empty (OPS-9)', () => {
 		expect(r.handed.map((m) => m.activity.type)).toEqual(['Follow', 'Undo'])
 	})
 
+	it('holds the next request while the legacy consumer retries the previous one with a delay', async () => {
+		const store = await importedStore()
+		const r = await rollback(store)
+		await r.spool('/ap/users/alice/inbox', follow(r.carol.uri, 1))
+		await r.spool('/ap/users/alice/inbox', {
+			'@context': ctx,
+			id: `${r.carol.uri}#undo/1`,
+			type: 'Undo',
+			actor: r.carol.uri,
+			object: follow(r.carol.uri, 1),
+		})
+		await r.consume()
+		expect((await r.drain()).body).toMatchObject({ sent: 1 })
+		// The legacy consumer retries the Follow with a delay: the Queue's count leaves it out, its bytes do not.
+		await r.legacy.deliver((batch) => batch.messages.forEach((m) => m.retry({ delaySeconds: 60 })), { ready: true })
+		expect(r.legacy.retries).toBe(1)
+		const { backlogCount, backlogBytes } = await r.legacy.metrics()
+		expect(backlogCount).toBe(0)
+		expect(backlogBytes).toBeGreaterThan(0)
+		expect((await r.drain()).body).toMatchObject({ sent: 0, waiting: 'legacy-backlog' })
+		expect(r.legacy.pending).toHaveLength(1)
+		// The delay passes and the legacy consumer acknowledges it: the Undo goes next.
+		r.ackLegacy()
+		expect((await r.drain()).body).toMatchObject({ sent: 1 })
+		r.ackLegacy()
+		expect(r.handed.map((m) => m.activity.type)).toEqual(['Follow', 'Undo'])
+	})
+
 	it("refuses to close the rollback while a delayed copy may sit in Kopje's Queue or its DLQ", async () => {
 		const store = await importedStore()
 		const r = await rollback(store)
