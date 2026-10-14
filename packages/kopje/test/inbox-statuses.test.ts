@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
-import { inboxDeps } from './app-helpers'
+import { inboxDeps, NOW } from './app-helpers'
 import { AP, LOCAL, MASTODON, mastodonActor, MISSKEY, MISSKEY_CONTEXT, misskeyActor, signedInit } from './inbox-helpers'
 import {
 	accountId,
@@ -27,8 +27,11 @@ import {
 	undo,
 	update,
 } from './inbox-status-helpers'
+import { rowsRead } from './read-helpers'
 import { PURGE_BATCH } from '../src/domain/inbox'
 import { MAX_STATUS_MEDIA, MAX_STATUS_TAGS } from '../src/domain/remote-statuses'
+import { getTag } from '../src/domain/tags'
+import { tagTimeline } from '../src/domain/timelines'
 import { handleQueue } from '../src/jobs/queue'
 import { MAX_JSON_DEPTH } from '../src/platform/json-bounds'
 import { REMOTE_HTML_RAW_LIMIT } from '../src/security/html'
@@ -523,7 +526,8 @@ describe('Delete of a status (ID-6, RES-6)', () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
 		await followed(t, bob)
-		const note = mastodonNote(bob)
+		const names = ['cats', ...Array.from({ length: 19 }, (_, i) => `t${i}`)]
+		const note = mastodonNote(bob, { tag: names.map((name) => ({ type: 'Hashtag', name: `#${name}` })) })
 		await t.post(bob, create(bob, note))
 		const row = (await statusRow(t.store, note.id))!
 		const boosts = PURGE_BATCH + 50
@@ -546,6 +550,13 @@ describe('Delete of a status (ID-6, RES-6)', () => {
 		expect(hidden).toMatchObject({ visibility: 'direct', content: '' })
 		expect((await t.api(`/api/v1/statuses/${row.id}`)).status).toBe(404)
 		expect(t.queue.pending.map((m) => m.body)).toContainEqual({ kind: 'inbound-jobs' })
+		// Its hashtags leave the tag reads with it, the ones a later batch removes included.
+		const marks = await sql<{ public: number; n: number }>(
+			t.store,
+			'SELECT public, count(*) AS n FROM status_tags WHERE status_id = ? GROUP BY public',
+			row.id
+		)
+		expect(marks).toEqual([{ public: 0, n: expect.any(Number) }])
 
 		const deps = inboxDeps(() => t.store, t.web.loader)
 		const env = { ...t.env, MAINTENANCE: 'off' } as Env
@@ -556,6 +567,76 @@ describe('Delete of a status (ID-6, RES-6)', () => {
 			{ done: 1 },
 		])
 	})
+
+	it('takes the hashtags of statuses still being deleted out of tag reads at once (RES-7)', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		// Each with more hashtags than a batch has rows left once the boosts it removes are counted; the one read sorts
+		// last, so a batch's removal of hashtags reaches it last.
+		const tags = [...Array.from({ length: 19 }, (_, i) => `t${i}`), 'zebra'].map((name) => ({
+			type: 'Hashtag',
+			name: `#${name}`,
+		}))
+		const notes = Array.from({ length: 20 }, () => mastodonNote(bob, { tag: tags }))
+		for (const note of notes) {
+			await t.post(bob, create(bob, note))
+		}
+		// Each with more boosts than a batch removes, so every deletion is still pending after its Delete.
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+			INSERT INTO accounts (id, uri, username, domain) SELECT printf('4%017d', i), 'https://many.example/u/' || i, 'u' || i,
+				'many.example' FROM n`,
+			PURGE_BATCH + 10
+		)
+		await sql(
+			t.store,
+			`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
+			SELECT printf('5%04d%013d', o.rowid % 10000, CAST(substr(a.id, 2) AS INTEGER)), o.uri || '/b/' || a.id, a.id, o.id,
+				'public', '2026-10-11T13:00:00.000Z'
+			FROM statuses o CROSS JOIN accounts a WHERE o.reblog_of_id IS NULL AND a.domain = 'many.example'`
+		)
+		const reads = async () => ({
+			timeline: await rowsRead({ store: t.store }, tagTimeline, {
+				credential: null,
+				now: NOW,
+				page: { limit: 20 },
+				local: false,
+				remote: false,
+				onlyMedia: false,
+				present: { origin: 'https://kopje.test' },
+				tag: 'zebra',
+				any: [],
+				all: [],
+				none: [],
+			}),
+			history: await rowsRead({ store: t.store }, getTag, {
+				credential: null,
+				name: 'zebra',
+				now: Date.parse('2026-10-11T18:00:00.000Z'),
+				present: { origin: 'https://kopje.test' },
+			}),
+		})
+		for (const note of notes) {
+			expect(await t.post(bob, remove(bob, note.id))).toBe(202)
+		}
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM statuses WHERE reblog_of_id IS NULL')).toEqual([{ n: 20 }])
+		expect(
+			await sql(t.store, "SELECT public, count(*) AS n FROM status_tags WHERE name = 'zebra' GROUP BY public")
+		).toEqual([{ public: 0, n: 20 }])
+		const pending = await reads()
+
+		const deps = inboxDeps(() => t.store, t.web.loader)
+		const env = { ...t.env, MAINTENANCE: 'off' } as Env
+		for (let round = 0; round < 50 && (await statuses(t.store)).length > 0; round++) {
+			await t.queue.deliver((batch) => handleQueue(batch, env, deps))
+		}
+		expect(await statuses(t.store)).toEqual([])
+		const finished = await reads()
+		expect(pending.timeline).toBeLessThanOrEqual(finished.timeline + 5)
+		expect(pending.history).toBeLessThanOrEqual(finished.history + 5)
+	}, 60_000)
 })
 
 describe('Like and reactions (Mastodon and Misskey)', () => {
