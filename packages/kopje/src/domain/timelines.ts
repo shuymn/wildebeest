@@ -101,9 +101,9 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 						and: options,
 						tail,
 					},
+					// The viewer's own: no follow's options apply (nobody follows themselves).
 					{
 						where: `s.account_id = ?1 AND s.visibility IN ${REQUIRES_MENTION_SQL} AND ${cursorSql('s.id')}`,
-						and: options,
 						tail,
 					},
 					{

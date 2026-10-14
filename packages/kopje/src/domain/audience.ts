@@ -271,7 +271,7 @@ type Row = Record<string, SqlStorageValue>
 // StatusSelect, and the ids it returns are ones the rule passed for the viewer. Nothing is parsed.
 export type StatusReads = {
 	// One SELECT, after an optional WITH clause its parts may read, with further columns (name: expression) after the id.
-	select<Extra extends Row & { id?: never } = Record<never, never>>(
+	select<Extra extends Row = Record<never, never>>(
 		db: Db,
 		rule: StatusRule,
 		query: StatusSelect & { readonly with?: string; readonly columns?: Columns<Extra, 'id'> },
@@ -287,7 +287,7 @@ export type StatusReads = {
 	): { id: VisibleStatusId }[]
 	// The viewer's notifications the notification rule (R15) shows them, which shows a status only if they may view it:
 	//   SELECT n.status_id AS status_id, <columns> FROM main.notifications n WHERE (<where>) AND (<rule>) <tail>
-	notifications<Extra extends Row & { status_id?: never }>(
+	notifications<Extra extends Row>(
 		db: Db,
 		query: { readonly where: string; readonly tail?: string; readonly columns: Columns<Extra, 'status_id'> },
 		...params: SqlStorageValue[]
@@ -339,7 +339,7 @@ export function statusReads(
 		return db.all<T>(query, ...params)
 	}
 	return {
-		select<Extra extends Row & { id?: never } = Record<never, never>>(
+		select<Extra extends Row = Record<never, never>>(
 			db: Db,
 			rule: StatusRule,
 			query: StatusSelect & { readonly with?: string; readonly columns?: Columns<Extra, 'id'> },
@@ -357,7 +357,7 @@ export function statusReads(
 				params
 			)
 		},
-		notifications<Extra extends Row & { status_id?: never }>(
+		notifications<Extra extends Row>(
 			db: Db,
 			query: { readonly where: string; readonly tail?: string; readonly columns: Columns<Extra, 'status_id'> },
 			...params: SqlStorageValue[]

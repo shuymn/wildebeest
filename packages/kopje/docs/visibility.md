@@ -114,10 +114,11 @@ WHERE (<where>) AND (<rule over s>) AND (<and>) <tail>
 The rule is a conjunct of the SELECT's own WHERE, over the `statuses s` whose id it selects, so no condition, subquery,
 join or `WITH` table of the caller's can stand in for it. The reader and the fragments name their tables with the
 `main.` schema, so a `WITH` table named `statuses` or `blocks` cannot take their place, and a further column is a plain
-identifier other than the id column (`id`, or `status_id` for notifications), refused by the types and at run time. The caller's conditions go before (`where`) or after (`and`)
-it, in the order a hand-written query would give them, so the terms, the plan and the rows read are the same. Each
-query runs only with its parameters at `viewer` and `now` bound to the context's account id and time.
-`viewableStatusId` is `canView` (R3) for one id. `ownStatusId` checks the author. The callers:
+identifier other than the id column (`id`, or `status_id` for notifications), refused by the types and at run time.
+The caller's conditions go before (`where`) or after (`and`) it, in the order a hand-written query would give them, so
+the terms, the plan and the rows read are the same. Each query runs only with its parameters at `viewer` and `now`
+bound to the context's account id and time. `viewableStatusId` is `canView` (R3) for one id. `ownStatusId` checks the
+author. The callers:
 
 | Caller                                                     | Ids from                                                                         |
 | ---------------------------------------------------------- | -------------------------------------------------------------------------------- |
@@ -161,8 +162,8 @@ It also keeps the status id brands with the policy module. Elsewhere, `VisibleSt
 `WithVisibleStatus` may be named only in an import or as the type of a function parameter: a cast, a type argument
 (`db.all<{ id: VisibleStatusId }>`), a type predicate, an alias or an annotated variable or result could make one from
 a plain string. The presenter is called only from `src/domain/`, where ESLint refuses an `any` argument
-(`eslint.config.js`), so no `any` reaches its parameters. The test also
-checks the generated visibility sets and that `REACHES_FOLLOWERS_SQL` is the list of the `statuses_feed` index.
+(`eslint.config.js`), so no `any` reaches its parameters. The test also checks the generated visibility sets and that
+`REACHES_FOLLOWERS_SQL` is the list of the `statuses_feed` index.
 
 The fragments nest: Cloudflare's SQLite refuses an expression deeper than 100 levels, and each nested `EXISTS` and
 each term of an `AND` chain adds to it. The deepest fragment, `shownSql`, compiles at a depth of about 76; keep the
