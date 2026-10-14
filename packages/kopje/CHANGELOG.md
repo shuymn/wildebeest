@@ -22,7 +22,22 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   release adds the rebuild step. Without `--images`, the conversion is unchanged. See docs/cutover.md ("Media") and
   docs/cutover-runbook.md. No schema or `wrangler.jsonc` change.
 
+## [0.1.0-rc.2] - 2026-10-14
+
+A second release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Fixed
+
+- The cutover tools read a real D1 export: `convert`, `verify-conversion` and `fingerprint export` accept the
+  `DELETE FROM sqlite_sequence` line that `wrangler d1 export` writes, match columns by name (a legacy database may
+  have re-added a column in another position, nullable), drop the notifications legacy created for the author of a
+  remote post and never showed (`--accept-deletions`), read outbox rows written before legacy migration 0016 as
+  targets, and replace lone surrogates in carried text, counting each.
+
+- `kopje-admin import` bounds each call by what it writes, so a real-sized import no longer stops on the Durable
+  Object CPU limit: a chunk holds at most 2,000 statements in 4 MiB, and link statements are applied during verify in
+  bounded steps. An interrupted import saved by an earlier version cannot be resumed (`import-chunks-outdated`): run
+  `import-reset` and import again.
 
 - An activity without addressing (a Follow, Accept, Reject, Like or their Undo) now goes to the recipient's shared
   inbox when it has one, and to its personal inbox only otherwise. Some servers accept such activities at a personal
@@ -36,6 +51,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   as empty only when its message count and byte count are both 0, and fail closed on a malformed reading. Before, a
   drain could finish while an older request was still delayed in Kopje's Queue, and `cutover close` could remove the
   handoff receipts while a delayed copy of a handed-off request remained.
+
+### Instance changes
+
+- Store schema: unchanged (`0000_initial`).
+- `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.1] - 2026-10-13
 

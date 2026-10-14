@@ -781,8 +781,7 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 )
 
 export type DeliveryOutcome =
-	| { kind: 'delivered'; status: number }
-	| { kind: 'failed'; status: number | null; error: string; permanent: boolean }
+	{ kind: 'delivered'; status: number } | { kind: 'failed'; status: number | null; error: string; permanent: boolean }
 
 export type Completion = (
 	| { status: 'delivered' }

@@ -205,8 +205,7 @@ export function mediaPage(
 }
 
 export type MediaCopyRecord =
-	| { state: 'copied'; destination: string; run: string; copy: ObjectDigest }
-	| { state: 'absent' }
+	{ state: 'copied'; destination: string; run: string; copy: ObjectDigest } | { state: 'absent' }
 
 export function recordMedia(
 	sql: SqlStorage,

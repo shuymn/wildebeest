@@ -557,8 +557,7 @@ async function prepare(
 // keys are fetched anew, unsigned, within the request budget and the JSON bounds, and nothing is recorded. Only the
 // request is judged here; the legacy instance applies the activity. transient: may pass if tried again later.
 export type SpoolVerification =
-	| { ok: true; actor: string; activity: Json }
-	| { ok: false; transient: boolean; reason: string }
+	{ ok: true; actor: string; activity: Json } | { ok: false; transient: boolean; reason: string }
 
 export async function verifySpooledRequest(
 	loader: LoaderDeps,
