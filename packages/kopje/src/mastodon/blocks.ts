@@ -11,7 +11,7 @@ import {
 import { mastodonError } from './errors'
 import { pageQuery, pageResponse } from './pagination'
 import { type Params, parseBoolean } from './params'
-import { normalizeDomain } from '../platform/domain-name'
+import { blockedDomain } from '../platform/domain-name'
 
 // Blocks, mutes and domain blocks (Mastodon 4.5's AccountsController#block/#unblock/#mute/#unmute, BlocksController,
 // MutesController, DomainBlocksController and DomainBlocks::PreviewsController); the Store does the work
@@ -94,7 +94,7 @@ export const domainBlocks: ApiHandler = async (c, deps) => {
 // lowercased and in punycode), and a trailing dot dropped too. null when absent or not a domain name.
 function domainParam(p: Params): { domain: string | null; blank: boolean } {
 	const raw = (p.get('domain') ?? '').trim()
-	return { domain: raw === '' ? null : normalizeDomain(raw.replace(/\/$/, '').replace(/\.$/, '')), blank: raw === '' }
+	return { domain: raw === '' ? null : blockedDomain(raw), blank: raw === '' }
 }
 
 export const blockDomain: ApiHandler = async (c, deps) => {

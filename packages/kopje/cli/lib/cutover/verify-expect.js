@@ -8,6 +8,7 @@
 // and are never printed: reports carry counts and digests only.
 
 import { createHmac } from 'node:crypto'
+import { domainToASCII } from 'node:url'
 
 import { REMOTE_HTML_RAW_LIMIT, sanitizeRemoteHtml } from './kopje-runtime.js'
 
@@ -98,6 +99,19 @@ function address(value, hops = 0) {
 		return address(/** @type {{ id: unknown }} */ (value).id, hops + 1)
 	}
 	return undefined
+}
+
+// A domain block's domain as Kopje stores it, worked out here on its own: a trailing slash and a trailing dot dropped,
+// lowercased, IDNA to ASCII (punycode), and only a hostname of two or more labels, not an IPv4 address. null when it
+// is no domain name (the converter drops the row).
+/** @param {string} raw */
+function blockedDomainOf(raw) {
+	const name = raw.trim().replace(/\/$/, '').replace(/\.$/, '')
+	if (name === '' || name.endsWith('.') || /[\s/\\?#@:[\]%]/.test(name)) {
+		return null
+	}
+	const ascii = domainToASCII(name)
+	return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(ascii) && !/^\d{1,3}(\.\d{1,3}){3}$/.test(ascii) ? ascii : null
 }
 
 /**
@@ -649,8 +663,9 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		}
 	}
 	for (const d of all('SELECT account_id, domain FROM domain_blocks')) {
-		if (known(d.account_id)) {
-			put('domain_blocks', `${String(d.account_id)} ${text(d.domain).trim().toLowerCase()}`, 1)
+		const domain = blockedDomainOf(text(d.domain))
+		if (known(d.account_id) && domain !== null) {
+			put('domain_blocks', `${String(d.account_id)} ${domain}`, 1)
 		}
 	}
 	for (const l of all('SELECT id, account_id, title, replies_policy, exclusive FROM lists')) {
