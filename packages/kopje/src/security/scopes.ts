@@ -49,7 +49,10 @@ const CHILDREN = [
 
 export type Scope = (typeof TOP_LEVEL)[number] | (typeof CHILDREN)[number]
 
-const KNOWN = new Set<string>([...TOP_LEVEL, ...CHILDREN])
+// Every scope a token can be issued with (parseScopes accepts these and no other).
+export const SCOPES: readonly Scope[] = [...TOP_LEVEL, ...CHILDREN]
+
+const KNOWN = new Set<string>(SCOPES)
 
 const FOLLOW_EXPANSION = new Set<string>([
 	'read:follows',

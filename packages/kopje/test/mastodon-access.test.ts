@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import mastodon from './fixtures/mastodon-4.5.11-api-access.json'
 import type { RouteAccess } from '../src/mastodon/access'
 import { ROUTES } from '../src/mastodon/routes'
-import { grants, parseScopes, type Scope } from '../src/security/scopes'
+import { grants, type Scope, SCOPES } from '../src/security/scopes'
 
 // Every route of the API table (src/mastodon/routes.ts) asks of its caller what Mastodon's same route asks, read from
 // Mastodon's source by scripts/mastodon-scopes.mjs (the fixture's header says how to regenerate it). Compared:
@@ -102,21 +102,19 @@ const EXCEPTIONS: Record<string, readonly [RouteAccess, string]> = {
 	],
 }
 
-// The scopes a token may hold to pass the route's scope: the scope, its parents and `follow`, as grants() covers it.
-function acceptedScopes(scope: Scope): string[] {
-	const parts = scope.split(':')
-	const candidates = [...parts.map((_, i) => parts.slice(0, i + 1).join(':')), 'follow']
-	return candidates.filter((s) => parseScopes(s) !== null && grants([s], scope)).toSorted()
+// The scopes a token may hold to pass the route's scope: every scope Kopje issues that covers it.
+function acceptedScopes(scope: Scope, covers = grants): string[] {
+	return SCOPES.filter((s) => covers([s], scope)).toSorted()
 }
 
-function kopjeAccess(access: RouteAccess): Access {
+function kopjeAccess(access: RouteAccess, covers = grants): Access {
 	if (access === 'public') {
 		return { token: 'none', scopes: null, user: false }
 	}
 	if (access === 'token') {
 		return { token: 'required', scopes: null, user: false }
 	}
-	const scopes = access.scope === undefined ? null : acceptedScopes(access.scope)
+	const scopes = access.scope === undefined ? null : acceptedScopes(access.scope, covers)
 	return access.optional === true
 		? { token: 'optional', scopes, user: false }
 		: { token: 'required', scopes, user: true }
@@ -140,7 +138,8 @@ const show = (access: Access) =>
 	`token ${access.token}, scopes ${access.scopes === null ? 'any' : access.scopes.join(' ')}, user ${access.user ? 'required' : 'not required'}`
 
 // Why a route's access is not Mastodon's, or undefined when it is.
-function difference(route: (typeof ROUTES)[number]): string | undefined {
+// covers stands in for grants() in the check that the comparison sees a scope grants() lets through.
+function difference(route: (typeof ROUTES)[number], covers = grants): string | undefined {
 	const name = `${route.method} ${route.path}`
 	const theirs = mastodonRoute(route.method, route.path)
 	if (theirs === undefined) {
@@ -149,7 +148,7 @@ function difference(route: (typeof ROUTES)[number]): string | undefined {
 	if (theirs.unresolved !== undefined) {
 		return `${name}: Mastodon's access could not be read (${theirs.unresolved.join('; ')})`
 	}
-	const ours = kopjeAccess(route.access)
+	const ours = kopjeAccess(route.access, covers)
 	const expected = mastodonAccess(theirs)
 	if (JSON.stringify(ours) === JSON.stringify(expected)) {
 		return undefined
@@ -189,5 +188,14 @@ describe(`route access matches Mastodon v${mastodon.mastodon}`, () => {
 		expect(acceptedScopes('write:blocks')).toEqual(['follow', 'write', 'write:blocks'])
 		expect(acceptedScopes('admin:read:accounts')).toEqual(['admin:read', 'admin:read:accounts'])
 		expect(acceptedScopes('push')).toEqual(['push'])
+	})
+
+	it('sees a scope the hierarchy wrongly lets through', () => {
+		const bookmarks = ROUTES.find((route) => route.method === 'GET' && route.path === '/api/v1/bookmarks')
+		expect(bookmarks).toBeDefined()
+		expect(difference(bookmarks!)).toBeUndefined()
+		const leaky: typeof grants = (granted, required) =>
+			grants(granted, required) || (granted.includes('push') && required === 'read:bookmarks')
+		expect(difference(bookmarks!, leaky)).toContain('scopes push read read:bookmarks')
 	})
 })
