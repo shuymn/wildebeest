@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createKopjeDatabase, readCatalog } from '../cli/lib/cutover/kopje-db.js'
 import { splitStatements } from '../cli/lib/cutover/sql-script.js'
+import { CATEGORIES } from '../cli/lib/cutover/verify-actual.js'
 
 // Every table and column of the migrated Store schema against the cutover tools that name them by hand: the converter
 // (convert.js) writes columns of the Store schema, and the actual side of verify-conversion (verify-actual.js) reads
@@ -294,13 +295,23 @@ function tableOf(chain: AnyNode[]): string | undefined {
 
 // The columns verify-actual.js reads per table: t('column'), row.column, row['column'], and c === 'column' (a link
 // statement's columns). A read outside a case clause or link block, or row[...] by a variable other than where the row
-// is built (row[column] = ...) and in t itself, is unattributed.
+// is built (row[column] = ...) and in t itself, is unattributed. Also the categories its put(category, ...) calls
+// record, which must be literal (else unattributed).
 function verifierReads({ text, nodes }: Parsed) {
 	const columns = new Map<string, Set<string>>()
 	const unattributed: string[] = []
+	const categories = new Set<string>()
 	for (const { node, parents } of nodes) {
 		let column: string | undefined
-		if (node.type === 'CallExpression' && named(node.callee, 't')) {
+		if (node.type === 'CallExpression' && named(node.callee, 'put')) {
+			const category = literal(node.arguments[0])
+			if (category === undefined) {
+				unattributed.push(text.slice(node.start, node.end).replace(/\s+/g, ' '))
+			} else {
+				categories.add(category)
+			}
+			continue
+		} else if (node.type === 'CallExpression' && named(node.callee, 't')) {
 			column = literal(node.arguments[0])
 		} else if (node.type === 'MemberExpression' && named(node.object, 'row')) {
 			column = node.computed
@@ -325,7 +336,7 @@ function verifierReads({ text, nodes }: Parsed) {
 			add(columns, table, [column])
 		}
 	}
-	return { columns, unattributed }
+	return { columns, unattributed, categories }
 }
 
 // The `table.column` names where a dump catalog's columns differ from the schema's, missing or extra, in every table it
@@ -346,6 +357,8 @@ function unknown(schema: Map<string, string[]>, columns: Map<string, Set<string>
 }
 
 const sorted = (names: Iterable<string>) => [...names].sort()
+// The categories put records that compareConversion does not iterate (verify-actual.js CATEGORIES).
+const unregistered = (categories: Iterable<string>) => sorted(categories).filter((c) => !CATEGORIES.includes(c))
 
 const files = parse({
 	convert: source('../cli/lib/cutover/convert.js'),
@@ -386,6 +399,8 @@ describe('the source scanners', () => {
 			"\t\tcase 'mutes':",
 			"\t\t\tput('mutes', [int(row.hide_notifications), null, // t('expires_at'),",
 			"\t\t\t\t/* row.commented */ row['quoted'], \"t('in_a_string')\", row[key]])",
+			"\t\t\tput('polls', 1)",
+			'\t\t\tput(category, 1)',
 			'\t\t\tbreak',
 			'\t\tdefault:',
 			'\t\t\tbreak',
@@ -418,14 +433,16 @@ describe('the source scanners', () => {
 	})
 
 	it('attribute reads to their case clause or link block, and report every other read', () => {
-		const { columns, unattributed } = verifierReads(fixtures.reads)
+		const { columns, unattributed, categories } = verifierReads(fixtures.reads)
 		expect(columns).toEqual(
 			new Map([
 				['statuses', new Set(['id'])],
 				['mutes', new Set(['hide_notifications', 'quoted'])],
 			])
 		)
-		expect(unattributed).toEqual(['row.some_column', "t('stray')", 'row[key]'])
+		expect(unattributed).toEqual(['row.some_column', "t('stray')", 'row[key]', 'put(category, 1)'])
+		// A category compareConversion does not iterate would never be compared.
+		expect(unregistered(categories)).toEqual(['polls'])
 	})
 })
 
@@ -470,7 +487,7 @@ describe('the dump catalogs', () => {
 describe('the Store schema in the cutover tools', () => {
 	const schema = schemaColumns()
 	const { columns: written, unparsed } = converterWrites(files.convert)
-	const { columns: read, unattributed } = verifierReads(files.verify)
+	const { columns: read, unattributed, categories } = verifierReads(files.verify)
 	const carried = [...schema.keys()].filter((table) => !(table in NOT_CARRIED))
 
 	it('names only tables and columns the schema has', () => {
@@ -490,6 +507,8 @@ describe('the Store schema in the cutover tools', () => {
 
 	it('verify-conversion reads each column of the tables the cutover carries, or says why not', () => {
 		expect(unattributed).toEqual([])
+		expect(categories.size).toBeGreaterThan(0)
+		expect(unregistered(categories)).toEqual([])
 		expect(sorted([...read.keys()].filter((table) => table in NOT_CARRIED))).toEqual([])
 		const unread = carried.flatMap((table) =>
 			(schema.get(table) ?? []).filter((c) => !read.get(table)?.has(c)).map((c) => `${table}.${c}`)
