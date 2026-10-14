@@ -36,10 +36,10 @@ const configSchema = z.object({
 	CUTOVER_JOURNAL_MAX_BYTES: z.coerce.number().int().min(1).optional(),
 	// For that drain only: the legacy instance's VAPID_JWK, which its inbox messages carry.
 	LEGACY_VAPID_JWK: z.string().min(1).optional(),
-	// Set after /setup generates it; Web Push stays unavailable until then.
+	// Web Push's key, set by the operator and never generated (DATA-2): Web Push is unavailable without it.
 	VAPID_JWK: z
 		.string()
-		.refine((value) => vapidPublicKey(value) !== null, 'must be an EC P-256 JWK')
+		.refine((value) => vapidPublicKey(value) !== null, 'must be an EC P-256 private key JWK')
 		.optional(),
 })
 
