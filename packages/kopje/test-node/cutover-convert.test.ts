@@ -126,6 +126,9 @@ describe('convert and verify-conversion', () => {
 		expect(value("SELECT visibility FROM statuses WHERE content LIKE '%secret direct%'")).toBe('direct')
 		expect(value('SELECT count(*) FROM statuses WHERE raw IS NOT NULL')).toBe(4)
 		expect(value("SELECT value FROM kopje_state WHERE name = 'last_local_id'")).toMatch(/^\d{18}$/)
+		// The language is the primary subtag of the first in contentMap; hashtags are stored normalized, once each.
+		expect(value("SELECT language FROM statuses WHERE content LIKE '%a reply to alice%'")).toBe('pt')
+		expect(value('SELECT group_concat(name) FROM (SELECT name FROM status_tags ORDER BY name)')).toBe('cats,wildebeest')
 		db.close()
 	})
 

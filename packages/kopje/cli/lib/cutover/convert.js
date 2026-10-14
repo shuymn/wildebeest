@@ -139,6 +139,22 @@ function str(value) {
 }
 
 /**
+ * A status's language as Kopje stores one it receives (src/federation/remote-status.ts, languageOf): from the first
+ * language map of contentMap, nameMap and summaryMap, the primary subtag of its first tag, lowercased, if that is ISO
+ * 639 (two or three letters); else none.
+ * @param {Json} properties
+ * @returns {string | null}
+ */
+function statusLanguage(properties) {
+	const map = [properties.contentMap, properties.nameMap, properties.summaryMap].find(
+		(m) => typeof m === 'object' && m !== null && !Array.isArray(m) && Object.keys(m).length > 0
+	)
+	const tag = map === undefined ? '' : (Object.keys(map)[0] ?? '')
+	const primary = (tag.split(/[-_]/)[0] ?? '').toLowerCase()
+	return /^[a-z]{2,3}$/.test(primary) ? primary : null
+}
+
+/**
  * Legacy's reference rule (packages/backend/src/activitypub/objects/index.ts, getApId): a string is parsed as a URL
  * and compared in its normalized form; an object stands for its `id`, recursively; anything else (an object with only
  * `href`, null, a number) makes legacy throw, which here is null.
@@ -597,7 +613,7 @@ export function convertLegacy(
 			String(user.pubkey),
 			JSON.stringify(list(account.properties.alsoKnownAs).filter((x) => typeof x === 'string')),
 			visibility,
-			preference?.posting_default_sensitive ? 1 : 0,
+			preference?.posting_default_sensitive === 1 ? 1 : 0,
 			preference?.posting_default_language ?? null,
 			isoTime(user.cdate) ?? account.created ?? new Date(baseTime).toISOString()
 		)
@@ -875,8 +891,6 @@ export function convertLegacy(
 		const content = html(properties.content)
 		const updated = isoTime(properties.updated)
 		const edited = updated !== null && updated !== plan.published ? updated : null
-		const contentMap = properties.contentMap
-		const languages = typeof contentMap === 'object' && contentMap !== null ? Object.keys(contentMap) : []
 		// The parent: the status at inReplyTo, else the one legacy linked.
 		const inReplyToUri = idOf(properties.inReplyTo)
 		const legacyParent = typeof row.in_reply_to_id === 'string' ? statuses.get(row.in_reply_to_id) : undefined
@@ -900,7 +914,7 @@ export function convertLegacy(
 				? carried(properties.source.content)
 				: null,
 			properties.sensitive === true ? 1 : 0,
-			languages.length === 1 ? (languages[0] ?? null) : null,
+			statusLanguage(properties),
 			plan.published,
 			edited,
 			local ? null : (edited ?? plan.published),

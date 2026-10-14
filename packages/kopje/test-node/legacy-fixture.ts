@@ -439,6 +439,8 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		inReplyTo?: Note
 		summary?: string
 		lostOriginal?: boolean
+		// Default: { ja: content }.
+		contentMap?: Record<string, string>
 	}
 	const remoteNote = (input: RemoteNote): Note => {
 		const proxy = objectId()
@@ -457,7 +459,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 			cc: input.cc,
 			sensitive: input.summary !== undefined,
 			content: input.content,
-			contentMap: { ja: input.content },
+			contentMap: input.contentMap ?? { ja: input.content },
 			attachment: input.attachment ?? [],
 			tag: input.tags ?? [],
 		}
@@ -669,6 +671,8 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		inReplyTo: publicNote,
 		tags: [{ type: 'Mention', href: alice, name: '@alice@kopje.test' }],
 		summary: 'CW 注意',
+		// Two languages with regions: Kopje keeps the first one's primary subtag.
+		contentMap: { 'pt-BR': '<p>uma resposta</p>', en: '<p>a reply to alice</p>' },
 	})
 	if (followersSpelling) {
 		remoteNote({

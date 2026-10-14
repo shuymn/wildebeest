@@ -78,6 +78,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   domain name is dropped and counted (`domain_blocks:invalid-domain`), so the conversion stops on it until
   `--accept-deletions`.
 
+- The cutover converts a status's language as Kopje reads one from a remote object: the primary subtag of the first
+  language in `contentMap` (else `nameMap`, `summaryMap`), when it is two or three letters. It used to keep the whole
+  tag, and only when `contentMap` had a single language.
+
 - `VAPID_JWK` must hold the private key (`d`), not only the public point: a key without it now makes the instance
   answer 503 as misconfigured, as any invalid value does.
 
