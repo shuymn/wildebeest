@@ -18,6 +18,8 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { escapeRegExp } from 'es-toolkit'
+
 const root = fileURLToPath(new URL('..', import.meta.url))
 
 // ---- Ruby source helpers ----
@@ -573,7 +575,7 @@ function applies(cb, action) {
 // The body of `def <action>` up to the next definition or visibility keyword.
 /** @param {string} text @param {string} action */
 function actionBody(text, action) {
-	const start = text.search(new RegExp(`^[ \\t]*def ${action.replace(/[?!]/g, '\\$&')}(?![\\w?!])`, 'm'))
+	const start = text.search(new RegExp(`^[ \\t]*def ${escapeRegExp(action)}(?![\\w?!])`, 'm'))
 	if (start < 0) return null
 	const rest = text.slice(start)
 	const firstLine = rest.indexOf('\n') + 1
