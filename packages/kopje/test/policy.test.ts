@@ -23,10 +23,29 @@ type Rule = { name: string; pattern: RegExp; allowed: Record<string, string> }
 
 const POLICY_ONLY = { [POLICY]: 'the policy module' }
 
+// A table as SQLite reads its name: bare or quoted ("t", `t`, [t]), with an optional main. schema prefix.
+function table(names: readonly string[]): string {
+	const quoted = (name: string) => `(?:${name}|"${name}"|\`${name}\`|\\[${name}\\])`
+	return `(?:${quoted('main')}\\s*\\.\\s*)?${quoted(`(?:${names.join('|')})`)}(?!\\w)`
+}
+
+// FROM t or JOIN t.
+function reads(...names: string[]): RegExp {
+	return new RegExp(`\\b(?:FROM|JOIN)\\s+${table(names)}`, 'i')
+}
+
+// INSERT INTO t, INSERT OR <conflict> INTO t, or REPLACE INTO t.
+function writes(...names: string[]): RegExp {
+	return new RegExp(
+		`\\b(?:INSERT(?:\\s+OR\\s+(?:ROLLBACK|ABORT|REPLACE|FAIL|IGNORE))?|REPLACE)\\s+INTO\\s+${table(names)}`,
+		'i'
+	)
+}
+
 const RULES: readonly Rule[] = [
 	{
 		name: 'reads blocks',
-		pattern: /\b(?:FROM|JOIN)\s+blocks\b/i,
+		pattern: reads('blocks'),
 		allowed: {
 			...POLICY_ONLY,
 			'../src/domain/blocks.ts': 'writes blocks (block, unblock) and lists the viewer’s own',
@@ -35,7 +54,7 @@ const RULES: readonly Rule[] = [
 	},
 	{
 		name: 'reads mutes',
-		pattern: /\b(?:FROM|JOIN)\s+mutes\b/i,
+		pattern: reads('mutes'),
 		allowed: {
 			...POLICY_ONLY,
 			'../src/domain/blocks.ts': 'writes mutes (mute, unmute) and lists the viewer’s own',
@@ -44,7 +63,7 @@ const RULES: readonly Rule[] = [
 	},
 	{
 		name: 'reads domain_blocks',
-		pattern: /\b(?:FROM|JOIN)\s+domain_blocks\b/i,
+		pattern: reads('domain_blocks'),
 		allowed: {
 			...POLICY_ONLY,
 			'../src/domain/blocks.ts': 'writes domain blocks and their cleanups, and lists the viewer’s own',
@@ -62,17 +81,17 @@ const RULES: readonly Rule[] = [
 	},
 	{
 		name: 'writes notifications',
-		pattern: /\bINSERT\s+INTO\s+notifications\b/i,
+		pattern: writes('notifications'),
 		allowed: { '../src/domain/notifications.ts': 'notify, through the notification rule (VIS-10)' },
 	},
 	{
 		name: 'writes outbound activities or deliveries',
-		pattern: /\bINSERT\s+INTO\s+(?:outbound_activities|deliveries)\b/i,
+		pattern: writes('outbound_activities', 'deliveries'),
 		allowed: { '../src/domain/deliveries.ts': 'enqueueActivity and the expansion of its targets (NET-2)' },
 	},
 	{
 		name: 'writes status_mentions',
-		pattern: /\bINSERT\s+INTO\s+status_mentions\b/i,
+		pattern: writes('status_mentions'),
 		allowed: {
 			'../src/domain/statuses.ts': 'a local status’s mentions, resolved by mentionableBySql',
 			'../src/domain/remote-statuses.ts': 'an inbound status’s addressing (interpretAddressing) and its later audience',
@@ -126,6 +145,52 @@ describe('policy boundary', () => {
 			'../src/domain/b.ts writes notifications',
 			'../src/domain/c.ts no longer reads lists: drop it from the list',
 		])
+	})
+})
+
+describe('the guarded spellings', () => {
+	const rule = (name: string) => RULES.find((r) => r.name === name)!.pattern
+	const SPELLINGS = (t: string) => [t, `"${t}"`, `\`${t}\``, `[${t}]`, `main.${t}`, `main."${t}"`, `"main" . [${t}]`]
+
+	for (const [name, tables] of [
+		['reads blocks', ['blocks']],
+		['reads mutes', ['mutes']],
+		['reads domain_blocks', ['domain_blocks']],
+	] as const) {
+		it(`${name}: FROM and JOIN, any quoting, with or without main.`, () => {
+			for (const t of tables) {
+				for (const spelled of SPELLINGS(t)) {
+					expect(rule(name).test(`SELECT 1 FROM ${spelled} b`), spelled).toBe(true)
+					expect(rule(name).test(`SELECT 1 FROM x JOIN ${spelled} b ON true`), spelled).toBe(true)
+				}
+			}
+		})
+	}
+
+	for (const [name, tables] of [
+		['writes notifications', ['notifications']],
+		['writes outbound activities or deliveries', ['outbound_activities', 'deliveries']],
+		['writes status_mentions', ['status_mentions']],
+	] as const) {
+		it(`${name}: INSERT, INSERT OR <conflict> and REPLACE, any quoting, with or without main.`, () => {
+			for (const t of tables) {
+				for (const spelled of SPELLINGS(t)) {
+					for (const verb of ['INSERT', 'insert or ignore', 'INSERT OR REPLACE', 'INSERT OR ABORT', 'REPLACE']) {
+						expect(rule(name).test(`${verb} INTO ${spelled} (id) VALUES (1)`), `${verb} ${spelled}`).toBe(true)
+					}
+				}
+			}
+		})
+	}
+
+	it('does not mistake another table or a column for a guarded one', () => {
+		expect(rule('reads blocks').test('SELECT 1 FROM domain_blocks d')).toBe(false)
+		expect(rule('reads blocks').test('SELECT 1 FROM blocks_archive b')).toBe(false)
+		expect(rule('reads blocks').test('SELECT blocks FROM accounts')).toBe(false)
+		expect(rule('writes notifications').test('INSERT INTO notifications_seen (id) VALUES (1)')).toBe(false)
+		expect(rule('writes outbound activities or deliveries').test('INSERT INTO push_deliveries (id) VALUES (1)')).toBe(
+			false
+		)
 	})
 })
 
