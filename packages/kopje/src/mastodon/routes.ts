@@ -59,7 +59,7 @@ export const ROUTES: readonly Route[] = [
 		access: { scope: 'read:follows' },
 		handler: accounts.familiarFollowers,
 	},
-	{ method: 'GET', path: '/api/v1/tags/:id', access: { scope: 'read:follows', optional: true }, handler: tags.getTag },
+	{ method: 'GET', path: '/api/v1/tags/:id', access: { optional: true }, handler: tags.getTag },
 	{ method: 'GET', path: '/api/v1/filters', access: { scope: 'read:filters' }, handler: placeholders.emptyUserList },
 	{ method: 'GET', path: '/api/v2/filters', access: { scope: 'read:filters' }, handler: placeholders.emptyUserList },
 	{
@@ -86,7 +86,7 @@ export const ROUTES: readonly Route[] = [
 		access: { scope: 'read:accounts' },
 		handler: placeholders.emptyUserList,
 	},
-	{ method: 'GET', path: '/api/v1/announcements', access: { scope: 'read' }, handler: placeholders.emptyUserList },
+	{ method: 'GET', path: '/api/v1/announcements', access: 'token', handler: placeholders.emptyUserList },
 	{ method: 'GET', path: '/api/v1/trends', access: 'public', handler: placeholders.emptyList },
 	{ method: 'GET', path: '/api/v1/trends/tags', access: 'public', handler: placeholders.emptyList },
 	{ method: 'GET', path: '/api/v1/trends/statuses', access: 'public', handler: placeholders.emptyList },

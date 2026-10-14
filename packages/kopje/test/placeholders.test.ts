@@ -13,7 +13,6 @@ describe('features without data yet', () => {
 		['/api/v1/followed_tags', 'read:follows'],
 		['/api/v1/featured_tags', 'read:accounts'],
 		['/api/v1/endorsements', 'read:accounts'],
-		['/api/v1/announcements', 'read'],
 		['/api/v1/suggestions', 'read:accounts'],
 		['/api/v2/suggestions', 'read:accounts'],
 	]
@@ -29,6 +28,20 @@ describe('features without data yet', () => {
 		expect((await h.request(route, bearer('nope'))).status).toBe(401)
 		expect((await h.request(route, bearer(await scopedToken(h, 'write')))).status).toBe(403)
 		expect((await h.request(route, bearer(await appToken(h)))).status).toBe(422)
+	})
+
+	it('/api/v1/announcements is an empty list for any user token, whatever its scopes (AUTH-2)', async () => {
+		const h = await apiHarness()
+		const alice = await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
+		for (const scope of ['read:accounts read:statuses', 'write', 'push']) {
+			expect(await getJson(h, '/api/v1/announcements', await scopedToken(h, scope))).toEqual({ status: 200, body: [] })
+		}
+		expect((await h.request('/api/v1/announcements')).status).toBe(401)
+		expect((await h.request('/api/v1/announcements', bearer('nope'))).status).toBe(401)
+		expect((await h.request('/api/v1/announcements', bearer(await appToken(h)))).status).toBe(422)
+		const token = await scopedToken(h, 'read')
+		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?', '2026-01-01', alice)
+		expect((await h.request('/api/v1/announcements', bearer(token))).status).toBe(403)
 	})
 
 	it('a revoked token gets no empty list', async () => {

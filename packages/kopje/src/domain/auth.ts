@@ -107,11 +107,12 @@ export const checkCredential = readOperation<Credential, Authorized<Viewer>>((db
 })
 
 // Operations of a route whose token is optional (Mastodon's authorize_if_got_token!): no credential reads as an
-// anonymous viewer; a credential must be valid and cover the route's scope, and an app token (no user) is anonymous.
+// anonymous viewer; a credential must be valid and cover the route's scope (if it declares one), and an app token (no
+// user) is anonymous.
 export function optionalUserReadOperation<I, O>(
 	run: (db: Db, input: I, viewerId: string | null) => O
-): StoreOperation<I & { credential: UserCredential | null }, Authorized<O>> {
-	return readOperation<I & { credential: UserCredential | null }, Authorized<O>>((db, input) => {
+): StoreOperation<I & { credential: Credential | null }, Authorized<O>> {
+	return readOperation<I & { credential: Credential | null }, Authorized<O>>((db, input) => {
 		if (input.credential === null) {
 			return { status: 'ok', value: run(db, input, null) }
 		}

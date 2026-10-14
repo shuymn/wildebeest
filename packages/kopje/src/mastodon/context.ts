@@ -75,6 +75,11 @@ export function optionalCredential(c: ApiContext, deps: Pick<ApiDeps, 'now'>): U
 	return c.get('credential') === null ? null : userCredential(c, deps)
 }
 
+// The credential of a route whose token is optional and declares no scope: null when the request sent none.
+export function optionalTokenCredential(c: ApiContext, deps: Pick<ApiDeps, 'now'>): Credential | null {
+	return c.get('credential') === null ? null : credential(c, deps)
+}
+
 const AUTH_ERRORS: Record<AuthFailure['status'], { status: 401 | 403 | 422; message: string }> = {
 	unauthenticated: { status: 401, message: 'The access token is invalid' },
 	suspended: { status: 403, message: 'Your login is currently disabled' },
