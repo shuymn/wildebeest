@@ -49,7 +49,7 @@ export type AdminDeps = AccessDeps & {
 	store: StoreResolver
 	// Remote fetches of the cutover rollback drain (app/cutover.ts).
 	loader: Omit<LoaderDeps, 'userAgent'>
-	// Rings the delivery doorbell after a retry.
+	// Rings the delivery doorbell after a retry, and after a publication that recorded profile Updates.
 	doorbell: (env: Env) => Promise<void>
 	// Re-encoding for the media rebuild.
 	images: (env: Env) => ImageCodec
@@ -463,7 +463,11 @@ export function adminRoutes({ build, store, fetch, now, doorbell, loader, images
 		if (confirm !== true) {
 			return c.json({ error: 'publishing ends the cutover for good; send {"confirm": true}' }, 400)
 		}
-		return reply(c, await stub(c).publish(build(c.env), c.get('auth')))
+		const result = await stub(c).publish(build(c.env), c.get('auth'))
+		if (result.ok && result.profileUpdates > 0) {
+			await doorbell(c.env).catch(() => {})
+		}
+		return reply(c, result)
 	})
 
 	// Ends a rollback, once Kopje's Queue and its dead-letter queue (bound as KOPJE_DLQ, read for its metrics only) both

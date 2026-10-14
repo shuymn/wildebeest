@@ -1,8 +1,10 @@
 import { DurableObject } from 'cloudflare:workers'
 
 import { MIGRATIONS } from './db/migrations'
+import { Db } from './db/sql'
 import * as accounts from './domain/accounts'
 import * as activities from './domain/activities'
+import { announceConvertedProfiles } from './domain/actor-update'
 import {
 	ensureInstanceActorKey,
 	getCollection,
@@ -72,7 +74,10 @@ export class Store extends DurableObject<Env> {
 		super(ctx, env)
 		const build = buildOf(env)
 		this.#kernel = new StoreKernel(ctx, { build, migrations: MIGRATIONS })
-		this.#admin = new StoreAdmin(ctx, this.#kernel, { source: { build, version: PACKAGE_VERSION } })
+		this.#admin = new StoreAdmin(ctx, this.#kernel, {
+			source: { build, version: PACKAGE_VERSION },
+			onPublish: (sql, now) => announceConvertedProfiles(new Db(sql), now),
+		})
 	}
 
 	health(callerBuild: string) {

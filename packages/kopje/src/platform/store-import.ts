@@ -1,4 +1,4 @@
-import { DUMPED_STATE, hasRows, SEQUENCE_TABLE, STATE_TABLE } from './dump-catalog'
+import { hasRows, parseProfileUpdates, PROFILE_UPDATES, SEQUENCE_TABLE, STATE_TABLE } from './dump-catalog'
 import {
 	DUMP_FORMAT,
 	type DumpHeader,
@@ -67,7 +67,16 @@ export class ImportError extends Error {
 }
 
 function canonicalTable(t: TableSpec): string {
-	return JSON.stringify([t.name, t.columns, t.order, t.key, t.deferred, t.only ?? null])
+	return JSON.stringify([t.name, t.columns, t.order, t.key, t.deferred])
+}
+
+// A dump may restore fewer kopje_state names than this Store does (a dump from a version before a name was added),
+// never one this Store does not.
+function onlyWithin(dump: TableSpec['only'], mine: TableSpec['only']): boolean {
+	if (dump === undefined || mine === undefined) {
+		return dump === mine
+	}
+	return dump.column === mine.column && dump.values.every((value) => mine.values.includes(value))
 }
 
 // Returns why the dump's tables differ from this Store's catalog, or null when they are the same.
@@ -78,7 +87,7 @@ export function catalogDifference(dump: readonly TableSpec[], target: readonly T
 	}
 	for (const [i, table] of dump.entries()) {
 		const mine = target[i]
-		if (mine === undefined || canonicalTable(table) !== canonicalTable(mine)) {
+		if (mine === undefined || canonicalTable(table) !== canonicalTable(mine) || !onlyWithin(table.only, mine.only)) {
 			return `table ${table.name} differs from this Store's definition`
 		}
 	}
@@ -119,7 +128,6 @@ export const MAX_LINK_STATEMENT_BYTES = 64 * 1024
 // (the platform limits a statement to 100 KB) and keeps every storage class exact. `first` is the ordinal of the
 // first statement in the body, which names the staged links in body order.
 export function applyStatements(sql: SqlStorage, statements: readonly ParsedStatement[], first: number): void {
-	const allowedState = new Set(DUMPED_STATE.map(textLiteral))
 	const columnLists = new Map<string, string>()
 	for (const [index, statement] of statements.entries()) {
 		const table = quoteIdentifier(statement.table.name)
@@ -141,8 +149,14 @@ export function applyStatements(sql: SqlStorage, statements: readonly ParsedStat
 			continue
 		}
 		const name = statement.literals[0] ?? ''
-		if (statement.table.name === STATE_TABLE && !allowedState.has(name)) {
-			throw new ImportError('state-not-allowed', `kopje_state ${name} is not restorable`)
+		if (statement.table.name === STATE_TABLE) {
+			// The names the dump's header declares, which catalogDifference checked against this Store's.
+			if (!(statement.table.only?.values ?? []).some((allowed) => textLiteral(allowed) === name)) {
+				throw new ImportError('state-not-allowed', `kopje_state ${name} is not restorable`)
+			}
+			if (name === textLiteral(PROFILE_UPDATES) && parseProfileUpdates(bound.params[1]) === null) {
+				throw new ImportError('state-invalid', `kopje_state ${PROFILE_UPDATES} is not a list of account ids`)
+			}
 		}
 		if (statement.table.name === SEQUENCE_TABLE) {
 			// AUTOINCREMENT inserts above created their own counter rows; the dumped value replaces them.

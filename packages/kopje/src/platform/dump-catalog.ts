@@ -12,8 +12,29 @@ import { bindAll, readColumn, textLiteral, valueLiteral } from './dump-literals'
 //   _cf_*                 platform internals
 //   sqlite_* internals    except sqlite_sequence (AUTOINCREMENT counters), which is restored by name
 export const STATE_TABLE = 'kopje_state'
-export const DUMPED_STATE = ['last_local_id'] as const
+export const DUMPED_STATE = ['last_local_id', 'profile_updates'] as const
 export const SEQUENCE_TABLE = 'sqlite_sequence'
+
+// The local accounts whose avatar or header a cutover conversion changed (`convert --images`): a JSON array of account
+// ids, which publication announces with an Update each and then deletes (domain/actor-update.ts). Only a converted dump
+// holds it, so a Store dumped after publication never does.
+export const PROFILE_UPDATES = 'profile_updates'
+
+// The account ids of a PROFILE_UPDATES value, or null when it is not a JSON array of non-empty strings.
+export function parseProfileUpdates(value: unknown): string[] | null {
+	if (typeof value !== 'string') {
+		return null
+	}
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(value)
+	} catch {
+		return null
+	}
+	return Array.isArray(parsed) && parsed.every((id) => typeof id === 'string' && id !== '')
+		? (parsed as string[])
+		: null
+}
 
 function excluded(name: string): boolean {
 	return (
