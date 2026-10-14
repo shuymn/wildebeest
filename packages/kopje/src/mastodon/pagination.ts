@@ -1,5 +1,6 @@
+import type { ApiContext } from './context'
 import type { Params } from './params'
-import type { PageQuery } from '../domain/accounts'
+import type { Page, PageQuery } from '../domain/accounts'
 
 // Keyset pagination for every list: max_id, since_id and min_id cursors, and a Link header with next (older) and
 // prev (newer) pages, as Mastodon sends them.
@@ -44,4 +45,13 @@ function pageUrl(requestUrl: string, name: 'max_id' | 'min_id', value: string): 
 	}
 	url.searchParams.set(name, value)
 	return url.toString()
+}
+
+// A page as a list response: its items, and the Link header to the pages around it.
+export function pageResponse<T>(c: ApiContext, page: Page<T>, limit: number): Response {
+	const link = linkHeader(c.req.url, { ...page, count: page.items.length }, limit)
+	if (link !== undefined) {
+		c.header('Link', link)
+	}
+	return c.json(page.items as object)
 }

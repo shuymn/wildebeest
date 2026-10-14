@@ -1,6 +1,5 @@
 import { relationshipResponse } from './accounts'
 import {
-	type ApiContext,
 	type ApiHandler,
 	authorized,
 	present,
@@ -10,9 +9,8 @@ import {
 	userCredential,
 } from './context'
 import { mastodonError } from './errors'
-import { linkHeader, pageQuery } from './pagination'
+import { pageQuery, pageResponse } from './pagination'
 import { type Params, parseBoolean } from './params'
-import type { Page } from '../domain/accounts'
 import { normalizeDomain } from '../platform/domain-name'
 
 // Blocks, mutes and domain blocks (Mastodon 4.5's AccountsController#block/#unblock/#mute/#unmute, BlocksController,
@@ -61,39 +59,21 @@ export const mute: ApiHandler = async (c, deps) => {
 	return relationshipResponse(c, authorized(await storeCall(c, deps, (s, b) => s.mute(b, input))))
 }
 
-function paged<T>(c: ApiContext, result: Page<T>, limit: number): Response {
-	const link = linkHeader(c.req.url, { ...result, count: result.items.length }, limit)
-	if (link !== undefined) {
-		c.header('Link', link)
+// GET /api/v1/blocks and /api/v1/mutes: the accounts, paged by Link headers.
+function accounts(call: 'listBlocks' | 'listMutes'): ApiHandler {
+	return async (c, deps) => {
+		const p = await requestParams(c, deps)
+		if (p instanceof Response) {
+			return p
+		}
+		const page = pageQuery(p)
+		const input = { credential: userCredential(c, deps), page, present: present(c) }
+		return pageResponse(c, authorized(await storeCall(c, deps, (s, b) => s[call](b, input))), page.limit)
 	}
-	return c.json(result.items)
 }
 
-export const blocks: ApiHandler = async (c, deps) => {
-	const p = await requestParams(c, deps)
-	if (p instanceof Response) {
-		return p
-	}
-	const page = pageQuery(p)
-	const credential = userCredential(c, deps)
-	const result = authorized(
-		await storeCall(c, deps, (s, b) => s.listBlocks(b, { credential, page, present: present(c) }))
-	)
-	return paged(c, result, page.limit)
-}
-
-export const mutes: ApiHandler = async (c, deps) => {
-	const p = await requestParams(c, deps)
-	if (p instanceof Response) {
-		return p
-	}
-	const page = pageQuery(p)
-	const credential = userCredential(c, deps)
-	const result = authorized(
-		await storeCall(c, deps, (s, b) => s.listMutes(b, { credential, page, present: present(c) }))
-	)
-	return paged(c, result, page.limit)
-}
+export const blocks = accounts('listBlocks')
+export const mutes = accounts('listMutes')
 
 // Mastodon's DomainBlocksController pages 100 domains by default and at most 200.
 const DOMAIN_BLOCKS_LIMIT = 100
@@ -107,7 +87,7 @@ export const domainBlocks: ApiHandler = async (c, deps) => {
 	const page = pageQuery(p, DOMAIN_BLOCKS_LIMIT, MAX_DOMAIN_BLOCKS_LIMIT)
 	const credential = userCredential(c, deps)
 	const result = authorized(await storeCall(c, deps, (s, b) => s.listDomainBlocks(b, { credential, page })))
-	return paged(c, result, page.limit)
+	return pageResponse(c, result, page.limit)
 }
 
 // The `domain` parameter as Mastodon normalizes it (TagManager#normalize_domain: a trailing slash dropped, the host
