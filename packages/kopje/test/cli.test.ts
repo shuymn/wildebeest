@@ -222,7 +222,7 @@ describe('kopje-admin', () => {
 		const store = await sourceStore(0)
 		const { fetch } = edge(store)
 		expect(JSON.parse((await cli(['version'], { fetch })).out)).toMatchObject({ store: { applied: LATEST_MIGRATION } })
-		expect((await cli(['capacity'], { fetch })).out).toMatch(/^database .*\n.* accounts$/m)
+		expect((await cli(['capacity'], { fetch })).out).toMatch(/^database .*(?:\n +\d+ {2}\w+)*\n +\d+ {2}accounts$/m)
 		expect(JSON.parse((await cli(['spool'], { fetch })).out)).toMatchObject({ parts: 1 })
 		expect(JSON.parse((await cli(['maintenance', 'on'], { fetch })).out)).toEqual({ maintenance: true })
 		expect(JSON.parse((await cli(['maintenance', 'off'], { fetch })).out)).toEqual({ maintenance: false })
