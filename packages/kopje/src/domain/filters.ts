@@ -121,6 +121,11 @@ function statusesOf(db: Db, filterIds: readonly string[]): StatusRow[] {
 	)
 }
 
+// The owner's filters, oldest first.
+function ownFilters(db: Db, ownerId: string): FilterRow[] {
+	return db.all<FilterRow>(`SELECT ${FILTER_COLUMNS} FROM filters f WHERE f.account_id = ? ORDER BY f.id`, ownerId)
+}
+
 // Filters with their keywords and statuses (rules_requested), in the order of `rows`.
 function withRules(db: Db, rows: FilterRow[]): Filter[] {
 	const ids = rows.map((row) => row.id)
@@ -335,6 +340,10 @@ function applyKeywords(db: Db, filterId: string, plan: KeywordPlan, now: string)
 	}
 }
 
+function updateKeyword(db: Db, id: string, keyword: string, wholeWord: boolean): void {
+	db.run('UPDATE filter_keywords SET keyword = ?, whole_word = ? WHERE id = ?', keyword, wholeWord ? 1 : 0, id)
+}
+
 function insertKeyword(db: Db, filterId: string, keyword: string, wholeWord: boolean, now: string): KeywordRow {
 	const row = db.first<KeywordRow>(
 		`INSERT INTO filter_keywords (id, filter_id, keyword, whole_word, created_at) VALUES (?, ?, ?, ?, ?)
@@ -393,10 +402,7 @@ const NEW_FILTER: FilterState = { title: '', context: [], action: 'warn', expire
 
 // GET /api/v2/filters: the viewer's filters, oldest first, with their keywords and statuses.
 export const listFilters = userReadOperation<object, Filter[]>((db, _input, { accountId }) =>
-	withRules(
-		db,
-		db.all<FilterRow>(`SELECT ${FILTER_COLUMNS} FROM filters f WHERE f.account_id = ? ORDER BY f.id`, accountId)
-	)
+	withRules(db, ownFilters(db, accountId))
 )
 
 // GET /api/v2/filters/:id.
@@ -512,12 +518,7 @@ export const updateFilterKeyword = userWriteOperation<KeywordChanges & { id: str
 			return { status: 'invalid', errors }
 		}
 		const wholeWord = castBoolean(input.wholeWord) ?? own.keyword.whole_word === 1
-		db.run(
-			'UPDATE filter_keywords SET keyword = ?, whole_word = ? WHERE id = ?',
-			keyword,
-			wholeWord ? 1 : 0,
-			own.keyword.id
-		)
+		updateKeyword(db, own.keyword.id, keyword, wholeWord)
 		return { status: 'ok', value: { id: own.keyword.id, keyword, whole_word: wholeWord } }
 	}
 )
@@ -603,10 +604,7 @@ export const deleteFilterStatus = userWriteOperation<{ id: string }, boolean>((d
 // The v1 API (Api::V1::FiltersController): each keyword of the viewer's filters is a v1 filter.
 
 function ownKeywords(db: Db, ownerId: string): { filter: FilterRow; keyword: KeywordRow }[] {
-	const filters = db.all<FilterRow>(
-		`SELECT ${FILTER_COLUMNS} FROM filters f WHERE f.account_id = ? ORDER BY f.id`,
-		ownerId
-	)
+	const filters = ownFilters(db, ownerId)
 	const byId = new Map(filters.map((f) => [f.id, f]))
 	return keywordsOf(
 		db,
@@ -710,12 +708,7 @@ export const updateFilterV1 = userWriteOperation<FilterV1Changes & { id: string 
 			return { status: 'invalid', errors }
 		}
 		const wholeWord = castBoolean(input.wholeWord) ?? own.keyword.whole_word === 1
-		db.run(
-			'UPDATE filter_keywords SET keyword = ?, whole_word = ? WHERE id = ?',
-			phrase,
-			wholeWord ? 1 : 0,
-			own.keyword.id
-		)
+		updateKeyword(db, own.keyword.id, phrase, wholeWord)
 		updateFilterRow(db, own.filter.id, next.state)
 		return {
 			status: 'ok',

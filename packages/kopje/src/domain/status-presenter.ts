@@ -9,7 +9,6 @@ import {
 	visibleSql,
 } from './audience'
 import {
-	type ActiveFilters,
 	activeFilters,
 	applyFilters,
 	type FilterResult,
@@ -123,9 +122,8 @@ export const STATUS_COLUMNS = `s.id, s.uri, s.url, s.account_id, s.reblog_of_id,
 
 export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
 
-// viewer: the viewer and the request time (null for none). filters: the viewer's active filters, when the caller read
-// them once for several presentations; otherwise the presenter reads them.
-export type PresentOptions = Present & { viewer: ViewerContext | null; filters?: ActiveFilters | null }
+// viewer: the viewer and the request time (null for none).
+export type PresentOptions = Present & { viewer: ViewerContext | null }
 
 export type PresentOwnOptions = PresentOptions & {
 	// DELETE answers with the source text (`text`) in place of `content`, for redrafting: on the deleted status only,
@@ -158,7 +156,7 @@ type MentionRow = {
 // Statuses the read rule passed for the viewer, in the order of `ids`; ids with no row, and boosts whose original the
 // viewer may not see, are left out.
 export function presentStatuses(db: Db, ids: readonly VisibleStatusId[], options: PresentOptions): Status[] {
-	return present(db, ids, options, false).flatMap((status) => (status === undefined ? [] : [status]))
+	return presented(present(db, ids, options, false))
 }
 
 // Two lists of statuses presented as one response (a thread's ancestors and descendants), so their filters' text
@@ -170,8 +168,11 @@ export function presentStatusPair(
 	options: PresentOptions
 ): [Status[], Status[]] {
 	const all = present(db, [...first, ...second], options, false)
-	const kept = (part: (Status | undefined)[]) => part.flatMap((status) => (status === undefined ? [] : [status]))
-	return [kept(all.slice(0, first.length)), kept(all.slice(first.length))]
+	return [presented(all.slice(0, first.length)), presented(all.slice(first.length))]
+}
+
+function presented(statuses: readonly (Status | undefined)[]): Status[] {
+	return statuses.flatMap((status) => (status === undefined ? [] : [status]))
 }
 
 export function presentStatus(db: Db, id: VisibleStatusId, options: PresentOptions): Status | null {
@@ -228,8 +229,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		)
 	)
 	const flags = viewerFlags(db, viewerId, all)
-	const filters =
-		options.filters !== undefined ? options.filters : options.viewer === null ? null : activeFilters(db, options.viewer)
+	const filters = options.viewer === null ? null : activeFilters(db, options.viewer)
 	const statusMatches =
 		filters === null ? new Map<string, Set<string>>() : filterStatusMatches(db, filters, [...byId.keys()])
 	// Status#searchable_text of a status: its spoiler text, its text (a local status's source, a remote one's HTML as
