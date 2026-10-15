@@ -7,7 +7,8 @@ import { DISTRIBUTABLE_SQL, REACHES_FOLLOWERS_SQL, REQUIRES_MENTION_SQL } from '
 // fragments of one module, src/domain/audience.ts. Elsewhere, SQL calls them instead of reading the tables they
 // decide on, so a new read, notification or delivery path cannot apply a copy of a rule that drifts from it. Only the
 // modules that write those tables read them directly, each for the reason given. The single writers of
-// notifications, outbound activities and the audience rows are pinned the same way.
+// notifications, outbound activities and the audience rows are pinned the same way, and so is the selection of an
+// activity's recipients (recipientsFor): no other SQL turns follows into inboxes or picks an account's shared inbox.
 
 const POLICY = '../src/domain/audience.ts'
 
@@ -33,6 +34,15 @@ function table(names: readonly string[]): string {
 function reads(...names: string[]): RegExp {
 	return new RegExp(`\\b(?:FROM|JOIN)\\s+${table(names)}`, 'i')
 }
+
+// One SQL string (no quote or statement end between) that reads follows and an inbox column, in either order.
+const FOLLOWER_INBOXES = new RegExp(
+	[
+		`\\b(?:FROM|JOIN)\\s+${table(['follows'])}[^\`';]*?\\b(?:shared_)?inbox_url\\b`,
+		`\\b(?:shared_)?inbox_url\\b[^\`';]*?\\b(?:FROM|JOIN)\\s+${table(['follows'])}`,
+	].join('|'),
+	'i'
+)
 
 // INSERT INTO t, INSERT OR <conflict> INTO t, or REPLACE INTO t.
 function writes(...names: string[]): RegExp {
@@ -96,6 +106,24 @@ const RULES: readonly Rule[] = [
 			'../src/domain/statuses.ts': 'a local status’s mentions, resolved by mentionableBySql',
 			'../src/domain/remote-statuses.ts': 'an inbound status’s addressing (interpretAddressing) and its later audience',
 			'../src/domain/inbox.ts': 'an inbound boost’s addressing, as silent mentions',
+		},
+	},
+	{
+		name: 'expands followers into inboxes',
+		pattern: FOLLOWER_INBOXES,
+		allowed: {
+			...POLICY_ONLY,
+			'../src/domain/actors.ts':
+				'the followers and following collections (R13), whose items name an inbox; nothing is sent',
+		},
+	},
+	{
+		name: 'reads shared inboxes',
+		pattern: /\bshared_inbox_url\b/i,
+		allowed: {
+			...POLICY_ONLY,
+			'../src/domain/inbox.ts': 'stores a remote actor’s inboxes',
+			'../src/domain/deliveries.ts': 'moves a row its recipient’s shared inbox refused to that recipient’s own inbox',
 		},
 	},
 ]
@@ -226,6 +254,30 @@ function g(
 			'../src/domain/result.ts:1 names VisibleStatusId outside a parameter type',
 			'../src/mastodon/routes.ts presents statuses outside the domain modules',
 		])
+	})
+})
+
+describe('recipient selection', () => {
+	const rule = (name: string) => RULES.find((r) => r.name === name)!.pattern
+
+	it('finds follows turned into inboxes, in either order, and any read of a shared inbox', () => {
+		for (const sql of [
+			"SELECT DISTINCT COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) FROM follows f JOIN accounts a",
+			'SELECT a.inbox_url FROM accounts a JOIN main.follows f ON f.account_id = a.id',
+			'SELECT a.inbox_url FROM accounts a WHERE a.id IN (SELECT account_id FROM "follows")',
+			'FROM follows f JOIN accounts a ON a.id = f.account_id WHERE f.state = 1 ORDER BY a.inbox_url',
+		]) {
+			expect(rule('expands followers into inboxes').test(sql), sql).toBe(true)
+		}
+		expect(rule('reads shared inboxes').test('SELECT a.shared_inbox_url FROM accounts a')).toBe(true)
+	})
+
+	it('does not join two strings or statements', () => {
+		expect(rule('expands followers into inboxes').test("'SELECT 1 FROM follows', 'SELECT inbox_url FROM x'")).toBe(
+			false
+		)
+		expect(rule('expands followers into inboxes').test('SELECT 1 FROM follows; SELECT inbox_url FROM x')).toBe(false)
+		expect(rule('expands followers into inboxes').test('SELECT inbox_url FROM deliveries')).toBe(false)
 	})
 })
 

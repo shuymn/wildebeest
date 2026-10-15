@@ -9,6 +9,7 @@ import type { Db } from '../db/sql'
 //     filter before LIMIT and no read path keeps a second copy of the rule in TypeScript.
 //   - interpretAddressing: inbound to/cc/tag → visibility and silent mentions (B1b).
 //   - addressingOf / audienceOf: a local status's to/cc and the accounts that must receive it (B2).
+//   - recipientsFor / addresses: whom an outbound activity reaches and names, by what it does (outboundKind).
 //
 // Visibilities are Mastodon's internal set. limited is Misskey's `specified` (and Mastodon's own limited): addressed
 // recipients who are not mentioned in the text. Those recipients are status_mentions rows with silent = 1: they may
@@ -555,4 +556,113 @@ export type Audience = { followers: boolean; accounts: string[] }
 export function audienceOf(visibility: Visibility, recipients: readonly Recipient[], extra: readonly string[] = []) {
 	const accounts = new Set([...recipients.map((r) => r.accountId), ...extra])
 	return { followers: !requiresMention(visibility), accounts: [...accounts] } satisfies Audience
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Outbound recipients (R22, R23): who an activity of a local signer goes to. deliveries.ts turns them into inboxes
+// and personal copies; nothing else selects the followers or the addressed accounts of an activity.
+// ---------------------------------------------------------------------------------------------------------------
+
+// What an outbound activity does, which decides whom it may reach:
+//   - content carries a status, or a boost of one, to its audience: Create, an Update of a status, Announce. It goes
+//     to no unavailable account (R1) and to no one the signer blocks or whose domain it blocks (VIS-13, VIS-15): an
+//     addressed account the signer blocks or domain-blocks is neither named nor sent to, and a follower on a domain it
+//     blocks (one the domain block's cleanup has not removed yet) is not sent to.
+//   - a retraction withdraws what was sent: a Delete, an Undo of anything, a Reject that ends a follow we had accepted
+//     (withdraws). It is named to and reaches its whole audience, the blocked included, and every inbox that received
+//     what it withdraws (deliveries.ts).
+//   - everything else (an Update of the actor, Like, Follow, Accept, a Reject of a request, Block) goes to its whole
+//     audience. Mastodon 4.5 filters none of these by block or domain block: FavouriteService, FollowService,
+//     BlockService and RejectFollowService send to the account's inbox, and ActivityPub::UpdateDistributionWorker to
+//     followers.inboxes (AccountReachFinder); a domain block ends the follows with the domain instead
+//     (AfterBlockDomainFromAccountService), as its cleanup does here.
+export type OutboundKind = 'content' | 'retraction' | 'other'
+
+const ACTOR_TYPES = new Set(['Person', 'Service', 'Group', 'Application', 'Organization'])
+
+// Whether an activity's object is an actor document (an Update of a profile).
+export function isActorObject(object: unknown): boolean {
+	return typeof object === 'object' && object !== null && ACTOR_TYPES.has(String((object as { type?: unknown }).type))
+}
+
+export function outboundKind(activity: Record<string, unknown>, withdraws = false): OutboundKind {
+	switch (activity.type) {
+		case 'Create':
+		case 'Announce':
+			return 'content'
+		case 'Update':
+			return isActorObject(activity.object) ? 'other' : 'content'
+		case 'Delete':
+		case 'Undo':
+			return 'retraction'
+		case 'Reject':
+			return withdraws ? 'retraction' : 'other'
+		default:
+			return 'other'
+	}
+}
+
+// Whether an activity of `kind` by `signer` leaves out the account `x`: when it is unavailable; as a follower, when
+// the signer blocks its domain; as an addressed account, when the signer blocks it or its domain. Only content leaves
+// anyone out, so only for content does the fragment name `signer` (a caller binds it then only).
+function leavesOutSql(kind: OutboundKind, as: 'follower' | 'addressed', signer: string, x: string): string {
+	if (kind !== 'content') {
+		return '0'
+	}
+	return `(NOT ${availableSql(x)} OR ${as === 'follower' ? domainBlocksSql(signer, x) : blockedSql(signer, x)})`
+}
+
+// Whether an activity of `kind` by `signer` names and reaches the account `accountId` among its addressed accounts
+// (R22): a boost names the original's author through this, so its Announce leaves out an author the booster blocks or
+// domain-blocks, and its Undo names them all the same.
+export function addresses(db: Db, kind: OutboundKind, signerId: string, accountId: string): boolean {
+	return (
+		kind !== 'content' ||
+		db.first(`SELECT 1 AS x WHERE NOT ${leavesOutSql(kind, 'addressed', '?1', '?2')}`, signerId, accountId) !==
+			undefined
+	)
+}
+
+// A remote account an activity is addressed to, with its inboxes ('' read as none).
+export type AddressedAccount = { uri: string; inbox_url: string | null; shared_inbox_url: string | null }
+
+export type OutboundRecipients = {
+	// The inboxes of the signer's accepted remote followers the activity reaches, when its audience has the followers:
+	// each one's shared inbox when it has one, else its personal inbox, deduplicated (possibly null or '').
+	followerInboxes: (string | null)[]
+	// The remote accounts of its audience it reaches, by id.
+	accounts: AddressedAccount[]
+}
+
+// R23: whom an activity by `signerId` for `audience` reaches, by its kind (outboundKind). Local accounts are not
+// among them: they read the Store. withdraws: a Reject that ends a follow already accepted.
+export function recipientsFor(
+	db: Db,
+	signerId: string,
+	activity: Record<string, unknown>,
+	audience: Audience,
+	withdraws = false
+): OutboundRecipients {
+	const kind = outboundKind(activity, withdraws)
+	const followerInboxes = audience.followers
+		? db
+				.all<{ inbox: string | null }>(
+					`SELECT DISTINCT COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) AS inbox
+					FROM main.follows f JOIN main.accounts a ON a.id = f.account_id
+					WHERE f.target_account_id = ?1 AND f.state = 'accepted' AND a.domain IS NOT NULL
+						AND NOT ${leavesOutSql(kind, 'follower', '?1', 'a.id')}`,
+					signerId
+				)
+				.map((row) => row.inbox)
+		: []
+	const accounts = db.all<AddressedAccount>(
+		`SELECT a.uri, NULLIF(a.inbox_url, '') AS inbox_url, NULLIF(a.shared_inbox_url, '') AS shared_inbox_url
+		FROM main.accounts a
+		WHERE a.id IN (SELECT value FROM json_each(?1)) AND a.domain IS NOT NULL
+			AND NOT ${leavesOutSql(kind, 'addressed', '?2', 'a.id')}
+		ORDER BY a.id`,
+		JSON.stringify(audience.accounts),
+		...(kind === 'content' ? [signerId] : [])
+	)
+	return { followerInboxes, accounts }
 }

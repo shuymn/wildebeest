@@ -1074,13 +1074,14 @@ export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input,
 	recordOutbound(
 		db,
 		accountId,
-		announceActivity(announceOf(db, accountId, author.uri, uri, visibility, publishedAt, target)),
+		announceActivity(announceOf(db, accountId, author.uri, uri, visibility, publishedAt, target, 'content')),
 		input.now
 	)
 	return viewed(presentOwn(db, accountId, id, options))
 })
 
-// The Announce of a boost by `boosterId` (boostAnnounce in activities.ts decides what it names).
+// The Announce of a boost by `boosterId`, for the Announce (content) or its Undo (retraction); boostAnnounce in
+// activities.ts decides what it names.
 function announceOf(
 	db: Db,
 	boosterId: string,
@@ -1088,13 +1089,15 @@ function announceOf(
 	uri: string,
 	visibility: Visibility,
 	publishedAt: string,
-	target: Target
+	target: Target,
+	kind: 'content' | 'retraction'
 ): AnnounceInput {
 	return boostAnnounce(
 		db,
 		boosterId,
 		{ announceUri: uri, actorUri, visibility, publishedAt, objectUri: target.uri },
-		{ id: target.account_id, uri: target.author_uri }
+		{ id: target.account_id, uri: target.author_uri },
+		kind
 	)
 }
 
@@ -1121,7 +1124,8 @@ function undoLocalBoosts(db: Db, originalId: string, now: number): void {
 			boost.uri,
 			boost.visibility,
 			boost.published_at,
-			target
+			target,
+			'retraction'
 		)
 		recordOutbound(db, boost.account_id, undoAnnounceActivity(announce), now)
 	}
@@ -1161,7 +1165,8 @@ export function withdrawLocalBoost(db: Db, boostId: string, now: number, maxRows
 		boost.uri,
 		boost.visibility,
 		boost.published_at,
-		target
+		target,
+		'retraction'
 	)
 	return beginRetraction(db, boost.account_id, undoAnnounceActivity(announce), now, maxRows)
 }
@@ -1182,7 +1187,16 @@ function removeReblog(db: Db, accountId: string, reblogId: string, originalId: s
 			db,
 			accountId,
 			undoAnnounceActivity(
-				announceOf(db, accountId, viewerUri(db, accountId), row.uri, row.visibility, row.published_at, target)
+				announceOf(
+					db,
+					accountId,
+					viewerUri(db, accountId),
+					row.uri,
+					row.visibility,
+					row.published_at,
+					target,
+					'retraction'
+				)
 			),
 			now
 		)

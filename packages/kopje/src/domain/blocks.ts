@@ -43,7 +43,7 @@ import type { Db } from '../db/sql'
 //     That is a durable cleanup (domain_block_cleanups) done in batches that each scan DOMAIN_BLOCK_WINDOW follows by
 //     id (RES-6, RES-7): the first in the request, the rest by runDomainBlockCleanups, which the Queue and the cron
 //     run with the inbound jobs. Meanwhile followers there get nothing that carries content recorded after the block
-//     (audienceTargets in deliveries.ts).
+//     (recipientsFor in audience.ts).
 //     An unblock deletes the cleanup with the block: what was removed stays removed, and the rest stays.
 
 // Follows rows one cleanup batch scans, and batches one runDomainBlockCleanups call does at most.
