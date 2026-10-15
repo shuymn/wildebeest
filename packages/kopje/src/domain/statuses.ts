@@ -41,7 +41,13 @@ import {
 	type Visibility,
 	viewableStatusId,
 } from './audience'
-import { optionalUserReadOperation, userMediaDeleteOperation, userReadOperation, userWriteOperation } from './auth'
+import {
+	optionalUserReadOperation,
+	type UserContext,
+	userMediaDeleteOperation,
+	userReadOperation,
+	userWriteOperation,
+} from './auth'
 import { beginRetraction } from './deliveries'
 import { activeFilters } from './filters'
 import { allocateLocalId } from './ids'
@@ -262,106 +268,108 @@ export type CreateStatusInput = {
 export type CreateStatusResult =
 	{ status: 'ok'; value: Status } | { status: 'reply_not_found' } | { status: 'invalid'; error: string }
 
-export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusResult>((db, input, { accountId }) => {
-	const options = { ...input.present, viewerId: accountId }
-	if (input.idempotencyKey !== undefined) {
-		// The key is the status's natural key: a repeat answers with the status the first request made.
-		const existing = db.first<{ id: string }>(
-			'SELECT id FROM statuses WHERE account_id = ? AND client_key = ?',
-			accountId,
-			input.idempotencyKey
-		)
-		const status = existing === undefined ? null : presentOwn(db, accountId, existing.id, options)
-		if (status !== null) {
-			return { status: 'ok', value: status }
+export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusResult>(
+	(db, input, { accountId }, viewer) => {
+		const options = { ...input.present, viewer }
+		if (input.idempotencyKey !== undefined) {
+			// The key is the status's natural key: a repeat answers with the status the first request made.
+			const existing = db.first<{ id: string }>(
+				'SELECT id FROM statuses WHERE account_id = ? AND client_key = ?',
+				accountId,
+				input.idempotencyKey
+			)
+			const status = existing === undefined ? null : presentOwn(db, accountId, existing.id, options)
+			if (status !== null) {
+				return { status: 'ok', value: status }
+			}
 		}
-	}
-	if (exceedsRawLength(input.text, input.spoilerText)) {
-		return { status: 'invalid', error: TOO_LONG }
-	}
-	const author = localAuthor(db, accountId)
-	let parent: ReplyParent | null = null
-	if (input.inReplyToId !== undefined) {
-		parent = replyParent(db, accountId, input.inReplyToId)
-		if (parent === null) {
-			return { status: 'reply_not_found' }
+		if (exceedsRawLength(input.text, input.spoilerText)) {
+			return { status: 'invalid', error: TOO_LONG }
 		}
-	}
-	const media = attachableMedia(db, accountId, input.mediaIds, null, input.now)
-	if (input.text.trim() === '' && media.length === 0) {
-		return { status: 'invalid', error: "Validation failed: Text can't be blank" }
-	}
-	const origin = new URL(author.uri).origin
-	const composed = compose(db, input.text, author, input.present.origin)
-	const visibility = input.visibility ?? author.default_visibility
-	const sensitive = (input.sensitive ?? author.default_sensitive === 1) || input.spoilerText !== ''
-	const language = input.language ?? author.default_language
-	// Status#carried_over_reply_to_account_id: continuing one's own reply keeps the conversation partner.
-	const replyTarget =
-		parent === null
-			? null
-			: parent.account_id === accountId && parent.in_reply_to_uri !== null
-				? parent.in_reply_to_account_id
-				: parent.account_id
-	const id = allocateLocalId(db, input.now)
-	db.run(
-		`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, spoiler_text, content,
+		const author = localAuthor(db, accountId)
+		let parent: ReplyParent | null = null
+		if (input.inReplyToId !== undefined) {
+			parent = replyParent(db, accountId, input.inReplyToId)
+			if (parent === null) {
+				return { status: 'reply_not_found' }
+			}
+		}
+		const media = attachableMedia(db, accountId, input.mediaIds, null, input.now)
+		if (input.text.trim() === '' && media.length === 0) {
+			return { status: 'invalid', error: "Validation failed: Text can't be blank" }
+		}
+		const origin = new URL(author.uri).origin
+		const composed = compose(db, input.text, author, input.present.origin)
+		const visibility = input.visibility ?? author.default_visibility
+		const sensitive = (input.sensitive ?? author.default_sensitive === 1) || input.spoilerText !== ''
+		const language = input.language ?? author.default_language
+		// Status#carried_over_reply_to_account_id: continuing one's own reply keeps the conversation partner.
+		const replyTarget =
+			parent === null
+				? null
+				: parent.account_id === accountId && parent.in_reply_to_uri !== null
+					? parent.in_reply_to_account_id
+					: parent.account_id
+		const id = allocateLocalId(db, input.now)
+		db.run(
+			`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, spoiler_text, content,
 			source_text, sensitive, language, published_at, client_key, search_text, in_reply_to_account_id, created_at)
 		VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?12)`,
-		id,
-		`${origin}/ap/o/${input.objectId}`,
-		accountId,
-		parent?.uri ?? null,
-		parent?.id ?? null,
-		visibility,
-		input.spoilerText,
-		composed.content,
-		composed.source,
-		sensitive ? 1 : 0,
-		language,
-		iso(input.now),
-		input.idempotencyKey ?? null,
-		searchText(composed.source, input.spoilerText),
-		replyTarget
-	)
-	writeMentions(db, id, composed.mentions, [])
-	writeTags(db, id, composed.tags)
-	attachMedia(db, id, media, input.now)
-	recountStatuses(db, accountId)
-	recountStatus(db, parent?.id ?? null)
-	for (const mention of composed.mentions) {
-		notify(db, { recipientId: mention.id, type: 'mention', fromId: accountId, statusId: id, now: input.now })
-	}
-	// FeedInsertWorker#notify?: followers who asked to be notified hear of a post that is not a reply to someone else
-	// (or to an unknown partner) and that their home would show (the follow's languages); notify() applies the audience
-	// rule.
-	if (parent === null || replyTarget === accountId) {
-		const subscribers = db.all<{ account_id: string }>(
-			`SELECT account_id FROM follows WHERE target_account_id = ?1 AND state = 'accepted' AND notify = 1
-				AND (languages IS NULL OR ?2 IS NULL OR ?2 IN (SELECT value FROM json_each(languages)))`,
+			id,
+			`${origin}/ap/o/${input.objectId}`,
 			accountId,
-			language
+			parent?.uri ?? null,
+			parent?.id ?? null,
+			visibility,
+			input.spoilerText,
+			composed.content,
+			composed.source,
+			sensitive ? 1 : 0,
+			language,
+			iso(input.now),
+			input.idempotencyKey ?? null,
+			searchText(composed.source, input.spoilerText),
+			replyTarget
 		)
-		for (const subscriber of subscribers) {
-			notify(db, {
-				recipientId: subscriber.account_id,
-				type: 'status',
-				fromId: accountId,
-				statusId: id,
-				now: input.now,
-			})
+		writeMentions(db, id, composed.mentions, [])
+		writeTags(db, id, composed.tags)
+		attachMedia(db, id, media, input.now)
+		recountStatuses(db, accountId)
+		recountStatus(db, parent?.id ?? null)
+		for (const mention of composed.mentions) {
+			notify(db, { recipientId: mention.id, type: 'mention', fromId: accountId, statusId: id, now: input.now })
 		}
+		// FeedInsertWorker#notify?: followers who asked to be notified hear of a post that is not a reply to someone else
+		// (or to an unknown partner) and that their home would show (the follow's languages); notify() applies the audience
+		// rule.
+		if (parent === null || replyTarget === accountId) {
+			const subscribers = db.all<{ account_id: string }>(
+				`SELECT account_id FROM follows WHERE target_account_id = ?1 AND state = 'accepted' AND notify = 1
+				AND (languages IS NULL OR ?2 IS NULL OR ?2 IN (SELECT value FROM json_each(languages)))`,
+				accountId,
+				language
+			)
+			for (const subscriber of subscribers) {
+				notify(db, {
+					recipientId: subscriber.account_id,
+					type: 'status',
+					fromId: accountId,
+					statusId: id,
+					now: input.now,
+				})
+			}
+		}
+		const facts = statusFacts(db, id)
+		if (facts !== null) {
+			recordOutbound(db, accountId, createActivity(facts), input.now)
+		}
+		const status = presentOwn(db, accountId, id, options)
+		if (status === null) {
+			throw new Error('created status cannot be presented')
+		}
+		return { status: 'ok', value: status }
 	}
-	const facts = statusFacts(db, id)
-	if (facts !== null) {
-		recordOutbound(db, accountId, createActivity(facts), input.now)
-	}
-	const status = presentOwn(db, accountId, id, options)
-	if (status === null) {
-		throw new Error('created status cannot be presented')
-	}
-	return { status: 'ok', value: status }
-})
+)
 
 type ReplyParent = {
 	id: string
@@ -504,8 +512,8 @@ export function recordEdit(db: Db, statusId: string, at: string): string {
 // added by an edit is linked in the text but adds no recipient, notification or delivery, so neither the status nor
 // its history reaches anyone who could not see the original. Public and unlisted statuses follow Mastodon: a new
 // mention is a mention and is notified. Either way, a mention removed by an edit stays as a silent mention.
-export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db, input, { accountId }) => {
-	const options = { ...input.present, viewerId: accountId }
+export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db, input, { accountId }, viewer) => {
+	const options = { ...input.present, viewer }
 	const current = ownStatus(db, accountId, input.id)
 	if (current === null || current.reblog_of_id !== null) {
 		return { status: 'not_found' }
@@ -636,12 +644,12 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 export const deleteStatus = userMediaDeleteOperation<
 	{ id: string; deleteMedia: boolean; now: number; present: Present },
 	Viewed<Status>
->((db, input, { accountId }) => {
+>((db, input, { accountId }, viewer) => {
 	const current = ownStatus(db, accountId, input.id)
 	if (current === null) {
 		return { status: 'not_found' }
 	}
-	const value = presentOwn(db, accountId, current.id, { ...input.present, viewerId: accountId, source: true })
+	const value = presentOwn(db, accountId, current.id, { ...input.present, viewer, source: true })
 	if (value === null) {
 		return { status: 'not_found' }
 	}
@@ -688,9 +696,9 @@ function viewable(db: Db, viewerId: string | null, id: string) {
 }
 
 export const getStatus = optionalUserReadOperation<{ id: string; present: Present }, Viewed<Status>>(
-	(db, { id, present }, { accountId: viewerId }) => {
-		const resolved = viewable(db, viewerId, id)
-		return viewed(resolved === null ? null : presentStatus(db, resolved, { ...present, viewerId }))
+	(db, { id, present }, viewer) => {
+		const resolved = viewable(db, viewer.accountId, id)
+		return viewed(resolved === null ? null : presentStatus(db, resolved, { ...present, viewer }))
 	}
 )
 
@@ -744,8 +752,8 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 			limits.descendants,
 			now
 		)
-		// The thread's filters (filters.ts): a member a hide filter matches is left out, as with any other member.
-		const options = { ...present, viewerId, filters: activeFilters(db, viewer, 'thread') }
+		// The viewer's filters, read once for both lists.
+		const options = { ...present, viewer, filters: activeFilters(db, viewer) }
 		return {
 			status: 'ok',
 			value: {
@@ -820,9 +828,10 @@ export type StatusEdit = {
 
 // Edit history, oldest first. A status never edited has one entry: itself.
 export const statusHistory = optionalUserReadOperation<{ id: string; present: Present }, Viewed<StatusEdit[]>>(
-	(db, { id, present }, { accountId: viewerId }) => {
+	(db, { id, present }, viewer) => {
+		const { accountId: viewerId } = viewer
 		const resolved = viewable(db, viewerId, id)
-		const status = resolved === null ? null : presentStatus(db, resolved, { ...present, viewerId })
+		const status = resolved === null ? null : presentStatus(db, resolved, { ...present, viewer })
 		if (resolved === null || status === null) {
 			return { status: 'not_found' }
 		}
@@ -924,15 +933,15 @@ function viewerUri(db: Db, accountId: string): string {
 	return localAuthor(db, accountId).uri
 }
 
-function presented(db: Db, id: string, viewerId: string, present: Present): Viewed<Status> {
-	const visible = viewableStatusId(db, viewerId, id)
-	return viewed(visible === null ? null : presentStatus(db, visible, { ...present, viewerId }))
+function presented(db: Db, id: string, viewer: UserContext, present: Present): Viewed<Status> {
+	const visible = viewableStatusId(db, viewer.accountId, id)
+	return viewed(visible === null ? null : presentStatus(db, visible, { ...present, viewer }))
 }
 
 type ActionInput = { id: string; now: number; present: Present }
 
 // StatusPolicy#favourite?: the status is visible and the viewer does not block its author.
-export const favourite = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }) => {
+export const favourite = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
 	const target = actionTarget(db, accountId, input.id)
 	if (target === null) {
 		return { status: 'not_found' }
@@ -966,10 +975,10 @@ export const favourite = userWriteOperation<ActionInput, Acted<Status>>((db, inp
 			input.now
 		)
 	}
-	return presented(db, target.id, accountId, input.present)
+	return presented(db, target.id, viewer, input.present)
 })
 
-export const unfavourite = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }) => {
+export const unfavourite = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
 	const id = originalId(db, input.id)
 	if (id === null) {
 		return { status: 'not_found' }
@@ -1004,10 +1013,10 @@ export const unfavourite = userWriteOperation<ActionInput, Acted<Status>>((db, i
 			)
 		}
 	}
-	return presented(db, id, accountId, input.present)
+	return presented(db, id, viewer, input.present)
 })
 
-export const bookmark = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }) => {
+export const bookmark = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
 	const target = actionTarget(db, accountId, input.id)
 	if (target === null) {
 		return { status: 'not_found' }
@@ -1018,16 +1027,16 @@ export const bookmark = userWriteOperation<ActionInput, Acted<Status>>((db, inpu
 		target.id,
 		iso(input.now)
 	)
-	return presented(db, target.id, accountId, input.present)
+	return presented(db, target.id, viewer, input.present)
 })
 
-export const unbookmark = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }) => {
+export const unbookmark = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
 	const id = originalId(db, input.id)
 	if (id === null) {
 		return { status: 'not_found' }
 	}
 	db.run('DELETE FROM bookmarks WHERE account_id = ? AND status_id = ?', accountId, id)
-	return presented(db, id, accountId, input.present)
+	return presented(db, id, viewer, input.present)
 })
 
 export type ReblogInput = ActionInput & { visibility?: ApiVisibility; objectId: string }
@@ -1035,7 +1044,7 @@ export type ReblogInput = ActionInput & { visibility?: ApiVisibility; objectId: 
 // StatusPolicy#reblog?: visible, not direct or limited, private only by its author, and the viewer does not block
 // the author. A private status is boosted as private; otherwise the requested visibility or the viewer's default,
 // with direct (which a boost cannot be) read as private.
-export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input, { accountId }) => {
+export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input, { accountId }, viewer) => {
 	const target = actionTarget(db, accountId, input.id)
 	if (target === null) {
 		return { status: 'not_found' }
@@ -1047,7 +1056,7 @@ export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input,
 	) {
 		return { status: 'forbidden' }
 	}
-	const options = { ...input.present, viewerId: accountId }
+	const options = { ...input.present, viewer }
 	const existing = db.first<{ id: string }>(
 		'SELECT id FROM statuses WHERE account_id = ? AND reblog_of_id = ?',
 		accountId,
@@ -1220,7 +1229,7 @@ function removeReblog(db: Db, accountId: string, reblogId: string, originalId: s
 	)
 }
 
-export const unreblog = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }) => {
+export const unreblog = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
 	const id = originalId(db, input.id)
 	if (id === null) {
 		return { status: 'not_found' }
@@ -1233,7 +1242,7 @@ export const unreblog = userWriteOperation<ActionInput, Acted<Status>>((db, inpu
 	if (own !== undefined) {
 		removeReblog(db, accountId, own.id, id, input.now)
 	}
-	return presented(db, id, accountId, input.present)
+	return presented(db, id, viewer, input.present)
 })
 
 // ---------------------------------------------------------------------------------------------------------------

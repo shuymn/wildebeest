@@ -146,7 +146,7 @@ function searchStatuses(db: Db, input: SearchRequest, viewer: UserContext): Stat
 			...p.values
 		)
 		.map((row) => row.id)
-	return presentStatuses(db, ids, { ...input.present, viewerId })
+	return presentStatuses(db, ids, { ...input.present, viewer })
 }
 
 // The largest code point, as UTF-8 compares: every name with the prefix sorts below prefix + this.

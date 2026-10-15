@@ -1128,8 +1128,8 @@ describe("userinfo reads the account, not the account's history (RES-7)", () => 
 	}, 60_000)
 })
 
-// Filters apply as a page is presented (filters.ts): each read in a filterable context reads the viewer's filters for
-// it, compiled once, and seeks the page's statuses in the filters that name statuses. So a page costs the viewer's
+// Filters are reported as a page is presented (filters.ts): each read for a signed-in viewer reads the viewer's active
+// filters, compiled once, and seeks the page's statuses in the filters that name statuses. So a page costs the viewer's
 // filter rows, which the caps bound (MAX_FILTERS, MAX_FILTER_KEYWORDS), and no more as the history grows, however many
 // statuses the filters name. The viewer follows one author whose public statuses mention them; the filters, in every
 // context, match none of them, so every page is full.

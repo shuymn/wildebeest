@@ -3,11 +3,19 @@ import {
 	apiVisibility,
 	type ApiVisibility,
 	type OwnStatusId,
+	type ViewerContext,
 	type Visibility,
 	type VisibleStatusId,
 	visibleSql,
 } from './audience'
-import { type ActiveFilters, applyFilters, type FilterResult, filterStatusMatches, filterTextLimit } from './filters'
+import {
+	type ActiveFilters,
+	activeFilters,
+	applyFilters,
+	type FilterResult,
+	filterStatusMatches,
+	filterTextLimit,
+} from './filters'
 import { htmlToPlainText } from './plain-text'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
@@ -20,8 +28,10 @@ import { remoteHtmlText } from '../security/html'
 // viewer, or OwnStatusId, the viewer's own, for the response to their write. A boost's original is read through the
 // read rule for the same viewer, whichever the boost's id: a boost the viewer may see stands only with an original
 // they may see, and their own boost of an original they may no longer see is shown without it (reblog: null).
-// A read in a filterable context passes the viewer's active filters for it (filters.ts): a status a hide filter
-// matches is left out, and one a warn or blur filter matches carries the results in `filtered`, as does its original.
+// For a signed-in viewer every status carries `filtered` (REST::StatusSerializer, StatusRelationshipsPresenter): the
+// viewer's active filters that match it, whatever their context and action, as CustomFilter.apply_cached_filters finds
+// them (filters.ts); a boost and its original carry the same. Nothing is left out for a filter: the client decides by
+// context.
 
 export type MediaSize = { width: number; height: number; size: string; aspect: number }
 
@@ -112,8 +122,9 @@ export const STATUS_COLUMNS = `s.id, s.uri, s.url, s.account_id, s.reblog_of_id,
 
 export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
 
-// filters: the viewer's active filters for the context the statuses are presented in, or none (null or absent).
-export type PresentOptions = Present & { viewerId: string | null; filters?: ActiveFilters | null }
+// viewer: the viewer and the request time (null for none). filters: the viewer's active filters, when the caller read
+// them once for several presentations; otherwise the presenter reads them.
+export type PresentOptions = Present & { viewer: ViewerContext | null; filters?: ActiveFilters | null }
 
 export type PresentOwnOptions = PresentOptions & {
 	// DELETE answers with the source text (`text`) in place of `content`, for redrafting: on the deleted status only,
@@ -163,6 +174,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		return []
 	}
 	const idList = JSON.stringify(ids)
+	const viewerId = options.viewer?.accountId ?? null
 	// The statuses, and the originals of the boosts among them that the viewer may see.
 	const rows = db.all<StatusRow>(
 		`SELECT ${STATUS_COLUMNS} FROM ${STATUS_FROM}
@@ -170,7 +182,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			OR (s.id IN (SELECT reblog_of_id FROM statuses WHERE id IN (SELECT value FROM json_each(?1)) AND reblog_of_id IS NOT NULL)
 				AND ${visibleSql('s', '?2')})`,
 		idList,
-		options.viewerId
+		viewerId
 	)
 	const byId = new Map(rows.map((row) => [row.id, row]))
 	const all = JSON.stringify([...byId.keys()])
@@ -200,8 +212,9 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			all
 		)
 	)
-	const flags = viewerFlags(db, options.viewerId, all)
-	const filters = options.filters ?? null
+	const flags = viewerFlags(db, viewerId, all)
+	const filters =
+		options.filters !== undefined ? options.filters : options.viewer === null ? null : activeFilters(db, options.viewer)
 	const statusMatches =
 		filters === null ? new Map<string, Set<string>>() : filterStatusMatches(db, filters, [...byId.keys()])
 	// Status#searchable_text of a status: its spoiler text, its text (a local status's source, a remote one's HTML as
@@ -228,9 +241,6 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 					ids: row.reblog_of_id === null ? [row.id] : [row.id, row.reblog_of_id],
 					limit: textLimit,
 				})
-				if (filtered.some((result) => result.filter.filter_action === 'hide')) {
-					return undefined
-				}
 			}
 		}
 		if (row.reblog_of_id !== null) {
@@ -246,7 +256,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		}
 		const visibility = apiVisibility(row.visibility)
 		const viewer =
-			options.viewerId === null
+			viewerId === null
 				? {}
 				: {
 						favourited: flags.favourited.has(row.id),
@@ -254,7 +264,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 						muted: false,
 						bookmarked: flags.bookmarked.has(row.id),
 						// Pins come later; an own, pinnable status says it is not pinned.
-						...(row.account_id === options.viewerId && row.reblog_of_id === null && visibility !== 'direct'
+						...(row.account_id === viewerId && row.reblog_of_id === null && visibility !== 'direct'
 							? { pinned: false }
 							: {}),
 						filtered,

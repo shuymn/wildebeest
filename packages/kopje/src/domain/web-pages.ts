@@ -51,7 +51,7 @@ export const profilePage = readOperation<{ username: string; maxId: string | nul
 		return {
 			status: 'ok',
 			account: presentAccount(row, present),
-			statuses: presentStatuses(db, ids.slice(0, PROFILE_PAGE_SIZE), { ...present, viewerId: null }),
+			statuses: presentStatuses(db, ids.slice(0, PROFILE_PAGE_SIZE), { ...present, viewer: null }),
 			next,
 		}
 	}
@@ -93,12 +93,12 @@ export const statusPage = readOperation<{ username: string; id: string; present:
 		if (resolved !== id) {
 			return { status: 'moved', username: row.username, id: resolved }
 		}
-		const status = presentStatus(db, row.id, { ...present, viewerId: null })
+		const status = presentStatus(db, row.id, { ...present, viewer: null })
 		if (status === null) {
 			return { status: 'not_found' }
 		}
 		const parentId = row.in_reply_to_id === null ? null : viewableStatusId(db, null, row.in_reply_to_id)
-		const parent = parentId === null ? null : presentStatus(db, parentId, { ...present, viewerId: null })
+		const parent = parentId === null ? null : presentStatus(db, parentId, { ...present, viewer: null })
 		return {
 			status: 'ok',
 			value: status,

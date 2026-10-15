@@ -868,10 +868,7 @@ export function edgeRangeSql(column: string, max: string, min: string): string {
 	return `${column} < coalesce(CAST(${max} AS INTEGER), 1e19) AND ${column} > coalesce(CAST(${min} AS INTEGER), -1e19)`
 }
 
-// newest and oldest are the cursors of the rows the page read. read is how many it read, when the presenter may leave
-// some out (a hide filter): the next page is offered when the read filled the page, as Mastodon decides it from the
-// statuses it loaded.
-export type Page<T> = { items: T[]; newest: string | null; oldest: string | null; read?: number }
+export type Page<T> = { items: T[]; newest: string | null; oldest: string | null }
 
 export type ListFollowsInput = {
 	account: string

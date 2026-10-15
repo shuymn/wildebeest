@@ -27,7 +27,7 @@ export const listNotifications: ApiHandler = async (c, deps) => {
 			})
 		)
 	)
-	const link = linkHeader(c.req.url, { ...result, count: result.read ?? result.items.length }, page.limit)
+	const link = linkHeader(c.req.url, { ...result, count: result.items.length }, page.limit)
 	if (link !== undefined) {
 		c.header('Link', link)
 	}

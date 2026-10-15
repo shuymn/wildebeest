@@ -14,11 +14,11 @@ import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
 // Filters on generated worlds (docs/visibility.md, "Filters"): each local viewer's read endpoints run before and after
-// the viewer gets random filters, and the filtered output must be the unfiltered one less exactly what a hide filter
-// for the endpoint's context matches (a model of keyword and status matching below), page after page; warn and blur
-// filters never remove a status and are reported in `filtered` exactly where they match; nothing in `filtered` names a
-// status other than the one it is on or its original; expired filters never match. Filters never add to what the read
-// rule shows, so what the viewer may not see stays hidden (the unfiltered output is checked by the endpoint oracle).
+// the viewer gets random filters. The output must be the unfiltered one, page after page (filters remove nothing; the
+// client decides by context), and each status's `filtered` must name exactly the viewer's active filters that match it
+// (a model of keyword and status matching below), whatever their context and action; a boost and its original report
+// the same; nothing in `filtered` names a status other than the one it is on or its original, which the read rule let
+// the viewer see (the unfiltered output is checked by the endpoint oracle); expired filters never match.
 
 const CASES = 60
 const LIMIT = 3
@@ -114,22 +114,18 @@ function writeFilters(sql: SqlStorage, c: Case): void {
 	})
 }
 
-// The filters of `viewer` that match the status `s` in `context` (CustomFilter.apply_cached_filters), by index.
-function matching(c: Case, viewer: number, s: number, context: Context): number[] {
+// The active filters of `viewer` that match the status `s` (CustomFilter.apply_cached_filters), by index.
+function matching(c: Case, viewer: number, s: number): number[] {
 	const proper = c.world.statuses[s]?.reblogOf ?? s
 	const text = `status ${proper}`
 	return c.filters.flatMap((f, i) => {
-		if (f.owner !== viewer || f.expired || !f.contexts.includes(context)) {
+		if (f.owner !== viewer || f.expired) {
 			return []
 		}
 		const keyword = f.keywords.some((k) => (k.wholeWord ? proper === k.n : text.includes(`status ${k.n}`)))
 		const named = f.statuses.includes(s) || f.statuses.includes(proper)
 		return keyword || named ? [i] : []
 	})
-}
-
-function hidden(c: Case, viewer: number, s: number, context: Context): boolean {
-	return matching(c, viewer, s, context).some((i) => c.filters[i]?.action === 'hide')
 }
 
 const shown = new Set<string>()
@@ -146,12 +142,12 @@ describe('filters on generated worlds', () => {
 	})
 
 	afterAll(() => {
-		// Each endpoint hid something and warned of something in some case, so the property cannot pass vacuously.
+		// Each endpoint reported a hide filter and another filter in some case, so the property cannot pass vacuously.
 		const endpoints = ['home', 'list', 'public', 'tag', 'account statuses', 'context', 'notifications']
-		expect([...shown].sort()).toEqual(endpoints.flatMap((e) => [`${e} hid`, `${e} warned`]).sort())
+		expect([...shown].sort()).toEqual(endpoints.flatMap((e) => [`${e} hide`, `${e} other`]).sort())
 	})
 
-	it('hides exactly what a hide filter of the context matches, and reports warn and blur filters where they match', async () => {
+	it('removes nothing, and reports every active filter that matches each status', async () => {
 		await fc.assert(
 			fc.asyncProperty(caseArb, async (c) => {
 				const problems = await runInDurableObject(store, (_instance, state) => check(state.storage.sql, c))
@@ -162,7 +158,7 @@ describe('filters on generated worlds', () => {
 	}, 120_000)
 })
 
-type Read = { name: string; context: Context; read: (viewer: number, page: PageQuery) => Page<Status> | null }
+type Read = { name: string; read: (viewer: number, page: PageQuery) => Page<Status> | null }
 
 function check(sql: SqlStorage, c: Case): string[] {
 	const { world } = c
@@ -203,21 +199,18 @@ function check(sql: SqlStorage, c: Case): string[] {
 	const accountInput = { onlyMedia: false, excludeReplies: false, excludeReblogs: false, pinned: false, tagged: null }
 
 	const reads: Read[] = [
-		{ name: 'home', context: 'home', read: (v, page) => run(homeTimeline, { ...base(v), page }) },
-		{ name: 'public', context: 'public', read: (v, page) => run(publicTimeline, { ...base(v), ...timeline, page }) },
+		{ name: 'home', read: (v, page) => run(homeTimeline, { ...base(v), page }) },
+		{ name: 'public', read: (v, page) => run(publicTimeline, { ...base(v), ...timeline, page }) },
 		{
 			name: 'tag',
-			context: 'public',
 			read: (v, page) => run(tagTimeline, { ...base(v), ...timeline, tag: 'cats', any: [], all: [], none: [], page }),
 		},
 		...world.accounts.map((_, x): Read => ({
 			name: 'account statuses',
-			context: 'account',
 			read: (v, page) => run(accountStatuses, { ...base(v), ...accountInput, account: accountId(x), page }),
 		})),
 		...world.lists.map((list, l): Read => ({
 			name: 'list',
-			context: 'home',
 			read: (v, page) => (v === list.owner ? run(listTimeline, { ...base(v), id: listId(l), page }) : null),
 		})),
 	]
@@ -272,25 +265,21 @@ function check(sql: SqlStorage, c: Case): string[] {
 
 	writeFilters(sql, c)
 
-	// The filtered statuses: the unfiltered ones less those hidden, each with `filtered` as the model has it.
-	const compare = (name: string, v: number, context: Context, was: Status[], now: Status[]) => {
-		const expected = was.filter((status) => !hidden(c, v, indexOf.get(status.id) ?? -1, context))
-		if (JSON.stringify(ids(now)) !== JSON.stringify(ids(expected))) {
-			problems.push(`${name} of ${v}: shows [${ids(now).join(' ')}], the model [${ids(expected).join(' ')}]`)
-		}
-		if (expected.length < was.length) {
-			shown.add(`${name} hid`)
+	// The same statuses as unfiltered, each with `filtered` as the model has it.
+	const compare = (name: string, v: number, was: Status[], now: Status[]) => {
+		if (JSON.stringify(ids(now)) !== JSON.stringify(ids(was))) {
+			problems.push(`${name} of ${v}: shows [${ids(now).join(' ')}], unfiltered [${ids(was).join(' ')}]`)
 		}
 		for (const status of now) {
 			const s = indexOf.get(status.id) ?? -1
-			const want = matching(c, v, s, context).map(filterId)
+			const want = matching(c, v, s).map(filterId)
 			const results = status.filtered ?? []
 			const got = results.map((r) => r.filter.id)
 			if (JSON.stringify(got) !== JSON.stringify(want)) {
 				problems.push(`${name} of ${v}: status ${s} filtered by [${got.join(' ')}], the model [${want.join(' ')}]`)
 			}
-			if (got.length > 0) {
-				shown.add(`${name} warned`)
+			for (const r of results) {
+				shown.add(`${name} ${r.filter.filter_action === 'hide' ? 'hide' : 'other'}`)
 			}
 			const own = new Set([status.id, ...(status.reblog === null ? [] : [status.reblog.id])])
 			for (const r of results) {
@@ -309,28 +298,22 @@ function check(sql: SqlStorage, c: Case): string[] {
 			compare(
 				r.name,
 				v,
-				r.context,
 				before.get(`${v} ${i}`) ?? [],
 				pages((page) => r.read(v, page))
 			)
 		)
-		world.statuses.forEach((_, s) =>
-			compare('context', v, 'thread', contextBefore.get(`${v} ${s}`) ?? [], contextOf(v, s))
-		)
+		world.statuses.forEach((_, s) => compare('context', v, contextBefore.get(`${v} ${s}`) ?? [], contextOf(v, s)))
 		const was = notificationsBefore.get(v) ?? []
 		const nowNotifications = notificationsOf(v)
-		const expected = was.filter(
-			(n) => n.status === undefined || !hidden(c, v, indexOf.get(n.status.id) ?? -1, 'notifications')
+		if (JSON.stringify(nowNotifications.map((n) => n.id)) !== JSON.stringify(was.map((n) => n.id))) {
+			problems.push(`notifications of ${v}: differ from the unfiltered ones`)
+		}
+		compare(
+			'notifications',
+			v,
+			was.flatMap((n) => (n.status === undefined ? [] : [n.status as Status])),
+			nowNotifications.flatMap((n) => (n.status === undefined ? [] : [n.status as Status]))
 		)
-		if (JSON.stringify(nowNotifications.map((n) => n.id)) !== JSON.stringify(expected.map((n) => n.id))) {
-			problems.push(`notifications of ${v}: differ from the model`)
-		}
-		if (expected.length < was.length) {
-			shown.add('notifications hid')
-		}
-		if (nowNotifications.some((n) => (n.status?.filtered ?? []).length > 0)) {
-			shown.add('notifications warned')
-		}
 	}
 	return problems
 }

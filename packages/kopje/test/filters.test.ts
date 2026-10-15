@@ -7,7 +7,6 @@ import {
 	community,
 	follow,
 	getJson,
-	ids,
 	post,
 	remoteAccount,
 	seedStatus,
@@ -288,18 +287,19 @@ describe('filters API', () => {
 		})
 	})
 
-	it('refuses a filter status for a status the viewer may not see, and lists one that became invisible by id', async () => {
+	it('refuses a filter status for a status the viewer may not see as a missing one, and lists one that became invisible by id', async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice, bob } = h.users
 		const filter = await createFilter(h, alice, { title: 'f', context: ['home'] })
 		const hidden = await post(h, bob, { status: 'only for bob', visibility: 'direct' })
-		const notFound = { status: 404, body: { error: 'Record not found' } }
+		// Refused as a missing status is, so the two cannot be told apart.
+		const refused = { status: 422, body: { error: 'Validation failed: Status must exist' } }
 		expect(
 			await answer(await act(h, alice, `/api/v2/filters/${filter.id}/statuses`, { status_id: hidden.id }))
-		).toEqual(notFound)
+		).toEqual(refused)
 		expect(
 			await answer(await act(h, alice, `/api/v2/filters/${filter.id}/statuses`, { status_id: '999999999999999999' }))
-		).toEqual(notFound)
+		).toEqual(refused)
 
 		await follow(h, alice, bob.id)
 		const privateStatus = await post(h, bob, { status: 'followers', visibility: 'private' })
@@ -439,79 +439,82 @@ describe('filters applied', () => {
 		return { h, alice, bob }
 	}
 
-	it('marks warned statuses with filtered and leaves hidden ones out of home, keeping the cursors of the page read', async () => {
+	it('reports every active filter that matches, whatever its context and action, and removes nothing', async () => {
 		const { h, alice, bob } = await setup()
 		const plain = await post(h, bob, { status: 'nothing here', visibility: 'public' })
-		const warned = await post(h, bob, { status: 'The Cat sat', visibility: 'public' })
-		const hidden = await post(h, bob, { status: 'a dog barked', visibility: 'public' })
+		const cat = await post(h, bob, { status: 'The Cat sat', visibility: 'public' })
+		const dog = await post(h, bob, { status: 'a dog barked', visibility: 'public' })
 		const warn = await createFilter(h, alice, {
 			title: 'cats',
-			context: ['home'],
+			context: ['public'],
 			keywords_attributes: [{ keyword: 'cat' }],
 		})
-		await createFilter(h, alice, {
-			title: 'dogs',
-			context: ['home'],
+		const hide = await createFilter(h, alice, {
+			title: 'animals',
+			context: ['notifications'],
 			filter_action: 'hide',
-			keywords_attributes: [{ keyword: 'dog' }],
+			keywords_attributes: [{ keyword: 'dog' }, { keyword: 'cat' }],
 		})
+		await act(h, alice, `/api/v2/filters/${hide.id}/statuses`, { status_id: plain.id })
+		const entity = (f: Filter) => ({
+			id: f.id,
+			title: f.title,
+			context: f.context,
+			expires_at: null,
+			filter_action: f.filter_action,
+		})
+		const results = {
+			[plain.id]: [{ filter: entity(hide), keyword_matches: null, status_matches: [plain.id] }],
+			[cat.id]: [
+				{ filter: entity(warn), keyword_matches: ['Cat'], status_matches: null },
+				{ filter: entity(hide), keyword_matches: ['Cat'], status_matches: [] },
+			],
+			[dog.id]: [{ filter: entity(hide), keyword_matches: ['dog'], status_matches: [] }],
+		}
 		const response = await h.request('/api/v1/timelines/home?limit=3', bearer(alice.token))
 		const page = await response.json<Status[]>()
-		expect(page.map((s) => s.id)).toEqual([warned.id, plain.id])
-		expect(page[0]!.filtered).toEqual([
-			{
-				filter: { id: warn.id, title: 'cats', context: ['home'], expires_at: null, filter_action: 'warn' },
-				keyword_matches: ['Cat'],
-				status_matches: null,
-			},
-		])
-		expect(page[1]!.filtered).toEqual([])
-		// The cursors are those of the page read: the hidden status is the newest of it.
-		expect(response.headers.get('link')).toContain(`min_id=${hidden.id}>; rel="prev"`)
+		expect(page.map((s) => [s.id, s.filtered])).toEqual([dog, cat, plain].map((s) => [s.id, results[s.id]]))
 		expect(response.headers.get('link')).toContain(`max_id=${plain.id}>; rel="next"`)
 
-		// A page of hidden statuses only is empty, and its cursors still move on.
-		const onlyHidden = await h.request(`/api/v1/timelines/home?limit=1`, bearer(alice.token))
-		expect(await onlyHidden.json()).toEqual([])
-		expect(onlyHidden.headers.get('link')).toContain(`max_id=${hidden.id}>; rel="next"`)
+		// Everywhere Mastodon's StatusSerializer has it for a signed-in viewer.
+		expect((await getJson<Status>(h, `/api/v1/statuses/${cat.id}`, alice.token)).body.filtered).toEqual(results[cat.id])
+		const favourited = await act(h, alice, `/api/v1/statuses/${dog.id}/favourite`)
+		expect((await favourited.json<Status>()).filtered).toEqual(results[dog.id])
+		await act(h, alice, `/api/v1/statuses/${cat.id}/bookmark`)
+		expect((await timeline(h, '/api/v1/favourites', alice.token)).map((s) => s.filtered)).toEqual([results[dog.id]])
+		expect((await timeline(h, '/api/v1/bookmarks', alice.token)).map((s) => s.filtered)).toEqual([results[cat.id]])
+		expect((await timeline(h, '/api/v1/timelines/public', alice.token)).map((s) => s.id)).toEqual([
+			dog.id,
+			cat.id,
+			plain.id,
+		])
+		// Another viewer is not filtered by alice's filters, and an anonymous one has no `filtered`.
+		expect((await timeline(h, '/api/v1/timelines/public', bob.token)).map((s) => s.filtered)).toEqual([[], [], []])
+		expect((await getJson<Status>(h, `/api/v1/statuses/${cat.id}`)).body).not.toHaveProperty('filtered')
 	})
 
-	it('applies a filter only in the contexts it names, and never once it has expired', async () => {
+	it('never matches an expired filter', async () => {
 		const { h, alice, bob } = await setup()
-		const status = await post(h, bob, { status: 'spoiler ahead #show', visibility: 'public' })
-		const reply = await post(h, bob, { status: 'more spoiler', visibility: 'public', in_reply_to_id: status.id })
+		const status = await post(h, bob, { status: 'spoiler ahead', visibility: 'public' })
 		await createFilter(h, alice, {
-			title: 'public only',
-			context: ['public', 'thread'],
+			title: 'spoilers',
+			context: ['home'],
 			filter_action: 'hide',
 			keywords_attributes: [{ keyword: 'spoiler' }],
 		})
-		expect((await timeline(h, '/api/v1/timelines/home', alice.token)).map((s) => s.id)).toEqual([reply.id, status.id])
-		expect(await timeline(h, '/api/v1/timelines/public', alice.token)).toEqual([])
-		expect(await timeline(h, '/api/v1/timelines/tag/show', alice.token)).toEqual([])
-		expect((await timeline(h, `/api/v1/accounts/${bob.id}/statuses`, alice.token)).map((s) => s.id)).toEqual([
-			reply.id,
-			status.id,
-		])
-		expect((await getJson(h, `/api/v1/statuses/${status.id}/context`, alice.token)).body).toEqual({
-			ancestors: [],
-			descendants: [],
-		})
-		// The single status is not a filtered context; another viewer is not filtered by alice's filters.
-		expect((await getJson<Status>(h, `/api/v1/statuses/${status.id}`, alice.token)).body.filtered).toEqual([])
-		expect((await timeline(h, '/api/v1/timelines/public', bob.token)).map((s) => s.id)).toEqual([reply.id, status.id])
-
+		expect((await timeline(h, '/api/v1/timelines/home', alice.token))[0]!.filtered).toHaveLength(1)
 		await sql(h.store, 'UPDATE filters SET expires_at = ?', new Date(NOW - 1000).toISOString())
-		expect((await timeline(h, '/api/v1/timelines/public', alice.token)).map((s) => s.id)).toEqual([reply.id, status.id])
+		expect((await timeline(h, '/api/v1/timelines/home', alice.token)).map((s) => [s.id, s.filtered])).toEqual([
+			[status.id, []],
+		])
 		// expires_in=0 expires at once.
 		await act(h, alice, '/api/v2/filters', {
 			title: 'gone',
-			context: ['account'],
-			filter_action: 'hide',
+			context: ['home'],
 			expires_in: 0,
 			keywords_attributes: [{ keyword: 'spoiler' }],
 		})
-		expect(await timeline(h, `/api/v1/accounts/${bob.id}/statuses`, alice.token)).toHaveLength(2)
+		expect((await timeline(h, '/api/v1/timelines/home', alice.token))[0]!.filtered).toEqual([])
 	})
 
 	it('matches whole words as Mastodon builds its regex, over spoiler text, text and media descriptions', async () => {
@@ -578,28 +581,25 @@ describe('filters applied', () => {
 		expect(shown!.filtered).toEqual(results)
 		expect(shown!.reblog!.filtered).toEqual(results)
 
+		// A hide filter is reported too; the client hides the status.
 		await send(h, alice, 'PUT', `/api/v2/filters/${filter.id}`, { filter_action: 'hide' })
-		expect(await timeline(h, '/api/v1/timelines/home', alice.token)).toEqual([])
+		const [again] = await timeline(h, '/api/v1/timelines/home', alice.token)
+		expect((again!.filtered as FilterResult[]).map((r) => r.filter.filter_action)).toEqual(['hide'])
 	})
 
-	it('hides notifications whose status a hide filter of the notifications context matches', async () => {
+	it("reports matches on a notification's status and removes no notification", async () => {
 		const { h, alice, bob } = await setup()
-		const mine = await post(h, alice, { status: 'hello', visibility: 'public' })
-		await act(h, bob, `/api/v1/statuses/${mine.id}/favourite`)
 		const mention = await post(h, bob, { status: '@alice secret plans', visibility: 'public' })
-		const before = await getJson<{ id: string; status?: Status }[]>(h, '/api/v1/notifications', alice.token)
-		expect(before.body.map((n) => n.status?.id)).toEqual([mention.id, mine.id])
 		await createFilter(h, alice, {
 			title: 'plans',
 			context: ['notifications'],
 			filter_action: 'hide',
 			keywords_attributes: [{ keyword: 'plans' }],
 		})
-		const after = await getJson<{ id: string; status?: Status }[]>(h, '/api/v1/notifications', alice.token)
-		expect(after.body.map((n) => n.status?.id)).toEqual([mine.id])
-		expect((await getJson(h, `/api/v1/notifications/${before.body[0]!.id}`, alice.token)).status).toBe(404)
-		// Home is another context: the mention is still there.
-		expect(await ids(h, '/api/v1/timelines/home', alice.token)).toContain(mention.id)
+		const listed = await getJson<{ id: string; status?: Status }[]>(h, '/api/v1/notifications', alice.token)
+		expect(listed.body.map((n) => n.status?.id)).toEqual([mention.id])
+		expect((listed.body[0]!.status!.filtered as FilterResult[]).map((r) => r.keyword_matches)).toEqual([['plans']])
+		expect((await getJson(h, `/api/v1/notifications/${listed.body[0]!.id}`, alice.token)).status).toBe(200)
 	})
 })
 
@@ -643,7 +643,7 @@ describe('filter matching work', () => {
 		const started = performance.now()
 		const shown = await timeline(h, `/api/v1/accounts/${remote}/statuses?limit=40`, alice.token)
 		const elapsed = performance.now() - started
-		expect(shown).toHaveLength(40)
+		expect(shown.map((s) => s.filtered)).toEqual(Array.from({ length: 40 }, () => []))
 		expect(elapsed).toBeLessThan(5_000)
 	}, 60_000)
 
@@ -668,7 +668,9 @@ describe('filter matching work', () => {
 			keywords_attributes: [{ keyword: 'needle' }],
 		})
 		const shown = await timeline(h, `/api/v1/accounts/${remote}/statuses`, alice.token)
-		expect(shown.map((s) => s.id)).toEqual([late])
-		expect(shown.map((s) => s.id)).not.toContain(early)
+		expect(shown.map((s) => [s.id, (s.filtered as FilterResult[]).length])).toEqual([
+			[late, 0],
+			[early, 1],
+		])
 	})
 })

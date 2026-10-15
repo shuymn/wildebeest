@@ -9,10 +9,10 @@ import type { Db } from '../db/sql'
 // a local account; only its owner sees or changes it, its keywords and its statuses: anyone else's is not found.
 //
 // Filters are not a visibility rule. The read rule (audience.ts) decides what the viewer may see; the presenter then
-// applies the viewer's active filters for the context it presents (home and lists, notifications, public and tag
-// timelines, a thread, an account's statuses): a status a hide filter matches is left out of the response, and one a
-// warn or blur filter matches carries the FilterResult entries in `filtered`. activeFilters reads and compiles the
-// viewer's filters for one context once per request, and filterStatusMatches seeks the page's statuses in each of them.
+// reports, in each status's `filtered`, every active filter of the viewer that matches it, whatever its context and
+// action (warn, hide, blur), as Mastodon's StatusRelationshipsPresenter does: the client decides by context, and
+// nothing is left out on the server. activeFilters reads and compiles the viewer's filters once per presentation, and
+// filterStatusMatches seeks the presented statuses in each of them.
 
 // CustomFilter::VALID_CONTEXTS, CustomFilter's action enum, TITLE_LENGTH_LIMIT and
 // CustomFilterKeyword::KEYWORD_LENGTH_LIMIT.
@@ -23,8 +23,8 @@ export type FilterAction = (typeof FILTER_ACTIONS)[number]
 export const MAX_FILTER_TITLE = 256
 export const MAX_FILTER_KEYWORD = 512
 
-// Kopje's caps, where Mastodon has none: every read in a filterable context compiles the viewer's filters for it and
-// matches each status of the page against every keyword (RES-1, RES-7), and GET /api/v2/filters answers every filter
+// Kopje's caps, where Mastodon has none: every presentation to a signed-in viewer compiles their filters and matches
+// each status against every keyword (RES-1, RES-7), and GET /api/v2/filters answers every filter
 // with its rules (RES-3). Generous for a person's filters: at most 1,000 keywords and 10,000 filtered statuses.
 export const MAX_FILTERS = 50
 export const MAX_FILTER_KEYWORDS = 20
@@ -525,7 +525,8 @@ export const listFilterStatuses = userReadOperation<{ filterId: string }, Filter
 )
 
 // POST /api/v2/filters/:filter_id/statuses: a status the viewer may see (CustomFilterStatus#validate_status_access,
-// StatusPolicy#show?), once per filter. A status the viewer may not see is not found, as one that does not exist.
+// StatusPolicy#show?), once per filter. A status the viewer may not see is refused as one that does not exist is
+// ("Status must exist"), so the two cannot be told apart; Mastodon answers "Status is invalid" for the first.
 export const createFilterStatus = userWriteOperation<
 	{ filterId: string; statusId?: string },
 	FilterOutcome<FilterStatus>
@@ -534,12 +535,9 @@ export const createFilterStatus = userWriteOperation<
 	if (filter === undefined) {
 		return { status: 'not_found' }
 	}
-	if (blank(input.statusId)) {
-		return { status: 'invalid', errors: ['Status must exist'] }
-	}
-	const statusId = resolveApiId(db, 'statuses', input.statusId ?? '')
+	const statusId = blank(input.statusId) ? null : resolveApiId(db, 'statuses', input.statusId ?? '')
 	if (statusId === null || !canView(db, accountId, statusId)) {
-		return { status: 'not_found' }
+		return { status: 'invalid', errors: ['Status must exist'] }
 	}
 	const errors: string[] = []
 	if (db.first('SELECT 1 AS x FROM filter_statuses WHERE filter_id = ? AND status_id = ?', filter.id, statusId)) {
@@ -729,7 +727,7 @@ type CompiledKeyword = { folded: string; start: boolean; end: boolean }
 // hasStatuses: whether the filter names any status (CustomFilterStatus), wherever it is.
 type CompiledFilter = { filter: Filter; keywords: CompiledKeyword[]; hasStatuses: boolean }
 
-// The viewer's filters for one context that have not expired, compiled; read once per request.
+// The viewer's filters that have not expired, compiled; read once per presentation.
 export type ActiveFilters = { readonly filters: readonly CompiledFilter[] }
 
 // Onigmo's [[:word:]] for Unicode strings, which \b reads: letters, marks, numbers and connector punctuation.
@@ -757,20 +755,18 @@ function compileKeyword(row: KeywordRow): CompiledKeyword {
 	}
 }
 
-// The viewer's active filters for `context` (CustomFilter.cached_filters_for, then the context the response
-// presents): unexpired at the request's time, with their keywords compiled. Null for an anonymous viewer or none.
-export function activeFilters(db: Db, viewer: ViewerContext, context: FilterContext): ActiveFilters | null {
+// The viewer's active filters (CustomFilter.cached_filters_for): unexpired at the request's time, whatever their context
+// and action, with their keywords compiled; read once per presentation. Null for an anonymous viewer or none.
+export function activeFilters(db: Db, viewer: ViewerContext): ActiveFilters | null {
 	if (viewer.accountId === null) {
 		return null
 	}
 	const rows = db.all<FilterRow & { has_statuses: number }>(
 		`SELECT ${FILTER_COLUMNS}, EXISTS (SELECT 1 FROM filter_statuses fs WHERE fs.filter_id = f.id) AS has_statuses
 		FROM filters f WHERE f.account_id = ?1 AND (f.expires_at IS NULL OR f.expires_at > ?2)
-			AND EXISTS (SELECT 1 FROM json_each(f.context) c WHERE c.value = ?3)
 		ORDER BY f.id`,
 		viewer.accountId,
-		viewer.now,
-		context
+		viewer.now
 	)
 	if (rows.length === 0) {
 		return null
