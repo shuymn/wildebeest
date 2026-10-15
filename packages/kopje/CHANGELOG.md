@@ -91,9 +91,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       search's do; and home looks at most two pages (at least 40) of a followed hashtag's newest statuses for a page, so
       when most of them are hidden from you (say, a blocked account's), that page shows fewer of the hashtag's
       statuses.
-- Featured hashtags, as Mastodon 4.5 has them: `GET` and `POST /api/v1/featured_tags`, `DELETE
-/api/v1/featured_tags/:id`, `GET /api/v1/featured_tags/suggestions` (the hashtags of your newest 1,000 statuses you
-  do not feature yet, the most used first), `POST /api/v1/tags/:id/feature` and `/unfeature` (scopes
+- Featured hashtags, as Mastodon 4.5 has them: `GET` and `POST /api/v1/featured_tags`,
+  `DELETE /api/v1/featured_tags/:id`, `GET /api/v1/featured_tags/suggestions` (the hashtags of your newest 1,000
+  statuses you do not feature yet, the most used first), `POST /api/v1/tags/:id/feature` and `/unfeature` (scopes
   `read:accounts` and `write:accounts`), and `GET /api/v1/accounts/:id/featured_tags`, public, empty for a suspended
   account. An account features at most 10 hashtags, with Mastodon's validation and messages. Each shows the number of
   your public and unlisted statuses with it and the date of the newest, kept as you post, edit and delete. Its `url`,
