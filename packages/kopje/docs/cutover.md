@@ -120,12 +120,13 @@ kopje-admin verify-conversion <export> <dump file> [--accept-deletions] [--accep
 ## What the conversion does
 
 **Kopje's own functions.** Where a value is one Kopje derives itself (a remote status's sanitized HTML and search text,
-hashtag names, an object's language, the domain of a domain block, an image's type, the conversations of the direct
-statuses), the converter derives it with Kopje's code, through `cli/lib/cutover/kopje-runtime.js`, so a converted row is
-the row Kopje would have written. A new derived value follows the same rule: its module joins `kopje-runtime.js` and its
-function is exported from `src/maintenance-render.ts` (for the npm package, which ships no sources), rather than a
-second version being written in the converter. `verify-conversion` derives the same values by its own code (see
-Verification), so the two are not wrong in the same way.
+hashtag names, an object's language, the domain of a domain block, the conversations of the direct statuses), the
+converter derives it with Kopje's code, through `cli/lib/cutover/kopje-runtime.js`, so a converted row is the row Kopje
+would have written; the image export checks an image's signature the same way. A new derived value follows the same
+rule: its module joins `kopje-runtime.js` and its function is exported from `src/maintenance-render.ts` (for the npm
+package, which ships no sources), rather than a second version being written in the converter. `verify-conversion`
+derives the values it compares by its own code, sharing only the HTML sanitizer (see Verification); it does not compare
+search text.
 
 **Ids.** Accounts, statuses, media and lists get 18-digit TEXT ids. A legacy API id that already has 18 digits stays
 the id; all of them are reserved before any new id is drawn, so a drawn id never takes one. Any other (a UUID) becomes `legacy_id`, which the API and `/@user/<id>` resolve, and the row gets a new id:
