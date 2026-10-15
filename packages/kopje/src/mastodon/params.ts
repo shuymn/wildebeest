@@ -22,6 +22,12 @@ export class Params {
 		return this.entries.some(([key]) => key === name || key === `${name}[]`)
 	}
 
+	// Whether `name` was sent as an object: some `name[field]`, as JSON `{"name":{"field":...}}` reads. An empty object
+	// sends nothing, and an array (`name[]`) is not an object.
+	hasObject(name: string): boolean {
+		return this.entries.some(([key]) => key.startsWith(`${name}[`) && !key.startsWith(`${name}[]`))
+	}
+
 	// The first of `names` sent more than once (query and body together), for parameters that must be single
 	// (RFC 6749 §3.1, §3.2). Array parameters (`name[]`) are not scalars and are never named here.
 	repeated(names: readonly string[]): string | undefined {
