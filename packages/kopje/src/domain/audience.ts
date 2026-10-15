@@ -306,6 +306,19 @@ export type StatusSelect = {
 	readonly tail?: string
 }
 
+// A window of each author's statuses, for a feed of whole authors (home, a list), as StatusReads writes it:
+//   SELECT w.id AS id FROM (<authors>) a CROSS JOIN main.statuses w ON w.id IN (SELECT s.id FROM main.statuses s
+//     WHERE (s.account_id = a.account_id AND <where>) AND (<rule over s>) AND (<and>) <tail>)
+// <authors> selects each author once, as account_id, and <tail> orders each author's statuses by id and cuts them to a
+// page: so a status of a merged page is within its author's window, the page is the one a single SELECT over all the
+// authors' statuses gives, and an author costs a window however many statuses they have.
+export type AuthorWindows = {
+	readonly authors: string
+	readonly where?: string
+	readonly and?: string
+	readonly tail: string
+}
+
 // Further columns, name: expression. A name is a plain identifier, never the id column the reader selects.
 type Columns<Extra, Id extends string> = { readonly [K in keyof Extra]: string } & { readonly [K in Id]?: never }
 
@@ -323,12 +336,16 @@ export type StatusReads = {
 		query: StatusSelect & { readonly with?: string; readonly columns?: Columns<Extra, 'id'> },
 		...params: SqlStorageValue[]
 	): (Extra & { id: VisibleStatusId })[]
-	// SELECTs combined, each a StatusSelect under the same rule, selecting the id only:
+	// SELECTs combined, each a StatusSelect or AuthorWindows under the same rule, selecting the id only:
 	//   SELECT id FROM (SELECT * FROM (<branch>) UNION [ALL] SELECT * FROM (<branch>) ...) <tail>
 	union(
 		db: Db,
 		rule: StatusRule,
-		query: { readonly all: boolean; readonly branches: readonly StatusSelect[]; readonly tail: string },
+		query: {
+			readonly all: boolean
+			readonly branches: readonly (StatusSelect | AuthorWindows)[]
+			readonly tail: string
+		},
 		...params: SqlStorageValue[]
 	): { id: VisibleStatusId }[]
 	// The viewer's notifications the notification rule (R15) shows them, which shows a status only if they may view it:
@@ -374,6 +391,17 @@ export function statusReads(
 	const selectSql = (rule: string, q: StatusSelect, extra?: Record<string, string>) =>
 		`SELECT s.id AS id${columns(extra, 'id')} FROM ${q.from ?? ''} main.statuses s ${q.join ?? ''}
 		WHERE ${where(q.where, rule, q.and)} ${q.tail ?? ''}`
+	const branchSql = (rule: string, q: StatusSelect | AuthorWindows) => {
+		if (!('authors' in q)) {
+			return selectSql(rule, q)
+		}
+		const window = selectSql(rule, {
+			where: `s.account_id = a.account_id${q.where === undefined ? '' : ` AND ${q.where}`}`,
+			and: q.and,
+			tail: q.tail,
+		})
+		return `SELECT w.id AS id FROM (${q.authors}) a CROSS JOIN main.statuses w ON w.id IN (${window})`
+	}
 	const run = <T extends Row>(db: Db, query: string, params: SqlStorageValue[]): T[] => {
 		const bound = (placeholder: string) => {
 			const index = /^\?([1-9]\d*)$/.exec(placeholder)?.[1]
@@ -396,7 +424,7 @@ export function statusReads(
 		},
 		union(db, rule, query, ...params) {
 			const sql = ruleSql(rule)
-			const branches = query.branches.map((branch) => `SELECT * FROM (${selectSql(sql, branch)})`)
+			const branches = query.branches.map((branch) => `SELECT * FROM (${branchSql(sql, branch)})`)
 			return run<{ id: VisibleStatusId }>(
 				db,
 				`SELECT id FROM (${branches.join(query.all ? ' UNION ALL ' : ' UNION ')}) ${query.tail}`,
