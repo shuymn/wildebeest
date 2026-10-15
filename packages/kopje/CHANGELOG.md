@@ -117,7 +117,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 - The content of an account being deleted is hidden as soon as its deletion starts: from the transaction that accepts a
   remote account's `Delete`, its statuses, boosts, notifications and interactions are shown to nobody, it cannot be
-  followed, mentioned or found, and the account itself is shown redacted (`suspended: true`), while its purge
+  followed, mentioned, boosted or found, and the account itself is shown redacted (`suspended: true`), while its purge
   removes what it has in the background. Blocks and mutes of the account are removed last, so a post that mentions it
   stays filtered for whoever blocks or mutes it while that mention remains.
 

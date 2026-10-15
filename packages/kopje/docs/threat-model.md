@@ -954,7 +954,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   followers per batch and carries at most 100 blocks and mutes; a deleted actor's purge writes at most 500 rows per batch in all, every
   write counted (SQLite's `total_changes()`): deletions, counter recounts (`followers_count`, `following_count`,
   `statuses_count`, status counters) and the Undo intent of a withdrawn boost with its target chunks. The account is
-  unavailable from the first batch's transaction on (VIS-1), so the order of the steps shows nothing of it. Its follows, notifications, mentions
+  unavailable from the first batch's transaction on (VIS-1), so the order of the steps shows nothing of it, and no
+  boost of its statuses is accepted and no status of it fetched while it lasts. Its follows, notifications, mentions
   and other relationships go first; then local boosts of its statuses, each withdrawn once: the Undo intent is recorded, then its targets
   (the boost's receipts among them) are staged a chunk per row over as many batches as they need, the receipts kept
   until all are written (`beginRetraction` and `stageRetraction` in `src/domain/deliveries.ts`); B2's delivery rounds

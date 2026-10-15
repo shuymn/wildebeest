@@ -1639,6 +1639,10 @@ function newOriginal(
 	if (authorUri === null || originOf(authorUri) !== originOf(fetched.uri)) {
 		return ignored('unusable-object')
 	}
+	// Nothing new of an author whose deletion has started is stored, its stored row or not (ID-7).
+	if (isDeletedActor(db, authorUri, now)) {
+		return ignored('author-deleted')
+	}
 	const known = originalByUri(db, fetched.uri)
 	if (known !== undefined) {
 		return known
@@ -1696,6 +1700,10 @@ const announce: Handler<'Announce'> = (db, actor, activity, input) => {
 	if (!announceable(original.account_id, actor.id, original.visibility)) {
 		return ignored('not-announceable')
 	}
+	// An original whose author is being deleted is on its way out with its boosts: none is added.
+	if (authorDeleted(db, original.account_id, now)) {
+		return ignored('author-deleted')
+	}
 	const originalId = original.id
 	if (
 		db.first('SELECT 1 AS x FROM statuses WHERE account_id = ? AND reblog_of_id = ?', actor.id, originalId) !==
@@ -1743,6 +1751,12 @@ const announce: Handler<'Announce'> = (db, actor, activity, input) => {
 	// The local author hears of the boost only if they may see it (notify applies the rule to the wrapper too).
 	notify(db, { recipientId: original.account_id, type: 'reblog', fromId: actor.id, statusId: originalId, now })
 	return applied('boosted')
+}
+
+// Whether the remote account `id` deleted itself (its tombstone, as isDeletedActor).
+function authorDeleted(db: Db, id: string, now: number): boolean {
+	const uri = db.first<{ uri: string }>('SELECT uri FROM accounts WHERE id = ? AND domain IS NOT NULL', id)?.uri
+	return uri !== undefined && isDeletedActor(db, uri, now)
 }
 
 // A favourite or boost the actor made under this id.
