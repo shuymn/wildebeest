@@ -395,11 +395,16 @@ export type MediaDeleted = 'deleted' | 'in_use' | 'not_found'
 // is refused, and so is media a scheduled status holds (scheduled-statuses.ts); a live unattached upload is doomed at
 // once, as delete_media dooms a status's media, and the sweep deletes it and its R2 objects. A profile image, a
 // reservation still being written and an upload already doomed are not found, as they are for GET and PUT.
+//
+// An unattached row with no gc_at that is not a profile image is one the cutover kept for good (cli/lib/cutover/
+// convert.js): an image only earlier versions of a status show, whose files status_edits still names, or an image
+// legacy kept unattached. No Kopje write leaves such a row, so it is refused as in use: telling the two apart would
+// mean reading every edit of the account.
 export const deleteMedia = userMediaDeleteOperation<{ id: string; now: number }, MediaDeleted>(
 	(db, { id, now }, { accountId }) => {
-		const row = db.first<{ used: number }>(
-			`SELECT status_id IS NOT NULL OR scheduled_status_id IS NOT NULL AS used FROM media_attachments
-			WHERE id = ? AND account_id = ?`,
+		const row = db.first<{ used: number; kept: number }>(
+			`SELECT status_id IS NOT NULL OR scheduled_status_id IS NOT NULL AS used, gc_at IS NULL AS kept
+			FROM media_attachments WHERE id = ? AND account_id = ?`,
 			id,
 			accountId
 		)
@@ -411,6 +416,9 @@ export const deleteMedia = userMediaDeleteOperation<{ id: string; now: number },
 		}
 		if (ownUpload(db, accountId, id, now) === undefined) {
 			return 'not_found'
+		}
+		if (row.kept === 1) {
+			return 'in_use'
 		}
 		db.run('UPDATE media_attachments SET gc_at = ? WHERE id = ?', DOOMED_AT, id)
 		return 'deleted'

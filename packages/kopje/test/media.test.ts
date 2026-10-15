@@ -407,6 +407,52 @@ describe('PATCH and DELETE /api/v1/media/:id', () => {
 	})
 })
 
+describe('media the cutover kept', () => {
+	it('refuses to delete an image only earlier versions of a status show, and keeps its files', async () => {
+		const h = await users()
+		const { alice } = h.users
+		const status = await post(h, alice, { status: 'edited' })
+		// As the converter writes it: an unattached, processed row of the author with a file token and no gc_at, named
+		// by an earlier version of the status.
+		const id = '100000000000000088'
+		const token = 'E'.repeat(43)
+		const url = `https://kopje.test/media/${token}/full.png`
+		await sql(
+			h.store,
+			`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, description, meta,
+				file_token, content_type, processed, legacy_ap_o, created_at)
+			VALUES (?, ?, NULL, 0, 'image', ?, ?, '', NULL, ?, 'image/png', 1, NULL, ?)`,
+			id,
+			alice.id,
+			url,
+			`https://kopje.test/media/${token}/small.png`,
+			token,
+			new Date(NOW).toISOString()
+		)
+		await sql(
+			h.store,
+			'INSERT INTO status_edits (status_id, content, media_json, created_at) VALUES (?, ?, ?, ?)',
+			status.id,
+			'<p>before</p>',
+			JSON.stringify([{ id, type: 'image', url }]),
+			new Date(NOW).toISOString()
+		)
+		const keys = [`files/${token}/full`, `files/${token}/small`, `originals/${id}`]
+		for (const key of keys) {
+			await env.MEDIA.put(key, bytes(PNG_PLAIN))
+		}
+
+		const refused = await h.request(`/api/v1/media/${id}`, bearer(alice.token, { method: 'DELETE' }))
+		expect([refused.status, await refused.json()]).toEqual([
+			422,
+			{ error: 'Media attachment is currently used by a status' },
+		])
+		expect(await row(h, id)).toMatchObject({ status_id: null, gc_at: null })
+		expect(await sweep(h, NOW + 30 * 24 * HOUR)).toBe(0)
+		expect(await stored(keys)).toEqual(keys)
+	})
+})
+
 describe('explicit deletion', () => {
 	it('is final for a post or schedule that started before it', async () => {
 		const h = await users()
