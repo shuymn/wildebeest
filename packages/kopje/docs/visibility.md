@@ -95,8 +95,36 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R18 reblog, R19 favourite | `canView` and `blocksAuthor` (`blocksSql`) in `statuses.ts`.                                                                                                                                                                                                                                                                                                                                                                       |
 | R20 reply                 | `canView` of the parent.                                                                                                                                                                                                                                                                                                                                                                                                           |
 | R21 follow                | `followableBySql` for a local follow and for each follower a `Move` carries; an inbound `Follow` is ignored when the actor blocks the target (`blocksSql`) and rejected when the target blocks it or its domain (`blockedSql`).                                                                                                                                                                                                    |
-| R22 addressing            | `addressingOf` and `boostAnnounce` (`blockedSql`).                                                                                                                                                                                                                                                                                                                                                                                 |
-| R23 delivery targets      | `audienceTargets` in `deliveries.ts`: `domainBlocksSql` on followers, `blockedSql` on addressed accounts for content.                                                                                                                                                                                                                                                                                                              |
+| R22 addressing            | `addressingOf` for a status; for a boost, `addresses` (through `boostAnnounce`): the `Announce` leaves out an author the booster blocks or domain-blocks, its `Undo` names them. See "Outbound recipients".                                                                                                                                                                                                                        |
+| R23 delivery targets      | `recipientsFor`, by `outboundKind`, turned into inboxes by `audienceTargets` in `deliveries.ts`. See "Outbound recipients".                                                                                                                                                                                                                                                                                                        |
+
+## Outbound recipients
+
+`recipientsFor(db, signer, activity, audience)` decides whom an activity of a local account reaches (R23), and
+`addresses(db, kind, signer, x)` whether it names an addressed account (R22). Both read the activity's kind,
+`outboundKind(activity)`:
+
+| Kind       | Activities                                                                          | Followers                                                                                | Addressed accounts                                                         |
+| ---------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| content    | `Create`, `Update` of a status, `Announce`                                          | accepted remote followers, less unavailable ones and those on a domain the signer blocks | remote, less unavailable ones and those the signer blocks or domain-blocks |
+| retraction | `Delete`, `Undo` of anything, a `Reject` that ends an accepted follow               | every accepted remote follower                                                           | every remote account of the audience, blocked or not                       |
+| other      | `Update` of the actor, `Like`, `Follow`, `Accept`, a `Reject` of a request, `Block` | every accepted remote follower                                                           | every remote account of the audience                                       |
+
+A retraction also reaches every inbox that received what it withdraws, or may still: the receipts of its status, and
+the delivery rows and unexpanded targets of earlier activities about it (`receiversOf` in `deliveries.ts`). So a
+`Delete` reaches a follower who has left or been blocked since, and the `Undo` of a boost names and reaches the
+original's author even when the booster blocks them or their domain (its `Announce` left them out).
+
+The rule for activities that are neither content nor retractions is Mastodon 4.5's: none of them is filtered by
+block or domain block. `FavouriteService`, `FollowService`, `BlockService` and `RejectFollowService` send to the
+account's inbox, and `ActivityPub::UpdateDistributionWorker` sends a profile `Update` to `followers.inboxes`
+(`AccountReachFinder`). A domain block instead ends the follows with the domain (`AfterBlockDomainFromAccountService`,
+the cleanup in `blocks.ts`); until the cleanup reaches a follower there, it is sent profile changes but no content.
+
+`audienceTargets` turns the recipients into targets: followers and accounts named in `to` or `cc` by shared inbox,
+a silent recipient of an addressed activity by a copy of its own at its personal inbox (VIS-2), and the recipient of
+an activity without `to` by shared inbox, else personal inbox. No other SQL turns follows into inboxes or reads an
+account's shared inbox (the architecture test below).
 
 ## Status ids the presenter accepts
 
@@ -168,7 +196,11 @@ module:
   (`IN ('public', ...`);
 - inserts into `notifications` outside `notifications.ts`, or into `outbound_activities` or `deliveries` outside
   `deliveries.ts`;
-- inserts into `status_mentions` outside its listed writers: `statuses.ts`, `remote-statuses.ts` and `inbox.ts`.
+- inserts into `status_mentions` outside its listed writers: `statuses.ts`, `remote-statuses.ts` and `inbox.ts`;
+- selects inboxes from `follows` (follower expansion) outside the policy module, except the ActivityPub followers and
+  following collections in `actors.ts`, whose items name an inbox and are not sent anything;
+- reads `shared_inbox_url` outside the policy module, except where `inbox.ts` stores a remote actor's inboxes and where
+  `deliveries.ts` moves a row its recipient's shared inbox refused to that recipient's personal inbox.
 
 An allowed file that no longer matches fails the test too, so the list does not outlive its reason.
 
@@ -232,3 +264,28 @@ boost must come with its own original (never `reblog: null` on a read), which th
 | search resolution (of every stored account and status)     | an account exactly when account search finds it (R14); a status exactly when the single-status read shows it (R3), unless the viewer blocks its author's domain |
 
 Each endpoint must show something in some case, so a property cannot pass by showing nothing.
+
+`test/policy-writes.test.ts` runs the write paths on generated worlds, with remote accounts given personal and some
+shared inboxes and local accounts given Web Push subscriptions (alerts, policy, valid or expired token). Each case
+runs 10 to 24 actions: local authors post with every visibility, mentions and replies, edit (a mention dropped by an
+edit stays silent), delete, boost and undo a boost, favourite and undo it, and change their profile; deliveries are
+made (claimed and completed); remote followers leave; authors block accounts (ending the follows) and domains (before
+the cleanup). After each action the model (`outboundKindOf`, `statusAudience`, `names`, `reaches`, `pushed` in
+`test/policy-model.ts`) judges what it recorded:
+
+- every target of each activity is an inbox of an account the activity reaches (R23), or, for a retraction, an inbox
+  something about its object was sent to before; a personal copy goes only to an addressed account it does not name;
+- `to` and `cc` (the activity's and its object's) name only Public, the signer's followers and the accounts R22 lets
+  it name: never a silent recipient, and for content never an account the author blocks or domain-blocks; a boost's
+  `Announce` names the author exactly when R22 allows, its `Undo` always;
+- a retraction is recorded, and reaches every inbox something about its object was delivered to, is still queued for
+  (a deliveries row in any state) or is still in a chunk of targets not yet expanded; a profile change reaches every
+  remote follower;
+- every notification written satisfies R15, and every push recorded R16, at the time of the action.
+
+The property runs 500 cases from a fixed seed (`FC_SEED` replays another). Next to it, witnesses (cases written by
+hand) run each scenario it must check: content leaving out an account being deleted while its retraction reaches it,
+a delivered retraction reaching a blocked receiver, one reaching a target still
+queued after its follower left, one reaching targets not yet expanded (more followers than an expansion step, who
+leave before the `Delete`), the `Undo` of a boost naming a blocked author, a profile `Update` to a domain-blocked
+follower, content leaving one out, a personal copy, notifications and pushes. So coverage never depends on chance.
