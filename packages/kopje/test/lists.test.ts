@@ -233,6 +233,35 @@ describe('list members', () => {
 		expect(await ids(h, `/api/v1/accounts/${newest[0]}/lists`, alice.token)).toEqual([])
 	})
 
+	it('answers at most 1,000 members with limit=0, the newest', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const list = await createList(h, alice, { title: 'l' })
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT CAST(500000000000000000 + i AS TEXT), 'https://remote.example/users/m' || i, 'm' || i, 'remote.example'
+			FROM n`,
+			1001
+		)
+		await sql(
+			h.store,
+			`INSERT INTO follows (account_id, target_account_id, state)
+			SELECT ?1, id, 'accepted' FROM accounts WHERE domain = 'remote.example'`,
+			alice.id
+		)
+		await sql(
+			h.store,
+			"INSERT INTO list_accounts (list_id, account_id) SELECT ?, id FROM accounts WHERE domain = 'remote.example'",
+			list.id
+		)
+		const all = await members(h, alice, list.id)
+		// Each answer presents whole accounts, remote bios included: a bound the isolate's memory holds.
+		expect(all).toHaveLength(1000)
+		expect(all[0]).toBe('500000000000001001')
+	})
+
 	it('asks for read:lists or write:lists', async () => {
 		const h = await community(['alice'], 'read:statuses write:statuses')
 		const { alice } = h.users

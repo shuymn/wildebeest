@@ -27,9 +27,9 @@ export const MAX_LISTS = 50
 export const MAX_LIST_TITLE = 256
 
 // GET /api/v1/lists/:id/accounts with limit=0 answers every member (Lists::AccountsController#unlimited?). Kopje stops
-// at this many, above Mastodon's default follow limit of 7,500 (FollowLimitValidator), so the answer stays bounded
-// (RES-3).
-export const MAX_LIST_MEMBERS_ANSWERED = 10_000
+// at this many, the newest by account id, so the accounts one answer presents (bios of remote accounts included) stay
+// well within the isolate's memory (RES-3).
+export const MAX_LIST_MEMBERS_ANSWERED = 1_000
 
 export const REPLIES_POLICIES = ['followed', 'list', 'none'] as const
 

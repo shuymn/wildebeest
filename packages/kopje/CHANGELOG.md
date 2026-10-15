@@ -14,7 +14,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `DELETE /api/v1/lists/:id` (`title`, at most 256 characters; `replies_policy` `followed`, `list` or `none`, `list` by
   default; `exclusive`), at most 50 lists per account; `GET`, `POST` and `DELETE /api/v1/lists/:id/accounts`
   (`account_ids[]`; the members paged by Link headers, 40 by default and at most 80, or all at once with `limit=0`, up
-  to 10,000); `GET /api/v1/accounts/:id/lists`; and `GET /api/v1/timelines/list/:id`. Scopes are `read:lists` and
+  to 1,000); `GET /api/v1/accounts/:id/lists`; and `GET /api/v1/timelines/list/:id`. Scopes are `read:lists` and
   `write:lists` (or `read` and `write`). Errors answer as Mastodon's do (422 with its validation messages, 404 for an
   unknown account or a list of someone else's).
     - A list holds you and accounts you follow or have asked to follow; anyone else is refused. An account whose
