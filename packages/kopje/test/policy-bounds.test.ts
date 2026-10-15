@@ -277,17 +277,103 @@ async function worldWith(unrelated: number): Promise<StoreStub> {
 	return store
 }
 
+// The world's history replicated: every status of the world `factor` times over, each copy older than every original
+// (so the newest page is the world's), with its original's author, visibility, content, mentions and tag, a reply to
+// the copy of its parent in the same replica and a boost of the copy of its original, and the viewer's favourite,
+// bookmark and notification of it as the viewer has of the original. Replica 1 is the newest; within a replica the
+// copies keep the world's order. A copy's id, and its edges' ids, depend only on its replica and its original, so the
+// newest copies are the same whatever the factor. Accounts and the edges between them are not replicated.
+const COPY_BASE = 190000000000000000n
+const MAX_REPLICAS = 10_000
+// The first id of the viewer's favourites, bookmarks and notifications of the world's own statuses, above every copy's.
+const ORIGINAL_EDGE_BASE = 1_000_000_000
+
+function copyId(replica: number, index: number): string {
+	return String(COPY_BASE + BigInt((MAX_REPLICAS - replica) * WORLD.statuses.length + index))
+}
+
+function writeCopies(sql: SqlStorage, factor: number): void {
+	const viewer = accountId(VIEWER)
+	const replicas = 'WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < ?1)'
+	const statuses = WORLD.statuses.length
+	// The copy in replica n of the status with id x (NULL for NULL), as copyId.
+	const copy = (x: string) =>
+		`CAST(${COPY_BASE} + (${MAX_REPLICAS} - n) * ${statuses} + (CAST(${x} AS INTEGER) - ${statusId(0)}) AS TEXT)`
+	const params = [factor] as const
+	sql.exec(
+		`${replicas}
+		INSERT INTO statuses (id, uri, account_id, reblog_of_id, in_reply_to_uri, in_reply_to_id, in_reply_to_account_id,
+			visibility, content, search_text, published_at)
+		SELECT ${copy('s.id')}, s.uri || '/r' || n, s.account_id, ${copy('s.reblog_of_id')},
+			CASE WHEN s.in_reply_to_id IS NULL THEN s.in_reply_to_uri ELSE s.in_reply_to_uri || '/r' || n END,
+			${copy('s.in_reply_to_id')}, s.in_reply_to_account_id, s.visibility, s.content, s.search_text,
+			strftime('%Y-%m-%dT%H:%M:%fZ', s.published_at, '-' || (n * ${statuses}) || ' minutes')
+		FROM statuses s, r`,
+		...params
+	)
+	sql.exec(
+		`${replicas}
+		INSERT INTO status_mentions (status_id, account_id, silent)
+		SELECT ${copy('m.status_id')}, m.account_id, m.silent FROM status_mentions m, r`,
+		...params
+	)
+	sql.exec(
+		`${replicas}
+		INSERT INTO status_tags (status_id, name, public) SELECT ${copy('t.status_id')}, t.name, t.public FROM status_tags t, r`,
+		...params
+	)
+	// The viewer's edges of the copies, in the copies' order and below those writeViewer then writes of the world's
+	// statuses: the edge of a copy has the copy's offset from COPY_BASE, plus one.
+	const edge = `CAST(id AS INTEGER) - ${COPY_BASE} + 1`
+	const copies = 'FROM statuses WHERE id < ?2'
+	sql.exec(`INSERT INTO favourites (id, account_id, status_id) SELECT ${edge}, ?1, id ${copies}`, viewer, statusId(0))
+	sql.exec(`INSERT INTO bookmarks (id, account_id, status_id) SELECT ${edge}, ?1, id ${copies}`, viewer, statusId(0))
+	sql.exec(
+		`INSERT INTO notifications (id, account_id, type, from_account_id, status_id)
+		SELECT ${edge}, ?1, 'mention', account_id, id ${copies} AND account_id <> ?1`,
+		viewer,
+		statusId(0)
+	)
+	// AUTOINCREMENT never reuses an id: a row just below ORIGINAL_EDGE_BASE, deleted, makes it the next id.
+	const mark = ORIGINAL_EDGE_BASE - 1
+	sql.exec('INSERT INTO favourites (id, account_id, status_id) VALUES (?, ?, ?)', mark, viewer, statusId(0))
+	sql.exec('INSERT INTO bookmarks (id, account_id, status_id) VALUES (?, ?, ?)', mark, viewer, statusId(0))
+	sql.exec(
+		"INSERT INTO notifications (id, account_id, type, from_account_id) VALUES (?, ?, 'mark', ?)",
+		mark,
+		viewer,
+		viewer
+	)
+	for (const table of ['favourites', 'bookmarks', 'notifications']) {
+		sql.exec(`DELETE FROM ${table} WHERE id = ?`, mark)
+	}
+}
+
+async function replicated(factor: number): Promise<StoreStub> {
+	const store = await migratedStore()
+	await runInDurableObject(store, (_instance, state) => {
+		writeWorld(state.storage.sql, WORLD)
+		writeCopies(state.storage.sql, factor)
+		writeViewer(state.storage.sql)
+	})
+	return store
+}
+
 const credential = { tokenHash: TOKEN_HASH, scope: 'read', now: NOW } as const
 const target = { credential, now: NOW, id: statusId(TARGET), present: PRESENT }
 const searchInput = { credential, limit: 20, offset: 0, following: false, localDomain: 'kopje.test', present: PRESENT }
 const timeline = { credential, now: NOW, page: PAGE, local: false, remote: false, onlyMedia: false, present: PRESENT }
 
-// Each endpoint with its input, as the routes call them.
-const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown][] = [
-	['home', homeTimeline, { credential, page: PAGE, present: PRESENT }],
-	['list', listTimeline, { credential, id: VIEWER_LIST, page: PAGE, present: PRESENT }],
-	['public', publicTimeline, timeline],
-	['tag', tagTimeline, { ...timeline, tag: 'cats', any: [], all: [], none: [] }],
+// What an endpoint that pages a viewer's history pages by: statuses (by status id), the viewer's notifications,
+// favourites or bookmarks (by their ids), or a status's interactors (accounts, which are not replicated).
+type Paging = 'statuses' | 'notifications' | 'favourites' | 'bookmarks' | 'interactors'
+
+// Each endpoint with its input, as the routes call them, and for one that pages the history, what it pages by.
+const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = [
+	['home', homeTimeline, { credential, page: PAGE, present: PRESENT }, 'statuses'],
+	['list', listTimeline, { credential, id: VIEWER_LIST, page: PAGE, present: PRESENT }, 'statuses'],
+	['public', publicTimeline, timeline, 'statuses'],
+	['tag', tagTimeline, { ...timeline, tag: 'cats', any: [], all: [], none: [] }, 'statuses'],
 	[
 		'account statuses',
 		accountStatuses,
@@ -303,17 +389,19 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown][] = [
 			tagged: null,
 			present: PRESENT,
 		},
+		'statuses',
 	],
 	[
 		'notifications',
 		listNotifications,
 		{ credential, page: PAGE, types: [], excludeTypes: [], accountId: null, present: PRESENT },
+		'notifications',
 	],
 	['context', statusContext, target],
-	['favourites', favourites, { credential, page: PAGE, present: PRESENT }],
-	['bookmarks', bookmarks, { credential, page: PAGE, present: PRESENT }],
-	['favourited_by', interactors, { ...target, kind: 'favourited_by', page: PAGE }],
-	['reblogged_by', interactors, { ...target, kind: 'reblogged_by', page: PAGE }],
+	['favourites', favourites, { credential, page: PAGE, present: PRESENT }, 'favourites'],
+	['bookmarks', bookmarks, { credential, page: PAGE, present: PRESENT }, 'bookmarks'],
+	['favourited_by', interactors, { ...target, kind: 'favourited_by', page: PAGE }, 'interactors'],
+	['reblogged_by', interactors, { ...target, kind: 'reblogged_by', page: PAGE }, 'interactors'],
 	['relationships', relationships, { credential, ids: WORLD.accounts.map((_, x) => accountId(x)) }],
 	[
 		'followers',
@@ -439,6 +527,114 @@ describe('read endpoints do not read more rows as unrelated data grows (RES-7)',
 				grown.push(`${name}: ${few} -> ${many}`)
 			}
 		}
+		expect(grown).toEqual([])
+	}, 60_000)
+})
+
+// The world's history grown by replicating it (writeCopies): its composition stays, so a read that walks past what it
+// hides or filters reads a constant multiple of a page, while one that walks or sorts a whole history grows with the
+// factor. Both factors are past the point where each author's history holds more than a page of what it shows. The
+// author set is not grown (no follow cap bounds it yet), nor are skewed histories built.
+describe("read endpoints read the same rows however long the world's history (RES-7)", () => {
+	const FEW = 40
+	const MANY = 400
+
+	// Endpoints whose reads grow with the history, left out of the comparison.
+	const GROWING = new Set([
+		// TODO(RES-7): home and list read a window of every followed account or member, and the window of one whose
+		// every status the rule hides (suspended, or blocking the viewer) walks its whole history; home's mentions stream
+		// also walks the mentions it does not show. Measured at 40 and 400 replicas: home newest page 2135 -> 9335 rows,
+		// middle 1720 -> 5320, oldest 2056 -> 9256; list newest 1852 -> 4732, middle 1689 -> 3129, oldest 1851 -> 4731.
+		'home',
+		'list',
+		// TODO(RES-7): the public feed and account statuses take max_id as `?2 IS NULL OR s.id < ?2`, not an index range,
+		// so a page from the middle reads from the newest down to the cursor. Middle page: public 802 -> 1342 rows,
+		// account statuses 802 -> 2062.
+		'public',
+		'account statuses',
+		// TODO(RES-7): the same for notifications, favourites and bookmarks on the edge's INTEGER id. Middle page:
+		// notifications 1668 -> 4368 rows, favourites and bookmarks 1315 -> 5275.
+		'notifications',
+		'favourites',
+		'bookmarks',
+		// Search reads windows of the viewer's library (LIBRARY_SOURCE_LIMIT per source) and, for hashtags, of their own
+		// entries and the newest public statuses (HASHTAG_LIBRARY_LIMIT, HASHTAG_PUBLIC_WINDOW): they grow with the
+		// history up to those limits.
+		'status search',
+		'hashtag search',
+	])
+
+	type Measured = { endpoint: string; page: string; rows: number; shown: number; output: unknown }
+
+	// Each endpoint's newest page, a page from the middle of the replicated history and the oldest page, or its one read
+	// if it does not page the history.
+	async function measure(factor: number): Promise<Measured[]> {
+		const store = await replicated(factor)
+		const viewer = accountId(VIEWER)
+		const middle = await runInDurableObject(store, (_instance, state) => {
+			// The viewer's edge halfway through those of the copies.
+			const edge = (table: string) =>
+				String(
+					state.storage.sql
+						.exec<{ id: number }>(
+							`SELECT id FROM ${table} WHERE account_id = ?1 AND id < ?2 ORDER BY id
+							LIMIT 1 OFFSET (SELECT count(*) / 2 FROM ${table} WHERE account_id = ?1 AND id < ?2)`,
+							viewer,
+							ORIGINAL_EDGE_BASE
+						)
+						.one().id
+				)
+			const cursors: Record<Paging, string | undefined> = {
+				statuses: copyId(Math.floor(factor / 2), 0),
+				notifications: edge('notifications'),
+				favourites: edge('favourites'),
+				bookmarks: edge('bookmarks'),
+				// The target's interactors are accounts, which are not replicated: their newest page stands for the middle.
+				interactors: undefined,
+			}
+			return cursors
+		})
+		const measured: Measured[] = []
+		for (const [endpoint, operation, input, paging] of ENDPOINTS) {
+			const maxId = paging === undefined ? undefined : middle[paging]
+			const pages: [string, unknown][] =
+				paging === undefined
+					? [['once', input]]
+					: [
+							['newest', input],
+							['middle', { ...(input as object), page: maxId === undefined ? PAGE : { ...PAGE, maxId } }],
+							['oldest', { ...(input as object), page: { ...PAGE, minId: '1' } }],
+						]
+			for (const [page, paged] of pages) {
+				const output = await runInDurableObject(store, (_instance, state) =>
+					operation.run(state.storage.sql, paged as never)
+				)
+				const rows = await rowsRead({ store }, operation, paged as never)
+				measured.push({ endpoint, page, rows, shown: shown(output), output })
+			}
+		}
+		return measured
+	}
+
+	it(`reads the same rows with the world's history replicated ${FEW} or ${MANY} times`, async () => {
+		const few = await measure(FEW)
+		const many = await measure(MANY)
+		// Every endpoint shows the viewer something on every page at either factor, and the same newest page (or one read).
+		const empty = [...few, ...many].flatMap(({ endpoint, page, shown }) => (shown === 0 ? [`${endpoint} ${page}`] : []))
+		expect(empty).toEqual([])
+		const newest = (measured: Measured[]) =>
+			Object.fromEntries(
+				measured
+					.filter(({ page }) => page === 'newest' || page === 'once')
+					.map(({ endpoint, output }) => [endpoint, identities(output)])
+			)
+		expect(newest(many)).toEqual(newest(few))
+		const grown = few.flatMap(({ endpoint, page, rows }, i) => {
+			const manyRows = many[i]?.rows ?? Infinity
+			return GROWING.has(endpoint) || manyRows <= rows + ALLOWANCE
+				? []
+				: [`${endpoint} ${page}: ${rows} -> ${manyRows}`]
+		})
 		expect(grown).toEqual([])
 	}, 60_000)
 })
