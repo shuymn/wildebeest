@@ -333,6 +333,14 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 			return { items: [], newest: null, oldest: null }
 		}
 		const read = statusReads(viewer, { viewer: '?1', now: '?7' })
+		// An account the rule hides as a whole from the viewer (unavailable, or blocking them), or that they block, shows
+		// nothing: decided once, so its history is never read. A mute or a domain block does not hide a profile.
+		const author = statusReads(viewer, { viewer: '?1' })
+		if (
+			!author.authorShown(db, 'visible', { author: '?2', and: `NOT ${blocksSql('?1', '?2')}` }, viewerId, accountId)
+		) {
+			return { items: [], newest: null, oldest: null }
+		}
 		const rows = read.select(
 			db,
 			'visible',

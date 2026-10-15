@@ -370,6 +370,15 @@ export type StatusReads = {
 		},
 		...params: SqlStorageValue[]
 	): { id: VisibleStatusId }[]
+	// Whether the rule passes the author `author` (an expression over the parameters) as a whole, and `and`: when it
+	// does not, no status of theirs passes, so a read of their statuses alone can return nothing without reading them.
+	//   SELECT 1 WHERE (<rule over the author>) AND (<and>)
+	authorShown(
+		db: Db,
+		rule: StatusRule,
+		query: { readonly author: string; readonly and?: string },
+		...params: SqlStorageValue[]
+	): boolean
 	// The viewer's notifications the notification rule (R15) shows them, which shows a status only if they may view it:
 	//   SELECT n.status_id AS status_id, <columns> FROM main.notifications n WHERE (<where>) AND (<rule>) <tail>
 	notifications<Extra extends Row>(
@@ -460,6 +469,15 @@ export function statusReads(
 				db,
 				`SELECT id FROM (${branches.join(query.all ? ' UNION ALL ' : ' UNION ')}) ${query.tail}`,
 				params
+			)
+		},
+		authorShown(db, rule, query, ...params) {
+			return (
+				run<{ shown: number }>(
+					db,
+					`SELECT 1 AS shown WHERE ${where(authorRuleSql(rule, query.author), query.and)}`,
+					params
+				).length > 0
 			)
 		},
 		notifications<Extra extends Row>(

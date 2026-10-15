@@ -874,11 +874,17 @@ describe("home and list timelines read a page per author, not each author's hist
 
 // What the viewer never sees of an author costs nothing, however long the author's history. Home reads the viewer's
 // mentions per followed account (status_mentions_requires_mention), so an account the viewer does not follow, sending
-// them direct statuses, is never read.
+// them direct statuses, is never read; and an account's statuses are not read when the viewer may see none of them:
+// the account blocks the viewer, the viewer blocks it, or it is suspended or being deleted.
 describe("reads skip an author's history the viewer never sees (RES-7)", () => {
 	const VIEWER_ID = '640000000000000001'
 	const FRIEND_ID = '640000000000000002'
 	const STRANGER_ID = '640000000000000003'
+	const BLOCKER_ID = '640000000000000004'
+	const BLOCKED_ID = '640000000000000005'
+	const SUSPENDED_ID = '640000000000000006'
+	const DELETING_ID = '640000000000000007'
+	const HIDDEN_AUTHORS = { blocker: BLOCKER_ID, blocked: BLOCKED_ID, suspended: SUSPENDED_ID, deleting: DELETING_ID }
 	const SKIP_TOKEN = 'skip-token'
 	const status = (i: number) => String(650000000000000000n + BigInt(i))
 
@@ -886,26 +892,37 @@ describe("reads skip an author's history the viewer never sees (RES-7)", () => {
 		const store = await migratedStore()
 		await runInDurableObject(store, (_instance, state) => {
 			const sql = state.storage.sql
-			sql.exec(
-				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
-				VIEWER_ID
-			)
-			sql.exec(
-				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
-				VIEWER_ID
-			)
-			for (const [id, username] of [
-				[FRIEND_ID, 'friend'],
-				[STRANGER_ID, 'stranger'],
-			]) {
+			const local = (id: string, username: string, suspended = false) => {
 				sql.exec(
-					'INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, ?)',
+					'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+					id,
+					`https://kopje.test/ap/users/${username}`,
+					username
+				)
+				sql.exec(
+					`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey, suspended_at)
+					VALUES (?, ?, X'00', X'00', 'test', ?)`,
+					id,
+					`${username}@example.com`,
+					suspended ? '2026-01-01T00:00:00.000Z' : null
+				)
+			}
+			const remote = (id: string, username: string, deleting = false) =>
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username, domain, deleted_at) VALUES (?, ?, ?, ?, ?)',
 					id,
 					`https://far.example/users/${username}`,
 					username,
-					'far.example'
+					'far.example',
+					deleting ? '2026-01-01T00:00:00.000Z' : null
 				)
-			}
+			local(VIEWER_ID, 'viewer')
+			local(SUSPENDED_ID, 'suspended', true)
+			remote(FRIEND_ID, 'friend')
+			remote(STRANGER_ID, 'stranger')
+			remote(BLOCKER_ID, 'blocker')
+			remote(BLOCKED_ID, 'blocked')
+			remote(DELETING_ID, 'deleting', true)
 			sql.exec(
 				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('skip', 'secret', 'skip', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
 			)
@@ -919,8 +936,11 @@ describe("reads skip an author's history the viewer never sees (RES-7)", () => {
 				VIEWER_ID,
 				FRIEND_ID
 			)
-			// The friend's public statuses fill home; the stranger's direct statuses to the viewer interleave with them.
-			const authors = [FRIEND_ID, STRANGER_ID]
+			sql.exec('INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?)', BLOCKER_ID, VIEWER_ID)
+			sql.exec('INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?)', VIEWER_ID, BLOCKED_ID)
+			// The friend's public statuses fill home; the stranger's direct statuses to the viewer interleave with them,
+			// and each hidden author posts publicly, all newer than the friend's.
+			const authors = [FRIEND_ID, STRANGER_ID, ...Object.values(HIDDEN_AUTHORS)]
 			for (let i = 0; i < perAuthor * authors.length; i++) {
 				const by = authors[i % authors.length] ?? FRIEND_ID
 				const direct = by === STRANGER_ID
@@ -953,6 +973,26 @@ describe("reads skip an author's history the viewer never sees (RES-7)", () => {
 		const reads: [string, StoreOperation<never, unknown>, unknown, number][] = [
 			// A full page of the friend's statuses, none of the stranger's.
 			['home', homeTimeline, { credential, page: PAGE, present: PRESENT }, PAGE.limit],
+			...Object.entries(HIDDEN_AUTHORS).map(
+				([name, account]) =>
+					[
+						`account statuses of ${name}`,
+						accountStatuses,
+						{
+							credential,
+							now: NOW,
+							account,
+							page: PAGE,
+							onlyMedia: false,
+							excludeReplies: false,
+							excludeReblogs: false,
+							pinned: false,
+							tagged: null,
+							present: PRESENT,
+						},
+						0,
+					] as [string, StoreOperation<never, unknown>, unknown, number]
+			),
 		]
 		const grown: string[] = []
 		for (const [name, operation, input, expected] of reads) {
