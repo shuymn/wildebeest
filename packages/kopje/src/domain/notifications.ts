@@ -1,6 +1,7 @@
-import { type Account, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
+import { type Account, edgeRangeSql, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
 import { shownSql, statusReads, type WithVisibleStatus } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
+import { addToConversation } from './conversations'
 import { presentStatuses, type Status } from './status-presenter'
 import type { Db } from '../db/sql'
 
@@ -57,6 +58,10 @@ export function notify(db: Db, input: NotifyInput): void {
 	// VIS-10: a push only for a row inserted now, never for a repeat.
 	for (const { id } of inserted) {
 		queuePushes(db, id, input.now)
+		// NotifyService#push_to_conversation!: a direct status the recipient is notified of joins their conversation.
+		if (input.type === 'mention' && input.statusId !== null) {
+			addToConversation(db, input.recipientId, input.statusId)
+		}
 	}
 }
 
@@ -169,7 +174,7 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 			db,
 			{
 				where: `n.account_id = ?1
-					AND (?2 IS NULL OR n.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR n.id > CAST(?3 AS INTEGER))
+					AND ${edgeRangeSql('n.id', '?2', '?3')}
 					AND (?4 IS NULL OR n.type IN (SELECT value FROM json_each(?4)))
 					AND n.type NOT IN (SELECT value FROM json_each(?5))
 					AND (?6 IS NULL OR n.from_account_id = ?6)`,

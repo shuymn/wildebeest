@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto'
 import { LEGACY_DEFAULT_AVATAR, mediaToken, parseDeliveryUrl, UPSTREAM_ACCOUNT_HASH } from './images-export.js'
 import { MAX_PROFILE_UPDATES } from './kopje-db.js'
 import {
+	backfillConversations,
 	blockedDomain,
 	hashtagObjectName,
 	languageOf,
@@ -777,7 +778,13 @@ export function convertLegacy(
 			legacy_id, legacy_ap_o, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	)
-	const mentionInsert = insert('INSERT OR IGNORE INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, ?)')
+	// status_mentions.requires_mention: whether the status is direct or limited (requiresMention in
+	// src/domain/audience.ts), the only statuses home reads from a viewer's mentions; author_id: the status's author.
+	const mentionInsert = insert(
+		'INSERT OR IGNORE INTO status_mentions (status_id, account_id, silent, requires_mention, author_id) VALUES (?, ?, ?, ?, ?)'
+	)
+	/** @param {string} visibility */
+	const requiresMention = (visibility) => (visibility === 'direct' || visibility === 'limited' ? 1 : 0)
 	// status_tags.public: whether the status is public, the only visibility hashtag timelines list.
 	const tagInsert = insert('INSERT OR IGNORE INTO status_tags (status_id, name, public) VALUES (?, ?, ?)')
 	/** @type {Set<string>} ids of the public statuses written */
@@ -920,7 +927,7 @@ export function convertLegacy(
 			isoTime(row.cdate) ?? plan.published
 		)
 		for (const [account, silent] of mentions) {
-			mentionInsert.run(plan.id, account, silent)
+			mentionInsert.run(plan.id, account, silent, requiresMention(visibility), author.id)
 		}
 		const tags = new Set()
 		for (const tag of list(properties.tag)) {
@@ -1031,7 +1038,7 @@ export function convertLegacy(
 		)
 		insert('UPDATE statuses SET reblog_of_id = ? WHERE id = ?').run(boost.target.id, boost.id)
 		for (const account of boostReaders) {
-			mentionInsert.run(boost.id, String(account), 1)
+			mentionInsert.run(boost.id, String(account), 1, requiresMention(visibility), boost.booster.id)
 		}
 	}
 
@@ -1684,6 +1691,12 @@ export function convertLegacy(
 		kopje.prepare("DELETE FROM sqlite_sequence WHERE name = 'notifications'").run()
 		kopje.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('notifications', ?)").run(sequence)
 	}
+
+	// ---------------------------------------------------------------- conversations
+	// Legacy never wrote its conversation tables (UNUSED_LEGACY_TABLES): the conversations come from the direct statuses
+	// and mention notifications carried, by the backfill of migration 0009_conversations (Kopje's own), so a converted
+	// Store holds the rows an upgraded one would.
+	backfillConversations(kopje)
 
 	// ---------------------------------------------------------------- clients and settings
 	const clientInsert = insert(

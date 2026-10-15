@@ -114,4 +114,37 @@ describe('mastodon-scopes.mjs', () => {
 			"unreadable only:/except: in `before_action -> { doorkeeper_authorize! :read, :'read:things' }, only: READS`",
 		])
 	})
+
+	it('reads the API routes outside /api it names, and no other route outside /api', async () => {
+		await checkout({
+			'config/routes.rb': [
+				'Rails.application.routes.draw do',
+				'  namespace :oauth do',
+				"    match 'userinfo', via: [:get, :post], to: 'userinfo#show', defaults: { format: 'json' }",
+				'  end',
+				"  get '/about', to: 'about#show'",
+				'end',
+				'',
+			].join('\n'),
+			'app/controllers/oauth/userinfo_controller.rb': [
+				'class OAuth::UserinfoController < Api::BaseController',
+				'  before_action -> { doorkeeper_authorize! :profile }, only: [:show]',
+				'  before_action :require_user!',
+				'',
+				'  def show',
+				'    render json: {}',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+		})
+		for (const method of ['GET', 'POST']) {
+			expect(route('/oauth/userinfo', method)).toMatchObject({ token: 'required', scopes: ['profile'], user: true })
+			expect(route('/oauth/userinfo', method)?.unresolved).toBeUndefined()
+		}
+		expect((mastodonAccessTable(dir).routes as Entry[]).map((r) => `${r.method} ${r.path}`)).toEqual([
+			'GET /oauth/userinfo',
+			'POST /oauth/userinfo',
+		])
+	})
 })

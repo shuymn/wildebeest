@@ -497,6 +497,52 @@ describe('hashtags a hashtag timeline lists (status_tags.public)', () => {
 	})
 })
 
+describe("mentions home's mentions stream reads (status_mentions.requires_mention, author_id)", () => {
+	it('marks the mentions of direct and limited statuses only, with their author, however they are written', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const neko = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const mention = (uri: string, name: string) => ({ type: 'Mention', href: uri, name })
+		// Remote Creates: public with a mention, direct to alice, followers-only addressing dave, and a Misskey specified
+		// note (limited) to alice, delivered again to dave's personal inbox (a silent recipient added).
+		const open = mastodonNote(bob, { cc: [`${bob.uri}/followers`, ALICE_URI], tag: [mention(ALICE_URI, '@alice')] })
+		const direct = mastodonNote(bob, { to: [ALICE_URI], cc: [], tag: [mention(ALICE_URI, '@alice')] })
+		const followers = mastodonNote(bob, { to: [`${bob.uri}/followers`], cc: [DAVE_URI] })
+		for (const note of [open, direct, followers]) {
+			expect(await t.post(bob, create(bob, note))).toBe(202)
+		}
+		const specified = misskeyNote(neko, { to: [ALICE_URI], cc: [], _misskey_quote: undefined, quoteUrl: undefined })
+		expect(await t.post(neko, create(neko, specified, MISSKEY_CONTEXT))).toBe(202)
+		expect(await t.post(neko, create(neko, specified, MISSKEY_CONTEXT), { path: '/ap/users/dave/inbox' })).toBe(202)
+		// A remote Update that mentions dave as well.
+		const edited = { ...open, tag: [mention(ALICE_URI, '@alice'), mention(DAVE_URI, '@dave')] }
+		expect(await t.post(bob, update(bob, edited, '2026-10-11T13:00:00Z'))).toBe(202)
+		// A boost addressed to alice.
+		const local = await localStatus(t, { status: 'public post', visibility: 'public' }, 'dave')
+		expect(await t.post(bob, announce(bob, local.uri, { to: [`${bob.uri}/followers`], cc: [ALICE_URI] }))).toBe(202)
+		// Local posts: public and direct, each mentioning dave.
+		await localStatus(t, { status: '@dave hello', visibility: 'public' })
+		await localStatus(t, { status: '@dave psst', visibility: 'direct' })
+
+		const rows = await sql(
+			t.store,
+			`SELECT s.visibility, m.requires_mention, m.author_id IS s.account_id AS by_author
+			FROM status_mentions m JOIN statuses s ON s.id = m.status_id ORDER BY s.visibility, m.requires_mention`
+		)
+		// Every kind of write was made, and each row is marked exactly when its status needs a mention to be seen.
+		expect(new Set(rows.map((row) => row.visibility))).toEqual(new Set(['public', 'private', 'direct', 'limited']))
+		expect(
+			rows.filter(
+				(row) => row.requires_mention !== (row.visibility === 'direct' || row.visibility === 'limited' ? 1 : 0)
+			)
+		).toEqual([])
+		expect(rows.filter((row) => row.requires_mention === 1)).toHaveLength(4)
+		// Each names its status's author.
+		expect(rows.filter((row) => row.by_author !== 1)).toEqual([])
+	})
+})
+
 describe('Delete of a status (ID-6, RES-6)', () => {
 	it('deletes the author’s status with its children, and nothing of anyone else’s (ID-6, ID-3)', async () => {
 		const t = await setup()

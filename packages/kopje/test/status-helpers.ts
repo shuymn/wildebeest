@@ -82,10 +82,11 @@ const seedStatusOperation = writeOperation<SeedStatus & { now: number }, string>
 	)
 	for (const mention of input.mentions ?? []) {
 		db.run(
-			'INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, ?)',
-			id,
+			`INSERT INTO status_mentions (status_id, account_id, silent, requires_mention, author_id)
+			SELECT id, ?, ?, visibility IN ('direct', 'limited'), account_id FROM statuses WHERE id = ?`,
 			mention.accountId,
-			mention.silent === true ? 1 : 0
+			mention.silent === true ? 1 : 0,
+			id
 		)
 	}
 	for (const tag of input.tags ?? []) {

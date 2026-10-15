@@ -1,7 +1,7 @@
 import { createMiddleware } from 'hono/factory'
 
 import type { ApiEnv } from './context'
-import { mastodonError } from './errors'
+import { invalidTokenError } from './errors'
 import type { RequiredScope } from '../security/scopes'
 import { sha256Hex } from '../security/tokens'
 
@@ -30,7 +30,7 @@ export function requireAccess(access: RouteAccess) {
 				c.set('credential', null)
 				return next()
 			}
-			return mastodonError(401, 'The access token is invalid')
+			return invalidTokenError()
 		}
 		c.set('credential', {
 			tokenHash: await sha256Hex(token),

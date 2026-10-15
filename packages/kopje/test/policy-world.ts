@@ -132,6 +132,15 @@ export function listId(index: number): string {
 	return String(LIST_BASE + BigInt(index))
 }
 
+// The uri writeWorld gives a status, and the uri of the status never stored that a reply to one names.
+export function statusUri(index: number): string {
+	return `https://${INSTANCE_DOMAIN}/ap/o/${index}`
+}
+
+export function unknownParentUri(index: number): string {
+	return `https://elsewhere.example/objects/${index}`
+}
+
 // Keeps the first of each key.
 function unique<T>(items: readonly T[], key: (item: T) => string): T[] {
 	const seen = new Set<string>()
@@ -308,6 +317,8 @@ export const worldArb: fc.Arbitrary<World> = fc
 
 // The tables a world fills, in an order that deletes children first.
 const WORLD_TABLES = [
+	'conversation_statuses',
+	'conversations',
 	'list_accounts',
 	'lists',
 	'notifications',
@@ -370,14 +381,10 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 				visibility, content, search_text, published_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			statusId(i),
-			`https://${INSTANCE_DOMAIN}/ap/o/${i}`,
+			statusUri(i),
 			accountId(status.author),
 			status.reblogOf === null ? null : statusId(status.reblogOf),
-			status.replyToUnknown
-				? `https://elsewhere.example/objects/${i}`
-				: status.replyTo === null
-					? null
-					: `https://${INSTANCE_DOMAIN}/ap/o/${status.replyTo}`,
+			status.replyToUnknown ? unknownParentUri(i) : status.replyTo === null ? null : statusUri(status.replyTo),
 			status.replyTo === null ? null : statusId(status.replyTo),
 			partners[i] ?? null,
 			status.visibility,
@@ -387,10 +394,12 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 		)
 		for (const mention of status.mentions) {
 			sql.exec(
-				'INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, ?)',
+				'INSERT INTO status_mentions (status_id, account_id, silent, requires_mention, author_id) VALUES (?, ?, ?, ?, ?)',
 				statusId(i),
 				accountId(mention.account),
-				mention.silent ? 1 : 0
+				mention.silent ? 1 : 0,
+				status.visibility === 'direct' || status.visibility === 'limited' ? 1 : 0,
+				accountId(status.author)
 			)
 		}
 		if (status.tagged) {

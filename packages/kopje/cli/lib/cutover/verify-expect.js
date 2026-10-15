@@ -230,6 +230,64 @@ function metaSizes(meta) {
 }
 
 /**
+ * The thread of each status, from the reply records alone, each status walked once: a status that replies to no status
+ * carried takes the conversation its stored object names, else the inReplyTo it names, else its own URI, and each
+ * reply below it takes its thread; a status in a cycle of replies, or below one, takes the same as a start would.
+ * @param {Record<string, string>} replies the `replies` records: status URI -> [inReplyTo, the carried parent's URI]
+ * @param {Record<string, string>} statuses the `statuses` records, by status URI
+ * @param {Map<string, string>} [conversations] status URI -> the conversation its stored object names
+ * @returns {(uri: string) => string}
+ */
+export function threadsOf(replies, statuses, conversations = new Map()) {
+	/** @type {Map<string, string | null>} status URI -> what it replies to (in_reply_to_uri) */
+	const inReplyToOf = new Map()
+	/** @type {Map<string, string>} status URI -> the carried status it replies to */
+	const parentOf = new Map()
+	for (const [uri, record] of Object.entries(replies)) {
+		const [inReplyTo, parent] = /** @type {[string | null, string | null]} */ (JSON.parse(record))
+		inReplyToOf.set(uri, inReplyTo)
+		if (parent !== null && statuses[parent] !== undefined) {
+			parentOf.set(uri, parent)
+		}
+	}
+	/** @param {string} uri */
+	const ownThread = (uri) => conversations.get(uri) ?? inReplyToOf.get(uri) ?? uri
+	/** @type {Map<string, string | null>} status URI -> its thread, or null when no chain start is above it */
+	const chained = new Map()
+	/** @param {string} uri @returns {string} */
+	const threadOf = (uri) => {
+		/** @type {string[]} */
+		const path = []
+		const onPath = new Set()
+		/** @type {string | null} */
+		let found = null
+		for (let at = uri; ;) {
+			const known = chained.get(at)
+			if (known !== undefined) {
+				found = known
+				break
+			}
+			if (onPath.has(at)) {
+				break
+			}
+			path.push(at)
+			onPath.add(at)
+			const parent = parentOf.get(at)
+			if (parent === undefined) {
+				found = ownThread(at)
+				break
+			}
+			at = parent
+		}
+		for (const at of path) {
+			chained.set(at, found)
+		}
+		return chained.get(uri) ?? ownThread(uri)
+	}
+	return threadOf
+}
+
+/**
  * @param {import('node:sqlite').DatabaseSync} db the bridged legacy database
  * @param {{ originalActorIds: Map<string, string>, source: import('./legacy-load.js').SourceAddressing,
  *   notificationSequence: string | null, images?: import('./images-export.js').ImagesFile }} options
@@ -430,6 +488,8 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	for (const h of all('SELECT value, object_id FROM note_hashtags')) {
 		recordedTags.set(String(h.object_id), [...(recordedTags.get(String(h.object_id)) ?? []), hashtagName(h.value)])
 	}
+	/** @type {Map<string, string>} status URI -> the conversation its object names */
+	const namedConversations = new Map()
 	for (const o of objects) {
 		const id = String(o.id)
 		const uri = statusUri.get(id)
@@ -437,6 +497,14 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			continue
 		}
 		const p = parse(o.properties)
+		// The conversation a remote status's object names (Mastodon's `conversation`): a string of 1 to 4,096 UTF-8 bytes,
+		// as Kopje reads one when it receives a status and from the object it keeps.
+		if (o.local !== 1 && typeof p.conversation === 'string') {
+			const bytes = new TextEncoder().encode(p.conversation).length
+			if (bytes > 0 && bytes <= 4096) {
+				namedConversations.set(uri, p.conversation)
+			}
+		}
 		const author = String(o.original_actor_id)
 		const isLocal = o.local === 1
 		const spoiler = isLocal ? text(p.spoiler_text) || text(p.summary) : text(p.summary) || text(p.spoiler_text)
@@ -477,8 +545,11 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		])
 
 		// Recipients: for public and unlisted, the tagged known accounts and, silently, the other addressed ones; for
-		// followers-only, none (a follow decides); for direct, exactly the known accounts in to (tagged ones not silent).
-		// Non-public audiences also name the author legacy authorized with.
+		// followers-only, none (a follow decides); for direct, exactly the known accounts in to (tagged ones not silent),
+		// each marked as a mention in a status only a mention lets one see (status_mentions.requires_mention), and each
+		// naming the status's author (status_mentions.author_id). Non-public audiences also name the author legacy
+		// authorized with.
+		const requiresMention = audience.visibility === 'direct' ? 1 : 0
 		const accountAt = (/** @type {unknown} */ x) => byAddress.get(address(x) ?? '')
 		const tagged = new Set(
 			many(p.tag)
@@ -507,7 +578,15 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		put('audience', uri, [
 			audience.visibility,
 			[...readers]
-				.map((x) => /** @type {[string, number]} */ ([String(x), tagged.has(/** @type {string} */ (x)) ? 0 : 1]))
+				.map(
+					(x) =>
+						/** @type {[string, number, number, string]} */ ([
+							String(x),
+							tagged.has(/** @type {string} */ (x)) ? 0 : 1,
+							requiresMention,
+							author,
+						])
+				)
 				.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)),
 			open ? null : stored,
 		])
@@ -665,12 +744,13 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			sent === undefined || sent === null
 				? { visibility: 'unreadable', to: [] }
 				: audienceOf(sent.to, sent.cc, followersOf(String(r.actor_id), source.followers.get(String(r.actor_id))))
-		// A boost reaches nobody in particular, except a direct one: the accounts in its to.
+		// A boost reaches nobody in particular, except a direct one: the accounts in its to, silent, in a status only a
+		// mention lets one see.
 		const recipients =
 			audience.visibility === 'direct'
 				? [...new Set(audience.to.map((x) => byAddress.get(x ?? '')))]
 						.filter((x) => x !== undefined && x !== String(r.actor_id))
-						.map((x) => /** @type {[string, number]} */ ([String(x), 1]))
+						.map((x) => /** @type {[string, number, number, string]} */ ([String(x), 1, 1, String(r.actor_id)]))
 						.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
 				: []
 		put('boosts', String(r.id), [String(r.actor_id), target, audience.visibility, recipients])
@@ -815,6 +895,57 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	}
 	if (highest > 0n) {
 		put('counters', 'notifications', highest.toString())
+	}
+
+	// Threads and conversations, worked out here on their own from the records above, each status once. A status's
+	// thread: a status that replies to no status carried takes the inReplyTo it names, else its own URI, and each reply
+	// below it takes its thread; a status in a cycle of replies, or below one, takes its own inReplyTo, else its URI.
+	const threadOf = threadsOf(out.replies ?? {}, out.statuses ?? {}, namedConversations)
+	for (const uri of Object.keys(out.statuses ?? {})) {
+		put('threads', uri, threadOf(uri))
+	}
+
+	// A direct status (direct with no silent recipient: one with a silent recipient is limited) is in its local
+	// author's conversation, and in the conversation of each local account notified of it as a mention. A conversation
+	// is keyed by its owner, its thread and the other accounts among the author and the tagged recipients. Its last
+	// status is its newest, and it is unread when that one is someone else's: the ids that order them are the
+	// converter's, so the actual side checks that of its own rows.
+	/** @type {Map<string, string[]>} status URI -> the accounts notified of it as a mention */
+	const notified = new Map()
+	for (const record of Object.values(out.notifications ?? {})) {
+		const [type, recipient, , target] = /** @type {string[]} */ (JSON.parse(record))
+		if (type === 'mention' && target !== undefined && recipient !== undefined) {
+			const list = notified.get(target)
+			if (list === undefined) {
+				notified.set(target, [recipient])
+			} else {
+				list.push(recipient)
+			}
+		}
+	}
+	/** @type {Map<string, string[]>} */
+	const conversations = new Map()
+	for (const [uri, record] of Object.entries(out.audience ?? {})) {
+		const [visibility, recipients] = /** @type {[string, [string, number][]]} */ (JSON.parse(record))
+		if (visibility !== 'direct' || recipients.some(([, silent]) => silent === 1)) {
+			continue
+		}
+		const author = String(/** @type {unknown[]} */ (JSON.parse(out.statuses?.[uri] ?? '[]'))[0])
+		const owners = new Set([...(local.has(author) ? [author] : []), ...(notified.get(uri) ?? [])])
+		const thread = threadOf(uri)
+		for (const owner of owners) {
+			const others = [...new Set([author, ...recipients.map(([x]) => x)])].filter((x) => x !== owner).sort()
+			const key = `${owner} ${thread} ${others.join(' ')}`
+			const members = conversations.get(key)
+			if (members === undefined) {
+				conversations.set(key, [uri])
+			} else {
+				members.push(uri)
+			}
+		}
+	}
+	for (const [key, members] of conversations) {
+		put('conversations', key, [members.sort(), true, true])
 	}
 
 	// Settings, under Kopje's names, and clients.

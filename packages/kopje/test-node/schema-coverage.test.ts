@@ -44,6 +44,19 @@ const NOT_CARRIED: Record<string, string> = {
 	remote_keys: 'fetched again on demand',
 }
 
+// Tables the converter fills through Kopje's own code, over the rows it carried, rather than with SQL of its own: the
+// function named, called in convert.js, writes every column.
+const DERIVED: Record<string, { by: string; why: string }> = {
+	conversation_statuses: {
+		by: 'backfillConversations',
+		why: 'the conversations of the direct statuses carried, as migration 0009_conversations backfills them',
+	},
+	conversations: {
+		by: 'backfillConversations',
+		why: 'the conversations of the direct statuses carried, as migration 0009_conversations backfills them',
+	},
+}
+
 const ASSIGNED = 'INTEGER PRIMARY KEY, assigned on insert'
 const DEFAULT = 'left at its default by the converter (NOT_CONVERTED)'
 
@@ -65,6 +78,7 @@ const NOT_CONVERTED: Record<string, string> = {
 	'mutes.expires_at': 'legacy mutes never expire',
 	'mutes.id': ASSIGNED,
 	'status_edits.id': ASSIGNED,
+	'statuses.thread': 'written by the trigger statuses_thread and given again by backfillConversations (DERIVED)',
 	'statuses.withdrawn': 'marks an Undo Kopje recorded; legacy has none',
 }
 
@@ -487,8 +501,17 @@ describe('the Store schema in the cutover tools', () => {
 
 	it('convert writes each table the cutover carries, and each of its columns or says why not', () => {
 		expect(unparsed).toEqual([])
-		expect(sorted(written.keys())).toEqual(sorted(carried))
-		const unwritten = carried.flatMap((table) =>
+		const own = carried.filter((table) => !(table in DERIVED))
+		expect(sorted(written.keys())).toEqual(sorted(own))
+		// Each derived table is the schema's and is filled by a call convert.js makes.
+		for (const [table, { by }] of Object.entries(DERIVED)) {
+			expect([table, schema.has(table)]).toEqual([table, true])
+			const called = files.convert.nodes.some(
+				({ node }) => node.type === 'CallExpression' && node.callee.type === 'Identifier' && node.callee.name === by
+			)
+			expect([table, by, called]).toEqual([table, by, true])
+		}
+		const unwritten = own.flatMap((table) =>
 			(schema.get(table) ?? []).filter((c) => !written.get(table)?.has(c)).map((c) => `${table}.${c}`)
 		)
 		expect(sorted(unwritten)).toEqual(sorted(Object.keys(NOT_CONVERTED)))

@@ -10,6 +10,26 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- `GET` and `POST /oauth/userinfo`, as Mastodon 4.5 has it: for a token with the `profile` scope, the OpenID Connect
+  claims of its account (`iss`, `sub`, `name`, `preferred_username`, `profile`, `picture`). A token without `profile`
+  is refused with 403, an app token with 422.
+- `GET /.well-known/oauth-authorization-server` (RFC 8414), as Mastodon 4.5 has it: the OAuth endpoints, including
+  `userinfo_endpoint` and Mastodon's `app_registration_endpoint`, the scopes, and the supported response types and
+  modes, grant types, client authentication methods and PKCE methods.
+- Conversations in the Mastodon API, as Mastodon 4.5 has them: `GET /api/v1/conversations` (paged by the last status
+  with Link headers, 20 by default and at most 40), `DELETE /api/v1/conversations/:id` and
+  `POST /api/v1/conversations/:id/read` and `/unread`. Scopes are `read:statuses` and `write:conversations` (or `read`
+  and `write`); another account's conversation answers 404.
+    - Your direct statuses, and the direct statuses you are notified of as a mention, are grouped by thread and by the
+      other accounts in them. A received status that names its conversation, as Mastodon's do, joins that thread even
+      when it arrives before the status it replies to. A new status from someone else marks the conversation unread; your own does not.
+    - Deleting a status takes it out of its conversations; a conversation with none left goes. Deleting a
+      conversation keeps its statuses, and a later one makes a new conversation. Blocking an account ends your
+      conversations with it.
+    - A conversation's last status is shown only while you may still see it (its author is not suspended and does not
+      block you); otherwise it is `null`.
+    - The conversations of the direct statuses already stored are made when the instance upgrades, and the cutover
+      makes them of the statuses it carries.
 - Timeline markers in the Mastodon API, as Mastodon 4.5 has them: `GET /api/v1/markers` (`timeline[]`: `home`,
   `notifications`; other names are ignored) and `POST /api/v1/markers` (`home[last_read_id]`,
   `notifications[last_read_id]`), each marker with its `last_read_id`, `version` and `updated_at`. Scopes are
@@ -17,9 +37,31 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   same value changes nothing. `last_read_id` is kept as sent, up to 255 characters; a blank one answers 422 with
   Mastodon's message. Updates are applied one at a time, so two at once both succeed instead of one answering 409.
 
+### Changed
+
+- A missing, unknown or expired bearer token is refused with a `WWW-Authenticate: Bearer` challenge
+  (`error="invalid_token"`), as Mastodon refuses it.
+- The public timeline, account statuses, notifications, favourites and bookmarks read a bounded number of rows for a
+  page anywhere in the history, and home and list timelines no longer read the statuses of followed accounts they
+  hide entirely. Home reads only the mentions of you in direct and limited statuses by accounts you follow, not every
+  mention of you, and the statuses of an account that blocks you, that you block, or that is suspended or being deleted
+  are no longer read to show its empty profile.
+
 ### Instance changes
 
-- Store schema: adds `0010_markers`, the `markers` table, applied on the first request after the deploy. It is quick.
+- Store schema: adds three migrations, applied in order on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
+      marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
+      author. Its work grows linearly with the mentions stored (one pass, with a lookup of each one's status); locally,
+      200,000 mentions took under a second.
+    - `0009_conversations`: adds `statuses.thread` (the thread a status belongs to, given to each status stored, from
+      the start of each reply chain down, and to each new one by a trigger), the `conversations` and
+      `conversation_statuses` tables, the trigger that takes a deleted status out of its conversations, and the
+      conversations of the direct statuses stored. It rewrites every status once (its thread) and reads each a few
+      times, so its work grows linearly with the statuses stored; locally, 500,000 statuses, 50,000 of them direct in
+      two long reply chains, took about 1.2 seconds.
+    - `0010_markers`: adds the `markers` table. It is quick.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.5] - 2026-10-15

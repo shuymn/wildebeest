@@ -4,6 +4,7 @@ import { requireAccess, type RouteAccess } from './access'
 import * as accounts from './accounts'
 import * as blocks from './blocks'
 import type { ApiDeps, ApiEnv, ApiHandler } from './context'
+import * as conversations from './conversations'
 import * as instance from './instance'
 import * as lists from './lists'
 import * as markers from './markers'
@@ -35,6 +36,14 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'GET', path: '/api/v1/apps/verify_credentials', access: 'token', handler: oauth.verifyApp },
 	{ method: 'POST', path: '/oauth/token', access: 'public', handler: oauth.tokenHandler },
 	{ method: 'POST', path: '/oauth/revoke', access: 'public', handler: oauth.revokeHandler },
+	{ method: 'GET', path: '/oauth/userinfo', access: { scope: 'profile' }, handler: oauth.userinfo },
+	{ method: 'POST', path: '/oauth/userinfo', access: { scope: 'profile' }, handler: oauth.userinfo },
+	{
+		method: 'GET',
+		path: '/.well-known/oauth-authorization-server',
+		access: 'public',
+		handler: oauth.authorizationServerMetadata,
+	},
 
 	{ method: 'GET', path: '/api/v1/instance', access: 'public', handler: instance.instanceV1 },
 	{ method: 'GET', path: '/api/v2/instance', access: 'public', handler: instance.instanceV2 },
@@ -332,6 +341,31 @@ export const ROUTES: readonly Route[] = [
 		handler: lists.removeListAccounts,
 	},
 
+	// Conversations (mastodon/conversations.ts).
+	{
+		method: 'GET',
+		path: '/api/v1/conversations',
+		access: { scope: 'read:statuses' },
+		handler: conversations.conversations,
+	},
+	{
+		method: 'DELETE',
+		path: '/api/v1/conversations/:id',
+		access: { scope: 'write:conversations' },
+		handler: conversations.deleteConversation,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/conversations/:id/read',
+		access: { scope: 'write:conversations' },
+		handler: conversations.readConversation,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/conversations/:id/unread',
+		access: { scope: 'write:conversations' },
+		handler: conversations.unreadConversation,
+	},
 	// Timeline markers (mastodon/markers.ts).
 	{ method: 'GET', path: '/api/v1/markers', access: { scope: 'read:statuses' }, handler: markers.markers },
 	{ method: 'POST', path: '/api/v1/markers', access: { scope: 'write:statuses' }, handler: markers.saveMarkers },

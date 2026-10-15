@@ -31,6 +31,8 @@ import {
 	isDistributable,
 	listedForSql,
 	mentionableBySql,
+	MENTION_STATUS_COLUMNS,
+	mentionStatusSql,
 	ownStatusId,
 	REACHES_FOLLOWERS_SQL,
 	requiresMention,
@@ -40,6 +42,7 @@ import {
 	viewableStatusId,
 } from './audience'
 import { optionalUserReadOperation, userMediaDeleteOperation, userReadOperation, userWriteOperation } from './auth'
+import { addToConversation } from './conversations'
 import { beginRetraction } from './deliveries'
 import { allocateLocalId } from './ids'
 import { DETACHED_GRACE_MS, liveMediaSql } from './media'
@@ -329,6 +332,8 @@ export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusRe
 	for (const mention of composed.mentions) {
 		notify(db, { recipientId: mention.id, type: 'mention', fromId: accountId, statusId: id, now: input.now })
 	}
+	// FanOutOnWriteService#deliver_to_conversation!: the author's own direct status joins their conversation.
+	addToConversation(db, accountId, id)
 	// FeedInsertWorker#notify?: followers who asked to be notified hear of a post that is not a reply to someone else
 	// (or to an unknown partner) and that their home would show (the follow's languages); notify() applies the audience
 	// rule.
@@ -398,7 +403,8 @@ function writeMentions(
 		current
 	)
 	db.run(
-		`INSERT INTO status_mentions (status_id, account_id, silent) SELECT ?1, value, 0 FROM json_each(?2) WHERE true
+		`INSERT INTO status_mentions (status_id, account_id, silent, ${MENTION_STATUS_COLUMNS})
+		SELECT ?1, value, 0, ${mentionStatusSql('?1')} FROM json_each(?2) WHERE true
 		ON CONFLICT (status_id, account_id) DO UPDATE SET silent = 0`,
 		statusId,
 		current
