@@ -247,17 +247,28 @@ export class PolicyModel {
 		return parent.author === author && this.isReply(replyTo) ? this.partner(replyTo) : parent.author
 	}
 
+	// Whether the list `l` holds the account x (as a member of any kind: the owner, active or pending).
+	listMember(l: number, x: number | null): boolean {
+		return x !== null && (this.world.lists[l]?.members.includes(x) ?? false)
+	}
+
+	// Whether x is in one of the viewer's exclusive lists.
+	exclusiveMember(viewer: number, x: number): boolean {
+		return this.world.lists.some((list, l) => list.owner === viewer && list.exclusive && this.listMember(l, x))
+	}
+
 	// R9, home as a whole: the viewer's own statuses; public, unlisted and private statuses of accounts the viewer
 	// follows (accepted); direct and limited statuses of followed accounts that mention the viewer (silently or not).
-	// Of others' statuses, a boost needs the follow's show_reblogs, and a reply passes only when its partner is known
-	// and is the author, the viewer or an account the viewer follows. Then homeFilter. (The world's statuses have no
-	// language, so a follow's languages filter nothing.)
+	// Of others' statuses, none whose author is in one of the viewer's exclusive lists; a boost needs the follow's
+	// show_reblogs, and a reply passes only when its partner is known and is the author, the viewer or an account the
+	// viewer follows. Then homeFilter. (The world's statuses have no language, so a follow's languages filter nothing.)
 	home(s: number, viewer: number): boolean {
 		const { author, visibility, reblogOf } = this.status(s)
 		if (author !== viewer) {
 			const follow = this.world.follows.find((f) => f.from === viewer && f.to === author && f.accepted)
 			if (
 				follow === undefined ||
+				this.exclusiveMember(viewer, author) ||
 				((visibility === 'direct' || visibility === 'limited') && !this.mentioned(s, viewer))
 			) {
 				return false
@@ -274,6 +285,44 @@ export class PolicyModel {
 			}
 		}
 		return this.homeFilter(s, viewer)
+	}
+
+	// A list's timeline: the public, unlisted and private statuses (and boosts) of its active members, the owner (when a
+	// member) and the members the owner follows (accepted). Of others' statuses, a boost needs the follow's
+	// show_reblogs. A reply passes when its partner is known and is the author or the owner, or by the list's
+	// replies_policy: followed, any reply of the owner's own and one to an account the owner follows (accepted); list,
+	// one to a member of the list (pending included); none, nothing more. Then homeFilter for the owner. Exclusive
+	// changes nothing here.
+	listTimeline(l: number, s: number): boolean {
+		const list = this.world.lists[l]
+		if (list === undefined) {
+			return false
+		}
+		const { owner, repliesPolicy } = list
+		const { author, visibility, reblogOf } = this.status(s)
+		if (
+			!this.listMember(l, author) ||
+			(visibility !== 'public' && visibility !== 'unlisted' && visibility !== 'private')
+		) {
+			return false
+		}
+		if (author !== owner) {
+			const follow = this.world.follows.find((f) => f.from === owner && f.to === author && f.accepted)
+			if (follow === undefined || (reblogOf !== null && !follow.showReblogs)) {
+				return false
+			}
+		}
+		if (this.isReply(s)) {
+			const partner = this.partner(s)
+			const passes =
+				(partner !== null && (partner === author || partner === owner)) ||
+				(repliesPolicy === 'followed' && (author === owner || (partner !== null && this.follows(owner, partner)))) ||
+				(repliesPolicy === 'list' && this.listMember(l, partner))
+			if (!passes) {
+				return false
+			}
+		}
+		return this.homeFilter(s, owner)
 	}
 
 	// Blocks the account, or mutes it with notifications.

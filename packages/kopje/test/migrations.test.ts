@@ -454,6 +454,131 @@ describe('Store migration runner', () => {
 		expect(large - small).toBeLessThanOrEqual(5 * added)
 	}, 60_000)
 
+	it('upgrades a Store at 0006_account_deletion with 0007_list_members: members nobody follows go, and leave with the follow', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, 7)).upgrade()).toMatchObject({ ok: true })
+			const id = (n: number) => String(100000000000000000n + BigInt(n))
+			for (const n of [1, 2]) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+					id(n),
+					`https://kopje.test/ap/users/u${n}`,
+					`u${n}`
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'k')",
+					id(n),
+					`u${n}@example.com`
+				)
+			}
+			for (const n of [3, 4, 5, 6]) {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, 'remote.example')",
+					id(n),
+					`https://remote.example/users/r${n}`,
+					`r${n}`
+				)
+			}
+			// u1 follows r3 and has asked r4; u2 follows r5. r6 is followed by nobody.
+			sql.exec(
+				`INSERT INTO follows (account_id, target_account_id, state) VALUES
+					(?1, ?3, 'accepted'), (?1, ?4, 'pending'), (?2, ?5, 'accepted')`,
+				id(1),
+				id(2),
+				id(3),
+				id(4),
+				id(5)
+			)
+			sql.exec(
+				"INSERT INTO lists (id, account_id, title) VALUES ('800000000000000001', ?, 'a'), ('800000000000000002', ?, 'b')",
+				id(1),
+				id(2)
+			)
+			for (const [list, members] of [
+				['800000000000000001', [1, 3, 4, 5, 6]],
+				['800000000000000002', [3, 5]],
+			] as const) {
+				for (const n of members) {
+					sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', list, id(n))
+				}
+			}
+
+			expect(await kernel(state, MIGRATIONS.slice(0, 8)).upgrade()).toMatchObject({ ok: true, applied: [NAMES[7]] })
+			const members = () =>
+				sql.exec('SELECT list_id, account_id FROM list_accounts ORDER BY list_id, account_id').toArray()
+			expect(members()).toEqual([
+				{ list_id: '800000000000000001', account_id: id(1) },
+				{ list_id: '800000000000000001', account_id: id(3) },
+				{ list_id: '800000000000000001', account_id: id(4) },
+				{ list_id: '800000000000000002', account_id: id(5) },
+			])
+			// A follow's end takes its account out of the follower's lists only; an accepted request keeps it.
+			sql.exec("UPDATE follows SET state = 'accepted' WHERE target_account_id = ?", id(4))
+			sql.exec('DELETE FROM follows WHERE account_id = ? AND target_account_id = ?', id(1), id(3))
+			sql.exec('DELETE FROM follows WHERE account_id = ? AND target_account_id = ?', id(2), id(5))
+			expect(members()).toEqual([
+				{ list_id: '800000000000000001', account_id: id(1) },
+				{ list_id: '800000000000000001', account_id: id(4) },
+			])
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('0007_list_members reads each member a bounded number of times, however many there are', async () => {
+		const migration = MIGRATIONS.find((m) => m.name === '0007_list_members')!
+		const cleanup = migration.sql
+			.split('\n')
+			.filter((line) => !line.startsWith('--'))
+			.join('\n')
+			.split('CREATE TRIGGER')[0]!
+			.split(';')
+			.filter((statement) => statement.trim() !== '')
+		expect(cleanup).toHaveLength(1)
+		const measure = async (count: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, 7)).upgrade()
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username) VALUES ('100000000000000000', 'https://kopje.test/ap/users/o', 'o')"
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES ('100000000000000000', 'o@example.com', X'00', X'00', 'k')"
+				)
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO accounts (id, uri, username, domain)
+					SELECT CAST(100000000000000000 + i AS TEXT), 'https://remote.example/users/u' || i, 'u' || i, 'remote.example'
+					FROM n`,
+					count
+				)
+				// The owner follows every other account; every account is in one of five lists.
+				sql.exec(
+					`INSERT INTO follows (account_id, target_account_id, state)
+					SELECT '100000000000000000', id, 'accepted' FROM accounts WHERE domain IS NOT NULL AND id % 2 = 0`
+				)
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5)
+					INSERT INTO lists (id, account_id, title) SELECT CAST(800000000000000000 + i AS TEXT), '100000000000000000', 'l' FROM n`
+				)
+				sql.exec(
+					`INSERT INTO list_accounts (list_id, account_id)
+					SELECT CAST(800000000000000001 + id % 5 AS TEXT), id FROM accounts WHERE domain IS NOT NULL`
+				)
+				const cursor = sql.exec(cleanup[0]!)
+				cursor.toArray()
+				expect(sql.exec('SELECT count(*) AS n FROM list_accounts').one()).toEqual({ n: count / 2 })
+				return cursor.rowsRead
+			})
+		}
+		const small = await measure(1000)
+		const large = await measure(10_000)
+		// A few reads per member added (the row, its list, its follow), none per pair.
+		expect(large - small).toBeLessThanOrEqual(5 * (10_000 - 1000))
+	}, 60_000)
+
 	it('stays readonly with exact bookkeeping when a file fails, and lets a fixed build continue', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {

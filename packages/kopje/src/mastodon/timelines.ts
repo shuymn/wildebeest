@@ -11,8 +11,8 @@ import { mastodonError } from './errors'
 import { pageQuery, pageResponse } from './pagination'
 import { parseBoolean } from './params'
 
-// Timelines (B4a): home, public, hashtag, an account's statuses, bookmarks and favourites. Status lists default to
-// 20 and allow up to 40, as Mastodon's.
+// Timelines (B4a): home, a list's, public, hashtag, an account's statuses, bookmarks and favourites. Status lists
+// default to 20 and allow up to 40, as Mastodon's.
 
 const STATUS_LIMIT = 20
 const MAX_STATUS_LIMIT = 40
@@ -28,6 +28,21 @@ export const home: ApiHandler = async (c, deps) => {
 	const credential = userCredential(c, deps)
 	const result = await storeCall(c, deps, (s, b) => s.homeTimeline(b, { credential, page, present: present(c) }))
 	return pageResponse(c, authorized(result), page.limit)
+}
+
+// A list that is not the viewer's is not found (Timelines::ListController#set_list).
+export const listTimeline: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const page = pageQuery(p, STATUS_LIMIT, MAX_STATUS_LIMIT)
+	const input = { credential: userCredential(c, deps), id: c.req.param('id') ?? '', page, present: present(c) }
+	const result = authorized(await storeCall(c, deps, (s, b) => s.listTimeline(b, input)))
+	if (result === null) {
+		return mastodonError(404, 'Record not found')
+	}
+	return pageResponse(c, result, page.limit)
 }
 
 export const publicTimeline: ApiHandler = async (c, deps) => {

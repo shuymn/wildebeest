@@ -12,6 +12,7 @@ import {
 } from './audience'
 import { stageRetraction } from './deliveries'
 import { insertWithFreshId, remoteId } from './ids'
+import { listsHolding } from './lists'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
 import { pushSequence } from './push'
@@ -996,6 +997,15 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 	const changed: string[] = [target.id]
 	for (const follower of followers) {
 		changed.push(follower.id)
+		// FollowService: a follow the follower could not make itself is not made for it, and then nothing changes for
+		// this follower: Mastodon's FollowMigrationService raises before its UnfollowService runs (UnfollowFollowWorker
+		// rescues it), so the follow of the source and its list memberships stay.
+		if (db.first(`SELECT 1 AS x WHERE ${followableBySql('?2', '?1')}`, follower.id, target.id) === undefined) {
+			continue
+		}
+		// The follower's lists that hold the source, read before the unfollow takes it out of them (migration
+		// 0007_list_members): FollowMigrationService#migrate_list_accounts! puts the target in them.
+		const lists = listsHolding(db, follower.id, source.id)
 		// Mastodon's MoveWorker: UnfollowService for the source (undone there), FollowService for the target.
 		const local = db.first<LocalRow>(
 			'SELECT a.id, a.uri, a.locked, 0 AS suspended FROM accounts a WHERE a.id = ?',
@@ -1003,10 +1013,6 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 		)
 		if (local !== undefined) {
 			unfollowRemote(db, local, source, now)
-		}
-		// FollowService: a follow the follower could not make itself is not made for it.
-		if (db.first(`SELECT 1 AS x WHERE ${followableBySql('?2', '?1')}`, follower.id, target.id) === undefined) {
-			continue
 		}
 		const state = target.local === 1 && target.locked === 0 ? 'accepted' : 'pending'
 		const edge = db.first<{ id: string }>(
@@ -1019,6 +1025,12 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 			follower.notify,
 			follower.languages,
 			new Date(now).toISOString()
+		)
+		// The target is followed now, or was already (followed or asked), so it may be a member of those lists.
+		db.run(
+			'INSERT OR IGNORE INTO list_accounts (list_id, account_id) SELECT value, ? FROM json_each(?)',
+			target.id,
+			JSON.stringify(lists)
 		)
 		if (edge === undefined) {
 			continue
@@ -1177,6 +1189,16 @@ function spend(db: Db, budget: Budget, sql: string, ...params: SqlStorageValue[]
 }
 
 function purgeRelationships(db: Db, id: string, budget: Budget): void {
+	// The account's list memberships go before its follows: a follow's delete also deletes the followed account's rows
+	// in the follower's lists (migration 0007_list_members), and with them gone it deletes none, so a follow stays two
+	// rows. Until they are all gone, the budget is spent and no follow is read.
+	spend(
+		db,
+		budget,
+		`DELETE FROM list_accounts WHERE account_id = ?1
+			AND list_id IN (SELECT list_id FROM list_accounts WHERE account_id = ?1 LIMIT ?2)`,
+		id
+	)
 	// A follow's delete and its local side's recount: two rows each at most.
 	const follows = db.all<{ id: string; other: string }>(
 		`SELECT CAST(id AS TEXT) AS id, CASE WHEN account_id = ?1 THEN target_account_id ELSE account_id END AS other
@@ -1205,13 +1227,6 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	for (const status of new Set(favourites.map((f) => f.status))) {
 		recountStatus(db, status)
 	}
-	spend(
-		db,
-		budget,
-		`DELETE FROM list_accounts WHERE account_id = ?1
-			AND list_id IN (SELECT list_id FROM list_accounts WHERE account_id = ?1 LIMIT ?2)`,
-		id
-	)
 	spend(
 		db,
 		budget,

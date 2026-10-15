@@ -10,6 +10,25 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Lists in the Mastodon API, as Mastodon 4.5 has them: `GET` and `POST /api/v1/lists`, `GET`, `PUT`, `PATCH` and
+  `DELETE /api/v1/lists/:id` (`title`, at most 256 characters; `replies_policy` `followed`, `list` or `none`, `list` by
+  default; `exclusive`), at most 50 lists per account; `GET`, `POST` and `DELETE /api/v1/lists/:id/accounts`
+  (`account_ids[]`; the members paged by Link headers, 40 by default and at most 80, or all at once with `limit=0`, up
+  to 1,000); `GET /api/v1/accounts/:id/lists`; and `GET /api/v1/timelines/list/:id`. Scopes are `read:lists` and
+  `write:lists` (or `read` and `write`). Errors answer as Mastodon's do (422 with its validation messages, 404 for an
+  unknown account or a list of someone else's).
+    - A list holds you and accounts you follow or have asked to follow; anyone else is refused. An account whose
+      request is pending is listed but adds nothing to the timeline until you are accepted.
+    - The list timeline has the public, unlisted and private statuses and boosts of its members, filtered as home
+      filters them (blocks, mutes, domain blocks, a follow's boosts and languages), with the list's `replies_policy`
+      deciding which replies to others are shown. Like home, it is worked out when read, so it also shows what members
+      posted before they were added.
+    - An exclusive list keeps its members' statuses and boosts out of home. Post notifications (`notify` on a follow)
+      are still sent for them, as in Mastodon.
+    - When your follow of a member ends (you unfollow it, either of you blocks the other, a domain block's cleanup
+      reaches it, it rejects or removes your follow, or its account is deleted), it leaves your lists, and following it
+      again does not bring it back. When an account you follow moves, its new account takes its place in your lists.
+
 - Blocks, mutes and domain blocks in the Mastodon API, as Mastodon 4.5 has them: `POST /api/v1/accounts/:id/block`,
   `/unblock`, `/mute` (`notifications`, default true, and `duration` in seconds, 0 for no expiry) and `/unmute`, which
   answer the Relationship; `GET /api/v1/blocks` and `GET /api/v1/mutes` (with `mute_expires_at`), paged by Link
@@ -105,6 +124,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   keeps its partner and stays in home as before. Your own replies are shown as before. Such a reply also creates, lists
   and pushes no post notification (`notify` on a follow), as home leaves it out.
 
+- The cutover leaves out a legacy list member that is neither the list's owner nor an account the owner follows or has
+  asked to follow, counted (`list_accounts:not-followed-left-out`): legacy kept members whatever the follows, while a
+  list in Kopje, as in Mastodon, holds an account only while you follow it. `verify-conversion` expects the same.
+
 - The cutover converts a legacy domain block as Kopje's API stores one: lowercase, in punycode and without a trailing
   dot, the form domain blocks are matched in. Rows that become the same block are merged, and a value that is no
   domain name is dropped and counted (`domain_blocks:invalid-domain`), so the conversion stops on it until
@@ -146,6 +169,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- A `Move` whose new account a follower may not follow (the follower blocks it, or its domain) leaves that follower's
+  follow of the old account, and the old account in the follower's lists, as they are, as in Mastodon. Before, the old
+  follow was ended anyway.
+
 - The cutover reads a legacy export that holds `d1_kv`, a table D1 now creates in a database by itself: the table list
   of the export (`kopje-admin fingerprint tables-sql`) leaves it out, as it leaves out `_cf_*`, and the fingerprint and
   the conversion ignore both in an export that has them. Before, such an export was refused as a schema mismatch.
@@ -160,7 +187,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds six migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds seven migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0001_blocks_and_mutes`: `mutes.expires_at` with an index, and the `domain_block_cleanups` table. It is quick.
     - `0002_web_push`: the subscription's encoding and sealed token on `push_subscriptions`, and the
@@ -175,6 +202,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0006_account_deletion`: adds `accounts.deleted_at` with a partial index, and marks the account of a purge that
       is still running. Its work grows linearly with the accounts stored (one check and one index pass); locally,
       200,000 accounts took under a second.
+    - `0007_list_members`: removes the list members whose list's owner neither is nor follows them (a Store converted
+      by an earlier release keeps them), and adds the trigger that removes a member with the follow. Its work grows
+      linearly with the list members stored (one check of each); it is quick.
 - `wrangler.jsonc`: unchanged. Set the `VAPID_JWK` secret to turn Web Push on.
 
 ## [0.1.0-rc.3] - 2026-10-14

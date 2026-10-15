@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { migratedStore } from './helpers'
 import { type ModelSubscription, NOTIFICATION_TYPES, outboundKindOf, PolicyModel } from './policy-model'
-import { accountId, REMOTE_DOMAINS, runs, type World, worldArb, writeWorld } from './policy-world'
+import { accountId, listId, REMOTE_DOMAINS, runs, type World, worldArb, writeWorld } from './policy-world'
 import { updateCredentials } from '../src/domain/accounts'
 import { API_VISIBILITIES, type ApiVisibility } from '../src/domain/audience'
 import { type Claim, claimDeliveries, completeDelivery, EXPANSION_STEP, type Target } from '../src/domain/deliveries'
@@ -39,7 +39,9 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 //   - a retraction reaches every inbox that received what it withdraws or may still: delivered, still in a deliveries
 //     row, or in a chunk of targets not yet expanded; an Update of the actor reaches every follower;
 //   - R15 and R16: every notification written is shown to its recipient, and every push recorded is wanted, at the
-//     time of the action.
+//     time of the action;
+//   - list members leave with the follow: after each action, a list holds what it held before, less each account its
+//     owner no longer follows in either state (migration 0007_list_members); its owner stays.
 
 // Cases per property: each writes a world and runs a sequence of actions in it. The seed is fixed (FC_SEED replays
 // another), and witnesses (below) run each scenario the properties must see, so coverage never depends on chance.
@@ -119,6 +121,7 @@ const SCENARIOS = [
 	'content leaves out a domain-blocked follower',
 	'content leaves out an unavailable account',
 	'content to a silent recipient',
+	'list member leaves with the follow',
 	'notification',
 	'push',
 	'retraction reaches a blocked receiver',
@@ -132,11 +135,11 @@ const SCENARIOS = [
 type Scenario = (typeof SCENARIOS)[number]
 
 // A case written by hand: the four local accounts (L0 acts), remote accounts R0, R1, ... alternately on the two
-// remote domains with a personal inbox only, the given statuses and accepted follows of L0, and every local account
-// subscribed to every alert.
+// remote domains with a personal inbox only, the given statuses, accepted follows of L0 and by L0, and lists, and
+// every local account subscribed to every alert.
 function witness(
 	remotes: number,
-	world: Partial<Pick<World, 'statuses'>> & { followers?: number[] },
+	world: Partial<Pick<World, 'statuses' | 'lists'>> & { followers?: number[]; following?: number[] },
 	actions: (Partial<Action> & Pick<Action, 'kind'>)[]
 ): Case {
 	const accounts: World['accounts'] = []
@@ -167,16 +170,14 @@ function witness(
 		world: {
 			accounts,
 			statuses: world.statuses ?? [],
-			follows: (world.followers ?? []).map((from) => ({
-				from,
-				to: 0,
-				accepted: true,
-				showReblogs: true,
-				notify: false,
-			})),
+			follows: [
+				...(world.followers ?? []).map((from) => ({ from, to: 0 })),
+				...(world.following ?? []).map((to) => ({ from: 0, to })),
+			].map((f) => ({ ...f, accepted: true, showReblogs: true, notify: false })),
 			blocks: [],
 			mutes: [],
 			domainBlocks: [],
+			lists: world.lists ?? [],
 			now: '2026-10-12T00:00:00.000Z',
 		},
 		shared: [false],
@@ -253,6 +254,25 @@ const WITNESSES: { name: string; scenarios: Scenario[]; case: Case }[] = [
 			{ kind: 'block', account: R0 },
 			{ kind: 'delete' },
 		]),
+	},
+	{
+		name: 'a block of an account in the blocker’s lists, and of one whose list holds the blocker',
+		scenarios: ['list member leaves with the follow'],
+		case: witness(
+			2,
+			{
+				followers: [1],
+				following: [1, R0, R1],
+				lists: [
+					{ owner: 0, repliesPolicy: 'list', exclusive: true, members: [0, 1, R0, R1] },
+					{ owner: 1, repliesPolicy: 'none', exclusive: false, members: [0, 1] },
+				],
+			},
+			[
+				{ kind: 'block', account: R0 },
+				{ kind: 'block', account: 1 },
+			]
+		),
 	},
 	{
 		name: 'a delete before delivery after the follower leaves',
@@ -474,6 +494,14 @@ function readWorld(sql: SqlStorage, base: World): Snapshot {
 				.exec<{ account_id: string; domain: string }>('SELECT account_id, domain FROM domain_blocks')
 				.toArray()
 				.map((d) => ({ owner: account(d.account_id), domain: d.domain })),
+			// The case's lists, with the members they hold now.
+			lists: base.lists.map((list, l) => ({
+				...list,
+				members: sql
+					.exec<{ account_id: string }>('SELECT account_id FROM list_accounts WHERE list_id = ?', listId(l))
+					.toArray()
+					.map((row) => account(row.account_id)),
+			})),
 			now: base.now,
 		},
 	}
@@ -596,6 +624,15 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 	}
 	let objects = 0
 
+	// Every list row, with its list's owner.
+	const listRows = () =>
+		sql
+			.exec<{ owner: string; list_id: string; member: string }>(
+				`SELECT l.account_id AS owner, la.list_id, la.account_id AS member
+				FROM list_accounts la JOIN lists l ON l.id = la.list_id ORDER BY la.list_id, la.account_id`
+			)
+			.toArray()
+
 	// The Store as a world before each action: the world after the previous one.
 	let before = readWorld(sql, world)
 	for (const action of c.actions) {
@@ -613,6 +650,7 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 		if (author === undefined) {
 			break
 		}
+		const membersBefore = listRows()
 		const ids = [...before.byId.keys()]
 		const uris = [...before.byUri.keys()]
 		const statuses = before.world.statuses.map((status, s) => ({ ...status, s, id: ids[s]!, uri: uris[s]! }))
@@ -956,6 +994,20 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 					add(recorded, subject, target.inbox)
 				}
 			}
+		}
+
+		// List members leave with the follow: a list keeps its owner and the accounts its owner still follows.
+		const following = (owner: string, member: string) =>
+			after.world.follows.some((f) => accountId(f.from) === owner && accountId(f.to) === member)
+		const membersKept = membersBefore.filter((row) => row.owner === row.member || following(row.owner, row.member))
+		const membersAfter = listRows()
+		if (JSON.stringify(membersAfter) !== JSON.stringify(membersKept)) {
+			problems.push(
+				`${label}: lists hold [${membersAfter.map((row) => `${row.list_id}:${row.member}`).join(' ')}], the model [${membersKept.map((row) => `${row.list_id}:${row.member}`).join(' ')}]`
+			)
+		}
+		if (membersKept.length < membersBefore.length) {
+			saw.add('list member leaves with the follow')
 		}
 
 		const model = new PolicyModel(after.world)

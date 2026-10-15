@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { migratedStore } from './helpers'
 import { NOTIFICATION_TYPES, PolicyModel, type Viewer } from './policy-model'
-import { accountId, runs, statusId, type World, worldArb, writeWorld } from './policy-world'
+import { accountId, listId, runs, statusId, type World, worldArb, writeWorld } from './policy-world'
 import { type Account, listFollows, type Page, type PageQuery } from '../src/domain/accounts'
 import type { NotificationType } from '../src/domain/notifications'
 import { listNotifications } from '../src/domain/notifications'
@@ -18,6 +18,7 @@ import {
 	bookmarks,
 	favourites,
 	homeTimeline,
+	listTimeline,
 	publicTimeline,
 	tagTimeline,
 } from '../src/domain/timelines'
@@ -28,10 +29,10 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // follower and following lists, account search and search resolution run on generated worlds (test/policy-world.ts)
 // for every available local viewer and, where the endpoint allows it, the anonymous one. No endpoint may show a status
 // (or a boosted original) or an account the model of its rule (test/policy-model.ts) does not allow the viewer. The
-// lists (home, public, tag, account statuses, favourites, bookmarks, followers, following, account search) must also
-// show exactly what the model allows of their members, in order, page after page; search resolution must answer an
-// account exactly when account search finds it, and a status exactly when the single-status read shows it, unless the
-// viewer blocks its author's domain.
+// lists (home with exclusive lists, a list's timeline, public, tag, account statuses, favourites, bookmarks,
+// followers, following, account search) must also show exactly what the model allows of their members, in order, page
+// after page; search resolution must answer an account exactly when account search finds it, and a status exactly when
+// the single-status read shows it, unless the viewer blocks its author's domain.
 
 // Cases per property: each writes a world and runs every endpoint for every viewer.
 const CASES = 60
@@ -177,6 +178,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'followers',
 				'following',
 				'home',
+				'list',
 				'notifications',
 				'public',
 				'reblogged_by',
@@ -433,6 +435,25 @@ function check(sql: SqlStorage, c: Case): string[] {
 			feed('home', homeTimeline, { present: PRESENT }),
 			newestFirst(all.filter((s) => m.home(s, viewer)))
 		)
+
+		// Each list's timeline: exactly what the model allows of the list's members to its owner, newest first; another
+		// account's list is not found.
+		world.lists.forEach((list, l) => {
+			const read = (page: PageQuery) =>
+				ok<Page<Status> | null>(run(listTimeline, { ...user, id: listId(l), page, present: PRESENT }), 'list')
+			if (list.owner !== viewer) {
+				if (read({ limit: LIMIT }) !== null) {
+					problems.push(`list ${l} ${nameOf(viewer)}: answers for another account's list`)
+				}
+				return
+			}
+			equal(
+				`list ${l}`,
+				viewer,
+				pages(read).map((value) => status('list', viewer, value, () => true)),
+				newestFirst(all.filter((s) => m.listTimeline(l, s)))
+			)
+		})
 
 		// Status search over the viewer's library: only what the list rule allows.
 		const results = ok<{ statuses: Status[] }>(

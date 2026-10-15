@@ -104,6 +104,7 @@ describe('convert and verify-conversion', () => {
 		const conversion = manifest.conversion as Record<string, Record<string, number>>
 		expect(conversion.normalized).toMatchObject({
 			'follows:accepted-without-follow-record': 2,
+			'list_accounts:not-followed-left-out': 1,
 			'notifications:duplicate-merged': 1,
 			'statuses:remote-without-original-uri': 1,
 		})
@@ -114,6 +115,10 @@ describe('convert and verify-conversion', () => {
 		expect(value("SELECT count(*) FROM follows WHERE state = 'accepted' AND uri IS NULL")).toBe(2)
 		expect(value("SELECT uri FROM follows WHERE uri LIKE '%/ap/a/follow-300'")).toBe(
 			'https://kopje.test/ap/a/follow-300'
+		)
+		// A list keeps the account its owner follows; bob, who follows the owner but is not followed, is left out.
+		expect(value('SELECT group_concat(a.username) FROM list_accounts la JOIN accounts a ON a.id = la.account_id')).toBe(
+			'r0'
 		)
 		// Old media stays at its URLs, and old Image ids are kept.
 		expect(value("SELECT count(*) FROM media_attachments WHERE url LIKE 'https://images.example/%'")).toBe(3)

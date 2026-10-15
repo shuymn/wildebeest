@@ -1605,11 +1605,22 @@ export function convertLegacy(
 		lists.add(id)
 		localIds.push(id)
 	}
+	// A member is the list's owner or an account the owner follows or has asked to follow (Mastodon's ListAccount, and
+	// Kopje's list_members_follow_ended trigger): legacy kept members whatever the follows, and such a member is left out
+	// (counted), as Mastodon would have deleted it with the follow.
 	const listAccountInsert = insert('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)')
+	const followedByOwner = kopje.prepare(
+		`SELECT 1 AS x FROM lists l WHERE l.id = ?1
+		AND (l.account_id = ?2 OR EXISTS (SELECT 1 FROM follows f WHERE f.account_id = l.account_id AND f.target_account_id = ?2))`
+	)
 	for (const member of rows('SELECT * FROM list_accounts ORDER BY rowid')) {
 		const account = accountOf(member.account_id)
 		if (account === undefined || !lists.has(String(member.list_id))) {
 			count(dropped, 'list_accounts:unknown-list-or-account')
+			continue
+		}
+		if (followedByOwner.get(String(member.list_id), account.id) === undefined) {
+			count(normalized, 'list_accounts:not-followed-left-out')
 			continue
 		}
 		listAccountInsert.run(String(member.list_id), account.id)

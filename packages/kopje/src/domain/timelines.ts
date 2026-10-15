@@ -11,6 +11,7 @@ import {
 	visibleSql,
 } from './audience'
 import { optionalUserReadOperation, userReadOperation } from './auth'
+import { ownList, type RepliesPolicy } from './lists'
 import { presentStatuses, type Status } from './status-presenter'
 import { statusCursor } from './statuses'
 import { normalizeTag } from './tag-name'
@@ -61,6 +62,33 @@ function ids<Id>(rows: { id: Id }[]): Id[] {
 	return rows.map((row) => row.id)
 }
 
+// The reply rule home applies, and a list whose replies_policy is followed (?1 the viewer): a reply to an account the
+// viewer follows (accepted), and any reply of the viewer's own.
+const FOLLOWED_REPLIES_SQL = `s.account_id = ?1 OR EXISTS (SELECT 1 FROM follows hr
+	WHERE hr.account_id = ?1 AND hr.target_account_id = s.in_reply_to_account_id AND hr.state = 'accepted')`
+
+// The follow's options that home and a list timeline apply to others' statuses, after homeFilterSql (?1 the viewer):
+// a boost needs the follow's show_reblogs; a reply passes when its partner is known and is the author or the viewer, or
+// when `partner` (the feed's own rule) passes; and a follow's languages filter its own posts. A boost row has language
+// NULL, so boosts pass whatever the original's language, as in Mastodon's FeedManager. The viewer's own statuses pass
+// the boost and language terms (nobody follows themselves).
+function followOptionsSql(partner: string): string {
+	return `(s.reblog_of_id IS NULL OR s.account_id = ?1 OR EXISTS (SELECT 1 FROM follows hf
+			WHERE hf.account_id = ?1 AND hf.target_account_id = s.account_id AND hf.show_reblogs = 1))
+		AND (s.in_reply_to_uri IS NULL OR s.in_reply_to_account_id IN (?1, s.account_id) OR ${partner})
+		AND NOT EXISTS (SELECT 1 FROM follows hl WHERE hl.account_id = ?1 AND hl.target_account_id = s.account_id
+			AND hl.languages IS NOT NULL AND s.language IS NOT NULL
+			AND s.language NOT IN (SELECT value FROM json_each(hl.languages)))`
+}
+
+// The members of the viewer's (?1) exclusive lists, pending ones included (Mastodon's
+// FeedManager#crutches_exclusive_list_users): home leaves out their statuses and boosts (filter_from_home's
+// :skip_home), and shows them in those lists only. A non-correlated subquery, read once per query: the viewer's lists
+// and their members. Only home applies it: a post notification still follows homeFilterSql (shownSql), as
+// FeedInsertWorker#notify? lets :skip_home through.
+const EXCLUSIVE_MEMBERS = `(SELECT ela.account_id FROM lists el JOIN list_accounts ela ON ela.list_id = el.id
+	WHERE el.account_id = ?1 AND el.exclusive = 1)`
+
 // Home (Mastodon's FeedManager#filter_from_home): the viewer's own statuses and those of accounts they follow,
 // public, unlisted and private; direct and limited statuses of their own, and of followed accounts that address
 // them. Boosts from follows with show_reblogs off, replies (of others) unless they are to the author, to the viewer or
@@ -69,24 +97,15 @@ function ids<Id>(rows: { id: Id }[]): Id[] {
 // original that mentions an account the viewer blocks or mutes; the viewer's own statuses always pass, as in
 // FeedManager#filter_from_home). A reply whose partner is unknown (in_reply_to_account_id NULL: its parent was never
 // stored, or the partner's account was purged) is left out too, so a purge does not bring back a reply home hid. A
-// reply whose parent is deleted keeps its partner.
+// reply whose parent is deleted keeps its partner. Others' statuses leave home when their author is in one of the
+// viewer's exclusive lists (EXCLUSIVE_MEMBERS); the viewer's own never do.
 export const homeTimeline = userReadOperation<{ page: PageQuery; present: Present }, Page<Status>>(
 	(db, { page, present }, _viewer, viewer) => {
 		const { accountId, now } = viewer
 		const cursor = statusPage(page)
 		const order = cursor.ascending ? 'ASC' : 'DESC'
 		const read = statusReads(viewer, { viewer: '?1', now: '?5' })
-		// After homeFilterSql: the follow's options.
-		const options = `(s.reblog_of_id IS NULL OR s.account_id = ?1 OR EXISTS (SELECT 1 FROM follows hf
-				WHERE hf.account_id = ?1 AND hf.target_account_id = s.account_id AND hf.show_reblogs = 1))
-			AND (s.account_id = ?1 OR s.in_reply_to_uri IS NULL OR s.in_reply_to_account_id IN (?1, s.account_id)
-				OR EXISTS (SELECT 1 FROM follows hr
-					WHERE hr.account_id = ?1 AND hr.target_account_id = s.in_reply_to_account_id AND hr.state = 'accepted'))
-			-- A follow's languages filter its own posts. A boost row has language NULL, so boosts pass whatever the
-			-- original's language, as in Mastodon's FeedManager.
-			AND NOT EXISTS (SELECT 1 FROM follows hl WHERE hl.account_id = ?1 AND hl.target_account_id = s.account_id
-				AND hl.languages IS NOT NULL AND s.language IS NOT NULL
-				AND s.language NOT IN (SELECT value FROM json_each(hl.languages)))`
+		const options = followOptionsSql(FOLLOWED_REPLIES_SQL)
 		const tail = `ORDER BY s.id ${order} LIMIT ?4`
 		const rows = read.union(
 			db,
@@ -96,7 +115,8 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 				branches: [
 					{
 						where: `s.account_id IN (SELECT ?1 UNION ALL
-								SELECT target_account_id FROM follows WHERE account_id = ?1 AND state = 'accepted')
+								SELECT target_account_id FROM follows WHERE account_id = ?1 AND state = 'accepted'
+									AND target_account_id NOT IN ${EXCLUSIVE_MEMBERS})
 							AND ${FEED} AND ${cursorSql('s.id')}`,
 						and: options,
 						tail,
@@ -112,7 +132,7 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 						where: `m.account_id = ?1 AND s.account_id <> ?1 AND s.visibility IN ${REQUIRES_MENTION_SQL}
 							AND EXISTS (SELECT 1 FROM follows df
 								WHERE df.account_id = ?1 AND df.target_account_id = s.account_id AND df.state = 'accepted')
-							AND ${cursorSql('s.id')}`,
+							AND s.account_id NOT IN ${EXCLUSIVE_MEMBERS} AND ${cursorSql('s.id')}`,
 						and: options,
 						tail,
 					},
@@ -124,6 +144,57 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 			cursor.min,
 			cursor.limit,
 			now
+		)
+		return statusesPage(db, ids(rows), cursor, accountId, present)
+	}
+)
+
+// The rule a list's replies_policy adds for a reply to someone other than its author or the owner (?1), with the list
+// at ?6 (Mastodon's FeedManager#filter_from_list? and the list's crutches_following): followed, an account the owner
+// follows, and any reply of the owner's own; list, a member of the list (pending included); none, nothing more.
+function repliesPolicySql(policy: RepliesPolicy): string {
+	switch (policy) {
+		case 'followed':
+			return FOLLOWED_REPLIES_SQL
+		case 'list':
+			return 'EXISTS (SELECT 1 FROM list_accounts lr WHERE lr.list_id = ?6 AND lr.account_id = s.in_reply_to_account_id)'
+		case 'none':
+			return '0'
+	}
+}
+
+// A list's timeline (Mastodon's ListFeed, filled by FanOutOnWriteService#deliver_to_lists and FeedManager#filter with
+// timeline_type :list): the public, unlisted and private statuses and boosts of its active members, the owner (when
+// a member) and the accounts the owner follows (accepted; a member with a pending request contributes nothing until it
+// is accepted). Home's filters apply as filter_from_home applies them to a list (homeFilterSql, and the follow's boosts
+// and languages), with the list's replies_policy deciding which replies to others pass; exclusive does not matter here.
+// Null when the list is not the viewer's.
+export const listTimeline = userReadOperation<{ id: string; page: PageQuery; present: Present }, Page<Status> | null>(
+	(db, { id, page, present }, _viewer, viewer) => {
+		const { accountId, now } = viewer
+		const list = ownList(db, accountId, id)
+		if (list === undefined) {
+			return null
+		}
+		const cursor = statusPage(page)
+		const read = statusReads(viewer, { viewer: '?1', now: '?5' })
+		const rows = read.select(
+			db,
+			'homeFilter',
+			{
+				where: `s.account_id IN (SELECT la.account_id FROM list_accounts la WHERE la.list_id = ?6
+						AND (la.account_id = ?1 OR EXISTS (SELECT 1 FROM follows lf
+							WHERE lf.account_id = ?1 AND lf.target_account_id = la.account_id AND lf.state = 'accepted')))
+					AND ${FEED} AND ${cursorSql('s.id')}`,
+				and: followOptionsSql(repliesPolicySql(list.replies_policy)),
+				tail: `ORDER BY s.id ${cursor.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+			},
+			accountId,
+			cursor.max,
+			cursor.min,
+			cursor.limit,
+			now,
+			list.id
 		)
 		return statusesPage(db, ids(rows), cursor, accountId, present)
 	}

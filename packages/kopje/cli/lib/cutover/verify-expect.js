@@ -775,9 +775,17 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			put('lists', String(l.id), [String(l.account_id), text(l.title), policy, l.exclusive === 1 ? 1 : 0])
 		}
 	}
+	// A member the list's owner neither is nor follows (in either state) is left out, as the converter leaves it out.
 	for (const m of all('SELECT list_id, account_id FROM list_accounts')) {
-		if (known(m.account_id) && out.lists?.[String(m.list_id)] !== undefined) {
-			put('list_accounts', `${String(m.list_id)} ${String(m.account_id)}`, 1)
+		const list = out.lists?.[String(m.list_id)]
+		const owner = list === undefined ? undefined : String(/** @type {unknown[]} */ (JSON.parse(list))[0])
+		const member = String(m.account_id)
+		if (
+			known(m.account_id) &&
+			owner !== undefined &&
+			(owner === member || out.follows?.[`${owner} ${member}`] !== undefined)
+		) {
+			put('list_accounts', `${String(m.list_id)} ${member}`, 1)
 		}
 	}
 
