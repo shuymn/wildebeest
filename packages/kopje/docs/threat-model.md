@@ -1018,7 +1018,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `0008_status_mentions_requires_mention`), so mentions by accounts the viewer does not follow are never read. Account
   statuses decide once whether the viewer may see the account at all (it is available, neither blocks the other), and
   read nothing when not (`test/policy-bounds.test.ts`, "never sees"). _Gap:_ what a follow's options (boosts,
-  languages, replies) and the home filter leave out is still read on the way.
+  languages, replies) and the home filter leave out is still read on the way, and account statuses read past the
+  statuses of an account the viewer may see that they may not (a non-follower opening the profile of an account that
+  posts mostly to followers), up to that account's stored history: a remote account's private statuses are stored only
+  while a local account follows it, so no outside party can grow it at will (accepted).
   _Enforced (main)_ for search: statuses pass `listableSql` before `LIMIT`, each library source reads at most 2,500 rows through an index ordered by the status id it returns (cursors applied
   inside it), hashtags come from at most 500 entries per library source plus the newest 2,000 public statuses, and an
   account search matches the exact address (always), at most 1,000 username-prefix candidates, the 5,000 newest
