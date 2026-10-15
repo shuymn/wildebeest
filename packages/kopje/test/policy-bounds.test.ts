@@ -541,12 +541,11 @@ describe("read endpoints read the same rows however long the world's history (RE
 
 	// Endpoints whose reads grow with the history, left out of the comparison.
 	const GROWING = new Set([
-		// TODO(RES-7): home and list read a window of every followed account or member, and the window of one whose
-		// every status the rule hides (suspended, or blocking the viewer) walks its whole history; home's mentions stream
-		// also walks the mentions it does not show. Measured at 40 and 400 replicas: home newest page 2135 -> 9335 rows,
-		// middle 1720 -> 5320, oldest 2056 -> 9256; list newest 1852 -> 4732, middle 1689 -> 3129, oldest 1851 -> 4731.
+		// TODO(RES-7): home's third stream reads the viewer's mentions from the cursor and keeps the direct and limited
+		// statuses of followed accounts among them, so mentions it does not show (here all of them: public, private and
+		// the viewer's own, and a direct one from a suspended account) are walked to the end of the history. Measured at
+		// 40 and 400 replicas: newest page 1810 -> 6130 rows, middle 1563 -> 3723, oldest 1732 -> 6052.
 		'home',
-		'list',
 		// Search reads windows of the viewer's library (LIBRARY_SOURCE_LIMIT per source) and, for hashtags, of their own
 		// entries and the newest public statuses (HASHTAG_LIBRARY_LIMIT, HASHTAG_PUBLIC_WINDOW): they grow with the
 		// history up to those limits.

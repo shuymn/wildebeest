@@ -307,11 +307,14 @@ export type StatusSelect = {
 }
 
 // A window of each author's statuses, for a feed of whole authors (home, a list), as StatusReads writes it:
-//   SELECT w.id AS id FROM (<authors>) a CROSS JOIN main.statuses w ON w.id IN (SELECT s.id FROM main.statuses s
+//   SELECT w.id AS id FROM (SELECT wa.account_id FROM (<authors>) wa WHERE <rule over the author>) a
+//     CROSS JOIN main.statuses w ON w.id IN (SELECT s.id FROM main.statuses s
 //     WHERE (s.account_id = a.account_id AND <where>) AND (<rule over s>) AND (<and>) <tail>)
 // <authors> selects each author once, as account_id, and <tail> orders each author's statuses by id and cuts them to a
 // page: so a status of a merged page is within its author's window, the page is the one a single SELECT over all the
-// authors' statuses gives, and an author costs a window however many statuses they have.
+// authors' statuses gives, and an author costs a window however many statuses they have. The rule over the author is
+// the part of the rule that holds for all of an author's statuses or none (authorRuleSql): an author it rejects has no
+// window, rather than one that walks their whole history finding nothing.
 export type AuthorWindows = {
 	readonly authors: string
 	readonly where?: string
@@ -391,16 +394,24 @@ export function statusReads(
 	const selectSql = (rule: string, q: StatusSelect, extra?: Record<string, string>) =>
 		`SELECT s.id AS id${columns(extra, 'id')} FROM ${q.from ?? ''} main.statuses s ${q.join ?? ''}
 		WHERE ${where(q.where, rule, q.and)} ${q.tail ?? ''}`
-	const branchSql = (rule: string, q: StatusSelect | AuthorWindows) => {
+	// The part of the rule over the author `x` alone, which every status of theirs passes if any does: the author is
+	// available and, unless the viewer, does not block them; for the list and home rules, the viewer does not filter
+	// them either.
+	const authorRuleSql = (rule: StatusRule, x: string) => {
+		const visible = `${availableSql(x)} AND (${x} IS ${at.viewer} OR NOT ${blocksSql(x, at.viewer)})`
+		return rule === 'visible' ? visible : `${visible} AND NOT ${filteredForSql(x, at.viewer, now())}`
+	}
+	const branchSql = (rule: StatusRule, q: StatusSelect | AuthorWindows) => {
 		if (!('authors' in q)) {
-			return selectSql(rule, q)
+			return selectSql(ruleSql(rule), q)
 		}
-		const window = selectSql(rule, {
+		const window = selectSql(ruleSql(rule), {
 			where: `s.account_id = a.account_id${q.where === undefined ? '' : ` AND ${q.where}`}`,
 			and: q.and,
 			tail: q.tail,
 		})
-		return `SELECT w.id AS id FROM (${q.authors}) a CROSS JOIN main.statuses w ON w.id IN (${window})`
+		const authors = `SELECT wa.account_id FROM (${q.authors}) wa WHERE ${authorRuleSql(rule, 'wa.account_id')}`
+		return `SELECT w.id AS id FROM (${authors}) a CROSS JOIN main.statuses w ON w.id IN (${window})`
 	}
 	const run = <T extends Row>(db: Db, query: string, params: SqlStorageValue[]): T[] => {
 		const bound = (placeholder: string) => {
@@ -423,8 +434,7 @@ export function statusReads(
 			return run<Extra & { id: VisibleStatusId }>(db, sql, params)
 		},
 		union(db, rule, query, ...params) {
-			const sql = ruleSql(rule)
-			const branches = query.branches.map((branch) => `SELECT * FROM (${branchSql(sql, branch)})`)
+			const branches = query.branches.map((branch) => `SELECT * FROM (${branchSql(rule, branch)})`)
 			return run<{ id: VisibleStatusId }>(
 				db,
 				`SELECT id FROM (${branches.join(query.all ? ' UNION ALL ' : ' UNION ')}) ${query.tail}`,
