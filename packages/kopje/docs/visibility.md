@@ -60,9 +60,10 @@ notifications, sends none.
 
 An account becomes unavailable when its deletion starts: a remote actor's `Delete` writes `accounts.deleted_at` in the
 transaction that writes its purge job (`deleteActor` in `src/domain/inbox.ts`), before the purge's batches remove its
-relationships, notifications and statuses, so none of them is shown while they are removed, whatever the order. The
-row goes with the purge's last batch; until then the actor's own activities are ignored and its document is not stored
-again (its tombstone, `isDeletedActor`). `availableSql` finds a deleted account through the partial index
+relationships, notifications and statuses, so none of them is shown while they are removed. Blocks and mutes of the
+account go last, once nothing they filter (its statuses, mentions of it, replies to it, its notifications) is left. The
+row goes with the purge's last batch; until then the actor's own activities are ignored, and its document is not
+stored again (its tombstone, `isDeletedActor`). `availableSql` finds a deleted account through the partial index
 `accounts_deleted`, which holds only such accounts, so for any other account the rule reads its `local_accounts` row
 alone. A local account is never marked (the schema refuses it), so `availableLocalSql` needs only that row.
 

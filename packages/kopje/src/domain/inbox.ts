@@ -1092,12 +1092,13 @@ const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
 // SQLite's total_changes() so that nothing escapes the count: deletions, counter recounts, and the Undo intent of a
 // local boost and its target chunks. Each step is limited beforehand to what is left, so a batch never writes more
 // than PURGE_BATCH rows:
-//   1. the account's relationships, notifications, mentions, favourites and keys, with the counters they counted;
+//   1. the account's follows, notifications, mentions, favourites and keys, with the counters they counted;
 //   2. local boosts of its statuses: each boost's Undo is recorded once (withdrawLocalBoost; the job's cursor keeps
 //      the boost being withdrawn), its targets are written a chunk per row over as many batches as they need
 //      (stageRetraction), and B2's delivery rounds expand them in their own bounded steps; then the boost is deleted
 //      like any status, its receipts included, and its booster's count recounted;
-//   3. remote boosts of its statuses, then its own statuses.
+//   3. remote boosts of its statuses, then its own statuses;
+//   4. once nothing else of it is left, the blocks and mutes of it, which filter what remains until then.
 // A status is deleted only once its children (edits, media, mentions, tags, favourites, bookmarks, notifications,
 // receipts, boosts and the reply links to it) are gone, so deleting it cascades nothing. Local media is detached for
 // the media sweep (its R2 objects go only through B4b's path), never deleted here. Returns whether anything remains;
@@ -1124,6 +1125,17 @@ export function purgeBatch(db: Db, uri: string, now: number): boolean {
 		if (status === undefined || !deleteStatusWithin(db, status.id, budget)) {
 			break
 		}
+	}
+	// Blocks and mutes of the account go last, once nothing they filter is left: no status, mention, reply link or
+	// notification of it.
+	if (!accountHasRows(db, id, false)) {
+		spend(
+			db,
+			budget,
+			'DELETE FROM blocks WHERE id IN (SELECT id FROM blocks WHERE account_id = ?1 OR target_account_id = ?1 LIMIT ?2)',
+			id
+		)
+		spend(db, budget, 'DELETE FROM mutes WHERE id IN (SELECT id FROM mutes WHERE target_account_id = ? LIMIT ?)', id)
 	}
 	// The final account delete and the job's completion are two more rows.
 	if (budget.left() < 2 || accountHasRows(db, id)) {
@@ -1189,13 +1201,6 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	for (const status of new Set(favourites.map((f) => f.status))) {
 		recountStatus(db, status)
 	}
-	spend(
-		db,
-		budget,
-		'DELETE FROM blocks WHERE id IN (SELECT id FROM blocks WHERE account_id = ?1 OR target_account_id = ?1 LIMIT ?2)',
-		id
-	)
-	spend(db, budget, 'DELETE FROM mutes WHERE id IN (SELECT id FROM mutes WHERE target_account_id = ? LIMIT ?)', id)
 	spend(
 		db,
 		budget,
@@ -1396,14 +1401,15 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 	return true
 }
 
-function accountHasRows(db: Db, id: string): boolean {
+// Whether rows of the account remain; with filters false, rows other than its blocks and mutes.
+function accountHasRows(db: Db, id: string, filters = true): boolean {
 	return (
 		db.first(
 			`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM statuses WHERE account_id = ?1)
 				OR EXISTS (SELECT 1 FROM favourites WHERE account_id = ?1)
 				OR EXISTS (SELECT 1 FROM follows WHERE account_id = ?1 OR target_account_id = ?1)
-				OR EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 OR target_account_id = ?1)
-				OR EXISTS (SELECT 1 FROM mutes WHERE target_account_id = ?1)
+				OR (?2 AND EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 OR target_account_id = ?1))
+				OR (?2 AND EXISTS (SELECT 1 FROM mutes WHERE target_account_id = ?1))
 				OR EXISTS (SELECT 1 FROM list_accounts WHERE account_id = ?1)
 				OR EXISTS (SELECT 1 FROM notifications WHERE from_account_id = ?1)
 				OR EXISTS (SELECT 1 FROM status_mentions WHERE account_id = ?1)
@@ -1411,7 +1417,8 @@ function accountHasRows(db: Db, id: string): boolean {
 				OR EXISTS (SELECT 1 FROM media_attachments WHERE account_id = ?1)
 				OR EXISTS (SELECT 1 FROM remote_keys WHERE account_id = ?1)
 				OR EXISTS (SELECT 1 FROM inbound_jobs WHERE target_account_id = ?1)`,
-			id
+			id,
+			filters ? 1 : 0
 		) !== undefined
 	)
 }

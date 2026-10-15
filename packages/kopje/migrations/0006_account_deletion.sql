@@ -21,4 +21,5 @@ UPDATE accounts SET deleted_at = (
 WHERE domain IS NOT NULL
 	AND uri IN (SELECT key FROM inbound_jobs WHERE kind = 'purge' AND done_at IS NULL);
 
+-- Queries name this index (INDEXED BY accounts_deleted in availableSql): renaming or dropping it breaks them.
 CREATE INDEX accounts_deleted ON accounts (id) WHERE deleted_at IS NOT NULL;

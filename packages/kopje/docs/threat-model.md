@@ -954,14 +954,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   followers per batch and carries at most 100 blocks and mutes; a deleted actor's purge writes at most 500 rows per batch in all, every
   write counted (SQLite's `total_changes()`): deletions, counter recounts (`followers_count`, `following_count`,
   `statuses_count`, status counters) and the Undo intent of a withdrawn boost with its target chunks. The account is
-  unavailable from the first batch's transaction on (VIS-1), so the order of the steps shows nothing of it. Its
-  relationships go first; then local boosts of its statuses, each withdrawn once: the Undo intent is recorded, then its targets
+  unavailable from the first batch's transaction on (VIS-1), so the order of the steps shows nothing of it. Its follows, notifications, mentions
+  and other relationships go first; then local boosts of its statuses, each withdrawn once: the Undo intent is recorded, then its targets
   (the boost's receipts among them) are staged a chunk per row over as many batches as they need, the receipts kept
   until all are written (`beginRetraction` and `stageRetraction` in `src/domain/deliveries.ts`); B2's delivery rounds
   expand them 100 at a time; then the purge deletes the receipts a batch at a time before the boost and its
   booster's recount; then its statuses, each
   deleted only after its children (edits, media, mentions, tags, favourites, bookmarks, notifications, receipts,
-  boosts, reply links), so no delete cascades. A user's own unboost keeps B2's path unchanged. Local media is detached
+  boosts, reply links), so no delete cascades. Blocks and mutes of the account go last, once nothing they filter is
+  left (`test/inbox-regressions.test.ts`, "keeps filtering a post that mentions the actor"). A user's own unboost keeps B2's path unchanged. Local media is detached
   for B4b's media sweep, never deleted from R2 here. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
   Queue message nor maintenance stops them, and waiting out maintenance spends no retry. `test/inbox.test.ts`,
   `test/inbox-regressions.test.ts`, `test/inbox-verify4.test.ts` ("writes the targets of a withdrawal that needs more

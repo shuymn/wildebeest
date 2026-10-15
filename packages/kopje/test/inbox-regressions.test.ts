@@ -1,3 +1,5 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
@@ -14,7 +16,8 @@ import {
 	type TestActor,
 } from './inbox-helpers'
 import { community } from './status-helpers'
-import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH } from '../src/domain/inbox'
+import { Db } from '../src/db/sql'
+import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, purgeBatch } from '../src/domain/inbox'
 import { BudgetExceededError, createSafeLoader, isTransientLoadError } from '../src/federation/loader'
 import { handleQueue, runScheduledJobs } from '../src/jobs/queue'
 import { sha256Hex } from '../src/platform/sha256'
@@ -908,8 +911,8 @@ describe('an actor whose deletion has started (R1)', () => {
 
 		web.fail(bob.uri, 410)
 		expect(await post(bob, deleteSelf(bob))).toBe(202)
-		// The first batch removed carol's mute and bob's follow; most of his statuses are left.
-		expect(await count(h.store, 'SELECT 1 FROM mutes')).toBe(0)
+		// The first batch removed bob's follow; most of his statuses are left, and carol's mute until they are gone.
+		expect(await count(h.store, 'SELECT 1 FROM mutes')).toBe(1)
 		expect(await count(h.store, 'SELECT 1 FROM statuses WHERE account_id = ?', bobId)).toBeGreaterThan(PURGE_BATCH)
 		expect(await bobStatuses(null)).toBe(0)
 		expect(await bobStatuses(carol.token)).toBe(0)
@@ -939,5 +942,86 @@ describe('an actor whose deletion has started (R1)', () => {
 			inboxDeps(() => h.store, web.loader)
 		)
 		expect(await accountId(h.store, bob.uri)).toBeUndefined()
+	})
+	it('keeps filtering a post that mentions the actor, by its blocks, until no mention of it is left', async () => {
+		const h = await community(['alice', 'carol'])
+		const { alice, carol } = h.users
+		const aliceUri = (await sql<{ uri: string }>(h.store, 'SELECT uri FROM accounts WHERE id = ?', alice.id))[0]!.uri
+		const web = new RemoteWeb()
+		const inbox = harness(h.store, {}, BUILD, { keygen: fixtureKeyGen, loader: web.loader })
+		const post = async (actor: TestActor, activity: unknown) =>
+			(await inbox.request('/inbox', await signedInit(actor, '/inbox', activity))).status
+		const bob = await mastodonActor(web, 'bob')
+		expect(await post(bob, follow(bob, nextId(bob), aliceUri))).toBe(202)
+		const bobId = (await accountId(h.store, bob.uri))!
+		await h.request(`/api/v1/accounts/${carol.id}/follow`, bearer(alice.token, { method: 'POST' }))
+		// carol mentions alice and bob; alice is notified, and would be pushed.
+		const posted = await h.request('/api/v1/statuses', bearer(carol.token, json({ status: '@alice hello' })))
+		const status = ((await posted.json()) as { id: string }).id
+		await sql(h.store, 'INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, 0)', status, bobId)
+		await sql(
+			h.store,
+			`INSERT INTO push_subscriptions (token_hash, endpoint, key_p256dh, key_auth, alerts)
+			VALUES (?, 'https://push.example/alice', 'p256dh', 'auth', '{"mention":true}')`,
+			sha256Hex(alice.token)
+		)
+		// More notifications from bob than two purge batches remove, so his mention rows outlive two batches.
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?3)
+			INSERT INTO notifications (account_id, type, from_account_id) SELECT ?1, 'filler-' || i, ?2 FROM n`,
+			carol.id,
+			bobId,
+			PURGE_BATCH * 2 + 100
+		)
+		const shown = async () => {
+			const home = (await (await h.request('/api/v1/timelines/home', bearer(alice.token))).json()) as { id: string }[]
+			const listed = (await (await h.request('/api/v1/notifications?types[]=mention', bearer(alice.token))).json()) as {
+				status?: { id: string }
+			}[]
+			await sql(h.store, 'DELETE FROM push_deliveries')
+			await sql(
+				h.store,
+				`INSERT INTO push_deliveries (subscription_id, notification_id, next_attempt_at, updated_at)
+				SELECT (SELECT id FROM push_subscriptions), id, 0, 0 FROM notifications WHERE account_id = ? AND type = 'mention'`,
+				alice.id
+			)
+			const pushed = (await h.store.claimPushes(BUILD, { now: NOW, leaseToken: crypto.randomUUID() })).pushes
+			return {
+				home: home.some((s) => s.id === status),
+				notification: listed.some((n) => n.status?.id === status),
+				push: pushed.length > 0,
+			}
+		}
+		const everywhere = { home: true, notification: true, push: true }
+		const nowhere = { home: false, notification: false, push: false }
+		expect(await shown()).toEqual(everywhere)
+		await h.request(`/api/v1/accounts/${bobId}/block`, bearer(alice.token, { method: 'POST' }))
+		expect(await shown()).toEqual(nowhere)
+
+		web.fail(bob.uri, 410)
+		expect(await post(bob, deleteSelf(bob))).toBe(202)
+		const mentioned = async () =>
+			(await count(h.store, 'SELECT 1 FROM status_mentions WHERE status_id = ? AND account_id = ?', status, bobId)) > 0
+		// After each batch: while carol's post still mentions bob, alice's block of him stays and filters it.
+		let mentioning = 0
+		for (;;) {
+			if (await mentioned()) {
+				mentioning++
+				expect(await count(h.store, 'SELECT 1 FROM blocks')).toBe(1)
+				expect(await shown()).toEqual(nowhere)
+			}
+			const more = await runInDurableObject(h.store, (_instance, state) =>
+				purgeBatch(new Db(state.storage.sql), bob.uri, NOW)
+			)
+			if (!more) {
+				break
+			}
+		}
+		// Once bob is gone, carol's post mentions only alice.
+		expect(mentioning).toBeGreaterThanOrEqual(2)
+		expect(await accountId(h.store, bob.uri)).toBeUndefined()
+		expect(await count(h.store, 'SELECT 1 FROM blocks')).toBe(0)
+		expect(await shown()).toEqual(everywhere)
 	})
 })
