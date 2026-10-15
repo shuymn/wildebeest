@@ -366,6 +366,9 @@ async function replicated(factor: number): Promise<StoreStub> {
 		writeWorld(state.storage.sql, WORLD)
 		writeCopies(state.storage.sql, factor)
 		writeViewer(state.storage.sql)
+		// The conversations of the direct statuses and the viewer's mentions, copies included, as migration 0009 makes
+		// them.
+		backfillConversations({ exec: (query: string) => state.storage.sql.exec(query) })
 	})
 	return store
 }
@@ -375,7 +378,7 @@ const target = { credential, now: NOW, id: statusId(TARGET), present: PRESENT }
 const searchInput = { credential, limit: 20, offset: 0, following: false, localDomain: 'kopje.test', present: PRESENT }
 const timeline = { credential, now: NOW, page: PAGE, local: false, remote: false, onlyMedia: false, present: PRESENT }
 
-// What an endpoint that pages a viewer's history pages by: statuses (by status id), the viewer's notifications,
+// What an endpoint that pages a viewer's history pages by: statuses (by status id: conversations by their last status's), the viewer's notifications,
 // favourites or bookmarks (by their ids), or a status's interactors (accounts, which are not replicated).
 type Paging = 'statuses' | 'notifications' | 'favourites' | 'bookmarks' | 'interactors'
 
@@ -510,6 +513,10 @@ function identities(output: unknown): unknown {
 	}
 	if ('visibility' in value && 'account' in value) {
 		return { id: value.id, reblog: (value.reblog as Entity | null)?.id ?? null }
+	}
+	// A conversation by what it shows: its id is numbered with the conversations a Store holds.
+	if ('last_status' in value && 'unread' in value) {
+		return { unread: value.unread, accounts: identities(value.accounts), last_status: identities(value.last_status) }
 	}
 	if ('acct' in value) {
 		return value.id
