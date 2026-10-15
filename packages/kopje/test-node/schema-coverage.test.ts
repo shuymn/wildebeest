@@ -51,6 +51,10 @@ const NOT_CARRIED: Record<string, string> = {
 	push_subscriptions: 'push subscriptions are not carried: clients register again',
 	remote_keys: 'fetched again on demand',
 	scheduled_statuses: 'posts scheduled in Kopje; legacy Wildebeest has no scheduled statuses',
+	tag_follows:
+		'legacy never wrote its followed_tags table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
+	featured_tags:
+		'legacy never wrote its featured_tags table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 }
 
 // Tables the converter fills through Kopje's own code, over the rows it carried, rather than with SQL of its own: the
