@@ -40,6 +40,7 @@ export const CATEGORIES = [
 	'lists',
 	'list_accounts',
 	'notifications',
+	'conversations',
 	'settings',
 	'clients',
 ]
@@ -104,6 +105,10 @@ export function actualFromDump(text) {
 	const edits = new Map()
 	/** @type {Map<string, [number, unknown[]][]>} */
 	const media = new Map()
+	/** @type {Map<string, { owner: string, thread: string, participants: string, last: string, unread: number | null }>} */
+	const conversations = new Map()
+	/** @type {Map<string, string[]>} conversation id -> its status ids */
+	const conversationStatuses = new Map()
 	/** @type {unknown} the kopje_state profile_updates value: ids of local accounts that publication announces */
 	let profileUpdates = []
 	const account = (/** @type {string | null} */ id) => (id === null ? undefined : accounts.get(id))
@@ -317,6 +322,20 @@ export function actualFromDump(text) {
 					row.status_id === 'NULL' ? '' : status(t('status_id'))?.uri,
 				])
 				break
+			case 'conversations':
+				conversations.set(t('id') ?? '', {
+					owner: t('account_id') ?? '',
+					thread: t('thread') ?? '',
+					participants: t('participants') ?? '',
+					last: t('last_status_id') ?? '',
+					unread: int(row.unread),
+				})
+				break
+			case 'conversation_statuses': {
+				const id = t('conversation_id') ?? ''
+				conversationStatuses.set(id, [...(conversationStatuses.get(id) ?? []), t('status_id') ?? ''])
+				break
+			}
 			case 'instance_settings':
 				put('settings', t('name') ?? '', t('value'))
 				break
@@ -362,6 +381,28 @@ export function actualFromDump(text) {
 	// Hashtags of a boost or of no status are records of their own, so they fail as extra ones.
 	for (const [id, names] of tags) {
 		put('statuses', `hashtags of ${statuses.get(id)?.uri ?? `no status ${id}`}`, names)
+	}
+	// Each conversation by its owner, thread and the other accounts, with its statuses; and whether its last status is
+	// its newest, and it is unread exactly when that one is someone else's.
+	for (const [id, c] of conversations) {
+		const owner = account(c.owner)?.uri
+		/** @type {unknown} */
+		let participants
+		try {
+			participants = JSON.parse(c.participants)
+		} catch {
+			participants = null
+		}
+		const others = Array.isArray(participants)
+			? participants.map((x) => account(String(x))?.uri ?? `unknown account ${String(x)}`).sort()
+			: ['(not a list)']
+		const members = (conversationStatuses.get(id) ?? []).sort()
+		const newest = members.at(-1)
+		put('conversations', `${owner} ${c.thread} ${others.join(' ')}`, [
+			members.map((m) => statuses.get(m)?.uri ?? `no status ${m}`).sort(),
+			c.last === newest,
+			c.unread === (status(newest ?? null)?.author !== owner ? 1 : 0),
+		])
 	}
 	// A repeated id is a record of its own, so it fails as an extra one.
 	const listed = new Set()

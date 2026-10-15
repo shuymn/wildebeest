@@ -817,6 +817,62 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		put('counters', 'notifications', highest.toString())
 	}
 
+	// Conversations, worked out here on their own from the records above. A direct status (direct with no silent
+	// recipient: one with a silent recipient is limited) is in its local author's conversation, and in the conversation
+	// of each local account notified of it as a mention. A conversation is keyed by its owner, its thread (walking up
+	// the stored parents, the inReplyTo of the status it ends at, else that status; a status in a cycle of replies keeps
+	// its own) and the other accounts among the author and the tagged recipients. Its last status is its newest, and it
+	// is unread when that one is someone else's: the ids that order them are the converter's, so the actual side checks
+	// that of its own rows.
+	/** @param {string} uri @returns {[string | null, string | null] | undefined} the reply record: inReplyTo, parent */
+	const replyOf = (uri) => {
+		const record = out.replies?.[uri]
+		return record === undefined ? undefined : /** @type {[string | null, string | null]} */ (JSON.parse(record))
+	}
+	/** @param {string} uri @returns {string} */
+	const threadOf = (uri) => {
+		const seen = new Set([uri])
+		let at = uri
+		for (;;) {
+			const parent = replyOf(at)?.[1] ?? null
+			if (parent === null || out.statuses?.[parent] === undefined) {
+				return replyOf(at)?.[0] ?? at
+			}
+			if (seen.has(parent)) {
+				return replyOf(uri)?.[0] ?? uri
+			}
+			seen.add(parent)
+			at = parent
+		}
+	}
+	/** @type {Map<string, string[]>} status URI -> the accounts notified of it as a mention */
+	const notified = new Map()
+	for (const record of Object.values(out.notifications ?? {})) {
+		const [type, recipient, , target] = /** @type {string[]} */ (JSON.parse(record))
+		if (type === 'mention' && target !== undefined && recipient !== undefined) {
+			notified.set(target, [...(notified.get(target) ?? []), recipient])
+		}
+	}
+	/** @type {Map<string, string[]>} */
+	const conversations = new Map()
+	for (const [uri, record] of Object.entries(out.audience ?? {})) {
+		const [visibility, recipients] = /** @type {[string, [string, number][]]} */ (JSON.parse(record))
+		if (visibility !== 'direct' || recipients.some(([, silent]) => silent === 1)) {
+			continue
+		}
+		const author = String(/** @type {unknown[]} */ (JSON.parse(out.statuses?.[uri] ?? '[]'))[0])
+		const owners = new Set([...(local.has(author) ? [author] : []), ...(notified.get(uri) ?? [])])
+		const thread = threadOf(uri)
+		for (const owner of owners) {
+			const others = [...new Set([author, ...recipients.map(([x]) => x)])].filter((x) => x !== owner).sort()
+			const key = `${owner} ${thread} ${others.join(' ')}`
+			conversations.set(key, [...(conversations.get(key) ?? []), uri])
+		}
+	}
+	for (const [key, members] of conversations) {
+		put('conversations', key, [members.sort(), true, true])
+	}
+
 	// Settings, under Kopje's names, and clients.
 	for (const s of all('SELECT setting_name, setting_value FROM server_settings')) {
 		put(
