@@ -204,7 +204,7 @@ export function createApp({
 			return maintenanceError()
 		}
 		if (error instanceof HTTPException) {
-			return mastodonError(error.status, error.message || 'Error')
+			return error.res === undefined ? mastodonError(error.status, error.message || 'Error') : error.getResponse()
 		}
 		// The route template, not the URL: a path or query can carry a token or content (DATA-5).
 		console.error({
