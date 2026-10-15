@@ -696,6 +696,74 @@ describe('Store migration runner', () => {
 		expect(large - small).toBeLessThanOrEqual(5 * added)
 	}, 60_000)
 
+	it('upgrades a Store with 0011_filters: filters go with their account, rules with their filter, statuses with theirs', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			const at = NAMES.indexOf('0011_filters')
+			expect(at).toBeGreaterThan(0)
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			expect(tableNames(sql)).not.toContain('filters')
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0011_filters'],
+			})
+			const alice = '100000000000000001'
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice', NULL)",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'alice@example.com', x'00', x'00', 'k')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES ('200000000000000001', 'https://kopje.test/ap/o/1', ?, 'public', '2026-01-01T00:00:00.000Z')",
+				alice
+			)
+			sql.exec(
+				`INSERT INTO filters (id, account_id, title, context) VALUES ('300000000000000001', ?, 'f', '["home"]'),
+					('300000000000000002', ?, 'g', '["public"]')`,
+				alice,
+				alice
+			)
+			sql.exec(
+				"INSERT INTO filter_keywords (id, filter_id, keyword) VALUES ('400000000000000001', '300000000000000001', 'k')"
+			)
+			sql.exec(
+				`INSERT INTO filter_statuses (id, filter_id, status_id) VALUES
+					('500000000000000001', '300000000000000001', '200000000000000001'),
+					('500000000000000002', '300000000000000002', '200000000000000001')`
+			)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO filters (id, account_id, title, context, action) VALUES ('300000000000000003', ?, 'h', '[]', 'delete')",
+					alice
+				)
+			).toThrow(/CHECK/)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO filters (id, account_id, title, context) VALUES ('300000000000000003', ?, 'h', 'home')",
+					alice
+				)
+			).toThrow(/CHECK/)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO filter_statuses (id, filter_id, status_id) VALUES ('500000000000000003', '300000000000000001', '200000000000000001')"
+				)
+			).toThrow(/UNIQUE/)
+
+			sql.exec("DELETE FROM filters WHERE id = '300000000000000001'")
+			expect(sql.exec('SELECT id FROM filter_keywords').toArray()).toEqual([])
+			expect(sql.exec('SELECT id FROM filter_statuses').toArray()).toEqual([{ id: '500000000000000002' }])
+			sql.exec("DELETE FROM statuses WHERE id = '200000000000000001'")
+			expect(sql.exec('SELECT id FROM filter_statuses').toArray()).toEqual([])
+			sql.exec('DELETE FROM local_accounts WHERE account_id = ?', alice)
+			expect(sql.exec('SELECT id FROM filters').toArray()).toEqual([])
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
 	it('stays readonly with exact bookkeeping when a file fails, and lets a fixed build continue', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
