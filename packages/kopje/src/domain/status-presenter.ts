@@ -161,20 +161,17 @@ export function presentStatuses(db: Db, ids: readonly VisibleStatusId[], options
 	return present(db, ids, options, false).flatMap((status) => (status === undefined ? [] : [status]))
 }
 
-// Several lists of statuses presented as one response (a thread's ancestors and descendants), so their filters' text
-// budget is shared by all of them; each list as presentStatuses would give it.
-export function presentStatusLists(
+// Two lists of statuses presented as one response (a thread's ancestors and descendants), so their filters' text
+// budget is shared by both; each list as presentStatuses would give it.
+export function presentStatusPair(
 	db: Db,
-	lists: readonly (readonly VisibleStatusId[])[],
+	first: readonly VisibleStatusId[],
+	second: readonly VisibleStatusId[],
 	options: PresentOptions
-): Status[][] {
-	const all = present(db, lists.flat(), options, false)
-	let start = 0
-	return lists.map((list) => {
-		const part = all.slice(start, start + list.length)
-		start += list.length
-		return part.flatMap((status) => (status === undefined ? [] : [status]))
-	})
+): [Status[], Status[]] {
+	const all = present(db, [...first, ...second], options, false)
+	const kept = (part: (Status | undefined)[]) => part.flatMap((status) => (status === undefined ? [] : [status]))
+	return [kept(all.slice(0, first.length)), kept(all.slice(first.length))]
 }
 
 export function presentStatus(db: Db, id: VisibleStatusId, options: PresentOptions): Status | null {

@@ -62,7 +62,7 @@ import {
 	presentOwnStatus,
 	type PresentOwnOptions,
 	presentStatus,
-	presentStatusLists,
+	presentStatusPair,
 	type Status,
 } from './status-presenter'
 import { exceedsRawLength, mentionKey, type MentionRef, parseStatusText, renderStatusHtml } from './status-text'
@@ -804,9 +804,10 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 			now
 		)
 		// Presented as one response, so the filters' text budget is shared by both lists.
-		const [presentedAncestors = [], presentedDescendants = []] = presentStatusLists(
+		const [presentedAncestors, presentedDescendants] = presentStatusPair(
 			db,
-			[ancestors.map((row) => row.id), descendants.map((row) => row.id)],
+			ancestors.map((row) => row.id),
+			descendants.map((row) => row.id),
 			{ ...present, viewer }
 		)
 		return { status: 'ok', value: { ancestors: presentedAncestors, descendants: presentedDescendants } }
