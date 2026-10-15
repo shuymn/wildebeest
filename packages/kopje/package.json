@@ -68,7 +68,7 @@
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-plugin": "1.4.0",
-		"@cloudflare/workers-types": "5.20261011.1",
+		"@cloudflare/workers-types": "5.20261012.1",
 		"@fedify/fedify": "2.4.3",
 		"@fedify/testing": "2.4.3",
 		"@fedify/vocab": "2.4.3",
