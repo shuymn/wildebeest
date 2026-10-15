@@ -835,11 +835,10 @@ export function relationshipResult(db: Db, viewerId: string, targetId: string, n
 export type PageQuery = { maxId?: string; sinceId?: string; minId?: string; limit: number }
 
 // The cursor on an edge table's INTEGER id as a plain range, with `max` and `min` the cursor parameters (NULL for none):
-// no cursor is the largest or smallest INTEGER, which AUTOINCREMENT ids from 1 never reach. A read in an index ending in
-// the id then starts at the cursor, not at the newest.
+// no cursor is a REAL beyond either end of the INTEGER range, so every id is inside it (SQLite compares the two types by
+// value). A read in an index ending in the id then starts at the cursor, not at the newest.
 export function edgeRangeSql(column: string, max: string, min: string): string {
-	return `${column} < coalesce(CAST(${max} AS INTEGER), 9223372036854775807)
-		AND ${column} > coalesce(CAST(${min} AS INTEGER), -9223372036854775808)`
+	return `${column} < coalesce(CAST(${max} AS INTEGER), 1e19) AND ${column} > coalesce(CAST(${min} AS INTEGER), -1e19)`
 }
 
 export type Page<T> = { items: T[]; newest: string | null; oldest: string | null }
