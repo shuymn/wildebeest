@@ -6,7 +6,8 @@ import type { Visibility } from '../src/domain/audience'
 // A generated world for the policy oracle (test/policy-oracle.test.ts) and the bounds harness
 // (test/policy-bounds.test.ts): local accounts (one of them may be suspended, some may hide their network), remote
 // accounts on two domains (one of them may be being deleted, its statuses and edges still stored), statuses of every
-// visibility with mentions (some silent), boosts and replies, and the edges the rules read: follows (pending and
+// visibility with mentions (some silent), boosts and replies (some to a status never stored, and some continuing such
+// a reply, as a purge leaves a reply to the account it removes), and the edges the rules read: follows (pending and
 // accepted), blocks both ways, mutes with and without an expiry and with and without notifications, and domain blocks
 // in their stored form. Accounts and statuses are referred to by index; writeWorld gives them fixed ids.
 
@@ -61,6 +62,8 @@ export type WorldStatus = {
 	mentions: { account: number; silent: boolean }[]
 	reblogOf: number | null
 	replyTo: number | null
+	// A reply to a status the server never stored (replyTo is null): its parent and partner are unknown.
+	replyToUnknown: boolean
 	tagged: boolean
 }
 
@@ -165,6 +168,8 @@ export const worldArb: fc.Arbitrary<World> = fc
 		now: fc.constantFrom(...TIMES),
 		// Last, so the other fields of a seed's worlds stay as they were before it was added.
 		deleting: fc.option(fc.nat(), { freq: 3 }),
+		// Statuses (not boosts) made replies to a status never stored, once all statuses are drawn.
+		replyToUnknown: fc.array(fc.nat(), { maxLength: 3 }),
 	})
 	.map((raw): World => {
 		const accounts: WorldAccount[] = []
@@ -213,6 +218,7 @@ export const worldArb: fc.Arbitrary<World> = fc
 					(m) => String(m.account)
 				),
 				reblogOf: boost ? target : null,
+				replyToUnknown: false,
 				replyTo:
 					raw.kind === 'reply'
 						? target
@@ -222,6 +228,13 @@ export const worldArb: fc.Arbitrary<World> = fc
 				tagged: !boost && raw.tagged,
 			})
 		})
+		for (const n of raw.replyToUnknown) {
+			const status = statuses[n % Math.max(statuses.length, 1)]
+			if (status !== undefined && status.reblogOf === null) {
+				status.replyTo = null
+				status.replyToUnknown = true
+			}
+		}
 		const pair = (e: { from: number; to: number }) => `${e.from}:${e.to}`
 		return {
 			accounts,
@@ -298,7 +311,7 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 		}
 	})
 	// in_reply_to_account_id as statuses.ts writes it (Status#carried_over_reply_to_account_id): the parent's author,
-	// or, when the author continues their own reply, that reply's partner.
+	// or, when the author continues their own reply, that reply's partner; none for a reply to a status never stored.
 	const partners: (string | null)[] = []
 	world.statuses.forEach((status, i) => {
 		const parent = status.replyTo === null ? undefined : world.statuses[status.replyTo]
@@ -306,7 +319,7 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 		partners.push(
 			parent === undefined
 				? null
-				: parent.author === status.author && parent.replyTo !== null
+				: parent.author === status.author && (parent.replyTo !== null || parent.replyToUnknown)
 					? parentPartner
 					: accountId(parent.author)
 		)
@@ -318,7 +331,11 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 			`https://${INSTANCE_DOMAIN}/ap/o/${i}`,
 			accountId(status.author),
 			status.reblogOf === null ? null : statusId(status.reblogOf),
-			status.replyTo === null ? null : `https://${INSTANCE_DOMAIN}/ap/o/${status.replyTo}`,
+			status.replyToUnknown
+				? `https://elsewhere.example/objects/${i}`
+				: status.replyTo === null
+					? null
+					: `https://${INSTANCE_DOMAIN}/ap/o/${status.replyTo}`,
 			status.replyTo === null ? null : statusId(status.replyTo),
 			partners[i] ?? null,
 			status.visibility,

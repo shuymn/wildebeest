@@ -28,10 +28,10 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // follower and following lists, account search and search resolution run on generated worlds (test/policy-world.ts)
 // for every available local viewer and, where the endpoint allows it, the anonymous one. No endpoint may show a status
 // (or a boosted original) or an account the model of its rule (test/policy-model.ts) does not allow the viewer. The
-// lists whose membership is simple (public, tag, account statuses, favourites, bookmarks, followers, following,
-// account search) must also show exactly what the model allows of their members, in order, page after page; search
-// resolution must answer an account exactly when account search finds it, and a status exactly when the single-status
-// read shows it, unless the viewer blocks its author's domain.
+// lists (home, public, tag, account statuses, favourites, bookmarks, followers, following, account search) must also
+// show exactly what the model allows of their members, in order, page after page; search resolution must answer an
+// account exactly when account search finds it, and a status exactly when the single-status read shows it, unless the
+// viewer blocks its author's domain.
 
 // Cases per property: each writes a world and runs every endpoint for every viewer.
 const CASES = 60
@@ -269,9 +269,7 @@ function check(sql: SqlStorage, c: Case): string[] {
 	const publicFeed = (s: number) => {
 		const status = m.status(s)
 		return (
-			status.visibility === 'public' &&
-			status.reblogOf === null &&
-			(status.replyTo === null || m.partner(s) === status.author)
+			status.visibility === 'public' && status.reblogOf === null && (!m.isReply(s) || m.partner(s) === status.author)
 		)
 	}
 
@@ -428,12 +426,11 @@ function check(sql: SqlStorage, c: Case): string[] {
 			equal(endpoint, viewer, actual, expected)
 		}
 
-		// Home: nothing home hides from the viewer.
-		for (const value of pages((page) =>
-			ok<Page<Status>>(run(homeTimeline, { ...user, page, present: PRESENT }), 'home')
-		)) {
-			status('home', viewer, value, (s) => m.homeFilter(s, viewer))
-		}
+		// Home: exactly what the home rule allows the viewer, newest first.
+		const home = pages((page) => ok<Page<Status>>(run(homeTimeline, { ...user, page, present: PRESENT }), 'home')).map(
+			(value) => status('home', viewer, value, (s) => m.home(s, viewer))
+		)
+		equal('home', viewer, home, newestFirst(all.filter((s) => m.home(s, viewer))))
 
 		// Status search over the viewer's library: only what the list rule allows.
 		const results = ok<{ statuses: Status[] }>(

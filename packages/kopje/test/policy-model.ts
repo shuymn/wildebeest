@@ -194,15 +194,54 @@ export class PolicyModel {
 		return !mentions.some((m) => !m.silent && (this.blocks(viewer, m.account) || this.mutes(viewer, m.account)))
 	}
 
+	// Whether the status is a reply, to a stored status or to one never stored.
+	isReply(s: number): boolean {
+		const { replyTo, replyToUnknown } = this.status(s)
+		return replyTo !== null || replyToUnknown
+	}
+
 	// The account a reply answers: the parent's author, except that an author continuing their own reply keeps
-	// talking to that reply's partner.
+	// talking to that reply's partner. Null when the status is not a reply or its partner is unknown (a reply to a
+	// status never stored, or one continuing such a reply).
 	partner(s: number): number | null {
 		const { author, replyTo } = this.status(s)
 		if (replyTo === null) {
 			return null
 		}
 		const parent = this.status(replyTo)
-		return parent.author === author && parent.replyTo !== null ? this.partner(replyTo) : parent.author
+		return parent.author === author && this.isReply(replyTo) ? this.partner(replyTo) : parent.author
+	}
+
+	// R9, home as a whole: the viewer's own statuses; public, unlisted and private statuses of accounts the viewer
+	// follows (accepted); direct and limited statuses of followed accounts that mention the viewer (silently or not).
+	// Of others' statuses, a boost needs the follow's show_reblogs, and a reply passes only when its partner is known
+	// and is the author, the viewer or an account the viewer follows. Then homeFilter. (The world's statuses have no
+	// language, so a follow's languages filter nothing.)
+	home(s: number, viewer: Viewer): boolean {
+		if (viewer === null) {
+			return false
+		}
+		const { author, visibility, reblogOf } = this.status(s)
+		if (author !== viewer) {
+			const follow = this.world.follows.find((f) => f.from === viewer && f.to === author && f.accepted)
+			if (
+				follow === undefined ||
+				((visibility === 'direct' || visibility === 'limited') && !this.mentioned(s, viewer))
+			) {
+				return false
+			}
+			if (reblogOf !== null && !follow.showReblogs) {
+				return false
+			}
+			const partner = this.partner(s)
+			if (
+				this.isReply(s) &&
+				(partner === null || (partner !== author && partner !== viewer && !this.follows(viewer, partner)))
+			) {
+				return false
+			}
+		}
+		return this.homeFilter(s, viewer)
 	}
 
 	// Blocks the account, or mutes it with notifications.
