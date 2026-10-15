@@ -25,6 +25,7 @@ import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import * as inbox from './domain/inbox'
 import { instanceInfo, instancePeers, instanceRules } from './domain/instance'
 import * as lists from './domain/lists'
+import * as markers from './domain/markers'
 import * as media from './domain/media'
 import * as mediaRebuild from './domain/media-rebuild'
 import * as notifications from './domain/notifications'
@@ -722,6 +723,16 @@ export class Store extends DurableObject<Env> {
 
 	deleteConversation(callerBuild: string, input: OperationInput<typeof conversations.deleteConversation>) {
 		return this.#kernel.execute(callerBuild, conversations.deleteConversation, input)
+	}
+
+	// Timeline markers (domain/markers.ts).
+
+	getMarkers(callerBuild: string, input: OperationInput<typeof markers.getMarkers>) {
+		return this.#kernel.execute(callerBuild, markers.getMarkers, input)
+	}
+
+	saveMarkers(callerBuild: string, input: OperationInput<typeof markers.saveMarkers>) {
+		return this.#kernel.execute(callerBuild, markers.saveMarkers, input)
 	}
 
 	// Statuses, timelines and notifications (B4a).

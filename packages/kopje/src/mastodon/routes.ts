@@ -7,6 +7,7 @@ import type { ApiDeps, ApiEnv, ApiHandler } from './context'
 import * as conversations from './conversations'
 import * as instance from './instance'
 import * as lists from './lists'
+import * as markers from './markers'
 import * as media from './media'
 import * as notifications from './notifications'
 import * as oauth from './oauth'
@@ -365,6 +366,9 @@ export const ROUTES: readonly Route[] = [
 		access: { scope: 'write:conversations' },
 		handler: conversations.unreadConversation,
 	},
+	// Timeline markers (mastodon/markers.ts).
+	{ method: 'GET', path: '/api/v1/markers', access: { scope: 'read:statuses' }, handler: markers.markers },
+	{ method: 'POST', path: '/api/v1/markers', access: { scope: 'write:statuses' }, handler: markers.saveMarkers },
 
 	{ method: 'POST', path: '/api/v1/media', access: { scope: 'write:media' }, handler: media.uploadMedia },
 	{ method: 'POST', path: '/api/v2/media', access: { scope: 'write:media' }, handler: media.uploadMedia },

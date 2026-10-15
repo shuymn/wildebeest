@@ -30,6 +30,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       block you); otherwise it is `null`.
     - The conversations of the direct statuses already stored are made when the instance upgrades, and the cutover
       makes them of the statuses it carries.
+- Timeline markers in the Mastodon API, as Mastodon 4.5 has them: `GET /api/v1/markers` (`timeline[]`: `home`,
+  `notifications`; other names are ignored) and `POST /api/v1/markers` (`home[last_read_id]`,
+  `notifications[last_read_id]`), each marker with its `last_read_id`, `version` and `updated_at`. Scopes are
+  `read:statuses` and `write:statuses` (or `read` and `write`). An update that changes a marker counts a version; the
+  same value changes nothing. `last_read_id` is kept as sent, up to 255 characters; a blank one answers 422 with
+  Mastodon's message. Updates are applied one at a time, so two at once both succeed instead of one answering 409.
 
 ### Changed
 
@@ -43,7 +49,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds two migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds three migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
@@ -55,6 +61,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       conversations of the direct statuses stored. It rewrites every status once (its thread) and reads each a few
       times, so its work grows linearly with the statuses stored; locally, 500,000 statuses, 50,000 of them direct in
       two long reply chains, took about 1.2 seconds.
+    - `0010_markers`: adds the `markers` table. It is quick.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.5] - 2026-10-15

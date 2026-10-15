@@ -872,7 +872,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   ("raw input bound"). _Enforced (main)_ for search terms (500 characters) and media (16 MB
   and 16,777,216 pixels, read with the body bound before parsing): `src/mastodon/search.ts`, `src/mastodon/media.ts`;
   `test/search.test.ts` ("bounds the query"), `test/media.test.ts` ("refuses a file over 16 MB"). _Enforced (main)_ for remote profiles: bios are cut at 50,000 code units before sanitizing and
-  display names at 2,048 (`src/security/html.ts`, `src/federation/remote-actor.ts`). Other query strings: _Gap._
+  display names at 2,048 (`src/security/html.ts`, `src/federation/remote-actor.ts`). _Implemented on branch `kopje/markers`:_ a timeline
+  marker's `last_read_id` stops at 255 characters, which Mastodon bounds as a bigint (`src/domain/markers.ts`;
+  `test/markers.test.ts`, "answers 422 with Mastodon's validation message"). Other query strings: _Gap._
 - **RES-2: parsing work is bounded.** Every regex, parser and normalization over input at the RES-1 cap has an
   adversarial fixture with a time bound. _Enforced (main)_ for status text:
   `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Enforced (main)_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
