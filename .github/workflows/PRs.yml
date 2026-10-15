@@ -51,9 +51,9 @@ jobs:
         # request's merge commit has main's previous commit as its first parent too.
         run: |
           if [ "$EVENT_NAME" = pull_request ]; then
-            git diff --name-only HEAD^1 HEAD | bash scripts/test-affected.sh suites | tee -a "$GITHUB_OUTPUT"
+            git diff --no-renames --name-only HEAD^1 HEAD | bash scripts/test-affected.sh suites | tee -a "$GITHUB_OUTPUT"
           elif git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
-            git diff --name-only "$BEFORE" HEAD | bash scripts/test-affected.sh suites | tee -a "$GITHUB_OUTPUT"
+            git diff --no-renames --name-only "$BEFORE" HEAD | bash scripts/test-affected.sh suites | tee -a "$GITHUB_OUTPUT"
           else
             printf 'kopje=true\nlegacy=true\n' | tee -a "$GITHUB_OUTPUT"
           fi

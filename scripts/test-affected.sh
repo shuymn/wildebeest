@@ -7,7 +7,8 @@
 # The second form takes KOPJE and LEGACY from the environment when CI has already decided, and otherwise
 # compares the working tree with its merge base on origin/main. Paths outside the package directories (the
 # lockfile, root config, migrations, workflows) affect both suites, and so does an empty list. The Kopje
-# instance template (deploy/) counts as Kopje.
+# instance template (deploy/) counts as Kopje, and a file one suite's tests import from the other's package
+# counts as both. Callers list paths with --no-renames, so a move names both its source and its destination.
 set -euo pipefail
 
 suites() {
@@ -15,6 +16,10 @@ suites() {
 	while IFS= read -r path || [ -n "$path" ]; do
 		case $path in
 			'') ;;
+			# The consumer's rollback test runs Kopje's legacy-inbox; Kopje's html test runs the backend's vectors.
+			packages/kopje/src/federation/legacy-inbox.ts | packages/backend/src/utils/html.vectors.*)
+				kopje=true legacy=true
+				;;
 			packages/kopje/* | deploy/*) kopje=true ;;
 			packages/backend/* | packages/consumer/* | packages/do/* | packages/frontend/*) legacy=true ;;
 			*) kopje=true legacy=true ;;
@@ -33,7 +38,7 @@ fi
 
 if [ -z "${KOPJE:-}" ] || [ -z "${LEGACY:-}" ]; then
 	if base=$(git merge-base origin/main HEAD 2>/dev/null); then
-		result=$(git diff --name-only "$base" | suites)
+		result=$(git diff --no-renames --name-only "$base" | suites)
 	else
 		result=$(suites < /dev/null)
 	fi
