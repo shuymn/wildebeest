@@ -16,6 +16,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - `GET /.well-known/oauth-authorization-server` (RFC 8414), as Mastodon 4.5 has it: the OAuth endpoints, including
   `userinfo_endpoint` and Mastodon's `app_registration_endpoint`, the scopes, and the supported response types and
   modes, grant types, client authentication methods and PKCE methods.
+- Filters, as Mastodon 4.5 has them: `/api/v2/filters` with keywords (`keywords_attributes`, `_destroy`) and statuses,
+  `/api/v2/filters/:id/keywords`, `/api/v2/filters/keywords/:id`, `/api/v2/filters/:id/statuses` and
+  `/api/v2/filters/statuses/:id`, and the v1 `/api/v1/filters` over the same filters. They apply to your home and list
+  timelines, notifications, the public and tag timelines, threads and account statuses, in the contexts each filter
+  names: `warn` and `blur` matches are reported in a status's `filtered`, and `hide` matches are left out of the
+  response. An account has at most 50 filters, a filter 20 keywords and 200 statuses, and a status is matched on its
+  first 10,000 characters.
 
 ### Changed
 
@@ -29,12 +36,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+- Store schema: adds two migrations, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
       author. Its work grows linearly with the mentions stored (one pass, with a lookup of each one's status); locally,
       200,000 mentions took under a second.
+    - `0011_filters`: adds the `filters`, `filter_keywords` and `filter_statuses` tables, empty. Its work does not grow
+      with the Store.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.5] - 2026-10-15

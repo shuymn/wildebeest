@@ -162,6 +162,20 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R23 delivery targets      | `recipientsFor`, by `outboundKind`, turned into inboxes by `audienceTargets` in `deliveries.ts`. See "Outbound recipients".                                                                                                                                                                                                                                                                                                        |
 | R24 list timeline         | `homeFilterSql` in `listTimeline`, with the list's active members, the follow's options and the list's `replies_policy`; the owner's lists only (`ownList` in `lists.ts`).                                                                                                                                                                                                                                                         |
 
+## Filters
+
+A viewer's filters (`src/domain/filters.ts`, Mastodon's `CustomFilter`) apply after the rules above, to what that
+viewer is shown and to nobody else's reads. They are not a visibility rule and are not in `audience.ts`: a read first
+selects what the rules let the viewer see, and the presenter then applies the viewer's active (unexpired) filters for
+the context it presents: home and lists (`home`), notifications, the public and tag feeds (`public`), a thread's
+context (`thread`) and an account's statuses (`account`). A filter matches a status by a keyword in its spoiler text,
+text or media descriptions (of the original, for a boost), with `whole_word` as Mastodon's regex reads it, or by a
+status it names (the status or, for a boost, its original). A `hide` match leaves the status, or the notification of
+it, out of the response; the page's cursors are still those of the rows it read, so the next page starts where the read
+stopped. A `warn` or `blur` match is reported in the status's `filtered` (and its original's). A filter status can be
+added only for a status the viewer may view (`canView`), and is listed by its ids alone, whatever the viewer may see
+of it later. `test/policy-filters.test.ts` checks the endpoints on generated worlds against a model of the matching.
+
 ## Outbound recipients
 
 `recipientsFor(db, signer, activity, audience)` decides whom an activity of a local account reaches (R23), and
