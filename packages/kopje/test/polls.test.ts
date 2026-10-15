@@ -365,6 +365,34 @@ describe('ending a poll', () => {
 		expect(await sql(h.store, 'SELECT ended, update_due_at FROM polls')).toEqual([{ ended: 1, update_due_at: null }])
 	})
 
+	it('notifies again when a poll that replaced an ended one ends, its own voters only', async () => {
+		const h = await community(['alice', 'bob', 'carol'])
+		const { alice, bob, carol } = h.users
+		const status = await polled(h, alice, { options: ['a', 'b'], expires_in: 600 })
+		await voteOn(h, bob, status.id, [0])
+		await round(h, NOW + 600_001)
+		expect(await pollNotifications(h, bob)).toHaveLength(1)
+		h.now.mockReturnValue(NOW + HOUR)
+		const edit = (body: Record<string, unknown>) =>
+			send(h, alice, `/api/v1/statuses/${status.id}`, { status: 'which?', ...body }, 'PUT')
+		// New choices: the old poll's notifications go with it.
+		expect((await edit({ poll: { options: ['c', 'd'], expires_in: 600 } })).status).toBe(200)
+		expect(await pollNotifications(h, alice)).toEqual([])
+		expect(await pollNotifications(h, bob)).toEqual([])
+		await voteOn(h, carol, status.id, [1])
+		await round(h, NOW + HOUR + 600_001)
+		expect(await pollNotifications(h, alice)).toEqual([{ from: alice.id, status: status.id }])
+		expect(await pollNotifications(h, carol)).toEqual([{ from: alice.id, status: status.id }])
+		expect(await pollNotifications(h, bob)).toEqual([])
+		// Removed, then added again: the same once more.
+		h.now.mockReturnValue(NOW + 2 * HOUR)
+		expect((await edit({})).status).toBe(200)
+		expect(await pollNotifications(h, alice)).toEqual([])
+		expect((await edit({ poll: { options: ['e', 'f'], expires_in: 600 } })).status).toBe(200)
+		await round(h, NOW + 2 * HOUR + 600_001)
+		expect(await pollNotifications(h, alice)).toEqual([{ from: alice.id, status: status.id }])
+	})
+
 	it('applies the notification rule: a voter who mutes the author with notifications hears nothing', async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice, bob } = h.users

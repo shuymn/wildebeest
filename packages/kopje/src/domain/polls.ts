@@ -157,6 +157,9 @@ export function writePoll(db: Db, statusId: string, poll: PollInput, now: number
 // and its counts start again; the older votes are swept in bounded batches (sweepStaleVotes, deleteStatusWithin). With
 // `removed`, the poll is also no poll any more for every read until an edit adds one again.
 function resetPoll(db: Db, statusId: string, removed: boolean): void {
+	// The 'poll' notifications of the poll it replaces go with it (Mastodon destroys a poll's notifications with the
+	// poll), so the next poll's end notifies again; at most one per local account.
+	db.run("DELETE FROM notifications WHERE status_id = ? AND type = 'poll'", statusId)
 	db.run(
 		`UPDATE polls SET generation = generation + 1, stale = 1, removed = ?2, votes_count = 0,
 			voters_count = CASE WHEN voters_count IS NULL THEN NULL ELSE 0 END,
