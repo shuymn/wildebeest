@@ -426,10 +426,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   belongs to a local account; to anyone else it is not found, read, marked or deleted (Mastodon's
   `AccountConversation.where(account: current_account)`). It is written when a direct status is stored, for its local
   author and for each local account the notification rule lets it notify of the mention (VIS-10, VIS-13, VIS-14), and a
-  status leaves it with its row however the status is deleted (a trigger, so no deletion path can forget it). Its last
+  status leaves it with its row however the status is deleted (a trigger, so no deletion path can forget it). It is
+  keyed by the thread each status is stored with (`statuses.thread`), which no delete changes. Its last
   status is shown only while the read rule (VIS-1) lets the owner see it, else as null; a block ends the blocker's
   conversations with the blocked account. _Implemented on branch `kopje/conversations`:_ `src/domain/conversations.ts`,
-  `src/domain/conversation-rows.ts`, migration `0009_conversations` (trigger `conversation_statuses_removed`);
+  `src/domain/conversation-rows.ts`, migration `0009_conversations` (triggers `statuses_thread` and
+  `conversation_statuses_removed`);
   `test/conversations.test.ts`, `test/migrations.test.ts`, `test/policy-endpoints.test.ts`,
   `test/policy-bounds.test.ts`, `test/policy-writes.test.ts`.
 

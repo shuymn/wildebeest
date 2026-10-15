@@ -102,10 +102,13 @@ notified of as a mention joins that account's (`NotifyService#push_to_conversati
 the notification rule (R15) decides who receives one: a status from an account the owner blocks or mutes with
 notifications adds nothing, and a limited status (a silent recipient) is not a direct message. A conversation is keyed
 by its owner, its thread and its participants (`src/domain/conversation-rows.ts`): the participants are the status's
-author and its mentions (not silent) less the owner; the thread stands for Mastodon's `conversation_id`, which Kopje
-does not store: the uri of the status a reply chain starts at (or the `in_reply_to_uri` that one names, for a parent
-never stored or deleted), where a status already in a conversation keeps the thread it was given and a reply takes the
-thread of the nearest status above it in one, so deleting a status does not split its thread. A status leaves its
+author and its mentions (not silent) less the owner; the thread is `statuses.thread`, Mastodon's `conversation_id`,
+written once when a status (not a boost) is stored and never changed (the trigger `statuses_thread`): a reply to a
+status stored takes that status's thread, a reply to a status not stored the uri it names (`in_reply_to_uri`), any
+other status its own uri. Deleting a status or a conversation changes no other status's thread, so a later reply joins
+the thread its parent was stored in. Migration `0009_conversations` gives the statuses already stored theirs by the
+same rule, from the start of each reply chain down (a status in a cycle of replies, or below one, takes its own
+`in_reply_to_uri`, else its uri). A status leaves its
 conversations however it is deleted (a delete, an inbound `Delete`, a purge): its `conversation_statuses` rows cascade,
 and the trigger `conversation_statuses_removed` of migration `0009_conversations` moves the last status back to the
 newest left, or deletes the conversation when none is left (`AccountConversation.remove_status`). A block ends the

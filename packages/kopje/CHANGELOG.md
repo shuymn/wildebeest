@@ -48,10 +48,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
       author. Its work grows linearly with the mentions stored (one pass, with a lookup of each one's status); locally,
       200,000 mentions took under a second.
-    - `0009_conversations`: the `conversations` and `conversation_statuses` tables, the trigger that takes a deleted
-      status out of its conversations, and the conversations of the direct statuses stored. Its work grows linearly with
-      the statuses stored (one pass) and the direct statuses and the statuses they reply to (a few reads each); locally,
-      500,000 statuses with 50,000 direct ones in long threads took under a second.
+    - `0009_conversations`: adds `statuses.thread` (the thread a status belongs to, given to each status stored, from
+      the start of each reply chain down, and to each new one by a trigger), the `conversations` and
+      `conversation_statuses` tables, the trigger that takes a deleted status out of its conversations, and the
+      conversations of the direct statuses stored. It rewrites every status once (its thread) and reads each a few
+      times, so its work grows linearly with the statuses stored; locally, 500,000 statuses, 50,000 of them direct in
+      two long reply chains, took about 1.2 seconds.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.5] - 2026-10-15
