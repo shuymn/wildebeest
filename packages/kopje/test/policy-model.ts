@@ -94,6 +94,31 @@ export class PolicyModel {
 		return this.available(x) && !this.filteredFor(x, viewer) && !this.blocks(x, viewer)
 	}
 
+	// R13: the owner's followers and following are shown to the viewer: the owner is available and, unless the viewer is
+	// the owner, neither hides its network nor blocks the viewer.
+	followListsShown(owner: number, viewer: Viewer): boolean {
+		const account = this.account(owner)
+		return (
+			this.available(owner) &&
+			(owner === viewer || (!(account.local && account.hidesCollections) && !this.blocks(owner, viewer)))
+		)
+	}
+
+	// R13: x is listed among the owner's followers or following to the viewer: an anonymous viewer and the owner see
+	// every entry; anyone else does not see an account they block or mute, or one that blocks them.
+	followListed(x: number, owner: number, viewer: Viewer): boolean {
+		return (
+			viewer === null ||
+			viewer === owner ||
+			!(this.blocks(viewer, x) || this.blocks(x, viewer) || this.mutes(viewer, x))
+		)
+	}
+
+	// R14: the viewer finds x by account search or search resolution: available, and not on a domain the viewer blocks.
+	findableBy(x: number, viewer: Viewer): boolean {
+		return this.available(x) && !this.domainBlocks(viewer, x)
+	}
+
 	// R17: the author may mention x: available, and the author blocks neither it nor its domain.
 	mentionableBy(x: number, author: number): boolean {
 		return this.available(x) && !this.blocked(author, x)

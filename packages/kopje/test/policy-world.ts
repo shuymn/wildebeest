@@ -4,7 +4,8 @@ import { inject } from 'vitest'
 import type { Visibility } from '../src/domain/audience'
 
 // A generated world for the policy oracle (test/policy-oracle.test.ts) and the bounds harness
-// (test/policy-bounds.test.ts): local accounts (one of them may be suspended), remote accounts on two domains, statuses
+// (test/policy-bounds.test.ts): local accounts (one of them may be suspended, some may hide their network), remote
+// accounts on two domains, statuses
 // of every visibility with mentions (some silent), boosts and replies, and the edges the rules read: follows (pending
 // and accepted), blocks both ways, mutes with and without an expiry and with and without notifications, and domain
 // blocks in their stored form. Accounts and statuses are referred to by index; writeWorld gives them fixed ids.
@@ -44,6 +45,8 @@ type WorldAccount = {
 	name: string
 	local: boolean
 	suspended: boolean
+	// Local accounts only: hide_collections.
+	hidesCollections: boolean
 	// Remote accounts only: the stored domain. The actor id's host may differ from it (see HOSTS).
 	domain: string | null
 	uri: string
@@ -131,6 +134,7 @@ export const worldArb: fc.Arbitrary<World> = fc
 	.record({
 		remotes: fc.array(remoteArb, { minLength: 2, maxLength: 3 }),
 		suspended: fc.option(fc.integer({ min: 0, max: LOCALS - 1 }), { freq: 4 }),
+		hidden: fc.array(fc.constantFrom(false, false, true), { minLength: LOCALS, maxLength: LOCALS }),
 		statuses: fc.array(statusArb, { maxLength: 22, size: 'max' }),
 		follows: fc.array(
 			fc.record({
@@ -165,6 +169,7 @@ export const worldArb: fc.Arbitrary<World> = fc
 				name: `L${i}`,
 				local: true,
 				suspended: raw.suspended === i,
+				hidesCollections: raw.hidden[i] ?? false,
 				domain: null,
 				uri: `https://${INSTANCE_DOMAIN}/ap/users/l${i}`,
 			})
@@ -174,6 +179,7 @@ export const worldArb: fc.Arbitrary<World> = fc
 				name: `R${i}`,
 				local: false,
 				suspended: false,
+				hidesCollections: false,
 				domain: remote.domain,
 				uri: `https://${actorHost(remote.host, remote.domain)}/users/r${i}`,
 			})
@@ -264,20 +270,23 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 	}
 	world.accounts.forEach((account, i) => {
 		const username = account.name.toLowerCase()
+		// Every account's search text holds "account", so an account search for it reads them all.
 		sql.exec(
-			'INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, ?)',
+			'INSERT INTO accounts (id, uri, username, domain, search_text) VALUES (?, ?, ?, ?, ?)',
 			accountId(i),
 			account.uri,
 			username,
-			account.domain
+			account.domain,
+			`account ${account.domain === null ? username : `${username}@${account.domain}`}`
 		)
 		if (account.local) {
 			sql.exec(
-				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey, suspended_at)
-				VALUES (?, ?, X'00', X'00', 'test', ?)`,
+				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey, suspended_at, hide_collections)
+				VALUES (?, ?, X'00', X'00', 'test', ?, ?)`,
 				accountId(i),
 				`${username}@example.com`,
-				account.suspended ? '2026-01-01T00:00:00.000Z' : null
+				account.suspended ? '2026-01-01T00:00:00.000Z' : null,
+				account.hidesCollections ? 1 : 0
 			)
 		}
 	})

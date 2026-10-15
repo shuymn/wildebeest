@@ -8,7 +8,7 @@ import { migratedStore } from './helpers'
 import { PolicyModel } from './policy-model'
 import { accountId, REMOTE_DOMAINS, statusId, type World, worldArb, writeWorld } from './policy-world'
 import { rowsRead } from './read-helpers'
-import { relationships } from '../src/domain/accounts'
+import { listFollows, relationships } from '../src/domain/accounts'
 import type { Visibility } from '../src/domain/audience'
 import { listNotifications } from '../src/domain/notifications'
 import { search } from '../src/domain/search'
@@ -33,9 +33,17 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 
 // The world, the same in every run: the first of fast-check's samples for a fixed seed in which every endpoint has
 // something to show the viewer (the first available local account). The viewer then follows everyone, favourites and
-// bookmarks every status, and has a notification from every account.
+// bookmarks every status, and has a notification from every account; LISTED follows the viewer.
 function viewerOf(world: World): number {
 	return world.accounts.findIndex((account) => account.local && !account.suspended)
+}
+
+// The account whose followers and following the lists read: another account whose lists the viewer is shown. The
+// viewer follows it (as everyone) and it follows the viewer, so each list shows the viewer something.
+function listedOf(world: World): number {
+	const model = new PolicyModel(world)
+	const viewer = viewerOf(world)
+	return world.accounts.findIndex((_, owner) => owner !== viewer && model.followListsShown(owner, viewer))
 }
 
 // The status the status endpoints read: a listable original with a listable reply and a listable public boost.
@@ -62,6 +70,7 @@ function rich(world: World): boolean {
 		world.statuses.length >= 18 &&
 		viewer >= 0 &&
 		targetOf(world) >= 0 &&
+		listedOf(world) >= 0 &&
 		publicListable.some((status) => status.replyTo === null) &&
 		publicListable.some((status) => status.tagged)
 	)
@@ -70,6 +79,7 @@ function rich(world: World): boolean {
 const WORLD = fc.sample(worldArb, { numRuns: 1000, seed: 20261015 }).find(rich) as World
 const VIEWER = viewerOf(WORLD)
 const TARGET = targetOf(WORLD)
+const LISTED = listedOf(WORLD)
 // The account the account statuses endpoint reads: the author of the most statuses.
 const AUTHOR = WORLD.accounts.map((_, x) => x).sort((a, b) => authored(b) - authored(a))[0] as number
 
@@ -81,9 +91,10 @@ const TOKEN_HASH = 'policy-bounds-token'
 const PRESENT = { origin: 'https://kopje.test' }
 const PAGE = { limit: 20 }
 
-// Unrelated rows: per unrelated remote account, three statuses (a reply and a boost among them) and its edges; one
-// unrelated local account per ten remote ones, with mutes, domain blocks, favourites, bookmarks and notifications. The
-// viewer's own blocks and mutes of unrelated accounts and domain blocks of domains nobody lives on grow with them.
+// Unrelated rows: per unrelated remote account, three statuses (a reply and a boost among them) and its edges (a
+// follow of a world account other than LISTED, whose followers are listed); one unrelated local account per ten remote
+// ones, with mutes, domain blocks, favourites, bookmarks and notifications. The viewer's own blocks and mutes of
+// unrelated accounts and domain blocks of domains nobody lives on grow with them.
 const UNRELATED_ACCOUNT_BASE = 300000000000000000n
 const UNRELATED_STATUS_BASE = 400000000000000000n
 const HIDDEN: readonly Visibility[] = ['unlisted', 'private', 'direct', 'limited']
@@ -114,6 +125,12 @@ function writeViewer(sql: SqlStorage): void {
 			accountId(x)
 		)
 	})
+	sql.exec(
+		`INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')
+		ON CONFLICT (account_id, target_account_id) DO UPDATE SET state = 'accepted'`,
+		accountId(LISTED),
+		viewer
+	)
 	WORLD.statuses.forEach((status, s) => {
 		sql.exec('INSERT INTO favourites (account_id, status_id) VALUES (?, ?)', viewer, statusId(s))
 		sql.exec('INSERT INTO bookmarks (account_id, status_id) VALUES (?, ?)', viewer, statusId(s))
@@ -195,7 +212,8 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 		const mentioned = (VIEWER + 1 + (i % (worldAccounts - 1))) % worldAccounts
 		sql.exec('INSERT INTO status_mentions (status_id, account_id) VALUES (?, ?)', first, accountId(mentioned))
 		const world = accountId(i % worldAccounts)
-		sql.exec("INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')", author, world)
+		const followed = i % worldAccounts === LISTED ? accountId((LISTED + 1) % worldAccounts) : world
+		sql.exec("INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')", author, followed)
 		sql.exec(
 			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
 			author,
@@ -274,6 +292,19 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown][] = [
 	['favourited_by', interactors, { ...target, kind: 'favourited_by', page: PAGE }],
 	['reblogged_by', interactors, { ...target, kind: 'reblogged_by', page: PAGE }],
 	['relationships', relationships, { credential, ids: WORLD.accounts.map((_, x) => accountId(x)) }],
+	[
+		'followers',
+		listFollows,
+		{ credential, now: NOW, account: accountId(LISTED), direction: 'followers', page: PAGE, present: PRESENT },
+	],
+	[
+		'following',
+		listFollows,
+		{ credential, now: NOW, account: accountId(LISTED), direction: 'following', page: PAGE, present: PRESENT },
+	],
+	// Among the viewer's follows: a search of every account reads the newest accounts the instance knows, a window
+	// that grows with them up to its limit (ACCOUNT_RECENT_LIMIT).
+	['account search', search, { ...searchInput, query: 'account', types: ['accounts'], following: true }],
 	['status search', search, { ...searchInput, query: 'status', types: ['statuses'] }],
 	['hashtag search', search, { ...searchInput, query: 'cats', types: ['hashtags'] }],
 ]
