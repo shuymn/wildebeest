@@ -207,6 +207,28 @@ export const unblock = userWriteOperation<RelationInput, RelationshipResult>((db
 	return relationshipResult(db, viewer.id, target.id, input.now)
 })
 
+// POST /api/v1/accounts/:id/remove_from_followers (RemoveFromFollowersService): the account's accepted follow of the
+// viewer ends as a block ends it (endFollow): a remote follower is sent the Reject that withdraws it, a local one's
+// follow simply ends. A pending request is left alone (the service reads passive_relationships, accepted follows only),
+// and so is everything else for any other stored account, the viewer included.
+export const removeFromFollowers = userWriteOperation<RelationInput, RelationshipResult>((db, input, { accountId }) => {
+	const resolved = resolveAccountId(db, input.target)
+	const follower = resolved === null ? undefined : party(db, resolved)
+	const viewer = party(db, accountId)
+	if (follower === undefined || viewer === undefined) {
+		return { status: 'not_found' }
+	}
+	const accepted = db.first(
+		"SELECT 1 AS x FROM follows WHERE account_id = ? AND target_account_id = ? AND state = 'accepted'",
+		follower.id,
+		viewer.id
+	)
+	if (accepted !== undefined) {
+		endFollow(db, follower, viewer, input.now)
+	}
+	return relationshipResult(db, viewer.id, follower.id, input.now)
+})
+
 // Account#mute!: a new mute, or new options for an existing one (an expired one included). expiresAt is null for an
 // indefinite mute.
 export const mute = userWriteOperation<

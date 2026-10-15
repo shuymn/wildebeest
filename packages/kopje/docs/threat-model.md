@@ -454,6 +454,21 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `kopje/filters`:_ `src/domain/filters.ts`, `src/domain/status-presenter.ts`, migration `0012_filters`;
   `test/filters.test.ts` (API, ownership, matching, the worst case at the caps), `test/policy-filters.test.ts`
   (generated worlds), `test/policy-bounds.test.ts` (rows read up to the caps).
+- **VIS-19: a private note is its author's alone, and an endorsement lasts only as long as the follow.** A note
+  (`AccountNote`) on an account is shown only to the local account that wrote it, as the `note` of its Relationship
+  with that account; no other read path reads the notes (`test/policy.test.ts`), and they are never federated. An
+  endorsement (`AccountPin`) needs the endorser's accepted follow of the account, and goes when that follow ends,
+  whatever ends it (an unfollow, a block either way, a removal from followers, a domain block's cleanup, a `Reject`, a
+  `Move`, a purge): a trigger deletes it with the follow, so no path can forget it, and a later follow does not bring
+  it back. Endorsements are public, as Mastodon 4.5's: an account's list is shown to anyone while the account is
+  available, leaving out unavailable endorsed accounts (R28). They are not federated (Mastodon 4.5's actor has no
+  endorsements collection). A remote account's purge deletes the endorsements of it and the notes on it within its
+  batches (RES-6). _Implemented on branch `kopje/account-relations`:_ `src/domain/endorsements.ts`, `setNote` and
+  `relationshipsOf` in `src/domain/accounts.ts`, `removeFromFollowers` in `src/domain/blocks.ts`, `purgeRelationships`
+  in `src/domain/inbox.ts`, migration `0014_account_notes_and_pins` (trigger `account_pins_follow_ended`);
+  `test/account-relations.test.ts`, `test/inbox.test.ts` ("endorsements and inbound activities"),
+  `test/inbox-regressions.test.ts`, `test/migrations.test.ts`, `test/policy-oracle.test.ts`,
+  `test/policy-bounds.test.ts`, `test/policy-writes.test.ts`.
 
 ### Authorization (AUTH)
 

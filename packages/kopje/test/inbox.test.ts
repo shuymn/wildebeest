@@ -1163,3 +1163,87 @@ describe('list members and inbound activities', () => {
 		)
 	})
 })
+
+// An endorsement goes with our follow, whatever inbound activity ends it (migration 0014_account_notes_and_pins).
+describe('endorsements and inbound activities', () => {
+	const pins = (t: Setup) =>
+		sql<{ account_id: string; target_account_id: string }>(
+			t.store,
+			'SELECT account_id, target_account_id FROM account_pins ORDER BY account_id, target_account_id'
+		)
+
+	async function endorsed(t: Setup, follower: string, ...targets: string[]): Promise<void> {
+		for (const target of targets) {
+			await sql(
+				t.store,
+				`INSERT INTO follows (account_id, target_account_id, state) VALUES (?1, ?2, 'accepted')
+				ON CONFLICT (account_id, target_account_id) DO UPDATE SET state = 'accepted'`,
+				follower,
+				target
+			)
+			await sql(t.store, 'INSERT INTO account_pins (account_id, target_account_id) VALUES (?, ?)', follower, target)
+		}
+	}
+
+	it('go on a Reject and on a Block of the endorsed account; another follower keeps theirs', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const carol = await mastodonActor(t.web, 'carol')
+		const bobId = await ourFollow(t, bob)
+		const carolId = await ourFollow(t, carol)
+		await endorsed(t, ALICE, bobId, carolId)
+		await endorsed(t, DAVE, bobId, carolId)
+		const reject = {
+			'@context': AS,
+			id: `${bob.uri}#rejects/follows/1`,
+			type: 'Reject',
+			actor: bob.uri,
+			object: { type: 'Follow', actor: ALICE_URI, object: bob.uri },
+		}
+		expect(await t.post(bob, reject)).toBe(202)
+		const block = { '@context': AS, id: `${carol.uri}#blocks/1`, type: 'Block', actor: carol.uri, object: ALICE_URI }
+		expect(await t.post(carol, block)).toBe(202)
+		expect(await pins(t)).toEqual(
+			[bobId, carolId].toSorted().map((target) => ({ account_id: DAVE, target_account_id: target }))
+		)
+	})
+
+	it('go when the endorsed account moves, and are not carried to its target', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bob2 = await mastodonActor(t.web, 'bob2', { origin: 'https://new.example', key: 2, extra: {} })
+		t.web.serve(bob2.uri, { ...bob2.document, alsoKnownAs: [bob.uri] })
+		const bobId = await ourFollow(t, bob)
+		await endorsed(t, ALICE, bobId)
+		const move = {
+			'@context': AS,
+			id: `${bob.uri}#moves/1`,
+			type: 'Move',
+			actor: bob.uri,
+			object: bob.uri,
+			target: bob2.uri,
+		}
+		expect(await t.post(bob, move)).toBe(202)
+		expect((await follows(t.store)).filter((f) => f.account_id === ALICE).map((f) => f.state)).toEqual(['pending'])
+		expect(await pins(t)).toEqual([])
+	})
+
+	it('go, with the notes on it, when the endorsed account is deleted', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bobId = await ourFollow(t, bob)
+		await endorsed(t, ALICE, bobId)
+		await sql(
+			t.store,
+			"INSERT INTO account_notes (account_id, target_account_id, comment) VALUES (?, ?, 'bob')",
+			DAVE,
+			bobId
+		)
+		t.web.fail(bob.uri, 410)
+		const deletion = { '@context': AS, id: `${bob.uri}#delete`, type: 'Delete', actor: bob.uri, object: bob.uri }
+		expect(await t.post(bob, deletion)).toBe(202)
+		expect(await pins(t)).toEqual([])
+		expect(await sql(t.store, 'SELECT * FROM account_notes')).toEqual([])
+		expect(await accountId(t.store, bob.uri)).toBeUndefined()
+	})
+})

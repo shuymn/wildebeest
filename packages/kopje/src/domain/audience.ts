@@ -213,6 +213,17 @@ export function followListedSql(x: string, owner: string, viewer: string, now: s
 		OR NOT (${blocksSql(viewer, x)} OR ${blocksSql(x, viewer)} OR ${mutesSql(viewer, x, now)}))`
 }
 
+// R28 (Accounts::EndorsementsController#set_endorsed_accounts): whether the accounts `owner` endorses are listed. They
+// are public: to anyone, the owner itself included, while the owner is available (an unavailable one lists none).
+export function endorsementsShownSql(owner: string): string {
+	return availableSql(owner)
+}
+
+// R28 (`endorsed_accounts.without_suspended`): whether the endorsed account `x` is listed: while it is available.
+export function endorsementListedSql(x: string): string {
+	return availableSql(x)
+}
+
 // ---- Statuses. `s` is the alias of a statuses row.
 
 // Whether `viewer` is a remote account (accounts.domain is set). It does not depend on a status, so SQLite evaluates
