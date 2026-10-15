@@ -269,6 +269,29 @@ describe('conversation mutes', () => {
 		expect((await types())[0]).toEqual(['favourite', root.id])
 	})
 
+	it('keeps the edit notification written before the mute when a later edit is not notified', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const status = await post(h, alice, { status: 'v1' })
+		await act(h, bob, `/api/v1/statuses/${status.id}/reblog`)
+		const edit = (text: string) =>
+			h.request(`/api/v1/statuses/${status.id}`, bearer(alice.token, json({ status: text }, { method: 'PUT' })))
+		const updates = async () =>
+			(await getJson<Notification[]>(h, '/api/v1/notifications?types[]=update', bob.token)).body.map((n) => n.id)
+		expect((await edit('v2')).status).toBe(200)
+		const before = await updates()
+		expect(before).toHaveLength(1)
+		await act(h, bob, `/api/v1/statuses/${status.id}/mute`)
+		expect((await edit('v3')).status).toBe(200)
+		expect(await updates()).toEqual(before)
+		// Unmuted, the next edit replaces it.
+		await act(h, bob, `/api/v1/statuses/${status.id}/unmute`)
+		await edit('v4')
+		const after = await updates()
+		expect(after).toHaveLength(1)
+		expect(after).not.toEqual(before)
+	})
+
 	it("mutes a boost's own conversation, as Mastodon gives a boost one", async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice, bob } = h.users

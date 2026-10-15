@@ -36,9 +36,21 @@ export type NotifyInput = {
 
 // Writes a notification if the rule lets it through (notifiedSql: R15, and not in a conversation the recipient mutes,
 // R31). The natural key makes a repeat a no-op, except for `update`:
-// every edit notifies again, so the previous one is replaced (and gets a newer id).
+// every edit notifies again, so the previous one is replaced (and gets a newer id). The replacement is judged first:
+// an edit the rule refuses (its conversation muted since) leaves the previous one as it is, as a mute keeps the
+// notifications written before it.
 export function notify(db: Db, input: NotifyInput): void {
 	if (input.type === 'update') {
+		const eligible = db.first(
+			`SELECT 1 AS ok WHERE ${notifiedSql('?1', "'update'", '?2', '?3', '?4')}`,
+			input.recipientId,
+			input.fromId,
+			input.statusId,
+			new Date(input.now).toISOString()
+		)
+		if (eligible === undefined) {
+			return
+		}
 		db.run(
 			`DELETE FROM notifications WHERE account_id = ? AND type = 'update' AND from_account_id = ? AND status_id = ?`,
 			input.recipientId,
