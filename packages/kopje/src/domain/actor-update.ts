@@ -19,8 +19,9 @@ const CONTEXT = [
 	{
 		manuallyApprovesFollowers: 'as:manuallyApprovesFollowers',
 		toot: 'http://joinmastodon.org/ns#',
-		discoverable: 'toot:discoverable',
 		featured: { '@id': 'toot:featured', '@type': '@id' },
+		featuredTags: { '@id': 'toot:featuredTags', '@type': '@id' },
+		discoverable: 'toot:discoverable',
 		schema: 'http://schema.org#',
 		PropertyValue: 'schema:PropertyValue',
 		value: 'schema:value',
@@ -74,6 +75,7 @@ export function actorDocument(db: Db, accountId: string): Record<string, unknown
 		followers: followersUri(row.uri),
 		following: `${row.uri}/following`,
 		featured: featuredUri(row.uri),
+		featuredTags: `${row.uri}/collections/tags`,
 		endpoints: { sharedInbox: `${origin}/inbox` },
 		publicKey: { id: `${row.uri}#main-key`, owner: row.uri, publicKeyPem: row.pubkey },
 		manuallyApprovesFollowers: row.locked === 1,
@@ -115,6 +117,8 @@ export function recordActorUpdate(db: Db, accountId: string, before: string | nu
 		},
 		now
 	)
+	// The document carries the featured collections, so the Add or Remove of a featured hashtag needs no Update first.
+	db.run('UPDATE local_accounts SET featured_announced = 1 WHERE account_id = ? AND featured_announced = 0', accountId)
 	return true
 }
 

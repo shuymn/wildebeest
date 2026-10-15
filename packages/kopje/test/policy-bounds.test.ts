@@ -9,12 +9,13 @@ import { PolicyModel } from './policy-model'
 import { accountId, REMOTE_DOMAINS, statusId, type World, worldArb, writeWorld } from './policy-world'
 import { rowsRead } from './read-helpers'
 import { Db } from '../src/db/sql'
-import { getAccounts, listFollows, relationships, userinfo } from '../src/domain/accounts'
+import { getAccounts, listFollows, type PageQuery, relationships, userinfo } from '../src/domain/accounts'
 import { getFeatured, getLocalNote, getOutbox } from '../src/domain/activities'
 import { canView, visibleSql, type Visibility } from '../src/domain/audience'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { listConversations } from '../src/domain/conversations'
 import { accountEndorsements, listEndorsements } from '../src/domain/endorsements'
+import { accountFeaturedTags, listFeaturedTags } from '../src/domain/featured-tags'
 import {
 	getFilter,
 	listFilterKeywords,
@@ -24,7 +25,18 @@ import {
 	MAX_FILTER_KEYWORDS,
 	MAX_FILTERS,
 } from '../src/domain/filters'
+import { inboxOwnerExists } from '../src/domain/inbox'
+import { listAccounts } from '../src/domain/lists'
 import { getMarkers, MARKER_TIMELINES } from '../src/domain/markers'
+import {
+	getNotificationGroup,
+	GROUP_COUNT,
+	GROUP_WALK,
+	listGroupedNotifications,
+	notificationGroupAccounts,
+	unreadCount,
+	unreadGroupCount,
+} from '../src/domain/notification-groups'
 import { listNotifications } from '../src/domain/notifications'
 import { getPoll, vote } from '../src/domain/polls'
 import { dueScheduled, listScheduled, publishScheduled } from '../src/domain/scheduled-statuses'
@@ -37,6 +49,7 @@ import {
 	MAX_STATUSES_BY_ID,
 	statusContext,
 } from '../src/domain/statuses'
+import { featuredTagSuggestions, followedTags, MAX_FOLLOWED_TAGS } from '../src/domain/tags'
 import {
 	accountStatuses,
 	bookmarks,
@@ -126,6 +139,8 @@ const VIEWER_FILTER = '720000000000000001'
 const TOKEN_HASH = 'policy-bounds-token'
 const PRESENT = { origin: 'https://kopje.test' }
 const PAGE = { limit: 20 }
+// The group of the viewer's follow notifications (and of the unrelated local accounts' own).
+const FOLLOW_GROUP = 'follow-1'
 
 // Unrelated rows: per unrelated remote account, three statuses (a reply and a boost among them) and its edges (a
 // follow of a world account other than LISTED, whose followers are listed); one unrelated local account per ten remote
@@ -158,9 +173,10 @@ function writeViewer(sql: SqlStorage): void {
 			accountId(x)
 		)
 		sql.exec(
-			"INSERT INTO notifications (account_id, type, from_account_id) VALUES (?, 'follow', ?)",
+			"INSERT INTO notifications (account_id, type, from_account_id, group_key) VALUES (?, 'follow', ?, ?)",
 			viewer,
-			accountId(x)
+			accountId(x),
+			FOLLOW_GROUP
 		)
 	})
 	sql.exec(
@@ -216,6 +232,13 @@ function writeViewer(sql: SqlStorage): void {
 	WORLD.accounts.forEach((_, x) => {
 		sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', VIEWER_LIST, accountId(x))
 	})
+	writeTagFollows(sql, viewer)
+	writeFeaturedTags(sql, viewer)
+	// A hashtag on the viewer's own statuses that they do not feature, which featured tag suggestions show.
+	sql.exec(
+		"INSERT INTO status_tags (status_id, name, public) SELECT id, 'birds', visibility = 'public' FROM statuses WHERE account_id = ?",
+		viewer
+	)
 	writeMarkers(sql, viewer)
 	writeScheduled(sql, viewer, VIEWER_SCHEDULED_BASE, 25)
 	writePolls(sql, viewer)
@@ -233,13 +256,32 @@ function writeViewer(sql: SqlStorage): void {
 	})
 }
 
+// The account follows the world's hashtag and another one.
+function writeTagFollows(sql: SqlStorage, account: string): void {
+	sql.exec("INSERT INTO tag_follows (account_id, name) VALUES (?1, 'cats'), (?1, 'dogs')", account)
+}
+
+// The account features the world's hashtag and another one (the counts as they would be kept).
+function writeFeaturedTags(sql: SqlStorage, account: string): void {
+	sql.exec(
+		`INSERT INTO featured_tags (id, account_id, name, display_name, statuses_count, last_status_at)
+		VALUES (?2, ?1, 'cats', 'Cats', 3, '2026-10-01T00:00:00.000Z'), (?3, ?1, 'dogs', 'dogs', 0, NULL)`,
+		account,
+		String(FEATURED_BASE + (BigInt(account) % 1_000_000n)),
+		String(FEATURED_BASE + 1_000_000n + (BigInt(account) % 1_000_000n))
+	)
+}
+
+const FEATURED_BASE = 740000000000000000n
+
+// The notifications marker reads from the first notification on, so the unread counts have something to count.
 function writeMarkers(sql: SqlStorage, account: string): void {
 	for (const timeline of MARKER_TIMELINES) {
 		sql.exec(
 			"INSERT INTO markers (account_id, timeline, last_read_id, version, updated_at) VALUES (?, ?, ?, 1, '2026-01-01T00:00:00.000Z')",
 			account,
 			timeline,
-			account
+			timeline === 'notifications' ? '1' : account
 		)
 	}
 }
@@ -296,6 +338,8 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 				`u${i}@example.com`
 			)
 			writeMarkers(sql, account(i))
+			writeTagFollows(sql, account(i))
+			writeFeaturedTags(sql, account(i))
 		}
 	}
 	for (let i = 0; i < remote; i++) {
@@ -444,6 +488,14 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 				accountId(k % worldAccounts),
 				target
 			)
+			// Its follows from world accounts, in a group with the key of the viewer's.
+			sql.exec(
+				`INSERT INTO notifications (account_id, type, from_account_id, group_key) VALUES (?, 'follow', ?, ?)
+				ON CONFLICT DO NOTHING`,
+				owner,
+				accountId(k % worldAccounts),
+				FOLLOW_GROUP
+			)
 		}
 	}
 }
@@ -550,6 +602,8 @@ const credential = { tokenHash: TOKEN_HASH, scope: 'read', now: NOW } as const
 const target = { credential, now: NOW, id: statusId(TARGET), present: PRESENT }
 const searchInput = { credential, limit: 20, offset: 0, following: false, localDomain: 'kopje.test', present: PRESENT }
 const timeline = { credential, now: NOW, page: PAGE, local: false, remote: false, onlyMedia: false, present: PRESENT }
+const notificationsQuery = { credential, page: PAGE, types: [], excludeTypes: [] }
+const unread = { credential, limit: 100, types: [], excludeTypes: [] }
 
 // What an endpoint that pages a viewer's history pages by: statuses (by status id: conversations by their last status's), the viewer's notifications,
 // favourites or bookmarks (by their ids), or a status's interactors (accounts, which are not replicated).
@@ -584,6 +638,20 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 		{ credential, page: PAGE, types: [], excludeTypes: [], accountId: null, present: PRESENT },
 		'notifications',
 	],
+	[
+		'grouped notifications',
+		listGroupedNotifications,
+		{ ...notificationsQuery, groupedTypes: null, expandAccounts: 'full', present: PRESENT },
+		'notifications',
+	],
+	['notification group', getNotificationGroup, { credential, groupKey: FOLLOW_GROUP, present: PRESENT }],
+	[
+		'notification group accounts',
+		notificationGroupAccounts,
+		{ credential, groupKey: FOLLOW_GROUP, page: PAGE, present: PRESENT },
+	],
+	['unread count', unreadCount, { ...unread, accountId: null, groupedTypes: null }],
+	['unread group count', unreadGroupCount, { ...unread, accountId: null, groupedTypes: null }],
 	['context', statusContext, target],
 	['conversations', listConversations, { credential, page: PAGE, present: PRESENT }, 'statuses'],
 	['favourites', favourites, { credential, page: PAGE, present: PRESENT }, 'favourites'],
@@ -615,6 +683,10 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 	['markers', getMarkers, { credential, timelines: [...MARKER_TIMELINES] }],
 	['scheduled statuses', listScheduled, { credential, page: PAGE }],
 	['poll', getPoll, { credential, id: statusId(TARGET), now: NOW }],
+	['followed tags', followedTags, { credential, page: PAGE, present: PRESENT }],
+	['featured tags', listFeaturedTags, { credential, present: PRESENT }],
+	['account featured tags', accountFeaturedTags, { id: accountId(VIEWER), present: PRESENT }],
+	['featured tag suggestions', featuredTagSuggestions, { credential, present: PRESENT }],
 	['endorsements', listEndorsements, { credential, page: PAGE, present: PRESENT }],
 	[
 		'account endorsements',
@@ -656,6 +728,17 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 const ALLOWANCE = 10
 const UNRELATED = 1000
 
+// Endpoints allowed more than ALLOWANCE in the unrelated-rows case, each with why. The extra rows are constant: the same
+// with ten times the unrelated rows.
+const UNRELATED_EXTRA: Record<string, { rows: number; why: string }> = {
+	home: {
+		rows: 1,
+		why:
+			"each followed hashtag's window judges its statuses again through homeFilterSql, and its probe of the viewer's " +
+			'blocks and mutes reads the next index entry, which unrelated accounts provide',
+	},
+}
+
 // What an endpoint showed: the items of a page, the members of a context, the results of a search, the entries of a
 // list, the timelines of markers, or the account userinfo claims, through the operation's ok result.
 function shown(output: unknown): number {
@@ -668,6 +751,12 @@ function shown(output: unknown): number {
 	}
 	if (Array.isArray(value.items)) {
 		return value.items.length
+	}
+	if (Array.isArray(value.notification_groups)) {
+		return value.notification_groups.length
+	}
+	if (typeof value.count === 'number') {
+		return value.count
 	}
 	if (Array.isArray(value.options)) {
 		return value.options.length
@@ -729,6 +818,11 @@ function identities(output: unknown): unknown {
 			note,
 		}
 	}
+	// A notification group, without the time of its newest notification (written at each Store's own time).
+	if ('notifications_count' in value) {
+		const { latest_page_notification_at: _at, ...group } = value
+		return group
+	}
 	if ('type' in value && 'account' in value) {
 		return {
 			id: value.id,
@@ -772,7 +866,7 @@ describe('read endpoints do not read more rows as unrelated data grows (RES-7)',
 		for (const [name, operation, input] of ENDPOINTS) {
 			const few = await rowsRead({ store: alone }, operation, input as never)
 			const many = await rowsRead({ store: crowded }, operation, input as never)
-			if (many > few + ALLOWANCE) {
+			if (many > few + ALLOWANCE + (UNRELATED_EXTRA[name]?.rows ?? 0)) {
 				grown.push(`${name}: ${few} -> ${many}`)
 			}
 		}
@@ -795,6 +889,9 @@ describe("read endpoints read the same rows however long the world's history (RE
 		// history up to those limits.
 		'status search',
 		'hashtag search',
+		// Suggestions read the hashtags of the viewer's newest statuses, a window that grows with their history up to its
+		// limit (Tag::RECENT_STATUS_LIMIT).
+		'featured tag suggestions',
 	])
 
 	type Measured = { endpoint: string; page: string; rows: number; shown: number; output: unknown }
@@ -1695,6 +1792,122 @@ describe('endorsements and notes read a page, however many an account has (RES-7
 	}, 60_000)
 })
 
+// A list's members add a dimension: the accounts one list holds. A page of members reads the list's from the cursor
+// through the primary key, so it reads the same rows whether the list holds 20 accounts or 2,000.
+describe("a list's members read a page, however many it holds (RES-7)", () => {
+	const OWNER_ID = '650000000000000000'
+	const LIST_ID = '659000000000000000'
+	const OWNER_TOKEN = 'list-owner-token'
+	const member = (i: number) => String(651000000000000000n + BigInt(i))
+
+	async function holding(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/owner', 'owner')",
+				OWNER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'owner@example.com', X'00', X'00', 'test')",
+				OWNER_ID
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://far' || (i % 10) || '.example/users/u' || i, 'u' || i,
+					'far' || (i % 10) || '.example'
+				FROM n`,
+				count,
+				member(0)
+			)
+			sql.exec(
+				`INSERT INTO follows (account_id, target_account_id, state)
+				SELECT ?1, id, 'accepted' FROM accounts WHERE id <> ?1`,
+				OWNER_ID
+			)
+			sql.exec("INSERT INTO lists (id, account_id, title) VALUES (?, ?, 'l')", LIST_ID, OWNER_ID)
+			sql.exec('INSERT INTO list_accounts (list_id, account_id) SELECT ?, target_account_id FROM follows', LIST_ID)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('listing', 'secret', 'listing', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'listing', ?, 'read')",
+				OWNER_TOKEN,
+				OWNER_ID
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 20 or 2,000, on the newest, a middle and the oldest page', async () => {
+		const few = await holding(20)
+		const many = await holding(2000)
+		const credential = { tokenHash: OWNER_TOKEN, scope: 'read', now: NOW } as const
+		const grown: string[] = []
+		// The newest page; a page from the middle of the longer list (above every member of the shorter one, so its
+		// newest page); the oldest page.
+		for (const page of [PAGE, { ...PAGE, maxId: member(1000) }, { ...PAGE, minId: '1' }]) {
+			const input = { credential, id: LIST_ID, page, present: PRESENT }
+			const shownBy = async (store: StoreStub) =>
+				runInDurableObject(store, (_instance, state) => shown(listAccounts.run(state.storage.sql, input)))
+			expect([page, await shownBy(few), await shownBy(many)]).toEqual([page, PAGE.limit, PAGE.limit])
+			const fewRows = await rowsRead({ store: few }, listAccounts, input)
+			const manyRows = await rowsRead({ store: many }, listAccounts, input)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${JSON.stringify(page)}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 60_000)
+})
+
+// A local account looked up by its exact username (a personal inbox, the outbox) is found through the index on
+// lower(username), so the lookup reads the same rows whether the instance has 20 local accounts or 2,000.
+describe('a local account is found by username, however many local accounts there are (RES-7)', () => {
+	async function knowing(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES ('660000000000000000', 'https://kopje.test/ap/users/alice', 'alice')"
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES ('660000000000000000', 'alice@example.com', X'00', X'00', 'test')"
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username)
+				SELECT CAST(661000000000000000 + i AS TEXT), 'https://kopje.test/ap/users/u' || i, 'u' || i FROM n`,
+				count
+			)
+			sql.exec(
+				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+				SELECT id, username || '@example.com', X'00', X'00', 'test' FROM accounts WHERE username GLOB 'u[0-9]*'`
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 20 or 2,000 local accounts', async () => {
+		const few = await knowing(20)
+		const many = await knowing(2000)
+		const reads: [string, StoreOperation<never, unknown>, unknown][] = [
+			['inbox owner', inboxOwnerExists, { username: 'alice' }],
+			['outbox', getOutbox, { username: 'alice', before: null }],
+		]
+		const grown: string[] = []
+		for (const [name, operation, input] of reads) {
+			const fewRows = await rowsRead({ store: few }, operation, input as never)
+			const manyRows = await rowsRead({ store: many }, operation, input as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	})
+})
+
 // The rows an operation reads, writes included (rowsRead in read-helpers.ts counts reads only).
 async function rowsTouched<I>(store: StoreStub, operation: StoreOperation<I, unknown>, input: I): Promise<number> {
 	return runInDurableObject(store, (_instance, state) => {
@@ -1899,6 +2112,177 @@ describe('polls are presented from their counts, not their votes (RES-7)', () =>
 			(many[k] ?? Infinity) <= (few[k] ?? 0) + ALLOWANCE ? [] : [`${name}: ${few[k]} -> ${many[k]}`]
 		)
 		expect(grown).toEqual([])
+	}, 60_000)
+})
+
+// Home reads a window of each followed hashtag's public statuses (R9): a page per hashtag, however many statuses
+// carry it, and the followed hashtags are capped (MAX_FOLLOWED_TAGS).
+describe('followed hashtags cost home a window each, up to the cap, not their history (RES-7)', () => {
+	const VIEWER_ID = '810000000000000001'
+	const AUTHOR_ID = '810000000000000002'
+	const TAGS_TOKEN = 'tags-token'
+	// Statuses interleave the hashtags, so each hashtag has statuses on every page.
+	const status = (tag: number, i: number) => String(820000000000000000n + BigInt(i * 1000 + tag))
+
+	async function store(perTag: number, followed: number): Promise<StoreStub> {
+		const stub = await migratedStore()
+		await runInDurableObject(stub, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://far.example/users/a', 'a', 'far.example')",
+				AUTHOR_ID
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('tags', 'secret', 'tags', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'tags', ?, 'read')",
+				TAGS_TOKEN,
+				VIEWER_ID
+			)
+			for (let tag = 0; tag < MAX_FOLLOWED_TAGS; tag++) {
+				if (tag < followed) {
+					sql.exec('INSERT INTO tag_follows (account_id, name) VALUES (?, ?)', VIEWER_ID, `t${tag}`)
+				}
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+					INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					SELECT CAST(?2 + i * 1000 AS TEXT), 'https://far.example/objects/' || ?3 || '-' || i, ?4, 'public', '<p>tagged</p>', ?5
+					FROM n`,
+					perTag,
+					status(tag, 0),
+					tag,
+					AUTHOR_ID,
+					new Date(NOW).toISOString()
+				)
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+					INSERT INTO status_tags (status_id, name, public) SELECT CAST(?2 + i * 1000 AS TEXT), ?3, 1 FROM n`,
+					perTag,
+					status(tag, 0),
+					`t${tag}`
+				)
+			}
+		})
+		return stub
+	}
+
+	const credential = { tokenHash: TAGS_TOKEN, scope: 'read', now: NOW } as const
+	const pages: [string, PageQuery][] = [
+		['newest', PAGE],
+		['oldest', { ...PAGE, minId: '1' }],
+	]
+
+	async function measure(perTag: number, followed: number): Promise<Record<string, number>> {
+		const stub = await store(perTag, followed)
+		const rows: Record<string, number> = {}
+		for (const [name, page] of pages) {
+			const input = { credential, page, present: PRESENT }
+			const output = await runInDurableObject(stub, (_instance, state) =>
+				homeTimeline.run(state.storage.sql, input as never)
+			)
+			expect([name, shown(output)]).toEqual([name, followed === 0 ? 0 : PAGE.limit])
+			rows[name] = await rowsRead({ store: stub }, homeTimeline, input as never)
+		}
+		return rows
+	}
+
+	it(`reads the same rows with 40 or 400 statuses per hashtag at the cap, and at most a window per hashtag more than with none`, async () => {
+		const none = await measure(40, 0)
+		const few = await measure(40, MAX_FOLLOWED_TAGS)
+		const many = await measure(400, MAX_FOLLOWED_TAGS)
+		const grown: string[] = []
+		for (const [name] of pages) {
+			const [base = 0, capped = 0, longer = 0] = [none[name], few[name], many[name]]
+			// Per hashtag: its tag_follows entry, and a window of a page of statuses, each with its status_tags row and the
+			// rows the rule reads for it (about ten).
+			if (capped > base + MAX_FOLLOWED_TAGS * (12 * PAGE.limit + 10) + ALLOWANCE) {
+				grown.push(`${name} with hashtags: ${base} -> ${capped}`)
+			}
+			if (longer > capped + ALLOWANCE) {
+				grown.push(`${name} with history: ${capped} -> ${longer}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 120_000)
+})
+
+// Home and the followed hashtags list read the viewer's own tag_follows rows through the (account_id, ...) indexes,
+// however many accounts follow hashtags.
+describe("followed hashtags read the viewer's rows, not every account's (RES-7)", () => {
+	const VIEWER_ID = '830000000000000005'
+	const AUTHOR_ID = '840000000000000001'
+	const TAGS_TOKEN = 'followed-token'
+
+	async function accountsFollowingTags(count: number): Promise<StoreStub> {
+		const stub = await migratedStore()
+		await runInDurableObject(stub, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO accounts (id, uri, username)
+				SELECT CAST(830000000000000000 + i AS TEXT), 'https://kopje.test/ap/users/u' || i, 'u' || i FROM n`,
+				count
+			)
+			sql.exec(
+				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+				SELECT id, username || '@example.com', X'00', X'00', 'test' FROM accounts`
+			)
+			for (const name of ['cats', 'dogs', 'birds']) {
+				sql.exec('INSERT INTO tag_follows (account_id, name) SELECT account_id, ? FROM local_accounts', name)
+			}
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://far.example/users/a', 'a', 'far.example')",
+				AUTHOR_ID
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 39)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(850000000000000000 + i AS TEXT), 'https://far.example/objects/' || i, ?, 'public', '<p>cats</p>', ?
+				FROM n`,
+				AUTHOR_ID,
+				new Date(NOW).toISOString()
+			)
+			sql.exec("INSERT INTO status_tags (status_id, name, public) SELECT id, 'cats', 1 FROM statuses")
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('followed', 'secret', 'followed', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'followed', ?, 'read')",
+				TAGS_TOKEN,
+				VIEWER_ID
+			)
+		})
+		return stub
+	}
+
+	it('reads the same rows with 10 or 2,000 accounts that follow hashtags', async () => {
+		const credential = { tokenHash: TAGS_TOKEN, scope: 'read', now: NOW } as const
+		const reads: [string, StoreOperation<never, unknown>, unknown, number][] = [
+			['home', homeTimeline, { credential, page: PAGE, present: PRESENT }, PAGE.limit],
+			['followed tags', followedTags, { credential, page: PAGE, present: PRESENT }, 3],
+		]
+		const few = await accountsFollowingTags(10)
+		const many = await accountsFollowingTags(2000)
+		for (const [name, operation, input, expected] of reads) {
+			for (const stub of [few, many]) {
+				const output = await runInDurableObject(stub, (_instance, state) =>
+					operation.run(state.storage.sql, input as never)
+				)
+				expect([name, shown(output)]).toEqual([name, expected])
+			}
+			const small = await rowsRead({ store: few }, operation, input as never)
+			const large = await rowsRead({ store: many }, operation, input as never)
+			expect(large, name).toBeLessThanOrEqual(small + ALLOWANCE)
+		}
 	}, 60_000)
 })
 
@@ -2176,4 +2560,223 @@ describe('served Notes read their statuses, not their boosts (RES-7)', () => {
 		}
 		expect(grown).toEqual([])
 	})
+})
+
+// Grouped notifications add a dimension: the notifications of one group. A status favourited by `count` accounts
+// within the hours of one group, between older follows and newer follow requests: a page of groups, a group, its
+// accounts and the unread counts read the same rows with 2,500 favourites or 5,000 (one group dominating the walk,
+// past its limit), since a walk reads at most GROUP_WALK notifications, a group counts at most GROUP_COUNT and a
+// group's accounts are paged by its index.
+describe('grouped notifications read a walk, however many notifications a group holds (RES-7)', () => {
+	const VIEWER_ID = '650000000000000000'
+	const STATUS_ID = '651000000000000000'
+	const GROUP_TOKEN = 'grouping-token'
+	const sender = (i: number) => String(652000000000000000n + BigInt(i))
+	const FAVOURITES = `favourite-${STATUS_ID}-1`
+	// The follows and follow requests around the group, and the first favourite's id.
+	const FOLLOWS = 50
+	const REQUESTS = 5
+	const FIRST_FAVOURITE = FOLLOWS + 1
+
+	async function grouping(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES (?, 'https://kopje.test/ap/o/s', ?, 'public', '<p>s</p>', ?)`,
+				STATUS_ID,
+				VIEWER_ID,
+				new Date(NOW).toISOString()
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://far' || (i % 10) || '.example/users/u' || i, 'u' || i,
+					'far' || (i % 10) || '.example'
+				FROM n`,
+				count,
+				sender(0)
+			)
+			const notifications = (type: string, limit: number, groupKey: string | null) =>
+				sql.exec(
+					`INSERT INTO notifications (account_id, type, from_account_id, status_id, group_key)
+					SELECT ?1, ?2, id, CASE WHEN ?2 = 'favourite' THEN ?3 END, ?4 FROM accounts
+					WHERE id <> ?1 ORDER BY id LIMIT ?5`,
+					VIEWER_ID,
+					type,
+					STATUS_ID,
+					groupKey,
+					limit
+				)
+			notifications('follow', FOLLOWS, null)
+			notifications('favourite', count, FAVOURITES)
+			notifications('follow_request', REQUESTS, null)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('grouping', 'secret', 'grouping', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'grouping', ?, 'read')",
+				GROUP_TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 2,500 or 5,000 notifications in a group, on the newest, a middle and the oldest page', async () => {
+		// Both sizes are past the walk's limit, so the group dominates it at either.
+		expect(GROUP_WALK).toBeLessThan(2500)
+		const few = await grouping(2500)
+		const many = await grouping(5000)
+		const credential = { tokenHash: GROUP_TOKEN, scope: 'read', now: NOW } as const
+		const groups = {
+			credential,
+			types: [],
+			excludeTypes: [],
+			groupedTypes: null,
+			expandAccounts: 'full',
+			present: PRESENT,
+		}
+		const counts = { credential, limit: 100, types: [], excludeTypes: [], accountId: null, groupedTypes: null }
+		// The newest page; a page from the middle of the group (the same favourites at either size); the page above the
+		// follows, oldest first into the group (the accounts, which page by max_id alone: the group's oldest page).
+		const middle = { ...PAGE, maxId: String(FIRST_FAVOURITE + 450) }
+		const reads: [string, StoreOperation<never, unknown>, unknown][] = [
+			...[PAGE, middle, { ...PAGE, minId: String(FOLLOWS) }].map(
+				(page): [string, StoreOperation<never, unknown>, unknown] => [
+					`grouped notifications ${JSON.stringify(page)}`,
+					listGroupedNotifications,
+					{ ...groups, page },
+				]
+			),
+			...[PAGE, middle, { ...PAGE, maxId: String(FIRST_FAVOURITE + PAGE.limit) }].map(
+				(page): [string, StoreOperation<never, unknown>, unknown] => [
+					`notification group accounts ${JSON.stringify(page)}`,
+					notificationGroupAccounts,
+					{ credential, groupKey: FAVOURITES, page, present: PRESENT },
+				]
+			),
+			['notification group', getNotificationGroup, { credential, groupKey: FAVOURITES, present: PRESENT }],
+			['unread count', unreadCount, counts],
+			['unread group count', unreadGroupCount, counts],
+		]
+		const grown: string[] = []
+		for (const [name, operation, input] of reads) {
+			// Each shows as much at either size (the newest notifications differ by size).
+			const shownBy = async (store: StoreStub) =>
+				runInDurableObject(store, (_instance, state) => shown(operation.run(state.storage.sql, input as never)))
+			const fewShown = await shownBy(few)
+			expect([name, fewShown > 0]).toEqual([name, true])
+			expect([name, await shownBy(many)]).toEqual([name, fewShown])
+			const fewRows = await rowsRead({ store: few }, operation, input as never)
+			const manyRows = await rowsRead({ store: many }, operation, input as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+		// The newest page reads the follow requests and the group up to the walk's limit, at either size.
+		for (const store of [few, many]) {
+			const newest = await runInDurableObject(store, (_instance, state) =>
+				listGroupedNotifications.run(state.storage.sql, { ...groups, page: PAGE } as never)
+			)
+			expect(
+				(
+					newest as { value: { notification_groups: { type: string; notifications_count: number }[] } }
+				).value.notification_groups.map((group) => [group.type, group.notifications_count])
+			).toEqual([...Array.from({ length: REQUESTS }, () => ['follow_request', 1]), ['favourite', GROUP_COUNT]])
+		}
+	}, 120_000)
+})
+
+// A followed hashtag whose newest statuses are a blocked author's: home inspects a bounded number of the hashtag's
+// statuses (two pages, at least 40), so the blocked author's tagged history costs nothing more as it grows.
+describe("a followed hashtag's hidden statuses cost home a bounded window (RES-7)", () => {
+	const VIEWER_ID = '860000000000000001'
+	const BLOCKED_ID = '860000000000000002'
+	const AUTHOR_ID = '860000000000000003'
+	const HIDDEN_TOKEN = 'hidden-token'
+
+	async function store(hidden: number): Promise<StoreStub> {
+		const stub = await migratedStore()
+		await runInDurableObject(stub, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			for (const [id, name] of [
+				[BLOCKED_ID, 'spam'],
+				[AUTHOR_ID, 'a'],
+			]) {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, 'far.example')",
+					id,
+					`https://far.example/users/${name}`,
+					name
+				)
+			}
+			sql.exec('INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?)', VIEWER_ID, BLOCKED_ID)
+			sql.exec("INSERT INTO tag_follows (account_id, name) VALUES (?, 'cats')", VIEWER_ID)
+			// 40 shown statuses of the hashtag, older than the blocked author's.
+			const write = (base: bigint, count: number, author: string) => {
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+					INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					SELECT CAST(?2 + i AS TEXT), 'https://far.example/objects/' || ?2 || '-' || i, ?3, 'public', '<p>cats</p>', ?4
+					FROM n`,
+					count,
+					String(base),
+					author,
+					new Date(NOW).toISOString()
+				)
+				sql.exec(
+					`INSERT INTO status_tags (status_id, name, public) SELECT id, 'cats', 1 FROM statuses WHERE account_id = ?`,
+					author
+				)
+			}
+			write(870000000000000000n, 40, AUTHOR_ID)
+			write(880000000000000000n, hidden, BLOCKED_ID)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('hidden', 'secret', 'hidden', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'hidden', ?, 'read')",
+				HIDDEN_TOKEN,
+				VIEWER_ID
+			)
+		})
+		return stub
+	}
+
+	it('reads the same rows with 100 or 2,000 newer statuses of a blocked author with the hashtag', async () => {
+		const credential = { tokenHash: HIDDEN_TOKEN, scope: 'read', now: NOW } as const
+		const input = { credential, page: PAGE, present: PRESENT }
+		const measure = async (hidden: number) => {
+			const stub = await store(hidden)
+			const output = await runInDurableObject(stub, (_instance, state) =>
+				homeTimeline.run(state.storage.sql, input as never)
+			)
+			return { shown: shown(output), rows: await rowsRead({ store: stub }, homeTimeline, input as never) }
+		}
+		// With fewer hidden statuses than the window inspects, the shown ones below them fill the page.
+		expect((await measure(20)).shown).toBe(PAGE.limit)
+		const few = await measure(100)
+		const many = await measure(2000)
+		expect(many.shown).toBe(few.shown)
+		expect(many.rows).toBeLessThanOrEqual(few.rows + ALLOWANCE)
+	}, 60_000)
 })

@@ -202,6 +202,7 @@ function witness(
 			lists: world.lists ?? [],
 			pins: [],
 			conversationMutes: [],
+			tagFollowers: [],
 			now: '2026-10-12T00:00:00.000Z',
 		},
 		shared: [false],
@@ -549,6 +550,7 @@ function readWorld(sql: SqlStorage, base: World): Snapshot {
 			// The actions neither pin nor mute; the conversation mutes are read below.
 			pins: [],
 			conversationMutes: [],
+			tagFollowers: base.tagFollowers,
 			now: base.now,
 		},
 	}

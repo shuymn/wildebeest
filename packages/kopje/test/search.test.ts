@@ -7,7 +7,7 @@ import { HASHTAG_PUBLIC_WINDOW, LIBRARY_SOURCE_LIMIT } from '../src/domain/searc
 type Results = {
 	accounts: { id: string; acct: string }[]
 	statuses: { id: string; content: string }[]
-	hashtags: { name: string; url: string; history: [] }[]
+	hashtags: { name: string; url: string; history: []; following?: boolean; featuring?: boolean }[]
 }
 
 async function fixture() {
@@ -137,7 +137,13 @@ describe('GET /api/v2/search', () => {
 		})
 		const tags = (await search('#cat', '&type=hashtags')).hashtags
 		expect(tags.map((t) => t.name)).toEqual(['cat', 'cats', 'catsofkopje'])
-		expect(tags[0]).toEqual({ name: 'cat', url: 'https://kopje.test/tags/cat', history: [] })
+		expect(tags[0]).toEqual({
+			name: 'cat',
+			url: 'https://kopje.test/tags/cat',
+			history: [],
+			following: false,
+			featuring: false,
+		})
 		// carol may see it; it enters her windows once she saves it (mentions are not a hashtag window source).
 		await sql(h.store, 'INSERT INTO bookmarks (account_id, status_id) VALUES (?, ?)', carol.id, secret)
 		expect((await search('cat', '&type=hashtags', carol.token)).hashtags.map((t) => t.name)).toContain('catsecret')

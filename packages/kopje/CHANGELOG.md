@@ -79,6 +79,32 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - `DELETE /api/v1/profile/avatar` and `DELETE /api/v1/profile/header`, as Mastodon 4.5 has them (scope
   `write:accounts`): the account shows the default image again, the removed image's files are deleted, followers'
   servers receive the profile `Update`, and the answer is your `CredentialAccount`.
+- Followed hashtags, as Mastodon 4.5 has them: `POST /api/v1/tags/:id/follow` and `/unfollow` (scope
+  `write:follows`), and `GET /api/v1/followed_tags` (scope `read:follows`; newest follow first, 100 by default and at
+  most 200, with Link headers). A name that is not a hashtag answers 404; any other name may be followed, used or not.
+  Home also shows the public statuses, not boosts, with a hashtag you follow, from anyone, unless you block or mute
+  their author or an account they mention, block their author's domain, or their author blocks you. The Tag entity
+  shows `following` and `featuring` to a signed-in user wherever it appears, search's hashtags included.
+    - Where Kopje differs from Mastodon: an account follows at most 100 hashtags; home shows a followed hashtag's
+      statuses posted before the follow too (home is read, not filled as statuses arrive), and they leave it at once
+      on an unfollow; the followed hashtags and the suggestions below show each hashtag with an empty `history`, as
+      search's do; and home looks at most two pages (at least 40) of a followed hashtag's newest statuses for a page, so
+      when most of them are hidden from you (say, a blocked account's), that page shows fewer of the hashtag's
+      statuses.
+- Featured hashtags, as Mastodon 4.5 has them: `GET` and `POST /api/v1/featured_tags`,
+  `DELETE /api/v1/featured_tags/:id`, `GET /api/v1/featured_tags/suggestions` (the hashtags of your newest 1,000
+  statuses you do not feature yet, the most used first), `POST /api/v1/tags/:id/feature` and `/unfeature` (scopes
+  `read:accounts` and `write:accounts`), and `GET /api/v1/accounts/:id/featured_tags`, public, empty for a suspended
+  account. An account features at most 10 hashtags, with Mastodon's validation and messages. Each shows the number of
+  your public and unlisted statuses with it and the date of the newest, kept as you post, edit and delete. Its `url`,
+  `/@username/tagged/:tag`, is your public profile page with only your posts with the hashtag.
+    - Over ActivityPub, the actor publishes `featuredTags` (its featured hashtags as `Hashtag`s) and `featured` (its
+      pinned statuses, below), and featuring or unfeaturing a hashtag sends your followers Mastodon's `Add` or
+      `Remove` of the `Hashtag`; before an account's first one, its followers are sent the actor again, as servers that
+      stored it earlier know no `featured` collection to add to. Kopje does not read the featured hashtags of remote
+      accounts.
+    - Where Kopje differs from Mastodon: an edit that adds a hashtag to an older status keeps the newest date rather
+      than taking the older status's.
 - The remaining account endpoints of Mastodon 4.5:
     - Private notes: `POST /api/v1/accounts/:id/note` (`comment`, at most 2,000 characters; a blank one deletes the
       note) answers the Relationship. Every Relationship now carries your note on the account in `note`; nobody else
@@ -102,8 +128,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       and pinning a status again answers 422 `Duplicate record`. Your statuses now carry a real `pinned`, and
       `GET /api/v1/accounts/:id/statuses?pinned=true` lists an account's pins, newest pin first, to whoever may see
       each. Your actor publishes its `featured` collection of pins (the post of a public or unlisted one, the address
-      of any other), and your followers' servers are sent an `Add` or `Remove` when you pin or unpin. Deleting a pinned
-      status unpins it.
+      of any other), and your followers' servers are sent an `Add` or `Remove` when you pin or unpin. A later `Add` or `Remove` of
+      the same status replaces an earlier one still waiting or given up. Deleting a pinned status unpins it.
     - Conversation mutes: `POST /api/v1/statuses/:id/mute` and `/unmute` (scope `write:mutes`) mute the conversation
       of a status you may see, and every status of it then shows `muted: true` to you. While it is muted, nothing in
       it notifies you (mentions, favourites, boosts, poll ends, edits), and its direct statuses no longer reach your
@@ -111,6 +137,28 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `GET /api/v1/statuses?id[]=` shows up to 20 statuses at once, those you may see and have not filtered out by a
       block, mute or domain block, each as `GET /api/v1/statuses/:id` shows it, in the order asked; more answer 422.
     - `PATCH /api/v1/statuses/:id` edits a status, as `PUT` does.
+- Grouped notifications, as Mastodon 4.5 has them: `GET /api/v2/notifications` answers `accounts`, `statuses` and
+  `notification_groups` (with `types[]`, `exclude_types[]`, `grouped_types[]`, `expand_accounts=partial_avatars` and
+  paging with Link headers, 40 groups by default and at most 80), `GET /api/v2/notifications/:group_key` shows one
+  group, `GET /api/v2/notifications/:group_key/accounts` lists its accounts, and
+  `POST /api/v2/notifications/:group_key/dismiss` and `POST /api/v2/notifications/clear` delete. Favourites and
+  boosts of the same status, and follows, group by the hour, joining a group of the same kind from up to 11 hours
+  before; v1 notifications show their `group_key` too. Scopes are `read:notifications` and `write:notifications` (or
+  `read` and `write`).
+    - A group counts and shows only the notifications you are shown in v1: a notification from an account you have
+      since blocked or muted, or about a status you may no longer see, is left out.
+    - Each group on a page counts and samples its notifications up to the page's newest, those below the page
+      included, as Mastodon does.
+    - Where Kopje differs from Mastodon: a group counts at most 400 notifications, and a page reads at most 2,000
+      notifications, skipping those of the groups it has found, so a page ends early, with the groups found and a `next`
+      link that goes on from there, only when its walk meets more than that of the groups it found (in practice a status
+      favourited by thousands within a few hours). A dismissed group is not remembered, so a later notification within
+      its hours starts a new one. Dismissing a group and clearing delete at once, in the request.
+    - Notifications stored before the upgrade stay ungrouped, each a group of its own, as Mastodon left those it
+      stored before it grouped them.
+- `GET /api/v1/notifications/unread_count` and `GET /api/v2/notifications/unread_count`, as Mastodon 4.5 has them: the
+  notifications (v1) or groups (v2) newer than your notifications marker, up to `limit` (100 by default, at most 1,000),
+  with the same filters as the lists.
 
 ### Changed
 
@@ -121,6 +169,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   hide entirely. Home reads only the mentions of you in direct and limited statuses by accounts you follow, not every
   mention of you, and the statuses of an account that blocks you, that you block, or that is suspended or being deleted
   are no longer read to show its empty profile.
+- A page of a list's members (`GET /api/v1/lists/:id/accounts` with `max_id` or `min_id`) is read from its cursor, not
+  from the newest member.
 
 ### Fixed
 
@@ -133,7 +183,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds nine migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds eleven migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
@@ -161,6 +211,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       its sweep); other uploads stay as they are. Its work grows linearly with the media and the edits stored (one pass
       over the media for the column and one for the index, and one over the edits' media, grouped by id, with a
       lookup of each named upload).
+    - `0016_tags`: adds the `tag_follows` and `featured_tags` tables, empty, and `local_accounts.featured_announced`.
+      It is quick.
+    - `0017_notification_groups`: adds `notifications.group_key`, empty for the notifications stored, and its partial
+      index by recipient and group. It reads each notification once to build the index, so its work grows linearly
+      with the notifications stored.
     - `0018_status_pins_and_conversation_mutes`: adds the `status_pins` and `conversation_mutes` tables, empty. Its
       work does not grow with the Store.
 - `wrangler.jsonc`: unchanged.

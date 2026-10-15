@@ -13,6 +13,7 @@ import {
 	CryptographicKey,
 	Endpoints,
 	Group,
+	Hashtag,
 	Image,
 	Note,
 	type Object as ApObject,
@@ -56,7 +57,7 @@ import { bytesToBase64, generateWrappedKey, importPublicKeyPem, type KeyGen } fr
 import { createKeyring, type KeyOwner, requestSigner, type Signer } from '../security/keyring'
 
 // The Fedify Federation of one request: dispatchers for actors, key pairs, WebFinger, NodeInfo, the followers,
-// following and featured collections, local Notes and the outbox, over the Store, with ids under the domain fixed at /setup. It
+// following, featured and featured hashtags collections, local Notes and the outbox, over the Store, with ids under the domain fixed at /setup. It
 // never sends: Fedify's queue,
 // sendActivity and forwardActivity are not used (test/fedify-usage.test.ts); outbound delivery goes through deliveries.
 
@@ -324,27 +325,12 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 			})
 	}
 
-	// VIS-4: local public and unlisted statuses as Notes, from the data of their outbound Create (domain/activities.ts).
-	// Anything else, signed request or not, is not found.
-	federation.setObjectDispatcher(Note, '/ap/o/{uuid}', async (ctx, { uuid }) => {
-		if (!OBJECT_ID.test(uuid)) {
-			return null
-		}
-		const note = await rpc((s) => s.localNote(build, { uri: `${origin}/ap/o/${uuid}` }))
-		if (note === null) {
-			return null
-		}
-		const json = JSON.parse(note) as { type?: unknown }
-		// A status with a poll is a Question (ActivityPub::NoteSerializer). Fedify serves whatever object the dispatcher
-		// returns; the dispatcher is registered for Note, the type of the path's other objects.
-		return json.type === 'Question'
-			? ((await Question.fromJsonLd(json, { contextLoader: ctx.contextLoader })) as unknown as Note)
-			: Note.fromJsonLd(json, { contextLoader: ctx.contextLoader })
-	})
-
 	// The featured collection (ActivityPub::CollectionsController, `featured`): the pinned statuses, newest pin first,
 	// all in the collection itself, as Mastodon's OrderedCollection without pages: the Note of a public or unlisted one
-	// (as the object endpoint serves it, VIS-4), the uri alone of any other, and their count (totalItems).
+	// (as the object endpoint serves it, VIS-4), the uri alone of any other, and their count (totalItems). It is also the
+	// target Mastodon names in the Add and Remove of a pin and of a featured hashtag (domain/status-actions.ts,
+	// domain/featured-tags.ts), which receivers act on only when the actor publishes it. An unknown or suspended actor
+	// has none.
 	const pins = new Map<string, Promise<FeaturedItem[] | null>>()
 	const featuredOf = (username: string) =>
 		memo(pins, username, async () =>
@@ -371,6 +357,40 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 			return { items: items as ApObject[] }
 		})
 		.setCounter(async (_ctx, identifier) => (await featuredOf(identifier))?.length ?? null)
+	// The featuredTags collection (`tags`): the actor's featured hashtags, at most ten, in one collection.
+	const featuredTags = new Map<string, Promise<Hashtag[] | null>>()
+	const hashtags = (identifier: string) =>
+		memo(featuredTags, identifier, async () => {
+			if ((await localActor(identifier))?.username !== identifier) {
+				return null
+			}
+			const tags = await rpc((s) => s.featuredTagsCollection(build, { username: identifier, origin }))
+			return tags?.map((tag) => new Hashtag({ name: `#${tag.name}`, href: new URL(tag.href) })) ?? null
+		})
+	federation
+		.setFeaturedTagsDispatcher('/ap/users/{identifier}/collections/tags', async (_ctx, identifier) => {
+			const items = await hashtags(identifier)
+			return items === null ? null : { items }
+		})
+		.setCounter(async (_ctx, identifier) => (await hashtags(identifier))?.length ?? null)
+
+	// VIS-4: local public and unlisted statuses as Notes, from the data of their outbound Create (domain/activities.ts).
+	// Anything else, signed request or not, is not found.
+	federation.setObjectDispatcher(Note, '/ap/o/{uuid}', async (ctx, { uuid }) => {
+		if (!OBJECT_ID.test(uuid)) {
+			return null
+		}
+		const note = await rpc((s) => s.localNote(build, { uri: `${origin}/ap/o/${uuid}` }))
+		if (note === null) {
+			return null
+		}
+		const json = JSON.parse(note) as { type?: unknown }
+		// A status with a poll is a Question (ActivityPub::NoteSerializer). Fedify serves whatever object the dispatcher
+		// returns; the dispatcher is registered for Note, the type of the path's other objects.
+		return json.type === 'Question'
+			? ((await Question.fromJsonLd(json, { contextLoader: ctx.contextLoader })) as unknown as Note)
+			: Note.fromJsonLd(json, { contextLoader: ctx.contextLoader })
+	})
 
 	// The outbox: Create and Announce of the public and unlisted statuses, newest first.
 	federation
@@ -477,6 +497,7 @@ async function localActorObject(ctx: RequestContext<FederationState>, actor: Loc
 		followers: ctx.getFollowersUri(actor.username),
 		following: ctx.getFollowingUri(actor.username),
 		featured: ctx.getFeaturedUri(actor.username),
+		featuredTags: ctx.getFeaturedTagsUri(actor.username),
 		endpoints: new Endpoints({ sharedInbox: new URL('/inbox', ctx.canonicalOrigin) }),
 		// Derived from local_accounts.pubkey, the authoritative public key.
 		publicKey: new CryptographicKey({

@@ -31,7 +31,8 @@ import type { Db } from '../db/sql'
 //     The remote inbox may then see the activity twice; receivers deduplicate by activity id.
 //   - A failure is retried after min(30 s·2^n, 12 h), n being the attempts so far; after MAX_ATTEMPTS, or on a
 //     permanent failure, the row is gave_up: kept for the operator until retried or swept. An activity that a later
-//     one about the same object follows is superseded, and the operator may not send it again.
+//     one about the same object follows is superseded, and the operator may not send it again (an Add or Remove is
+//     about its object in its collection, so either supersedes the other of the same pair).
 //   - An activity without to that a recipient's shared inbox answers with 404, 405 or 410 moves to that recipient's
 //     personal inbox on the same origin, within its attempts (personalFallback): some servers advertise a shared
 //     inbox they have disabled.
@@ -89,13 +90,23 @@ function idOf(value: unknown): string | null {
 	return null
 }
 
-// The subject of an Add or Remove: the pair of its target collection and its object, so the Add and the Remove of one
-// object in one collection share it (and nothing else does), whatever their own ids. The later of the two supersedes
-// the earlier (enqueueActivity), so an Add the operator retries cannot undo a Remove sent since, or the reverse.
-function collectionSubject(activity: Activity): string | null {
-	const target = idOf(activity.target)
-	const object = idOf(activity.object)
-	return target === null || object === null ? null : JSON.stringify([target, object])
+function hrefOf(value: unknown): string | null {
+	const href = typeof value === 'object' && value !== null ? (value as { href?: unknown }).href : undefined
+	return typeof href === 'string' ? href : null
+}
+
+// The activity types a later activity about the same object supersedes (beyond what a retraction supersedes: all):
+// an Update earlier Updates, an Add or Remove earlier Adds and Removes of the same member of the same collection.
+function supersededTypes(type: unknown): string[] {
+	switch (type) {
+		case 'Update':
+			return ['Update']
+		case 'Add':
+		case 'Remove':
+			return ['Add', 'Remove']
+		default:
+			return []
+	}
 }
 
 // The local object an activity is about, and whether it retracts it (outboundKind in audience.ts).
@@ -112,9 +123,14 @@ function subjectOf(activity: Activity, withdraws: boolean): { object: string | n
 		case 'Reject':
 		case 'Accept':
 			return { object: idOf(activity.object), retracts }
+		// An Add or Remove is about its object in its collection (a featured hashtag, by its href when it has no id), so a
+		// later one about the same pair supersedes it.
 		case 'Add':
-		case 'Remove':
-			return { object: collectionSubject(activity), retracts }
+		case 'Remove': {
+			const target = idOf(activity.target)
+			const member = idOf(activity.object) ?? hrefOf(activity.object)
+			return { object: target === null || member === null ? null : `${target} ${member}`, retracts }
+		}
 		default:
 			return { object: typeof activity.id === 'string' ? activity.id : null, retracts }
 	}
@@ -255,10 +271,9 @@ export function enqueueActivity(
 ): void {
 	const { targets, voters } = targetsOf(db, signerId, envelope.activity, envelope.audience, options.withdraws === true)
 	const { object, retracts } = subjectOf(envelope.activity, options.withdraws === true)
-	// An Add or Remove supersedes every earlier one of its subject (collectionSubject): only they have it.
-	const collection = envelope.activity.type === 'Add' || envelope.activity.type === 'Remove'
-	if (object !== null && (retracts || collection || envelope.activity.type === 'Update')) {
-		supersede(db, signerId, object, retracts || collection)
+	const types = supersededTypes(envelope.activity.type)
+	if (object !== null && (retracts || types.length > 0)) {
+		supersede(db, signerId, object, retracts, types)
 	}
 	if (object !== null && retracts) {
 		db.run(
@@ -304,17 +319,18 @@ export function enqueueActivity(
 	expandPending(db, now, EXPANSION_STEP)
 }
 
-const SUPERSEDED = `account_id = ? AND object_uri = ? AND (? OR json_extract(body, '$.activity.type') = 'Update')`
+const SUPERSEDED = `account_id = ? AND object_uri = ? AND (? OR json_extract(body, '$.activity.type') IN (SELECT value FROM json_each(?)))`
 
 // Marks the earlier activities a new one about the object follows. A retraction still staging (stageRetraction) is
 // complete then: the new retraction targets every inbox it held or would have.
-function supersede(db: Db, signerId: string, object: string, retracts: boolean): void {
+function supersede(db: Db, signerId: string, object: string, retracts: boolean, types: string[] = []): void {
 	const stopped = db.all<{ id: string }>(
 		`UPDATE outbound_activities SET superseded = 1, staged = NULL WHERE ${SUPERSEDED}
 		RETURNING CAST(id AS TEXT) AS id`,
 		signerId,
 		object,
-		retracts ? 1 : 0
+		retracts ? 1 : 0,
+		JSON.stringify(types)
 	)
 	for (const { id } of stopped) {
 		dropSettledActivity(db, id)
@@ -347,7 +363,8 @@ export function beginRetraction(
 					`SELECT count(*) AS n FROM outbound_activities WHERE ${SUPERSEDED}`,
 					signerId,
 					object,
-					1
+					1,
+					'[]'
 				)?.n ?? 0)
 	// Each superseded intent is updated and may be dropped; then the intent itself.
 	if (2 * superseded + 1 > maxRows) {

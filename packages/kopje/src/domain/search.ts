@@ -5,6 +5,7 @@ import { statusQueryTerms } from './search-text'
 import { presentStatuses, type Status } from './status-presenter'
 import { statusCursor } from './statuses'
 import { normalizeTag } from './tag-name'
+import { presentTags, type Tag } from './tags'
 import type { Db } from '../db/sql'
 
 // GET /api/v2/search (design §6, "search"): local data only, matched with instr on search_text (NFKC); no virtual
@@ -29,7 +30,8 @@ export const LIBRARY_SOURCE_LIMIT = 2500
 export const HASHTAG_LIBRARY_LIMIT = 500
 export const HASHTAG_PUBLIC_WINDOW = 2000
 
-export type Hashtag = { name: string; url: string; history: [] }
+// A Tag entity (tags.ts), with no history, and the viewer's following and featuring.
+export type Hashtag = Tag
 
 export type SearchType = 'accounts' | 'statuses' | 'hashtags'
 
@@ -177,9 +179,11 @@ function searchHashtags(db: Db, input: SearchRequest, { accountId: viewerId, now
 		input.offset,
 		now
 	)
-	return rows.map(({ name }) => ({
-		name,
-		url: `${input.present.origin}/tags/${encodeURIComponent(name)}`,
-		history: [],
-	}))
+	return presentTags(
+		db,
+		rows.map(({ name }) => name),
+		viewerId,
+		input.present,
+		null
+	)
 }

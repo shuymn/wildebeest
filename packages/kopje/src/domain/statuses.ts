@@ -50,6 +50,7 @@ import {
 } from './auth'
 import { addToConversation } from './conversations'
 import { beginRetraction } from './deliveries'
+import { countFeaturedTags, featuredOfStatus, uncountFeaturedTags } from './featured-tags'
 import { allocateLocalId } from './ids'
 import { DETACHED_GRACE_MS, DOOMED_AT, liveMediaSql } from './media'
 import { notify } from './notifications'
@@ -484,7 +485,9 @@ function writeMentions(
 	return mentions.map((m) => m.id).filter((id) => !previous.includes(id))
 }
 
+// The status's hashtags, and the counts of its author's featured hashtags that it gains or loses (featured-tags.ts).
 export function writeTags(db: Db, statusId: string, tags: readonly string[]): void {
+	const featured = featuredOfStatus(db, statusId)
 	db.run('DELETE FROM status_tags WHERE status_id = ?', statusId)
 	db.run(
 		`INSERT INTO status_tags (status_id, name, public)
@@ -492,6 +495,7 @@ export function writeTags(db: Db, statusId: string, tags: readonly string[]): vo
 		statusId,
 		JSON.stringify(tags)
 	)
+	countFeaturedTags(db, statusId, featured)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -753,6 +757,7 @@ export const deleteStatus = userMediaDeleteOperation<
 		recordOutbound(db, accountId, deleteActivity(facts), input.now)
 	}
 	undoLocalBoosts(db, current.id, input.now)
+	uncountFeaturedTags(db, current.id)
 	// Children cascade (mentions, tags, edits, favourites, bookmarks, notifications, boosts and their receipts);
 	// replies keep their in_reply_to_uri.
 	db.run('DELETE FROM statuses WHERE id = ?', current.id)
@@ -1429,3 +1434,8 @@ export function statusCursor(cursor: string | undefined): string | null {
 	}
 	return cursor.padStart(STATUS_ID_LENGTH, '0')
 }
+
+// Bounds beyond every 18-digit id, for a cursor that is absent: with them a range is always a plain one, read through
+// the index from the cursor rather than filtered from the newest.
+export const ABOVE_EVERY_ID = ':'
+export const BELOW_EVERY_ID = ''

@@ -161,6 +161,15 @@ const RULES: readonly Rule[] = [
 			'../src/domain/polls.ts': 'votes cast through mayVoteSql (R27), the viewer’s own, and their purges',
 		},
 	},
+	{
+		// R29: the hashtags an account follows are its own; nobody else is shown them.
+		name: 'reads or writes tag_follows',
+		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['tag_follows'])}`, 'i'),
+		allowed: {
+			'../src/domain/tags.ts': 'the viewer’s own followed hashtags: their follows, the list and the Tag’s following',
+			'../src/domain/timelines.ts': 'home’s windows of the viewer’s own followed hashtags (R9)',
+		},
+	},
 ]
 
 function violations(files: Record<string, string>, rules: readonly Rule[] = RULES): string[] {

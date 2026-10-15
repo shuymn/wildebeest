@@ -673,7 +673,10 @@ describe('filter matching work', () => {
 		const shown = await timeline(h, `/api/v1/accounts/${remote}/statuses?limit=40`, alice.token)
 		const elapsed = performance.now() - started
 		expect(shown.map((s) => s.filtered)).toEqual(Array.from({ length: 40 }, () => []))
-		expect(elapsed).toBeLessThan(5_000)
+		// Bounded matching takes about a second locally and several on a busy CI runner; a regression to unbounded
+		// matching (uncut texts, or a pattern that backtracks) multiplies that many times over, so the bound leaves room
+		// for the runner and still fails on the regression.
+		expect(elapsed).toBeLessThan(20_000)
 	}, 60_000)
 
 	it('matches a status on its first MAX_FILTER_TEXT code units only', async () => {

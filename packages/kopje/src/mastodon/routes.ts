@@ -10,6 +10,7 @@ import * as instance from './instance'
 import * as lists from './lists'
 import * as markers from './markers'
 import * as media from './media'
+import * as notificationGroups from './notification-groups'
 import * as notifications from './notifications'
 import * as oauth from './oauth'
 import * as placeholders from './placeholders'
@@ -75,24 +76,42 @@ export const ROUTES: readonly Route[] = [
 		access: { scope: 'read:follows' },
 		handler: accounts.familiarFollowers,
 	},
+	// Hashtags, followed and featured (mastodon/tags.ts).
 	{ method: 'GET', path: '/api/v1/tags/:id', access: { optional: true }, handler: tags.getTag },
+	{ method: 'POST', path: '/api/v1/tags/:id/follow', access: { scope: 'write:follows' }, handler: tags.followTag },
+	{ method: 'POST', path: '/api/v1/tags/:id/unfollow', access: { scope: 'write:follows' }, handler: tags.unfollowTag },
+	{ method: 'POST', path: '/api/v1/tags/:id/feature', access: { scope: 'write:accounts' }, handler: tags.featureTag },
+	{
+		method: 'POST',
+		path: '/api/v1/tags/:id/unfeature',
+		access: { scope: 'write:accounts' },
+		handler: tags.unfeatureTag,
+	},
+	{ method: 'GET', path: '/api/v1/followed_tags', access: { scope: 'read:follows' }, handler: tags.followedTags },
 	{
 		method: 'GET',
-		path: '/api/v1/followed_tags',
-		access: { scope: 'read:follows' },
-		handler: placeholders.emptyUserList,
+		path: '/api/v1/featured_tags/suggestions',
+		access: { scope: 'read:accounts' },
+		handler: tags.featuredTagSuggestions,
+	},
+	{ method: 'GET', path: '/api/v1/featured_tags', access: { scope: 'read:accounts' }, handler: tags.featuredTags },
+	{
+		method: 'POST',
+		path: '/api/v1/featured_tags',
+		access: { scope: 'write:accounts' },
+		handler: tags.createFeaturedTag,
 	},
 	{
-		method: 'GET',
-		path: '/api/v1/featured_tags',
-		access: { scope: 'read:accounts' },
-		handler: placeholders.emptyUserList,
+		method: 'DELETE',
+		path: '/api/v1/featured_tags/:id',
+		access: { scope: 'write:accounts' },
+		handler: tags.deleteFeaturedTag,
 	},
 	{
 		method: 'GET',
 		path: '/api/v1/accounts/:id/featured_tags',
 		access: 'public',
-		handler: placeholders.accountFeaturedTags,
+		handler: tags.accountFeaturedTags,
 	},
 	{
 		method: 'GET',
@@ -587,6 +606,12 @@ export const ROUTES: readonly Route[] = [
 	},
 	{
 		method: 'GET',
+		path: '/api/v1/notifications/unread_count',
+		access: { scope: 'read:notifications' },
+		handler: notificationGroups.unreadCount,
+	},
+	{
+		method: 'GET',
 		path: '/api/v1/notifications/:id',
 		access: { scope: 'read:notifications' },
 		handler: notifications.getNotification,
@@ -596,6 +621,43 @@ export const ROUTES: readonly Route[] = [
 		path: '/api/v1/notifications/:id/dismiss',
 		access: { scope: 'write:notifications' },
 		handler: notifications.dismissNotification,
+	},
+	// Grouped notifications (mastodon/notification-groups.ts).
+	{
+		method: 'GET',
+		path: '/api/v2/notifications',
+		access: { scope: 'read:notifications' },
+		handler: notificationGroups.listGroupedNotifications,
+	},
+	{
+		method: 'GET',
+		path: '/api/v2/notifications/unread_count',
+		access: { scope: 'read:notifications' },
+		handler: notificationGroups.unreadGroupCount,
+	},
+	{
+		method: 'POST',
+		path: '/api/v2/notifications/clear',
+		access: { scope: 'write:notifications' },
+		handler: notifications.clearNotifications,
+	},
+	{
+		method: 'GET',
+		path: '/api/v2/notifications/:group_key',
+		access: { scope: 'read:notifications' },
+		handler: notificationGroups.getNotificationGroup,
+	},
+	{
+		method: 'POST',
+		path: '/api/v2/notifications/:group_key/dismiss',
+		access: { scope: 'write:notifications' },
+		handler: notificationGroups.dismissNotificationGroup,
+	},
+	{
+		method: 'GET',
+		path: '/api/v2/notifications/:group_key/accounts',
+		access: { scope: 'read:notifications' },
+		handler: notificationGroups.notificationGroupAccounts,
 	},
 
 	{ method: 'POST', path: '/api/v1/push/subscription', access: { scope: 'push' }, handler: push.createSubscription },

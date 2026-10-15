@@ -469,6 +469,20 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/account-relations.test.ts`, `test/inbox.test.ts` ("endorsements and inbound activities"),
   `test/inbox-regressions.test.ts`, `test/migrations.test.ts`, `test/policy-oracle.test.ts`,
   `test/policy-bounds.test.ts`, `test/policy-writes.test.ts`.
+- **VIS-20: a followed hashtag brings into home only what home may show, and featured hashtags show only their
+  counts.** The hashtags a local account follows are its own: only it lists them, and only its home and its Tag
+  entities read them (R29). Home shows a followed hashtag's public originals, not boosts, through `homeFilterSql` (VIS-1,
+  VIS-5, VIS-13 to VIS-15: nothing of an author or a mentioned account the viewer blocks or mutes, of an author who
+  blocks the viewer or whose domain the viewer blocks), as Mastodon's `FeedManager#filter_from_tags?`; never an
+  unlisted, private, direct or limited status, which the hashtag index it reads does not hold. Its cost is bounded
+  (RES-7): a window of a page per followed hashtag, at most 100 hashtags. A featured hashtag shows how many of the
+  account's public and unlisted statuses carry it and the date of the newest, never which; an unavailable account
+  shows none (VIS-1). The counts are kept on write, so no read counts the account's history; featuring a hashtag counts
+  the account's own history once, and deleting or editing the newest tagged status walks back to the one before it, as
+  Mastodon does (accepted: a local user's action on their own data). _Implemented on branch `kopje/tags`:_
+  `src/domain/tags.ts`, `src/domain/featured-tags.ts`, `homeTimeline` in `src/domain/timelines.ts`, `TagWindows` in
+  `src/domain/audience.ts`, migration `0016_tags`; `test/followed-tags.test.ts`, `test/featured-tags.test.ts`,
+  `test/policy-endpoints.test.ts`, `test/policy-bounds.test.ts`, `test/migrations.test.ts`.
 - **VIS-22: a pin shows only what its status shows, and a conversation mute is its owner's alone.** A pin
   (`StatusPin`) is of the pinner's own status, never a boost or a direct or limited one, at most five per account
   (`StatusPinValidator`). Pins are public, as Mastodon's: `GET /api/v1/accounts/:id/statuses?pinned=true` lists them
@@ -1152,8 +1166,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   window, and the account's other followers grow). _Enforced (main)_ for scheduled statuses: a page reads the
   account's own index by id, and a publication round reads the due ones through the index by time, so neither grows
   with the accounts that schedule or their scheduled statuses (`test/policy-bounds.test.ts`, "however many accounts
-  schedule"). Context traversal and edit history:
-  _Planned (B4a fixes)._
+  schedule"). _Enforced (main)_ for grouped notifications: a page of groups walks the viewer's notifications from the
+  cursor, as the list does, and reads at most 2,000 of those the rule shows; each group's count, samples and ends are
+  read through the `(account_id, group_key, id)` index, at most 400 notifications per group; a group's accounts are
+  paged through the same index; so none grows with the notifications of one group (`test/policy-bounds.test.ts`,
+  "however many notifications a group holds"). Accepted: a group of more than 400 counts 400, and a page whose walk
+  meets more than 2,000 notifications of the groups it found (one group that large, in practice) ends with those groups,
+  its Link going on from the last notification read. Dismissing a group and clearing delete in the request, as Mastodon
+  does. Context traversal and edit history: _Planned (B4a fixes)._
 
 ### Data and keys (DATA)
 

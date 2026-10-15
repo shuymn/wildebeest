@@ -59,6 +59,10 @@ const NOT_CARRIED: Record<string, string> = {
 	scheduled_statuses: 'posts scheduled in Kopje; legacy Wildebeest has no scheduled statuses',
 	status_pins:
 		'legacy never wrote its status_pins table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
+	tag_follows:
+		'legacy never wrote its followed_tags table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
+	featured_tags:
+		'legacy never wrote its featured_tags table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 }
 
 // Tables the converter fills through Kopje's own code, over the rows it carried, rather than with SQL of its own: the
@@ -86,6 +90,8 @@ const NOT_CONVERTED: Record<string, string> = {
 	'domain_blocks.id': ASSIGNED,
 	'favourites.id': ASSIGNED,
 	'follows.id': ASSIGNED,
+	'local_accounts.featured_announced':
+		'0: other servers stored a converted actor without its featured collections, so its first Add or Remove sends it again',
 	'local_accounts.fields': 'legacy has no profile fields',
 	'local_accounts.hide_collections': 'legacy has no setting to hide the network: every account shows it',
 	'local_accounts.suspended_at': 'legacy has no suspension',
@@ -95,6 +101,8 @@ const NOT_CONVERTED: Record<string, string> = {
 	'media_attachments.scheduled_status_id': 'held by a scheduled status of Kopje; legacy has none',
 	'mutes.expires_at': 'legacy mutes never expire',
 	'mutes.id': ASSIGNED,
+	'notifications.group_key':
+		'legacy never grouped notifications: carried ones stay ungrouped, as stored ones do in 0017',
 	'status_edits.id': ASSIGNED,
 	'status_edits.poll_options': 'legacy has no polls',
 	'statuses.thread': 'written by the trigger statuses_thread and given again by backfillConversations (DERIVED)',
@@ -132,6 +140,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'follows.id': DEFAULT,
 	'lists.created_at': TIME,
 	'local_accounts.created_at': TIME,
+	'local_accounts.featured_announced': DEFAULT,
 	'local_accounts.fields': DEFAULT,
 	'local_accounts.hide_collections': DEFAULT,
 	'local_accounts.suspended_at': DEFAULT,
@@ -147,6 +156,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'mutes.created_at': TIME,
 	'mutes.id': DEFAULT,
 	'notifications.created_at': TIME,
+	'notifications.group_key': DEFAULT,
 	'oauth_clients.created_at': TIME,
 	'status_edits.created_at': TIME,
 	'status_edits.id': DEFAULT,

@@ -109,13 +109,20 @@ const FOLLOWED = `SELECT target_account_id AS account_id FROM follows WHERE acco
 // stored, or the partner's account was purged) is left out too, so a purge does not bring back a reply home hid. A
 // reply whose parent is deleted keeps its partner. Others' statuses leave home when their author is in one of the
 // viewer's exclusive lists (EXCLUSIVE_MEMBERS); the viewer's own never do.
-// It reads three streams, each from the cursor through an index, and merges them: a window of each followed account's
+// Home also shows the public statuses, not boosts, that carry a hashtag the viewer follows (tag_follows), as Mastodon's
+// FanOutOnWriteService#deliver_to_hashtag_followers! puts a broadcastable status into its followers' home feeds, with
+// homeFilterSql as FeedManager#filter_from_tags? (none of the follow's options or exclusive lists apply to them). As
+// home is a read, they include those posted before the follow, and leave home when it ends.
+// It reads four streams, each from the cursor through an index, and merges them: a window of each followed account's
 // public, unlisted and private statuses (AuthorWindows, on statuses_feed) with every filter inside the window; the
 // viewer's own statuses; and a window of each followed account's direct and limited statuses that mention the viewer,
-// from the viewer's mentions by that account in such statuses (status_mentions.requires_mention). A page reads at most
-// a page of statuses per followed account in each window, and those a follow's options or homeFilterSql leave out on
-// the way, however long their history; the viewer's own statuses cost a page, and mentions by accounts the viewer does
-// not follow, or in public, unlisted and private statuses, are never read.
+// from the viewer's mentions by that account in such statuses (status_mentions.requires_mention); and a window of each
+// followed hashtag's public statuses, from its public hashtag rows (status_tags_public). A status in more than one is
+// shown once. A page reads at most a page of statuses per followed account and per followed hashtag in each window,
+// and those a follow's options or homeFilterSql leave out on the way, however long their history; the viewer's own
+// statuses cost a page, mentions by accounts the viewer does not follow, or in public, unlisted and private statuses,
+// are never read, and neither are a hashtag's statuses that are not public. The followed hashtags are capped
+// (MAX_FOLLOWED_TAGS in tags.ts).
 export const homeTimeline = userReadOperation<{ page: PageQuery; present: Present }, Page<Status>>(
 	(db, { page, present }, _viewer, viewer) => {
 		const { accountId, now } = viewer
@@ -128,7 +135,8 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 			db,
 			'homeFilter',
 			{
-				all: true,
+				// A status may come from more than one stream (a followed account's, with a followed hashtag).
+				all: false,
 				branches: [
 					// The public, unlisted and private statuses of the accounts home shows: a window of each, on statuses_feed.
 					{
@@ -152,17 +160,63 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 						and: options,
 						tail: `ORDER BY m.status_id ${order} LIMIT ?4`,
 					},
+					// The public statuses, not boosts, with a hashtag the viewer follows: a window of each, on status_tags_public,
+					// cut at its bound (followedTagBounds).
+					{
+						tags: "SELECT json_extract(value, '$.name') AS name, json_extract(value, '$.bound') AS bound FROM json_each(?6)",
+						tag: 't.name',
+						from: 'status_tags t CROSS JOIN',
+						join: 'ON s.id = t.status_id',
+						// One bound on each side, so both are bounds of the index walk: the cursor's on one, the window's on the
+						// other (inclusive; the cursor's own status is left out by inequality).
+						where: `t.public = 1 AND ${
+							cursor.ascending
+								? 't.status_id > ?3 AND t.status_id <= g.bound AND t.status_id <> ?2'
+								: 't.status_id < ?2 AND t.status_id >= g.bound AND t.status_id <> ?3'
+						}`,
+						and: "s.visibility = 'public' AND s.reblog_of_id IS NULL",
+						tail: `ORDER BY t.status_id ${order} LIMIT ?4`,
+					},
 				],
 				tail: `ORDER BY id ${order} LIMIT ?4`,
 			},
 			accountId,
 			...rangeParams(cursor),
 			cursor.limit,
-			now
+			now,
+			followedTagBounds(db, accountId, cursor)
 		)
 		return statusesPage(db, ids(rows), cursor, viewer, present)
 	}
 )
+
+// How many of a followed hashtag's public statuses from the cursor home inspects for a page: two pages, and at least 40.
+// Mastodon filters a hashtag's statuses as they arrive (FeedManager#filter_from_tags? at fan-out); Kopje filters them
+// as home is read, so a hashtag whose newest statuses are mostly hidden from the viewer (a blocked or muted author's)
+// would otherwise have home walk all of them on every page. Beyond the budget a window stops: a page then shows fewer
+// of the hashtag's statuses, and those below a stretch of hidden ones longer than the budget are shown only once
+// home's other streams move the page past that stretch (a deliberate difference from Mastodon).
+function tagCandidates(limit: number): number {
+	return Math.max(2 * limit, 40)
+}
+
+// The viewer's followed hashtags, each with the bound of its window: its tagCandidates-th public status from the
+// cursor (none when it has fewer), found by one seek of status_tags_public that reads at most that many entries. The
+// window's walk then stops there, whatever the rule leaves out. As JSON, for home's TagWindows.
+function followedTagBounds(db: Db, viewerId: string, cursor: Cursor): string {
+	const order = cursor.ascending ? 'ASC' : 'DESC'
+	const rows = db.all<{ name: string; bound: string | null }>(
+		`SELECT f.name, (SELECT c.status_id FROM status_tags c WHERE c.name = f.name AND c.public = 1 AND ${rangeSql('c.status_id')}
+			ORDER BY c.status_id ${order} LIMIT 1 OFFSET ?4 - 1) AS bound
+		FROM tag_follows f WHERE f.account_id = ?1`,
+		viewerId,
+		...rangeParams(cursor),
+		tagCandidates(cursor.limit)
+	)
+	// With fewer, the bound is the cursor's own (inclusive here: the window leaves the cursor's status out by itself).
+	const [max, min] = rangeParams(cursor)
+	return JSON.stringify(rows.map((row) => ({ name: row.name, bound: row.bound ?? (cursor.ascending ? max : min) })))
+}
 
 // The rule a list's replies_policy adds for a reply to someone other than its author or the owner (?1), with the list
 // at ?6 (Mastodon's FeedManager#filter_from_list? and the list's crutches_following): followed, an account the owner
