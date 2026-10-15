@@ -34,6 +34,11 @@ const EXCEPTIONS: Record<string, Exception> = {
 		mastodon: 'absent',
 		reason: "Doorkeeper's revocation endpoint, outside /api",
 	},
+	'GET /.well-known/oauth-authorization-server': {
+		kopje: 'none token, scopes any, no user required',
+		mastodon: 'absent',
+		reason: 'WellKnown::OAuthMetadataController, not an API controller: public, it reads no token',
+	},
 
 	// Answers that do not depend on the caller, so no token is read.
 	'GET /api/v1/trends': {
