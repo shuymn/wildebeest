@@ -72,6 +72,8 @@ export type RemoteStatusInput = {
 	published: string | null
 	updated: string | null
 	inReplyTo: string | null
+	// The thread the sender names (Mastodon's `conversation`), when it names one.
+	conversation?: string | null
 	to: string[]
 	cc: string[]
 	// hrefs of Mention tags, and normalized names of Hashtag tags.
@@ -356,6 +358,8 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 			: parent.account_id === author.id && parent.in_reply_to_uri !== null
 				? parent.in_reply_to_account_id
 				: parent.account_id
+	// Its thread (statuses.thread): the parent's when the parent is stored, else the conversation the sender names
+	// (ActivityPub::Activity::Create#conversation_from_uri), else what the trigger of migration 0009 gives.
 	const id = insertWithFreshId(
 		'statuses',
 		() => remoteId(iso(published), ctx.now),
@@ -363,8 +367,9 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 			db.run(
 				`INSERT INTO statuses (id, uri, url, account_id, in_reply_to_uri, in_reply_to_id, in_reply_to_account_id,
 					visibility, spoiler_text, content, sensitive, language, published_at, edited_at, remote_version, raw,
-					search_text, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					search_text, created_at, thread)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+					COALESCE((SELECT p.thread FROM statuses p WHERE p.id = ?6), ?))`,
 				candidate,
 				input.uri,
 				input.url,
@@ -382,7 +387,8 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 				iso(version),
 				input.raw,
 				searchText(input),
-				iso(ctx.now)
+				iso(ctx.now),
+				input.conversation ?? null
 			)
 			return candidate
 		}

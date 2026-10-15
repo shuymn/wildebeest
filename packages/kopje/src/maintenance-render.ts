@@ -8,6 +8,7 @@ import { StoreUnavailableError } from './platform/store-errors'
 import { isStorableSnapshot, type Snapshot } from './platform/store-kernel'
 
 // The converter's shared functions, for the npm package, which ships no sources (cli/lib/cutover/kopje-runtime.js).
+export { backfillConversations } from './domain/conversation-rows'
 export { languageOf } from './domain/language'
 export { normalizeSearchText } from './domain/search-text'
 export { hashtagObjectName, normalizeTag } from './domain/tag-name'

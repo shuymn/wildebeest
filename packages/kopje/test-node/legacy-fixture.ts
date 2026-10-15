@@ -67,6 +67,8 @@ export type FixtureOptions = {
 	// More of alice's domain blocks, spelled as legacy never stored them: 'spam.example.' (the same block as
 	// 'Spam.Example' once normalized), 'Upper.Example', 'trailing.example.', 'bücher.example', and 'not a domain'.
 	domainBlockSpellings?: boolean
+	// A direct exchange: r1 writes to alice (who is notified of it), and alice answers in its thread.
+	directMessages?: boolean
 }
 
 export type LegacyFixture = {
@@ -188,6 +190,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		loneSurrogates = false,
 		imagesAccount,
 		domainBlockSpellings = false,
+		directMessages = false,
 	} = options
 	const images = imagesAccount === undefined ? IMAGES : `https://imagedelivery.net/${imagesAccount}`
 	if (before0016 !== undefined && level < 16) {
@@ -452,6 +455,8 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		// Defaults: published a minute before `minutes`, not updated.
 		published?: string
 		updated?: string
+		// Mastodon's conversation identifier, kept in the object.
+		conversation?: string
 	}
 	const remoteNote = (input: RemoteNote): Note => {
 		const proxy = objectId()
@@ -474,6 +479,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 			contentMap: input.contentMap ?? { ja: input.content },
 			attachment: input.attachment ?? [],
 			tag: input.tags ?? [],
+			...(input.conversation === undefined ? {} : { conversation: input.conversation }),
 		}
 		const original = input.lostOriginal === true ? (level >= 21 ? proxy : null) : uri
 		insert('objects', {
@@ -689,6 +695,31 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		published: spaced(169, 'Z'),
 		updated: spaced(175, '+05:30'),
 	})
+	const directToAlice = directMessages
+		? remoteNote({
+				author: 1,
+				minutes: 172,
+				content: '<p><span class="h-card"><a href="https://kopje.test/@alice">@alice</a></span> just us</p>',
+				to: [alice],
+				cc: [],
+				mastodonId: snowflake(171, 3),
+				tags: [{ type: 'Mention', href: alice, name: '@alice@kopje.test' }],
+				conversation: 'tag:remote.example,2024-03-01:objectId=171:objectType=Conversation',
+			})
+		: null
+	if (directToAlice !== null) {
+		localNote({
+			author: alice,
+			username: 'alice',
+			minutes: 174,
+			text: '@r1 just us, then',
+			to: [r(1).uri],
+			cc: [],
+			mastodonId: snowflake(174, 2),
+			tags: [{ type: 'Mention', href: r(1).uri, name: '@r1@remote.example' }],
+			inReplyTo: directToAlice,
+		})
+	}
 	remoteNote({
 		author: 2,
 		minutes: 180,
@@ -883,6 +914,9 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		notify('favourite', alice, bob, publicNote, 506)
 		notify('follow', bob, r(3).uri, null, 507)
 		notify('mention', bob, alice, followersOnly, 508)
+		if (directToAlice !== null) {
+			notify('mention', alice, r(1).uri, directToAlice, 511)
+		}
 	}
 	if (remoteOwnedNotifications) {
 		notify('reblog', r(0).uri, r(1).uri, r0Post, 509)

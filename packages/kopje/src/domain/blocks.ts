@@ -21,6 +21,7 @@ import {
 } from './activities'
 import { activeMuteSql, inDomainSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
+import { leaveConversationsWith } from './conversations'
 import { retractFollow } from './inbox'
 import { writeOperation } from './operation'
 import type { Db } from '../db/sql'
@@ -30,7 +31,8 @@ import type { Db } from '../db/sql'
 // sees and is notified of is applied where those are read and written (audience.ts, notifications.ts, timelines.ts);
 // here they are recorded, and the relationships they end are ended:
 //
-//   - A block ends the follows between the two accounts, either way and in either state. Our follow of a remote
+//   - A block ends the follows between the two accounts, either way and in either state, and the blocker's
+//     conversations with the blocked account (AfterBlockService#clear_conversations!). Our follow of a remote
 //     account is undone there (Undo Follow), and a remote account's follow of us is answered with a Reject; a remote
 //     target is sent the Block, and an unblock its Undo. A local block always applies: the ended Follow's id is
 //     recorded as retracted (ID-7) only within the remote actor's retraction cap, since the block itself refuses that
@@ -154,6 +156,7 @@ export const block = userWriteOperation<RelationInput, RelationshipResult>((db, 
 	if (existing === undefined) {
 		endFollow(db, viewer, target, input.now)
 		endFollow(db, target, viewer, input.now)
+		leaveConversationsWith(db, viewer.id, target.id)
 		const edge = db.first<{ id: string }>(
 			`INSERT INTO blocks (account_id, target_account_id, created_at) VALUES (?, ?, ?)
 			RETURNING CAST(id AS TEXT) AS id`,

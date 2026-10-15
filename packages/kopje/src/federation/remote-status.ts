@@ -2,6 +2,7 @@ import type { DocumentLoader } from '@fedify/fedify'
 
 import { isTransientLoadError } from './loader'
 import { isPublicCollection } from '../domain/audience'
+import { isConversationId } from '../domain/conversation-rows'
 import { languageOf } from '../domain/language'
 import {
 	MAX_MEDIA_DESCRIPTION_LENGTH,
@@ -236,6 +237,9 @@ export function parseRemoteStatus(object: unknown, activity: Json | null = null)
 	const content = sanitizeRemoteHtml(html)
 	const { mentions, tags } = tagsOf(object)
 	const inReplyTo = idOf(object.inReplyTo)
+	// Mastodon's `conversation` (ActivityPub::Activity::Create reads it, and not `context`): any identifier, a tag: URI
+	// included, of a bounded length (isConversationId, which the backfill of migration 0009 applies to stored objects).
+	const conversation = isConversationId(object.conversation) ? object.conversation : null
 	return {
 		uri,
 		url,
@@ -248,6 +252,7 @@ export function parseRemoteStatus(object: unknown, activity: Json | null = null)
 		published: timeOf(object.published),
 		updated: timeOf(object.updated),
 		inReplyTo: inReplyTo === null || inReplyTo.length > MAX_URL_LENGTH ? null : inReplyTo,
+		conversation,
 		to: audience(object, 'to', activity),
 		cc: audience(object, 'cc', activity),
 		mentions,

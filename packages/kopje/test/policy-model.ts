@@ -1,4 +1,4 @@
-import type { World, WorldStatus } from './policy-world'
+import { statusUri, unknownParentUri, type World, type WorldStatus } from './policy-world'
 import type { NotificationType } from '../src/domain/notifications'
 
 // The policy rules as docs/visibility.md states them, in plain TypeScript over a generated world
@@ -55,6 +55,16 @@ export const NOTIFICATION_TYPES = [
 ] as const satisfies readonly NotificationType[]
 const EVERY_TYPE: Exclude<NotificationType, (typeof NOTIFICATION_TYPES)[number]> extends never ? true : false = true
 void EVERY_TYPE
+
+// A conversation (Mastodon's AccountConversation): its owner, thread and participants (account indices in id order),
+// its statuses (oldest first), and whether it is unread.
+export type ModelConversation = {
+	owner: number
+	thread: string
+	participants: number[]
+	statuses: number[]
+	unread: boolean
+}
 
 export class PolicyModel {
 	constructor(readonly world: World) {}
@@ -323,6 +333,50 @@ export class PolicyModel {
 			}
 		}
 		return this.homeFilter(s, owner)
+	}
+
+	// The thread of a status (Mastodon's conversation_id, which a reply takes from its parent): the uri of the status its
+	// reply chain starts at, or, when that one replies to a status never stored, the uri it names.
+	thread(s: number): string {
+		let at = s
+		for (let parent = this.status(at).replyTo; parent !== null; parent = this.status(at).replyTo) {
+			at = parent
+		}
+		return this.status(at).replyToUnknown ? unknownParentUri(at) : statusUri(at)
+	}
+
+	// The participants of a status for the owner of a conversation (AccountConversation.participants_from_status): its
+	// author and the accounts it mentions, not silently, less the owner, in id order.
+	participants(s: number, owner: number): number[] {
+		const { author, mentions } = this.status(s)
+		const all = new Set([author, ...mentions.filter((m) => !m.silent).map((m) => m.account)])
+		all.delete(owner)
+		return [...all].sort((a, b) => a - b)
+	}
+
+	// The conversations of the world's direct statuses (not boosts), as Mastodon's migration of them makes them: a local
+	// author's for the author, and one a local account was notified of (`notified`) for that account, each added in
+	// order. A conversation ends with its newest status, and is unread when that status is someone else's.
+	conversations(notified: (r: number, s: number) => boolean): ModelConversation[] {
+		const found = new Map<string, ModelConversation>()
+		this.world.statuses.forEach((status, s) => {
+			if (status.visibility !== 'direct' || status.reblogOf !== null) {
+				return
+			}
+			const owners = this.world.accounts.flatMap((account, x) =>
+				account.local && (x === status.author || notified(x, s)) ? [x] : []
+			)
+			for (const owner of owners) {
+				const participants = this.participants(s, owner)
+				const thread = this.thread(s)
+				const key = JSON.stringify([owner, thread, participants])
+				const conversation = found.get(key) ?? { owner, thread, participants, statuses: [], unread: false }
+				conversation.statuses.push(s)
+				conversation.unread = status.author !== owner
+				found.set(key, conversation)
+			}
+		})
+		return [...found.values()]
 	}
 
 	// Blocks the account, or mutes it with notifications.

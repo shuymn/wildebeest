@@ -7,6 +7,8 @@ import { migratedStore } from './helpers'
 import { NOTIFICATION_TYPES, PolicyModel, type Viewer } from './policy-model'
 import { accountId, listId, runs, statusId, type World, worldArb, writeWorld } from './policy-world'
 import { type Account, listFollows, type Page, type PageQuery } from '../src/domain/accounts'
+import { backfillConversations } from '../src/domain/conversation-rows'
+import { type Conversation, listConversations, markConversation } from '../src/domain/conversations'
 import type { NotificationType } from '../src/domain/notifications'
 import { listNotifications } from '../src/domain/notifications'
 import { resolveSearch } from '../src/domain/remote-statuses'
@@ -133,6 +135,8 @@ function writeCase(sql: SqlStorage, { world, edges }: Case): Map<string, SeededN
 			.one()
 		notifications.set(id, n)
 	}
+	// The conversations of the world's direct statuses and the mentions seeded, as migration 0009 makes them.
+	backfillConversations({ exec: (query: string) => sql.exec(query) })
 	return notifications
 }
 
@@ -173,6 +177,8 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'account statuses',
 				'bookmarks',
 				'context',
+				'conversation without its last status',
+				'conversations',
 				'favourited_by',
 				'favourites',
 				'followers',
@@ -611,6 +617,64 @@ function check(sql: SqlStorage, c: Case): string[] {
 			}
 			if (from === undefined || !m.shown(viewer, notification.type, from, s)) {
 				problems.push(`notifications ${nameOf(viewer)}: ${notification.type} from ${notification.account.id}`)
+			}
+		}
+
+		// Conversations: exactly the viewer's the model makes of the world's direct statuses and the mentions seeded, by
+		// newest last status, each with the viewer's own account when nobody else is in it, and its last status only if
+		// the viewer may see it (R2); page by page both ways. Another account's conversation is not found.
+		const seededMention = (r: number, s: number) =>
+			edges.notifications.some((n) => n.recipient === r && n.type === 'mention' && n.status === s)
+		const expected = m
+			.conversations(seededMention)
+			.filter((c) => c.owner === viewer)
+			.map((c) => ({ ...c, last: Math.max(...c.statuses) }))
+			.sort((a, b) => b.last - a.last)
+			.map((c) => ({
+				accounts: (c.participants.length > 0 ? c.participants : [viewer]).map(accountId),
+				last_status: m.visible(c.last, viewer) ? statusId(c.last) : null,
+				unread: c.unread,
+			}))
+		const conversationsOf = (page: PageQuery) =>
+			ok<Page<Conversation>>(run(listConversations, { ...user, page, present: PRESENT }), 'conversations')
+		const shownConversation = (c: Conversation) => {
+			shown.add('conversations')
+			if (c.last_status === null) {
+				shown.add('conversation without its last status')
+			} else {
+				status('conversations', viewer, c.last_status, (x) => m.visible(x, viewer))
+			}
+			return { accounts: c.accounts.map((a) => a.id), last_status: c.last_status?.id ?? null, unread: c.unread }
+		}
+		const older = pages(conversationsOf).map(shownConversation)
+		const newer: ReturnType<typeof shownConversation>[] = []
+		for (let i = 0, minId = '0'; i < 64; i++) {
+			const page = conversationsOf({ limit: 2, minId })
+			if (page.items.length === 0 || page.newest === null) {
+				break
+			}
+			newer.unshift(...page.items.map(shownConversation))
+			minId = page.newest
+		}
+		for (const [way, actual] of [
+			['max_id', older],
+			['min_id', newer],
+		] as const) {
+			if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+				problems.push(
+					`conversations (${way}) ${nameOf(viewer)}: shows ${JSON.stringify(actual)}, the model ${JSON.stringify(expected)}`
+				)
+			}
+		}
+		for (const other of sql
+			.exec<{ id: string }>('SELECT CAST(id AS TEXT) AS id FROM conversations WHERE account_id <> ?', accountId(viewer))
+			.toArray()) {
+			const marked = ok<Conversation | null>(
+				run(markConversation, { ...user, id: other.id, unread: false, present: PRESENT }),
+				'mark conversation'
+			)
+			if (marked !== null) {
+				problems.push(`conversations ${nameOf(viewer)}: marks another account's conversation ${other.id}`)
 			}
 		}
 	}
