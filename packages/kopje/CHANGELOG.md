@@ -67,6 +67,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       remote poll goes to its author as Mastodon's vote Note. A received `Question` is stored with its poll, an
       Update refreshes its counts and end, and a received vote counts in a local poll once, from an account that may
       see it, and is never stored as a status.
+    - Where Kopje differs from Mastodon: a poll's id is its status's id; a voter who blocks the author's domain is
+      refused, since the vote could not be delivered; a remote poll keeps at most 100 choices of 1,000 code units, and a
+      choice cut to that length cannot be voted for; any Note naming a choice in reply to a local poll is treated as a
+      vote, never as a status; a local poll's `Question` says `closed` once the cron has ended it, within 5 minutes of
+      its end; and the Update of counts reaches remote voters only for a public or unlisted status.
 
 ### Changed
 
