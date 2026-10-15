@@ -1012,9 +1012,19 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   the cursor through `statuses_feed`, so a page reads about a page per author however long each author's history and
   never reads a followed account's direct or limited statuses to others; home adds the viewer's own statuses (a page)
   and the direct and limited statuses that mention the viewer, from the cursor in the viewer's mentions
-  (`test/policy-bounds.test.ts`, the second case). _Gap:_ what a follow's options (boosts, languages, replies) and the
-  home filter leave out is still read on the way, and the mentions stream grows with the viewer's mentions home does
-  not show.
+  (`test/policy-bounds.test.ts`, the second case); an account whose every status the rule hides (unavailable, blocking
+  the viewer, or blocked, muted or domain-blocked by them) has no window. The public feed, account statuses,
+  notifications, favourites and bookmarks start at the cursor in their index, so a page from the middle of a long
+  history reads what the newest does (`test/policy-bounds.test.ts`, "however long the world's history"). Home's
+  mentions stream reads a window per followed account of the viewer's mentions in that account's direct and limited
+  statuses, through the partial index `status_mentions_requires_mention` (migration
+  `0008_status_mentions_requires_mention`), so mentions by accounts the viewer does not follow are never read. Account
+  statuses decide once whether the viewer may see the account at all (it is available, neither blocks the other), and
+  read nothing when not (`test/policy-bounds.test.ts`, "never sees"). _Gap:_ what a follow's options (boosts,
+  languages, replies) and the home filter leave out is still read on the way, and account statuses read past the
+  statuses of an account the viewer may see that they may not (a non-follower opening the profile of an account that
+  posts mostly to followers), up to that account's stored history: a remote account's private statuses are stored only
+  while a local account follows it, so no outside party can grow it at will (accepted).
   _Enforced (main)_ for search: statuses pass `listableSql` before `LIMIT`, each library source reads at most 2,500 rows through an index ordered by the status id it returns (cursors applied
   inside it), hashtags come from at most 500 entries per library source plus the newest 2,000 public statuses, and an
   account search matches the exact address (always), at most 1,000 username-prefix candidates, the 5,000 newest
