@@ -22,6 +22,9 @@ const configSchema = z.object({
 	IMPORT_TOKEN: z.string().min(1).optional(),
 	// The KEK that wraps local private keys. Unset reads as the empty string, which is a legal KEK (healthReport warns).
 	USER_KEK: z.string().optional(),
+	// The KEK the local keys were wrapped with before USER_KEK changed, read only by `kopje-admin keys rewrap`
+	// (app/key-rewrap.ts). Unset reads as the empty string, like USER_KEK; removed once the rewrap has passed.
+	USER_KEK_PREVIOUS: z.string().optional(),
 	// Images transformations uploads may reserve per UTC month (two per upload). The default stays under the 5,000 the
 	// Images free plan includes; an operator with paid transformations raises it in the dashboard.
 	IMAGES_MONTHLY_TRANSFORMS: z.coerce.number().int().min(0).default(4000),
@@ -48,6 +51,11 @@ export type Config = z.infer<typeof configSchema>
 // The effective KEK: an unset USER_KEK reads as the empty string, which is a legal KEK.
 export function userKek(config: Config): string {
 	return config.USER_KEK ?? ''
+}
+
+// The KEK a rewrap moves keys from: an unset USER_KEK_PREVIOUS reads as the empty string, as USER_KEK does.
+export function previousUserKek(config: Config): string {
+	return config.USER_KEK_PREVIOUS ?? ''
 }
 
 // The default share is a tenth of the instance budget: Kopje serves up to about ten local accounts.

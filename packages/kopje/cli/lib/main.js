@@ -20,6 +20,10 @@ Commands
                                 enough), one call at a time. Prints counts and the rows to look at; exits 3 when an original is
                                 missing, a type does not match, re-encoding failed, the Images quota or monthly budget
                                 stopped it, or the Store is not readonly (run it again later: made files are skipped)
+  keys rewrap                   move every local private key from USER_KEK_PREVIOUS (unset: the empty KEK) to
+                                USER_KEK, the same keys under a new wrapping (docs/setup.md, "Rotating the KEK").
+                                Resumable: keys already under USER_KEK are skipped. Prints counts and the keys it could
+                                not move; exits 3 when any failed
   dump <file>                   dump the Store to <file> (resumable)
       --chunk-mib <n>           chunk size in MiB, 0.001-16 (default 16)
       --lease-seconds <n>       freeze lease, renewed by every chunk (default 600)
@@ -770,6 +774,35 @@ export async function run({
 					)
 				}
 				return stopped !== null || problems.length > 0 ? 3 : 0
+			}
+			case 'keys': {
+				if (rest.length !== 1 || rest[0] !== 'rewrap') {
+					throw new UsageError('keys rewrap')
+				}
+				const counts = { rewrapped: 0, current: 0, failed: 0 }
+				/** @type {unknown[]} */
+				const failures = []
+				/** @type {string | null} */
+				let after = null
+				for (;;) {
+					const step = await client.post('/admin/keys/rewrap', { after })
+					counts.rewrapped += step.counts.rewrapped
+					counts.current += step.counts.current
+					counts.failed += step.counts.failed
+					failures.push(...step.failures)
+					out.progress(`keys rewrap: ${JSON.stringify(counts)}`)
+					if (step.done) {
+						break
+					}
+					after = step.next
+				}
+				print({ ...counts, failures })
+				if (failures.length > 0) {
+					out.info(
+						'some keys were not rewrapped (changed: run it again; unwrap-failed or pubkey-mismatch: neither KEK fits them)'
+					)
+				}
+				return failures.length > 0 ? 3 : 0
 			}
 			case 'dump': {
 				const path = rest[0]

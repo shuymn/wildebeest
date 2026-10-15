@@ -14,6 +14,8 @@ import {
 	getLocalKey,
 	getNodeInfoUsage,
 	listLocalKeys,
+	listRewrapKeys,
+	rewrapLocalKey,
 } from './domain/actors'
 import { checkCredential, type Credential, type UserCredential } from './domain/auth'
 import * as blocks from './domain/blocks'
@@ -454,6 +456,16 @@ export class Store extends DurableObject<Env> {
 
 	localKeys(callerBuild: string) {
 		return this.#kernel.execute(callerBuild, listLocalKeys, undefined)
+	}
+
+	// The KEK rewrap (app/key-rewrap.ts), from /admin/keys/rewrap: a page of wrapped keys, and the compare-and-swap write
+	// of one rewrapped key.
+	rewrapKeys(callerBuild: string, input: OperationInput<typeof listRewrapKeys>) {
+		return this.#kernel.execute(callerBuild, listRewrapKeys, input)
+	}
+
+	rewrapKey(callerBuild: string, input: OperationInput<typeof rewrapLocalKey>) {
+		return this.#kernel.execute(callerBuild, rewrapLocalKey, input)
 	}
 
 	collection(callerBuild: string, input: OperationInput<typeof getCollection>) {

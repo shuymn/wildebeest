@@ -1,8 +1,10 @@
 import { type FieldSource, fieldSources } from './accounts'
+import { accessAdminRefusal } from './admin-authority'
 import { availableLocalSql, followListsShownSql } from './audience'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
-import { base64ToBytes } from '../security/key-wrap'
+import type { ImportAuthority } from '../platform/store-admin'
+import { base64ToBytes, bytesToBase64 } from '../security/key-wrap'
 
 // What the federation layer needs from the Store to publish local actors: profiles, wrapped keys, collections, and
 // usage counts. Ids are derived by the caller from the domain fixed at /setup.
@@ -126,6 +128,91 @@ export const listLocalKeys = readOperation<void, { owner: string | null; key: St
 export function decodeKey(key: EncodedKey): StoredKey {
 	return { privkey: base64ToBytes(key.privkey), salt: base64ToBytes(key.salt), pubkey: key.pubkey }
 }
+
+// ---- the KEK rewrap (app/key-rewrap.ts, `kopje-admin keys rewrap`): the Store reads pages of the wrapped keys and
+// writes a rewrapped key only over the bytes that were read. The cryptography runs in the Worker.
+
+// Local keys per page: each costs the Worker a few PBKDF2 derivations and RSA signatures, so a page stays well within a
+// request's CPU time and its Store calls (one listing and at most one write per key).
+export const KEY_PAGE = 10
+
+// A key the rewrap may change: account is the local account id, or null for the instance actor; owner is the username,
+// or null for the instance actor.
+export type RewrapKey = { account: string | null; owner: string | null; key: StoredKey }
+
+// keys: at most KEY_PAGE local users in account id order after `after`, then, on the last page, the instance actor's
+// key; next: the account id the page ended at (the next page starts after it); done: nothing is after this page.
+export type RewrapKeyPage = { keys: RewrapKey[]; next: string | null; done: boolean }
+
+export const listRewrapKeys = readOperation<{ after: string | null }, RewrapKeyPage>((db, { after }) => {
+	const users = db
+		.all<KeyRow & { account_id: string }>(
+			`SELECT l.account_id, a.username, l.privkey, l.privkey_salt, l.pubkey FROM local_accounts l
+			JOIN accounts a ON a.id = l.account_id WHERE l.account_id > ? ORDER BY l.account_id LIMIT ?`,
+			after ?? '',
+			KEY_PAGE
+		)
+		.map((row) => ({ account: row.account_id, owner: row.username, key: storedKey(row) }))
+	const next = users.at(-1)?.account ?? after
+	if (users.length === KEY_PAGE) {
+		return { keys: users, next, done: false }
+	}
+	const instance = readInstanceKey(db)
+	return {
+		keys: instance === null ? users : [...users, { account: null, owner: null, key: decodeKey(instance) }],
+		next,
+		done: true,
+	}
+})
+
+export type RewrapWrite = { status: 'written' } | { status: 'changed' } | { status: 'denied'; reason: string }
+
+// Replaces one wrapped key (bytes and salt; the public key never changes) by its rewrapped form, only while the stored
+// key is still exactly the one the Worker read and checked: anything written meanwhile is never overwritten
+// ('changed'). An Access admin only, checked again here.
+export const rewrapLocalKey = writeOperation<
+	{
+		authority: ImportAuthority
+		account: string | null
+		read: StoredKey
+		wrapped: { privkey: Uint8Array; salt: Uint8Array }
+	},
+	RewrapWrite
+>((db, { authority, account, read, wrapped }) => {
+	const refused = accessAdminRefusal(db, authority, 'only an Access admin rewraps keys')
+	if (refused !== null) {
+		return { status: 'denied', reason: refused }
+	}
+	if (account !== null) {
+		const written = db.run(
+			`UPDATE local_accounts SET privkey = ?, privkey_salt = ?
+			WHERE account_id = ? AND privkey = ? AND privkey_salt = ? AND pubkey = ?`,
+			wrapped.privkey.slice().buffer,
+			wrapped.salt.slice().buffer,
+			account,
+			read.privkey.slice().buffer,
+			read.salt.slice().buffer,
+			read.pubkey
+		)
+		return written === 1 ? { status: 'written' } : { status: 'changed' }
+	}
+	const stored = readInstanceKey(db)
+	if (
+		stored === null ||
+		stored.privkey !== bytesToBase64(read.privkey) ||
+		stored.salt !== bytesToBase64(read.salt) ||
+		stored.pubkey !== read.pubkey
+	) {
+		return { status: 'changed' }
+	}
+	const key: EncodedKey = {
+		privkey: bytesToBase64(wrapped.privkey),
+		salt: bytesToBase64(wrapped.salt),
+		pubkey: stored.pubkey,
+	}
+	db.run('UPDATE instance_settings SET value = ? WHERE name = ?', JSON.stringify(key), INSTANCE_ACTOR_KEY)
+	return { status: 'written' }
+})
 
 export type CollectionKind = 'followers' | 'following'
 

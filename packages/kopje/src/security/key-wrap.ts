@@ -3,7 +3,7 @@
 //   wrapping key : PBKDF2 (SHA-256, 10000 iterations) of the UTF-8 KEK with a 16-byte random salt -> AES-256-GCM
 //   privkey      : AES-GCM of the PKCS#8 DER, IV = the same 16-byte salt, no additional data, 128-bit tag appended
 //   pubkey       : SPKI DER as a single base64 line between "-----BEGIN PUBLIC KEY-----" and the END line
-// Keys are RSASSA-PKCS1-v1_5 with SHA-256 and a 4096-bit modulus. Only the keyring uses this module.
+// Keys are RSASSA-PKCS1-v1_5 with SHA-256 and a 4096-bit modulus.
 
 export type WrappedKey = { privkey: Uint8Array; salt: Uint8Array }
 
@@ -44,6 +44,13 @@ export async function wrapPkcs8(kek: string, pkcs8: Uint8Array, salt: Uint8Array
 export async function unwrapPkcs8(kek: string, { privkey, salt }: WrappedKey): Promise<Uint8Array> {
 	const key = await wrappingKey(kek, salt)
 	return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: salt }, key, privkey))
+}
+
+// The same private key wrapped under another KEK, with a fresh salt (the KEK rewrap, app/key-rewrap.ts). Throws as
+// unwrapPkcs8 does when `from` does not unwrap it.
+export async function rewrapPkcs8(from: string, to: string, key: WrappedKey): Promise<WrappedKey> {
+	const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES))
+	return { privkey: await wrapPkcs8(to, await unwrapPkcs8(from, key), salt), salt }
 }
 
 // Extractable because Fedify refuses non-extractable keys; the key lives only as long as the request using it.
