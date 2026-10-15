@@ -1251,6 +1251,69 @@ describe('Store migration runner', () => {
 		expect(large - small).toBeLessThanOrEqual(5 * (10_000 - 1000))
 	}, 60_000)
 
+	it('upgrades a Store with 0013_polls: new tables whose rows go with their status and account, and edits keep their history', async () => {
+		const index = NAMES.indexOf('0013_polls')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, index)).upgrade()).toMatchObject({ ok: true })
+			const alice = '100000000000000001'
+			const remote = '100000000000000002'
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice', NULL)",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://remote.example/users/r', 'r', 'remote.example')",
+				remote
+			)
+			sql.exec(
+				"INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES ('200000000000000001', 'https://kopje.test/ap/o/1', ?, 'public', '2026-01-01T00:00:00.000Z')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO status_edits (status_id, content, created_at) VALUES ('200000000000000001', 'old', '2026-01-01T00:00:00.000Z')"
+			)
+
+			expect(await kernel(state, MIGRATIONS.slice(0, index + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: [NAMES[index]],
+			})
+			expect(sql.exec('SELECT poll_options FROM status_edits').toArray()).toEqual([{ poll_options: null }])
+			const poll = (options: string, tallies: string, expiresAt: string | null = '2026-01-02T00:00:00.000Z') =>
+				sql.exec(
+					"INSERT INTO polls (status_id, options, tallies, expires_at) VALUES ('200000000000000001', ?, ?, ?)",
+					options,
+					tallies,
+					expiresAt
+				)
+			// As many counts as choices, at least one choice and at most 100, and a time in the one form the Store writes.
+			expect(() => poll('["a","b"]', '[0]')).toThrow(/CHECK/)
+			expect(() => poll('[]', '[]')).toThrow(/CHECK/)
+			expect(() => poll(JSON.stringify(Array.from({ length: 101 }, String)), '[]')).toThrow(/CHECK/)
+			expect(() => poll('["a","b"]', '[0,0]', '2026-01-02T00:00:00Z')).toThrow(/CHECK/)
+			poll('["a","b"]', '[0,0]')
+			const vote = (account: string, choice: number) =>
+				sql.exec(
+					"INSERT INTO poll_votes (poll_id, account_id, choice) VALUES ('200000000000000001', ?, ?)",
+					account,
+					choice
+				)
+			vote(remote, 0)
+			expect(() => vote(remote, 0)).toThrow(/UNIQUE/)
+			vote(alice, 1)
+			expect(() => sql.exec("UPDATE status_edits SET poll_options = '{}'")).toThrow(/CHECK/)
+			// A vote goes with its account; the poll and its votes go with the status.
+			sql.exec('DELETE FROM accounts WHERE id = ?', remote)
+			expect(sql.exec('SELECT account_id FROM poll_votes').toArray()).toEqual([{ account_id: alice }])
+			sql.exec("DELETE FROM statuses WHERE id = '200000000000000001'")
+			expect(sql.exec('SELECT (SELECT count(*) FROM polls) + (SELECT count(*) FROM poll_votes) AS n').one()).toEqual({
+				n: 0,
+			})
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
 	it('stays readonly with exact bookkeeping when a file fails, and lets a fixed build continue', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {

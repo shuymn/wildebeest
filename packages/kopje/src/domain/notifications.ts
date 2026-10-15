@@ -15,7 +15,8 @@ import type { Db } from '../db/sql'
 // written one. A new notification also records a push for each of the recipient's Web Push subscriptions that wants
 // it; domain/push.ts checks this rule again, at its own time, before each is sent (PUSH-3).
 
-export type NotificationType = 'mention' | 'status' | 'reblog' | 'favourite' | 'follow' | 'follow_request' | 'update'
+export type NotificationType =
+	'mention' | 'status' | 'reblog' | 'favourite' | 'follow' | 'follow_request' | 'update' | 'poll'
 
 export type Notification = {
 	id: string

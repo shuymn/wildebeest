@@ -18,6 +18,7 @@ import {
 	Organization,
 	Person,
 	PropertyValue,
+	Question,
 	Service,
 } from '@fedify/vocab'
 import { Temporal } from 'temporal-polyfill'
@@ -328,7 +329,15 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 			return null
 		}
 		const note = await rpc((s) => s.localNote(build, { uri: `${origin}/ap/o/${uuid}` }))
-		return note === null ? null : Note.fromJsonLd(JSON.parse(note), { contextLoader: ctx.contextLoader })
+		if (note === null) {
+			return null
+		}
+		const json = JSON.parse(note) as { type?: unknown }
+		// A status with a poll is a Question (ActivityPub::NoteSerializer). Fedify serves whatever object the dispatcher
+		// returns; the dispatcher is registered for Note, the type of the path's other objects.
+		return json.type === 'Question'
+			? ((await Question.fromJsonLd(json, { contextLoader: ctx.contextLoader })) as unknown as Note)
+			: Note.fromJsonLd(json, { contextLoader: ctx.contextLoader })
 	})
 
 	// The outbox: Create and Announce of the public and unlisted statuses, newest first.

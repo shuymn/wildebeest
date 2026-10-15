@@ -31,6 +31,7 @@ import * as media from './domain/media'
 import * as mediaRebuild from './domain/media-rebuild'
 import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
+import * as polls from './domain/polls'
 import * as push from './domain/push'
 import { resolveSearch } from './domain/remote-statuses'
 import * as scheduled from './domain/scheduled-statuses'
@@ -814,6 +815,21 @@ export class Store extends DurableObject<Env> {
 
 	saveMarkers(callerBuild: string, input: OperationInput<typeof markers.saveMarkers>) {
 		return this.#kernel.execute(callerBuild, markers.saveMarkers, input)
+	}
+
+	// Polls (domain/polls.ts).
+
+	getPoll(callerBuild: string, input: OperationInput<typeof polls.getPoll>) {
+		return this.#kernel.execute(callerBuild, polls.getPoll, input)
+	}
+
+	vote(callerBuild: string, input: OperationInput<typeof polls.vote>) {
+		return this.#kernel.execute(callerBuild, polls.vote, input)
+	}
+
+	// The cron's round of polls (jobs/scheduled.ts): those that ended, and the Updates of counts that are due.
+	pollRound(callerBuild: string, input: OperationInput<typeof polls.pollRound>) {
+		return this.#kernel.execute(callerBuild, polls.pollRound, input)
 	}
 
 	// Scheduled statuses (domain/scheduled-statuses.ts).

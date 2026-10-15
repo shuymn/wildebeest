@@ -516,6 +516,14 @@ export function scheduledOwnSql(ss: string, viewer: string): string {
 	return `${ss}.account_id = ${viewer}`
 }
 
+// R27 (PollPolicy#vote?): whether `voter` may vote in the poll of the status `s`: may see the status by itself (R3),
+// and blocks neither its author (an author who blocks the voter hides the status already) nor the author's domain, to
+// which a remote poll's vote would not be delivered (R23 leaves such an account out). Votes are their voters'
+// own: polls.ts alone reads poll_votes, and shows a poll's counts and a viewer's own votes, never who voted.
+export function mayVoteSql(s: string, voter: string): string {
+	return `(${viewableSql(s, voter)} AND NOT ${blockedSql(voter, `${s}.account_id`)})`
+}
+
 // ---- Notifications.
 
 // Status.without_replies: not a reply, or a reply in the author's own conversation (in_reply_to_account_id carries
@@ -529,7 +537,7 @@ function silencedSql(r: string, a: string, now: string): string {
 
 // R15: whether the recipient `r` is shown a notification of `type` from `from` about `status` at `now`. One rule
 // decides whether a notification is written, listed and pushed (notifications.ts, push.ts): the sender is not the
-// recipient, is available, is not blocked (either way), muted with notifications or domain-blocked by the recipient,
+// recipient (but for the end of the recipient's own poll, NotifyService's from_self? exception), is available, is not blocked (either way), muted with notifications or domain-blocked by the recipient,
 // and the recipient may see the status. A reblog notification names the original; the boost itself (the sender's one
 // boost of it) must be visible to the recipient too, so a followers-only or direct boost is not revealed to an author
 // outside its audience. A mention is left out when its status mentions or replies to an account the recipient
@@ -537,7 +545,7 @@ function silencedSql(r: string, a: string, now: string): string {
 // than in the author's own conversation (a partner that is someone else or unknown, as FeedInsertWorker#notify?) or
 // when home would leave it out (homeFilterSql, which also hides a sender the recipient mutes without notifications).
 export function shownSql(r: string, type: string, from: string, status: string, now: string): string {
-	return `(${from} <> ${r}
+	return `((${from} <> ${r} OR ${type} = 'poll')
 		AND ${availableSql(from)}
 		AND NOT ${silencedSql(r, from, now)}
 		AND NOT ${blocksSql(from, r)}
@@ -645,7 +653,10 @@ export function addressingOf(
 
 // Who must receive an activity about a status: the author's followers (unless only the addressed may see it) and
 // the addressed accounts, silent ones included. B2 expands it into inboxes; local accounts are served from the Store.
-export type Audience = { followers: boolean; accounts: string[] }
+// followers: the signer's followers; accounts: the addressed accounts; pollVoters: the remote voters of the signer's
+// poll on the status with this id (the Update of a poll, DistributePollUpdateWorker), whom recipientsFor reaches only
+// for a public or unlisted status.
+export type Audience = { followers: boolean; accounts: string[]; pollVoters?: string }
 
 export function audienceOf(visibility: Visibility, recipients: readonly Recipient[], extra: readonly string[] = []) {
 	const accounts = new Set([...recipients.map((r) => r.accountId), ...extra])
@@ -726,6 +737,8 @@ export type OutboundRecipients = {
 	followerInboxes: (string | null)[]
 	// The remote accounts of its audience it reaches, by id.
 	accounts: AddressedAccount[]
+	// The inboxes of the remote voters of its poll it reaches, when its audience has them, as followerInboxes are.
+	voterInboxes: (string | null)[]
 }
 
 // R23: whom an activity by `signerId` for `audience` reaches, by its kind (outboundKind). Local accounts are not
@@ -758,5 +771,22 @@ export function recipientsFor(
 		JSON.stringify(audience.accounts),
 		...(kind === 'content' ? [signerId] : [])
 	)
-	return { followerInboxes, accounts }
+	// The voters of the poll's current generation (polls.ts), of a public or unlisted status of the signer's only (the
+	// others reach them as followers or addressed accounts already), without those the signer may not address.
+	const voterInboxes =
+		audience.pollVoters === undefined
+			? []
+			: db
+					.all<{ inbox: string | null }>(
+						`SELECT DISTINCT COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) AS inbox
+						FROM main.statuses ps JOIN main.polls pp ON pp.status_id = ps.id AND pp.removed = 0
+							JOIN main.poll_votes pv ON pv.poll_id = pp.status_id AND pv.generation = pp.generation
+							JOIN main.accounts a ON a.id = pv.account_id
+						WHERE ps.id = ?1 AND ps.account_id = ?2 AND ps.visibility IN ${DISTRIBUTABLE_SQL}
+							AND a.domain IS NOT NULL AND NOT ${leavesOutSql(kind, 'addressed', '?2', 'a.id')}`,
+						audience.pollVoters,
+						signerId
+					)
+					.map((row) => row.inbox)
+	return { followerInboxes, accounts, voterInboxes }
 }

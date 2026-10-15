@@ -168,7 +168,11 @@ describe('scheduling a status', () => {
 				422,
 				{ error: 'Validation failed: Visibility is not included in the list' },
 			],
-			[{ status: 'x', 'poll[options][]': 'a' }, 422, { error: 'Polls are not supported' }],
+			[
+				{ status: 'x', 'poll[options][]': 'a' },
+				422,
+				{ error: "Validation failed: Deadline can't be blank, Choices must have more than one item" },
+			],
 			[{ status: 'x', media_ids: ['1', '2', '3', '4', '5'] }, 422, { error: 'Cannot attach more than 4 files' }],
 			[
 				{ status: 'x', in_reply_to_id: '999999999999999999' },

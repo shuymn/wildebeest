@@ -572,6 +572,25 @@ describe('filters applied', () => {
 		).toEqual([['cat']])
 	})
 
+	it("matches a keyword in a poll's choices (Status#searchable_text), for a boost on its original's", async () => {
+		const { h, alice, bob } = await setup()
+		const polled = await post(h, bob, {
+			status: 'which pet?',
+			visibility: 'public',
+			poll: { options: ['dog', 'cat'], expires_in: 600 },
+		})
+		const plain = await post(h, bob, { status: 'no poll here', visibility: 'public' })
+		const boost = await act(h, alice, `/api/v1/statuses/${polled.id}/reblog`)
+		expect(boost.status).toBe(200)
+		await createFilter(h, alice, { title: 'cats', context: ['home'], keywords_attributes: [{ keyword: 'cat' }] })
+		const shown = await timeline(h, '/api/v1/timelines/home?limit=40', alice.token)
+		const matches = (s: Status) => (s.filtered as FilterResult[]).map((r) => r.keyword_matches)
+		expect(matches(shown.find((s) => s.id === polled.id)!)).toEqual([['cat']])
+		expect(matches(shown.find((s) => s.id === plain.id)!)).toEqual([])
+		const reblog = shown.find((s) => s.reblog !== null)!
+		expect(matches(reblog)).toEqual([['cat']])
+	})
+
 	it('matches a status a filter names, and a boost of it, with the original carrying the same results', async () => {
 		const { h, alice, bob } = await setup()
 		const remote = await remoteAccount(h.store, 'carol')

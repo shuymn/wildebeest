@@ -15,6 +15,7 @@ import { userWriteOperation } from './auth'
 import { insertWithFreshId, remoteId } from './ids'
 import { isDeleted, type RemoteActorInput, upsertRemoteActor } from './inbox'
 import { notify } from './notifications'
+import { isLocalPoll, receiveVote, type RemotePollInput, remotePollChanges, storeRemotePoll } from './polls'
 import { normalizeSearchText } from './search-text'
 import { presentStatus, type Status } from './status-presenter'
 import { MAX_STATUS_EDITS, recordEdit, recountStatus, writeTags } from './statuses'
@@ -80,6 +81,9 @@ export type RemoteStatusInput = {
 	mentions: string[]
 	tags: string[]
 	media: RemoteMediaInput[]
+	// The Note's name (a vote names its choice), and the poll of a Question.
+	name?: string | null
+	poll?: RemotePollInput | null
 	// The object as received.
 	raw: string
 }
@@ -313,6 +317,19 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 	if (isDeleted(db, author.uri, input.uri, ctx.now)) {
 		return { applied: false, reason: 'retracted' }
 	}
+	// Create#poll_vote?: a Note naming a choice in reply to a local poll is a vote, counted when it may be
+	// (receiveVote), and never stored as a status.
+	const votedIn = input.name === null || input.name === undefined ? undefined : parentOf(db, input.inReplyTo)
+	if (input.name !== null && input.name !== undefined && votedIn !== undefined && isLocalPoll(db, votedIn.id)) {
+		const counted = receiveVote(db, {
+			voterId: author.id,
+			statusId: votedIn.id,
+			name: input.name,
+			uri: input.uri,
+			now: ctx.now,
+		})
+		return { applied: counted, reason: counted ? 'vote' : 'vote-refused' }
+	}
 	const existing = statusByUri(db, input.uri)
 	if (existing !== undefined) {
 		if (existing.account_id !== author.id) {
@@ -404,6 +421,9 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 	)
 	writeTags(db, id, input.tags.slice(0, MAX_STATUS_TAGS))
 	writeMedia(db, id, author, input.media, ctx)
+	if (input.poll !== null && input.poll !== undefined) {
+		storeRemotePoll(db, id, input.poll, true, ctx.now)
+	}
 	recountStatus(db, parent?.id ?? null)
 	const isReply = input.inReplyTo !== null
 	linkReplies(db, { id, uri: input.uri, accountId: author.id, replyTarget, isReply })
@@ -555,8 +575,17 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	}
 	// The watermark is the last accepted version, whether or not it changed the history, as the remote wrote it.
 	const stored = Date.parse(existing.remote_version ?? existing.edited_at ?? existing.published_at)
-	if (Number.isNaN(version) || version <= stored) {
+	// ProcessStatusUpdateService#already_updated_more_recently?: an older version changes nothing, its poll included.
+	if (version < stored) {
 		return { applied: false, reason: 'stale' }
+	}
+	if (Number.isNaN(version) || version === stored) {
+		// ProcessStatusUpdateService#handle_implicit_update!: an Update that names no newer version (such as the Update of
+		// a poll's counts, which names none, or the same one) still refreshes the counts, the end and the voters of its
+		// poll.
+		return input.poll !== undefined && storeRemotePoll(db, existing.id, input.poll, false, ctx.now)
+			? { applied: true, reason: 'poll-updated', statusId: existing.id }
+			: { applied: false, reason: 'stale' }
 	}
 	const editedAt = iso(Math.min(version, ctx.now))
 	const media = input.media.slice(0, MAX_STATUS_MEDIA)
@@ -567,13 +596,18 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	const mediaChanged =
 		JSON.stringify(currentMedia.map((m) => [m.url, m.description])) !==
 		JSON.stringify(media.map((m) => [m.url, m.description]))
-	const significant = input.content !== existing.content || input.spoilerText !== existing.spoiler_text || mediaChanged
+	const significant =
+		input.content !== existing.content ||
+		input.spoilerText !== existing.spoiler_text ||
+		mediaChanged ||
+		remotePollChanges(db, existing.id, input.poll ?? null)
 	const versions = significant
 		? (db.first<{ n: number }>('SELECT COUNT(*) AS n FROM status_edits WHERE status_id = ?', existing.id)?.n ?? 0)
 		: 0
 	if (significant && versions === 0) {
 		recordEdit(db, existing.id, existing.published_at)
 	}
+	storeRemotePoll(db, existing.id, input.poll ?? null, true, ctx.now)
 	db.run(
 		`UPDATE statuses SET content = ?, spoiler_text = ?, sensitive = ?, language = ?, raw = ?, search_text = ?,
 			remote_version = ?, edited_at = CASE WHEN ? THEN ? ELSE edited_at END

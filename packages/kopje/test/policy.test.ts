@@ -134,6 +134,15 @@ const RULES: readonly Rule[] = [
 			'../src/domain/scheduled-statuses.ts': 'the owner’s scheduled statuses (scheduledOwnSql) and their publication',
 		},
 	},
+	{
+		// R27: votes are their voters' own; only counts and a viewer's own votes are shown, never who voted.
+		name: 'reads or writes poll_votes',
+		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['poll_votes'])}`, 'i'),
+		allowed: {
+			...POLICY_ONLY,
+			'../src/domain/polls.ts': 'votes cast through mayVoteSql (R27), the viewer’s own, and their purges',
+		},
+	},
 ]
 
 function violations(files: Record<string, string>, rules: readonly Rule[] = RULES): string[] {

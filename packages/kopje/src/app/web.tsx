@@ -139,7 +139,9 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 				: withVary(await forward(c, `/ap/users/${encodeURIComponent(account.username)}`))
 		}
 		const maxId = c.req.query('max_id') ?? null
-		const page = await storeCall(c, deps, (s, b) => s.profilePage(b, { username, maxId, present: present(c) }))
+		const page = await storeCall(c, deps, (s, b) =>
+			s.profilePage(b, { username, maxId, present: present(c), now: deps.now() })
+		)
 		if (page.status === 'not_found') {
 			return notFound(c)
 		}
@@ -170,7 +172,9 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 		if (username === null || username === '' || id.length > 64) {
 			return notFound(c)
 		}
-		const page = await storeCall(c, deps, (s, b) => s.statusPage(b, { username, id, present: present(c) }))
+		const page = await storeCall(c, deps, (s, b) =>
+			s.statusPage(b, { username, id, present: present(c), now: deps.now() })
+		)
 		if (page.status === 'not_found') {
 			return wantsActivityPub(c.req.header('accept'))
 				? withVary(new Response('Not Found', { status: 404 }))

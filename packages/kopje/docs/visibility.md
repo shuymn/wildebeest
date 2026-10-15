@@ -192,6 +192,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R24 list timeline         | `homeFilterSql` in `listTimeline`, with the list's active members, the follow's options and the list's `replies_policy`; the owner's lists only (`ownList` in `lists.ts`).                                                                                                                                                                                                                                                         |
 | R25 conversations         | `visibleSql` (through `statusReads`) for each last status; rows are the owner's only (`listConversations`, `markConversation`, `deleteConversation` in `conversations.ts`).                                                                                                                                                                                                                                                        |
 | R26 scheduled statuses    | `scheduledOwnSql` in every read of `scheduled_statuses`, all in `scheduled-statuses.ts`: the owner's alone, anyone else's not found; published through `writePost`, after which R1 to R25 apply.                                                                                                                                                                                                                                   |
+| R27 polls                 | `viewableStatusId` (R3) for a poll's status in `getPoll`, `vote` and the presenter's callers; `mayVoteSql` (R3, and the voter blocks neither the author nor its domain) for a local vote and a received one; `poll_votes` read in `polls.ts` alone, only the viewer's own.                                                                                                                                                         |
 
 A scheduled status (`src/domain/scheduled-statuses.ts`, migration `0011_scheduled_statuses`) is not a status: it is
 a row of `scheduled_statuses` with the post's parameters, and its owner's alone (R26, `scheduledOwnSql`). No read,
@@ -203,6 +204,20 @@ so no other post attaches them and the sweep of unattached uploads leaves them. 
 ("nothing leaks before publication") schedules generated posts of every visibility, with mentions and replies, and
 checks after each that no other table changed and that each account sees only its own.
 
+A poll (`src/domain/polls.ts`, migration `0013_polls`) is shown with its status, to whoever may see the status, and
+its API id is its status's: `GET /api/v1/polls/:id` and its votes answer 404 for a poll on a status the viewer may
+not see by itself (R3). Who may vote is R27 (`mayVoteSql`, Mastodon's `PollPolicy#vote?`): the status is viewable and
+the voter blocks neither its author (an author who blocks the voter hides it already) nor the author's domain
+(where the vote would not be delivered); a remote vote, a Note naming a
+choice in reply to a local poll, passes the same rule (Mastodon checks none for it) and is never stored as a status.
+Votes are their voters' own: a poll shows its counts (`votes_count`, `voters_count`, and each choice's, which
+`hide_totals` hides from everyone, the author included, until the poll ends, as `Poll#show_totals_now?`), and the
+viewer's own votes (`voted`, `own_votes`), never who voted. The counts are kept as votes are cast, never recounted on
+read. A poll's end notifies its local author and local voters (`poll`, from the poll's author; R15 applies, with the
+author's own poll the one notification from oneself). Its `Question` goes to its status's audience (R23), and its
+Update of counts also to the remote voters of a public or unlisted status; a local vote in a remote poll goes to the
+poll's author alone.
+
 ## Filters
 
 A viewer's filters (`src/domain/filters.ts`, Mastodon's `CustomFilter`) are applied after the rules above, to what that
@@ -211,8 +226,8 @@ selects what the rules let the viewer see, and the presenter then reports, in ea
 (unexpired) filter of the viewer that matches it, whatever its context and action (`warn`, `hide`, `blur`), as
 Mastodon's `StatusRelationshipsPresenter` does; a boost and its original report the same. Nothing is removed on the
 server: the client decides by context, so pages and cursors are those of the read. A filter matches a status by a
-keyword in its spoiler text, text (a remote status's lines as Mastodon's `PlainTextFormatter` extracts them) or media
-descriptions (of the original, for a boost), with `whole_word` as Mastodon's regex reads it, or by a status it names
+keyword in its spoiler text, text (a remote status's lines as Mastodon's `PlainTextFormatter` extracts them), poll
+choices or media descriptions (of the original, for a boost), with `whole_word` as Mastodon's regex reads it, or by a status it names
 (the status or, for a boost, its original). A filter status can be added only for a status the viewer may view
 (`canView`); one they may not view is refused as a missing one is, and a filter status is listed by its ids alone,
 whatever the viewer may see of it later. `test/policy-filters.test.ts` checks the endpoints on generated worlds against
@@ -344,6 +359,7 @@ module:
   `deliveries.ts` moves a row its recipient's shared inbox refused to that recipient's personal inbox.
 - reads or writes `scheduled_statuses` outside `scheduled-statuses.ts`, whose every read is the owner's
   (`scheduledOwnSql`, R26).
+- reads or writes `poll_votes` outside `polls.ts`, which shows only counts and a viewer's own votes (R27).
 
 An allowed file that no longer matches fails the test too, so the list does not outlive its reason.
 
@@ -418,7 +434,10 @@ does not follow sending them direct statuses, which home must not read, and an a
 viewer blocks, a suspended one and one being deleted, whose statuses the account statuses endpoint must not read. Home
 must show a full page and the account statuses none, reading at most 10 rows more.
 Another case grows the accounts with timeline markers from 10 to 2,000: the viewer's markers read at most 10 rows
-more.
+more. The world gives every original status a poll of four choices with the viewer's vote, and the unrelated accounts
+polls and votes of their own and votes in the target's poll (rows only); the target's poll (`GET /api/v1/polls/:id`)
+is an endpoint of both cases. A last poll case grows the votes in each of a page's 20 polls from 10 to 1,000: the
+account statuses page, the poll and a vote in it must each read at most 10 rows more.
 
 `test/policy-endpoints.test.ts` runs the read endpoints themselves on generated worlds, with favourites, bookmarks and
 notifications added, for each available local viewer and, where the endpoint answers without a token, the anonymous

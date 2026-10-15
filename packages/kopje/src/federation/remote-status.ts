@@ -4,6 +4,7 @@ import { isTransientLoadError } from './loader'
 import { isPublicCollection } from '../domain/audience'
 import { isConversationId } from '../domain/conversation-rows'
 import { languageOf } from '../domain/language'
+import { MAX_REMOTE_OPTION_LENGTH, MAX_REMOTE_OPTIONS, type RemotePollInput } from '../domain/polls'
 import {
 	MAX_MEDIA_DESCRIPTION_LENGTH,
 	MAX_SPOILER_LENGTH,
@@ -207,6 +208,57 @@ function tagsOf(object: Json): { mentions: string[]; tags: string[] } {
 	return { mentions: [...mentions], tags: [...tags] }
 }
 
+function count(value: unknown): number | null {
+	return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
+}
+
+function isoOf(value: unknown): string | null {
+	const parsed = typeof value === 'string' ? Date.parse(value) : NaN
+	return Number.isNaN(parsed) ? null : new Date(parsed).toISOString()
+}
+
+// ActivityPub::Parser::PollParser: the poll of a Question, from its anyOf (multiple) or oneOf items, each a choice by
+// its name (or content) with its votes in replies.totalItems; it ends when closed says (a time, or now for any other
+// true value), else at endTime. Choices without a name are left out with their votes. At most MAX_REMOTE_OPTIONS
+// choices, each cut to MAX_REMOTE_OPTION_LENGTH code units (RES-4). null: not a poll.
+function pollOf(object: Json): RemotePollInput | null {
+	const items = Array.isArray(object.anyOf) ? object.anyOf : Array.isArray(object.oneOf) ? object.oneOf : null
+	if (!typeIs(object.type, ['Question']) || items === null) {
+		return null
+	}
+	const options: string[] = []
+	const tallies: number[] = []
+	const cut: number[] = []
+	for (const item of items) {
+		if (options.length >= MAX_REMOTE_OPTIONS) {
+			break
+		}
+		const title = isObject(item) ? (text(item.name) ?? text(item.content)) : null
+		if (title === null || !isObject(item)) {
+			continue
+		}
+		if (title.length > MAX_REMOTE_OPTION_LENGTH) {
+			cut.push(options.length)
+		}
+		options.push(title.slice(0, MAX_REMOTE_OPTION_LENGTH))
+		tallies.push((isObject(item.replies) ? count(item.replies.totalItems) : null) ?? 0)
+	}
+	if (options.length === 0) {
+		return null
+	}
+	const closed = object.closed
+	const closedNow = closed !== undefined && closed !== null && closed !== false && typeof closed !== 'string'
+	return {
+		options,
+		tallies,
+		multiple: Array.isArray(object.anyOf),
+		expiresAt: typeof closed === 'string' ? isoOf(closed) : closedNow ? null : isoOf(object.endTime),
+		closedNow,
+		votersCount: count(object.votersCount),
+		cut,
+	}
+}
+
 // The status an object describes, or null if it is not one Kopje stores. `activity` supplies to and cc when the
 // object has none (StatusParser falls back to the activity's addressing).
 export function parseRemoteStatus(object: unknown, activity: Json | null = null): RemoteStatusInput | null {
@@ -258,6 +310,9 @@ export function parseRemoteStatus(object: unknown, activity: Json | null = null)
 		mentions,
 		tags,
 		media: mediaOf(object),
+		// A Note's name: in reply to a local poll, a vote (ActivityPub::Activity::Create#poll_vote?).
+		name: converted ? null : text(object.name),
+		poll: converted ? null : pollOf(object),
 		raw: JSON.stringify(object),
 	}
 }
