@@ -132,7 +132,9 @@ function pollFacts(db: Db, statusId: string): PollFacts | null {
 			}
 }
 
-export function statusFacts(db: Db, statusId: string): StatusFacts | null {
+// options.reached false leaves the remote accounts the status reached out (reached: []): a read that only serves the
+// Note (noteOf does not use them) need not read every remote boost of the status.
+export function statusFacts(db: Db, statusId: string, options: { reached?: boolean } = {}): StatusFacts | null {
 	const row = db.first<{
 		id: string
 		uri: string
@@ -167,19 +169,20 @@ export function statusFacts(db: Db, statusId: string): StatusFacts | null {
 		WHERE m.status_id = ? ORDER BY a.id`,
 		statusId
 	)
-	const reached = isDistributable(row.visibility)
-		? db
-				.all<{ id: string }>(
-					`SELECT r.account_id AS id FROM statuses r JOIN accounts a ON a.id = r.account_id
+	const reached =
+		options.reached !== false && isDistributable(row.visibility)
+			? db
+					.all<{ id: string }>(
+						`SELECT r.account_id AS id FROM statuses r JOIN accounts a ON a.id = r.account_id
 					WHERE r.reblog_of_id = ?1 AND a.domain IS NOT NULL
 					UNION
 					SELECT p.account_id FROM statuses p JOIN accounts a ON a.id = p.account_id
 					WHERE p.id = ?2 AND a.domain IS NOT NULL`,
-					statusId,
-					row.in_reply_to_id
-				)
-				.map((r) => r.id)
-		: []
+						statusId,
+						row.in_reply_to_id
+					)
+					.map((r) => r.id)
+			: []
 	const { host, origin } = new URL(row.actor_uri)
 	return {
 		id: row.id,
@@ -769,7 +772,7 @@ export const getFeatured = readOperation<{ username: string }, FeaturedItem[] | 
 		PIN_LIMIT
 	)
 	return rows.map((row) => {
-		const facts = row.servable === 1 ? statusFacts(db, row.id) : null
+		const facts = row.servable === 1 ? statusFacts(db, row.id, { reached: false }) : null
 		return {
 			uri: row.uri,
 			note: facts === null ? null : JSON.stringify({ '@context': contextOf(facts), ...noteOf(facts) }),

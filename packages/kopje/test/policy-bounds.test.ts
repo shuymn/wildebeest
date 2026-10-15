@@ -2104,3 +2104,63 @@ describe('conversation mutes cost a lookup, however many an account has (RES-7)'
 		expect([await notified(few), await notified(many)]).toEqual([[status(1)], [status(1)]])
 	}, 60_000)
 })
+
+// The featured collection serves each public pin's Note, which names its audience but not the remote accounts that
+// boosted it: it reads the same rows whether 20 remote accounts boosted the pin or 2,000.
+describe('the featured collection reads its pins, not their boosts (RES-7)', () => {
+	const OWNER = '660000000000000000'
+	const PINNED = '661000000000000000'
+	const booster = (i: number) => String(662000000000000000n + BigInt(i))
+
+	async function boosted(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/owner', 'owner')",
+				OWNER
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'owner@example.com', X'00', X'00', 'test')",
+				OWNER
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES (?, 'https://kopje.test/ap/o/pinned', ?, 'public', '<p>pinned</p>', ?)`,
+				PINNED,
+				OWNER,
+				new Date(NOW).toISOString()
+			)
+			sql.exec('INSERT INTO status_pins (account_id, status_id) VALUES (?, ?)', OWNER, PINNED)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://far' || (i % 10) || '.example/users/b' || i, 'b' || i,
+					'far' || (i % 10) || '.example' FROM n`,
+				count,
+				booster(0)
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, content, published_at)
+				SELECT CAST(CAST(id AS INTEGER) + 1000000 AS TEXT), uri || '/boost', id, ?1, 'public', '', ?2
+				FROM accounts WHERE domain IS NOT NULL`,
+				PINNED,
+				new Date(NOW).toISOString()
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 20 or 2,000 remote boosts of a public pin', async () => {
+		const few = await boosted(20)
+		const many = await boosted(2000)
+		const input = { username: 'owner' }
+		const served = (store: StoreStub) =>
+			runInDurableObject(store, (_instance, state) => getFeatured.run(state.storage.sql, input))
+		const output = await served(few)
+		expect(output).toHaveLength(1)
+		expect(await served(many)).toEqual(output)
+		const fewRows = await rowsRead({ store: few }, getFeatured, input)
+		expect(await rowsRead({ store: many }, getFeatured, input)).toBeLessThanOrEqual(fewRows + ALLOWANCE)
+	})
+})
