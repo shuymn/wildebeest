@@ -16,6 +16,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - `GET /.well-known/oauth-authorization-server` (RFC 8414), as Mastodon 4.5 has it: the OAuth endpoints, including
   `userinfo_endpoint` and Mastodon's `app_registration_endpoint`, the scopes, and the supported response types and
   modes, grant types, client authentication methods and PKCE methods.
+- Scheduled statuses, as Mastodon 4.5 has them: `POST /api/v1/statuses` with `scheduled_at` answers a
+  `ScheduledStatus`, checked as a post is, at least 5 minutes ahead, at most 300 per account and 25 per day (a time
+  not in the future posts at once). `GET /api/v1/scheduled_statuses` lists them, and `GET`, `PUT`, `PATCH` and
+  `DELETE` on `/api/v1/scheduled_statuses/:id` show, move and delete one. The cron publishes each when it is due
+  (within its 5-minute schedule) as an ordinary post, and drops one that no longer passes (the status it replies to is
+  gone, or its account is suspended). Media attached to a scheduled status is kept until it is published or deleted.
 
 ### Changed
 
@@ -29,12 +35,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+- Store schema: adds two migrations, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
       author. Its work grows linearly with the mentions stored (one pass, with a lookup of each one's status); locally,
       200,000 mentions took under a second.
+    - `0012_scheduled_statuses`: adds the `scheduled_statuses` table and `media_attachments.scheduled_status_id`, with
+      their indexes. Its work grows linearly with the media stored (one pass to add the column and one to build its
+      partial index).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.5] - 2026-10-15
