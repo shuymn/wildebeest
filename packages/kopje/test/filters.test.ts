@@ -13,7 +13,7 @@ import {
 	type Status,
 	type User,
 } from './status-helpers'
-import { MAX_FILTER_KEYWORDS, MAX_FILTER_TEXT, MAX_FILTERS } from '../src/domain/filters'
+import { MAX_FILTER_KEYWORDS, MAX_FILTER_REQUEST_TEXT, MAX_FILTER_TEXT, MAX_FILTERS } from '../src/domain/filters'
 
 // Filters through the API (domain/filters.ts, mastodon/filters.ts), as Mastodon 4.5 has them: the v2 endpoints with
 // their keywords and statuses, the v1 layer over the same rows, their errors, and the filters applied where statuses
@@ -673,4 +673,164 @@ describe('filter matching work', () => {
 			[early, 1],
 		])
 	})
+})
+
+describe('filter review fixes', () => {
+	it('stores each context once, however often it is sent', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const many = Array.from({ length: 100_000 }, () => 'home')
+		const v2 = await act(h, alice, '/api/v2/filters', { title: 't', context: [...many, 'public'] })
+		const v2Text = await v2.text()
+		expect(v2.status).toBe(200)
+		expect(JSON.parse(v2Text)).toMatchObject({ context: ['home', 'public'] })
+		expect(v2Text.length).toBeLessThan(1_000)
+		const v1 = await act(h, alice, '/api/v1/filters', { phrase: 'p', context: many })
+		expect(await v1.json()).toMatchObject({ context: ['home'] })
+		expect(await answer(await act(h, alice, '/api/v2/filters', { title: 't', context: [...many, 'nowhere'] }))).toEqual(
+			{
+				status: 422,
+				body: { error: 'Validation failed: Context None or invalid context supplied' },
+			}
+		)
+	})
+
+	it('applies repeated keywords_attributes entries of one keyword in order, as Rails does', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const filter = await createFilter(h, alice, {
+			title: 't',
+			context: ['home'],
+			keywords_attributes: [{ keyword: 'cat' }],
+		})
+		const id = filter.keywords[0]!.id
+		const updated = await answer(
+			await send(h, alice, 'PUT', `/api/v2/filters/${filter.id}`, {
+				keywords_attributes: [
+					{ id, keyword: 'dog' },
+					{ id, whole_word: false },
+				],
+			})
+		)
+		expect(updated).toMatchObject({ status: 200, body: { keywords: [{ id, keyword: 'dog', whole_word: false }] } })
+		const destroyed = await answer(
+			await send(h, alice, 'PUT', `/api/v2/filters/${filter.id}`, {
+				keywords_attributes: [
+					{ id, _destroy: true },
+					{ id, keyword: 'bird' },
+				],
+			})
+		)
+		expect(destroyed).toMatchObject({ status: 200, body: { keywords: [] } })
+	})
+
+	it('creates and deletes v1 filters without using up the filter cap', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		for (let i = 0; i < 60; i++) {
+			const created = await act(h, alice, '/api/v1/filters', { phrase: `p${i}`, context: ['home'] })
+			expect(created.status, await created.clone().text()).toBe(200)
+			const { id } = await created.json<{ id: string }>()
+			expect((await send(h, alice, 'DELETE', `/api/v1/filters/${id}`)).status).toBe(200)
+		}
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM filters')).toEqual([{ n: 0 }])
+		// A filter that keeps another keyword, or a status, stays.
+		const kept = await createFilter(h, alice, {
+			title: 'kept',
+			context: ['home'],
+			keywords_attributes: [{ keyword: 'a' }, { keyword: 'b' }],
+		})
+		expect((await send(h, alice, 'DELETE', `/api/v1/filters/${kept.keywords[0]!.id}`)).status).toBe(200)
+		expect((await getJson<Filter>(h, `/api/v2/filters/${kept.id}`, alice.token)).body.keywords).toHaveLength(1)
+	})
+
+	it('folds case as the iu flags do, and keeps whole-word boundaries at Unicode word characters', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const remote = await remoteAccount(h.store, 'carol')
+		const texts = ['ΟΔΟΣ', 'οδος', 'οδός', 'kıta', 'KITA', 'Iıİi']
+		const ids: string[] = []
+		for (const text of texts) {
+			ids.push(await seedStatus(h.store, { accountId: remote, visibility: 'public', content: `<p>${text}</p>` }))
+		}
+		await createFilter(h, alice, {
+			title: 'sigma',
+			context: ['account'],
+			keywords_attributes: [{ keyword: 'οδοσ' }, { keyword: 'kıta' }],
+		})
+		const shown = await timeline(h, `/api/v1/accounts/${remote}/statuses`, alice.token)
+		const matches = (i: number) =>
+			((shown.find((s) => s.id === ids[i])!.filtered ?? []) as FilterResult[]).map((r) => r.keyword_matches)
+		// σ, ς and Σ fold together; ό does not fold to ο.
+		expect([matches(0), matches(1), matches(2)]).toEqual([[['ΟΔΟΣ']], [['οδος']], []])
+		// Dotless ı folds to nothing else (as in Ruby): kıta matches itself, not KITA.
+		expect([matches(3), matches(4)]).toEqual([[['kıta']], []])
+	})
+
+	it('matches a remote status on its lines as Mastodon extracts them, never across a line break', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const remote = await remoteAccount(h.store, 'carol')
+		const broken = await seedStatus(h.store, {
+			accountId: remote,
+			visibility: 'public',
+			content: '<p>breaking<br>news</p><p>more</p>',
+		})
+		const joined = await seedStatus(h.store, {
+			accountId: remote,
+			visibility: 'public',
+			content: '<p>breaking news</p>',
+		})
+		await createFilter(h, alice, {
+			title: 'news',
+			context: ['account'],
+			keywords_attributes: [
+				{ keyword: 'breaking news', whole_word: false },
+				{ keyword: 'news\nmore', whole_word: false },
+			],
+		})
+		const shown = await timeline(h, `/api/v1/accounts/${remote}/statuses`, alice.token)
+		const matches = (id: string) =>
+			(shown.find((s) => s.id === id)!.filtered as FilterResult[]).map((r) => r.keyword_matches)
+		expect(matches(broken)).toEqual([['news\nmore']])
+		expect(matches(joined)).toEqual([['breaking news']])
+	})
+
+	it("shares one text budget across a thread's ancestors and descendants", async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const remote = await remoteAccount(h.store, 'carol')
+		// Each status's text is about 10,000 code units with the keyword at its end, so the budget covers 40 of them.
+		const content = `<p>${'x '.repeat(MAX_FILTER_TEXT / 2 - 10)}needle</p>`
+		const chain: string[] = []
+		for (let i = 0; i < 25; i++) {
+			chain.push(
+				await seedStatus(h.store, {
+					accountId: remote,
+					visibility: 'public',
+					content,
+					...(i === 0 ? {} : { inReplyToId: chain[i - 1] }),
+				})
+			)
+		}
+		const middle = chain[12]!
+		const replies: string[] = []
+		for (let i = 0; i < 25; i++) {
+			replies.push(await seedStatus(h.store, { accountId: remote, visibility: 'public', content, inReplyToId: middle }))
+		}
+		await createFilter(h, alice, { title: 'n', context: ['thread'], keywords_attributes: [{ keyword: 'needle' }] })
+		const { body } = await getJson<{ ancestors: Status[]; descendants: Status[] }>(
+			h,
+			`/api/v1/statuses/${middle}/context`,
+			alice.token
+		)
+		const all = [...body.ancestors, ...body.descendants]
+		const matched = all.map((s) => (s.filtered as FilterResult[]).length)
+		expect(all).toHaveLength(12 + 12 + 25)
+		// The budget is MAX_FILTER_REQUEST_TEXT over the whole response: the first 39 statuses fit whole, and later ones
+		// are matched on what is left, here too little to reach the keyword.
+		const fit = Math.floor(MAX_FILTER_REQUEST_TEXT / (MAX_FILTER_TEXT - 6))
+		expect(matched.slice(0, fit)).toEqual(Array.from({ length: fit }, () => 1))
+		expect(matched.slice(fit + 1)).toEqual(Array.from({ length: all.length - fit - 1 }, () => 0))
+	}, 60_000)
 })

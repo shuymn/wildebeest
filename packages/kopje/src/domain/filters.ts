@@ -143,9 +143,10 @@ function characters(text: string): number {
 	return [...text].length
 }
 
-// CustomFilter's normalization of context: each stripped, blanks dropped.
+// CustomFilter's normalization of context: each stripped, blanks dropped; then, where Mastodon keeps repeats, each
+// once, so the stored list is at most the five contexts (any other value is refused).
 function normalizeContext(context: readonly string[]): string[] {
-	return context.map((c) => c.trim()).filter((c) => c !== '')
+	return [...new Set(context.map((c) => c.trim()).filter((c) => c !== ''))]
 }
 
 // Expireable#expires_in=: a blank interval is no expiry; anything else is Ruby's to_i (a leading integer, else 0) in
@@ -273,6 +274,9 @@ function planKeywords(
 	const plan: KeywordPlan = { add: [], change: [], remove: [] }
 	const errors: string[] = []
 	const byId = new Map(existing.map((k) => [k.id, k]))
+	// The entries naming an existing keyword, merged by id in input order as Rails assigns each to the same record: a
+	// later field wins, and _destroy, once set, stays.
+	const merged = new Map<string, { keyword?: string; wholeWord?: string; destroy: boolean }>()
 	for (const entry of attributes) {
 		const destroy = castBoolean(entry.destroy) === true
 		if (blank(entry.id)) {
@@ -289,15 +293,24 @@ function planKeywords(
 		if (row === undefined) {
 			return null
 		}
-		if (destroy) {
-			plan.remove.push(row.id)
+		const changes = merged.get(row.id) ?? { destroy: false }
+		merged.set(row.id, {
+			keyword: entry.keyword ?? changes.keyword,
+			wholeWord: entry.wholeWord ?? changes.wholeWord,
+			destroy: changes.destroy || destroy,
+		})
+	}
+	for (const [id, changes] of merged) {
+		const row = byId.get(id)!
+		if (changes.destroy) {
+			plan.remove.push(id)
 			continue
 		}
-		const keyword = entry.keyword ?? row.keyword
+		const keyword = changes.keyword ?? row.keyword
 		errors.push(...keywordErrors(keyword, 'Keywords keyword'))
-		plan.change.push({ id: row.id, keyword, wholeWord: castBoolean(entry.wholeWord) ?? row.whole_word === 1 })
+		plan.change.push({ id, keyword, wholeWord: castBoolean(changes.wholeWord) ?? row.whole_word === 1 })
 	}
-	const kept = existing.length - new Set(plan.remove).size + plan.add.length
+	const kept = existing.length - plan.remove.length + plan.add.length
 	if (plan.add.length > 0 && kept > MAX_FILTER_KEYWORDS) {
 		errors.push(TOO_MANY_KEYWORDS)
 	}
@@ -715,44 +728,51 @@ export const updateFilterV1 = userWriteOperation<FilterV1Changes & { id: string 
 	}
 )
 
-// DELETE /api/v1/filters/:id: the keyword; its filter stays, as Mastodon keeps it. Whether it was the viewer's.
-export const deleteFilterV1 = deleteFilterKeyword
+// DELETE /api/v1/filters/:id: the keyword (Api::V1::FiltersController#destroy destroys the CustomFilterKeyword), and
+// then its filter if that leaves it with no keyword and no status. Mastodon keeps such a filter, which no v1 request
+// can see or delete again; Kopje deletes it, so v1 creates and deletes do not use up MAX_FILTERS. Whether the keyword
+// was the viewer's.
+export const deleteFilterV1 = userWriteOperation<{ id: string }, boolean>((db, { id }, { accountId }) => {
+	const own = ownKeyword(db, accountId, id)
+	if (own === undefined || db.run('DELETE FROM filter_keywords WHERE id = ?', own.keyword.id) === 0) {
+		return false
+	}
+	db.run(
+		`DELETE FROM filters WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM filter_keywords WHERE filter_id = ?1)
+			AND NOT EXISTS (SELECT 1 FROM filter_statuses WHERE filter_id = ?1)`,
+		own.filter.id
+	)
+	return true
+})
 
 // Applying filters.
 
-// A keyword compiled for matching: its folded text, and whether its start and end must sit at a word boundary
-// (CustomFilterKeyword#to_regex: \b where the keyword starts or ends with a word character, when whole_word).
-type CompiledKeyword = { folded: string; start: boolean; end: boolean }
+// A filter compiled for matching: its keywords as one pattern (Regexp.union of CustomFilterKeyword#to_regex), or null
+// when it has none. hasStatuses: whether the filter names any status (CustomFilterStatus), wherever it is.
+type CompiledFilter = { filter: Filter; keywords: RegExp | null; hasStatuses: boolean }
 
-// hasStatuses: whether the filter names any status (CustomFilterStatus), wherever it is.
-type CompiledFilter = { filter: Filter; keywords: CompiledKeyword[]; hasStatuses: boolean }
-
-// The viewer's filters that have not expired, compiled; read once per presentation.
-export type ActiveFilters = { readonly filters: readonly CompiledFilter[] }
+// The viewer's filters that have not expired, compiled once per request, and what is left of the request's text
+// budget (MAX_FILTER_REQUEST_TEXT), shared by every presentation that uses them.
+export type ActiveFilters = { readonly filters: readonly CompiledFilter[]; budget: number }
 
 // Onigmo's [[:word:]] for Unicode strings, which \b reads: letters, marks, numbers and connector punctuation.
-const WORD = /[\p{L}\p{M}\p{N}\p{Pc}]/u
+const WORD_CLASS = '[\\p{L}\\p{M}\\p{N}\\p{Pc}]'
+const WORD = new RegExp(WORD_CLASS, 'u')
 
-// Case folding that keeps every code point's length, so a position in the folded text is one in the text: the
-// lowercase form of a code point, unless it has another length (then the code point as it is). Ruby's /i folds a few
-// such code points (İ, ẞ) further; Kopje leaves them.
-function fold(text: string): string {
-	let out = ''
-	for (const c of text) {
-		const lower = c.toLowerCase()
-		out += lower.length === c.length ? lower : c
-	}
-	return out
+// A keyword as CustomFilterKeyword#to_regex builds it: the escaped literal, case-insensitive (simple Unicode case
+// folding, the iu flags), and for whole_word a word boundary where the keyword starts or ends with a word character,
+// written as lookarounds over WORD_CLASS (Ruby's \b for Unicode text). A literal with no quantifier cannot backtrack.
+// Ruby's /i also applies multi-character folds (ß with ss, İ with i̇); the iu flags do not, and Kopje leaves them.
+function keywordSource(row: KeywordRow): string {
+	const chars = [...row.keyword]
+	const whole = row.whole_word === 1
+	const start = whole && WORD.test(chars[0] ?? '') ? `(?<!${WORD_CLASS})` : ''
+	const end = whole && WORD.test(chars.at(-1) ?? '') ? `(?!${WORD_CLASS})` : ''
+	return `${start}${row.keyword.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&')}${end}`
 }
 
-function compileKeyword(row: KeywordRow): CompiledKeyword {
-	const whole = row.whole_word === 1
-	const chars = [...row.keyword]
-	return {
-		folded: fold(row.keyword),
-		start: whole && WORD.test(chars[0] ?? ''),
-		end: whole && WORD.test(chars.at(-1) ?? ''),
-	}
+function compileKeywords(rows: readonly KeywordRow[]): RegExp | null {
+	return rows.length === 0 ? null : new RegExp(rows.map((row) => `(?:${keywordSource(row)})`).join('|'), 'iu')
 }
 
 // The viewer's active filters (CustomFilter.cached_filters_for): unexpired at the request's time, whatever their context
@@ -776,9 +796,10 @@ export function activeFilters(db: Db, viewer: ViewerContext): ActiveFilters | nu
 		rows.map((row) => row.id)
 	)
 	return {
+		budget: MAX_FILTER_REQUEST_TEXT,
 		filters: rows.map((row) => ({
 			filter: presentFilter(row),
-			keywords: keywords.filter((k) => k.filter_id === row.id).map(compileKeyword),
+			keywords: compileKeywords(keywords.filter((k) => k.filter_id === row.id)),
 			hasStatuses: row.has_statuses === 1,
 		})),
 	}
@@ -810,83 +831,18 @@ export function filterStatusMatches(
 	return matches
 }
 
-// Whether a code point is a word character (WORD), with ASCII decided without the regex.
-function isWordCodePoint(cp: number): boolean {
-	if (cp < 0x80) {
-		return (cp >= 0x30 && cp <= 0x39) || (cp >= 0x41 && cp <= 0x5a) || (cp >= 0x61 && cp <= 0x7a) || cp === 0x5f
-	}
-	return WORD.test(String.fromCodePoint(cp))
-}
-
-// The text a status is matched in, built once per status: folded, whether each code unit belongs to a word character
-// (both units of a surrogate pair alike), and for each position the first one from it at which a word may start (the
-// start, or after a code unit that is not of a word character), so every keyword reads the same tables.
-type Prepared = { folded: string; word: Uint8Array; nextStart: Int32Array }
-
-function prepare(text: string): Prepared {
-	const folded = fold(text)
-	const n = folded.length
-	const word = new Uint8Array(n)
-	for (let i = 0; i < n;) {
-		const cp = folded.codePointAt(i) ?? 0
-		const size = cp > 0xffff ? 2 : 1
-		const w = isWordCodePoint(cp) ? 1 : 0
-		word.fill(w, i, i + size)
-		i += size
-	}
-	const nextStart = new Int32Array(n + 2)
-	nextStart[n + 1] = n + 1
-	for (let j = n; j >= 0; j--) {
-		nextStart[j] = j === 0 || word[j - 1] === 0 ? j : (nextStart[j + 1] ?? n + 1)
-	}
-	return { folded, word, nextStart }
-}
-
-// The leftmost occurrence of `keyword` in the text that sits at the boundaries it needs, or -1. Each occurrence is
-// found by indexOf; one that does not start at a word boundary moves the search to the next place a word may start, so
-// the work stays near linear in the text for each keyword.
-function findKeyword(text: Prepared, keyword: CompiledKeyword): number {
-	const { folded, word, nextStart } = text
-	let from = 0
-	while (from <= folded.length) {
-		const i = folded.indexOf(keyword.folded, from)
-		if (i === -1) {
-			return -1
-		}
-		if (keyword.start && i > 0 && word[i - 1] === 1) {
-			from = nextStart[i + 1] ?? folded.length + 1
-			continue
-		}
-		if (keyword.end && word[i + keyword.folded.length] === 1) {
-			from = i + 1
-			continue
-		}
-		return i
-	}
-	return -1
-}
-
 // Kopje's bound on the text matched, where Mastodon matches all of it: each status's searchable text up to
-// MAX_FILTER_TEXT code units, and a request's statuses together up to MAX_FILTER_REQUEST_TEXT, shared evenly among them
-// but never below MIN_FILTER_TEXT each (a status of Mastodon's default length). With the keyword caps, a page compares
-// at most MAX_FILTER_REQUEST_TEXT code units of text with each keyword, and a thread of the most members (CONTEXT_LIMITS
-// in statuses.ts) about ten times that; indexOf with the boundary tables keeps each comparison near linear (RES-2).
+// MAX_FILTER_TEXT code units, and the statuses of one request together up to MAX_FILTER_REQUEST_TEXT, in the order they
+// are presented (a thread's ancestors, then its descendants): a status is matched on what is left of the budget, so in
+// a very large response the filters' keywords are reported on its earlier statuses only (filter statuses still match
+// everywhere). With the keyword caps, a request compares at most MAX_FILTER_REQUEST_TEXT code units of text with each
+// keyword.
 export const MAX_FILTER_TEXT = 10_000
 export const MAX_FILTER_REQUEST_TEXT = 400_000
-export const MIN_FILTER_TEXT = 500
-
-// The text each of `statuses` statuses is matched on, in code units.
-export function filterTextLimit(statuses: number): number {
-	return Math.max(
-		MIN_FILTER_TEXT,
-		Math.min(MAX_FILTER_TEXT, Math.floor(MAX_FILTER_REQUEST_TEXT / Math.max(statuses, 1)))
-	)
-}
 
 // What a status is matched by: its text (Status#searchable_text, of the boosted original for a boost), and the ids
 // filter statuses may name (the status and, for a boost, its original).
-// limit: the code units of the text matched (filterTextLimit).
-export type FilterTarget = { text: string; ids: readonly string[]; limit: number }
+export type FilterTarget = { text: string; ids: readonly string[] }
 
 // CustomFilter.apply_cached_filters: for each active filter, the first keyword match (the leftmost in the text, the
 // earlier keyword at the same place, as Regexp.union finds it) and the ids of the target a filter status names. A
@@ -897,23 +853,20 @@ export function applyFilters(
 	statusMatches: ReadonlyMap<string, ReadonlySet<string>>,
 	target: FilterTarget
 ): FilterResult[] {
-	let prepared: Prepared | undefined
+	// The text matched: what the budget leaves of the status's first MAX_FILTER_TEXT code units, taken from the budget
+	// when a filter has keywords.
+	let text: string | undefined
 	const results: FilterResult[] = []
 	for (const { filter, keywords, hasStatuses } of active.filters) {
 		let keywordMatches: string[] | null = null
-		if (keywords.length > 0) {
-			prepared ??= prepare(target.text.slice(0, target.limit))
-			let best = -1
-			let length = 0
-			for (const keyword of keywords) {
-				const i = findKeyword(prepared, keyword)
-				if (i !== -1 && (best === -1 || i < best)) {
-					best = i
-					length = keyword.folded.length
-				}
+		if (keywords !== null) {
+			if (text === undefined) {
+				text = target.text.slice(0, Math.min(MAX_FILTER_TEXT, active.budget))
+				active.budget -= text.length
 			}
-			if (best !== -1) {
-				keywordMatches = [target.text.slice(best, best + length)]
+			const match = keywords.exec(text)
+			if (match !== null) {
+				keywordMatches = [match[0]]
 			}
 		}
 		const named = target.ids.filter((id) => statusMatches.get(id)?.has(filter.id) === true)

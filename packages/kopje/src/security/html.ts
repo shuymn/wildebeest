@@ -156,3 +156,14 @@ export function remoteHtmlText(html: string): string {
 		(entity) => ENTITIES[entity] ?? entity
 	)
 }
+
+// The text of sanitized remote HTML as Mastodon's PlainTextFormatter extracts it for a remote status (what filters
+// match): a newline after each run of <br> and </p>, tags dropped (with the content of those Mastodon drops whole),
+// the entities sanitize-html writes decoded, and one trailing newline removed (Ruby's chomp).
+export function remotePlainText(html: string): string {
+	const text = sanitizeHtml(html.replace(/(?:<br \/>|<br>|<\/p>)+/g, '$&\n'), TEXT_OPTIONS).replace(
+		/&(?:amp|lt|gt|quot|#39);/g,
+		(entity) => ENTITIES[entity] ?? entity
+	)
+	return text.replace(/(?:\r\n|\r|\n)$/, '')
+}

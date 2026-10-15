@@ -8,18 +8,11 @@ import {
 	type VisibleStatusId,
 	visibleSql,
 } from './audience'
-import {
-	type ActiveFilters,
-	activeFilters,
-	applyFilters,
-	type FilterResult,
-	filterStatusMatches,
-	filterTextLimit,
-} from './filters'
+import { type ActiveFilters, activeFilters, applyFilters, type FilterResult, filterStatusMatches } from './filters'
 import { htmlToPlainText } from './plain-text'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
-import { remoteHtmlText } from '../security/html'
+import { remotePlainText } from '../security/html'
 
 // The Status entity as Mastodon 4.0.2's REST::StatusSerializer shows it. One presenter for every read path: it takes
 // a list of ids and the viewer and reads the related rows kind by kind (statuses and reblogged originals, accounts,
@@ -222,11 +215,10 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 	const searchableText = (row: StatusRow): string =>
 		[
 			row.spoiler_text,
-			row.author_domain === null ? (row.source_text ?? htmlToPlainText(row.content)) : remoteHtmlText(row.content),
+			row.author_domain === null ? (row.source_text ?? htmlToPlainText(row.content)) : remotePlainText(row.content),
 			(media.get(row.id) ?? []).map((m) => m.description).join('\n\n'),
 		].join('\n\n')
 
-	const textLimit = filterTextLimit(ids.length)
 	const presentRow = (row: StatusRow, top: boolean, filtered: FilterResult[] = []): Status | undefined => {
 		const account = accounts.get(row.account_id)
 		if (account === undefined) {
@@ -239,7 +231,6 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 				filtered = applyFilters(filters, statusMatches, {
 					text: searchableText(proper),
 					ids: row.reblog_of_id === null ? [row.id] : [row.id, row.reblog_of_id],
-					limit: textLimit,
 				})
 			}
 		}
