@@ -27,15 +27,18 @@ account id (NULL for anonymous) and `now` the context's time.
 
 Accounts (always over an account id, never over a status or a follow row):
 
-| Fragment                                                                   | Rule                                                                                                                                              |
-| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `availableSql(x)`, `availableLocalSql(l)`                                  | R1: the account is not a suspended local account. The second form takes a `local_accounts` row already joined.                                    |
-| `blocksSql(owner, x)`, `domainBlocksSql(owner, x)`, `blockedSql(owner, x)` | `owner` blocks `x`, blocks its domain, or either.                                                                                                 |
-| `inDomainSql(a, domain)`                                                   | The account row `a` lives on `domain`: its stored domain or the host of its actor id, exactly.                                                    |
-| `filteredForSql(x, viewer, now)`                                           | R7: the viewer blocks `x`, mutes it while the mute applies, or blocks its domain. Nobody filters themselves; an anonymous viewer filters nothing. |
-| `listedForSql(x, viewer, now)`                                             | R12: `x` may be listed among others (who favourited or boosted): available, not filtered, and not blocking the viewer.                            |
-| `mentionableBySql(x, author)`                                              | R17: the author may mention or address `x`: available, and the author blocks neither it nor its domain.                                           |
-| `followableBySql(x, viewer)`                                               | R21: the viewer may follow `x`: available, someone else, no block either way, no domain block by the viewer.                                      |
+| Fragment                                                                   | Rule                                                                                                                                                                                                  |
+| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `availableSql(x)`, `availableLocalSql(l)`                                  | R1: the account is not a suspended local account. The second form takes a `local_accounts` row already joined.                                                                                        |
+| `blocksSql(owner, x)`, `domainBlocksSql(owner, x)`, `blockedSql(owner, x)` | `owner` blocks `x`, blocks its domain, or either.                                                                                                                                                     |
+| `inDomainSql(a, domain)`                                                   | The account row `a` lives on `domain`: its stored domain or the host of its actor id, exactly.                                                                                                        |
+| `filteredForSql(x, viewer, now)`                                           | R7: the viewer blocks `x`, mutes it while the mute applies, or blocks its domain. Nobody filters themselves; an anonymous viewer filters nothing.                                                     |
+| `listedForSql(x, viewer, now)`                                             | R12: `x` may be listed among others (who favourited or boosted): available, not filtered, and not blocking the viewer.                                                                                |
+| `followListsShownSql(owner, viewer)`                                       | R13: the viewer is shown the owner's followers and following: the owner is available and, unless the viewer is the owner, neither hides its network (`hide_collections`) nor blocks the viewer.       |
+| `followListedSql(x, owner, viewer, now)`                                   | R13: `x` is listed among the owner's followers or following: to an anonymous viewer and the owner, always; to anyone else, unless they block or mute `x` (while the mute applies) or `x` blocks them. |
+| `findableBySql(x, viewer)`                                                 | R14: the viewer finds `x` by account search or search resolution: available, and not on a domain the viewer blocks.                                                                                   |
+| `mentionableBySql(x, author)`                                              | R17: the author may mention or address `x`: available, and the author blocks neither it nor its domain.                                                                                               |
+| `followableBySql(x, viewer)`                                               | R21: the viewer may follow `x`: available, someone else, no block either way, no domain block by the viewer.                                                                                          |
 
 Statuses:
 
@@ -62,28 +65,29 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 
 ## The rules as the module implements them
 
-| Rule                      | Where it is applied                                                                                                                                                                                                             |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| R1 available              | `availableSql` in every status and account rule below; the object endpoint, outbox and web pages (`availableLocalSql`); user counts.                                                                                            |
-| R2, R3 show and view      | `visibleSql`, `viewableSql`, `canView`: single status, history, write responses, replies, favourites and boosts, inbound `Like`, search resolution, web pages.                                                                  |
-| R4 servable               | `SERVABLE` in `activities.ts` (`DISTRIBUTABLE_SQL` and `availableLocalSql`); web pages use `visibleSql` with no viewer.                                                                                                         |
-| R5 source                 | The author only (`statusSource`).                                                                                                                                                                                               |
-| R6 history                | `canView`, with the audience frozen at write time (`editStatus`).                                                                                                                                                               |
-| R7 filtered               | `filteredForSql`, inside `listableSql`, account statuses (boosted originals), familiar followers.                                                                                                                               |
-| R8 listable               | `listableSql`: public, tag, bookmarks, favourites, context, status and hashtag search.                                                                                                                                          |
-| R9 home                   | `homeFilterSql` in `homeTimeline`, with its membership and the follow's options.                                                                                                                                                |
-| R10 public and tag feeds  | `publicConditions` in `timelines.ts` on `listableSql`; the tag feed and a tag's history take their candidates from the hashtags of public statuses (`status_tags.public`, written with `tagPublicSql`).                         |
-| R11 account statuses      | `visibleSql`, `blocksSql` (the viewer blocks the account), and `visibleSql` with `filteredForSql` for a boosted original.                                                                                                       |
-| R12 listed accounts       | `listedForSql` in `favourited_by` and `reblogged_by` (`DISTRIBUTABLE_SQL` boosts only).                                                                                                                                         |
-| R14 account search        | `availableLocalSql` and `domainBlocksSql` in `findAccounts`; search resolution answers no account or status on a domain the viewer blocks.                                                                                      |
-| R15 notifications         | `shownSql` in `notify`, `listNotifications`, `getNotification` and the push target.                                                                                                                                             |
-| R16 push                  | `shownSql` and `pushWantedSql` at record, claim and confirm time.                                                                                                                                                               |
-| R17 mentionable           | `mentionableBySql` in `resolveMentions`; an edit drops mentions the author now blocks (`blockedSql`).                                                                                                                           |
-| R18 reblog, R19 favourite | `canView` and `blocksAuthor` (`blocksSql`) in `statuses.ts`.                                                                                                                                                                    |
-| R20 reply                 | `canView` of the parent.                                                                                                                                                                                                        |
-| R21 follow                | `followableBySql` for a local follow and for each follower a `Move` carries; an inbound `Follow` is ignored when the actor blocks the target (`blocksSql`) and rejected when the target blocks it or its domain (`blockedSql`). |
-| R22 addressing            | `addressingOf` and `boostAnnounce` (`blockedSql`).                                                                                                                                                                              |
-| R23 delivery targets      | `audienceTargets` in `deliveries.ts`: `domainBlocksSql` on followers, `blockedSql` on addressed accounts for content.                                                                                                           |
+| Rule                      | Where it is applied                                                                                                                                                                                                                                                                                                          |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R1 available              | `availableSql` in every status and account rule below; the object endpoint, outbox, followers and following collections and web pages (`availableLocalSql`); user counts.                                                                                                                                                    |
+| R2, R3 show and view      | `visibleSql`, `viewableSql`, `canView`: single status, history, write responses, replies, favourites and boosts, inbound `Like`, web pages.                                                                                                                                                                                  |
+| R4 servable               | `SERVABLE` in `activities.ts` (`DISTRIBUTABLE_SQL` and `availableLocalSql`); web pages use `visibleSql` with no viewer.                                                                                                                                                                                                      |
+| R5 source                 | The author only (`statusSource`).                                                                                                                                                                                                                                                                                            |
+| R6 history                | `canView`, with the audience frozen at write time (`editStatus`).                                                                                                                                                                                                                                                            |
+| R7 filtered               | `filteredForSql`, inside `listableSql`, account statuses (boosted originals), familiar followers.                                                                                                                                                                                                                            |
+| R8 listable               | `listableSql`: public, tag, bookmarks, favourites, context, status and hashtag search, and a status answered by search resolution.                                                                                                                                                                                           |
+| R9 home                   | `homeFilterSql` in `homeTimeline`, with its membership and the follow's options.                                                                                                                                                                                                                                             |
+| R10 public and tag feeds  | `publicConditions` in `timelines.ts` on `listableSql`; the tag feed and a tag's history take their candidates from the hashtags of public statuses (`status_tags.public`, written with `tagPublicSql`).                                                                                                                      |
+| R11 account statuses      | `visibleSql`, `blocksSql` (the viewer blocks the account), and `visibleSql` with `filteredForSql` for a boosted original.                                                                                                                                                                                                    |
+| R12 listed accounts       | `listedForSql` in `favourited_by` and `reblogged_by` (`DISTRIBUTABLE_SQL` boosts only).                                                                                                                                                                                                                                      |
+| R13 follower lists        | `followListsShownSql` and `followListedSql` in `listFollows` (`GET /api/v1/accounts/:id/followers` and `/following`); `followListsShownSql` in familiar followers (for the account and each follower) and, with no viewer, in the ActivityPub followers and following collections: a hidden network shows `totalItems` only. |
+| R14 account search        | `findableBySql` in `findAccounts` and for an account answered by search resolution. Mastodon's account search leaves out suspended accounts only; Kopje also leaves out those on a domain the viewer blocks.                                                                                                                 |
+| R15 notifications         | `shownSql` in `notify`, `listNotifications`, `getNotification` and the push target.                                                                                                                                                                                                                                          |
+| R16 push                  | `shownSql` and `pushWantedSql` at record, claim and confirm time.                                                                                                                                                                                                                                                            |
+| R17 mentionable           | `mentionableBySql` in `resolveMentions`; an edit drops mentions the author now blocks (`blockedSql`).                                                                                                                                                                                                                        |
+| R18 reblog, R19 favourite | `canView` and `blocksAuthor` (`blocksSql`) in `statuses.ts`.                                                                                                                                                                                                                                                                 |
+| R20 reply                 | `canView` of the parent.                                                                                                                                                                                                                                                                                                     |
+| R21 follow                | `followableBySql` for a local follow and for each follower a `Move` carries; an inbound `Follow` is ignored when the actor blocks the target (`blocksSql`) and rejected when the target blocks it or its domain (`blockedSql`).                                                                                              |
+| R22 addressing            | `addressingOf` and `boostAnnounce` (`blockedSql`).                                                                                                                                                                                                                                                                           |
+| R23 delivery targets      | `audienceTargets` in `deliveries.ts`: `domainBlocksSql` on followers, `blockedSql` on addressed accounts for content.                                                                                                                                                                                                        |
 
 ## Status ids the presenter accepts
 
@@ -129,7 +133,7 @@ author. The callers:
 | notifications (list and one)                               | `notifications`                                                                  |
 | web profile and status pages                               | `select` under `visible` with no viewer; the parent through `viewableStatusId`   |
 | single status, history, actions (favourite, bookmark, ...) | `viewableStatusId`                                                               |
-| search resolution                                          | `viewableStatusId`, after the domain block of the author                         |
+| search resolution                                          | `select` under `listable`, for the one status it answers                         |
 | post, edit, delete, boost (and their repeats)              | `ownStatusId`, then `presentOwnStatus`                                           |
 
 The presenter reads a boost's original through `visibleSql` for the same viewer, whatever brand the boost's id has: a
@@ -173,32 +177,35 @@ deepest terms last in a chain and prefer `JOIN ... ON` to `WHERE` for a lookup i
 
 `test/policy-oracle.test.ts` checks each fragment against a second statement of its rule. `test/policy-model.ts` states
 the rules of this page in plain TypeScript, without importing the module. `test/policy-world.ts` generates worlds with
-[fast-check](https://fast-check.dev/): four local accounts (one of them may be suspended), two or three remote accounts
-on two domains (some with an actor id on a subdomain, with a port, with a trailing dot or on the other domain), up to 22
-statuses of every visibility with mentions (some silent), boosts, replies and replies that continue the author's own
-thread (written with the conversation partner `statuses.ts` carries over), accepted and pending follows, blocks both
-ways, mutes that have expired, expire at the time of the read or later, or never, with or without notifications, and
-domain blocks in their stored form, including the instance's own domain and a domain nobody lives on. Each property
-writes a world into one Store and evaluates its fragment over every pair the rule takes: every viewer (each account and
-the anonymous one) with every account or status (for the list rules, `listableSql` and `homeFilterSql`, the viewers
-their callers judge: each local account and the anonymous one), every owner with every account, and, for `shownSql`,
-every local recipient with every notification type, sender and status (or none). The set of pairs it accepts must equal
-the model's. A failure prints the shrunk world, the pairs only one side accepts, and the seed; `FC_SEED=<seed> pnpm
-vitest run test/policy-oracle.test.ts` replays it.
+[fast-check](https://fast-check.dev/): four local accounts (one of them may be suspended, some may hide their network),
+two or three remote accounts on two domains (some with an actor id on a subdomain, with a port, with a trailing dot or
+on the other domain), up to 22 statuses of every visibility with mentions (some silent), boosts, replies and replies
+that continue the author's own thread (written with the conversation partner `statuses.ts` carries over), accepted and
+pending follows, blocks both ways, mutes that have expired, expire at the time of the read or later, or never, with or
+without notifications, and domain blocks in their stored form, including the instance's own domain and a domain nobody
+lives on. Each property writes a world into one Store and evaluates its fragment over every pair the rule takes: every
+viewer (each account and the anonymous one) with every account or status (for the list rules, `listableSql` and
+`homeFilterSql`, the viewers their callers judge: each local account and the anonymous one), every owner with every
+account, for `followListedSql` every viewer with every owner and account, and, for `shownSql`, every local recipient
+with every notification type, sender and status (or none). The set of pairs it accepts must equal the model's. A failure
+prints the shrunk world, the pairs only one side accepts, and the seed; `FC_SEED=<seed> pnpm vitest run
+test/policy-oracle.test.ts` replays it.
 
 `test/policy-bounds.test.ts` takes one generated world, for a fixed seed, in which every endpoint below shows the viewer
 something. It runs home, the public and tag feeds, account statuses, notifications, context, favourites, bookmarks,
-`favourited_by`, `reblogged_by`, relationships and status and hashtag search on that world alone, and again with 1,000
-unrelated remote accounts and 100 unrelated local ones: their statuses (never public, though they carry the hashtag the
-tag feed reads), replies and boosts, their
-follows, blocks, mutes and domain blocks of the world's accounts and domains, and their favourites, bookmarks and
-notifications, together with the viewer's own blocks and mutes of those accounts and domain blocks of domains nobody
-lives on. Each endpoint must show the same with them as without (the same statuses, accounts, notifications and hashtags
-in the same order, and the same relationship flags), and the rows it reads (RES-7) may grow by at most 10.
+`favourited_by`, `reblogged_by`, relationships, the followers and following of an account (one that no unrelated account
+follows), status and hashtag search, and account search among the viewer's follows (a search of every account reads the
+newest accounts the instance knows, a window that grows with them up to its limit) on that world alone, and again with
+1,000 unrelated remote accounts and 100 unrelated local ones: their statuses (never public, though they carry the
+hashtag the tag feed reads), replies and boosts, their follows, blocks, mutes and domain blocks of the world's accounts
+and domains, and their favourites, bookmarks and notifications, together with the viewer's own blocks and mutes of those
+accounts and domain blocks of domains nobody lives on. Each endpoint must show the same with them as without (the same
+statuses, accounts, notifications and hashtags in the same order, and the same relationship flags), and the rows it
+reads (RES-7) may grow by at most 10.
 
-`test/policy-endpoints.test.ts` runs the status read endpoints themselves on generated worlds, with favourites,
-bookmarks and notifications added, for each available local viewer and, where the endpoint answers without a token,
-the anonymous one. No endpoint may show a status the model does not allow the viewer by the endpoint's rule, and a
+`test/policy-endpoints.test.ts` runs the read endpoints themselves on generated worlds, with favourites, bookmarks and
+notifications added, for each available local viewer and, where the endpoint answers without a token, the anonymous
+one. No endpoint may show a status or an account the model does not allow the viewer by the endpoint's rule, and a
 boost must come with its own original (never `reblog: null` on a read), which the viewer may see:
 
 | Endpoint                                                   | Asserted                                                                              |
@@ -210,5 +217,8 @@ boost must come with its own original (never `reblog: null` on a read), which th
 | `favourited_by`, `reblogged_by`                            | nothing for a status the viewer may not view; only listed interactors (R12)           |
 | status search                                              | listable statuses only (R8)                                                           |
 | notifications                                              | only the viewer's, as written, that the rule shows (R15), with statuses they may view |
+| followers, following (of every account)                    | exactly the accepted follows the list rule shows (R13), newest first, over pages of 3 |
+| account search                                             | exactly the accounts the viewer may find (R14)                                        |
+| search resolution (of every stored account and status)     | exactly what account search and status search show the viewer (R14, R8)               |
 
 Each endpoint must show something in some case, so a property cannot pass by showing nothing.

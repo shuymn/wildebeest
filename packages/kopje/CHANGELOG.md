@@ -60,11 +60,27 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `/api/v1/endorsements`, `/api/v1/announcements` (any user token), `/api/v1/trends` (and `/trends/tags`,
   `/trends/statuses`, `/trends/links`), `/api/v1/suggestions` and `/api/v2/suggestions`.
 
+- `hide_collections`, Mastodon's setting to hide an account's network: `PATCH /api/v1/accounts/update_credentials`
+  takes it, and the Account entity and the credential account's `source` show it (`null` for a remote account, whose
+  setting Kopje does not learn). While it is on, the account's followers and following are listed to nobody but the
+  account itself, familiar followers leave it out, and the ActivityPub followers and following collections show their
+  size (`totalItems`) only, with no page, as Mastodon's do.
+
 - The `profile` OAuth scope, as Mastodon 4.5 has it: an app may register and request it alone or with other scopes. A
   `profile` token reads `GET /api/v1/accounts/verify_credentials` (the same answer as with `read:accounts`) and no other
   route that requires a scope; `read` does not include `profile`.
 
 ### Changed
+
+- `GET /api/v1/accounts/:id/followers` and `/following` read an optional token (`read:accounts`), as Mastodon does,
+  and list as Mastodon 4.5 lists for the viewer: nothing when the account is suspended, or, to anyone but the account
+  itself, when it blocks the viewer or hides its network; and without the accounts the viewer blocks, mutes (while
+  the mute lasts) or is blocked by. A suspended account stays in the lists, shown redacted. The ActivityPub followers
+  and following collections of a suspended account answer 404, as its outbox does.
+
+- Search with `resolve=true` answers by the rules search applies: a status only when status search would list it to
+  you (so not one by an account you block, mute or whose domain you block), and an account only when account search
+  would find it (not suspended, and not on a domain you block).
 
 - Home and mention notifications also leave out a status that mentions or replies to an account you block or mute
   (for mention notifications, a mute that hides notifications), as Mastodon filters them; so do post notifications
@@ -111,7 +127,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds four migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds five migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0001_blocks_and_mutes`: `mutes.expires_at` with an index, and the `domain_block_cleanups` table. It is quick.
     - `0002_web_push`: the subscription's encoding and sealed token on `push_subscriptions`, and the
@@ -122,6 +138,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0004_status_tags_public`: adds `status_tags.public`, marks the hashtags of public statuses, and indexes them.
       Its work grows linearly with the hashtags stored (one pass, with a lookup of each one's status); locally, 500,000
       hashtags took a few seconds.
+    - `0005_hide_collections`: adds `local_accounts.hide_collections`, 0 for every account. It is quick.
 - `wrangler.jsonc`: unchanged. Set the `VAPID_JWK` secret to turn Web Push on.
 
 ## [0.1.0-rc.3] - 2026-10-14

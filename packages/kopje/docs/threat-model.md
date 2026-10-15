@@ -261,7 +261,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   relationships, inbound Follows and Moves, account search and search resolution), so an account confirmed under
   another WebFinger domain cannot escape a block of the server it lives on; `test/inbox-canonical-address.test.ts`
   ("applies a block of the actor’s host on every path", "never lets a third-party alias replace a confirmed domain or
-  evade a block on it").
+  evade a block on it"). Account search finds an account that is available and not on a domain the viewer blocks
+  (`findableBySql`), and search resolution answers by the rules search applies: an account only when account search
+  would find it, a status only when status search would list it (`listableSql`), so an author the viewer blocks or
+  mutes is not answered either. _Implemented on branch `kopje/account-lists`:_ `findAccounts` in
+  `src/domain/accounts.ts`, `resolveSearch` in `src/domain/remote-statuses.ts`; `test/inbox-statuses.test.ts`
+  ("answers a status only when status search would list it"), `test/policy-endpoints.test.ts`.
 - **VIS-6: a wrapper reveals nothing its target hides.** A boost is visible only if its original is; boosting is limited
   to `public` and `unlisted` statuses and one's own `private` ones (`StatusPolicy#reblog?`). _Enforced (main):_ `viewableSql`; `test/visibility.test.ts` ("a boost of an original the viewer may not see is hidden
   with it"), `test/statuses.test.ts` ("refuses to boost direct and others’ private statuses"). Quotes and other embedded
@@ -290,8 +295,20 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   would not show the same viewer: _Implemented on branch `kopje/startup-reads`:_ `familiarFollowers` in
   `src/domain/accounts.ts`; `test/account-reads.test.ts` ("counts accepted follows only (VIS-8)", "leaves out
   accounts the viewer blocks or mutes", "shows a follower whose mute has expired, and hides one on a domain the viewer
-  blocks", "shows no more than the followers and following lists show"). _Gap:_ Kopje stores no hide-collections setting (local or remote), so neither those lists nor familiar
-  followers hide an account's network as Mastodon does for an account that hides it.
+  blocks", "shows no more than the followers and following lists show"). The followers and following lists
+  (`GET /api/v1/accounts/:id/followers` and `/following`, Mastodon 4.5's `FollowerAccountsController` and
+  `FollowingAccountsController`) read the viewer from an optional token and list nothing when the account is
+  suspended, or, to anyone but the account itself, when it hides its network (`hide_collections`, set through
+  `update_credentials`) or blocks the viewer; other viewers do not see the accounts they block, mute (while the mute
+  applies) or are blocked by. Familiar followers leave out an account that hides its network and a follower that hides
+  its own. The ActivityPub followers and following collections of a suspended actor answer 404, and those of an actor
+  that hides its network show `totalItems` only, with no page. Kopje does not learn a remote account's setting, so a
+  remote account's lists are never hidden. _Implemented on branch `kopje/account-lists`:_ `followListsShownSql` and
+  `followListedSql` in `src/domain/audience.ts`, `listFollows` and `familiarFollowers` in `src/domain/accounts.ts`,
+  `getCollection` in `src/domain/actors.ts`; `test/accounts.test.ts` ("follower lists for the viewer (R13)"),
+  `test/account-reads.test.ts` ("leaves out an account that hides its network"), `test/federation.test.ts` ("shows
+  only the size of the collections of an actor that hides its network"), `test/policy-oracle.test.ts`,
+  `test/policy-endpoints.test.ts`.
 - **VIS-9: only the followed side accepts.** A pending follow of a local account becomes `accepted` only by that
   account's own authorize call; a pending remote follow only by an `Accept` that passes ID-6. _Enforced (main):_ `answerFollowRequest` in `src/domain/accounts.ts` (`POST
 /api/v1/follow_requests/:id/authorize` and `/reject`, the viewer from the credential; a remote requester gets the
