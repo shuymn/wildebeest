@@ -64,7 +64,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   takes it, and the Account entity and the credential account's `source` show it (`null` for a remote account, whose
   setting Kopje does not learn). While it is on, the account's followers and following are listed to nobody but the
   account itself, familiar followers leave it out, and the ActivityPub followers and following collections show their
-  size (`totalItems`) only, with no page, as Mastodon's do.
+  size (`totalItems`) only and refuse a page (403), as Mastodon's do.
 
 - The `profile` OAuth scope, as Mastodon 4.5 has it: an app may register and request it alone or with other scopes. A
   `profile` token reads `GET /api/v1/accounts/verify_credentials` (the same answer as with `read:accounts`) and no other

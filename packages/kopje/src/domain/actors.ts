@@ -129,7 +129,7 @@ export function decodeKey(key: EncodedKey): StoredKey {
 
 export type CollectionKind = 'followers' | 'following'
 
-// hidden: the owner hides its network, so the collection shows its size only and has no pages.
+// hidden: the owner hides its network, so the collection shows its size only and refuses its pages.
 export type CollectionPage = {
 	total: number
 	items: { uri: string; inbox: string | null }[]
@@ -141,7 +141,7 @@ export const COLLECTION_PAGE_SIZE = 40
 
 // Accepted follows of a local actor, newest first, one page (1-based) at a time. page null asks for the count only.
 // A suspended actor has none, as its outbox has none. A remote server fetches these without a viewer, so an actor that
-// hides its network (followListsShownSql with no viewer) shows the count only, with no page, as Mastodon's
+// hides its network (followListsShownSql with no viewer) shows the count only and no page, as Mastodon's
 // FollowerAccountsController and FollowingAccountsController show totalItems only.
 export const getCollection = readOperation<
 	{ username: string; kind: CollectionKind; page: number | null },

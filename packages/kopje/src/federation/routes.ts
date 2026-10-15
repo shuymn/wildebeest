@@ -143,6 +143,8 @@ export async function fetchFederation(
 		contextData: state,
 		onNotFound: () => new Response('Not Found', { status: 404 }),
 		onNotAcceptable: () => new Response('Not Acceptable', { status: 406 }),
+		// Only a page of a hidden followers or following collection is refused.
+		onUnauthorized: () => new Response('Forbidden', { status: 403 }),
 	})
 	return { response, state }
 }

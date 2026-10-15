@@ -369,7 +369,7 @@ describe('followers and following collections', () => {
 		})
 	})
 
-	it('shows only the size of the collections of an actor that hides its network, with no page', async () => {
+	it('shows only the size of the collections of an actor that hides its network, and refuses a page', async () => {
 		const { json, request, store } = await instance()
 		await seedFollow(store, BOB, ALICE)
 		await seedFollow(store, ALICE, BOB)
@@ -384,8 +384,10 @@ describe('followers and following collections', () => {
 				type: 'OrderedCollection',
 				totalItems: 1,
 			})
-			expect((await request(`/ap/users/Alice/${kind}?cursor=1`, AP)).status).toBe(404)
+			expect((await request(`/ap/users/Alice/${kind}?cursor=1`, AP)).status).toBe(403)
 		}
+		// A malformed page is still not found.
+		expect((await request('/ap/users/Alice/followers?cursor=x', AP)).status).toBe(404)
 	})
 
 	it('answers 404 for the collections of a suspended actor, as for its outbox', async () => {
