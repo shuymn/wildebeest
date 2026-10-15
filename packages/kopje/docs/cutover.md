@@ -119,13 +119,13 @@ kopje-admin verify-conversion <export> <dump file> [--accept-deletions] [--accep
 
 ## What the conversion does
 
-**Kopje's own functions.** Where a value is one Kopje derives itself (a remote status's sanitized HTML, the search text
-of accounts and statuses, hashtag names, an object's language, the domain of a domain block, every status's thread and
-the conversations of the direct statuses), the converter derives it with Kopje's code, through
-`cli/lib/cutover/kopje-runtime.js`, so a converted row is the row Kopje would have written; the image export checks an
-image's signature the same way. A new derived value follows the same rule: its module joins `kopje-runtime.js` and its
-function is exported from `src/maintenance-render.ts` (for the npm package, which ships no sources), rather than a
-second version being written in the converter. `verify-conversion` derives the values it compares by its own code,
+**Kopje's own functions.** Where a value is one Kopje derives itself, such as sanitized HTML (bios, status content and
+earlier versions), the search text of accounts and statuses, hashtag names, an object's language, the domain of a domain
+block, every status's thread and the conversations of the direct statuses, the converter derives it with Kopje's code,
+through `cli/lib/cutover/kopje-runtime.js`, so a converted row is the row Kopje would have written; the image export
+checks an image's signature the same way. A new derived value follows the same rule: its module joins `kopje-runtime.js`
+and its function is exported from `src/maintenance-render.ts` (for the npm package, which ships no sources), rather than
+a second version being written in the converter. `verify-conversion` derives the values it compares by its own code,
 sharing only the HTML sanitizer (see Verification); it does not compare search text.
 
 **Ids.** Accounts, statuses, media and lists get 18-digit TEXT ids. A legacy API id that already has 18 digits stays
