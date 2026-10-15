@@ -1136,7 +1136,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   window, and the account's other followers grow). _Enforced (main)_ for scheduled statuses: a page reads the
   account's own index by id, and a publication round reads the due ones through the index by time, so neither grows
   with the accounts that schedule or their scheduled statuses (`test/policy-bounds.test.ts`, "however many accounts
-  schedule"). Context traversal and edit history:
+  schedule"). _Enforced (main)_ for grouped notifications: a page of groups walks the viewer's notifications from the
+  cursor, as the list does, and reads at most 400 of those the rule shows (or twice the page's limit, when that is
+  more); a group read reads at most 400; a group's accounts are paged through the `(account_id, group_key, id)` index;
+  so none grows with the notifications of one group (`test/policy-bounds.test.ts`, "however many notifications a group
+  holds"). Accepted: a group larger than the walk is counted over the notifications read, and the page's Link goes on
+  from the last one read, where the group continues. Context traversal and edit history:
   _Planned (B4a fixes)._
 
 ### Data and keys (DATA)

@@ -9,6 +9,7 @@ import { accountId, listId, runs, statusId, type World, worldArb, writeWorld } f
 import { type Account, listFollows, type Page, type PageQuery } from '../src/domain/accounts'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { type Conversation, listConversations, markConversation } from '../src/domain/conversations'
+import { listGroupedNotifications, unreadCount, unreadGroupCount } from '../src/domain/notification-groups'
 import type { NotificationType } from '../src/domain/notifications'
 import { listNotifications } from '../src/domain/notifications'
 import { resolveSearch } from '../src/domain/remote-statuses'
@@ -101,6 +102,16 @@ const tokenOf = (x: number) => `policy-endpoints-${x}`
 
 type SeededNotification = Edges['notifications'][number]
 
+// The group notify gives a seeded notification, all in one hour: a favourite or boost by status, a follow.
+function groupKeyOf(n: SeededNotification): string | null {
+	if (n.type === 'follow') {
+		return 'follow-1'
+	}
+	return (n.type === 'favourite' || n.type === 'reblog') && n.status !== null
+		? `${n.type}-${statusId(n.status)}-1`
+		: null
+}
+
 // Writes the case and returns the notifications it seeded, by id.
 function writeCase(sql: SqlStorage, { world, edges }: Case): Map<string, SeededNotification> {
 	sql.exec('DELETE FROM oauth_tokens')
@@ -125,12 +136,13 @@ function writeCase(sql: SqlStorage, { world, edges }: Case): Map<string, SeededN
 	for (const n of edges.notifications) {
 		const { id } = sql
 			.exec<{ id: string }>(
-				`INSERT INTO notifications (account_id, type, from_account_id, status_id) VALUES (?, ?, ?, ?)
+				`INSERT INTO notifications (account_id, type, from_account_id, status_id, group_key) VALUES (?, ?, ?, ?, ?)
 				RETURNING CAST(id AS TEXT) AS id`,
 				accountId(n.recipient),
 				n.type,
 				accountId(n.from),
-				n.status === null ? null : statusId(n.status)
+				n.status === null ? null : statusId(n.status),
+				groupKeyOf(n)
 			)
 			.one()
 		notifications.set(id, n)
@@ -182,6 +194,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'favourited_by',
 				'favourites',
 				'followers',
+				'grouped notifications',
 				'following',
 				'home',
 				'list',
@@ -593,7 +606,7 @@ function check(sql: SqlStorage, c: Case): string[] {
 		// Notifications: only the viewer's, as seeded, that the notification rule shows, with statuses the viewer may
 		// view.
 		const notifications = pages((page) =>
-			ok<Page<{ id: string; type: NotificationType; account: Account; status?: Status }>>(
+			ok<Page<{ id: string; type: NotificationType; group_key: string; account: Account; status?: Status }>>(
 				run(listNotifications, { ...user, page, types: [], excludeTypes: [], accountId: null, present: PRESENT }),
 				'notifications'
 			)
@@ -618,6 +631,57 @@ function check(sql: SqlStorage, c: Case): string[] {
 			if (from === undefined || !m.shown(viewer, notification.type, from, s)) {
 				problems.push(`notifications ${nameOf(viewer)}: ${notification.type} from ${notification.account.id}`)
 			}
+		}
+
+		// Grouped notifications: the groups of exactly the notifications v1 shows (checked above), newest first by each
+		// group's newest, each counting and sampling its own (newest first); the unread counts count them.
+		const expectedGroups: { key: string; count: number; samples: string[] }[] = []
+		for (const notification of notifications) {
+			const group = expectedGroups.find((g) => g.key === notification.group_key)
+			if (group === undefined) {
+				expectedGroups.push({ key: notification.group_key, count: 1, samples: [notification.account.id] })
+			} else {
+				group.count += 1
+				if (group.samples.length < 8) {
+					group.samples.push(notification.account.id)
+				}
+			}
+		}
+		const grouped = ok<{
+			statuses: Status[]
+			notification_groups: { group_key: string; notifications_count: number; sample_account_ids: string[] }[]
+		}>(
+			run(listGroupedNotifications, {
+				...user,
+				page: { limit: 80 },
+				types: [],
+				excludeTypes: [],
+				groupedTypes: null,
+				expandAccounts: 'full',
+				present: PRESENT,
+			}),
+			'grouped notifications'
+		)
+		const actualGroups = grouped.notification_groups.map((g) => ({
+			key: g.group_key,
+			count: g.notifications_count,
+			samples: g.sample_account_ids,
+		}))
+		if (JSON.stringify(actualGroups) !== JSON.stringify(expectedGroups)) {
+			problems.push(
+				`grouped notifications ${nameOf(viewer)}: ${JSON.stringify(actualGroups)}, v1 ${JSON.stringify(expectedGroups)}`
+			)
+		}
+		for (const value of grouped.statuses) {
+			status('grouped notifications', viewer, value, (x) => m.viewable(x, viewer))
+		}
+		const counts = { ...user, limit: 1000, types: [], excludeTypes: [], accountId: null, groupedTypes: null }
+		const unread = [
+			ok<{ count: number }>(run(unreadCount, counts), 'unread count').count,
+			ok<{ count: number }>(run(unreadGroupCount, counts), 'unread group count').count,
+		]
+		if (JSON.stringify(unread) !== JSON.stringify([notifications.length, expectedGroups.length])) {
+			problems.push(`unread counts ${nameOf(viewer)}: ${JSON.stringify(unread)}`)
 		}
 
 		// Conversations: exactly the viewer's the model makes of the world's direct statuses and the mentions seeded, by
