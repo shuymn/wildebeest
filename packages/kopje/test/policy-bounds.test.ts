@@ -23,6 +23,7 @@ import {
 	MAX_FILTER_KEYWORDS,
 	MAX_FILTERS,
 } from '../src/domain/filters'
+import { listAccounts } from '../src/domain/lists'
 import { getMarkers, MARKER_TIMELINES } from '../src/domain/markers'
 import {
 	getNotificationGroup,
@@ -1662,6 +1663,76 @@ describe('endorsements and notes read a page, however many an account has (RES-7
 			const manyRows = await rowsRead({ store: many }, operation, input as never)
 			if (manyRows > fewRows + ALLOWANCE) {
 				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 60_000)
+})
+
+// A list's members add a dimension: the accounts one list holds. A page of members reads the list's from the cursor
+// through the primary key, so it reads the same rows whether the list holds 20 accounts or 2,000.
+describe("a list's members read a page, however many it holds (RES-7)", () => {
+	const OWNER_ID = '650000000000000000'
+	const LIST_ID = '659000000000000000'
+	const OWNER_TOKEN = 'list-owner-token'
+	const member = (i: number) => String(651000000000000000n + BigInt(i))
+
+	async function holding(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/owner', 'owner')",
+				OWNER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'owner@example.com', X'00', X'00', 'test')",
+				OWNER_ID
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://far' || (i % 10) || '.example/users/u' || i, 'u' || i,
+					'far' || (i % 10) || '.example'
+				FROM n`,
+				count,
+				member(0)
+			)
+			sql.exec(
+				`INSERT INTO follows (account_id, target_account_id, state)
+				SELECT ?1, id, 'accepted' FROM accounts WHERE id <> ?1`,
+				OWNER_ID
+			)
+			sql.exec("INSERT INTO lists (id, account_id, title) VALUES (?, ?, 'l')", LIST_ID, OWNER_ID)
+			sql.exec('INSERT INTO list_accounts (list_id, account_id) SELECT ?, target_account_id FROM follows', LIST_ID)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('listing', 'secret', 'listing', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'listing', ?, 'read')",
+				OWNER_TOKEN,
+				OWNER_ID
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 20 or 2,000, on the newest, a middle and the oldest page', async () => {
+		const few = await holding(20)
+		const many = await holding(2000)
+		const credential = { tokenHash: OWNER_TOKEN, scope: 'read', now: NOW } as const
+		const grown: string[] = []
+		// The newest page; a page from the middle of the longer list (above every member of the shorter one, so its
+		// newest page); the oldest page.
+		for (const page of [PAGE, { ...PAGE, maxId: member(1000) }, { ...PAGE, minId: '1' }]) {
+			const input = { credential, id: LIST_ID, page, present: PRESENT }
+			const shownBy = async (store: StoreStub) =>
+				runInDurableObject(store, (_instance, state) => shown(listAccounts.run(state.storage.sql, input)))
+			expect([page, await shownBy(few), await shownBy(many)]).toEqual([page, PAGE.limit, PAGE.limit])
+			const fewRows = await rowsRead({ store: few }, listAccounts, input)
+			const manyRows = await rowsRead({ store: many }, listAccounts, input)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${JSON.stringify(page)}: ${fewRows} -> ${manyRows}`)
 			}
 		}
 		expect(grown).toEqual([])
