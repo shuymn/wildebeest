@@ -80,11 +80,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   and following collections of a suspended account answer 404, as its outbox does.
 
 - Who an outbound activity goes to is decided by one rule, by what the activity does. Content (a new status, an edit,
-  a boost) still goes to no account you block or whose domain you block, and to no unavailable account (suspended, or a remote account being deleted). The `Undo` of a
-  boost now names and reaches the boosted status's author even when you block them or their domain, as every other
-  `Delete` and `Undo` does. A profile change, and a `Delete` or `Undo`, now also reach a follower on a domain you
-  have just blocked, until the domain block's cleanup has ended that follow, as Mastodon 4.5 sends them; new statuses
-  still do not reach that follower.
+  a boost) still goes to no account you block or whose domain you block, and to no unavailable account (suspended, or
+  a remote account being deleted). The `Undo` of a boost now names and reaches the boosted status's author even when
+  you block them or their domain, as every other `Delete` and `Undo` does. A profile change, and a `Delete` or `Undo`,
+  now also reach a follower on a domain you have just blocked, until the domain block's cleanup has ended that follow,
+  as Mastodon 4.5 sends them; new statuses still do not reach that follower.
 
 - Home and mention notifications also leave out a status that mentions or replies to an account you block or mute
   (for mention notifications, a mute that hides notifications), as Mastodon filters them; so do post notifications
