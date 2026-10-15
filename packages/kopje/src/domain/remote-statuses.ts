@@ -575,9 +575,14 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	}
 	// The watermark is the last accepted version, whether or not it changed the history, as the remote wrote it.
 	const stored = Date.parse(existing.remote_version ?? existing.edited_at ?? existing.published_at)
-	if (Number.isNaN(version) || version <= stored) {
-		// ProcessStatusUpdateService#handle_implicit_update!: an Update that is not newer (such as the Update of a poll's
-		// counts, which names no new version) still refreshes the counts, the end and the voters of its poll.
+	// ProcessStatusUpdateService#already_updated_more_recently?: an older version changes nothing, its poll included.
+	if (version < stored) {
+		return { applied: false, reason: 'stale' }
+	}
+	if (Number.isNaN(version) || version === stored) {
+		// ProcessStatusUpdateService#handle_implicit_update!: an Update that names no newer version (such as the Update of
+		// a poll's counts, which names none, or the same one) still refreshes the counts, the end and the voters of its
+		// poll.
 		return input.poll !== undefined && storeRemotePoll(db, existing.id, input.poll, false, ctx.now)
 			? { applied: true, reason: 'poll-updated', statusId: existing.id }
 			: { applied: false, reason: 'stale' }

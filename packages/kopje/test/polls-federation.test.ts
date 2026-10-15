@@ -167,6 +167,40 @@ describe('a remote Question', () => {
 		])
 	})
 
+	it('leaves the poll alone for an Update older than the stored version, reordered or replayed', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const object = question(bob)
+		await remotePoll(t, bob, object)
+		const counts = (cats: number, dogs: number, voters: number, end: string) =>
+			question(bob, {
+				id: object.id,
+				votersCount: voters,
+				endTime: end,
+				oneOf: [
+					{ type: 'Note', name: 'cats', replies: { type: 'Collection', totalItems: cats } },
+					{ type: 'Note', name: 'dogs', replies: { type: 'Collection', totalItems: dogs } },
+				],
+			})
+		const v1 = update(bob, counts(3, 1, 4, '2026-10-12T02:00:00Z'), '2026-10-11T12:10:00Z')
+		const v2 = update(bob, counts(5, 5, 10, '2026-10-12T03:00:00Z'), '2026-10-11T12:20:00Z')
+		const stored = () => sql(t.store, 'SELECT tallies, votes_count, voters_count, expires_at FROM polls')
+		expect(await t.post(bob, v2)).toBe(202)
+		const after2 = [{ tallies: '[5,5]', votes_count: 10, voters_count: 10, expires_at: '2026-10-12T03:00:00.000Z' }]
+		expect(await stored()).toEqual(after2)
+		// V1 after V2, and V1 again: nothing.
+		await t.post(bob, v1)
+		await t.post(bob, { ...v1, id: `${v1.id}-again` })
+		expect(await stored()).toEqual(after2)
+		// The same version as stored with newer counts is an implicit update.
+		const same = update(bob, counts(6, 5, 11, '2026-10-12T03:00:00Z'), '2026-10-11T12:20:00Z')
+		await t.post(bob, { ...same, id: `${same.id}-counts` })
+		expect(await stored()).toEqual([
+			{ tallies: '[6,5]', votes_count: 11, voters_count: 11, expires_at: '2026-10-12T03:00:00.000Z' },
+		])
+	})
+
 	it('notifies its local voters when it ends', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
