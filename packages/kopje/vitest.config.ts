@@ -32,6 +32,9 @@ export default defineConfig({
 		setupFiles: [fileURLToPath(new URL('./test/sql-depth-setup.ts', import.meta.url))],
 		// The suites drive the real Store through workerd; on a loaded CI runner a heavy test can pass 5 s.
 		testTimeout: 20_000,
+		// Vitest 5.0.4 caches transformed modules on disk by default; workerd cannot read that cache back, so every file
+		// failed to load. The Node suite (vitest.node.config.ts) keeps it.
+		fsModuleCache: false,
 		// FC_SEED replays a property test's run (test/policy-world.ts).
 		provide: { fcSeed: process.env.FC_SEED ?? '' },
 	},
