@@ -5,9 +5,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { migratedStore } from './helpers'
 import { type ModelSubscription, NOTIFICATION_TYPES, outboundKindOf, PolicyModel } from './policy-model'
-import { accountId, listId, REMOTE_DOMAINS, runs, type World, worldArb, writeWorld } from './policy-world'
+import { accountId, listId, REMOTE_DOMAINS, runs, statusId, type World, worldArb, writeWorld } from './policy-world'
 import { updateCredentials } from '../src/domain/accounts'
 import { API_VISIBILITIES, type ApiVisibility } from '../src/domain/audience'
+import { backfillConversations, THREAD_DEPTH } from '../src/domain/conversation-rows'
 import { type Claim, claimDeliveries, completeDelivery, EXPANSION_STEP, type Target } from '../src/domain/deliveries'
 import type { NotificationType } from '../src/domain/notifications'
 import { POLICIES } from '../src/domain/push'
@@ -41,7 +42,11 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 //   - R15 and R16: every notification written is shown to its recipient, and every push recorded is wanted, at the
 //     time of the action;
 //   - list members leave with the follow: after each action, a list holds what it held before, less each account its
-//     owner no longer follows in either state (migration 0007_list_members); its owner stays.
+//     owner no longer follows in either state (migration 0007_list_members); its owner stays;
+//   - conversations hold what Mastodon's AccountConversation.add_status and remove_status would make of the actions:
+//     a direct status joins its author's conversation and each local recipient's it notifies (R15), by thread and
+//     participants, and leaves each when it is deleted; the last status is the newest left, and a conversation with
+//     none goes.
 
 // Cases per property: each writes a world and runs a sequence of actions in it. The seed is fixed (FC_SEED replays
 // another), and witnesses (below) run each scenario the properties must see, so coverage never depends on chance.
@@ -121,6 +126,9 @@ const SCENARIOS = [
 	'content leaves out a domain-blocked follower',
 	'content leaves out an unavailable account',
 	'content to a silent recipient',
+	'conversation goes with its last status',
+	'conversation moves back to an earlier status',
+	'conversation of a recipient',
 	'list member leaves with the follow',
 	'notification',
 	'push',
@@ -273,6 +281,20 @@ const WITNESSES: { name: string; scenarios: Scenario[]; case: Case }[] = [
 				{ kind: 'block', account: 1 },
 			]
 		),
+	},
+	{
+		name: 'a direct exchange, a reply in it, and their deletes',
+		scenarios: [
+			'conversation of a recipient',
+			'conversation moves back to an earlier status',
+			'conversation goes with its last status',
+		],
+		case: witness(0, {}, [
+			{ kind: 'post', visibility: 'direct', mentions: [1] },
+			{ kind: 'post', visibility: 'direct', mentions: [1], reply: true },
+			{ kind: 'delete', target: 1 },
+			{ kind: 'delete', target: 0 },
+		]),
 	},
 	{
 		name: 'a delete before delivery after the follower leaves',
@@ -632,6 +654,23 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 				FROM list_accounts la JOIN lists l ON l.id = la.list_id ORDER BY la.list_id, la.account_id`
 			)
 			.toArray()
+
+	// The conversations of the world's direct statuses (the world has no notifications: its local authors' own), as
+	// migration 0009 makes them; then what each action's adds and removes make of them, by status id, with the thread
+	// each status in one was given.
+	backfillConversations({ exec: (query: string) => sql.exec(query) })
+	const conversations = new Map<
+		string,
+		{ owner: number; thread: string; participants: number[]; statuses: Set<string>; unread: boolean }
+	>()
+	const threads = new Map<string, string>()
+	for (const c of new PolicyModel(world).conversations(() => false)) {
+		const statuses = new Set(c.statuses.map(statusId))
+		conversations.set(JSON.stringify([c.owner, c.thread, c.participants]), { ...c, statuses })
+		for (const id of statuses) {
+			threads.set(id, c.thread)
+		}
+	}
 
 	// The Store as a world before each action: the world after the previous one.
 	let before = readWorld(sql, world)
@@ -1031,6 +1070,115 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 		}
 		if (profiled && followers.length > 0 && !actorUpdated) {
 			problems.push(`${label}: records no Update for the followers ${followers.map(nameOf).join(' ')}`)
+		}
+
+		// Conversations: AccountConversation.remove_status for each status gone, add_status for each direct status
+		// written, for its author and each local account it mentions that the notification rule (R15) lets it notify.
+		const chain = new Map(
+			sql
+				.exec<{ id: string; uri: string; in_reply_to_id: string | null; in_reply_to_uri: string | null }>(
+					'SELECT id, uri, in_reply_to_id, in_reply_to_uri FROM statuses'
+				)
+				.toArray()
+				.map((row) => [row.id, row])
+		)
+		for (const id of before.byId.keys()) {
+			if (after.byId.has(id)) {
+				continue
+			}
+			threads.delete(id)
+			for (const [key, c] of conversations) {
+				if (c.statuses.delete(id)) {
+					saw.add(
+						c.statuses.size === 0
+							? 'conversation goes with its last status'
+							: 'conversation moves back to an earlier status'
+					)
+				}
+				if (c.statuses.size === 0) {
+					conversations.delete(key)
+				}
+			}
+		}
+		// The thread of a status: the nearest status at or above it already in a conversation gives its own; else the
+		// start of its chain (THREAD_DEPTH parents up at most), the uri its in_reply_to_uri names or its own.
+		const threadOf = (id: string): string => {
+			let at = chain.get(id)!
+			for (let depth = 0; ; depth++) {
+				const kept = threads.get(at.id)
+				if (kept !== undefined) {
+					return kept
+				}
+				const parent = at.in_reply_to_id === null ? undefined : chain.get(at.in_reply_to_id)
+				if (parent === undefined || depth === THREAD_DEPTH) {
+					return at.in_reply_to_uri ?? at.uri
+				}
+				at = parent
+			}
+		}
+		const addStatus = (owner: number, id: string) => {
+			const s = after.byId.get(id)!
+			const thread = threadOf(id)
+			const participants = model.participants(s, owner)
+			const key = JSON.stringify([owner, thread, participants])
+			const c = conversations.get(key) ?? { owner, thread, participants, statuses: new Set<string>(), unread: false }
+			if (c.statuses.has(id)) {
+				return
+			}
+			c.statuses.add(id)
+			c.unread = after.world.statuses[s]!.author !== owner
+			conversations.set(key, c)
+			threads.set(id, thread)
+			if (owner !== after.world.statuses[s]!.author) {
+				saw.add('conversation of a recipient')
+			}
+		}
+		for (const [id, s] of after.byId) {
+			const status = after.world.statuses[s]!
+			if (status.visibility !== 'direct' || status.reblogOf !== null) {
+				continue
+			}
+			const mentioned = (state: Snapshot, x: number) =>
+				state.byId.has(id) &&
+				state.world.statuses[state.byId.get(id)!]!.mentions.some((m) => m.account === x && !m.silent)
+			const recipients = world.accounts.flatMap((account, x) =>
+				account.local &&
+				mentioned(after, x) &&
+				!(before.byId.has(id) && before.world.statuses[before.byId.get(id)!]!.mentions.some((m) => m.account === x)) &&
+				model.shown(x, 'mention', status.author, s)
+					? [x]
+					: []
+			)
+			if (!before.byId.has(id)) {
+				addStatus(status.author, id)
+			}
+			for (const r of recipients) {
+				addStatus(r, id)
+			}
+		}
+		const expectedConversations = [...conversations.values()]
+			.map((c) => ({
+				account_id: accountId(c.owner),
+				thread: c.thread,
+				participants: JSON.stringify(c.participants.map(accountId)),
+				last_status_id: [...c.statuses].sort().at(-1)!,
+				unread: c.unread ? 1 : 0,
+				statuses: JSON.stringify([...c.statuses].sort()),
+			}))
+			.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+		const actualConversations = sql
+			.exec<(typeof expectedConversations)[number]>(
+				`SELECT c.account_id, c.thread, c.participants, c.last_status_id, c.unread,
+					(SELECT json_group_array(status_id ORDER BY status_id) FROM conversation_statuses WHERE conversation_id = c.id)
+						AS statuses
+				FROM conversations c`
+			)
+			.toArray()
+			.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+		if (JSON.stringify(actualConversations) !== JSON.stringify(expectedConversations)) {
+			problems.push(
+				`${label}: conversations ${JSON.stringify(actualConversations)}, the model ${JSON.stringify(expectedConversations)}`
+			)
 		}
 
 		// R15: every notification the action wrote is shown to its recipient, at the time of the action.
