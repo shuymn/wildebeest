@@ -106,10 +106,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `write`).
     - A group counts and shows only the notifications you are shown in v1: a notification from an account you have
       since blocked or muted, or about a status you may no longer see, is left out.
-    - Where Kopje differs from Mastodon: a page reads at most 400 notifications (or twice its limit), so a page that
-      meets a group larger than that ends with the groups found, each counted over the notifications read, and its
-      `next` link goes on from there; a single group counts at most 400. A dismissed group is not remembered, so a
-      later notification within its hours starts a new one.
+    - Each group on a page counts and samples its notifications up to the page's newest, those below the page
+      included, as Mastodon does.
+    - Where Kopje differs from Mastodon: a group counts at most 400 notifications; a page reads at most 400
+      notifications (or twice its limit), so a page that meets more than that ends with the groups found, and its
+      `next` link goes on from there. A dismissed group is not remembered, so a later notification within its hours
+      starts a new one. Dismissing a group and clearing delete at once, in the request.
     - Notifications stored before the upgrade stay ungrouped, each a group of its own, as Mastodon left those it
       stored before it grouped them.
 - `GET /api/v1/notifications/unread_count` and `GET /api/v2/notifications/unread_count`, as Mastodon 4.5 has them: the

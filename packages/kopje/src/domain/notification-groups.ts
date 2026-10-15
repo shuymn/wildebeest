@@ -13,11 +13,14 @@ import type { Db } from '../db/sql'
 // blocked or muted, or a status the viewer may no longer see, is neither shown nor counted.
 //
 // Mastodon walks the notifications newest first and keeps the first of each group until it has a page of groups, then
-// counts each group's notifications between the page's ends. Kopje walks the same way, and the walk is what it counts,
-// with one difference: a walk reads at most groupWalkLimit(limit) notifications it shows. When a page's groups hold
-// more than that (a status favourited by hundreds within a few hours), the page ends early with the groups found, each
-// counted over the notifications read, and its Link continues from the last one read, so a group too large for one
-// page goes on in the next, as a group that spans pages does in Mastodon (RES-7).
+// reads each group's notifications up to the page's upper end (NotificationGroup.load_groups_data): its count, its
+// sample accounts and its newest, however far below the page they reach, and its oldest from the page's lower end.
+// Kopje does the same, through the group index, with two bounds (RES-7): a walk reads at most groupWalkLimit(limit)
+// notifications it shows, and a group's count reads at most GROUP_COUNT of them. When a page's walk meets more than
+// that (a status favourited by hundreds within a few hours), the page ends early with the groups found, and its Link
+// continues from the last one read, so the walk goes on in the next page.
+//
+// Dismissing a group and clearing delete at once, in the request, as Mastodon's destroy_all and delete_all do.
 
 // Api::V2::NotificationsController::DEFAULT_NOTIFICATIONS_COUNT_LIMIT and MAX_NOTIFICATIONS_COUNT_LIMIT, which the v1
 // controller shares.
@@ -28,8 +31,11 @@ export const MAX_UNREAD_LIMIT = 1_000
 const SAMPLE_ACCOUNTS = 8
 
 // How many shown notifications a walk for `limit` groups reads at most: GROUP_WALK, or twice the limit when that is
-// more (an unread count of up to MAX_UNREAD_LIMIT groups). A group read reads at most GROUP_WALK.
+// more (an unread count of up to MAX_UNREAD_LIMIT groups).
 export const GROUP_WALK = 400
+
+// How many of a group's shown notifications its count reads at most: a larger group counts this many.
+export const GROUP_COUNT = 400
 
 function groupWalkLimit(limit: number): number {
 	return Math.max(GROUP_WALK, 2 * limit)
@@ -97,8 +103,8 @@ function shownNotifications(
 
 type Shown = ReturnType<typeof shownNotifications>[number]
 
-// A group as a read found it: its notifications in the order read.
-type Found = { key: string; rows: Shown[] }
+// A group as a walk found it: its first notification read stands for it.
+type Found = { key: string; first: Shown }
 
 type WalkInput = {
 	ascending: boolean
@@ -114,6 +120,8 @@ type WalkInput = {
 
 type Walk = {
 	groups: Found[]
+	// Whether the walk found `limit` groups.
+	full: boolean
 	// Whether the walk stopped at its limit of notifications read, before a page of groups or the end.
 	cut: boolean
 	// The id of the last notification read.
@@ -132,9 +140,8 @@ function groupedOf(groupedTypes: string[] | null): readonly string[] {
 }
 
 // Walks the viewer's shown notifications from the cursor (newest first, or oldest first when ascending) in chunks of a
-// page, keeping each group's notifications in the order read, until `limit` groups are found (the last one's first
-// notification ends the walk, as it ends Mastodon's range), the notifications run out, or groupWalkLimit(limit) are
-// read.
+// page, keeping the first notification of each group, until `limit` groups are found, the notifications run out, or
+// groupWalkLimit(limit) are read.
 function walkGroups(db: Db, viewer: UserContext, input: WalkInput): Walk {
 	const grouped = groupedOf(input.groupedTypes)
 	const groups = new Map<string, Found>()
@@ -161,21 +168,19 @@ function walkGroups(db: Db, viewer: UserContext, input: WalkInput): Walk {
 			read += 1
 			last = row.id
 			const key = groupOf(row, grouped)
-			const group = groups.get(key)
-			if (group !== undefined) {
-				group.rows.push(row)
+			if (groups.has(key)) {
 				continue
 			}
-			groups.set(key, { key, rows: [row] })
+			groups.set(key, { key, first: row })
 			if (groups.size === input.limit) {
-				return { groups: [...groups.values()], cut: false, last }
+				return { groups: [...groups.values()], full: true, cut: false, last }
 			}
 		}
 		if (rows.length < chunk) {
 			break
 		}
 		if (read >= budget) {
-			return { groups: [...groups.values()], cut: true, last }
+			return { groups: [...groups.values()], full: false, cut: true, last }
 		}
 		if (input.ascending) {
 			minId = last
@@ -183,7 +188,45 @@ function walkGroups(db: Db, viewer: UserContext, input: WalkInput): Walk {
 			maxId = last
 		}
 	}
-	return { groups: [...groups.values()], cut: false, last }
+	return { groups: [...groups.values()], full: false, cut: false, last }
+}
+
+// The ids a page's groups are read between (NotificationGroup.load_groups_data's pagination_range), both inclusive,
+// null for no end.
+type Range = { lower: string | null; upper: string | null }
+
+// A group's shown notifications up to the range's upper end, newest first, at most GROUP_COUNT; with no grouped key,
+// its first one alone.
+function membersOf(db: Db, viewer: UserContext, group: Found, upper: string | null): Shown[] {
+	if (group.key.startsWith('ungrouped-')) {
+		return [group.first]
+	}
+	return shownNotifications(
+		db,
+		viewer,
+		'n.group_key = ?3 AND n.id <= coalesce(CAST(?4 AS INTEGER), 1e19)',
+		'ORDER BY n.id DESC LIMIT ?5',
+		group.key,
+		upper,
+		GROUP_COUNT
+	)
+}
+
+// The id of a group's oldest shown notification from the range's lower end up (load_groups_data's min_id).
+function oldestOf(db: Db, viewer: UserContext, group: Found, lower: string | null): string {
+	if (group.key.startsWith('ungrouped-')) {
+		return group.first.id
+	}
+	return (
+		shownNotifications(
+			db,
+			viewer,
+			'n.group_key = ?3 AND n.id >= coalesce(CAST(?4 AS INTEGER), -1e19)',
+			'ORDER BY n.id ASC LIMIT 1',
+			group.key,
+			lower
+		)[0]?.id ?? group.first.id
+	)
 }
 
 // The groups presented (NotificationGroup.from_notifications and GroupedNotificationsPresenter): each with the
@@ -193,7 +236,7 @@ function walkGroups(db: Db, viewer: UserContext, input: WalkInput): Walk {
 function presentGroups(
 	db: Db,
 	viewer: UserContext,
-	groups: readonly { key: string; first: Shown; rows: Shown[] }[],
+	groups: readonly { key: string; first: Shown; rows: Shown[]; oldest?: string }[],
 	options: { paged: boolean; expandAccounts: ExpandAccounts; present: Present }
 ): GroupedNotifications {
 	const samples = groups.map((group) => group.rows.slice(0, SAMPLE_ACCOUNTS).map((row) => row.from_account_id))
@@ -203,15 +246,14 @@ function presentGroups(
 		presentStatuses(db, statusIds, { ...options.present, viewer }).map((status) => [status.id, status])
 	)
 	const shown: { group: NotificationGroup; accounts: Account[]; status: Status | undefined }[] = []
-	groups.forEach(({ key, first, rows }, i) => {
+	groups.forEach(({ key, first, rows, oldest: pageMin }, i) => {
 		const sampled = (samples[i] ?? []).flatMap((id) => {
 			const account = accounts.get(id)
 			return account === undefined ? [] : [account]
 		})
 		const status = first.status_id === null ? undefined : statuses.get(first.status_id)
 		const newest = rows[0]
-		const oldest = rows.at(-1)
-		if (newest === undefined || oldest === undefined || sampled.length === 0) {
+		if (newest === undefined || sampled.length === 0) {
 			return
 		}
 		if (first.status_id !== null && status === undefined) {
@@ -224,7 +266,11 @@ function presentGroups(
 				type: first.type,
 				most_recent_notification_id: Number(newest.id),
 				...(options.paged
-					? { page_min_id: oldest.id, page_max_id: newest.id, latest_page_notification_at: newest.created_at }
+					? {
+							page_min_id: pageMin ?? newest.id,
+							page_max_id: newest.id,
+							latest_page_notification_at: newest.created_at,
+						}
 					: {}),
 				sample_account_ids: sampled.map((account) => account.id),
 				...(STATUS_TYPES.has(first.type) ? { status_id: status?.id ?? null } : {}),
@@ -277,6 +323,23 @@ export type ListGroupedInput = {
 // a group (Api::V2::NotificationsController#next_path and #prev_path).
 export type GroupedPage = GroupedNotifications & { next: string | null; prev: string | null }
 
+// The range of a page (Api::V2::NotificationsController#load_grouped_notifications), with `ordered` its groups newest
+// first: between its groups' first notifications; on a last page (no more notifications), down to since_id (or the
+// oldest) or, walking up, to below max_id (or the newest). A walk cut short reaches as far as it read.
+function pageRange(walk: Walk, ordered: readonly Found[], ascending: boolean, page: PageQuery): Range {
+	const newest = ordered[0]?.first.id ?? null
+	const oldest = ordered.at(-1)?.first.id ?? null
+	if (walk.full) {
+		return { lower: oldest, upper: newest }
+	}
+	if (ascending) {
+		const below = page.maxId === undefined ? null : String(BigInt(page.maxId) - 1n)
+		return { lower: oldest, upper: walk.cut ? walk.last : below }
+	}
+	const above = page.sinceId === undefined ? null : String(BigInt(page.sinceId) + 1n)
+	return { lower: walk.cut ? walk.last : above, upper: newest }
+}
+
 // GET /api/v2/notifications: newest first by each group's first notification read; with min_id, the groups right
 // above it, walked oldest first (each group's oldest notification above min_id stands for it) and answered newest
 // first.
@@ -294,10 +357,13 @@ export const listGroupedNotifications = userReadOperation<ListGroupedInput, Grou
 			limit: page.limit,
 		})
 		const ordered = ascending ? walk.groups.toReversed() : walk.groups
-		const groups = ordered.flatMap(({ key, rows }) => {
-			const first = rows[0]
-			return first === undefined ? [] : [{ key, first, rows: ascending ? rows.toReversed() : rows }]
-		})
+		const range = pageRange(walk, ordered, ascending, page)
+		const groups = ordered.map((group) => ({
+			key: group.key,
+			first: group.first,
+			rows: membersOf(db, viewer, group, range.upper),
+			oldest: oldestOf(db, viewer, group, range.lower),
+		}))
 		const presented = presentGroups(db, viewer, groups, {
 			paged: true,
 			expandAccounts: input.expandAccounts,
@@ -327,8 +393,8 @@ function firstOfGroup(db: Db, viewer: UserContext, groupKey: string): Shown | un
 	return shownNotifications(db, viewer, 'n.group_key = ?3', 'ORDER BY n.id DESC LIMIT 1', groupKey)[0]
 }
 
-// GET /api/v2/notifications/:group_key: the group with every notification of it shown (up to groupWalkLimit of the
-// default page, newest first), without page fields; null when it has none.
+// GET /api/v2/notifications/:group_key: the group with every notification of it shown (up to GROUP_COUNT, newest
+// first), without page fields; null when it has none.
 export const getNotificationGroup = userReadOperation<
 	{ groupKey: string; present: Present },
 	GroupedNotifications | null
@@ -339,7 +405,7 @@ export const getNotificationGroup = userReadOperation<
 	}
 	const grouped = first.group_key !== null && GROUPABLE_TYPES.some((type) => type === first.type)
 	const rows = grouped
-		? shownNotifications(db, viewer, 'n.group_key = ?3', 'ORDER BY n.id DESC LIMIT ?4', first.group_key, GROUP_WALK)
+		? shownNotifications(db, viewer, 'n.group_key = ?3', 'ORDER BY n.id DESC LIMIT ?4', first.group_key, GROUP_COUNT)
 		: [first]
 	return presentGroups(db, viewer, [{ key: groupOf(first, GROUPABLE_TYPES), first, rows }], {
 		paged: false,

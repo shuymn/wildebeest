@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, form, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { act, block, community, follow, getJson, mute, post, type Status } from './status-helpers'
+import { act, block, community, follow, getJson, mute, post, remoteAccount, type Status } from './status-helpers'
 
 type Notification = { id: string; type: string; group_key: string; account: { id: string } }
 
@@ -182,22 +182,26 @@ describe('grouped notifications (API v2)', () => {
 	it('pages by the groups found, a group going on in the page after, with Link headers', async () => {
 		const { h, alice, bob, carol, dave, id } = await scene()
 		const first = await grouped(h, '/api/v2/notifications?limit=2', alice.token)
-		// Each group counts its notifications between the page's ends: dave's follow and favourite.
-		expect(keys(first.body)).toEqual([
-			['follow', 1],
-			[expect.stringMatching(/^favourite-/), 1],
+		// Each group counts and samples its notifications up to the page's newest, those below the page included.
+		expect(first.body.notification_groups.map((g) => [g.type, g.notifications_count, g.sample_account_ids])).toEqual([
+			['follow', 2, [dave.id, carol.id]],
+			['favourite', 3, [dave.id, carol.id, bob.id]],
+		])
+		expect(first.body.notification_groups.map((g) => [g.page_min_id, g.page_max_id])).toEqual([
+			[id('follow', dave.id), id('follow', dave.id)],
+			[id('favourite', dave.id), id('favourite', dave.id)],
 		])
 		expect(first.link).toBe(
 			`<https://kopje.test/api/v2/notifications?limit=2&max_id=${id('favourite', dave.id)}>; rel="next", ` +
 				`<https://kopje.test/api/v2/notifications?limit=2&min_id=${id('follow', dave.id)}>; rel="prev"`
 		)
-		// The next page meets carol's follow again: the follow group goes on, counted over this page.
+		// The next page meets carol's follow again: the follow group goes on, counted up to this page's newest.
 		const second = await grouped(h, `/api/v2/notifications?limit=2&max_id=${id('favourite', dave.id)}`, alice.token)
 		expect(second.body.notification_groups.map((g) => [g.type, g.notifications_count, g.sample_account_ids])).toEqual([
 			['mention', 1, [dave.id]],
 			['follow', 1, [carol.id]],
 		])
-		// The last page has no more than it holds: a group on it counts the rest of its notifications.
+		// The last page: a group on it counts its notifications up to the page's newest.
 		const last = await grouped(h, `/api/v2/notifications?max_id=${id('follow', carol.id)}`, alice.token)
 		expect(last.body.notification_groups.map((g) => [g.type, g.notifications_count, g.sample_account_ids])).toEqual([
 			['reblog', 1, [bob.id]],
@@ -209,10 +213,37 @@ describe('grouped notifications (API v2)', () => {
 			above.body.notification_groups.map((g) => [g.type, g.notifications_count, g.page_min_id, g.page_max_id])
 		).toEqual([
 			['reblog', 1, id('reblog', bob.id), id('reblog', bob.id)],
-			['favourite', 1, id('favourite', carol.id), id('favourite', carol.id)],
+			['favourite', 2, id('favourite', carol.id), id('favourite', carol.id)],
 		])
 		const empty = await grouped(h, `/api/v2/notifications?max_id=${id('favourite', bob.id)}`, alice.token)
 		expect({ link: empty.link, groups: empty.body.notification_groups }).toEqual({ link: null, groups: [] })
+	})
+
+	it("counts a group's notifications below a full page", async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const status = await post(h, alice, { status: 'hello' })
+		const senders = await Promise.all(Array.from({ length: 42 }, (_, i) => remoteAccount(h.store, `r${i}`)))
+		const key = `favourite-${status.id}-${BUCKET}`
+		// Three favourites, then 39 mentions: a page of 40 groups ends at the newest favourite.
+		for (const [i, from] of senders.entries()) {
+			await sql(
+				h.store,
+				'INSERT INTO notifications (account_id, type, from_account_id, status_id, group_key) VALUES (?, ?, ?, ?, ?)',
+				alice.id,
+				i < 3 ? 'favourite' : 'mention',
+				from,
+				i < 3 ? status.id : null,
+				i < 3 ? key : null
+			)
+		}
+		const { body } = await grouped(h, '/api/v2/notifications', alice.token)
+		expect(body.notification_groups).toHaveLength(40)
+		expect(body.notification_groups.at(-1)).toMatchObject({
+			group_key: key,
+			notifications_count: 3,
+			sample_account_ids: [senders[2], senders[1], senders[0]],
+		})
 	})
 
 	it('shows one group by its key, and the accounts of a group by page', async () => {

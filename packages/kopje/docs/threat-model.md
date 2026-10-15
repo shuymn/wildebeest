@@ -1139,10 +1139,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   with the accounts that schedule or their scheduled statuses (`test/policy-bounds.test.ts`, "however many accounts
   schedule"). _Enforced (main)_ for grouped notifications: a page of groups walks the viewer's notifications from the
   cursor, as the list does, and reads at most 400 of those the rule shows (or twice the page's limit, when that is
-  more); a group read reads at most 400; a group's accounts are paged through the `(account_id, group_key, id)` index;
-  so none grows with the notifications of one group (`test/policy-bounds.test.ts`, "however many notifications a group
-  holds"). Accepted: a group larger than the walk is counted over the notifications read, and the page's Link goes on
-  from the last one read, where the group continues. Context traversal and edit history:
+  more); each group's count, samples and ends are read through the `(account_id, group_key, id)` index, at most 400
+  notifications per group; a group's accounts are paged through the same index; so none grows with the notifications
+  of one group (`test/policy-bounds.test.ts`, "however many notifications a group holds"). Accepted: a group of more
+  than 400 counts 400, and a page whose walk reaches its limit ends with the groups found, its Link going on from the
+  last notification read. Dismissing a group and clearing delete in the request, as Mastodon does. Context traversal and edit history:
   _Planned (B4a fixes)._
 
 ### Data and keys (DATA)

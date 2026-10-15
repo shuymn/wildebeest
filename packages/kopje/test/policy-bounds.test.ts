@@ -26,7 +26,7 @@ import {
 import { getMarkers, MARKER_TIMELINES } from '../src/domain/markers'
 import {
 	getNotificationGroup,
-	GROUP_WALK,
+	GROUP_COUNT,
 	listGroupedNotifications,
 	notificationGroupAccounts,
 	unreadCount,
@@ -2105,10 +2105,7 @@ describe('grouped notifications read a walk, however many notifications a group 
 				(
 					newest as { value: { notification_groups: { type: string; notifications_count: number }[] } }
 				).value.notification_groups.map((group) => [group.type, group.notifications_count])
-			).toEqual([
-				...Array.from({ length: REQUESTS }, () => ['follow_request', 1]),
-				['favourite', GROUP_WALK - REQUESTS],
-			])
+			).toEqual([...Array.from({ length: REQUESTS }, () => ['follow_request', 1]), ['favourite', GROUP_COUNT]])
 		}
 	}, 120_000)
 })
