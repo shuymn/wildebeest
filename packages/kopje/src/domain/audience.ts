@@ -509,6 +509,13 @@ export function ownStatusId(db: Db, authorId: string, statusId: string): OwnStat
 		: (statusId as OwnStatusId)
 }
 
+// R26: a scheduled status (scheduled_statuses row `ss`) is its owner's alone. It is not a status: no other rule
+// reads it, nothing lists, notifies or delivers it, and anyone else's is not found, until its publication writes an
+// ordinary status, which the rules above then govern.
+export function scheduledOwnSql(ss: string, viewer: string): string {
+	return `${ss}.account_id = ${viewer}`
+}
+
 // ---- Notifications.
 
 // Status.without_replies: not a reply, or a reply in the author's own conversation (in_reply_to_account_id carries

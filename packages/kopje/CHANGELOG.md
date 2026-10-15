@@ -46,6 +46,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `read:statuses` and `write:statuses` (or `read` and `write`). An update that changes a marker counts a version; the
   same value changes nothing. `last_read_id` is kept as sent, up to 255 characters; a blank one answers 422 with
   Mastodon's message. Updates are applied one at a time, so two at once both succeed instead of one answering 409.
+- Scheduled statuses, as Mastodon 4.5 has them: `POST /api/v1/statuses` with `scheduled_at` answers a
+  `ScheduledStatus`, checked as a post is, at least 5 minutes ahead, at most 300 per account and 25 per day (a time
+  not in the future posts at once). `GET /api/v1/scheduled_statuses` lists them, and `GET`, `PUT`, `PATCH` and
+  `DELETE` on `/api/v1/scheduled_statuses/:id` show, move and delete one. The cron publishes each when it is due
+  (within its 5-minute schedule) as an ordinary post, and drops one that no longer passes (the status it replies to is
+  gone, or its account is suspended); one that fails with an error is retried four times over about five hours, then
+  dropped. An `Idempotency-Key` that scheduled a status answers with it on a repeat, with or without `scheduled_at`.
+  Media attached to a scheduled status is kept until it is published or deleted.
 
 ### Changed
 
@@ -59,7 +67,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds four migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds five migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
@@ -72,6 +80,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       times, so its work grows linearly with the statuses stored; locally, 500,000 statuses, 50,000 of them direct in
       two long reply chains, took about 1.2 seconds.
     - `0010_markers`: adds the `markers` table. It is quick.
+    - `0011_scheduled_statuses`: adds the `scheduled_statuses` table and `media_attachments.scheduled_status_id`, with
+      their indexes. Its work grows linearly with the media stored (one pass to add the column and one to build its
+      partial index).
     - `0012_filters`: adds the `filters`, `filter_keywords` and `filter_statuses` tables, empty. Its work does not grow
       with the Store.
 - `wrangler.jsonc`: unchanged.

@@ -14,6 +14,7 @@ import * as notifications from './notifications'
 import * as oauth from './oauth'
 import * as placeholders from './placeholders'
 import * as push from './push'
+import * as scheduled from './scheduled-statuses'
 import * as search from './search'
 import * as statuses from './statuses'
 import * as tags from './tags'
@@ -446,6 +447,32 @@ export const ROUTES: readonly Route[] = [
 	// Timeline markers (mastodon/markers.ts).
 	{ method: 'GET', path: '/api/v1/markers', access: { scope: 'read:statuses' }, handler: markers.markers },
 	{ method: 'POST', path: '/api/v1/markers', access: { scope: 'write:statuses' }, handler: markers.saveMarkers },
+	// Scheduled statuses (mastodon/scheduled-statuses.ts); scheduling is POST /api/v1/statuses with scheduled_at.
+	{ method: 'GET', path: '/api/v1/scheduled_statuses', access: { scope: 'read:statuses' }, handler: scheduled.list },
+	{
+		method: 'GET',
+		path: '/api/v1/scheduled_statuses/:id',
+		access: { scope: 'read:statuses' },
+		handler: scheduled.show,
+	},
+	{
+		method: 'PUT',
+		path: '/api/v1/scheduled_statuses/:id',
+		access: { scope: 'write:statuses' },
+		handler: scheduled.update,
+	},
+	{
+		method: 'PATCH',
+		path: '/api/v1/scheduled_statuses/:id',
+		access: { scope: 'write:statuses' },
+		handler: scheduled.update,
+	},
+	{
+		method: 'DELETE',
+		path: '/api/v1/scheduled_statuses/:id',
+		access: { scope: 'write:statuses' },
+		handler: scheduled.destroy,
+	},
 
 	{ method: 'POST', path: '/api/v1/media', access: { scope: 'write:media' }, handler: media.uploadMedia },
 	{ method: 'POST', path: '/api/v2/media', access: { scope: 'write:media' }, handler: media.uploadMedia },

@@ -168,13 +168,15 @@ function compose(db: Db, text: string, author: Author, origin: string): Composed
 
 // Own media that is already attached to `statusId`, or unattached, processed and not doomed, in the order given
 // (MEDIA-1). Media of other accounts, still processing, or past its grace period is left out, as Mastodon leaves out
-// what `current_account.media_attachments.where(status_id: nil)` does not find.
+// what `current_account.media_attachments.where(status_id: nil)` does not find. Media a scheduled status holds is
+// attachable only by that scheduled status's publication (`scheduledId`).
 function attachableMedia(
 	db: Db,
 	accountId: string,
 	mediaIds: readonly string[],
 	statusId: string | null,
-	now: number
+	now: number,
+	scheduledId: string | null = null
 ): string[] {
 	if (mediaIds.length === 0) {
 		return []
@@ -182,17 +184,20 @@ function attachableMedia(
 	return db
 		.all<{ id: string }>(
 			`SELECT m.id FROM json_each(?1) j JOIN media_attachments m ON m.id = j.value
-			WHERE m.account_id = ?2 AND (m.status_id = ?3 OR (m.status_id IS NULL AND ${liveMediaSql('m', '?4')}))
+			WHERE m.account_id = ?2 AND (m.status_id = ?3
+				OR (m.status_id IS NULL AND m.scheduled_status_id IS ?5 AND ${liveMediaSql('m', '?4')}))
 			ORDER BY j.key`,
 			JSON.stringify([...new Set(mediaIds)]),
 			accountId,
 			statusId,
-			iso(now)
+			iso(now),
+			scheduledId
 		)
 		.map((row) => row.id)
 }
 
-// Attaches `mediaIds` in order; media the status stops using is detached and may be attached again for a day.
+// Attaches `mediaIds` in order (from a scheduled status too); media the status stops using is detached and may be
+// attached again for a day.
 function attachMedia(db: Db, statusId: string, mediaIds: readonly string[], now: number): void {
 	db.run(
 		`UPDATE media_attachments SET status_id = NULL, position = 0, gc_at = ?3
@@ -202,7 +207,7 @@ function attachMedia(db: Db, statusId: string, mediaIds: readonly string[], now:
 		iso(now + DETACHED_GRACE_MS)
 	)
 	db.run(
-		`UPDATE media_attachments SET status_id = ?1, gc_at = NULL,
+		`UPDATE media_attachments SET status_id = ?1, scheduled_status_id = NULL, gc_at = NULL,
 			position = (SELECT j.key FROM json_each(?2) j WHERE j.value = media_attachments.id)
 		WHERE id IN (SELECT value FROM json_each(?2))`,
 		statusId,
@@ -236,7 +241,7 @@ export function recountStatus(db: Db, statusId: string | null): void {
 	)
 }
 
-function iso(now: number): string {
+export function iso(now: number): string {
 	return new Date(now).toISOString()
 }
 
@@ -268,108 +273,152 @@ export type CreateStatusInput = {
 export type CreateStatusResult =
 	{ status: 'ok'; value: Status } | { status: 'reply_not_found' } | { status: 'invalid'; error: string }
 
+// A post as the poster sent it, checked and ready to write: by an immediate post, a scheduled one when it is
+// scheduled (scheduled-statuses.ts), and its publication.
+export type PostInput = Omit<CreateStatusInput, 'present' | 'idempotencyKey' | 'objectId'>
+
+export type PreparedPost = { author: Author; parent: ReplyParent | null; media: string[] }
+
+export type Prepared = PreparedPost | { status: 'reply_not_found' } | { status: 'invalid'; error: string }
+
+// PostStatusService's checks of a post, before anything is written: the raw bound, the status replied to, the media
+// and a blank text. `scheduledId` is the scheduled status being published, whose media it attaches (null: none).
+export function preparePost(db: Db, accountId: string, input: PostInput, scheduledId: string | null): Prepared {
+	if (exceedsRawLength(input.text, input.spoilerText)) {
+		return { status: 'invalid', error: TOO_LONG }
+	}
+	const author = localAuthor(db, accountId)
+	let parent: ReplyParent | null = null
+	if (input.inReplyToId !== undefined) {
+		parent = replyParent(db, accountId, input.inReplyToId)
+		if (parent === null) {
+			return { status: 'reply_not_found' }
+		}
+	}
+	const media = attachableMedia(db, accountId, input.mediaIds, null, input.now, scheduledId)
+	if (input.text.trim() === '' && media.length === 0) {
+		return { status: 'invalid', error: "Validation failed: Text can't be blank" }
+	}
+	return { author, parent, media }
+}
+
+export function isPrepared(prepared: Prepared): prepared is PreparedPost {
+	return 'author' in prepared
+}
+
+// Writes a prepared post: the status, its mentions, tags and media, its notifications and its Create (activities.ts),
+// all in the caller's transaction. The new status's id.
+export function writePost(
+	db: Db,
+	accountId: string,
+	input: PostInput & { idempotencyKey?: string; objectId: string; origin: string },
+	{ author, parent, media }: PreparedPost
+): string {
+	const origin = new URL(author.uri).origin
+	const composed = compose(db, input.text, author, input.origin)
+	const visibility = input.visibility ?? author.default_visibility
+	const sensitive = (input.sensitive ?? author.default_sensitive === 1) || input.spoilerText !== ''
+	const language = input.language ?? author.default_language
+	// Status#carried_over_reply_to_account_id: continuing one's own reply keeps the conversation partner.
+	const replyTarget =
+		parent === null
+			? null
+			: parent.account_id === accountId && parent.in_reply_to_uri !== null
+				? parent.in_reply_to_account_id
+				: parent.account_id
+	const id = allocateLocalId(db, input.now)
+	db.run(
+		`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, spoiler_text, content,
+			source_text, sensitive, language, published_at, client_key, search_text, in_reply_to_account_id, created_at)
+		VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?12)`,
+		id,
+		`${origin}/ap/o/${input.objectId}`,
+		accountId,
+		parent?.uri ?? null,
+		parent?.id ?? null,
+		visibility,
+		input.spoilerText,
+		composed.content,
+		composed.source,
+		sensitive ? 1 : 0,
+		language,
+		iso(input.now),
+		input.idempotencyKey ?? null,
+		searchText(composed.source, input.spoilerText),
+		replyTarget
+	)
+	writeMentions(db, id, composed.mentions, [])
+	writeTags(db, id, composed.tags)
+	attachMedia(db, id, media, input.now)
+	recountStatuses(db, accountId)
+	recountStatus(db, parent?.id ?? null)
+	for (const mention of composed.mentions) {
+		notify(db, { recipientId: mention.id, type: 'mention', fromId: accountId, statusId: id, now: input.now })
+	}
+	// FanOutOnWriteService#deliver_to_conversation!: the author's own direct status joins their conversation.
+	addToConversation(db, accountId, id)
+	// FeedInsertWorker#notify?: followers who asked to be notified hear of a post that is not a reply to someone else
+	// (or to an unknown partner) and that their home would show (the follow's languages); notify() applies the audience
+	// rule.
+	if (parent === null || replyTarget === accountId) {
+		const subscribers = db.all<{ account_id: string }>(
+			`SELECT account_id FROM follows WHERE target_account_id = ?1 AND state = 'accepted' AND notify = 1
+				AND (languages IS NULL OR ?2 IS NULL OR ?2 IN (SELECT value FROM json_each(languages)))`,
+			accountId,
+			language
+		)
+		for (const subscriber of subscribers) {
+			notify(db, {
+				recipientId: subscriber.account_id,
+				type: 'status',
+				fromId: accountId,
+				statusId: id,
+				now: input.now,
+			})
+		}
+	}
+	const facts = statusFacts(db, id)
+	if (facts !== null) {
+		recordOutbound(db, accountId, createActivity(facts), input.now)
+	}
+	return id
+}
+
+// The status the Idempotency-Key `key` made for the account, as its own: a repeat answers with it.
+export function ownStatusByKey(db: Db, viewer: UserContext, key: string, present: Present): Status | null {
+	const existing = db.first<{ id: string }>(
+		'SELECT id FROM statuses WHERE account_id = ? AND client_key = ?',
+		viewer.accountId,
+		key
+	)
+	return existing === undefined ? null : presentOwn(db, viewer.accountId, existing.id, { ...present, viewer })
+}
+
+// Posts at once: the checks, then the write, answered with the new status.
+export function postNow(db: Db, viewer: UserContext, input: CreateStatusInput): CreateStatusResult {
+	const { accountId } = viewer
+	const prepared = preparePost(db, accountId, input, null)
+	if (!isPrepared(prepared)) {
+		return prepared
+	}
+	const id = writePost(db, accountId, { ...input, origin: input.present.origin }, prepared)
+	const status = presentOwn(db, accountId, id, { ...input.present, viewer })
+	if (status === null) {
+		throw new Error('created status cannot be presented')
+	}
+	return { status: 'ok', value: status }
+}
+
 export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusResult>(
 	(db, input, { accountId }, viewer) => {
-		const options = { ...input.present, viewer }
 		if (input.idempotencyKey !== undefined) {
 			// The key is the status's natural key: a repeat answers with the status the first request made.
-			const existing = db.first<{ id: string }>(
-				'SELECT id FROM statuses WHERE account_id = ? AND client_key = ?',
-				accountId,
-				input.idempotencyKey
-			)
-			const status = existing === undefined ? null : presentOwn(db, accountId, existing.id, options)
+			const status = ownStatusByKey(db, viewer, input.idempotencyKey, input.present)
 			if (status !== null) {
 				return { status: 'ok', value: status }
 			}
 		}
-		if (exceedsRawLength(input.text, input.spoilerText)) {
-			return { status: 'invalid', error: TOO_LONG }
-		}
-		const author = localAuthor(db, accountId)
-		let parent: ReplyParent | null = null
-		if (input.inReplyToId !== undefined) {
-			parent = replyParent(db, accountId, input.inReplyToId)
-			if (parent === null) {
-				return { status: 'reply_not_found' }
-			}
-		}
-		const media = attachableMedia(db, accountId, input.mediaIds, null, input.now)
-		if (input.text.trim() === '' && media.length === 0) {
-			return { status: 'invalid', error: "Validation failed: Text can't be blank" }
-		}
-		const origin = new URL(author.uri).origin
-		const composed = compose(db, input.text, author, input.present.origin)
-		const visibility = input.visibility ?? author.default_visibility
-		const sensitive = (input.sensitive ?? author.default_sensitive === 1) || input.spoilerText !== ''
-		const language = input.language ?? author.default_language
-		// Status#carried_over_reply_to_account_id: continuing one's own reply keeps the conversation partner.
-		const replyTarget =
-			parent === null
-				? null
-				: parent.account_id === accountId && parent.in_reply_to_uri !== null
-					? parent.in_reply_to_account_id
-					: parent.account_id
-		const id = allocateLocalId(db, input.now)
-		db.run(
-			`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, spoiler_text, content,
-			source_text, sensitive, language, published_at, client_key, search_text, in_reply_to_account_id, created_at)
-		VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?12)`,
-			id,
-			`${origin}/ap/o/${input.objectId}`,
-			accountId,
-			parent?.uri ?? null,
-			parent?.id ?? null,
-			visibility,
-			input.spoilerText,
-			composed.content,
-			composed.source,
-			sensitive ? 1 : 0,
-			language,
-			iso(input.now),
-			input.idempotencyKey ?? null,
-			searchText(composed.source, input.spoilerText),
-			replyTarget
-		)
-		writeMentions(db, id, composed.mentions, [])
-		writeTags(db, id, composed.tags)
-		attachMedia(db, id, media, input.now)
-		recountStatuses(db, accountId)
-		recountStatus(db, parent?.id ?? null)
-		for (const mention of composed.mentions) {
-			notify(db, { recipientId: mention.id, type: 'mention', fromId: accountId, statusId: id, now: input.now })
-		}
-		// FanOutOnWriteService#deliver_to_conversation!: the author's own direct status joins their conversation.
-		addToConversation(db, accountId, id)
-		// FeedInsertWorker#notify?: followers who asked to be notified hear of a post that is not a reply to someone else
-		// (or to an unknown partner) and that their home would show (the follow's languages); notify() applies the audience
-		// rule.
-		if (parent === null || replyTarget === accountId) {
-			const subscribers = db.all<{ account_id: string }>(
-				`SELECT account_id FROM follows WHERE target_account_id = ?1 AND state = 'accepted' AND notify = 1
-				AND (languages IS NULL OR ?2 IS NULL OR ?2 IN (SELECT value FROM json_each(languages)))`,
-				accountId,
-				language
-			)
-			for (const subscriber of subscribers) {
-				notify(db, {
-					recipientId: subscriber.account_id,
-					type: 'status',
-					fromId: accountId,
-					statusId: id,
-					now: input.now,
-				})
-			}
-		}
-		const facts = statusFacts(db, id)
-		if (facts !== null) {
-			recordOutbound(db, accountId, createActivity(facts), input.now)
-		}
-		const status = presentOwn(db, accountId, id, options)
-		if (status === null) {
-			throw new Error('created status cannot be presented')
-		}
-		return { status: 'ok', value: status }
+		return postNow(db, viewer, input)
 	}
 )
 

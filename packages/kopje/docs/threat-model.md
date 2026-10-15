@@ -503,7 +503,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   (main)_ for accounts and OAuth: `src/domain/accounts.ts`, `src/domain/oauth.ts`; `test/oauth.test.ts` ("does not
   revoke a token of another client"). _Enforced (main)_ for statuses and notifications:
   `test/statuses.test.ts` ("cannot edit someone else's status", "gives the source for editing to the author only"),
-  `test/notifications.test.ts` ("only the viewer’s own notifications").
+  `test/notifications.test.ts` ("only the viewer’s own notifications"). _Enforced (main)_ for scheduled statuses: every read and change
+  of `scheduled_statuses` is the owner's (`scheduledOwnSql`, R26, all in `src/domain/scheduled-statuses.ts`, which
+  `test/policy.test.ts` keeps alone in touching the table), so another account's is not found (404), and the media a
+  scheduled status holds is the poster's own, checked as for a post; publication runs as the scheduled status's owner
+  and through the checks of a post (`preparePost`), and an account suspended meanwhile publishes nothing;
+  `test/scheduled-statuses.test.ts` ("never shows or changes another account's scheduled status", "nothing leaks
+  before publication").
 - **AUTH-7: opaque credentials are unguessable and stored as digests.** Client ids and secrets, codes and access tokens
   are 32 random bytes. Codes and access tokens are stored and looked up only by their full SHA-256. _Enforced (main):_
   `src/security/tokens.ts`, `src/domain/oauth.ts`; `test/oauth.test.ts` ("stores only digests of tokens and codes").
@@ -888,9 +894,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   ("raw input bound"). _Enforced (main)_ for search terms (500 characters) and media (16 MB
   and 16,777,216 pixels, read with the body bound before parsing): `src/mastodon/search.ts`, `src/mastodon/media.ts`;
   `test/search.test.ts` ("bounds the query"), `test/media.test.ts` ("refuses a file over 16 MB"). _Enforced (main)_ for remote profiles: bios are cut at 50,000 code units before sanitizing and
-  display names at 2,048 (`src/security/html.ts`, `src/federation/remote-actor.ts`). _Implemented on branch `kopje/markers`:_ a timeline
-  marker's `last_read_id` stops at 255 characters, which Mastodon bounds as a bigint (`src/domain/markers.ts`;
-  `test/markers.test.ts`, "answers 422 with Mastodon's validation message"). Other query strings: _Gap._
+  display names at 2,048 (`src/security/html.ts`, `src/federation/remote-actor.ts`). _Implemented on branch `kopje/markers`:_ a timeline marker's `last_read_id` stops at 255 characters, which Mastodon bounds as a bigint (`src/domain/markers.ts`; `test/markers.test.ts`, "answers 422 with Mastodon's validation message"). _Enforced (main)_ for scheduled statuses: `scheduled_at` is read only up to 64 characters, and a scheduled status's params are a JSON object of a fixed shape built from checked fields (the status text's raw bound, at most four media ids), refused over 128 KiB in the Store and by the schema (migration `0011_scheduled_statuses`); `test/migrations.test.ts`, `test/scheduled-statuses.test.ts`. `scheduled_at` must name a date and time the calendar has (Ruby's `DateTime.parse`: no February 29 outside leap years, no 31st of a 30-day month, minutes and hours in range), checked before its offset applies. Other query strings: _Gap._
 - **RES-2: parsing work is bounded.** Every regex, parser and normalization over input at the RES-1 cap has an
   adversarial fixture with a time bound. _Enforced (main)_ for status text:
   `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Enforced (main)_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
@@ -979,6 +983,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   as Mastodon's `ApplicationsVacuum` does, and expired codes and web sessions, 500 of each per run. `registerApp` and
   `sweepOAuth` in `src/domain/oauth.ts`, `src/mastodon/oauth.ts`; `test/apps-budget.test.ts`. Avatar and header
   uploads from the web UI go through the media budgets below.
+  _Enforced (main)_ for scheduled statuses: an account holds at most 300, at most 25 on one UTC day, each at least 5
+  minutes ahead (Mastodon's limits, 422 with its messages); the cron publishes at most 25 a run, the earliest due first,
+  each in its own transaction that deletes the row as it writes the status, so overlapping runs and retries publish it
+  once. Never-attempted schedules come first; one whose publication fails with an error is rolled back, its attempt
+  recorded in a transaction of its own and retried after 5, 15, 60 and 240 minutes, through a separate index, and
+  dropped (its media detached) after 5 attempts, so failures back off and never hold back what is newly due. Nothing is published while
+  the Store is in maintenance or readonly; what is due waits. `publishScheduled` in `src/store.ts`,
+  `src/domain/scheduled-statuses.ts`, `src/jobs/scheduled.ts`; `test/scheduled-statuses.test.ts` ("publishes a due
+  status once", "publishes at most 25 a run", "backs off what keeps failing", "waits while the Store is readonly").
   _Enforced (main)_ for media: before the body is read or Images is called, the Store
   counts upload attempts (deleted and failed ones included) to at most 30 per 30 minutes per account (Mastodon's
   limit) and checks the monthly budgets; right before Images is called it revalidates the reservation with fresh time
@@ -1075,7 +1088,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   read only their setting; familiar followers reads at most 10,000 of the viewer's accepted follows (above
   Mastodon's default follow limit of 7,500) and checks each against the account through the pair index; `test/instance-reads.test.ts`, `test/tags.test.ts`,
   `test/account-reads.test.ts` (rows read stay flat as accounts per domain, accounts known, statuses outside the
-  window, and the account's other followers grow). Context traversal and edit history:
+  window, and the account's other followers grow). _Enforced (main)_ for scheduled statuses: a page reads the
+  account's own index by id, and a publication round reads the due ones through the index by time, so neither grows
+  with the accounts that schedule or their scheduled statuses (`test/policy-bounds.test.ts`, "however many accounts
+  schedule"). Context traversal and edit history:
   _Planned (B4a fixes)._
 
 ### Data and keys (DATA)
