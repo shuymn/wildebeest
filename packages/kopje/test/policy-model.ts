@@ -253,7 +253,8 @@ export class PolicyModel {
 	// the recipient, is available, is neither blocked (either way), muted with notifications nor domain-blocked by the
 	// recipient, and the recipient may see the status. A reblog needs the sender's boost of it to be visible to the
 	// recipient. A mention is left out when its status mentions (not silently) or replies to an account the recipient
-	// blocks or mutes with notifications. A post notification is shown only when home would show its status.
+	// blocks or mutes with notifications. A post notification is shown only for a status that is not a reply, or is one
+	// in the author's own conversation (a known partner that is the author), and that home's filter passes.
 	shown(r: number, type: NotificationType, from: number, s: number | null): boolean {
 		if (
 			from === r ||
@@ -285,7 +286,7 @@ export class PolicyModel {
 				)
 			}
 			case 'status':
-				return s !== null && this.homeFilter(s, r)
+				return s !== null && (!this.isReply(s) || this.partner(s) === this.status(s).author) && this.homeFilter(s, r)
 			default:
 				return true
 		}

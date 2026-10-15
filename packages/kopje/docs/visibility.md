@@ -65,8 +65,9 @@ notifications, and for sending their pushes (`domain/push.ts`, judged again at t
 the recipient, is available, is neither blocked (either way), muted with notifications nor domain-blocked by the
 recipient, and the recipient may see the status. A reblog notification also needs the sender's boost to be visible to
 the recipient. A mention is left out when its status mentions or replies to an account the recipient blocks or mutes
-with notifications. A post notification (`status`) is shown only when `homeFilterSql` passes for its status, as
-Mastodon's `FeedInsertWorker` notifies only of what home shows: so a sender the recipient mutes, with or without
+with notifications. A post notification (`status`) is shown only for a status that is not a reply, or is one in the
+author's own conversation (its partner is the author; an unknown partner does not count), and only when
+`homeFilterSql` passes for it, as Mastodon's `FeedInsertWorker` notifies only of what home shows: so a sender the recipient mutes, with or without
 notifications, sends none.
 
 An account becomes unavailable when its deletion starts: a remote actor's `Delete` writes `accounts.deleted_at` in the

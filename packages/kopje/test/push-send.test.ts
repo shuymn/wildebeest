@@ -462,6 +462,34 @@ describe('PUSH-3: a push reveals no more than the notification', () => {
 		expect(await rows(h.store)).toEqual([])
 	})
 
+	it('PUSH-3: lists and pushes no post notification of a reply whose partner is unknown', async () => {
+		const { h } = await pushing()
+		const { alice, bob } = h.users
+		await act(h, alice, `/api/v1/accounts/${bob.id}/follow`, { notify: true })
+		const news = await post(h, bob, { status: 'news' })
+		const listed = async () =>
+			(
+				(await (await h.request('/api/v1/notifications?types[]=status', bearer(alice.token))).json()) as {
+					status: { id: string }
+				}[]
+			).map((n) => n.status.id)
+		expect(await listed()).toEqual([news.id])
+		expect(await rows(h.store)).toHaveLength(1)
+
+		// The status turns out to be a reply to a status never stored: its partner is unknown, so home leaves it out,
+		// and so do the notification's listing and its push.
+		await sql(
+			h.store,
+			"UPDATE statuses SET in_reply_to_uri = 'https://elsewhere.example/objects/1' WHERE id = ?",
+			news.id
+		)
+		expect(await listed()).toEqual([])
+		const { fetch, sent } = recordingFetch()
+		expect(await round(h, fetch)).toMatchObject({ settled: [] })
+		expect(sent).toEqual([])
+		expect(await rows(h.store)).toEqual([])
+	})
+
 	it('sends what holds when it is sent: an edit during the host check is in the payload', async () => {
 		const { h, client } = await pushing()
 		const status = await post(h, h.users.bob, { status: '@alice first' })

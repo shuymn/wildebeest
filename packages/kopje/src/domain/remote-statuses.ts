@@ -398,7 +398,16 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 	recountStatus(db, parent?.id ?? null)
 	linkReplies(db, { id, uri: input.uri, accountId: author.id, replyTarget, isReply: input.inReplyTo !== null })
 	if (!ctx.fetched) {
-		notifyCreated(db, { id, author, rows, audience, language: input.language, replyTarget, now: ctx.now })
+		notifyCreated(db, {
+			id,
+			author,
+			rows,
+			audience,
+			language: input.language,
+			replyTarget,
+			isReply: input.inReplyTo !== null,
+			now: ctx.now,
+		})
 	}
 	return { applied: true, reason: 'created', statusId: id }
 }
@@ -435,6 +444,7 @@ function notifyCreated(
 		audience: ReadonlySet<string>
 		language: string | null
 		replyTarget: string | null
+		isReply: boolean
 		now: number
 	}
 ): void {
@@ -444,7 +454,9 @@ function notifyCreated(
 			notify(db, { recipientId: mention.accountId, type: 'mention', fromId: author.id, statusId: id, now })
 		}
 	}
-	if (created.replyTarget !== null && created.replyTarget !== author.id) {
+	// No post notification for a reply other than in the author's own conversation, its partner unknown included
+	// (FeedInsertWorker#notify?).
+	if (created.isReply && created.replyTarget !== author.id) {
 		return
 	}
 	const subscribers = db.all<{ account_id: string }>(

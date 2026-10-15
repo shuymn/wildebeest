@@ -330,8 +330,9 @@ export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusRe
 		notify(db, { recipientId: mention.id, type: 'mention', fromId: accountId, statusId: id, now: input.now })
 	}
 	// FeedInsertWorker#notify?: followers who asked to be notified hear of a post that is not a reply to someone else
-	// and that their home would show (the follow's languages); notify() applies the audience rule.
-	if (replyTarget === null || replyTarget === accountId) {
+	// (or to an unknown partner) and that their home would show (the follow's languages); notify() applies the audience
+	// rule.
+	if (parent === null || replyTarget === accountId) {
 		const subscribers = db.all<{ account_id: string }>(
 			`SELECT account_id FROM follows WHERE target_account_id = ?1 AND state = 'accepted' AND notify = 1
 				AND (languages IS NULL OR ?2 IS NULL OR ?2 IN (SELECT value FROM json_each(languages)))`,
