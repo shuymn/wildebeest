@@ -21,9 +21,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `/api/v2/filters/statuses/:id`, and the v1 `/api/v1/filters` over the same filters. Every status shown to you carries
   in `filtered` your active filters that match it, whatever their context and action, and your client hides or warns
   by context, as with Mastodon. An account has at most 50 filters, a filter 20 keywords and 200 statuses. A status is
-  matched on the beginning of its text: a response's statuses share 400,000 characters evenly, at most 10,000 each, so
-  a page is matched in full but a keyword deep in a long status of a very large thread may be missed (filtered statuses
-  always match). Keywords match case-insensitively by simple Unicode case folding; the
+  matched on the beginning of its text: at most 10,000 characters each, and a response's statuses share 400,000 (short
+  ones whole, long ones on an equal share), so a page is matched in full but a keyword deep in a long status of a very
+  large thread may be missed (filtered statuses always match). Keywords match case-insensitively by simple Unicode case folding; the
   multi-character folds Mastodon also applies (ß and ss, İ and i̇) do not match. Deleting a v1 filter also deletes its
   filter when that leaves it with no keyword and no status.
 - Conversations in the Mastodon API, as Mastodon 4.5 has them: `GET /api/v1/conversations` (paged by the last status
