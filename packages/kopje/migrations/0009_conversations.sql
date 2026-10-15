@@ -1,9 +1,9 @@
 -- Kopje Store schema 0009: conversations, the direct-message list. Never edit after release (checksummed).
 --
--- statuses.thread is Mastodon's conversation_id: the thread a status belongs to, written once when the status (not a
--- boost) is stored and never changed (the trigger statuses_thread below). A reply to a status stored takes that
--- status's thread; a reply to a status not stored takes the uri it names (in_reply_to_uri); any other status its own
--- uri. Deleting a status or a conversation changes no other status's thread.
+-- statuses.thread is Mastodon's conversation_id: the thread a status belongs to, written once when the status is
+-- stored and never changed (the trigger statuses_thread below). A reply to a status stored takes that status's thread;
+-- a reply to a status not stored takes the uri it names (in_reply_to_uri); any other status its own uri. Deleting a
+-- status or a conversation changes no other status's thread.
 --
 -- conversations is Mastodon's account_conversations, written when a direct status is stored
 -- (AccountConversation.add_status): a local author's own direct status goes into the author's conversation, and a
@@ -52,15 +52,14 @@ CREATE TABLE conversation_threads (
 
 INSERT INTO conversation_threads (id, thread)
 WITH RECURSIVE down (id, thread) AS (
-  SELECT id, COALESCE(in_reply_to_uri, uri) FROM statuses WHERE in_reply_to_id IS NULL AND reblog_of_id IS NULL
+  SELECT id, COALESCE(in_reply_to_uri, uri) FROM statuses WHERE in_reply_to_id IS NULL
   UNION ALL
-  SELECT s.id, down.thread FROM down JOIN statuses s ON s.in_reply_to_id = down.id WHERE s.reblog_of_id IS NULL
+  SELECT s.id, down.thread FROM down JOIN statuses s ON s.in_reply_to_id = down.id
 )
 SELECT id, thread FROM down;
 
 UPDATE statuses SET thread = COALESCE((SELECT t.thread FROM conversation_threads t WHERE t.id = statuses.id),
-  in_reply_to_uri, uri)
-WHERE reblog_of_id IS NULL;
+  in_reply_to_uri, uri);
 
 DROP TABLE conversation_threads;
 
@@ -103,9 +102,9 @@ DROP TABLE conversation_backfill_members;
 DELETE FROM sqlite_sequence WHERE name = 'conversations' AND seq = 0;
 
 -- A status's thread, when it is stored: its parent's, read through the primary key, else in_reply_to_uri, else its uri.
--- A status written with its thread (an import) keeps it.
+-- A status written with its thread (an import, whose boosts and replies are linked after) keeps it.
 CREATE TRIGGER statuses_thread AFTER INSERT ON statuses
-WHEN NEW.reblog_of_id IS NULL AND NEW.thread IS NULL
+WHEN NEW.thread IS NULL
 BEGIN
   UPDATE statuses
     SET thread = COALESCE((SELECT p.thread FROM statuses p WHERE p.id = NEW.in_reply_to_id), NEW.in_reply_to_uri, NEW.uri)

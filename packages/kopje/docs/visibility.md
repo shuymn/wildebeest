@@ -103,7 +103,7 @@ the notification rule (R15) decides who receives one: a status from an account t
 notifications adds nothing, and a limited status (a silent recipient) is not a direct message. A conversation is keyed
 by its owner, its thread and its participants (`src/domain/conversation-rows.ts`): the participants are the status's
 author and its mentions (not silent) less the owner; the thread is `statuses.thread`, Mastodon's `conversation_id`,
-written once when a status (not a boost) is stored and never changed (the trigger `statuses_thread`): a reply to a
+written once when a status is stored and never changed (the trigger `statuses_thread`): a reply to a
 status stored takes that status's thread, a reply to a status not stored the uri it names (`in_reply_to_uri`), any
 other status its own uri. Deleting a status or a conversation changes no other status's thread, so a later reply joins
 the thread its parent was stored in. Migration `0009_conversations` gives the statuses already stored theirs by the

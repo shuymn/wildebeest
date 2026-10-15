@@ -3,7 +3,7 @@
 // and the text of CONVERSATIONS_BACKFILL is also in migration 0009_conversations (test/migrations.test.ts checks it).
 //
 // A conversation row belongs to a local account and is keyed, as Mastodon keys it, by its thread and its participants:
-//   - the thread is statuses.thread, Mastodon's conversation_id: written once when a status (not a boost) is stored,
+//   - the thread is statuses.thread, Mastodon's conversation_id: written once when a status is stored,
 //     by the trigger statuses_thread of migration 0009, and never changed. A reply to a status stored takes that
 //     status's thread; a reply to a status not stored takes the uri it names (in_reply_to_uri); any other status its
 //     own uri. Deleting a status or a conversation changes no other status's thread;
@@ -20,7 +20,7 @@ export function participantsSql(s: string, owner: string): string {
 
 // The threads of the statuses stored and the conversations of the direct ones, as the write path makes them, in work
 // that grows linearly with the statuses:
-//   1. the thread of every status (not a boost), the same rule applied from the start of each chain down: a status that
+//   1. the thread of every status, the same rule applied from the start of each chain down: a status that
 //      replies to no status stored takes in_reply_to_uri, else its own uri, and each reply below it takes its thread.
 //      A status in a cycle of replies, or below one, starts no chain and takes in_reply_to_uri, else its own uri;
 //   2. each (owner, status), as Mastodon's own migration of account conversations made them: a direct status (not a
@@ -37,15 +37,14 @@ export const CONVERSATIONS_BACKFILL = `CREATE TABLE conversation_threads (
 
 INSERT INTO conversation_threads (id, thread)
 WITH RECURSIVE down (id, thread) AS (
-  SELECT id, COALESCE(in_reply_to_uri, uri) FROM statuses WHERE in_reply_to_id IS NULL AND reblog_of_id IS NULL
+  SELECT id, COALESCE(in_reply_to_uri, uri) FROM statuses WHERE in_reply_to_id IS NULL
   UNION ALL
-  SELECT s.id, down.thread FROM down JOIN statuses s ON s.in_reply_to_id = down.id WHERE s.reblog_of_id IS NULL
+  SELECT s.id, down.thread FROM down JOIN statuses s ON s.in_reply_to_id = down.id
 )
 SELECT id, thread FROM down;
 
 UPDATE statuses SET thread = COALESCE((SELECT t.thread FROM conversation_threads t WHERE t.id = statuses.id),
-  in_reply_to_uri, uri)
-WHERE reblog_of_id IS NULL;
+  in_reply_to_uri, uri);
 
 DROP TABLE conversation_threads;
 
