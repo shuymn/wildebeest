@@ -6,7 +6,7 @@ import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { PNG_PLAIN } from './fixtures/images'
 import { bytes, mediaForm, pathOf, r2Keys, TestCodec } from './media-helpers'
-import { community } from './status-helpers'
+import { community, outbound, remoteAccount, remoteFollows } from './status-helpers'
 import { type Browser, csrfOf, ORIGIN, signIn } from './web-helpers'
 import { sweepMedia } from '../src/mastodon/media'
 
@@ -112,6 +112,68 @@ describe('profile images', () => {
 		expect(await r2Keys(`originals/${current?.id}`)).toHaveLength(1)
 		expect((await h.request(pathOf(second ?? null))).status).toBe(200)
 		expect(await sql(h.store, 'SELECT url FROM media_attachments')).toEqual([{ url: second }])
+	})
+
+	it('removes the avatar or header through the API, dooms its upload and federates the Update', async () => {
+		const h = await setup()
+		const { alice } = h.users
+		await remoteFollows(h.store, await remoteAccount(h.store, 'fan'), alice.id)
+		const csrf = await csrfOf(h, h.browser)
+		await uploadImage(h, h.browser, 'avatar', { csrf })
+		await uploadImage(h, h.browser, 'header', { csrf })
+		const before = await account(h)
+		const rows = await sql<{ id: string; url: string; file_token: string }>(
+			h.store,
+			'SELECT id, url, file_token FROM media_attachments'
+		)
+		const avatar = rows.find((row) => row.url === before?.avatar_url)
+		const header = rows.find((row) => row.url === before?.header_url)
+		// An Update supersedes the earlier ones, so the latest is the one to read.
+		const latestUpdate = async () =>
+			(await outbound(h.store)).filter((o) => o.activity.type === 'Update').at(-1)?.activity
+		const uploadsUpdate = await latestUpdate()
+
+		const removed = await h.request('/api/v1/profile/avatar', bearer(alice.token, { method: 'DELETE' }))
+		expect(removed.status).toBe(200)
+		const credential = await removed.json<{ avatar: string; header: string; source: unknown }>()
+		expect(credential).toMatchObject({ avatar: `${ORIGIN}/assets/avatar.png`, header: before?.header_url })
+		expect(credential.source).toBeDefined()
+		expect(await account(h)).toEqual({ avatar_url: null, header_url: before?.header_url })
+		// The sweep after the response deleted the avatar's upload and files; the header's stay.
+		expect(await r2Keys(`files/${avatar?.file_token}/`)).toEqual([])
+		expect(await r2Keys(`originals/${avatar?.id}`)).toEqual([])
+		expect(await r2Keys(`files/${header?.file_token}/`)).toHaveLength(2)
+		expect(await sql(h.store, 'SELECT id FROM media_attachments')).toEqual([{ id: header?.id }])
+		const update = await latestUpdate()
+		expect(update?.id).not.toBe(uploadsUpdate?.id)
+		expect(update?.object).not.toHaveProperty('icon')
+		expect(update?.object).toMatchObject({ image: { type: 'Image', url: before?.header_url } })
+
+		const headerRemoved = await h.request('/api/v1/profile/header', bearer(alice.token, { method: 'DELETE' }))
+		expect(await headerRemoved.json()).toMatchObject({ header: `${ORIGIN}/assets/header.png` })
+		expect(await account(h)).toEqual({ avatar_url: null, header_url: null })
+		expect(await sql(h.store, 'SELECT id FROM media_attachments')).toEqual([])
+		const headerUpdate = await latestUpdate()
+		expect(headerUpdate?.id).not.toBe(update?.id)
+		expect(headerUpdate?.object).not.toHaveProperty('image')
+
+		// Removing an image the account does not have changes nothing and sends nothing.
+		const again = await h.request('/api/v1/profile/avatar', bearer(alice.token, { method: 'DELETE' }))
+		expect(again.status).toBe(200)
+		expect((await latestUpdate())?.id).toBe(headerUpdate?.id)
+	})
+
+	it('keeps an upload the other profile image still names', async () => {
+		const h = await setup()
+		const csrf = await csrfOf(h, h.browser)
+		await uploadImage(h, h.browser, 'avatar', { csrf })
+		const url = (await account(h))?.avatar_url
+		// Both images naming one upload, as a converted account may.
+		await sql(h.store, 'UPDATE accounts SET header_url = ? WHERE username = ?', url ?? null, 'alice')
+		const removed = await h.request('/api/v1/profile/avatar', bearer(h.users.alice.token, { method: 'DELETE' }))
+		expect(removed.status).toBe(200)
+		expect(await sql(h.store, 'SELECT url, gc_at FROM media_attachments')).toEqual([{ url, gc_at: null }])
+		expect((await h.request(pathOf(url ?? null))).status).toBe(200)
 	})
 
 	it('refuses a foreign, null or missing Origin and a wrong token before any transformation (WEB-1, WEB-4)', async () => {

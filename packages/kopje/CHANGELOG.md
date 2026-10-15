@@ -72,6 +72,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       choice cut to that length cannot be voted for; any Note naming a choice in reply to a local poll is treated as a
       vote, never as a status; a local poll's `Question` says `closed` once the cron has ended it, within 5 minutes of
       its end; and the Update of counts reaches remote voters only for a public or unlisted status.
+- `PATCH /api/v1/media/:id`, the same update as `PUT`, and `DELETE /api/v1/media/:id`, as Mastodon 4.5 has them (scope
+  `write:media`): your own media only, else 404. Media a status uses, or a scheduled status holds, answers 422 with
+  Mastodon's message, and so does an image the cutover kept unattached (one only earlier versions of a status show, or
+  one legacy kept); otherwise the media is deleted with its files and the answer is `{}`.
+- `DELETE /api/v1/profile/avatar` and `DELETE /api/v1/profile/header`, as Mastodon 4.5 has them (scope
+  `write:accounts`): the account shows the default image again, the removed image's files are deleted, followers'
+  servers receive the profile `Update`, and the answer is your `CredentialAccount`.
 
 ### Changed
 

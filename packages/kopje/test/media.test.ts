@@ -14,6 +14,7 @@ import {
 	WEBP_XMP,
 	WIDE_PNG,
 } from './fixtures/images'
+import { BUILD } from './helpers'
 import {
 	type Attachment,
 	bytes,
@@ -31,6 +32,7 @@ import { handleScheduled } from '../src/jobs/scheduled'
 import { sweepMedia } from '../src/mastodon/media'
 import { accountMonthlyTransforms, readConfig } from '../src/platform/config'
 import { retainedMetadata } from '../src/platform/image-bytes'
+import { sha256Hex } from '../src/security/tokens'
 
 const HOUR = 60 * 60 * 1000
 
@@ -344,6 +346,161 @@ describe('GET and PUT /api/v1/media/:id', () => {
 		// Attached media cannot be moved to another status either.
 		const other = await post(h, alice, { status: 'other', media_ids: [media.id] })
 		expect(other.media_attachments).toEqual([])
+	})
+})
+
+describe('PATCH and DELETE /api/v1/media/:id', () => {
+	it('updates through PATCH as through PUT', async () => {
+		const h = await users()
+		const { alice, bob } = h.users
+		const media = await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		const patch = (token: string, body: Record<string, unknown>) =>
+			h.request(`/api/v1/media/${media.id}`, bearer(token, json(body, { method: 'PATCH' })))
+		expect((await patch(bob.token, { description: 'mine now' })).status).toBe(404)
+		const updated = await patch(alice.token, { description: 'patched', focus: '0.5,-0.5' })
+		expect(updated.status).toBe(200)
+		expect(await updated.json()).toMatchObject({ description: 'patched', meta: { focus: { x: 0.5, y: -0.5 } } })
+		expect((await patch(alice.token, { description: 'x'.repeat(1501) })).status).toBe(422)
+	})
+
+	it('deletes own unattached media with its R2 objects, and nobody else’s (MEDIA-1)', async () => {
+		const h = await users()
+		const { alice, bob } = h.users
+		const media = await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		const keys = await keysOf(h, media.id)
+		const destroy = (token: string, id = media.id) =>
+			h.request(`/api/v1/media/${id}`, bearer(token, { method: 'DELETE' }))
+		const foreign = await destroy(bob.token)
+		expect([foreign.status, await foreign.json()]).toEqual([404, { error: 'Record not found' }])
+		expect((await destroy(alice.token, '999999999999999999')).status).toBe(404)
+		expect(await stored(keys)).toEqual(keys)
+
+		const deleted = await destroy(alice.token)
+		expect([deleted.status, await deleted.json()]).toEqual([200, {}])
+		expect(await stored(keys)).toEqual([])
+		expect(await row(h, media.id)).toBeUndefined()
+		expect((await h.request(pathOf(media.url))).status).toBe(404)
+		expect((await destroy(alice.token)).status).toBe(404)
+		expect((await post(h, alice, { status: 'x', media_ids: [media.id] })).media_attachments).toEqual([])
+	})
+
+	it('refuses media a status uses, and deletes it once a status deletion detached it', async () => {
+		const h = await users()
+		const { alice } = h.users
+		const media = await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		const keys = await keysOf(h, media.id)
+		const status = await post(h, alice, { status: 'x', media_ids: [media.id] })
+		const destroy = () => h.request(`/api/v1/media/${media.id}`, bearer(alice.token, { method: 'DELETE' }))
+		const refused = await destroy()
+		expect([refused.status, await refused.json()]).toEqual([
+			422,
+			{ error: 'Media attachment is currently used by a status' },
+		])
+		expect(await stored(keys)).toEqual(keys)
+		expect(await row(h, media.id)).toMatchObject({ status_id: status.id })
+
+		// Deleting the status keeps the media for a redraft; deleting the media then removes it at once.
+		await h.request(`/api/v1/statuses/${status.id}`, bearer(alice.token, { method: 'DELETE' }))
+		expect((await destroy()).status).toBe(200)
+		expect(await stored(keys)).toEqual([])
+		expect(await row(h, media.id)).toBeUndefined()
+	})
+})
+
+describe('media the cutover kept', () => {
+	it('refuses to delete an image only earlier versions of a status show, and keeps its files', async () => {
+		const h = await users()
+		const { alice } = h.users
+		const status = await post(h, alice, { status: 'edited' })
+		// As the converter writes it: an unattached, processed row of the author with a file token and no gc_at, named
+		// by an earlier version of the status.
+		const id = '100000000000000088'
+		const token = 'E'.repeat(43)
+		const url = `https://kopje.test/media/${token}/full.png`
+		await sql(
+			h.store,
+			`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, description, meta,
+				file_token, content_type, processed, legacy_ap_o, created_at)
+			VALUES (?, ?, NULL, 0, 'image', ?, ?, '', NULL, ?, 'image/png', 1, NULL, ?)`,
+			id,
+			alice.id,
+			url,
+			`https://kopje.test/media/${token}/small.png`,
+			token,
+			new Date(NOW).toISOString()
+		)
+		await sql(
+			h.store,
+			'INSERT INTO status_edits (status_id, content, media_json, created_at) VALUES (?, ?, ?, ?)',
+			status.id,
+			'<p>before</p>',
+			JSON.stringify([{ id, type: 'image', url }]),
+			new Date(NOW).toISOString()
+		)
+		const keys = [`files/${token}/full`, `files/${token}/small`, `originals/${id}`]
+		for (const key of keys) {
+			await env.MEDIA.put(key, bytes(PNG_PLAIN))
+		}
+
+		const refused = await h.request(`/api/v1/media/${id}`, bearer(alice.token, { method: 'DELETE' }))
+		expect([refused.status, await refused.json()]).toEqual([
+			422,
+			{ error: 'Media attachment is currently used by a status' },
+		])
+		expect(await row(h, id)).toMatchObject({ status_id: null, gc_at: null })
+		expect(await sweep(h, NOW + 30 * 24 * HOUR)).toBe(0)
+		expect(await stored(keys)).toEqual(keys)
+	})
+})
+
+describe('explicit deletion', () => {
+	it('is final for a post or schedule that started before it', async () => {
+		const h = await users()
+		const { alice } = h.users
+		const [deleted, held, viaStatus] = [
+			await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS))),
+			await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS))),
+			await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS))),
+		]
+		const status = await post(h, alice, { status: 'x', media_ids: [viaStatus.id] })
+		// The Store commits the deletions at a later time than the requests below carry (the harness clock stays at
+		// NOW). They are called directly, so no sweep removes the rows before those requests run.
+		const later = NOW + 60_000
+		const credential = { tokenHash: await sha256Hex(alice.token), scope: 'write', now: later } as const
+		for (const id of [deleted.id, held.id]) {
+			expect(await h.store.deleteMedia(BUILD, { credential, id, now: later })).toEqual({
+				status: 'ok',
+				value: 'deleted',
+			})
+		}
+		const removed = await h.store.deleteStatus(BUILD, {
+			credential,
+			id: status.id,
+			deleteMedia: true,
+			now: later,
+			present: { origin: 'https://kopje.test' },
+		})
+		expect(removed.status).toBe('ok')
+
+		const late = await post(h, alice, { status: 'late', media_ids: [deleted.id, viaStatus.id] })
+		expect(late.media_attachments).toEqual([])
+		const scheduled = await h.request(
+			'/api/v1/statuses',
+			bearer(
+				alice.token,
+				json({ status: 'later', media_ids: [held.id], scheduled_at: new Date(NOW + HOUR).toISOString() })
+			)
+		)
+		expect(scheduled.status).toBe(200)
+		expect(await scheduled.json()).toMatchObject({ media_attachments: [] })
+		expect(
+			await sql(
+				h.store,
+				'SELECT id FROM media_attachments WHERE status_id IS NOT NULL OR scheduled_status_id IS NOT NULL'
+			)
+		).toEqual([])
+		// The sweep then deletes all three.
+		expect(await sweep(h, NOW)).toBe(3)
 	})
 })
 

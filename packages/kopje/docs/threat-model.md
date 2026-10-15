@@ -784,8 +784,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `attachableMedia` in `src/domain/statuses.ts`; `test/statuses.test.ts` ("attaches own unattached media").
   _Enforced (main)_ for reading, updating and deleting: `src/domain/media.ts` (an upload is
   read or updated only by its owner while unattached; it is deleted only through its owner's status with
-  `delete_media`, or by the sweep after its grace period, and a doomed or still-processing upload cannot be attached);
-  `test/media.test.ts` ("shows and updates own unattached media only").
+  `delete_media`, by its owner while unattached and not held by a scheduled status (`deleteMedia`), or by the sweep
+  after its grace period, and a doomed or still-processing upload cannot be attached);
+  `test/media.test.ts` ("shows and updates own unattached media only", "deletes own unattached media with its R2
+  objects, and nobody else’s").
 - **MEDIA-2: R2 keys are server-made.** Keys derive from server-generated ids and stored records; no filename, path
   segment or encoded separator from a request selects or overwrites a key. Originals are not publicly readable.
   _Enforced (main):_ `src/platform/media-files.ts` (originals at `originals/<id>`, served

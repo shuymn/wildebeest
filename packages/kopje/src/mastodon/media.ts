@@ -357,7 +357,7 @@ export const getMedia: ApiHandler = async (c, deps) => {
 	return media === null ? NOT_FOUND() : c.json(media)
 }
 
-// PUT /api/v1/media/:id: description and focus of own unattached media. Attached media is described through
+// PUT and PATCH /api/v1/media/:id: description and focus of own unattached media. Attached media is described through
 // media_attributes[] of a status edit, as in Mastodon.
 export const updateMedia: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)
@@ -375,6 +375,22 @@ export const updateMedia: ApiHandler = async (c, deps) => {
 		await storeCall(c, deps, (s, b) => s.updateMedia(b, { credential, id: mediaId(c), changes, now: deps.now() }))
 	)
 	return media === null ? NOT_FOUND() : c.json(media)
+}
+
+// DELETE /api/v1/media/:id: own unattached media; the sweep deletes its R2 objects after the response.
+export const deleteMedia: ApiHandler = async (c, deps) => {
+	const credential = userCredential(c, deps)
+	const outcome = authorized(
+		await storeCall(c, deps, (s, b) => s.deleteMedia(b, { credential, id: mediaId(c), now: deps.now() }))
+	)
+	if (outcome === 'not_found') {
+		return NOT_FOUND()
+	}
+	if (outcome === 'in_use') {
+		return mastodonError(422, 'Media attachment is currently used by a status')
+	}
+	sweepSoon(c, deps)
+	return c.json({})
 }
 
 export type SweepDeps = { build: (env: Env) => string; now: () => number; store: StoreResolver }
@@ -401,7 +417,8 @@ export async function sweepMedia(env: Env, deps: SweepDeps): Promise<number> {
 	}
 }
 
-// Runs a sweep after the response (delete_media, a failed upload), so the files go now rather than at the next cron.
+// Runs a sweep after the response (delete_media, a deleted upload or profile image), so the files go now rather than
+// at the next cron.
 export function sweepSoon(c: ApiContext, deps: ApiDeps): void {
 	const sweep = sweepMedia(c.env, deps).catch((error: unknown) => {
 		console.error({ event: 'kopje.media.sweep_failed', ...errorFields(error) })
