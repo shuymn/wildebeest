@@ -339,6 +339,21 @@ describe('a remote vote in a local poll', () => {
 		expect(sent).toEqual([{ type: 'Update' }])
 	})
 
+	it('drops a vote that arrives after an edit removed the poll, storing and counting nothing', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const status = await localPoll(t)
+		const edited = await t.request(`/api/v1/statuses/${(status as { id: string }).id}`, {
+			method: 'PUT',
+			headers: { authorization: `Bearer ${t.tokens.alice}`, 'content-type': 'application/json' },
+			body: JSON.stringify({ status: 'no poll now' }),
+		})
+		expect(edited.status).toBe(200)
+		expect(await t.post(bob, voteNote(bob, status.uri, 'dogs', 1))).toBe(202)
+		expect((await statuses(t.store)).map((s) => s.uri)).toEqual([status.uri])
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM poll_votes')).toEqual([{ n: 0 }])
+	})
+
 	it('is refused from an account the author blocks (R27), and after the poll ends', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')

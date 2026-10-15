@@ -583,9 +583,17 @@ export function receiveVote(db: Db, input: RemoteVote): boolean {
 	return true
 }
 
-// Whether the status `statusId` has a poll and is local: a Note naming a choice in reply to it is a vote.
+// Whether the status `statusId` is local and has, or had, a poll: a Note naming a choice in reply to it is a vote,
+// never a status. A poll an edit removed keeps its row (removed), so a vote that arrives late is still one
+// (receiveVote, which counts in live polls only, then drops it).
 export function isLocalPoll(db: Db, statusId: string): boolean {
-	return votedPoll(db, statusId)?.local === 1
+	return (
+		db.first(
+			`SELECT 1 AS x FROM polls p JOIN statuses s ON s.id = p.status_id JOIN accounts a ON a.id = s.account_id
+			WHERE p.status_id = ? AND a.domain IS NULL`,
+			statusId
+		) !== undefined
+	)
 }
 
 // ---- A remote poll (remote-statuses.ts), as ActivityPub::Parser::PollParser reads a Question.
