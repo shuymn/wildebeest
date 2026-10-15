@@ -190,6 +190,7 @@ function witness(
 			mutes: [],
 			domainBlocks: [],
 			lists: world.lists ?? [],
+			tagFollowers: [],
 			now: '2026-10-12T00:00:00.000Z',
 		},
 		shared: [false],
@@ -534,6 +535,7 @@ function readWorld(sql: SqlStorage, base: World): Snapshot {
 					.toArray()
 					.map((row) => account(row.account_id)),
 			})),
+			tagFollowers: base.tagFollowers,
 			now: base.now,
 		},
 	}

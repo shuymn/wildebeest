@@ -7,6 +7,7 @@ import * as activities from './domain/activities'
 import { announceConvertedProfiles } from './domain/actor-update'
 import {
 	ensureInstanceActorKey,
+	featuredTagsOfActor,
 	getCollection,
 	getInstanceActorKey,
 	getInstanceDomain,
@@ -22,6 +23,7 @@ import * as blocks from './domain/blocks'
 import * as conversations from './domain/conversations'
 import * as deliveries from './domain/deliveries'
 import * as endorsements from './domain/endorsements'
+import * as featuredTags from './domain/featured-tags'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import * as filters from './domain/filters'
 import * as inbox from './domain/inbox'
@@ -41,7 +43,7 @@ import { search } from './domain/search'
 import * as setup from './domain/setup'
 import { saveSnapshot } from './domain/snapshot'
 import * as statuses from './domain/statuses'
-import { getTag } from './domain/tags'
+import * as tags from './domain/tags'
 import * as timelines from './domain/timelines'
 import * as webPages from './domain/web-pages'
 import * as webSession from './domain/web-session'
@@ -478,6 +480,10 @@ export class Store extends DurableObject<Env> {
 
 	collection(callerBuild: string, input: OperationInput<typeof getCollection>) {
 		return this.#kernel.execute(callerBuild, getCollection, input)
+	}
+
+	featuredTagsCollection(callerBuild: string, input: OperationInput<typeof featuredTagsOfActor>) {
+		return this.#kernel.execute(callerBuild, featuredTagsOfActor, input)
 	}
 
 	nodeInfoUsage(callerBuild: string, input: OperationInput<typeof getNodeInfoUsage>) {
@@ -996,8 +1002,49 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, timelines.tagTimeline, input)
 	}
 
-	tag(callerBuild: string, input: OperationInput<typeof getTag>) {
-		return this.#kernel.execute(callerBuild, getTag, input)
+	// Hashtags (domain/tags.ts) and featured hashtags (domain/featured-tags.ts).
+	tag(callerBuild: string, input: OperationInput<typeof tags.getTag>) {
+		return this.#kernel.execute(callerBuild, tags.getTag, input)
+	}
+
+	followTag(callerBuild: string, input: OperationInput<typeof tags.followTag>) {
+		return this.#kernel.execute(callerBuild, tags.followTag, input)
+	}
+
+	unfollowTag(callerBuild: string, input: OperationInput<typeof tags.unfollowTag>) {
+		return this.#kernel.execute(callerBuild, tags.unfollowTag, input)
+	}
+
+	featureTag(callerBuild: string, input: OperationInput<typeof tags.featureTagOperation>) {
+		return this.#kernel.execute(callerBuild, tags.featureTagOperation, input)
+	}
+
+	unfeatureTag(callerBuild: string, input: OperationInput<typeof tags.unfeatureTagOperation>) {
+		return this.#kernel.execute(callerBuild, tags.unfeatureTagOperation, input)
+	}
+
+	followedTags(callerBuild: string, input: OperationInput<typeof tags.followedTags>) {
+		return this.#kernel.execute(callerBuild, tags.followedTags, input)
+	}
+
+	featuredTagSuggestions(callerBuild: string, input: OperationInput<typeof tags.featuredTagSuggestions>) {
+		return this.#kernel.execute(callerBuild, tags.featuredTagSuggestions, input)
+	}
+
+	listFeaturedTags(callerBuild: string, input: OperationInput<typeof featuredTags.listFeaturedTags>) {
+		return this.#kernel.execute(callerBuild, featuredTags.listFeaturedTags, input)
+	}
+
+	createFeaturedTag(callerBuild: string, input: OperationInput<typeof featuredTags.createFeaturedTag>) {
+		return this.#kernel.execute(callerBuild, featuredTags.createFeaturedTag, input)
+	}
+
+	deleteFeaturedTag(callerBuild: string, input: OperationInput<typeof featuredTags.deleteFeaturedTag>) {
+		return this.#kernel.execute(callerBuild, featuredTags.deleteFeaturedTag, input)
+	}
+
+	accountFeaturedTags(callerBuild: string, input: OperationInput<typeof featuredTags.accountFeaturedTags>) {
+		return this.#kernel.execute(callerBuild, featuredTags.accountFeaturedTags, input)
 	}
 
 	accountStatuses(callerBuild: string, input: OperationInput<typeof timelines.accountStatuses>) {

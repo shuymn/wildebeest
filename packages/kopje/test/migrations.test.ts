@@ -1490,6 +1490,61 @@ describe('Store migration runner', () => {
 		})
 	})
 
+	it('upgrades a Store with 0016_tags: followed and featured hashtags of local accounts, which go with the account, and whether each actor was sent with its featured collections', async () => {
+		const index = NAMES.indexOf('0016_tags')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, index)).upgrade()).toMatchObject({ ok: true })
+			const alice = '100000000000000001'
+			const remote = '100000000000000002'
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice', NULL)",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://remote.example/users/r', 'r', 'remote.example')",
+				remote
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, index + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: [NAMES[index]],
+			})
+			const followTag = (account: string, name: string) =>
+				sql.exec('INSERT INTO tag_follows (account_id, name) VALUES (?, ?)', account, name)
+			const featureTag = (id: string, account: string, name: string) =>
+				sql.exec(
+					'INSERT INTO featured_tags (id, account_id, name, display_name) VALUES (?, ?, ?, ?)',
+					id,
+					account,
+					name,
+					name
+				)
+			// No actor has been sent with its featured collections yet.
+			expect(sql.exec('SELECT featured_announced FROM local_accounts').toArray()).toEqual([{ featured_announced: 0 }])
+			expect(() => sql.exec('UPDATE local_accounts SET featured_announced = 2')).toThrow(/CHECK/)
+			followTag(alice, 'cats')
+			expect(() => followTag(alice, 'cats')).toThrow(/UNIQUE/)
+			expect(() => followTag(alice, '')).toThrow(/CHECK/)
+			// Only a local account follows or features a hashtag.
+			expect(() => followTag(remote, 'cats')).toThrow(/FOREIGN KEY/)
+			featureTag('700000000000000001', alice, 'cats')
+			expect(() => featureTag('700000000000000002', alice, 'cats')).toThrow(/UNIQUE/)
+			expect(() => featureTag('7', alice, 'dogs')).toThrow(/CHECK/)
+			expect(() => featureTag('700000000000000003', remote, 'dogs')).toThrow(/FOREIGN KEY/)
+			expect(() => sql.exec('UPDATE featured_tags SET statuses_count = -1')).toThrow(/CHECK/)
+			// Both go with the account.
+			sql.exec('DELETE FROM local_accounts WHERE account_id = ?', alice)
+			expect(
+				sql.exec('SELECT (SELECT count(*) FROM tag_follows) + (SELECT count(*) FROM featured_tags) AS n').one()
+			).toEqual({ n: 0 })
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
 	it('upgrades a Store with 0015_media_shown: media only earlier versions of one status name goes back to it, unshown', async () => {
 		const index = NAMES.indexOf('0015_media_shown')
 		const store = freshStore()

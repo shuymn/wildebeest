@@ -279,12 +279,39 @@ export class PolicyModel {
 		return this.world.lists.some((list, l) => list.owner === viewer && list.exclusive && this.listMember(l, x))
 	}
 
+	// R9, the statuses home shows by a hashtag the viewer follows (FanOutOnWriteService#deliver_to_hashtag_followers!
+	// when broadcastable?, then FeedManager#filter_from_tags?): public originals with the hashtag, by an available
+	// author, unless the viewer blocks, mutes or domain-blocks the author, the author blocks the viewer, or a mention
+	// (not silent) names an account the viewer blocks or mutes. None of the follow's options or exclusive lists apply.
+	byFollowedTag(s: number, viewer: number): boolean {
+		const { author, visibility, reblogOf, tagged, mentions } = this.status(s)
+		return (
+			this.world.tagFollowers.includes(viewer) &&
+			tagged &&
+			visibility === 'public' &&
+			reblogOf === null &&
+			this.available(author) &&
+			(author === viewer ||
+				(!this.blocks(viewer, author) &&
+					!this.mutes(viewer, author) &&
+					!this.domainBlocks(viewer, author) &&
+					!this.blocks(author, viewer) &&
+					!mentions.some((m) => !m.silent && (this.blocks(viewer, m.account) || this.mutes(viewer, m.account)))))
+		)
+	}
+
 	// R9, home as a whole: the viewer's own statuses; public, unlisted and private statuses of accounts the viewer
 	// follows (accepted); direct and limited statuses of followed accounts that mention the viewer (silently or not).
 	// Of others' statuses, none whose author is in one of the viewer's exclusive lists; a boost needs the follow's
 	// show_reblogs, and a reply passes only when its partner is known and is the author, the viewer or an account the
 	// viewer follows. Then homeFilter. (The world's statuses have no language, so a follow's languages filter nothing.)
+	// And the statuses of the viewer's followed hashtags (byFollowedTag).
 	home(s: number, viewer: number): boolean {
+		return this.homeByFollow(s, viewer) || this.byFollowedTag(s, viewer)
+	}
+
+	// R9 without the followed hashtags.
+	homeByFollow(s: number, viewer: number): boolean {
 		const { author, visibility, reblogOf } = this.status(s)
 		if (author !== viewer) {
 			const follow = this.world.follows.find((f) => f.from === viewer && f.to === author && f.accepted)

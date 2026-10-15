@@ -469,6 +469,20 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/account-relations.test.ts`, `test/inbox.test.ts` ("endorsements and inbound activities"),
   `test/inbox-regressions.test.ts`, `test/migrations.test.ts`, `test/policy-oracle.test.ts`,
   `test/policy-bounds.test.ts`, `test/policy-writes.test.ts`.
+- **VIS-20: a followed hashtag brings into home only what home may show, and featured hashtags show only their
+  counts.** The hashtags a local account follows are its own: only it lists them, and only its home and its Tag
+  entities read them (R29). Home shows a followed hashtag's public originals, not boosts, through `homeFilterSql` (VIS-1,
+  VIS-5, VIS-13 to VIS-15: nothing of an author or a mentioned account the viewer blocks or mutes, of an author who
+  blocks the viewer or whose domain the viewer blocks), as Mastodon's `FeedManager#filter_from_tags?`; never an
+  unlisted, private, direct or limited status, which the hashtag index it reads does not hold. Its cost is bounded
+  (RES-7): a window of a page per followed hashtag, at most 100 hashtags. A featured hashtag shows how many of the
+  account's public and unlisted statuses carry it and the date of the newest, never which; an unavailable account
+  shows none (VIS-1). The counts are kept on write, so no read counts the account's history; featuring a hashtag counts
+  the account's own history once, and deleting or editing the newest tagged status walks back to the one before it, as
+  Mastodon does (accepted: a local user's action on their own data). _Implemented on branch `kopje/tags`:_
+  `src/domain/tags.ts`, `src/domain/featured-tags.ts`, `homeTimeline` in `src/domain/timelines.ts`, `TagWindows` in
+  `src/domain/audience.ts`, migration `0016_tags`; `test/followed-tags.test.ts`, `test/featured-tags.test.ts`,
+  `test/policy-endpoints.test.ts`, `test/policy-bounds.test.ts`, `test/migrations.test.ts`.
 
 ### Authorization (AUTH)
 

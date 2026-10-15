@@ -197,6 +197,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'grouped notifications',
 				'following',
 				'home',
+				'home through a followed hashtag only',
 				'list',
 				'notifications',
 				'public',
@@ -508,6 +509,11 @@ function check(sql: SqlStorage, c: Case): string[] {
 			(page) => ok<Page<Status>>(run(homeTimeline, { ...user, page, present: PRESENT }), 'home'),
 			newestFirst(all.filter((s) => m.home(s, viewer)))
 		)
+		// The hashtag path is exercised: some case's home holds a status only a followed hashtag brings (checked above with
+		// the rest of home), so the model's followed hashtags cannot pass by bringing nothing.
+		if (all.some((s) => m.byFollowedTag(s, viewer) && !m.homeByFollow(s, viewer))) {
+			shown.add('home through a followed hashtag only')
+		}
 
 		// Each list's timeline: exactly what the model allows of the list's members to its owner, newest first; another
 		// account's list is not found.

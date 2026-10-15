@@ -1,6 +1,7 @@
 import { type FieldSource, fieldSources } from './accounts'
 import { accessAdminRefusal } from './admin-authority'
 import { availableLocalSql, followListsShownSql } from './audience'
+import { taggedUrl } from './featured-tags'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 import type { ImportAuthority } from '../platform/store-admin'
@@ -262,6 +263,28 @@ export const getCollection = readOperation<
 		hasNext: items.length > COLLECTION_PAGE_SIZE,
 		hidden,
 	}
+})
+
+// The featured hashtags of a local actor (its featuredTags collection, as Mastodon's ActivityPub::CollectionsController
+// serves `tags`): each name as the account wrote it and the URL of its statuses with it, oldest first. Null for no such
+// actor, or a suspended one, which has no collections, as getCollection answers.
+export const featuredTagsOfActor = readOperation<
+	{ username: string; origin: string },
+	{ name: string; href: string }[] | null
+>((db, { username, origin }) => {
+	const owner = db.first<{ id: string; username: string }>(
+		`SELECT a.id, a.username ${LOCAL_BY_USERNAME} AND ${availableLocalSql('l')}`,
+		username
+	)
+	if (owner === undefined) {
+		return null
+	}
+	return db
+		.all<{ name: string; display_name: string }>(
+			'SELECT name, display_name FROM featured_tags WHERE account_id = ? ORDER BY id',
+			owner.id
+		)
+		.map((row) => ({ name: row.display_name, href: taggedUrl(origin, owner.username, row.name) }))
 })
 
 export type NodeInfoUsage = { users: number; activeMonth: number; activeHalfyear: number; localPosts: number }

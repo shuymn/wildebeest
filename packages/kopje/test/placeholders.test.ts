@@ -10,8 +10,6 @@ describe('features without data yet', () => {
 	const userLists: [string, string][] = [
 		['/api/v1/filters', 'read:filters'],
 		['/api/v2/filters', 'read:filters'],
-		['/api/v1/followed_tags', 'read:follows'],
-		['/api/v1/featured_tags', 'read:accounts'],
 		['/api/v1/suggestions', 'read:accounts'],
 		['/api/v2/suggestions', 'read:accounts'],
 	]
@@ -57,14 +55,4 @@ describe('features without data yet', () => {
 			expect(await getJson(h, route, 'stale')).toEqual({ status: 200, body: [] })
 		}
 	)
-
-	it('shows no featured tags of an account that exists, and 404 for one that does not', async () => {
-		const h = await apiHarness()
-		const alice = await seedAccount(h.store, { username: 'alice' })
-		expect(await getJson(h, `/api/v1/accounts/${alice}/featured_tags`)).toEqual({ status: 200, body: [] })
-		expect(await getJson(h, '/api/v1/accounts/999999999999999999/featured_tags')).toEqual({
-			status: 404,
-			body: { error: 'Record not found' },
-		})
-	})
 })

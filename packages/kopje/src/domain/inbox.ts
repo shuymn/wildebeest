@@ -1575,7 +1575,7 @@ function deliveredTo(db: Db, recipient: string | null | undefined): string | nul
 	return (
 		db.first<{ id: string }>(
 			`SELECT a.id FROM accounts a JOIN local_accounts l ON l.account_id = a.id
-			WHERE a.domain IS NULL AND a.username = ? AND ${availableLocalSql('l')}`,
+			WHERE a.domain IS NULL AND lower(a.username) = lower(?1) AND a.username = ?1 AND ${availableLocalSql('l')}`,
 			recipient
 		)?.id ?? null
 	)
@@ -2016,7 +2016,8 @@ export const inboxWritable = writeOperation<undefined, true>(() => true)
 export const inboxOwnerExists = readOperation<{ username: string }, boolean>(
 	(db, { username }) =>
 		db.first(
-			'SELECT 1 AS x FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.domain IS NULL AND a.username = ?',
+			`SELECT 1 AS x FROM accounts a JOIN local_accounts l ON l.account_id = a.id
+			WHERE a.domain IS NULL AND lower(a.username) = lower(?1) AND a.username = ?1`,
 			username
 		) !== undefined
 )

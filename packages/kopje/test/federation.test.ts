@@ -69,6 +69,8 @@ describe('actor document', () => {
 			outbox: 'https://social.example/ap/users/Alice/outbox',
 			followers: 'https://social.example/ap/users/Alice/followers',
 			following: 'https://social.example/ap/users/Alice/following',
+			featured: 'https://social.example/ap/users/Alice/collections/featured',
+			featuredTags: 'https://social.example/ap/users/Alice/collections/tags',
 			endpoints: { sharedInbox: 'https://social.example/inbox' },
 			manuallyApprovesFollowers: false,
 			discoverable: true,
@@ -418,6 +420,55 @@ describe('followers and following collections', () => {
 			'/ap/users/Alice/followers?cursor=0',
 			'/ap/users/Alice/followers?cursor=x',
 		]) {
+			expect((await request(path, AP)).status, path).toBe(404)
+		}
+	})
+})
+
+describe('featured collections', () => {
+	it('serves the featured hashtags as Hashtags, and an empty featured collection (no pinned statuses)', async () => {
+		const { json, store } = await instance()
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec(
+				`INSERT INTO featured_tags (id, account_id, name, display_name) VALUES
+					('700000000000000001', ?1, 'cats', 'Cats'), ('700000000000000002', ?1, '猫', '猫')`,
+				ALICE
+			)
+		})
+		const tags = await json('/ap/users/Alice/collections/tags')
+		expect(tags.status).toBe(200)
+		expect(tags.body).toMatchObject({
+			id: 'https://social.example/ap/users/Alice/collections/tags',
+			totalItems: 2,
+			orderedItems: [
+				{ type: 'Hashtag', name: '#Cats', href: 'https://social.example/@Alice/tagged/cats' },
+				{ type: 'Hashtag', name: '#猫', href: `https://social.example/@Alice/tagged/${encodeURIComponent('猫')}` },
+			],
+		})
+		const featured = await json('/ap/users/Alice/collections/featured')
+		expect(featured.status).toBe(200)
+		expect(featured.body).toMatchObject({
+			id: 'https://social.example/ap/users/Alice/collections/featured',
+			totalItems: 0,
+		})
+	})
+
+	it('answers 404 for an unknown actor, another spelling or a suspended actor', async () => {
+		const { request, store } = await instance()
+		for (const path of [
+			'/ap/users/nobody/collections/tags',
+			'/ap/users/alice/collections/tags',
+			'/ap/users/alice/collections/featured',
+		]) {
+			expect((await request(path, AP)).status, path).toBe(404)
+		}
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec(
+				"UPDATE local_accounts SET suspended_at = '2026-01-01T00:00:00.000Z' WHERE account_id = ?",
+				ALICE
+			)
+		})
+		for (const path of ['/ap/users/Alice/collections/tags', '/ap/users/Alice/collections/featured']) {
 			expect((await request(path, AP)).status, path).toBe(404)
 		}
 	})
