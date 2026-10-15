@@ -8,6 +8,7 @@ import { BUILD } from './helpers'
 import {
 	act,
 	community,
+	domainBlock,
 	follow,
 	getJson,
 	ids,
@@ -368,7 +369,7 @@ describe('blocked recipients (VIS-13, VIS-15)', () => {
 		await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'other.example'), alice.id)
 		await remoteFollows(h.store, await remoteAccount(h.store, 'far', 'blocked.example'), alice.id)
 		// The block as it stands before its cleanup ends the follow there.
-		await sql(h.store, "INSERT INTO domain_blocks (account_id, domain) VALUES (?, 'blocked.example')", alice.id)
+		await domainBlock(h.store, alice.id, 'blocked.example')
 
 		await post(h, alice, { status: 'not for blocked.example' })
 		const profile = await h.request(

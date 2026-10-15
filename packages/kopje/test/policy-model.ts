@@ -165,7 +165,7 @@ export class PolicyModel {
 		return this.available(x) && x !== viewer && !this.blocks(x, viewer) && !this.blocked(viewer, x)
 	}
 
-	follows(from: Viewer, to: number): boolean {
+	private follows(from: Viewer, to: number): boolean {
 		return this.world.follows.some((f) => f.from === from && f.to === to && f.accepted)
 	}
 

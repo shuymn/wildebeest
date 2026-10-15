@@ -7,8 +7,8 @@ import { migratedStore } from './helpers'
 import { type ModelSubscription, NOTIFICATION_TYPES, outboundKindOf, PolicyModel } from './policy-model'
 import { accountId, REMOTE_DOMAINS, runs, type World, worldArb, writeWorld } from './policy-world'
 import { updateCredentials } from '../src/domain/accounts'
-import type { ApiVisibility } from '../src/domain/audience'
-import { type Claim, claimDeliveries, completeDelivery, EXPANSION_STEP } from '../src/domain/deliveries'
+import { API_VISIBILITIES, type ApiVisibility } from '../src/domain/audience'
+import { type Claim, claimDeliveries, completeDelivery, EXPANSION_STEP, type Target } from '../src/domain/deliveries'
 import type { NotificationType } from '../src/domain/notifications'
 import { POLICIES } from '../src/domain/push'
 import {
@@ -47,7 +47,6 @@ const CASES = 500
 const SEED = 20261015
 const PRESENT = { origin: 'https://kopje.test' }
 const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
-const API_VISIBILITIES: readonly ApiVisibility[] = ['public', 'unlisted', 'private', 'direct']
 
 const ACTION_KINDS = [
 	'post',
@@ -504,8 +503,6 @@ function namedIn(activity: Activity): Set<string> {
 	return new Set([...uris(activity.to), ...uris(activity.cc), ...uris(object.to), ...uris(object.cc)])
 }
 
-type Target = { inbox: string; addressee: string | null }
-
 // The targets recorded for an activity: its deliveries rows and its targets not yet expanded.
 function targetsOf(sql: SqlStorage, activityId: string): Target[] {
 	return sql
@@ -586,8 +583,9 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 	}
 	let objects = 0
 
+	// The Store as a world before each action: the world after the previous one.
+	let before = readWorld(sql, world)
 	for (const action of c.actions) {
-		const before = readWorld(sql, world)
 		// What earlier activities about each object may still send: their deliveries rows, in any state (a leased one may
 		// have been POSTed), and their targets not yet expanded.
 		const outstanding = outstandingTargets(sql)
@@ -602,7 +600,9 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 		if (author === undefined) {
 			break
 		}
-		const statuses = before.world.statuses.map((status, s) => ({ ...status, s, id: [...before.byId.keys()][s]! }))
+		const ids = [...before.byId.keys()]
+		const uris = [...before.byUri.keys()]
+		const statuses = before.world.statuses.map((status, s) => ({ ...status, s, id: ids[s]!, uri: uris[s]! }))
 		const originals = statuses.filter((status) => status.reblogOf === null)
 		const own = statuses.filter((status) => status.author === author)
 		// Whom a block names: as often a remote follower of the author, or an account something was delivered to, as any
@@ -656,10 +656,9 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 				break
 			}
 			case 'delete': {
-				const uris = [...before.byUri.keys()]
-				const status = pick([...own.filter((s) => delivered.has(uris[s.s]!)), ...own], action.target)
+				const status = pick([...own.filter((s) => delivered.has(s.uri)), ...own], action.target)
 				if (status !== undefined) {
-					withdrawn = uris[status.s]!
+					withdrawn = status.uri
 					run(deleteStatus, { ...credential(author), id: status.id, deleteMedia: false, present: PRESENT })
 				}
 				break
@@ -683,7 +682,7 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 					action.target
 				)
 				if (boost?.reblogOf !== undefined && boost.reblogOf !== null) {
-					withdrawn = [...before.byUri.keys()][boost.s]!
+					withdrawn = boost.uri
 					run(unreblog, { ...credential(author), id: statuses[boost.reblogOf]!.id, present: PRESENT })
 				}
 				break
@@ -801,9 +800,10 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 			const signer = accountIndex.get(row.account_id)!
 			const subject = subjectOf(activity)
 			const targets = targetsOf(sql, row.id)
+			const actorUpdate = kind === 'other' && activity.type === 'Update'
 			if (kind === 'retraction') {
 				retracted.add(subject)
-			} else if (kind === 'other' && activity.type === 'Update') {
+			} else if (actorUpdate) {
 				actorUpdated = true
 			}
 			const named = namedIn(activity)
@@ -816,7 +816,7 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 			// The accounts it may name besides Public and the signer's followers, and those it must name.
 			const mayName = new Set<number>()
 			const mustName = new Set<number>()
-			if (kind === 'other' && activity.type === 'Update') {
+			if (actorUpdate) {
 				audience = { followers: true, accounts: [] }
 			} else if (activity.type === 'Like' || inner.type === 'Like') {
 				const s = snapshot.byUri.get(String(activity.type === 'Like' ? activity.object : inner.object))
@@ -929,7 +929,7 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 				}
 			}
 			// An Update of the actor reaches every follower, on a blocked domain too.
-			if (kind === 'other' && activity.type === 'Update') {
+			if (actorUpdate) {
 				for (const f of reach.followers) {
 					if (!sent.has(inboxOf(f) ?? '')) {
 						problems.push(`${what}: misses the follower ${nameOf(f)}`)
@@ -945,12 +945,12 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 			}
 		}
 
+		const model = new PolicyModel(after.world)
+		const followers = model.reaches('other', author, { followers: true, accounts: [] }).followers
 		// A post leaves out the followers on a domain its author blocks (checked above as a bound on each target).
 		if (action.kind === 'post') {
-			const model = new PolicyModel(after.world)
-			const everyone = model.reaches('other', author, { followers: true, accounts: [] }).followers
 			const kept = model.reaches('content', author, { followers: true, accounts: [] }).followers
-			const left = everyone.filter((f) => !kept.includes(f) && !kept.some((k) => inboxOf(k) === inboxOf(f)))
+			const left = followers.filter((f) => !kept.includes(f) && !kept.some((k) => inboxOf(k) === inboxOf(f)))
 			if (left.length > 0 && left.every((f) => !contentInboxes.has(inboxOf(f) ?? ''))) {
 				saw.add('content leaves out a domain-blocked follower')
 			}
@@ -961,16 +961,14 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 				: (delivered.get(withdrawn)?.size ?? 0) +
 					(outstanding.get(withdrawn)?.rows.size ?? 0) +
 					(outstanding.get(withdrawn)?.unexpanded.size ?? 0)
-		if (withdrawn !== null && owed > 0 && !retracted.has(withdrawn)) {
+		if (owed > 0 && !retracted.has(withdrawn)) {
 			problems.push(`${label}: records no retraction of ${withdrawn}, which was sent or queued`)
 		}
-		const followers = new PolicyModel(after.world).reaches('other', author, { followers: true, accounts: [] }).followers
 		if (profiled && followers.length > 0 && !actorUpdated) {
 			problems.push(`${label}: records no Update for the followers ${followers.map(nameOf).join(' ')}`)
 		}
 
 		// R15: every notification the action wrote is shown to its recipient, at the time of the action.
-		const m = new PolicyModel(after.world)
 		const notifications = sql
 			.exec<{
 				id: number
@@ -985,7 +983,7 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 			const r = accountIndex.get(n.account_id)!
 			const from = accountIndex.get(n.from_account_id)!
 			const s = n.status_id === null ? null : (after.byId.get(n.status_id) ?? null)
-			if (!world.accounts[r]!.local || !m.shown(r, n.type, from, s)) {
+			if (!world.accounts[r]!.local || !model.shown(r, n.type, from, s)) {
 				problems.push(`${label}: notifies ${nameOf(r)} of ${n.type} from ${nameOf(from)}`)
 			}
 		}
@@ -1002,10 +1000,11 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 			const sub = subscriptions.get(push.subscription_id)
 			const from = accountIndex.get(push.from_account_id)!
 			const s = push.status_id === null ? null : (after.byId.get(push.status_id) ?? null)
-			if (sub === undefined || !m.pushed(sub, push.type, from, s)) {
+			if (sub === undefined || !model.pushed(sub, push.type, from, s)) {
 				problems.push(`${label}: pushes ${push.type} from ${nameOf(from)} to subscription ${push.subscription_id}`)
 			}
 		}
+		before = after
 	}
 	return problems
 }
