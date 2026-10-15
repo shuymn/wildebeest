@@ -17,9 +17,11 @@ on:
       - "docs/**"
       - "renovate.json"
 
-# This allows a subsequently queued workflow run to interrupt previous runs
+# A newer push to a pull request interrupts its earlier run. Every push to main runs to the end in a group of its own:
+# a main run checks only what changed since the commit before it (the changes job), so a cancelled one would leave its
+# changes unchecked on main.
 concurrency:
-  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
+  group: "${{ github.workflow }} @ ${{ github.event_name == 'push' && github.sha || github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
 env:
