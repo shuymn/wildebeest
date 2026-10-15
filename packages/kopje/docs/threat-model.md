@@ -1012,9 +1012,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`test/policy-bounds.test.ts`, the second case); an account whose every status the rule hides (unavailable, blocking
   the viewer, or blocked, muted or domain-blocked by them) has no window. The public feed, account statuses,
   notifications, favourites and bookmarks start at the cursor in their index, so a page from the middle of a long
-  history reads what the newest does (`test/policy-bounds.test.ts`, "however long the world's history"). _Gap:_ what a follow's options
-  (boosts, languages, replies) and the home filter leave out is still read on the way, and the mentions stream grows
-  with the viewer's mentions home does not show.
+  history reads what the newest does (`test/policy-bounds.test.ts`, "however long the world's history"). Home's
+  mentions stream reads only the viewer's mentions in direct and limited statuses, through the partial index
+  `status_mentions_requires_mention` (migration `0008_status_mentions_requires_mention`). _Gap:_ what a follow's
+  options (boosts, languages, replies) and the home filter leave out is still read on the way, and the mentions stream
+  grows with the viewer's mentions in direct and limited statuses home does not show (from accounts they do not follow,
+  or whose statuses home hides).
   _Enforced (main)_ for search: statuses pass `listableSql` before `LIMIT`, each library source reads at most 2,500 rows through an index ordered by the status id it returns (cursors applied
   inside it), hashtags come from at most 500 entries per library source plus the newest 2,000 public statuses, and an
   account search matches the exact address (always), at most 1,000 username-prefix candidates, the 5,000 newest

@@ -12,7 +12,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 - The public timeline, account statuses, notifications, favourites and bookmarks read a bounded number of rows for a
   page anywhere in the history, and home and list timelines no longer read the statuses of followed accounts they
-  hide entirely.
+  hide entirely. Home reads only the mentions of you in direct and limited statuses, not every mention of you.
+
+### Instance changes
+
+- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention`, marks the mentions in direct and
+      limited statuses, and indexes them. Its work grows linearly with the mentions stored (one pass, with a lookup of
+      each one's status); locally, 200,000 mentions took under a second.
+- `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.5] - 2026-10-15
 

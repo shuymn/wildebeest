@@ -71,11 +71,15 @@ newest page of all those windows. A status of the page is within its author's wi
 query over every author's statuses would give, and the filters apply inside each window, so an author whose newest
 statuses are all left out still shows older ones on the same page. Home merges two more streams: the viewer's own
 statuses, whatever their visibility (the read rule shows the viewer all of them, so this reads at most a page), and the
-direct and limited statuses that mention the viewer, from the viewer's mentions in status id order from the cursor. A
-page reads a page of shown statuses per author however long each author's history, and a followed account's direct
-and limited statuses to others are never read. What a follow's options (boosts, languages, replies) and
+direct and limited statuses that mention the viewer, from the viewer's mentions in status id order from the cursor,
+through the partial index `status_mentions_requires_mention` of the mentions in direct and limited statuses
+(`status_mentions.requires_mention`, which the writers of `status_mentions` set from the status's visibility, migration
+`0008_status_mentions_requires_mention`). A page reads a page of shown statuses per author however long each author's
+history, a followed account's direct and limited statuses to others are never read, and neither are the viewer's
+mentions in public, unlisted and private statuses. What a follow's options (boosts, languages, replies) and
 `homeFilterSql` leave out is still read on the way: an author whose recent statuses are mostly left out costs those
-rows. The mentions stream grows with the viewer's mentions that home does not show.
+rows. The mentions stream grows with the viewer's mentions in direct and limited statuses that home does not show (from
+accounts they do not follow, or whose statuses home hides).
 
 A list (`src/domain/lists.ts`) belongs to a local account and holds the owner or accounts the owner follows or has
 asked to follow (Mastodon's `ListAccount#validate_relationship`). A member leaves the owner's lists when that follow
@@ -335,9 +339,11 @@ once each author's history holds more than a page of what it shows, while a read
 grows with the factor. Each endpoint that pages statuses or the viewer's edges is read on its newest page, a page from
 the middle of the replicated history and its oldest page, and the others once; every read must show the viewer
 something, the newest pages must be the same at both factors, and the rows read may grow by at most 10. Status and
-hashtag search are exempt (their windows grow with the history up to their documented limits), and so is home, whose
-mentions stream walks the viewer's mentions that it does not show. The case does not grow the author set (no follow cap
-bounds it yet), and it does not build skewed histories, where one author's statuses dominate.
+hashtag search are exempt (their windows grow with the history up to their documented limits). Home may read up to 5
+rows more per mention of the viewer in a direct or limited status the replicas add, which its mentions stream walks
+when home does not show the status (in this world, a suspended account's direct statuses to the viewer), and nothing
+for the viewer's other mentions. The case does not grow the author set (no follow cap bounds it yet), and it does not
+build skewed histories, where one author's statuses dominate.
 
 `test/policy-endpoints.test.ts` runs the read endpoints themselves on generated worlds, with favourites, bookmarks and
 notifications added, for each available local viewer and, where the endpoint answers without a token, the anonymous
