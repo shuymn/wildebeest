@@ -113,6 +113,10 @@ export type World = {
 	mutes: { from: number; to: number; expiresAt: string | null; hideNotifications: boolean }[]
 	domainBlocks: { owner: number; domain: string }[]
 	lists: WorldList[]
+	// Local accounts' pins of their own originals that are not direct or limited, as the API makes them.
+	pins: { account: number; status: number }[]
+	// Local accounts' conversation mutes, each of a thread (statuses.thread) of the world's statuses.
+	conversationMutes: { account: number; thread: string }[]
 	now: string
 }
 
@@ -139,6 +143,16 @@ export function statusUri(index: number): string {
 
 export function unknownParentUri(index: number): string {
 	return `https://elsewhere.example/objects/${index}`
+}
+
+// The thread of a status (statuses.thread, which a reply takes from its parent when it is stored): the uri of the
+// status its reply chain starts at, or, when that one replies to a status never stored, the uri it names.
+export function threadOf(statuses: readonly WorldStatus[], s: number): string {
+	let at = s
+	for (let parent = statuses[at]?.replyTo ?? null; parent !== null; parent = statuses[at]?.replyTo ?? null) {
+		at = parent
+	}
+	return statuses[at]?.replyToUnknown === true ? unknownParentUri(at) : statusUri(at)
 }
 
 // Keeps the first of each key.
@@ -212,6 +226,9 @@ export const worldArb: fc.Arbitrary<World> = fc
 			}),
 			{ maxLength: 4 }
 		),
+		// Last, as above: pins (each a choice among the author's pinnable statuses) and conversation mutes.
+		pins: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 4 }),
+		conversationMutes: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 4 }),
 	})
 	.map((raw): World => {
 		const accounts: WorldAccount[] = []
@@ -311,12 +328,40 @@ export const worldArb: fc.Arbitrary<World> = fc
 				const members = list.members.map((m) => candidates[m % candidates.length] ?? owner)
 				return { ...list, owner, members: [...new Set(members)] }
 			}),
+			pins: unique(
+				raw.pins.flatMap((p) => {
+					const account = p.account % LOCALS
+					const pinnable = statuses.flatMap((status, s) =>
+						status.author === account &&
+						status.reblogOf === null &&
+						status.visibility !== 'direct' &&
+						status.visibility !== 'limited'
+							? [s]
+							: []
+					)
+					const status = pinnable[p.status % Math.max(pinnable.length, 1)]
+					return status === undefined ? [] : [{ account, status }]
+				}),
+				(p) => `${p.account}:${p.status}`
+			),
+			conversationMutes:
+				statuses.length === 0
+					? []
+					: unique(
+							raw.conversationMutes.map((m) => ({
+								account: m.account % LOCALS,
+								thread: threadOf(statuses, m.status % statuses.length),
+							})),
+							(m) => `${m.account}:${m.thread}`
+						),
 			now: raw.now,
 		}
 	})
 
 // The tables a world fills, in an order that deletes children first.
 const WORLD_TABLES = [
+	'status_pins',
+	'conversation_mutes',
 	'conversation_statuses',
 	'conversations',
 	'list_accounts',
@@ -448,4 +493,16 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 			sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', listId(l), accountId(member))
 		}
 	})
+	// Pinned in order, a minute apart, so the newest pin is the last.
+	world.pins.forEach((p, i) => {
+		sql.exec(
+			'INSERT INTO status_pins (account_id, status_id, created_at) VALUES (?, ?, ?)',
+			accountId(p.account),
+			statusId(p.status),
+			new Date(Date.parse(TIMES[0]) + i * 60_000).toISOString()
+		)
+	})
+	for (const m of world.conversationMutes) {
+		sql.exec('INSERT INTO conversation_mutes (account_id, thread) VALUES (?, ?)', accountId(m.account), m.thread)
+	}
 }

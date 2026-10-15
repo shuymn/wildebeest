@@ -1,4 +1,4 @@
-import { statusUri, unknownParentUri, type World, type WorldStatus } from './policy-world'
+import { threadOf, type World, type WorldStatus } from './policy-world'
 import type { NotificationType } from '../src/domain/notifications'
 
 // The policy rules as docs/visibility.md states them, in plain TypeScript over a generated world
@@ -350,11 +350,19 @@ export class PolicyModel {
 	// The thread of a status (Mastodon's conversation_id, which a reply takes from its parent): the uri of the status its
 	// reply chain starts at, or, when that one replies to a status never stored, the uri it names.
 	thread(s: number): string {
-		let at = s
-		for (let parent = this.status(at).replyTo; parent !== null; parent = this.status(at).replyTo) {
-			at = parent
-		}
-		return this.status(at).replyToUnknown ? unknownParentUri(at) : statusUri(at)
+		this.status(s)
+		return threadOf(this.world.statuses, s)
+	}
+
+	// R31: the recipient mutes the conversation (thread) of the status.
+	conversationMuted(r: number, s: number): boolean {
+		const thread = this.thread(s)
+		return this.world.conversationMutes.some((m) => m.account === r && m.thread === thread)
+	}
+
+	// R15 as notify writes a notification: shown, and its status (if any) not in a conversation the recipient mutes.
+	notified(r: number, type: NotificationType, from: number, s: number | null): boolean {
+		return (s === null || !this.conversationMuted(r, s)) && this.shown(r, type, from, s)
 	}
 
 	// The participants of a status for the owner of a conversation (AccountConversation.participants_from_status): its

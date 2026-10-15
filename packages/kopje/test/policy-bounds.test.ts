@@ -10,6 +10,7 @@ import { accountId, REMOTE_DOMAINS, statusId, type World, worldArb, writeWorld }
 import { rowsRead } from './read-helpers'
 import { Db } from '../src/db/sql'
 import { getAccounts, listFollows, relationships, userinfo } from '../src/domain/accounts'
+import { getFeatured } from '../src/domain/activities'
 import { canView, visibleSql, type Visibility } from '../src/domain/audience'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { listConversations } from '../src/domain/conversations'
@@ -28,7 +29,14 @@ import { listNotifications } from '../src/domain/notifications'
 import { getPoll, vote } from '../src/domain/polls'
 import { dueScheduled, listScheduled, publishScheduled } from '../src/domain/scheduled-statuses'
 import { search } from '../src/domain/search'
-import { getStatus, interactors, statusContext } from '../src/domain/statuses'
+import {
+	favourite,
+	getStatus,
+	getStatuses,
+	interactors,
+	MAX_STATUSES_BY_ID,
+	statusContext,
+} from '../src/domain/statuses'
 import {
 	accountStatuses,
 	bookmarks,
@@ -88,12 +96,18 @@ function rich(world: World): boolean {
 	return (
 		world.statuses.length >= 18 &&
 		viewer >= 0 &&
+		world.statuses.some(
+			(status) => status.author === viewer && status.reblogOf === null && PINNABLE.has(status.visibility)
+		) &&
 		targetOf(world) >= 0 &&
 		listedOf(world) >= 0 &&
 		publicListable.some((status) => status.replyTo === null) &&
 		publicListable.some((status) => status.tagged)
 	)
 }
+
+// What a pin may name (the API refuses direct and limited statuses).
+const PINNABLE: ReadonlySet<Visibility> = new Set(['public', 'unlisted', 'private'])
 
 const WORLD = fc.sample(worldArb, { numRuns: 1000, seed: 20261015 }).find(rich) as World
 const VIEWER = viewerOf(WORLD)
@@ -165,6 +179,22 @@ function writeViewer(sql: SqlStorage): void {
 		`INSERT INTO account_notes (account_id, target_account_id, comment)
 		SELECT account_id, target_account_id, 'note' FROM follows WHERE account_id = ?`,
 		viewer
+	)
+	// The viewer pins its newest pinnable originals of the world (not the copies), and mutes the conversations of
+	// every other status of the world.
+	sql.exec(
+		`INSERT INTO status_pins (account_id, status_id) SELECT account_id, id FROM statuses
+		WHERE account_id = ?1 AND id >= ?2 AND reblog_of_id IS NULL AND visibility IN ('public', 'unlisted', 'private')
+		ORDER BY id DESC LIMIT 5
+		ON CONFLICT DO NOTHING`,
+		viewer,
+		statusId(0)
+	)
+	sql.exec(
+		`INSERT INTO conversation_mutes (account_id, thread) SELECT ?1, thread FROM statuses
+		WHERE id >= ?2 AND CAST(id AS INTEGER) % 2 = 0 ON CONFLICT DO NOTHING`,
+		viewer,
+		statusId(0)
 	)
 	sql.exec("INSERT INTO lists (id, account_id, title) VALUES (?, ?, 'everyone')", VIEWER_LIST, viewer)
 	sql.exec(
@@ -386,6 +416,24 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 			)
 		})
 		writeScheduled(sql, owner, UNRELATED_SCHEDULED_BASE + BigInt(j * 100), 30)
+		// A private status of its own, pinned, and mutes of the world's conversations: rows no read of the viewer's
+		// touches.
+		const own = String(UNRELATED_STATUS_BASE + 900_000n + BigInt(j))
+		sql.exec(
+			`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			VALUES (?, ?, ?, 'private', '<p>own</p>', ?)`,
+			own,
+			`https://kopje.test/ap/o/unrelated-${j}`,
+			owner,
+			new Date(NOW).toISOString()
+		)
+		sql.exec('INSERT INTO status_pins (account_id, status_id) VALUES (?, ?)', owner, own)
+		sql.exec(
+			'INSERT INTO conversation_mutes (account_id, thread) SELECT DISTINCT ?, thread FROM statuses WHERE id >= ? AND id < ?',
+			owner,
+			statusId(0),
+			String(UNRELATED_ACCOUNT_BASE)
+		)
 		for (let k = 0; k < 10; k++) {
 			const target = status(3 * (j * 10 + k))
 			sql.exec('INSERT INTO favourites (account_id, status_id) VALUES (?, ?)', owner, target)
@@ -574,6 +622,33 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 		{ credential, now: NOW, account: accountId(VIEWER), page: PAGE, present: PRESENT },
 	],
 	['accounts by id', getAccounts, { ids: WORLD.accounts.map((_, x) => accountId(x)), present: PRESENT }],
+	[
+		'pinned statuses',
+		accountStatuses,
+		{
+			credential,
+			now: NOW,
+			account: accountId(VIEWER),
+			page: PAGE,
+			onlyMedia: false,
+			excludeReplies: false,
+			excludeReblogs: false,
+			pinned: true,
+			tagged: null,
+			present: PRESENT,
+		},
+	],
+	[
+		'statuses by id',
+		getStatuses,
+		{
+			credential,
+			now: NOW,
+			ids: WORLD.statuses.slice(0, MAX_STATUSES_BY_ID).map((_, s) => statusId(s)),
+			present: PRESENT,
+		},
+	],
+	['featured', getFeatured, { username: WORLD.accounts[VIEWER]?.name.toLowerCase() }],
 ]
 
 // How many rows a read may add when the unrelated rows grow from none to UNRELATED: a few for a planner's choice, far
@@ -1927,5 +2002,105 @@ describe('statuses cost the media they show, not the media their edits dropped (
 			}
 		}
 		expect(grown).toEqual([])
+	}, 60_000)
+})
+
+// Pins (R31) are at most PIN_LIMIT per account; conversation mutes add a dimension: the conversations one account
+// mutes. A status's `muted` and notify's check look the mute up by owner and thread, so presenting the viewer's
+// statuses and notifying the viewer read the same rows whether they mute 20 conversations or 2,000.
+describe('conversation mutes cost a lookup, however many an account has (RES-7)', () => {
+	const VIEWER_ID = '650000000000000000'
+	const OTHER_ID = '650000000000000001'
+	const TOKENS = { viewer: 'muting-viewer', other: 'muting-other' }
+	const status = (i: number) => String(651000000000000000n + BigInt(i))
+
+	async function muting(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			for (const [id, name] of [
+				[VIEWER_ID, 'viewer'],
+				[OTHER_ID, 'other'],
+			] as const) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+					id,
+					`https://kopje.test/ap/users/${name}`,
+					name
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'test')",
+					id,
+					`${name}@example.com`
+				)
+			}
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 19)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(?1 + i AS TEXT), 'https://kopje.test/ap/o/m' || i, ?2, 'public', '<p>m</p>', ?3 FROM n`,
+				status(0),
+				VIEWER_ID,
+				new Date(NOW).toISOString()
+			)
+			// Half of the viewer's statuses are in muted conversations; the other mutes name threads elsewhere.
+			sql.exec(
+				`INSERT INTO conversation_mutes (account_id, thread)
+				SELECT ?1, thread FROM statuses WHERE CAST(id AS INTEGER) % 2 = 0`,
+				VIEWER_ID
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 11)
+				INSERT INTO conversation_mutes (account_id, thread) SELECT ?1, 'https://far.example/objects/' || i FROM n`,
+				VIEWER_ID,
+				count
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('muting', 'secret', 'muting', 'urn:ietf:wg:oauth:2.0:oob', 'read write')"
+			)
+			for (const [token, id] of [
+				[TOKENS.viewer, VIEWER_ID],
+				[TOKENS.other, OTHER_ID],
+			] as const) {
+				sql.exec(
+					"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'muting', ?, 'read write')",
+					token,
+					id
+				)
+			}
+		})
+		return store
+	}
+
+	it('reads the same rows with 20 or 2,000 muted conversations', async () => {
+		const few = await muting(20)
+		const many = await muting(2000)
+		const read = { tokenHash: TOKENS.viewer, scope: 'read', now: NOW } as const
+		const byId = { credential: read, now: NOW, ids: Array.from({ length: 20 }, (_, i) => status(i)), present: PRESENT }
+		const muted = async (store: StoreStub) =>
+			runInDurableObject(store, (_instance, state) => {
+				const output = getStatuses.run(state.storage.sql, byId) as { status: string; value: { muted?: boolean }[] }
+				return output.value.filter((s) => s.muted === true).length
+			})
+		expect([await muted(few), await muted(many)]).toEqual([10, 10])
+		const fewRows = await rowsRead({ store: few }, getStatuses, byId)
+		expect(await rowsRead({ store: many }, getStatuses, byId)).toBeLessThanOrEqual(fewRows + ALLOWANCE)
+		// A favourite of a status in a muted conversation, and of one elsewhere, notifies through notifiedSql.
+		for (const target of [status(0), status(1)]) {
+			const input = {
+				credential: { tokenHash: TOKENS.other, scope: 'write:favourites', now: NOW } as const,
+				id: target,
+				now: NOW,
+				present: PRESENT,
+			}
+			const rows = [await rowsTouched(few, favourite, input), await rowsTouched(many, favourite, input)]
+			expect(rows[1]).toBeLessThanOrEqual(rows[0]! + ALLOWANCE)
+		}
+		const notified = async (store: StoreStub) =>
+			(
+				await runInDurableObject(store, (_instance, state) =>
+					state.storage.sql.exec<{ status_id: string }>('SELECT status_id FROM notifications').toArray()
+				)
+			).map((n) => n.status_id)
+		expect([await notified(few), await notified(many)]).toEqual([[status(1)], [status(1)]])
 	}, 60_000)
 })

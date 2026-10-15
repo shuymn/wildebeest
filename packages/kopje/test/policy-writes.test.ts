@@ -5,7 +5,17 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { migratedStore } from './helpers'
 import { type ModelSubscription, NOTIFICATION_TYPES, outboundKindOf, PolicyModel } from './policy-model'
-import { accountId, listId, REMOTE_DOMAINS, runs, statusId, type World, worldArb, writeWorld } from './policy-world'
+import {
+	accountId,
+	listId,
+	REMOTE_DOMAINS,
+	runs,
+	statusId,
+	threadOf,
+	type World,
+	worldArb,
+	writeWorld,
+} from './policy-world'
 import { updateCredentials } from '../src/domain/accounts'
 import { API_VISIBILITIES, type ApiVisibility } from '../src/domain/audience'
 import { backfillConversations } from '../src/domain/conversation-rows'
@@ -190,6 +200,8 @@ function witness(
 			mutes: [],
 			domainBlocks: [],
 			lists: world.lists ?? [],
+			pins: [],
+			conversationMutes: [],
 			now: '2026-10-12T00:00:00.000Z',
 		},
 		shared: [false],
@@ -474,7 +486,7 @@ function readWorld(sql: SqlStorage, base: World): Snapshot {
 			'SELECT status_id, account_id, silent FROM status_mentions ORDER BY account_id'
 		)
 		.toArray()
-	return {
+	const snapshot: Snapshot = {
 		byId,
 		byUri: new Map(rows.map((row, s) => [row.uri, s])),
 		world: {
@@ -534,9 +546,21 @@ function readWorld(sql: SqlStorage, base: World): Snapshot {
 					.toArray()
 					.map((row) => account(row.account_id)),
 			})),
+			// The actions neither pin nor mute; the conversation mutes are read below.
+			pins: [],
+			conversationMutes: [],
 			now: base.now,
 		},
 	}
+	// The conversation mutes the Store holds, each as the thread the model gives a status of the thread (the Store's
+	// threads name uris the model does not know).
+	snapshot.world.conversationMutes = sql
+		.exec<{ account_id: string; status_id: string }>(
+			'SELECT m.account_id, s.id AS status_id FROM conversation_mutes m JOIN statuses s ON s.thread = m.thread'
+		)
+		.toArray()
+		.map((m) => ({ account: account(m.account_id), thread: threadOf(snapshot.world.statuses, byId.get(m.status_id)!) }))
+	return snapshot
 }
 
 type Activity = { id?: unknown; type?: unknown; to?: unknown; cc?: unknown; object?: unknown }
@@ -1175,7 +1199,7 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 				account.local &&
 				mentioned(after, x) &&
 				!(before.byId.has(id) && before.world.statuses[before.byId.get(id)!]!.mentions.some((m) => m.account === x)) &&
-				model.shown(x, 'mention', status.author, s)
+				model.notified(x, 'mention', status.author, s)
 					? [x]
 					: []
 			)
@@ -1226,7 +1250,7 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 			const r = accountIndex.get(n.account_id)!
 			const from = accountIndex.get(n.from_account_id)!
 			const s = n.status_id === null ? null : (after.byId.get(n.status_id) ?? null)
-			if (!world.accounts[r]!.local || !model.shown(r, n.type, from, s)) {
+			if (!world.accounts[r]!.local || !model.notified(r, n.type, from, s)) {
 				problems.push(`${label}: notifies ${nameOf(r)} of ${n.type} from ${nameOf(from)}`)
 			}
 		}
