@@ -20,8 +20,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `/api/v2/filters/:id/keywords`, `/api/v2/filters/keywords/:id`, `/api/v2/filters/:id/statuses` and
   `/api/v2/filters/statuses/:id`, and the v1 `/api/v1/filters` over the same filters. Every status shown to you carries
   in `filtered` your active filters that match it, whatever their context and action, and your client hides or warns
-  by context, as with Mastodon. An account has at most 50 filters, a filter 20 keywords and 200 statuses, and a status
-  is matched on its first 10,000 characters.
+  by context, as with Mastodon. An account has at most 50 filters, a filter 20 keywords and 200 statuses. A status is
+  matched on its first 10,000 characters and a response's statuses on 400,000 together, so a very large thread reports
+  keyword matches on its earlier statuses only. Keywords match case-insensitively by simple Unicode case folding; the
+  multi-character folds Mastodon also applies (ß and ss, İ and i̇) do not match. Deleting a v1 filter also deletes its
+  filter when that leaves it with no keyword and no status.
 - Conversations in the Mastodon API, as Mastodon 4.5 has them: `GET /api/v1/conversations` (paged by the last status
   with Link headers, 20 by default and at most 40), `DELETE /api/v1/conversations/:id` and
   `POST /api/v1/conversations/:id/read` and `/unread`. Scopes are `read:statuses` and `write:conversations` (or `read`
