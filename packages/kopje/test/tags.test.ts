@@ -13,6 +13,7 @@ type Tag = {
 	url: string
 	history: { day: string; uses: string; accounts: string }[]
 	following?: boolean
+	featuring?: boolean
 }
 
 describe('tags', () => {
@@ -56,8 +57,12 @@ describe('tags', () => {
 				{ day: day(6), uses: '1', accounts: '1' },
 			],
 		})
-		// The same for a signed-in viewer, who follows no tag yet.
-		expect((await getJson<Tag>(h, '/api/v1/tags/cats', alice.token)).body).toEqual({ ...body, following: false })
+		// The same for a signed-in viewer, who neither follows nor features it.
+		expect((await getJson<Tag>(h, '/api/v1/tags/cats', alice.token)).body).toEqual({
+			...body,
+			following: false,
+			featuring: false,
+		})
 	})
 
 	it('counts public statuses only: a tag used only unlisted has no history', async () => {
@@ -91,13 +96,15 @@ describe('tags', () => {
 		}
 	})
 
-	it('needs no scope: any valid token reads it, following only for a user (AUTH-2)', async () => {
+	it('needs no scope: any valid token reads it, following and featuring only for a user (AUTH-2)', async () => {
 		const h = await community(['alice'])
-		expect((await getJson<Tag>(h, '/api/v1/tags/cats', await appToken(h))).body).not.toHaveProperty('following')
+		const app = (await getJson<Tag>(h, '/api/v1/tags/cats', await appToken(h))).body
+		expect(app).not.toHaveProperty('following')
+		expect(app).not.toHaveProperty('featuring')
 		for (const scope of ['read:statuses', 'write:statuses']) {
 			const { status, body } = await getJson<Tag>(h, '/api/v1/tags/cats', await scopedToken(h, scope))
 			expect(status).toBe(200)
-			expect(body.following).toBe(false)
+			expect([body.following, body.featuring]).toEqual([false, false])
 		}
 		expect((await h.request('/api/v1/tags/cats', bearer('nope'))).status).toBe(401)
 	})

@@ -1,19 +1,29 @@
-import type { Present } from './accounts'
+import type { Page, PageQuery, Present } from './accounts'
+import { edgeRangeSql } from './accounts'
 import { visibleSql } from './audience'
-import { optionalUserReadOperation } from './auth'
+import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
+import { featureTag, unfeatureTag } from './featured-tags'
 import { isHashtagName } from './status-text'
 import { normalizeTag } from './tag-name'
+import type { Db } from '../db/sql'
 
-// A hashtag as GET /api/v1/tags/:id shows it (Mastodon 4.0.2's Tag entity). Kopje has no tags table: any valid name is
-// a tag, used or not, as Mastodon builds an unsaved Tag for a name it has never seen. The name is the normalized one
-// statuses and search show. Tag follows do not exist yet, so a signed-in viewer follows none.
+// A hashtag as Mastodon 4.5's REST::TagSerializer shows it. Kopje has no tags table: any valid name is a tag, used or
+// not, as Mastodon builds an unsaved Tag for a name it has never seen (Api::V1::TagsController#set_or_create_tag). The
+// name is the normalized one statuses and search show. A signed-in viewer is also told whether they follow the hashtag
+// (tag_follows) and feature it on their profile (featured_tags, domain/featured-tags.ts).
 
 export type TagHistory = { day: string; uses: string; accounts: string }
 
-export type Tag = { name: string; url: string; history: TagHistory[]; following?: false }
+export type Tag = { name: string; url: string; history: TagHistory[]; following?: boolean; featuring?: boolean }
 
 const HISTORY_DAYS = 7
 const DAY_MS = 86_400_000
+
+// Kopje's cap on the hashtags an account follows, where Mastodon has none: home reads a window of each followed
+// hashtag's public statuses on every page (timelines.ts), so the hashtags bound that read (RES-7), as the caps on
+// filters bound the matching every presentation does. Generous for a person.
+export const MAX_FOLLOWED_TAGS = 100
+const TOO_MANY_FOLLOWED = 'You have reached the maximum number of followed hashtags'
 
 // Seven days of uses and distinct authors, today (UTC) first, as Mastodon's TagSerializer#history. It counts public
 // originals only (Mastodon's Trends::Tags registers public statuses only) that anyone may see (visibleSql with no
@@ -23,34 +33,196 @@ const DAY_MS = 86_400_000
 // status id (RES-7): ids carry the publication time of statuses Kopje created or received (domain/ids.ts), and the
 // receipt time of ids a cutover kept, so the range holds the tag's public statuses the instance received in the last
 // seven days, and the work follows the instance's own receive volume.
-export const getTag = optionalUserReadOperation<{ name: string; now: number; present: Present }, Tag | null>(
-	(db, { name, now, present }, { accountId: viewerId }) => {
-		if (!isHashtagName(name)) {
-			return null
-		}
-		const tag = normalizeTag(name)
-		const today = Math.floor(now / DAY_MS) * DAY_MS
-		const since = today - (HISTORY_DAYS - 1) * DAY_MS
-		const rows = db.all<{ day: string; uses: number; accounts: number }>(
-			`SELECT substr(s.published_at, 1, 10) AS day, COUNT(*) AS uses, COUNT(DISTINCT s.account_id) AS accounts
-			FROM status_tags t JOIN statuses s ON s.id = t.status_id
-			WHERE t.name = ?1 AND t.public = 1 AND t.status_id >= ?2 AND s.visibility = 'public' AND s.reblog_of_id IS NULL
-				AND ${visibleSql('s', 'NULL')}
-			GROUP BY day`,
-			tag,
-			(BigInt(since) << 16n).toString()
+function tagHistory(db: Db, tag: string, now: number): TagHistory[] {
+	const today = Math.floor(now / DAY_MS) * DAY_MS
+	const since = today - (HISTORY_DAYS - 1) * DAY_MS
+	const rows = db.all<{ day: string; uses: number; accounts: number }>(
+		`SELECT substr(s.published_at, 1, 10) AS day, COUNT(*) AS uses, COUNT(DISTINCT s.account_id) AS accounts
+		FROM status_tags t JOIN statuses s ON s.id = t.status_id
+		WHERE t.name = ?1 AND t.public = 1 AND t.status_id >= ?2 AND s.visibility = 'public' AND s.reblog_of_id IS NULL
+			AND ${visibleSql('s', 'NULL')}
+		GROUP BY day`,
+		tag,
+		(BigInt(since) << 16n).toString()
+	)
+	const byDay = new Map(rows.map((row) => [row.day, row]))
+	return Array.from({ length: HISTORY_DAYS }, (_, index) => {
+		const start = today - index * DAY_MS
+		const row = byDay.get(new Date(start).toISOString().slice(0, 10))
+		return { day: String(start / 1000), uses: String(row?.uses ?? 0), accounts: String(row?.accounts ?? 0) }
+	})
+}
+
+// The viewer's relationship to each of the hashtags `names` (TagRelationshipsPresenter): the ones they follow and the
+// ones they feature, two seeks of the (account_id, name) indexes per name.
+export function tagRelationships(
+	db: Db,
+	viewerId: string,
+	names: readonly string[]
+): { following: Set<string>; featuring: Set<string> } {
+	const of = (table: 'tag_follows' | 'featured_tags') =>
+		new Set(
+			db
+				.all<{ name: string }>(
+					`SELECT name FROM ${table} WHERE account_id = ?1 AND name IN (SELECT value FROM json_each(?2))`,
+					viewerId,
+					JSON.stringify([...new Set(names)])
+				)
+				.map((row) => row.name)
 		)
-		const byDay = new Map(rows.map((row) => [row.day, row]))
-		const history = Array.from({ length: HISTORY_DAYS }, (_, index) => {
-			const start = today - index * DAY_MS
-			const row = byDay.get(new Date(start).toISOString().slice(0, 10))
-			return { day: String(start / 1000), uses: String(row?.uses ?? 0), accounts: String(row?.accounts ?? 0) }
-		})
-		return {
-			name: tag,
-			url: `${present.origin}/tags/${encodeURIComponent(tag)}`,
-			history,
-			...(viewerId === null ? {} : { following: false as const }),
+	return { following: of('tag_follows'), featuring: of('featured_tags') }
+}
+
+// Hashtags as the viewer sees them: with `following` and `featuring` for a signed-in viewer. history is computed for a
+// single hashtag (`now` given); lists answer it empty, as search's hashtags do, so a list reads no statuses.
+export function presentTags(
+	db: Db,
+	names: readonly string[],
+	viewerId: string | null,
+	present: Present,
+	now: number | null
+): Tag[] {
+	const relationships = viewerId === null ? null : tagRelationships(db, viewerId, names)
+	return names.map((name) => ({
+		name,
+		url: `${present.origin}/tags/${encodeURIComponent(name)}`,
+		history: now === null ? [] : tagHistory(db, name, now),
+		...(relationships === null
+			? {}
+			: { following: relationships.following.has(name), featuring: relationships.featuring.has(name) }),
+	}))
+}
+
+function presentTag(db: Db, name: string, viewerId: string | null, present: Present, now: number): Tag {
+	const [tag] = presentTags(db, [name], viewerId, present, now)
+	if (tag === undefined) {
+		throw new Error('a tag was not presented')
+	}
+	return tag
+}
+
+// GET /api/v1/tags/:id. Null for a name that is not a hashtag.
+export const getTag = optionalUserReadOperation<{ name: string; now: number; present: Present }, Tag | null>(
+	(db, { name, now, present }, { accountId: viewerId }) =>
+		isHashtagName(name) ? presentTag(db, normalizeTag(name), viewerId, present, now) : null
+)
+
+export type TagInput = { name: string; now: number; present: Present }
+
+export type TagResult = { status: 'ok'; value: Tag } | { status: 'not_found' } | { status: 'invalid'; errors: string[] }
+
+// A write on the hashtag `name` (Api::V1::TagsController): a name that is not a hashtag is not found; the response is
+// the hashtag as the viewer now sees it.
+function tagWrite(
+	change: (
+		db: Db,
+		accountId: string,
+		input: TagInput & { tag: string }
+	) => { status: 'ok' } | { status: 'invalid'; errors: string[] }
+) {
+	return userWriteOperation<TagInput, TagResult>((db, input, { accountId }) => {
+		if (!isHashtagName(input.name)) {
+			return { status: 'not_found' }
 		}
+		const tag = normalizeTag(input.name)
+		const result = change(db, accountId, { ...input, tag })
+		return result.status === 'ok'
+			? { status: 'ok', value: presentTag(db, tag, accountId, input.present, input.now) }
+			: result
+	})
+}
+
+// POST /api/v1/tags/:id/follow (TagFollow.find_or_create_by!): nothing more when already followed. Refused at
+// MAX_FOLLOWED_TAGS, Kopje's own cap.
+export const followTag = tagWrite((db, accountId, { tag, now }) => {
+	if (db.first('SELECT 1 AS x FROM tag_follows WHERE account_id = ? AND name = ?', accountId, tag) !== undefined) {
+		return { status: 'ok' }
+	}
+	const followed = db.first<{ n: number }>('SELECT count(*) AS n FROM tag_follows WHERE account_id = ?', accountId)
+	if ((followed?.n ?? 0) >= MAX_FOLLOWED_TAGS) {
+		return { status: 'invalid', errors: [TOO_MANY_FOLLOWED] }
+	}
+	db.run(
+		'INSERT INTO tag_follows (account_id, name, created_at) VALUES (?, ?, ?)',
+		accountId,
+		tag,
+		new Date(now).toISOString()
+	)
+	return { status: 'ok' }
+})
+
+// POST /api/v1/tags/:id/unfollow: nothing when not followed. Home is a read, so the hashtag's statuses leave it at
+// once (Mastodon's TagUnmergeWorker).
+export const unfollowTag = tagWrite((db, accountId, { tag }) => {
+	db.run('DELETE FROM tag_follows WHERE account_id = ? AND name = ?', accountId, tag)
+	return { status: 'ok' }
+})
+
+// POST /api/v1/tags/:id/feature and /unfeature (CreateFeaturedTagService, RemoveFeaturedTagService with a tag). A
+// hashtag featured this way is shown under its normalized name.
+export const featureTagOperation = tagWrite((db, accountId, { tag, now, present }) =>
+	featureTag(db, accountId, tag, now, present.origin)
+)
+
+export const unfeatureTagOperation = tagWrite((db, accountId, { tag, now, present }) => {
+	unfeatureTag(db, accountId, tag, now, present.origin)
+	return { status: 'ok' }
+})
+
+// GET /api/v1/followed_tags (Api::V1::FollowedTagsController): the viewer's followed hashtags, newest follow first,
+// paged by the follow's id through tag_follows_account.
+export const followedTags = userReadOperation<{ page: PageQuery; present: Present }, Page<Tag>>(
+	(db, { page, present }, { accountId }) => {
+		const ascending = page.minId !== undefined
+		const rows = db.all<{ id: string; name: string }>(
+			`SELECT CAST(id AS TEXT) AS id, name FROM tag_follows WHERE account_id = ?1 AND ${edgeRangeSql('id', '?2', '?3')}
+			ORDER BY id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+			accountId,
+			page.maxId ?? null,
+			page.minId ?? page.sinceId ?? null,
+			page.limit
+		)
+		if (ascending) {
+			rows.reverse()
+		}
+		return {
+			items: presentTags(
+				db,
+				rows.map((row) => row.name),
+				accountId,
+				present,
+				null
+			),
+			newest: rows[0]?.id ?? null,
+			oldest: rows.at(-1)?.id ?? null,
+		}
+	}
+)
+
+// Tag::RECENT_STATUS_LIMIT and Api::V1::FeaturedTags::SuggestionsController::RECENT_TAGS_LIMIT.
+const RECENT_STATUSES = 1000
+const SUGGESTIONS = 10
+
+// GET /api/v1/featured_tags/suggestions (Tag.suggestions_for_account): the hashtags of the viewer's newest 1,000
+// statuses that they do not feature yet, the most used first (ties by name), at most 10. A window of the viewer's own
+// statuses through statuses_account, whatever their history.
+export const featuredTagSuggestions = userReadOperation<{ present: Present }, Tag[]>(
+	(db, { present }, { accountId }) => {
+		const rows = db.all<{ name: string }>(
+			`SELECT t.name FROM (SELECT id FROM statuses WHERE account_id = ?1 ORDER BY id DESC LIMIT ?2) r
+			CROSS JOIN status_tags t ON t.status_id = r.id
+			WHERE NOT EXISTS (SELECT 1 FROM featured_tags f WHERE f.account_id = ?1 AND f.name = t.name)
+			GROUP BY t.name ORDER BY count(*) DESC, t.name LIMIT ?3`,
+			accountId,
+			RECENT_STATUSES,
+			SUGGESTIONS
+		)
+		return presentTags(
+			db,
+			rows.map((row) => row.name),
+			accountId,
+			present,
+			null
+		)
 	}
 )

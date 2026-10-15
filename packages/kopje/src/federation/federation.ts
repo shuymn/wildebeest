@@ -13,6 +13,7 @@ import {
 	CryptographicKey,
 	Endpoints,
 	Group,
+	Hashtag,
 	Image,
 	Note,
 	Organization,
@@ -53,8 +54,8 @@ import { StoreUnavailableError } from '../platform/store-errors'
 import { bytesToBase64, generateWrappedKey, importPublicKeyPem, type KeyGen } from '../security/key-wrap'
 import { createKeyring, type KeyOwner, requestSigner, type Signer } from '../security/keyring'
 
-// The Fedify Federation of one request: dispatchers for actors, key pairs, WebFinger, NodeInfo and the followers and
-// following collections, local Notes and the outbox, over the Store, with ids under the domain fixed at /setup. It
+// The Fedify Federation of one request: dispatchers for actors, key pairs, WebFinger, NodeInfo, the followers,
+// following, featured and featured hashtags collections, local Notes and the outbox, over the Store, with ids under the domain fixed at /setup. It
 // never sends: Fedify's queue,
 // sendActivity and forwardActivity are not used (test/fedify-usage.test.ts); outbound delivery goes through deliveries.
 
@@ -322,6 +323,35 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 			})
 	}
 
+	// The featured collection (Mastodon's ActivityPub::CollectionsController `featured`): the pinned statuses, which
+	// Kopje does not have, so it is empty. It is the target Mastodon names in the Add and Remove of a featured hashtag
+	// (domain/featured-tags.ts), and receivers act on those only when the actor publishes it.
+	const featuredOwner = async (identifier: string) => {
+		const actor = await localActor(identifier)
+		return actor !== null && actor.username === identifier && !actor.suspended
+	}
+	federation
+		.setFeaturedDispatcher('/ap/users/{identifier}/collections/featured', async (_ctx, identifier) =>
+			(await featuredOwner(identifier)) ? { items: [] } : null
+		)
+		.setCounter(async (_ctx, identifier) => ((await featuredOwner(identifier)) ? 0 : null))
+	// The featuredTags collection (`tags`): the actor's featured hashtags, at most ten, in one collection.
+	const featuredTags = new Map<string, Promise<Hashtag[] | null>>()
+	const hashtags = (identifier: string) =>
+		memo(featuredTags, identifier, async () => {
+			if ((await localActor(identifier))?.username !== identifier) {
+				return null
+			}
+			const tags = await rpc((s) => s.featuredTagsCollection(build, { username: identifier, origin }))
+			return tags?.map((tag) => new Hashtag({ name: `#${tag.name}`, href: new URL(tag.href) })) ?? null
+		})
+	federation
+		.setFeaturedTagsDispatcher('/ap/users/{identifier}/collections/tags', async (_ctx, identifier) => {
+			const items = await hashtags(identifier)
+			return items === null ? null : { items }
+		})
+		.setCounter(async (_ctx, identifier) => (await hashtags(identifier))?.length ?? null)
+
 	// VIS-4: local public and unlisted statuses as Notes, from the data of their outbound Create (domain/activities.ts).
 	// Anything else, signed request or not, is not found.
 	federation.setObjectDispatcher(Note, '/ap/o/{uuid}', async (ctx, { uuid }) => {
@@ -444,6 +474,8 @@ async function localActorObject(ctx: RequestContext<FederationState>, actor: Loc
 		outbox: new URL(`${id.href}/outbox`),
 		followers: ctx.getFollowersUri(actor.username),
 		following: ctx.getFollowingUri(actor.username),
+		featured: ctx.getFeaturedUri(actor.username),
+		featuredTags: ctx.getFeaturedTagsUri(actor.username),
 		endpoints: new Endpoints({ sharedInbox: new URL('/inbox', ctx.canonicalOrigin) }),
 		// Derived from local_accounts.pubkey, the authoritative public key.
 		publicKey: new CryptographicKey({
