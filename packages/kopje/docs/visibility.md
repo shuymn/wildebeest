@@ -64,6 +64,15 @@ of the viewer's exclusive lists, a pending member included (`EXCLUSIVE_MEMBERS` 
 own filter, not part of `homeFilterSql`: Mastodon's `FeedInsertWorker#notify?` refuses only `:filter`, so an exclusive
 member's post still notifies a follower with `notify` on, as the post notification rule below has it.
 
+Home and a list's timeline read a window of each author's statuses (`AuthorWindows` below): for the viewer and each
+account home shows (for a list, each active member), the newest statuses of theirs inside the cursor that pass every
+filter above, at most a page, through the `(account_id, id)` index from the cursor; then the newest page of all those
+windows. A status of the page is within its author's window, so the page is the one a single query over every author's
+statuses would give, and the filters apply inside each window, so an author whose newest statuses are all left out
+still shows older ones on the same page. A page reads at most a page of shown statuses per author, and the ones left
+out on the way, however long each author's history. Home has no membership by visibility: the read rule passes all of
+the viewer's own statuses and a followed account's direct or limited status only when it addresses the viewer.
+
 A list (`src/domain/lists.ts`) belongs to a local account and holds the owner or accounts the owner follows or has
 asked to follow (Mastodon's `ListAccount#validate_relationship`). A member leaves the owner's lists when that follow
 ends, whatever ends it: the trigger `list_members_follow_ended` of migration `0007_list_members` deletes the rows with
@@ -196,7 +205,16 @@ WHERE (<where>) AND (<rule over s>) AND (<and>) <tail>
 - `select(db, rule, parts)` runs one such SELECT, after an optional `WITH` clause its joins and conditions may read,
   with further columns after the id. `rule` is `visible` (R2), `listable` (R8) or `homeFilter` (R9).
 - `union(db, rule, { all, branches, tail })` combines several, each with the same rule and selecting the id alone:
-  `SELECT id FROM (SELECT * FROM (<branch>) UNION [ALL] ...) <tail>`.
+  `SELECT id FROM (SELECT * FROM (<branch>) UNION [ALL] ...) <tail>`. A branch is such a SELECT or an `AuthorWindows`,
+  a window of each author's statuses, in which the rule is a conjunct of the window's WHERE over its `statuses s`:
+
+    ```sql
+    SELECT w.id AS id FROM (<authors>) a CROSS JOIN main.statuses w ON w.id IN (SELECT s.id FROM main.statuses s
+      WHERE (s.account_id = a.account_id AND <where>) AND (<rule over s>) AND (<and>) <window tail>)
+    ```
+
+    `<authors>` selects each author once as `account_id`, and the window's tail orders by id and cuts to a page.
+
 - `notifications(db, parts)` selects `n.status_id` and further columns from `notifications n`, with `shownSql` (R15,
   the viewer as the recipient, which shows a status only if they may view it) as the rule.
 
@@ -211,8 +229,8 @@ author. The callers:
 
 | Caller                                                     | Ids from                                                                         |
 | ---------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| home                                                       | `union` of its three membership branches under `homeFilter`                      |
-| list timeline                                              | `select` under `homeFilter`, with the list's active members                      |
+| home                                                       | `union` of one `AuthorWindows` under `homeFilter`: the viewer and its follows    |
+| list timeline                                              | `union` of one `AuthorWindows` under `homeFilter`: the list's active members     |
 | public feed, bookmarks and favourites, context             | `select` under `listable`; the tag feed a `union` of its names under it          |
 | account statuses                                           | `select` under `visible`, with `visibleSql` and `filteredForSql` for an original |
 | status search                                              | `select` under `listable`, with its candidates as a `WITH` table                 |
@@ -299,7 +317,10 @@ and domains, their favourites, bookmarks and notifications, and their exclusive 
 own, together with the viewer's own blocks and mutes of those
 accounts and domain blocks of domains nobody lives on. Each endpoint must show the same with them as without (the same
 statuses, accounts, notifications and hashtags in the same order, and the same relationship flags), and the rows it
-reads (RES-7) may grow by at most 10.
+reads (RES-7) may grow by at most 10. A second case grows the history of each author home and a list read instead:
+the viewer, who follows six accounts and has a list of them, and those accounts, from 20 statuses each to 2,000. The
+newest page, a page from the middle of the longer histories and the oldest page of home and of the list must each be
+full and read at most 10 rows more.
 
 `test/policy-endpoints.test.ts` runs the read endpoints themselves on generated worlds, with favourites, bookmarks and
 notifications added, for each available local viewer and, where the endpoint answers without a token, the anonymous
@@ -310,8 +331,8 @@ boost must come with its own original (never `reblog: null` on a read), which th
 | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | public feed, tag feed, account statuses (of every account) | exactly the model's members the rule allows (R10, R11), newest first, over pages of 3                                                                           |
 | favourites, bookmarks                                      | exactly the viewer's edges the list rule allows (R8), newest edge first, over pages                                                                             |
-| home                                                       | exactly the model's members home allows (R9: membership, exclusive lists, the follow's options and `homeFilterSql`), newest first, over pages of 3              |
-| list timeline (of each of the viewer's lists)              | exactly what the model allows of the list's members (R24), newest first, over pages of 3; another account's list is not found                                   |
+| home                                                       | exactly the model's members home allows (R9: membership, exclusive lists, the follow's options and `homeFilterSql`), newest first, page by page (below)         |
+| list timeline (of each of the viewer's lists)              | exactly what the model allows of the list's members (R24), page by page as home; another account's list is not found                                            |
 | single status, context                                     | nothing for a status the viewer may not view (R3); context members listable (R8)                                                                                |
 | `favourited_by`, `reblogged_by`                            | nothing for a status the viewer may not view; only listed interactors (R12)                                                                                     |
 | status search                                              | listable statuses only (R8)                                                                                                                                     |
@@ -320,7 +341,10 @@ boost must come with its own original (never `reblog: null` on a read), which th
 | account search                                             | exactly the accounts the viewer may find (R14)                                                                                                                  |
 | search resolution (of every stored account and status)     | an account exactly when account search finds it (R14); a status exactly when the single-status read shows it (R3), unless the viewer blocks its author's domain |
 
-Each endpoint must show something in some case, so a property cannot pass by showing nothing.
+Home and each list are read page by page: by `max_id` in pages of 3 and by `min_id` from the oldest in pages of 2,
+each page exactly the next of the model's members, so a page cannot come back short while members remain; and the
+`since_id` and `min_id` pages above the middle member. Each endpoint must show something in some case, so a property
+cannot pass by showing nothing.
 
 `test/policy-writes.test.ts` runs the write paths on generated worlds, with remote accounts given personal and some
 shared inboxes and local accounts given Web Push subscriptions (alerts, policy, valid or expired token). Each case
