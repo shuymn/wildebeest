@@ -397,8 +397,9 @@ export const updateCredentials = userWriteOperation<
 	{ changes: CredentialChanges; present: Present; now: number },
 	CredentialAccount | null
 >((db, { changes, present, now }, { accountId }) => {
-	const current = db.first<{ username: string; display_name: string; actor_type: string }>(
-		'SELECT a.username, a.display_name, a.actor_type FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?',
+	const current = db.first<{ username: string; display_name: string; actor_type: string; hide_collections: number }>(
+		`SELECT a.username, a.display_name, a.actor_type, l.hide_collections
+		FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?`,
 		accountId
 	)
 	if (current === undefined) {
@@ -438,8 +439,12 @@ export const updateCredentials = userWriteOperation<
 		bit(changes.hideCollections),
 		accountId
 	)
-	// Other servers learn of the change (Update(Person)), only if the published document changed.
-	recordActorUpdate(db, accountId, before, now)
+	// Other servers learn of the change (Update(Person)), only if the published document changed, or if the account
+	// shows or hides its network: the document does not carry that, but a server that receives the Update fetches the
+	// collections again and learns it from them, as Mastodon's ProcessAccountService does.
+	const hideChanged =
+		changes.hideCollections !== undefined && (changes.hideCollections ? 1 : 0) !== current.hide_collections
+	recordActorUpdate(db, accountId, hideChanged ? null : before, now)
 	return credentialAccount(db, accountId, present)
 })
 
