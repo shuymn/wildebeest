@@ -8,6 +8,20 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- Timeline markers in the Mastodon API, as Mastodon 4.5 has them: `GET /api/v1/markers` (`timeline[]`: `home`,
+  `notifications`; other names are ignored) and `POST /api/v1/markers` (`home[last_read_id]`,
+  `notifications[last_read_id]`), each marker with its `last_read_id`, `version` and `updated_at`. Scopes are
+  `read:statuses` and `write:statuses` (or `read` and `write`). An update that changes a marker counts a version; the
+  same value changes nothing. `last_read_id` is kept as sent, up to 255 characters; a blank one answers 422 with
+  Mastodon's message. Updates are applied one at a time, so two at once both succeed instead of one answering 409.
+
+### Instance changes
+
+- Store schema: adds `0010_markers`, the `markers` table, applied on the first request after the deploy. It is quick.
+- `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.5] - 2026-10-15
 
 A fifth release candidate of the first release, published under the npm dist-tag `next`.
