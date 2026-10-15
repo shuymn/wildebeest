@@ -1404,3 +1404,8 @@ export function statusCursor(cursor: string | undefined): string | null {
 	}
 	return cursor.padStart(STATUS_ID_LENGTH, '0')
 }
+
+// Bounds beyond every 18-digit id, for a cursor that is absent: with them a range is always a plain one, read through
+// the index from the cursor rather than filtered from the newest.
+export const ABOVE_EVERY_ID = ':'
+export const BELOW_EVERY_ID = ''

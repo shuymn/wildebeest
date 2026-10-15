@@ -132,6 +132,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   hide entirely. Home reads only the mentions of you in direct and limited statuses by accounts you follow, not every
   mention of you, and the statuses of an account that blocks you, that you block, or that is suspended or being deleted
   are no longer read to show its empty profile.
+- A page of a list's members (`GET /api/v1/lists/:id/accounts` with `max_id` or `min_id`) is read from its cursor, not
+  from the newest member.
 
 ### Fixed
 

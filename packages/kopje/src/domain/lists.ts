@@ -11,7 +11,7 @@ import {
 import { availableSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
-import { statusCursor } from './statuses'
+import { ABOVE_EVERY_ID, BELOW_EVERY_ID, statusCursor } from './statuses'
 import type { Db } from '../db/sql'
 
 // Lists (Mastodon 4.5's List and ListAccount, Api::V1::ListsController, Lists::AccountsController and
@@ -160,12 +160,12 @@ export const listAccounts = userReadOperation<
 	const rows = db.all<AccountRow>(
 		`SELECT ${ACCOUNT_COLUMNS}
 		FROM list_accounts la JOIN accounts a ON a.id = la.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
-		WHERE la.list_id = ?1 AND (?2 IS NULL OR la.account_id < ?2) AND (?3 IS NULL OR la.account_id > ?3)
+		WHERE la.list_id = ?1 AND la.account_id < ?2 AND la.account_id > ?3
 			AND ${availableSql('la.account_id')}
 		ORDER BY la.account_id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 		id,
-		statusCursor(page?.maxId),
-		statusCursor(page?.minId ?? page?.sinceId),
+		statusCursor(page?.maxId) ?? ABOVE_EVERY_ID,
+		statusCursor(page?.minId ?? page?.sinceId) ?? BELOW_EVERY_ID,
 		page?.limit ?? MAX_LIST_MEMBERS_ANSWERED
 	)
 	if (ascending) {
