@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
@@ -198,6 +198,30 @@ describe('the export against the conversion manifest', () => {
 		expect(report).toMatchObject({ result: 'PASS', exportDiffers: [] })
 	})
 
+	it("ignores D1's own tables, _cf_KV and d1_kv, in an export that has them", async () => {
+		const { db } = await live()
+		const texts = exportDatabase(db, { sequence: true })
+		const plain = fingerprintExport(await writeExport(space.dir, texts, 'without-platform'))
+		texts.set(
+			'_cf_KV',
+			'PRAGMA defer_foreign_keys=TRUE;\nCREATE TABLE _cf_KV (key TEXT PRIMARY KEY, value BLOB) WITHOUT ROWID;\n' +
+				`INSERT INTO "_cf_KV" ("key","value") VALUES('k',X'00');\n`
+		)
+		texts.set(
+			'd1_kv',
+			'PRAGMA defer_foreign_keys=TRUE;\nCREATE TABLE d1_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);\n' +
+				`INSERT INTO "d1_kv" ("key","value") VALUES('k','v');\n`
+		)
+		const path = await writeExport(space.dir, texts, 'with-platform')
+		const fingerprint = fingerprintExport(path)
+		expect(fingerprint).toEqual(plain)
+		const { manifest } = await convert(space.dir, path, { out: 'out-platform' })
+		expect(compareFingerprints(fingerprint, fingerprint, parseManifest(manifest))).toMatchObject({
+			result: 'PASS',
+			exportDiffers: [],
+		})
+	})
+
 	it('fails on another count or another notification counter', async () => {
 		const { final, manifest } = await converted()
 		const parsed = parseManifest(manifest)
@@ -270,6 +294,17 @@ describe('kopje-admin fingerprint', () => {
 			return { code: e.code, stdout: e.stdout, stderr: e.stderr }
 		}
 	}
+
+	it("lists every table to export but SQLite's, D1's own and the full-text index's", () => {
+		const db = new DatabaseSync(':memory:')
+		db.exec(`CREATE TABLE actors (id TEXT);
+			CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT);
+			CREATE TABLE _cf_KV (key TEXT PRIMARY KEY, value BLOB) WITHOUT ROWID;
+			CREATE TABLE d1_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+			CREATE VIRTUAL TABLE search_fts USING fts5(body)`)
+		const tables = db.prepare(TABLES_SQL).all() as { name: string }[]
+		expect(tables.map((t) => t.name)).toEqual(['actors', 'd1_migrations'])
+	})
 
 	it('fingerprints and compares exports through the real CLI', async () => {
 		expect((await run(['fingerprint', 'tables-sql'])).stdout.trim()).toBe(TABLES_SQL)

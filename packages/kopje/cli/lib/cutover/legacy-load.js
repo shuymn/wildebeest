@@ -22,6 +22,7 @@ import {
 	digestOf,
 	ExportError,
 	exportOrder,
+	isPlatformTable,
 	parseStatement,
 	quoteIdentifier,
 	splitStatements,
@@ -63,7 +64,7 @@ function isSearchTable(name) {
 
 /** @param {string} name */
 function isBookkeeping(name) {
-	return name === 'd1_migrations' || name.startsWith('sqlite_') || name.startsWith('_cf_')
+	return name === 'd1_migrations' || name.startsWith('sqlite_') || isPlatformTable(name)
 }
 
 // Loader failures carry a fixed code and counts or digests only (DATA-13).
@@ -284,7 +285,7 @@ function load(sources, acceptDeletions, baseTime, path) {
 	const migrations = legacyMigrations()
 
 	// Pass 1: the export's table definitions (collected, not run), its d1_migrations rows and its sequence counter.
-	// Bookkeeping tables (d1_migrations, sqlite_*, _cf_*) never get the export's DDL: their rows are read by name into
+	// Bookkeeping tables (d1_migrations, sqlite_*, D1's _cf_* and d1_kv) never get the export's DDL: their rows are read by name into
 	// a fixed schema of the converter's own.
 	/** @type {Map<string, string>} */
 	const definitions = new Map()
@@ -309,7 +310,7 @@ function load(sources, acceptDeletions, baseTime, path) {
 				}
 				definitions.set(parsed.table, parsed.sql)
 			} else if (parsed.kind === 'insert') {
-				if (isSearchTable(parsed.table) || parsed.table.startsWith('_cf_')) {
+				if (isSearchTable(parsed.table) || isPlatformTable(parsed.table)) {
 					continue
 				}
 				if (parsed.table === 'sqlite_sequence') {
