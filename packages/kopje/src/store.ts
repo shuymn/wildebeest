@@ -21,6 +21,7 @@ import * as deliveries from './domain/deliveries'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import * as inbox from './domain/inbox'
 import { instanceInfo, instancePeers, instanceRules } from './domain/instance'
+import * as lists from './domain/lists'
 import * as media from './domain/media'
 import * as mediaRebuild from './domain/media-rebuild'
 import * as notifications from './domain/notifications'
@@ -654,6 +655,44 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, blocks.previewDomainBlock, input)
 	}
 
+	// Lists (domain/lists.ts); their timeline is with the others.
+
+	listLists(callerBuild: string, input: OperationInput<typeof lists.listLists>) {
+		return this.#kernel.execute(callerBuild, lists.listLists, input)
+	}
+
+	getList(callerBuild: string, input: OperationInput<typeof lists.getList>) {
+		return this.#kernel.execute(callerBuild, lists.getList, input)
+	}
+
+	createList(callerBuild: string, input: OperationInput<typeof lists.createList>) {
+		return this.#kernel.execute(callerBuild, lists.createList, input)
+	}
+
+	updateList(callerBuild: string, input: OperationInput<typeof lists.updateList>) {
+		return this.#kernel.execute(callerBuild, lists.updateList, input)
+	}
+
+	deleteList(callerBuild: string, input: OperationInput<typeof lists.deleteList>) {
+		return this.#kernel.execute(callerBuild, lists.deleteList, input)
+	}
+
+	listAccounts(callerBuild: string, input: OperationInput<typeof lists.listAccounts>) {
+		return this.#kernel.execute(callerBuild, lists.listAccounts, input)
+	}
+
+	addListAccounts(callerBuild: string, input: OperationInput<typeof lists.addListAccounts>) {
+		return this.#kernel.execute(callerBuild, lists.addListAccounts, input)
+	}
+
+	removeListAccounts(callerBuild: string, input: OperationInput<typeof lists.removeListAccounts>) {
+		return this.#kernel.execute(callerBuild, lists.removeListAccounts, input)
+	}
+
+	accountLists(callerBuild: string, input: OperationInput<typeof lists.accountLists>) {
+		return this.#kernel.execute(callerBuild, lists.accountLists, input)
+	}
+
 	// Statuses, timelines and notifications (B4a).
 
 	createStatus(callerBuild: string, input: OperationInput<typeof statuses.createStatus>) {
@@ -714,6 +753,10 @@ export class Store extends DurableObject<Env> {
 
 	homeTimeline(callerBuild: string, input: OperationInput<typeof timelines.homeTimeline>) {
 		return this.#kernel.execute(callerBuild, timelines.homeTimeline, input)
+	}
+
+	listTimeline(callerBuild: string, input: OperationInput<typeof timelines.listTimeline>) {
+		return this.#kernel.execute(callerBuild, timelines.listTimeline, input)
 	}
 
 	publicTimeline(callerBuild: string, input: OperationInput<typeof timelines.publicTimeline>) {

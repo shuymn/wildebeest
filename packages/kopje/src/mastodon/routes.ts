@@ -5,6 +5,7 @@ import * as accounts from './accounts'
 import * as blocks from './blocks'
 import type { ApiDeps, ApiEnv, ApiHandler } from './context'
 import * as instance from './instance'
+import * as lists from './lists'
 import * as media from './media'
 import * as notifications from './notifications'
 import * as oauth from './oauth'
@@ -176,6 +177,13 @@ export const ROUTES: readonly Route[] = [
 		handler: timelines.accountStatuses,
 	},
 
+	{
+		method: 'GET',
+		path: '/api/v1/accounts/:id/lists',
+		access: { scope: 'read:lists' },
+		handler: lists.accountLists,
+	},
+
 	// Blocks, mutes and domain blocks (mastodon/blocks.ts).
 	{ method: 'POST', path: '/api/v1/accounts/:id/block', access: { scope: 'write:blocks' }, handler: blocks.block },
 	{ method: 'POST', path: '/api/v1/accounts/:id/unblock', access: { scope: 'write:blocks' }, handler: blocks.unblock },
@@ -283,6 +291,12 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'GET', path: '/api/v1/timelines/home', access: { scope: 'read:statuses' }, handler: timelines.home },
 	{
 		method: 'GET',
+		path: '/api/v1/timelines/list/:id',
+		access: { scope: 'read:lists' },
+		handler: timelines.listTimeline,
+	},
+	{
+		method: 'GET',
 		path: '/api/v1/timelines/public',
 		access: { scope: 'read:statuses', optional: true },
 		handler: timelines.publicTimeline,
@@ -295,6 +309,27 @@ export const ROUTES: readonly Route[] = [
 	},
 	{ method: 'GET', path: '/api/v1/bookmarks', access: { scope: 'read:bookmarks' }, handler: timelines.bookmarks },
 	{ method: 'GET', path: '/api/v1/favourites', access: { scope: 'read:favourites' }, handler: timelines.favourites },
+
+	// Lists (mastodon/lists.ts).
+	{ method: 'GET', path: '/api/v1/lists', access: { scope: 'read:lists' }, handler: lists.lists },
+	{ method: 'POST', path: '/api/v1/lists', access: { scope: 'write:lists' }, handler: lists.createList },
+	{ method: 'GET', path: '/api/v1/lists/:id', access: { scope: 'read:lists' }, handler: lists.getList },
+	{ method: 'PUT', path: '/api/v1/lists/:id', access: { scope: 'write:lists' }, handler: lists.updateList },
+	{ method: 'PATCH', path: '/api/v1/lists/:id', access: { scope: 'write:lists' }, handler: lists.updateList },
+	{ method: 'DELETE', path: '/api/v1/lists/:id', access: { scope: 'write:lists' }, handler: lists.deleteList },
+	{ method: 'GET', path: '/api/v1/lists/:id/accounts', access: { scope: 'read:lists' }, handler: lists.listAccounts },
+	{
+		method: 'POST',
+		path: '/api/v1/lists/:id/accounts',
+		access: { scope: 'write:lists' },
+		handler: lists.addListAccounts,
+	},
+	{
+		method: 'DELETE',
+		path: '/api/v1/lists/:id/accounts',
+		access: { scope: 'write:lists' },
+		handler: lists.removeListAccounts,
+	},
 
 	{ method: 'POST', path: '/api/v1/media', access: { scope: 'write:media' }, handler: media.uploadMedia },
 	{ method: 'POST', path: '/api/v2/media', access: { scope: 'write:media' }, handler: media.uploadMedia },
