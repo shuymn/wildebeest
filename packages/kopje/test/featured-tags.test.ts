@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { BUILD } from './helpers'
 import { appToken, rowsRead, scopedToken } from './read-helpers'
 import { act, community, getJson, outbound, post, remoteAccount, remoteFollows, type User } from './status-helpers'
 import { accountFeaturedTags, MAX_FEATURED_TAGS } from '../src/domain/featured-tags'
@@ -357,7 +358,27 @@ describe('featured hashtags over ActivityPub', () => {
 			bearer(alice.token, json({ display_name: 'Alice' }, { method: 'PATCH' }))
 		)
 		expect(edit.status).toBe(200)
+		expect(await sql(h.store, 'SELECT featured_announced FROM local_accounts WHERE account_id = ?', alice.id)).toEqual([
+			{ featured_announced: 1 },
+		])
+		// The profile Update is delivered, so nothing waits that a later Update could replace.
+		const claimed = await h.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'drain' })
+		expect(claimed.deliveries).toHaveLength(1)
+		for (const delivery of claimed.deliveries) {
+			await h.store.completeDelivery(BUILD, {
+				id: delivery.id,
+				leaseToken: 'drain',
+				now: NOW,
+				outcome: { kind: 'delivered', status: 202 },
+			})
+		}
+		expect(await sql(h.store, 'SELECT id FROM deliveries')).toEqual([])
 		await feature(h, alice, 'cats')
-		expect((await outbound(h.store)).map(({ activity }) => activity.type)).toEqual(['Update', 'Add'])
+		const queued = await sql<{ type: string }>(
+			h.store,
+			`SELECT json_extract(o.body, '$.activity.type') AS type FROM deliveries d
+			JOIN outbound_activities o ON o.id = d.activity_id ORDER BY d.id`
+		)
+		expect(queued.map((row) => row.type)).toEqual(['Add'])
 	})
 })
