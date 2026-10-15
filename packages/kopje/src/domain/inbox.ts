@@ -1362,11 +1362,12 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 	)
 	// The votes in its poll; the poll itself, one row, goes with the status.
 	deletePollVotes(db, statusId, budget.left())
-	// Local uploads are detached for the media sweep, which deletes their R2 objects; remote rows only name URLs.
+	// Local uploads, also those an edit dropped, are detached for the media sweep, which deletes their R2 objects;
+	// remote rows only name URLs.
 	spend(
 		db,
 		budget,
-		`UPDATE media_attachments SET status_id = NULL, position = 0, gc_at = ?1
+		`UPDATE media_attachments SET status_id = NULL, position = 0, shown = 1, gc_at = ?1
 		WHERE id IN (SELECT id FROM media_attachments WHERE status_id = ?2 AND file_token IS NOT NULL LIMIT ?3)`,
 		new Date(0).toISOString(),
 		statusId

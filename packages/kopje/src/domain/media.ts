@@ -29,10 +29,12 @@ import { mediaPath } from '../platform/media-files'
 // Completion is idempotent, so a request whose completion answer was lost can ask again, and abandonment never dooms a
 // completed upload.
 //
-// Lifecycle: an unattached upload carries gc_at. It is attachable only while gc_at is in the future. A status that
-// stops using media (edit, delete) detaches it with a new grace period, so a redraft can attach it again; delete_media
-// and deleting an unattached upload (deleteMedia) doom it at once. The sweep (expiredMedia, then R2 deletes, then
-// purgeMedia) removes doomed rows and their R2 objects in bounded batches, objects first.
+// Lifecycle: an unattached upload carries gc_at. It is attachable only while gc_at is in the future. Media an edit
+// drops stays attached, no longer shown (shown 0), as long as the status: its earlier versions still show it, and
+// only a later edit of the same status may show it again. Deleting the status detaches all of its media with a new
+// grace period, so a redraft can attach it again; delete_media and deleting an unattached upload (deleteMedia) doom
+// it at once. The sweep (expiredMedia, then R2 deletes, then purgeMedia) removes doomed rows and their R2 objects in
+// bounded batches, objects first.
 //
 // A profile image (avatar or header, set from the settings page) is a completed upload that the account's avatar_url or
 // header_url names, kept with neither status_id nor gc_at: it is never swept, and never attached, read or updated
@@ -396,10 +398,10 @@ export type MediaDeleted = 'deleted' | 'in_use' | 'not_found'
 // once, as delete_media dooms a status's media, and the sweep deletes it and its R2 objects. A profile image, a
 // reservation still being written and an upload already doomed are not found, as they are for GET and PUT.
 //
-// An unattached row with no gc_at that is not a profile image is one the cutover kept for good (cli/lib/cutover/
-// convert.js): an image only earlier versions of a status show, whose files status_edits still names, or an image
-// legacy kept unattached. No Kopje write leaves such a row, so it is refused as in use: telling the two apart would
-// mean reading every edit of the account.
+// Media an edit dropped is attached (shown 0), so it is in use. An unattached row with no gc_at that is not a profile
+// image is one the cutover kept for good (cli/lib/cutover/convert.js) and could not link to a status: an image legacy
+// kept unattached, or one that earlier versions of no single status name (migration 0015_media_shown links the
+// others). No Kopje write leaves such a row, so it is refused as in use too.
 export const deleteMedia = userMediaDeleteOperation<{ id: string; now: number }, MediaDeleted>(
 	(db, { id, now }, { accountId }) => {
 		const row = db.first<{ used: number; kept: number }>(

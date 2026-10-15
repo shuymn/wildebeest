@@ -1043,17 +1043,32 @@ export function convertLegacy(
 	}
 
 	// ---------------------------------------------------------------- media
-	// Local media mapped from Cloudflare Images also get their file token, served type and preview URL.
+	// Local media mapped from Cloudflare Images also get their file token, served type and preview URL. shown is 0 for
+	// an image only earlier versions of its status show (migration 0015_media_shown).
 	const mediaRow = insert(
 		`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, description, meta,
-			file_token, content_type, processed, legacy_ap_o, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+			file_token, content_type, processed, legacy_ap_o, created_at, shown)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`
 	)
 	/**
 	 * @param {string} id @param {string} account @param {string | null} status @param {number} position
 	 * @param {string} type @param {string} url @param {string} description @param {string | null} meta
-	 * @param {string | null} legacyApO @param {string} created @param {MappedImage} [image]
+	 * @param {string | null} legacyApO @param {string} created @param {MappedImage} [image] @param {0 | 1} [shown]
 	 */
-	const mediaInsert = (id, account, status, position, type, url, description, meta, legacyApO, created, image) => {
+	const mediaInsert = (
+		id,
+		account,
+		status,
+		position,
+		type,
+		url,
+		description,
+		meta,
+		legacyApO,
+		created,
+		image,
+		shown = 1
+	) => {
 		const mapped = image?.kind === 'mapped' ? image : null
 		if (mapped !== null) {
 			originals.push([mapped.imageId, id])
@@ -1071,7 +1086,8 @@ export function convertLegacy(
 			mapped?.token ?? null,
 			mapped?.contentType ?? null,
 			legacyApO,
-			created
+			created,
+			shown
 		)
 	}
 	/** @param {string | null} url @param {boolean} local @param {(imageId: string) => string} rowKey */
@@ -1355,7 +1371,7 @@ export function convertLegacy(
 						]
 					}
 					// An image only earlier versions show still needs a row, with its own token and original, so its files
-					// are made and kept: an unattached one of the author, as legacy kept such images. One per status.
+					// are made and kept: one of the status, not shown, as an edit that drops media leaves it. One per status.
 					const key = `${plan.uri}\n${mapped.imageId}`
 					let id = editedImages.get(key)
 					if (id === undefined) {
@@ -1364,7 +1380,7 @@ export function convertLegacy(
 						mediaInsert(
 							id,
 							plan.author,
-							null,
+							plan.id,
 							0,
 							'image',
 							url,
@@ -1372,7 +1388,8 @@ export function convertLegacy(
 							mapped.meta,
 							null,
 							plan.published,
-							mapped
+							mapped,
+							0
 						)
 					}
 					return [

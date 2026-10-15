@@ -200,7 +200,7 @@ export function statusFacts(db: Db, statusId: string): StatusFacts | null {
 			.all<{ name: string }>('SELECT name FROM status_tags WHERE status_id = ? ORDER BY name', statusId)
 			.map((t) => ({ name: t.name, href: `${origin}/tags/${encodeURIComponent(t.name)}` })),
 		media: db.all<{ url: string; content_type: string | null; description: string }>(
-			'SELECT url, content_type, description FROM media_attachments WHERE status_id = ? ORDER BY position, id',
+			'SELECT url, content_type, description FROM media_attachments WHERE status_id = ? AND shown = 1 ORDER BY position, id',
 			statusId
 		),
 		mentionNames: new Map(mentioned.map((m) => [m.uri, `@${m.username}@${m.domain ?? host}`])),
