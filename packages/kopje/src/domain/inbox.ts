@@ -1128,7 +1128,8 @@ export function purgeBatch(db: Db, uri: string, now: number): boolean {
 	}
 	// Blocks and mutes of the account go last, once nothing they filter is left: no status, mention, reply link or
 	// notification of it.
-	if (!accountHasRows(db, id, false)) {
+	const others = accountHasRows(db, id, false)
+	if (!others) {
 		spend(
 			db,
 			budget,
@@ -1138,7 +1139,7 @@ export function purgeBatch(db: Db, uri: string, now: number): boolean {
 		spend(db, budget, 'DELETE FROM mutes WHERE id IN (SELECT id FROM mutes WHERE target_account_id = ? LIMIT ?)', id)
 	}
 	// The final account delete and the job's completion are two more rows.
-	if (budget.left() < 2 || accountHasRows(db, id)) {
+	if (others || budget.left() < 2 || accountHasRows(db, id)) {
 		return true
 	}
 	db.run('DELETE FROM accounts WHERE id = ? AND domain IS NOT NULL', id)

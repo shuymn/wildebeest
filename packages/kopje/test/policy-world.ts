@@ -5,10 +5,10 @@ import type { Visibility } from '../src/domain/audience'
 
 // A generated world for the policy oracle (test/policy-oracle.test.ts) and the bounds harness
 // (test/policy-bounds.test.ts): local accounts (one of them may be suspended, some may hide their network), remote
-// accounts on two domains (one of them may be being deleted, its statuses and edges still stored), statuses of every visibility with mentions (some silent), boosts and replies, and the edges
-// the rules read: follows (pending and accepted), blocks both ways, mutes with and without an expiry and with and
-// without notifications, and domain blocks in their stored form. Accounts and statuses are referred to by index;
-// writeWorld gives them fixed ids.
+// accounts on two domains (one of them may be being deleted, its statuses and edges still stored), statuses of every
+// visibility with mentions (some silent), boosts and replies, and the edges the rules read: follows (pending and
+// accepted), blocks both ways, mutes with and without an expiry and with and without notifications, and domain blocks
+// in their stored form. Accounts and statuses are referred to by index; writeWorld gives them fixed ids.
 
 declare module 'vitest' {
 	interface ProvidedContext {

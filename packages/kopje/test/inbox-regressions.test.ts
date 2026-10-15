@@ -879,13 +879,12 @@ describe('an actor whose deletion has started (R1)', () => {
 	it('shows nothing of the actor from the Delete on, while its purge still removes what it has', async () => {
 		const h = await community(['alice', 'carol'])
 		const { alice, carol } = h.users
-		const aliceUri = (await sql<{ uri: string }>(h.store, 'SELECT uri FROM accounts WHERE id = ?', alice.id))[0]!.uri
 		const web = new RemoteWeb()
 		const inbox = harness(h.store, {}, BUILD, { keygen: fixtureKeyGen, loader: web.loader })
 		const post = async (actor: TestActor, activity: unknown) =>
 			(await inbox.request('/inbox', await signedInit(actor, '/inbox', activity))).status
 		const bob = await mastodonActor(web, 'bob')
-		expect(await post(bob, follow(bob, nextId(bob), aliceUri))).toBe(202)
+		expect(await post(bob, follow(bob))).toBe(202)
 		const bobId = (await accountId(h.store, bob.uri))!
 		await seedStatuses(h.store, bob.uri, PURGE_BATCH * 2 + 1)
 		// Carol mutes bob (his notifications still shown); alice has bob's follow notification.
@@ -931,7 +930,7 @@ describe('an actor whose deletion has started (R1)', () => {
 
 		// The actor's own activity and a fetch of its document while the purge runs do not bring it back.
 		web.serve(bob.uri, bob.document)
-		expect(await post(bob, follow(bob, nextId(bob), aliceUri))).toBe(202)
+		expect(await post(bob, follow(bob))).toBe(202)
 		expect(await count(h.store, 'SELECT 1 FROM follows WHERE account_id = ?', bobId)).toBe(0)
 		expect(await sql(h.store, 'SELECT deleted_at FROM accounts WHERE id = ?', bobId)).toEqual([
 			{ deleted_at: new Date(NOW).toISOString() },
@@ -946,13 +945,12 @@ describe('an actor whose deletion has started (R1)', () => {
 	it('keeps filtering a post that mentions the actor, by its blocks, until no mention of it is left', async () => {
 		const h = await community(['alice', 'carol'])
 		const { alice, carol } = h.users
-		const aliceUri = (await sql<{ uri: string }>(h.store, 'SELECT uri FROM accounts WHERE id = ?', alice.id))[0]!.uri
 		const web = new RemoteWeb()
 		const inbox = harness(h.store, {}, BUILD, { keygen: fixtureKeyGen, loader: web.loader })
 		const post = async (actor: TestActor, activity: unknown) =>
 			(await inbox.request('/inbox', await signedInit(actor, '/inbox', activity))).status
 		const bob = await mastodonActor(web, 'bob')
-		expect(await post(bob, follow(bob, nextId(bob), aliceUri))).toBe(202)
+		expect(await post(bob, follow(bob))).toBe(202)
 		const bobId = (await accountId(h.store, bob.uri))!
 		await h.request(`/api/v1/accounts/${carol.id}/follow`, bearer(alice.token, { method: 'POST' }))
 		// carol mentions alice and bob; alice is notified, and would be pushed.
