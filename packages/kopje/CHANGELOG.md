@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.4] - 2026-10-15
+
+A fourth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - Lists in the Mastodon API, as Mastodon 4.5 has them: `GET` and `POST /api/v1/lists`, `GET`, `PUT`, `PATCH` and
