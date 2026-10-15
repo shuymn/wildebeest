@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { BUILD, freshStore, rejectionOf, tableNames, testKernel as kernel } from './helpers'
 import { MIGRATIONS } from '../src/db/migrations'
+import { REQUIRES_MENTION_SQL } from '../src/domain/audience'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
 
@@ -577,6 +578,117 @@ describe('Store migration runner', () => {
 		const large = await measure(10_000)
 		// A few reads per member added (the row, its list, its follow), none per pair.
 		expect(large - small).toBeLessThanOrEqual(5 * (10_000 - 1000))
+	}, 60_000)
+
+	it('upgrades a Store at 0007_list_members with 0008_status_mentions_requires_mention: mentions in direct and limited statuses are marked', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, 8)).upgrade()).toMatchObject({ ok: true })
+			const alice = '100000000000000001'
+			const bob = '100000000000000002'
+			for (const [id, name] of [
+				[alice, 'alice'],
+				[bob, 'bob'],
+			]) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, NULL)',
+					id,
+					`https://kopje.test/ap/users/${name}`,
+					name
+				)
+			}
+			const visibilities = ['public', 'unlisted', 'private', 'direct', 'limited']
+			visibilities.forEach((visibility, i) => {
+				const id = String(200000000000000001n + BigInt(i))
+				sql.exec(
+					"INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES (?, ?, ?, ?, '2026-01-01T00:00:00.000Z')",
+					id,
+					`https://kopje.test/ap/o/${i}`,
+					alice,
+					visibility
+				)
+				sql.exec('INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, ?)', id, bob, i % 2)
+			})
+
+			expect(await kernel(state, MIGRATIONS.slice(0, 9)).upgrade()).toMatchObject({ ok: true, applied: [NAMES[8]] })
+			expect(
+				sql
+					.exec(
+						`SELECT s.visibility, m.silent, m.requires_mention FROM status_mentions m JOIN statuses s ON s.id = m.status_id
+						ORDER BY m.status_id`
+					)
+					.toArray()
+			).toEqual(
+				visibilities.map((visibility, i) => ({
+					visibility,
+					silent: i % 2,
+					requires_mention: visibility === 'direct' || visibility === 'limited' ? 1 : 0,
+				}))
+			)
+			expect(
+				sql
+					.exec("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'status_mentions_requires_mention'")
+					.toArray()
+			).toEqual([{ sql: expect.stringContaining('WHERE requires_mention = 1') }])
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('0008_status_mentions_requires_mention marks the visibilities the policy names', () => {
+		const migration = MIGRATIONS.find((m) => m.name === '0008_status_mentions_requires_mention')!
+		expect(migration.sql).toContain(`IN ${REQUIRES_MENTION_SQL}`)
+	})
+
+	it('0008_status_mentions_requires_mention reads each mention row a bounded number of times, however many there are', async () => {
+		const migration = MIGRATIONS.find((m) => m.name === '0008_status_mentions_requires_mention')!
+		const statements = migration.sql
+			.split('\n')
+			.filter((line) => !line.startsWith('--'))
+			.join('\n')
+			.split(';')
+			.filter((statement) => statement.trim() !== '')
+		const measure = async (count: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, 8)).upgrade()
+				sql.exec(
+					`INSERT INTO accounts (id, uri, username, domain) VALUES
+					('100000000000000001', 'https://kopje.test/ap/users/alice', 'alice', NULL),
+					('100000000000000002', 'https://kopje.test/ap/users/bob', 'bob', NULL),
+					('100000000000000003', 'https://kopje.test/ap/users/carol', 'carol', NULL)`
+				)
+				// Every other status direct, each mentioning two accounts.
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+					SELECT CAST(200000000000000000 + i AS TEXT), 'https://kopje.test/ap/o/' || i, '100000000000000001',
+						CASE i % 2 WHEN 0 THEN 'direct' ELSE 'public' END, '2026-01-01T00:00:00.000Z' FROM n`,
+					count
+				)
+				sql.exec(
+					`INSERT INTO status_mentions (status_id, account_id)
+					SELECT id, '100000000000000002' FROM statuses UNION ALL SELECT id, '100000000000000003' FROM statuses`
+				)
+				let read = 0
+				for (const statement of statements) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				expect(sql.exec('SELECT count(*) AS n FROM status_mentions WHERE requires_mention = 1').one()).toEqual({
+					n: count,
+				})
+				return read
+			})
+		}
+		const small = await measure(1000)
+		const large = await measure(10_000)
+		// A few reads per mention row added (the backfill's pass with its status lookup, the index build's pass), nothing
+		// per pair of rows.
+		const added = 2 * (10_000 - 1000)
+		expect(large - small).toBeLessThanOrEqual(5 * added)
 	}, 60_000)
 
 	it('stays readonly with exact bookkeeping when a file fails, and lets a fixed build continue', async () => {

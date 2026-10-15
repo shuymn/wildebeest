@@ -219,7 +219,12 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 		}
 		// A world account other than the viewer is mentioned; the viewer never is.
 		const mentioned = (VIEWER + 1 + (i % (worldAccounts - 1))) % worldAccounts
-		sql.exec('INSERT INTO status_mentions (status_id, account_id) VALUES (?, ?)', first, accountId(mentioned))
+		sql.exec(
+			'INSERT INTO status_mentions (status_id, account_id, requires_mention) VALUES (?, ?, ?)',
+			first,
+			accountId(mentioned),
+			HIDDEN[i % HIDDEN.length] === 'direct' || HIDDEN[i % HIDDEN.length] === 'limited' ? 1 : 0
+		)
 		const world = accountId(i % worldAccounts)
 		const followed = i % worldAccounts === LISTED ? accountId((LISTED + 1) % worldAccounts) : world
 		sql.exec("INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')", author, followed)
@@ -313,8 +318,8 @@ function writeCopies(sql: SqlStorage, factor: number): void {
 	)
 	sql.exec(
 		`${replicas}
-		INSERT INTO status_mentions (status_id, account_id, silent)
-		SELECT ${copy('m.status_id')}, m.account_id, m.silent FROM status_mentions m, r`,
+		INSERT INTO status_mentions (status_id, account_id, silent, requires_mention)
+		SELECT ${copy('m.status_id')}, m.account_id, m.silent, m.requires_mention FROM status_mentions m, r`,
 		...params
 	)
 	sql.exec(
@@ -816,7 +821,11 @@ describe("home and list timelines read a page per author, not each author's hist
 						by,
 						new Date(NOW).toISOString()
 					)
-					sql.exec('INSERT INTO status_mentions (status_id, account_id) VALUES (?, ?)', status(i), ADDRESSEE_ID)
+					sql.exec(
+						'INSERT INTO status_mentions (status_id, account_id, requires_mention) VALUES (?, ?, 1)',
+						status(i),
+						ADDRESSEE_ID
+					)
 					continue
 				}
 				const parent = i >= authors.length && i % 4 === 0 ? status(i - authors.length) : null

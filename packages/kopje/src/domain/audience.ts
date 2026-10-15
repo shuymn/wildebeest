@@ -74,6 +74,14 @@ export function tagPublicSql(id: string): string {
 	return `(SELECT tp.visibility = 'public' FROM main.statuses tp WHERE tp.id = ${id})`
 }
 
+// status_mentions.requires_mention of a mention in the status `id`: whether the status is direct or limited, the only
+// statuses home reads from the viewer's mentions. A status's visibility stays in or out of that set once written (a
+// direct status gaining a recipient becomes limited), so the writers of status_mentions set it with each row, and the
+// partial index status_mentions_requires_mention holds just those rows.
+export function mentionRequiredSql(id: string): string {
+	return `(SELECT mr.visibility IN ${REQUIRES_MENTION_SQL} FROM statuses mr WHERE mr.id = ${id})`
+}
+
 // ---- Accounts. `x` is an expression for an account id, never a status or edge alias.
 
 // R1 (Account#unavailable?): a suspended local account, and a remote account whose deletion has started
