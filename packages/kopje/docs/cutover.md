@@ -250,7 +250,10 @@ are kept without a status either way. To move the images into Kopje's own media 
 **Relationships.** Follows, favourites, boosts, bookmarks, blocks, mutes, domain blocks and lists carry over. A
 follow's `uri` is its legacy value, or for a local follower the id of its latest Follow activity; an accepted follow
 with no Follow record keeps `uri` NULL and is counted. Self-follows, self-blocks and self-mutes cannot exist in Kopje
-and are left out (counted). Counters are recomputed.
+and are left out (counted). A list member that is neither the list's owner nor an account the owner follows or has
+asked to follow is left out too (counted, `list_accounts:not-followed-left-out`): legacy kept members whatever the
+follows, while a Kopje list, as a Mastodon one, holds an account only while its owner follows it. Counters are
+recomputed.
 
 **Clients and settings.** OAuth clients keep their id, secret and scopes. Legacy settings take Kopje's names:
 `server name` becomes `title` and `server description` becomes `description` (both shown by `/api/v1/instance`);

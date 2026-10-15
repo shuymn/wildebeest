@@ -1010,3 +1010,117 @@ describe('OPS-1: spooled requests are verified on replay against their spool tim
 		expect(await follows(t.store)).toHaveLength(1)
 	})
 })
+
+// List members leave with the follow, whatever ends it (migration 0007_list_members); a Move carries them to the
+// target (FollowMigrationService#migrate_list_accounts!).
+describe('list members and inbound activities', () => {
+	const LIST = '800000000000000001'
+	const OTHER_LIST = '800000000000000002'
+
+	// Alice's lists: LIST holds alice herself and the accounts, OTHER_LIST is dave's and holds them too.
+	async function lists(t: Setup, members: string[]): Promise<void> {
+		await sql(
+			t.store,
+			"INSERT INTO lists (id, account_id, title) VALUES (?, ?, 'l'), (?, ?, 'd')",
+			LIST,
+			ALICE,
+			OTHER_LIST,
+			DAVE
+		)
+		for (const member of [ALICE, ...members]) {
+			await sql(t.store, 'INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', LIST, member)
+		}
+		for (const member of members) {
+			await sql(t.store, 'INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', OTHER_LIST, member)
+		}
+	}
+
+	const members = (t: Setup) =>
+		sql<{ list_id: string; account_id: string }>(
+			t.store,
+			'SELECT list_id, account_id FROM list_accounts ORDER BY list_id, account_id'
+		)
+
+	it('leave on a Reject and on a Block; the follower of the other side keeps them', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const carol = await mastodonActor(t.web, 'carol')
+		const bobId = await ourFollow(t, bob)
+		const carolId = await ourFollow(t, carol)
+		await sql(t.store, "UPDATE follows SET state = 'accepted' WHERE account_id = ?", ALICE)
+		for (const id of [bobId, carolId]) {
+			await sql(
+				t.store,
+				"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+				DAVE,
+				id
+			)
+		}
+		await lists(t, [bobId, carolId])
+		const reject = {
+			'@context': AS,
+			id: `${bob.uri}#rejects/follows/1`,
+			type: 'Reject',
+			actor: bob.uri,
+			object: { type: 'Follow', actor: ALICE_URI, object: bob.uri },
+		}
+		expect(await t.post(bob, reject)).toBe(202)
+		const block = { '@context': AS, id: `${carol.uri}#blocks/1`, type: 'Block', actor: carol.uri, object: ALICE_URI }
+		expect(await t.post(carol, block)).toBe(202)
+		expect(await members(t)).toEqual([
+			{ list_id: LIST, account_id: ALICE },
+			{ list_id: OTHER_LIST, account_id: [bobId, carolId].toSorted()[0] },
+			{ list_id: OTHER_LIST, account_id: [bobId, carolId].toSorted()[1] },
+		])
+	})
+
+	it('leave when the account is deleted', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bobId = await ourFollow(t, bob)
+		await lists(t, [bobId])
+		t.web.fail(bob.uri, 410)
+		const deletion = { '@context': AS, id: `${bob.uri}#delete`, type: 'Delete', actor: bob.uri, object: bob.uri }
+		expect(await t.post(bob, deletion)).toBe(202)
+		expect(await members(t)).toEqual([{ list_id: LIST, account_id: ALICE }])
+	})
+
+	it("move with a Move into the followers' lists that held the source, the follow requested", async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bob2 = await mastodonActor(t.web, 'bob2', { origin: 'https://new.example', key: 2, extra: {} })
+		t.web.serve(bob2.uri, { ...bob2.document, alsoKnownAs: [bob.uri] })
+		const bobId = await ourFollow(t, bob)
+		await sql(t.store, "UPDATE follows SET state = 'accepted' WHERE account_id = ?", ALICE)
+		await sql(
+			t.store,
+			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+			DAVE,
+			bobId
+		)
+		await lists(t, [bobId])
+		const move = {
+			'@context': AS,
+			id: `${bob.uri}#moves/1`,
+			type: 'Move',
+			actor: bob.uri,
+			object: bob.uri,
+			target: bob2.uri,
+		}
+		expect(await t.post(bob, move)).toBe(202)
+		const bob2Id = (await accountId(t.store, bob2.uri))!
+		expect(
+			(await follows(t.store)).filter((f) => f.target_account_id !== ALICE && f.target_account_id !== DAVE)
+		).toMatchObject([
+			{ account_id: ALICE, target_account_id: bob2Id, state: 'pending' },
+			{ account_id: DAVE, target_account_id: bob2Id, state: 'pending' },
+		])
+		expect(await members(t)).toEqual(
+			[
+				{ list_id: LIST, account_id: ALICE },
+				{ list_id: LIST, account_id: bob2Id },
+				{ list_id: OTHER_LIST, account_id: bob2Id },
+			].toSorted((a, b) => (a.list_id + a.account_id).localeCompare(b.list_id + b.account_id))
+		)
+	})
+})
