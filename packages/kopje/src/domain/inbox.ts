@@ -1544,8 +1544,15 @@ const create: Handler<'Create'> = (db, actor, activity, input) =>
 const updateStatus: Handler<'UpdateStatus'> = (db, actor, activity, input) =>
 	outcome(updateRemoteStatus(db, actor, activity.object, storeContext(db, input)))
 
+// What an inbound Like or Announce of a status requires of its actor: that it may see the status by itself (canView, as
+// a remote viewer). So an author who blocks the actor (VIS-13) or its domain (VIS-15) refuses both. Mastodon's Like and
+// Announce handlers do not check the read rule; Kopje does.
+function mayInteract(db: Db, actor: RemoteRow, statusId: string): boolean {
+	return canView(db, actor.id, statusId)
+}
+
 // Mastodon's ActivityPub::Activity::Like: a favourite of a local status, once per account, unless an Undo of this Like
-// arrived first (ID-7). Kopje also requires that the actor may see the status (VIS-1), which Mastodon does not check.
+// arrived first (ID-7), by an actor that may interact with it (mayInteract).
 const like: Handler<'Like'> = (db, actor, activity, { now }) => {
 	const status = db.first<{ id: string; account_id: string }>(
 		`SELECT s.id, s.account_id FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id
@@ -1558,7 +1565,7 @@ const like: Handler<'Like'> = (db, actor, activity, { now }) => {
 	if (isRetracted(db, actor.uri, activity.id, now)) {
 		return ignored('retracted')
 	}
-	if (!canView(db, actor.id, status.id)) {
+	if (!mayInteract(db, actor, status.id)) {
 		return ignored('not-visible')
 	}
 	const inserted = db.first<{ id: number }>(
@@ -1677,8 +1684,8 @@ function newOriginal(
 }
 
 // Mastodon's ActivityPub::Activity::Announce: a boost row (reblog_of_id) by the actor, once per original (ID-7), only
-// when it concerns this instance (a local follower of the booster, or a local original), and only of an original it
-// may wrap (VIS-6). The local author is notified.
+// when it concerns this instance (a local follower of the booster, or a local original), only of an original it may
+// wrap (VIS-6), and by an actor that may interact with it (mayInteract). The local author is notified.
 const announce: Handler<'Announce'> = (db, actor, activity, input) => {
 	const { now } = input
 	if (isDeleted(db, actor.uri, activity.id, now)) {
@@ -1707,6 +1714,9 @@ const announce: Handler<'Announce'> = (db, actor, activity, input) => {
 	// An original whose author is being deleted is on its way out with its boosts: none is added.
 	if (authorDeleted(db, original.account_id, now)) {
 		return ignored('author-deleted')
+	}
+	if (!mayInteract(db, actor, original.id)) {
+		return ignored('not-visible')
 	}
 	const originalId = original.id
 	if (
