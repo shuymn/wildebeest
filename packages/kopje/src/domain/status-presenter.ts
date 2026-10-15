@@ -207,7 +207,11 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 	)
 	const flags = viewerFlags(db, viewerId, all)
 	const filters =
-		options.filters !== undefined ? options.filters : options.viewer === null ? null : activeFilters(db, options.viewer)
+		options.filters !== undefined
+			? options.filters
+			: options.viewer === null
+				? null
+				: activeFilters(db, options.viewer, ids.length)
 	const statusMatches =
 		filters === null ? new Map<string, Set<string>>() : filterStatusMatches(db, filters, [...byId.keys()])
 	// Status#searchable_text of a status: its spoiler text, its text (a local status's source, a remote one's HTML as

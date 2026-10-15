@@ -13,7 +13,7 @@ import {
 	type Status,
 	type User,
 } from './status-helpers'
-import { MAX_FILTER_KEYWORDS, MAX_FILTER_REQUEST_TEXT, MAX_FILTER_TEXT, MAX_FILTERS } from '../src/domain/filters'
+import { MAX_FILTER_KEYWORDS, MAX_FILTER_TEXT, MAX_FILTERS } from '../src/domain/filters'
 
 // Filters through the API (domain/filters.ts, mastodon/filters.ts), as Mastodon 4.5 has them: the v2 endpoints with
 // their keywords and statuses, the v1 layer over the same rows, their errors, and the filters applied where statuses
@@ -796,41 +796,56 @@ describe('filter review fixes', () => {
 		expect(matches(joined)).toEqual([['breaking news']])
 	})
 
-	it("shares one text budget across a thread's ancestors and descendants", async () => {
+	it("shares the text budget evenly over a thread's statuses, and matches every status on its beginning", async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		const remote = await remoteAccount(h.store, 'carol')
-		// Each status's text is about 10,000 code units with the keyword at its end, so the budget covers 40 of them.
-		const content = `<p>${'x '.repeat(MAX_FILTER_TEXT / 2 - 10)}needle</p>`
+		// Each status's text is about 10,000 code units with "needle" at its end; the last reply starts with "pin".
+		const deep = `${'x '.repeat(MAX_FILTER_TEXT / 2 - 10)}needle`
 		const chain: string[] = []
 		for (let i = 0; i < 25; i++) {
 			chain.push(
 				await seedStatus(h.store, {
 					accountId: remote,
 					visibility: 'public',
-					content,
+					content: `<p>${deep}</p>`,
 					...(i === 0 ? {} : { inReplyToId: chain[i - 1] }),
 				})
 			)
 		}
 		const middle = chain[12]!
-		const replies: string[] = []
 		for (let i = 0; i < 25; i++) {
-			replies.push(await seedStatus(h.store, { accountId: remote, visibility: 'public', content, inReplyToId: middle }))
+			await seedStatus(h.store, {
+				accountId: remote,
+				visibility: 'public',
+				content: `<p>${i === 24 ? 'pin ' : ''}${deep}</p>`,
+				inReplyToId: middle,
+			})
 		}
-		await createFilter(h, alice, { title: 'n', context: ['thread'], keywords_attributes: [{ keyword: 'needle' }] })
+		await createFilter(h, alice, {
+			title: 'n',
+			context: ['thread'],
+			filter_action: 'hide',
+			keywords_attributes: [{ keyword: 'needle' }, { keyword: 'pin' }],
+		})
 		const { body } = await getJson<{ ancestors: Status[]; descendants: Status[] }>(
 			h,
 			`/api/v1/statuses/${middle}/context`,
 			alice.token
 		)
 		const all = [...body.ancestors, ...body.descendants]
-		const matched = all.map((s) => (s.filtered as FilterResult[]).length)
-		expect(all).toHaveLength(12 + 12 + 25)
-		// The budget is MAX_FILTER_REQUEST_TEXT over the whole response: the first 39 statuses fit whole, and later ones
-		// are matched on what is left, here too little to reach the keyword.
-		const fit = Math.floor(MAX_FILTER_REQUEST_TEXT / (MAX_FILTER_TEXT - 6))
-		expect(matched.slice(0, fit)).toEqual(Array.from({ length: fit }, () => 1))
-		expect(matched.slice(fit + 1)).toEqual(Array.from({ length: all.length - fit - 1 }, () => 0))
+		expect(all).toHaveLength(49)
+		// 49 statuses share MAX_FILTER_REQUEST_TEXT: about 8,163 code units each, short of every "needle", while the
+		// last status's "pin", at its beginning, is matched.
+		const matched = all.map((s) => (s.filtered as FilterResult[]).flatMap((r) => r.keyword_matches ?? []))
+		expect(matched.slice(0, -1)).toEqual(Array.from({ length: 48 }, () => []))
+		expect(matched.at(-1)).toEqual(['pin'])
+
+		// A page of 40 such statuses is matched in full.
+		const page = await timeline(h, `/api/v1/accounts/${remote}/statuses?limit=40`, alice.token)
+		await createFilter(h, alice, { title: 'a', context: ['account'], keywords_attributes: [{ keyword: 'needle' }] })
+		const again = await timeline(h, `/api/v1/accounts/${remote}/statuses?limit=40`, alice.token)
+		expect(page).toHaveLength(40)
+		expect(again.map((s) => (s.filtered as FilterResult[]).length > 0)).toEqual(Array.from({ length: 40 }, () => true))
 	}, 60_000)
 })

@@ -755,8 +755,12 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 			limits.descendants,
 			now
 		)
-		// The viewer's filters, read once for both lists.
-		const options = { ...present, viewer, filters: activeFilters(db, viewer) }
+		// The viewer's filters, read once for both lists, the text budget shared by all their members.
+		const options = {
+			...present,
+			viewer,
+			filters: activeFilters(db, viewer, ancestors.length + descendants.length),
+		}
 		return {
 			status: 'ok',
 			value: {

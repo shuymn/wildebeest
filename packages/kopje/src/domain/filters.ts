@@ -751,9 +751,9 @@ export const deleteFilterV1 = userWriteOperation<{ id: string }, boolean>((db, {
 // when it has none. hasStatuses: whether the filter names any status (CustomFilterStatus), wherever it is.
 type CompiledFilter = { filter: Filter; keywords: RegExp | null; hasStatuses: boolean }
 
-// The viewer's filters that have not expired, compiled once per request, and what is left of the request's text
-// budget (MAX_FILTER_REQUEST_TEXT), shared by every presentation that uses them.
-export type ActiveFilters = { readonly filters: readonly CompiledFilter[]; budget: number }
+// The viewer's filters that have not expired, compiled once per request, and the code units of each status's text they
+// are matched on (filterTextShare).
+export type ActiveFilters = { readonly filters: readonly CompiledFilter[]; readonly share: number }
 
 // Onigmo's [[:word:]] for Unicode strings, which \b reads: letters, marks, numbers and connector punctuation.
 const WORD_CLASS = '[\\p{L}\\p{M}\\p{N}\\p{Pc}]'
@@ -777,7 +777,8 @@ function compileKeywords(rows: readonly KeywordRow[]): RegExp | null {
 
 // The viewer's active filters (CustomFilter.cached_filters_for): unexpired at the request's time, whatever their context
 // and action, with their keywords compiled; read once per presentation. Null for an anonymous viewer or none.
-export function activeFilters(db: Db, viewer: ViewerContext): ActiveFilters | null {
+// `statuses` is how many statuses the response presents with them, which sets each one's share of the text budget.
+export function activeFilters(db: Db, viewer: ViewerContext, statuses: number): ActiveFilters | null {
 	if (viewer.accountId === null) {
 		return null
 	}
@@ -796,7 +797,7 @@ export function activeFilters(db: Db, viewer: ViewerContext): ActiveFilters | nu
 		rows.map((row) => row.id)
 	)
 	return {
-		budget: MAX_FILTER_REQUEST_TEXT,
+		share: filterTextShare(statuses),
 		filters: rows.map((row) => ({
 			filter: presentFilter(row),
 			keywords: compileKeywords(keywords.filter((k) => k.filter_id === row.id)),
@@ -831,14 +832,19 @@ export function filterStatusMatches(
 	return matches
 }
 
-// Kopje's bound on the text matched, where Mastodon matches all of it: each status's searchable text up to
-// MAX_FILTER_TEXT code units, and the statuses of one request together up to MAX_FILTER_REQUEST_TEXT, in the order they
-// are presented (a thread's ancestors, then its descendants): a status is matched on what is left of the budget, so in
-// a very large response the filters' keywords are reported on its earlier statuses only (filter statuses still match
-// everywhere). With the keyword caps, a request compares at most MAX_FILTER_REQUEST_TEXT code units of text with each
-// keyword.
+// Kopje's bound on the text matched, where Mastodon matches all of it: the statuses of one response share
+// MAX_FILTER_REQUEST_TEXT code units evenly, each matched on the beginning of its searchable text up to its share, and
+// never more than MAX_FILTER_TEXT. A page of 40 statuses is matched on 10,000 code units each, the cap; a thread of the
+// most members (CONTEXT_LIMITS in statuses.ts, 8,192) on about 48 each, so a keyword deep in a long status of a very
+// large response may be missed. Filter statuses match whatever the share: they need no text. With the keyword caps, a
+// response compares at most MAX_FILTER_REQUEST_TEXT code units of text with each keyword.
 export const MAX_FILTER_TEXT = 10_000
 export const MAX_FILTER_REQUEST_TEXT = 400_000
+
+// The code units each of `statuses` statuses is matched on.
+export function filterTextShare(statuses: number): number {
+	return Math.min(MAX_FILTER_TEXT, Math.floor(MAX_FILTER_REQUEST_TEXT / Math.max(statuses, 1)))
+}
 
 // What a status is matched by: its text (Status#searchable_text, of the boosted original for a boost), and the ids
 // filter statuses may name (the status and, for a boost, its original).
@@ -853,17 +859,13 @@ export function applyFilters(
 	statusMatches: ReadonlyMap<string, ReadonlySet<string>>,
 	target: FilterTarget
 ): FilterResult[] {
-	// The text matched: what the budget leaves of the status's first MAX_FILTER_TEXT code units, taken from the budget
-	// when a filter has keywords.
+	// The text matched: the beginning of the status's text, up to its share.
 	let text: string | undefined
 	const results: FilterResult[] = []
 	for (const { filter, keywords, hasStatuses } of active.filters) {
 		let keywordMatches: string[] | null = null
 		if (keywords !== null) {
-			if (text === undefined) {
-				text = target.text.slice(0, Math.min(MAX_FILTER_TEXT, active.budget))
-				active.budget -= text.length
-			}
+			text ??= target.text.slice(0, active.share)
 			const match = keywords.exec(text)
 			if (match !== null) {
 				keywordMatches = [match[0]]
