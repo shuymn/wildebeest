@@ -539,3 +539,105 @@ describe("the author's domain block costs a local viewer nothing per status (R2,
 		})
 	})
 })
+
+// Home and a list's timeline read each author's own window (AuthorWindows in audience.ts): a page reads about a page of
+// statuses per followed account or member, however many statuses each has, and wherever the page's cursor is. The
+// viewer follows every author and has a list of them all; each author, and the viewer (whose own statuses home reads
+// whatever their visibility), has a history of public, unlisted and private statuses, some of them replies in their
+// own thread, every one of which home and the list show.
+describe("home and list timelines read a page per author, not each author's history (RES-7)", () => {
+	const VIEWER_ID = '600000000000000001'
+	const LIST_ID = '600000000000000002'
+	const HISTORY_TOKEN = 'history-token'
+	const AUTHORS = 6
+	const author = (i: number) => String(610000000000000000n + BigInt(i))
+	const status = (i: number) => String(620000000000000000n + BigInt(i))
+	const VISIBILITIES: readonly Visibility[] = ['public', 'unlisted', 'private']
+
+	async function histories(perAuthor: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('history', 'secret', 'history', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'history', ?, 'read')",
+				HISTORY_TOKEN,
+				VIEWER_ID
+			)
+			sql.exec("INSERT INTO lists (id, account_id, title) VALUES (?, ?, 'authors')", LIST_ID, VIEWER_ID)
+			const authors = [VIEWER_ID]
+			for (let a = 0; a < AUTHORS; a++) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, ?)',
+					author(a),
+					`https://far${a}.example/users/a${a}`,
+					`a${a}`,
+					`far${a}.example`
+				)
+				sql.exec(
+					"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+					VIEWER_ID,
+					author(a)
+				)
+				sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', LIST_ID, author(a))
+				authors.push(author(a))
+			}
+			// The authors' statuses interleave, oldest first; every fourth is a reply in its author's own thread.
+			for (let i = 0; i < perAuthor * authors.length; i++) {
+				const by = authors[i % authors.length] ?? VIEWER_ID
+				const parent = i >= authors.length && i % 4 === 0 ? status(i - authors.length) : null
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, in_reply_to_account_id,
+						visibility, content, published_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, '<p>hello</p>', ?)`,
+					status(i),
+					`https://kopje.test/objects/${status(i)}`,
+					by,
+					parent === null ? null : `https://kopje.test/objects/${parent}`,
+					parent,
+					parent === null ? null : by,
+					VISIBILITIES[i % VISIBILITIES.length] ?? 'public',
+					new Date(NOW).toISOString()
+				)
+			}
+		})
+		return store
+	}
+
+	it('reads the same rows with 20 or 2,000 statuses per author, on the newest, a middle and the oldest page', async () => {
+		const few = await histories(20)
+		const many = await histories(2000)
+		const credential = { tokenHash: HISTORY_TOKEN, scope: 'read', now: NOW } as const
+		const grown: string[] = []
+		// The newest page; a page from the middle of the longer histories (above every status of the shorter ones, so
+		// their newest page); the oldest page.
+		const middle = status((2000 * (AUTHORS + 1)) / 2)
+		for (const page of [PAGE, { ...PAGE, maxId: middle }, { ...PAGE, minId: '1' }]) {
+			for (const [name, operation, input] of [
+				['home', homeTimeline, { credential, page, present: PRESENT }],
+				['list', listTimeline, { credential, id: LIST_ID, page, present: PRESENT }],
+			] as const) {
+				// A full page from either store.
+				const shownBy = async (store: StoreStub) =>
+					runInDurableObject(store, (_instance, state) => shown(operation.run(state.storage.sql, input as never)))
+				expect([await shownBy(few), await shownBy(many)]).toEqual([PAGE.limit, PAGE.limit])
+				const fewRows = await rowsRead({ store: few }, operation as StoreOperation<never, unknown>, input as never)
+				const manyRows = await rowsRead({ store: many }, operation as StoreOperation<never, unknown>, input as never)
+				if (manyRows > fewRows + ALLOWANCE) {
+					grown.push(`${name} ${JSON.stringify(page)}: ${fewRows} -> ${manyRows}`)
+				}
+			}
+		}
+		expect(grown).toEqual([])
+	}, 60_000)
+})

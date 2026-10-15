@@ -4,7 +4,6 @@ import {
 	filteredForSql,
 	NOT_A_REPLY_TO_OTHERS,
 	REACHES_FOLLOWERS_SQL,
-	REQUIRES_MENTION_SQL,
 	type StatusSelect,
 	statusReads,
 	type VisibleStatusId,
@@ -39,6 +38,14 @@ function statusPage(page: PageQuery): Cursor {
 // The cursor condition on a status id column, with the cursor parameters at ?2 (max) and ?3 (min).
 function cursorSql(column: string): string {
 	return `(?2 IS NULL OR ${column} < ?2) AND (?3 IS NULL OR ${column} > ?3)`
+}
+
+// The cursor as a plain range on s.id, with ?2 and ?3 bound by rangeParams: no cursor is '' or ':', below and above
+// every id of digits. An author's window then starts in the (account_id, id) index at the cursor, not at the newest.
+const RANGE_SQL = 's.id < ?2 AND s.id > ?3'
+
+function rangeParams(cursor: Cursor): [string, string] {
+	return [cursor.max ?? ':', cursor.min ?? '']
 }
 
 function statusesPage(
@@ -99,14 +106,16 @@ const EXCLUSIVE_MEMBERS = `(SELECT ela.account_id FROM lists el JOIN list_accoun
 // stored, or the partner's account was purged) is left out too, so a purge does not bring back a reply home hid. A
 // reply whose parent is deleted keeps its partner. Others' statuses leave home when their author is in one of the
 // viewer's exclusive lists (EXCLUSIVE_MEMBERS); the viewer's own never do.
+// It reads a window of each author's statuses (AuthorWindows), the viewer and the accounts home shows, with every
+// filter inside the window, through the (account_id, id) index: the read rule alone decides the visibilities, as the
+// viewer sees all of their own and a followed account's direct or limited status only when it addresses them. A page
+// reads at most a page of statuses an author shows, and those home leaves out on the way, however long their history.
 export const homeTimeline = userReadOperation<{ page: PageQuery; present: Present }, Page<Status>>(
 	(db, { page, present }, _viewer, viewer) => {
 		const { accountId, now } = viewer
 		const cursor = statusPage(page)
 		const order = cursor.ascending ? 'ASC' : 'DESC'
 		const read = statusReads(viewer, { viewer: '?1', now: '?5' })
-		const options = followOptionsSql(FOLLOWED_REPLIES_SQL)
-		const tail = `ORDER BY s.id ${order} LIMIT ?4`
 		const rows = read.union(
 			db,
 			'homeFilter',
@@ -114,34 +123,18 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 				all: true,
 				branches: [
 					{
-						where: `s.account_id IN (SELECT ?1 UNION ALL
-								SELECT target_account_id FROM follows WHERE account_id = ?1 AND state = 'accepted'
-									AND target_account_id NOT IN ${EXCLUSIVE_MEMBERS})
-							AND ${FEED} AND ${cursorSql('s.id')}`,
-						and: options,
-						tail,
-					},
-					// The viewer's own: no follow's options apply (nobody follows themselves).
-					{
-						where: `s.account_id = ?1 AND s.visibility IN ${REQUIRES_MENTION_SQL} AND ${cursorSql('s.id')}`,
-						tail,
-					},
-					{
-						from: 'status_mentions m JOIN',
-						join: 'ON s.id = m.status_id',
-						where: `m.account_id = ?1 AND s.account_id <> ?1 AND s.visibility IN ${REQUIRES_MENTION_SQL}
-							AND EXISTS (SELECT 1 FROM follows df
-								WHERE df.account_id = ?1 AND df.target_account_id = s.account_id AND df.state = 'accepted')
-							AND s.account_id NOT IN ${EXCLUSIVE_MEMBERS} AND ${cursorSql('s.id')}`,
-						and: options,
-						tail,
+						authors: `SELECT ?1 AS account_id UNION ALL
+							SELECT target_account_id FROM follows WHERE account_id = ?1 AND state = 'accepted'
+								AND target_account_id NOT IN ${EXCLUSIVE_MEMBERS}`,
+						where: RANGE_SQL,
+						and: followOptionsSql(FOLLOWED_REPLIES_SQL),
+						tail: `ORDER BY s.id ${order} LIMIT ?4`,
 					},
 				],
 				tail: `ORDER BY id ${order} LIMIT ?4`,
 			},
 			accountId,
-			cursor.max,
-			cursor.min,
+			...rangeParams(cursor),
 			cursor.limit,
 			now
 		)
@@ -168,7 +161,8 @@ function repliesPolicySql(policy: RepliesPolicy): string {
 // a member) and the accounts the owner follows (accepted; a member with a pending request contributes nothing until it
 // is accepted). Home's filters apply as filter_from_home applies them to a list (homeFilterSql, and the follow's boosts
 // and languages), with the list's replies_policy deciding which replies to others pass; exclusive does not matter here.
-// Null when the list is not the viewer's.
+// As home, it reads a window of each member's statuses (AuthorWindows), through statuses_feed. Null when the list is not
+// the viewer's.
 export const listTimeline = userReadOperation<{ id: string; page: PageQuery; present: Present }, Page<Status> | null>(
 	(db, { id, page, present }, _viewer, viewer) => {
 		const { accountId, now } = viewer
@@ -178,20 +172,26 @@ export const listTimeline = userReadOperation<{ id: string; page: PageQuery; pre
 		}
 		const cursor = statusPage(page)
 		const read = statusReads(viewer, { viewer: '?1', now: '?5' })
-		const rows = read.select(
+		const order = cursor.ascending ? 'ASC' : 'DESC'
+		const rows = read.union(
 			db,
 			'homeFilter',
 			{
-				where: `s.account_id IN (SELECT la.account_id FROM list_accounts la WHERE la.list_id = ?6
-						AND (la.account_id = ?1 OR EXISTS (SELECT 1 FROM follows lf
-							WHERE lf.account_id = ?1 AND lf.target_account_id = la.account_id AND lf.state = 'accepted')))
-					AND ${FEED} AND ${cursorSql('s.id')}`,
-				and: followOptionsSql(repliesPolicySql(list.replies_policy)),
-				tail: `ORDER BY s.id ${cursor.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+				all: true,
+				branches: [
+					{
+						authors: `SELECT la.account_id FROM list_accounts la WHERE la.list_id = ?6
+							AND (la.account_id = ?1 OR EXISTS (SELECT 1 FROM follows lf
+								WHERE lf.account_id = ?1 AND lf.target_account_id = la.account_id AND lf.state = 'accepted'))`,
+						where: `${FEED} AND ${RANGE_SQL}`,
+						and: followOptionsSql(repliesPolicySql(list.replies_policy)),
+						tail: `ORDER BY s.id ${order} LIMIT ?4`,
+					},
+				],
+				tail: `ORDER BY id ${order} LIMIT ?4`,
 			},
 			accountId,
-			cursor.max,
-			cursor.min,
+			...rangeParams(cursor),
 			cursor.limit,
 			now,
 			list.id
