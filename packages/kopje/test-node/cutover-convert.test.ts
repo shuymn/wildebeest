@@ -17,6 +17,7 @@ import {
 	workspace,
 } from './cutover-helpers.js'
 import type { FixtureOptions } from './legacy-fixture.js'
+import { threadsOf } from '../cli/lib/cutover/verify-expect.js'
 
 // The converter end to end on synthetic exports (DATA-11 to DATA-14): convert, then check the result against
 // expectations computed independently from the export, and show the check fails on each kind of damage.
@@ -381,6 +382,7 @@ describe('convert and verify-conversion', () => {
 			['a follow loses its languages', 'UPDATE follows SET languages = NULL', 'follows'],
 			['a favourite loses its Like record', 'UPDATE favourites SET uri = NULL', 'favourites'],
 			['a block loses its Block record', 'UPDATE blocks SET uri = NULL', 'blocks'],
+			['a status takes its own thread', 'UPDATE statuses SET thread = uri WHERE in_reply_to_id IS NOT NULL', 'threads'],
 			['a conversation is marked unread', 'UPDATE conversations SET unread = 1 - unread', 'conversations'],
 			['a conversation loses its statuses', 'DELETE FROM conversation_statuses', 'conversations'],
 		]
@@ -608,5 +610,30 @@ describe('text with a lone surrogate', () => {
 		const { ok: verified, categories } = await verifyWith(exportPath, dumpPath)
 		expect(failing(categories)).toEqual([])
 		expect(verified).toBe(true)
+	})
+})
+
+describe('the expected threads', () => {
+	it('walk each status once, so a 50,000-status chain is quick, and give a cycle each status’s own', () => {
+		const uri = (i: number) => `https://remote.example/objects/${i}`
+		const replies: Record<string, string> = {}
+		const statuses: Record<string, string> = {}
+		for (let i = 1; i <= 50_000; i++) {
+			statuses[uri(i)] = '[]'
+			replies[uri(i)] = JSON.stringify([uri(i - 1), i > 1 ? uri(i - 1) : null])
+		}
+		for (const [a, b] of [
+			['a', 'b'],
+			['b', 'a'],
+		] as const) {
+			statuses[uri(0) + a] = '[]'
+			replies[uri(0) + a] = JSON.stringify([uri(0) + b, uri(0) + b])
+		}
+		const started = performance.now()
+		const threadOf = threadsOf(replies, statuses)
+		const threads = new Set(Array.from({ length: 50_000 }, (_, i) => threadOf(uri(50_000 - i))))
+		expect(performance.now() - started).toBeLessThan(2000)
+		expect([...threads]).toEqual([uri(0)])
+		expect([threadOf(uri(0) + 'a'), threadOf(uri(0) + 'b')]).toEqual([uri(0) + 'b', uri(0) + 'a'])
 	})
 })

@@ -40,6 +40,7 @@ export const CATEGORIES = [
 	'lists',
 	'list_accounts',
 	'notifications',
+	'threads',
 	'conversations',
 	'settings',
 	'clients',
@@ -91,7 +92,7 @@ export function actualFromDump(text) {
 	}
 	/** @type {Map<string, { uri: string, local: boolean }>} */
 	const accounts = new Map()
-	/** @type {Map<string, { uri: string, author: string, record: unknown[], visibility: string | null, inReplyTo: string | null, alias: string | null, remote: boolean }>} */
+	/** @type {Map<string, { uri: string, author: string, record: unknown[], visibility: string | null, inReplyTo: string | null, alias: string | null, remote: boolean, thread: string | null }>} */
 	const statuses = new Map()
 	/** @type {Map<string, string>} */
 	const reblogOf = new Map()
@@ -205,6 +206,7 @@ export function actualFromDump(text) {
 					inReplyTo: t('in_reply_to_uri'),
 					alias: t('legacy_ap_o'),
 					remote: owner !== undefined && !owner.local,
+					thread: t('thread'),
 				})
 				if (row.raw !== 'NULL') {
 					put('raw', `status ${uri}`, t('raw'))
@@ -341,7 +343,12 @@ export function actualFromDump(text) {
 				break
 			case 'conversation_statuses': {
 				const id = t('conversation_id') ?? ''
-				conversationStatuses.set(id, [...(conversationStatuses.get(id) ?? []), t('status_id') ?? ''])
+				const members = conversationStatuses.get(id)
+				if (members === undefined) {
+					conversationStatuses.set(id, [t('status_id') ?? ''])
+				} else {
+					members.push(t('status_id') ?? '')
+				}
 				break
 			}
 			case 'instance_settings':
@@ -370,6 +377,7 @@ export function actualFromDump(text) {
 			put('boosts', entry.uri, [entry.author, statuses.get(target)?.uri, entry.visibility, boostRecipients])
 			continue
 		}
+		put('threads', entry.uri, entry.thread)
 		put('statuses', entry.uri, [
 			...entry.record,
 			(tags.get(id) ?? []).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)),

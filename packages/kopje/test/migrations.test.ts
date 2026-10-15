@@ -808,6 +808,16 @@ describe('Store migration runner', () => {
 					statuses: JSON.stringify([statusId(3)]),
 				},
 			])
+			// Every status has its thread: the start of its chain, or the uri a reply to a status never stored names.
+			expect(sql.exec('SELECT id, thread FROM statuses ORDER BY id').toArray()).toEqual([
+				{ id: statusId(1), thread: 'https://kopje.test/ap/o/1' },
+				{ id: statusId(2), thread: 'https://kopje.test/ap/o/1' },
+				{ id: statusId(3), thread: 'https://remote.example/objects/gone' },
+				{ id: statusId(4), thread: 'https://kopje.test/ap/o/4' },
+				{ id: statusId(5), thread: 'https://kopje.test/ap/o/5' },
+				{ id: statusId(6), thread: 'https://kopje.test/ap/o/6' },
+				{ id: statusId(7), thread: 'https://kopje.test/ap/o/7' },
+			])
 			// A deleted status leaves: the last status moves back, and a conversation with none left goes.
 			sql.exec('DELETE FROM statuses WHERE id = ?', statusId(2))
 			sql.exec('DELETE FROM statuses WHERE id = ?', statusId(3))
@@ -818,6 +828,67 @@ describe('Store migration runner', () => {
 			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
 		})
 	})
+
+	it('0009_conversations threads a chain deeper than any walk and a cycle as the write path keeps them', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, CONVERSATIONS)).upgrade()
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES ('100000000000000003', 'https://remote.example/users/r', 'r', 'remote.example')"
+			)
+			const uri = (i: number) => `https://remote.example/objects/${i}`
+			// A chain of 5,000 replies, the first replying to a status never stored; and A and B replying to each other.
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5000)
+				INSERT INTO statuses (id, uri, account_id, visibility, in_reply_to_id, in_reply_to_uri, published_at)
+				SELECT CAST(200000000000000000 + i AS TEXT), 'https://remote.example/objects/' || i, '100000000000000003',
+					'direct', CASE WHEN i > 1 THEN CAST(200000000000000000 + i - 1 AS TEXT) END,
+					'https://remote.example/objects/' || (i - 1), '2026-10-01T00:00:00.000Z'
+				FROM n`
+			)
+			for (const [id, parent] of [
+				['300000000000000001', '300000000000000002'],
+				['300000000000000002', '300000000000000001'],
+			]) {
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, in_reply_to_uri, published_at)
+					VALUES (?, ?, '100000000000000003', 'direct', ?, '2026-10-01T00:00:00.000Z')`,
+					id,
+					`https://remote.example/objects/${id}`,
+					`https://remote.example/objects/${parent}`
+				)
+			}
+			sql.exec("UPDATE statuses SET in_reply_to_id = '300000000000000002' WHERE id = '300000000000000001'")
+			sql.exec("UPDATE statuses SET in_reply_to_id = '300000000000000001' WHERE id = '300000000000000002'")
+			expect(await kernel(state, MIGRATIONS.slice(0, CONVERSATIONS + 1)).upgrade()).toMatchObject({ ok: true })
+			const threads = (where: string) =>
+				sql
+					.exec(`SELECT DISTINCT thread FROM statuses WHERE ${where}`)
+					.toArray()
+					.map((row) => row.thread)
+			// The whole chain takes the uri its first status names, however deep.
+			expect(threads("id < '300000000000000000'")).toEqual([uri(0)])
+			// Neither status of the cycle starts a chain: each takes the uri it names.
+			expect(threads("id = '300000000000000001'")).toEqual(['https://remote.example/objects/300000000000000002'])
+			expect(threads("id = '300000000000000002'")).toEqual(['https://remote.example/objects/300000000000000001'])
+			// Statuses written after take their parent's thread, which never changes.
+			for (const [id, parent] of [
+				['400000000000000001', '200000000000005000'],
+				['400000000000000002', '300000000000000001'],
+			]) {
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, in_reply_to_id, in_reply_to_uri, published_at)
+					VALUES (?, ?, '100000000000000003', 'direct', ?, 'https://remote.example/parent', '2026-10-01T00:00:00.000Z')`,
+					id,
+					`https://remote.example/objects/${id}`,
+					parent
+				)
+			}
+			expect(threads("id = '400000000000000001'")).toEqual([uri(0)])
+			expect(threads("id = '400000000000000002'")).toEqual(['https://remote.example/objects/300000000000000002'])
+		})
+	}, 60_000)
 
 	it('0009_conversations reads each status a bounded number of times, and each direct one a few more', async () => {
 		const migration = MIGRATIONS[CONVERSATIONS]!
@@ -885,10 +956,11 @@ describe('Store migration runner', () => {
 		}
 		const small = await measure(1000)
 		const large = await measure(10_000)
-		// A read or two per status added (finding the direct ones), and a bounded number per direct status (its row, its
-		// parent, its mention, its notification, its two owners' rows), however long its reply chain: none per pair.
+		// A few reads per status added (its thread, from the start of its chain down, and its write), and a bounded number
+		// per direct status (its mention, its notification, its two owners' rows), however long its reply chain: none per
+		// pair.
 		const added = 10_000 - 1000
-		expect(large - small).toBeLessThanOrEqual(2 * added + 50 * (added / 10))
+		expect(large - small).toBeLessThanOrEqual(6 * added + 20 * (added / 10))
 	}, 60_000)
 
 	it('stays readonly with exact bookkeeping when a file fails, and lets a fixed build continue', async () => {

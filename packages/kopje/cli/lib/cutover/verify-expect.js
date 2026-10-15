@@ -230,6 +230,63 @@ function metaSizes(meta) {
 }
 
 /**
+ * The thread of each status, from the reply records alone, each status walked once: a status that replies to no status
+ * carried takes the inReplyTo it names, else its own URI, and each reply below it takes its thread; a status in a cycle
+ * of replies, or below one, takes its own inReplyTo, else its URI.
+ * @param {Record<string, string>} replies the `replies` records: status URI -> [inReplyTo, the carried parent's URI]
+ * @param {Record<string, string>} statuses the `statuses` records, by status URI
+ * @returns {(uri: string) => string}
+ */
+export function threadsOf(replies, statuses) {
+	/** @type {Map<string, string | null>} status URI -> what it replies to (in_reply_to_uri) */
+	const inReplyToOf = new Map()
+	/** @type {Map<string, string>} status URI -> the carried status it replies to */
+	const parentOf = new Map()
+	for (const [uri, record] of Object.entries(replies)) {
+		const [inReplyTo, parent] = /** @type {[string | null, string | null]} */ (JSON.parse(record))
+		inReplyToOf.set(uri, inReplyTo)
+		if (parent !== null && statuses[parent] !== undefined) {
+			parentOf.set(uri, parent)
+		}
+	}
+	/** @param {string} uri */
+	const ownThread = (uri) => inReplyToOf.get(uri) ?? uri
+	/** @type {Map<string, string | null>} status URI -> its thread, or null when no chain start is above it */
+	const chained = new Map()
+	/** @param {string} uri @returns {string} */
+	const threadOf = (uri) => {
+		/** @type {string[]} */
+		const path = []
+		const onPath = new Set()
+		/** @type {string | null} */
+		let found = null
+		for (let at = uri; ;) {
+			const known = chained.get(at)
+			if (known !== undefined) {
+				found = known
+				break
+			}
+			if (onPath.has(at)) {
+				break
+			}
+			path.push(at)
+			onPath.add(at)
+			const parent = parentOf.get(at)
+			if (parent === undefined) {
+				found = ownThread(at)
+				break
+			}
+			at = parent
+		}
+		for (const at of path) {
+			chained.set(at, found)
+		}
+		return chained.get(uri) ?? ownThread(uri)
+	}
+	return threadOf
+}
+
+/**
  * @param {import('node:sqlite').DatabaseSync} db the bridged legacy database
  * @param {{ originalActorIds: Map<string, string>, source: import('./legacy-load.js').SourceAddressing,
  *   notificationSequence: string | null, images?: import('./images-export.js').ImagesFile }} options
@@ -829,40 +886,30 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		put('counters', 'notifications', highest.toString())
 	}
 
-	// Conversations, worked out here on their own from the records above. A direct status (direct with no silent
-	// recipient: one with a silent recipient is limited) is in its local author's conversation, and in the conversation
-	// of each local account notified of it as a mention. A conversation is keyed by its owner, its thread (walking up
-	// the stored parents, the inReplyTo of the status it ends at, else that status; a status in a cycle of replies keeps
-	// its own) and the other accounts among the author and the tagged recipients. Its last status is its newest, and it
-	// is unread when that one is someone else's: the ids that order them are the converter's, so the actual side checks
-	// that of its own rows.
-	/** @param {string} uri @returns {[string | null, string | null] | undefined} the reply record: inReplyTo, parent */
-	const replyOf = (uri) => {
-		const record = out.replies?.[uri]
-		return record === undefined ? undefined : /** @type {[string | null, string | null]} */ (JSON.parse(record))
+	// Threads and conversations, worked out here on their own from the records above, each status once. A status's
+	// thread: a status that replies to no status carried takes the inReplyTo it names, else its own URI, and each reply
+	// below it takes its thread; a status in a cycle of replies, or below one, takes its own inReplyTo, else its URI.
+	const threadOf = threadsOf(out.replies ?? {}, out.statuses ?? {})
+	for (const uri of Object.keys(out.statuses ?? {})) {
+		put('threads', uri, threadOf(uri))
 	}
-	/** @param {string} uri @returns {string} */
-	const threadOf = (uri) => {
-		const seen = new Set([uri])
-		let at = uri
-		for (;;) {
-			const parent = replyOf(at)?.[1] ?? null
-			if (parent === null || out.statuses?.[parent] === undefined) {
-				return replyOf(at)?.[0] ?? at
-			}
-			if (seen.has(parent)) {
-				return replyOf(uri)?.[0] ?? uri
-			}
-			seen.add(parent)
-			at = parent
-		}
-	}
+
+	// A direct status (direct with no silent recipient: one with a silent recipient is limited) is in its local
+	// author's conversation, and in the conversation of each local account notified of it as a mention. A conversation
+	// is keyed by its owner, its thread and the other accounts among the author and the tagged recipients. Its last
+	// status is its newest, and it is unread when that one is someone else's: the ids that order them are the
+	// converter's, so the actual side checks that of its own rows.
 	/** @type {Map<string, string[]>} status URI -> the accounts notified of it as a mention */
 	const notified = new Map()
 	for (const record of Object.values(out.notifications ?? {})) {
 		const [type, recipient, , target] = /** @type {string[]} */ (JSON.parse(record))
 		if (type === 'mention' && target !== undefined && recipient !== undefined) {
-			notified.set(target, [...(notified.get(target) ?? []), recipient])
+			const list = notified.get(target)
+			if (list === undefined) {
+				notified.set(target, [recipient])
+			} else {
+				list.push(recipient)
+			}
 		}
 	}
 	/** @type {Map<string, string[]>} */
@@ -878,7 +925,12 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		for (const owner of owners) {
 			const others = [...new Set([author, ...recipients.map(([x]) => x)])].filter((x) => x !== owner).sort()
 			const key = `${owner} ${thread} ${others.join(' ')}`
-			conversations.set(key, [...(conversations.get(key) ?? []), uri])
+			const members = conversations.get(key)
+			if (members === undefined) {
+				conversations.set(key, [uri])
+			} else {
+				members.push(uri)
+			}
 		}
 	}
 	for (const [key, members] of conversations) {

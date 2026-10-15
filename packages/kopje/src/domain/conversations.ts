@@ -1,7 +1,7 @@
 import { type Account, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
 import { statusReads, type ViewerContext } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
-import { participantsSql, threadSql } from './conversation-rows'
+import { participantsSql } from './conversation-rows'
 import { presentStatuses, type Status } from './status-presenter'
 import { statusCursor } from './statuses'
 import type { Db } from '../db/sql'
@@ -13,7 +13,8 @@ import type { Db } from '../db/sql'
 //   - a direct status a local account is notified of as a mention goes into that account's (notify() in
 //     notifications.ts, NotifyService#push_to_conversation!), unread. The notification rule (R15) decides, so a status
 //     from an account the owner blocks or mutes with notifications adds nothing, as Mastodon drops its notification.
-// A row is keyed by its owner, its thread and its participants (conversation-rows.ts). A status leaves its
+// A row is keyed by its owner, its thread (statuses.thread, written once with the status) and its participants
+// (conversation-rows.ts). A status leaves its
 // conversations with its conversation_statuses rows, and the trigger of migration 0009_conversations moves each one's
 // last status back, or deletes it when it has none left (AccountConversation.remove_status). A block ends the
 // blocker's conversations with the blocked account (AfterBlockService#clear_conversations!).
@@ -39,7 +40,7 @@ const CONVERSATION_ID = /^\d{1,19}$/
 // owner's own.
 export function addToConversation(db: Db, ownerId: string, statusId: string): void {
 	const status = db.first<{ account_id: string; thread: string; participants: string }>(
-		`SELECT s.account_id, ${threadSql('s.id')} AS thread, ${participantsSql('s', '?2')} AS participants
+		`SELECT s.account_id, s.thread, ${participantsSql('s', '?2')} AS participants
 		FROM statuses s WHERE s.id = ?1 AND s.visibility = 'direct' AND s.reblog_of_id IS NULL`,
 		statusId,
 		ownerId

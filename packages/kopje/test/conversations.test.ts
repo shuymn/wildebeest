@@ -36,6 +36,33 @@ import { writeOperation } from '../src/domain/operation'
 
 const add = writeOperation<{ owner: string; id: string }, void>((db, { owner, id }) => addToConversation(db, owner, id))
 
+// A direct status of a remote account to `to`, stored with its parent (a status stored, or a uri only) and added to the
+// recipient's conversation as a notified mention adds it.
+async function remoteDirect(
+	h: ApiHarness,
+	author: string,
+	to: string,
+	parent: { id?: string; uri?: string } = {},
+	uri?: string
+): Promise<string> {
+	const id = String(
+		BigInt((await sql<{ n: number }>(h.store, 'SELECT count(*) AS n FROM statuses'))[0]?.n ?? 0) + 300000000000000000n
+	)
+	await sql(
+		h.store,
+		`INSERT INTO statuses (id, uri, account_id, in_reply_to_id, in_reply_to_uri, visibility, content, published_at)
+		VALUES (?, ?, ?, ?, ?, 'direct', '<p>hi</p>', '2026-10-01T00:00:00.000Z')`,
+		id,
+		uri ?? `https://remote.example/objects/${id}`,
+		author,
+		parent.id ?? null,
+		parent.uri ?? null
+	)
+	await sql(h.store, 'INSERT INTO status_mentions (status_id, account_id) VALUES (?, ?)', id, to)
+	await runInDurableObject(h.store, (_instance, state) => add.run(state.storage.sql, { owner: to, id }))
+	return id
+}
+
 type Conversation = { id: string; unread: boolean; accounts: { id: string }[]; last_status: Status | null }
 
 async function list(h: ApiHarness, user: User, query = ''): Promise<Conversation[]> {
@@ -171,15 +198,9 @@ describe('conversations', () => {
 
 		// Replies to a status never stored share its thread; a reply to another one does not.
 		const erin = await remoteAccount(h.store, 'erin')
-		const replyTo = async (parent: string) => {
-			const id = await seedStatus(h.store, { accountId: erin, visibility: 'direct', mentions: [{ accountId: bob.id }] })
-			await sql(h.store, 'UPDATE statuses SET in_reply_to_uri = ? WHERE id = ?', parent, id)
-			await runInDurableObject(h.store, (_instance, state) => add.run(state.storage.sql, { owner: bob.id, id }))
-			return id
-		}
-		const a = await replyTo('https://remote.example/objects/never-stored')
-		const b = await replyTo('https://remote.example/objects/never-stored')
-		const c = await replyTo('https://remote.example/objects/another')
+		const a = await remoteDirect(h, erin, bob.id, { uri: 'https://remote.example/objects/never-stored' })
+		const b = await remoteDirect(h, erin, bob.id, { uri: 'https://remote.example/objects/never-stored' })
+		const c = await remoteDirect(h, erin, bob.id, { uri: 'https://remote.example/objects/another' })
 		expect((await summary(h, bob)).slice(0, 2)).toEqual([
 			[[erin], c, true],
 			[[erin], b, true],
@@ -193,6 +214,62 @@ describe('conversations', () => {
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM conversation_statuses WHERE status_id = ?', a)).toEqual([
 			{ n: 1 },
 		])
+	})
+
+	it('keeps each status’s thread when a status above it or its conversation is deleted', async () => {
+		const h = await community(['alice', 'bob', 'carol'])
+		const { alice, bob, carol } = h.users
+		// A public status and a public reply; Alice writes to Bob under the reply, and to Bob and Carol under the first.
+		const p = await post(h, alice, { status: 'p', visibility: 'public' })
+		const q = await post(h, alice, { status: 'q', visibility: 'public', in_reply_to_id: p.id })
+		const d = await direct(h, alice, '@bob d', q.id)
+		const g = await direct(h, alice, '@bob @carol g', p.id)
+		const threads = () => sql<{ id: string; thread: string }>(h.store, 'SELECT id, thread FROM statuses ORDER BY id')
+		const pUri = (await sql<{ uri: string }>(h.store, 'SELECT uri FROM statuses WHERE id = ?', p.id))[0]?.uri
+		expect((await threads()).map((row) => row.thread)).toEqual([pUri, pUri, pUri, pUri])
+
+		// Q goes, then Alice's conversation holding D: D keeps its thread, so a reply to it joins G's conversation.
+		await send(h, alice, 'DELETE', `/api/v1/statuses/${q.id}`)
+		const [withBob] = (await list(h, alice)).filter((c) => c.last_status?.id === d.id)
+		await send(h, alice, 'DELETE', `/api/v1/conversations/${withBob?.id}`)
+		expect(await threads()).toEqual([
+			{ id: p.id, thread: pUri },
+			{ id: d.id, thread: pUri },
+			{ id: g.id, thread: pUri },
+		])
+		const r = await direct(h, alice, '@bob @carol r', d.id)
+		expect((await summary(h, alice)).map(([accounts, last]) => [accounts.toSorted(), last])).toEqual([
+			[[bob.id, carol.id].toSorted(), r.id],
+		])
+		expect((await summary(h, carol)).map(([, last]) => last)).toEqual([r.id])
+	})
+
+	it('keeps a reply cycle in one thread: each status keeps the thread it was stored with', async () => {
+		const h = await community(['bob'])
+		const { bob } = h.users
+		const erin = await remoteAccount(h.store, 'erin')
+		// A replies to B before B is stored; B arrives replying to A; then A is linked to B.
+		const a = await remoteDirect(
+			h,
+			erin,
+			bob.id,
+			{ uri: 'https://remote.example/objects/b' },
+			'https://remote.example/objects/a'
+		)
+		const b = await remoteDirect(
+			h,
+			erin,
+			bob.id,
+			{ id: a, uri: 'https://remote.example/objects/a' },
+			'https://remote.example/objects/b'
+		)
+		await sql(h.store, 'UPDATE statuses SET in_reply_to_id = ? WHERE id = ?', b, a)
+		expect(await sql(h.store, 'SELECT DISTINCT thread FROM statuses')).toEqual([
+			{ thread: 'https://remote.example/objects/b' },
+		])
+		expect(await summary(h, bob)).toEqual([[[erin], b, true]])
+		const c = await remoteDirect(h, erin, bob.id, { id: a, uri: 'https://remote.example/objects/a' })
+		expect(await summary(h, bob)).toEqual([[[erin], c, true]])
 	})
 
 	it('adds nothing from an account the recipient blocks or mutes with notifications, as no mention is notified', async () => {

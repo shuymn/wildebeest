@@ -8,7 +8,7 @@ import { type ModelSubscription, NOTIFICATION_TYPES, outboundKindOf, PolicyModel
 import { accountId, listId, REMOTE_DOMAINS, runs, statusId, type World, worldArb, writeWorld } from './policy-world'
 import { updateCredentials } from '../src/domain/accounts'
 import { API_VISIBILITIES, type ApiVisibility } from '../src/domain/audience'
-import { backfillConversations, THREAD_DEPTH } from '../src/domain/conversation-rows'
+import { backfillConversations } from '../src/domain/conversation-rows'
 import { type Claim, claimDeliveries, completeDelivery, EXPANSION_STEP, type Target } from '../src/domain/deliveries'
 import type { NotificationType } from '../src/domain/notifications'
 import { POLICIES } from '../src/domain/push'
@@ -663,13 +663,19 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 		string,
 		{ owner: number; thread: string; participants: number[]; statuses: Set<string>; unread: boolean }
 	>()
+	// The thread of each status (not a boost), as the model gives it to the world's and then to each status written.
 	const threads = new Map<string, string>()
-	for (const c of new PolicyModel(world).conversations(() => false)) {
-		const statuses = new Set(c.statuses.map(statusId))
-		conversations.set(JSON.stringify([c.owner, c.thread, c.participants]), { ...c, statuses })
-		for (const id of statuses) {
-			threads.set(id, c.thread)
+	const initial = new PolicyModel(world)
+	world.statuses.forEach((status, s) => {
+		if (status.reblogOf === null) {
+			threads.set(statusId(s), initial.thread(s))
 		}
+	})
+	for (const c of initial.conversations(() => false)) {
+		conversations.set(JSON.stringify([c.owner, c.thread, c.participants]), {
+			...c,
+			statuses: new Set(c.statuses.map(statusId)),
+		})
 	}
 
 	// The Store as a world before each action: the world after the previous one.
@@ -1074,14 +1080,22 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 
 		// Conversations: AccountConversation.remove_status for each status gone, add_status for each direct status
 		// written, for its author and each local account it mentions that the notification rule (R15) lets it notify.
-		const chain = new Map(
-			sql
-				.exec<{ id: string; uri: string; in_reply_to_id: string | null; in_reply_to_uri: string | null }>(
-					'SELECT id, uri, in_reply_to_id, in_reply_to_uri FROM statuses'
-				)
-				.toArray()
-				.map((row) => [row.id, row])
-		)
+		// A status written takes its thread once: its parent's, when the parent is stored, else the uri its
+		// in_reply_to_uri names, else its own; no status's thread changes after. The Store's are the model's.
+		const stored = sql
+			.exec<{ id: string; uri: string; in_reply_to_id: string | null; in_reply_to_uri: string | null; thread: string }>(
+				'SELECT id, uri, in_reply_to_id, in_reply_to_uri, thread FROM statuses WHERE reblog_of_id IS NULL ORDER BY id'
+			)
+			.toArray()
+		for (const row of stored) {
+			if (!threads.has(row.id)) {
+				const parent = row.in_reply_to_id === null ? undefined : threads.get(row.in_reply_to_id)
+				threads.set(row.id, parent ?? row.in_reply_to_uri ?? row.uri)
+			}
+			if (row.thread !== threads.get(row.id)) {
+				problems.push(`${label}: ${row.id} has the thread ${row.thread}, the model ${threads.get(row.id)}`)
+			}
+		}
 		for (const id of before.byId.keys()) {
 			if (after.byId.has(id)) {
 				continue
@@ -1100,25 +1114,9 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 				}
 			}
 		}
-		// The thread of a status: the nearest status at or above it already in a conversation gives its own; else the
-		// start of its chain (THREAD_DEPTH parents up at most), the uri its in_reply_to_uri names or its own.
-		const threadOf = (id: string): string => {
-			let at = chain.get(id)!
-			for (let depth = 0; ; depth++) {
-				const kept = threads.get(at.id)
-				if (kept !== undefined) {
-					return kept
-				}
-				const parent = at.in_reply_to_id === null ? undefined : chain.get(at.in_reply_to_id)
-				if (parent === undefined || depth === THREAD_DEPTH) {
-					return at.in_reply_to_uri ?? at.uri
-				}
-				at = parent
-			}
-		}
 		const addStatus = (owner: number, id: string) => {
 			const s = after.byId.get(id)!
-			const thread = threadOf(id)
+			const thread = threads.get(id)!
 			const participants = model.participants(s, owner)
 			const key = JSON.stringify([owner, thread, participants])
 			const c = conversations.get(key) ?? { owner, thread, participants, statuses: new Set<string>(), unread: false }
@@ -1128,7 +1126,6 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 			c.statuses.add(id)
 			c.unread = after.world.statuses[s]!.author !== owner
 			conversations.set(key, c)
-			threads.set(id, thread)
 			if (owner !== after.world.statuses[s]!.author) {
 				saw.add('conversation of a recipient')
 			}

@@ -77,6 +77,7 @@ const NOT_CONVERTED: Record<string, string> = {
 	'mutes.expires_at': 'legacy mutes never expire',
 	'mutes.id': ASSIGNED,
 	'status_edits.id': ASSIGNED,
+	'statuses.thread': 'written by the trigger statuses_thread and given again by backfillConversations (DERIVED)',
 	'statuses.withdrawn': 'marks an Undo Kopje recorded; legacy has none',
 }
 
