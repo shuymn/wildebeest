@@ -1,11 +1,12 @@
 import { type Account, type Present, presentAccountsById } from './accounts'
 import {
+	domainBlocksSql,
 	findableBySql,
 	interpretAddressing,
 	isDistributable,
 	isPublicCollection,
 	type StatusMention,
-	statusReads,
+	viewableStatusId,
 	type Visibility,
 } from './audience'
 import { userWriteOperation } from './auth'
@@ -684,9 +685,10 @@ export type ResolveInput = { query: string; resolved: Resolved; now: number; ori
 export type ResolveResult = { accounts: Account[]; statuses: Status[] }
 
 // Stores what was resolved with the validation of inbound activities (ID-3, ID-7, HTML-1, HTML-3, RES-4), then answers
-// with it only if search would show it to the viewer (VIS-1): an account only if account search would find it
-// (findableBySql, R14), a status only if status search would list it (listableSql, R8). A private object a server
-// answered the instance actor with is stored with its audience and shown to nobody else.
+// with it only if the viewer may see it (VIS-1): an account only if account search would find it (findableBySql, R14),
+// a status by the rule of a single status (canView, R3, as Mastodon's ResolveURLService authorizes show?), unless the
+// viewer blocks its author's domain. A private object a server answered the instance actor with is stored with its
+// audience and shown to nobody else.
 export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db, input, _viewer, context) => {
 	const { resolved, now, origin } = input
 	const { accountId } = context
@@ -698,18 +700,15 @@ export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db
 		return { accounts: found === undefined ? [] : [found], statuses: [] }
 	}
 	const status = (id: string | undefined): ResolveResult => {
-		const [listed] =
-			id === undefined
-				? []
-				: statusReads(context, { viewer: '?1', now: '?2' }).select(
-						db,
-						'listable',
-						{ where: 's.id = ?3' },
-						accountId,
-						context.now,
-						id
-					)
-		const found = listed === undefined ? null : presentStatus(db, listed.id, options)
+		const blocked =
+			id === undefined ||
+			db.first(
+				`SELECT 1 AS blocked FROM statuses s WHERE s.id = ?2 AND ${domainBlocksSql('?1', 's.account_id')}`,
+				accountId,
+				id
+			) !== undefined
+		const visible = blocked ? null : viewableStatusId(db, accountId, id)
+		const found = visible === null ? null : presentStatus(db, visible, options)
 		return { accounts: [], statuses: found === null ? [] : [found] }
 	}
 	switch (resolved.kind) {

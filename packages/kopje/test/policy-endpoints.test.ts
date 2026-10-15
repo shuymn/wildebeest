@@ -30,7 +30,8 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // (or a boosted original) or an account the model of its rule (test/policy-model.ts) does not allow the viewer. The
 // lists whose membership is simple (public, tag, account statuses, favourites, bookmarks, followers, following,
 // account search) must also show exactly what the model allows of their members, in order, page after page; search
-// resolution must answer exactly what search shows the viewer.
+// resolution must answer an account exactly when account search finds it, and a status exactly when the single-status
+// read shows it, unless the viewer blocks its author's domain.
 
 // Cases per property: each writes a world and runs every endpoint for every viewer.
 const CASES = 60
@@ -476,8 +477,9 @@ function check(sql: SqlStorage, c: Case): string[] {
 			)
 		}
 
-		// Search resolution of what is stored, by its uri: an account exactly when account search finds it, a status
-		// exactly when status search over its author's statuses lists it (both by the list rule, R8), and never a boost.
+		// Search resolution of what is stored, by its uri: an account exactly when account search finds it (R14), a
+		// status exactly when the single-status read shows it (R3) and the viewer does not block its author's domain,
+		// and never a boost.
 		const resolve = (query: string) =>
 			ok<{ accounts: Account[]; statuses: Status[] }>(
 				run(resolveSearch, {
@@ -500,42 +502,14 @@ function check(sql: SqlStorage, c: Case): string[] {
 				problems.push(`resolve ${nameOf(viewer)}: ${account.name} answers [${ids.map(nameOf).join(' ')}]`)
 			}
 		})
-		const searchedOf = new Map<number, number[]>()
-		const statusSearchOf = (author: number) => {
-			const known = searchedOf.get(author)
-			if (known !== undefined) {
-				return known
-			}
-			const found = ok<{ statuses: Status[] }>(
-				run(search, {
-					...user,
-					query: 'status',
-					types: ['statuses'],
-					limit: 40,
-					offset: 0,
-					following: false,
-					accountId: accountId(author),
-					localDomain: 'kopje.test',
-					present: PRESENT,
-				}),
-				'status search of an account'
-			).statuses.map((value) => status('status search', viewer, value, (s) => m.listable(s, viewer)))
-			searchedOf.set(author, found)
-			return found
-		}
 		for (const s of all) {
 			const answered = resolve(`https://kopje.test/ap/o/${s}`)
 			const ids = answered.statuses.map((value) =>
-				status('resolve status', viewer, value, (x) => x === s && m.listable(x, viewer))
+				status('resolve status', viewer, value, (x) => x === s && m.viewable(x, viewer))
 			)
+			const single = found<Status>(run(getStatus, { ...optional(viewer), id: statusId(s), present: PRESENT }), 'status')
 			const { author, reblogOf } = m.status(s)
-			const searched = reblogOf === null && statusSearchOf(author).includes(s)
-			if (searched !== (reblogOf === null && m.listable(s, viewer))) {
-				problems.push(
-					`status search of an account ${nameOf(viewer)}: ${statusName(s)} ${searched ? 'listed' : 'missed'}`
-				)
-			}
-			const expected = searched ? [s] : []
+			const expected = reblogOf === null && single !== null && !m.domainBlocks(viewer, author) ? [s] : []
 			if (answered.accounts.length > 0 || JSON.stringify(ids) !== JSON.stringify(expected)) {
 				problems.push(`resolve ${nameOf(viewer)}: ${statusName(s)} answers [${ids.map(statusName).join(' ')}]`)
 			}

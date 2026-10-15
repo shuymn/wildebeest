@@ -78,10 +78,6 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   the mute lasts) or is blocked by. A suspended account stays in the lists, shown redacted. The ActivityPub followers
   and following collections of a suspended account answer 404, as its outbox does.
 
-- Search with `resolve=true` answers by the rules search applies: a status only when status search would list it to
-  you (so not one by an account you block, mute or whose domain you block), and an account only when account search
-  would find it (not suspended, and not on a domain you block).
-
 - Home and mention notifications also leave out a status that mentions or replies to an account you block or mute
   (for mention notifications, a mute that hides notifications), as Mastodon filters them; so do post notifications
   of accounts you follow with `notify`, whenever home leaves the status out.

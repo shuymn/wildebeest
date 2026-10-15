@@ -894,7 +894,7 @@ describe('search with resolve=true (NET-4, VIS-1)', () => {
 		expect((await t.api<unknown[]>('/api/v1/timelines/public', null)).body).toEqual([])
 	})
 
-	it('answers a status only when status search would list it: not of an author the viewer blocks or mutes', async () => {
+	it('answers a status by the single-status rule, unless the viewer blocks its author’s domain', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
 		const note = mastodonNote(bob, { content: '<p>found</p>' })
@@ -904,12 +904,17 @@ describe('search with resolve=true (NET-4, VIS-1)', () => {
 				.statuses
 		expect(await found()).toHaveLength(1)
 		const bobId = (await accountId(t.store, bob.uri))!
+		// An explicit lookup, like GET /api/v1/statuses/:id: the viewer's own mute or block does not hide it.
 		await sql(t.store, 'INSERT INTO mutes (account_id, target_account_id) VALUES (?, ?)', ALICE, bobId)
-		expect(await found()).toEqual([])
-		await sql(t.store, 'DELETE FROM mutes')
 		await sql(t.store, 'INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?)', ALICE, bobId)
+		expect(await found()).toHaveLength(1)
+		// The author blocking the viewer does (VIS-1), and so does the viewer's block of the author's domain.
+		await sql(t.store, 'DELETE FROM blocks')
+		await sql(t.store, 'INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?)', bobId, ALICE)
 		expect(await found()).toEqual([])
-		// Others still find it.
+		await sql(t.store, 'DELETE FROM blocks')
+		await sql(t.store, 'INSERT INTO domain_blocks (account_id, domain) VALUES (?, ?)', ALICE, new URL(bob.uri).host)
+		expect(await found()).toEqual([])
 		expect(await found('dave')).toHaveLength(1)
 	})
 

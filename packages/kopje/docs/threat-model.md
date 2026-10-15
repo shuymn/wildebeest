@@ -262,11 +262,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   another WebFinger domain cannot escape a block of the server it lives on; `test/inbox-canonical-address.test.ts`
   ("applies a block of the actor’s host on every path", "never lets a third-party alias replace a confirmed domain or
   evade a block on it"). Account search finds an account that is available and not on a domain the viewer blocks
-  (`findableBySql`), and search resolution answers by the rules search applies: an account only when account search
-  would find it, a status only when status search would list it (`listableSql`), so an author the viewer blocks or
-  mutes is not answered either. _Implemented on branch `kopje/account-lists`:_ `findAccounts` in
+  (`findableBySql`). Search resolution answers an account only when account search would find it, and a status by the
+  rule of a single status (VIS-1, `canView`, as Mastodon's `ResolveURLService` authorizes `show?`) unless the viewer
+  blocks its author's domain. _Implemented on branch `kopje/account-lists`:_ `findAccounts` in
   `src/domain/accounts.ts`, `resolveSearch` in `src/domain/remote-statuses.ts`; `test/inbox-statuses.test.ts`
-  ("answers a status only when status search would list it"), `test/policy-endpoints.test.ts`.
+  ("answers a status by the single-status rule"), `test/policy-endpoints.test.ts`.
 - **VIS-6: a wrapper reveals nothing its target hides.** A boost is visible only if its original is; boosting is limited
   to `public` and `unlisted` statuses and one's own `private` ones (`StatusPolicy#reblog?`). _Enforced (main):_ `viewableSql`; `test/visibility.test.ts` ("a boost of an original the viewer may not see is hidden
   with it"), `test/statuses.test.ts` ("refuses to boost direct and others’ private statuses"). Quotes and other embedded
