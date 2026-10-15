@@ -866,7 +866,34 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   or suspending the account deletes its subscriptions").
 - **POLL-1: votes are the voter's own.** Only the poll's author changes its definition or results. A vote is attributed
   to the verified voter, names a valid option of that poll, respects expiry and single or multiple choice, and a replay
-  counts once. _Planned (polls)._
+  counts once. _Enforced (main):_ a local poll is changed only by its author's edit (`editPoll`, through
+  `editStatus`'s own-status check) and a remote one only by its author's Create or Update (`storeRemotePoll`, behind
+  ID-6's author and origin checks); a local vote is the authenticated viewer's (`vote`), a remote one the signed
+  actor's, a Note naming a choice in reply to a local poll (`receiveVote`): open, a choice it has, not the author's
+  own, not again (`UNIQUE (poll_id, account_id, choice)` and VoteValidator's rules); counts change only with a vote
+  written. `src/domain/polls.ts`, `migrations/0013_polls.sql`; `test/polls.test.ts` ("refuses a vote as Mastodon's
+  VoteValidator does"), `test/polls-federation.test.ts` ("counts once, as Mastodon counts it, and is never stored as a
+  status", "takes the counts … of an Update(Question) that names no new version, but not new choices").
+- **POLL-2: a poll shows no more than its status, and never who voted (VIS).** A poll is read and voted on only by
+  whoever may see its status by itself (R3), and a vote needs R27 (`mayVoteSql`: the voter does not block the
+  author); otherwise 404 (403 for a voter who blocks the author, as Mastodon). Only counts and the viewer's own votes
+  are shown; `hide_totals` hides each choice's count from everyone until the poll ends, in the API and in the
+  Question (no `totalItems`). `poll_votes` is read in `polls.ts` alone (`test/policy.test.ts`, R27). A remote vote
+  passes the same rule (Mastodon checks none). _Enforced (main):_ `test/polls.test.ts` ("shows a poll only to whoever
+  may see its status", "refuses a voter who blocks the author (R27)", "hides the counts … from everyone"),
+  `test/polls-federation.test.ts` ("is refused from an account the author blocks (R27)").
+- **POLL-3: polls cost bounded work (RES).** Presenting reads each poll's row and the viewer's own votes, never the
+  votes; the cron ends at most 25 polls and records at most 25 Updates of counts a run, through partial indexes; the
+  Update of a local poll's counts is debounced (3 minutes after the first vote since the last one sent, one Update for
+  all, superseding any still waiting), never one per vote; a remote poll keeps at most 100 choices of at most 200
+  code units; a status's or account's votes go in bounded batches of a purge. _Enforced (main):_
+  `test/policy-bounds.test.ts` ("polls are presented from their counts, not their votes"), `test/polls.test.ts`
+  ("ends at most 25 polls a run", "falls due a while after the first vote", "RES-6: votes go in bounded batches").
+- **POLL-4: polls federate as Mastodon's (AP).** A local poll's status is a Question (`oneOf`/`anyOf`, `endTime`,
+  `closed` once ended, `votersCount`, each choice's `replies.totalItems`) in its Create, Update and served object; a
+  local vote in a remote poll is a Create of a Note (`name`, `inReplyTo`, to the author) to the author alone, through
+  the delivery queue; an inbound Question is stored with its poll, an implicit Update refreshes only counts, end and
+  voters, and a vote Note is never a status. _Enforced (main):_ `test/polls-federation.test.ts`.
 
 ### Resources (RES)
 

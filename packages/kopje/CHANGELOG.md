@@ -44,6 +44,19 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   gone, or its account is suspended); one that fails with an error is retried four times over about five hours, then
   dropped. An `Idempotency-Key` that scheduled a status answers with it on a repeat, with or without `scheduled_at`.
   Media attached to a scheduled status is kept until it is published or deleted.
+- Polls, as Mastodon 4.5 has them: `POST /api/v1/statuses` takes `poll[options][]`, `poll[expires_in]`,
+  `poll[multiple]` and `poll[hide_totals]` (2 to 4 choices of at most 50 characters, 5 minutes to a month, refused
+  with media), and every status shows its `Poll`. `GET /api/v1/polls/:id` shows a poll to whoever may see its status,
+  and `POST /api/v1/polls/:id/votes` (`choices[]`) votes, with Mastodon's validation and messages; a voter who blocks
+  the author is refused. `hide_totals` hides the counts from everyone until the poll ends, and who voted is never
+  shown. Editing a status's poll moves its end, and changed choices drop the votes cast; an edit without a poll
+  removes it. A scheduled status keeps its poll and creates it on publication. When a poll ends, its local author and
+  local voters are notified (`poll`, with Web Push), by the cron within its 5-minute schedule.
+    - Over ActivityPub, a poll is a `Question` in its Create, Update and served object; votes in a local poll update
+      it with an Update about 3 minutes after the first new vote (one for all, and one when it ends), and a vote in a
+      remote poll goes to its author as Mastodon's vote Note. A received `Question` is stored with its poll, an
+      Update refreshes its counts and end, and a received vote counts in a local poll once, from an account that may
+      see it, and is never stored as a status.
 
 ### Changed
 
@@ -57,7 +70,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds four migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds five migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
@@ -73,6 +86,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0011_scheduled_statuses`: adds the `scheduled_statuses` table and `media_attachments.scheduled_status_id`, with
       their indexes. Its work grows linearly with the media stored (one pass to add the column and one to build its
       partial index).
+    - `0013_polls`: adds the `polls` and `poll_votes` tables, with their indexes, and `status_edits.poll_options`. It is
+      quick.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.5] - 2026-10-15
