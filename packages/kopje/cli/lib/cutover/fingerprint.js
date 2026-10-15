@@ -25,12 +25,12 @@ export const FINGERPRINT_FORMAT = 'kopje-fingerprint/2'
 const SEQUENCE_TABLE = 'sqlite_sequence'
 const NOTIFICATIONS = 'actor_notifications'
 
-// The table list of the export loop: every table but internal ones (sqlite_*, D1's _cf_*), virtual tables (the full-text
-// index) and their shadow tables. sqlite_sequence is exported on its own (the runbook names it).
+// The table list of the export loop: every table but internal ones (sqlite_*, D1's _cf_* and d1_kv), virtual tables
+// (the full-text index) and their shadow tables. sqlite_sequence is exported on its own (the runbook names it).
 export const TABLES_SQL = [
 	'SELECT m.name AS name FROM sqlite_schema AS m',
 	"WHERE m.type = 'table'",
-	"AND substr(m.name, 1, 7) <> 'sqlite_' AND substr(m.name, 1, 4) <> '_cf_'",
+	"AND substr(m.name, 1, 7) <> 'sqlite_' AND substr(m.name, 1, 4) <> '_cf_' AND m.name <> 'd1_kv'",
 	"AND m.sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
 	"AND NOT EXISTS (SELECT 1 FROM sqlite_schema AS v WHERE v.type = 'table' AND v.sql LIKE 'CREATE VIRTUAL TABLE%'",
 	"AND substr(m.name, 1, length(v.name) + 1) = v.name || '_')",
