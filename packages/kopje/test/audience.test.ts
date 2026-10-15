@@ -5,15 +5,18 @@ import { describe, expect, it } from 'vitest'
 import { seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
-import { block, domainBlock, mute, remoteFollows, seedStatus } from './status-helpers'
+import { block, community, domainBlock, mute, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
 import {
+	addresses,
 	addressingOf,
 	canView,
 	interpretAddressing,
 	listableSql,
+	outboundKind,
 	ownStatusId,
 	PUBLIC_COLLECTION,
+	recipientsFor,
 	statusReads,
 	viewableStatusId,
 	type Visibility,
@@ -91,6 +94,60 @@ describe('addressingOf (Mastodon TagManager#to and #cc)', () => {
 })
 
 // The read rule against the real schema, viewer by viewer (Mastodon's spec/policies/status_policy_spec.rb #show?).
+describe('the recipient rule (recipientsFor, addresses)', () => {
+	it('classifies content, retractions and everything else', () => {
+		const note = { id: 'https://kopje.test/ap/o/1', type: 'Note' }
+		expect(outboundKind({ type: 'Create', object: note })).toBe('content')
+		expect(outboundKind({ type: 'Update', object: note })).toBe('content')
+		expect(outboundKind({ type: 'Announce', object: note.id })).toBe('content')
+		expect(outboundKind({ type: 'Update', object: { type: 'Person' } })).toBe('other')
+		expect(outboundKind({ type: 'Like', object: note.id })).toBe('other')
+		expect(outboundKind({ type: 'Follow', object: note.id })).toBe('other')
+		expect(outboundKind({ type: 'Reject', object: {} })).toBe('other')
+		expect(outboundKind({ type: 'Reject', object: {} }, true)).toBe('retraction')
+		expect(outboundKind({ type: 'Delete', object: note })).toBe('retraction')
+		expect(outboundKind({ type: 'Undo', object: { type: 'Announce' } })).toBe('retraction')
+	})
+
+	it('leaves unavailable and blocked accounts out of content only; a retraction names them all', async () => {
+		const h = await community(['alice', 'carol'])
+		const { alice, carol } = h.users
+		const bob = await remoteAccount(h.store, 'bob')
+		const far = await remoteAccount(h.store, 'far', 'blocked.example')
+		const fan = await remoteAccount(h.store, 'fan', 'blocked.example')
+		await remoteFollows(h.store, fan, alice.id)
+		await block(h.store, alice.id, bob)
+		await domainBlock(h.store, alice.id, 'blocked.example')
+		await sql(
+			h.store,
+			'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
+			new Date(NOW).toISOString(),
+			carol.id
+		)
+		const reached = await runInDurableObject(h.store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			const audience = { followers: true, accounts: [carol.id, bob, far] }
+			const of = (type: string) => {
+				const recipients = recipientsFor(db, alice.id, { type, object: 'https://kopje.test/ap/o/1' }, audience)
+				return {
+					followers: recipients.followerInboxes,
+					accounts: recipients.accounts.map((a) => a.uri),
+					named: [carol.id, bob, far].map((x) => addresses(db, recipients.kind, alice.id, x)),
+				}
+			}
+			return { content: of('Announce'), retraction: of('Delete'), other: of('Like') }
+		})
+		expect(reached.content).toEqual({ followers: [], accounts: [], named: [false, false, false] })
+		const everyone = {
+			followers: ['https://blocked.example/inbox'],
+			accounts: ['https://remote.example/users/bob', 'https://blocked.example/users/far'],
+			named: [true, true, true],
+		}
+		expect(reached.retraction).toEqual(everyone)
+		expect(reached.other).toEqual(everyone)
+	})
+})
+
 describe('canView and the list rule', () => {
 	type Cast = Record<'author' | 'follower' | 'mentioned' | 'silent' | 'stranger' | 'blocked' | 'pending', string>
 

@@ -344,6 +344,44 @@ describe('blocked recipients (VIS-13, VIS-15)', () => {
 		expect(JSON.stringify(served)).not.toContain('https://remote.example/users/bob')
 	})
 
+	it('names and reaches the author in the Undo of a boost that left them out, as every retraction does', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const bob = await remoteAccount(h.store, 'bob')
+		await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'other.example'), alice.id)
+		const original = await seedStatus(h.store, { accountId: bob, visibility: 'public' })
+		await h.request('/api/v1/domain_blocks', bearer(alice.token, json({ domain: 'remote.example' })))
+		expect((await act(h, alice, `/api/v1/statuses/${original}/reblog`)).status).toBe(200)
+		await sql(h.store, 'DELETE FROM outbound_activities')
+
+		expect((await act(h, alice, `/api/v1/statuses/${original}/unreblog`)).status).toBe(200)
+		const [undo] = await sent(h)
+		expect(undo?.activity.type).toBe('Undo')
+		expect(undo?.activity.cc).toContain('https://remote.example/users/bob')
+		expect(undo?.audience.accounts).toEqual([bob])
+		expect(undo?.inboxes.sort()).toEqual(['https://other.example/inbox', 'https://remote.example/inbox'])
+	})
+
+	it('sends a profile Update, but no new status, to a follower on a domain the cleanup has not reached yet', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'other.example'), alice.id)
+		await remoteFollows(h.store, await remoteAccount(h.store, 'far', 'blocked.example'), alice.id)
+		// The block as it stands before its cleanup ends the follow there.
+		await sql(h.store, "INSERT INTO domain_blocks (account_id, domain) VALUES (?, 'blocked.example')", alice.id)
+
+		await post(h, alice, { status: 'not for blocked.example' })
+		const profile = await h.request(
+			'/api/v1/accounts/update_credentials',
+			bearer(alice.token, { ...json({ display_name: 'Alice Again' }), method: 'PATCH' })
+		)
+		expect(profile.status).toBe(200)
+		expect((await sent(h)).map((o) => [o.activity.type, o.inboxes.sort()])).toEqual([
+			['Create', ['https://other.example/inbox']],
+			['Update', ['https://blocked.example/inbox', 'https://other.example/inbox']],
+		])
+	})
+
 	it('addresses a status written after a block to nobody behind the blocked account', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
