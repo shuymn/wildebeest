@@ -1,7 +1,7 @@
+import { accessAdminRefusal } from './admin-authority'
 import { chargeInstanceTransforms, TRANSFORMS_PER_UPLOAD } from './media'
 import { mediaRebuildOperation, readOperation } from './operation'
 import type { Db } from '../db/sql'
-import { ACCESS_SETTINGS, accessRefusal, settingsFromRows, type SettingRow } from '../platform/access-settings'
 import type { ImportAuthority } from '../platform/store-admin'
 import { PITR_RESTORING, PITR_RESTORING_MS, REBUILD_LEASE } from '../platform/store-flags'
 
@@ -83,18 +83,9 @@ export const rebuildRowLive = readOperation<{ id: string; token: string; now: nu
 		) !== undefined
 )
 
-// The Access admin, checked against the saved configuration, as the Worker verified it. IMPORT_TOKEN and import
-// sessions never rebuild: the cutover runs this through Access, after the token is retired.
+// IMPORT_TOKEN and import sessions never rebuild: the cutover runs this through Access, after the token is retired.
 function adminRefused(db: Db, authority: ImportAuthority): string | null {
-	if (authority.kind !== 'access') {
-		return 'only an Access admin rebuilds media'
-	}
-	const names = Object.values(ACCESS_SETTINGS)
-	const rows = db.all<SettingRow>(
-		`SELECT name, value FROM instance_settings WHERE name IN (${names.map(() => '?').join(',')})`,
-		...names
-	)
-	return accessRefusal(settingsFromRows(rows), authority)
+	return accessAdminRefusal(db, authority, 'only an Access admin rebuilds media')
 }
 
 // The rebuild's lease (REBUILD_LEASE in kopje_state; not dumped, imported or reset). Every rebuild operation runs at
