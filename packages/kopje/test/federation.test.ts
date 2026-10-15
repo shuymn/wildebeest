@@ -369,6 +369,46 @@ describe('followers and following collections', () => {
 		})
 	})
 
+	it('shows only the size of the collections of an actor that hides its network, and refuses a page', async () => {
+		const { json, request, store } = await instance()
+		await seedFollow(store, BOB, ALICE)
+		await seedFollow(store, ALICE, BOB)
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec('UPDATE local_accounts SET hide_collections = 1 WHERE account_id = ?', ALICE)
+		})
+
+		for (const kind of ['followers', 'following']) {
+			expect((await json(`/ap/users/Alice/${kind}`)).body).toEqual({
+				'@context': expect.anything(),
+				id: `https://social.example/ap/users/Alice/${kind}`,
+				type: 'OrderedCollection',
+				totalItems: 1,
+			})
+			expect((await request(`/ap/users/Alice/${kind}?cursor=1`, AP)).status).toBe(403)
+		}
+		// A malformed page is still not found.
+		expect((await request('/ap/users/Alice/followers?cursor=x', AP)).status).toBe(404)
+	})
+
+	it('answers 404 for the collections of a suspended actor, as for its outbox', async () => {
+		const { request, store } = await instance()
+		await seedFollow(store, BOB, ALICE)
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec(
+				"UPDATE local_accounts SET suspended_at = '2026-01-01T00:00:00.000Z' WHERE account_id = ?",
+				ALICE
+			)
+		})
+
+		for (const path of [
+			'/ap/users/Alice/followers',
+			'/ap/users/Alice/followers?cursor=1',
+			'/ap/users/Alice/following',
+		]) {
+			expect((await request(path, AP)).status, path).toBe(404)
+		}
+	})
+
 	it('answers 404 for an unknown actor, another spelling of a username, or a malformed page', async () => {
 		const { request } = await instance()
 		for (const path of [

@@ -280,12 +280,21 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 				? rpc((s) => s.collection(build, { username, kind, page }))
 				: null
 		)
+	// A collection whose owner hides its network has no first page: Fedify then asks for its items without a cursor,
+	// and it has none to show, only its size. A page of it is refused (403), as Mastodon refuses it: the dispatcher
+	// answers it empty so that Fedify reaches the authorization check, which refuses it.
 	for (const kind of ['followers', 'following'] as const) {
 		const dispatcher = async (_ctx: unknown, identifier: string, cursor: string | null) => {
+			if (cursor === null) {
+				return (await collection(kind, identifier, null))?.hidden === true ? { items: [] } : null
+			}
 			const page = parsePage(cursor)
 			const result = page === null ? null : await collection(kind, identifier, page)
 			if (page === null || result === null) {
 				return null
+			}
+			if (result.hidden) {
+				return { items: [] }
 			}
 			const items = result.items.map((item) => new URL(item.uri))
 			return { items, nextCursor: result.hasNext ? String(page + 1) : null }
@@ -300,8 +309,16 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 					})
 				: federation.setFollowingDispatcher('/ap/users/{identifier}/following', dispatcher)
 		setters
+			.authorize(async (ctx, identifier) => {
+				// Fedify asks only after the dispatcher answered, so the page's result is already read.
+				const cursor = ctx.url.searchParams.get('cursor')
+				return cursor === null || (await collection(kind, identifier, parsePage(cursor)))?.hidden !== true
+			})
 			.setCounter(async (_ctx, identifier) => (await collection(kind, identifier, null))?.total ?? null)
-			.setFirstCursor(async (_ctx, identifier) => ((await collection(kind, identifier, null)) === null ? null : '1'))
+			.setFirstCursor(async (_ctx, identifier) => {
+				const result = await collection(kind, identifier, null)
+				return result === null || result.hidden ? null : '1'
+			})
 	}
 
 	// VIS-4: local public and unlisted statuses as Notes, from the data of their outbound Create (domain/activities.ts).

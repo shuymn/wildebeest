@@ -2,15 +2,18 @@ import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFo
 import { actorSnapshot, recordActorUpdate } from './actor-update'
 import {
 	activeMuteJoinSql,
-	availableLocalSql,
 	availableSql,
 	blocksSql,
 	domainBlocksSql,
 	filteredForSql,
+	findableBySql,
 	followableBySql,
+	followListedSql,
+	followListsShownSql,
+	hidesCollectionsSql,
 	REACHES_FOLLOWERS_SQL,
 } from './audience'
-import { userReadOperation, userWriteOperation } from './auth'
+import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
 import { retractFollow } from './inbox'
 import { notify } from './notifications'
 import { readOperation } from './operation'
@@ -48,6 +51,9 @@ export type Account = {
 	following_count: number
 	statuses_count: number
 	last_status_at: string | null
+	// Whether the account hides its network (Account#hide_collections): set by a local account; null for a remote
+	// account, whose setting Kopje does not learn.
+	hide_collections: boolean | null
 	emojis: []
 	fields: Field[]
 	suspended?: true
@@ -75,6 +81,7 @@ export type CredentialAccount = Account & {
 		note: string
 		fields: (FieldSource & { verified_at: null })[]
 		follow_requests_count: number
+		hide_collections: boolean
 	}
 	role: { id: string; name: string; permissions: string; color: string; highlighted: boolean }
 }
@@ -121,8 +128,9 @@ export type AccountRow = {
 	created_at: string
 	suspended_at: string | null
 	last_status_at: string | null
-	// local_accounts.fields; null for a remote account.
+	// local_accounts.fields and hide_collections; null for a remote account.
 	local_fields: string | null
+	hide_collections: number | null
 	// A remote account's `attachment`, as JSON (fields are read from raw, as the design keeps them).
 	attachment: string | null
 }
@@ -133,7 +141,7 @@ export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type,
 	(SELECT substr(s.published_at, 1, 10) FROM statuses s
 		WHERE s.account_id = a.id AND s.visibility IN ${REACHES_FOLLOWERS_SQL} ORDER BY s.id DESC LIMIT 1)
 		AS last_status_at,
-	l.fields AS local_fields,
+	l.fields AS local_fields, l.hide_collections,
 	CASE WHEN a.domain IS NOT NULL THEN a.raw -> '$.attachment' END AS attachment`
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
@@ -181,6 +189,7 @@ export function presentAccount(row: AccountRow, { origin }: Present): Account {
 		following_count: row.following_count,
 		statuses_count: row.statuses_count,
 		last_status_at: row.last_status_at,
+		hide_collections: row.hide_collections === null ? null : row.hide_collections === 1,
 		emojis: [],
 		fields: suspended
 			? []
@@ -332,6 +341,7 @@ export function credentialAccount(db: Db, accountId: string, present: Present): 
 			note: htmlToPlainText(row.note),
 			fields: fieldSources(row.local_fields).map((field) => ({ ...field, verified_at: null })),
 			follow_requests_count: local.follow_requests_count,
+			hide_collections: row.hide_collections === 1,
 		},
 		// Every user has Mastodon's default role (id -99) until roles exist. permissions is a string (design §4).
 		role: { id: '-99', name: '', permissions: '0', color: '', highlighted: false },
@@ -374,6 +384,7 @@ export type CredentialChanges = {
 	locked?: boolean
 	bot?: boolean
 	discoverable?: boolean
+	hideCollections?: boolean
 	privacy?: Visibility
 	sensitive?: boolean
 	language?: string | null
@@ -387,8 +398,9 @@ export const updateCredentials = userWriteOperation<
 	{ changes: CredentialChanges; present: Present; now: number },
 	CredentialAccount | null
 >((db, { changes, present, now }, { accountId }) => {
-	const current = db.first<{ username: string; display_name: string; actor_type: string }>(
-		'SELECT a.username, a.display_name, a.actor_type FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?',
+	const current = db.first<{ username: string; display_name: string; actor_type: string; hide_collections: number }>(
+		`SELECT a.username, a.display_name, a.actor_type, l.hide_collections
+		FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?`,
 		accountId
 	)
 	if (current === undefined) {
@@ -396,6 +408,7 @@ export const updateCredentials = userWriteOperation<
 	}
 	const before = actorSnapshot(db, accountId)
 	const displayName = changes.displayName ?? current.display_name
+	const hide = bit(changes.hideCollections)
 	const actorType =
 		changes.bot === undefined || !['Person', 'Service'].includes(current.actor_type)
 			? current.actor_type
@@ -418,17 +431,21 @@ export const updateCredentials = userWriteOperation<
 		`UPDATE local_accounts SET default_visibility = COALESCE(?, default_visibility),
 			default_sensitive = COALESCE(?, default_sensitive),
 			default_language = CASE WHEN ? THEN ? ELSE default_language END,
-			fields = COALESCE(?, fields)
+			fields = COALESCE(?, fields), hide_collections = COALESCE(?, hide_collections)
 		WHERE account_id = ?`,
 		changes.privacy ?? null,
 		bit(changes.sensitive),
 		changes.language === undefined ? 0 : 1,
 		changes.language ?? null,
 		changes.fields === undefined ? null : JSON.stringify(changes.fields.slice(0, MAX_FIELDS)),
+		hide,
 		accountId
 	)
-	// Other servers learn of the change (Update(Person)), only if the published document changed.
-	recordActorUpdate(db, accountId, before, now)
+	// Other servers learn of the change (Update(Person)), only if the published document changed, or if the account
+	// shows or hides its network: the document does not carry that, but a server that receives the Update fetches the
+	// collections again and learns it from them, as Mastodon's ProcessAccountService does.
+	const hideChanged = hide !== null && hide !== current.hide_collections
+	recordActorUpdate(db, accountId, hideChanged ? null : before, now)
 	return credentialAccount(db, accountId, present)
 })
 
@@ -504,12 +521,11 @@ export const relationships = userReadOperation<{ ids: string[] }, Relationship[]
 )
 
 // GET /api/v1/accounts/familiar_followers (Mastodon's FamiliarFollowersPresenter): for each requested account, the
-// accounts the viewer follows that follow it. Both follows are accepted ones (VIS-8). It shows no more than
-// GET /api/v1/accounts/:id/followers of the account and /following of each follower show the same viewer: Kopje
-// hides no account's network (it stores no hide-collections setting, local or remote), so those lists show every
-// accepted follow and so may this. An unknown or suspended account has no entry; a suspended follower is left out, and
-// so is one the viewer filters out of lists (filteredForSql: a block, a mute that applies at the request time, or a
-// block of its domain).
+// accounts the viewer follows that follow it. Both follows are accepted ones (VIS-8). As Mastodon's
+// FamiliarFollowersController and FamiliarFollowersPresenter: an unknown or suspended account has no entry; an account
+// that hides its network has an entry with no accounts, whoever asks (the account itself included); a follower that
+// hides its network, or is suspended, is left out. So is a follower the viewer filters out of lists (filteredForSql: a
+// block, a mute that applies at the request time, or a block of its domain).
 // Bounds (RES-3, RES-7): at most MAX_FAMILIAR_FOLLOWERS_IDS accounts. For each, the candidates are the viewer's own
 // accepted follows (at most FAMILIAR_FOLLOWERS_WINDOW, through the partial index of accepted follows), each checked
 // for an accepted follow of the account through the unique pair index (CROSS JOIN keeps SQLite to that order), so
@@ -529,16 +545,24 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 			.slice(0, MAX_FAMILIAR_FOLLOWERS_IDS)
 			.map((id) => resolveAccountId(db, id))
 			.filter((id) => id !== null)
-		const targets = [...new Set(resolved)].filter(
-			(id) => db.first(`SELECT 1 AS available WHERE ${availableSql('?1')}`, id) !== undefined
-		)
-		return targets.map((target) => {
+		return [...new Set(resolved)].flatMap((target) => {
+			const row = db.first<{ hidden: number }>(
+				`SELECT ${hidesCollectionsSql('?1')} AS hidden WHERE ${availableSql('?1')}`,
+				target
+			)
+			if (row === undefined) {
+				return []
+			}
+			if (row.hidden === 1) {
+				return [{ id: target, accounts: [] }]
+			}
 			const followers = db
 				.all<{ id: string }>(
 					`SELECT x.account_id AS id
 					FROM (SELECT target_account_id FROM follows WHERE account_id = ?2 AND state = 'accepted' LIMIT ?3) mine
 					CROSS JOIN follows x ON x.account_id = mine.target_account_id AND x.target_account_id = ?1 AND x.state = 'accepted'
-					WHERE ${availableSql('x.account_id')} AND NOT ${filteredForSql('x.account_id', '?2', '?5')}
+					WHERE ${availableSql('x.account_id')} AND NOT ${hidesCollectionsSql('x.account_id')}
+						AND NOT ${filteredForSql('x.account_id', '?2', '?5')}
 					ORDER BY x.id DESC LIMIT ?4`,
 					target,
 					viewerId,
@@ -548,7 +572,7 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 				)
 				.map((row) => row.id)
 			const accounts = presentAccountsById(db, followers, present)
-			return { id: target, accounts: followers.flatMap((id) => accounts.get(id) ?? []) }
+			return [{ id: target, accounts: followers.flatMap((id) => accounts.get(id) ?? []) }]
 		})
 	}
 )
@@ -564,7 +588,8 @@ export type SearchInput = {
 }
 
 // Local and known remote accounts whose search_text contains every term (in any of its variants). An exact username
-// ranks first, then local accounts. Suspended local accounts are not listed.
+// ranks first, then local accounts. Only accounts the viewer may find are listed (findableBySql, R14): not suspended,
+// and not on a domain the viewer blocks.
 export const searchAccounts = userReadOperation<SearchInput, Account[]>((db, input, viewer) =>
 	findAccounts(db, input, viewer.accountId)
 )
@@ -619,9 +644,8 @@ export function findAccounts(db: Db, input: SearchInput, viewerId: string): Acco
 	const ids = db
 		.all<{ id: string }>(
 			`WITH candidates(id) AS (${candidates})
-			SELECT a.id FROM candidates c JOIN accounts a ON a.id = c.id LEFT JOIN local_accounts l ON l.account_id = a.id
-			WHERE ${availableLocalSql('l')} AND NOT ${domainBlocksSql('?', 'a.id')}
-				AND ${where.join(' AND ')}
+			SELECT a.id FROM candidates c JOIN accounts a ON a.id = c.id
+			WHERE ${findableBySql('a.id', '?')} AND ${where.join(' AND ')}
 			ORDER BY lower(a.username) = ? DESC, a.domain IS NULL DESC, a.followers_count DESC, a.id
 			LIMIT ? OFFSET ?`,
 			...candidateParams,
@@ -816,11 +840,19 @@ export type ListFollowsInput = {
 	present: Present
 }
 
-export const listFollows = readOperation<ListFollowsInput, Page<Account> | null>(
-	(db, { account, direction, page, present }) => {
+// GET /api/v1/accounts/:id/followers and /following as the viewer (null: anonymous) may see them (R13, Mastodon's
+// FollowerAccountsController and FollowingAccountsController): accepted follows, newest first. Nothing is listed when
+// the account is suspended, or, to anyone but itself, when it hides its network or blocks the viewer
+// (followListsShownSql). Others do not see the accounts they block, mute or are blocked by (followListedSql), left out
+// before LIMIT. An unknown account is not found.
+export const listFollows = optionalUserReadOperation<ListFollowsInput, Page<Account> | null>(
+	(db, { account, direction, page, present }, { accountId: viewerId, now }) => {
 		const id = resolveAccountId(db, account)
 		if (id === null) {
 			return null
+		}
+		if (db.first(`SELECT 1 AS shown WHERE ${followListsShownSql('?1', '?2')}`, id, viewerId) === undefined) {
+			return { items: [], newest: null, oldest: null }
 		}
 		const [anchor, other] =
 			direction === 'followers' ? ['target_account_id', 'account_id'] : ['account_id', 'target_account_id']
@@ -831,11 +863,14 @@ export const listFollows = readOperation<ListFollowsInput, Page<Account> | null>
 		FROM follows f JOIN accounts a ON a.id = f.${other} LEFT JOIN local_accounts l ON l.account_id = a.id
 		WHERE f.${anchor} = ?1 AND f.state = 'accepted'
 			AND (?2 IS NULL OR f.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR f.id > CAST(?3 AS INTEGER))
+			AND ${followListedSql('a.id', '?1', '?5', '?6')}
 		ORDER BY f.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			id,
 			page.maxId ?? null,
 			lower,
-			page.limit
+			page.limit,
+			viewerId,
+			now
 		)
 		if (ascending) {
 			rows.reverse()

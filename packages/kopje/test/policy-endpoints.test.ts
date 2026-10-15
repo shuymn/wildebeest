@@ -6,9 +6,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { migratedStore } from './helpers'
 import { NOTIFICATION_TYPES, PolicyModel, type Viewer } from './policy-model'
 import { accountId, runs, statusId, type World, worldArb, writeWorld } from './policy-world'
-import type { Account, Page, PageQuery } from '../src/domain/accounts'
+import { type Account, listFollows, type Page, type PageQuery } from '../src/domain/accounts'
 import type { NotificationType } from '../src/domain/notifications'
 import { listNotifications } from '../src/domain/notifications'
+import { resolveSearch } from '../src/domain/remote-statuses'
 import { search } from '../src/domain/search'
 import type { Status } from '../src/domain/status-presenter'
 import { getStatus, interactors, statusContext } from '../src/domain/statuses'
@@ -23,11 +24,14 @@ import {
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
-// The endpoint oracle (docs/visibility.md, "The oracle and the bounds harness"): the status read endpoints run on
-// generated worlds (test/policy-world.ts) for every available local viewer and, where the endpoint allows it, the
-// anonymous one. No endpoint may show a status (or a boosted original) the model of its rule (test/policy-model.ts)
-// does not allow the viewer. The lists whose membership is simple (public, tag, account statuses, favourites,
-// bookmarks) must also show exactly what the model allows of their members, in order, page after page.
+// The endpoint oracle (docs/visibility.md, "The oracle and the bounds harness"): the status read endpoints, the
+// follower and following lists, account search and search resolution run on generated worlds (test/policy-world.ts)
+// for every available local viewer and, where the endpoint allows it, the anonymous one. No endpoint may show a status
+// (or a boosted original) or an account the model of its rule (test/policy-model.ts) does not allow the viewer. The
+// lists whose membership is simple (public, tag, account statuses, favourites, bookmarks, followers, following,
+// account search) must also show exactly what the model allows of their members, in order, page after page; search
+// resolution must answer an account exactly when account search finds it, and a status exactly when the single-status
+// read shows it, unless the viewer blocks its author's domain.
 
 // Cases per property: each writes a world and runs every endpoint for every viewer.
 const CASES = 60
@@ -164,15 +168,20 @@ describe('the status read endpoints agree with the model of their rules', () => 
 	afterAll(() => {
 		expect([...shown].sort()).toEqual(
 			[
+				'account search',
 				'account statuses',
 				'bookmarks',
 				'context',
 				'favourited_by',
 				'favourites',
+				'followers',
+				'following',
 				'home',
 				'notifications',
 				'public',
 				'reblogged_by',
+				'resolve account',
+				'resolve status',
 				'status',
 				'status search',
 				'tag',
@@ -373,6 +382,33 @@ function check(sql: SqlStorage, c: Case): string[] {
 			equal(`account statuses of ${world.accounts[a]?.name}`, viewer, actual, newestFirst(expected))
 		})
 
+		// Followers and following of every account: exactly the accepted follows the list rule (R13) shows the viewer,
+		// newest follow first.
+		world.accounts.forEach((_, owner) => {
+			for (const direction of ['followers', 'following'] as const) {
+				const actual = pages((page) =>
+					ok<Page<Account> | null>(
+						run(listFollows, { ...optional(viewer), account: accountId(owner), direction, page, present: PRESENT }),
+						direction
+					)
+				).map((account) => {
+					shown.add(direction)
+					return accountIndex.get(account.id) ?? -1
+				})
+				const members = world.follows
+					.filter((f) => f.accepted && (direction === 'followers' ? f.to : f.from) === owner)
+					.map((f) => (direction === 'followers' ? f.from : f.to))
+				const expected = m.followListsShown(owner, viewer)
+					? members.filter((x) => m.followListed(x, owner, viewer)).reverse()
+					: []
+				if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+					problems.push(
+						`${direction} of ${nameOf(owner)} ${nameOf(viewer)}: lists [${actual.map(nameOf).join(' ')}], the model [${expected.map(nameOf).join(' ')}]`
+					)
+				}
+			}
+		})
+
 		if (viewer === null || user === null) {
 			continue
 		}
@@ -415,6 +451,68 @@ function check(sql: SqlStorage, c: Case): string[] {
 		)
 		for (const value of results.statuses) {
 			status('status search', viewer, value, (s) => m.listable(s, viewer))
+		}
+
+		// Account search (every account's search text matches): exactly the accounts the viewer may find (R14).
+		const searched = ok<{ accounts: Account[] }>(
+			run(search, {
+				...user,
+				query: 'account',
+				types: ['accounts'],
+				limit: 40,
+				offset: 0,
+				following: false,
+				localDomain: 'kopje.test',
+				present: PRESENT,
+			}),
+			'account search'
+		).accounts.map((account) => {
+			shown.add('account search')
+			return accountIndex.get(account.id) ?? -1
+		})
+		const findable = world.accounts.flatMap((_, x) => (m.findableBy(x, viewer) ? [x] : []))
+		if (JSON.stringify([...searched].sort((a, b) => a - b)) !== JSON.stringify(findable)) {
+			problems.push(
+				`account search ${nameOf(viewer)}: finds [${searched.map(nameOf).join(' ')}], the model [${findable.map(nameOf).join(' ')}]`
+			)
+		}
+
+		// Search resolution of what is stored, by its uri: an account exactly when account search finds it (R14), a
+		// status exactly when the single-status read shows it (R3) and the viewer does not block its author's domain,
+		// and never a boost.
+		const resolve = (query: string) =>
+			ok<{ accounts: Account[]; statuses: Status[] }>(
+				run(resolveSearch, {
+					...user,
+					query,
+					resolved: { kind: 'none' },
+					now,
+					origin: 'https://kopje.test',
+					present: PRESENT,
+				}),
+				'resolve'
+			)
+		world.accounts.forEach((account, x) => {
+			const answered = resolve(account.uri)
+			const ids = answered.accounts.map((found) => accountIndex.get(found.id) ?? -1)
+			if (ids.length > 0) {
+				shown.add('resolve account')
+			}
+			if (answered.statuses.length > 0 || JSON.stringify(ids) !== JSON.stringify(searched.includes(x) ? [x] : [])) {
+				problems.push(`resolve ${nameOf(viewer)}: ${account.name} answers [${ids.map(nameOf).join(' ')}]`)
+			}
+		})
+		for (const s of all) {
+			const answered = resolve(`https://kopje.test/ap/o/${s}`)
+			const ids = answered.statuses.map((value) =>
+				status('resolve status', viewer, value, (x) => x === s && m.viewable(x, viewer))
+			)
+			const single = found<Status>(run(getStatus, { ...optional(viewer), id: statusId(s), present: PRESENT }), 'status')
+			const { author, reblogOf } = m.status(s)
+			const expected = reblogOf === null && single !== null && !m.domainBlocks(viewer, author) ? [s] : []
+			if (answered.accounts.length > 0 || JSON.stringify(ids) !== JSON.stringify(expected)) {
+				problems.push(`resolve ${nameOf(viewer)}: ${statusName(s)} answers [${ids.map(statusName).join(' ')}]`)
+			}
 		}
 
 		// Notifications: only the viewer's, as seeded, that the notification rule shows, with statuses the viewer may

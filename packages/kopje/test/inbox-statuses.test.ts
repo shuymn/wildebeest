@@ -28,6 +28,7 @@ import {
 	update,
 } from './inbox-status-helpers'
 import { rowsRead } from './read-helpers'
+import { block, domainBlock, mute } from './status-helpers'
 import { PURGE_BATCH } from '../src/domain/inbox'
 import { MAX_STATUS_MEDIA, MAX_STATUS_TAGS } from '../src/domain/remote-statuses'
 import { getTag } from '../src/domain/tags'
@@ -892,6 +893,30 @@ describe('search with resolve=true (NET-4, VIS-1)', () => {
 		)
 		expect(open.body.statuses).toMatchObject([{ visibility: 'unlisted' }])
 		expect((await t.api<unknown[]>('/api/v1/timelines/public', null)).body).toEqual([])
+	})
+
+	it('answers a status by the single-status rule, unless the viewer blocks its author’s domain', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const note = mastodonNote(bob, { content: '<p>found</p>' })
+		t.web.serve(note.id, { '@context': AS, ...note })
+		const found = async (as: 'alice' | 'dave' = 'alice') =>
+			(await t.api<{ statuses: unknown[] }>(`/api/v2/search?resolve=true&q=${encodeURIComponent(note.id)}`, as)).body
+				.statuses
+		expect(await found()).toHaveLength(1)
+		const bobId = (await accountId(t.store, bob.uri))!
+		// An explicit lookup, like GET /api/v1/statuses/:id: the viewer's own mute or block does not hide it.
+		await mute(t.store, ALICE, bobId)
+		await block(t.store, ALICE, bobId)
+		expect(await found()).toHaveLength(1)
+		// The author blocking the viewer does (VIS-1), and so does the viewer's block of the author's domain.
+		await sql(t.store, 'DELETE FROM blocks')
+		await block(t.store, bobId, ALICE)
+		expect(await found()).toEqual([])
+		await sql(t.store, 'DELETE FROM blocks')
+		await domainBlock(t.store, ALICE, new URL(bob.uri).host)
+		expect(await found()).toEqual([])
+		expect(await found('dave')).toHaveLength(1)
 	})
 
 	it('resolves user@domain through WebFinger and an actor URL, and never fetches a local URL', async () => {

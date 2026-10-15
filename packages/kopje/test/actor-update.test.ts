@@ -93,6 +93,26 @@ describe('Update(Person)', () => {
 		expect(await outbound(h.store)).toEqual([])
 	})
 
+	it('sends one Update when the account hides or shows its network, and none when the setting stays', async () => {
+		for (const [stored, asked] of [
+			[0, true],
+			[1, false],
+		] as const) {
+			const h = await setup()
+			await sql(h.store, 'UPDATE local_accounts SET hide_collections = ?', stored)
+			// The same value as stored: nothing changes.
+			expect((await patch(h, { hide_collections: !asked })).status).toBe(200)
+			expect(await updates(h)).toEqual([])
+			expect((await patch(h, { hide_collections: asked })).status).toBe(200)
+			const sent = await updates(h)
+			expect(sent).toHaveLength(1)
+			expect(sent[0]?.activity).toMatchObject({ type: 'Update', object: { id: `${ORIGIN}/ap/users/alice` } })
+			// Asked again, it records nothing more.
+			expect((await patch(h, { hide_collections: asked })).status).toBe(200)
+			expect(await updates(h)).toEqual(sent)
+		}
+	})
+
 	it('sends the new avatar from the settings page', async () => {
 		const h = await setup()
 		const browser = await signIn(h)

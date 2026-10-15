@@ -3,6 +3,7 @@ import m0001 from '../../migrations/0001_blocks_and_mutes.sql'
 import m0002 from '../../migrations/0002_web_push.sql'
 import m0003 from '../../migrations/0003_domain_block_form.sql'
 import m0004 from '../../migrations/0004_status_tags_public.sql'
+import m0005 from '../../migrations/0005_hide_collections.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
 // never change. Each file runs in its own transaction, must finish well under 30 seconds, and must be pure SQL.
@@ -12,4 +13,5 @@ export const MIGRATIONS: readonly { name: string; sql: string }[] = [
 	{ name: '0002_web_push', sql: m0002 },
 	{ name: '0003_domain_block_form', sql: m0003 },
 	{ name: '0004_status_tags_public', sql: m0004 },
+	{ name: '0005_hide_collections', sql: m0005 },
 ]

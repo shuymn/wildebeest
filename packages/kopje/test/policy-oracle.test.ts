@@ -15,7 +15,10 @@ import {
 	canView,
 	domainBlocksSql,
 	filteredForSql,
+	findableBySql,
 	followableBySql,
+	followListedSql,
+	followListsShownSql,
 	homeFilterSql,
 	inDomainSql,
 	listableSql,
@@ -172,11 +175,11 @@ describe('the policy fragments agree with the model of their rules', () => {
 		model: (m: PolicyModel, x: number, viewer: Viewer) => boolean
 	) {
 		return agree(
-			(db, world) =>
-				pairs(
-					`SELECT v.id AS x, a.id AS y FROM ${VIEWERS} v CROSS JOIN accounts a WHERE ${fragment('a.id', 'v.id', '?1')}`,
-					world.now
-				)(db, world),
+			(db, world) => {
+				const query = `SELECT v.id AS x, a.id AS y FROM ${VIEWERS} v CROSS JOIN accounts a WHERE ${fragment('a.id', 'v.id', '?1')}`
+				// Some account predicates have no time.
+				return pairs(query, ...(query.includes('?1') ? [world.now] : []))(db, world)
+			},
 			(m) =>
 				viewers(m.world).flatMap((viewer) =>
 					accounts(m.world).flatMap((x) =>
@@ -189,6 +192,36 @@ describe('the policy fragments agree with the model of their rules', () => {
 	it('filteredForSql (R7)', () => viewerAccountPairs(filteredForSql, (m, x, viewer) => m.filteredFor(x, viewer)))
 
 	it('listedForSql (R12)', () => viewerAccountPairs(listedForSql, (m, x, viewer) => m.listedFor(x, viewer)))
+
+	it('followListsShownSql (R13)', () =>
+		viewerAccountPairs(followListsShownSql, (m, owner, viewer) => m.followListsShown(owner, viewer)))
+
+	// Every (viewer, owner, x): x is listed among the owner's followers or following to the viewer.
+	it('followListedSql (R13)', () =>
+		agree(
+			(db, world) => {
+				const named = namer(world)
+				return db
+					.all<{ v: string | null; o: string; x: string }>(
+						`SELECT v.id AS v, o.id AS o, a.id AS x FROM ${VIEWERS} v CROSS JOIN accounts o CROSS JOIN accounts a
+						WHERE ${followListedSql('a.id', 'o.id', 'v.id', '?1')}`,
+						world.now
+					)
+					.map((row) => named(row.v, row.o, row.x))
+			},
+			(m) =>
+				viewers(m.world).flatMap((viewer) =>
+					accounts(m.world).flatMap((owner) =>
+						accounts(m.world).flatMap((x) =>
+							m.followListed(x, owner, viewer)
+								? [`${name(m.world, viewer)} ${name(m.world, owner)} ${name(m.world, x)}`]
+								: []
+						)
+					)
+				)
+		))
+
+	it('findableBySql (R14)', () => viewerAccountPairs(findableBySql, (m, x, viewer) => m.findableBy(x, viewer)))
 
 	// Every (viewer, status) pair a status predicate accepts at the world's time: of every viewer, or of the list rules'.
 	function viewerStatusPairs(

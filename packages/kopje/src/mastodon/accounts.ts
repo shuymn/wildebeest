@@ -2,6 +2,7 @@ import {
 	type ApiContext,
 	type ApiHandler,
 	authorized,
+	optionalCredential,
 	present,
 	refuseAfterAuth,
 	requestParams,
@@ -94,6 +95,7 @@ export function credentialChanges(p: Params): { changes: CredentialChanges; prob
 	changes.locked = parseBoolean(p.get('locked'))
 	changes.bot = parseBoolean(p.get('bot'))
 	changes.discoverable = parseBoolean(p.get('discoverable'))
+	changes.hideCollections = parseBoolean(p.get('hide_collections'))
 	changes.sensitive = parseBoolean(p.get('source[sensitive]'))
 	return { changes, problems }
 }
@@ -220,8 +222,18 @@ function followList(direction: 'followers' | 'following'): ApiHandler {
 			return p
 		}
 		const page = pageQuery(p)
-		const result = await storeCall(c, deps, (s, b) =>
-			s.listFollows(b, { account: c.req.param('id') ?? '', direction, page, present: present(c) })
+		const credential = optionalCredential(c, deps)
+		const result = authorized(
+			await storeCall(c, deps, (s, b) =>
+				s.listFollows(b, {
+					credential,
+					account: c.req.param('id') ?? '',
+					direction,
+					page,
+					now: deps.now(),
+					present: present(c),
+				})
+			)
 		)
 		if (result === null) {
 			return NOT_FOUND()
