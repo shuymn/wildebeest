@@ -274,7 +274,8 @@ the threads and conversations out on its own from the legacy records.
 Mastodon endpoints, which Kopje does not serve yet. Rules become `rules`. Any other setting name stops the conversion
 (`settings:unknown-name`), since it could collide with Kopje's own settings.
 Access tokens, push subscriptions, app credentials, the outbox and inbox queues and the full-text index are not carried
-over: users sign in again and clients register push again.
+over: users sign in again and clients register push again. Legacy never wrote its filter tables (`filters`,
+`filter_keywords`, `filter_statuses`), so a converted Store starts without filters.
 
 **Stops.** The converter writes no dump when it finds rows it cannot carry over (`conversion.problems`: rows in tables
 the legacy code never wrote, unknown object types, statuses whose author is not local where it must be, duplicate

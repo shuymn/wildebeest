@@ -415,7 +415,7 @@ describe('statusReads, the id brands and the presenter guard', () => {
 			const read = statusReads({ accountId: booster, now: NOW_ISO }, { viewer: '?1' })
 			const rows = read.select(db, 'visible', { where: 's.id = ?2' }, booster, boost)
 			expect(rows.map((row) => row.id)).toEqual([boost])
-			const options = { ...PRESENT, viewerId: booster }
+			const options = { ...PRESENT, viewer: { accountId: booster, now: NOW_ISO } }
 			expect(
 				presentStatuses(
 					db,
@@ -431,9 +431,12 @@ describe('statusReads, the id brands and the presenter guard', () => {
 			expect(ownStatusId(db, booster, original)).toBeNull()
 			// The original's author sees both.
 			const visible = viewableStatusId(db, author, boost)
-			expect(presentStatuses(db, visible === null ? [] : [visible], { ...PRESENT, viewerId: author })).toMatchObject([
-				{ id: boost, reblog: { id: original } },
-			])
+			expect(
+				presentStatuses(db, visible === null ? [] : [visible], {
+					...PRESENT,
+					viewer: { accountId: author, now: NOW_ISO },
+				})
+			).toMatchObject([{ id: boost, reblog: { id: original } }])
 		})
 	})
 })

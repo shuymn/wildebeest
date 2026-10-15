@@ -7,6 +7,7 @@ import {
 	REQUIRES_MENTION_SQL,
 	type StatusSelect,
 	statusReads,
+	type ViewerContext,
 	type VisibleStatusId,
 	visibleSql,
 } from './audience'
@@ -50,14 +51,14 @@ function statusesPage(
 	db: Db,
 	ids: VisibleStatusId[],
 	cursor: Cursor,
-	viewerId: string | null,
+	viewer: ViewerContext,
 	present: Present
 ): Page<Status> {
 	if (cursor.ascending) {
 		ids.reverse()
 	}
 	return {
-		items: presentStatuses(db, ids, { ...present, viewerId }),
+		items: presentStatuses(db, ids, { ...present, viewer }),
 		newest: ids[0] ?? null,
 		oldest: ids.at(-1) ?? null,
 	}
@@ -159,7 +160,7 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 			cursor.limit,
 			now
 		)
-		return statusesPage(db, ids(rows), cursor, accountId, present)
+		return statusesPage(db, ids(rows), cursor, viewer, present)
 	}
 )
 
@@ -217,7 +218,7 @@ export const listTimeline = userReadOperation<{ id: string; page: PageQuery; pre
 			now,
 			list.id
 		)
-		return statusesPage(db, ids(rows), cursor, accountId, present)
+		return statusesPage(db, ids(rows), cursor, viewer, present)
 	}
 )
 
@@ -255,7 +256,7 @@ export const publicTimeline = optionalUserReadOperation<PublicTimelineInput, Pag
 		cursor.limit,
 		now
 	)
-	return statusesPage(db, ids(rows), cursor, viewerId, input.present)
+	return statusesPage(db, ids(rows), cursor, viewer, input.present)
 })
 
 export type TagTimelineInput = PublicTimelineInput & { tag: string; any: string[]; all: string[]; none: string[] }
@@ -303,7 +304,7 @@ export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Stat
 		now,
 		...names
 	)
-	return statusesPage(db, ids(rows), cursor, viewerId, input.present)
+	return statusesPage(db, ids(rows), cursor, viewer, input.present)
 })
 
 export type AccountStatusesInput = {
@@ -363,7 +364,7 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 			input.tagged === null ? null : normalizeTag(input.tagged),
 			now
 		)
-		return statusesPage(db, ids(rows), cursor, viewerId, input.present)
+		return statusesPage(db, ids(rows), cursor, viewer, input.present)
 	}
 )
 
@@ -396,7 +397,7 @@ function edgeList(table: 'bookmarks' | 'favourites') {
 				rows.reverse()
 			}
 			return {
-				items: presentStatuses(db, ids(rows), { ...present, viewerId: accountId }),
+				items: presentStatuses(db, ids(rows), { ...present, viewer }),
 				newest: rows[0]?.cursor ?? null,
 				oldest: rows.at(-1)?.cursor ?? null,
 			}
