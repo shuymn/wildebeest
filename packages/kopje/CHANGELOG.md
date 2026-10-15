@@ -41,7 +41,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
       author. Its work grows linearly with the mentions stored (one pass, with a lookup of each one's status); locally,
       200,000 mentions took under a second.
-    - `0011_filters`: adds the `filters`, `filter_keywords` and `filter_statuses` tables, empty. Its work does not grow
+    - `0012_filters`: adds the `filters`, `filter_keywords` and `filter_statuses` tables, empty. Its work does not grow
       with the Store.
 - `wrangler.jsonc`: unchanged.
 

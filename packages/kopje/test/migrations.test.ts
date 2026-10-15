@@ -696,17 +696,17 @@ describe('Store migration runner', () => {
 		expect(large - small).toBeLessThanOrEqual(5 * added)
 	}, 60_000)
 
-	it('upgrades a Store with 0011_filters: filters go with their account, rules with their filter, statuses with theirs', async () => {
+	it('upgrades a Store with 0012_filters: filters go with their account, rules with their filter, statuses with theirs', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
 			const sql = state.storage.sql
-			const at = NAMES.indexOf('0011_filters')
+			const at = NAMES.indexOf('0012_filters')
 			expect(at).toBeGreaterThan(0)
 			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
 			expect(tableNames(sql)).not.toContain('filters')
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
 				ok: true,
-				applied: ['0011_filters'],
+				applied: ['0012_filters'],
 			})
 			const alice = '100000000000000001'
 			sql.exec(

@@ -1,4 +1,4 @@
--- Kopje Store schema 0011: filters. Never edit after release (checksummed).
+-- Kopje Store schema 0012: filters. Never edit after release (checksummed).
 --
 -- A filter belongs to a local account and goes with it, as Mastodon's custom_filters do (account_id, ON DELETE
 -- CASCADE). context is a JSON array of the contexts it applies in (home, notifications, public, thread, account);
