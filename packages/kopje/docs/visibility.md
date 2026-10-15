@@ -29,7 +29,7 @@ Accounts (always over an account id, never over a status or a follow row):
 
 | Fragment                                                                   | Rule                                                                                                                                                                                                  |
 | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `availableSql(x)`, `availableLocalSql(l)`                                  | R1: the account is not a suspended local account. The second form takes a `local_accounts` row already joined.                                                                                        |
+| `availableSql(x)`, `availableLocalSql(l)`                                  | R1: the account is not a suspended local account, nor a remote account whose deletion has started. The second form takes the `local_accounts` row of a local account already joined.                  |
 | `blocksSql(owner, x)`, `domainBlocksSql(owner, x)`, `blockedSql(owner, x)` | `owner` blocks `x`, blocks its domain, or either.                                                                                                                                                     |
 | `inDomainSql(a, domain)`                                                   | The account row `a` lives on `domain`: its stored domain or the host of its actor id, exactly.                                                                                                        |
 | `filteredForSql(x, viewer, now)`                                           | R7: the viewer blocks `x`, mutes it while the mute applies, or blocks its domain. Nobody filters themselves; an anonymous viewer filters nothing.                                                     |
@@ -58,6 +58,15 @@ with notifications. A post notification (`status`) is shown only when `homeFilte
 Mastodon's `FeedInsertWorker` notifies only of what home shows: so a sender the recipient mutes, with or without
 notifications, sends none.
 
+An account becomes unavailable when its deletion starts: a remote actor's `Delete` writes `accounts.deleted_at` in the
+transaction that writes its purge job (`deleteActor` in `src/domain/inbox.ts`), before the purge's batches remove its
+relationships, notifications and statuses, so none of them is shown while they are removed. Blocks and mutes of the
+account go last, once nothing they filter (its statuses, mentions of it, replies to it, its notifications) is left. The
+row goes with the purge's last batch; until then the actor's own activities are ignored, its document is not stored
+again, and no boost of its statuses is accepted nor any status of it fetched (its tombstone, `isDeletedActor`). `availableSql` finds a deleted account through the partial index
+`accounts_deleted`, which holds only such accounts, so for any other account the rule reads its `local_accounts` row
+alone. A local account is never marked (the schema refuses it), so `availableLocalSql` needs only that row.
+
 Visibility sets are generated from `isDistributable` and `requiresMention`: `DISTRIBUTABLE_SQL` (public, unlisted),
 `REQUIRES_MENTION_SQL` (direct, limited) and `REACHES_FOLLOWERS_SQL` (public, unlisted, private, the list of the
 partial index `statuses_feed`, which SQLite uses only for the same list). SQL elsewhere writes `visibility IN
@@ -67,7 +76,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 
 | Rule                      | Where it is applied                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| R1 available              | `availableSql` in every status and account rule below; the object endpoint, outbox, followers and following collections and web pages (`availableLocalSql`); user counts.                                                                                                                                                                                                                                                          |
+| R1 available              | `availableSql` in every status and account rule below; the object endpoint, outbox, followers and following collections and web pages (`availableLocalSql`); user counts. The account presenter shows an unavailable account redacted (`suspended: true`).                                                                                                                                                                         |
 | R2, R3 show and view      | `visibleSql`, `viewableSql`, `canView`: single status, history, write responses, replies, favourites and boosts, inbound `Like`, search resolution (with `domainBlocksSql` of the author), web pages.                                                                                                                                                                                                                              |
 | R4 servable               | `SERVABLE` in `activities.ts` (`DISTRIBUTABLE_SQL` and `availableLocalSql`); web pages use `visibleSql` with no viewer.                                                                                                                                                                                                                                                                                                            |
 | R5 source                 | The author only (`statusSource`).                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -183,7 +192,8 @@ module:
 - reads `blocks`, `mutes` or `domain_blocks` (`FROM` or `JOIN`), except in the modules that write them, each listed
   with its reason: `blocks.ts` (blocks, mutes, domain blocks and their cleanups) and `inbox.ts` (an inbound `Block`
   and its `Undo`, the expired mute sweep, a `Move` carrying blocks and mutes, an actor purge);
-- judges suspension (`suspended_at IS [NOT] NULL`) or spells a set of visibilities (`IN ('public', ...`);
+- judges suspension or deletion (`suspended_at` or `deleted_at IS [NOT] NULL`) or spells a set of visibilities
+  (`IN ('public', ...`);
 - inserts into `notifications` outside `notifications.ts`, or into `outbound_activities` or `deliveries` outside
   `deliveries.ts`;
 - inserts into `status_mentions` outside its listed writers: `statuses.ts`, `remote-statuses.ts` and `inbox.ts`;
@@ -211,11 +221,11 @@ deepest terms last in a chain and prefer `JOIN ... ON` to `WHERE` for a lookup i
 the rules of this page in plain TypeScript, without importing the module. `test/policy-world.ts` generates worlds with
 [fast-check](https://fast-check.dev/): four local accounts (one of them may be suspended, some may hide their network),
 two or three remote accounts on two domains (some with an actor id on a subdomain, with a port, with a trailing dot or
-on the other domain), up to 22 statuses of every visibility with mentions (some silent), boosts, replies and replies
-that continue the author's own thread (written with the conversation partner `statuses.ts` carries over), accepted and
-pending follows, blocks both ways, mutes that have expired, expire at the time of the read or later, or never, with or
-without notifications, and domain blocks in their stored form, including the instance's own domain and a domain nobody
-lives on. Each property writes a world into one Store and evaluates its fragment over every pair the rule takes: every
+on the other domain; one may be being deleted, with its statuses and edges still stored), up to 22 statuses of every
+visibility with mentions (some silent), boosts, replies and replies that continue the author's own thread (written
+with the conversation partner `statuses.ts` carries over), accepted and pending follows, blocks both ways, mutes that
+have expired, expire at the time of the read or later, or never, with or without notifications, and domain blocks in
+their stored form, including the instance's own domain and a domain nobody lives on. Each property writes a world into one Store and evaluates its fragment over every pair the rule takes: every
 viewer (each account and the anonymous one) with every account or status (for the list rules, `listableSql` and
 `homeFilterSql`, the viewers their callers judge: each local account and the anonymous one), every owner with every
 account, for `followListedSql` every viewer with every owner and account, and, for `shownSql`, every local recipient

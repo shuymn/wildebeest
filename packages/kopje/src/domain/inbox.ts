@@ -1071,13 +1071,22 @@ const updateActor: Handler<'UpdateActor'> = (_db, _actor, _activity, input) =>
 
 // Mastodon's DeleteAccountService for a remote account, as a durable job: the purge job (the actor's tombstone) is
 // written with the first batch, and each batch removes a bounded part of what the account has (purgeBatch); the
-// account row goes with the last one.
+// account row goes with the last one. The account is unavailable from this transaction on (accounts.deleted_at,
+// availableSql), so nothing of it is shown while the batches remove it, whatever order they remove it in.
 const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
+	// A finished purge whose tombstone expired before the sweep removed it (the actor was stored again since) starts
+	// over, so this purge runs to its end and renews the tombstone.
 	db.run(
-		"INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('purge', ?, ?, ?) ON CONFLICT DO NOTHING",
-		actor.uri,
+		`INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('purge', ?1, ?1, ?2)
+		ON CONFLICT (kind, key) DO UPDATE SET cursor = NULL, done_at = NULL, expires_at = NULL, created_at = excluded.created_at
+		WHERE done_at IS NOT NULL`,
 		actor.uri,
 		now
+	)
+	db.run(
+		'UPDATE accounts SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ? AND domain IS NOT NULL',
+		new Date(now).toISOString(),
+		actor.id
 	)
 	return applied('actor-deleted', purgeBatch(db, actor.uri, now))
 }
@@ -1086,12 +1095,13 @@ const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
 // SQLite's total_changes() so that nothing escapes the count: deletions, counter recounts, and the Undo intent of a
 // local boost and its target chunks. Each step is limited beforehand to what is left, so a batch never writes more
 // than PURGE_BATCH rows:
-//   1. the account's relationships, notifications, mentions, favourites and keys, with the counters they counted;
+//   1. the account's follows, notifications, mentions, favourites and keys, with the counters they counted;
 //   2. local boosts of its statuses: each boost's Undo is recorded once (withdrawLocalBoost; the job's cursor keeps
 //      the boost being withdrawn), its targets are written a chunk per row over as many batches as they need
 //      (stageRetraction), and B2's delivery rounds expand them in their own bounded steps; then the boost is deleted
 //      like any status, its receipts included, and its booster's count recounted;
-//   3. remote boosts of its statuses, then its own statuses.
+//   3. remote boosts of its statuses, then its own statuses;
+//   4. once nothing else of it is left, the blocks and mutes of it, which filter what remains until then.
 // A status is deleted only once its children (edits, media, mentions, tags, favourites, bookmarks, notifications,
 // receipts, boosts and the reply links to it) are gone, so deleting it cascades nothing. Local media is detached for
 // the media sweep (its R2 objects go only through B4b's path), never deleted here. Returns whether anything remains;
@@ -1119,8 +1129,20 @@ export function purgeBatch(db: Db, uri: string, now: number): boolean {
 			break
 		}
 	}
+	// Blocks and mutes of the account go last, once nothing they filter is left: no status, mention, reply link or
+	// notification of it.
+	const others = accountHasRows(db, id, false)
+	if (!others) {
+		spend(
+			db,
+			budget,
+			'DELETE FROM blocks WHERE id IN (SELECT id FROM blocks WHERE account_id = ?1 OR target_account_id = ?1 LIMIT ?2)',
+			id
+		)
+		spend(db, budget, 'DELETE FROM mutes WHERE id IN (SELECT id FROM mutes WHERE target_account_id = ? LIMIT ?)', id)
+	}
 	// The final account delete and the job's completion are two more rows.
-	if (budget.left() < 2 || accountHasRows(db, id)) {
+	if (others || budget.left() < 2 || accountHasRows(db, id)) {
 		return true
 	}
 	db.run('DELETE FROM accounts WHERE id = ? AND domain IS NOT NULL', id)
@@ -1183,13 +1205,6 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	for (const status of new Set(favourites.map((f) => f.status))) {
 		recountStatus(db, status)
 	}
-	spend(
-		db,
-		budget,
-		'DELETE FROM blocks WHERE id IN (SELECT id FROM blocks WHERE account_id = ?1 OR target_account_id = ?1 LIMIT ?2)',
-		id
-	)
-	spend(db, budget, 'DELETE FROM mutes WHERE id IN (SELECT id FROM mutes WHERE target_account_id = ? LIMIT ?)', id)
 	spend(
 		db,
 		budget,
@@ -1390,14 +1405,15 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 	return true
 }
 
-function accountHasRows(db: Db, id: string): boolean {
+// Whether rows of the account remain; with filters false, rows other than its blocks and mutes.
+function accountHasRows(db: Db, id: string, filters = true): boolean {
 	return (
 		db.first(
 			`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM statuses WHERE account_id = ?1)
 				OR EXISTS (SELECT 1 FROM favourites WHERE account_id = ?1)
 				OR EXISTS (SELECT 1 FROM follows WHERE account_id = ?1 OR target_account_id = ?1)
-				OR EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 OR target_account_id = ?1)
-				OR EXISTS (SELECT 1 FROM mutes WHERE target_account_id = ?1)
+				OR (?2 AND EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 OR target_account_id = ?1))
+				OR (?2 AND EXISTS (SELECT 1 FROM mutes WHERE target_account_id = ?1))
 				OR EXISTS (SELECT 1 FROM list_accounts WHERE account_id = ?1)
 				OR EXISTS (SELECT 1 FROM notifications WHERE from_account_id = ?1)
 				OR EXISTS (SELECT 1 FROM status_mentions WHERE account_id = ?1)
@@ -1405,7 +1421,8 @@ function accountHasRows(db: Db, id: string): boolean {
 				OR EXISTS (SELECT 1 FROM media_attachments WHERE account_id = ?1)
 				OR EXISTS (SELECT 1 FROM remote_keys WHERE account_id = ?1)
 				OR EXISTS (SELECT 1 FROM inbound_jobs WHERE target_account_id = ?1)`,
-			id
+			id,
+			filters ? 1 : 0
 		) !== undefined
 	)
 }
@@ -1626,6 +1643,10 @@ function newOriginal(
 	if (authorUri === null || originOf(authorUri) !== originOf(fetched.uri)) {
 		return ignored('unusable-object')
 	}
+	// Nothing new of an author whose deletion has started is stored, its stored row or not (ID-7).
+	if (isDeletedActor(db, authorUri, now)) {
+		return ignored('author-deleted')
+	}
 	const known = originalByUri(db, fetched.uri)
 	if (known !== undefined) {
 		return known
@@ -1683,6 +1704,10 @@ const announce: Handler<'Announce'> = (db, actor, activity, input) => {
 	if (!announceable(original.account_id, actor.id, original.visibility)) {
 		return ignored('not-announceable')
 	}
+	// An original whose author is being deleted is on its way out with its boosts: none is added.
+	if (authorDeleted(db, original.account_id, now)) {
+		return ignored('author-deleted')
+	}
 	const originalId = original.id
 	if (
 		db.first('SELECT 1 AS x FROM statuses WHERE account_id = ? AND reblog_of_id = ?', actor.id, originalId) !==
@@ -1730,6 +1755,12 @@ const announce: Handler<'Announce'> = (db, actor, activity, input) => {
 	// The local author hears of the boost only if they may see it (notify applies the rule to the wrapper too).
 	notify(db, { recipientId: original.account_id, type: 'reblog', fromId: actor.id, statusId: originalId, now })
 	return applied('boosted')
+}
+
+// Whether the remote account `id` deleted itself (its tombstone, as isDeletedActor).
+function authorDeleted(db: Db, id: string, now: number): boolean {
+	const uri = db.first<{ uri: string }>('SELECT uri FROM accounts WHERE id = ? AND domain IS NOT NULL', id)?.uri
+	return uri !== undefined && isDeletedActor(db, uri, now)
 }
 
 // A favourite or boost the actor made under this id.
@@ -1864,7 +1895,9 @@ function receive(db: Db, input: ReceiveInput): ReceiveResult {
 		// stored by a late activity (ID-7).
 		db.run(
 			`INSERT INTO inbound_jobs (kind, key, actor_uri, done_at, expires_at, created_at)
-			VALUES ('purge', ?1, ?1, ?2, ?3, ?2) ON CONFLICT DO NOTHING`,
+			VALUES ('purge', ?1, ?1, ?2, ?3, ?2)
+			ON CONFLICT (kind, key) DO UPDATE SET done_at = excluded.done_at, expires_at = excluded.expires_at,
+				created_at = excluded.created_at`,
 			actorUri,
 			now,
 			now + JOB_RETENTION_MS

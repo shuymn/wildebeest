@@ -810,3 +810,39 @@ describe('VIS-6: a reblog notification follows the boost’s audience when read'
 		expect((await t.api(`/api/v1/notifications/${id}`)).status).toBe(404)
 	})
 })
+
+describe('ID-7: no boost of an author whose deletion has started', () => {
+	it('refuses a boost of a stored original, and stores no removed one again, while the author is purged', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const carol = await mastodonActor(t.web, 'carol', { key: 2 })
+		await followed(t, bob)
+		await followed(t, carol)
+		const bobId = (await accountId(t.store, bob.uri))!
+		// More statuses than one purge batch removes.
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+			INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+			SELECT printf('3%017d', i), ? || '/statuses/' || i, ?, 'public', '2026-10-11T12:00:00.000Z' FROM n`,
+			PURGE_BATCH * 2 + 1,
+			bob.uri,
+			bobId
+		)
+		t.web.fail(bob.uri, 410)
+		expect(
+			await t.post(bob, { '@context': AS, id: `${bob.uri}#delete`, type: 'Delete', actor: bob.uri, object: bob.uri })
+		).toBe(202)
+		const kept = `${bob.uri}/statuses/${PURGE_BATCH * 2 + 1}`
+		const removed = `${bob.uri}/statuses/1`
+		expect(await sql(t.store, 'SELECT uri FROM statuses WHERE uri IN (?, ?)', kept, removed)).toEqual([{ uri: kept }])
+
+		// carol boosts the original still stored, then the one the first batch removed, which bob's server still serves.
+		expect(await t.post(carol, announce(carol, kept))).toBe(202)
+		t.web.serve(removed, mastodonNote(bob, { id: removed, atomUri: removed }))
+		expect(await t.post(carol, announce(carol, removed))).toBe(202)
+		expect(await sql(t.store, 'SELECT uri FROM statuses WHERE reblog_of_id IS NOT NULL OR uri = ?', removed)).toEqual(
+			[]
+		)
+	})
+})

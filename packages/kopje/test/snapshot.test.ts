@@ -152,6 +152,63 @@ describe('snapshot freshness', () => {
 	})
 })
 
+describe('snapshots of a suspended actor', () => {
+	const ACTOR_KEYS = [
+		'path:/ap/users/Alice',
+		'webfinger:acct:Alice@social.example',
+		'webfinger:https://social.example/ap/users/Alice',
+	]
+
+	it('drops them on suspension, then keeps the redacted documents, and the full ones again after unsuspension', async () => {
+		const { store, healthy } = await healthyInstance()
+		const before = await store.rescueSnapshot(BUILD, 'path:/ap/users/Alice')
+		const renderedFrom = JSON.stringify(await store.localActor(BUILD, { username: 'Alice' }))
+
+		expect(await store.suspendAccount(BUILD, { accountId: '111111111111111111', now: NOW })).toEqual({
+			suspended: true,
+		})
+		for (const key of ACTOR_KEYS) {
+			expect(await store.rescueSnapshot(BUILD, key), key).toBeNull()
+		}
+		// The instance's own snapshots stay.
+		expect(await snapshotNames(store)).toEqual([
+			'snapshot:path:/.well-known/nodeinfo',
+			'snapshot:path:/actor',
+			'snapshot:path:/nodeinfo/2.0',
+			'snapshot:path:/nodeinfo/2.1',
+		])
+		// While the Store refuses, the actor's documents answer 503 rather than the document from before.
+		const { request } = harness(store, { USER_KEK: LEGACY.kek }, '0.0.0-other', offline)
+		expect((await request('/ap/users/Alice', AP)).status).toBe(503)
+		// A save of the document rendered before the suspension, arriving late, is refused.
+		expect(
+			await store.saveSnapshot(BUILD, {
+				key: 'path:/ap/users/Alice',
+				contentType: before?.contentType ?? '',
+				body: before?.body ?? '',
+				source: { kind: 'actor', username: 'Alice', rendered: renderedFrom },
+				renderedAt: NOW,
+			})
+		).toBe(false)
+
+		// The next live requests keep the redacted documents, which the rescue path then serves.
+		const suspended = (await served(store)).bodies
+		expect(JSON.parse(suspended['/ap/users/Alice']?.body ?? '{}')).toMatchObject({ suspended: true })
+		expect(JSON.parse(suspended['/ap/users/Alice']?.body ?? '{}')).not.toHaveProperty('name')
+		const rescued = (await served(store, '0.0.0-other')).bodies
+		for (const path of ALWAYS) {
+			expect(rescued[path], path).toEqual(suspended[path])
+		}
+
+		// Unsuspended, the live requests keep the full documents again.
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec("UPDATE local_accounts SET suspended_at = NULL WHERE account_id = '111111111111111111'")
+		})
+		expect((await served(store)).bodies).toEqual(healthy)
+		expect((await served(store, '0.0.0-other')).bodies).toEqual(healthy)
+	})
+})
+
 describe('snapshot render order', () => {
 	it('refuses a NodeInfo rendered before the kept one, though its own source still recomputes the same', async () => {
 		const { store } = await healthyInstance()

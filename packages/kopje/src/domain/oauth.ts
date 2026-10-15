@@ -1,4 +1,5 @@
 import { readOperation, sessionOperation, writeOperation } from './operation'
+import { forgetActorSnapshots } from './snapshot'
 import { sweepWebState } from './web-session'
 import type { Db } from '../db/sql'
 import { withinScopes } from '../security/scopes'
@@ -376,9 +377,10 @@ export const revokeToken = sessionOperation<
 	return { status: 'ok' }
 })
 
-// Suspends a local account: records suspended_at once and deletes its access tokens and unused codes (with their
-// push subscriptions). Token validation and authorize refuse the account from then on. The owner console calls it
-// in a later stage.
+// Suspends a local account: records suspended_at once, deletes its access tokens and unused codes (with their
+// push subscriptions), and removes the rescue snapshots of its actor document, which the next live request saves again
+// redacted. Token validation and authorize refuse the account from then on. The owner console calls it in a later
+// stage.
 export const suspendAccount = writeOperation<{ accountId: string; now: number }, { suspended: boolean }>(
 	(db, { accountId, now }) => {
 		if (db.first('SELECT 1 AS found FROM local_accounts WHERE account_id = ?', accountId) === undefined) {
@@ -390,6 +392,7 @@ export const suspendAccount = writeOperation<{ accountId: string; now: number },
 			accountId
 		)
 		db.run('DELETE FROM oauth_tokens WHERE account_id = ?', accountId)
+		forgetActorSnapshots(db, accountId)
 		return { suspended: true }
 	}
 )

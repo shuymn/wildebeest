@@ -127,6 +127,8 @@ export type AccountRow = {
 	statuses_count: number
 	created_at: string
 	suspended_at: string | null
+	// A remote account whose deletion has started; null otherwise.
+	deleted_at: string | null
 	last_status_at: string | null
 	// local_accounts.fields and hide_collections; null for a remote account.
 	local_fields: string | null
@@ -137,7 +139,7 @@ export type AccountRow = {
 
 export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type, a.display_name, a.note, a.url, a.avatar_url,
 	a.header_url, a.locked, a.discoverable, a.followers_count, a.following_count, a.statuses_count, a.created_at,
-	l.suspended_at,
+	l.suspended_at, a.deleted_at,
 	(SELECT substr(s.published_at, 1, 10) FROM statuses s
 		WHERE s.account_id = a.id AND s.visibility IN ${REACHES_FOLLOWERS_SQL} ORDER BY s.id DESC LIMIT 1)
 		AS last_status_at,
@@ -161,10 +163,11 @@ export function acctOf(row: { username: string; domain: string | null }): string
 	return row.domain === null ? row.username : `${row.username}@${row.domain}`
 }
 
-// A suspended account is shown redacted, as Mastodon 4.0.2's REST::AccountSerializer does: no display name, note,
-// fields or emojis, the default avatar and header, and locked, bot and discoverable false.
+// An unavailable account (R1: suspended, or a remote account whose deletion has started) is shown redacted, as
+// Mastodon's REST::AccountSerializer shows an unavailable one: no display name, note, fields or emojis, the default
+// avatar and header, locked, bot and discoverable false, and `suspended: true`.
 export function presentAccount(row: AccountRow, { origin }: Present): Account {
-	const suspended = row.suspended_at !== null
+	const suspended = row.suspended_at !== null || row.deleted_at !== null
 	// Stored URLs are shown only when they are http(s) (httpUrl); anything else reads as unset.
 	const url = accountUrl(row, origin)
 	const avatar = (suspended ? null : httpUrl(row.avatar_url)?.href) ?? `${origin}${DEFAULT_AVATAR}`

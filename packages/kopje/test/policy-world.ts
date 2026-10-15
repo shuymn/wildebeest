@@ -5,10 +5,10 @@ import type { Visibility } from '../src/domain/audience'
 
 // A generated world for the policy oracle (test/policy-oracle.test.ts) and the bounds harness
 // (test/policy-bounds.test.ts): local accounts (one of them may be suspended, some may hide their network), remote
-// accounts on two domains, statuses of every visibility with mentions (some silent), boosts and replies, and the edges
-// the rules read: follows (pending and accepted), blocks both ways, mutes with and without an expiry and with and
-// without notifications, and domain blocks in their stored form. Accounts and statuses are referred to by index;
-// writeWorld gives them fixed ids.
+// accounts on two domains (one of them may be being deleted, its statuses and edges still stored), statuses of every
+// visibility with mentions (some silent), boosts and replies, and the edges the rules read: follows (pending and
+// accepted), blocks both ways, mutes with and without an expiry and with and without notifications, and domain blocks
+// in their stored form. Accounts and statuses are referred to by index; writeWorld gives them fixed ids.
 
 declare module 'vitest' {
 	interface ProvidedContext {
@@ -49,6 +49,8 @@ type WorldAccount = {
 	name: string
 	local: boolean
 	suspended: boolean
+	// Remote accounts only: its deletion has started (accounts.deleted_at), and its purge has removed nothing yet.
+	deleting: boolean
 	// Local accounts only: hide_collections.
 	hidesCollections: boolean
 	// Remote accounts only: the stored domain. The actor id's host may differ from it (see HOSTS).
@@ -165,6 +167,8 @@ export const worldArb: fc.Arbitrary<World> = fc
 			size: 'max',
 		}),
 		now: fc.constantFrom(...TIMES),
+		// Last, so the other fields of a seed's worlds stay as they were before it was added.
+		deleting: fc.option(fc.nat(), { freq: 3 }),
 	})
 	.map((raw): World => {
 		const accounts: WorldAccount[] = []
@@ -173,6 +177,7 @@ export const worldArb: fc.Arbitrary<World> = fc
 				name: `L${i}`,
 				local: true,
 				suspended: raw.suspended === i,
+				deleting: false,
 				hidesCollections: raw.hidden[i] ?? false,
 				domain: null,
 				uri: `https://${INSTANCE_DOMAIN}/ap/users/l${i}`,
@@ -183,6 +188,7 @@ export const worldArb: fc.Arbitrary<World> = fc
 				name: `R${i}`,
 				local: false,
 				suspended: false,
+				deleting: raw.deleting !== null && raw.deleting % raw.remotes.length === i,
 				hidesCollections: false,
 				domain: remote.domain,
 				uri: `https://${actorHost(remote.host, remote.domain)}/users/r${i}`,
@@ -276,12 +282,13 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 		const username = account.name.toLowerCase()
 		// Every account's search text holds "account", so an account search for it reads them all.
 		sql.exec(
-			'INSERT INTO accounts (id, uri, username, domain, search_text) VALUES (?, ?, ?, ?, ?)',
+			'INSERT INTO accounts (id, uri, username, domain, search_text, deleted_at) VALUES (?, ?, ?, ?, ?, ?)',
 			accountId(i),
 			account.uri,
 			username,
 			account.domain,
-			`account ${account.domain === null ? username : `${username}@${account.domain}`}`
+			`account ${account.domain === null ? username : `${username}@${account.domain}`}`,
+			account.deleting ? '2026-01-01T00:00:00.000Z' : null
 		)
 		if (account.local) {
 			sql.exec(
