@@ -3,13 +3,23 @@ import {
 	apiVisibility,
 	type ApiVisibility,
 	type OwnStatusId,
+	type ViewerContext,
 	type Visibility,
 	type VisibleStatusId,
 	visibleSql,
 } from './audience'
+import {
+	activeFilters,
+	applyFilters,
+	type FilterResult,
+	filterStatusMatches,
+	filterTextLimits,
+	MAX_FILTER_TEXT,
+} from './filters'
 import { htmlToPlainText } from './plain-text'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
+import { remotePlainText } from '../security/html'
 
 // The Status entity as Mastodon 4.0.2's REST::StatusSerializer shows it. One presenter for every read path: it takes
 // a list of ids and the viewer and reads the related rows kind by kind (statuses and reblogged originals, accounts,
@@ -18,6 +28,10 @@ import { httpUrl } from '../platform/http-url'
 // viewer, or OwnStatusId, the viewer's own, for the response to their write. A boost's original is read through the
 // read rule for the same viewer, whichever the boost's id: a boost the viewer may see stands only with an original
 // they may see, and their own boost of an original they may no longer see is shown without it (reblog: null).
+// For a signed-in viewer every status carries `filtered` (REST::StatusSerializer, StatusRelationshipsPresenter): the
+// viewer's active filters that match it, whatever their context and action, as CustomFilter.apply_cached_filters finds
+// them (filters.ts); a boost and its original carry the same. Nothing is left out for a filter: the client decides by
+// context.
 
 export type MediaSize = { width: number; height: number; size: string; aspect: number }
 
@@ -60,7 +74,7 @@ export type Status = {
 	muted?: boolean
 	bookmarked?: boolean
 	pinned?: boolean
-	filtered?: []
+	filtered?: FilterResult[]
 	content?: string
 	text?: string
 	reblog: Status | null
@@ -108,7 +122,8 @@ export const STATUS_COLUMNS = `s.id, s.uri, s.url, s.account_id, s.reblog_of_id,
 
 export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
 
-export type PresentOptions = Present & { viewerId: string | null }
+// viewer: the viewer and the request time (null for none).
+export type PresentOptions = Present & { viewer: ViewerContext | null }
 
 export type PresentOwnOptions = PresentOptions & {
 	// DELETE answers with the source text (`text`) in place of `content`, for redrafting: on the deleted status only,
@@ -141,7 +156,23 @@ type MentionRow = {
 // Statuses the read rule passed for the viewer, in the order of `ids`; ids with no row, and boosts whose original the
 // viewer may not see, are left out.
 export function presentStatuses(db: Db, ids: readonly VisibleStatusId[], options: PresentOptions): Status[] {
-	return present(db, ids, options, false)
+	return presented(present(db, ids, options, false))
+}
+
+// Two lists of statuses presented as one response (a thread's ancestors and descendants), so their filters' text
+// budget is shared by both; each list as presentStatuses would give it.
+export function presentStatusPair(
+	db: Db,
+	first: readonly VisibleStatusId[],
+	second: readonly VisibleStatusId[],
+	options: PresentOptions
+): [Status[], Status[]] {
+	const all = present(db, [...first, ...second], options, false)
+	return [presented(all.slice(0, first.length)), presented(all.slice(first.length))]
+}
+
+function presented(statuses: readonly (Status | undefined)[]): Status[] {
+	return statuses.flatMap((status) => (status === undefined ? [] : [status]))
 }
 
 export function presentStatus(db: Db, id: VisibleStatusId, options: PresentOptions): Status | null {
@@ -153,11 +184,13 @@ export function presentOwnStatus(db: Db, id: OwnStatusId, options: PresentOwnOpt
 	return present(db, [id], options, true)[0] ?? null
 }
 
-function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own: boolean): Status[] {
+// The statuses in the order of `ids`, undefined for an id with no row or a boost left out.
+function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own: boolean): (Status | undefined)[] {
 	if (ids.length === 0) {
 		return []
 	}
 	const idList = JSON.stringify(ids)
+	const viewerId = options.viewer?.accountId ?? null
 	// The statuses, and the originals of the boosts among them that the viewer may see.
 	const rows = db.all<StatusRow>(
 		`SELECT ${STATUS_COLUMNS} FROM ${STATUS_FROM}
@@ -165,7 +198,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			OR (s.id IN (SELECT reblog_of_id FROM statuses WHERE id IN (SELECT value FROM json_each(?1)) AND reblog_of_id IS NOT NULL)
 				AND ${visibleSql('s', '?2')})`,
 		idList,
-		options.viewerId
+		viewerId
 	)
 	const byId = new Map(rows.map((row) => [row.id, row]))
 	const all = JSON.stringify([...byId.keys()])
@@ -195,18 +228,58 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			all
 		)
 	)
-	const flags = viewerFlags(db, options.viewerId, all)
+	const flags = viewerFlags(db, viewerId, all)
+	const filters = options.viewer === null ? null : activeFilters(db, options.viewer)
+	const statusMatches =
+		filters === null ? new Map<string, Set<string>>() : filterStatusMatches(db, filters, [...byId.keys()])
+	// Status#searchable_text of a status: its spoiler text, its text (a local status's source, a remote one's HTML as
+	// text) and its media descriptions. Kopje has no polls.
+	const searchableText = (row: StatusRow): string =>
+		[
+			row.spoiler_text,
+			row.author_domain === null ? (row.source_text ?? htmlToPlainText(row.content)) : remotePlainText(row.content),
+			(media.get(row.id) ?? []).map((m) => m.description).join('\n\n'),
+		].join('\n\n')
+	// The text each status is matched on (filterTextLimits): read only when a filter has keywords.
+	const texts = new Map<string, { text: string; cut: number }>()
+	if (filters !== null && filters.filters.some((filter) => filter.keywords !== null)) {
+		const full = ids.map((id) => {
+			const row = byId.get(id)
+			const proper = row?.reblog_of_id == null ? row : byId.get(row.reblog_of_id)
+			return proper === undefined ? '' : searchableText(proper)
+		})
+		const limits = filterTextLimits(full.map((text) => Math.min(text.length, MAX_FILTER_TEXT)))
+		ids.forEach((id, i) => {
+			const text = full[i] ?? ''
+			// A cut inside a surrogate pair moves back to the pair's start, so the code point after it is whole.
+			const limit = limits[i] ?? 0
+			const unit = text.charCodeAt(limit)
+			const cut = limit > 0 && limit < text.length && unit >= 0xdc00 && unit <= 0xdfff ? limit - 1 : limit
+			// The code point after a cut is kept for the boundary after a match, so the cut is not taken for one.
+			const next = cut < text.length ? String.fromCodePoint(text.codePointAt(cut) ?? 0) : ''
+			texts.set(id, { text: text.slice(0, cut) + next, cut })
+		})
+	}
 
-	const presentRow = (row: StatusRow, top: boolean): Status | undefined => {
+	const presentRow = (row: StatusRow, top: boolean, filtered: FilterResult[] = []): Status | undefined => {
 		const account = accounts.get(row.account_id)
 		if (account === undefined) {
 			return undefined
 		}
 		let reblog: Status | null = null
+		if (top && filters !== null) {
+			const proper = row.reblog_of_id === null ? row : byId.get(row.reblog_of_id)
+			if (proper !== undefined) {
+				filtered = applyFilters(filters, statusMatches, {
+					...(texts.get(row.id) ?? { text: '', cut: 0 }),
+					ids: row.reblog_of_id === null ? [row.id] : [row.id, row.reblog_of_id],
+				})
+			}
+		}
 		if (row.reblog_of_id !== null) {
 			const original = byId.get(row.reblog_of_id)
 			if (original !== undefined) {
-				reblog = presentRow(original, false) ?? null
+				reblog = presentRow(original, false, filtered) ?? null
 				if (reblog === null) {
 					return undefined
 				}
@@ -216,7 +289,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		}
 		const visibility = apiVisibility(row.visibility)
 		const viewer =
-			options.viewerId === null
+			viewerId === null
 				? {}
 				: {
 						favourited: flags.favourited.has(row.id),
@@ -224,10 +297,10 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 						muted: false,
 						bookmarked: flags.bookmarked.has(row.id),
 						// Pins come later; an own, pinnable status says it is not pinned.
-						...(row.account_id === options.viewerId && row.reblog_of_id === null && visibility !== 'direct'
+						...(row.account_id === viewerId && row.reblog_of_id === null && visibility !== 'direct'
 							? { pinned: false }
 							: {}),
-						filtered: [] as [],
+						filtered,
 					}
 		const body =
 			top && options.source === true
@@ -269,10 +342,9 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		}
 	}
 
-	return ids.flatMap((id) => {
+	return ids.map((id) => {
 		const row = byId.get(id)
-		const status = row === undefined ? undefined : presentRow(row, true)
-		return status === undefined ? [] : [status]
+		return row === undefined ? undefined : presentRow(row, true)
 	})
 }
 
