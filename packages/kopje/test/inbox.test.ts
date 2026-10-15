@@ -1085,6 +1085,45 @@ describe('list members and inbound activities', () => {
 		expect(await members(t)).toEqual([{ list_id: LIST, account_id: ALICE }])
 	})
 
+	it("stay, with the follow, for a follower who may not follow the Move's target", async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bob2 = await mastodonActor(t.web, 'bob2', { origin: 'https://new.example', key: 2, extra: {} })
+		t.web.serve(bob2.uri, { ...bob2.document, alsoKnownAs: [bob.uri] })
+		const bobId = await ourFollow(t, bob)
+		await sql(t.store, "UPDATE follows SET state = 'accepted' WHERE account_id = ?", ALICE)
+		await lists(t, [bobId])
+		const bob2Id = '333333333333333333'
+		await sql(
+			t.store,
+			"INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, 'bob2', 'new.example')",
+			bob2Id,
+			bob2.uri
+		)
+		// Alice blocks the target: FollowService refuses, so Mastodon's UnfollowService never runs for her.
+		await sql(t.store, 'INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?)', ALICE, bob2Id)
+		const move = {
+			'@context': AS,
+			id: `${bob.uri}#moves/1`,
+			type: 'Move',
+			actor: bob.uri,
+			object: bob.uri,
+			target: bob2.uri,
+		}
+		expect(await t.post(bob, move)).toBe(202)
+		expect(
+			(await follows(t.store)).filter((f) => f.account_id === ALICE).map((f) => [f.target_account_id, f.state])
+		).toEqual([[bobId, 'accepted']])
+		expect((await outbound(t.store)).filter((o) => o.activity.type === 'Undo')).toEqual([])
+		expect(await members(t)).toEqual(
+			[
+				{ list_id: LIST, account_id: ALICE },
+				{ list_id: LIST, account_id: bobId },
+				{ list_id: OTHER_LIST, account_id: bobId },
+			].toSorted((a, b) => (a.list_id + a.account_id).localeCompare(b.list_id + b.account_id))
+		)
+	})
+
 	it("move with a Move into the followers' lists that held the source, the follow requested", async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')

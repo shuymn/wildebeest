@@ -171,7 +171,8 @@ describe('the canonical address of a remote account', () => {
 		expect(
 			await sql(t.store, 'SELECT * FROM follows WHERE account_id = ? AND target_account_id = ?', aliId, ALICE)
 		).toEqual([])
-		// A Move to it does not carry alice's follow over.
+		// A Move to it does not carry alice's follow over, and leaves her follow of the mover as it is (Mastodon's
+		// FollowMigrationService refuses before it unfollows).
 		const move = {
 			'@context': AS,
 			id: `${mover.uri}#move`,
@@ -185,8 +186,8 @@ describe('the canonical address of a remote account', () => {
 			await sql(t.store, 'SELECT * FROM follows WHERE account_id = ? AND target_account_id = ?', ALICE, aliId)
 		).toEqual([])
 		expect(
-			await sql(t.store, 'SELECT * FROM follows WHERE account_id = ? AND target_account_id = ?', ALICE, moverId)
-		).toEqual([])
+			await sql(t.store, 'SELECT state FROM follows WHERE account_id = ? AND target_account_id = ?', ALICE, moverId)
+		).toEqual([{ state: 'accepted' }])
 	})
 })
 

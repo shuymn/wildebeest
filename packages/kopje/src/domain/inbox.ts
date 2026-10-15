@@ -997,6 +997,12 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 	const changed: string[] = [target.id]
 	for (const follower of followers) {
 		changed.push(follower.id)
+		// FollowService: a follow the follower could not make itself is not made for it, and then nothing changes for
+		// this follower: Mastodon's FollowMigrationService raises before its UnfollowService runs (UnfollowFollowWorker
+		// rescues it), so the follow of the source and its list memberships stay.
+		if (db.first(`SELECT 1 AS x WHERE ${followableBySql('?2', '?1')}`, follower.id, target.id) === undefined) {
+			continue
+		}
 		// The follower's lists that hold the source, read before the unfollow takes it out of them (migration
 		// 0007_list_members): FollowMigrationService#migrate_list_accounts! puts the target in them.
 		const lists = listsHolding(db, follower.id, source.id)
@@ -1007,10 +1013,6 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 		)
 		if (local !== undefined) {
 			unfollowRemote(db, local, source, now)
-		}
-		// FollowService: a follow the follower could not make itself is not made for it.
-		if (db.first(`SELECT 1 AS x WHERE ${followableBySql('?2', '?1')}`, follower.id, target.id) === undefined) {
-			continue
 		}
 		const state = target.local === 1 && target.locked === 0 ? 'accepted' : 'pending'
 		const edge = db.first<{ id: string }>(
