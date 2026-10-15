@@ -41,6 +41,7 @@ const NOT_CARRIED: Record<string, string> = {
 	push_deliveries: 'push queue; legacy has no such data',
 	push_subscriptions: 'push subscriptions are not carried: clients register again',
 	remote_keys: 'fetched again on demand',
+	scheduled_statuses: 'posts scheduled in Kopje; legacy Wildebeest has no scheduled statuses',
 }
 
 const ASSIGNED = 'INTEGER PRIMARY KEY, assigned on insert'
@@ -61,6 +62,7 @@ const NOT_CONVERTED: Record<string, string> = {
 	'media_attachments.focus_x': 'legacy has no focal point',
 	'media_attachments.focus_y': 'legacy has no focal point',
 	'media_attachments.gc_at': 'converted media is kept: attached, or a profile or earlier-version image',
+	'media_attachments.scheduled_status_id': 'held by a scheduled status of Kopje; legacy has none',
 	'mutes.expires_at': 'legacy mutes never expire',
 	'mutes.id': ASSIGNED,
 	'status_edits.id': ASSIGNED,
@@ -107,6 +109,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'media_attachments.gc_at': DEFAULT,
 	'media_attachments.id': ID,
 	'media_attachments.processed': 'always 1: converted media needs no processing',
+	'media_attachments.scheduled_status_id': DEFAULT,
 	'media_attachments.type':
 		"classified from an attachment's type and mediaType, which legacy kept no class of; URL and description are compared",
 	'mutes.created_at': TIME,
