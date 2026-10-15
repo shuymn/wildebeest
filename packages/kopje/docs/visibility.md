@@ -192,7 +192,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R24 list timeline         | `homeFilterSql` in `listTimeline`, with the list's active members, the follow's options and the list's `replies_policy`; the owner's lists only (`ownList` in `lists.ts`).                                                                                                                                                                                                                                                         |
 | R25 conversations         | `visibleSql` (through `statusReads`) for each last status; rows are the owner's only (`listConversations`, `markConversation`, `deleteConversation` in `conversations.ts`).                                                                                                                                                                                                                                                        |
 | R26 scheduled statuses    | `scheduledOwnSql` in every read of `scheduled_statuses`, all in `scheduled-statuses.ts`: the owner's alone, anyone else's not found; published through `writePost`, after which R1 to R25 apply.                                                                                                                                                                                                                                   |
-| R27 polls                 | `viewableStatusId` (R3) for a poll's status in `getPoll`, `vote` and the presenter's callers; `mayVoteSql` (R3 and the voter does not block the author) for a local vote and a received one; `poll_votes` read in `polls.ts` alone, only the viewer's own.                                                                                                                                                                         |
+| R27 polls                 | `viewableStatusId` (R3) for a poll's status in `getPoll`, `vote` and the presenter's callers; `mayVoteSql` (R3, and the voter blocks neither the author nor its domain) for a local vote and a received one; `poll_votes` read in `polls.ts` alone, only the viewer's own.                                                                                                                                                         |
 
 A scheduled status (`src/domain/scheduled-statuses.ts`, migration `0011_scheduled_statuses`) is not a status: it is
 a row of `scheduled_statuses` with the post's parameters, and its owner's alone (R26, `scheduledOwnSql`). No read,
@@ -207,7 +207,8 @@ checks after each that no other table changed and that each account sees only it
 A poll (`src/domain/polls.ts`, migration `0013_polls`) is shown with its status, to whoever may see the status, and
 its API id is its status's: `GET /api/v1/polls/:id` and its votes answer 404 for a poll on a status the viewer may
 not see by itself (R3). Who may vote is R27 (`mayVoteSql`, Mastodon's `PollPolicy#vote?`): the status is viewable and
-the voter does not block its author (an author who blocks the voter hides it already); a remote vote, a Note naming a
+the voter blocks neither its author (an author who blocks the voter hides it already) nor the author's domain
+(where the vote would not be delivered); a remote vote, a Note naming a
 choice in reply to a local poll, passes the same rule (Mastodon checks none for it) and is never stored as a status.
 Votes are their voters' own: a poll shows its counts (`votes_count`, `voters_count`, and each choice's, which
 `hide_totals` hides from everyone, the author included, until the poll ends, as `Poll#show_totals_now?`), and the

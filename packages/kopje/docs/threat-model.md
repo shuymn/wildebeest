@@ -890,8 +890,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   VoteValidator does"), `test/polls-federation.test.ts` ("counts once, as Mastodon counts it, and is never stored as a
   status", "takes the counts … of an Update(Question) that names no new version, but not new choices").
 - **POLL-2: a poll shows no more than its status, and never who voted (VIS).** A poll is read and voted on only by
-  whoever may see its status by itself (R3), and a vote needs R27 (`mayVoteSql`: the voter does not block the
-  author); otherwise 404 (403 for a voter who blocks the author, as Mastodon). Only counts and the viewer's own votes
+  whoever may see its status by itself (R3), and a vote needs R27 (`mayVoteSql`: the voter blocks neither the
+  author nor its domain); otherwise 404 (403 for a voter who blocks the author, as Mastodon). Only counts and the viewer's own votes
   are shown; `hide_totals` hides each choice's count from everyone until the poll ends, in the API and in the
   Question (no `totalItems`). `poll_votes` is read in `polls.ts` alone (`test/policy.test.ts`, R27). A remote vote
   passes the same rule (Mastodon checks none). _Enforced (main):_ `test/polls.test.ts` ("shows a poll only to whoever

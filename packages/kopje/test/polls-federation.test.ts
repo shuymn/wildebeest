@@ -17,7 +17,7 @@ import {
 	statuses,
 	update,
 } from './inbox-status-helpers'
-import { block, outbound } from './status-helpers'
+import { block, domainBlock, outbound } from './status-helpers'
 import type { Poll } from '../src/domain/polls'
 import { endPolls } from '../src/jobs/scheduled'
 
@@ -228,6 +228,23 @@ describe('a remote Question', () => {
 		expect((await vote('0')).status).toBe(200)
 		const names = (await outbound(t.store)).map((o) => (o.activity.object as { name?: string } | undefined)?.name)
 		expect(names.filter((name) => name !== undefined)).toEqual([family])
+	})
+
+	it('refuses a vote in a poll on a domain the voter blocks, recording and sending nothing (R27)', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const id = await remotePoll(t, bob, question(bob))
+		await domainBlock(t.store, ALICE, new URL(bob.uri).host)
+		const before = (await outbound(t.store)).length
+		const refused = await api(t, `/api/v1/polls/${id}/votes`, {
+			method: 'POST',
+			body: JSON.stringify({ choices: ['0'] }),
+		})
+		expect(refused).toEqual({ status: 403, body: { error: 'This action is not allowed' } })
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM poll_votes')).toEqual([{ n: 0 }])
+		expect(await sql(t.store, 'SELECT votes_count FROM polls')).toEqual([{ votes_count: 3 }])
+		expect(await outbound(t.store)).toHaveLength(before)
 	})
 
 	it('notifies its local voters when it ends', async () => {

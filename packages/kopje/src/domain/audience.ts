@@ -517,10 +517,11 @@ export function scheduledOwnSql(ss: string, viewer: string): string {
 }
 
 // R27 (PollPolicy#vote?): whether `voter` may vote in the poll of the status `s`: may see the status by itself (R3),
-// and does not block its author (an author who blocks the voter hides the status already). Votes are their voters'
+// and blocks neither its author (an author who blocks the voter hides the status already) nor the author's domain, to
+// which a remote poll's vote would not be delivered (R23 leaves such an account out). Votes are their voters'
 // own: polls.ts alone reads poll_votes, and shows a poll's counts and a viewer's own votes, never who voted.
 export function mayVoteSql(s: string, voter: string): string {
-	return `(${viewableSql(s, voter)} AND NOT ${blocksSql(voter, `${s}.account_id`)})`
+	return `(${viewableSql(s, voter)} AND NOT ${blockedSql(voter, `${s}.account_id`)})`
 }
 
 // ---- Notifications.
