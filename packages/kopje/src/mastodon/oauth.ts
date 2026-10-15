@@ -1,11 +1,21 @@
-import { type ApiContext, type ApiHandler, authorized, credential, storeCall, vapidKey } from './context'
+import {
+	type ApiContext,
+	type ApiHandler,
+	authorized,
+	credential,
+	present,
+	storeCall,
+	userCredential,
+	vapidKey,
+} from './context'
 import { mastodonError } from './errors'
 import { type Params, readParams } from './params'
 import { OOB_REDIRECT_URI } from '../domain/oauth'
 import { DEFAULT_SCOPES, parseScopes } from '../security/scopes'
 import { PKCE_VERIFIER, pkceChallenge, sha256Hex } from '../security/tokens'
 
-// App registration and the OAuth token endpoints. /oauth/authorize (behind Access) lives in app/authorize.ts.
+// App registration and the OAuth token and userinfo endpoints. /oauth/authorize (behind Access) lives in
+// app/authorize.ts.
 
 const MAX_NAME = 255
 const MAX_REDIRECT_URIS = 10
@@ -257,4 +267,15 @@ export const revokeHandler: ApiHandler = async (c, deps) => {
 		return INVALID_CLIENT()
 	}
 	return c.json({})
+}
+
+// GET and POST /oauth/userinfo (Mastodon's OAuth::UserinfoController; OpenID Connect Core §5.3 asks for both): the
+// claims of the token's account, for a token with the profile scope. The token's account always exists while the
+// token does; without it, the answer is Mastodon's for a token whose user is gone.
+export const userinfo: ApiHandler = async (c, deps) => {
+	const token = userCredential(c, deps)
+	const claims = authorized(
+		await storeCall(c, deps, (s, b) => s.userinfo(b, { credential: token, present: present(c) }))
+	)
+	return claims === null ? mastodonError(422, 'This method requires an authenticated user') : c.json(claims)
 }

@@ -44,7 +44,7 @@ export type AppDeps = {
 	doorbell?: (env: Env) => Promise<void>
 }
 
-const API_CORS_PATHS = ['/api/*', '/oauth/token', '/oauth/revoke']
+const API_CORS_PATHS = ['/api/*', '/oauth/token', '/oauth/revoke', '/oauth/userinfo']
 
 type AppEnv = { Bindings: Env; Variables: { requestClass: RequestClass; inboxBody: Uint8Array; domain: string } }
 
