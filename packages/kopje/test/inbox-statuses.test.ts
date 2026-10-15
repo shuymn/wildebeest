@@ -718,6 +718,28 @@ describe('Like and reactions (Mastodon and Misskey)', () => {
 		expect(await sql(t.store, 'SELECT * FROM favourites')).toEqual([])
 		expect(await notifications(t.store)).toEqual([])
 	})
+
+	it('VIS-13, VIS-15: ignores a Like by an actor the author blocks or whose domain the author blocks', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const carol = await mastodonActor(t.web, 'carol', { key: 2 })
+		const erin = await mastodonActor(t.web, 'erin', { origin: OTHER, key: 3 })
+		const local = await localStatus(t, { status: 'not for them', visibility: 'unlisted' })
+		// Bob's first activity stores his account, for alice to block.
+		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+		await block(t.store, ALICE, (await accountId(t.store, bob.uri))!)
+		await domainBlock(t.store, ALICE, new URL(carol.uri).host)
+		for (const actor of [bob, carol]) {
+			expect(await t.post(actor, like(actor, local.uri))).toBe(202)
+		}
+		expect(await sql(t.store, 'SELECT * FROM favourites')).toEqual([])
+		expect((await statusRow(t.store, local.uri))?.favourites_count).toBe(0)
+		// An actor on another domain still may.
+		expect(await t.post(erin, like(erin, local.uri))).toBe(202)
+		const erinId = (await accountId(t.store, erin.uri))!
+		expect(await sql(t.store, 'SELECT account_id FROM favourites')).toEqual([{ account_id: erinId }])
+		expect(await notifications(t.store)).toEqual([{ account_id: ALICE, type: 'favourite' }])
+	})
 })
 
 describe('Announce (VIS-6, NET-4)', () => {
@@ -831,6 +853,28 @@ describe('Announce (VIS-6, NET-4)', () => {
 		await t.post(stranger, announce(stranger, elsewhere.id))
 		expect(t.web.fetched).not.toContain(elsewhere.id)
 		expect(await statuses(t.store)).toHaveLength(2)
+	})
+
+	it('VIS-13, VIS-15: ignores a boost by an actor the author blocks or whose domain the author blocks', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const carol = await mastodonActor(t.web, 'carol', { key: 2 })
+		const erin = await mastodonActor(t.web, 'erin', { origin: OTHER, key: 3 })
+		const local = await localStatus(t, { status: 'not for them', visibility: 'public' })
+		// Bob's first activity stores his account, for alice to block.
+		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+		await block(t.store, ALICE, (await accountId(t.store, bob.uri))!)
+		await domainBlock(t.store, ALICE, new URL(carol.uri).host)
+		for (const actor of [bob, carol]) {
+			expect(await t.post(actor, announce(actor, local.uri))).toBe(202)
+		}
+		expect((await statuses(t.store)).map((s) => s.uri)).toEqual([local.uri])
+		expect((await statusRow(t.store, local.uri))?.reblogs_count).toBe(0)
+		// An actor on another domain still may.
+		const boost = announce(erin, local.uri)
+		expect(await t.post(erin, boost)).toBe(202)
+		expect((await statuses(t.store)).map((s) => s.uri)).toEqual([boost.id, local.uri])
+		expect(await notifications(t.store)).toEqual([{ account_id: ALICE, type: 'reblog' }])
 	})
 })
 

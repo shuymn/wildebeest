@@ -345,7 +345,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **VIS-13: a block cuts both ways, as Mastodon's does.** A block (local, or a remote `Block` that passes ID-6)
   ends the follows between the two accounts in both directions and in either state; while it lasts neither may
   follow the other (a remote `Follow` is answered with a `Reject`), the blocked account sees nothing of the blocker
-  (VIS-1) and cannot favourite or boost the blocker's statuses, and nothing from the blocked account reaches the
+  (VIS-1) and cannot favourite or boost the blocker's statuses (an inbound `Like` or `Announce` of one is ignored,
+  where Mastodon stores it and only filters its notification), and nothing from the blocked account reaches the
   blocker: no list shows it (VIS-5), and no notification of it is written or shown, including a mention or reply
   that mentions or answers it and a post notification (`notify`) of a status that mentions it. Relationships show `blocking` and `blocked_by`. A local block of a remote account
   sends, in order, the `Undo` of our follow, a `Reject` of theirs (one that withdraws it if it was accepted) and the
@@ -360,10 +361,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   _Implemented on branch `kopje/blocks-mutes`:_ `block` and `unblock` in `src/domain/blocks.ts`, the inbound `block`
   in `src/domain/inbox.ts`, `resolveMentions` and `editStatus` in `src/domain/statuses.ts`, `audienceTargets` in
   `src/domain/deliveries.ts`, `shownSql` and `homeFilterSql` in `src/domain/audience.ts`, `homeTimeline` in
-  `src/domain/timelines.ts`; `test/blocks.test.ts` ("blocks a local account", "sends a remote account Undo Follow,
-  Reject and Block", "applies an inbound Block and its Undo", "blocked recipients", "mentions of blocked and muted
-  accounts", "names and reaches the author in the Undo of a boost"), `test/inbox.test.ts` ("records a Block, ends both
-  follows"), `test/policy-writes.test.ts` (the outbound and notification rules on generated worlds).
+  `src/domain/timelines.ts`, `mayInteract` in `src/domain/inbox.ts`; `test/blocks.test.ts` ("blocks a local account",
+  "sends a remote account Undo Follow, Reject and Block", "applies an inbound Block and its Undo", "blocked
+  recipients", "mentions of blocked and muted accounts", "names and reaches the author in the Undo of a boost"),
+  `test/inbox.test.ts` ("records a Block, ends both follows"), `test/policy-writes.test.ts` (the outbound and
+  notification rules on generated worlds), `test/inbox-statuses.test.ts` ("ignores a Like by an actor the author
+  blocks", "ignores a boost by an actor the author blocks").
 - **VIS-14: a mute hides only for the muter, and only while it lasts.** A mute is never federated and changes nothing
   the muted account sees or may do. It keeps the muted account out of the muter's lists (VIS-5) and home, including
   others' statuses that mention it, and, unless created with `notifications=false`, out of the muter's notifications
@@ -381,7 +384,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **VIS-15: a domain block hides the domain and ends the relationships with it.** A user's domain block matches every
   account whose stored domain or actor host is the domain, exactly (Mastodon's `AccountDomainBlock` matches no
   subdomains; `inDomainSql`, `domainBlocksSql`), and hides them as VIS-5 says; following an account there is refused, a `Follow`
-  from one is rejected, and none of the user's statuses mentions or is addressed to one (as VIS-13); a boost of a
+  from one is rejected, and none of the user's statuses mentions or is addressed to one (as VIS-13); an account there
+  may not see the user's public and unlisted statuses as a viewer (Mastodon's `StatusPolicy#show?`,
+  `author_blocking_domain?`; `visibleSql`), so its `Like` or `Announce` of one is ignored; a boost of a
   status by an account there, which Mastodon allows, leaves its author out of the `Announce`'s addressing and audience
   (`boostAnnounce` in `src/domain/activities.ts`, for the delivered `Announce` and the outbox's copy); the boost's
   `Undo`, a retraction, names and reaches the author all the same.

@@ -202,11 +202,19 @@ export function followListedSql(x: string, owner: string, viewer: string, now: s
 
 // ---- Statuses. `s` is the alias of a statuses row.
 
+// Whether `viewer` is a remote account (accounts.domain is set). It does not depend on a status, so SQLite evaluates
+// it once per query, and a local viewer pays one row for it however many statuses are judged. A rule guards a lookup
+// with it in a CASE, which skips the lookup when it is false (an AND may evaluate both operands).
+function remoteSql(viewer: string): string {
+	return `EXISTS (SELECT 1 FROM main.accounts pv WHERE pv.id = ${viewer} AND pv.domain IS NOT NULL)`
+}
+
 // R2 (StatusPolicy#show?): whether `viewer` may see the row itself.
 //   - a status of an unavailable author is seen by nobody;
 //   - the author sees everything of their own;
 //   - an author who blocks the viewer hides everything from them;
-//   - public and unlisted are seen by everyone else;
+//   - public and unlisted are seen by everyone else but a remote account on a domain the author blocks
+//     (author_blocking_domain?);
 //   - private is seen by accepted followers and the mentioned (silent included);
 //   - direct and limited are seen by the mentioned (silent included) only.
 // It has no time: nothing the viewer chose changes what they may see.
@@ -214,10 +222,12 @@ export function visibleSql(s: string, viewer: string): string {
 	return `(${availableSql(`${s}.account_id`)}
 		AND (${s}.account_id IS ${viewer}
 			OR (NOT ${blocksSql(`${s}.account_id`, viewer)}
-				AND (${s}.visibility IN ${DISTRIBUTABLE_SQL}
-					OR (${s}.visibility = 'private' AND EXISTS (SELECT 1 FROM main.follows fo
-						WHERE fo.account_id IS ${viewer} AND fo.target_account_id = ${s}.account_id AND fo.state = 'accepted'))
-					OR EXISTS (SELECT 1 FROM main.status_mentions sm WHERE sm.status_id = ${s}.id AND sm.account_id IS ${viewer})))))`
+				AND (CASE WHEN ${s}.visibility IN ${DISTRIBUTABLE_SQL}
+					THEN CASE WHEN ${remoteSql(viewer)} THEN NOT ${domainBlocksSql(`${s}.account_id`, viewer)} ELSE 1 END
+					ELSE (${s}.visibility = 'private' AND EXISTS (SELECT 1 FROM main.follows fo
+							WHERE fo.account_id IS ${viewer} AND fo.target_account_id = ${s}.account_id AND fo.state = 'accepted'))
+						OR EXISTS (SELECT 1 FROM main.status_mentions sm WHERE sm.status_id = ${s}.id AND sm.account_id IS ${viewer})
+					END))))`
 }
 
 // R3: a status may be shown by itself (GET /statuses/:id): the row is visible and, for a reblog, so is the original.
