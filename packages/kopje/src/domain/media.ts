@@ -1,3 +1,4 @@
+import { type CredentialAccount, credentialAccount, type Present } from './accounts'
 import { actorSnapshot, recordActorUpdate } from './actor-update'
 import { userMediaDeleteOperation, userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
@@ -30,12 +31,12 @@ import { mediaPath } from '../platform/media-files'
 //
 // Lifecycle: an unattached upload carries gc_at. It is attachable only while gc_at is in the future. A status that
 // stops using media (edit, delete) detaches it with a new grace period, so a redraft can attach it again; delete_media
-// dooms it at once. The sweep (expiredMedia, then R2 deletes, then purgeMedia) removes doomed rows and their R2 objects
-// in bounded batches, objects first.
+// and deleting an unattached upload (deleteMedia) doom it at once. The sweep (expiredMedia, then R2 deletes, then
+// purgeMedia) removes doomed rows and their R2 objects in bounded batches, objects first.
 //
 // A profile image (avatar or header, set from the settings page) is a completed upload that the account's avatar_url or
 // header_url names, kept with neither status_id nor gc_at: it is never swept, and never attached, read or updated
-// through the API. Replacing it dooms the previous one.
+// through the API. Replacing or removing it dooms it.
 //
 // Only the uploader reads, updates or attaches an upload, and only while it is unattached (MEDIA-1); Mastodon's
 // MediaController finds `current_account.media_attachments.where(status_id: nil)`.
@@ -324,20 +325,42 @@ export const setProfileImage = userMediaDeleteOperation<{ id: string; kind: Prof
 		const previous = db.first<{ url: string | null }>(`SELECT ${column} AS url FROM accounts WHERE id = ?`, accountId)
 		db.run(`UPDATE accounts SET ${column} = ? WHERE id = ?`, upload.url, accountId)
 		db.run('UPDATE media_attachments SET gc_at = NULL WHERE id = ?', id)
-		if (previous?.url != null && previous.url !== upload.url) {
-			db.run(
-				`UPDATE media_attachments SET gc_at = ? WHERE account_id = ? AND url = ? AND status_id IS NULL
-					AND gc_at IS NULL AND id <> ?`,
-				iso(now),
-				accountId,
-				previous.url,
-				id
-			)
-		}
+		releaseProfileImage(db, accountId, previous?.url ?? null, now)
 		recordActorUpdate(db, accountId, before, now)
 		return true
 	}
 )
+
+// Dooms the upload behind a profile image the account no longer shows (replaced or removed), so the sweep deletes it
+// and its files, unless the account's other image still names it.
+function releaseProfileImage(db: Db, accountId: string, url: string | null, now: number): void {
+	if (url === null) {
+		return
+	}
+	db.run(
+		`UPDATE media_attachments SET gc_at = ?1 WHERE account_id = ?2 AND url = ?3 AND status_id IS NULL AND gc_at IS NULL
+			AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id = ?2 AND ?3 IN (a.avatar_url, a.header_url))`,
+		iso(now),
+		accountId,
+		url
+	)
+}
+
+// DELETE /api/v1/profile/avatar and /api/v1/profile/header (Mastodon's Profile::AvatarsController and
+// HeadersController#destroy): the account shows the default image again, the upload behind the removed one is doomed
+// as a replaced one is, and other servers receive the Update a profile edit sends. Answers the CredentialAccount.
+export const removeProfileImage = userMediaDeleteOperation<
+	{ kind: ProfileImage; present: Present; now: number },
+	CredentialAccount | null
+>((db, { kind, present, now }, { accountId }) => {
+	const before = actorSnapshot(db, accountId)
+	const column = kind === 'avatar' ? 'avatar_url' : 'header_url'
+	const previous = db.first<{ url: string | null }>(`SELECT ${column} AS url FROM accounts WHERE id = ?`, accountId)
+	db.run(`UPDATE accounts SET ${column} = NULL WHERE id = ?`, accountId)
+	releaseProfileImage(db, accountId, previous?.url ?? null, now)
+	recordActorUpdate(db, accountId, before, now)
+	return credentialAccount(db, accountId, present)
+})
 
 export type MediaChanges = { description?: string; focus?: { x: number; y: number } }
 
@@ -360,6 +383,34 @@ export const updateMedia = userWriteOperation<
 	const row = ownUpload(db, accountId, id, now)
 	return row === undefined ? null : presentMedia(row)
 })
+
+export type MediaDeleted = 'deleted' | 'in_use' | 'not_found'
+
+// DELETE /api/v1/media/:id (Mastodon's MediaController#destroy): the uploader's own media only. Media a status uses
+// is refused, and so is media a scheduled status holds (scheduled-statuses.ts); a live unattached upload is doomed at
+// once, as delete_media dooms a status's media, and the sweep deletes it and its R2 objects. A profile image, a
+// reservation still being written and an upload already doomed are not found, as they are for GET and PUT.
+export const deleteMedia = userMediaDeleteOperation<{ id: string; now: number }, MediaDeleted>(
+	(db, { id, now }, { accountId }) => {
+		const row = db.first<{ used: number }>(
+			`SELECT status_id IS NOT NULL OR scheduled_status_id IS NOT NULL AS used FROM media_attachments
+			WHERE id = ? AND account_id = ?`,
+			id,
+			accountId
+		)
+		if (row === undefined) {
+			return 'not_found'
+		}
+		if (row.used === 1) {
+			return 'in_use'
+		}
+		if (ownUpload(db, accountId, id, now) === undefined) {
+			return 'not_found'
+		}
+		db.run('UPDATE media_attachments SET gc_at = ? WHERE id = ?', iso(now), id)
+		return 'deleted'
+	}
+)
 
 // token is null for rows with no R2 files (migrated media), which are only deleted.
 export type ExpiredMedia = { id: string; token: string | null }

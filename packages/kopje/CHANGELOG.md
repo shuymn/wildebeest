@@ -54,6 +54,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   gone, or its account is suspended); one that fails with an error is retried four times over about five hours, then
   dropped. An `Idempotency-Key` that scheduled a status answers with it on a repeat, with or without `scheduled_at`.
   Media attached to a scheduled status is kept until it is published or deleted.
+- `PATCH /api/v1/media/:id`, the same update as `PUT`, and `DELETE /api/v1/media/:id`, as Mastodon 4.5 has them (scope
+  `write:media`): your own media only, else 404. Media a status uses, or a scheduled status holds, answers 422 with
+  Mastodon's message; otherwise the media is deleted with its files and the answer is `{}`.
+- `DELETE /api/v1/profile/avatar` and `DELETE /api/v1/profile/header`, as Mastodon 4.5 has them (scope
+  `write:accounts`): the account shows the default image again, the removed image's files are deleted, followers'
+  servers receive the profile `Update`, and the answer is your `CredentialAccount`.
 
 ### Changed
 

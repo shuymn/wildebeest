@@ -347,6 +347,64 @@ describe('GET and PUT /api/v1/media/:id', () => {
 	})
 })
 
+describe('PATCH and DELETE /api/v1/media/:id', () => {
+	it('updates through PATCH as through PUT', async () => {
+		const h = await users()
+		const { alice, bob } = h.users
+		const media = await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		const patch = (token: string, body: Record<string, unknown>) =>
+			h.request(`/api/v1/media/${media.id}`, bearer(token, json(body, { method: 'PATCH' })))
+		expect((await patch(bob.token, { description: 'mine now' })).status).toBe(404)
+		const updated = await patch(alice.token, { description: 'patched', focus: '0.5,-0.5' })
+		expect(updated.status).toBe(200)
+		expect(await updated.json()).toMatchObject({ description: 'patched', meta: { focus: { x: 0.5, y: -0.5 } } })
+		expect((await patch(alice.token, { description: 'x'.repeat(1501) })).status).toBe(422)
+	})
+
+	it('deletes own unattached media with its R2 objects, and nobody else’s (MEDIA-1)', async () => {
+		const h = await users()
+		const { alice, bob } = h.users
+		const media = await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		const keys = await keysOf(h, media.id)
+		const destroy = (token: string, id = media.id) =>
+			h.request(`/api/v1/media/${id}`, bearer(token, { method: 'DELETE' }))
+		const foreign = await destroy(bob.token)
+		expect([foreign.status, await foreign.json()]).toEqual([404, { error: 'Record not found' }])
+		expect((await destroy(alice.token, '999999999999999999')).status).toBe(404)
+		expect(await stored(keys)).toEqual(keys)
+
+		const deleted = await destroy(alice.token)
+		expect([deleted.status, await deleted.json()]).toEqual([200, {}])
+		expect(await stored(keys)).toEqual([])
+		expect(await row(h, media.id)).toBeUndefined()
+		expect((await h.request(pathOf(media.url))).status).toBe(404)
+		expect((await destroy(alice.token)).status).toBe(404)
+		expect((await post(h, alice, { status: 'x', media_ids: [media.id] })).media_attachments).toEqual([])
+	})
+
+	it('refuses media a status uses, and deletes it once a status deletion detached it', async () => {
+		const h = await users()
+		const { alice } = h.users
+		const media = await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS)))
+		const keys = await keysOf(h, media.id)
+		const status = await post(h, alice, { status: 'x', media_ids: [media.id] })
+		const destroy = () => h.request(`/api/v1/media/${media.id}`, bearer(alice.token, { method: 'DELETE' }))
+		const refused = await destroy()
+		expect([refused.status, await refused.json()]).toEqual([
+			422,
+			{ error: 'Media attachment is currently used by a status' },
+		])
+		expect(await stored(keys)).toEqual(keys)
+		expect(await row(h, media.id)).toMatchObject({ status_id: status.id })
+
+		// Deleting the status keeps the media for a redraft; deleting the media then removes it at once.
+		await h.request(`/api/v1/statuses/${status.id}`, bearer(alice.token, { method: 'DELETE' }))
+		expect((await destroy()).status).toBe(200)
+		expect(await stored(keys)).toEqual([])
+		expect(await row(h, media.id)).toBeUndefined()
+	})
+})
+
 describe('GET /media/:token/:file', () => {
 	it('serves only well-formed paths of served files (MEDIA-2, unsafe R2 key)', async () => {
 		const h = await users()
