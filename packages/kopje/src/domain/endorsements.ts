@@ -12,7 +12,7 @@ import {
 } from './accounts'
 import { endorsementListedSql, endorsementsShownSql } from './audience'
 import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
-import { statusCursor } from './statuses'
+import { ABOVE_EVERY_ID, BELOW_EVERY_ID, statusCursor } from './statuses'
 import type { Db } from '../db/sql'
 
 // Endorsed accounts (Mastodon 4.5's AccountPin, Api::V1::Accounts::EndorsementsController and
@@ -73,10 +73,6 @@ export const unendorse = userWriteOperation<{ target: string; now: number }, Rel
 	}
 )
 
-// Account ids are 18 digits: no cursor is a bound beyond every one, so the range is always a plain one and a page is
-// read from the owner's endorsements through the primary key from the cursor, not from the newest.
-const ABOVE_EVERY_ID = ':'
-
 // The accounts `owner` endorses that R28 lists, by account id, newest first, paged by the account id
 // (paginate_by_max_id, and min_id as Kopje's other account lists page); page null reads up to
 // MAX_ENDORSEMENTS_ANSWERED.
@@ -93,7 +89,7 @@ function endorsedPage(db: Db, owner: string, page: PageQuery | null, present: Pr
 		ORDER BY p.target_account_id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 		owner,
 		statusCursor(page?.maxId) ?? ABOVE_EVERY_ID,
-		statusCursor(page?.minId ?? page?.sinceId) ?? '',
+		statusCursor(page?.minId ?? page?.sinceId) ?? BELOW_EVERY_ID,
 		page?.limit ?? MAX_ENDORSEMENTS_ANSWERED
 	)
 	if (ascending) {
