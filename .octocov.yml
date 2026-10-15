@@ -4,6 +4,7 @@ coverage:
     - octocov-1/lcov.info
     - octocov-2/lcov.info
     - octocov-3/lcov.info
+    - octocov-4/lcov.info
 diff:
   datastores:
     - artifact://${GITHUB_REPOSITORY}
