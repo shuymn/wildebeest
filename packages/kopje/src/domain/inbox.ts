@@ -1409,6 +1409,15 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 		'DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE status_id = ? LIMIT ?)',
 		statusId
 	)
+	// Pins of the status (migration 0018_status_pins_and_conversation_mutes): only its author pins it, so a remote
+	// status has none, but none outlives it.
+	spend(
+		db,
+		budget,
+		`DELETE FROM status_pins WHERE status_id = ?1
+			AND account_id IN (SELECT account_id FROM status_pins WHERE status_id = ?1 LIMIT ?2)`,
+		statusId
+	)
 	// Filters naming the status (migration 0012_filters): any number of them, of any accounts.
 	spend(
 		db,
@@ -1439,6 +1448,7 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 			OR EXISTS (SELECT 1 FROM bookmarks WHERE status_id = ?1)
 			OR EXISTS (SELECT 1 FROM notifications WHERE status_id = ?1)
 			OR EXISTS (SELECT 1 FROM filter_statuses WHERE status_id = ?1)
+			OR EXISTS (SELECT 1 FROM status_pins WHERE status_id = ?1)
 			OR EXISTS (SELECT 1 FROM outbound_receipts WHERE status_id = ?1)
 			OR EXISTS (SELECT 1 FROM statuses WHERE in_reply_to_id = ?1 OR reblog_of_id = ?1)`,
 		statusId

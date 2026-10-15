@@ -1,5 +1,5 @@
 import { type Account, edgeRangeSql, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
-import { shownSql, statusReads, type WithVisibleStatus } from './audience'
+import { notifiedSql, statusReads, type WithVisibleStatus } from './audience'
 import { type UserContext, userReadOperation, userWriteOperation } from './auth'
 import { addToConversation } from './conversations'
 import { presentStatuses, type Status } from './status-presenter'
@@ -12,7 +12,7 @@ import type { Db } from '../db/sql'
 // status. A mention is also left out when its status mentions or replies to an account the recipient blocks or mutes
 // with notifications (Mastodon's FeedManager#filter_from_mentions), and a post notification (`status`) when home would
 // leave its status out (FeedInsertWorker), which includes a sender the recipient mutes. Only a local recipient is
-// written one. A new notification also records a push for each of the recipient's Web Push subscriptions that wants
+// written one, and none about a status in a conversation the recipient mutes (R31); one written before the mute stays. A new notification also records a push for each of the recipient's Web Push subscriptions that wants
 // it; domain/push.ts checks this rule again, at its own time, before each is sent (PUSH-3).
 
 export type NotificationType =
@@ -34,7 +34,8 @@ export type NotifyInput = {
 	now: number
 }
 
-// Writes a notification if the rule lets it through. The natural key makes a repeat a no-op, except for `update`:
+// Writes a notification if the rule lets it through (notifiedSql: R15, and not in a conversation the recipient mutes,
+// R31). The natural key makes a repeat a no-op, except for `update`:
 // every edit notifies again, so the previous one is replaced (and gets a newer id).
 export function notify(db: Db, input: NotifyInput): void {
 	if (input.type === 'update') {
@@ -48,7 +49,7 @@ export function notify(db: Db, input: NotifyInput): void {
 	const inserted = db.all<{ id: number }>(
 		`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at)
 		SELECT ?1, ?2, ?3, ?4, ?5
-		WHERE EXISTS (SELECT 1 FROM local_accounts WHERE account_id = ?1) AND ${shownSql('?1', '?2', '?3', '?4', '?5')}
+		WHERE EXISTS (SELECT 1 FROM local_accounts WHERE account_id = ?1) AND ${notifiedSql('?1', '?2', '?3', '?4', '?5')}
 		ON CONFLICT DO NOTHING RETURNING id`,
 		input.recipientId,
 		input.type,

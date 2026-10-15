@@ -570,6 +570,37 @@ export function undoBlockActivity(input: BlockActivityInput) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Pins (Mastodon's Api::V1::Statuses::PinsController): pinning a status adds its uri to the actor's featured
+// collection, unpinning removes it, each told to the actor's followers (ActivityPub::AddSerializer and
+// RemoveSerializer, sent by ActivityPub::RawDistributionWorker to followers.inboxes). Neither is content (R23): it
+// carries a uri only, and goes to every accepted remote follower, as Mastodon sends it. Mastodon's carries no id;
+// Kopje names each `<actor>#featured/<local id>`.
+// ---------------------------------------------------------------------------------------------------------------
+
+// StatusPinValidator::PIN_LIMIT: a local account pins at most this many statuses (status-actions.ts), so its featured
+// collection holds at most this many.
+export const PIN_LIMIT = 5
+
+// The featured collection of a local actor (ActivityPub::ActorSerializer#featured), served by federation.ts.
+export function featuredUri(actorUri: string): string {
+	return `${actorUri}/collections/featured`
+}
+
+export function featuredActivity(type: 'Add' | 'Remove', input: { id: string; actorUri: string; statusUri: string }) {
+	return {
+		activity: {
+			'@context': AS_CONTEXT,
+			id: input.id,
+			type,
+			actor: input.actorUri,
+			object: input.statusUri,
+			target: featuredUri(input.actorUri),
+		},
+		audience: { followers: true, accounts: [] },
+	} satisfies OutboundEnvelope
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Local objects served over ActivityPub (VIS-4): the Note of a public or unlisted local status, and the outbox. Both
 // come from statusFacts and noteOf, the data of the outbound Create, so the served object and the delivered one agree.
 // ---------------------------------------------------------------------------------------------------------------
@@ -711,3 +742,37 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 		return { total: null, items, next: rows.length > OUTBOX_PAGE_SIZE && last !== undefined ? last.id : null }
 	}
 )
+
+// A pinned status in the featured collection: the Note (serialized JSON-LD) of a public or unlisted one, else its uri
+// alone (ActivityPub::CollectionsController#set_items: `item.distributable? ? item : uri`).
+export type FeaturedItem = { uri: string; note: string | null }
+
+// A local actor's featured collection (ActivityPub::CollectionsController, `featured`): its pinned statuses, newest pin
+// first (Account#pinned_statuses), all at once (an OrderedCollection without pages). Null for no such actor, or a
+// suspended one, as the outbox answers. The actor is found through the index of local usernames, and its pins through
+// their primary key: at most PIN_LIMIT.
+export const getFeatured = readOperation<{ username: string }, FeaturedItem[] | null>((db, { username }) => {
+	const owner = db.first<{ id: string }>(
+		`SELECT a.id FROM accounts a JOIN local_accounts l ON l.account_id = a.id
+		WHERE a.domain IS NULL AND lower(a.username) = lower(?1) AND a.username = ?1 AND ${availableLocalSql('l')}`,
+		username
+	)
+	if (owner === undefined) {
+		return null
+	}
+	const rows = db.all<{ id: string; uri: string; servable: number }>(
+		`SELECT s.id, s.uri, s.visibility IN ${DISTRIBUTABLE_SQL} AS servable
+		FROM status_pins p CROSS JOIN statuses s ON s.id = p.status_id
+		WHERE p.account_id = ?1 AND s.account_id = ?1 AND s.reblog_of_id IS NULL
+		ORDER BY p.created_at DESC, s.id DESC LIMIT ?2`,
+		owner.id,
+		PIN_LIMIT
+	)
+	return rows.map((row) => {
+		const facts = row.servable === 1 ? statusFacts(db, row.id) : null
+		return {
+			uri: row.uri,
+			note: facts === null ? null : JSON.stringify({ '@context': contextOf(facts), ...noteOf(facts) }),
+		}
+	})
+})

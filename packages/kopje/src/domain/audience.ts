@@ -572,6 +572,23 @@ export function shownSql(r: string, type: string, from: string, status: string, 
 			AND ${NOT_A_REPLY_TO_OTHERS} AND ${homeFilterSql('s', r, now)})))`
 }
 
+// R31 (Account#muting_conversation?): whether `owner` mutes the conversation `thread`, an expression for a status's
+// thread (statuses.thread, Mastodon's conversation_id). A mute is its owner's alone: only this module reads
+// conversation_mutes, for the status's `muted` and for notify.
+export function conversationMutedSql(owner: string, thread: string): string {
+	return `EXISTS (SELECT 1 FROM main.conversation_mutes pcm WHERE pcm.account_id = ${owner} AND pcm.thread = ${thread})`
+}
+
+// R15 as notify writes a notification (NotifyService#drop?): what shownSql shows, unless its status is in a
+// conversation the recipient mutes (R31, NotifyService::DropCondition#conversation_muted?: a reblog notification
+// names the original, whose conversation counts). Mastodon drops only the notifications it would create: one written
+// before the mute stays listed and pushed, so listing and pushes apply shownSql alone.
+export function notifiedSql(r: string, type: string, from: string, status: string, now: string): string {
+	return `((${status} IS NULL OR NOT EXISTS (SELECT 1 FROM main.statuses nc WHERE nc.id = ${status}
+			AND ${conversationMutedSql(r, 'nc.thread')}))
+		AND ${shownSql(r, type, from, status, now)})`
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // ActivityPub addressing.
 // ---------------------------------------------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 import { fieldSources } from './accounts'
-import { followersUri, recordOutbound } from './activities'
+import { featuredUri, followersUri, recordOutbound } from './activities'
 import { PUBLIC_COLLECTION } from './audience'
 import { allocateLocalId } from './ids'
 import { renderFieldValue } from './status-text'
@@ -20,6 +20,7 @@ const CONTEXT = [
 		manuallyApprovesFollowers: 'as:manuallyApprovesFollowers',
 		toot: 'http://joinmastodon.org/ns#',
 		discoverable: 'toot:discoverable',
+		featured: { '@id': 'toot:featured', '@type': '@id' },
 		schema: 'http://schema.org#',
 		PropertyValue: 'schema:PropertyValue',
 		value: 'schema:value',
@@ -72,6 +73,7 @@ export function actorDocument(db: Db, accountId: string): Record<string, unknown
 		outbox: `${row.uri}/outbox`,
 		followers: followersUri(row.uri),
 		following: `${row.uri}/following`,
+		featured: featuredUri(row.uri),
 		endpoints: { sharedInbox: `${origin}/inbox` },
 		publicKey: { id: `${row.uri}#main-key`, owner: row.uri, publicKeyPem: row.pubkey },
 		manuallyApprovesFollowers: row.locked === 1,

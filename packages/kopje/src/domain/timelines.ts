@@ -321,7 +321,10 @@ export type AccountStatusesInput = {
 // An account's statuses as the viewer may see them (Mastodon's Status.permitted_for): nothing when either blocks the
 // other; boosts of accounts the viewer blocks, mutes or domain-blocks, and of originals they may not see, are left
 // out. The account's own statuses are shown even if the viewer mutes it, as on its profile. exclude_replies keeps
-// replies to the account itself (threads). Pins do not exist yet: pinned=true is an empty list.
+// replies to the account itself (threads). pinned=true lists the account's pinned statuses by the same rule
+// (AccountStatusesFilter#pinned_scope), newest pin first (Account#pinned_statuses) and with the other filters; a page
+// asked by min_id is by status id, as Mastodon's paginate_by_min_id reorders it. An account pins at most a few, read
+// through their primary key.
 export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, Page<Status> | null>(
 	(db, input, viewer) => {
 		const { accountId: viewerId, now } = viewer
@@ -330,9 +333,6 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 			return null
 		}
 		const cursor = statusPage(input.page)
-		if (input.pinned) {
-			return { items: [], newest: null, oldest: null }
-		}
 		const read = statusReads(viewer, { viewer: '?1', now: '?7' })
 		// An account the rule hides as a whole from the viewer (unavailable, or blocking them), or that they block, shows
 		// nothing: decided once, so its history is never read. A mute or a domain block does not hide a profile.
@@ -342,11 +342,19 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 		) {
 			return { items: [], newest: null, oldest: null }
 		}
+		const order = cursor.ascending ? 'ASC' : 'DESC'
 		const rows = read.select(
 			db,
 			'visible',
 			{
-				where: 's.account_id = ?5',
+				...(input.pinned
+					? {
+							from: 'status_pins p CROSS JOIN',
+							join: 'ON s.id = p.status_id',
+							where: 'p.account_id = ?5 AND s.account_id = ?5',
+							tail: `ORDER BY ${cursor.ascending ? '' : 'p.created_at DESC, '}s.id ${order} LIMIT ?4`,
+						}
+					: { where: 's.account_id = ?5', tail: `ORDER BY s.id ${order} LIMIT ?4` }),
 				and: `NOT ${blocksSql('?1', 's.account_id')}
 					AND (s.reblog_of_id IS NULL OR EXISTS (SELECT 1 FROM statuses o WHERE o.id = s.reblog_of_id
 						AND ${visibleSql('o', '?1')} AND NOT ${filteredForSql('o.account_id', '?1', '?7')}))
@@ -355,7 +363,6 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 					${input.excludeReblogs ? 'AND s.reblog_of_id IS NULL' : ''}
 					AND (?6 IS NULL OR EXISTS (SELECT 1 FROM status_tags ut WHERE ut.status_id = s.id AND ut.name = ?6))
 					AND ${rangeSql('s.id')}`,
-				tail: `ORDER BY s.id ${cursor.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			},
 			viewerId,
 			...rangeParams(cursor),

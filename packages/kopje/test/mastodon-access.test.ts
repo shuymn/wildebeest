@@ -100,6 +100,16 @@ const EXCEPTIONS: Record<string, Exception> = {
 		mastodon: 'required token, scopes read read:follows, user required',
 		reason: 'grants() lets `follow` cover read:follows everywhere; Mastodon omits follow here',
 	},
+	'POST /api/v1/statuses/:id/mute': {
+		kopje: 'required token, scopes follow write write:mutes, user required',
+		mastodon: 'required token, scopes write write:mutes, user required',
+		reason: 'grants() lets `follow` cover write:mutes everywhere; Mastodon omits follow here',
+	},
+	'POST /api/v1/statuses/:id/unmute': {
+		kopje: 'required token, scopes follow write write:mutes, user required',
+		mastodon: 'required token, scopes write write:mutes, user required',
+		reason: 'grants() lets `follow` cover write:mutes everywhere; Mastodon omits follow here',
+	},
 
 	// Mastodon's StatusPolicy#show? (Pundit) decides per viewer; Kopje's Store applies the visibility rules.
 	'GET /api/v1/statuses/:id': {

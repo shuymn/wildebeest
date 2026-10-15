@@ -2,7 +2,9 @@ import { type Account, accountUrl, acctOf, type Present, presentAccountsById } f
 import {
 	apiVisibility,
 	type ApiVisibility,
+	conversationMutedSql,
 	type OwnStatusId,
+	requiresMention,
 	type ViewerContext,
 	type Visibility,
 	type VisibleStatusId,
@@ -301,11 +303,12 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 				: {
 						favourited: flags.favourited.has(row.id),
 						reblogged: flags.reblogged.has(row.id),
-						muted: false,
+						muted: flags.muted.has(row.id),
 						bookmarked: flags.bookmarked.has(row.id),
-						// Pins come later; an own, pinnable status says it is not pinned.
-						...(row.account_id === viewerId && row.reblog_of_id === null && visibility !== 'direct'
-							? { pinned: false }
+						// Only on an own status that may be pinned (REST::StatusSerializer#pinnable?: not a boost, and
+						// public, unlisted or private).
+						...(row.account_id === viewerId && row.reblog_of_id === null && !requiresMention(row.visibility)
+							? { pinned: flags.pinned.has(row.id) }
 							: {}),
 						filtered,
 					}
@@ -397,25 +400,31 @@ function mediaSize({ width, height }: Size): MediaSize {
 	return { width, height, size: `${width}x${height}`, aspect: width / height }
 }
 
-function viewerFlags(
-	db: Db,
-	viewerId: string | null,
-	ids: string
-): { favourited: Set<string>; reblogged: Set<string>; bookmarked: Set<string> } {
+type ViewerFlags = Record<'favourited' | 'reblogged' | 'bookmarked' | 'pinned' | 'muted', Set<string>>
+
+// The viewer's own flags of the statuses: favourited, boosted, bookmarked, pinned, and in a conversation they mute
+// (each status's own thread, a boost's too, as Mastodon's muted reads the status's conversation).
+function viewerFlags(db: Db, viewerId: string | null, ids: string): ViewerFlags {
 	if (viewerId === null) {
-		return { favourited: new Set(), reblogged: new Set(), bookmarked: new Set() }
+		return { favourited: new Set(), reblogged: new Set(), bookmarked: new Set(), pinned: new Set(), muted: new Set() }
 	}
 	const rows = db.all<{ kind: string; status_id: string }>(
 		`SELECT 'f' AS kind, status_id FROM favourites WHERE account_id = ?1 AND status_id IN (SELECT value FROM json_each(?2))
 		UNION ALL
 		SELECT 'r', reblog_of_id FROM statuses WHERE account_id = ?1 AND reblog_of_id IN (SELECT value FROM json_each(?2))
 		UNION ALL
-		SELECT 'b', status_id FROM bookmarks WHERE account_id = ?1 AND status_id IN (SELECT value FROM json_each(?2))`,
+		SELECT 'b', status_id FROM bookmarks WHERE account_id = ?1 AND status_id IN (SELECT value FROM json_each(?2))
+		UNION ALL
+		SELECT 'p', value FROM json_each(?2)
+		WHERE EXISTS (SELECT 1 FROM status_pins WHERE account_id = ?1 AND status_id = value)
+		UNION ALL
+		SELECT 'm', ms.id FROM statuses ms
+		WHERE ms.id IN (SELECT value FROM json_each(?2)) AND ${conversationMutedSql('?1', 'ms.thread')}`,
 		viewerId,
 		ids
 	)
 	const of = (kind: string) => new Set(rows.filter((row) => row.kind === kind).map((row) => row.status_id))
-	return { favourited: of('f'), reblogged: of('r'), bookmarked: of('b') }
+	return { favourited: of('f'), reblogged: of('r'), bookmarked: of('b'), pinned: of('p'), muted: of('m') }
 }
 
 function groupBy<T extends { status_id: string }>(rows: T[]): Map<string, T[]> {

@@ -16,10 +16,11 @@ import { type Params, parseBoolean } from './params'
 import { API_VISIBILITIES, type ApiVisibility } from '../domain/audience'
 import { checkPoll, isPollInput, type PollInput } from '../domain/polls'
 import { exceedsRawLength, statusLength } from '../domain/status-text'
-import { type Acted, type MediaAttributes, TOO_MANY_FILES, type Viewed } from '../domain/statuses'
+import { type Acted, MAX_STATUSES_BY_ID, type MediaAttributes, TOO_MANY_FILES, type Viewed } from '../domain/statuses'
 import { sha256Hex } from '../security/tokens'
 
-// /api/v1/statuses (B4a): posting, editing, deleting, the per-status reads, and favourite, reblog and bookmark.
+// /api/v1/statuses (B4a): posting, editing, deleting, the per-status reads, favourite, reblog and bookmark, pins and
+// conversation mutes.
 // Requests are checked here as Mastodon's controllers and validators do; the Store authorizes and decides.
 
 const NOT_FOUND = () => mastodonError(404, 'Record not found')
@@ -276,6 +277,24 @@ export const getStatus: ApiHandler = async (c, deps) => {
 	return viewedResponse(c, authorized(result))
 }
 
+// GET /api/v1/statuses?id[]= (StatusesController#index): the statuses getStatus would show, in one read. More than
+// MAX_STATUSES_BY_ID distinct ids raise Mastodon::ValidationError, which answers 422 with the class's name.
+export const getStatuses: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const ids = [...new Set(p.getAll('id'))]
+	if (ids.length > MAX_STATUSES_BY_ID) {
+		return refuseAfterAuth(c, deps, mastodonError(422, 'Mastodon::ValidationError'))
+	}
+	const credential = optionalCredential(c, deps)
+	const result = await storeCall(c, deps, (s, b) =>
+		s.getStatuses(b, { credential, ids, now: deps.now(), present: present(c) })
+	)
+	return c.json(authorized(result))
+}
+
 export const statusContext: ApiHandler = async (c, deps) => {
 	const credential = optionalCredential(c, deps)
 	const result = await storeCall(c, deps, (s, b) =>
@@ -298,7 +317,16 @@ export const statusSource: ApiHandler = async (c, deps) => {
 	return viewedResponse(c, authorized(result))
 }
 
-type Action = 'favourite' | 'unfavourite' | 'bookmark' | 'unbookmark' | 'unreblog'
+type Action =
+	| 'favourite'
+	| 'unfavourite'
+	| 'bookmark'
+	| 'unbookmark'
+	| 'unreblog'
+	| 'pin'
+	| 'unpin'
+	| 'muteConversation'
+	| 'unmuteConversation'
 
 function action(name: Action): ApiHandler {
 	return async (c, deps) => {
@@ -313,6 +341,11 @@ export const unfavourite = action('unfavourite')
 export const bookmark = action('bookmark')
 export const unbookmark = action('unbookmark')
 export const unreblog = action('unreblog')
+// Pins (Statuses::PinsController) and conversation mutes (Statuses::MutesController).
+export const pin = action('pin')
+export const unpin = action('unpin')
+export const muteConversation = action('muteConversation')
+export const unmuteConversation = action('unmuteConversation')
 
 export const reblog: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)

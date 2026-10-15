@@ -266,11 +266,18 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'POST', path: '/api/v1/statuses', access: { scope: 'write:statuses' }, handler: statuses.createStatus },
 	{
 		method: 'GET',
+		path: '/api/v1/statuses',
+		access: { scope: 'read:statuses', optional: true },
+		handler: statuses.getStatuses,
+	},
+	{
+		method: 'GET',
 		path: '/api/v1/statuses/:id',
 		access: { scope: 'read:statuses', optional: true },
 		handler: statuses.getStatus,
 	},
 	{ method: 'PUT', path: '/api/v1/statuses/:id', access: { scope: 'write:statuses' }, handler: statuses.editStatus },
+	{ method: 'PATCH', path: '/api/v1/statuses/:id', access: { scope: 'write:statuses' }, handler: statuses.editStatus },
 	{
 		method: 'DELETE',
 		path: '/api/v1/statuses/:id',
@@ -342,6 +349,21 @@ export const ROUTES: readonly Route[] = [
 		path: '/api/v1/statuses/:id/unbookmark',
 		access: { scope: 'write:bookmarks' },
 		handler: statuses.unbookmark,
+	},
+	// Pins and conversation mutes.
+	{ method: 'POST', path: '/api/v1/statuses/:id/pin', access: { scope: 'write:accounts' }, handler: statuses.pin },
+	{ method: 'POST', path: '/api/v1/statuses/:id/unpin', access: { scope: 'write:accounts' }, handler: statuses.unpin },
+	{
+		method: 'POST',
+		path: '/api/v1/statuses/:id/mute',
+		access: { scope: 'write:mutes' },
+		handler: statuses.muteConversation,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/statuses/:id/unmute',
+		access: { scope: 'write:mutes' },
+		handler: statuses.unmuteConversation,
 	},
 
 	{ method: 'GET', path: '/api/v1/timelines/home', access: { scope: 'read:statuses' }, handler: timelines.home },

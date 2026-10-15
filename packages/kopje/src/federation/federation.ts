@@ -15,6 +15,7 @@ import {
 	Group,
 	Image,
 	Note,
+	type Object as ApObject,
 	Organization,
 	Person,
 	PropertyValue,
@@ -34,6 +35,7 @@ import {
 	type RequestSigner,
 	requireObjectRoot,
 } from './loader'
+import type { FeaturedItem } from '../domain/activities'
 import {
 	type CollectionKind,
 	type CollectionPage,
@@ -53,8 +55,8 @@ import { StoreUnavailableError } from '../platform/store-errors'
 import { bytesToBase64, generateWrappedKey, importPublicKeyPem, type KeyGen } from '../security/key-wrap'
 import { createKeyring, type KeyOwner, requestSigner, type Signer } from '../security/keyring'
 
-// The Fedify Federation of one request: dispatchers for actors, key pairs, WebFinger, NodeInfo and the followers and
-// following collections, local Notes and the outbox, over the Store, with ids under the domain fixed at /setup. It
+// The Fedify Federation of one request: dispatchers for actors, key pairs, WebFinger, NodeInfo, the followers,
+// following and featured collections, local Notes and the outbox, over the Store, with ids under the domain fixed at /setup. It
 // never sends: Fedify's queue,
 // sendActivity and forwardActivity are not used (test/fedify-usage.test.ts); outbound delivery goes through deliveries.
 
@@ -340,6 +342,36 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 			: Note.fromJsonLd(json, { contextLoader: ctx.contextLoader })
 	})
 
+	// The featured collection (ActivityPub::CollectionsController, `featured`): the pinned statuses, newest pin first,
+	// all in the collection itself, as Mastodon's OrderedCollection without pages: the Note of a public or unlisted one
+	// (as the object endpoint serves it, VIS-4), the uri alone of any other, and their count (totalItems).
+	const pins = new Map<string, Promise<FeaturedItem[] | null>>()
+	const featuredOf = (username: string) =>
+		memo(pins, username, async () =>
+			(await localActor(username))?.username === username ? rpc((s) => s.featured(build, { username })) : null
+		)
+	federation
+		.setFeaturedDispatcher('/ap/users/{identifier}/collections/featured', async (ctx, identifier, cursor) => {
+			const featured = cursor === null ? await featuredOf(identifier) : null
+			if (featured === null) {
+				return null
+			}
+			const items = await Promise.all(
+				featured.map(async ({ uri, note }): Promise<ApObject | URL> => {
+					if (note === null) {
+						return new URL(uri)
+					}
+					const json = JSON.parse(note) as { type?: unknown }
+					return json.type === 'Question'
+						? Question.fromJsonLd(json, { contextLoader: ctx.contextLoader })
+						: Note.fromJsonLd(json, { contextLoader: ctx.contextLoader })
+				})
+			)
+			// Fedify serves a URL item as the uri it is (filterCollectionItems), though the dispatcher's type names objects.
+			return { items: items as ApObject[] }
+		})
+		.setCounter(async (_ctx, identifier) => (await featuredOf(identifier))?.length ?? null)
+
 	// The outbox: Create and Announce of the public and unlisted statuses, newest first.
 	federation
 		.setOutboxDispatcher('/ap/users/{identifier}/outbox', async (ctx, identifier, cursor) => {
@@ -444,6 +476,7 @@ async function localActorObject(ctx: RequestContext<FederationState>, actor: Loc
 		outbox: new URL(`${id.href}/outbox`),
 		followers: ctx.getFollowersUri(actor.username),
 		following: ctx.getFollowingUri(actor.username),
+		featured: ctx.getFeaturedUri(actor.username),
 		endpoints: new Endpoints({ sharedInbox: new URL('/inbox', ctx.canonicalOrigin) }),
 		// Derived from local_accounts.pubkey, the authoritative public key.
 		publicKey: new CryptographicKey({

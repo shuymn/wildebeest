@@ -69,6 +69,7 @@ describe('actor document', () => {
 			outbox: 'https://social.example/ap/users/Alice/outbox',
 			followers: 'https://social.example/ap/users/Alice/followers',
 			following: 'https://social.example/ap/users/Alice/following',
+			featured: 'https://social.example/ap/users/Alice/collections/featured',
 			endpoints: { sharedInbox: 'https://social.example/inbox' },
 			manuallyApprovesFollowers: false,
 			discoverable: true,
