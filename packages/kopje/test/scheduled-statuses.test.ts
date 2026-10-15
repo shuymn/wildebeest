@@ -561,7 +561,7 @@ describe('publication', () => {
 	})
 })
 
-// Nothing of a scheduled status is shown, notified or delivered before its publication (R25, VIS-1): whatever is
+// Nothing of a scheduled status is shown, notified or delivered before its publication (R26, VIS-1): whatever is
 // scheduled, by whom, mentioning whom and with which visibility, every other table stays as it was, and each account's
 // scheduled statuses are its own.
 describe('nothing leaks before publication', () => {

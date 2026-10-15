@@ -17,6 +17,7 @@ import {
 	workspace,
 } from './cutover-helpers.js'
 import type { FixtureOptions } from './legacy-fixture.js'
+import { threadsOf } from '../cli/lib/cutover/verify-expect.js'
 
 // The converter end to end on synthetic exports (DATA-11 to DATA-14): convert, then check the result against
 // expectations computed independently from the export, and show the check fails on each kind of damage.
@@ -76,6 +77,58 @@ describe('convert and verify-conversion', () => {
 			}
 		})
 	}
+
+	it('makes the conversations of the direct statuses carried, as migration 0009 makes them', async () => {
+		const exportPath = await exportOf({ level: 39, directMessages: true })
+		const { ok, dumpPath } = await convert(exportPath)
+		expect(ok).toBe(true)
+		const { ok: verified, report } = await verify(exportPath, dumpPath)
+		expect(verified).toBe(true)
+		expect((report as { categories: Record<string, { expected: number }> }).categories.conversations?.expected).toBe(3)
+		const db = await opened(dumpPath)
+		const rows = () =>
+			db
+				.prepare(
+					`SELECT a.username AS owner, c.thread, (SELECT group_concat(p.username) FROM json_each(c.participants) j
+							JOIN accounts p ON p.id = j.value) AS participants, c.unread,
+						(SELECT group_concat(s.content, ' | ') FROM (SELECT s.content FROM conversation_statuses cs
+							JOIN statuses s ON s.id = cs.status_id WHERE cs.conversation_id = c.id ORDER BY s.id) s) AS statuses,
+						c.last_status_id = (SELECT max(status_id) FROM conversation_statuses WHERE conversation_id = c.id) AS newest
+					FROM conversations c JOIN accounts a ON a.id = c.account_id ORDER BY c.id`
+				)
+				.all()
+		// Alice's two direct messages to r0, each a thread of its own (r1, tagged in the second, is not addressed, so no
+		// recipient), and r1's to her with her answer in its thread: read, as her answer is the last status.
+		const converted = rows()
+		expect(converted).toEqual([
+			expect.objectContaining({
+				owner: 'alice',
+				participants: 'r0',
+				unread: 0,
+				statuses: '<p>@r0 a secret direct message</p>',
+			}),
+			expect.objectContaining({ owner: 'alice', participants: 'r0', unread: 0, newest: 1 }),
+			expect.objectContaining({
+				owner: 'alice',
+				// The conversation r1's object names, which alice's answer takes too.
+				thread: 'tag:remote.example,2024-03-01:objectId=171:objectType=Conversation',
+				participants: 'r1',
+				unread: 0,
+				statuses: expect.stringMatching(/just us<\/p> \| <p>@r1 just us, then<\/p>$/),
+				newest: 1,
+			}),
+		])
+		// The migration's own backfill makes the same rows of the converted statuses.
+		const migration = await readFile(
+			fileURLToPath(new URL('../migrations/0009_conversations.sql', import.meta.url)),
+			'utf8'
+		)
+		db.exec('DELETE FROM conversations')
+		db.exec(
+			migration.slice(migration.indexOf('CREATE TABLE conversation_backfill'), migration.indexOf('CREATE TRIGGER'))
+		)
+		expect(rows()).toEqual(converted)
+	})
 
 	it('reads sqlite_sequence as D1 exports it (a reset, then the counter rows), and refuses a second reset', async () => {
 		const exportPath = await exportOf({ level: 39, notificationSequence: 12n })
@@ -330,6 +383,9 @@ describe('convert and verify-conversion', () => {
 			['a follow loses its languages', 'UPDATE follows SET languages = NULL', 'follows'],
 			['a favourite loses its Like record', 'UPDATE favourites SET uri = NULL', 'favourites'],
 			['a block loses its Block record', 'UPDATE blocks SET uri = NULL', 'blocks'],
+			['a status takes its own thread', 'UPDATE statuses SET thread = uri WHERE in_reply_to_id IS NOT NULL', 'threads'],
+			['a conversation is marked unread', 'UPDATE conversations SET unread = 1 - unread', 'conversations'],
+			['a conversation loses its statuses', 'DELETE FROM conversation_statuses', 'conversations'],
 		]
 		let exportPath: string
 		let dumpPath: string
@@ -555,5 +611,30 @@ describe('text with a lone surrogate', () => {
 		const { ok: verified, categories } = await verifyWith(exportPath, dumpPath)
 		expect(failing(categories)).toEqual([])
 		expect(verified).toBe(true)
+	})
+})
+
+describe('the expected threads', () => {
+	it('walk each status once, so a 50,000-status chain is quick, and give a cycle each status’s own', () => {
+		const uri = (i: number) => `https://remote.example/objects/${i}`
+		const replies: Record<string, string> = {}
+		const statuses: Record<string, string> = {}
+		for (let i = 1; i <= 50_000; i++) {
+			statuses[uri(i)] = '[]'
+			replies[uri(i)] = JSON.stringify([uri(i - 1), i > 1 ? uri(i - 1) : null])
+		}
+		for (const [a, b] of [
+			['a', 'b'],
+			['b', 'a'],
+		] as const) {
+			statuses[uri(0) + a] = '[]'
+			replies[uri(0) + a] = JSON.stringify([uri(0) + b, uri(0) + b])
+		}
+		const started = performance.now()
+		const threadOf = threadsOf(replies, statuses)
+		const threads = new Set(Array.from({ length: 50_000 }, (_, i) => threadOf(uri(50_000 - i))))
+		expect(performance.now() - started).toBeLessThan(2000)
+		expect([...threads]).toEqual([uri(0)])
+		expect([threadOf(uri(0) + 'a'), threadOf(uri(0) + 'b')]).toEqual([uri(0) + 'b', uri(0) + 'a'])
 	})
 })

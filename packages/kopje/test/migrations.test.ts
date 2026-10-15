@@ -4,8 +4,12 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { BUILD, freshStore, rejectionOf, tableNames, testKernel as kernel } from './helpers'
 import { MIGRATIONS } from '../src/db/migrations'
+import { Db } from '../src/db/sql'
 import { REQUIRES_MENTION_SQL } from '../src/domain/audience'
+import { CONVERSATIONS_BACKFILL } from '../src/domain/conversation-rows'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
+import { storeRemoteStatus } from '../src/domain/remote-statuses'
+import { parseRemoteStatus } from '../src/federation/remote-status'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
 
 // The shipped migrations, in order; test-only files are named after them (9999_*).
@@ -16,6 +20,8 @@ const SCHEMA_TABLES = [
 	'accounts',
 	'blocks',
 	'bookmarks',
+	'conversation_statuses',
+	'conversations',
 	'deliveries',
 	'domain_block_cleanups',
 	'domain_blocks',
@@ -29,6 +35,7 @@ const SCHEMA_TABLES = [
 	'list_accounts',
 	'lists',
 	'local_accounts',
+	'markers',
 	'media_attachments',
 	'mutes',
 	'notifications',
@@ -696,6 +703,388 @@ describe('Store migration runner', () => {
 		const added = 2 * (10_000 - 1000)
 		expect(large - small).toBeLessThanOrEqual(5 * added)
 	}, 60_000)
+
+	// Found by name, so the tests hold whatever migrations come before it.
+	const CONVERSATIONS = NAMES.indexOf('0009_conversations')
+
+	it('0009_conversations runs the backfill the cutover runs', () => {
+		expect(MIGRATIONS[CONVERSATIONS]?.sql).toContain(CONVERSATIONS_BACKFILL)
+	})
+
+	it('upgrades a Store with 0009_conversations: the direct statuses stored make their conversations', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, CONVERSATIONS)).upgrade()).toMatchObject({ ok: true })
+			const id = (n: number) => String(100000000000000000n + BigInt(n))
+			const statusId = (n: number) => String(200000000000000000n + BigInt(n))
+			for (const n of [1, 2]) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+					id(n),
+					`https://kopje.test/ap/users/u${n}`,
+					`u${n}`
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'k')",
+					id(n),
+					`u${n}@example.com`
+				)
+			}
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://remote.example/users/r', 'r', 'remote.example')",
+				id(3)
+			)
+			const status = (
+				n: number,
+				author: number,
+				visibility: string,
+				mentions: number[],
+				notified: number[],
+				parent: { id?: number; uri?: string } = {}
+			) => {
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, in_reply_to_id, in_reply_to_uri, published_at)
+					VALUES (?, ?, ?, ?, ?, ?, '2026-10-01T00:00:00.000Z')`,
+					statusId(n),
+					`https://kopje.test/ap/o/${n}`,
+					id(author),
+					visibility,
+					parent.id === undefined ? null : statusId(parent.id),
+					parent.uri ?? (parent.id === undefined ? null : `https://kopje.test/ap/o/${parent.id}`)
+				)
+				for (const m of mentions) {
+					sql.exec('INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, 0)', statusId(n), id(m))
+				}
+				for (const r of notified) {
+					sql.exec(
+						"INSERT INTO notifications (account_id, type, from_account_id, status_id) VALUES (?, 'mention', ?, ?)",
+						id(r),
+						id(author),
+						statusId(n)
+					)
+				}
+			}
+			// u1 writes to u2, who answers; r writes to u1 in reply to a status never stored, and to u2, whose notification
+			// is gone (cleared). A limited, a private and a public status mention u1 too.
+			status(1, 1, 'direct', [2], [2])
+			status(2, 2, 'direct', [1], [1], { id: 1 })
+			status(3, 3, 'direct', [1], [1], { uri: 'https://remote.example/objects/gone' })
+			status(4, 3, 'direct', [2], [])
+			status(5, 3, 'limited', [1], [1])
+			status(6, 2, 'private', [1], [1])
+			status(7, 2, 'public', [1], [1])
+
+			expect(await kernel(state, MIGRATIONS.slice(0, CONVERSATIONS + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: [NAMES[CONVERSATIONS]],
+			})
+			const conversations = () =>
+				sql
+					.exec(
+						`SELECT c.account_id, c.thread, c.participants, c.last_status_id, c.unread,
+							(SELECT json_group_array(status_id) FROM conversation_statuses WHERE conversation_id = c.id) AS statuses
+						FROM conversations c ORDER BY c.id`
+					)
+					.toArray()
+			expect(conversations()).toEqual([
+				{
+					account_id: id(1),
+					thread: 'https://kopje.test/ap/o/1',
+					participants: JSON.stringify([id(2)]),
+					last_status_id: statusId(2),
+					unread: 1,
+					statuses: JSON.stringify([statusId(1), statusId(2)]),
+				},
+				{
+					account_id: id(2),
+					thread: 'https://kopje.test/ap/o/1',
+					participants: JSON.stringify([id(1)]),
+					last_status_id: statusId(2),
+					unread: 0,
+					statuses: JSON.stringify([statusId(1), statusId(2)]),
+				},
+				{
+					account_id: id(1),
+					thread: 'https://remote.example/objects/gone',
+					participants: JSON.stringify([id(3)]),
+					last_status_id: statusId(3),
+					unread: 1,
+					statuses: JSON.stringify([statusId(3)]),
+				},
+			])
+			// Every status has its thread: the start of its chain, or the uri a reply to a status never stored names.
+			expect(sql.exec('SELECT id, thread FROM statuses ORDER BY id').toArray()).toEqual([
+				{ id: statusId(1), thread: 'https://kopje.test/ap/o/1' },
+				{ id: statusId(2), thread: 'https://kopje.test/ap/o/1' },
+				{ id: statusId(3), thread: 'https://remote.example/objects/gone' },
+				{ id: statusId(4), thread: 'https://kopje.test/ap/o/4' },
+				{ id: statusId(5), thread: 'https://kopje.test/ap/o/5' },
+				{ id: statusId(6), thread: 'https://kopje.test/ap/o/6' },
+				{ id: statusId(7), thread: 'https://kopje.test/ap/o/7' },
+			])
+			// A deleted status leaves: the last status moves back, and a conversation with none left goes.
+			sql.exec('DELETE FROM statuses WHERE id = ?', statusId(2))
+			sql.exec('DELETE FROM statuses WHERE id = ?', statusId(3))
+			expect(conversations()).toEqual([
+				expect.objectContaining({ account_id: id(1), last_status_id: statusId(1), unread: 1 }),
+				expect.objectContaining({ account_id: id(2), last_status_id: statusId(1), unread: 0 }),
+			])
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('0009_conversations threads a chain deeper than any walk and a cycle as the write path keeps them', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, CONVERSATIONS)).upgrade()
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES ('100000000000000003', 'https://remote.example/users/r', 'r', 'remote.example')"
+			)
+			const uri = (i: number) => `https://remote.example/objects/${i}`
+			// A chain of 5,000 replies, the first replying to a status never stored; and A and B replying to each other.
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5000)
+				INSERT INTO statuses (id, uri, account_id, visibility, in_reply_to_id, in_reply_to_uri, published_at)
+				SELECT CAST(200000000000000000 + i AS TEXT), 'https://remote.example/objects/' || i, '100000000000000003',
+					'direct', CASE WHEN i > 1 THEN CAST(200000000000000000 + i - 1 AS TEXT) END,
+					'https://remote.example/objects/' || (i - 1), '2026-10-01T00:00:00.000Z'
+				FROM n`
+			)
+			for (const [id, parent] of [
+				['300000000000000001', '300000000000000002'],
+				['300000000000000002', '300000000000000001'],
+			]) {
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, in_reply_to_uri, published_at)
+					VALUES (?, ?, '100000000000000003', 'direct', ?, '2026-10-01T00:00:00.000Z')`,
+					id,
+					`https://remote.example/objects/${id}`,
+					`https://remote.example/objects/${parent}`
+				)
+			}
+			sql.exec("UPDATE statuses SET in_reply_to_id = '300000000000000002' WHERE id = '300000000000000001'")
+			sql.exec("UPDATE statuses SET in_reply_to_id = '300000000000000001' WHERE id = '300000000000000002'")
+			expect(await kernel(state, MIGRATIONS.slice(0, CONVERSATIONS + 1)).upgrade()).toMatchObject({ ok: true })
+			const threads = (where: string) =>
+				sql
+					.exec(`SELECT DISTINCT thread FROM statuses WHERE ${where}`)
+					.toArray()
+					.map((row) => row.thread)
+			// The whole chain takes the uri its first status names, however deep.
+			expect(threads("id < '300000000000000000'")).toEqual([uri(0)])
+			// Neither status of the cycle starts a chain: each takes the uri it names.
+			expect(threads("id = '300000000000000001'")).toEqual(['https://remote.example/objects/300000000000000002'])
+			expect(threads("id = '300000000000000002'")).toEqual(['https://remote.example/objects/300000000000000001'])
+			// Statuses written after take their parent's thread, which never changes.
+			for (const [id, parent] of [
+				['400000000000000001', '200000000000005000'],
+				['400000000000000002', '300000000000000001'],
+			]) {
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, in_reply_to_id, in_reply_to_uri, published_at)
+					VALUES (?, ?, '100000000000000003', 'direct', ?, 'https://remote.example/parent', '2026-10-01T00:00:00.000Z')`,
+					id,
+					`https://remote.example/objects/${id}`,
+					parent
+				)
+			}
+			expect(threads("id = '400000000000000001'")).toEqual([uri(0)])
+			expect(threads("id = '400000000000000002'")).toEqual(['https://remote.example/objects/300000000000000002'])
+		})
+	}, 60_000)
+
+	it('0009_conversations threads a received status by the conversation its stored object names', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, CONVERSATIONS)).upgrade()
+			const alice = '100000000000000001'
+			const bob = '100000000000000002'
+			const aliceUri = 'https://kopje.test/ap/users/alice'
+			sql.exec("INSERT INTO accounts (id, uri, username) VALUES (?, ?, 'alice')", alice, aliceUri)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'alice@example.com', X'00', X'00', 'k')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://mastodon.example/users/bob', 'bob', 'mastodon.example')",
+				bob
+			)
+			const conversation = 'tag:mastodon.example,2026-10-11:objectId=1:objectType=Conversation'
+			const note = (n: number, extra: Record<string, unknown> = {}) => ({
+				id: `https://mastodon.example/users/bob/statuses/${n}`,
+				type: 'Note',
+				attributedTo: 'https://mastodon.example/users/bob',
+				to: [aliceUri],
+				cc: [],
+				published: `2026-10-11T12:0${n}:00Z`,
+				content: `<p>${n}</p>`,
+				tag: [{ type: 'Mention', href: aliceUri }],
+				conversation,
+				...extra,
+			})
+			// Stored before the upgrade: R naming its conversation, and S naming one too long to be one (as no release
+			// stored a thread then, both without one).
+			const before = (n: number, raw: Record<string, unknown>) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, published_at, raw)
+					VALUES (?, ?, ?, 'direct', '2026-10-11T12:00:00.000Z', ?)`,
+					`20000000000000000${n}`,
+					raw.id,
+					bob,
+					JSON.stringify(raw)
+				)
+			const r = note(1)
+			before(1, r)
+			const s = note(5, { conversation: 'x'.repeat(4097) })
+			before(5, s)
+			expect(await kernel(state, MIGRATIONS.slice(0, CONVERSATIONS + 1)).upgrade()).toMatchObject({ ok: true })
+			const threadOf = (uri: string) =>
+				sql.exec<{ thread: string }>('SELECT thread FROM statuses WHERE uri = ?', uri).one().thread
+			expect([threadOf(r.id), threadOf(s.id)]).toEqual([conversation, s.id])
+
+			// After it, P replies to R and Q to P, and Q arrives first: all of them are in one thread and one conversation.
+			const db = new Db(sql)
+			const p = note(2, { inReplyTo: r.id })
+			const q = note(3, { inReplyTo: p.id })
+			for (const object of [q, p]) {
+				const input = parseRemoteStatus(object)
+				expect(input).not.toBeNull()
+				const outcome = storeRemoteStatus(db, { id: bob, uri: 'https://mastodon.example/users/bob' }, input!, {
+					now: Date.parse('2026-10-11T13:00:00Z'),
+					origin: 'https://kopje.test',
+					deliveredTo: alice,
+					fetched: false,
+				})
+				expect(outcome).toMatchObject({ applied: true })
+			}
+			expect([r, p, q].map((n) => threadOf(n.id))).toEqual([conversation, conversation, conversation])
+			expect(sql.exec('SELECT count(*) AS n FROM conversations WHERE account_id = ?', alice).one()).toEqual({ n: 1 })
+		})
+	})
+
+	it('0009_conversations reads each status a bounded number of times, and each direct one a few more', async () => {
+		const migration = MIGRATIONS[CONVERSATIONS]!
+		const statements = migration.sql
+			.replace(/--.*$/gm, '')
+			.split('CREATE TRIGGER')[0]!
+			.split(';')
+			.filter((statement) => statement.trim() !== '')
+		const measure = async (count: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, CONVERSATIONS)).upgrade()
+				for (const [n, domain] of [
+					[1, null],
+					[2, null],
+					[3, 'remote.example'],
+				] as const) {
+					sql.exec(
+						'INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, ?)',
+						String(100000000000000000n + BigInt(n)),
+						`https://kopje.test/ap/users/u${n}`,
+						`u${n}`,
+						domain
+					)
+					if (domain === null) {
+						sql.exec(
+							"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'k')",
+							String(100000000000000000n + BigInt(n)),
+							`u${n}@example.com`
+						)
+					}
+				}
+				// One status in ten is direct, from u1 or r to u2 (notified), each the reply to the one before it of its
+				// author; the rest are public.
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO statuses (id, uri, account_id, visibility, in_reply_to_id, in_reply_to_uri, published_at)
+					SELECT CAST(200000000000000000 + i AS TEXT), 'https://kopje.test/ap/o/' || i,
+						CASE WHEN i % 20 = 0 THEN '100000000000000003' ELSE '100000000000000001' END,
+						CASE WHEN i % 10 = 0 THEN 'direct' ELSE 'public' END,
+						CASE WHEN i % 10 = 0 AND i > 20 THEN CAST(200000000000000000 + i - 20 AS TEXT) END,
+						CASE WHEN i % 10 = 0 AND i > 20 THEN 'https://kopje.test/ap/o/' || (i - 20) END,
+						'2026-10-01T00:00:00.000Z'
+					FROM n`,
+					count
+				)
+				sql.exec(
+					`INSERT INTO status_mentions (status_id, account_id) SELECT id, '100000000000000002' FROM statuses
+					WHERE visibility = 'direct'`
+				)
+				sql.exec(
+					`INSERT INTO notifications (account_id, type, from_account_id, status_id)
+					SELECT '100000000000000002', 'mention', account_id, id FROM statuses WHERE visibility = 'direct'`
+				)
+				let read = 0
+				for (const statement of statements) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				expect(sql.exec('SELECT count(*) AS n FROM conversation_statuses').one()).toEqual({ n: (count / 10) * 1.5 })
+				return read
+			})
+		}
+		const small = await measure(1000)
+		const large = await measure(10_000)
+		// A few reads per status added (its thread, from the start of its chain down, and its write), and a bounded number
+		// per direct status (its mention, its notification, its two owners' rows), however long its reply chain: none per
+		// pair.
+		const added = 10_000 - 1000
+		expect(large - small).toBeLessThanOrEqual(6 * added + 20 * (added / 10))
+	}, 60_000)
+
+	it('upgrades a Store with 0010_markers: a new table whose rows go with their local account', async () => {
+		// By name, not position: the files before it are whatever this build ships.
+		const at = NAMES.indexOf('0010_markers')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			const alice = '100000000000000001'
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES ('100000000000000002', 'https://remote.example/users/r', 'r', 'remote.example')"
+			)
+
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0010_markers'],
+			})
+			const insert = (account: string, timeline: string, lastReadId: string) =>
+				sql.exec(
+					"INSERT INTO markers (account_id, timeline, last_read_id, updated_at) VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z')",
+					account,
+					timeline,
+					lastReadId
+				)
+			insert(alice, 'home', '1')
+			insert(alice, 'notifications', '2')
+			expect(() => insert(alice, 'home', '3')).toThrow(/UNIQUE constraint failed/)
+			expect(() => insert(alice, 'public', '3')).toThrow(/CHECK constraint failed/)
+			expect(() => insert(alice, 'home', '')).toThrow(/CHECK constraint failed/)
+			expect(() => sql.exec("UPDATE markers SET last_read_id = ? WHERE timeline = 'home'", 'a'.repeat(256))).toThrow(
+				/CHECK constraint failed/
+			)
+			// Only a local account has markers.
+			expect(() => insert('100000000000000002', 'home', '1')).toThrow(/FOREIGN KEY constraint failed/)
+			expect(sql.exec('SELECT version FROM markers').toArray()).toEqual([{ version: 0 }, { version: 0 }])
+			sql.exec('DELETE FROM local_accounts WHERE account_id = ?', alice)
+			expect(sql.exec('SELECT count(*) AS n FROM markers').one()).toEqual({ n: 0 })
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
 
 	it('upgrades a Store with 0011_scheduled_statuses: uploads stay as they were, and scheduled statuses hold theirs and go with their account', async () => {
 		const index = NAMES.indexOf('0011_scheduled_statuses')

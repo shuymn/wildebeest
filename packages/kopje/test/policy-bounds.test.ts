@@ -11,6 +11,9 @@ import { rowsRead } from './read-helpers'
 import { Db } from '../src/db/sql'
 import { listFollows, relationships, userinfo } from '../src/domain/accounts'
 import { canView, visibleSql, type Visibility } from '../src/domain/audience'
+import { backfillConversations } from '../src/domain/conversation-rows'
+import { listConversations } from '../src/domain/conversations'
+import { getMarkers, MARKER_TIMELINES } from '../src/domain/markers'
 import { listNotifications } from '../src/domain/notifications'
 import { dueScheduled, listScheduled, publishScheduled } from '../src/domain/scheduled-statuses'
 import { search } from '../src/domain/search'
@@ -32,12 +35,13 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // of rows (RES-7). Unrelated rows are what no viewer's read of the world should touch: other accounts with their
 // statuses (never public, so no public or tag feed would list them, though they carry the tag the tag feed reads),
 // replies and boosts among them, their follows, blocks, mutes and domain blocks of the world's accounts and domains,
-// their favourites, bookmarks and notifications, and their exclusive lists holding world accounts and their own.
+// their favourites, bookmarks and notifications, their exclusive lists holding world accounts and their own, and their
+// timeline markers.
 
 // The world, the same in every run: the first of fast-check's samples for a fixed seed in which every endpoint has
 // something to show the viewer (the first available local account). The viewer then follows everyone, favourites and
-// bookmarks every status, has a notification from every account, and has a list (VIEWER_LIST) of every account;
-// LISTED follows the viewer.
+// bookmarks every status, has a notification from every account, has a list (VIEWER_LIST) of every account and a
+// marker on each timeline; LISTED follows the viewer.
 function viewerOf(world: World): number {
 	return world.accounts.findIndex((account) => account.local && !account.suspended)
 }
@@ -141,6 +145,7 @@ function writeViewer(sql: SqlStorage): void {
 	WORLD.accounts.forEach((_, x) => {
 		sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', VIEWER_LIST, accountId(x))
 	})
+	writeMarkers(sql, viewer)
 	writeScheduled(sql, viewer, VIEWER_SCHEDULED_BASE, 25)
 	WORLD.statuses.forEach((status, s) => {
 		sql.exec('INSERT INTO favourites (account_id, status_id) VALUES (?, ?)', viewer, statusId(s))
@@ -154,6 +159,17 @@ function writeViewer(sql: SqlStorage): void {
 			)
 		}
 	})
+}
+
+function writeMarkers(sql: SqlStorage, account: string): void {
+	for (const timeline of MARKER_TIMELINES) {
+		sql.exec(
+			"INSERT INTO markers (account_id, timeline, last_read_id, version, updated_at) VALUES (?, ?, ?, 1, '2026-01-01T00:00:00.000Z')",
+			account,
+			timeline,
+			account
+		)
+	}
 }
 
 // `count` scheduled statuses of `owner`, a day apart from a week after NOW, with ids from `base`.
@@ -196,6 +212,7 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 				account(i),
 				`u${i}@example.com`
 			)
+			writeMarkers(sql, account(i))
 		}
 	}
 	for (let i = 0; i < remote; i++) {
@@ -301,6 +318,9 @@ async function worldWith(unrelated: number): Promise<StoreStub> {
 		writeWorld(state.storage.sql, WORLD)
 		writeViewer(state.storage.sql)
 		writeUnrelated(state.storage.sql, unrelated)
+		// The conversations of the direct statuses and mentions written, as migration 0009 makes them: the viewer's,
+		// and the unrelated local accounts'.
+		backfillConversations({ exec: (query: string) => state.storage.sql.exec(query) })
 	})
 	return store
 }
@@ -383,6 +403,9 @@ async function replicated(factor: number): Promise<StoreStub> {
 		writeWorld(state.storage.sql, WORLD)
 		writeCopies(state.storage.sql, factor)
 		writeViewer(state.storage.sql)
+		// The conversations of the direct statuses and the viewer's mentions, copies included, as migration 0009 makes
+		// them.
+		backfillConversations({ exec: (query: string) => state.storage.sql.exec(query) })
 	})
 	return store
 }
@@ -392,7 +415,7 @@ const target = { credential, now: NOW, id: statusId(TARGET), present: PRESENT }
 const searchInput = { credential, limit: 20, offset: 0, following: false, localDomain: 'kopje.test', present: PRESENT }
 const timeline = { credential, now: NOW, page: PAGE, local: false, remote: false, onlyMedia: false, present: PRESENT }
 
-// What an endpoint that pages a viewer's history pages by: statuses (by status id), the viewer's notifications,
+// What an endpoint that pages a viewer's history pages by: statuses (by status id: conversations by their last status's), the viewer's notifications,
 // favourites or bookmarks (by their ids), or a status's interactors (accounts, which are not replicated).
 type Paging = 'statuses' | 'notifications' | 'favourites' | 'bookmarks' | 'interactors'
 
@@ -426,6 +449,7 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 		'notifications',
 	],
 	['context', statusContext, target],
+	['conversations', listConversations, { credential, page: PAGE, present: PRESENT }, 'statuses'],
 	['favourites', favourites, { credential, page: PAGE, present: PRESENT }, 'favourites'],
 	['bookmarks', bookmarks, { credential, page: PAGE, present: PRESENT }, 'bookmarks'],
 	['favourited_by', interactors, { ...target, kind: 'favourited_by', page: PAGE }, 'interactors'],
@@ -447,6 +471,7 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 	['status search', search, { ...searchInput, query: 'status', types: ['statuses'] }],
 	['hashtag search', search, { ...searchInput, query: 'cats', types: ['hashtags'] }],
 	['userinfo', userinfo, { credential: { ...credential, scope: 'profile' }, present: PRESENT }],
+	['markers', getMarkers, { credential, timelines: [...MARKER_TIMELINES] }],
 	['scheduled statuses', listScheduled, { credential, page: PAGE }],
 ]
 
@@ -456,7 +481,7 @@ const ALLOWANCE = 10
 const UNRELATED = 1000
 
 // What an endpoint showed: the items of a page, the members of a context, the results of a search, the entries of a
-// list, or the account userinfo claims, through the operation's ok result.
+// list, the timelines of markers, or the account userinfo claims, through the operation's ok result.
 function shown(output: unknown): number {
 	if (Array.isArray(output)) {
 		return output.length
@@ -477,7 +502,7 @@ function shown(output: unknown): number {
 	if (Array.isArray(value.accounts) && Array.isArray(value.statuses) && Array.isArray(value.hashtags)) {
 		return value.accounts.length + value.statuses.length + value.hashtags.length
 	}
-	return 0
+	return MARKER_TIMELINES.filter((timeline) => timeline in value).length
 }
 
 type Entity = Record<string, unknown>
@@ -527,6 +552,10 @@ function identities(output: unknown): unknown {
 	}
 	if ('visibility' in value && 'account' in value) {
 		return { id: value.id, reblog: (value.reblog as Entity | null)?.id ?? null }
+	}
+	// A conversation by what it shows: its id is numbered with the conversations a Store holds.
+	if ('last_status' in value && 'unread' in value) {
+		return { unread: value.unread, accounts: identities(value.accounts), last_status: identities(value.last_status) }
 	}
 	if ('acct' in value) {
 		return value.id
@@ -899,6 +928,106 @@ describe("home and list timelines read a page per author, not each author's hist
 	}, 60_000)
 })
 
+// The conversation list reads a page of the viewer's conversations through the (account, last status) index, and each
+// one's last status and participants, however many conversations the viewer has and however long each is: the viewer
+// has 20 or 2,000 conversations, each a thread of three direct statuses with one of ten remote accounts.
+describe('the conversation list reads a page, not the history (RES-7)', () => {
+	const VIEWER_ID = '800000000000000001'
+	const HISTORY_TOKEN = 'conversations-token'
+	const PARTNERS = 10
+	const partner = (i: number) => String(810000000000000000n + BigInt(i))
+	const status = (i: number) => String(820000000000000000n + BigInt(i))
+
+	async function conversations(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('history', 'secret', 'history', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'history', ?, 'read')",
+				HISTORY_TOKEN,
+				VIEWER_ID
+			)
+			for (let p = 0; p < PARTNERS; p++) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, ?)',
+					partner(p),
+					`https://far${p}.example/users/p${p}`,
+					`p${p}`,
+					`far${p}.example`
+				)
+			}
+			// Each conversation: the partner writes, the viewer answers, the partner answers again.
+			for (let c = 0; c < count; c++) {
+				const with_ = partner(c % PARTNERS)
+				for (let k = 0; k < 3; k++) {
+					const id = status(3 * c + k)
+					const author = k === 1 ? VIEWER_ID : with_
+					const parent = k === 0 ? null : status(3 * c + k - 1)
+					sql.exec(
+						`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, in_reply_to_account_id,
+							visibility, content, published_at)
+						VALUES (?, ?, ?, ?, ?, ?, 'direct', '<p>psst</p>', ?)`,
+						id,
+						`https://kopje.test/objects/${id}`,
+						author,
+						parent === null ? null : `https://kopje.test/objects/${parent}`,
+						parent,
+						parent === null ? null : k === 1 ? with_ : VIEWER_ID,
+						new Date(NOW).toISOString()
+					)
+					sql.exec(
+						'INSERT INTO status_mentions (status_id, account_id) VALUES (?, ?)',
+						id,
+						author === VIEWER_ID ? with_ : VIEWER_ID
+					)
+					if (author !== VIEWER_ID) {
+						sql.exec(
+							"INSERT INTO notifications (account_id, type, from_account_id, status_id) VALUES (?, 'mention', ?, ?)",
+							VIEWER_ID,
+							author,
+							id
+						)
+					}
+				}
+			}
+			backfillConversations({ exec: (query: string) => sql.exec(query) })
+		})
+		return store
+	}
+
+	it('reads the same rows with 20 or 2,000 conversations, on the newest, a middle and the oldest page', async () => {
+		const few = await conversations(20)
+		const many = await conversations(2000)
+		const credential = { tokenHash: HISTORY_TOKEN, scope: 'read', now: NOW } as const
+		const grown: string[] = []
+		// A page from the middle of the longer history is above every conversation of the shorter one.
+		const middle = status(3 * 1000 + 2)
+		for (const page of [PAGE, { ...PAGE, maxId: middle }, { ...PAGE, minId: '1' }]) {
+			const input = { credential, page, present: PRESENT }
+			const shownBy = async (store: StoreStub) =>
+				runInDurableObject(store, (_instance, state) => shown(listConversations.run(state.storage.sql, input)))
+			expect([await shownBy(few), await shownBy(many)]).toEqual([PAGE.limit, PAGE.limit])
+			const fewRows = await rowsRead({ store: few }, listConversations, input)
+			const manyRows = await rowsRead({ store: many }, listConversations, input)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${JSON.stringify(page)}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 60_000)
+})
+
 // What the viewer never sees of an author costs nothing, however long the author's history. Home reads the viewer's
 // mentions per followed account (status_mentions_requires_mention), so an account the viewer does not follow, sending
 // them direct statuses, is never read; and an account's statuses are not read when the viewer may see none of them:
@@ -1093,6 +1222,58 @@ describe("userinfo reads the account, not the account's history (RES-7)", () => 
 	}, 60_000)
 })
 
+// Markers read the viewer's own rows through the (account_id, timeline) key: at most one per timeline, however many
+// accounts have markers.
+describe("markers read the viewer's rows, not every account's (RES-7)", () => {
+	const VIEWER_ID = '630000000000000000'
+	const MARKERS_TOKEN = 'markers-token'
+
+	async function accountsWithMarkers(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO accounts (id, uri, username)
+				SELECT CAST(630000000000000000 + i AS TEXT), 'https://kopje.test/ap/users/u' || i, 'u' || i FROM n`,
+				count
+			)
+			sql.exec(
+				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+				SELECT id, username || '@example.com', X'00', X'00', 'test' FROM accounts`
+			)
+			for (const timeline of MARKER_TIMELINES) {
+				sql.exec(
+					`INSERT INTO markers (account_id, timeline, last_read_id, version, updated_at)
+					SELECT account_id, ?, account_id, 1, '2026-01-01T00:00:00.000Z' FROM local_accounts`,
+					timeline
+				)
+			}
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('markers', 'secret', 'markers', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'markers', ?, 'read')",
+				MARKERS_TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 10 or 2,000 accounts that have markers', async () => {
+		const credential = { tokenHash: MARKERS_TOKEN, scope: 'read', now: NOW } as const
+		const input = { credential, timelines: [...MARKER_TIMELINES] }
+		const few = await accountsWithMarkers(10)
+		const many = await accountsWithMarkers(2000)
+		const shownBy = async (store: StoreStub) =>
+			runInDurableObject(store, (_instance, state) => shown(getMarkers.run(state.storage.sql, input)))
+		expect([await shownBy(few), await shownBy(many)]).toEqual([2, 2])
+		const fewRows = await rowsRead({ store: few }, getMarkers, input)
+		expect(await rowsRead({ store: many }, getMarkers, input)).toBeLessThanOrEqual(fewRows + ALLOWANCE)
+	})
+})
+
 // The rows an operation reads, writes included (rowsRead in read-helpers.ts counts reads only).
 async function rowsTouched<I>(store: StoreStub, operation: StoreOperation<I, unknown>, input: I): Promise<number> {
 	return runInDurableObject(store, (_instance, state) => {
@@ -1120,7 +1301,7 @@ async function rowsTouched<I>(store: StoreStub, operation: StoreOperation<I, unk
 	})
 }
 
-// Scheduled statuses (R25) add a dimension: the accounts that schedule, each up to its limit. An account's page reads
+// Scheduled statuses (R26) add a dimension: the accounts that schedule, each up to its limit. An account's page reads
 // its own index, and a publication round reads the due ones through the index by time, so both read the same rows
 // with 10 accounts holding scheduled statuses or 300, each with 30, only one of them due.
 describe('scheduled statuses read a page and a round, however many accounts schedule (RES-7)', () => {

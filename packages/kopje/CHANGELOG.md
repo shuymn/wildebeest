@@ -16,6 +16,26 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - `GET /.well-known/oauth-authorization-server` (RFC 8414), as Mastodon 4.5 has it: the OAuth endpoints, including
   `userinfo_endpoint` and Mastodon's `app_registration_endpoint`, the scopes, and the supported response types and
   modes, grant types, client authentication methods and PKCE methods.
+- Conversations in the Mastodon API, as Mastodon 4.5 has them: `GET /api/v1/conversations` (paged by the last status
+  with Link headers, 20 by default and at most 40), `DELETE /api/v1/conversations/:id` and
+  `POST /api/v1/conversations/:id/read` and `/unread`. Scopes are `read:statuses` and `write:conversations` (or `read`
+  and `write`); another account's conversation answers 404.
+    - Your direct statuses, and the direct statuses you are notified of as a mention, are grouped by thread and by the
+      other accounts in them. A received status that names its conversation, as Mastodon's do, joins that thread even
+      when it arrives before the status it replies to. A new status from someone else marks the conversation unread; your own does not.
+    - Deleting a status takes it out of its conversations; a conversation with none left goes. Deleting a
+      conversation keeps its statuses, and a later one makes a new conversation. Blocking an account ends your
+      conversations with it.
+    - A conversation's last status is shown only while you may still see it (its author is not suspended and does not
+      block you); otherwise it is `null`.
+    - The conversations of the direct statuses already stored are made when the instance upgrades, and the cutover
+      makes them of the statuses it carries.
+- Timeline markers in the Mastodon API, as Mastodon 4.5 has them: `GET /api/v1/markers` (`timeline[]`: `home`,
+  `notifications`; other names are ignored) and `POST /api/v1/markers` (`home[last_read_id]`,
+  `notifications[last_read_id]`), each marker with its `last_read_id`, `version` and `updated_at`. Scopes are
+  `read:statuses` and `write:statuses` (or `read` and `write`). An update that changes a marker counts a version; the
+  same value changes nothing. `last_read_id` is kept as sent, up to 255 characters; a blank one answers 422 with
+  Mastodon's message. Updates are applied one at a time, so two at once both succeed instead of one answering 409.
 - Scheduled statuses, as Mastodon 4.5 has them: `POST /api/v1/statuses` with `scheduled_at` answers a
   `ScheduledStatus`, checked as a post is, at least 5 minutes ahead, at most 300 per account and 25 per day (a time
   not in the future posts at once). `GET /api/v1/scheduled_statuses` lists them, and `GET`, `PUT`, `PATCH` and
@@ -37,12 +57,19 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds two migrations, applied on the first request after the deploy; a rollback to an earlier version
-  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+- Store schema: adds four migrations, applied in order on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
       author. Its work grows linearly with the mentions stored (one pass, with a lookup of each one's status); locally,
       200,000 mentions took under a second.
+    - `0009_conversations`: adds `statuses.thread` (the thread a status belongs to, given to each status stored, from
+      the start of each reply chain down, and to each new one by a trigger), the `conversations` and
+      `conversation_statuses` tables, the trigger that takes a deleted status out of its conversations, and the
+      conversations of the direct statuses stored. It rewrites every status once (its thread) and reads each a few
+      times, so its work grows linearly with the statuses stored; locally, 500,000 statuses, 50,000 of them direct in
+      two long reply chains, took about 1.2 seconds.
+    - `0010_markers`: adds the `markers` table. It is quick.
     - `0011_scheduled_statuses`: adds the `scheduled_statuses` table and `media_attachments.scheduled_status_id`, with
       their indexes. Its work grows linearly with the media stored (one pass to add the column and one to build its
       partial index).

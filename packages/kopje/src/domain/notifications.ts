@@ -1,6 +1,7 @@
 import { type Account, edgeRangeSql, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
 import { shownSql, statusReads, type WithVisibleStatus } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
+import { addToConversation } from './conversations'
 import { presentStatuses, type Status } from './status-presenter'
 import type { Db } from '../db/sql'
 
@@ -57,6 +58,10 @@ export function notify(db: Db, input: NotifyInput): void {
 	// VIS-10: a push only for a row inserted now, never for a repeat.
 	for (const { id } of inserted) {
 		queuePushes(db, id, input.now)
+		// NotifyService#push_to_conversation!: a direct status the recipient is notified of joins their conversation.
+		if (input.type === 'mention' && input.statusId !== null) {
+			addToConversation(db, input.recipientId, input.statusId)
+		}
 	}
 }
 

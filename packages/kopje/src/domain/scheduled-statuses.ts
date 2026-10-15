@@ -23,7 +23,7 @@ import type { Db } from '../db/sql'
 // Api::V1::ScheduledStatusesController and PublishScheduledStatusWorker). A post sent with a future scheduled_at is
 // checked as a post is, then kept with its parameters until it is due; the cron publishes it through the path of an
 // ordinary post (statuses.ts, preparePost and writePost), in the transaction that deletes it, so it is published once.
-// Until then it is its owner's alone (R25, scheduledOwnSql): only this module reads scheduled_statuses, every read is
+// Until then it is its owner's alone (R26, scheduledOwnSql): only this module reads scheduled_statuses, every read is
 // the owner's, and nothing of it is listed, notified or delivered. The uploads it will attach are held
 // (media_attachments.scheduled_status_id): the sweep of unattached uploads leaves them and no other post attaches them.
 

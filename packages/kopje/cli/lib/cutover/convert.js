@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto'
 import { LEGACY_DEFAULT_AVATAR, mediaToken, parseDeliveryUrl, UPSTREAM_ACCOUNT_HASH } from './images-export.js'
 import { MAX_PROFILE_UPDATES } from './kopje-db.js'
 import {
+	backfillConversations,
 	blockedDomain,
 	hashtagObjectName,
 	languageOf,
@@ -1690,6 +1691,12 @@ export function convertLegacy(
 		kopje.prepare("DELETE FROM sqlite_sequence WHERE name = 'notifications'").run()
 		kopje.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('notifications', ?)").run(sequence)
 	}
+
+	// ---------------------------------------------------------------- conversations
+	// Legacy never wrote its conversation tables (UNUSED_LEGACY_TABLES): the conversations come from the direct statuses
+	// and mention notifications carried, by the backfill of migration 0009_conversations (Kopje's own), so a converted
+	// Store holds the rows an upgraded one would.
+	backfillConversations(kopje)
 
 	// ---------------------------------------------------------------- clients and settings
 	const clientInsert = insert(

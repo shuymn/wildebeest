@@ -422,6 +422,23 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `0007_list_members` (trigger `list_members_follow_ended`), `moveBatch` in `src/domain/inbox.ts`; `test/lists.test.ts`,
   `test/inbox.test.ts` ("list members and inbound activities"), `test/migrations.test.ts`,
   `test/policy-endpoints.test.ts`, `test/policy-bounds.test.ts`, `test/policy-writes.test.ts`.
+- **VIS-17: a conversation shows its owner only what the owner may see, and nobody else anything.** A conversation
+  belongs to a local account; to anyone else it is not found, read, marked or deleted (Mastodon's
+  `AccountConversation.where(account: current_account)`). It is written when a direct status is stored, for its local
+  author and for each local account the notification rule lets it notify of the mention (VIS-10, VIS-13, VIS-14), and a
+  status leaves it with its row however the status is deleted (a trigger, so no deletion path can forget it). It is
+  keyed by the thread each status is stored with (`statuses.thread`), which no delete changes; a received status's
+  named `conversation` is taken whatever its origin (Mastodon's `conversation_from_uri`), which lets a sender group only
+  its own statuses within a conversation it is a participant of. Accepted costs (RES-7): dismissing a conversation
+  deletes all of its rows in one transaction (a few reads and a write each, no recount of its last status), and a block
+  reads the blocker's conversations to find those with the blocked account; both are a local user's action on their
+  own data, and rare. Its last
+  status is shown only while the read rule (VIS-1) lets the owner see it, else as null; a block ends the blocker's
+  conversations with the blocked account. _Implemented on branch `kopje/conversations`:_ `src/domain/conversations.ts`,
+  `src/domain/conversation-rows.ts`, migration `0009_conversations` (triggers `statuses_thread` and
+  `conversation_statuses_removed`);
+  `test/conversations.test.ts`, `test/migrations.test.ts`, `test/policy-endpoints.test.ts`,
+  `test/policy-bounds.test.ts`, `test/policy-writes.test.ts`.
 
 ### Authorization (AUTH)
 
@@ -471,7 +488,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   revoke a token of another client"). _Enforced (main)_ for statuses and notifications:
   `test/statuses.test.ts` ("cannot edit someone else's status", "gives the source for editing to the author only"),
   `test/notifications.test.ts` ("only the viewer’s own notifications"). _Enforced (main)_ for scheduled statuses: every read and change
-  of `scheduled_statuses` is the owner's (`scheduledOwnSql`, R25, all in `src/domain/scheduled-statuses.ts`, which
+  of `scheduled_statuses` is the owner's (`scheduledOwnSql`, R26, all in `src/domain/scheduled-statuses.ts`, which
   `test/policy.test.ts` keeps alone in touching the table), so another account's is not found (404), and the media a
   scheduled status holds is the poster's own, checked as for a post; publication runs as the scheduled status's owner
   and through the checks of a post (`preparePost`), and an account suspended meanwhile publishes nothing;
@@ -861,13 +878,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   ("raw input bound"). _Enforced (main)_ for search terms (500 characters) and media (16 MB
   and 16,777,216 pixels, read with the body bound before parsing): `src/mastodon/search.ts`, `src/mastodon/media.ts`;
   `test/search.test.ts` ("bounds the query"), `test/media.test.ts` ("refuses a file over 16 MB"). _Enforced (main)_ for remote profiles: bios are cut at 50,000 code units before sanitizing and
-  display names at 2,048 (`src/security/html.ts`, `src/federation/remote-actor.ts`). _Enforced (main)_ for scheduled
-  statuses: `scheduled_at` is read only up to 64 characters, and a scheduled status's params are a JSON object of a
-  fixed shape built from checked fields (the status text's raw bound, at most four media ids), refused over 128 KiB in
-  the Store and by the schema (migration `0011_scheduled_statuses`); `test/migrations.test.ts`,
-  `test/scheduled-statuses.test.ts`. `scheduled_at` must name a date and time the calendar has (Ruby's
-  `DateTime.parse`: no February 29 outside leap years, no 31st of a 30-day month, minutes and hours in range), checked
-  before its offset applies. Other query strings: _Gap._
+  display names at 2,048 (`src/security/html.ts`, `src/federation/remote-actor.ts`). _Implemented on branch `kopje/markers`:_ a timeline marker's `last_read_id` stops at 255 characters, which Mastodon bounds as a bigint (`src/domain/markers.ts`; `test/markers.test.ts`, "answers 422 with Mastodon's validation message"). _Enforced (main)_ for scheduled statuses: `scheduled_at` is read only up to 64 characters, and a scheduled status's params are a JSON object of a fixed shape built from checked fields (the status text's raw bound, at most four media ids), refused over 128 KiB in the Store and by the schema (migration `0011_scheduled_statuses`); `test/migrations.test.ts`, `test/scheduled-statuses.test.ts`. `scheduled_at` must name a date and time the calendar has (Ruby's `DateTime.parse`: no February 29 outside leap years, no 31st of a 30-day month, minutes and hours in range), checked before its offset applies. Other query strings: _Gap._
 - **RES-2: parsing work is bounded.** Every regex, parser and normalization over input at the RES-1 cap has an
   adversarial fixture with a time bound. _Enforced (main)_ for status text:
   `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Enforced (main)_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
