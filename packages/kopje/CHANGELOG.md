@@ -8,6 +8,32 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- Conversations in the Mastodon API, as Mastodon 4.5 has them: `GET /api/v1/conversations` (paged by the last status
+  with Link headers, 20 by default and at most 40), `DELETE /api/v1/conversations/:id` and
+  `POST /api/v1/conversations/:id/read` and `/unread`. Scopes are `read:statuses` and `write:conversations` (or `read`
+  and `write`); another account's conversation answers 404.
+    - Your direct statuses, and the direct statuses you are notified of as a mention, are grouped by thread and by the
+      other accounts in them. A new status from someone else marks the conversation unread; your own does not.
+    - Deleting a status takes it out of its conversations; a conversation with none left goes. Deleting a
+      conversation keeps its statuses, and a later one makes a new conversation. Blocking an account ends your
+      conversations with it.
+    - A conversation's last status is shown only while you may still see it (its author is not suspended and does not
+      block you); otherwise it is `null`.
+    - The conversations of the direct statuses already stored are made when the instance upgrades, and the cutover
+      makes them of the statuses it carries.
+
+### Instance changes
+
+- Store schema: adds `0009_conversations`, applied on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0009_conversations`: the `conversations` and `conversation_statuses` tables, the trigger that takes a deleted
+      status out of its conversations, and the conversations of the direct statuses stored. Its work grows linearly with
+      the statuses stored (one pass) and the direct statuses and the statuses they reply to (a few reads each); locally,
+      500,000 statuses with 50,000 direct ones in long threads took under a second.
+- `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.5] - 2026-10-15
 
 A fifth release candidate of the first release, published under the npm dist-tag `next`.

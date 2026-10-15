@@ -253,7 +253,10 @@ with no Follow record keeps `uri` NULL and is counted. Self-follows, self-blocks
 and are left out (counted). A list member that is neither the list's owner nor an account the owner follows or has
 asked to follow is left out too (counted, `list_accounts:not-followed-left-out`): legacy kept members whatever the
 follows, while a Kopje list, as a Mastodon one, holds an account only while its owner follows it. Counters are
-recomputed.
+recomputed. Legacy never wrote its conversation tables (a row there stops the conversion); the conversations of the
+direct statuses carried are made by the backfill of migration `0009_conversations`, Kopje's own: each local author's
+direct statuses, and each direct status a local account holds a mention notification of. `verify-conversion` works
+them out on its own from the legacy records.
 
 **Clients and settings.** OAuth clients keep their id, secret and scopes. Legacy settings take Kopje's names:
 `server name` becomes `title` and `server description` becomes `description` (both shown by `/api/v1/instance`);
