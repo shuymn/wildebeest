@@ -54,6 +54,23 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   gone, or its account is suspended); one that fails with an error is retried four times over about five hours, then
   dropped. An `Idempotency-Key` that scheduled a status answers with it on a repeat, with or without `scheduled_at`.
   Media attached to a scheduled status is kept until it is published or deleted.
+- The remaining account endpoints of Mastodon 4.5:
+    - Private notes: `POST /api/v1/accounts/:id/note` (`comment`, at most 2,000 characters; a blank one deletes the
+      note) answers the Relationship. Every Relationship now carries your note on the account in `note`; nobody else
+      is shown it.
+    - Endorsements: `POST /api/v1/accounts/:id/endorse` and `/unendorse` (also as `/pin` and `/unpin`), which answer
+      the Relationship, now with a real `endorsed`; `GET /api/v1/endorsements` (yours, 40 by default and at most 80
+      with Link headers, or all at once with `limit=0`, up to 1,000), which no longer answers empty; and
+      `GET /api/v1/accounts/:id/endorsements` (anyone's, to anyone). You can endorse only an account you follow (else
+      422 with Mastodon's message), and the endorsement goes when the follow ends, however it ends. Suspended accounts
+      and accounts being deleted are not listed. Endorsements are not federated, as in Mastodon 4.5.
+    - `POST /api/v1/accounts/:id/remove_from_followers` ends the account's follow of you: a remote follower is sent a
+      `Reject`, as when a block ends its follow. A pending request is left alone.
+    - `GET /api/v1/accounts?id[]=` shows up to 40 accounts at once, as `GET /api/v1/accounts/:id` shows each; more
+      answer 422.
+    - `GET /api/v1/accounts/:id/identity_proofs` answers `[]`, as Mastodon's deprecated endpoint does.
+    - `POST /api/v1/accounts` (registration) answers as Mastodon does with registrations closed: 403 `Forbidden` for an
+      app token with `write:accounts`, after Mastodon's token checks. Kopje has no open registration.
 
 ### Changed
 
@@ -67,7 +84,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds five migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds six migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
@@ -85,6 +102,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       partial index).
     - `0012_filters`: adds the `filters`, `filter_keywords` and `filter_statuses` tables, empty. Its work does not grow
       with the Store.
+    - `0014_account_notes_and_pins`: adds the `account_notes` and `account_pins` tables, empty, and the trigger that
+      deletes an endorsement with its follow. Its work does not grow with the Store.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.5] - 2026-10-15
