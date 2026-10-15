@@ -546,11 +546,6 @@ describe("read endpoints read the same rows however long the world's history (RE
 
 	// Endpoints whose reads grow with the history, left out of the comparison.
 	const GROWING = new Set([
-		// TODO(RES-7): home's third stream reads the viewer's mentions from the cursor and keeps the direct and limited
-		// statuses of followed accounts among them, so mentions it does not show (here all of them: public, private and
-		// the viewer's own, and a direct one from a suspended account) are walked to the end of the history. Measured at
-		// 40 and 400 replicas: newest page 1810 -> 6130 rows, middle 1563 -> 3723, oldest 1732 -> 6052.
-		'home',
 		// Search reads windows of the viewer's library (LIBRARY_SOURCE_LIMIT per source) and, for hashtags, of their own
 		// entries and the newest public statuses (HASHTAG_LIBRARY_LIMIT, HASHTAG_PUBLIC_WINDOW): they grow with the
 		// history up to those limits.
@@ -558,13 +553,30 @@ describe("read endpoints read the same rows however long the world's history (RE
 		'hashtag search',
 	])
 
+	// Home's mentions stream reads the viewer's mentions in direct and limited statuses from the cursor
+	// (status_mentions_requires_mention), walking those home does not show: in this world all of them, a suspended
+	// account's direct statuses to the viewer. Home may read up to this many rows more per mention of the viewer in a
+	// direct or limited status the replicas add, and nothing for their other mentions and statuses.
+	const PER_HIDDEN_MENTION = 5
+
 	type Measured = { endpoint: string; page: string; rows: number; shown: number; output: unknown }
 
 	// Each endpoint's newest page, a page from the middle of the replicated history and the oldest page, or its one read
 	// if it does not page the history.
-	async function measure(factor: number): Promise<Measured[]> {
+	async function measure(factor: number): Promise<{ measured: Measured[]; mentions: number }> {
 		const store = await replicated(factor)
 		const viewer = accountId(VIEWER)
+		// The viewer's mentions in direct and limited statuses.
+		const mentions = await runInDurableObject(
+			store,
+			(_instance, state) =>
+				state.storage.sql
+					.exec<{ n: number }>(
+						'SELECT count(*) AS n FROM status_mentions WHERE account_id = ? AND requires_mention = 1',
+						viewer
+					)
+					.one().n
+		)
 		const middle = await runInDurableObject(store, (_instance, state) => {
 			// The viewer's edge halfway through those of the copies.
 			const edge = (table: string) =>
@@ -607,12 +619,12 @@ describe("read endpoints read the same rows however long the world's history (RE
 				measured.push({ endpoint, page, rows, shown: shown(output), output })
 			}
 		}
-		return measured
+		return { measured, mentions }
 	}
 
 	it(`reads the same rows with the world's history replicated ${FEW} or ${MANY} times`, async () => {
-		const few = await measure(FEW)
-		const many = await measure(MANY)
+		const { measured: few, mentions: fewMentions } = await measure(FEW)
+		const { measured: many, mentions: manyMentions } = await measure(MANY)
 		// Every endpoint shows the viewer something on every page at either factor, and the same newest page (or one read).
 		const empty = [...few, ...many].flatMap(({ endpoint, page, shown }) => (shown === 0 ? [`${endpoint} ${page}`] : []))
 		expect(empty).toEqual([])
@@ -625,9 +637,8 @@ describe("read endpoints read the same rows however long the world's history (RE
 		expect(newest(many)).toEqual(newest(few))
 		const grown = few.flatMap(({ endpoint, page, rows }, i) => {
 			const manyRows = many[i]?.rows ?? Infinity
-			return GROWING.has(endpoint) || manyRows <= rows + ALLOWANCE
-				? []
-				: [`${endpoint} ${page}: ${rows} -> ${manyRows}`]
+			const allowed = ALLOWANCE + (endpoint === 'home' ? PER_HIDDEN_MENTION * (manyMentions - fewMentions) : 0)
+			return GROWING.has(endpoint) || manyRows <= rows + allowed ? [] : [`${endpoint} ${page}: ${rows} -> ${manyRows}`]
 		})
 		expect(grown).toEqual([])
 	}, 60_000)
