@@ -30,6 +30,7 @@ import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
 import * as push from './domain/push'
 import { resolveSearch } from './domain/remote-statuses'
+import * as scheduled from './domain/scheduled-statuses'
 import { search } from './domain/search'
 import * as setup from './domain/setup'
 import { saveSnapshot } from './domain/snapshot'
@@ -48,6 +49,7 @@ import {
 	recordMedia,
 	saveBackup,
 } from './platform/backup-state'
+import { errorFields } from './platform/error-message'
 import { restoreMarkerKey } from './platform/media-files'
 import { type ImportAuthority, StoreAdmin } from './platform/store-admin'
 import { readFlags } from './platform/store-flags'
@@ -707,6 +709,54 @@ export class Store extends DurableObject<Env> {
 
 	accountLists(callerBuild: string, input: OperationInput<typeof lists.accountLists>) {
 		return this.#kernel.execute(callerBuild, lists.accountLists, input)
+	}
+
+	// Scheduled statuses (domain/scheduled-statuses.ts).
+
+	scheduleStatus(callerBuild: string, input: OperationInput<typeof scheduled.scheduleStatus>) {
+		return this.#kernel.execute(callerBuild, scheduled.scheduleStatus, input)
+	}
+
+	listScheduled(callerBuild: string, input: OperationInput<typeof scheduled.listScheduled>) {
+		return this.#kernel.execute(callerBuild, scheduled.listScheduled, input)
+	}
+
+	getScheduled(callerBuild: string, input: OperationInput<typeof scheduled.getScheduled>) {
+		return this.#kernel.execute(callerBuild, scheduled.getScheduled, input)
+	}
+
+	updateScheduled(callerBuild: string, input: OperationInput<typeof scheduled.updateScheduled>) {
+		return this.#kernel.execute(callerBuild, scheduled.updateScheduled, input)
+	}
+
+	deleteScheduled(callerBuild: string, input: OperationInput<typeof scheduled.deleteScheduled>) {
+		return this.#kernel.execute(callerBuild, scheduled.deleteScheduled, input)
+	}
+
+	// The cron's round (jobs/scheduled.ts): the due scheduled statuses, earliest first, each published in its own
+	// transaction with one of the object ids the Worker made. A failure of one is counted and the round goes on, so one
+	// that cannot be written does not hold back the others; a refusal of the first read (maintenance, readonly) ends the
+	// round, and what is due waits for the next.
+	async publishScheduled(callerBuild: string, input: { now: number; objectIds: string[] }) {
+		const due = await this.#kernel.execute(callerBuild, scheduled.dueScheduled, {
+			now: input.now,
+			limit: input.objectIds.length,
+		})
+		const counts = { published: 0, dropped: 0, failed: 0, gone: 0 }
+		for (const [i, id] of due.entries()) {
+			try {
+				const result = await this.#kernel.execute(callerBuild, scheduled.publishScheduled, {
+					id,
+					now: input.now,
+					objectId: input.objectIds[i] ?? crypto.randomUUID(),
+				})
+				counts[result.status === 'published' ? 'published' : result.status === 'dropped' ? 'dropped' : 'gone']++
+			} catch (error) {
+				console.error({ event: 'kopje.scheduled.publish_failed', id, ...errorFields(error) })
+				counts.failed++
+			}
+		}
+		return counts
 	}
 
 	// Statuses, timelines and notifications (B4a).

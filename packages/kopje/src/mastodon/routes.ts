@@ -11,6 +11,7 @@ import * as notifications from './notifications'
 import * as oauth from './oauth'
 import * as placeholders from './placeholders'
 import * as push from './push'
+import * as scheduled from './scheduled-statuses'
 import * as search from './search'
 import * as statuses from './statuses'
 import * as tags from './tags'
@@ -337,6 +338,33 @@ export const ROUTES: readonly Route[] = [
 		path: '/api/v1/lists/:id/accounts',
 		access: { scope: 'write:lists' },
 		handler: lists.removeListAccounts,
+	},
+
+	// Scheduled statuses (mastodon/scheduled-statuses.ts); scheduling is POST /api/v1/statuses with scheduled_at.
+	{ method: 'GET', path: '/api/v1/scheduled_statuses', access: { scope: 'read:statuses' }, handler: scheduled.list },
+	{
+		method: 'GET',
+		path: '/api/v1/scheduled_statuses/:id',
+		access: { scope: 'read:statuses' },
+		handler: scheduled.show,
+	},
+	{
+		method: 'PUT',
+		path: '/api/v1/scheduled_statuses/:id',
+		access: { scope: 'write:statuses' },
+		handler: scheduled.update,
+	},
+	{
+		method: 'PATCH',
+		path: '/api/v1/scheduled_statuses/:id',
+		access: { scope: 'write:statuses' },
+		handler: scheduled.update,
+	},
+	{
+		method: 'DELETE',
+		path: '/api/v1/scheduled_statuses/:id',
+		access: { scope: 'write:statuses' },
+		handler: scheduled.destroy,
 	},
 
 	{ method: 'POST', path: '/api/v1/media', access: { scope: 'write:media' }, handler: media.uploadMedia },
