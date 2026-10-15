@@ -284,7 +284,7 @@ export const userinfo: ApiHandler = async (c, deps) => {
 // what Kopje supports of Mastodon's. The authorization endpoint answers in the query only, so the response modes are
 // query alone; Mastodon (Doorkeeper) lists fragment and form_post too.
 export const authorizationServerMetadata: ApiHandler = (c) => {
-	const { origin } = new URL(c.req.url)
+	const { origin } = present(c)
 	return Promise.resolve(
 		c.json({
 			issuer: `${origin}/`,
