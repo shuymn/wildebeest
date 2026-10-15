@@ -17,7 +17,7 @@ import {
 } from './inbox-helpers'
 import { community } from './status-helpers'
 import { Db } from '../src/db/sql'
-import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, purgeBatch } from '../src/domain/inbox'
+import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, purgeBatch, SWEEP_BATCH } from '../src/domain/inbox'
 import { BudgetExceededError, createSafeLoader, isTransientLoadError } from '../src/federation/loader'
 import { handleQueue, runScheduledJobs } from '../src/jobs/queue'
 import { sha256Hex } from '../src/platform/sha256'
@@ -121,6 +121,67 @@ describe('durable purge of a deleted actor (OPS-1, RES-6)', () => {
 
 		await runScheduledJobs(env(t), t.deps)
 		expect(await count(t.store, 'SELECT 1 FROM statuses')).toBe(0)
+	})
+
+	it('purges an actor stored again after its tombstone expired, when it deletes itself again', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await t.post(bob, follow(bob))
+		t.web.fail(bob.uri, 410)
+		expect(await t.post(bob, deleteSelf(bob))).toBe(202)
+		expect(await accountId(t.store, bob.uri)).toBeUndefined()
+
+		// The tombstone has expired but its row is not swept yet: older expired jobs fill the sweeps of the next requests.
+		await sql(t.store, "UPDATE inbound_jobs SET expires_at = ? WHERE kind = 'purge' AND key = ?", NOW - 1, bob.uri)
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO inbound_jobs (kind, key, actor_uri, done_at, expires_at, created_at)
+			SELECT 'purge', 'https://gone.example/u/' || i, 'https://gone.example/u/' || i, 0, ?2, 0 FROM n`,
+			SWEEP_BATCH * 3,
+			NOW - 2
+		)
+		t.web.serve(bob.uri, bob.document)
+		expect(await t.post(bob, follow(bob))).toBe(202)
+		expect(await accountId(t.store, bob.uri)).toBeDefined()
+		await seedStatuses(t.store, bob.uri, PURGE_BATCH + 1)
+
+		t.web.fail(bob.uri, 410)
+		expect(await t.post(bob, { ...deleteSelf(bob), id: `${bob.uri}#delete-again` })).toBe(202)
+		await runScheduledJobs(env(t), t.deps)
+		expect(await accountId(t.store, bob.uri)).toBeUndefined()
+		expect(await count(t.store, 'SELECT 1 FROM statuses')).toBe(0)
+		// The tombstone is renewed: the actor is not stored again by its next activity.
+		expect(
+			await sql(t.store, "SELECT done_at, expires_at FROM inbound_jobs WHERE kind = 'purge' AND key = ?", bob.uri)
+		).toEqual([{ done_at: NOW, expires_at: NOW + 30 * DAY }])
+		t.web.serve(bob.uri, bob.document)
+		expect(await t.post(bob, follow(bob))).toBe(202)
+		expect(await accountId(t.store, bob.uri)).toBeUndefined()
+	})
+
+	it('renews the expired tombstone of an actor that deletes itself again without being stored', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await t.post(bob, follow(bob))
+		t.web.fail(bob.uri, 410)
+		expect(await t.post(bob, deleteSelf(bob))).toBe(202)
+		await sql(t.store, "UPDATE inbound_jobs SET expires_at = ? WHERE kind = 'purge' AND key = ?", NOW - 1, bob.uri)
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO inbound_jobs (kind, key, actor_uri, done_at, expires_at, created_at)
+			SELECT 'purge', 'https://gone.example/u/' || i, 'https://gone.example/u/' || i, 0, ?2, 0 FROM n`,
+			SWEEP_BATCH * 2,
+			NOW - 2
+		)
+		t.web.serve(bob.uri, bob.document)
+		expect(await t.post(bob, { ...deleteSelf(bob), id: `${bob.uri}#delete-again` })).toBe(202)
+		expect(
+			await sql(t.store, "SELECT done_at, expires_at FROM inbound_jobs WHERE kind = 'purge' AND key = ?", bob.uri)
+		).toEqual([{ done_at: NOW, expires_at: NOW + 30 * DAY }])
+		expect(await t.post(bob, follow(bob))).toBe(202)
+		expect(await accountId(t.store, bob.uri)).toBeUndefined()
 	})
 
 	it('handles a duplicate Queue message, and ignores the actor’s live activity meanwhile', async () => {

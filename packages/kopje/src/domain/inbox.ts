@@ -1074,9 +1074,12 @@ const updateActor: Handler<'UpdateActor'> = (_db, _actor, _activity, input) =>
 // account row goes with the last one. The account is unavailable from this transaction on (accounts.deleted_at,
 // availableSql), so nothing of it is shown while the batches remove it, whatever order they remove it in.
 const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
+	// A finished purge whose tombstone expired before the sweep removed it (the actor was stored again since) starts
+	// over, so this purge runs to its end and renews the tombstone.
 	db.run(
-		"INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('purge', ?, ?, ?) ON CONFLICT DO NOTHING",
-		actor.uri,
+		`INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('purge', ?1, ?1, ?2)
+		ON CONFLICT (kind, key) DO UPDATE SET cursor = NULL, done_at = NULL, expires_at = NULL, created_at = excluded.created_at
+		WHERE done_at IS NOT NULL`,
 		actor.uri,
 		now
 	)
@@ -1892,7 +1895,9 @@ function receive(db: Db, input: ReceiveInput): ReceiveResult {
 		// stored by a late activity (ID-7).
 		db.run(
 			`INSERT INTO inbound_jobs (kind, key, actor_uri, done_at, expires_at, created_at)
-			VALUES ('purge', ?1, ?1, ?2, ?3, ?2) ON CONFLICT DO NOTHING`,
+			VALUES ('purge', ?1, ?1, ?2, ?3, ?2)
+			ON CONFLICT (kind, key) DO UPDATE SET done_at = excluded.done_at, expires_at = excluded.expires_at,
+				created_at = excluded.created_at`,
 			actorUri,
 			now,
 			now + JOB_RETENTION_MS

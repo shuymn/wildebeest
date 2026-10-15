@@ -127,6 +127,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- A remote actor that deletes itself again, after its earlier deletion's 30-day record has expired and it was stored
+  again, is purged to the end and its record renewed, also when the expired record has not been cleaned up yet.
+
 - Home applies its rule to your own direct and limited statuses too. A converted Store can hold a legacy direct boost
   of yours, and home used to list it with its original even when you may no longer see the original (its author
   blocks you or is suspended, or it is private and you no longer follow its author) or you filter its author; such a
