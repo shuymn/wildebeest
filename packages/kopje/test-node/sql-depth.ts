@@ -18,14 +18,17 @@ export type DeepStatement = { depth: number; sql: string }
 let database: DatabaseSync | undefined
 
 // Each statement of `statements` deeper than ALLOWED_EXPR_DEPTH, with its depth. A statement that fails to compile for
-// another reason throws: the guard does not skip what it cannot measure.
+// another reason throws, and so does a batch (SqlStorage.exec runs every statement of a text, prepare compiles the
+// first): the guard does not skip what it cannot measure.
 export function deepStatements(statements: string[]): DeepStatement[] {
 	database ??= createKopjeDatabase()
 	const db = database
 	const compiles = (sql: string, depth: number): boolean => {
 		db.limits.exprDepth = depth
 		try {
-			db.prepare(sql)
+			if (db.prepare(sql).sourceSQL.trimEnd() !== sql.trimEnd()) {
+				throw new Error('a batch of statements')
+			}
 			return true
 		} catch (error) {
 			if (error instanceof Error && error.message.startsWith('Expression tree is too large')) {

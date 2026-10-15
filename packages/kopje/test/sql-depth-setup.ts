@@ -5,7 +5,10 @@ import { afterAll, expect } from 'vitest'
 import { Db } from '../src/db/sql'
 
 // Setup of every Workers suite (vitest.config.ts): records each distinct statement the suite runs through Db, in the
-// Store or in a test, and after the suite has its expression depth measured on Node (test-node/sql-depth.ts).
+// Store or in a test, and after the suite has its expression depth measured on Node (test-node/sql-depth.ts). Db is
+// where the domain code, and the policy fragments it composes (src/domain/audience.ts), run their SQL; the Store
+// kernel's migrations and the dump, import and backup statements run on SqlStorage directly, as fixed or
+// catalog-generated text without such nesting.
 
 export const statements = new Set<string>()
 
