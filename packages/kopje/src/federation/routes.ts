@@ -20,6 +20,8 @@ export const FEDERATION_GET_ROUTES = [
 	'/ap/users/:username/followers',
 	'/ap/users/:username/following',
 	'/ap/users/:username/outbox',
+	'/ap/users/:username/collections/featured',
+	'/ap/users/:username/collections/tags',
 	'/ap/o/:uuid',
 ]
 

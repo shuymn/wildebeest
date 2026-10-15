@@ -2,7 +2,9 @@ import { type Account, ACCOUNT_COLUMNS, ACCOUNT_FROM, type AccountRow, type Pres
 import { NOT_A_REPLY_TO_OTHERS, statusReads, viewableStatusId } from './audience'
 import { readOperation } from './operation'
 import { presentStatus, presentStatuses, type Status } from './status-presenter'
+import { isHashtagName } from './status-text'
 import { resolveStatusId } from './statuses'
+import { normalizeTag } from './tag-name'
 
 // What the public web pages show (B5): a local profile and a local status, to an anonymous viewer. Both go through the
 // read rule with no viewer (visibleSql with NULL, VIS-1), so only public and unlisted statuses of an account that is
@@ -18,11 +20,17 @@ export type ProfilePage =
 	| { status: 'suspended' }
 
 // A local account's page: its profile and its own posts, newest first, as Mastodon's "Posts" tab shows them to a
-// signed-out visitor (public and unlisted, replies to others and boosts left out). `maxId` pages older posts.
+// signed-out visitor (public and unlisted, replies to others and boosts left out). `maxId` pages older posts. With
+// `tag` (a featured hashtag's URL, /@username/tagged/:tag), only the posts with that hashtag: the account's own posts are
+// read from the cursor as without it, each checked for the hashtag by its key, so the read follows the account's own
+// posts, never other accounts' posts with the hashtag; a name that is not a hashtag is not found.
 export const profilePage = readOperation<
-	{ username: string; maxId: string | null; present: Present; now: number },
+	{ username: string; maxId: string | null; tag?: string | null; present: Present; now: number },
 	ProfilePage
->((db, { username, maxId, present, now }) => {
+>((db, { username, maxId, tag = null, present, now }) => {
+	if (tag !== null && !isHashtagName(tag)) {
+		return { status: 'not_found' }
+	}
 	const row = db.first<AccountRow>(
 		`SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM} WHERE a.domain IS NULL AND lower(a.username) = lower(?)`,
 		username
@@ -40,13 +48,16 @@ export const profilePage = readOperation<
 			'visible',
 			{
 				where: 's.account_id = ?2 AND s.reblog_of_id IS NULL',
-				and: `${NOT_A_REPLY_TO_OTHERS} AND (?3 IS NULL OR s.id < ?3)`,
+				and: `${NOT_A_REPLY_TO_OTHERS} AND (?3 IS NULL OR s.id < ?3)${
+					tag === null ? '' : ' AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = ?5)'
+				}`,
 				tail: 'ORDER BY s.id DESC LIMIT ?4',
 			},
 			null,
 			row.id,
 			maxId !== null && STATUS_ID.test(maxId) ? maxId : null,
-			PROFILE_PAGE_SIZE + 1
+			PROFILE_PAGE_SIZE + 1,
+			...(tag === null ? [] : [normalizeTag(tag)])
 		)
 		.map((status) => status.id)
 	const next = ids.length > PROFILE_PAGE_SIZE ? (ids[PROFILE_PAGE_SIZE - 1] ?? null) : null

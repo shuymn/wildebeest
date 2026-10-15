@@ -150,9 +150,12 @@ export type ProfileView = {
 	next: string | null
 	domain: string
 	actorUri: string
+	// The hashtag the posts are of (/@username/tagged/:tag), or none for all of them.
+	tag?: string | null
 }
 
-export const ProfilePage: FC<ProfileView> = ({ account, statuses, next, domain, actorUri }) => {
+export const ProfilePage: FC<ProfileView> = ({ account, statuses, next, domain, actorUri, tag = null }) => {
+	const base = tag === null ? `/@${account.username}` : `/@${account.username}/tagged/${encodeURIComponent(tag)}`
 	const name = displayName(account)
 	const title = `${name} (${address(account, domain)})`
 	const description = plainText(account.note)
@@ -209,6 +212,7 @@ export const ProfilePage: FC<ProfileView> = ({ account, statuses, next, domain, 
 				</ul>
 			</section>
 			<section class="statuses">
+				{tag === null ? null : <h2>#{tag}</h2>}
 				{statuses.length === 0 ? (
 					<p class="empty">{STRINGS.noPosts}</p>
 				) : (
@@ -216,7 +220,7 @@ export const ProfilePage: FC<ProfileView> = ({ account, statuses, next, domain, 
 				)}
 				{next === null ? null : (
 					<p class="pager">
-						<a href={`/@${account.username}?max_id=${next}`}>{STRINGS.olderPosts}</a>
+						<a href={`${base}?max_id=${next}`}>{STRINGS.olderPosts}</a>
 					</p>
 				)}
 			</section>

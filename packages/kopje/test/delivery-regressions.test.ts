@@ -274,6 +274,49 @@ describe('retractions against outstanding deliveries (VIS-3)', () => {
 })
 
 describe('operator retry of superseded activities (RES-5)', () => {
+	it('refuses to retry the Add of a featured hashtag after its Remove, and the reverse, but not another hashtag’s', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'fans.example'), alice.id)
+		// Sends the next delivery of the lane and completes it with the outcome; returns its id and activity type.
+		const next = async (outcome: DeliveryOutcome) => {
+			const claimed = await claim(h.store, NOW, 'x')
+			const delivery = claimed.deliveries[0]
+			const [row] = await sql<{ type: string }>(
+				h.store,
+				`SELECT json_extract(o.body, '$.activity.type') AS type FROM deliveries d
+				JOIN outbound_activities o ON o.id = d.activity_id WHERE d.id = ?`,
+				delivery?.id ?? ''
+			)
+			await complete(h.store, delivery?.id ?? '', 'x', NOW, outcome)
+			return { id: delivery?.id ?? '', type: row?.type }
+		}
+		const feature = (name: string) => act(h, alice, `/api/v1/tags/${name}/feature`)
+		const unfeature = (name: string) => act(h, alice, `/api/v1/tags/${name}/unfeature`)
+		await feature('cats')
+		expect((await next(OK)).type).toBe('Update')
+		const add = await next(REFUSED)
+		expect(add.type).toBe('Add')
+		await feature('dogs')
+		const dogs = await next(REFUSED)
+		await unfeature('cats')
+		expect(await h.store.retryDeliveries(BUILD, { ids: [add.id], now: NOW })).toEqual({
+			ok: false,
+			code: 'superseded',
+			ids: [add.id],
+		})
+		const remove = await next(REFUSED)
+		expect(remove.type).toBe('Remove')
+		await feature('cats')
+		expect(await h.store.retryDeliveries(BUILD, { ids: [remove.id], now: NOW })).toEqual({
+			ok: false,
+			code: 'superseded',
+			ids: [remove.id],
+		})
+		// Another hashtag's Add is not superseded by them.
+		expect(await h.store.retryDeliveries(BUILD, { ids: [dogs.id], now: NOW })).toMatchObject({ ok: true, retried: 1 })
+	})
+
 	it('refuses to retry a Like that its Undo has superseded, sent or not', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users

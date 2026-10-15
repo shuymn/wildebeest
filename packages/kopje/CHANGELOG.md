@@ -79,6 +79,32 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - `DELETE /api/v1/profile/avatar` and `DELETE /api/v1/profile/header`, as Mastodon 4.5 has them (scope
   `write:accounts`): the account shows the default image again, the removed image's files are deleted, followers'
   servers receive the profile `Update`, and the answer is your `CredentialAccount`.
+- Followed hashtags, as Mastodon 4.5 has them: `POST /api/v1/tags/:id/follow` and `/unfollow` (scope
+  `write:follows`), and `GET /api/v1/followed_tags` (scope `read:follows`; newest follow first, 100 by default and at
+  most 200, with Link headers). A name that is not a hashtag answers 404; any other name may be followed, used or not.
+  Home also shows the public statuses, not boosts, with a hashtag you follow, from anyone, unless you block or mute
+  their author or an account they mention, block their author's domain, or their author blocks you. The Tag entity
+  shows `following` and `featuring` to a signed-in user wherever it appears, search's hashtags included.
+    - Where Kopje differs from Mastodon: an account follows at most 100 hashtags; home shows a followed hashtag's
+      statuses posted before the follow too (home is read, not filled as statuses arrive), and they leave it at once
+      on an unfollow; the followed hashtags and the suggestions below show each hashtag with an empty `history`, as
+      search's do; and home looks at most two pages (at least 40) of a followed hashtag's newest statuses for a page, so
+      when most of them are hidden from you (say, a blocked account's), that page shows fewer of the hashtag's
+      statuses.
+- Featured hashtags, as Mastodon 4.5 has them: `GET` and `POST /api/v1/featured_tags`,
+  `DELETE /api/v1/featured_tags/:id`, `GET /api/v1/featured_tags/suggestions` (the hashtags of your newest 1,000
+  statuses you do not feature yet, the most used first), `POST /api/v1/tags/:id/feature` and `/unfeature` (scopes
+  `read:accounts` and `write:accounts`), and `GET /api/v1/accounts/:id/featured_tags`, public, empty for a suspended
+  account. An account features at most 10 hashtags, with Mastodon's validation and messages. Each shows the number of
+  your public and unlisted statuses with it and the date of the newest, kept as you post, edit and delete. Its `url`,
+  `/@username/tagged/:tag`, is your public profile page with only your posts with the hashtag.
+    - Over ActivityPub, the actor publishes `featuredTags` (its featured hashtags as `Hashtag`s) and `featured` (empty:
+      Kopje has no pinned statuses), and featuring or unfeaturing a hashtag sends your followers Mastodon's `Add` or
+      `Remove` of the `Hashtag`; before an account's first one, its followers are sent the actor again, as servers that
+      stored it earlier know no `featured` collection to add to. Kopje does not read the featured hashtags of remote
+      accounts.
+    - Where Kopje differs from Mastodon: an edit that adds a hashtag to an older status keeps the newest date rather
+      than taking the older status's.
 - The remaining account endpoints of Mastodon 4.5:
     - Private notes: `POST /api/v1/accounts/:id/note` (`comment`, at most 2,000 characters; a blank one deletes the
       note) answers the Relationship. Every Relationship now carries your note on the account in `note`; nobody else
@@ -120,7 +146,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds eight migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds nine migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
@@ -148,6 +174,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       its sweep); other uploads stay as they are. Its work grows linearly with the media and the edits stored (one pass
       over the media for the column and one for the index, and one over the edits' media, grouped by id, with a
       lookup of each named upload).
+    - `0016_tags`: adds the `tag_follows` and `featured_tags` tables, empty, and `local_accounts.featured_announced`.
+      It is quick.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.5] - 2026-10-15

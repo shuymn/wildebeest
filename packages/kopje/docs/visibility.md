@@ -65,6 +65,23 @@ of the viewer's exclusive lists, a pending member included (`EXCLUSIVE_MEMBERS` 
 own filter, not part of `homeFilterSql`: Mastodon's `FeedInsertWorker#notify?` refuses only `:filter`, so an exclusive
 member's post still notifies a follower with `notify` on, as the post notification rule below has it.
 
+Home also has the public statuses, not boosts, that carry a hashtag the viewer follows (`tag_follows`, migration
+`0016_tags`), whoever wrote them: Mastodon's `FanOutOnWriteService#deliver_to_hashtag_followers!` puts a broadcastable
+status into its hashtag followers' home feeds, and `FeedManager#filter_from_tags?` leaves out a status whose author or
+active mention the viewer blocks or mutes, whose author blocks the viewer, or whose author's domain the viewer blocks:
+`homeFilterSql` for such a status. None of the follow's options nor the exclusive lists apply to them, as Mastodon's
+`:tags` filter checks neither; a status that home has by more than one way is shown once. Kopje has no silenced
+accounts, the third condition of Mastodon's `broadcastable?`. As home is read, a followed hashtag's statuses from before
+the follow are shown too, and they leave home when the follow ends (Mastodon's `TagUnmergeWorker`).
+
+Home reads a window of each followed hashtag's public statuses (`TagWindows` below), through the partial index
+`status_tags_public`, so a hashtag's unlisted, private, direct and limited statuses are never read; an account follows
+at most `MAX_FOLLOWED_TAGS` (100) hashtags, Kopje's cap where Mastodon has none, so the windows of a page are bounded.
+Each window inspects at most two pages (at least 40) of the hashtag's public statuses from the cursor, whatever the rule
+leaves out of them: Mastodon filters a hashtag's statuses as they arrive, Kopje as home is read, so a hashtag whose
+newest statuses are mostly hidden from the viewer (a blocked author's) shows fewer of its statuses on that page instead
+of costing home its whole history; those below a longer hidden stretch appear once home's other streams move the page
+past it.
 Home and a list's timeline read a window of each author's statuses (`AuthorWindows` below): for each account home
 shows (for a list, each active member), the newest public, unlisted and private statuses of theirs inside the cursor
 that pass every filter above, at most a page, through the partial index `statuses_feed` from the cursor; then the
@@ -193,6 +210,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R24 list timeline         | `homeFilterSql` in `listTimeline`, with the list's active members, the follow's options and the list's `replies_policy`; the owner's lists only (`ownList` in `lists.ts`).                                                                                                                                                                                                                                                         |
 | R25 conversations         | `visibleSql` (through `statusReads`) for each last status; rows are the owner's only (`listConversations`, `markConversation`, `deleteConversation` in `conversations.ts`).                                                                                                                                                                                                                                                        |
 | R26 scheduled statuses    | `scheduledOwnSql` in every read of `scheduled_statuses`, all in `scheduled-statuses.ts`: the owner's alone, anyone else's not found; published through `writePost`, after which R1 to R25 apply.                                                                                                                                                                                                                                   |
+| R29 hashtags              | `tag_follows` read in `tags.ts` (the viewer's own) and in home's `TagWindows` (R9) alone; featured hashtags (`featured-tags.ts`) shown to anyone for an available account (R1, `availableSql`), none for an unavailable one, and in the actor's `featuredTags` collection for an available local actor.                                                                                                                            |
 | R27 polls                 | `viewableStatusId` (R3) for a poll's status in `getPoll`, `vote` and the presenter's callers; `mayVoteSql` (R3, and the voter blocks neither the author nor its domain) for a local vote and a received one; `poll_votes` read in `polls.ts` alone, only the viewer's own.                                                                                                                                                         |
 | R28 endorsements, notes   | `endorsementsShownSql` and `endorsementListedSql` in `endorsedPage` (`endorsements.ts`): an account's endorsements, to anyone, and the viewer's own. A private note is its author's alone: read only in the viewer's relationships (`relationshipsOf` in `accounts.ts`).                                                                                                                                                           |
 
@@ -313,6 +331,10 @@ WHERE (<where>) AND (<rule over s>) AND (<and>) <tail>
     window. `<author>` is `s.account_id` unless the window reads another index: home's mentions window reads the
     viewer's mentions by author (`m.author_id`), with `status_mentions m` in `<from>`.
 
+    A branch may also be a `TagWindows`, a window of each followed hashtag's statuses (home's), in the same form with
+    `(<tags>) g` selecting each hashtag once as `name` and `<tag> = g.name` in the window's WHERE; a hashtag has no rule
+    of its own, so every status of its window is judged by the rule.
+
 - `authorShown(db, rule, { author, and })` decides that part of the rule for one author, with `and`, before a read of
   that author's statuses alone, which can then return nothing without reading them.
 
@@ -330,7 +352,7 @@ author. The callers:
 
 | Caller                                                     | Ids from                                                                                             |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| home                                                       | `union` under `homeFilter` of two `AuthorWindows` (follows, mentions) and own                        |
+| home                                                       | `union` under `homeFilter` of two `AuthorWindows` (follows, mentions), own and a `TagWindows`        |
 | list timeline                                              | `union` of one `AuthorWindows` under `homeFilter`: the list's active members                         |
 | public feed, bookmarks and favourites, context             | `select` under `listable`; the tag feed a `union` of its names under it                              |
 | account statuses                                           | `authorShown`, then `select` under `visible`, with `visibleSql` and `filteredForSql` for an original |
@@ -373,6 +395,7 @@ module:
 - reads or writes `scheduled_statuses` outside `scheduled-statuses.ts`, whose every read is the owner's
   (`scheduledOwnSql`, R26).
 - reads or writes `poll_votes` outside `polls.ts`, which shows only counts and a viewer's own votes (R27).
+- reads or writes `tag_follows` outside `tags.ts` and home's windows in `timelines.ts`, each the viewer's own (R29).
 - reads `account_notes` outside `accounts.ts`, which reads only the viewer's own (R28) and writes them, and `inbox.ts`,
   whose actor purge deletes the notes on the account.
 
@@ -415,21 +438,26 @@ test/policy-oracle.test.ts` replays it.
 
 `test/policy-bounds.test.ts` takes one generated world, for a fixed seed, in which every endpoint below shows the viewer
 something. It runs home, the public and tag feeds, account statuses, notifications, context, conversations, favourites,
-bookmarks, `favourited_by`, `reblogged_by`, relationships (with the viewer's endorsement of and note on each account), the followers and following of an account (one that no unrelated account
-follows), a list's timeline (a list of every account of the world), the viewer's timeline markers, status and hashtag search, the viewer's scheduled statuses, the viewer's endorsements (of every account it follows) through both endpoints, the world's accounts by id, and account search among the viewer's follows (a search of every account reads the
-newest accounts the instance knows, a window that grows with them up to its limit) on that world alone, and again with
-1,000 unrelated remote accounts and 100 unrelated local ones: their statuses (never public, though they carry the
-hashtag the tag feed reads), replies and boosts, their follows, blocks, mutes and domain blocks of the world's accounts
-and domains, their favourites, bookmarks and notifications, their exclusive lists of the world's accounts and their
-own, their endorsements of and notes on those accounts, and their timeline markers and scheduled statuses, together with the viewer's own blocks and mutes of those
+bookmarks, `favourited_by`, `reblogged_by`, relationships (with the viewer's endorsement of and note on each account),
+the followers and following of an account (one that no unrelated account follows), a list's timeline (a list of every
+account of the world), the viewer's timeline markers, status and hashtag search, the viewer's scheduled statuses, the
+viewer's endorsements (of every account it follows) through both endpoints, the world's accounts by id, and account
+search among the viewer's follows (a search of every account reads the newest accounts the instance knows, a window that
+grows with them up to its limit) on that world alone, and again with 1,000 unrelated remote accounts and 100 unrelated
+local ones: their statuses (never public, though they carry the hashtag the tag feed reads), replies and boosts, their
+follows, blocks, mutes and domain blocks of the world's accounts and domains, their favourites, bookmarks and
+notifications, their exclusive lists of the world's accounts and their own, their endorsements of and notes on those
+accounts, and their timeline markers and scheduled statuses, together with the viewer's own blocks and mutes of those
 accounts and domain blocks of domains nobody lives on. Each endpoint must show the same with them as without (the same
 statuses, accounts, notifications and hashtags in the same order, and the same relationship flags), and the rows it
-reads (RES-7) may grow by at most 10. A second case grows the history of each author home and a list read instead:
-the viewer, who follows seven accounts and has a list of them, and those accounts, from 20 statuses each to 2,000, one
-of the accounts posting only direct statuses addressed to another account. The newest page, a page from the middle of
-the longer histories and the oldest page of home and of the list must each be full and read at most 10 rows more. A
-third case does the same for the conversation list, with 20 or 2,000 conversations of the viewer, each a thread of
-three direct statuses.
+reads (RES-7) may grow by at most 10 (home by 11: each followed hashtag's window judges its statuses again, and the
+probe of the viewer's blocks and mutes reads the next index entry, which the unrelated accounts provide; the same with
+ten times the unrelated rows). A second case grows the history of each author home and a list read instead: the viewer,
+who follows seven accounts and has a list of them, and those accounts, from 20 statuses each to 2,000, one of the
+accounts posting only direct statuses addressed to another account. The newest page, a page from the middle of the
+longer histories and the oldest page of home and of the list must each be full and read at most 10 rows more. A third
+case does the same for the conversation list, with 20 or 2,000 conversations of the viewer, each a thread of three
+direct statuses.
 
 A third case grows the generated world's own history: the same world with every status replicated 40 and 400 times,
 each copy a new status older than every original, with its original's author, visibility, mentions, hashtag and
@@ -450,11 +478,18 @@ viewer blocks, a suspended one and one being deleted, whose statuses the account
 must show a full page and the account statuses none, reading at most 10 rows more.
 Another case grows the accounts with timeline markers from 10 to 2,000: the viewer's markers read at most 10 rows
 more. The world gives every original status a poll of four choices with the viewer's vote, and the unrelated accounts
-polls and votes of their own and votes in the target's poll (rows only); the target's poll (`GET /api/v1/polls/:id`)
-is an endpoint of both cases. A last poll case grows the votes in each of a page's 20 polls from 10 to 1,000: the
-account statuses page, the poll and a vote in it must each read at most 10 rows more. Another grows the accounts the
-viewer endorses and keeps notes on from 20 to 2,000: the newest, a middle and the oldest page of the viewer's
-endorsements through both endpoints, and the relationships of 20 of them, read at most 10 rows more.
+polls and votes of their own and votes in the target's poll (rows only); the target's poll (`GET /api/v1/polls/:id`) is
+an endpoint of both cases. A last poll case grows the votes in each of a page's 20 polls from 10 to 1,000: the account
+statuses page, the poll and a vote in it must each read at most 10 rows more. Another grows the accounts the viewer
+endorses and keeps notes on from 20 to 2,000: the newest, a middle and the oldest page of the viewer's endorsements
+through both endpoints, and the relationships of 20 of them, read at most 10 rows more. The viewer also follows the
+world's hashtag and another, and features both; the followed hashtags, the featured hashtags (the viewer's and their
+account's) and the suggestions are endpoints of both cases (the suggestions exempt from the history case: they read the
+viewer's newest 1,000 statuses, a window that grows with the history up to that limit). The unrelated local accounts
+follow and feature hashtags too, and a case of its own grows the accounts that follow hashtags from 10 to 2,000: home
+and the followed hashtags must read at most 10 rows more. A last case follows `MAX_FOLLOWED_TAGS` hashtags, each with 40
+or 400 public statuses: home's newest and oldest pages must read the same rows (at most 10 more), and at most a window
+per hashtag more than with none.
 
 `test/policy-endpoints.test.ts` runs the read endpoints themselves on generated worlds, with favourites, bookmarks and
 notifications added, for each available local viewer and, where the endpoint answers without a token, the anonymous
@@ -476,10 +511,10 @@ boost must come with its own original (never `reblog: null` on a read), which th
 | conversations                                              | exactly the viewer's conversations the model makes of the direct statuses and the mentions seeded (R25), newest last status first, both ways over pages; each last status only if the viewer may see it (R2), else null; another account's is not found |
 | search resolution (of every stored account and status)     | an account exactly when account search finds it (R14); a status exactly when the single-status read shows it (R3), unless the viewer blocks its author's domain                                                                                         |
 
-Home and each list are read page by page: by `max_id` in pages of 3 and by `min_id` from the oldest in pages of 2,
-each page exactly the next of the model's members, so a page cannot come back short while members remain; and the
-`since_id` and `min_id` pages above the middle member. Each endpoint must show something in some case, so a property
-cannot pass by showing nothing.
+Home and each list are read page by page: by `max_id` in pages of 3 and by `min_id` from the oldest in pages of 2, each
+page exactly the next of the model's members, so a page cannot come back short while members remain; and the `since_id`
+and `min_id` pages above the middle member. Each endpoint must show something in some case, so a property cannot pass by
+showing nothing, and some case's home must hold a status only a followed hashtag brings.
 
 `test/policy-writes.test.ts` runs the write paths on generated worlds, with remote accounts given personal and some
 shared inboxes and local accounts given Web Push subscriptions (alerts, policy, valid or expired token). Each case
