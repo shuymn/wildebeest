@@ -126,6 +126,14 @@ const RULES: readonly Rule[] = [
 			'../src/domain/deliveries.ts': 'moves a row its recipient’s shared inbox refused to that recipient’s own inbox',
 		},
 	},
+	{
+		// R25: nothing of a scheduled status is shown, notified or delivered before it is published.
+		name: 'reads or writes scheduled_statuses',
+		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['scheduled_statuses'])}`, 'i'),
+		allowed: {
+			'../src/domain/scheduled-statuses.ts': 'the owner’s scheduled statuses (scheduledOwnSql) and their publication',
+		},
+	},
 ]
 
 function violations(files: Record<string, string>, rules: readonly Rule[] = RULES): string[] {

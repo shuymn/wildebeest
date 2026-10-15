@@ -12,6 +12,7 @@ import { Db } from '../src/db/sql'
 import { listFollows, relationships, userinfo } from '../src/domain/accounts'
 import { canView, visibleSql, type Visibility } from '../src/domain/audience'
 import { listNotifications } from '../src/domain/notifications'
+import { dueScheduled, listScheduled, publishScheduled } from '../src/domain/scheduled-statuses'
 import { search } from '../src/domain/search'
 import { interactors, statusContext } from '../src/domain/statuses'
 import {
@@ -140,6 +141,7 @@ function writeViewer(sql: SqlStorage): void {
 	WORLD.accounts.forEach((_, x) => {
 		sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', VIEWER_LIST, accountId(x))
 	})
+	writeScheduled(sql, viewer, VIEWER_SCHEDULED_BASE, 25)
 	WORLD.statuses.forEach((status, s) => {
 		sql.exec('INSERT INTO favourites (account_id, status_id) VALUES (?, ?)', viewer, statusId(s))
 		sql.exec('INSERT INTO bookmarks (account_id, status_id) VALUES (?, ?)', viewer, statusId(s))
@@ -152,6 +154,25 @@ function writeViewer(sql: SqlStorage): void {
 			)
 		}
 	})
+}
+
+// `count` scheduled statuses of `owner`, a day apart from a week after NOW, with ids from `base`.
+const VIEWER_SCHEDULED_BASE = 720000000000000000n
+const UNRELATED_SCHEDULED_BASE = 730000000000000000n
+
+function writeScheduled(sql: SqlStorage, owner: string, base: bigint, count: number): void {
+	sql.exec(
+		`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+		INSERT INTO scheduled_statuses (id, account_id, scheduled_at, params)
+		SELECT CAST(?2 + i AS TEXT), ?3, strftime('%Y-%m-%dT%H:%M:%fZ', ?4, '+' || (7 + i) || ' days'),
+			json_object('text', 'later ' || i, 'spoiler_text', '', 'sensitive', NULL, 'language', NULL, 'visibility', NULL,
+				'in_reply_to_id', NULL, 'media_ids', NULL)
+		FROM n`,
+		count,
+		String(base),
+		owner,
+		new Date(NOW).toISOString()
+	)
 }
 
 function writeUnrelated(sql: SqlStorage, remote: number): void {
@@ -259,6 +280,7 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 			j % 3 === 0 ? null : new Date(NOW + (j % 3 === 1 ? -1 : 1) * 3_600_000).toISOString()
 		)
 		sql.exec('INSERT INTO domain_blocks (account_id, domain) VALUES (?, ?)', owner, REMOTE_DOMAINS[j % 2] ?? '')
+		writeScheduled(sql, owner, UNRELATED_SCHEDULED_BASE + BigInt(j * 100), 30)
 		for (let k = 0; k < 10; k++) {
 			const target = status(3 * (j * 10 + k))
 			sql.exec('INSERT INTO favourites (account_id, status_id) VALUES (?, ?)', owner, target)
@@ -425,6 +447,7 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 	['status search', search, { ...searchInput, query: 'status', types: ['statuses'] }],
 	['hashtag search', search, { ...searchInput, query: 'cats', types: ['hashtags'] }],
 	['userinfo', userinfo, { credential: { ...credential, scope: 'profile' }, present: PRESENT }],
+	['scheduled statuses', listScheduled, { credential, page: PAGE }],
 ]
 
 // How many rows a read may add when the unrelated rows grow from none to UNRELATED: a few for a planner's choice, far
@@ -1067,5 +1090,105 @@ describe("userinfo reads the account, not the account's history (RES-7)", () => 
 		}
 		const [few = 0, many = 0] = counts
 		expect(many).toBeLessThanOrEqual(few + ALLOWANCE)
+	}, 60_000)
+})
+
+// The rows an operation reads, writes included (rowsRead in read-helpers.ts counts reads only).
+async function rowsTouched<I>(store: StoreStub, operation: StoreOperation<I, unknown>, input: I): Promise<number> {
+	return runInDurableObject(store, (_instance, state) => {
+		let read = 0
+		const real = state.storage.sql
+		const counting = {
+			exec: (query: string, ...params: SqlStorageValue[]) => {
+				const cursor = real.exec(query, ...params)
+				return {
+					toArray: () => {
+						const rows = cursor.toArray()
+						read += cursor.rowsRead
+						return rows
+					},
+					get rowsWritten() {
+						cursor.toArray()
+						read += cursor.rowsRead
+						return cursor.rowsWritten
+					},
+				}
+			},
+		} as unknown as SqlStorage
+		operation.run(counting, input)
+		return read
+	})
+}
+
+// Scheduled statuses (R25) add a dimension: the accounts that schedule, each up to its limit. An account's page reads
+// its own index, and a publication round reads the due ones through the index by time, so both read the same rows
+// with 10 accounts holding scheduled statuses or 300, each with 30, only one of them due.
+describe('scheduled statuses read a page and a round, however many accounts schedule (RES-7)', () => {
+	const OWNER = '820000000000000000'
+	const TOKEN = 'scheduled-token'
+	const account = (i: number) => String(820000000000000000n + BigInt(i))
+	const DUE = '740000000000000001'
+
+	async function schedules(accounts: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			for (let i = 0; i < accounts; i++) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+					account(i),
+					`https://kopje.test/ap/users/u${i}`,
+					`u${i}`
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'test')",
+					account(i),
+					`u${i}@example.com`
+				)
+				writeScheduled(sql, account(i), 750000000000000000n + BigInt(i * 100), 30)
+			}
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('scheduled', 'secret', 'scheduled', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'scheduled', ?, 'read')",
+				TOKEN,
+				OWNER
+			)
+			sql.exec(
+				`INSERT INTO scheduled_statuses (id, account_id, scheduled_at, params)
+				VALUES (?, ?, ?, json_object('text', 'due', 'spoiler_text', '', 'sensitive', NULL, 'language', NULL,
+					'visibility', NULL, 'in_reply_to_id', NULL, 'media_ids', NULL))`,
+				DUE,
+				account(1),
+				new Date(NOW - 60_000).toISOString()
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 10 or 300 accounts holding scheduled statuses', async () => {
+		const page = { credential: { tokenHash: TOKEN, scope: 'read', now: NOW }, page: PAGE } as const
+		const due = { now: NOW, limit: 25 }
+		const publish = { id: DUE, now: NOW, objectId: '00000000-0000-4000-8000-000000000001' }
+		const measured: number[][] = []
+		for (const store of [await schedules(10), await schedules(300)]) {
+			const shown = await runInDurableObject(store, (_instance, state) => listScheduled.run(state.storage.sql, page))
+			expect(shown).toMatchObject({ status: 'ok', value: { items: expect.any(Array) } })
+			expect(shown.status === 'ok' ? shown.value.items.length : 0).toBe(PAGE.limit)
+			const rows = [await rowsRead({ store }, listScheduled, page), await rowsTouched(store, dueScheduled, due)]
+			rows.push(await rowsTouched(store, publishScheduled, publish))
+			expect(
+				await runInDurableObject(store, (_instance, state) =>
+					state.storage.sql.exec('SELECT count(*) AS n FROM statuses').one()
+				)
+			).toEqual({ n: 1 })
+			measured.push(rows)
+		}
+		const [few = [], many = []] = measured
+		const grown = ['page', 'due', 'publish'].flatMap((name, k) =>
+			(many[k] ?? Infinity) <= (few[k] ?? 0) + ALLOWANCE ? [] : [`${name}: ${few[k]} -> ${many[k]}`]
+		)
+		expect(grown).toEqual([])
 	}, 60_000)
 })
