@@ -107,9 +107,18 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   mention of you, and the statuses of an account that blocks you, that you block, or that is suspended or being deleted
   are no longer read to show its empty profile.
 
+### Fixed
+
+- Media an edit removes from a status stays with the status, as with Mastodon, so the status's edit history still
+  shows it: it is no longer deleted a day after the edit. The status no longer shows it, and it cannot be attached to
+  another status or a scheduled status; a later edit of the same status can attach it again, and it is deleted with
+  the status (at once with `delete_media`, otherwise after the grace period, as the status's other media). An image
+  that only earlier versions of a converted status show now belongs to that status too, so it is no longer offered as
+  an unattached upload, and goes with the status.
+
 ### Instance changes
 
-- Store schema: adds seven migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds eight migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
@@ -131,6 +140,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       quick.
     - `0014_account_notes_and_pins`: adds the `account_notes` and `account_pins` tables, empty, and the trigger that
       deletes an endorsement with its follow. Its work does not grow with the Store.
+    - `0015_media_shown`: adds `media_attachments.shown`, rebuilds the index `media_attachments_status` with it, and
+      gives back to its status, not shown, each kept upload that earlier versions of exactly one status of its author
+      name (an image the cutover kept for earlier versions, or media an edit detached that is more than an hour from
+      its sweep); other uploads stay as they are. Its work grows linearly with the media and the edits stored (one pass
+      over the media for the column and one for the index, and one over the edits' media, grouped by id, with a
+      lookup of each named upload).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.5] - 2026-10-15

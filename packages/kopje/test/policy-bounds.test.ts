@@ -28,7 +28,7 @@ import { listNotifications } from '../src/domain/notifications'
 import { getPoll, vote } from '../src/domain/polls'
 import { dueScheduled, listScheduled, publishScheduled } from '../src/domain/scheduled-statuses'
 import { search } from '../src/domain/search'
-import { interactors, statusContext } from '../src/domain/statuses'
+import { getStatus, interactors, statusContext } from '../src/domain/statuses'
 import {
 	accountStatuses,
 	bookmarks,
@@ -1823,6 +1823,109 @@ describe('polls are presented from their counts, not their votes (RES-7)', () =>
 		const grown = ['page', 'poll', 'vote'].flatMap((name, k) =>
 			(many[k] ?? Infinity) <= (few[k] ?? 0) + ALLOWANCE ? [] : [`${name}: ${few[k]} -> ${many[k]}`]
 		)
+		expect(grown).toEqual([])
+	}, 60_000)
+})
+
+// Media an edit drops stays with its status, not shown (migration 0015_media_shown), up to four per edit. What a status
+// shows is sought in the index media_attachments_status past what it no longer shows, so the reads of a status and of
+// the media-only feeds do not grow with the media its edits dropped.
+describe('statuses cost the media they show, not the media their edits dropped (RES-7)', () => {
+	const AUTHOR_ID = '690000000000000001'
+	const MEDIA_TOKEN = 'media-token'
+	const status = (i: number) => String(691000000000000000n + BigInt(i))
+	const media = (i: number, m: number) => String(692000000000000000n + BigInt(i * 1000 + m))
+	const STATUSES = 25
+
+	async function store(dropped: number): Promise<StoreStub> {
+		const stub = await migratedStore()
+		await runInDurableObject(stub, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/author', 'author')",
+				AUTHOR_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'author@example.com', X'00', X'00', 'test')",
+				AUTHOR_ID
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('media', 'secret', 'media', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'media', ?, 'read')",
+				MEDIA_TOKEN,
+				AUTHOR_ID
+			)
+			for (let i = 0; i < STATUSES; i++) {
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					VALUES (?, ?, ?, 'public', '<p>hello</p>', ?)`,
+					status(i),
+					`https://kopje.test/objects/${status(i)}`,
+					AUTHOR_ID,
+					new Date(NOW).toISOString()
+				)
+				// The status shows one image; its edits dropped the others, the oldest first.
+				for (let m = 0; m <= dropped; m++) {
+					sql.exec(
+						`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, shown)
+						VALUES (?, ?, ?, 0, 'image', ?, ?)`,
+						media(i, m),
+						AUTHOR_ID,
+						status(i),
+						`https://kopje.test/media/${media(i, m)}/full.png`,
+						m === dropped ? 1 : 0
+					)
+				}
+			}
+		})
+		return stub
+	}
+
+	it('reads the same rows with 4 or 396 media dropped per status', async () => {
+		const credential = { tokenHash: MEDIA_TOKEN, scope: 'read', now: NOW } as const
+		const reads: [string, StoreOperation<never, unknown>, unknown][] = [
+			['status', getStatus, { credential, id: status(STATUSES - 1), present: PRESENT }],
+			[
+				'public, only media',
+				publicTimeline,
+				{ credential, now: NOW, page: PAGE, local: false, remote: false, onlyMedia: true, present: PRESENT },
+			],
+			[
+				'account statuses, only media',
+				accountStatuses,
+				{
+					credential,
+					now: NOW,
+					account: AUTHOR_ID,
+					page: PAGE,
+					onlyMedia: true,
+					excludeReplies: false,
+					excludeReblogs: false,
+					pinned: false,
+					tagged: null,
+					present: PRESENT,
+				},
+			],
+		]
+		const [few, many] = [await store(4), await store(396)]
+		const grown: string[] = []
+		for (const [name, operation, input] of reads) {
+			const output = await runInDurableObject(many, (_instance, state) =>
+				operation.run(state.storage.sql, input as never)
+			)
+			// The newest status shows its one image, and none it dropped.
+			expect(JSON.stringify(output)).toContain(media(STATUSES - 1, 396))
+			expect(JSON.stringify(output)).not.toContain(media(STATUSES - 1, 395))
+			const counts = [
+				await rowsRead({ store: few }, operation, input as never),
+				await rowsRead({ store: many }, operation, input as never),
+			]
+			if ((counts[1] ?? Infinity) > (counts[0] ?? 0) + ALLOWANCE) {
+				grown.push(`${name}: ${counts[0]} -> ${counts[1]}`)
+			}
+		}
 		expect(grown).toEqual([])
 	}, 60_000)
 })

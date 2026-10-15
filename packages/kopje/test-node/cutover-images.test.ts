@@ -431,7 +431,7 @@ describe('convert and verify-conversion with --images', () => {
 		}
 		const media = (name: keyof typeof tokens) =>
 			row(
-				`SELECT m.id, a.username, m.status_id IS NOT NULL AS attached, m.gc_at, m.type, m.url, m.preview_url,
+				`SELECT m.id, a.username, m.status_id IS NOT NULL AS attached, m.shown, m.gc_at, m.type, m.url, m.preview_url,
 					m.content_type, m.meta, m.processed FROM media_attachments m JOIN accounts a ON a.id = m.account_id
 				WHERE m.file_token = ?`,
 				tokens[name]
@@ -480,8 +480,21 @@ describe('convert and verify-conversion with --images', () => {
 			})
 		}
 		expect(media('image-2')).toMatchObject({ attached: 0, url: `${ORIGIN}/media/${tokens['image-2']}/full.png` })
-		// An image only an earlier version shows has a row of its own, and the version names its files.
-		expect(media('image-9')).toMatchObject({ attached: 0, username: 'alice', content_type: 'image/png' })
+		// An image only an earlier version shows has a row of its own, of the status but not shown, as an edit that drops
+		// media leaves it; the version names its files.
+		expect(media('image-9')).toMatchObject({
+			attached: 1,
+			shown: 0,
+			gc_at: null,
+			username: 'alice',
+			content_type: 'image/png',
+		})
+		expect(
+			row(
+				'SELECT s.uri FROM media_attachments m JOIN statuses s ON s.id = m.status_id WHERE m.file_token = ?',
+				tokens['image-9']
+			)
+		).toEqual({ uri: statusUri('%second version%') })
 		const edits = (
 			db.prepare('SELECT media_json FROM status_edits ORDER BY rowid').all() as { media_json: string }[]
 		).map((e) => JSON.parse(e.media_json) as { url: string; preview_url: string; description: string | null }[])

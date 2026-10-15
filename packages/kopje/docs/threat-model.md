@@ -795,7 +795,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 ### Media (MEDIA)
 
 - **MEDIA-1: only the owner uses an attachment.** Only the uploader may update, delete or attach an attachment, and only
-  while it is unattached or attached to the status being edited. _Enforced (main)_ for attaching:
+  while it is unattached or attached to the status being edited; media an edit drops stays attached to its status,
+  not shown, so only a later edit of that status may attach it again. _Enforced (main)_ for attaching:
   `attachableMedia` in `src/domain/statuses.ts`; `test/statuses.test.ts` ("attaches own unattached media").
   _Enforced (main)_ for reading, updating and deleting: `src/domain/media.ts` (an upload is
   read or updated only by its owner while unattached; it is deleted only through its owner's status with
