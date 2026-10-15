@@ -268,10 +268,13 @@ the cleanup). After each action the model (`outboundKindOf`, `statusAudience`, `
 - `to` and `cc` (the activity's and its object's) name only Public, the signer's followers and the accounts R22 lets
   it name: never a silent recipient, and for content never an account the author blocks or domain-blocks; a boost's
   `Announce` names the author exactly when R22 allows, its `Undo` always;
-- a retraction is recorded, and reaches every inbox that was delivered something about its object; a profile change
-  reaches every remote follower;
+- a retraction is recorded, and reaches every inbox something about its object was delivered to, is still queued for
+  (a deliveries row in any state) or is still in a chunk of targets not yet expanded; a profile change reaches every
+  remote follower;
 - every notification written satisfies R15, and every push recorded R16, at the time of the action.
 
-The properties must each see their cases (a delivered retraction reaching a blocked receiver, the `Undo` of a boost
-naming a blocked author, a profile `Update` to a domain-blocked follower, content leaving one out, a personal copy,
-notifications and pushes), so none passes by checking nothing.
+The property runs 500 cases from a fixed seed (`FC_SEED` replays another). Next to it, witnesses (cases written by
+hand) run each scenario it must check: a delivered retraction reaching a blocked receiver, one reaching a target still
+queued after its follower left, one reaching targets not yet expanded (more followers than an expansion step, who
+leave before the `Delete`), the `Undo` of a boost naming a blocked author, a profile `Update` to a domain-blocked
+follower, content leaving one out, a personal copy, notifications and pushes. So coverage never depends on chance.

@@ -5,10 +5,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { migratedStore } from './helpers'
 import { type ModelSubscription, NOTIFICATION_TYPES, outboundKindOf, PolicyModel } from './policy-model'
-import { accountId, runs, type World, worldArb, writeWorld } from './policy-world'
+import { accountId, REMOTE_DOMAINS, runs, type World, worldArb, writeWorld } from './policy-world'
 import { updateCredentials } from '../src/domain/accounts'
 import type { ApiVisibility } from '../src/domain/audience'
-import { type Claim, claimDeliveries, completeDelivery } from '../src/domain/deliveries'
+import { type Claim, claimDeliveries, completeDelivery, EXPANSION_STEP } from '../src/domain/deliveries'
 import type { NotificationType } from '../src/domain/notifications'
 import { POLICIES } from '../src/domain/push'
 import {
@@ -36,12 +36,15 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 //   - R22: to and cc never name a silent recipient, and content never names an account the author blocks or whose
 //     domain it blocks; a boost's Announce names the original's author exactly when the author does not block them or
 //     their domain, and its Undo names them always;
-//   - a retraction reaches every inbox that received what it withdraws; an Update of the actor reaches every follower;
+//   - a retraction reaches every inbox that received what it withdraws or may still: delivered, still in a deliveries
+//     row, or in a chunk of targets not yet expanded; an Update of the actor reaches every follower;
 //   - R15 and R16: every notification written is shown to its recipient, and every push recorded is wanted, at the
 //     time of the action.
 
-// Cases per property: each writes a world and runs a sequence of actions in it.
+// Cases per property: each writes a world and runs a sequence of actions in it. The seed is fixed (FC_SEED replays
+// another), and witnesses (below) run each scenario the properties must see, so coverage never depends on chance.
 const CASES = 500
+const SEED = 20261015
 const PRESENT = { origin: 'https://kopje.test' }
 const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 const API_VISIBILITIES: readonly ApiVisibility[] = ['public', 'unlisted', 'private', 'direct']
@@ -66,13 +69,16 @@ const ACTION_KINDS = [
 ] as const
 
 type Action = {
-	kind: (typeof ACTION_KINDS)[number]
+	// A witness may also have every remote follower of the author leave at once.
+	kind: (typeof ACTION_KINDS)[number] | 'followers leave'
 	// Indices, taken modulo what the world offers when the action runs.
 	actor: number
 	target: number
 	visibility: ApiVisibility
 	mentions: number[]
 	reply: boolean
+	// A witness's choice of the account a block, domain block or unfollow names, instead of `target`.
+	account?: number
 }
 
 type Case = {
@@ -107,8 +113,141 @@ const caseArb: fc.Arbitrary<Case> = fc.record({
 	actions: fc.array(actionArb, { minLength: 10, maxLength: 24, size: 'max' }),
 })
 
-// What the properties saw, over every case, so none passes by checking nothing.
-const seen = new Set<string>()
+// The scenarios the properties must see, so none passes by checking nothing.
+const SCENARIOS = [
+	'actor Update to a domain-blocked follower',
+	'content leaves out a domain-blocked follower',
+	'content to a silent recipient',
+	'notification',
+	'push',
+	'retraction reaches a blocked receiver',
+	'retraction reaches an outstanding target',
+	'retraction reaches an unexpanded target',
+	'retraction reaches what was delivered',
+	'Undo(Announce) names a blocked author',
+] as const
+
+type Scenario = (typeof SCENARIOS)[number]
+
+// A case written by hand: the four local accounts (L0 acts), remote accounts R0, R1, ... alternately on the two
+// remote domains with a personal inbox only, the given statuses and accepted follows of L0, and every local account
+// subscribed to every alert.
+function witness(
+	remotes: number,
+	world: Partial<Pick<World, 'statuses'>> & { followers?: number[] },
+	actions: (Partial<Action> & Pick<Action, 'kind'>)[]
+): Case {
+	const accounts: World['accounts'] = []
+	for (let i = 0; i < 4; i++) {
+		accounts.push({
+			name: `L${i}`,
+			local: true,
+			suspended: false,
+			hidesCollections: false,
+			domain: null,
+			uri: `https://kopje.test/ap/users/l${i}`,
+		})
+	}
+	for (let i = 0; i < remotes; i++) {
+		const domain = REMOTE_DOMAINS[i % REMOTE_DOMAINS.length]!
+		accounts.push({
+			name: `R${i}`,
+			local: false,
+			suspended: false,
+			hidesCollections: false,
+			domain,
+			uri: `https://${domain}/users/r${i}`,
+		})
+	}
+	return {
+		world: {
+			accounts,
+			statuses: world.statuses ?? [],
+			follows: (world.followers ?? []).map((from) => ({
+				from,
+				to: 0,
+				accepted: true,
+				showReblogs: true,
+				notify: false,
+			})),
+			blocks: [],
+			mutes: [],
+			domainBlocks: [],
+			now: '2026-10-12T00:00:00.000Z',
+		},
+		shared: [false],
+		subscriptions: [{ alerts: NOTIFICATION_TYPES.map(() => true), policy: 'all', expired: false }],
+		actions: actions.map((action) => ({
+			actor: 0,
+			target: 0,
+			visibility: 'public',
+			mentions: [],
+			reply: false,
+			...action,
+		})),
+	}
+}
+
+const R0 = 4
+const R1 = 5
+
+const WITNESSES: { name: string; scenarios: Scenario[]; case: Case }[] = [
+	{
+		name: 'a boost of an author on a blocked domain, and its Undo',
+		scenarios: ['Undo(Announce) names a blocked author'],
+		case: witness(
+			2,
+			{
+				statuses: [
+					{ name: 'S0', author: R0, visibility: 'public', mentions: [], reblogOf: null, replyTo: null, tagged: false },
+				],
+				followers: [R1],
+			},
+			[{ kind: 'domain block', account: R0 }, { kind: 'boost' }, { kind: 'unboost' }]
+		),
+	},
+	{
+		name: 'a profile change and a post with a follower on a blocked domain',
+		scenarios: ['actor Update to a domain-blocked follower', 'content leaves out a domain-blocked follower'],
+		case: witness(2, { followers: [R0, R1] }, [
+			{ kind: 'domain block', account: R0 },
+			{ kind: 'profile' },
+			{ kind: 'post' },
+		]),
+	},
+	{
+		name: 'an edit that turns a mention silent, with notifications and pushes',
+		scenarios: ['content to a silent recipient', 'notification', 'push'],
+		case: witness(1, {}, [{ kind: 'post', mentions: [R0, 1] }, { kind: 'edit' }]),
+	},
+	{
+		name: 'a delete of a delivered status after its follower is blocked',
+		scenarios: ['retraction reaches what was delivered', 'retraction reaches a blocked receiver'],
+		case: witness(1, { followers: [R0] }, [
+			{ kind: 'post' },
+			{ kind: 'deliver' },
+			{ kind: 'block', account: R0 },
+			{ kind: 'delete' },
+		]),
+	},
+	{
+		name: 'a delete before delivery after the follower leaves',
+		scenarios: ['retraction reaches an outstanding target'],
+		case: witness(1, { followers: [R0] }, [{ kind: 'post' }, { kind: 'unfollow', account: R0 }, { kind: 'delete' }]),
+	},
+	{
+		name: 'a delete, after the followers leave, while the Create has targets not yet expanded',
+		scenarios: ['retraction reaches an unexpanded target'],
+		case: witness(EXPANSION_STEP + 5, { followers: Array.from({ length: EXPANSION_STEP + 5 }, (_, i) => 4 + i) }, [
+			{ kind: 'post' },
+			{ kind: 'followers leave' },
+			{ kind: 'delete' },
+		]),
+	},
+]
+
+// What the property and the witnesses saw.
+const seen = new Set<Scenario>()
 
 describe('the write paths agree with the model of the outbound and notification rules', () => {
 	let store: StoreStub
@@ -122,27 +261,28 @@ describe('the write paths agree with the model of the outbound and notification 
 	})
 
 	afterAll(() => {
-		expect([...seen].sort()).toEqual(
-			[
-				'actor Update to a domain-blocked follower',
-				'content leaves out a domain-blocked follower',
-				'content to a silent recipient',
-				'notification',
-				'push',
-				'retraction reaches a blocked receiver',
-				'retraction reaches what was delivered',
-				'Undo(Announce) names a blocked author',
-			].sort()
-		)
+		expect([...seen].sort()).toEqual([...SCENARIOS].sort())
 	})
+
+	for (const { name, scenarios, case: c } of WITNESSES) {
+		it(`sees ${name}`, async () => {
+			const saw = new Set<Scenario>()
+			const problems = await runInDurableObject(store, (_instance, state) => check(state.storage.sql, c, saw))
+			for (const scenario of saw) {
+				seen.add(scenario)
+			}
+			expect(problems).toEqual([])
+			expect(scenarios.filter((scenario) => !saw.has(scenario))).toEqual([])
+		})
+	}
 
 	it('sends, addresses and notifies only as the rules allow', async () => {
 		await fc.assert(
 			fc.asyncProperty(caseArb, async (c) => {
-				const problems = await runInDurableObject(store, (_instance, state) => check(state.storage.sql, c))
+				const problems = await runInDurableObject(store, (_instance, state) => check(state.storage.sql, c, seen))
 				expect(problems).toEqual([])
 			}),
-			runs(CASES)
+			runs(CASES, SEED)
 		)
 	}, 120_000)
 })
@@ -363,13 +503,36 @@ const activityRows = (sql: SqlStorage): ActivityRow[] =>
 		.exec<ActivityRow>('SELECT CAST(id AS TEXT) AS id, account_id, body FROM outbound_activities ORDER BY id')
 		.toArray()
 
-const rowKey = (row: ActivityRow) => `${row.id} ${String((JSON.parse(row.body) as { activity: Activity }).activity.id)}`
+const rowKey = (row: ActivityRow) => `${row.id} ${row.body}`
+
+function outstandingTargets(sql: SqlStorage): Map<string, { rows: Set<string>; unexpanded: Set<string> }> {
+	const found = new Map<string, { rows: Set<string>; unexpanded: Set<string> }>()
+	const rows = sql
+		.exec<{ subject: string; inbox: string; unexpanded: number }>(
+			`SELECT o.object_uri AS subject, d.inbox_url AS inbox, 0 AS unexpanded
+			FROM outbound_activities o JOIN deliveries d ON d.activity_id = o.id WHERE o.retracts = 0
+			UNION ALL
+			SELECT o.object_uri, json_extract(t.value, '$.inbox'), 1
+			FROM outbound_activities o JOIN outbound_targets c ON c.activity_id = o.id, json_each(c.targets) t
+			WHERE o.retracts = 0 AND t.key >= c.next`
+		)
+		.toArray()
+	for (const row of rows) {
+		if (row.subject === null || row.inbox === '') {
+			continue
+		}
+		const entry = found.get(row.subject) ?? { rows: new Set<string>(), unexpanded: new Set<string>() }
+		;(row.unexpanded === 1 ? entry.unexpanded : entry.rows).add(row.inbox)
+		found.set(row.subject, entry)
+	}
+	return found
+}
 
 const maxId = (sql: SqlStorage, table: string): number =>
 	sql.exec<{ n: number }>(`SELECT COALESCE(MAX(id), 0) AS n FROM ${table}`).one().n
 
-// Runs the case's actions and returns what disagrees with the model.
-function check(sql: SqlStorage, c: Case): string[] {
+// Runs the case's actions and returns what disagrees with the model; `saw` collects the scenarios it checked.
+function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 	const { inboxes, subscriptions } = writeCase(sql, c)
 	const { world } = c
 	const now = Date.parse(world.now)
@@ -402,7 +565,11 @@ function check(sql: SqlStorage, c: Case): string[] {
 
 	for (const action of c.actions) {
 		const before = readWorld(sql, world)
-		// outbound_activities reuses the id of a dropped row, so a row is told apart by its id and its activity's.
+		// What earlier activities about each object may still send: their deliveries rows, in any state (a leased one may
+		// have been POSTed), and their targets not yet expanded.
+		const outstanding = outstandingTargets(sql)
+		// outbound_activities reuses the id of a dropped row, and an edit replaces a waiting Create with one of the same
+		// id naming the current version, so a row is told apart by its id and its body.
 		const recordedBefore = new Set(activityRows(sql).map(rowKey))
 		const marks = {
 			notifications: maxId(sql, 'notifications'),
@@ -539,7 +706,12 @@ function check(sql: SqlStorage, c: Case): string[] {
 			case 'unfollow': {
 				// A remote follower leaves.
 				const follow = pick(
-					before.world.follows.filter((f) => f.to === author && !world.accounts[f.from]!.local),
+					before.world.follows.filter(
+						(f) =>
+							f.to === author &&
+							!world.accounts[f.from]!.local &&
+							(action.account === undefined || f.from === action.account)
+					),
 					action.target
 				)
 				if (follow !== undefined) {
@@ -551,9 +723,15 @@ function check(sql: SqlStorage, c: Case): string[] {
 				}
 				break
 			}
+			case 'followers leave':
+				sql.exec(
+					'DELETE FROM follows WHERE target_account_id = ? AND account_id IN (SELECT id FROM accounts WHERE domain IS NOT NULL)',
+					accountId(author)
+				)
+				break
 			case 'block': {
 				// A block, with the follows it ends either way; the activities it sends are not the subject here.
-				const target = pick(related, action.target)
+				const target = action.account ?? pick(related, action.target)
 				if (target !== undefined && target !== author) {
 					sql.exec(
 						'INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?) ON CONFLICT DO NOTHING',
@@ -570,7 +748,7 @@ function check(sql: SqlStorage, c: Case): string[] {
 			}
 			case 'domain block': {
 				// A domain block whose cleanup has not reached the follows there yet.
-				const target = pick(related, action.target)
+				const target = action.account ?? pick(related, action.target)
 				const domain = target === undefined ? null : world.accounts[target]!.domain
 				if (domain !== null) {
 					sql.exec(
@@ -623,7 +801,7 @@ function check(sql: SqlStorage, c: Case): string[] {
 				if (originalAuthor !== null && m.names(kind, signer, originalAuthor)) {
 					mustName.add(originalAuthor)
 					if (kind === 'retraction' && m.blocked(signer, originalAuthor)) {
-						seen.add('Undo(Announce) names a blocked author')
+						saw.add('Undo(Announce) names a blocked author')
 					}
 				}
 				for (const x of mustName) {
@@ -673,7 +851,7 @@ function check(sql: SqlStorage, c: Case): string[] {
 					if (!addressees.has(target.addressee) || named.has(target.addressee)) {
 						problems.push(`${what}: a personal copy for ${target.addressee}`)
 					} else if (kind === 'content') {
-						seen.add('content to a silent recipient')
+						saw.add('content to a silent recipient')
 					}
 				}
 			}
@@ -684,13 +862,22 @@ function check(sql: SqlStorage, c: Case): string[] {
 				}
 			}
 
-			// A retraction reaches every inbox that received what it withdraws, the blocked included.
+			// A retraction reaches every inbox that received what it withdraws, or may still, the blocked included.
 			if (kind === 'retraction') {
-				for (const inbox of delivered.get(subject ?? '') ?? []) {
-					seen.add('retraction reaches what was delivered')
+				const pending = outstanding.get(subject ?? '')
+				for (const [inbox, scenario] of [
+					...[...(delivered.get(subject ?? '') ?? [])].map(
+						(i) => [i, 'retraction reaches what was delivered'] as const
+					),
+					...[...(pending?.rows ?? [])].map((i) => [i, 'retraction reaches an outstanding target'] as const),
+					...[...(pending?.unexpanded ?? [])].map((i) => [i, 'retraction reaches an unexpanded target'] as const),
+				]) {
 					if (!sent.has(inbox)) {
-						problems.push(`${what}: misses ${inbox}, which received ${String(subject)}`)
-					} else if (
+						problems.push(`${what}: misses ${inbox}, which ${String(subject)} was sent or queued to`)
+						continue
+					}
+					saw.add(scenario)
+					if (
 						world.accounts.some(
 							(_, x) =>
 								m.blocked(signer, x) &&
@@ -698,7 +885,7 @@ function check(sql: SqlStorage, c: Case): string[] {
 								!reach.followers.some((f) => inboxOf(f) === inbox)
 						)
 					) {
-						seen.add('retraction reaches a blocked receiver')
+						saw.add('retraction reaches a blocked receiver')
 					}
 				}
 			}
@@ -708,7 +895,7 @@ function check(sql: SqlStorage, c: Case): string[] {
 					if (!sent.has(inboxOf(f) ?? '')) {
 						problems.push(`${what}: misses the follower ${nameOf(f)}`)
 					} else if (m.domainBlocks(signer, f)) {
-						seen.add('actor Update to a domain-blocked follower')
+						saw.add('actor Update to a domain-blocked follower')
 					}
 				}
 			}
@@ -726,11 +913,17 @@ function check(sql: SqlStorage, c: Case): string[] {
 			const kept = model.reaches('content', author, { followers: true, accounts: [] }).followers
 			const left = everyone.filter((f) => !kept.includes(f) && !kept.some((k) => inboxOf(k) === inboxOf(f)))
 			if (left.length > 0 && left.every((f) => !contentInboxes.has(inboxOf(f) ?? ''))) {
-				seen.add('content leaves out a domain-blocked follower')
+				saw.add('content leaves out a domain-blocked follower')
 			}
 		}
-		if (withdrawn !== null && (delivered.get(withdrawn)?.size ?? 0) > 0 && !retracted.has(withdrawn)) {
-			problems.push(`${label}: records no retraction of ${withdrawn}, which was delivered`)
+		const owed =
+			withdrawn === null
+				? 0
+				: (delivered.get(withdrawn)?.size ?? 0) +
+					(outstanding.get(withdrawn)?.rows.size ?? 0) +
+					(outstanding.get(withdrawn)?.unexpanded.size ?? 0)
+		if (withdrawn !== null && owed > 0 && !retracted.has(withdrawn)) {
+			problems.push(`${label}: records no retraction of ${withdrawn}, which was sent or queued`)
 		}
 		const followers = new PolicyModel(after.world).reaches('other', author, { followers: true, accounts: [] }).followers
 		if (profiled && followers.length > 0 && !actorUpdated) {
@@ -749,7 +942,7 @@ function check(sql: SqlStorage, c: Case): string[] {
 			}>('SELECT id, account_id, type, from_account_id, status_id FROM notifications WHERE id > ?', marks.notifications)
 			.toArray()
 		for (const n of notifications) {
-			seen.add('notification')
+			saw.add('notification')
 			const r = accountIndex.get(n.account_id)!
 			const from = accountIndex.get(n.from_account_id)!
 			const s = n.status_id === null ? null : (after.byId.get(n.status_id) ?? null)
@@ -766,7 +959,7 @@ function check(sql: SqlStorage, c: Case): string[] {
 			)
 			.toArray()
 		for (const push of pushes) {
-			seen.add('push')
+			saw.add('push')
 			const sub = subscriptions.get(push.subscription_id)
 			const from = accountIndex.get(push.from_account_id)!
 			const s = push.status_id === null ? null : (after.byId.get(push.status_id) ?? null)

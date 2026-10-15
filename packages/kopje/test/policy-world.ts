@@ -17,10 +17,14 @@ declare module 'vitest' {
 	}
 }
 
-// fast-check's parameters for a property: its case count, and the seed FC_SEED gives, if any.
-export function runs(numRuns: number): fc.Parameters<unknown> {
-	const seed = inject('fcSeed')
-	return seed === '' ? { numRuns } : { numRuns, seed: Number(seed) }
+// fast-check's parameters for a property: its case count, and the seed FC_SEED gives, else `seed` if given (a property
+// whose coverage must not depend on chance), else a random one.
+export function runs(numRuns: number, seed?: number): fc.Parameters<unknown> {
+	const given = inject('fcSeed')
+	if (given !== '') {
+		return { numRuns, seed: Number(given) }
+	}
+	return seed === undefined ? { numRuns } : { numRuns, seed }
 }
 
 const LOCALS = 4
