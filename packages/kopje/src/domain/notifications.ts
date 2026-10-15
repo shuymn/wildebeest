@@ -1,6 +1,7 @@
 import { type Account, edgeRangeSql, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
 import { shownSql, statusReads, type WithVisibleStatus } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
+import { type ActiveFilters, activeFilters } from './filters'
 import { presentStatuses, type Status } from './status-presenter'
 import type { Db } from '../db/sql'
 
@@ -118,11 +119,14 @@ const NOTIFICATION_COLUMNS = {
 	created_at: 'n.created_at',
 }
 
+// A notification whose status the presenter leaves out (a hide filter of the notifications context matches it, or the
+// boost's original is not visible) is left out with it.
 function presentNotifications(
 	db: Db,
 	rows: WithVisibleStatus<NotificationRow, 'status_id'>[],
 	viewerId: string,
-	present: Present
+	present: Present,
+	filters: ActiveFilters | null
 ): Notification[] {
 	const accounts = presentAccountsById(
 		db,
@@ -131,7 +135,7 @@ function presentNotifications(
 	)
 	const statusIds = [...new Set(rows.flatMap((row) => (row.status_id === null ? [] : [row.status_id])))]
 	const statuses = new Map(
-		presentStatuses(db, statusIds, { ...present, viewerId }).map((status) => [status.id, status])
+		presentStatuses(db, statusIds, { ...present, viewerId, filters }).map((status) => [status.id, status])
 	)
 	return rows.flatMap((row) => {
 		const account = accounts.get(row.from_account_id)
@@ -189,9 +193,10 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 			rows.reverse()
 		}
 		return {
-			items: presentNotifications(db, rows, viewerId, input.present),
+			items: presentNotifications(db, rows, viewerId, input.present, activeFilters(db, viewer, 'notifications')),
 			newest: rows[0]?.id ?? null,
 			oldest: rows.at(-1)?.id ?? null,
+			read: rows.length,
 		}
 	}
 )
@@ -212,7 +217,7 @@ export const getNotification = userReadOperation<{ id: string; present: Present 
 			id,
 			now
 		)
-		return presentNotifications(db, rows, viewerId, present)[0] ?? null
+		return presentNotifications(db, rows, viewerId, present, activeFilters(db, viewer, 'notifications'))[0] ?? null
 	}
 )
 

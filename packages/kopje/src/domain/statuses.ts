@@ -43,6 +43,7 @@ import {
 } from './audience'
 import { optionalUserReadOperation, userMediaDeleteOperation, userReadOperation, userWriteOperation } from './auth'
 import { beginRetraction } from './deliveries'
+import { activeFilters } from './filters'
 import { allocateLocalId } from './ids'
 import { DETACHED_GRACE_MS, liveMediaSql } from './media'
 import { notify } from './notifications'
@@ -743,7 +744,8 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 			limits.descendants,
 			now
 		)
-		const options = { ...present, viewerId }
+		// The thread's filters (filters.ts): a member a hide filter matches is left out, as with any other member.
+		const options = { ...present, viewerId, filters: activeFilters(db, viewer, 'thread') }
 		return {
 			status: 'ok',
 			value: {

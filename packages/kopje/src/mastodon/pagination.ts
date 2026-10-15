@@ -49,7 +49,7 @@ function pageUrl(requestUrl: string, name: 'max_id' | 'min_id', value: string): 
 
 // A page as a list response: its items, and the Link header to the pages around it.
 export function pageResponse<T>(c: ApiContext, page: Page<T>, limit: number): Response {
-	const link = linkHeader(c.req.url, { ...page, count: page.items.length }, limit)
+	const link = linkHeader(c.req.url, { ...page, count: page.read ?? page.items.length }, limit)
 	if (link !== undefined) {
 		c.header('Link', link)
 	}

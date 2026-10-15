@@ -7,9 +7,11 @@ import {
 	type VisibleStatusId,
 	visibleSql,
 } from './audience'
+import { type ActiveFilters, applyFilters, type FilterResult, filterStatusMatches } from './filters'
 import { htmlToPlainText } from './plain-text'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
+import { remoteHtmlText } from '../security/html'
 
 // The Status entity as Mastodon 4.0.2's REST::StatusSerializer shows it. One presenter for every read path: it takes
 // a list of ids and the viewer and reads the related rows kind by kind (statuses and reblogged originals, accounts,
@@ -18,6 +20,8 @@ import { httpUrl } from '../platform/http-url'
 // viewer, or OwnStatusId, the viewer's own, for the response to their write. A boost's original is read through the
 // read rule for the same viewer, whichever the boost's id: a boost the viewer may see stands only with an original
 // they may see, and their own boost of an original they may no longer see is shown without it (reblog: null).
+// A read in a filterable context passes the viewer's active filters for it (filters.ts): a status a hide filter
+// matches is left out, and one a warn or blur filter matches carries the results in `filtered`, as does its original.
 
 export type MediaSize = { width: number; height: number; size: string; aspect: number }
 
@@ -60,7 +64,7 @@ export type Status = {
 	muted?: boolean
 	bookmarked?: boolean
 	pinned?: boolean
-	filtered?: []
+	filtered?: FilterResult[]
 	content?: string
 	text?: string
 	reblog: Status | null
@@ -108,7 +112,8 @@ export const STATUS_COLUMNS = `s.id, s.uri, s.url, s.account_id, s.reblog_of_id,
 
 export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
 
-export type PresentOptions = Present & { viewerId: string | null }
+// filters: the viewer's active filters for the context the statuses are presented in, or none (null or absent).
+export type PresentOptions = Present & { viewerId: string | null; filters?: ActiveFilters | null }
 
 export type PresentOwnOptions = PresentOptions & {
 	// DELETE answers with the source text (`text`) in place of `content`, for redrafting: on the deleted status only,
@@ -196,17 +201,40 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		)
 	)
 	const flags = viewerFlags(db, options.viewerId, all)
+	const filters = options.filters ?? null
+	const statusMatches =
+		filters === null ? new Map<string, Set<string>>() : filterStatusMatches(db, filters, [...byId.keys()])
+	// Status#searchable_text of a status: its spoiler text, its text (a local status's source, a remote one's HTML as
+	// text) and its media descriptions. Kopje has no polls.
+	const searchableText = (row: StatusRow): string =>
+		[
+			row.spoiler_text,
+			row.author_domain === null ? (row.source_text ?? htmlToPlainText(row.content)) : remoteHtmlText(row.content),
+			(media.get(row.id) ?? []).map((m) => m.description).join('\n\n'),
+		].join('\n\n')
 
-	const presentRow = (row: StatusRow, top: boolean): Status | undefined => {
+	const presentRow = (row: StatusRow, top: boolean, filtered: FilterResult[] = []): Status | undefined => {
 		const account = accounts.get(row.account_id)
 		if (account === undefined) {
 			return undefined
 		}
 		let reblog: Status | null = null
+		if (top && filters !== null) {
+			const proper = row.reblog_of_id === null ? row : byId.get(row.reblog_of_id)
+			if (proper !== undefined) {
+				filtered = applyFilters(filters, statusMatches, {
+					text: searchableText(proper),
+					ids: row.reblog_of_id === null ? [row.id] : [row.id, row.reblog_of_id],
+				})
+				if (filtered.some((result) => result.filter.filter_action === 'hide')) {
+					return undefined
+				}
+			}
+		}
 		if (row.reblog_of_id !== null) {
 			const original = byId.get(row.reblog_of_id)
 			if (original !== undefined) {
-				reblog = presentRow(original, false) ?? null
+				reblog = presentRow(original, false, filtered) ?? null
 				if (reblog === null) {
 					return undefined
 				}
@@ -227,7 +255,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 						...(row.account_id === options.viewerId && row.reblog_of_id === null && visibility !== 'direct'
 							? { pinned: false }
 							: {}),
-						filtered: [] as [],
+						filtered,
 					}
 		const body =
 			top && options.source === true

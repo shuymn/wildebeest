@@ -21,6 +21,7 @@ import { checkCredential, type Credential, type UserCredential } from './domain/
 import * as blocks from './domain/blocks'
 import * as deliveries from './domain/deliveries'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
+import * as filters from './domain/filters'
 import * as inbox from './domain/inbox'
 import { instanceInfo, instancePeers, instanceRules } from './domain/instance'
 import * as lists from './domain/lists'
@@ -669,6 +670,84 @@ export class Store extends DurableObject<Env> {
 
 	previewDomainBlock(callerBuild: string, input: OperationInput<typeof blocks.previewDomainBlock>) {
 		return this.#kernel.execute(callerBuild, blocks.previewDomainBlock, input)
+	}
+
+	// Filters (domain/filters.ts), v2 and the v1 layer over them.
+
+	listFilters(callerBuild: string, input: OperationInput<typeof filters.listFilters>) {
+		return this.#kernel.execute(callerBuild, filters.listFilters, input)
+	}
+
+	getFilter(callerBuild: string, input: OperationInput<typeof filters.getFilter>) {
+		return this.#kernel.execute(callerBuild, filters.getFilter, input)
+	}
+
+	createFilter(callerBuild: string, input: OperationInput<typeof filters.createFilter>) {
+		return this.#kernel.execute(callerBuild, filters.createFilter, input)
+	}
+
+	updateFilter(callerBuild: string, input: OperationInput<typeof filters.updateFilter>) {
+		return this.#kernel.execute(callerBuild, filters.updateFilter, input)
+	}
+
+	deleteFilter(callerBuild: string, input: OperationInput<typeof filters.deleteFilter>) {
+		return this.#kernel.execute(callerBuild, filters.deleteFilter, input)
+	}
+
+	listFilterKeywords(callerBuild: string, input: OperationInput<typeof filters.listFilterKeywords>) {
+		return this.#kernel.execute(callerBuild, filters.listFilterKeywords, input)
+	}
+
+	createFilterKeyword(callerBuild: string, input: OperationInput<typeof filters.createFilterKeyword>) {
+		return this.#kernel.execute(callerBuild, filters.createFilterKeyword, input)
+	}
+
+	getFilterKeyword(callerBuild: string, input: OperationInput<typeof filters.getFilterKeyword>) {
+		return this.#kernel.execute(callerBuild, filters.getFilterKeyword, input)
+	}
+
+	updateFilterKeyword(callerBuild: string, input: OperationInput<typeof filters.updateFilterKeyword>) {
+		return this.#kernel.execute(callerBuild, filters.updateFilterKeyword, input)
+	}
+
+	deleteFilterKeyword(callerBuild: string, input: OperationInput<typeof filters.deleteFilterKeyword>) {
+		return this.#kernel.execute(callerBuild, filters.deleteFilterKeyword, input)
+	}
+
+	listFilterStatuses(callerBuild: string, input: OperationInput<typeof filters.listFilterStatuses>) {
+		return this.#kernel.execute(callerBuild, filters.listFilterStatuses, input)
+	}
+
+	createFilterStatus(callerBuild: string, input: OperationInput<typeof filters.createFilterStatus>) {
+		return this.#kernel.execute(callerBuild, filters.createFilterStatus, input)
+	}
+
+	getFilterStatus(callerBuild: string, input: OperationInput<typeof filters.getFilterStatus>) {
+		return this.#kernel.execute(callerBuild, filters.getFilterStatus, input)
+	}
+
+	deleteFilterStatus(callerBuild: string, input: OperationInput<typeof filters.deleteFilterStatus>) {
+		return this.#kernel.execute(callerBuild, filters.deleteFilterStatus, input)
+	}
+
+	listFiltersV1(callerBuild: string, input: OperationInput<typeof filters.listFiltersV1>) {
+		return this.#kernel.execute(callerBuild, filters.listFiltersV1, input)
+	}
+
+	getFilterV1(callerBuild: string, input: OperationInput<typeof filters.getFilterV1>) {
+		return this.#kernel.execute(callerBuild, filters.getFilterV1, input)
+	}
+
+	createFilterV1(callerBuild: string, input: OperationInput<typeof filters.createFilterV1>) {
+		return this.#kernel.execute(callerBuild, filters.createFilterV1, input)
+	}
+
+	updateFilterV1(callerBuild: string, input: OperationInput<typeof filters.updateFilterV1>) {
+		return this.#kernel.execute(callerBuild, filters.updateFilterV1, input)
+	}
+
+	deleteFilterV1(callerBuild: string, input: OperationInput<typeof filters.deleteFilterV1>) {
+		return this.#kernel.execute(callerBuild, filters.deleteFilterV1, input)
 	}
 
 	// Lists (domain/lists.ts); their timeline is with the others.

@@ -7,10 +7,12 @@ import {
 	REQUIRES_MENTION_SQL,
 	type StatusSelect,
 	statusReads,
+	type ViewerContext,
 	type VisibleStatusId,
 	visibleSql,
 } from './audience'
 import { optionalUserReadOperation, userReadOperation } from './auth'
+import { activeFilters, type FilterContext } from './filters'
 import { ownList, type RepliesPolicy } from './lists'
 import { presentStatuses, type Status } from './status-presenter'
 import { statusCursor } from './statuses'
@@ -46,20 +48,26 @@ function rangeParams(cursor: Cursor): [string, string] {
 	return [cursor.max ?? ':', cursor.min ?? '']
 }
 
+// A page of statuses as the viewer sees them in `context`: their filters for it apply as the page is presented (a
+// status a hide filter matches is left out), while the cursors are the page's read ids, so the next page starts where
+// this read stopped whatever the filters left out.
 function statusesPage(
 	db: Db,
 	ids: VisibleStatusId[],
 	cursor: Cursor,
-	viewerId: string | null,
-	present: Present
+	viewer: ViewerContext,
+	present: Present,
+	context: FilterContext
 ): Page<Status> {
 	if (cursor.ascending) {
 		ids.reverse()
 	}
+	const filters = activeFilters(db, viewer, context)
 	return {
-		items: presentStatuses(db, ids, { ...present, viewerId }),
+		items: presentStatuses(db, ids, { ...present, viewerId: viewer.accountId, filters }),
 		newest: ids[0] ?? null,
 		oldest: ids.at(-1) ?? null,
+		read: ids.length,
 	}
 }
 
@@ -159,7 +167,7 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 			cursor.limit,
 			now
 		)
-		return statusesPage(db, ids(rows), cursor, accountId, present)
+		return statusesPage(db, ids(rows), cursor, viewer, present, 'home')
 	}
 )
 
@@ -217,7 +225,7 @@ export const listTimeline = userReadOperation<{ id: string; page: PageQuery; pre
 			now,
 			list.id
 		)
-		return statusesPage(db, ids(rows), cursor, accountId, present)
+		return statusesPage(db, ids(rows), cursor, viewer, present, 'home')
 	}
 )
 
@@ -255,7 +263,7 @@ export const publicTimeline = optionalUserReadOperation<PublicTimelineInput, Pag
 		cursor.limit,
 		now
 	)
-	return statusesPage(db, ids(rows), cursor, viewerId, input.present)
+	return statusesPage(db, ids(rows), cursor, viewer, input.present, 'public')
 })
 
 export type TagTimelineInput = PublicTimelineInput & { tag: string; any: string[]; all: string[]; none: string[] }
@@ -303,7 +311,7 @@ export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Stat
 		now,
 		...names
 	)
-	return statusesPage(db, ids(rows), cursor, viewerId, input.present)
+	return statusesPage(db, ids(rows), cursor, viewer, input.present, 'public')
 })
 
 export type AccountStatusesInput = {
@@ -363,7 +371,7 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 			input.tagged === null ? null : normalizeTag(input.tagged),
 			now
 		)
-		return statusesPage(db, ids(rows), cursor, viewerId, input.present)
+		return statusesPage(db, ids(rows), cursor, viewer, input.present, 'account')
 	}
 )
 
