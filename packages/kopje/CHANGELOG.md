@@ -73,6 +73,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- An inbound `Announce` of a local status by an account its author blocks, or by an account on a domain its author
+  blocks, is ignored, as an inbound `Like` (a favourite or a reaction) by a blocked account already was; a `Like` by an
+  account on a blocked domain is now ignored too. A public or unlisted status is not visible to a remote account on a
+  domain its author blocks, as in Mastodon 4.5's status policy. Mastodon stores such favourites and boosts and filters
+  only their notifications.
+
 - `GET /api/v1/accounts/:id/followers` and `/following` read an optional token (`read:accounts`), as Mastodon does,
   and list as Mastodon 4.5 lists for the viewer: nothing when the account is suspended, or, to anyone but the account
   itself, when it blocks the viewer or hides its network; and without the accounts the viewer blocks, mutes (while
