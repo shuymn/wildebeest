@@ -300,7 +300,9 @@ describe('featured hashtags over ActivityPub', () => {
 		const created = (await getJson<FeaturedTag[]>(h, '/api/v1/featured_tags', alice.token)).body[0]
 		await send(h, alice, 'DELETE', `/api/v1/featured_tags/${created?.id ?? ''}`)
 		const actor = 'https://kopje.test/ap/users/alice'
-		const sent = (await outbound(h.store)).map(({ activity, audience }) => ({ activity, audience }))
+		const sent = (await outbound(h.store))
+			.filter(({ activity }) => activity.type !== 'Update')
+			.map(({ activity, audience }) => ({ activity, audience }))
 		const change = (type: string, name: string, href: string) => ({
 			activity: {
 				'@context': ['https://www.w3.org/ns/activitystreams', { Hashtag: 'as:Hashtag' }],
@@ -323,10 +325,39 @@ describe('featured hashtags over ActivityPub', () => {
 			`SELECT json_extract(o.body, '$.activity.type') AS type, d.inbox_url FROM deliveries d
 			JOIN outbound_activities o ON o.id = d.activity_id ORDER BY d.id`
 		)
-		expect(deliveries.map((d) => d.inbox_url)).toEqual(Array(4).fill('https://fans.example/inbox'))
+		expect(deliveries.filter((d) => d.type !== 'Update').map((d) => d.inbox_url)).toEqual(
+			Array(4).fill('https://fans.example/inbox')
+		)
 		// Featuring again what is featured sends nothing.
 		await act(h, alice, '/api/v1/tags/birds/feature')
 		await act(h, alice, '/api/v1/tags/birds/feature')
-		expect((await outbound(h.store)).length).toBe(5)
+		expect((await outbound(h.store)).length).toBe(6)
+	})
+
+	it('sends the actor, with its featured collections, before its first Add, once', async () => {
+		const h = await setup()
+		const { alice } = h.users
+		await feature(h, alice, 'cats')
+		await act(h, alice, '/api/v1/tags/cats/unfeature')
+		await feature(h, alice, 'dogs')
+		const types = (await outbound(h.store)).map(({ activity }) => activity.type)
+		expect(types).toEqual(['Update', 'Add', 'Remove', 'Add'])
+		const [update] = await outbound(h.store)
+		expect(update?.activity.object).toMatchObject({
+			featured: 'https://kopje.test/ap/users/alice/collections/featured',
+			featuredTags: 'https://kopje.test/ap/users/alice/collections/tags',
+		})
+	})
+
+	it('sends no extra Update for an account whose actor was sent with its featured collections', async () => {
+		const h = await setup()
+		const { alice } = h.users
+		const edit = await h.request(
+			'/api/v1/accounts/update_credentials',
+			bearer(alice.token, json({ display_name: 'Alice' }, { method: 'PATCH' }))
+		)
+		expect(edit.status).toBe(200)
+		await feature(h, alice, 'cats')
+		expect((await outbound(h.store)).map(({ activity }) => activity.type)).toEqual(['Update', 'Add'])
 	})
 })

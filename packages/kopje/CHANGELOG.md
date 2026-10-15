@@ -99,7 +99,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   your public and unlisted statuses with it and the date of the newest, kept as you post, edit and delete.
     - Over ActivityPub, the actor publishes `featuredTags` (its featured hashtags as `Hashtag`s) and `featured` (empty:
       Kopje has no pinned statuses), and featuring or unfeaturing a hashtag sends your followers Mastodon's `Add` or
-      `Remove` of the `Hashtag`. Kopje does not read the featured hashtags of remote accounts.
+      `Remove` of the `Hashtag`; before an account's first one, its followers are sent the actor again, as servers that
+      stored it earlier know no `featured` collection to add to. Kopje does not read the featured hashtags of remote
+      accounts.
     - Where Kopje differs from Mastodon: an edit that adds a hashtag to an older status keeps the newest date rather
       than taking the older status's.
 - The remaining account endpoints of Mastodon 4.5:
@@ -169,7 +171,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       its sweep); other uploads stay as they are. Its work grows linearly with the media and the edits stored (one pass
       over the media for the column and one for the index, and one over the edits' media, grouped by id, with a
       lookup of each named upload).
-    - `0016_tags`: adds the `tag_follows` and `featured_tags` tables, empty. It is quick.
+    - `0016_tags`: adds the `tag_follows` and `featured_tags` tables, empty, and `local_accounts.featured_announced`.
+      It is quick.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.5] - 2026-10-15

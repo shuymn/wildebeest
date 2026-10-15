@@ -117,6 +117,8 @@ export function recordActorUpdate(db: Db, accountId: string, before: string | nu
 		},
 		now
 	)
+	// The document carries the featured collections, so the Add or Remove of a featured hashtag needs no Update first.
+	db.run('UPDATE local_accounts SET featured_announced = 1 WHERE account_id = ? AND featured_announced = 0', accountId)
 	return true
 }
 

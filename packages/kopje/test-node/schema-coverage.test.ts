@@ -86,6 +86,8 @@ const NOT_CONVERTED: Record<string, string> = {
 	'domain_blocks.id': ASSIGNED,
 	'favourites.id': ASSIGNED,
 	'follows.id': ASSIGNED,
+	'local_accounts.featured_announced':
+		'0: other servers stored a converted actor without its featured collections, so its first Add or Remove sends it again',
 	'local_accounts.fields': 'legacy has no profile fields',
 	'local_accounts.hide_collections': 'legacy has no setting to hide the network: every account shows it',
 	'local_accounts.suspended_at': 'legacy has no suspension',
@@ -132,6 +134,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'follows.id': DEFAULT,
 	'lists.created_at': TIME,
 	'local_accounts.created_at': TIME,
+	'local_accounts.featured_announced': DEFAULT,
 	'local_accounts.fields': DEFAULT,
 	'local_accounts.hide_collections': DEFAULT,
 	'local_accounts.suspended_at': DEFAULT,

@@ -1395,7 +1395,7 @@ describe('Store migration runner', () => {
 		})
 	})
 
-	it('upgrades a Store with 0016_tags: followed and featured hashtags of local accounts, which go with the account', async () => {
+	it('upgrades a Store with 0016_tags: followed and featured hashtags of local accounts, which go with the account, and whether each actor was sent with its featured collections', async () => {
 		const index = NAMES.indexOf('0016_tags')
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
@@ -1429,6 +1429,9 @@ describe('Store migration runner', () => {
 					name,
 					name
 				)
+			// No actor has been sent with its featured collections yet.
+			expect(sql.exec('SELECT featured_announced FROM local_accounts').toArray()).toEqual([{ featured_announced: 0 }])
+			expect(() => sql.exec('UPDATE local_accounts SET featured_announced = 2')).toThrow(/CHECK/)
 			followTag(alice, 'cats')
 			expect(() => followTag(alice, 'cats')).toThrow(/UNIQUE/)
 			expect(() => followTag(alice, '')).toThrow(/CHECK/)

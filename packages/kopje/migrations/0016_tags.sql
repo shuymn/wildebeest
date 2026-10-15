@@ -13,7 +13,13 @@
 -- Mastodon's FeaturedTag#increment and #decrement do, so a read never counts.
 --
 -- Both belong to the local account and go with it (ON DELETE CASCADE), as its lists and filters do; no remote account
--- has rows here. The file only creates empty tables: its work does not grow with the Store.
+-- has rows here.
+--
+-- local_accounts.featured_announced is 1 once the account's actor has been sent with its featured and featuredTags
+-- collections (an Update of the actor), which other servers need before they accept the Add or Remove of a featured
+-- hashtag: an actor they stored before those collections were published names none. 0 for every account at first.
+--
+-- The file creates empty tables and adds a column with a constant default: its work does not grow with the Store.
 
 CREATE TABLE tag_follows (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,3 +41,5 @@ CREATE TABLE featured_tags (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   UNIQUE (account_id, name)
 );
+
+ALTER TABLE local_accounts ADD COLUMN featured_announced INTEGER NOT NULL DEFAULT 0 CHECK (featured_announced IN (0, 1));
