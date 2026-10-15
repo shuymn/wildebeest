@@ -8,6 +8,8 @@ on:
       - "!.github/workflows/PRs.yml"
       - "*.md"
       - "docs/**"
+      # Kopje's tests read the OAuth scope table of the Mastodon API docs.
+      - "!docs/mastodon-api-spec/client-api/auth-oauth.md"
       - "renovate.json"
   pull_request:
     paths-ignore:
@@ -15,9 +17,12 @@ on:
       - "!.github/workflows/PRs.yml"
       - "*.md"
       - "docs/**"
+      # Kopje's tests read the OAuth scope table of the Mastodon API docs.
+      - "!docs/mastodon-api-spec/client-api/auth-oauth.md"
       - "renovate.json"
 
-# This allows a subsequently queued workflow run to interrupt previous runs
+# This allows a subsequently queued workflow run to interrupt previous runs. A main run interrupted this way leaves
+# nothing unchecked: the next one compares with the last main run that passed (the changes job).
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
@@ -28,13 +33,15 @@ env:
 
 jobs:
   # Decides which suites a change can affect, so a kopje-only change skips the legacy suites and the reverse. A
-  # push to main is compared with the commit main was at before it, and runs everything when that commit is not
-  # at hand (a push of several commits, or the first push).
+  # pull request is compared with its base. A push to main is compared with the commit of the last main run that
+  # passed, so what a failed or cancelled run did not check is checked by the next one; when there is no such run,
+  # or its commit cannot be fetched, everything runs.
   changes:
     timeout-minutes: 5
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read # to find the last main run that passed
     outputs:
       kopje: ${{ steps.suites.outputs.kopje }}
       legacy: ${{ steps.suites.outputs.legacy }}
@@ -46,14 +53,21 @@ jobs:
       - id: suites
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BEFORE: ${{ github.event.before }}
-        # A pull request is checked out as a merge commit whose first parent is the base branch; a merged pull
-        # request's merge commit has main's previous commit as its first parent too.
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        # A pull request is checked out as a merge commit whose first parent is the base branch. The tree of the last
+        # main run that passed was checked in full, through the runs before it, so a main push needs only the paths
+        # that differ from it.
         run: |
           if [ "$EVENT_NAME" = pull_request ]; then
             git diff --no-renames --name-only HEAD^1 HEAD | bash scripts/test-affected.sh suites | tee -a "$GITHUB_OUTPUT"
-          elif git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
-            git diff --no-renames --name-only "$BEFORE" HEAD | bash scripts/test-affected.sh suites | tee -a "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          passed=$(gh run list --repo "$REPO" --workflow PRs.yml --branch main --event push --status success \
+            --limit 1 --json headSha --jq '.[0].headSha // ""' || true)
+          if [[ "$passed" =~ ^[0-9a-f]{40}$ ]] && git fetch --quiet --no-tags --depth=1 origin "$passed"; then
+            echo "compared with $passed, the last main run that passed"
+            git diff --no-renames --name-only "$passed" HEAD | bash scripts/test-affected.sh suites | tee -a "$GITHUB_OUTPUT"
           else
             printf 'kopje=true\nlegacy=true\n' | tee -a "$GITHUB_OUTPUT"
           fi
