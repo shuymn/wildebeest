@@ -27,8 +27,9 @@ env:
   OCTOCOV_VERSION: v0.83.3
 
 jobs:
-  # Decides which test suites a pull request can affect, so a kopje-only change skips the legacy suites and
-  # the reverse. Pushes to main run everything.
+  # Decides which suites a change can affect, so a kopje-only change skips the legacy suites and the reverse. A
+  # push to main is compared with the commit main was at before it, and runs everything when that commit is not
+  # at hand (a push of several commits, or the first push).
   changes:
     timeout-minutes: 5
     runs-on: ubuntu-latest
@@ -45,10 +46,14 @@ jobs:
       - id: suites
         env:
           EVENT_NAME: ${{ github.event_name }}
-        # A pull request is checked out as a merge commit whose first parent is the base branch.
+          BEFORE: ${{ github.event.before }}
+        # A pull request is checked out as a merge commit whose first parent is the base branch; a merged pull
+        # request's merge commit has main's previous commit as its first parent too.
         run: |
           if [ "$EVENT_NAME" = pull_request ]; then
             git diff --name-only HEAD^1 HEAD | bash scripts/test-affected.sh suites | tee -a "$GITHUB_OUTPUT"
+          elif git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            git diff --name-only "$BEFORE" HEAD | bash scripts/test-affected.sh suites | tee -a "$GITHUB_OUTPUT"
           else
             printf 'kopje=true\nlegacy=true\n' | tee -a "$GITHUB_OUTPUT"
           fi
@@ -133,9 +138,11 @@ jobs:
         with:
           version: ${{ env.OCTOCOV_VERSION }}
 
+  # Formatting is checked for every change; each package's lint, types and checks only when its suite is affected.
   lint:
     timeout-minutes: 10
     runs-on: ubuntu-latest
+    needs: changes
     permissions:
       contents: read
     steps:
@@ -155,26 +162,33 @@ jobs:
         run: pnpm run pretty
 
       - name: Check backend linting
+        if: needs.changes.outputs.legacy == 'true'
         run: pnpm run lint:backend
 
       - name: Check consumer linting
+        if: needs.changes.outputs.legacy == 'true'
         run: pnpm run lint:consumer
 
       - name: Check do linting
+        if: needs.changes.outputs.legacy == 'true'
         run: pnpm run lint:do
 
       - name: Check frontend linting
+        if: needs.changes.outputs.legacy == 'true'
         run: pnpm run lint:frontend
 
       - name: Check frontend types
+        if: needs.changes.outputs.legacy == 'true'
         continue-on-error: true
         working-directory: packages/frontend
         run: pnpm run types-check
 
       - name: Check kopje linting
+        if: needs.changes.outputs.kopje == 'true'
         run: pnpm run lint:kopje
 
       - name: Check kopje types
+        if: needs.changes.outputs.kopje == 'true'
         working-directory: packages/kopje
         run: pnpm run typecheck
 
@@ -182,13 +196,16 @@ jobs:
       # package, checks the packed files, dry-runs the deploy/ template against the tarball and compares both bundles,
       # runs the template in workerd, and installs the tarball (the CLI and the types). It takes a few seconds.
       - name: Check kopje package and template
+        if: needs.changes.outputs.kopje == 'true'
         run: pnpm run check:kopje-package
 
       # The release steps (publish once, recover a rerun, keep an existing GitHub release), with npm and gh stubbed.
       - name: Test the kopje release scripts
+        if: needs.changes.outputs.kopje == 'true'
         run: pnpm run test:scripts
 
       - name: Install sqlite3def
+        if: needs.changes.outputs.legacy == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -198,6 +215,7 @@ jobs:
           sqlite3def --version
 
       - name: Check DB schema
+        if: needs.changes.outputs.legacy == 'true'
         run: bash scripts/check-schema.sh
 
   # A skipped job reports success, so the required check still passes for a kopje-only change.
