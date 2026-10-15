@@ -643,7 +643,7 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 	(db, { username, before }) => {
 		const owner = db.first<{ id: string; uri: string }>(
 			`SELECT a.id, a.uri FROM accounts a JOIN local_accounts l ON l.account_id = a.id
-			WHERE a.domain IS NULL AND a.username = ? AND ${availableLocalSql('l')}`,
+			WHERE a.domain IS NULL AND lower(a.username) = lower(?1) AND a.username = ?1 AND ${availableLocalSql('l')}`,
 			username
 		)
 		if (owner === undefined) {
