@@ -46,6 +46,55 @@ describe('timeline paging', () => {
 		expect(next).toMatch(/max_id=\d+$/)
 		expect(await ids(h, new URL(next ?? '').pathname + new URL(next ?? '').search, alice.token)).toEqual([newer.id])
 	})
+
+	// Home and a list read a window of each author's statuses (AuthorWindows): the filters apply inside the window, so
+	// an author whose newest statuses are all left out still shows their older ones, in order, on every page.
+	it("pages home and a list past an author's newest statuses that the follow leaves out", async () => {
+		const h = await community(['alice', 'bob', 'carol', 'dave'])
+		const { alice, bob, carol, dave } = h.users
+		await act(h, carol, `/api/v1/accounts/${alice.id}/follow`, { reblogs: false, languages: ['ja'] })
+		await follow(h, carol, bob.id)
+		const listResponse = await act(h, carol, '/api/v1/lists', { title: 'both', replies_policy: 'followed' })
+		const list = (await listResponse.json<{ id: string }>()).id
+		expect((await act(h, carol, `/api/v1/lists/${list}/accounts`, { account_ids: [alice.id, bob.id] })).status).toBe(
+			200
+		)
+		const ja = await post(h, alice, { status: 'こんにちは', language: 'ja' })
+		const unknown = await post(h, alice, { status: '?' })
+		const bobs = await post(h, bob, { status: 'bob' })
+		const daves = await post(h, dave, { status: 'dave' })
+		// alice's newest: replies to an account carol does not follow, a boost, and posts in another language.
+		await post(h, alice, { status: '@dave one', in_reply_to_id: daves.id })
+		await post(h, alice, { status: '@dave two', in_reply_to_id: daves.id })
+		expect((await act(h, alice, `/api/v1/statuses/${daves.id}/reblog`)).status).toBe(200)
+		await post(h, alice, { status: 'hello', language: 'en' })
+		await post(h, alice, { status: 'hello again', language: 'en' })
+		const newest = await post(h, bob, { status: 'bob again' })
+		const expected = [newest.id, bobs.id, unknown.id, ja.id]
+		for (const path of ['/api/v1/timelines/home', `/api/v1/timelines/list/${list}`]) {
+			for (const limit of [1, 2, 3]) {
+				// Older pages by max_id, and newer pages by min_id from the oldest: each page full but the last.
+				const chunks = (list: string[]) => list.flatMap((_, n) => (n % limit === 0 ? [list.slice(n, n + limit)] : []))
+				const older: string[][] = []
+				let page = await ids(h, `${path}?limit=${limit}`, carol.token)
+				while (page.length > 0) {
+					older.push(page)
+					page = await ids(h, `${path}?limit=${limit}&max_id=${page.at(-1) ?? ''}`, carol.token)
+				}
+				expect(older, `${path} limit ${limit}`).toEqual(chunks(expected))
+				const newer: string[][] = []
+				page = await ids(h, `${path}?limit=${limit}&min_id=0`, carol.token)
+				while (page.length > 0) {
+					newer.push(page)
+					page = await ids(h, `${path}?limit=${limit}&min_id=${page[0] ?? ''}`, carol.token)
+				}
+				expect(newer, `${path} limit ${limit}`).toEqual(chunks([...expected].reverse()).map((c) => c.reverse()))
+			}
+			expect(await ids(h, `${path}?limit=2&since_id=${ja.id}`, carol.token)).toEqual([newest.id, bobs.id])
+			expect(await ids(h, `${path}?limit=2&min_id=${ja.id}`, carol.token)).toEqual([bobs.id, unknown.id])
+			expect(await ids(h, `${path}?limit=2&max_id=${bobs.id}&since_id=${ja.id}`, carol.token)).toEqual([unknown.id])
+		}
+	})
 })
 
 describe('home', () => {

@@ -262,6 +262,59 @@ function check(sql: SqlStorage, c: Case): string[] {
 	}
 
 	const newestFirst = (statuses: number[]) => [...statuses].sort((a, b) => b - a)
+	// A timeline paged every way (home, a list's): older pages by max_id, LIMIT at a time, and newer pages by min_id
+	// from the oldest, two at a time, each page exactly the next of `expected` (newest first), so no page comes back
+	// short while statuses remain; and the newest page (since_id) and the next page (min_id) above the middle status.
+	const paged = (
+		endpoint: string,
+		label: string,
+		viewer: Viewer,
+		read: (page: PageQuery) => Page<Status> | null,
+		expected: number[]
+	) => {
+		const items = (query: PageQuery) =>
+			(read(query)?.items ?? []).map((value) => status(endpoint, viewer, value, () => true))
+		const walk = (first: PageQuery, next: (shown: number[]) => PageQuery) => {
+			const shownPages: number[][] = []
+			let query = first
+			for (let i = 0; i < 64; i++) {
+				const page = items(query)
+				if (page.length === 0) {
+					break
+				}
+				shownPages.push(page)
+				query = next(page)
+			}
+			return shownPages
+		}
+		const chunks = (list: number[], limit: number) =>
+			list.flatMap((_, n) => (n % limit === 0 ? [list.slice(n, n + limit)] : []))
+		const compare = (name: string, actual: number[][], wanted: number[][]) => {
+			if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
+				const pagesOf = (list: number[][]) => list.map((page) => page.map(statusName).join(' ')).join(' | ')
+				problems.push(
+					`${label} (${name}) ${nameOf(viewer)}: pages [${pagesOf(actual)}], the model [${pagesOf(wanted)}]`
+				)
+			}
+		}
+		compare(
+			'max_id',
+			walk({ limit: LIMIT }, (page) => ({ limit: LIMIT, maxId: statusId(page.at(-1) ?? 0) })),
+			chunks(expected, LIMIT)
+		)
+		compare(
+			'min_id',
+			walk({ limit: 2, minId: '0' }, (page) => ({ limit: 2, minId: statusId(page[0] ?? 0) })),
+			chunks([...expected].reverse(), 2).map((page) => page.reverse())
+		)
+		const middle = expected[Math.floor(expected.length / 2)]
+		if (middle !== undefined) {
+			const above = expected.filter((s) => s > middle)
+			compare('since_id', [items({ limit: LIMIT, sinceId: statusId(middle) })], [above.slice(0, LIMIT)])
+			compare('min_id cursor', [items({ limit: LIMIT, minId: statusId(middle) })], [above.slice(-LIMIT)])
+		}
+	}
+
 	const all = world.statuses.map((_, s) => s)
 	const locals = world.accounts.flatMap((account, x) => (account.local && !account.suspended ? [x] : []))
 	const viewers: Viewer[] = [null, ...locals]
@@ -429,10 +482,11 @@ function check(sql: SqlStorage, c: Case): string[] {
 		}
 
 		// Home: exactly what the home rule allows the viewer, newest first.
-		equal(
+		paged(
+			'home',
 			'home',
 			viewer,
-			feed('home', homeTimeline, { present: PRESENT }),
+			(page) => ok<Page<Status>>(run(homeTimeline, { ...user, page, present: PRESENT }), 'home'),
 			newestFirst(all.filter((s) => m.home(s, viewer)))
 		)
 
@@ -447,12 +501,7 @@ function check(sql: SqlStorage, c: Case): string[] {
 				}
 				return
 			}
-			equal(
-				`list ${l}`,
-				viewer,
-				pages(read).map((value) => status('list', viewer, value, () => true)),
-				newestFirst(all.filter((s) => m.listTimeline(l, s)))
-			)
+			paged('list', `list ${l}`, viewer, read, newestFirst(all.filter((s) => m.listTimeline(l, s))))
 		})
 
 		// Status search over the viewer's library: only what the list rule allows.

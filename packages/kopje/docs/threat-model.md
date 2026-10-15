@@ -1004,7 +1004,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   untested_); the tag feed's candidates are the hashtags of public statuses (`status_tags.public`, through a partial
   index), so it never reads the tag's unlisted, private, direct or limited statuses, and it reads each requested tag
   (at most five) in id order from the cursor until it has a page, so a page reads the same rows however long the tag's
-  history (`test/policy-bounds.test.ts`, `test/tag-timeline.test.ts`).
+  history (`test/policy-bounds.test.ts`, `test/tag-timeline.test.ts`). Home and a list's timeline read a window of
+  each followed account's (or active member's) public, unlisted and private statuses with every filter inside it, from
+  the cursor through `statuses_feed`, so a page reads about a page per author however long each author's history and
+  never reads a followed account's direct or limited statuses to others; home adds the viewer's own statuses (a page)
+  and the direct and limited statuses that mention the viewer, from the cursor in the viewer's mentions
+  (`test/policy-bounds.test.ts`, the second case). _Gap:_ what a follow's options (boosts, languages, replies) and the
+  home filter leave out is still read on the way, and the mentions stream grows with the viewer's mentions home does
+  not show.
   _Enforced (main)_ for search: statuses pass `listableSql` before `LIMIT`, each library source reads at most 2,500 rows through an index ordered by the status id it returns (cursors applied
   inside it), hashtags come from at most 500 entries per library source plus the newest 2,000 public statuses, and an
   account search matches the exact address (always), at most 1,000 username-prefix candidates, the 5,000 newest

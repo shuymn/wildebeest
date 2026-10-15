@@ -41,6 +41,16 @@ function cursorSql(column: string): string {
 	return `(?2 IS NULL OR ${column} < ?2) AND (?3 IS NULL OR ${column} > ?3)`
 }
 
+// The cursor as a plain range, with ?2 and ?3 bound by rangeParams: no cursor is '' or ':', below and above every id of
+// digits. A read in an index ending in the column then starts at the cursor, not at the newest.
+function rangeSql(column: string): string {
+	return `${column} < ?2 AND ${column} > ?3`
+}
+
+function rangeParams(cursor: Cursor): [string, string] {
+	return [cursor.max ?? ':', cursor.min ?? '']
+}
+
 function statusesPage(
 	db: Db,
 	ids: VisibleStatusId[],
@@ -99,6 +109,11 @@ const EXCLUSIVE_MEMBERS = `(SELECT ela.account_id FROM lists el JOIN list_accoun
 // stored, or the partner's account was purged) is left out too, so a purge does not bring back a reply home hid. A
 // reply whose parent is deleted keeps its partner. Others' statuses leave home when their author is in one of the
 // viewer's exclusive lists (EXCLUSIVE_MEMBERS); the viewer's own never do.
+// It reads three streams, each from the cursor through an index, and merges them: a window of each followed account's
+// public, unlisted and private statuses (AuthorWindows, on statuses_feed) with every filter inside the window; the
+// viewer's own statuses; and the direct and limited statuses that mention the viewer. A page reads at most a page of
+// statuses per followed account, and those a follow's options or homeFilterSql leave out on the way, however long
+// their history; the viewer's own statuses cost a page, and the mentions stream grows with the viewer's mentions.
 export const homeTimeline = userReadOperation<{ page: PageQuery; present: Present }, Page<Status>>(
 	(db, { page, present }, _viewer, viewer) => {
 		const { accountId, now } = viewer
@@ -113,35 +128,35 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 			{
 				all: true,
 				branches: [
+					// The public, unlisted and private statuses of the accounts home shows: a window of each, on statuses_feed.
 					{
-						where: `s.account_id IN (SELECT ?1 UNION ALL
-								SELECT target_account_id FROM follows WHERE account_id = ?1 AND state = 'accepted'
-									AND target_account_id NOT IN ${EXCLUSIVE_MEMBERS})
-							AND ${FEED} AND ${cursorSql('s.id')}`,
+						authors: `SELECT target_account_id AS account_id FROM follows WHERE account_id = ?1 AND state = 'accepted'
+							AND target_account_id NOT IN ${EXCLUSIVE_MEMBERS}`,
+						where: `${FEED} AND ${rangeSql('s.id')}`,
 						and: options,
 						tail,
 					},
-					// The viewer's own: no follow's options apply (nobody follows themselves).
-					{
-						where: `s.account_id = ?1 AND s.visibility IN ${REQUIRES_MENTION_SQL} AND ${cursorSql('s.id')}`,
-						tail,
-					},
+					// The viewer's own, whatever their visibility: the rule shows them all, so this reads at most a page. No
+					// follow's options apply (nobody follows themselves).
+					{ where: `s.account_id = ?1 AND ${rangeSql('s.id')}`, tail },
+					// Direct and limited statuses of the accounts home shows that address the viewer, from the viewer's
+					// mentions in status id order from the cursor.
 					{
 						from: 'status_mentions m JOIN',
 						join: 'ON s.id = m.status_id',
-						where: `m.account_id = ?1 AND s.account_id <> ?1 AND s.visibility IN ${REQUIRES_MENTION_SQL}
+						where: `m.account_id = ?1 AND ${rangeSql('m.status_id')} AND s.account_id <> ?1
+							AND s.visibility IN ${REQUIRES_MENTION_SQL}
 							AND EXISTS (SELECT 1 FROM follows df
 								WHERE df.account_id = ?1 AND df.target_account_id = s.account_id AND df.state = 'accepted')
-							AND s.account_id NOT IN ${EXCLUSIVE_MEMBERS} AND ${cursorSql('s.id')}`,
+							AND s.account_id NOT IN ${EXCLUSIVE_MEMBERS}`,
 						and: options,
-						tail,
+						tail: `ORDER BY m.status_id ${order} LIMIT ?4`,
 					},
 				],
 				tail: `ORDER BY id ${order} LIMIT ?4`,
 			},
 			accountId,
-			cursor.max,
-			cursor.min,
+			...rangeParams(cursor),
 			cursor.limit,
 			now
 		)
@@ -168,7 +183,8 @@ function repliesPolicySql(policy: RepliesPolicy): string {
 // a member) and the accounts the owner follows (accepted; a member with a pending request contributes nothing until it
 // is accepted). Home's filters apply as filter_from_home applies them to a list (homeFilterSql, and the follow's boosts
 // and languages), with the list's replies_policy deciding which replies to others pass; exclusive does not matter here.
-// Null when the list is not the viewer's.
+// As home, it reads a window of each member's statuses (AuthorWindows), through statuses_feed. Null when the list is not
+// the viewer's.
 export const listTimeline = userReadOperation<{ id: string; page: PageQuery; present: Present }, Page<Status> | null>(
 	(db, { id, page, present }, _viewer, viewer) => {
 		const { accountId, now } = viewer
@@ -178,20 +194,26 @@ export const listTimeline = userReadOperation<{ id: string; page: PageQuery; pre
 		}
 		const cursor = statusPage(page)
 		const read = statusReads(viewer, { viewer: '?1', now: '?5' })
-		const rows = read.select(
+		const order = cursor.ascending ? 'ASC' : 'DESC'
+		const rows = read.union(
 			db,
 			'homeFilter',
 			{
-				where: `s.account_id IN (SELECT la.account_id FROM list_accounts la WHERE la.list_id = ?6
-						AND (la.account_id = ?1 OR EXISTS (SELECT 1 FROM follows lf
-							WHERE lf.account_id = ?1 AND lf.target_account_id = la.account_id AND lf.state = 'accepted')))
-					AND ${FEED} AND ${cursorSql('s.id')}`,
-				and: followOptionsSql(repliesPolicySql(list.replies_policy)),
-				tail: `ORDER BY s.id ${cursor.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+				all: true,
+				branches: [
+					{
+						authors: `SELECT la.account_id FROM list_accounts la WHERE la.list_id = ?6
+							AND (la.account_id = ?1 OR EXISTS (SELECT 1 FROM follows lf
+								WHERE lf.account_id = ?1 AND lf.target_account_id = la.account_id AND lf.state = 'accepted'))`,
+						where: `${FEED} AND ${rangeSql('s.id')}`,
+						and: followOptionsSql(repliesPolicySql(list.replies_policy)),
+						tail: `ORDER BY s.id ${order} LIMIT ?4`,
+					},
+				],
+				tail: `ORDER BY id ${order} LIMIT ?4`,
 			},
 			accountId,
-			cursor.max,
-			cursor.min,
+			...rangeParams(cursor),
 			cursor.limit,
 			now,
 			list.id
@@ -257,8 +279,8 @@ export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Stat
 	const unique = (names: string[]) => [...new Set(names.map(normalizeTag))]
 	const names = unique([input.tag, ...input.any]).slice(0, MAX_TAG_TIMELINE_NAMES)
 	// ?5 all, ?6 none, ?7 now, then one parameter per name from ?8. CROSS JOIN keeps status_tags outermost, and the
-	// cursor is a plain range (no cursor: '' and ':', below and above every id of digits), so each branch starts in
-	// the index at the cursor, walks it in order and stops at LIMIT.
+	// cursor is a plain range (rangeSql), so each branch starts in the index at the cursor, walks it in order and stops
+	// at LIMIT.
 	const branch = (n: number): StatusSelect => ({
 		from: 'status_tags t CROSS JOIN',
 		join: 'ON s.id = t.status_id JOIN accounts pa ON pa.id = s.account_id',
@@ -268,7 +290,7 @@ export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Stat
 			AND NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id
 				AND st.name IN (SELECT value FROM json_each(?6)))
 			AND ${publicConditions(input.local, input.remote, input.onlyMedia)}`,
-		and: 't.status_id < ?2 AND t.status_id > ?3',
+		and: rangeSql('t.status_id'),
 		tail: `ORDER BY t.status_id ${order} LIMIT ?4`,
 	})
 	const rows = read.union(
@@ -276,8 +298,7 @@ export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Stat
 		'listable',
 		{ all: false, branches: names.map((_, n) => branch(n)), tail: `ORDER BY id ${order} LIMIT ?4` },
 		viewerId,
-		cursor.max ?? ':',
-		cursor.min ?? '',
+		...rangeParams(cursor),
 		cursor.limit,
 		JSON.stringify(unique(input.all)),
 		JSON.stringify(unique(input.none)),

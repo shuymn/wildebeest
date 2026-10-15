@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Changed
+
+- Home and list timelines read a bounded number of rows per page.
+
 ## [0.1.0-rc.4] - 2026-10-15
 
 A fourth release candidate of the first release, published under the npm dist-tag `next`.
