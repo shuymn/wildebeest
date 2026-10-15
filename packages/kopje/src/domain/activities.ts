@@ -133,7 +133,8 @@ function pollFacts(db: Db, statusId: string): PollFacts | null {
 }
 
 // options.reached false leaves the remote accounts the status reached out (reached: []): a read that only serves the
-// Note (noteOf does not use them) need not read every remote boost of the status.
+// Note or its Create (noteOf and createActivity's activity do not use them; only its audience does) need not read
+// every remote boost of the status. The object endpoint, the outbox and the featured collection pass it.
 export function statusFacts(db: Db, statusId: string, options: { reached?: boolean } = {}): StatusFacts | null {
 	const row = db.first<{
 		id: string
@@ -618,7 +619,7 @@ export const getLocalNote = readOperation<{ uri: string }, string | null>((db, {
 		WHERE s.uri = ? AND s.reblog_of_id IS NULL AND ${SERVABLE}`,
 		uri
 	)
-	const facts = row === undefined ? null : statusFacts(db, row.id)
+	const facts = row === undefined ? null : statusFacts(db, row.id, { reached: false })
 	return facts === null ? null : JSON.stringify({ '@context': contextOf(facts), ...noteOf(facts) })
 })
 
@@ -736,7 +737,7 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 				)
 				continue
 			}
-			const facts = statusFacts(db, row.id)
+			const facts = statusFacts(db, row.id, { reached: false })
 			if (facts !== null) {
 				items.push(JSON.stringify(createActivity(facts).activity))
 			}

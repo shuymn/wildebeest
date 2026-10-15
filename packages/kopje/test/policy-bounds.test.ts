@@ -10,7 +10,7 @@ import { accountId, REMOTE_DOMAINS, statusId, type World, worldArb, writeWorld }
 import { rowsRead } from './read-helpers'
 import { Db } from '../src/db/sql'
 import { getAccounts, listFollows, relationships, userinfo } from '../src/domain/accounts'
-import { getFeatured } from '../src/domain/activities'
+import { getFeatured, getLocalNote, getOutbox } from '../src/domain/activities'
 import { canView, visibleSql, type Visibility } from '../src/domain/audience'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { listConversations } from '../src/domain/conversations'
@@ -2105,9 +2105,10 @@ describe('conversation mutes cost a lookup, however many an account has (RES-7)'
 	}, 60_000)
 })
 
-// The featured collection serves each public pin's Note, which names its audience but not the remote accounts that
-// boosted it: it reads the same rows whether 20 remote accounts boosted the pin or 2,000.
-describe('the featured collection reads its pins, not their boosts (RES-7)', () => {
+// The object endpoint, the outbox and the featured collection serve a public status's Note (or its Create), which
+// names its audience but not the remote accounts that boosted it: each reads the same rows whether 20 remote accounts
+// boosted the status or 2,000.
+describe('served Notes read their statuses, not their boosts (RES-7)', () => {
 	const OWNER = '660000000000000000'
 	const PINNED = '661000000000000000'
 	const booster = (i: number) => String(662000000000000000n + BigInt(i))
@@ -2151,16 +2152,28 @@ describe('the featured collection reads its pins, not their boosts (RES-7)', () 
 		return store
 	}
 
-	it('reads the same rows with 20 or 2,000 remote boosts of a public pin', async () => {
+	it('reads the same rows with 20 or 2,000 remote boosts of a public, pinned status', async () => {
 		const few = await boosted(20)
 		const many = await boosted(2000)
-		const input = { username: 'owner' }
-		const served = (store: StoreStub) =>
-			runInDurableObject(store, (_instance, state) => getFeatured.run(state.storage.sql, input))
-		const output = await served(few)
-		expect(output).toHaveLength(1)
-		expect(await served(many)).toEqual(output)
-		const fewRows = await rowsRead({ store: few }, getFeatured, input)
-		expect(await rowsRead({ store: many }, getFeatured, input)).toBeLessThanOrEqual(fewRows + ALLOWANCE)
+		const reads: [string, StoreOperation<never, unknown>, unknown][] = [
+			['featured', getFeatured, { username: 'owner' }],
+			['object', getLocalNote, { uri: 'https://kopje.test/ap/o/pinned' }],
+			['outbox', getOutbox, { username: 'owner', before: '~' }],
+		]
+		const grown: string[] = []
+		for (const [name, operation, input] of reads) {
+			const served = (store: StoreStub) =>
+				runInDurableObject(store, (_instance, state) => operation.run(state.storage.sql, input as never))
+			const output = await served(few)
+			expect([name, output]).not.toEqual([name, null])
+			expect(JSON.stringify(output)).toContain('<p>pinned</p>')
+			expect([name, await served(many)]).toEqual([name, output])
+			const fewRows = await rowsRead({ store: few }, operation, input as never)
+			const manyRows = await rowsRead({ store: many }, operation, input as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
 	})
 })
