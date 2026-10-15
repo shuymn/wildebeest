@@ -17,13 +17,15 @@ import {
 	MAX_FILTER_TEXT,
 } from './filters'
 import { htmlToPlainText } from './plain-text'
+import { type Poll, presentPolls } from './polls'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
 import { remotePlainText } from '../security/html'
 
 // The Status entity as Mastodon 4.0.2's REST::StatusSerializer shows it. One presenter for every read path: it takes
 // a list of ids and the viewer and reads the related rows kind by kind (statuses and reblogged originals, accounts,
-// media, mentions, tags, viewer flags), each in one query over json_each, so the rows read grow with the page only.
+// media, mentions, tags, viewer flags, polls), each in one query over json_each, so the rows read grow with the page
+// only.
 // It takes only ids the policy module (domain/audience.ts) made: VisibleStatusId, which a read rule passed for the
 // viewer, or OwnStatusId, the viewer's own, for the response to their write. A boost's original is read through the
 // read rule for the same viewer, whichever the boost's id: a boost the viewer may see stands only with an original
@@ -84,7 +86,7 @@ export type Status = {
 	tags: Tag[]
 	emojis: []
 	card: null
-	poll: null
+	poll: Poll | null
 }
 
 export type StatusRow = {
@@ -122,8 +124,8 @@ export const STATUS_COLUMNS = `s.id, s.uri, s.url, s.account_id, s.reblog_of_id,
 
 export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
 
-// viewer: the viewer and the request time (null for none).
-export type PresentOptions = Present & { viewer: ViewerContext | null }
+// viewer: the viewer (accountId null: anonymous) and the request time, which a poll's expiry is judged at.
+export type PresentOptions = Present & { viewer: ViewerContext }
 
 export type PresentOwnOptions = PresentOptions & {
 	// DELETE answers with the source text (`text`) in place of `content`, for redrafting: on the deleted status only,
@@ -190,7 +192,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		return []
 	}
 	const idList = JSON.stringify(ids)
-	const viewerId = options.viewer?.accountId ?? null
+	const viewerId = options.viewer.accountId
 	// The statuses, and the originals of the boosts among them that the viewer may see.
 	const rows = db.all<StatusRow>(
 		`SELECT ${STATUS_COLUMNS} FROM ${STATUS_FROM}
@@ -229,17 +231,22 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		)
 	)
 	const flags = viewerFlags(db, viewerId, all)
-	const filters = options.viewer === null ? null : activeFilters(db, options.viewer)
+	const polls = presentPolls(db, [...byId.keys()], viewerId, options.viewer.now)
+	const filters = activeFilters(db, options.viewer)
 	const statusMatches =
 		filters === null ? new Map<string, Set<string>>() : filterStatusMatches(db, filters, [...byId.keys()])
 	// Status#searchable_text of a status: its spoiler text, its text (a local status's source, a remote one's HTML as
-	// text) and its media descriptions. Kopje has no polls.
-	const searchableText = (row: StatusRow): string =>
-		[
+	// text), its poll's choices and its media descriptions (SearchConcern).
+	// A status without a poll has no entry for it (compact), not an empty one.
+	const searchableText = (row: StatusRow): string => {
+		const poll = polls.get(row.id)
+		return [
 			row.spoiler_text,
 			row.author_domain === null ? (row.source_text ?? htmlToPlainText(row.content)) : remotePlainText(row.content),
+			...(poll === undefined ? [] : [poll.options.map((option) => option.title).join('\n\n')]),
 			(media.get(row.id) ?? []).map((m) => m.description).join('\n\n'),
 		].join('\n\n')
+	}
 	// The text each status is matched on (filterTextLimits): read only when a filter has keywords.
 	const texts = new Map<string, { text: string; cut: number }>()
 	if (filters !== null && filters.filters.some((filter) => filter.keywords !== null)) {
@@ -338,7 +345,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			})),
 			emojis: [],
 			card: null,
-			poll: null,
+			poll: polls.get(row.id) ?? null,
 		}
 	}
 

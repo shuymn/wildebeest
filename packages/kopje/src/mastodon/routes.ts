@@ -13,6 +13,7 @@ import * as media from './media'
 import * as notifications from './notifications'
 import * as oauth from './oauth'
 import * as placeholders from './placeholders'
+import * as polls from './polls'
 import * as push from './push'
 import * as scheduled from './scheduled-statuses'
 import * as search from './search'
@@ -492,6 +493,14 @@ export const ROUTES: readonly Route[] = [
 	// Timeline markers (mastodon/markers.ts).
 	{ method: 'GET', path: '/api/v1/markers', access: { scope: 'read:statuses' }, handler: markers.markers },
 	{ method: 'POST', path: '/api/v1/markers', access: { scope: 'write:statuses' }, handler: markers.saveMarkers },
+	// Polls (mastodon/polls.ts); a poll is posted with its status.
+	{
+		method: 'GET',
+		path: '/api/v1/polls/:id',
+		access: { scope: 'read:statuses', optional: true },
+		handler: polls.showPoll,
+	},
+	{ method: 'POST', path: '/api/v1/polls/:id/votes', access: { scope: 'write:statuses' }, handler: polls.votePoll },
 	// Scheduled statuses (mastodon/scheduled-statuses.ts); scheduling is POST /api/v1/statuses with scheduled_at.
 	{ method: 'GET', path: '/api/v1/scheduled_statuses', access: { scope: 'read:statuses' }, handler: scheduled.list },
 	{
@@ -523,6 +532,21 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'POST', path: '/api/v2/media', access: { scope: 'write:media' }, handler: media.uploadMedia },
 	{ method: 'GET', path: '/api/v1/media/:id', access: { scope: 'write:media' }, handler: media.getMedia },
 	{ method: 'PUT', path: '/api/v1/media/:id', access: { scope: 'write:media' }, handler: media.updateMedia },
+	{ method: 'PATCH', path: '/api/v1/media/:id', access: { scope: 'write:media' }, handler: media.updateMedia },
+	{ method: 'DELETE', path: '/api/v1/media/:id', access: { scope: 'write:media' }, handler: media.deleteMedia },
+	// Profile images (mastodon/accounts.ts); they are set from the settings page.
+	{
+		method: 'DELETE',
+		path: '/api/v1/profile/avatar',
+		access: { scope: 'write:accounts' },
+		handler: accounts.removeAvatar,
+	},
+	{
+		method: 'DELETE',
+		path: '/api/v1/profile/header',
+		access: { scope: 'write:accounts' },
+		handler: accounts.removeHeader,
+	},
 
 	// Unauthenticated search is refused (design §6): it would enumerate accounts and load the Store.
 	{ method: 'GET', path: '/api/v2/search', access: { scope: 'read:search' }, handler: search.search },

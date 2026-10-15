@@ -25,6 +25,7 @@ import {
 } from '../src/domain/filters'
 import { getMarkers, MARKER_TIMELINES } from '../src/domain/markers'
 import { listNotifications } from '../src/domain/notifications'
+import { getPoll, vote } from '../src/domain/polls'
 import { dueScheduled, listScheduled, publishScheduled } from '../src/domain/scheduled-statuses'
 import { search } from '../src/domain/search'
 import { interactors, statusContext } from '../src/domain/statuses'
@@ -187,6 +188,7 @@ function writeViewer(sql: SqlStorage): void {
 	})
 	writeMarkers(sql, viewer)
 	writeScheduled(sql, viewer, VIEWER_SCHEDULED_BASE, 25)
+	writePolls(sql, viewer)
 	WORLD.statuses.forEach((status, s) => {
 		sql.exec('INSERT INTO favourites (account_id, status_id) VALUES (?, ?)', viewer, statusId(s))
 		sql.exec('INSERT INTO bookmarks (account_id, status_id) VALUES (?, ?)', viewer, statusId(s))
@@ -210,6 +212,17 @@ function writeMarkers(sql: SqlStorage, account: string): void {
 			account
 		)
 	}
+}
+
+// A poll of four choices on every original status (copies included), each with the viewer's vote, so every endpoint
+// presents a poll per status it shows.
+function writePolls(sql: SqlStorage, viewer: string): void {
+	sql.exec(
+		`INSERT INTO polls (status_id, options, tallies, multiple, expires_at, votes_count, voters_count)
+		SELECT id, '["a","b","c","d"]', '[1,0,0,0]', 0, ?, 1, 1 FROM statuses WHERE reblog_of_id IS NULL`,
+		new Date(NOW + 3_600_000).toISOString()
+	)
+	sql.exec('INSERT INTO poll_votes (poll_id, account_id, choice) SELECT status_id, ?, 0 FROM polls', viewer)
 }
 
 // `count` scheduled statuses of `owner`, a day apart from a week after NOW, with ids from `base`.
@@ -277,6 +290,17 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 		insert(first, HIDDEN[i % HIDDEN.length] ?? 'private')
 		insert(reply, HIDDEN[(i + 1) % HIDDEN.length] ?? 'private', { replyTo: first })
 		insert(boost, 'public', { reblogOf: first })
+		// A poll of its own, its vote in it, and its vote in a world poll (a row only: the poll's counts stand).
+		sql.exec(
+			`INSERT INTO polls (status_id, options, tallies, votes_count, voters_count) VALUES (?, '["a","b"]', '[1,0]', 1, 1)`,
+			first
+		)
+		sql.exec('INSERT INTO poll_votes (poll_id, account_id, choice) VALUES (?, ?, 0)', first, author)
+		sql.exec(
+			'INSERT INTO poll_votes (poll_id, account_id, choice) VALUES (?, ?, 1) ON CONFLICT DO NOTHING',
+			statusId(TARGET),
+			author
+		)
 		// The world's tag on statuses no tag feed lists, as the writers record it (not public).
 		sql.exec("INSERT INTO status_tags (status_id, name, public) VALUES (?, 'cats', 0), (?, 'cats', 0)", first, reply)
 		// The viewer's own choices about accounts and domains the world never shows them.
@@ -542,6 +566,7 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 	['filters v1', listFiltersV1, { credential }],
 	['markers', getMarkers, { credential, timelines: [...MARKER_TIMELINES] }],
 	['scheduled statuses', listScheduled, { credential, page: PAGE }],
+	['poll', getPoll, { credential, id: statusId(TARGET), now: NOW }],
 	['endorsements', listEndorsements, { credential, page: PAGE, present: PRESENT }],
 	[
 		'account endorsements',
@@ -568,6 +593,9 @@ function shown(output: unknown): number {
 	}
 	if (Array.isArray(value.items)) {
 		return value.items.length
+	}
+	if (Array.isArray(value.options)) {
+		return value.options.length
 	}
 	if (typeof value.sub === 'string') {
 		return 1
@@ -1686,6 +1714,113 @@ describe('scheduled statuses read a page and a round, however many accounts sche
 		}
 		const [few = [], many = []] = measured
 		const grown = ['page', 'due', 'publish'].flatMap((name, k) =>
+			(many[k] ?? Infinity) <= (few[k] ?? 0) + ALLOWANCE ? [] : [`${name}: ${few[k]} -> ${many[k]}`]
+		)
+		expect(grown).toEqual([])
+	}, 60_000)
+})
+
+// Polls add two dimensions: the polls of a page and the votes in each. A page presents its polls by reading each
+// poll's row and the viewer's own votes, and a vote reads the voter's own votes, so the rows read are the same with 10
+// or 1,000 votes in each of a page's 20 polls.
+describe('polls are presented from their counts, not their votes (RES-7)', () => {
+	const VIEWER_ID = '830000000000000000'
+	const AUTHOR_ID = '830000000000000001'
+	const TOKEN = 'polls-token'
+	const poll = (i: number) => String(840000000000000000n + BigInt(i))
+
+	async function polled(votes: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			for (const [id, name] of [
+				[VIEWER_ID, 'viewer'],
+				[AUTHOR_ID, 'author'],
+			] as const) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+					id,
+					`https://kopje.test/ap/users/${name}`,
+					name
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'test')",
+					id,
+					`${name}@example.com`
+				)
+			}
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://far.example/users/v' || i, 'v' || i, 'far.example' FROM n`,
+				votes,
+				String(850000000000000000n)
+			)
+			for (let i = 0; i < 20; i++) {
+				sql.exec(
+					"INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES (?, ?, ?, 'public', ?)",
+					poll(i),
+					`https://kopje.test/ap/o/poll${i}`,
+					AUTHOR_ID,
+					new Date(NOW - 60_000).toISOString()
+				)
+				sql.exec(
+					`INSERT INTO polls (status_id, options, tallies, multiple, expires_at, votes_count, voters_count)
+					VALUES (?, '["a","b","c","d"]', ?, 1, ?, ?, ?)`,
+					poll(i),
+					JSON.stringify([votes, 0, 0, 0]),
+					new Date(NOW + 3_600_000).toISOString(),
+					votes,
+					votes
+				)
+				sql.exec(
+					"INSERT INTO poll_votes (poll_id, account_id, choice) SELECT ?, id, 0 FROM accounts WHERE domain = 'far.example'",
+					poll(i)
+				)
+			}
+			sql.exec('INSERT INTO poll_votes (poll_id, account_id, choice) VALUES (?, ?, 1)', poll(0), VIEWER_ID)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('polls', 'secret', 'polls', 'urn:ietf:wg:oauth:2.0:oob', 'read write')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'polls', ?, 'read write')",
+				TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 10 or 1,000 votes in each poll of a page', async () => {
+		const read = { tokenHash: TOKEN, scope: 'read', now: NOW } as const
+		const page = {
+			credential: read,
+			now: NOW,
+			account: AUTHOR_ID,
+			page: PAGE,
+			onlyMedia: false,
+			excludeReplies: false,
+			excludeReblogs: false,
+			pinned: false,
+			tagged: null,
+			present: PRESENT,
+		}
+		const show = { credential: read, id: poll(0), now: NOW }
+		const cast = { credential: { ...read, scope: 'write' as const }, id: poll(0), choices: ['2'], now: NOW }
+		const measured: number[][] = []
+		for (const store of [await polled(10), await polled(1000)]) {
+			const output = await runInDurableObject(store, (_instance, state) => accountStatuses.run(state.storage.sql, page))
+			expect(output).toMatchObject({ status: 'ok' })
+			const items = output.status === 'ok' ? (output.value?.items ?? []) : []
+			expect(items.map((status) => status.poll?.own_votes)).toEqual([...Array.from({ length: 19 }, () => []), [1]])
+			measured.push([
+				await rowsRead({ store }, accountStatuses, page),
+				await rowsRead({ store }, getPoll, show),
+				await rowsTouched(store, vote, cast),
+			])
+		}
+		const [few = [], many = []] = measured
+		const grown = ['page', 'poll', 'vote'].flatMap((name, k) =>
 			(many[k] ?? Infinity) <= (few[k] ?? 0) + ALLOWANCE ? [] : [`${name}: ${few[k]} -> ${many[k]}`]
 		)
 		expect(grown).toEqual([])

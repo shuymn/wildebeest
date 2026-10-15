@@ -11,6 +11,7 @@ import m0009 from '../../migrations/0009_conversations.sql'
 import m0010 from '../../migrations/0010_markers.sql'
 import m0011 from '../../migrations/0011_scheduled_statuses.sql'
 import m0012 from '../../migrations/0012_filters.sql'
+import m0013 from '../../migrations/0013_polls.sql'
 import m0014 from '../../migrations/0014_account_notes_and_pins.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
@@ -29,5 +30,6 @@ export const MIGRATIONS: readonly { name: string; sql: string }[] = [
 	{ name: '0010_markers', sql: m0010 },
 	{ name: '0011_scheduled_statuses', sql: m0011 },
 	{ name: '0012_filters', sql: m0012 },
+	{ name: '0013_polls', sql: m0013 },
 	{ name: '0014_account_notes_and_pins', sql: m0014 },
 ]

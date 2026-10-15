@@ -54,6 +54,31 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   gone, or its account is suspended); one that fails with an error is retried four times over about five hours, then
   dropped. An `Idempotency-Key` that scheduled a status answers with it on a repeat, with or without `scheduled_at`.
   Media attached to a scheduled status is kept until it is published or deleted.
+- Polls, as Mastodon 4.5 has them: `POST /api/v1/statuses` takes `poll[options][]`, `poll[expires_in]`,
+  `poll[multiple]` and `poll[hide_totals]` (2 to 4 choices of at most 50 characters, 5 minutes to a month, refused
+  with media), and every status shows its `Poll`. `GET /api/v1/polls/:id` shows a poll to whoever may see its status,
+  and `POST /api/v1/polls/:id/votes` (`choices[]`) votes, with Mastodon's validation and messages; a voter who blocks
+  the author is refused. `hide_totals` hides the counts from everyone until the poll ends, and who voted is never
+  shown. Editing a status's poll moves its end, and changed choices drop the votes cast; an edit without a poll
+  removes it. A scheduled status keeps its poll and creates it on publication. When a poll ends, its local author and
+  local voters are notified (`poll`, with Web Push), by the cron within its 5-minute schedule.
+    - Over ActivityPub, a poll is a `Question` in its Create, Update and served object; votes in a local poll update
+      it with an Update about 3 minutes after the first new vote (one for all, and one when it ends), and a vote in a
+      remote poll goes to its author as Mastodon's vote Note. A received `Question` is stored with its poll, an
+      Update refreshes its counts and end, and a received vote counts in a local poll once, from an account that may
+      see it, and is never stored as a status.
+    - Where Kopje differs from Mastodon: a poll's id is its status's id; a voter who blocks the author's domain is
+      refused, since the vote could not be delivered; a remote poll keeps at most 100 choices of 1,000 code units, and a
+      choice cut to that length cannot be voted for; any Note naming a choice in reply to a local poll is treated as a
+      vote, never as a status; a local poll's `Question` says `closed` once the cron has ended it, within 5 minutes of
+      its end; and the Update of counts reaches remote voters only for a public or unlisted status.
+- `PATCH /api/v1/media/:id`, the same update as `PUT`, and `DELETE /api/v1/media/:id`, as Mastodon 4.5 has them (scope
+  `write:media`): your own media only, else 404. Media a status uses, or a scheduled status holds, answers 422 with
+  Mastodon's message, and so does an image the cutover kept unattached (one only earlier versions of a status show, or
+  one legacy kept); otherwise the media is deleted with its files and the answer is `{}`.
+- `DELETE /api/v1/profile/avatar` and `DELETE /api/v1/profile/header`, as Mastodon 4.5 has them (scope
+  `write:accounts`): the account shows the default image again, the removed image's files are deleted, followers'
+  servers receive the profile `Update`, and the answer is your `CredentialAccount`.
 - The remaining account endpoints of Mastodon 4.5:
     - Private notes: `POST /api/v1/accounts/:id/note` (`comment`, at most 2,000 characters; a blank one deletes the
       note) answers the Relationship. Every Relationship now carries your note on the account in `note`; nobody else
@@ -84,7 +109,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds six migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds seven migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
@@ -102,6 +127,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       partial index).
     - `0012_filters`: adds the `filters`, `filter_keywords` and `filter_statuses` tables, empty. Its work does not grow
       with the Store.
+    - `0013_polls`: adds the `polls` and `poll_votes` tables, with their indexes, and `status_edits.poll_options`. It is
+      quick.
     - `0014_account_notes_and_pins`: adds the `account_notes` and `account_pins` tables, empty, and the trigger that
       deletes an endorsement with its follow. Its work does not grow with the Store.
 - `wrangler.jsonc`: unchanged.

@@ -48,6 +48,9 @@ const NOT_CARRIED: Record<string, string> = {
 	outbound_activities: 'outbound queue; legacy queues are not carried',
 	outbound_receipts: 'records of deliveries made by Kopje',
 	outbound_targets: 'outbound queue; legacy queues are not carried',
+	poll_votes: 'votes cast in Kopje; legacy never wrote its poll_votes table (UNUSED_LEGACY_TABLES)',
+	polls:
+		'polls of Kopje; legacy never wrote its polls table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	push_deliveries: 'push queue; legacy has no such data',
 	push_subscriptions: 'push subscriptions are not carried: clients register again',
 	remote_keys: 'fetched again on demand',
@@ -89,6 +92,7 @@ const NOT_CONVERTED: Record<string, string> = {
 	'mutes.expires_at': 'legacy mutes never expire',
 	'mutes.id': ASSIGNED,
 	'status_edits.id': ASSIGNED,
+	'status_edits.poll_options': 'legacy has no polls',
 	'statuses.thread': 'written by the trigger statuses_thread and given again by backfillConversations (DERIVED)',
 	'statuses.withdrawn': 'marks an Undo Kopje recorded; legacy has none',
 }
@@ -142,6 +146,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'oauth_clients.created_at': TIME,
 	'status_edits.created_at': TIME,
 	'status_edits.id': DEFAULT,
+	'status_edits.poll_options': DEFAULT,
 	'statuses.client_key': "Idempotency-Key, read only to answer a client's retried post with the status it made",
 	'statuses.created_at': TIME,
 	'statuses.favourites_count': COUNTER,

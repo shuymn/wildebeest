@@ -14,8 +14,9 @@ import { descriptionProblem, parseFocus, sweepSoon } from './media'
 import { linkHeader, pageQuery } from './pagination'
 import { type Params, parseBoolean } from './params'
 import { API_VISIBILITIES, type ApiVisibility } from '../domain/audience'
+import { checkPoll, isPollInput, type PollInput } from '../domain/polls'
 import { exceedsRawLength, statusLength } from '../domain/status-text'
-import type { Acted, MediaAttributes, Viewed } from '../domain/statuses'
+import { type Acted, type MediaAttributes, TOO_MANY_FILES, type Viewed } from '../domain/statuses'
 import { sha256Hex } from '../security/tokens'
 
 // /api/v1/statuses (B4a): posting, editing, deleting, the per-status reads, and favourite, reblog and bookmark.
@@ -59,22 +60,45 @@ type Composition = {
 	sensitive?: boolean
 	language?: string
 	mediaIds: string[]
+	poll?: PollInput
 }
 
-// What POST and PUT share: text, spoiler, sensitive, language and media, with Mastodon's request validation.
-function composition(p: Params): Composition | string {
-	if (p.has('poll[options]') || p.get('poll[expires_in]') !== undefined) {
-		return 'Polls are not supported'
+// At most this many choices are read from a request (RES-1); more than MAX_OPTIONS is refused either way.
+const MAX_POLL_OPTIONS_READ = 100
+
+// The poll of a request (poll[options][], poll[expires_in], poll[multiple], poll[hide_totals]), as Mastodon's status
+// params permit it: present when any of its fields was sent (an empty object is none), checked as Poll validates it.
+function pollOf(p: Params): PollInput | string | undefined {
+	if (!p.hasObject('poll')) {
+		return undefined
 	}
+	const checked = checkPoll({
+		options: p.getAll('poll[options]').slice(0, MAX_POLL_OPTIONS_READ + 1),
+		expiresIn: p.get('poll[expires_in]'),
+		multiple: parseBoolean(p.get('poll[multiple]')),
+		hideTotals: parseBoolean(p.get('poll[hide_totals]')),
+	})
+	return isPollInput(checked) ? checked : checked.error
+}
+
+// What POST and PUT share: text, spoiler, sensitive, language, media and a poll, with Mastodon's request validation:
+// the media first (PostStatusService#validate_media!, which also refuses media with a poll), then the text, then the
+// poll.
+function composition(p: Params): Composition | string {
 	const text = p.get('status') ?? ''
 	const spoilerText = p.get('spoiler_text') ?? ''
 	const mediaIds = p.getAll('media_ids').filter((id) => id !== '')
-	if (mediaIds.length > MAX_MEDIA_ATTACHMENTS) {
-		return `Cannot attach more than ${MAX_MEDIA_ATTACHMENTS} files`
+	const sendsPoll = p.hasObject('poll')
+	if (mediaIds.length > MAX_MEDIA_ATTACHMENTS || (mediaIds.length > 0 && sendsPoll)) {
+		return TOO_MANY_FILES
 	}
 	// The raw bound comes first, so over-long input is refused before it is parsed.
 	if (exceedsRawLength(text, spoilerText) || statusLength(text, spoilerText) > MAX_CHARACTERS) {
 		return TOO_LONG
+	}
+	const poll = pollOf(p)
+	if (typeof poll === 'string') {
+		return poll
 	}
 	const language = p.get('language')
 	return {
@@ -83,6 +107,7 @@ function composition(p: Params): Composition | string {
 		sensitive: parseBoolean(p.get('sensitive')),
 		language: language !== undefined && LANGUAGE.test(language) ? language : undefined,
 		mediaIds,
+		...(poll === undefined ? {} : { poll }),
 	}
 }
 

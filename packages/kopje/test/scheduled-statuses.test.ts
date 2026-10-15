@@ -168,7 +168,11 @@ describe('scheduling a status', () => {
 				422,
 				{ error: 'Validation failed: Visibility is not included in the list' },
 			],
-			[{ status: 'x', 'poll[options][]': 'a' }, 422, { error: 'Polls are not supported' }],
+			[
+				{ status: 'x', 'poll[options][]': 'a' },
+				422,
+				{ error: "Validation failed: Deadline can't be blank, Choices must have more than one item" },
+			],
 			[{ status: 'x', media_ids: ['1', '2', '3', '4', '5'] }, 422, { error: 'Cannot attach more than 4 files' }],
 			[
 				{ status: 'x', in_reply_to_id: '999999999999999999' },
@@ -371,7 +375,7 @@ describe('the scheduled_statuses endpoints', () => {
 		})
 	})
 
-	it('holds its media: not swept as unattached, not attached elsewhere, not made a profile image', async () => {
+	it('holds its media: not swept as unattached, not attached elsewhere, not made a profile image, not deleted', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		const media = await upload(h, alice, 1)
@@ -388,6 +392,11 @@ describe('the scheduled_statuses endpoints', () => {
 			status: 'ok',
 			value: false,
 		})
+		expect(await refusal(await send(h, alice, 'DELETE', `/api/v1/media/${media}`))).toEqual({
+			status: 422,
+			body: { error: 'Media attachment is currently used by a status' },
+		})
+		expect(await sql(h.store, 'SELECT gc_at FROM media_attachments')).toEqual([{ gc_at: null }])
 	})
 })
 

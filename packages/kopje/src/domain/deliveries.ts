@@ -122,7 +122,7 @@ export function isDeliverableInbox(value: string | null): value is string {
 	}
 }
 
-export type DeliveryAudience = { followers: boolean; accounts: string[] }
+export type DeliveryAudience = { followers: boolean; accounts: string[]; pollVoters?: string }
 
 // The targets an activity goes to (NET-2), from the stored audience only, for the recipients the policy gives it
 // (recipientsFor in audience.ts):
@@ -144,6 +144,18 @@ export function audienceTargets(
 	audience: DeliveryAudience,
 	withdraws = false
 ): Target[] {
+	return targetsOf(db, signerId, activity, audience, withdraws).targets
+}
+
+// The targets, and the inboxes among them that are a poll's voters (pollVoters), which hold the status already: they
+// fetched it to vote, though no delivery of it to them may have been recorded.
+function targetsOf(
+	db: Db,
+	signerId: string,
+	activity: Activity,
+	audience: DeliveryAudience,
+	withdraws: boolean
+): { targets: Target[]; voters: Set<string> } {
 	// Neutral copies by inbox; personal copies by recipient, kept apart so one never replaces the other.
 	const neutral = new Set<string>()
 	const personal = new Map<string, string>()
@@ -157,7 +169,7 @@ export function audienceTargets(
 		}
 	}
 	const recipients = recipientsFor(db, signerId, activity, audience, withdraws)
-	for (const inbox of recipients.followerInboxes) {
+	for (const inbox of [...recipients.followerInboxes, ...recipients.voterInboxes]) {
 		add(inbox, null)
 	}
 	const named = new Set([...uris(activity.to), ...uris(activity.cc)])
@@ -179,10 +191,13 @@ export function audienceTargets(
 		}
 	}
 	const byInbox = (a: Target, b: Target) => (a.inbox < b.inbox ? -1 : a.inbox > b.inbox ? 1 : 0)
-	return [
-		...[...personal].map(([addressee, inbox]) => ({ inbox, addressee })).sort(byInbox),
-		...[...neutral].map((inbox) => ({ inbox, addressee: null })).sort(byInbox),
-	]
+	return {
+		targets: [
+			...[...personal].map(([addressee, inbox]) => ({ inbox, addressee })).sort(byInbox),
+			...[...neutral].map((inbox) => ({ inbox, addressee: null })).sort(byInbox),
+		],
+		voters: new Set(recipients.voterInboxes.filter(isDeliverableInbox)),
+	}
 }
 
 // Every inbox that received an object of this signer, or may: its receipts, the rows of earlier activities about it
@@ -226,7 +241,7 @@ export function enqueueActivity(
 	now: number,
 	options: { withdraws?: boolean } = {}
 ): void {
-	const targets = audienceTargets(db, signerId, envelope.activity, envelope.audience, options.withdraws === true)
+	const { targets, voters } = targetsOf(db, signerId, envelope.activity, envelope.audience, options.withdraws === true)
 	const { object, retracts } = subjectOf(envelope.activity, options.withdraws === true)
 	if (object !== null && (retracts || envelope.activity.type === 'Update')) {
 		supersede(db, signerId, object, retracts)
@@ -240,7 +255,8 @@ export function enqueueActivity(
 	}
 	// An Update of an actor (a profile change) goes to every target as it is, and replaces the earlier Updates of the
 	// actor still waiting there, so quick edits deliver only the latest document. An Update of a status goes as a
-	// Create to servers that lack the status.
+	// Create to servers that lack the status, but for the inboxes of its poll's voters, which have it (they voted in it)
+	// and take its counts from an Update only (DistributePollUpdateWorker).
 	if (object !== null && envelope.activity.type === 'Update' && isActorObject(envelope.activity.object)) {
 		replaceWaiting(
 			db,
@@ -252,7 +268,7 @@ export function enqueueActivity(
 		insertIntent(db, signerId, envelope, object, false, targets, now)
 	} else if (object !== null && envelope.activity.type === 'Update') {
 		const having = serversWithObject(db, signerId, object)
-		const fresh = targets.filter((t) => t.inbox !== '' && !having.has(laneOf(t.inbox)))
+		const fresh = targets.filter((t) => t.inbox !== '' && !having.has(laneOf(t.inbox)) && !voters.has(t.inbox))
 		if (fresh.length > 0) {
 			replaceWaiting(db, signerId, object, new Set(fresh.map((t) => laneOf(t.inbox))), now)
 			const creation = { ...envelope, activity: createOfCurrent(envelope.activity) }
