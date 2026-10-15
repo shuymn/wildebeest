@@ -128,7 +128,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       and pinning a status again answers 422 `Duplicate record`. Your statuses now carry a real `pinned`, and
       `GET /api/v1/accounts/:id/statuses?pinned=true` lists an account's pins, newest pin first, to whoever may see
       each. Your actor publishes its `featured` collection of pins (the post of a public or unlisted one, the address
-      of any other), and your followers' servers are sent an `Add` or `Remove` when you pin or unpin. A later `Add` or `Remove` of
+      of any other), and your followers' servers are sent an `Add` or `Remove` when you pin or unpin; before an
+      account's first one, pin or featured hashtag, its followers are sent the actor again. A later `Add` or `Remove` of
       the same status replaces an earlier one still waiting or given up. Deleting a pinned status unpins it.
     - Conversation mutes: `POST /api/v1/statuses/:id/mute` and `/unmute` (scope `write:mutes`) mute the conversation
       of a status you may see, and every status of it then shows `muted: true` to you. While it is muted, nothing in

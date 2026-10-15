@@ -221,7 +221,8 @@ found). A pin is of the viewer's own status, not a boost, direct or limited, at 
 are public (R31): `GET /api/v1/accounts/:id/statuses?pinned=true` reads the account's pins through their primary key
 and applies the account statuses rule (R11), newest pin first; the actor's `featured` collection serves them as the
 object endpoint serves statuses (R4), the uri alone of a private one, as Mastodon's `CollectionsController` does; and
-pinning or unpinning records an `Add` or `Remove` for the followers (R23, kind `other`). A conversation mute is its
+pinning or unpinning records an `Add` or `Remove` for the followers (R23, kind `other`), after an `Update` of the
+actor before the account's first one, pin or featured hashtag (`announceFeatured` in `actor-update.ts`). A conversation mute is its
 owner's and names a thread (`statuses.thread`); only the policy module reads it (`conversationMutedSql`): the
 presenter shows it in the viewer's `muted` of each status (a boost's own thread, as Mastodon gives a boost its own
 conversation), and `notify` writes through `notifiedSql`, R15 less a notification about a status of a conversation

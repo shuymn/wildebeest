@@ -1,5 +1,6 @@
 import type { Present } from './accounts'
 import { featuredActivity, PIN_LIMIT, recordOutbound } from './activities'
+import { announceFeatured } from './actor-update'
 import { requiresMention, type Visibility } from './audience'
 import { userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
@@ -103,6 +104,8 @@ export const unpin = userWriteOperation<ActionInput, Acted<Status>>((db, input, 
 
 function recordFeatured(db: Db, type: 'Add' | 'Remove', accountId: string, statusUri: string, now: number): void {
 	const actor = actorUri(db, accountId)
+	// Servers that stored the actor before it published its featured collection match the target against nothing.
+	announceFeatured(db, accountId, now)
 	recordOutbound(
 		db,
 		accountId,

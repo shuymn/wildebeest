@@ -212,6 +212,8 @@ describe('pins', () => {
 		const fan = await remoteAccount(h.store, 'fan', 'fans.example')
 		await remoteFollows(h.store, fan, alice.id)
 		const status = await post(h, alice, { status: 'pin me' })
+		// The actor's featured collection is known already, so only Adds and Removes are sent.
+		await sql(h.store, 'UPDATE local_accounts SET featured_announced = 1 WHERE account_id = ?', alice.id)
 		let at = NOW
 		// Delivers every due row of the pins, the first with `first` and the rest as sent.
 		const deliver = async (first: DeliveryOutcome) => {
@@ -250,6 +252,50 @@ describe('pins', () => {
 		// Each keeps its own id.
 		const sent = (await outbound(h.store)).filter((o) => o.activity.type === 'Add' || o.activity.type === 'Remove')
 		expect(new Set(sent.map((o) => o.activity.id)).size).toBe(sent.length)
+	})
+
+	it('sends the actor, with its featured collection, before the first Add or Remove, once', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const fan = await remoteAccount(h.store, 'fan', 'fans.example')
+		await remoteFollows(h.store, fan, alice.id)
+		const first = await post(h, alice, { status: 'first' })
+		const second = await post(h, alice, { status: 'second' })
+		const before = (await outbound(h.store)).length
+		await act(h, alice, `/api/v1/statuses/${first.id}/pin`)
+		await act(h, alice, `/api/v1/statuses/${second.id}/pin`)
+		await act(h, alice, `/api/v1/statuses/${first.id}/unpin`)
+		const sent = (await outbound(h.store)).slice(before)
+		expect(sent.map(({ activity }) => activity.type)).toEqual(['Update', 'Add', 'Add', 'Remove'])
+		expect(sent[0]?.activity.object).toMatchObject({
+			featured: 'https://kopje.test/ap/users/alice/collections/featured',
+		})
+	})
+
+	it('sends only the Add for an account whose actor was sent with its featured collection', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const fan = await remoteAccount(h.store, 'fan', 'fans.example')
+		await remoteFollows(h.store, fan, alice.id)
+		const status = await post(h, alice, { status: 'pin me' })
+		const edit = await h.request(
+			'/api/v1/accounts/update_credentials',
+			bearer(alice.token, json({ display_name: 'Alice' }, { method: 'PATCH' }))
+		)
+		expect(edit.status).toBe(200)
+		// Everything is delivered, so nothing waits that a later Update could replace.
+		const { deliveries } = await h.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'drain' })
+		for (const d of deliveries) {
+			await h.store.completeDelivery(BUILD, {
+				id: d.id,
+				leaseToken: 'drain',
+				now: NOW,
+				outcome: { kind: 'delivered', status: 202 },
+			})
+		}
+		const before = (await outbound(h.store)).length
+		await act(h, alice, `/api/v1/statuses/${status.id}/pin`)
+		expect((await outbound(h.store)).slice(before).map(({ activity }) => activity.type)).toEqual(['Add'])
 	})
 
 	it('goes with its status, without a Remove', async () => {
