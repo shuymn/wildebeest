@@ -120,6 +120,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   followed, mentioned or found, and the account itself is shown redacted (`suspended: true`), while its purge removes
   what it has in the background.
 
+- A suspended account's rescue documents (its actor document and WebFinger answers, served while the Store refuses
+  requests) are removed when the account is suspended: they answer 503 until a live request keeps the redacted
+  document, which is then served.
+
 ### Fixed
 
 - Home applies its rule to your own direct and limited statuses too. A converted Store can hold a legacy direct boost

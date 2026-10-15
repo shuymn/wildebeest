@@ -670,7 +670,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **NET-5: snapshots come only from authoritative local data.** A rescue snapshot holds only a canonical actor,
   WebFinger or NodeInfo document rendered on the fixed domain from Store columns, and is kept only if its source still
   matches the Store when saved. Request hosts, arbitrary queries and remote documents never create or change one.
-  _Enforced (main):_ `src/domain/snapshot.ts`, `src/federation/routes.ts`; `test/snapshot.test.ts`.
+  Suspending an account removes the snapshots of its actor document and WebFinger answers in the same transaction, so
+  the rescue path answers 503 for them, never with the document from before the suspension, until a live request keeps
+  the redacted one. _Enforced (main):_ `src/domain/snapshot.ts`, `src/federation/routes.ts`; `test/snapshot.test.ts`
+  ("snapshots of a suspended actor").
 
 ### Content (HTML)
 
