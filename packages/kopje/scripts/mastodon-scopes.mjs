@@ -1,6 +1,6 @@
-// Writes the access table of Mastodon's /api/** routes, which test/mastodon-access.test.ts checks Kopje's route table
-// (src/mastodon/routes.ts) against. For each route: the method, the path (`:param` form), the controller action, and
-// what the action requires of the caller:
+// Writes the access table of Mastodon's /api/** routes and its API routes outside /api (OUTSIDE_API), which
+// test/mastodon-access.test.ts checks Kopje's route table (src/mastodon/routes.ts) against. For each route: the method,
+// the path (`:param` form), the controller action, and what the action requires of the caller:
 //   token   'required'  doorkeeper_authorize!, require_user!, or valid_doorkeeper_token? in the action
 //           'optional'  authorize_if_got_token!, or no doorkeeper check but the controller reads the current user
 //           'none'      neither: no token is read
@@ -10,7 +10,8 @@
 // Where the Ruby cannot be read with certainty (a conditional callback, an unknown routing statement, a controller
 // not found), the route carries `unresolved` with the reasons instead of a guess.
 //
-// It only reads the checkout: config/routes.rb (and the files it draws), app/controllers/api/**.
+// It only reads the checkout: config/routes.rb (and the files it draws), app/controllers/api/** and the controllers of
+// OUTSIDE_API.
 //
 //   node scripts/mastodon-scopes.mjs <mastodon checkout> [<out file>]
 //   (default: test/fixtures/mastodon-<version>-api-access.json)
@@ -727,17 +728,20 @@ function version(checkout) {
 	return `${major}.${minor}.${patch}`
 }
 
+// Routes outside /api that clients call with a bearer token, served by an Api::BaseController.
+const OUTSIDE_API = new Set(['/oauth/userinfo'])
+
 export function mastodonAccessTable(/** @type {string} */ checkout) {
 	const cache = new Map()
 	const routes = readRoutes(checkout)
-		.filter((route) => route.path.startsWith('/api/') || route.method === '?')
+		.filter((route) => route.path.startsWith('/api/') || OUTSIDE_API.has(route.path) || route.method === '?')
 		.map((route) => access(route, checkout, cache))
 	const v = version(checkout)
 	return {
 		mastodon: v,
 		generatedBy: `(in packages/kopje) node scripts/mastodon-scopes.mjs <checkout of Mastodon v${v}>`,
 		note: [
-			'Generated from config/routes.rb and app/controllers/api/** by reading the Ruby source; do not edit by hand.',
+			'Generated from config/routes.rb, app/controllers/api/** and the API controllers outside /api (/oauth/userinfo) by reading the Ruby source; do not edit by hand.',
 			'token: required (doorkeeper_authorize!, require_user!, valid_doorkeeper_token?), optional (authorize_if_got_token!, or the controller reads the current user), none.',
 			'scopes: any one of them is accepted (null: no scope check). user: a token without a user is refused.',
 			'Not read: instance settings (DISALLOW_UNAUTHENTICATED_API_ACCESS, limited federation mode), serializers that read the current user.',

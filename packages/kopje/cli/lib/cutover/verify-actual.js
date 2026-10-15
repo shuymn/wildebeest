@@ -97,7 +97,7 @@ export function actualFromDump(text) {
 	const reblogOf = new Map()
 	/** @type {Map<string, string>} */
 	const parentOf = new Map()
-	/** @type {Map<string, [string, number][]>} */
+	/** @type {Map<string, [string, number, number, string][]>} status id -> its recipients, each with silent, requires_mention and author_id */
 	const mentions = new Map()
 	/** @type {Map<string, [string, number][]>} status id -> its hashtags, each with status_tags.public */
 	const tags = new Map()
@@ -222,7 +222,15 @@ export function actualFromDump(text) {
 			}
 			case 'status_mentions': {
 				const id = t('status_id') ?? ''
-				mentions.set(id, [...(mentions.get(id) ?? []), [account(t('account_id'))?.uri ?? '', Number(int(row.silent))]])
+				mentions.set(id, [
+					...(mentions.get(id) ?? []),
+					[
+						account(t('account_id'))?.uri ?? '',
+						Number(int(row.silent)),
+						Number(int(row.requires_mention)),
+						account(t('author_id'))?.uri ?? '',
+					],
+				])
 				break
 			}
 			case 'sqlite_sequence':

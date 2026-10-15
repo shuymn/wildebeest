@@ -10,6 +10,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- `GET` and `POST /oauth/userinfo`, as Mastodon 4.5 has it: for a token with the `profile` scope, the OpenID Connect
+  claims of its account (`iss`, `sub`, `name`, `preferred_username`, `profile`, `picture`). A token without `profile`
+  is refused with 403, an app token with 422.
+- `GET /.well-known/oauth-authorization-server` (RFC 8414), as Mastodon 4.5 has it: the OAuth endpoints, including
+  `userinfo_endpoint` and Mastodon's `app_registration_endpoint`, the scopes, and the supported response types and
+  modes, grant types, client authentication methods and PKCE methods.
 - Conversations in the Mastodon API, as Mastodon 4.5 has them: `GET /api/v1/conversations` (paged by the last status
   with Link headers, 20 by default and at most 40), `DELETE /api/v1/conversations/:id` and
   `POST /api/v1/conversations/:id/read` and `/unread`. Scopes are `read:statuses` and `write:conversations` (or `read`
@@ -24,10 +30,24 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - The conversations of the direct statuses already stored are made when the instance upgrades, and the cutover
       makes them of the statuses it carries.
 
+### Changed
+
+- A missing, unknown or expired bearer token is refused with a `WWW-Authenticate: Bearer` challenge
+  (`error="invalid_token"`), as Mastodon refuses it.
+- The public timeline, account statuses, notifications, favourites and bookmarks read a bounded number of rows for a
+  page anywhere in the history, and home and list timelines no longer read the statuses of followed accounts they
+  hide entirely. Home reads only the mentions of you in direct and limited statuses by accounts you follow, not every
+  mention of you, and the statuses of an account that blocks you, that you block, or that is suspended or being deleted
+  are no longer read to show its empty profile.
+
 ### Instance changes
 
-- Store schema: adds `0009_conversations`, applied on the first request after the deploy; a rollback to an earlier
+- Store schema: adds two migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
+      marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
+      author. Its work grows linearly with the mentions stored (one pass, with a lookup of each one's status); locally,
+      200,000 mentions took under a second.
     - `0009_conversations`: the `conversations` and `conversation_statuses` tables, the trigger that takes a deleted
       status out of its conversations, and the conversations of the direct statuses stored. Its work grows linearly with
       the statuses stored (one pass) and the direct statuses and the statuses they reply to (a few reads each); locally,

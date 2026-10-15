@@ -8,6 +8,8 @@ import {
 	followableBySql,
 	isDistributable,
 	isPublicCollection,
+	MENTION_STATUS_COLUMNS,
+	mentionStatusSql,
 	type Visibility,
 } from './audience'
 import { stageRetraction } from './deliveries'
@@ -1772,7 +1774,8 @@ const announce: Handler<'Announce'> = (db, actor, activity, input) => {
 		MAX_STATUS_MENTION_ROWS
 	)
 	db.run(
-		'INSERT INTO status_mentions (status_id, account_id, silent) SELECT ?1, value, 1 FROM json_each(?2) WHERE true',
+		`INSERT INTO status_mentions (status_id, account_id, silent, ${MENTION_STATUS_COLUMNS})
+		SELECT ?1, value, 1, ${mentionStatusSql('?1')} FROM json_each(?2) WHERE true`,
 		boostId,
 		JSON.stringify(addressed.map((row) => row.id))
 	)

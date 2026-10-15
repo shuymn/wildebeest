@@ -5,6 +5,8 @@ import {
 	interpretAddressing,
 	isDistributable,
 	isPublicCollection,
+	MENTION_STATUS_COLUMNS,
+	mentionStatusSql,
 	type StatusMention,
 	viewableStatusId,
 	type Visibility,
@@ -387,8 +389,9 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 	)
 	const rows = boundedMentions(mentions, known.local)
 	db.run(
-		`INSERT INTO status_mentions (status_id, account_id, silent)
-		SELECT ?1, json_extract(value, '$.accountId'), json_extract(value, '$.silent') FROM json_each(?2) WHERE true
+		`INSERT INTO status_mentions (status_id, account_id, silent, ${MENTION_STATUS_COLUMNS})
+		SELECT ?1, json_extract(value, '$.accountId'), json_extract(value, '$.silent'), ${mentionStatusSql('?1')}
+		FROM json_each(?2) WHERE true
 		ON CONFLICT DO NOTHING`,
 		id,
 		JSON.stringify(rows.map((m) => ({ accountId: m.accountId, silent: m.silent ? 1 : 0 })))
@@ -498,7 +501,8 @@ function extendAudience(db: Db, existing: StoredStatus, deliveredTo: string | nu
 		}
 	}
 	db.run(
-		'INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, 1) ON CONFLICT DO NOTHING',
+		`INSERT INTO status_mentions (status_id, account_id, silent, ${MENTION_STATUS_COLUMNS})
+		VALUES (?1, ?2, 1, ${mentionStatusSql('?1')}) ON CONFLICT DO NOTHING`,
 		existing.id,
 		deliveredTo
 	)
@@ -655,7 +659,8 @@ function updateMentions(
 		JSON.stringify(allowed)
 	)
 	db.run(
-		`INSERT INTO status_mentions (status_id, account_id, silent) SELECT ?1, value, 0 FROM json_each(?2) WHERE true
+		`INSERT INTO status_mentions (status_id, account_id, silent, ${MENTION_STATUS_COLUMNS})
+		SELECT ?1, value, 0, ${mentionStatusSql('?1')} FROM json_each(?2) WHERE true
 		ON CONFLICT (status_id, account_id) DO UPDATE SET silent = 0`,
 		existing.id,
 		JSON.stringify(allowed)

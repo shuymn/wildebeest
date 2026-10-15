@@ -210,6 +210,25 @@ describe('convert and verify-conversion', () => {
 			{ public: 0, listed: 0, n: expect.any(Number) },
 			{ public: 1, listed: 1, n: expect.any(Number) },
 		])
+		// A mention is marked as one home's mentions stream reads exactly when its status is direct or limited
+		// (REQUIRES_MENTION_SQL in src/domain/audience.ts, which this Node suite does not load), and names the status's
+		// author.
+		expect(
+			value(
+				'SELECT count(*) FROM status_mentions m JOIN statuses s ON s.id = m.status_id WHERE m.author_id IS NOT s.account_id'
+			)
+		).toBe(0)
+		expect(
+			db
+				.prepare(
+					`SELECT s.visibility IN ('direct', 'limited') AS required, m.requires_mention AS marked, count(*) AS n
+					FROM status_mentions m JOIN statuses s ON s.id = m.status_id GROUP BY 1, 2 ORDER BY 1, 2`
+				)
+				.all()
+		).toEqual([
+			{ required: 0, marked: 0, n: expect.any(Number) },
+			{ required: 1, marked: 1, n: expect.any(Number) },
+		])
 		// An unset discoverable: false for a local account, as legacy had it; unknown for a remote one.
 		expect(value("SELECT discoverable FROM accounts WHERE uri LIKE '%/users/alice'")).toBe(1)
 		expect(value("SELECT discoverable FROM accounts WHERE uri LIKE '%/users/Bob'")).toBe(0)
@@ -257,6 +276,21 @@ describe('convert and verify-conversion', () => {
 			[
 				'a DM recipient is removed',
 				"DELETE FROM status_mentions WHERE status_id = (SELECT id FROM statuses WHERE content LIKE '%secret direct%')",
+				'audience',
+			],
+			[
+				'a DM recipient is not marked',
+				"UPDATE status_mentions SET requires_mention = 0 WHERE status_id = (SELECT id FROM statuses WHERE content LIKE '%secret direct%')",
+				'audience',
+			],
+			[
+				'a public mention is marked',
+				"UPDATE status_mentions SET requires_mention = 1 WHERE status_id IN (SELECT id FROM statuses WHERE visibility = 'public' AND reblog_of_id IS NULL)",
+				'audience',
+			],
+			[
+				'a mention names another author',
+				"UPDATE status_mentions SET author_id = (SELECT id FROM accounts WHERE uri LIKE '%/users/r4') WHERE status_id = (SELECT id FROM statuses WHERE content LIKE '%secret direct%')",
 				'audience',
 			],
 			[

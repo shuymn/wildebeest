@@ -1,11 +1,21 @@
-import { type ApiContext, type ApiHandler, authorized, credential, storeCall, vapidKey } from './context'
+import {
+	type ApiContext,
+	type ApiHandler,
+	authorized,
+	credential,
+	present,
+	storeCall,
+	userCredential,
+	vapidKey,
+} from './context'
 import { mastodonError } from './errors'
 import { type Params, readParams } from './params'
 import { OOB_REDIRECT_URI } from '../domain/oauth'
-import { DEFAULT_SCOPES, parseScopes } from '../security/scopes'
+import { DEFAULT_SCOPES, parseScopes, SCOPES } from '../security/scopes'
 import { PKCE_VERIFIER, pkceChallenge, sha256Hex } from '../security/tokens'
 
-// App registration and the OAuth token endpoints. /oauth/authorize (behind Access) lives in app/authorize.ts.
+// App registration, the OAuth token and userinfo endpoints, and the authorization server metadata. /oauth/authorize
+// (behind Access) lives in app/authorize.ts.
 
 const MAX_NAME = 255
 const MAX_REDIRECT_URIS = 10
@@ -257,4 +267,40 @@ export const revokeHandler: ApiHandler = async (c, deps) => {
 		return INVALID_CLIENT()
 	}
 	return c.json({})
+}
+
+// GET and POST /oauth/userinfo (Mastodon's OAuth::UserinfoController; OpenID Connect Core §5.3 asks for both): the
+// claims of the token's account, for a token with the profile scope. The token's account always exists while the
+// token does; without it, the answer is Mastodon's for a token whose user is gone.
+export const userinfo: ApiHandler = async (c, deps) => {
+	const token = userCredential(c, deps)
+	const claims = authorized(
+		await storeCall(c, deps, (s, b) => s.userinfo(b, { credential: token, present: present(c) }))
+	)
+	return claims === null ? mastodonError(422, 'This method requires an authenticated user') : c.json(claims)
+}
+
+// GET /.well-known/oauth-authorization-server (RFC 8414; Mastodon's OAuthMetadataSerializer, fields in its order):
+// what Kopje supports of Mastodon's. The authorization endpoint answers in the query only, so the response modes are
+// query alone; Mastodon (Doorkeeper) lists fragment and form_post too.
+export const authorizationServerMetadata: ApiHandler = (c) => {
+	const { origin } = present(c)
+	return Promise.resolve(
+		c.json({
+			issuer: `${origin}/`,
+			authorization_endpoint: `${origin}/oauth/authorize`,
+			token_endpoint: `${origin}/oauth/token`,
+			revocation_endpoint: `${origin}/oauth/revoke`,
+			userinfo_endpoint: `${origin}/oauth/userinfo`,
+			scopes_supported: SCOPES,
+			response_types_supported: ['code'],
+			response_modes_supported: ['query'],
+			grant_types_supported: ['authorization_code', 'client_credentials'],
+			token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
+			code_challenge_methods_supported: ['S256'],
+			service_documentation: 'https://docs.joinmastodon.org/',
+			// Not RFC 7591 dynamic client registration: Mastodon's own app registration, under Mastodon's name for it.
+			app_registration_endpoint: `${origin}/api/v1/apps`,
+		})
+	)
 }

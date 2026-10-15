@@ -1,4 +1,4 @@
-import { type Account, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
+import { type Account, edgeRangeSql, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
 import { shownSql, statusReads, type WithVisibleStatus } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { addToConversation } from './conversations'
@@ -174,7 +174,7 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 			db,
 			{
 				where: `n.account_id = ?1
-					AND (?2 IS NULL OR n.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR n.id > CAST(?3 AS INTEGER))
+					AND ${edgeRangeSql('n.id', '?2', '?3')}
 					AND (?4 IS NULL OR n.type IN (SELECT value FROM json_each(?4)))
 					AND n.type NOT IN (SELECT value FROM json_each(?5))
 					AND (?6 IS NULL OR n.from_account_id = ?6)`,

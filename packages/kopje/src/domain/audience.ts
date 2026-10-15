@@ -74,6 +74,19 @@ export function tagPublicSql(id: string): string {
 	return `(SELECT tp.visibility = 'public' FROM main.statuses tp WHERE tp.id = ${id})`
 }
 
+// The columns of status_mentions copied from the mention's status, for its writers: requires_mention, whether the
+// status is direct or limited (the only statuses home reads from the viewer's mentions), and author_id, the status's
+// author. A status never changes author, and its visibility stays in or out of that set once written (a direct status
+// gaining a recipient becomes limited), so the writers set both with each row, and the partial index
+// status_mentions_requires_mention holds the marked rows by recipient and author.
+export const MENTION_STATUS_COLUMNS = 'requires_mention, author_id'
+
+// The values of MENTION_STATUS_COLUMNS for a mention in the status `id`.
+export function mentionStatusSql(id: string): string {
+	return `(SELECT mr.visibility IN ${REQUIRES_MENTION_SQL} FROM main.statuses mr WHERE mr.id = ${id}),
+		(SELECT ma.account_id FROM main.statuses ma WHERE ma.id = ${id})`
+}
+
 // ---- Accounts. `x` is an expression for an account id, never a status or edge alias.
 
 // R1 (Account#unavailable?): a suspended local account, and a remote account whose deletion has started
@@ -307,13 +320,22 @@ export type StatusSelect = {
 }
 
 // A window of each author's statuses, for a feed of whole authors (home, a list), as StatusReads writes it:
-//   SELECT w.id AS id FROM (<authors>) a CROSS JOIN main.statuses w ON w.id IN (SELECT s.id FROM main.statuses s
-//     WHERE (s.account_id = a.account_id AND <where>) AND (<rule over s>) AND (<and>) <tail>)
+//   SELECT w.id AS id FROM (SELECT wa.account_id FROM (<authors>) wa WHERE <rule over the author>) a
+//     CROSS JOIN main.statuses w ON w.id IN (SELECT s.id FROM <from> main.statuses s <join>
+//     WHERE (<author> = a.account_id AND <where>) AND (<rule over s>) AND (<and>) <tail>)
+// <author> is s.account_id unless given: a window read from another index (the viewer's mentions by author) names the
+// column of the author there, with the tables before statuses in <from> and the join after it in <join>, as a
+// StatusSelect has them.
 // <authors> selects each author once, as account_id, and <tail> orders each author's statuses by id and cuts them to a
 // page: so a status of a merged page is within its author's window, the page is the one a single SELECT over all the
-// authors' statuses gives, and an author costs a window however many statuses they have.
+// authors' statuses gives, and an author costs a window however many statuses they have. The rule over the author is
+// the part of the rule that holds for all of an author's statuses or none (authorRuleSql): an author it rejects has no
+// window, rather than one that walks their whole history finding nothing.
 export type AuthorWindows = {
 	readonly authors: string
+	readonly from?: string
+	readonly join?: string
+	readonly author?: string
 	readonly where?: string
 	readonly and?: string
 	readonly tail: string
@@ -348,6 +370,15 @@ export type StatusReads = {
 		},
 		...params: SqlStorageValue[]
 	): { id: VisibleStatusId }[]
+	// Whether the rule passes the author `author` (an expression over the parameters) as a whole, and `and`: when it
+	// does not, no status of theirs passes, so a read of their statuses alone can return nothing without reading them.
+	//   SELECT 1 WHERE (<rule over the author>) AND (<and>)
+	authorShown(
+		db: Db,
+		rule: StatusRule,
+		query: { readonly author: string; readonly and?: string },
+		...params: SqlStorageValue[]
+	): boolean
 	// The viewer's notifications the notification rule (R15) shows them, which shows a status only if they may view it:
 	//   SELECT n.status_id AS status_id, <columns> FROM main.notifications n WHERE (<where>) AND (<rule>) <tail>
 	notifications<Extra extends Row>(
@@ -391,16 +422,26 @@ export function statusReads(
 	const selectSql = (rule: string, q: StatusSelect, extra?: Record<string, string>) =>
 		`SELECT s.id AS id${columns(extra, 'id')} FROM ${q.from ?? ''} main.statuses s ${q.join ?? ''}
 		WHERE ${where(q.where, rule, q.and)} ${q.tail ?? ''}`
-	const branchSql = (rule: string, q: StatusSelect | AuthorWindows) => {
+	// The part of the rule over the author `x` alone, which every status of theirs passes if any does: the author is
+	// available and, unless the viewer, does not block them; for the list and home rules, the viewer does not filter
+	// them either.
+	const authorRuleSql = (rule: StatusRule, x: string) => {
+		const visible = `${availableSql(x)} AND (${x} IS ${at.viewer} OR NOT ${blocksSql(x, at.viewer)})`
+		return rule === 'visible' ? visible : `${visible} AND NOT ${filteredForSql(x, at.viewer, now())}`
+	}
+	const branchSql = (rule: StatusRule, q: StatusSelect | AuthorWindows) => {
 		if (!('authors' in q)) {
-			return selectSql(rule, q)
+			return selectSql(ruleSql(rule), q)
 		}
-		const window = selectSql(rule, {
-			where: `s.account_id = a.account_id${q.where === undefined ? '' : ` AND ${q.where}`}`,
+		const window = selectSql(ruleSql(rule), {
+			from: q.from,
+			join: q.join,
+			where: `${q.author ?? 's.account_id'} = a.account_id${q.where === undefined ? '' : ` AND ${q.where}`}`,
 			and: q.and,
 			tail: q.tail,
 		})
-		return `SELECT w.id AS id FROM (${q.authors}) a CROSS JOIN main.statuses w ON w.id IN (${window})`
+		const authors = `SELECT wa.account_id FROM (${q.authors}) wa WHERE ${authorRuleSql(rule, 'wa.account_id')}`
+		return `SELECT w.id AS id FROM (${authors}) a CROSS JOIN main.statuses w ON w.id IN (${window})`
 	}
 	const run = <T extends Row>(db: Db, query: string, params: SqlStorageValue[]): T[] => {
 		const bound = (placeholder: string) => {
@@ -423,12 +464,20 @@ export function statusReads(
 			return run<Extra & { id: VisibleStatusId }>(db, sql, params)
 		},
 		union(db, rule, query, ...params) {
-			const sql = ruleSql(rule)
-			const branches = query.branches.map((branch) => `SELECT * FROM (${branchSql(sql, branch)})`)
+			const branches = query.branches.map((branch) => `SELECT * FROM (${branchSql(rule, branch)})`)
 			return run<{ id: VisibleStatusId }>(
 				db,
 				`SELECT id FROM (${branches.join(query.all ? ' UNION ALL ' : ' UNION ')}) ${query.tail}`,
 				params
+			)
+		},
+		authorShown(db, rule, query, ...params) {
+			return (
+				run<{ shown: number }>(
+					db,
+					`SELECT 1 AS shown WHERE ${where(authorRuleSql(rule, query.author), query.and)}`,
+					params
+				).length > 0
 			)
 		},
 		notifications<Extra extends Row>(

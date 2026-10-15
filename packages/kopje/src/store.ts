@@ -586,6 +586,10 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, accounts.verifyCredentials, input)
 	}
 
+	userinfo(callerBuild: string, input: OperationInput<typeof accounts.userinfo>) {
+		return this.#kernel.execute(callerBuild, accounts.userinfo, input)
+	}
+
 	updateCredentials(callerBuild: string, input: OperationInput<typeof accounts.updateCredentials>) {
 		return this.#kernel.execute(callerBuild, accounts.updateCredentials, input)
 	}

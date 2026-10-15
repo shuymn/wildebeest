@@ -477,8 +477,11 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		])
 
 		// Recipients: for public and unlisted, the tagged known accounts and, silently, the other addressed ones; for
-		// followers-only, none (a follow decides); for direct, exactly the known accounts in to (tagged ones not silent).
-		// Non-public audiences also name the author legacy authorized with.
+		// followers-only, none (a follow decides); for direct, exactly the known accounts in to (tagged ones not silent),
+		// each marked as a mention in a status only a mention lets one see (status_mentions.requires_mention), and each
+		// naming the status's author (status_mentions.author_id). Non-public audiences also name the author legacy
+		// authorized with.
+		const requiresMention = audience.visibility === 'direct' ? 1 : 0
 		const accountAt = (/** @type {unknown} */ x) => byAddress.get(address(x) ?? '')
 		const tagged = new Set(
 			many(p.tag)
@@ -507,7 +510,15 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		put('audience', uri, [
 			audience.visibility,
 			[...readers]
-				.map((x) => /** @type {[string, number]} */ ([String(x), tagged.has(/** @type {string} */ (x)) ? 0 : 1]))
+				.map(
+					(x) =>
+						/** @type {[string, number, number, string]} */ ([
+							String(x),
+							tagged.has(/** @type {string} */ (x)) ? 0 : 1,
+							requiresMention,
+							author,
+						])
+				)
 				.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)),
 			open ? null : stored,
 		])
@@ -665,12 +676,13 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			sent === undefined || sent === null
 				? { visibility: 'unreadable', to: [] }
 				: audienceOf(sent.to, sent.cc, followersOf(String(r.actor_id), source.followers.get(String(r.actor_id))))
-		// A boost reaches nobody in particular, except a direct one: the accounts in its to.
+		// A boost reaches nobody in particular, except a direct one: the accounts in its to, silent, in a status only a
+		// mention lets one see.
 		const recipients =
 			audience.visibility === 'direct'
 				? [...new Set(audience.to.map((x) => byAddress.get(x ?? '')))]
 						.filter((x) => x !== undefined && x !== String(r.actor_id))
-						.map((x) => /** @type {[string, number]} */ ([String(x), 1]))
+						.map((x) => /** @type {[string, number, number, string]} */ ([String(x), 1, 1, String(r.actor_id)]))
 						.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
 				: []
 		put('boosts', String(r.id), [String(r.actor_id), target, audience.visibility, recipients])

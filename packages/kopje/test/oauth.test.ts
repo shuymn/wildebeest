@@ -869,6 +869,27 @@ describe('scopes on routes', () => {
 		expect((await h.request(`/api/v1/accounts/${h.aliceId}`)).status).toBe(200)
 	})
 
+	it('answers a refused token, but not a refused scope, with a Bearer challenge', async () => {
+		const h = await withAlice()
+		const challenge =
+			'Bearer realm="Doorkeeper", error="invalid_token", error_description="The access token is invalid"'
+		for (const [path, init] of [
+			['/api/v1/timelines/home', {}],
+			['/api/v1/timelines/home', bearer('nope')],
+			// An optional route reads no token as anonymous, but refuses an unknown one.
+			['/api/v1/timelines/public', bearer('nope')],
+		] as const) {
+			const response = await h.request(path, init)
+			expect(response.status, path).toBe(401)
+			expect(response.headers.get('www-authenticate'), path).toBe(challenge)
+		}
+		const app = await registerApp(h, { scopes: 'profile' })
+		const { token } = await login(h, { app, scope: 'profile' })
+		const denied = await h.request('/api/v1/timelines/home', bearer(token))
+		expect(denied.status).toBe(403)
+		expect(denied.headers.get('www-authenticate')).toBeNull()
+	})
+
 	it('opens the API and token endpoints to browser clients, errors included', async () => {
 		const h = await withAlice()
 		const preflight = await h.request('/oauth/token', {

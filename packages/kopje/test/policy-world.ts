@@ -394,10 +394,12 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 		)
 		for (const mention of status.mentions) {
 			sql.exec(
-				'INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, ?)',
+				'INSERT INTO status_mentions (status_id, account_id, silent, requires_mention, author_id) VALUES (?, ?, ?, ?, ?)',
 				statusId(i),
 				accountId(mention.account),
-				mention.silent ? 1 : 0
+				mention.silent ? 1 : 0,
+				status.visibility === 'direct' || status.visibility === 'limited' ? 1 : 0,
+				accountId(status.author)
 			)
 		}
 		if (status.tagged) {
