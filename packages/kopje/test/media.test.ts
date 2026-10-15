@@ -14,6 +14,7 @@ import {
 	WEBP_XMP,
 	WIDE_PNG,
 } from './fixtures/images'
+import { BUILD } from './helpers'
 import {
 	type Attachment,
 	bytes,
@@ -31,6 +32,7 @@ import { handleScheduled } from '../src/jobs/scheduled'
 import { sweepMedia } from '../src/mastodon/media'
 import { accountMonthlyTransforms, readConfig } from '../src/platform/config'
 import { retainedMetadata } from '../src/platform/image-bytes'
+import { sha256Hex } from '../src/security/tokens'
 
 const HOUR = 60 * 60 * 1000
 
@@ -402,6 +404,57 @@ describe('PATCH and DELETE /api/v1/media/:id', () => {
 		expect((await destroy()).status).toBe(200)
 		expect(await stored(keys)).toEqual([])
 		expect(await row(h, media.id)).toBeUndefined()
+	})
+})
+
+describe('explicit deletion', () => {
+	it('is final for a post or schedule that started before it', async () => {
+		const h = await users()
+		const { alice } = h.users
+		const [deleted, held, viaStatus] = [
+			await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS))),
+			await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS))),
+			await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS))),
+		]
+		const status = await post(h, alice, { status: 'x', media_ids: [viaStatus.id] })
+		// The Store commits the deletions at a later time than the requests below carry (the harness clock stays at
+		// NOW). They are called directly, so no sweep removes the rows before those requests run.
+		const later = NOW + 60_000
+		const credential = { tokenHash: await sha256Hex(alice.token), scope: 'write', now: later } as const
+		for (const id of [deleted.id, held.id]) {
+			expect(await h.store.deleteMedia(BUILD, { credential, id, now: later })).toEqual({
+				status: 'ok',
+				value: 'deleted',
+			})
+		}
+		const removed = await h.store.deleteStatus(BUILD, {
+			credential,
+			id: status.id,
+			deleteMedia: true,
+			now: later,
+			present: { origin: 'https://kopje.test' },
+		})
+		expect(removed.status).toBe('ok')
+
+		const late = await post(h, alice, { status: 'late', media_ids: [deleted.id, viaStatus.id] })
+		expect(late.media_attachments).toEqual([])
+		const scheduled = await h.request(
+			'/api/v1/statuses',
+			bearer(
+				alice.token,
+				json({ status: 'later', media_ids: [held.id], scheduled_at: new Date(NOW + HOUR).toISOString() })
+			)
+		)
+		expect(scheduled.status).toBe(200)
+		expect(await scheduled.json()).toMatchObject({ media_attachments: [] })
+		expect(
+			await sql(
+				h.store,
+				'SELECT id FROM media_attachments WHERE status_id IS NOT NULL OR scheduled_status_id IS NOT NULL'
+			)
+		).toEqual([])
+		// The sweep then deletes all three.
+		expect(await sweep(h, NOW)).toBe(3)
 	})
 })
 

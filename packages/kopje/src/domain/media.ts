@@ -85,6 +85,11 @@ function iso(ms: number): string {
 	return new Date(ms).toISOString()
 }
 
+// The gc_at of media an explicit deletion dooms (DELETE /api/v1/media/:id, delete_media, a replaced or removed profile
+// image): the epoch, which every request reads as past whatever its own time, so a request that started before the
+// deletion cannot attach the media again after it (liveMediaSql) while the sweep deletes its objects.
+export const DOOMED_AT = iso(0)
+
 // The condition for an unattached upload that may still be used: processed, not doomed, and not the uploader's
 // avatar or header. `now` is a parameter expression.
 export function liveMediaSql(m: string, now: string): string {
@@ -325,7 +330,7 @@ export const setProfileImage = userMediaDeleteOperation<{ id: string; kind: Prof
 		const previous = db.first<{ url: string | null }>(`SELECT ${column} AS url FROM accounts WHERE id = ?`, accountId)
 		db.run(`UPDATE accounts SET ${column} = ? WHERE id = ?`, upload.url, accountId)
 		db.run('UPDATE media_attachments SET gc_at = NULL WHERE id = ?', id)
-		releaseProfileImage(db, accountId, previous?.url ?? null, now)
+		releaseProfileImage(db, accountId, previous?.url ?? null)
 		recordActorUpdate(db, accountId, before, now)
 		return true
 	}
@@ -333,14 +338,14 @@ export const setProfileImage = userMediaDeleteOperation<{ id: string; kind: Prof
 
 // Dooms the upload behind a profile image the account no longer shows (replaced or removed), so the sweep deletes it
 // and its files, unless the account's other image still names it.
-function releaseProfileImage(db: Db, accountId: string, url: string | null, now: number): void {
+function releaseProfileImage(db: Db, accountId: string, url: string | null): void {
 	if (url === null) {
 		return
 	}
 	db.run(
 		`UPDATE media_attachments SET gc_at = ?1 WHERE account_id = ?2 AND url = ?3 AND status_id IS NULL AND gc_at IS NULL
 			AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id = ?2 AND ?3 IN (a.avatar_url, a.header_url))`,
-		iso(now),
+		DOOMED_AT,
 		accountId,
 		url
 	)
@@ -357,7 +362,7 @@ export const removeProfileImage = userMediaDeleteOperation<
 	const column = kind === 'avatar' ? 'avatar_url' : 'header_url'
 	const previous = db.first<{ url: string | null }>(`SELECT ${column} AS url FROM accounts WHERE id = ?`, accountId)
 	db.run(`UPDATE accounts SET ${column} = NULL WHERE id = ?`, accountId)
-	releaseProfileImage(db, accountId, previous?.url ?? null, now)
+	releaseProfileImage(db, accountId, previous?.url ?? null)
 	recordActorUpdate(db, accountId, before, now)
 	return credentialAccount(db, accountId, present)
 })
@@ -407,7 +412,7 @@ export const deleteMedia = userMediaDeleteOperation<{ id: string; now: number },
 		if (ownUpload(db, accountId, id, now) === undefined) {
 			return 'not_found'
 		}
-		db.run('UPDATE media_attachments SET gc_at = ? WHERE id = ?', iso(now), id)
+		db.run('UPDATE media_attachments SET gc_at = ? WHERE id = ?', DOOMED_AT, id)
 		return 'deleted'
 	}
 )

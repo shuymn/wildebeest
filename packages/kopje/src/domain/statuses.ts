@@ -51,7 +51,7 @@ import {
 import { addToConversation } from './conversations'
 import { beginRetraction } from './deliveries'
 import { allocateLocalId } from './ids'
-import { DETACHED_GRACE_MS, liveMediaSql } from './media'
+import { DETACHED_GRACE_MS, DOOMED_AT, liveMediaSql } from './media'
 import { notify } from './notifications'
 import { normalizeSearchText } from './search-text'
 import {
@@ -715,7 +715,7 @@ export const deleteStatus = userMediaDeleteOperation<
 	// Detached before the delete, so the rows (and the R2 keys they name) do not cascade away before the sweep.
 	db.run(
 		'UPDATE media_attachments SET status_id = NULL, position = 0, gc_at = ? WHERE status_id = ?',
-		iso(input.deleteMedia ? input.now : input.now + DETACHED_GRACE_MS),
+		input.deleteMedia ? DOOMED_AT : iso(input.now + DETACHED_GRACE_MS),
 		current.id
 	)
 	// Recorded while the status, its boosts and their receipts still exist, so the Delete reaches every inbox that
