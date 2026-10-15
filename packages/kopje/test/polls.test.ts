@@ -20,6 +20,7 @@ import {
 	type User,
 } from './status-helpers'
 import { Db } from '../src/db/sql'
+import { EXPANSION_STEP } from '../src/domain/deliveries'
 import { deleteStatusBatch, PURGE_BATCH, purgeBatch } from '../src/domain/inbox'
 import {
 	pollRound,
@@ -675,4 +676,63 @@ describe('RES-6: an edit that drops the votes of a poll deletes none at once', (
 			expect(await sql(h.store, 'SELECT stale FROM polls')).toEqual([{ stale: 0 }])
 		})
 	}
+})
+
+describe('RES-6: the Update of a poll with many remote voters', () => {
+	it('names the voters as a part of its audience, and reaches each voter’s inbox in bounded steps', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const status = await polled(h, alice, { options: ['a', 'b'], expires_in: 3600 })
+		const voters = 700
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO accounts (id, uri, username, domain, inbox_url, shared_inbox_url)
+			SELECT CAST(600000000000000000 + i AS TEXT), 'https://v' || i || '.example/users/v', 'v', 'v' || i || '.example',
+				'https://v' || i || '.example/users/v/inbox', 'https://v' || i || '.example/inbox' FROM n`,
+			voters
+		)
+		await sql(
+			h.store,
+			"INSERT INTO poll_votes (poll_id, account_id, choice) SELECT ?, id, 0 FROM accounts WHERE domain LIKE 'v%.example'",
+			status.id
+		)
+		await sql(h.store, 'UPDATE polls SET update_due_at = ?', at(NOW))
+		const before = await sql<{ n: number }>(h.store, 'SELECT count(*) AS n FROM deliveries')
+		const written = await runInDurableObject(h.store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
+			const start = changes()
+			state.storage.transactionSync(() => pollRound.run(state.storage.sql, { now: NOW }))
+			return changes() - start
+		})
+		// The intent, its chunks of targets, one expansion step of deliveries and the poll's own row.
+		expect(written).toBeLessThanOrEqual(EXPANSION_STEP + Math.ceil(voters / EXPANSION_STEP) + 10)
+		// No voter's server has the status yet, so it goes as a Create of the current version (deliveries.ts), to the
+		// same audience.
+		const sent = (await outbound(h.store)).filter((o) => o.activity.type !== 'Create' || o.audience.followers)
+		expect(sent.map((o) => o.audience)).toContainEqual({ followers: true, accounts: [], pollVoters: status.id })
+		const targets = await sql<{ inbox: string }>(
+			h.store,
+			`SELECT json_extract(t.value, '$.inbox') AS inbox FROM outbound_targets c, json_each(c.targets) t
+			UNION SELECT inbox_url FROM deliveries`
+		)
+		const inboxes = new Set(targets.map((t) => t.inbox))
+		expect([...Array(voters).keys()].filter((i) => !inboxes.has(`https://v${i}.example/inbox`))).toEqual([])
+		expect((before[0]?.n ?? 0) + EXPANSION_STEP).toBeGreaterThanOrEqual(
+			(await sql<{ n: number }>(h.store, 'SELECT count(*) AS n FROM deliveries'))[0]?.n ?? 0
+		)
+	})
+
+	it('reaches no voter of a followers-only poll as a voter (R23)', async () => {
+		const h = await community(['alice'])
+		const status = await polled(h, h.users.alice, { options: ['a', 'b'], expires_in: 3600 }, { visibility: 'private' })
+		const voter = await remoteAccount(h.store, 'voter', 'voter.example')
+		await sql(h.store, 'INSERT INTO poll_votes (poll_id, account_id, choice) VALUES (?, ?, 0)', status.id, voter)
+		await sql(h.store, 'UPDATE polls SET update_due_at = ?', at(NOW))
+		await round(h, NOW)
+		expect(
+			await sql(h.store, "SELECT count(*) AS n FROM deliveries WHERE inbox_url LIKE 'https://voter.example/%'")
+		).toEqual([{ n: 0 }])
+	})
 })

@@ -307,17 +307,10 @@ export function updateActivity(facts: StatusFacts, editId: string): OutboundEnve
 }
 
 // The Update of a local poll's counts or its end (ActivityPub::UpdatePollSerializer), named after the time it is
-// recorded. `voters` are the remote accounts that voted, which it reaches too (DistributePollUpdateWorker) when the
-// status is public or unlisted.
-export function pollUpdateActivity(facts: StatusFacts, at: number, voters: readonly string[]): OutboundEnvelope {
+// recorded. It reaches the poll's remote voters too (DistributePollUpdateWorker), as recipientsFor decides (R23).
+export function pollUpdateActivity(facts: StatusFacts, at: number): OutboundEnvelope {
 	const update = updateActivity(facts, `poll-${at}`)
-	const audience = statusAudience(facts)
-	return {
-		activity: update.activity,
-		audience: isDistributable(facts.visibility)
-			? { ...audience, accounts: [...new Set([...audience.accounts, ...voters])] }
-			: audience,
-	}
+	return { activity: update.activity, audience: { ...statusAudience(facts), pollVoters: facts.id } }
 }
 
 // A local account's vote in a remote poll (ActivityPub::VoteSerializer): a Create of a Note naming the choice, in reply

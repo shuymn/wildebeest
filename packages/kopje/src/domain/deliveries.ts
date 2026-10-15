@@ -122,7 +122,7 @@ export function isDeliverableInbox(value: string | null): value is string {
 	}
 }
 
-export type DeliveryAudience = { followers: boolean; accounts: string[] }
+export type DeliveryAudience = { followers: boolean; accounts: string[]; pollVoters?: string }
 
 // The targets an activity goes to (NET-2), from the stored audience only, for the recipients the policy gives it
 // (recipientsFor in audience.ts):
@@ -157,7 +157,7 @@ export function audienceTargets(
 		}
 	}
 	const recipients = recipientsFor(db, signerId, activity, audience, withdraws)
-	for (const inbox of recipients.followerInboxes) {
+	for (const inbox of [...recipients.followerInboxes, ...recipients.voterInboxes]) {
 		add(inbox, null)
 	}
 	const named = new Set([...uris(activity.to), ...uris(activity.cc)])

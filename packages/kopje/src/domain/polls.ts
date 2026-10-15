@@ -706,23 +706,10 @@ export function hasPollVotes(db: Db, by: { statusId?: string; accountId?: string
 
 // ---- The cron's rounds (jobs/scheduled.ts).
 
-// The remote accounts that voted in a local poll, whom its Update reaches too.
-function remoteVoters(db: Db, pollId: string): string[] {
-	return db
-		.all<{ id: string }>(
-			`SELECT DISTINCT v.account_id AS id FROM polls p
-				JOIN poll_votes v ON v.poll_id = p.status_id AND v.generation = p.generation
-				JOIN accounts a ON a.id = v.account_id
-			WHERE p.status_id = ? AND a.domain IS NOT NULL`,
-			pollId
-		)
-		.map((row) => row.id)
-}
-
 function recordPollUpdate(db: Db, statusId: string, authorId: string, now: number): void {
 	const facts = statusFacts(db, statusId)
 	if (facts !== null) {
-		recordOutbound(db, authorId, pollUpdateActivity(facts, now, remoteVoters(db, statusId)), now)
+		recordOutbound(db, authorId, pollUpdateActivity(facts, now), now)
 	}
 }
 

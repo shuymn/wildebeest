@@ -139,6 +139,7 @@ const RULES: readonly Rule[] = [
 		name: 'reads or writes poll_votes',
 		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['poll_votes'])}`, 'i'),
 		allowed: {
+			...POLICY_ONLY,
 			'../src/domain/polls.ts': 'votes cast through mayVoteSql (R27), the viewer’s own, and their purges',
 		},
 	},

@@ -652,7 +652,10 @@ export function addressingOf(
 
 // Who must receive an activity about a status: the author's followers (unless only the addressed may see it) and
 // the addressed accounts, silent ones included. B2 expands it into inboxes; local accounts are served from the Store.
-export type Audience = { followers: boolean; accounts: string[] }
+// followers: the signer's followers; accounts: the addressed accounts; pollVoters: the remote voters of the signer's
+// poll on the status with this id (the Update of a poll, DistributePollUpdateWorker), whom recipientsFor reaches only
+// for a public or unlisted status.
+export type Audience = { followers: boolean; accounts: string[]; pollVoters?: string }
 
 export function audienceOf(visibility: Visibility, recipients: readonly Recipient[], extra: readonly string[] = []) {
 	const accounts = new Set([...recipients.map((r) => r.accountId), ...extra])
@@ -733,6 +736,8 @@ export type OutboundRecipients = {
 	followerInboxes: (string | null)[]
 	// The remote accounts of its audience it reaches, by id.
 	accounts: AddressedAccount[]
+	// The inboxes of the remote voters of its poll it reaches, when its audience has them, as followerInboxes are.
+	voterInboxes: (string | null)[]
 }
 
 // R23: whom an activity by `signerId` for `audience` reaches, by its kind (outboundKind). Local accounts are not
@@ -765,5 +770,22 @@ export function recipientsFor(
 		JSON.stringify(audience.accounts),
 		...(kind === 'content' ? [signerId] : [])
 	)
-	return { followerInboxes, accounts }
+	// The voters of the poll's current generation (polls.ts), of a public or unlisted status of the signer's only (the
+	// others reach them as followers or addressed accounts already), without those the signer may not address.
+	const voterInboxes =
+		audience.pollVoters === undefined
+			? []
+			: db
+					.all<{ inbox: string | null }>(
+						`SELECT DISTINCT COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) AS inbox
+						FROM main.statuses ps JOIN main.polls pp ON pp.status_id = ps.id AND pp.removed = 0
+							JOIN main.poll_votes pv ON pv.poll_id = pp.status_id AND pv.generation = pp.generation
+							JOIN main.accounts a ON a.id = pv.account_id
+						WHERE ps.id = ?1 AND ps.account_id = ?2 AND ps.visibility IN ${DISTRIBUTABLE_SQL}
+							AND a.domain IS NOT NULL AND NOT ${leavesOutSql(kind, 'addressed', '?2', 'a.id')}`,
+						audience.pollVoters,
+						signerId
+					)
+					.map((row) => row.inbox)
+	return { followerInboxes, accounts, voterInboxes }
 }
