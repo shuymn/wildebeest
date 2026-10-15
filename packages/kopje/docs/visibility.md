@@ -241,7 +241,9 @@ a plain string. The presenter is called only from `src/domain/`, where ESLint re
 
 The fragments nest: Cloudflare's SQLite refuses an expression deeper than 100 levels, and each nested `EXISTS` and
 each term of an `AND` chain adds to it. The deepest fragment, `shownSql`, compiles at a depth of about 76; keep the
-deepest terms last in a chain and prefer `JOIN ... ON` to `WHERE` for a lookup inside a subquery.
+deepest terms last in a chain and prefer `JOIN ... ON` to `WHERE` for a lookup inside a subquery. The Workers suites
+allow 90: `test/sql-depth-setup.ts` records each statement a suite runs through `Db` and has its depth measured on
+Node (`test-node/sql-depth.ts`), so a statement nearing the limit fails the suite that runs it.
 
 ## The oracle and the bounds harness
 
