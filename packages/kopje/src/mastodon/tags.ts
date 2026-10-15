@@ -34,7 +34,7 @@ export const getTag: ApiHandler = async (c, deps) => {
 	return tag === null ? NOT_FOUND() : c.json(tag)
 }
 
-function tagResponse(c: ApiContext, result: TagResult): Response {
+function tagResponse(c: ApiContext, result: TagResult | FeatureResult): Response {
 	switch (result.status) {
 		case 'ok':
 			return c.json(result.value)
@@ -89,17 +89,6 @@ export const featuredTagSuggestions: ApiHandler = async (c, deps) => {
 	return c.json(authorized(await storeCall(c, deps, (s, b) => s.featuredTagSuggestions(b, input))))
 }
 
-function featureResponse(c: ApiContext, result: FeatureResult): Response {
-	switch (result.status) {
-		case 'ok':
-			return c.json(result.value)
-		case 'not_found':
-			return NOT_FOUND()
-		case 'invalid':
-			return validationError(result.errors)
-	}
-}
-
 // POST /api/v1/featured_tags: `name` is required (params.require(:name)), after the token and its user are checked.
 export const createFeaturedTag: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)
@@ -116,7 +105,7 @@ export const createFeaturedTag: ApiHandler = async (c, deps) => {
 		return mastodonError(400, 'param is missing or the value is empty: name')
 	}
 	const input = { credential: userCredential(c, deps), name, now: deps.now(), present: present(c) }
-	return featureResponse(c, authorized(await storeCall(c, deps, (s, b) => s.createFeaturedTag(b, input))))
+	return tagResponse(c, authorized(await storeCall(c, deps, (s, b) => s.createFeaturedTag(b, input))))
 }
 
 // DELETE /api/v1/featured_tags/:id: the viewer's own only; an empty object.

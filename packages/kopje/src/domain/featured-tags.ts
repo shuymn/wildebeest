@@ -99,21 +99,17 @@ export function featuredTagNamed(db: Db, accountId: string, name: string): Featu
 	)
 }
 
-// Features the hashtag `display` (a valid hashtag name) for the account: the row, with its counts read from the
-// account's statuses as FeaturedTag#reset_data reads them, and the Add its followers are sent. Refused at
-// MAX_FEATURED_TAGS (validate_featured_tags_limit). The caller has checked that it is not featured yet.
-function insertFeatured(
-	db: Db,
-	accountId: string,
-	display: string,
-	now: number,
-	origin: string
-): { status: 'ok'; row: FeaturedRow } | { status: 'invalid'; errors: string[] } {
-	const name = normalizeTag(display)
+// Whether the account features MAX_FEATURED_TAGS hashtags already (FeaturedTag#validate_featured_tags_limit).
+function featuresMost(db: Db, accountId: string): boolean {
 	const featured = db.first<{ n: number }>('SELECT count(*) AS n FROM featured_tags WHERE account_id = ?', accountId)
-	if ((featured?.n ?? 0) >= MAX_FEATURED_TAGS) {
-		return { status: 'invalid', errors: [TOO_MANY] }
-	}
+	return (featured?.n ?? 0) >= MAX_FEATURED_TAGS
+}
+
+// Features the hashtag `display` (a valid hashtag name) for the account: the row, with its counts read from the
+// account's statuses as FeaturedTag#reset_data reads them, and the Add its followers are sent. The caller has checked
+// that it is not featured yet and that the account may feature one more (featuresMost).
+function insertFeatured(db: Db, accountId: string, display: string, now: number, origin: string): FeaturedRow {
+	const name = normalizeTag(display)
 	// The account's public and unlisted statuses with the hashtag, and the newest (by id, as Mastodon's default order
 	// picks it). A walk of the account's own statuses, once, when the account features the hashtag.
 	const counted = db.first<{ n: number; last: string | null }>(
@@ -140,7 +136,7 @@ function insertFeatured(
 		throw new Error('the featured hashtag was not written')
 	}
 	recordFeaturedChange(db, accountId, 'Add', row, now, origin)
-	return { status: 'ok', row }
+	return row
 }
 
 // FeaturedTag's normalization of a name: surrounding whitespace and one leading # dropped.
@@ -171,15 +167,14 @@ export const createFeaturedTag = userWriteOperation<
 	if (existing !== undefined) {
 		errors.push('Tag has already been taken')
 	}
-	const count = db.first<{ n: number }>('SELECT count(*) AS n FROM featured_tags WHERE account_id = ?', accountId)
-	if ((count?.n ?? 0) >= MAX_FEATURED_TAGS) {
+	if (featuresMost(db, accountId)) {
 		errors.push(TOO_MANY)
 	}
 	if (errors.length > 0) {
 		return { status: 'invalid', errors }
 	}
-	const written = insertFeatured(db, accountId, display, input.now, input.present.origin)
-	return written.status === 'ok' ? { status: 'ok', value: presentFeatured(written.row, input.present.origin) } : written
+	const row = insertFeatured(db, accountId, display, input.now, input.present.origin)
+	return { status: 'ok', value: presentFeatured(row, input.present.origin) }
 })
 
 // DELETE /api/v1/featured_tags/:id (RemoveFeaturedTagService): the viewer's own only; a Remove to their followers.
@@ -215,8 +210,11 @@ export function featureTag(
 	if (featuredTagNamed(db, accountId, normalizeTag(display)) !== undefined) {
 		return { status: 'ok' }
 	}
-	const written = insertFeatured(db, accountId, display, now, origin)
-	return written.status === 'ok' ? { status: 'ok' } : written
+	if (featuresMost(db, accountId)) {
+		return { status: 'invalid', errors: [TOO_MANY] }
+	}
+	insertFeatured(db, accountId, display, now, origin)
+	return { status: 'ok' }
 }
 
 // POST /api/v1/tags/:id/unfeature (RemoveFeaturedTagService with a tag): nothing when it is not featured.
