@@ -715,7 +715,7 @@ export type ResolveResult = { accounts: Account[]; statuses: Status[] }
 // audience and shown to nobody else.
 export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db, input, { accountId }) => {
 	const { resolved, now, origin } = input
-	const options = { ...input.present, viewerId: accountId }
+	const options = { ...input.present, viewerId: accountId, now: new Date(now).toISOString() }
 	const account = (id: string | undefined): ResolveResult => {
 		const findable =
 			id !== undefined && db.first(`SELECT 1 AS found WHERE ${findableBySql('?2', '?1')}`, accountId, id) !== undefined

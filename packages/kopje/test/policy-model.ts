@@ -52,6 +52,7 @@ export const NOTIFICATION_TYPES = [
 	'follow',
 	'follow_request',
 	'update',
+	'poll',
 ] as const satisfies readonly NotificationType[]
 const EVERY_TYPE: Exclude<NotificationType, (typeof NOTIFICATION_TYPES)[number]> extends never ? true : false = true
 void EVERY_TYPE
@@ -385,14 +386,14 @@ export class PolicyModel {
 	}
 
 	// R15: whether the recipient is shown a notification of `type` from `from` about `s` (null: none). The sender is not
-	// the recipient, is available, is neither blocked (either way), muted with notifications nor domain-blocked by the
+	// the recipient (but for the end of their own poll), is available, is neither blocked (either way), muted with notifications nor domain-blocked by the
 	// recipient, and the recipient may see the status. A reblog needs the sender's boost of it to be visible to the
 	// recipient. A mention is left out when its status mentions (not silently) or replies to an account the recipient
 	// blocks or mutes with notifications. A post notification is shown only for a status that is not a reply, or is one
 	// in the author's own conversation (a known partner that is the author), and that home's filter passes.
 	shown(r: number, type: NotificationType, from: number, s: number | null): boolean {
 		if (
-			from === r ||
+			(from === r && type !== 'poll') ||
 			!this.available(from) ||
 			this.silences(r, from) ||
 			this.blocks(from, r) ||

@@ -97,6 +97,12 @@ const EXCEPTIONS: Record<string, Exception> = {
 			'unresolved (Pundit policy: authorize @status, :show?): optional token, scopes read read:statuses, no user required',
 		reason: "visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
 	},
+	'GET /api/v1/polls/:id': {
+		kopje: 'optional token, scopes read read:statuses, no user required',
+		mastodon:
+			'unresolved (Pundit policy: authorize @poll.status, :show?): optional token, scopes read read:statuses, no user required',
+		reason: "visibility of the poll's status is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
+	},
 	'GET /api/v1/statuses/:id/context': {
 		kopje: 'optional token, scopes read read:statuses, no user required',
 		mastodon:

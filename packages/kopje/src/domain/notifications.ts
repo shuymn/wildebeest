@@ -15,7 +15,8 @@ import type { Db } from '../db/sql'
 // written one. A new notification also records a push for each of the recipient's Web Push subscriptions that wants
 // it; domain/push.ts checks this rule again, at its own time, before each is sent (PUSH-3).
 
-export type NotificationType = 'mention' | 'status' | 'reblog' | 'favourite' | 'follow' | 'follow_request' | 'update'
+export type NotificationType =
+	'mention' | 'status' | 'reblog' | 'favourite' | 'follow' | 'follow_request' | 'update' | 'poll'
 
 export type Notification = {
 	id: string
@@ -127,7 +128,8 @@ function presentNotifications(
 	db: Db,
 	rows: WithVisibleStatus<NotificationRow, 'status_id'>[],
 	viewerId: string,
-	present: Present
+	present: Present,
+	now: string
 ): Notification[] {
 	const accounts = presentAccountsById(
 		db,
@@ -136,7 +138,7 @@ function presentNotifications(
 	)
 	const statusIds = [...new Set(rows.flatMap((row) => (row.status_id === null ? [] : [row.status_id])))]
 	const statuses = new Map(
-		presentStatuses(db, statusIds, { ...present, viewerId }).map((status) => [status.id, status])
+		presentStatuses(db, statusIds, { ...present, viewerId, now }).map((status) => [status.id, status])
 	)
 	return rows.flatMap((row) => {
 		const account = accounts.get(row.from_account_id)
@@ -194,7 +196,7 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 			rows.reverse()
 		}
 		return {
-			items: presentNotifications(db, rows, viewerId, input.present),
+			items: presentNotifications(db, rows, viewerId, input.present, now),
 			newest: rows[0]?.id ?? null,
 			oldest: rows.at(-1)?.id ?? null,
 		}
@@ -217,7 +219,7 @@ export const getNotification = userReadOperation<{ id: string; present: Present 
 			id,
 			now
 		)
-		return presentNotifications(db, rows, viewerId, present)[0] ?? null
+		return presentNotifications(db, rows, viewerId, present, now)[0] ?? null
 	}
 )
 

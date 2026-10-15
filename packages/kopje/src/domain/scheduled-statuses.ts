@@ -4,6 +4,7 @@ import { userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
 import { DETACHED_GRACE_MS } from './media'
 import { writeOperation } from './operation'
+import { checkPoll, isPollInput, type PollInput } from './polls'
 import { MEDIA_COLUMNS, type MediaAttachment, type MediaRow, presentMedia, type Status } from './status-presenter'
 import {
 	type CreateStatusInput,
@@ -40,11 +41,11 @@ export const MAX_PARAMS_BYTES = 128 * 1024
 export const PUBLISH_ROUND = 25
 
 // REST::ScheduledStatusSerializer's params: the post's options as PostStatusService#scheduled_options keeps them. Kopje
-// has no polls, applications on statuses or quotes, so those are always null (and the quote policy nobody, as the
-// serializer answers for none). Ids are strings.
+// has no applications on statuses or quotes, so those are always null (and the quote policy nobody, as the serializer
+// answers for none). Ids are strings, and so is a poll's expires_in, as a form sends it.
 export type ScheduledParams = {
 	text: string
-	poll: null
+	poll: ScheduledPoll | null
 	media_ids: string[] | null
 	sensitive: boolean | null
 	spoiler_text: string
@@ -59,6 +60,8 @@ export type ScheduledParams = {
 	quoted_status_id: null
 	quote_approval_policy: 'nobody'
 }
+
+export type ScheduledPoll = { options: string[]; expires_in: string; multiple: boolean; hide_totals: boolean }
 
 // REST::ScheduledStatusSerializer.
 export type ScheduledStatus = {
@@ -106,14 +109,39 @@ function readParams(text: string): ScheduledParams | null {
 		optional(p.language, 'string') &&
 		optional(p.in_reply_to_id, 'string') &&
 		(p.visibility === null || API_VISIBILITIES.includes(p.visibility as ApiVisibility)) &&
-		(p.media_ids === null || (Array.isArray(p.media_ids) && p.media_ids.every((id) => typeof id === 'string')))
-	return valid ? (p as ScheduledParams) : null
+		(p.media_ids === null || (Array.isArray(p.media_ids) && p.media_ids.every((id) => typeof id === 'string'))) &&
+		(p.poll === null || p.poll === undefined || isScheduledPoll(p.poll))
+	return valid ? ({ ...p, poll: p.poll ?? null } as ScheduledParams) : null
+}
+
+function isScheduledPoll(value: unknown): value is ScheduledPoll {
+	const poll = value as Record<string, unknown>
+	return (
+		typeof value === 'object' &&
+		value !== null &&
+		Array.isArray(poll.options) &&
+		poll.options.every((option) => typeof option === 'string') &&
+		typeof poll.expires_in === 'string' &&
+		typeof poll.multiple === 'boolean' &&
+		typeof poll.hide_totals === 'boolean'
+	)
+}
+
+function pollParams(poll: PollInput | undefined): ScheduledPoll | null {
+	return poll === undefined
+		? null
+		: {
+				options: poll.options,
+				expires_in: String(poll.expiresIn),
+				multiple: poll.multiple,
+				hide_totals: poll.hideTotals,
+			}
 }
 
 function paramsOf(input: PostInput, media: readonly string[], inReplyToId: string | null): ScheduledParams {
 	return {
 		text: input.text,
-		poll: null,
+		poll: pollParams(input.poll),
 		media_ids: media.length === 0 ? null : [...media],
 		sensitive: input.sensitive ?? null,
 		spoiler_text: input.spoilerText,
@@ -131,9 +159,23 @@ function paramsOf(input: PostInput, media: readonly string[], inReplyToId: strin
 }
 
 // The post a scheduled status publishes, at the time it is published: the author's defaults (visibility, sensitive,
-// language) apply then, as PostStatusService applies them when the worker runs.
-function postOf(params: ScheduledParams, now: number): PostInput {
+// language) apply then, as PostStatusService applies them when the worker runs, and a poll is checked again and ends
+// its duration after the publication. null: a poll that no longer passes.
+function postOf(params: ScheduledParams, now: number): PostInput | null {
+	const poll =
+		params.poll === null
+			? undefined
+			: checkPoll({
+					options: params.poll.options,
+					expiresIn: params.poll.expires_in,
+					multiple: params.poll.multiple,
+					hideTotals: params.poll.hide_totals,
+				})
+	if (poll !== undefined && !isPollInput(poll)) {
+		return null
+	}
 	return {
+		...(poll === undefined ? {} : { poll }),
 		text: params.text,
 		visibility: params.visibility ?? undefined,
 		spoilerText: params.spoiler_text,
@@ -219,7 +261,7 @@ export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db,
 		return { status: 'invalid', error: 'Record invalid' }
 	}
 	if (input.idempotencyKey !== undefined) {
-		const status: Status | null = ownStatusByKey(db, accountId, input.idempotencyKey, input.present)
+		const status: Status | null = ownStatusByKey(db, accountId, input.idempotencyKey, input.present, input.now)
 		if (status !== null) {
 			return { status: 'ok', value: status }
 		}
@@ -445,6 +487,9 @@ function publish(
 		return { status: 'dropped', reason: 'params' }
 	}
 	const input = postOf(params, now)
+	if (input === null) {
+		return { status: 'dropped', reason: 'invalid' }
+	}
 	const prepared = preparePost(db, row.account_id, input, id)
 	if (!isPrepared(prepared)) {
 		return { status: 'dropped', reason: prepared.status }

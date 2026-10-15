@@ -34,6 +34,21 @@ const AS_CONTEXT = 'https://www.w3.org/ns/activitystreams'
 
 const CONTEXT = [AS_CONTEXT, { sensitive: 'as:sensitive', Hashtag: 'as:Hashtag' }] as const
 
+// The context of an activity carrying a poll: Mastodon's votersCount extension.
+const POLL_CONTEXT = [
+	AS_CONTEXT,
+	{
+		sensitive: 'as:sensitive',
+		Hashtag: 'as:Hashtag',
+		toot: 'http://joinmastodon.org/ns#',
+		votersCount: 'toot:votersCount',
+	},
+] as const
+
+function contextOf(facts: StatusFacts) {
+	return facts.poll === null ? CONTEXT : POLL_CONTEXT
+}
+
 export type OutboundEnvelope = { activity: Record<string, unknown>; audience: Audience }
 
 // Records the intent and its target inboxes (domain/deliveries.ts), or nothing if no remote inbox needs it. As in
@@ -75,6 +90,46 @@ export type StatusFacts = {
 	tags: { name: string; href: string }[]
 	media: { url: string; content_type: string | null; description: string }[]
 	mentionNames: Map<string, string>
+	// The status's poll, which makes its object a Question.
+	poll: PollFacts | null
+}
+
+// A poll as its Question shows it (ActivityPub::NoteSerializer): the choices with their counts (none while hide_totals
+// hides them and the poll is open), its end, whether the cron has closed it, and its voters.
+export type PollFacts = {
+	options: string[]
+	tallies: number[]
+	multiple: boolean
+	hideTotals: boolean
+	expiresAt: string | null
+	ended: boolean
+	votersCount: number | null
+}
+
+function pollFacts(db: Db, statusId: string): PollFacts | null {
+	const row = db.first<{
+		options: string
+		tallies: string
+		multiple: number
+		hide_totals: number
+		expires_at: string | null
+		ended: number
+		voters_count: number | null
+	}>(
+		'SELECT options, tallies, multiple, hide_totals, expires_at, ended, voters_count FROM polls WHERE status_id = ?',
+		statusId
+	)
+	return row === undefined
+		? null
+		: {
+				options: JSON.parse(row.options) as string[],
+				tallies: JSON.parse(row.tallies) as number[],
+				multiple: row.multiple === 1,
+				hideTotals: row.hide_totals === 1,
+				expiresAt: row.expires_at,
+				ended: row.ended === 1,
+				votersCount: row.voters_count,
+			}
 }
 
 export function statusFacts(db: Db, statusId: string): StatusFacts | null {
@@ -149,6 +204,25 @@ export function statusFacts(db: Db, statusId: string): StatusFacts | null {
 			statusId
 		),
 		mentionNames: new Map(mentioned.map((m) => [m.uri, `@${m.username}@${m.domain ?? host}`])),
+		poll: pollFacts(db, statusId),
+	}
+}
+
+// A poll's part of its Question: oneOf (anyOf when it is multiple) with each choice's votes as replies.totalItems,
+// left out while hide_totals hides them and the poll is open; endTime, closed once the cron has ended it, and
+// votersCount when known.
+function questionOf(poll: PollFacts): Record<string, unknown> {
+	const shown = !poll.hideTotals || poll.ended
+	const choices = poll.options.map((name, i) => ({
+		type: 'Note',
+		name,
+		replies: { type: 'Collection', ...(shown ? { totalItems: poll.tallies[i] ?? 0 } : {}) },
+	}))
+	return {
+		[poll.multiple ? 'anyOf' : 'oneOf']: choices,
+		...(poll.expiresAt === null ? {} : { endTime: poll.expiresAt }),
+		...(poll.ended && poll.expiresAt !== null ? { closed: poll.expiresAt } : {}),
+		...(poll.votersCount === null ? {} : { votersCount: poll.votersCount }),
 	}
 }
 
@@ -156,7 +230,7 @@ export function noteOf(facts: StatusFacts): Record<string, unknown> {
 	const { to, cc } = addressingOf(facts.visibility, followersUri(facts.actorUri), facts.recipients)
 	return {
 		id: facts.uri,
-		type: 'Note',
+		type: facts.poll === null ? 'Note' : 'Question',
 		summary: facts.spoilerText === '' ? null : facts.spoilerText,
 		inReplyTo: facts.inReplyToUri,
 		published: facts.publishedAt,
@@ -188,6 +262,7 @@ export function noteOf(facts: StatusFacts): Record<string, unknown> {
 				.map((r) => ({ type: 'Mention', href: r.uri, name: facts.mentionNames.get(r.uri) ?? r.uri })),
 			...facts.tags.map((t) => ({ type: 'Hashtag', href: t.href, name: `#${t.name}` })),
 		],
+		...(facts.poll === null ? {} : questionOf(facts.poll)),
 	}
 }
 
@@ -199,7 +274,7 @@ export function createActivity(facts: StatusFacts): OutboundEnvelope {
 	const note = noteOf(facts)
 	return {
 		activity: {
-			'@context': CONTEXT,
+			'@context': contextOf(facts),
 			id: `${facts.uri}/activity`,
 			type: 'Create',
 			actor: facts.actorUri,
@@ -218,7 +293,7 @@ export function updateActivity(facts: StatusFacts, editId: string): OutboundEnve
 	const at = facts.editedAt ?? facts.publishedAt
 	return {
 		activity: {
-			'@context': CONTEXT,
+			'@context': contextOf(facts),
 			id: `${facts.uri}#updates/${editId}`,
 			type: 'Update',
 			actor: facts.actorUri,
@@ -229,6 +304,50 @@ export function updateActivity(facts: StatusFacts, editId: string): OutboundEnve
 		},
 		audience: statusAudience(facts),
 	}
+}
+
+// The Update of a local poll's counts or its end (ActivityPub::UpdatePollSerializer), named after the time it is
+// recorded. `voters` are the remote accounts that voted, which it reaches too (DistributePollUpdateWorker) when the
+// status is public or unlisted.
+export function pollUpdateActivity(facts: StatusFacts, at: number, voters: readonly string[]): OutboundEnvelope {
+	const update = updateActivity(facts, `poll-${at}`)
+	const audience = statusAudience(facts)
+	return {
+		activity: update.activity,
+		audience: isDistributable(facts.visibility)
+			? { ...audience, accounts: [...new Set([...audience.accounts, ...voters])] }
+			: audience,
+	}
+}
+
+// A local account's vote in a remote poll (ActivityPub::VoteSerializer): a Create of a Note naming the choice, in reply
+// to the poll's status, to its author alone.
+export function voteActivity(input: {
+	voteUri: string
+	actorUri: string
+	name: string
+	statusUri: string
+	authorUri: string
+	authorId: string
+}) {
+	return {
+		activity: {
+			'@context': AS_CONTEXT,
+			id: `${input.voteUri}/activity`,
+			type: 'Create',
+			actor: input.actorUri,
+			to: [input.authorUri],
+			object: {
+				id: input.voteUri,
+				type: 'Note',
+				name: input.name,
+				attributedTo: input.actorUri,
+				inReplyTo: input.statusUri,
+				to: [input.authorUri],
+			},
+		},
+		audience: { followers: false, accounts: [input.authorId] },
+	} satisfies OutboundEnvelope
 }
 
 export function deleteActivity(facts: StatusFacts): OutboundEnvelope {
@@ -473,7 +592,7 @@ export const getLocalNote = readOperation<{ uri: string }, string | null>((db, {
 		uri
 	)
 	const facts = row === undefined ? null : statusFacts(db, row.id)
-	return facts === null ? null : JSON.stringify({ '@context': CONTEXT, ...noteOf(facts) })
+	return facts === null ? null : JSON.stringify({ '@context': contextOf(facts), ...noteOf(facts) })
 })
 
 // A legacy /ap/o/<uuid> the cutover kept (docs/cutover.md): the proxy id a legacy instance gave a remote status

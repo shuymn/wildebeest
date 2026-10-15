@@ -17,6 +17,7 @@ import { insertWithFreshId, remoteId } from './ids'
 import { listsHolding } from './lists'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
+import { deleteAccountVotes, deletePollVotes, hasPollVotes } from './polls'
 import { pushSequence } from './push'
 import {
 	followersUri,
@@ -1235,6 +1236,8 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		'DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE from_account_id = ? LIMIT ?)',
 		id
 	)
+	// Its votes (the polls keep their counts).
+	deleteAccountVotes(db, id, budget.left())
 	spend(
 		db,
 		budget,
@@ -1340,6 +1343,8 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 		'DELETE FROM status_edits WHERE id IN (SELECT id FROM status_edits WHERE status_id = ? LIMIT ?)',
 		statusId
 	)
+	// The votes in its poll; the poll itself, one row, goes with the status.
+	deletePollVotes(db, statusId, budget.left())
 	// Local uploads are detached for the media sweep, which deletes their R2 objects; remote rows only name URLs.
 	spend(
 		db,
@@ -1412,8 +1417,8 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 			OR EXISTS (SELECT 1 FROM statuses WHERE in_reply_to_id = ?1 OR reblog_of_id = ?1)`,
 		statusId
 	)
-	// The status's delete and the recounts of its parent and original.
-	if (children !== undefined || budget.left() < 3 + after) {
+	// The status's delete (with its poll) and the recounts of its parent and original.
+	if (children !== undefined || hasPollVotes(db, { statusId }) || budget.left() < 3 + after) {
 		return false
 	}
 	db.run('DELETE FROM statuses WHERE id = ?', statusId)
@@ -1425,6 +1430,7 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 // Whether rows of the account remain; with filters false, rows other than its blocks and mutes.
 function accountHasRows(db: Db, id: string, filters = true): boolean {
 	return (
+		hasPollVotes(db, { accountId: id }) ||
 		db.first(
 			`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM statuses WHERE account_id = ?1)
 				OR EXISTS (SELECT 1 FROM favourites WHERE account_id = ?1)

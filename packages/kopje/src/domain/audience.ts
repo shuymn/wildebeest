@@ -516,6 +516,13 @@ export function scheduledOwnSql(ss: string, viewer: string): string {
 	return `${ss}.account_id = ${viewer}`
 }
 
+// R27 (PollPolicy#vote?): whether `voter` may vote in the poll of the status `s`: may see the status by itself (R3),
+// and does not block its author (an author who blocks the voter hides the status already). Votes are their voters'
+// own: polls.ts alone reads poll_votes, and shows a poll's counts and a viewer's own votes, never who voted.
+export function mayVoteSql(s: string, voter: string): string {
+	return `(${viewableSql(s, voter)} AND NOT ${blocksSql(voter, `${s}.account_id`)})`
+}
+
 // ---- Notifications.
 
 // Status.without_replies: not a reply, or a reply in the author's own conversation (in_reply_to_account_id carries
@@ -529,7 +536,7 @@ function silencedSql(r: string, a: string, now: string): string {
 
 // R15: whether the recipient `r` is shown a notification of `type` from `from` about `status` at `now`. One rule
 // decides whether a notification is written, listed and pushed (notifications.ts, push.ts): the sender is not the
-// recipient, is available, is not blocked (either way), muted with notifications or domain-blocked by the recipient,
+// recipient (but for the end of the recipient's own poll, NotifyService's from_self? exception), is available, is not blocked (either way), muted with notifications or domain-blocked by the recipient,
 // and the recipient may see the status. A reblog notification names the original; the boost itself (the sender's one
 // boost of it) must be visible to the recipient too, so a followers-only or direct boost is not revealed to an author
 // outside its audience. A mention is left out when its status mentions or replies to an account the recipient
@@ -537,7 +544,7 @@ function silencedSql(r: string, a: string, now: string): string {
 // than in the author's own conversation (a partner that is someone else or unknown, as FeedInsertWorker#notify?) or
 // when home would leave it out (homeFilterSql, which also hides a sender the recipient mutes without notifications).
 export function shownSql(r: string, type: string, from: string, status: string, now: string): string {
-	return `(${from} <> ${r}
+	return `((${from} <> ${r} OR ${type} = 'poll')
 		AND ${availableSql(from)}
 		AND NOT ${silencedSql(r, from, now)}
 		AND NOT ${blocksSql(from, r)}

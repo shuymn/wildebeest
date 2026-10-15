@@ -102,7 +102,7 @@ function presentConversations(
 		presentStatuses(
 			db,
 			visible.map((row) => row.id),
-			{ ...present, viewerId: viewer.accountId }
+			{ ...present, viewerId: viewer.accountId, now: viewer.now }
 		).map((status) => [status.id, status])
 	)
 	const participants = rows.map((row) => JSON.parse(row.participants) as string[])

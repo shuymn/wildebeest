@@ -15,6 +15,9 @@ import { StoreUnavailableError } from '../platform/store-errors'
 //   - scheduled statuses: publishes up to PUBLISH_ROUND that are due, each in its own transaction that deletes it, then
 //     rings the delivery doorbell for what they record (domain/scheduled-statuses.ts). In the Store's maintenance or
 //     readonly state nothing is published and what is due waits for the next run.
+//   - polls: one round (domain/polls.ts): ends up to POLL_ROUND polls whose time has come (the 'poll' notifications,
+//     once, and a local poll's final Update), and records up to POLL_ROUND Updates of local polls' counts that are due,
+//     then rings the delivery doorbell for what they record. In the Store's maintenance or readonly state, they wait.
 //   - OAuth: removes apps nobody used for a day (RES-6) and expired codes and web sessions (domain/oauth.ts).
 export type ScheduledDeps = SweepDeps & {
 	// Rings the delivery doorbell after statuses are published (default: a message on env.QUEUE).
@@ -41,6 +44,13 @@ export async function handleScheduled(env: Env, deps: ScheduledDeps): Promise<vo
 	} catch (error) {
 		if (!(error instanceof StoreUnavailableError)) {
 			console.error({ event: 'kopje.scheduled.publish_round_failed', ...errorFields(error) })
+		}
+	}
+	try {
+		await endPolls(env, deps)
+	} catch (error) {
+		if (!(error instanceof StoreUnavailableError)) {
+			console.error({ event: 'kopje.scheduled.poll_round_failed', ...errorFields(error) })
 		}
 	}
 	try {
@@ -71,6 +81,14 @@ export async function publishScheduled(env: Env, deps: ScheduledDeps): Promise<v
 		console.error({ event: 'kopje.scheduled.publish_failed', failed: round.failed })
 	}
 	if (round.published > 0) {
+		await (deps.doorbell ?? ((e: Env) => ringDoorbell(e.QUEUE)))(env)
+	}
+}
+
+// One round of polls (RES-6): the ends and the Updates of counts that are due.
+export async function endPolls(env: Env, deps: ScheduledDeps): Promise<void> {
+	const round = await callStore(() => deps.store(env).pollRound(deps.build(env), { now: deps.now() }))
+	if (round.ended > 0 || round.updated > 0) {
 		await (deps.doorbell ?? ((e: Env) => ringDoorbell(e.QUEUE)))(env)
 	}
 }
