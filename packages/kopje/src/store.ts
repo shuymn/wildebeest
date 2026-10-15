@@ -30,6 +30,7 @@ import * as lists from './domain/lists'
 import * as markers from './domain/markers'
 import * as media from './domain/media'
 import * as mediaRebuild from './domain/media-rebuild'
+import * as notificationGroups from './domain/notification-groups'
 import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
 import * as polls from './domain/polls'
@@ -1025,6 +1026,40 @@ export class Store extends DurableObject<Env> {
 
 	clearNotifications(callerBuild: string, input: OperationInput<typeof notifications.clearNotifications>) {
 		return this.#kernel.execute(callerBuild, notifications.clearNotifications, input)
+	}
+
+	// Grouped notifications (API v2) and the unread counts.
+	listGroupedNotifications(
+		callerBuild: string,
+		input: OperationInput<typeof notificationGroups.listGroupedNotifications>
+	) {
+		return this.#kernel.execute(callerBuild, notificationGroups.listGroupedNotifications, input)
+	}
+
+	getNotificationGroup(callerBuild: string, input: OperationInput<typeof notificationGroups.getNotificationGroup>) {
+		return this.#kernel.execute(callerBuild, notificationGroups.getNotificationGroup, input)
+	}
+
+	notificationGroupAccounts(
+		callerBuild: string,
+		input: OperationInput<typeof notificationGroups.notificationGroupAccounts>
+	) {
+		return this.#kernel.execute(callerBuild, notificationGroups.notificationGroupAccounts, input)
+	}
+
+	dismissNotificationGroup(
+		callerBuild: string,
+		input: OperationInput<typeof notificationGroups.dismissNotificationGroup>
+	) {
+		return this.#kernel.execute(callerBuild, notificationGroups.dismissNotificationGroup, input)
+	}
+
+	unreadNotificationCount(callerBuild: string, input: OperationInput<typeof notificationGroups.unreadCount>) {
+		return this.#kernel.execute(callerBuild, notificationGroups.unreadCount, input)
+	}
+
+	unreadNotificationGroupCount(callerBuild: string, input: OperationInput<typeof notificationGroups.unreadGroupCount>) {
+		return this.#kernel.execute(callerBuild, notificationGroups.unreadGroupCount, input)
 	}
 
 	// Web Push: the token's subscription, and the Worker's push rounds (jobs/push.ts).
