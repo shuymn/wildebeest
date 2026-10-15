@@ -865,7 +865,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   statuses: `scheduled_at` is read only up to 64 characters, and a scheduled status's params are a JSON object of a
   fixed shape built from checked fields (the status text's raw bound, at most four media ids), refused over 128 KiB in
   the Store and by the schema (migration `0012_scheduled_statuses`); `test/migrations.test.ts`,
-  `test/scheduled-statuses.test.ts`. Other query strings: _Gap._
+  `test/scheduled-statuses.test.ts`. `scheduled_at` must name a date and time the calendar has (Ruby's
+  `DateTime.parse`: no February 29 outside leap years, no 31st of a 30-day month, minutes and hours in range), checked
+  before its offset applies. Other query strings: _Gap._
 - **RES-2: parsing work is bounded.** Every regex, parser and normalization over input at the RES-1 cap has an
   adversarial fixture with a time bound. _Enforced (main)_ for status text:
   `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Enforced (main)_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
@@ -957,10 +959,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Enforced (main)_ for scheduled statuses: an account holds at most 300, at most 25 on one UTC day, each at least 5
   minutes ahead (Mastodon's limits, 422 with its messages); the cron publishes at most 25 a run, the earliest due first,
   each in its own transaction that deletes the row as it writes the status, so overlapping runs and retries publish it
-  once, and one that fails to write is counted and logged without holding back the others. Nothing is published while
+  once. Never-attempted schedules come first; one whose publication fails with an error is rolled back, its attempt
+  recorded in a transaction of its own and retried after 5, 15, 60 and 240 minutes, through a separate index, and
+  dropped (its media detached) after 5 attempts, so failures back off and never hold back what is newly due. Nothing is published while
   the Store is in maintenance or readonly; what is due waits. `publishScheduled` in `src/store.ts`,
   `src/domain/scheduled-statuses.ts`, `src/jobs/scheduled.ts`; `test/scheduled-statuses.test.ts` ("publishes a due
-  status once", "publishes at most 25 a run", "waits while the Store is readonly").
+  status once", "publishes at most 25 a run", "backs off what keeps failing", "waits while the Store is readonly").
   _Enforced (main)_ for media: before the body is read or Images is called, the Store
   counts upload attempts (deleted and failed ones included) to at most 30 per 30 minutes per account (Mastodon's
   limit) and checks the monthly budgets; right before Images is called it revalidates the reservation with fresh time

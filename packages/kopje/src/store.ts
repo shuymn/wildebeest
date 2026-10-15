@@ -713,8 +713,8 @@ export class Store extends DurableObject<Env> {
 
 	// Scheduled statuses (domain/scheduled-statuses.ts).
 
-	scheduleStatus(callerBuild: string, input: OperationInput<typeof scheduled.scheduleStatus>) {
-		return this.#kernel.execute(callerBuild, scheduled.scheduleStatus, input)
+	postStatus(callerBuild: string, input: OperationInput<typeof scheduled.postStatus>) {
+		return this.#kernel.execute(callerBuild, scheduled.postStatus, input)
 	}
 
 	listScheduled(callerBuild: string, input: OperationInput<typeof scheduled.listScheduled>) {
@@ -733,10 +733,11 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, scheduled.deleteScheduled, input)
 	}
 
-	// The cron's round (jobs/scheduled.ts): the due scheduled statuses, earliest first, each published in its own
-	// transaction with one of the object ids the Worker made. A failure of one is counted and the round goes on, so one
-	// that cannot be written does not hold back the others; a refusal of the first read (maintenance, readonly) ends the
-	// round, and what is due waits for the next.
+	// The cron's round (jobs/scheduled.ts): the due scheduled statuses, each published in its own transaction with one
+	// of the object ids the Worker made. One that fails with an error is rolled back, then its attempt is recorded in a
+	// transaction of its own (recordPublishFailure: retried later, dropped after the last attempt), and the round goes
+	// on, so what keeps failing backs off and never holds back the others. A refusal of the first call (maintenance,
+	// readonly) ends the round, and what is due waits for the next.
 	async publishScheduled(callerBuild: string, input: { now: number; objectIds: string[] }) {
 		const due = await this.#kernel.execute(callerBuild, scheduled.dueScheduled, {
 			now: input.now,
@@ -752,8 +753,16 @@ export class Store extends DurableObject<Env> {
 				})
 				counts[result.status === 'published' ? 'published' : result.status === 'dropped' ? 'dropped' : 'gone']++
 			} catch (error) {
-				console.error({ event: 'kopje.scheduled.publish_failed', id, ...errorFields(error) })
 				counts.failed++
+				try {
+					const failure = await this.#kernel.execute(callerBuild, scheduled.recordPublishFailure, {
+						id,
+						now: input.now,
+					})
+					console.error({ event: 'kopje.scheduled.publish_failed', id, failure, ...errorFields(error) })
+				} catch (recordError) {
+					console.error({ event: 'kopje.scheduled.publish_failed', id, ...errorFields(recordError) })
+				}
 			}
 		}
 		return counts

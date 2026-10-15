@@ -15,8 +15,11 @@
 -- nothing else attaches it. Publication attaches it to the new status; deleting the scheduled status, or dropping it
 -- at publication, detaches it with a new grace period, as deleting a status does.
 --
--- The indexes: an account's scheduled statuses by id (the API's pages), by time (the daily limit), and all of them by
--- time (the cron's due ones). The table is new and the column starts NULL; adding it checks each stored upload once,
+-- attempts counts the publications that failed with an error (not a refusal of the post, which drops it at once), and
+-- next_attempt_at is when the cron tries again (NULL until a failure). After the last attempt the cron drops it.
+--
+-- The indexes: an account's scheduled statuses by id (the API's pages), by time (the daily limit), those never
+-- attempted by time and those to retry by their next attempt (the cron's due ones). The table is new and the column starts NULL; adding it checks each stored upload once,
 -- and the partial index over it is built in one pass over media_attachments.
 
 CREATE TABLE scheduled_statuses (
@@ -25,6 +28,8 @@ CREATE TABLE scheduled_statuses (
   scheduled_at TEXT NOT NULL CHECK (length(scheduled_at) = 24 AND strftime('%Y-%m-%dT%H:%M:%fZ', scheduled_at) = scheduled_at),
   params TEXT NOT NULL CHECK (json_valid(params) AND json_type(params) = 'object' AND length(CAST(params AS BLOB)) <= 131072),
   client_key TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  next_attempt_at TEXT CHECK ((attempts = 0) = (next_attempt_at IS NULL)),
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   UNIQUE (account_id, client_key)
 );
@@ -33,7 +38,9 @@ CREATE INDEX scheduled_statuses_account ON scheduled_statuses (account_id, id);
 
 CREATE INDEX scheduled_statuses_account_time ON scheduled_statuses (account_id, scheduled_at);
 
-CREATE INDEX scheduled_statuses_due ON scheduled_statuses (scheduled_at, id);
+CREATE INDEX scheduled_statuses_due ON scheduled_statuses (scheduled_at, id) WHERE attempts = 0;
+
+CREATE INDEX scheduled_statuses_retry ON scheduled_statuses (next_attempt_at, id) WHERE attempts > 0;
 
 ALTER TABLE media_attachments ADD COLUMN scheduled_status_id TEXT
   REFERENCES scheduled_statuses (id) ON DELETE SET NULL

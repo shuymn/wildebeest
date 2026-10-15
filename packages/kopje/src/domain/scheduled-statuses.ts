@@ -204,16 +204,18 @@ function isTime(at: string): boolean {
 	return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(at) && !Number.isNaN(Date.parse(at))
 }
 
-export type ScheduleInput = CreateStatusInput & { scheduledAt: string }
+export type ScheduleInput = CreateStatusInput & { scheduledAt?: string }
 
 export type ScheduleResult = CreateStatusResult | { status: 'scheduled'; value: ScheduledStatus }
 
-// POST /api/v1/statuses with scheduled_at (PostStatusService): a repeated Idempotency-Key answers with what the first
-// request made, a status or a scheduled status; a time not in the future posts at once; otherwise the post is checked
-// as an immediate one (the status replied to, the media, a blank text), then against ScheduledStatus's validations,
-// and kept with its media held.
-export const scheduleStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db, input, { accountId }) => {
-	if (!isTime(input.scheduledAt)) {
+// POST /api/v1/statuses (PostStatusService), with or without scheduled_at. An Idempotency-Key is resolved first,
+// against the account's statuses and its scheduled statuses alike, whether this request schedules or not: a repeat
+// answers with what the first request made, a Status or a ScheduledStatus, and makes nothing (so a key that reserved
+// a scheduled status is never posted twice, once now and once when it is published). Then no scheduled_at, or a time
+// not in the future, posts at once; otherwise the post is checked as an immediate one (the status replied to, the
+// media, a blank text), then against ScheduledStatus's validations, and kept with its media held.
+export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db, input, { accountId }) => {
+	if (input.scheduledAt !== undefined && !isTime(input.scheduledAt)) {
 		return { status: 'invalid', error: 'Record invalid' }
 	}
 	if (input.idempotencyKey !== undefined) {
@@ -230,14 +232,15 @@ export const scheduleStatus = userWriteOperation<ScheduleInput, ScheduleResult>(
 			return { status: 'scheduled', value: presentScheduled(db, scheduled) }
 		}
 	}
-	if (Date.parse(input.scheduledAt) <= input.now) {
+	if (input.scheduledAt === undefined || Date.parse(input.scheduledAt) <= input.now) {
 		return postNow(db, accountId, input)
 	}
+	const scheduledAt = input.scheduledAt
 	const prepared = preparePost(db, accountId, input, null)
 	if (!isPrepared(prepared)) {
 		return prepared
 	}
-	const errors = scheduleErrors(db, accountId, input.scheduledAt, input.now, null)
+	const errors = scheduleErrors(db, accountId, scheduledAt, input.now, null)
 	if (errors.length > 0) {
 		return invalid(errors)
 	}
@@ -250,7 +253,7 @@ export const scheduleStatus = userWriteOperation<ScheduleInput, ScheduleResult>(
 		VALUES (?, ?, ?, ?, ?, ?) RETURNING id, scheduled_at, params`,
 		allocateLocalId(db, input.now),
 		accountId,
-		input.scheduledAt,
+		scheduledAt,
 		params,
 		input.idempotencyKey ?? null,
 		iso(input.now)
@@ -324,7 +327,12 @@ export const updateScheduled = userWriteOperation<
 	if (errors.length > 0) {
 		return invalid(errors)
 	}
-	db.run('UPDATE scheduled_statuses SET scheduled_at = ? WHERE id = ?', at, row.id)
+	// A new time is a new schedule: failed attempts at the old one no longer count.
+	db.run(
+		'UPDATE scheduled_statuses SET scheduled_at = ?, attempts = 0, next_attempt_at = NULL WHERE id = ?',
+		at,
+		row.id
+	)
 	return { status: 'ok', value: presentScheduled(db, { ...row, scheduled_at: at }) }
 })
 
@@ -341,18 +349,57 @@ export const deleteScheduled = userWriteOperation<{ id: string; now: number }, b
 
 // ---- Publication (the cron, jobs/scheduled.ts).
 
-// The ids of up to `limit` scheduled statuses due at `now`, the earliest first, through the index by time. Declared a
-// write, as the start of the round that publishes them: the Store refuses it in maintenance and readonly, so a round
-// then publishes nothing and what is due waits.
-export const dueScheduled = writeOperation<{ now: number; limit: number }, string[]>((db, { now, limit }) =>
-	db
+// Publication attempts that fail with an error, not a refusal of the post (which drops it at once): retried after
+// RETRY_DELAYS_MS (one per failure before the last), then dropped after MAX_ATTEMPTS, its media detached.
+export const MAX_ATTEMPTS = 5
+export const RETRY_DELAYS_MS = [5, 15, 60, 240].map((minutes) => minutes * 60 * 1000)
+
+// The ids of up to `limit` scheduled statuses due at `now`: those never attempted first, by scheduled time, then those
+// to retry, by their next attempt, each through its partial index, so a run publishes what is newly due however many
+// keep failing. Declared a write, as the start of the round that publishes them: the Store refuses it in maintenance
+// and readonly, so a round then publishes nothing and what is due waits.
+export const dueScheduled = writeOperation<{ now: number; limit: number }, string[]>((db, { now, limit }) => {
+	const cap = Math.min(limit, PUBLISH_ROUND)
+	const fresh = db
 		.all<{ id: string }>(
-			'SELECT id FROM scheduled_statuses WHERE scheduled_at <= ? ORDER BY scheduled_at, id LIMIT ?',
+			'SELECT id FROM scheduled_statuses WHERE attempts = 0 AND scheduled_at <= ? ORDER BY scheduled_at, id LIMIT ?',
 			iso(now),
-			Math.min(limit, PUBLISH_ROUND)
+			cap
 		)
 		.map((row) => row.id)
-)
+	const retries =
+		fresh.length >= cap
+			? []
+			: db
+					.all<{ id: string }>(
+						`SELECT id FROM scheduled_statuses WHERE attempts > 0 AND next_attempt_at <= ?
+						ORDER BY next_attempt_at, id LIMIT ?`,
+						iso(now),
+						cap - fresh.length
+					)
+					.map((row) => row.id)
+	return [...fresh, ...retries]
+})
+
+export type Failure = { status: 'gone' } | { status: 'retry'; attempts: number } | { status: 'dropped' }
+
+// Records a publication of `id` that failed with an error, in its own transaction after the failed one rolled back:
+// one more attempt, and the next after its delay, or, at MAX_ATTEMPTS, the scheduled status dropped and its media
+// detached (attachable again for a day).
+export const recordPublishFailure = writeOperation<{ id: string; now: number }, Failure>((db, { id, now }) => {
+	const row = db.first<{ attempts: number }>('SELECT attempts FROM scheduled_statuses WHERE id = ?', id)
+	if (row === undefined) {
+		return { status: 'gone' }
+	}
+	const attempts = row.attempts + 1
+	const delay = RETRY_DELAYS_MS[attempts - 1]
+	if (attempts >= MAX_ATTEMPTS || delay === undefined) {
+		removeScheduled(db, id, now)
+		return { status: 'dropped' }
+	}
+	db.run('UPDATE scheduled_statuses SET attempts = ?, next_attempt_at = ? WHERE id = ?', attempts, iso(now + delay), id)
+	return { status: 'retry', attempts }
+})
 
 export type Publication =
 	| { status: 'gone' }
@@ -369,7 +416,8 @@ export const publishScheduled = writeOperation<{ id: string; now: number; object
 	(db, { id, now, objectId }) => {
 		const row = db.first<{ account_id: string; params: string; client_key: string | null; available: number }>(
 			`SELECT ss.account_id, ss.params, ss.client_key, ${availableSql('ss.account_id')} AS available
-			FROM scheduled_statuses ss WHERE ss.id = ?1 AND ss.scheduled_at <= ?2`,
+			FROM scheduled_statuses ss WHERE ss.id = ?1
+				AND (ss.attempts = 0 AND ss.scheduled_at <= ?2 OR ss.attempts > 0 AND ss.next_attempt_at <= ?2)`,
 			id,
 			iso(now)
 		)

@@ -21,7 +21,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   not in the future posts at once). `GET /api/v1/scheduled_statuses` lists them, and `GET`, `PUT`, `PATCH` and
   `DELETE` on `/api/v1/scheduled_statuses/:id` show, move and delete one. The cron publishes each when it is due
   (within its 5-minute schedule) as an ordinary post, and drops one that no longer passes (the status it replies to is
-  gone, or its account is suspended). Media attached to a scheduled status is kept until it is published or deleted.
+  gone, or its account is suspended); one that fails with an error is retried four times over about five hours, then
+  dropped. An `Idempotency-Key` that scheduled a status answers with it on a repeat, with or without `scheduled_at`.
+  Media attached to a scheduled status is kept until it is published or deleted.
 
 ### Changed
 

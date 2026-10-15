@@ -18,7 +18,13 @@ import {
 	type User,
 } from './status-helpers'
 import { expiredMedia } from '../src/domain/media'
-import { DAILY_LIMIT, PUBLISH_ROUND, TOTAL_LIMIT } from '../src/domain/scheduled-statuses'
+import {
+	DAILY_LIMIT,
+	MAX_ATTEMPTS,
+	PUBLISH_ROUND,
+	RETRY_DELAYS_MS,
+	TOTAL_LIMIT,
+} from '../src/domain/scheduled-statuses'
 import { publishScheduled } from '../src/jobs/scheduled'
 import { parseScheduledAt } from '../src/mastodon/statuses'
 import { sha256Hex } from '../src/security/tokens'
@@ -234,6 +240,37 @@ describe('scheduling a status', () => {
 	})
 })
 
+describe('an Idempotency-Key shared by an immediate and a scheduled post', () => {
+	it('answers a post without scheduled_at with the scheduled status the key reserved, and publishes once', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const key = { 'Idempotency-Key': 'shared' }
+		const first = await (
+			await schedule(h, alice, { status: 'once', scheduled_at: at(NOW + HOUR) }, key)
+		).json<Scheduled>()
+		const now = await (await schedule(h, alice, { status: 'once' }, key)).json<Scheduled>()
+		expect(now).toEqual(first)
+		expect(await count(h, 'statuses')).toBe(0)
+		await round(h, NOW + HOUR)
+		await round(h, NOW + HOUR + 5 * MINUTE)
+		expect(await count(h, 'statuses')).toBe(1)
+		expect(await (await schedule(h, alice, { status: 'once' }, key)).json()).toMatchObject({ content: '<p>once</p>' })
+		expect(await count(h, 'statuses')).toBe(1)
+	})
+
+	it('answers a scheduled post with the status the key already made, and schedules nothing', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const key = { 'Idempotency-Key': 'shared' }
+		const posted = await (await schedule(h, alice, { status: 'once' }, key)).json<Status>()
+		const again = await (await schedule(h, alice, { status: 'once', scheduled_at: at(NOW + HOUR) }, key)).json()
+		expect(again).toMatchObject({ id: posted.id, content: '<p>once</p>' })
+		expect(await count(h, 'scheduled_statuses')).toBe(0)
+		await round(h, NOW + HOUR)
+		expect(await count(h, 'statuses')).toBe(1)
+	})
+})
+
 describe('the scheduled_statuses endpoints', () => {
 	it('pages by id, newest first, with Link headers', async () => {
 		const h = await community(['alice'])
@@ -280,6 +317,30 @@ describe('the scheduled_statuses endpoints', () => {
 			scheduled_at: '2026-10-12T01:00:00.000Z',
 			params: { text: 'move me' },
 		})
+	})
+
+	it('refuses a date the calendar does not have, on POST and PUT, as Mastodon does', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const created = await scheduled(h, alice, { status: 'x', scheduled_at: '2028-02-29T10:00:00Z' })
+		expect(created.scheduled_at).toBe('2028-02-29T10:00:00.000Z')
+		const path = `/api/v1/scheduled_statuses/${created.id}`
+		for (const invalid of [
+			'2027-02-29T10:00:00Z',
+			'2026-11-31T10:00:00Z',
+			'2026-12-01T24:30:00Z',
+			'2026-12-01T10:60:00Z',
+		]) {
+			const invalidBody = { status: 422, body: { error: 'Record invalid' } }
+			expect(await refusal(await schedule(h, alice, { status: 'x', scheduled_at: invalid })), invalid).toEqual(
+				invalidBody
+			)
+			expect(await refusal(await send(h, alice, 'PUT', path, { scheduled_at: invalid })), invalid).toEqual(invalidBody)
+		}
+		// Ruby reads 24:00:00 as the next day's midnight.
+		const midnight = await send(h, alice, 'PUT', path, { scheduled_at: '2026-12-01T24:00:00Z' })
+		expect(await midnight.json()).toMatchObject({ scheduled_at: '2026-12-02T00:00:00.000Z' })
+		expect(await count(h, 'scheduled_statuses')).toBe(1)
 	})
 
 	it("never shows or changes another account's scheduled status", async () => {
@@ -416,6 +477,65 @@ describe('publication', () => {
 		expect(await count(h, 'statuses')).toBe(1)
 	})
 
+	it(`backs off what keeps failing, so later schedules publish, and drops it after ${MAX_ATTEMPTS} attempts`, async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const media = await upload(h, alice, 1)
+		// An error that is not a refusal of the post: the Store rolls the publication back.
+		await sql(
+			h.store,
+			`CREATE TRIGGER fail_publication BEFORE INSERT ON statuses WHEN NEW.source_text LIKE 'fail%'
+			BEGIN SELECT RAISE(ABORT, 'injected failure'); END`
+		)
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO scheduled_statuses (id, account_id, scheduled_at, params)
+			SELECT CAST(600000000000000000 + i AS TEXT), ?2, strftime('%Y-%m-%dT%H:%M:%fZ', ?3, '+' || i || ' seconds'),
+				json_object('text', 'fail ' || i, 'spoiler_text', '', 'sensitive', NULL, 'language', NULL, 'visibility', NULL,
+					'in_reply_to_id', NULL, 'media_ids', NULL)
+			FROM n`,
+			PUBLISH_ROUND,
+			alice.id,
+			at(NOW + HOUR)
+		)
+		await sql(h.store, "UPDATE media_attachments SET scheduled_status_id = '600000000000000000', gc_at = NULL")
+		// Due after them; written directly, as the rows above already fill the day's limit.
+		const healthy = '600000000000000999'
+		await sql(
+			h.store,
+			`INSERT INTO scheduled_statuses (id, account_id, scheduled_at, params) VALUES (?, ?, ?, json_object('text',
+				'healthy', 'spoiler_text', '', 'sensitive', NULL, 'language', NULL, 'visibility', NULL, 'in_reply_to_id', NULL,
+				'media_ids', NULL))`,
+			healthy,
+			alice.id,
+			at(NOW + HOUR + MINUTE)
+		)
+		let t = NOW + HOUR + MINUTE
+		await round(h, t)
+		expect(await count(h, 'statuses')).toBe(0)
+		t += 5 * MINUTE
+		await round(h, t)
+		expect(await sql(h.store, 'SELECT content FROM statuses')).toEqual([{ content: '<p>healthy</p>' }])
+		expect((await getJson(h, `/api/v1/scheduled_statuses/${healthy}`, alice.token)).status).toBe(404)
+		// The failures back off and are retried, each failing again, until the last attempt drops them and frees the media.
+		const attempts = await sql<{ attempts: number }>(h.store, 'SELECT attempts FROM scheduled_statuses')
+		expect(attempts.length).toBe(PUBLISH_ROUND)
+		expect(attempts.every((row) => row.attempts >= 1 && row.attempts <= 2)).toBe(true)
+		for (let run = 0; run < MAX_ATTEMPTS + 1; run++) {
+			t += RETRY_DELAYS_MS.at(-1) ?? 0
+			await round(h, t)
+		}
+		expect(await count(h, 'scheduled_statuses')).toBe(0)
+		expect(await count(h, 'statuses')).toBe(1)
+		const [freed] = await sql<{ scheduled_status_id: string | null; gc_at: string | null }>(
+			h.store,
+			'SELECT scheduled_status_id, gc_at FROM media_attachments'
+		)
+		expect(freed?.scheduled_status_id).toBeNull()
+		expect(Date.parse(freed?.gc_at ?? '')).toBeGreaterThan(t)
+	})
+
 	it(`publishes at most ${PUBLISH_ROUND} a run, the earliest first`, async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
@@ -520,7 +640,23 @@ describe('parseScheduledAt', () => {
 		expect(parseScheduledAt('2026-10-20 10:00+0900')).toBe('2026-10-20T01:00:00.000Z')
 		expect(parseScheduledAt('2026-10-20T10:00')).toBe('2026-10-20T10:00:00.000Z')
 		expect(parseScheduledAt('2026-10-20')).toBe('2026-10-20T00:00:00.000Z')
-		for (const invalid of ['tomorrow', '2026-13-01T00:00:00Z', '2026-10-20T25:00:00Z', 'x'.repeat(100), '']) {
+		expect(parseScheduledAt('2028-02-29T10:00:00Z')).toBe('2028-02-29T10:00:00.000Z')
+		expect(parseScheduledAt('2026-10-20T24:00:00+09:00')).toBe('2026-10-20T15:00:00.000Z')
+		expect(parseScheduledAt('2026-10-20T10:00:60Z')).toBe('2026-10-20T10:00:59.000Z')
+		for (const invalid of [
+			'tomorrow',
+			'2026-13-01T00:00:00Z',
+			'2026-10-20T25:00:00Z',
+			'2027-02-29T10:00:00Z',
+			'2100-02-29T10:00:00Z',
+			'2026-11-31T10:00:00Z',
+			'2026-04-31',
+			'2026-10-20T24:00:01Z',
+			'2026-10-20T10:60:00Z',
+			'2026-10-20T10:00:61Z',
+			'x'.repeat(100),
+			'',
+		]) {
 			expect(parseScheduledAt(invalid), invalid).toBeNull()
 		}
 	})

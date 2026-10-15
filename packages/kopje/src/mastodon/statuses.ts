@@ -92,23 +92,50 @@ function composition(p: Params): Composition | string {
 const SCHEDULED_AT =
 	/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(?::(\d{2})(?:[.,](\d{1,9}))?)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?)?$/i
 
+function daysIn(year: number, month: number): number {
+	return month === 2
+		? year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+			? 29
+			: 28
+		: [4, 6, 9, 11].includes(month)
+			? 30
+			: 31
+}
+
 export function parseScheduledAt(raw: string): string | null {
 	// The raw bound comes first (RES-1).
 	const match = raw.length > 64 ? null : SCHEDULED_AT.exec(raw.trim())
 	if (match === null) {
 		return null
 	}
-	const [, date = '', time, seconds = '00', fraction = '', zone] = match
+	const [, date = '', time = '00:00', seconds = '00', fraction = '', zone] = match
+	const [year = 0, month = 0, day = 0] = date.split('-').map(Number)
+	const [hour = 0, minute = 0] = time.split(':').map(Number)
+	// As Ruby's DateTime.parse: the calendar date must exist, 24:00:00 is the next day's midnight, second 60 reads as
+	// 59, and anything else out of range is invalid. Checked before the offset applies, so no invalid date rolls over.
+	const midnight = hour === 24 && minute === 0 && Number(seconds) === 0 && Number(fraction || '0') === 0
+	if (
+		month < 1 ||
+		month > 12 ||
+		day < 1 ||
+		day > daysIn(year, month) ||
+		(hour > 23 && !midnight) ||
+		minute > 59 ||
+		Number(seconds) > 60
+	) {
+		return null
+	}
 	const offset =
 		zone === undefined || zone.toUpperCase() === 'Z'
 			? 'Z'
 			: `${zone.slice(0, 3)}:${zone.slice(3).replace(':', '') || '00'}`
 	const ms = fraction.padEnd(3, '0').slice(0, 3)
-	const at = Date.parse(`${date}T${time ?? '00:00'}:${seconds}.${ms}${offset}`)
+	const clock = midnight ? '00:00:00' : `${time}:${seconds === '60' ? '59' : seconds}`
+	const at = Date.parse(`${date}T${clock}.${ms}${offset}`)
 	if (Number.isNaN(at)) {
 		return null
 	}
-	const iso = new Date(at).toISOString()
+	const iso = new Date(at + (midnight ? 24 * 60 * 60 * 1000 : 0)).toISOString()
 	return /^\d{4}-/.test(iso) ? iso : null
 }
 
@@ -147,13 +174,9 @@ export const createStatus: ApiHandler = async (c, deps) => {
 		now: deps.now(),
 		present: present(c),
 	}
-	// With scheduled_at the answer is a ScheduledStatus, or a Status when the time is not in the future
-	// (domain/scheduled-statuses.ts).
-	const result = authorized(
-		await storeCall(c, deps, (s, b) =>
-			scheduledAt === undefined ? s.createStatus(b, input) : s.scheduleStatus(b, { ...input, scheduledAt })
-		)
-	)
+	// The key is resolved against statuses and scheduled statuses alike; with scheduled_at the answer is a
+	// ScheduledStatus, or a Status when the time is not in the future (domain/scheduled-statuses.ts).
+	const result = authorized(await storeCall(c, deps, (s, b) => s.postStatus(b, { ...input, scheduledAt })))
 	switch (result.status) {
 		case 'ok':
 		case 'scheduled':
