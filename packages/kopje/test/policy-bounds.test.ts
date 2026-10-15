@@ -19,6 +19,7 @@ import {
 	bookmarks,
 	favourites,
 	homeTimeline,
+	listTimeline,
 	publicTimeline,
 	tagTimeline,
 } from '../src/domain/timelines'
@@ -30,11 +31,12 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // of rows (RES-7). Unrelated rows are what no viewer's read of the world should touch: other accounts with their
 // statuses (never public, so no public or tag feed would list them, though they carry the tag the tag feed reads),
 // replies and boosts among them, their follows, blocks, mutes and domain blocks of the world's accounts and domains,
-// and their favourites, bookmarks and notifications.
+// their favourites, bookmarks and notifications, and their exclusive lists holding world accounts and their own.
 
 // The world, the same in every run: the first of fast-check's samples for a fixed seed in which every endpoint has
 // something to show the viewer (the first available local account). The viewer then follows everyone, favourites and
-// bookmarks every status, and has a notification from every account; LISTED follows the viewer.
+// bookmarks every status, has a notification from every account, and has a list (VIEWER_LIST) of every account;
+// LISTED follows the viewer.
 function viewerOf(world: World): number {
 	return world.accounts.findIndex((account) => account.local && !account.suspended)
 }
@@ -88,6 +90,7 @@ function authored(x: number): number {
 	return WORLD.statuses.filter((status) => status.author === x).length
 }
 
+const VIEWER_LIST = '700000000000000001'
 const TOKEN_HASH = 'policy-bounds-token'
 const PRESENT = { origin: 'https://kopje.test' }
 const PAGE = { limit: 20 }
@@ -98,6 +101,7 @@ const PAGE = { limit: 20 }
 // unrelated accounts and domain blocks of domains nobody lives on grow with them.
 const UNRELATED_ACCOUNT_BASE = 300000000000000000n
 const UNRELATED_STATUS_BASE = 400000000000000000n
+const UNRELATED_LIST_BASE = 710000000000000000n
 const HIDDEN: readonly Visibility[] = ['unlisted', 'private', 'direct', 'limited']
 
 function writeViewer(sql: SqlStorage): void {
@@ -132,6 +136,10 @@ function writeViewer(sql: SqlStorage): void {
 		accountId(LISTED),
 		viewer
 	)
+	sql.exec("INSERT INTO lists (id, account_id, title) VALUES (?, ?, 'everyone')", VIEWER_LIST, viewer)
+	WORLD.accounts.forEach((_, x) => {
+		sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', VIEWER_LIST, accountId(x))
+	})
 	WORLD.statuses.forEach((status, s) => {
 		sql.exec('INSERT INTO favourites (account_id, status_id) VALUES (?, ?)', viewer, statusId(s))
 		sql.exec('INSERT INTO bookmarks (account_id, status_id) VALUES (?, ?)', viewer, statusId(s))
@@ -224,6 +232,19 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 	}
 	for (let j = 0; j < locals; j++) {
 		const owner = account(remote + j)
+		// An exclusive list of the owner's, with a world account (other than LISTED, whose followers are listed) and an
+		// unrelated one it follows.
+		const list = String(UNRELATED_LIST_BASE + BigInt(j))
+		const followed = [
+			accountId(j % worldAccounts === LISTED ? (LISTED + 1) % worldAccounts : j % worldAccounts),
+			account(j),
+		]
+		sql.exec("INSERT INTO lists (id, account_id, title, exclusive) VALUES (?, ?, 'l', 1)", list, owner)
+		sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', list, owner)
+		for (const member of followed) {
+			sql.exec("INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')", owner, member)
+			sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', list, member)
+		}
 		sql.exec(
 			'INSERT INTO mutes (account_id, target_account_id, hide_notifications, expires_at) VALUES (?, ?, ?, ?)',
 			owner,
@@ -264,6 +285,7 @@ const timeline = { credential, now: NOW, page: PAGE, local: false, remote: false
 // Each endpoint with its input, as the routes call them.
 const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown][] = [
 	['home', homeTimeline, { credential, page: PAGE, present: PRESENT }],
+	['list', listTimeline, { credential, id: VIEWER_LIST, page: PAGE, present: PRESENT }],
 	['public', publicTimeline, timeline],
 	['tag', tagTimeline, { ...timeline, tag: 'cats', any: [], all: [], none: [] }],
 	[

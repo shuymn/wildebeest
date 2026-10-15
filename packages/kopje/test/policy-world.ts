@@ -9,7 +9,9 @@ import type { Visibility } from '../src/domain/audience'
 // visibility with mentions (some silent), boosts and replies (some to a status never stored, and some continuing such
 // a reply, as a purge leaves a reply to the account it removes), and the edges the rules read: follows (pending and
 // accepted), blocks both ways, mutes with and without an expiry and with and without notifications, and domain blocks
-// in their stored form. Accounts and statuses are referred to by index; writeWorld gives them fixed ids.
+// in their stored form; and local accounts' lists, exclusive or not, with each replies_policy, whose members are their
+// owner and accounts it follows, accepted or pending (whatever else the owner blocks, mutes or domain-blocks). Accounts,
+// statuses and lists are referred to by index; writeWorld gives them fixed ids.
 
 declare module 'vitest' {
 	interface ProvidedContext {
@@ -92,6 +94,17 @@ function actorHost(form: (typeof HOSTS)[number], domain: string): string {
 	}
 }
 
+export const REPLIES_POLICIES = ['followed', 'list', 'none'] as const
+
+// A list of a local account. Its members are the owner or accounts the owner follows (in either state): a Store holds
+// no other (migration 0007_list_members, the converter), so the world has none.
+export type WorldList = {
+	owner: number
+	repliesPolicy: (typeof REPLIES_POLICIES)[number]
+	exclusive: boolean
+	members: number[]
+}
+
 export type World = {
 	accounts: WorldAccount[]
 	statuses: WorldStatus[]
@@ -99,11 +112,13 @@ export type World = {
 	blocks: { from: number; to: number }[]
 	mutes: { from: number; to: number; expiresAt: string | null; hideNotifications: boolean }[]
 	domainBlocks: { owner: number; domain: string }[]
+	lists: WorldList[]
 	now: string
 }
 
 const ACCOUNT_BASE = 100000000000000000n
 const STATUS_BASE = 200000000000000000n
+const LIST_BASE = 600000000000000000n
 
 export function accountId(index: number): string {
 	return String(ACCOUNT_BASE + BigInt(index))
@@ -111,6 +126,10 @@ export function accountId(index: number): string {
 
 export function statusId(index: number): string {
 	return String(STATUS_BASE + BigInt(index))
+}
+
+export function listId(index: number): string {
+	return String(LIST_BASE + BigInt(index))
 }
 
 // Keeps the first of each key.
@@ -174,6 +193,16 @@ export const worldArb: fc.Arbitrary<World> = fc
 		deleting: fc.option(fc.nat(), { freq: 3 }),
 		// Statuses (not boosts) made replies to a status never stored, once all statuses are drawn.
 		replyToUnknown: fc.array(fc.nat(), { maxLength: 3 }),
+		// Lists, each member drawn from its owner and the accounts the owner follows.
+		lists: fc.array(
+			fc.record({
+				owner: fc.nat(),
+				repliesPolicy: fc.constantFrom(...REPLIES_POLICIES),
+				exclusive: fc.boolean(),
+				members: fc.array(fc.nat(), { maxLength: 5 }),
+			}),
+			{ maxLength: 4 }
+		),
 	})
 	.map((raw): World => {
 		const accounts: WorldAccount[] = []
@@ -240,13 +269,14 @@ export const worldArb: fc.Arbitrary<World> = fc
 			}
 		}
 		const pair = (e: { from: number; to: number }) => `${e.from}:${e.to}`
+		const follows = unique(
+			raw.follows.map((f) => ({ ...f, from: f.from % n, to: f.to % n })).filter((f) => f.from !== f.to),
+			pair
+		)
 		return {
 			accounts,
 			statuses,
-			follows: unique(
-				raw.follows.map((f) => ({ ...f, from: f.from % n, to: f.to % n })).filter((f) => f.from !== f.to),
-				pair
-			),
+			follows,
 			blocks: unique(
 				raw.blocks.map((b) => ({ from: b.from % n, to: b.to % n })).filter((b) => b.from !== b.to),
 				pair
@@ -266,12 +296,20 @@ export const worldArb: fc.Arbitrary<World> = fc
 				raw.domainBlocks.map((d) => ({ owner: d.owner % LOCALS, domain: d.domain })),
 				(d) => `${d.owner}:${d.domain}`
 			),
+			lists: raw.lists.map((list) => {
+				const owner = list.owner % LOCALS
+				const candidates = [owner, ...follows.flatMap((f) => (f.from === owner ? [f.to] : []))]
+				const members = list.members.map((m) => candidates[m % candidates.length] ?? owner)
+				return { ...list, owner, members: [...new Set(members)] }
+			}),
 			now: raw.now,
 		}
 	})
 
 // The tables a world fills, in an order that deletes children first.
 const WORLD_TABLES = [
+	'list_accounts',
+	'lists',
 	'notifications',
 	'favourites',
 	'bookmarks',
@@ -388,4 +426,17 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 	for (const d of world.domainBlocks) {
 		sql.exec('INSERT INTO domain_blocks (account_id, domain) VALUES (?, ?)', accountId(d.owner), d.domain)
 	}
+	world.lists.forEach((list, l) => {
+		sql.exec(
+			'INSERT INTO lists (id, account_id, title, replies_policy, exclusive) VALUES (?, ?, ?, ?, ?)',
+			listId(l),
+			accountId(list.owner),
+			`list ${l}`,
+			list.repliesPolicy,
+			list.exclusive ? 1 : 0
+		)
+		for (const member of list.members) {
+			sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', listId(l), accountId(member))
+		}
+	})
 }
