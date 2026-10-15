@@ -261,6 +261,9 @@ export function listableSql(s: string, viewer: string, now: string): string {
 // and a status or boosted original that mentions (not silently) an account the viewer blocks or mutes at `now`; the
 // viewer's own statuses always pass. Home applies it, and so does a post notification: FeedInsertWorker notifies only
 // of a status home shows. Home's membership and the follow's options (boosts, replies, languages) are home's own.
+// For the public statuses home shows by a followed hashtag, it is FeedManager#filter_from_tags?: the author or an
+// active mention blocked or muted by the viewer, an author blocking the viewer and the author's domain blocked by the
+// viewer each leave a status out (the viewer's own are home's anyway).
 export function homeFilterSql(s: string, viewer: string, now: string): string {
 	return `(${listableSql(s, viewer, now)}
 		AND (${s}.account_id IS ${viewer} OR NOT EXISTS (SELECT 1 FROM main.status_mentions phm
@@ -341,6 +344,24 @@ export type AuthorWindows = {
 	readonly tail: string
 }
 
+// A window of each of a set of hashtags' statuses, for a feed of whole hashtags (home's followed hashtags), as
+// StatusReads writes it:
+//   SELECT w.id AS id FROM (<tags>) g CROSS JOIN main.statuses w ON w.id IN (SELECT s.id FROM <from> main.statuses s
+//     <join> WHERE (<tag> = g.name AND <where>) AND (<rule over s>) AND (<and>) <tail>)
+// <tags> selects each hashtag once, as name; <tag> is the column of the hashtag in the index the window reads (in
+// <from>), and <tail> orders each hashtag's statuses by id and cuts them to a page, as an AuthorWindows' does: a
+// hashtag costs a window however many statuses carry it. A hashtag has no rule of its own, so every status of the
+// window is judged by the rule.
+export type TagWindows = {
+	readonly tags: string
+	readonly tag: string
+	readonly from: string
+	readonly join: string
+	readonly where?: string
+	readonly and?: string
+	readonly tail: string
+}
+
 // Further columns, name: expression. A name is a plain identifier, never the id column the reader selects.
 type Columns<Extra, Id extends string> = { readonly [K in keyof Extra]: string } & { readonly [K in Id]?: never }
 
@@ -358,14 +379,14 @@ export type StatusReads = {
 		query: StatusSelect & { readonly with?: string; readonly columns?: Columns<Extra, 'id'> },
 		...params: SqlStorageValue[]
 	): (Extra & { id: VisibleStatusId })[]
-	// SELECTs combined, each a StatusSelect or AuthorWindows under the same rule, selecting the id only:
+	// SELECTs combined, each a StatusSelect, AuthorWindows or TagWindows under the same rule, selecting the id only:
 	//   SELECT id FROM (SELECT * FROM (<branch>) UNION [ALL] SELECT * FROM (<branch>) ...) <tail>
 	union(
 		db: Db,
 		rule: StatusRule,
 		query: {
 			readonly all: boolean
-			readonly branches: readonly (StatusSelect | AuthorWindows)[]
+			readonly branches: readonly (StatusSelect | AuthorWindows | TagWindows)[]
 			readonly tail: string
 		},
 		...params: SqlStorageValue[]
@@ -429,7 +450,17 @@ export function statusReads(
 		const visible = `${availableSql(x)} AND (${x} IS ${at.viewer} OR NOT ${blocksSql(x, at.viewer)})`
 		return rule === 'visible' ? visible : `${visible} AND NOT ${filteredForSql(x, at.viewer, now())}`
 	}
-	const branchSql = (rule: StatusRule, q: StatusSelect | AuthorWindows) => {
+	const branchSql = (rule: StatusRule, q: StatusSelect | AuthorWindows | TagWindows) => {
+		if ('tags' in q) {
+			const window = selectSql(ruleSql(rule), {
+				from: q.from,
+				join: q.join,
+				where: `${q.tag} = g.name${q.where === undefined ? '' : ` AND ${q.where}`}`,
+				and: q.and,
+				tail: q.tail,
+			})
+			return `SELECT w.id AS id FROM (${q.tags}) g CROSS JOIN main.statuses w ON w.id IN (${window})`
+		}
 		if (!('authors' in q)) {
 			return selectSql(ruleSql(rule), q)
 		}

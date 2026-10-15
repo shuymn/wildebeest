@@ -11,8 +11,9 @@ import type { RepliesPolicy } from '../src/domain/lists'
 // a reply, as a purge leaves a reply to the account it removes), and the edges the rules read: follows (pending and
 // accepted), blocks both ways, mutes with and without an expiry and with and without notifications, and domain blocks
 // in their stored form; and local accounts' lists, exclusive or not, with each replies_policy, whose members are their
-// owner and accounts it follows, accepted or pending (whatever else the owner blocks, mutes or domain-blocks).
-// Accounts, statuses and lists are referred to by index; writeWorld gives them fixed ids.
+// owner and accounts it follows, accepted or pending (whatever else the owner blocks, mutes or domain-blocks); and the
+// local accounts that follow the hashtag tagged statuses carry. Accounts, statuses and lists are referred to by index;
+// writeWorld gives them fixed ids.
 
 declare module 'vitest' {
 	interface ProvidedContext {
@@ -113,6 +114,8 @@ export type World = {
 	mutes: { from: number; to: number; expiresAt: string | null; hideNotifications: boolean }[]
 	domainBlocks: { owner: number; domain: string }[]
 	lists: WorldList[]
+	// Local accounts that follow the hashtag the world's tagged statuses carry.
+	tagFollowers: number[]
 	now: string
 }
 
@@ -311,6 +314,11 @@ export const worldArb: fc.Arbitrary<World> = fc
 				const members = list.members.map((m) => candidates[m % candidates.length] ?? owner)
 				return { ...list, owner, members: [...new Set(members)] }
 			}),
+			// Local accounts following the world's hashtag, drawn from bits already drawn (a new field would change the
+			// worlds the fixed seeds of the other properties give): about one local account in four.
+			tagFollowers: Array.from({ length: LOCALS }, (_, x) => x).filter(
+				(x) => raw.follows[x]?.showReblogs === true && raw.follows[x]?.notify === true
+			),
 			now: raw.now,
 		}
 	})
@@ -321,6 +329,7 @@ const WORLD_TABLES = [
 	'conversations',
 	'list_accounts',
 	'lists',
+	'tag_follows',
 	'notifications',
 	'favourites',
 	'bookmarks',
@@ -434,6 +443,9 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 	}
 	for (const d of world.domainBlocks) {
 		sql.exec('INSERT INTO domain_blocks (account_id, domain) VALUES (?, ?)', accountId(d.owner), d.domain)
+	}
+	for (const follower of world.tagFollowers) {
+		sql.exec("INSERT INTO tag_follows (account_id, name) VALUES (?, 'cats')", accountId(follower))
 	}
 	world.lists.forEach((list, l) => {
 		sql.exec(

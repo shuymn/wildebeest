@@ -109,13 +109,20 @@ const FOLLOWED = `SELECT target_account_id AS account_id FROM follows WHERE acco
 // stored, or the partner's account was purged) is left out too, so a purge does not bring back a reply home hid. A
 // reply whose parent is deleted keeps its partner. Others' statuses leave home when their author is in one of the
 // viewer's exclusive lists (EXCLUSIVE_MEMBERS); the viewer's own never do.
-// It reads three streams, each from the cursor through an index, and merges them: a window of each followed account's
+// Home also shows the public statuses, not boosts, that carry a hashtag the viewer follows (tag_follows), as Mastodon's
+// FanOutOnWriteService#deliver_to_hashtag_followers! puts a broadcastable status into its followers' home feeds, with
+// homeFilterSql as FeedManager#filter_from_tags? (none of the follow's options or exclusive lists apply to them). As
+// home is a read, they include those posted before the follow, and leave home when it ends.
+// It reads four streams, each from the cursor through an index, and merges them: a window of each followed account's
 // public, unlisted and private statuses (AuthorWindows, on statuses_feed) with every filter inside the window; the
 // viewer's own statuses; and a window of each followed account's direct and limited statuses that mention the viewer,
-// from the viewer's mentions by that account in such statuses (status_mentions.requires_mention). A page reads at most
-// a page of statuses per followed account in each window, and those a follow's options or homeFilterSql leave out on
-// the way, however long their history; the viewer's own statuses cost a page, and mentions by accounts the viewer does
-// not follow, or in public, unlisted and private statuses, are never read.
+// from the viewer's mentions by that account in such statuses (status_mentions.requires_mention); and a window of each
+// followed hashtag's public statuses, from its public hashtag rows (status_tags_public). A status in more than one is
+// shown once. A page reads at most a page of statuses per followed account and per followed hashtag in each window,
+// and those a follow's options or homeFilterSql leave out on the way, however long their history; the viewer's own
+// statuses cost a page, mentions by accounts the viewer does not follow, or in public, unlisted and private statuses,
+// are never read, and neither are a hashtag's statuses that are not public. The followed hashtags are capped
+// (MAX_FOLLOWED_TAGS in tags.ts).
 export const homeTimeline = userReadOperation<{ page: PageQuery; present: Present }, Page<Status>>(
 	(db, { page, present }, _viewer, viewer) => {
 		const { accountId, now } = viewer
@@ -128,7 +135,8 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 			db,
 			'homeFilter',
 			{
-				all: true,
+				// A status may come from more than one stream (a followed account's, with a followed hashtag).
+				all: false,
 				branches: [
 					// The public, unlisted and private statuses of the accounts home shows: a window of each, on statuses_feed.
 					{
@@ -151,6 +159,16 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 							AND s.visibility IN ${REQUIRES_MENTION_SQL}`,
 						and: options,
 						tail: `ORDER BY m.status_id ${order} LIMIT ?4`,
+					},
+					// The public statuses, not boosts, with a hashtag the viewer follows: a window of each, on status_tags_public.
+					{
+						tags: 'SELECT name FROM tag_follows WHERE account_id = ?1',
+						tag: 't.name',
+						from: 'status_tags t CROSS JOIN',
+						join: 'ON s.id = t.status_id',
+						where: `t.public = 1 AND ${rangeSql('t.status_id')}`,
+						and: "s.visibility = 'public' AND s.reblog_of_id IS NULL",
+						tail: `ORDER BY t.status_id ${order} LIMIT ?4`,
 					},
 				],
 				tail: `ORDER BY id ${order} LIMIT ?4`,
