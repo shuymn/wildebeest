@@ -1,10 +1,10 @@
 import {
+	addresses,
 	addressingOf,
 	type Audience,
 	audienceOf,
 	availableLocalSql,
 	availableSql,
-	blockedSql,
 	DISTRIBUTABLE_SQL,
 	isDistributable,
 	PUBLIC_COLLECTION,
@@ -275,22 +275,25 @@ export type AnnounceInput = {
 	visibility: Visibility
 	publishedAt: string
 	objectUri: string
-	// The original's author; null when the booster blocks it or its domain (VIS-15), so it is neither named nor sent.
+	// The original's author; null when the Announce leaves it out (boostAnnounce), so it is neither named nor sent.
 	authorUri: string | null
 	authorId: string | null
 }
 
-// The Announce input of a local boost by `boosterId` of a status by `author`, for every copy of that Announce (the one
-// delivered, its Undo, and the outbox's). As Mastodon allows boosting a status of an account on a domain the booster
-// blocks, the author is then left out of the addressing and the audience (VIS-15).
+// The Announce input of a local boost by `boosterId` of a status by `author`, for the Announce (`content`: the one
+// delivered and the outbox's) or for its Undo (`retraction`). Whether it names the author is the policy's (addresses
+// in audience.ts, R22): as Mastodon allows boosting a status of an account on a domain the booster blocks, the
+// Announce then leaves the author out of the addressing and the audience (VIS-15); the Undo names and reaches them
+// whatever the booster blocks, as every retraction does (VIS-13).
 export function boostAnnounce(
 	db: Db,
 	boosterId: string,
 	boost: Omit<AnnounceInput, 'authorUri' | 'authorId'>,
-	author: { id: string; uri: string }
+	author: { id: string; uri: string },
+	kind: 'content' | 'retraction'
 ): AnnounceInput {
-	const blocked = db.first(`SELECT 1 AS x WHERE ${blockedSql('?1', '?2')}`, boosterId, author.id) !== undefined
-	return { ...boost, authorUri: blocked ? null : author.uri, authorId: blocked ? null : author.id }
+	const named = addresses(db, kind, boosterId, author.id)
+	return { ...boost, authorUri: named ? author.uri : null, authorId: named ? author.id : null }
 }
 
 // A boost goes to the booster's followers and the original's author (Mastodon's TagManager#to/#cc for a reblog).
@@ -579,7 +582,8 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 									publishedAt: row.published_at,
 									objectUri: row.original_uri,
 								},
-								{ id: row.original_author_id, uri: row.original_author_uri }
+								{ id: row.original_author_id, uri: row.original_author_uri },
+								'content'
 							)
 						).activity
 					)

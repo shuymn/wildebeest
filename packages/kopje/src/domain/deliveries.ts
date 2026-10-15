@@ -1,4 +1,4 @@
-import { blockedSql, domainBlocksSql } from './audience'
+import { isActorObject, outboundKind, recipientsFor } from './audience'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 
@@ -6,8 +6,9 @@ import type { Db } from '../db/sql'
 // truth; the Queue only rings a doorbell, and the Worker does the POSTs.
 //
 //   - Targets: an outbound intent's audience becomes a list of (inbox, addressee) targets, from the stored audience
-//     only (audienceTargets). A retraction (Delete, Undo, Reject) also targets every inbox that received the object or
-//     may still receive it: receipts, and the deliveries and unexpanded targets of earlier activities about it.
+//     only and for the recipients the policy gives it (audienceTargets, recipientsFor in audience.ts). A retraction
+//     (Delete, Undo, Reject) also targets every inbox that received the object or may still receive it: receipts, and
+//     the deliveries and unexpanded targets of earlier activities about it.
 //   - Silent recipients: a recipient the activity reaches without naming it in to/cc gets a copy of its own at its
 //     personal inbox, with only itself added to to (the object's too), and no Mention. Misskey reads the audience from
 //     to/cc only, not from the inbox it arrived at, so without the name the recipient would lose access. Each such
@@ -88,34 +89,22 @@ function idOf(value: unknown): string | null {
 	return null
 }
 
-// Activities that carry a status (or a boost of one) to its audience. One written after the signer blocks an account,
-// or its domain, is not addressed to it (VIS-13, VIS-15); a Block, Reject, Undo or Delete still reaches it. Rows
-// written before the block are sent as they were queued, as Mastodon sends them.
-const CONTENT_TYPES = new Set(['Create', 'Update', 'Announce'])
-
-function carriesContent(activity: Activity): boolean {
-	return typeof activity.type === 'string' && CONTENT_TYPES.has(activity.type)
-}
-
-// The local object an activity is about, and whether it retracts it.
+// The local object an activity is about, and whether it retracts it (outboundKind in audience.ts).
 // retracts: the activity withdraws work already sent, so it supersedes what it names and admission never refuses it.
 // A Reject withdraws only when it ends a follow we had accepted (withdraws); a Reject of a request never accepted (a
 // refused or blocked Follow) is new work and is admitted like any other.
 function subjectOf(activity: Activity, withdraws: boolean): { object: string | null; retracts: boolean } {
+	const retracts = outboundKind(activity, withdraws) === 'retraction'
 	switch (activity.type) {
 		case 'Create':
 		case 'Update':
-			return { object: idOf(activity.object), retracts: false }
 		case 'Delete':
-			return { object: idOf(activity.object), retracts: true }
 		case 'Undo':
-			return { object: idOf(activity.object), retracts: true }
 		case 'Reject':
-			return { object: idOf(activity.object), retracts: withdraws }
 		case 'Accept':
-			return { object: idOf(activity.object), retracts: false }
+			return { object: idOf(activity.object), retracts }
 		default:
-			return { object: typeof activity.id === 'string' ? activity.id : null, retracts: false }
+			return { object: typeof activity.id === 'string' ? activity.id : null, retracts }
 	}
 }
 
@@ -135,11 +124,10 @@ export function isDeliverableInbox(value: string | null): value is string {
 
 export type DeliveryAudience = { followers: boolean; accounts: string[] }
 
-// The targets an activity goes to (NET-2), from the stored audience only:
-//   - followers: the signer's accepted remote followers, by shared inbox when they have one (deduplicated), except
-//     those on a domain the signer blocks (a domain block removes them in bounded batches, domain/blocks.ts);
-//   - addressed accounts named in to/cc: by shared inbox, as Mastodon's StatusReachFinder; for an activity that carries
-//     content, not the accounts the signer blocks or whose domain it blocks (carriesContent);
+// The targets an activity goes to (NET-2), from the stored audience only, for the recipients the policy gives it
+// (recipientsFor in audience.ts):
+//   - followers: by shared inbox when they have one (deduplicated);
+//   - addressed accounts named in to/cc: by shared inbox, as Mastodon's StatusReachFinder;
 //   - addressed accounts the activity reaches without naming them: on an addressed activity (one with to), a silent
 //     recipient, by its personal inbox only, with itself as addressee (none: recorded as unreachable for the
 //     operator, never sent to a shared inbox); otherwise (an activity without to: a Like, Follow, Accept, Reject,
@@ -168,30 +156,13 @@ export function audienceTargets(
 			neutral.add(inbox)
 		}
 	}
-	if (audience.followers) {
-		const followers = db.all<{ inbox: string | null }>(
-			`SELECT DISTINCT COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) AS inbox
-			FROM follows f JOIN accounts a ON a.id = f.account_id
-			WHERE f.target_account_id = ?1 AND f.state = 'accepted' AND a.domain IS NOT NULL
-				AND NOT ${domainBlocksSql('?1', 'a.id')}`,
-			signerId
-		)
-		for (const { inbox } of followers) {
-			add(inbox, null)
-		}
+	const recipients = recipientsFor(db, signerId, activity, audience, withdraws)
+	for (const inbox of recipients.followerInboxes) {
+		add(inbox, null)
 	}
 	const named = new Set([...uris(activity.to), ...uris(activity.cc)])
 	const addressedActivity = Array.isArray(activity.to)
-	const addressed = db.all<{ uri: string; inbox_url: string | null; shared_inbox_url: string | null }>(
-		`SELECT a.uri, NULLIF(a.inbox_url, '') AS inbox_url, NULLIF(a.shared_inbox_url, '') AS shared_inbox_url
-		FROM accounts a
-		WHERE a.id IN (SELECT value FROM json_each(?1)) AND a.domain IS NOT NULL AND NOT (?2 AND ${blockedSql('?3', 'a.id')})
-		ORDER BY a.id`,
-		JSON.stringify(audience.accounts),
-		carriesContent(activity) ? 1 : 0,
-		signerId
-	)
-	for (const account of addressed) {
+	for (const account of recipients.accounts) {
 		if (named.has(account.uri)) {
 			add(account.shared_inbox_url ?? account.inbox_url, null)
 		} else {
@@ -301,12 +272,6 @@ export function enqueueActivity(
 		insertIntent(db, signerId, envelope, object, retracts, targets, now)
 	}
 	expandPending(db, now, EXPANSION_STEP)
-}
-
-const ACTOR_TYPES = new Set(['Person', 'Service', 'Group', 'Application', 'Organization'])
-
-function isActorObject(object: unknown): boolean {
-	return typeof object === 'object' && object !== null && ACTOR_TYPES.has(String((object as Activity).type))
 }
 
 const SUPERSEDED = `account_id = ? AND object_uri = ? AND (? OR json_extract(body, '$.activity.type') = 'Update')`

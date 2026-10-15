@@ -353,8 +353,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `Block`; an unblock sends the `Block`'s `Undo`, which supersedes a `Block` still waiting. All go to the blocked
   account only (NET-2). After the block, the blocked account is no recipient of the blocker's statuses: a new status
   or an edit does not mention it (the name stays text, as Mastodon's `ProcessMentionsService` drops the mention), and
-  an activity that carries content (`Create`, `Update`, `Announce`) recorded after the block is neither addressed nor
-  delivered to it; a `Block`, `Reject`, `Undo` or `Delete` still reaches it. Deliveries queued before the block are
+  an activity that carries content (`Create`, an `Update` of a status, `Announce`) recorded after the block is neither
+  addressed nor delivered to it; a `Block`, `Reject`, `Undo` or `Delete` still reaches it and names it in `to` or `cc`
+  as it would anyone (`recipientsFor` and `outboundKind` in `src/domain/audience.ts`). Deliveries queued before the block are
   sent as queued, as in Mastodon (see the accepted risks). A local block always applies: the ended remote `Follow` is recorded as retracted (ID-7)
   only within that actor's retraction cap, since the block itself refuses the actor's Follows while it lasts.
   _Implemented on branch `kopje/blocks-mutes`:_ `block` and `unblock` in `src/domain/blocks.ts`, the inbound `block`
@@ -362,9 +363,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/domain/deliveries.ts`, `shownSql` and `homeFilterSql` in `src/domain/audience.ts`, `homeTimeline` in
   `src/domain/timelines.ts`, `mayInteract` in `src/domain/inbox.ts`; `test/blocks.test.ts` ("blocks a local account",
   "sends a remote account Undo Follow, Reject and Block", "applies an inbound Block and its Undo", "blocked
-  recipients", "mentions of blocked and muted accounts"), `test/inbox.test.ts` ("records a Block, ends both follows"),
-  `test/inbox-statuses.test.ts` ("ignores a Like by an actor the author blocks", "ignores a boost by an actor the
-  author blocks").
+  recipients", "mentions of blocked and muted accounts", "names and reaches the author in the Undo of a boost"),
+  `test/inbox.test.ts` ("records a Block, ends both follows"), `test/policy-writes.test.ts` (the outbound and
+  notification rules on generated worlds), `test/inbox-statuses.test.ts` ("ignores a Like by an actor the author
+  blocks", "ignores a boost by an actor the author blocks").
 - **VIS-14: a mute hides only for the muter, and only while it lasts.** A mute is never federated and changes nothing
   the muted account sees or may do. It keeps the muted account out of the muter's lists (VIS-5) and home, including
   others' statuses that mention it, and, unless created with `notifications=false`, out of the muter's notifications
@@ -386,20 +388,23 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   may not see the user's public and unlisted statuses as a viewer (Mastodon's `StatusPolicy#show?`,
   `author_blocking_domain?`; `visibleSql`), so its `Like` or `Announce` of one is ignored; a boost of a
   status by an account there, which Mastodon allows, leaves its author out of the `Announce`'s addressing and audience
-  (`boostAnnounce` in `src/domain/activities.ts`, for the delivered `Announce`, its `Undo` and the outbox's copy).
+  (`boostAnnounce` in `src/domain/activities.ts`, for the delivered `Announce` and the outbox's copy); the boost's
+  `Undo`, a retraction, names and reaches the author all the same.
   As Mastodon 4.5's `AfterBlockDomainFromAccountService` does, the user's follows to and from accounts there end, in either state:
   each follower gets a `Reject`, each of our follows an `Undo`. That is a durable cleanup (`domain_block_cleanups`,
   progress kept as a cursor over follow ids up to the newest follow when the domain was blocked) done in batches that
   each scan 500 follows (RES-6, RES-7): the first in the request, the rest in the rounds the Queue and the cron run
   with the inbound jobs, until done; the next cleanup is picked through an index (`domain_block_cleanups_next`). Until
-  then, followers there are left out of the targets of anything that carries content recorded after the block. An
+  then, followers there are left out of the targets of anything that carries content recorded after the block; a
+  profile `Update`, a `Delete` or an `Undo` still reaches them, as Mastodon 4.5 sends those to `followers.inboxes`. An
   unblock
   stops the cleanup: what it removed stays removed. The domain is normalized (lowercase, punycode, no trailing dot or
   slash) and this instance's own domain is refused. _Implemented on branch `kopje/blocks-mutes`:_ `blockDomain` and
   `runDomainBlockCleanups` in `src/domain/blocks.ts`, `runInboundJobs` in `src/store.ts`, `audienceTargets` in
   `src/domain/deliveries.ts`; `test/blocks.test.ts` ("ends our follows there with an Undo and theirs
   with a Reject", "finishes the cleanup in later rounds", "stops the cleanup when the domain is unblocked", "reads a
-  bounded number of rows to block a domain", "picks the next cleanup through an index", "normalizes the domain").
+  bounded number of rows to block a domain", "picks the next cleanup through an index", "normalizes the domain", "sends a
+  profile Update, but no new status, to a follower on a domain the cleanup has not reached yet").
 
 ### Authorization (AUTH)
 
