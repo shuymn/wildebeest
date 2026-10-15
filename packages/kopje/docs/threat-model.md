@@ -1138,12 +1138,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   account's own index by id, and a publication round reads the due ones through the index by time, so neither grows
   with the accounts that schedule or their scheduled statuses (`test/policy-bounds.test.ts`, "however many accounts
   schedule"). _Enforced (main)_ for grouped notifications: a page of groups walks the viewer's notifications from the
-  cursor, as the list does, and reads at most 2,000 of those the rule shows; each group's count, samples and ends are read through the `(account_id, group_key, id)` index, at most 400
-  notifications per group; a group's accounts are paged through the same index; so none grows with the notifications
-  of one group (`test/policy-bounds.test.ts`, "however many notifications a group holds"). Accepted: a group of more
-  than 400 counts 400, and a page whose walk meets more than 2,000 notifications of the groups it found (one group
-  that large, in practice) ends with those groups, its Link going on from the last notification read. Dismissing a group and clearing delete in the request, as Mastodon does. Context traversal and edit history:
-  _Planned (B4a fixes)._
+  cursor, as the list does, and reads at most 2,000 of those the rule shows; each group's count, samples and ends are
+  read through the `(account_id, group_key, id)` index, at most 400 notifications per group; a group's accounts are
+  paged through the same index; so none grows with the notifications of one group (`test/policy-bounds.test.ts`,
+  "however many notifications a group holds"). Accepted: a group of more than 400 counts 400, and a page whose walk
+  meets more than 2,000 notifications of the groups it found (one group that large, in practice) ends with those groups,
+  its Link going on from the last notification read. Dismissing a group and clearing delete in the request, as Mastodon
+  does. Context traversal and edit history: _Planned (B4a fixes)._
 
 ### Data and keys (DATA)
 

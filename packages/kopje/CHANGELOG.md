@@ -102,16 +102,17 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   group, `GET /api/v2/notifications/:group_key/accounts` lists its accounts, and
   `POST /api/v2/notifications/:group_key/dismiss` and `POST /api/v2/notifications/clear` delete. Favourites and
   boosts of the same status, and follows, group by the hour, joining a group of the same kind from up to 11 hours
-  before; v1 notifications show their `group_key` too. Scopes are `read:notifications` and `write:notifications` (or `read` and
-  `write`).
+  before; v1 notifications show their `group_key` too. Scopes are `read:notifications` and `write:notifications` (or
+  `read` and `write`).
     - A group counts and shows only the notifications you are shown in v1: a notification from an account you have
       since blocked or muted, or about a status you may no longer see, is left out.
     - Each group on a page counts and samples its notifications up to the page's newest, those below the page
       included, as Mastodon does.
     - Where Kopje differs from Mastodon: a group counts at most 400 notifications, and a page reads at most 2,000
-      notifications, skipping those of the groups it has found, so only a group of more than that ends a page early,
-      with the groups found and a `next` link that goes on from there. A dismissed group is not remembered, so a later notification within its hours
-      starts a new one. Dismissing a group and clearing delete at once, in the request.
+      notifications, skipping those of the groups it has found, so a page ends early, with the groups found and a `next`
+      link that goes on from there, only when its walk meets more than that of the groups it found (in practice a status
+      favourited by thousands within a few hours). A dismissed group is not remembered, so a later notification within
+      its hours starts a new one. Dismissing a group and clearing delete at once, in the request.
     - Notifications stored before the upgrade stay ungrouped, each a group of its own, as Mastodon left those it
       stored before it grouped them.
 - `GET /api/v1/notifications/unread_count` and `GET /api/v2/notifications/unread_count`, as Mastodon 4.5 has them: the
