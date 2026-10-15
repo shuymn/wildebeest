@@ -162,13 +162,15 @@ function compose(db: Db, text: string, author: Author, origin: string): Composed
 
 // Own media that is already attached to `statusId`, or unattached, processed and not doomed, in the order given
 // (MEDIA-1). Media of other accounts, still processing, or past its grace period is left out, as Mastodon leaves out
-// what `current_account.media_attachments.where(status_id: nil)` does not find.
+// what `current_account.media_attachments.where(status_id: nil)` does not find. Media a scheduled status holds is
+// attachable only by that scheduled status's publication (`scheduledId`).
 function attachableMedia(
 	db: Db,
 	accountId: string,
 	mediaIds: readonly string[],
 	statusId: string | null,
-	now: number
+	now: number,
+	scheduledId: string | null = null
 ): string[] {
 	if (mediaIds.length === 0) {
 		return []
@@ -176,17 +178,20 @@ function attachableMedia(
 	return db
 		.all<{ id: string }>(
 			`SELECT m.id FROM json_each(?1) j JOIN media_attachments m ON m.id = j.value
-			WHERE m.account_id = ?2 AND (m.status_id = ?3 OR (m.status_id IS NULL AND ${liveMediaSql('m', '?4')}))
+			WHERE m.account_id = ?2 AND (m.status_id = ?3
+				OR (m.status_id IS NULL AND m.scheduled_status_id IS ?5 AND ${liveMediaSql('m', '?4')}))
 			ORDER BY j.key`,
 			JSON.stringify([...new Set(mediaIds)]),
 			accountId,
 			statusId,
-			iso(now)
+			iso(now),
+			scheduledId
 		)
 		.map((row) => row.id)
 }
 
-// Attaches `mediaIds` in order; media the status stops using is detached and may be attached again for a day.
+// Attaches `mediaIds` in order (from a scheduled status too); media the status stops using is detached and may be
+// attached again for a day.
 function attachMedia(db: Db, statusId: string, mediaIds: readonly string[], now: number): void {
 	db.run(
 		`UPDATE media_attachments SET status_id = NULL, position = 0, gc_at = ?3
@@ -196,7 +201,7 @@ function attachMedia(db: Db, statusId: string, mediaIds: readonly string[], now:
 		iso(now + DETACHED_GRACE_MS)
 	)
 	db.run(
-		`UPDATE media_attachments SET status_id = ?1, gc_at = NULL,
+		`UPDATE media_attachments SET status_id = ?1, scheduled_status_id = NULL, gc_at = NULL,
 			position = (SELECT j.key FROM json_each(?2) j WHERE j.value = media_attachments.id)
 		WHERE id IN (SELECT value FROM json_each(?2))`,
 		statusId,
@@ -230,7 +235,7 @@ export function recountStatus(db: Db, statusId: string | null): void {
 	)
 }
 
-function iso(now: number): string {
+export function iso(now: number): string {
 	return new Date(now).toISOString()
 }
 
@@ -262,20 +267,17 @@ export type CreateStatusInput = {
 export type CreateStatusResult =
 	{ status: 'ok'; value: Status } | { status: 'reply_not_found' } | { status: 'invalid'; error: string }
 
-export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusResult>((db, input, { accountId }) => {
-	const options = { ...input.present, viewerId: accountId }
-	if (input.idempotencyKey !== undefined) {
-		// The key is the status's natural key: a repeat answers with the status the first request made.
-		const existing = db.first<{ id: string }>(
-			'SELECT id FROM statuses WHERE account_id = ? AND client_key = ?',
-			accountId,
-			input.idempotencyKey
-		)
-		const status = existing === undefined ? null : presentOwn(db, accountId, existing.id, options)
-		if (status !== null) {
-			return { status: 'ok', value: status }
-		}
-	}
+// A post as the poster sent it, checked and ready to write: by an immediate post, a scheduled one when it is
+// scheduled (scheduled-statuses.ts), and its publication.
+export type PostInput = Omit<CreateStatusInput, 'present' | 'idempotencyKey' | 'objectId'>
+
+export type PreparedPost = { author: Author; parent: ReplyParent | null; media: string[] }
+
+export type Prepared = PreparedPost | { status: 'reply_not_found' } | { status: 'invalid'; error: string }
+
+// PostStatusService's checks of a post, before anything is written: the raw bound, the status replied to, the media
+// and a blank text. `scheduledId` is the scheduled status being published, whose media it attaches (null: none).
+export function preparePost(db: Db, accountId: string, input: PostInput, scheduledId: string | null): Prepared {
 	if (exceedsRawLength(input.text, input.spoilerText)) {
 		return { status: 'invalid', error: TOO_LONG }
 	}
@@ -287,12 +289,27 @@ export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusRe
 			return { status: 'reply_not_found' }
 		}
 	}
-	const media = attachableMedia(db, accountId, input.mediaIds, null, input.now)
+	const media = attachableMedia(db, accountId, input.mediaIds, null, input.now, scheduledId)
 	if (input.text.trim() === '' && media.length === 0) {
 		return { status: 'invalid', error: "Validation failed: Text can't be blank" }
 	}
+	return { author, parent, media }
+}
+
+export function isPrepared(prepared: Prepared): prepared is PreparedPost {
+	return 'author' in prepared
+}
+
+// Writes a prepared post: the status, its mentions, tags and media, its notifications and its Create (activities.ts),
+// all in the caller's transaction. The new status's id.
+export function writePost(
+	db: Db,
+	accountId: string,
+	input: PostInput & { idempotencyKey?: string; objectId: string; origin: string },
+	{ author, parent, media }: PreparedPost
+): string {
 	const origin = new URL(author.uri).origin
-	const composed = compose(db, input.text, author, input.present.origin)
+	const composed = compose(db, input.text, author, input.origin)
 	const visibility = input.visibility ?? author.default_visibility
 	const sensitive = (input.sensitive ?? author.default_sensitive === 1) || input.spoilerText !== ''
 	const language = input.language ?? author.default_language
@@ -358,11 +375,42 @@ export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusRe
 	if (facts !== null) {
 		recordOutbound(db, accountId, createActivity(facts), input.now)
 	}
-	const status = presentOwn(db, accountId, id, options)
+	return id
+}
+
+// The status the Idempotency-Key `key` made for the account, as its own: a repeat answers with it.
+export function ownStatusByKey(db: Db, accountId: string, key: string, present: Present): Status | null {
+	const existing = db.first<{ id: string }>(
+		'SELECT id FROM statuses WHERE account_id = ? AND client_key = ?',
+		accountId,
+		key
+	)
+	return existing === undefined ? null : presentOwn(db, accountId, existing.id, { ...present, viewerId: accountId })
+}
+
+// Posts at once: the checks, then the write, answered with the new status.
+export function postNow(db: Db, accountId: string, input: CreateStatusInput): CreateStatusResult {
+	const prepared = preparePost(db, accountId, input, null)
+	if (!isPrepared(prepared)) {
+		return prepared
+	}
+	const id = writePost(db, accountId, { ...input, origin: input.present.origin }, prepared)
+	const status = presentOwn(db, accountId, id, { ...input.present, viewerId: accountId })
 	if (status === null) {
 		throw new Error('created status cannot be presented')
 	}
 	return { status: 'ok', value: status }
+}
+
+export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusResult>((db, input, { accountId }) => {
+	if (input.idempotencyKey !== undefined) {
+		// The key is the status's natural key: a repeat answers with the status the first request made.
+		const status = ownStatusByKey(db, accountId, input.idempotencyKey, input.present)
+		if (status !== null) {
+			return { status: 'ok', value: status }
+		}
+	}
+	return postNow(db, accountId, input)
 })
 
 type ReplyParent = {

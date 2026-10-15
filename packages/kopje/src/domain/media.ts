@@ -311,7 +311,12 @@ export type ProfileImage = 'avatar' | 'header'
 export const setProfileImage = userMediaDeleteOperation<{ id: string; kind: ProfileImage; now: number }, boolean>(
 	(db, { id, kind, now }, { accountId }) => {
 		const upload = ownUpload(db, accountId, id, now)
-		if (upload === undefined || upload.url === '') {
+		// An upload a scheduled status holds stays for that status (scheduled-statuses.ts).
+		const held = db.first(
+			'SELECT 1 AS held FROM media_attachments WHERE id = ? AND scheduled_status_id IS NOT NULL',
+			id
+		)
+		if (upload === undefined || upload.url === '' || held !== undefined) {
 			return false
 		}
 		const before = actorSnapshot(db, accountId)

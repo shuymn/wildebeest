@@ -47,6 +47,7 @@ const SCHEMA_TABLES = [
 	'push_deliveries',
 	'push_subscriptions',
 	'remote_keys',
+	'scheduled_statuses',
 	'status_edits',
 	'status_mentions',
 	'status_tags',
@@ -1084,6 +1085,104 @@ describe('Store migration runner', () => {
 			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
 		})
 	})
+
+	it('upgrades a Store with 0011_scheduled_statuses: uploads stay as they were, and scheduled statuses hold theirs and go with their account', async () => {
+		const index = NAMES.indexOf('0011_scheduled_statuses')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, index)).upgrade()).toMatchObject({ ok: true })
+			const alice = '100000000000000001'
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice', NULL)",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+				alice
+			)
+			sql.exec(
+				`INSERT INTO media_attachments (id, account_id, type, url, file_token, gc_at)
+				VALUES ('800000000000000001', ?, 'image', 'https://kopje.test/files/t/full', 't', '2026-10-13T00:00:00.000Z')`,
+				alice
+			)
+
+			expect(await kernel(state, MIGRATIONS.slice(0, index + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: [NAMES[index]],
+			})
+			expect(sql.exec('SELECT scheduled_status_id, gc_at FROM media_attachments').toArray()).toEqual([
+				{ scheduled_status_id: null, gc_at: '2026-10-13T00:00:00.000Z' },
+			])
+			const schedule = (id: string, at = '2026-10-20T00:00:00.000Z', params = '{}') =>
+				sql.exec(
+					'INSERT INTO scheduled_statuses (id, account_id, scheduled_at, params) VALUES (?, ?, ?, ?)',
+					id,
+					alice,
+					at,
+					params
+				)
+			schedule('600000000000000001')
+			sql.exec("UPDATE media_attachments SET scheduled_status_id = '600000000000000001', gc_at = NULL")
+			// The time in the one form the module writes, params a bounded JSON object, and an upload held or attached.
+			expect(() => schedule('600000000000000002', '2026-10-20T00:00:00Z')).toThrow(/CHECK/)
+			expect(() => schedule('600000000000000002', '2026-10-20T00:00:00.000Z', '[]')).toThrow(/CHECK/)
+			expect(() =>
+				schedule('600000000000000002', '2026-10-20T00:00:00.000Z', JSON.stringify({ text: 'x'.repeat(131072) }))
+			).toThrow(/CHECK/)
+			sql.exec(
+				"INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES ('200000000000000001', 'https://kopje.test/ap/o/1', ?, 'public', '2026-01-01T00:00:00.000Z')",
+				alice
+			)
+			expect(() => sql.exec("UPDATE media_attachments SET status_id = '200000000000000001'")).toThrow(/CHECK/)
+			// Deleting the scheduled status lets the upload go; deleting the account deletes its scheduled statuses.
+			sql.exec("DELETE FROM scheduled_statuses WHERE id = '600000000000000001'")
+			expect(sql.exec('SELECT scheduled_status_id FROM media_attachments').toArray()).toEqual([
+				{ scheduled_status_id: null },
+			])
+			schedule('600000000000000003')
+			sql.exec('DELETE FROM local_accounts WHERE account_id = ?', alice)
+			expect(sql.exec('SELECT count(*) AS n FROM scheduled_statuses').one()).toEqual({ n: 0 })
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('0011_scheduled_statuses reads each stored upload a bounded number of times, however many there are', async () => {
+		const index = NAMES.indexOf('0011_scheduled_statuses')
+		const statements = (MIGRATIONS[index]?.sql ?? '')
+			.split('\n')
+			.filter((line) => !line.startsWith('--'))
+			.join('\n')
+			.split(';')
+			.filter((statement) => statement.trim() !== '')
+		const measure = async (count: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, index)).upgrade()
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES ('100000000000000001', 'https://kopje.test/ap/users/alice', 'alice', NULL)"
+				)
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO media_attachments (id, account_id, type, url) SELECT CAST(800000000000000000 + i AS TEXT),
+						'100000000000000001', 'image', 'https://kopje.test/files/' || i FROM n`,
+					count
+				)
+				let read = 0
+				for (const statement of statements) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				return read
+			})
+		}
+		const small = await measure(1000)
+		const large = await measure(10_000)
+		// The column's check and the partial index's build each read an upload once, nothing per pair of rows.
+		expect(large - small).toBeLessThanOrEqual(5 * (10_000 - 1000))
+	}, 60_000)
 
 	it('stays readonly with exact bookkeeping when a file fails, and lets a fixed build continue', async () => {
 		const store = freshStore()

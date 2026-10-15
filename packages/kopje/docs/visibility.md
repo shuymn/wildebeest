@@ -191,6 +191,17 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R23 delivery targets      | `recipientsFor`, by `outboundKind`, turned into inboxes by `audienceTargets` in `deliveries.ts`. See "Outbound recipients".                                                                                                                                                                                                                                                                                                        |
 | R24 list timeline         | `homeFilterSql` in `listTimeline`, with the list's active members, the follow's options and the list's `replies_policy`; the owner's lists only (`ownList` in `lists.ts`).                                                                                                                                                                                                                                                         |
 | R25 conversations         | `visibleSql` (through `statusReads`) for each last status; rows are the owner's only (`listConversations`, `markConversation`, `deleteConversation` in `conversations.ts`).                                                                                                                                                                                                                                                        |
+| R26 scheduled statuses    | `scheduledOwnSql` in every read of `scheduled_statuses`, all in `scheduled-statuses.ts`: the owner's alone, anyone else's not found; published through `writePost`, after which R1 to R25 apply.                                                                                                                                                                                                                                   |
+
+A scheduled status (`src/domain/scheduled-statuses.ts`, migration `0011_scheduled_statuses`) is not a status: it is
+a row of `scheduled_statuses` with the post's parameters, and its owner's alone (R26, `scheduledOwnSql`). No read,
+notification or delivery path reads that table (the architecture test below), so nothing of it is listed, notified or
+sent before it is published. The cron publishes it, when it is due, through `preparePost` and `writePost` in
+`src/domain/statuses.ts`, the path of an immediate post, in the transaction that deletes the row; from then on it is
+an ordinary status under the rules above. The uploads it will attach are held (`media_attachments.scheduled_status_id`),
+so no other post attaches them and the sweep of unattached uploads leaves them. `test/scheduled-statuses.test.ts`
+("nothing leaks before publication") schedules generated posts of every visibility, with mentions and replies, and
+checks after each that no other table changed and that each account sees only its own.
 
 ## Outbound recipients
 
@@ -314,6 +325,8 @@ module:
   following collections in `actors.ts`, whose items name an inbox and are not sent anything;
 - reads `shared_inbox_url` outside the policy module, except where `inbox.ts` stores a remote actor's inboxes and where
   `deliveries.ts` moves a row its recipient's shared inbox refused to that recipient's personal inbox.
+- reads or writes `scheduled_statuses` outside `scheduled-statuses.ts`, whose every read is the owner's
+  (`scheduledOwnSql`, R26).
 
 An allowed file that no longer matches fails the test too, so the list does not outlive its reason.
 
@@ -355,12 +368,12 @@ test/policy-oracle.test.ts` replays it.
 `test/policy-bounds.test.ts` takes one generated world, for a fixed seed, in which every endpoint below shows the viewer
 something. It runs home, the public and tag feeds, account statuses, notifications, context, conversations, favourites,
 bookmarks, `favourited_by`, `reblogged_by`, relationships, the followers and following of an account (one that no unrelated account
-follows), a list's timeline (a list of every account of the world), the viewer's timeline markers, status and hashtag search, and account search among the viewer's follows (a search of every account reads the
+follows), a list's timeline (a list of every account of the world), the viewer's timeline markers, status and hashtag search, the viewer's scheduled statuses, and account search among the viewer's follows (a search of every account reads the
 newest accounts the instance knows, a window that grows with them up to its limit) on that world alone, and again with
 1,000 unrelated remote accounts and 100 unrelated local ones: their statuses (never public, though they carry the
 hashtag the tag feed reads), replies and boosts, their follows, blocks, mutes and domain blocks of the world's accounts
 and domains, their favourites, bookmarks and notifications, their exclusive lists of the world's accounts and their
-own, and their timeline markers, together with the viewer's own blocks and mutes of those
+own, and their timeline markers and scheduled statuses, together with the viewer's own blocks and mutes of those
 accounts and domain blocks of domains nobody lives on. Each endpoint must show the same with them as without (the same
 statuses, accounts, notifications and hashtags in the same order, and the same relationship flags), and the rows it
 reads (RES-7) may grow by at most 10. A second case grows the history of each author home and a list read instead:
@@ -381,7 +394,9 @@ the middle of the replicated history and its oldest page, and the others once; e
 something, the newest pages must be the same at both factors, and the rows read may grow by at most 10. Status and
 hashtag search are exempt (their windows grow with the history up to their documented limits). The case does not grow
 the author set (no follow cap bounds it yet), and it does not build skewed histories, where one author's statuses
-dominate. A last case grows the histories the viewer never sees, from 20 statuses each to 2,000: an account the viewer
+dominate. Another case grows the accounts that hold scheduled statuses, from 10 to 300 with 30 each: the viewer's
+page of scheduled statuses, the listing of the due ones and the publication of one must each read at most 10 rows more.
+A last case grows the histories the viewer never sees, from 20 statuses each to 2,000: an account the viewer
 does not follow sending them direct statuses, which home must not read, and an account that blocks the viewer, one the
 viewer blocks, a suspended one and one being deleted, whose statuses the account statuses endpoint must not read. Home
 must show a full page and the account statuses none, reading at most 10 rows more.
