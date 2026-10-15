@@ -15,6 +15,7 @@ import m0013 from '../../migrations/0013_polls.sql'
 import m0014 from '../../migrations/0014_account_notes_and_pins.sql'
 import m0015 from '../../migrations/0015_media_shown.sql'
 import m0016 from '../../migrations/0016_tags.sql'
+import m0017 from '../../migrations/0017_notification_groups.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
 // never change. Each file runs in its own transaction, must finish well under 30 seconds, and must be pure SQL.
@@ -36,4 +37,5 @@ export const MIGRATIONS: readonly { name: string; sql: string }[] = [
 	{ name: '0014_account_notes_and_pins', sql: m0014 },
 	{ name: '0015_media_shown', sql: m0015 },
 	{ name: '0016_tags', sql: m0016 },
+	{ name: '0017_notification_groups', sql: m0017 },
 ]

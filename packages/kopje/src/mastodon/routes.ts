@@ -10,6 +10,7 @@ import * as instance from './instance'
 import * as lists from './lists'
 import * as markers from './markers'
 import * as media from './media'
+import * as notificationGroups from './notification-groups'
 import * as notifications from './notifications'
 import * as oauth from './oauth'
 import * as placeholders from './placeholders'
@@ -583,6 +584,12 @@ export const ROUTES: readonly Route[] = [
 	},
 	{
 		method: 'GET',
+		path: '/api/v1/notifications/unread_count',
+		access: { scope: 'read:notifications' },
+		handler: notificationGroups.unreadCount,
+	},
+	{
+		method: 'GET',
 		path: '/api/v1/notifications/:id',
 		access: { scope: 'read:notifications' },
 		handler: notifications.getNotification,
@@ -592,6 +599,43 @@ export const ROUTES: readonly Route[] = [
 		path: '/api/v1/notifications/:id/dismiss',
 		access: { scope: 'write:notifications' },
 		handler: notifications.dismissNotification,
+	},
+	// Grouped notifications (mastodon/notification-groups.ts).
+	{
+		method: 'GET',
+		path: '/api/v2/notifications',
+		access: { scope: 'read:notifications' },
+		handler: notificationGroups.listGroupedNotifications,
+	},
+	{
+		method: 'GET',
+		path: '/api/v2/notifications/unread_count',
+		access: { scope: 'read:notifications' },
+		handler: notificationGroups.unreadGroupCount,
+	},
+	{
+		method: 'POST',
+		path: '/api/v2/notifications/clear',
+		access: { scope: 'write:notifications' },
+		handler: notifications.clearNotifications,
+	},
+	{
+		method: 'GET',
+		path: '/api/v2/notifications/:group_key',
+		access: { scope: 'read:notifications' },
+		handler: notificationGroups.getNotificationGroup,
+	},
+	{
+		method: 'POST',
+		path: '/api/v2/notifications/:group_key/dismiss',
+		access: { scope: 'write:notifications' },
+		handler: notificationGroups.dismissNotificationGroup,
+	},
+	{
+		method: 'GET',
+		path: '/api/v2/notifications/:group_key/accounts',
+		access: { scope: 'read:notifications' },
+		handler: notificationGroups.notificationGroupAccounts,
 	},
 
 	{ method: 'POST', path: '/api/v1/push/subscription', access: { scope: 'push' }, handler: push.createSubscription },

@@ -14,6 +14,8 @@ import type { Db } from '../db/sql'
 // leave its status out (FeedInsertWorker), which includes a sender the recipient mutes. Only a local recipient is
 // written one. A new notification also records a push for each of the recipient's Web Push subscriptions that wants
 // it; domain/push.ts checks this rule again, at its own time, before each is sent (PUSH-3).
+// A favourite, a boost or a follow also records the group it joins in the API v2's grouped notifications
+// (group_key, which v1 shows too); notification-groups.ts reads them.
 
 export type NotificationType =
 	'mention' | 'status' | 'reblog' | 'favourite' | 'follow' | 'follow_request' | 'update' | 'poll'
@@ -22,6 +24,8 @@ export type Notification = {
 	id: string
 	type: string
 	created_at: string
+	// Mastodon 4.5's REST::NotificationSerializer#group_key: the notification's group, or `ungrouped-<id>`.
+	group_key: string
 	account: Account
 	status?: Status
 }
@@ -46,15 +50,16 @@ export function notify(db: Db, input: NotifyInput): void {
 		)
 	}
 	const inserted = db.all<{ id: number }>(
-		`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at)
-		SELECT ?1, ?2, ?3, ?4, ?5
+		`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at, group_key)
+		SELECT ?1, ?2, ?3, ?4, ?5, ?6
 		WHERE EXISTS (SELECT 1 FROM local_accounts WHERE account_id = ?1) AND ${shownSql('?1', '?2', '?3', '?4', '?5')}
 		ON CONFLICT DO NOTHING RETURNING id`,
 		input.recipientId,
 		input.type,
 		input.fromId,
 		input.statusId,
-		new Date(input.now).toISOString()
+		new Date(input.now).toISOString(),
+		groupKeyOf(db, input)
 	)
 	// VIS-10: a push only for a row inserted now, never for a repeat.
 	for (const { id } of inserted) {
@@ -64,6 +69,36 @@ export function notify(db: Db, input: NotifyInput): void {
 			addToConversation(db, input.recipientId, input.statusId)
 		}
 	}
+}
+
+// The notification types grouped in the API v2 (Mastodon's Notification::GROUPABLE_NOTIFICATION_TYPES, less
+// admin.sign_up, which Kopje never notifies).
+export const GROUPABLE_TYPES: readonly NotificationType[] = ['favourite', 'reblog', 'follow']
+
+// How many hours a group may span (Notification::Groups::MAXIMUM_GROUP_SPAN_HOURS).
+const GROUP_SPAN_HOURS = 12
+
+// The group a new notification joins (Notification#set_group_key!): a favourite or boost of a status, or a follow,
+// by the hour it happens, joining the recipient's group of the same kind from up to 11 hours before. Mastodon keeps
+// the last hour of each kind in Redis; here it is the newest of those hours that still has a notification, found by
+// the group index, one seek per hour. Other types are not grouped (null).
+function groupKeyOf(db: Db, input: NotifyInput): string | null {
+	if (!GROUPABLE_TYPES.includes(input.type)) {
+		return null
+	}
+	const kind = input.type === 'follow' ? input.type : `${input.type}-${input.statusId ?? ''}`
+	const hour = Math.floor(input.now / 3_600_000)
+	const previous = db.first<{ hour: number }>(
+		`WITH RECURSIVE h(hour) AS (SELECT CAST(?3 AS INTEGER) UNION ALL SELECT hour - 1 FROM h WHERE hour > ?3 - ?4 + 1)
+		SELECT hour FROM h WHERE EXISTS (SELECT 1 FROM notifications
+			WHERE account_id = ?1 AND group_key = ?2 || '-' || h.hour AND group_key IS NOT NULL)
+		ORDER BY hour DESC LIMIT 1`,
+		input.recipientId,
+		kind,
+		hour,
+		GROUP_SPAN_HOURS
+	)
+	return `${kind}-${previous?.hour ?? hour}`
 }
 
 // At most this many pushes wait at once (RES-4); a notification beyond it gets no push, but is still written.
@@ -114,14 +149,16 @@ type NotificationRow = {
 	from_account_id: string
 	status_id: string | null
 	created_at: string
+	group_key: string | null
 }
 
 // The columns of a notification row besides status_id, which StatusReads.notifications selects first.
-const NOTIFICATION_COLUMNS = {
+export const NOTIFICATION_COLUMNS = {
 	id: 'CAST(n.id AS TEXT)',
 	type: 'n.type',
 	from_account_id: 'n.from_account_id',
 	created_at: 'n.created_at',
+	group_key: 'n.group_key',
 }
 
 function presentNotifications(
@@ -148,6 +185,7 @@ function presentNotifications(
 				id: row.id,
 				type: row.type,
 				created_at: row.created_at,
+				group_key: row.group_key ?? `ungrouped-${row.id}`,
 				account,
 				...(status === undefined ? {} : { status }),
 			},
@@ -200,7 +238,7 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 	}
 )
 
-const NOTIFICATION_ID = /^\d{1,19}$/
+export const NOTIFICATION_ID = /^\d{1,19}$/
 
 export const getNotification = userReadOperation<{ id: string; present: Present }, Notification | null>(
 	(db, { id, present }, _viewer, viewer) => {

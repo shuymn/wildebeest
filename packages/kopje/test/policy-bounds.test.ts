@@ -28,6 +28,15 @@ import {
 import { inboxOwnerExists } from '../src/domain/inbox'
 import { listAccounts } from '../src/domain/lists'
 import { getMarkers, MARKER_TIMELINES } from '../src/domain/markers'
+import {
+	getNotificationGroup,
+	GROUP_COUNT,
+	GROUP_WALK,
+	listGroupedNotifications,
+	notificationGroupAccounts,
+	unreadCount,
+	unreadGroupCount,
+} from '../src/domain/notification-groups'
 import { listNotifications } from '../src/domain/notifications'
 import { getPoll, vote } from '../src/domain/polls'
 import { dueScheduled, listScheduled, publishScheduled } from '../src/domain/scheduled-statuses'
@@ -117,6 +126,8 @@ const VIEWER_FILTER = '720000000000000001'
 const TOKEN_HASH = 'policy-bounds-token'
 const PRESENT = { origin: 'https://kopje.test' }
 const PAGE = { limit: 20 }
+// The group of the viewer's follow notifications (and of the unrelated local accounts' own).
+const FOLLOW_GROUP = 'follow-1'
 
 // Unrelated rows: per unrelated remote account, three statuses (a reply and a boost among them) and its edges (a
 // follow of a world account other than LISTED, whose followers are listed); one unrelated local account per ten remote
@@ -149,9 +160,10 @@ function writeViewer(sql: SqlStorage): void {
 			accountId(x)
 		)
 		sql.exec(
-			"INSERT INTO notifications (account_id, type, from_account_id) VALUES (?, 'follow', ?)",
+			"INSERT INTO notifications (account_id, type, from_account_id, group_key) VALUES (?, 'follow', ?, ?)",
 			viewer,
-			accountId(x)
+			accountId(x),
+			FOLLOW_GROUP
 		)
 	})
 	sql.exec(
@@ -233,13 +245,14 @@ function writeFeaturedTags(sql: SqlStorage, account: string): void {
 
 const FEATURED_BASE = 740000000000000000n
 
+// The notifications marker reads from the first notification on, so the unread counts have something to count.
 function writeMarkers(sql: SqlStorage, account: string): void {
 	for (const timeline of MARKER_TIMELINES) {
 		sql.exec(
 			"INSERT INTO markers (account_id, timeline, last_read_id, version, updated_at) VALUES (?, ?, ?, 1, '2026-01-01T00:00:00.000Z')",
 			account,
 			timeline,
-			account
+			timeline === 'notifications' ? '1' : account
 		)
 	}
 }
@@ -428,6 +441,14 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 				accountId(k % worldAccounts),
 				target
 			)
+			// Its follows from world accounts, in a group with the key of the viewer's.
+			sql.exec(
+				`INSERT INTO notifications (account_id, type, from_account_id, group_key) VALUES (?, 'follow', ?, ?)
+				ON CONFLICT DO NOTHING`,
+				owner,
+				accountId(k % worldAccounts),
+				FOLLOW_GROUP
+			)
 		}
 	}
 }
@@ -534,6 +555,8 @@ const credential = { tokenHash: TOKEN_HASH, scope: 'read', now: NOW } as const
 const target = { credential, now: NOW, id: statusId(TARGET), present: PRESENT }
 const searchInput = { credential, limit: 20, offset: 0, following: false, localDomain: 'kopje.test', present: PRESENT }
 const timeline = { credential, now: NOW, page: PAGE, local: false, remote: false, onlyMedia: false, present: PRESENT }
+const notificationsQuery = { credential, page: PAGE, types: [], excludeTypes: [] }
+const unread = { credential, limit: 100, types: [], excludeTypes: [] }
 
 // What an endpoint that pages a viewer's history pages by: statuses (by status id: conversations by their last status's), the viewer's notifications,
 // favourites or bookmarks (by their ids), or a status's interactors (accounts, which are not replicated).
@@ -568,6 +591,20 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 		{ credential, page: PAGE, types: [], excludeTypes: [], accountId: null, present: PRESENT },
 		'notifications',
 	],
+	[
+		'grouped notifications',
+		listGroupedNotifications,
+		{ ...notificationsQuery, groupedTypes: null, expandAccounts: 'full', present: PRESENT },
+		'notifications',
+	],
+	['notification group', getNotificationGroup, { credential, groupKey: FOLLOW_GROUP, present: PRESENT }],
+	[
+		'notification group accounts',
+		notificationGroupAccounts,
+		{ credential, groupKey: FOLLOW_GROUP, page: PAGE, present: PRESENT },
+	],
+	['unread count', unreadCount, { ...unread, accountId: null, groupedTypes: null }],
+	['unread group count', unreadGroupCount, { ...unread, accountId: null, groupedTypes: null }],
 	['context', statusContext, target],
 	['conversations', listConversations, { credential, page: PAGE, present: PRESENT }, 'statuses'],
 	['favourites', favourites, { credential, page: PAGE, present: PRESENT }, 'favourites'],
@@ -641,6 +678,12 @@ function shown(output: unknown): number {
 	if (Array.isArray(value.items)) {
 		return value.items.length
 	}
+	if (Array.isArray(value.notification_groups)) {
+		return value.notification_groups.length
+	}
+	if (typeof value.count === 'number') {
+		return value.count
+	}
 	if (Array.isArray(value.options)) {
 		return value.options.length
 	}
@@ -700,6 +743,11 @@ function identities(output: unknown): unknown {
 			endorsed,
 			note,
 		}
+	}
+	// A notification group, without the time of its newest notification (written at each Store's own time).
+	if ('notifications_count' in value) {
+		const { latest_page_notification_at: _at, ...group } = value
+		return group
 	}
 	if ('type' in value && 'account' in value) {
 		return {
@@ -2265,6 +2313,142 @@ describe('statuses cost the media they show, not the media their edits dropped (
 		}
 		expect(grown).toEqual([])
 	}, 60_000)
+})
+
+// Grouped notifications add a dimension: the notifications of one group. A status favourited by `count` accounts
+// within the hours of one group, between older follows and newer follow requests: a page of groups, a group, its
+// accounts and the unread counts read the same rows with 2,500 favourites or 5,000 (one group dominating the walk,
+// past its limit), since a walk reads at most GROUP_WALK notifications, a group counts at most GROUP_COUNT and a
+// group's accounts are paged by its index.
+describe('grouped notifications read a walk, however many notifications a group holds (RES-7)', () => {
+	const VIEWER_ID = '650000000000000000'
+	const STATUS_ID = '651000000000000000'
+	const GROUP_TOKEN = 'grouping-token'
+	const sender = (i: number) => String(652000000000000000n + BigInt(i))
+	const FAVOURITES = `favourite-${STATUS_ID}-1`
+	// The follows and follow requests around the group, and the first favourite's id.
+	const FOLLOWS = 50
+	const REQUESTS = 5
+	const FIRST_FAVOURITE = FOLLOWS + 1
+
+	async function grouping(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES (?, 'https://kopje.test/ap/o/s', ?, 'public', '<p>s</p>', ?)`,
+				STATUS_ID,
+				VIEWER_ID,
+				new Date(NOW).toISOString()
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://far' || (i % 10) || '.example/users/u' || i, 'u' || i,
+					'far' || (i % 10) || '.example'
+				FROM n`,
+				count,
+				sender(0)
+			)
+			const notifications = (type: string, limit: number, groupKey: string | null) =>
+				sql.exec(
+					`INSERT INTO notifications (account_id, type, from_account_id, status_id, group_key)
+					SELECT ?1, ?2, id, CASE WHEN ?2 = 'favourite' THEN ?3 END, ?4 FROM accounts
+					WHERE id <> ?1 ORDER BY id LIMIT ?5`,
+					VIEWER_ID,
+					type,
+					STATUS_ID,
+					groupKey,
+					limit
+				)
+			notifications('follow', FOLLOWS, null)
+			notifications('favourite', count, FAVOURITES)
+			notifications('follow_request', REQUESTS, null)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('grouping', 'secret', 'grouping', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'grouping', ?, 'read')",
+				GROUP_TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 2,500 or 5,000 notifications in a group, on the newest, a middle and the oldest page', async () => {
+		// Both sizes are past the walk's limit, so the group dominates it at either.
+		expect(GROUP_WALK).toBeLessThan(2500)
+		const few = await grouping(2500)
+		const many = await grouping(5000)
+		const credential = { tokenHash: GROUP_TOKEN, scope: 'read', now: NOW } as const
+		const groups = {
+			credential,
+			types: [],
+			excludeTypes: [],
+			groupedTypes: null,
+			expandAccounts: 'full',
+			present: PRESENT,
+		}
+		const counts = { credential, limit: 100, types: [], excludeTypes: [], accountId: null, groupedTypes: null }
+		// The newest page; a page from the middle of the group (the same favourites at either size); the page above the
+		// follows, oldest first into the group (the accounts, which page by max_id alone: the group's oldest page).
+		const middle = { ...PAGE, maxId: String(FIRST_FAVOURITE + 450) }
+		const reads: [string, StoreOperation<never, unknown>, unknown][] = [
+			...[PAGE, middle, { ...PAGE, minId: String(FOLLOWS) }].map(
+				(page): [string, StoreOperation<never, unknown>, unknown] => [
+					`grouped notifications ${JSON.stringify(page)}`,
+					listGroupedNotifications,
+					{ ...groups, page },
+				]
+			),
+			...[PAGE, middle, { ...PAGE, maxId: String(FIRST_FAVOURITE + PAGE.limit) }].map(
+				(page): [string, StoreOperation<never, unknown>, unknown] => [
+					`notification group accounts ${JSON.stringify(page)}`,
+					notificationGroupAccounts,
+					{ credential, groupKey: FAVOURITES, page, present: PRESENT },
+				]
+			),
+			['notification group', getNotificationGroup, { credential, groupKey: FAVOURITES, present: PRESENT }],
+			['unread count', unreadCount, counts],
+			['unread group count', unreadGroupCount, counts],
+		]
+		const grown: string[] = []
+		for (const [name, operation, input] of reads) {
+			// Each shows as much at either size (the newest notifications differ by size).
+			const shownBy = async (store: StoreStub) =>
+				runInDurableObject(store, (_instance, state) => shown(operation.run(state.storage.sql, input as never)))
+			const fewShown = await shownBy(few)
+			expect([name, fewShown > 0]).toEqual([name, true])
+			expect([name, await shownBy(many)]).toEqual([name, fewShown])
+			const fewRows = await rowsRead({ store: few }, operation, input as never)
+			const manyRows = await rowsRead({ store: many }, operation, input as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+		// The newest page reads the follow requests and the group up to the walk's limit, at either size.
+		for (const store of [few, many]) {
+			const newest = await runInDurableObject(store, (_instance, state) =>
+				listGroupedNotifications.run(state.storage.sql, { ...groups, page: PAGE } as never)
+			)
+			expect(
+				(
+					newest as { value: { notification_groups: { type: string; notifications_count: number }[] } }
+				).value.notification_groups.map((group) => [group.type, group.notifications_count])
+			).toEqual([...Array.from({ length: REQUESTS }, () => ['follow_request', 1]), ['favourite', GROUP_COUNT]])
+		}
+	}, 120_000)
 })
 
 // A followed hashtag whose newest statuses are a blocked author's: home inspects a bounded number of the hashtag's
