@@ -50,7 +50,6 @@ import {
 } from './auth'
 import { addToConversation } from './conversations'
 import { beginRetraction } from './deliveries'
-import { activeFilters } from './filters'
 import { allocateLocalId } from './ids'
 import { DETACHED_GRACE_MS, liveMediaSql } from './media'
 import { notify } from './notifications'
@@ -63,7 +62,7 @@ import {
 	presentOwnStatus,
 	type PresentOwnOptions,
 	presentStatus,
-	presentStatuses,
+	presentStatusLists,
 	type Status,
 } from './status-presenter'
 import { exceedsRawLength, mentionKey, type MentionRef, parseStatusText, renderStatusHtml } from './status-text'
@@ -755,27 +754,13 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 			limits.descendants,
 			now
 		)
-		// The viewer's filters, read once for both lists, the text budget shared by all their members.
-		const options = {
-			...present,
-			viewer,
-			filters: activeFilters(db, viewer, ancestors.length + descendants.length),
-		}
-		return {
-			status: 'ok',
-			value: {
-				ancestors: presentStatuses(
-					db,
-					ancestors.map((row) => row.id),
-					options
-				),
-				descendants: presentStatuses(
-					db,
-					descendants.map((row) => row.id),
-					options
-				),
-			},
-		}
+		// Presented as one response, so the filters' text budget is shared by both lists.
+		const [presentedAncestors = [], presentedDescendants = []] = presentStatusLists(
+			db,
+			[ancestors.map((row) => row.id), descendants.map((row) => row.id)],
+			{ ...present, viewer }
+		)
+		return { status: 'ok', value: { ancestors: presentedAncestors, descendants: presentedDescendants } }
 	}
 )
 

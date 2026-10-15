@@ -8,7 +8,15 @@ import {
 	type VisibleStatusId,
 	visibleSql,
 } from './audience'
-import { type ActiveFilters, activeFilters, applyFilters, type FilterResult, filterStatusMatches } from './filters'
+import {
+	type ActiveFilters,
+	activeFilters,
+	applyFilters,
+	type FilterResult,
+	filterStatusMatches,
+	filterTextLimits,
+	MAX_FILTER_TEXT,
+} from './filters'
 import { htmlToPlainText } from './plain-text'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
@@ -150,7 +158,23 @@ type MentionRow = {
 // Statuses the read rule passed for the viewer, in the order of `ids`; ids with no row, and boosts whose original the
 // viewer may not see, are left out.
 export function presentStatuses(db: Db, ids: readonly VisibleStatusId[], options: PresentOptions): Status[] {
-	return present(db, ids, options, false)
+	return present(db, ids, options, false).flatMap((status) => (status === undefined ? [] : [status]))
+}
+
+// Several lists of statuses presented as one response (a thread's ancestors and descendants), so their filters' text
+// budget is shared by all of them; each list as presentStatuses would give it.
+export function presentStatusLists(
+	db: Db,
+	lists: readonly (readonly VisibleStatusId[])[],
+	options: PresentOptions
+): Status[][] {
+	const all = present(db, lists.flat(), options, false)
+	let start = 0
+	return lists.map((list) => {
+		const part = all.slice(start, start + list.length)
+		start += list.length
+		return part.flatMap((status) => (status === undefined ? [] : [status]))
+	})
 }
 
 export function presentStatus(db: Db, id: VisibleStatusId, options: PresentOptions): Status | null {
@@ -162,7 +186,8 @@ export function presentOwnStatus(db: Db, id: OwnStatusId, options: PresentOwnOpt
 	return present(db, [id], options, true)[0] ?? null
 }
 
-function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own: boolean): Status[] {
+// The statuses in the order of `ids`, undefined for an id with no row or a boost left out.
+function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own: boolean): (Status | undefined)[] {
 	if (ids.length === 0) {
 		return []
 	}
@@ -207,11 +232,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 	)
 	const flags = viewerFlags(db, viewerId, all)
 	const filters =
-		options.filters !== undefined
-			? options.filters
-			: options.viewer === null
-				? null
-				: activeFilters(db, options.viewer, ids.length)
+		options.filters !== undefined ? options.filters : options.viewer === null ? null : activeFilters(db, options.viewer)
 	const statusMatches =
 		filters === null ? new Map<string, Set<string>>() : filterStatusMatches(db, filters, [...byId.keys()])
 	// Status#searchable_text of a status: its spoiler text, its text (a local status's source, a remote one's HTML as
@@ -222,6 +243,17 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			row.author_domain === null ? (row.source_text ?? htmlToPlainText(row.content)) : remotePlainText(row.content),
 			(media.get(row.id) ?? []).map((m) => m.description).join('\n\n'),
 		].join('\n\n')
+	// The text each status is matched on (filterTextLimits): read only when a filter has keywords.
+	const texts = new Map<string, string>()
+	if (filters !== null && filters.filters.some((filter) => filter.keywords !== null)) {
+		const capped = ids.map((id) => {
+			const row = byId.get(id)
+			const proper = row?.reblog_of_id == null ? row : byId.get(row.reblog_of_id)
+			return proper === undefined ? '' : searchableText(proper).slice(0, MAX_FILTER_TEXT)
+		})
+		const limits = filterTextLimits(capped.map((text) => text.length))
+		ids.forEach((id, i) => texts.set(id, (capped[i] ?? '').slice(0, limits[i])))
+	}
 
 	const presentRow = (row: StatusRow, top: boolean, filtered: FilterResult[] = []): Status | undefined => {
 		const account = accounts.get(row.account_id)
@@ -233,7 +265,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			const proper = row.reblog_of_id === null ? row : byId.get(row.reblog_of_id)
 			if (proper !== undefined) {
 				filtered = applyFilters(filters, statusMatches, {
-					text: searchableText(proper),
+					text: texts.get(row.id) ?? '',
 					ids: row.reblog_of_id === null ? [row.id] : [row.id, row.reblog_of_id],
 				})
 			}
@@ -304,10 +336,9 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		}
 	}
 
-	return ids.flatMap((id) => {
+	return ids.map((id) => {
 		const row = byId.get(id)
-		const status = row === undefined ? undefined : presentRow(row, true)
-		return status === undefined ? [] : [status]
+		return row === undefined ? undefined : presentRow(row, true)
 	})
 }
 

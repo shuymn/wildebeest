@@ -13,7 +13,13 @@ import {
 	type Status,
 	type User,
 } from './status-helpers'
-import { MAX_FILTER_KEYWORDS, MAX_FILTER_TEXT, MAX_FILTERS } from '../src/domain/filters'
+import {
+	filterTextLimits,
+	MAX_FILTER_KEYWORDS,
+	MAX_FILTER_REQUEST_TEXT,
+	MAX_FILTER_TEXT,
+	MAX_FILTERS,
+} from '../src/domain/filters'
 
 // Filters through the API (domain/filters.ts, mastodon/filters.ts), as Mastodon 4.5 has them: the v2 endpoints with
 // their keywords and statuses, the v1 layer over the same rows, their errors, and the filters applied where statuses
@@ -848,4 +854,92 @@ describe('filter review fixes', () => {
 		expect(page).toHaveLength(40)
 		expect(again.map((s) => (s.filtered as FilterResult[]).length > 0)).toEqual(Array.from({ length: 40 }, () => true))
 	}, 60_000)
+})
+
+describe('filter text budget and word characters', () => {
+	it('gives the budget a short status leaves to the long ones (water-filling)', () => {
+		expect(filterTextLimits([10, 20, 30])).toEqual([10, 20, 30])
+		// 41 texts at the cap: each gets an even share of the budget.
+		const even = filterTextLimits(Array.from({ length: 41 }, () => MAX_FILTER_TEXT))
+		expect(new Set(even)).toEqual(new Set([Math.floor(MAX_FILTER_REQUEST_TEXT / 41)]))
+		// Short texts are matched whole, and the long ones share what they leave.
+		const mixed = filterTextLimits([5, ...Array.from({ length: 50 }, () => MAX_FILTER_TEXT)])
+		expect(mixed[0]).toBe(5)
+		expect(mixed[1]).toBe(Math.floor((MAX_FILTER_REQUEST_TEXT - 5) / 50))
+		expect(mixed.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(MAX_FILTER_REQUEST_TEXT)
+	})
+
+	it('matches a needle deep in the one long reply among a thousand short ones', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const remote = await remoteAccount(h.store, 'carol')
+		const root = await seedStatus(h.store, { accountId: remote, visibility: 'public', content: '<p>root</p>' })
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000)
+			INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, in_reply_to_account_id, visibility,
+				content, published_at)
+			SELECT printf('3%017d', i), 'https://remote.example/objects/r' || i, ?1, s.uri, s.id, ?1, 'public',
+				'<p>hello</p>', s.published_at
+			FROM n, statuses s WHERE s.id = ?2`,
+			remote,
+			root
+		)
+		const long = await seedStatus(h.store, {
+			accountId: remote,
+			visibility: 'public',
+			content: `<p>${'x'.repeat(468)} needle</p>`,
+			inReplyToId: root,
+		})
+		await createFilter(h, alice, { title: 'n', context: ['thread'], keywords_attributes: [{ keyword: 'needle' }] })
+		const { body } = await getJson<{ ancestors: Status[]; descendants: Status[] }>(
+			h,
+			`/api/v1/statuses/${root}/context`,
+			alice.token
+		)
+		expect(body.descendants).toHaveLength(1001)
+		const matched = body.descendants.filter((s) => (s.filtered as FilterResult[]).length > 0).map((s) => s.id)
+		expect(matched).toEqual([long])
+	}, 60_000)
+
+	it("decides word characters as Onigmo's [[:word:]] does: Alphabetic, marks, Nd, Pc and join controls", async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const remote = await remoteAccount(h.store, 'carol')
+		const cases = {
+			half: '1½ cups',
+			circled: 'xⒶ',
+			circledAlone: 'Ⓐ!',
+			roman: 'XⅫ',
+			romanAlone: '(Ⅻ)',
+			zwj: 'ab‍cd',
+			ascii: 'abc def',
+		}
+		const ids = new Map<string, string>()
+		for (const [name, text] of Object.entries(cases)) {
+			ids.set(name, await seedStatus(h.store, { accountId: remote, visibility: 'public', content: `<p>${text}</p>` }))
+		}
+		await createFilter(h, alice, {
+			title: 'w',
+			context: ['account'],
+			keywords_attributes: [
+				{ keyword: '½' },
+				{ keyword: 'Ⓐ' },
+				{ keyword: 'Ⅻ' },
+				{ keyword: 'ab' },
+				{ keyword: 'def' },
+			],
+		})
+		const shown = await timeline(h, `/api/v1/accounts/${remote}/statuses?limit=40`, alice.token)
+		const matched = (name: string) =>
+			(shown.find((s) => s.id === ids.get(name))!.filtered as FilterResult[]).flatMap((r) => r.keyword_matches ?? [])
+		// ½ is not a word character (No): no boundary is added, so it matches inside "1½".
+		expect(matched('half')).toEqual(['½'])
+		// Ⓐ and Ⅻ are Alphabetic: whole-word boundaries apply.
+		expect([matched('circled'), matched('circledAlone')]).toEqual([[], ['Ⓐ']])
+		expect([matched('roman'), matched('romanAlone')]).toEqual([[], ['Ⅻ']])
+		// A zero-width joiner continues the word, so "ab" is not a whole word in "ab‍cd".
+		expect(matched('zwj')).toEqual([])
+		expect(matched('ascii')).toEqual(['def'])
+	})
 })
