@@ -425,18 +425,19 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 
 ### Authorization (AUTH)
 
-- **VIS-17: a filter changes only what its owner is shown.** Filters (`CustomFilter`) belong to a local account;
+- **VIS-17: a filter changes only what its owner is told.** Filters (`CustomFilter`) belong to a local account;
   another account's filter, keyword or filter status is not found, read or written. They apply after the read rule
-  (VIS-1, VIS-5), in the presenter, for their owner only: a `hide` filter removes a status or its notification from
-  the owner's response in the contexts it names, `warn` and `blur` only report the match in `filtered`, and nothing a
-  filter reports names a status other than the one it is on or its original. A filter status is accepted only for a
-  status the owner may view and is listed by id only. Matching is bounded (RES-1, RES-7): at most 50 filters per
-  account, 20 keywords of 512 characters per filter and 200 statuses per filter, a status's text matched on its first
-  10,000 code units and a request's statuses on 400,000 together (500 each at least), by `indexOf` over literal
-  keywords, never a regular expression built from them. _Implemented on branch `kopje/filters`:_
-  `src/domain/filters.ts`, `src/domain/status-presenter.ts`, migration `0011_filters`; `test/filters.test.ts` (API,
-  ownership, contexts, matching, the worst case at the caps), `test/policy-filters.test.ts` (generated worlds),
-  `test/policy-bounds.test.ts` (rows read up to the caps).
+  (VIS-1, VIS-5), in the presenter, for their owner only: each status presented to the owner carries in `filtered` the
+  owner's active filters that match it, whatever their context and action, and the client decides by context, as
+  Mastodon's; nothing is removed on the server. Nothing a filter reports names a status other than the one it is on or
+  its original. A filter status is accepted only for a status the owner may view; one they may not view is refused as a
+  missing status is ("Status must exist"), so the two cannot be told apart, and it is listed by id only. Matching is
+  bounded (RES-1, RES-7): at most 50 filters per account, 20 keywords of 512 characters per filter and 200 statuses per
+  filter, a status's text matched on its first 10,000 code units and a presentation's statuses on 400,000 together
+  (500 each at least), by `indexOf` over literal keywords, never a regular expression built from them. _Implemented on
+  branch `kopje/filters`:_ `src/domain/filters.ts`, `src/domain/status-presenter.ts`, migration `0011_filters`;
+  `test/filters.test.ts` (API, ownership, matching, the worst case at the caps), `test/policy-filters.test.ts`
+  (generated worlds), `test/policy-bounds.test.ts` (rows read up to the caps).
 - **AUTH-1: authorization happens inside the operation.** Token validity, expiry, revocation, scope and account
   suspension are checked in the same Store transaction as the operation they authorize. _Enforced (main):_
   `userReadOperation` and `userWriteOperation` in `src/domain/auth.ts`; `test/store-auth.test.ts`, `test/oauth.test.ts`

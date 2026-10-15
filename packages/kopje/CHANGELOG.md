@@ -18,11 +18,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   modes, grant types, client authentication methods and PKCE methods.
 - Filters, as Mastodon 4.5 has them: `/api/v2/filters` with keywords (`keywords_attributes`, `_destroy`) and statuses,
   `/api/v2/filters/:id/keywords`, `/api/v2/filters/keywords/:id`, `/api/v2/filters/:id/statuses` and
-  `/api/v2/filters/statuses/:id`, and the v1 `/api/v1/filters` over the same filters. They apply to your home and list
-  timelines, notifications, the public and tag timelines, threads and account statuses, in the contexts each filter
-  names: `warn` and `blur` matches are reported in a status's `filtered`, and `hide` matches are left out of the
-  response. An account has at most 50 filters, a filter 20 keywords and 200 statuses, and a status is matched on its
-  first 10,000 characters.
+  `/api/v2/filters/statuses/:id`, and the v1 `/api/v1/filters` over the same filters. Every status shown to you carries
+  in `filtered` your active filters that match it, whatever their context and action, and your client hides or warns
+  by context, as with Mastodon. An account has at most 50 filters, a filter 20 keywords and 200 statuses, and a status
+  is matched on its first 10,000 characters.
 
 ### Changed
 
