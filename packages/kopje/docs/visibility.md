@@ -371,12 +371,12 @@ test/policy-oracle.test.ts` replays it.
 `test/policy-bounds.test.ts` takes one generated world, for a fixed seed, in which every endpoint below shows the viewer
 something. It runs home, the public and tag feeds, account statuses, notifications, context, conversations, favourites,
 bookmarks, `favourited_by`, `reblogged_by`, relationships, the followers and following of an account (one that no unrelated account
-follows), a list's timeline (a list of every account of the world), status and hashtag search, and account search among the viewer's follows (a search of every account reads the
+follows), a list's timeline (a list of every account of the world), the viewer's timeline markers, status and hashtag search, and account search among the viewer's follows (a search of every account reads the
 newest accounts the instance knows, a window that grows with them up to its limit) on that world alone, and again with
 1,000 unrelated remote accounts and 100 unrelated local ones: their statuses (never public, though they carry the
 hashtag the tag feed reads), replies and boosts, their follows, blocks, mutes and domain blocks of the world's accounts
-and domains, their favourites, bookmarks and notifications, and their exclusive lists of the world's accounts and their
-own, together with the viewer's own blocks and mutes of those
+and domains, their favourites, bookmarks and notifications, their exclusive lists of the world's accounts and their
+own, and their timeline markers, together with the viewer's own blocks and mutes of those
 accounts and domain blocks of domains nobody lives on. Each endpoint must show the same with them as without (the same
 statuses, accounts, notifications and hashtags in the same order, and the same relationship flags), and the rows it
 reads (RES-7) may grow by at most 10. A second case grows the history of each author home and a list read instead:
@@ -401,6 +401,8 @@ dominate. A last case grows the histories the viewer never sees, from 20 statuse
 does not follow sending them direct statuses, which home must not read, and an account that blocks the viewer, one the
 viewer blocks, a suspended one and one being deleted, whose statuses the account statuses endpoint must not read. Home
 must show a full page and the account statuses none, reading at most 10 rows more.
+Another case grows the accounts with timeline markers from 10 to 2,000: the viewer's markers read at most 10 rows
+more.
 
 `test/policy-endpoints.test.ts` runs the read endpoints themselves on generated worlds, with favourites, bookmarks and
 notifications added, for each available local viewer and, where the endpoint answers without a token, the anonymous

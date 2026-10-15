@@ -35,6 +35,7 @@ const SCHEMA_TABLES = [
 	'list_accounts',
 	'lists',
 	'local_accounts',
+	'markers',
 	'media_attachments',
 	'mutes',
 	'notifications',
@@ -1102,6 +1103,54 @@ describe('Store migration runner', () => {
 		const added = 10_000 - 1000
 		expect(large - small).toBeLessThanOrEqual(6 * added + 20 * (added / 10))
 	}, 60_000)
+
+	it('upgrades a Store with 0010_markers: a new table whose rows go with their local account', async () => {
+		// By name, not position: the files before it are whatever this build ships.
+		const at = NAMES.indexOf('0010_markers')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			const alice = '100000000000000001'
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES ('100000000000000002', 'https://remote.example/users/r', 'r', 'remote.example')"
+			)
+
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0010_markers'],
+			})
+			const insert = (account: string, timeline: string, lastReadId: string) =>
+				sql.exec(
+					"INSERT INTO markers (account_id, timeline, last_read_id, updated_at) VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z')",
+					account,
+					timeline,
+					lastReadId
+				)
+			insert(alice, 'home', '1')
+			insert(alice, 'notifications', '2')
+			expect(() => insert(alice, 'home', '3')).toThrow(/UNIQUE constraint failed/)
+			expect(() => insert(alice, 'public', '3')).toThrow(/CHECK constraint failed/)
+			expect(() => insert(alice, 'home', '')).toThrow(/CHECK constraint failed/)
+			expect(() => sql.exec("UPDATE markers SET last_read_id = ? WHERE timeline = 'home'", 'a'.repeat(256))).toThrow(
+				/CHECK constraint failed/
+			)
+			// Only a local account has markers.
+			expect(() => insert('100000000000000002', 'home', '1')).toThrow(/FOREIGN KEY constraint failed/)
+			expect(sql.exec('SELECT version FROM markers').toArray()).toEqual([{ version: 0 }, { version: 0 }])
+			sql.exec('DELETE FROM local_accounts WHERE account_id = ?', alice)
+			expect(sql.exec('SELECT count(*) AS n FROM markers').one()).toEqual({ n: 0 })
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
 
 	it('stays readonly with exact bookkeeping when a file fails, and lets a fixed build continue', async () => {
 		const store = freshStore()

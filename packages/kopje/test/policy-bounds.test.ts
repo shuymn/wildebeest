@@ -22,6 +22,7 @@ import {
 	MAX_FILTER_KEYWORDS,
 	MAX_FILTERS,
 } from '../src/domain/filters'
+import { getMarkers, MARKER_TIMELINES } from '../src/domain/markers'
 import { listNotifications } from '../src/domain/notifications'
 import { search } from '../src/domain/search'
 import { interactors, statusContext } from '../src/domain/statuses'
@@ -42,12 +43,13 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // of rows (RES-7). Unrelated rows are what no viewer's read of the world should touch: other accounts with their
 // statuses (never public, so no public or tag feed would list them, though they carry the tag the tag feed reads),
 // replies and boosts among them, their follows, blocks, mutes and domain blocks of the world's accounts and domains,
-// their favourites, bookmarks and notifications, and their exclusive lists holding world accounts and their own.
+// their favourites, bookmarks and notifications, their exclusive lists holding world accounts and their own, and their
+// timeline markers.
 
 // The world, the same in every run: the first of fast-check's samples for a fixed seed in which every endpoint has
 // something to show the viewer (the first available local account). The viewer then follows everyone, favourites and
-// bookmarks every status, has a notification from every account, and has a list (VIEWER_LIST) of every account;
-// LISTED follows the viewer.
+// bookmarks every status, has a notification from every account, has a list (VIEWER_LIST) of every account and a
+// marker on each timeline; LISTED follows the viewer.
 function viewerOf(world: World): number {
 	return world.accounts.findIndex((account) => account.local && !account.suspended)
 }
@@ -170,6 +172,7 @@ function writeViewer(sql: SqlStorage): void {
 	WORLD.accounts.forEach((_, x) => {
 		sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', VIEWER_LIST, accountId(x))
 	})
+	writeMarkers(sql, viewer)
 	WORLD.statuses.forEach((status, s) => {
 		sql.exec('INSERT INTO favourites (account_id, status_id) VALUES (?, ?)', viewer, statusId(s))
 		sql.exec('INSERT INTO bookmarks (account_id, status_id) VALUES (?, ?)', viewer, statusId(s))
@@ -182,6 +185,17 @@ function writeViewer(sql: SqlStorage): void {
 			)
 		}
 	})
+}
+
+function writeMarkers(sql: SqlStorage, account: string): void {
+	for (const timeline of MARKER_TIMELINES) {
+		sql.exec(
+			"INSERT INTO markers (account_id, timeline, last_read_id, version, updated_at) VALUES (?, ?, ?, 1, '2026-01-01T00:00:00.000Z')",
+			account,
+			timeline,
+			account
+		)
+	}
 }
 
 function writeUnrelated(sql: SqlStorage, remote: number): void {
@@ -205,6 +219,7 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 				account(i),
 				`u${i}@example.com`
 			)
+			writeMarkers(sql, account(i))
 		}
 	}
 	for (let i = 0; i < remote; i++) {
@@ -488,6 +503,7 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 	['filter keywords', listFilterKeywords, { credential, filterId: VIEWER_FILTER }],
 	['filter statuses', listFilterStatuses, { credential, filterId: VIEWER_FILTER }],
 	['filters v1', listFiltersV1, { credential }],
+	['markers', getMarkers, { credential, timelines: [...MARKER_TIMELINES] }],
 ]
 
 // How many rows a read may add when the unrelated rows grow from none to UNRELATED: a few for a planner's choice, far
@@ -496,7 +512,7 @@ const ALLOWANCE = 10
 const UNRELATED = 1000
 
 // What an endpoint showed: the items of a page, the members of a context, the results of a search, the entries of a
-// list, or the account userinfo claims, through the operation's ok result.
+// list, the timelines of markers, or the account userinfo claims, through the operation's ok result.
 function shown(output: unknown): number {
 	if (Array.isArray(output)) {
 		return output.length
@@ -521,7 +537,7 @@ function shown(output: unknown): number {
 	if (Array.isArray(value.accounts) && Array.isArray(value.statuses) && Array.isArray(value.hashtags)) {
 		return value.accounts.length + value.statuses.length + value.hashtags.length
 	}
-	return 0
+	return MARKER_TIMELINES.filter((timeline) => timeline in value).length
 }
 
 type Entity = Record<string, unknown>
@@ -1388,4 +1404,56 @@ describe('filters cost a page their own rows, up to the caps, not the history (R
 		}
 		expect(grown).toEqual([])
 	}, 120_000)
+})
+
+// Markers read the viewer's own rows through the (account_id, timeline) key: at most one per timeline, however many
+// accounts have markers.
+describe("markers read the viewer's rows, not every account's (RES-7)", () => {
+	const VIEWER_ID = '630000000000000000'
+	const MARKERS_TOKEN = 'markers-token'
+
+	async function accountsWithMarkers(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO accounts (id, uri, username)
+				SELECT CAST(630000000000000000 + i AS TEXT), 'https://kopje.test/ap/users/u' || i, 'u' || i FROM n`,
+				count
+			)
+			sql.exec(
+				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+				SELECT id, username || '@example.com', X'00', X'00', 'test' FROM accounts`
+			)
+			for (const timeline of MARKER_TIMELINES) {
+				sql.exec(
+					`INSERT INTO markers (account_id, timeline, last_read_id, version, updated_at)
+					SELECT account_id, ?, account_id, 1, '2026-01-01T00:00:00.000Z' FROM local_accounts`,
+					timeline
+				)
+			}
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('markers', 'secret', 'markers', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'markers', ?, 'read')",
+				MARKERS_TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 10 or 2,000 accounts that have markers', async () => {
+		const credential = { tokenHash: MARKERS_TOKEN, scope: 'read', now: NOW } as const
+		const input = { credential, timelines: [...MARKER_TIMELINES] }
+		const few = await accountsWithMarkers(10)
+		const many = await accountsWithMarkers(2000)
+		const shownBy = async (store: StoreStub) =>
+			runInDurableObject(store, (_instance, state) => shown(getMarkers.run(state.storage.sql, input)))
+		expect([await shownBy(few), await shownBy(many)]).toEqual([2, 2])
+		const fewRows = await rowsRead({ store: few }, getMarkers, input)
+		expect(await rowsRead({ store: many }, getMarkers, input)).toBeLessThanOrEqual(fewRows + ALLOWANCE)
+	})
 })

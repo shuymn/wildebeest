@@ -8,6 +8,7 @@ import m0006 from '../../migrations/0006_account_deletion.sql'
 import m0007 from '../../migrations/0007_list_members.sql'
 import m0008 from '../../migrations/0008_status_mentions_requires_mention.sql'
 import m0009 from '../../migrations/0009_conversations.sql'
+import m0010 from '../../migrations/0010_markers.sql'
 import m0012 from '../../migrations/0012_filters.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
@@ -23,5 +24,6 @@ export const MIGRATIONS: readonly { name: string; sql: string }[] = [
 	{ name: '0007_list_members', sql: m0007 },
 	{ name: '0008_status_mentions_requires_mention', sql: m0008 },
 	{ name: '0009_conversations', sql: m0009 },
+	{ name: '0010_markers', sql: m0010 },
 	{ name: '0012_filters', sql: m0012 },
 ]

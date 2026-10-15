@@ -70,7 +70,7 @@ export type ListResult =
 	{ status: 'ok'; list: List } | { status: 'not_found' } | { status: 'invalid'; errors: string[] }
 
 // Ruby's String#blank?: empty or whitespace only.
-function blank(text: string): boolean {
+export function blank(text: string): boolean {
 	return /^\s*$/u.test(text)
 }
 

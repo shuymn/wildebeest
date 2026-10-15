@@ -38,6 +38,7 @@ const NOT_CARRIED: Record<string, string> = {
 	inbound_retractions: 'inbound queue state',
 	inbound_spool: 'inbound queue state',
 	kopje_migrations: 'the target Store records its own migrations',
+	markers: 'legacy never wrote its markers table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	media_orphans: 'tombstones of R2 objects; a converted Store has none',
 	oauth_tokens: 'access tokens are not carried: users sign in again',
 	outbound_activities: 'outbound queue; legacy queues are not carried',
