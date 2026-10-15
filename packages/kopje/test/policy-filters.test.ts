@@ -56,9 +56,8 @@ const caseArb: fc.Arbitrary<Case> = fc
 			}),
 			{ maxLength: 8 }
 		),
-		notifications: fc.array(fc.record({ recipient: fc.nat(), from: fc.nat(), status: fc.nat() }), { maxLength: 12 }),
 	})
-	.map(({ world, filters, notifications }) => {
+	.map(({ world, filters }) => {
 		const locals = world.accounts.flatMap((account, x) => (account.local ? [x] : []))
 		const pick = (items: readonly number[], n: number) => items[n % Math.max(items.length, 1)]
 		const statuses = world.statuses.map((_, s) => s)
@@ -70,13 +69,13 @@ const caseArb: fc.Arbitrary<Case> = fc
 					? []
 					: [{ ...f, owner, statuses: [...new Set(f.statuses.flatMap((s) => pick(statuses, s) ?? []))] }]
 			}),
-			notifications: notifications.flatMap((n) => {
-				const recipient = pick(locals, n.recipient)
-				const status = pick(statuses, n.status)
-				return recipient === undefined || status === undefined
-					? []
-					: [{ recipient, from: n.from % world.accounts.length, status }]
-			}),
+			// A favourite notification of every status, from its author, to every other local account: the
+			// notifications endpoint then has the statuses the filters match, whatever the seed.
+			notifications: locals.flatMap((recipient) =>
+				world.statuses.flatMap((status, s) =>
+					status.author === recipient ? [] : [{ recipient, from: status.author, status: s }]
+				)
+			),
 		}
 	})
 
