@@ -542,14 +542,17 @@ describe("the author's domain block costs a local viewer nothing per status (R2,
 
 // Home and a list's timeline read each author's own window (AuthorWindows in audience.ts): a page reads about a page of
 // statuses per followed account or member, however many statuses each has, and wherever the page's cursor is. The
-// viewer follows every author and has a list of them all; each author, and the viewer (whose own statuses home reads
-// whatever their visibility), has a history of public, unlisted and private statuses, some of them replies in their
-// own thread, every one of which home and the list show.
+// viewer follows every author and has a list of them all; each author, and the viewer, has a history of public,
+// unlisted and private statuses, some of them replies in their own thread, every one of which home and the list show;
+// one more followed account and member has only direct statuses, addressed to someone else, which neither shows nor
+// reads.
 describe("home and list timelines read a page per author, not each author's history (RES-7)", () => {
 	const VIEWER_ID = '600000000000000001'
 	const LIST_ID = '600000000000000002'
 	const HISTORY_TOKEN = 'history-token'
 	const AUTHORS = 6
+	const WHISPERER_ID = '600000000000000003'
+	const ADDRESSEE_ID = '600000000000000004'
 	const author = (i: number) => String(610000000000000000n + BigInt(i))
 	const status = (i: number) => String(620000000000000000n + BigInt(i))
 	const VISIBILITIES: readonly Visibility[] = ['public', 'unlisted', 'private']
@@ -592,9 +595,45 @@ describe("home and list timelines read a page per author, not each author's hist
 				sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', LIST_ID, author(a))
 				authors.push(author(a))
 			}
+			// A followed account (in the list too) whose statuses are all direct, addressed to another local account.
+			for (const [id, username] of [
+				[WHISPERER_ID, 'whisperer'],
+				[ADDRESSEE_ID, 'addressee'],
+			] as const) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+					id,
+					`https://kopje.test/ap/users/${username}`,
+					username
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'test')",
+					id,
+					`${username}@example.com`
+				)
+			}
+			sql.exec(
+				"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+				VIEWER_ID,
+				WHISPERER_ID
+			)
+			sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', LIST_ID, WHISPERER_ID)
+			authors.push(WHISPERER_ID)
 			// The authors' statuses interleave, oldest first; every fourth is a reply in its author's own thread.
 			for (let i = 0; i < perAuthor * authors.length; i++) {
 				const by = authors[i % authors.length] ?? VIEWER_ID
+				if (by === WHISPERER_ID) {
+					sql.exec(
+						`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+						VALUES (?, ?, ?, 'direct', '<p>psst</p>', ?)`,
+						status(i),
+						`https://kopje.test/objects/${status(i)}`,
+						by,
+						new Date(NOW).toISOString()
+					)
+					sql.exec('INSERT INTO status_mentions (status_id, account_id) VALUES (?, ?)', status(i), ADDRESSEE_ID)
+					continue
+				}
 				const parent = i >= authors.length && i % 4 === 0 ? status(i - authors.length) : null
 				sql.exec(
 					`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, in_reply_to_account_id,
@@ -621,7 +660,7 @@ describe("home and list timelines read a page per author, not each author's hist
 		const grown: string[] = []
 		// The newest page; a page from the middle of the longer histories (above every status of the shorter ones, so
 		// their newest page); the oldest page.
-		const middle = status((2000 * (AUTHORS + 1)) / 2)
+		const middle = status((2000 * (AUTHORS + 2)) / 2)
 		for (const page of [PAGE, { ...PAGE, maxId: middle }, { ...PAGE, minId: '1' }]) {
 			for (const [name, operation, input] of [
 				['home', homeTimeline, { credential, page, present: PRESENT }],

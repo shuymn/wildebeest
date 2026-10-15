@@ -4,6 +4,7 @@ import {
 	filteredForSql,
 	NOT_A_REPLY_TO_OTHERS,
 	REACHES_FOLLOWERS_SQL,
+	REQUIRES_MENTION_SQL,
 	type StatusSelect,
 	statusReads,
 	type VisibleStatusId,
@@ -106,29 +107,47 @@ const EXCLUSIVE_MEMBERS = `(SELECT ela.account_id FROM lists el JOIN list_accoun
 // stored, or the partner's account was purged) is left out too, so a purge does not bring back a reply home hid. A
 // reply whose parent is deleted keeps its partner. Others' statuses leave home when their author is in one of the
 // viewer's exclusive lists (EXCLUSIVE_MEMBERS); the viewer's own never do.
-// It reads a window of each author's statuses (AuthorWindows), the viewer and the accounts home shows, with every
-// filter inside the window, through the (account_id, id) index: the read rule alone decides the visibilities, as the
-// viewer sees all of their own and a followed account's direct or limited status only when it addresses them. A page
-// reads at most a page of statuses an author shows, and those home leaves out on the way, however long their history.
+// It reads three streams, each from the cursor through an index, and merges them: a window of each followed account's
+// public, unlisted and private statuses (AuthorWindows, on statuses_feed) with every filter inside the window; the
+// viewer's own statuses; and the direct and limited statuses that mention the viewer. A page reads at most a page of
+// statuses per followed account, and those a follow's options or homeFilterSql leave out on the way, however long
+// their history; the viewer's own statuses cost a page, and the mentions stream grows with the viewer's mentions.
 export const homeTimeline = userReadOperation<{ page: PageQuery; present: Present }, Page<Status>>(
 	(db, { page, present }, _viewer, viewer) => {
 		const { accountId, now } = viewer
 		const cursor = statusPage(page)
 		const order = cursor.ascending ? 'ASC' : 'DESC'
 		const read = statusReads(viewer, { viewer: '?1', now: '?5' })
+		const options = followOptionsSql(FOLLOWED_REPLIES_SQL)
 		const rows = read.union(
 			db,
 			'homeFilter',
 			{
 				all: true,
 				branches: [
+					// The public, unlisted and private statuses of the accounts home shows: a window of each, on statuses_feed.
 					{
-						authors: `SELECT ?1 AS account_id UNION ALL
-							SELECT target_account_id FROM follows WHERE account_id = ?1 AND state = 'accepted'
-								AND target_account_id NOT IN ${EXCLUSIVE_MEMBERS}`,
-						where: RANGE_SQL,
-						and: followOptionsSql(FOLLOWED_REPLIES_SQL),
+						authors: `SELECT target_account_id AS account_id FROM follows WHERE account_id = ?1 AND state = 'accepted'
+							AND target_account_id NOT IN ${EXCLUSIVE_MEMBERS}`,
+						where: `${FEED} AND ${RANGE_SQL}`,
+						and: options,
 						tail: `ORDER BY s.id ${order} LIMIT ?4`,
+					},
+					// The viewer's own, whatever their visibility: the rule shows them all, so this reads at most a page. No
+					// follow's options apply (nobody follows themselves).
+					{ where: `s.account_id = ?1 AND ${RANGE_SQL}`, tail: `ORDER BY s.id ${order} LIMIT ?4` },
+					// Direct and limited statuses of the accounts home shows that address the viewer, from the viewer's
+					// mentions in status id order from the cursor.
+					{
+						from: 'status_mentions m JOIN',
+						join: 'ON s.id = m.status_id',
+						where: `m.account_id = ?1 AND m.status_id < ?2 AND m.status_id > ?3 AND s.account_id <> ?1
+							AND s.visibility IN ${REQUIRES_MENTION_SQL}
+							AND EXISTS (SELECT 1 FROM follows df
+								WHERE df.account_id = ?1 AND df.target_account_id = s.account_id AND df.state = 'accepted')
+							AND s.account_id NOT IN ${EXCLUSIVE_MEMBERS}`,
+						and: options,
+						tail: `ORDER BY m.status_id ${order} LIMIT ?4`,
 					},
 				],
 				tail: `ORDER BY id ${order} LIMIT ?4`,
