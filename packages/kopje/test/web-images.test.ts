@@ -169,7 +169,7 @@ describe('profile images', () => {
 		await uploadImage(h, h.browser, 'avatar', { csrf })
 		const url = (await account(h))?.avatar_url
 		// Both images naming one upload, as a converted account may.
-		await sql(h.store, 'UPDATE accounts SET header_url = ? WHERE username = ?', url, 'alice')
+		await sql(h.store, 'UPDATE accounts SET header_url = ? WHERE username = ?', url ?? null, 'alice')
 		const removed = await h.request('/api/v1/profile/avatar', bearer(h.users.alice.token, { method: 'DELETE' }))
 		expect(removed.status).toBe(200)
 		expect(await sql(h.store, 'SELECT url, gc_at FROM media_attachments')).toEqual([{ url, gc_at: null }])
