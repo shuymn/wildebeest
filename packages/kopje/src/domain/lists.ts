@@ -248,12 +248,24 @@ export const accountLists = userReadOperation<{ account: string }, List[] | null
 	}
 	return db
 		.all<ListRow>(
-			`SELECT l.id, l.title, l.replies_policy, l.exclusive
-			FROM lists l JOIN list_accounts la ON la.list_id = l.id AND la.account_id = ?2
-			WHERE l.account_id = ?1 AND ${availableSql('?2')}
-			ORDER BY l.id`,
+			`SELECT ${LIST_COLUMNS} FROM lists l WHERE ${holdingSql('?1', '?2')} AND ${availableSql('?2')} ORDER BY l.id`,
 			accountId,
 			member
 		)
 		.map(presentList)
 })
+
+// The lists `l` of `owner` that hold the account `x`: read from the owner's lists (lists_account, at most MAX_LISTS
+// through the API), each checked through the (list_id, account_id) key, so the reads do not grow with the lists of
+// other owners that hold the account.
+function holdingSql(owner: string, x: string): string {
+	return `l.account_id = ${owner}
+		AND EXISTS (SELECT 1 FROM list_accounts lh WHERE lh.list_id = l.id AND lh.account_id = ${x})`
+}
+
+// The ids of the lists of `ownerId` that hold `accountId`.
+export function listsHolding(db: Db, ownerId: string, accountId: string): string[] {
+	return db
+		.all<{ id: string }>(`SELECT l.id FROM lists l WHERE ${holdingSql('?1', '?2')}`, ownerId, accountId)
+		.map((list) => list.id)
+}

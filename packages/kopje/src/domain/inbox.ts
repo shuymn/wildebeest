@@ -12,6 +12,7 @@ import {
 } from './audience'
 import { stageRetraction } from './deliveries'
 import { insertWithFreshId, remoteId } from './ids'
+import { listsHolding } from './lists'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
 import { pushSequence } from './push'
@@ -998,14 +999,7 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 		changed.push(follower.id)
 		// The follower's lists that hold the source, read before the unfollow takes it out of them (migration
 		// 0007_list_members): FollowMigrationService#migrate_list_accounts! puts the target in them.
-		const lists = db
-			.all<{ id: string }>(
-				`SELECT l.id FROM lists l JOIN list_accounts la ON la.list_id = l.id AND la.account_id = ?2
-				WHERE l.account_id = ?1`,
-				follower.id,
-				source.id
-			)
-			.map((list) => list.id)
+		const lists = listsHolding(db, follower.id, source.id)
 		// Mastodon's MoveWorker: UnfollowService for the source (undone there), FollowService for the target.
 		const local = db.first<LocalRow>(
 			'SELECT a.id, a.uri, a.locked, 0 AS suspended FROM accounts a WHERE a.id = ?',

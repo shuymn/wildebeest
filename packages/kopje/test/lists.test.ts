@@ -1,6 +1,10 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, json, sql } from './api-helpers'
+import { NOW } from './app-helpers'
+import { rowsRead } from './read-helpers'
 import {
 	act,
 	community,
@@ -13,7 +17,8 @@ import {
 	seedStatus,
 	type User,
 } from './status-helpers'
-import { MAX_LISTS } from '../src/domain/lists'
+import { accountLists, listsHolding, MAX_LISTS } from '../src/domain/lists'
+import { readOperation } from '../src/domain/operation'
 
 // Lists through the API (domain/lists.ts, mastodon/lists.ts), as Mastodon 4.5 has them: the endpoints, their errors,
 // who may be a member, the list timeline and its replies policy, exclusive lists leaving home, and members leaving
@@ -437,5 +442,73 @@ describe('membership ends with the follow', () => {
 		expect((await add(h, alice, list.id, [remote, other])).status).toBe(200)
 		expect((await act(h, alice, '/api/v1/domain_blocks', { domain: 'blocked.example' })).status).toBe(200)
 		expect(await members(h, alice, list.id)).toEqual([other])
+	})
+})
+
+// RES-7: an owner's lists that hold an account are found from the owner's lists (at most 50), each checked through the
+// (list_id, account_id) key, so the reads do not grow with the lists of other owners that hold the same account.
+describe("finding an owner's lists that hold an account", () => {
+	const OWNER = '100000000000000001'
+	const MEMBER = '100000000000000002'
+	const TOKEN = 'lists-rows-read'
+
+	async function storeWith(others: number) {
+		const h = await community([])
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username)
+			SELECT printf('%018d', 100000000000000001 + i), 'https://kopje.test/ap/users/u' || i, 'u' || i FROM n`,
+			others + 1
+		)
+		await sql(
+			h.store,
+			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+			SELECT id, username || '@example.com', X'00', X'00', 'k' FROM accounts WHERE id <> ?`,
+			MEMBER
+		)
+		await sql(h.store, "UPDATE accounts SET domain = 'remote.example' WHERE id = ?", MEMBER)
+		// Every local account follows the member and has a list holding it; the owner has two, and a third without it.
+		await sql(
+			h.store,
+			"INSERT INTO follows (account_id, target_account_id, state) SELECT account_id, ?, 'accepted' FROM local_accounts",
+			MEMBER
+		)
+		await sql(
+			h.store,
+			`INSERT INTO lists (id, account_id, title)
+			SELECT CAST(700000000000000000 + rowid AS TEXT), account_id, 'l' FROM local_accounts`
+		)
+		await sql(
+			h.store,
+			"INSERT INTO lists (id, account_id, title) VALUES ('800000000000000001', ?1, 'b'), ('800000000000000002', ?1, 'c')",
+			OWNER
+		)
+		await sql(
+			h.store,
+			"INSERT INTO list_accounts (list_id, account_id) SELECT id, ? FROM lists WHERE id <> '800000000000000002'",
+			MEMBER
+		)
+		await sql(
+			h.store,
+			"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', (SELECT id FROM oauth_clients LIMIT 1), ?, 'read')",
+			TOKEN,
+			OWNER
+		)
+		return h
+	}
+
+	it('reads the same rows however many other owners list the account', async () => {
+		const input = { credential: { tokenHash: TOKEN, scope: 'read:lists', now: NOW } as const, account: MEMBER }
+		const few = await storeWith(10)
+		const many = await storeWith(1000)
+		const lists = await runInDurableObject(many.store, (_instance, state) => accountLists.run(state.storage.sql, input))
+		expect(lists).toMatchObject({ status: 'ok', value: [{ id: expect.any(String) }, { id: '800000000000000001' }] })
+		const read = async (h: ApiHarness) => rowsRead(h, accountLists, input)
+		expect(await read(many)).toBeLessThanOrEqual((await read(few)) + 10)
+		// The lists a Move carries the membership in (moveBatch) are found the same way.
+		const holding = readOperation<null, string[]>((db) => listsHolding(db, OWNER, MEMBER))
+		const moved = async (h: ApiHarness) => rowsRead(h, holding, null)
+		expect(await moved(many)).toBeLessThanOrEqual((await moved(few)) + 10)
 	})
 })
