@@ -4,6 +4,7 @@ import { requireAccess, type RouteAccess } from './access'
 import * as accounts from './accounts'
 import * as blocks from './blocks'
 import type { ApiDeps, ApiEnv, ApiHandler } from './context'
+import * as conversations from './conversations'
 import * as instance from './instance'
 import * as lists from './lists'
 import * as media from './media'
@@ -329,6 +330,32 @@ export const ROUTES: readonly Route[] = [
 		path: '/api/v1/lists/:id/accounts',
 		access: { scope: 'write:lists' },
 		handler: lists.removeListAccounts,
+	},
+
+	// Conversations (mastodon/conversations.ts).
+	{
+		method: 'GET',
+		path: '/api/v1/conversations',
+		access: { scope: 'read:statuses' },
+		handler: conversations.conversations,
+	},
+	{
+		method: 'DELETE',
+		path: '/api/v1/conversations/:id',
+		access: { scope: 'write:conversations' },
+		handler: conversations.deleteConversation,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/conversations/:id/read',
+		access: { scope: 'write:conversations' },
+		handler: conversations.readConversation,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/conversations/:id/unread',
+		access: { scope: 'write:conversations' },
+		handler: conversations.unreadConversation,
 	},
 
 	{ method: 'POST', path: '/api/v1/media', access: { scope: 'write:media' }, handler: media.uploadMedia },

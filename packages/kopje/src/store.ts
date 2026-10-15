@@ -19,6 +19,7 @@ import {
 } from './domain/actors'
 import { checkCredential, type Credential, type UserCredential } from './domain/auth'
 import * as blocks from './domain/blocks'
+import * as conversations from './domain/conversations'
 import * as deliveries from './domain/deliveries'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import * as inbox from './domain/inbox'
@@ -703,6 +704,20 @@ export class Store extends DurableObject<Env> {
 
 	accountLists(callerBuild: string, input: OperationInput<typeof lists.accountLists>) {
 		return this.#kernel.execute(callerBuild, lists.accountLists, input)
+	}
+
+	// Conversations (domain/conversations.ts).
+
+	listConversations(callerBuild: string, input: OperationInput<typeof conversations.listConversations>) {
+		return this.#kernel.execute(callerBuild, conversations.listConversations, input)
+	}
+
+	markConversation(callerBuild: string, input: OperationInput<typeof conversations.markConversation>) {
+		return this.#kernel.execute(callerBuild, conversations.markConversation, input)
+	}
+
+	deleteConversation(callerBuild: string, input: OperationInput<typeof conversations.deleteConversation>) {
+		return this.#kernel.execute(callerBuild, conversations.deleteConversation, input)
 	}
 
 	// Statuses, timelines and notifications (B4a).
