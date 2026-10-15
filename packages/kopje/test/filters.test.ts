@@ -1,3 +1,5 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, json, sql } from './api-helpers'
@@ -13,6 +15,7 @@ import {
 	type Status,
 	type User,
 } from './status-helpers'
+import { Db } from '../src/db/sql'
 import {
 	filterTextLimits,
 	MAX_FILTER_KEYWORDS,
@@ -20,6 +23,7 @@ import {
 	MAX_FILTER_TEXT,
 	MAX_FILTERS,
 } from '../src/domain/filters'
+import { deleteStatusBatch, PURGE_BATCH } from '../src/domain/inbox'
 
 // Filters through the API (domain/filters.ts, mastodon/filters.ts), as Mastodon 4.5 has them: the v2 endpoints with
 // their keywords and statuses, the v1 layer over the same rows, their errors, and the filters applied where statuses
@@ -941,5 +945,90 @@ describe('filter text budget and word characters', () => {
 		// A zero-width joiner continues the word, so "ab" is not a whole word in "ab‍cd".
 		expect(matched('zwj')).toEqual([])
 		expect(matched('ascii')).toEqual(['def'])
+	})
+})
+
+describe('filter matching at a cut, and filter statuses in batched deletes', () => {
+	it('never takes the cut of a text for a word boundary', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const remote = await remoteAccount(h.store, 'carol')
+		const root = await seedStatus(h.store, { accountId: remote, visibility: 'public', content: '<p>root</p>' })
+		// 41 replies at the cap share the budget at 9,756 code units each: their searchable text is "\n\n" + the text,
+		// so "cat" of "cats" ends exactly at the cut.
+		const atShare = `${'y '.repeat(4875)} cats ${'z '.repeat(200)}`
+		expect(2 + atShare.indexOf('cats') + 3).toBe(Math.floor(400_000 / 41))
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 41)
+			INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, in_reply_to_account_id, visibility,
+				content, published_at)
+			SELECT printf('3%017d', i), 'https://remote.example/objects/c' || i, ?1, s.uri, s.id, ?1, 'public', ?3,
+				s.published_at
+			FROM n, statuses s WHERE s.id = ?2`,
+			remote,
+			root,
+			`<p>${atShare}</p>`
+		)
+		// Alone, a status is cut at MAX_FILTER_TEXT: here right after the "cat" of "cats".
+		const atCap = `${'y '.repeat(4997)} cats more`
+		expect(2 + atCap.indexOf('cats') + 3).toBe(MAX_FILTER_TEXT)
+		const capped = await seedStatus(h.store, { accountId: remote, visibility: 'public', content: `<p>${atCap}</p>` })
+		await createFilter(h, alice, { title: 'c', context: ['thread'], keywords_attributes: [{ keyword: 'cat' }] })
+
+		const { body } = await getJson<{ descendants: Status[] }>(h, `/api/v1/statuses/${root}/context`, alice.token)
+		expect(body.descendants).toHaveLength(41)
+		expect(body.descendants.map((s) => s.filtered)).toEqual(Array.from({ length: 41 }, () => []))
+		const alone = await getJson<Status>(h, '/api/v1/statuses/300000000000000001', alice.token)
+		expect(alone.body.filtered).toEqual([])
+		expect((await getJson<Status>(h, `/api/v1/statuses/${capped}`, alice.token)).body.filtered).toEqual([])
+	})
+
+	it('deletes the filter statuses of a remote status over batches, each within PURGE_BATCH', async () => {
+		const h = await community(['alice'])
+		const remote = await remoteAccount(h.store, 'carol')
+		const status = await seedStatus(h.store, { accountId: remote, visibility: 'public', content: '<p>x</p>' })
+		// 12 accounts, each with 50 filters naming the status: 600 rows, more than a batch writes.
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 12)
+			INSERT INTO accounts (id, uri, username) SELECT printf('5%017d', i), 'https://kopje.test/ap/users/f' || i, 'f' || i FROM n`
+		)
+		await sql(
+			h.store,
+			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+			SELECT id, username || '@mail.example', x'00', x'00', 'k' FROM accounts WHERE id GLOB '5*'`
+		)
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50)
+			INSERT INTO filters (id, account_id, title, context)
+			SELECT printf('6%017d', CAST(substr(a.id, 2) AS INTEGER) * 100 + i), a.id, 'f', '["home"]'
+			FROM accounts a, n WHERE a.id GLOB '5*'`
+		)
+		await sql(
+			h.store,
+			`INSERT INTO filter_statuses (id, filter_id, status_id) SELECT printf('7%017d', rowid), id, ? FROM filters`,
+			status
+		)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM filter_statuses')).toEqual([{ n: 600 }])
+		const batches: number[] = []
+		for (let i = 0; i < 10; i++) {
+			const { wrote, remaining } = await runInDurableObject(h.store, (_instance, state) => {
+				const db = new Db(state.storage.sql)
+				const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
+				const before = changes()
+				const more = state.storage.transactionSync(() => deleteStatusBatch(db, status, NOW))
+				return { wrote: changes() - before, remaining: more }
+			})
+			batches.push(wrote)
+			if (!remaining) {
+				break
+			}
+		}
+		expect(batches.length).toBeGreaterThan(1)
+		expect(batches.every((wrote) => wrote <= PURGE_BATCH)).toBe(true)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status)).toEqual([{ n: 0 }])
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM filter_statuses')).toEqual([{ n: 0 }])
 	})
 })

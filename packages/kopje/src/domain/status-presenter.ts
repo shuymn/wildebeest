@@ -241,15 +241,21 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			(media.get(row.id) ?? []).map((m) => m.description).join('\n\n'),
 		].join('\n\n')
 	// The text each status is matched on (filterTextLimits): read only when a filter has keywords.
-	const texts = new Map<string, string>()
+	const texts = new Map<string, { text: string; cut: number }>()
 	if (filters !== null && filters.filters.some((filter) => filter.keywords !== null)) {
-		const capped = ids.map((id) => {
+		const full = ids.map((id) => {
 			const row = byId.get(id)
 			const proper = row?.reblog_of_id == null ? row : byId.get(row.reblog_of_id)
-			return proper === undefined ? '' : searchableText(proper).slice(0, MAX_FILTER_TEXT)
+			return proper === undefined ? '' : searchableText(proper)
 		})
-		const limits = filterTextLimits(capped.map((text) => text.length))
-		ids.forEach((id, i) => texts.set(id, (capped[i] ?? '').slice(0, limits[i])))
+		const limits = filterTextLimits(full.map((text) => Math.min(text.length, MAX_FILTER_TEXT)))
+		ids.forEach((id, i) => {
+			const text = full[i] ?? ''
+			const cut = limits[i] ?? 0
+			// The code point after a cut is kept for the boundary after a match, so the cut is not taken for one.
+			const next = cut < text.length ? String.fromCodePoint(text.codePointAt(cut) ?? 0) : ''
+			texts.set(id, { text: text.slice(0, cut) + next, cut })
+		})
 	}
 
 	const presentRow = (row: StatusRow, top: boolean, filtered: FilterResult[] = []): Status | undefined => {
@@ -262,7 +268,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			const proper = row.reblog_of_id === null ? row : byId.get(row.reblog_of_id)
 			if (proper !== undefined) {
 				filtered = applyFilters(filters, statusMatches, {
-					text: texts.get(row.id) ?? '',
+					...(texts.get(row.id) ?? { text: '', cut: 0 }),
 					ids: row.reblog_of_id === null ? [row.id] : [row.id, row.reblog_of_id],
 				})
 			}

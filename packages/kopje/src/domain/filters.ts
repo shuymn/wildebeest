@@ -773,7 +773,7 @@ function keywordSource(row: KeywordRow): string {
 }
 
 function compileKeywords(rows: readonly KeywordRow[]): RegExp | null {
-	return rows.length === 0 ? null : new RegExp(rows.map((row) => `(?:${keywordSource(row)})`).join('|'), 'iu')
+	return rows.length === 0 ? null : new RegExp(rows.map((row) => `(?:${keywordSource(row)})`).join('|'), 'giu')
 }
 
 // The viewer's active filters (CustomFilter.cached_filters_for): unexpired at the request's time, whatever their context
@@ -865,7 +865,9 @@ export function filterTextLimits(lengths: readonly number[]): number[] {
 // What a status is matched by: its text (Status#searchable_text, of the boosted original for a boost, as much of it as
 // filterTextLimits gives), and the ids
 // filter statuses may name (the status and, for a boost, its original).
-export type FilterTarget = { text: string; ids: readonly string[] }
+// `text` is the matched text up to `cut` code units, followed, when the text was cut, by the code point after the cut,
+// read only as the boundary after a match: a match must end by `cut`.
+export type FilterTarget = { text: string; cut: number; ids: readonly string[] }
 
 // CustomFilter.apply_cached_filters: for each active filter, the first keyword match (the leftmost in the text, the
 // earlier keyword at the same place, as Regexp.union finds it) and the ids of the target a filter status names. A
@@ -880,9 +882,15 @@ export function applyFilters(
 	for (const { filter, keywords, hasStatuses } of active.filters) {
 		let keywordMatches: string[] | null = null
 		if (keywords !== null) {
-			const match = keywords.exec(target.text)
-			if (match !== null) {
-				keywordMatches = [match[0]]
+			// The leftmost match that ends by the cut; one crossing it starts within a keyword's length of it, so the
+			// search goes on from the next position a bounded number of times.
+			keywords.lastIndex = 0
+			for (let match = keywords.exec(target.text); match !== null; match = keywords.exec(target.text)) {
+				if (match.index + match[0].length <= target.cut) {
+					keywordMatches = [match[0]]
+					break
+				}
+				keywords.lastIndex = match.index + 1
 			}
 		}
 		const named = target.ids.filter((id) => statusMatches.get(id)?.has(filter.id) === true)
