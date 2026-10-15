@@ -216,7 +216,7 @@ const POLL_COLUMNS = `p.status_id, s.account_id, p.options, p.tallies, p.multipl
 	p.votes_count, p.voters_count`
 
 function presentPoll(row: PollRow, viewer: { id: string | null; votes: number[] }, now: string): Poll {
-	const expired = row.expires_at !== null && row.expires_at < now
+	const expired = hasEnded(row.expires_at, now)
 	// Poll#show_totals_now?: for everyone, the author included.
 	const shown = expired || row.hide_totals === 0
 	const tallies = JSON.parse(row.tallies) as number[]
@@ -309,6 +309,13 @@ type VotedPoll = {
 	multiple: number
 	hide_totals: number
 	expires_at: string | null
+	ended: number
+}
+
+// Expireable#expired?: a poll has ended once its end has passed (expires_at < now), the boundary every read, vote and
+// round uses.
+function hasEnded(expiresAt: string | null, now: string): boolean {
+	return expiresAt !== null && expiresAt < now
 }
 
 // A choice as Ruby's Integer() reads a decimal one; anything else is no choice of the poll.
@@ -320,7 +327,8 @@ function choiceOf(value: string): number {
 // not have, the author's own poll, or a vote again (any in a single-choice poll, the same choice in a multiple one).
 function voteErrors(poll: VotedPoll, voterId: string, choice: number, votes: number[], now: string): string[] {
 	const errors: string[] = []
-	if (poll.expires_at !== null && poll.expires_at < now) {
+	// A poll the cron has ended stays ended, whatever end a later Update names.
+	if (poll.ended === 1 || hasEnded(poll.expires_at, now)) {
 		errors.push('The poll has already ended')
 	}
 	if (choice < 0 || choice >= (JSON.parse(poll.options) as string[]).length) {
@@ -389,7 +397,7 @@ function updateSoon(db: Db, poll: VotedPoll, now: number): void {
 function votedPoll(db: Db, pollId: string): VotedPoll | undefined {
 	return db.first<VotedPoll>(
 		`SELECT p.status_id, s.uri AS status_uri, s.account_id AS author_id, a.uri AS author_uri, a.domain IS NULL AS local,
-			p.options, p.multiple, p.hide_totals, p.expires_at
+			p.options, p.multiple, p.hide_totals, p.expires_at, p.ended
 		FROM polls p JOIN statuses s ON s.id = p.status_id JOIN accounts a ON a.id = s.account_id WHERE p.status_id = ?`,
 		pollId
 	)
@@ -647,7 +655,7 @@ export const pollRound = writeOperation<{ now: number }, PollRound>((db, { now }
 	const at = iso(now)
 	const ending = db.all<{ status_id: string; author_id: string; local: number }>(
 		`SELECT p.status_id, s.account_id AS author_id, a.domain IS NULL AS local
-		FROM (SELECT status_id FROM polls WHERE ended = 0 AND expires_at IS NOT NULL AND expires_at <= ?1
+		FROM (SELECT status_id FROM polls WHERE ended = 0 AND expires_at IS NOT NULL AND expires_at < ?1
 			ORDER BY expires_at LIMIT ?2) e
 		JOIN polls p ON p.status_id = e.status_id JOIN statuses s ON s.id = p.status_id JOIN accounts a ON a.id = s.account_id`,
 		at,

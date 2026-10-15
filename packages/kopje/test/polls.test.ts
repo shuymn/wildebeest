@@ -311,6 +311,40 @@ describe('POST /api/v1/polls/:id/votes', () => {
 	})
 })
 
+describe('the end of a poll', () => {
+	it('is the same boundary for a vote, the entity and the round: a poll is open at its end and ended after it', async () => {
+		const h = await community(['alice', 'bob', 'carol', 'dave'])
+		const { alice, bob, carol, dave } = h.users
+		const status = await polled(h, alice, { options: ['a', 'b'], expires_in: 600 })
+		const end = NOW + 600_000
+		h.now.mockReturnValue(end - 1)
+		expect((await voteOn(h, bob, status.id, [0])).status).toBe(200)
+		h.now.mockReturnValue(end)
+		const atEnd = await voteOn(h, carol, status.id, [0])
+		expect(atEnd.status).toBe(200)
+		expect(await atEnd.json()).toMatchObject({ expired: false })
+		await round(h, end)
+		expect(await sql(h.store, 'SELECT ended FROM polls')).toEqual([{ ended: 0 }])
+		h.now.mockReturnValue(end + 1)
+		expect(await refusal(await voteOn(h, dave, status.id, [0]))).toEqual({
+			status: 422,
+			body: { error: 'Validation failed: The poll has already ended' },
+		})
+		await round(h, end + 1)
+		expect(await sql(h.store, 'SELECT ended FROM polls')).toEqual([{ ended: 1 }])
+	})
+
+	it('refuses a vote in a poll the cron has ended, whatever its end says now', async () => {
+		const h = await community(['alice', 'bob'])
+		const status = await polled(h, h.users.alice, { options: ['a', 'b'], expires_in: 600 })
+		await sql(h.store, 'UPDATE polls SET ended = 1')
+		expect(await refusal(await voteOn(h, h.users.bob, status.id, [0]))).toEqual({
+			status: 422,
+			body: { error: 'Validation failed: The poll has already ended' },
+		})
+	})
+})
+
 describe('ending a poll', () => {
 	it("notifies its author and its local voters once, and the voter's notification names the author", async () => {
 		const h = await community(['alice', 'bob', 'carol'])
@@ -320,7 +354,7 @@ describe('ending a poll', () => {
 		await round(h, NOW + 599_000)
 		expect(await pollNotifications(h, alice)).toEqual([])
 		const doorbell = vi.fn(() => Promise.resolve())
-		await round(h, NOW + 600_000, doorbell)
+		await round(h, NOW + 600_001, doorbell)
 		await round(h, NOW + 700_000)
 		expect(await pollNotifications(h, alice)).toEqual([{ from: alice.id, status: status.id }])
 		expect(await pollNotifications(h, bob)).toEqual([{ from: alice.id, status: status.id }])
@@ -335,7 +369,7 @@ describe('ending a poll', () => {
 		const status = await polled(h, alice, { options: ['a', 'b'], expires_in: 600 })
 		await voteOn(h, bob, status.id, [0])
 		await send(h, bob, `/api/v1/accounts/${alice.id}/mute`, { notifications: true })
-		await round(h, NOW + 600_000)
+		await round(h, NOW + 600_001)
 		expect(await pollNotifications(h, bob)).toEqual([])
 		expect(await pollNotifications(h, alice)).toEqual([{ from: alice.id, status: status.id }])
 	})
