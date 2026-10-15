@@ -4,10 +4,13 @@ pre-commit:
     - rebase
   parallel: true
   jobs:
+    # Lints only the packages the staged change can affect; see scripts/lint-affected.sh.
     - name: lint
-      run: pnpm run lint
+      run: bash scripts/lint-affected.sh
+    # Checks the staged files' formatting; CI checks the whole tree (pnpm run pretty).
     - name: pretty
-      run: pnpm run pretty
+      glob: '*.{ts,tsx,js,jsx,json,css}'
+      run: npx prettier --list-different {staged_files}
     # Blocks commits that stage secrets. Install with `mise install` (betterleaks is pinned in mise.toml).
     - name: secrets
       run: betterleaks git --pre-commit --staged --redact --no-banner --verbose

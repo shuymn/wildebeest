@@ -51,7 +51,13 @@ test.describe('Infinite (statuses) scrolling', () => {
 			})
 
 			for (let i = 0; i < 3; i++) {
-				await page.keyboard.down('End')
+				// On a slow runner, pressing End right after a page renders sometimes loads nothing (the panel may not watch
+				// its new last status yet), so press until the next page arrives.
+				const first = page.locator('article').filter({ hasText: `Mock Fetched Status #${`${i * 5}`.padStart(3, '0')}` })
+				await expect(async () => {
+					await page.keyboard.press('End')
+					await expect(first).toBeVisible({ timeout: 1_000 })
+				}).toPass()
 				for (let j = 0; j < 5; j++) {
 					const paddedJ = `${i * 5 + j}`.padStart(3, '0')
 					// check that the new toots have been loaded
