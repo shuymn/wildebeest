@@ -94,6 +94,10 @@ function followOptionsSql(partner: string): string {
 const EXCLUSIVE_MEMBERS = `(SELECT ela.account_id FROM lists el JOIN list_accounts ela ON ela.list_id = el.id
 	WHERE el.account_id = ?1 AND el.exclusive = 1)`
 
+// The accounts home shows (?1 the viewer): those the viewer follows (accepted), but for members of their exclusive lists.
+const FOLLOWED = `SELECT target_account_id AS account_id FROM follows WHERE account_id = ?1 AND state = 'accepted'
+	AND target_account_id NOT IN ${EXCLUSIVE_MEMBERS}`
+
 // Home (Mastodon's FeedManager#filter_from_home): the viewer's own statuses and those of accounts they follow,
 // public, unlisted and private; direct and limited statuses of their own, and of followed accounts that address
 // them. Boosts from follows with show_reblogs off, replies (of others) unless they are to the author, to the viewer or
@@ -106,10 +110,11 @@ const EXCLUSIVE_MEMBERS = `(SELECT ela.account_id FROM lists el JOIN list_accoun
 // viewer's exclusive lists (EXCLUSIVE_MEMBERS); the viewer's own never do.
 // It reads three streams, each from the cursor through an index, and merges them: a window of each followed account's
 // public, unlisted and private statuses (AuthorWindows, on statuses_feed) with every filter inside the window; the
-// viewer's own statuses; and the direct and limited statuses that mention the viewer, from the viewer's mentions in such
-// statuses (status_mentions.requires_mention). A page reads at most a page of statuses per followed account, and those
-// a follow's options or homeFilterSql leave out on the way, however long their history; the viewer's own statuses cost
-// a page, and the mentions stream grows with the viewer's mentions in direct and limited statuses home does not show.
+// viewer's own statuses; and a window of each followed account's direct and limited statuses that mention the viewer,
+// from the viewer's mentions by that account in such statuses (status_mentions.requires_mention). A page reads at most
+// a page of statuses per followed account in each window, and those a follow's options or homeFilterSql leave out on
+// the way, however long their history; the viewer's own statuses cost a page, and mentions by accounts the viewer does
+// not follow, or in public, unlisted and private statuses, are never read.
 export const homeTimeline = userReadOperation<{ page: PageQuery; present: Present }, Page<Status>>(
 	(db, { page, present }, _viewer, viewer) => {
 		const { accountId, now } = viewer
@@ -126,8 +131,7 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 				branches: [
 					// The public, unlisted and private statuses of the accounts home shows: a window of each, on statuses_feed.
 					{
-						authors: `SELECT target_account_id AS account_id FROM follows WHERE account_id = ?1 AND state = 'accepted'
-							AND target_account_id NOT IN ${EXCLUSIVE_MEMBERS}`,
+						authors: FOLLOWED,
 						where: `${FEED} AND ${rangeSql('s.id')}`,
 						and: options,
 						tail,
@@ -135,17 +139,15 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 					// The viewer's own, whatever their visibility: the rule shows them all, so this reads at most a page. No
 					// follow's options apply (nobody follows themselves).
 					{ where: `s.account_id = ?1 AND ${rangeSql('s.id')}`, tail },
-					// Direct and limited statuses of the accounts home shows that address the viewer, from the viewer's
-					// mentions in direct and limited statuses (status_mentions_requires_mention) in status id order from the
-					// cursor.
+					// Direct and limited statuses of the accounts home shows that address the viewer: a window of each, from
+					// the viewer's mentions by that account in such statuses (status_mentions_requires_mention).
 					{
+						authors: FOLLOWED,
 						from: 'status_mentions m JOIN',
 						join: 'ON s.id = m.status_id',
-						where: `m.account_id = ?1 AND m.requires_mention = 1 AND ${rangeSql('m.status_id')} AND s.account_id <> ?1
-							AND s.visibility IN ${REQUIRES_MENTION_SQL}
-							AND EXISTS (SELECT 1 FROM follows df
-								WHERE df.account_id = ?1 AND df.target_account_id = s.account_id AND df.state = 'accepted')
-							AND s.account_id NOT IN ${EXCLUSIVE_MEMBERS}`,
+						author: 'm.author_id',
+						where: `m.account_id = ?1 AND m.requires_mention = 1 AND ${rangeSql('m.status_id')}
+							AND s.visibility IN ${REQUIRES_MENTION_SQL}`,
 						and: options,
 						tail: `ORDER BY m.status_id ${order} LIMIT ?4`,
 					},

@@ -31,7 +31,8 @@ import {
 	isDistributable,
 	listedForSql,
 	mentionableBySql,
-	mentionRequiredSql,
+	MENTION_STATUS_COLUMNS,
+	mentionStatusSql,
 	ownStatusId,
 	REACHES_FOLLOWERS_SQL,
 	requiresMention,
@@ -399,8 +400,8 @@ function writeMentions(
 		current
 	)
 	db.run(
-		`INSERT INTO status_mentions (status_id, account_id, silent, requires_mention)
-		SELECT ?1, value, 0, ${mentionRequiredSql('?1')} FROM json_each(?2) WHERE true
+		`INSERT INTO status_mentions (status_id, account_id, silent, ${MENTION_STATUS_COLUMNS})
+		SELECT ?1, value, 0, ${mentionStatusSql('?1')} FROM json_each(?2) WHERE true
 		ON CONFLICT (status_id, account_id) DO UPDATE SET silent = 0`,
 		statusId,
 		current

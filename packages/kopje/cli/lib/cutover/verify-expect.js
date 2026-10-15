@@ -478,8 +478,9 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 
 		// Recipients: for public and unlisted, the tagged known accounts and, silently, the other addressed ones; for
 		// followers-only, none (a follow decides); for direct, exactly the known accounts in to (tagged ones not silent),
-		// each marked as a mention in a status only a mention lets one see (status_mentions.requires_mention). Non-public
-		// audiences also name the author legacy authorized with.
+		// each marked as a mention in a status only a mention lets one see (status_mentions.requires_mention), and each
+		// naming the status's author (status_mentions.author_id). Non-public audiences also name the author legacy
+		// authorized with.
 		const requiresMention = audience.visibility === 'direct' ? 1 : 0
 		const accountAt = (/** @type {unknown} */ x) => byAddress.get(address(x) ?? '')
 		const tagged = new Set(
@@ -511,10 +512,11 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			[...readers]
 				.map(
 					(x) =>
-						/** @type {[string, number, number]} */ ([
+						/** @type {[string, number, number, string]} */ ([
 							String(x),
 							tagged.has(/** @type {string} */ (x)) ? 0 : 1,
 							requiresMention,
+							author,
 						])
 				)
 				.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)),
@@ -680,7 +682,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			audience.visibility === 'direct'
 				? [...new Set(audience.to.map((x) => byAddress.get(x ?? '')))]
 						.filter((x) => x !== undefined && x !== String(r.actor_id))
-						.map((x) => /** @type {[string, number, number]} */ ([String(x), 1, 1]))
+						.map((x) => /** @type {[string, number, number, string]} */ ([String(x), 1, 1, String(r.actor_id)]))
 						.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
 				: []
 		put('boosts', String(r.id), [String(r.actor_id), target, audience.visibility, recipients])

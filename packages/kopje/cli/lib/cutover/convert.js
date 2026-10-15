@@ -778,9 +778,9 @@ export function convertLegacy(
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	)
 	// status_mentions.requires_mention: whether the status is direct or limited (requiresMention in
-	// src/domain/audience.ts), the only statuses home reads from a viewer's mentions.
+	// src/domain/audience.ts), the only statuses home reads from a viewer's mentions; author_id: the status's author.
 	const mentionInsert = insert(
-		'INSERT OR IGNORE INTO status_mentions (status_id, account_id, silent, requires_mention) VALUES (?, ?, ?, ?)'
+		'INSERT OR IGNORE INTO status_mentions (status_id, account_id, silent, requires_mention, author_id) VALUES (?, ?, ?, ?, ?)'
 	)
 	/** @param {string} visibility */
 	const requiresMention = (visibility) => (visibility === 'direct' || visibility === 'limited' ? 1 : 0)
@@ -926,7 +926,7 @@ export function convertLegacy(
 			isoTime(row.cdate) ?? plan.published
 		)
 		for (const [account, silent] of mentions) {
-			mentionInsert.run(plan.id, account, silent, requiresMention(visibility))
+			mentionInsert.run(plan.id, account, silent, requiresMention(visibility), author.id)
 		}
 		const tags = new Set()
 		for (const tag of list(properties.tag)) {
@@ -1037,7 +1037,7 @@ export function convertLegacy(
 		)
 		insert('UPDATE statuses SET reblog_of_id = ? WHERE id = ?').run(boost.target.id, boost.id)
 		for (const account of boostReaders) {
-			mentionInsert.run(boost.id, String(account), 1, requiresMention(visibility))
+			mentionInsert.run(boost.id, String(account), 1, requiresMention(visibility), boost.booster.id)
 		}
 	}
 

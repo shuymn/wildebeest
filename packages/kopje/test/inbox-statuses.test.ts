@@ -497,8 +497,8 @@ describe('hashtags a hashtag timeline lists (status_tags.public)', () => {
 	})
 })
 
-describe("mentions home's mentions stream reads (status_mentions.requires_mention)", () => {
-	it('marks the mentions of direct and limited statuses only, however they are written', async () => {
+describe("mentions home's mentions stream reads (status_mentions.requires_mention, author_id)", () => {
+	it('marks the mentions of direct and limited statuses only, with their author, however they are written', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
 		await followed(t, bob)
@@ -527,8 +527,8 @@ describe("mentions home's mentions stream reads (status_mentions.requires_mentio
 
 		const rows = await sql(
 			t.store,
-			`SELECT s.visibility, m.requires_mention FROM status_mentions m JOIN statuses s ON s.id = m.status_id
-			ORDER BY s.visibility, m.requires_mention`
+			`SELECT s.visibility, m.requires_mention, m.author_id IS s.account_id AS by_author
+			FROM status_mentions m JOIN statuses s ON s.id = m.status_id ORDER BY s.visibility, m.requires_mention`
 		)
 		// Every kind of write was made, and each row is marked exactly when its status needs a mention to be seen.
 		expect(new Set(rows.map((row) => row.visibility))).toEqual(new Set(['public', 'private', 'direct', 'limited']))
@@ -538,6 +538,8 @@ describe("mentions home's mentions stream reads (status_mentions.requires_mentio
 			)
 		).toEqual([])
 		expect(rows.filter((row) => row.requires_mention === 1)).toHaveLength(4)
+		// Each names its status's author.
+		expect(rows.filter((row) => row.by_author !== 1)).toEqual([])
 	})
 })
 

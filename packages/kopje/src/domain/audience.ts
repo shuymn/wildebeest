@@ -74,12 +74,17 @@ export function tagPublicSql(id: string): string {
 	return `(SELECT tp.visibility = 'public' FROM main.statuses tp WHERE tp.id = ${id})`
 }
 
-// status_mentions.requires_mention of a mention in the status `id`: whether the status is direct or limited, the only
-// statuses home reads from the viewer's mentions. A status's visibility stays in or out of that set once written (a
-// direct status gaining a recipient becomes limited), so the writers of status_mentions set it with each row, and the
-// partial index status_mentions_requires_mention holds just those rows.
-export function mentionRequiredSql(id: string): string {
-	return `(SELECT mr.visibility IN ${REQUIRES_MENTION_SQL} FROM statuses mr WHERE mr.id = ${id})`
+// The columns of status_mentions copied from the mention's status, for its writers: requires_mention, whether the
+// status is direct or limited (the only statuses home reads from the viewer's mentions), and author_id, the status's
+// author. A status never changes author, and its visibility stays in or out of that set once written (a direct status
+// gaining a recipient becomes limited), so the writers set both with each row, and the partial index
+// status_mentions_requires_mention holds the marked rows by recipient and author.
+export const MENTION_STATUS_COLUMNS = 'requires_mention, author_id'
+
+// The values of MENTION_STATUS_COLUMNS for a mention in the status `id`.
+export function mentionStatusSql(id: string): string {
+	return `(SELECT mr.visibility IN ${REQUIRES_MENTION_SQL} FROM main.statuses mr WHERE mr.id = ${id}),
+		(SELECT ma.account_id FROM main.statuses ma WHERE ma.id = ${id})`
 }
 
 // ---- Accounts. `x` is an expression for an account id, never a status or edge alias.
@@ -316,8 +321,11 @@ export type StatusSelect = {
 
 // A window of each author's statuses, for a feed of whole authors (home, a list), as StatusReads writes it:
 //   SELECT w.id AS id FROM (SELECT wa.account_id FROM (<authors>) wa WHERE <rule over the author>) a
-//     CROSS JOIN main.statuses w ON w.id IN (SELECT s.id FROM main.statuses s
-//     WHERE (s.account_id = a.account_id AND <where>) AND (<rule over s>) AND (<and>) <tail>)
+//     CROSS JOIN main.statuses w ON w.id IN (SELECT s.id FROM <from> main.statuses s <join>
+//     WHERE (<author> = a.account_id AND <where>) AND (<rule over s>) AND (<and>) <tail>)
+// <author> is s.account_id unless given: a window read from another index (the viewer's mentions by author) names the
+// column of the author there, with the tables before statuses in <from> and the join after it in <join>, as a
+// StatusSelect has them.
 // <authors> selects each author once, as account_id, and <tail> orders each author's statuses by id and cuts them to a
 // page: so a status of a merged page is within its author's window, the page is the one a single SELECT over all the
 // authors' statuses gives, and an author costs a window however many statuses they have. The rule over the author is
@@ -325,6 +333,9 @@ export type StatusSelect = {
 // window, rather than one that walks their whole history finding nothing.
 export type AuthorWindows = {
 	readonly authors: string
+	readonly from?: string
+	readonly join?: string
+	readonly author?: string
 	readonly where?: string
 	readonly and?: string
 	readonly tail: string
@@ -414,7 +425,9 @@ export function statusReads(
 			return selectSql(ruleSql(rule), q)
 		}
 		const window = selectSql(ruleSql(rule), {
-			where: `s.account_id = a.account_id${q.where === undefined ? '' : ` AND ${q.where}`}`,
+			from: q.from,
+			join: q.join,
+			where: `${q.author ?? 's.account_id'} = a.account_id${q.where === undefined ? '' : ` AND ${q.where}`}`,
 			and: q.and,
 			tail: q.tail,
 		})

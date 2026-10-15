@@ -615,8 +615,8 @@ describe('Store migration runner', () => {
 			expect(
 				sql
 					.exec(
-						`SELECT s.visibility, m.silent, m.requires_mention FROM status_mentions m JOIN statuses s ON s.id = m.status_id
-						ORDER BY m.status_id`
+						`SELECT s.visibility, m.silent, m.requires_mention, m.author_id FROM status_mentions m
+						JOIN statuses s ON s.id = m.status_id ORDER BY m.status_id`
 					)
 					.toArray()
 			).toEqual(
@@ -624,13 +624,14 @@ describe('Store migration runner', () => {
 					visibility,
 					silent: i % 2,
 					requires_mention: visibility === 'direct' || visibility === 'limited' ? 1 : 0,
+					author_id: alice,
 				}))
 			)
 			expect(
 				sql
 					.exec("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'status_mentions_requires_mention'")
 					.toArray()
-			).toEqual([{ sql: expect.stringContaining('WHERE requires_mention = 1') }])
+			).toEqual([{ sql: expect.stringMatching(/\(account_id, author_id, status_id\)\s+WHERE requires_mention = 1/) }])
 			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
 		})
 	})
@@ -677,9 +678,13 @@ describe('Store migration runner', () => {
 					cursor.toArray()
 					read += cursor.rowsRead
 				}
-				expect(sql.exec('SELECT count(*) AS n FROM status_mentions WHERE requires_mention = 1').one()).toEqual({
-					n: count,
-				})
+				expect(
+					sql
+						.exec(
+							"SELECT count(*) AS n FROM status_mentions WHERE requires_mention = 1 AND author_id = '100000000000000001'"
+						)
+						.one()
+				).toEqual({ n: count })
 				return read
 			})
 		}

@@ -220,10 +220,11 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 		// A world account other than the viewer is mentioned; the viewer never is.
 		const mentioned = (VIEWER + 1 + (i % (worldAccounts - 1))) % worldAccounts
 		sql.exec(
-			'INSERT INTO status_mentions (status_id, account_id, requires_mention) VALUES (?, ?, ?)',
+			'INSERT INTO status_mentions (status_id, account_id, requires_mention, author_id) VALUES (?, ?, ?, ?)',
 			first,
 			accountId(mentioned),
-			HIDDEN[i % HIDDEN.length] === 'direct' || HIDDEN[i % HIDDEN.length] === 'limited' ? 1 : 0
+			HIDDEN[i % HIDDEN.length] === 'direct' || HIDDEN[i % HIDDEN.length] === 'limited' ? 1 : 0,
+			author
 		)
 		const world = accountId(i % worldAccounts)
 		const followed = i % worldAccounts === LISTED ? accountId((LISTED + 1) % worldAccounts) : world
@@ -318,8 +319,8 @@ function writeCopies(sql: SqlStorage, factor: number): void {
 	)
 	sql.exec(
 		`${replicas}
-		INSERT INTO status_mentions (status_id, account_id, silent, requires_mention)
-		SELECT ${copy('m.status_id')}, m.account_id, m.silent, m.requires_mention FROM status_mentions m, r`,
+		INSERT INTO status_mentions (status_id, account_id, silent, requires_mention, author_id)
+		SELECT ${copy('m.status_id')}, m.account_id, m.silent, m.requires_mention, m.author_id FROM status_mentions m, r`,
 		...params
 	)
 	sql.exec(
@@ -553,30 +554,13 @@ describe("read endpoints read the same rows however long the world's history (RE
 		'hashtag search',
 	])
 
-	// Home's mentions stream reads the viewer's mentions in direct and limited statuses from the cursor
-	// (status_mentions_requires_mention), walking those home does not show: in this world all of them, a suspended
-	// account's direct statuses to the viewer. Home may read up to this many rows more per mention of the viewer in a
-	// direct or limited status the replicas add, and nothing for their other mentions and statuses.
-	const PER_HIDDEN_MENTION = 5
-
 	type Measured = { endpoint: string; page: string; rows: number; shown: number; output: unknown }
 
 	// Each endpoint's newest page, a page from the middle of the replicated history and the oldest page, or its one read
 	// if it does not page the history.
-	async function measure(factor: number): Promise<{ measured: Measured[]; mentions: number }> {
+	async function measure(factor: number): Promise<Measured[]> {
 		const store = await replicated(factor)
 		const viewer = accountId(VIEWER)
-		// The viewer's mentions in direct and limited statuses.
-		const mentions = await runInDurableObject(
-			store,
-			(_instance, state) =>
-				state.storage.sql
-					.exec<{ n: number }>(
-						'SELECT count(*) AS n FROM status_mentions WHERE account_id = ? AND requires_mention = 1',
-						viewer
-					)
-					.one().n
-		)
 		const middle = await runInDurableObject(store, (_instance, state) => {
 			// The viewer's edge halfway through those of the copies.
 			const edge = (table: string) =>
@@ -619,12 +603,12 @@ describe("read endpoints read the same rows however long the world's history (RE
 				measured.push({ endpoint, page, rows, shown: shown(output), output })
 			}
 		}
-		return { measured, mentions }
+		return measured
 	}
 
 	it(`reads the same rows with the world's history replicated ${FEW} or ${MANY} times`, async () => {
-		const { measured: few, mentions: fewMentions } = await measure(FEW)
-		const { measured: many, mentions: manyMentions } = await measure(MANY)
+		const few = await measure(FEW)
+		const many = await measure(MANY)
 		// Every endpoint shows the viewer something on every page at either factor, and the same newest page (or one read).
 		const empty = [...few, ...many].flatMap(({ endpoint, page, shown }) => (shown === 0 ? [`${endpoint} ${page}`] : []))
 		expect(empty).toEqual([])
@@ -637,8 +621,9 @@ describe("read endpoints read the same rows however long the world's history (RE
 		expect(newest(many)).toEqual(newest(few))
 		const grown = few.flatMap(({ endpoint, page, rows }, i) => {
 			const manyRows = many[i]?.rows ?? Infinity
-			const allowed = ALLOWANCE + (endpoint === 'home' ? PER_HIDDEN_MENTION * (manyMentions - fewMentions) : 0)
-			return GROWING.has(endpoint) || manyRows <= rows + allowed ? [] : [`${endpoint} ${page}: ${rows} -> ${manyRows}`]
+			return GROWING.has(endpoint) || manyRows <= rows + ALLOWANCE
+				? []
+				: [`${endpoint} ${page}: ${rows} -> ${manyRows}`]
 		})
 		expect(grown).toEqual([])
 	}, 60_000)
@@ -833,9 +818,10 @@ describe("home and list timelines read a page per author, not each author's hist
 						new Date(NOW).toISOString()
 					)
 					sql.exec(
-						'INSERT INTO status_mentions (status_id, account_id, requires_mention) VALUES (?, ?, 1)',
+						'INSERT INTO status_mentions (status_id, account_id, requires_mention, author_id) VALUES (?, ?, 1, ?)',
 						status(i),
-						ADDRESSEE_ID
+						ADDRESSEE_ID,
+						by
 					)
 					continue
 				}
@@ -880,6 +866,103 @@ describe("home and list timelines read a page per author, not each author's hist
 				if (manyRows > fewRows + ALLOWANCE) {
 					grown.push(`${name} ${JSON.stringify(page)}: ${fewRows} -> ${manyRows}`)
 				}
+			}
+		}
+		expect(grown).toEqual([])
+	}, 60_000)
+})
+
+// What the viewer never sees of an author costs nothing, however long the author's history. Home reads the viewer's
+// mentions per followed account (status_mentions_requires_mention), so an account the viewer does not follow, sending
+// them direct statuses, is never read.
+describe("reads skip an author's history the viewer never sees (RES-7)", () => {
+	const VIEWER_ID = '640000000000000001'
+	const FRIEND_ID = '640000000000000002'
+	const STRANGER_ID = '640000000000000003'
+	const SKIP_TOKEN = 'skip-token'
+	const status = (i: number) => String(650000000000000000n + BigInt(i))
+
+	async function histories(perAuthor: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			for (const [id, username] of [
+				[FRIEND_ID, 'friend'],
+				[STRANGER_ID, 'stranger'],
+			]) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, ?)',
+					id,
+					`https://far.example/users/${username}`,
+					username,
+					'far.example'
+				)
+			}
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('skip', 'secret', 'skip', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'skip', ?, 'read')",
+				SKIP_TOKEN,
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+				VIEWER_ID,
+				FRIEND_ID
+			)
+			// The friend's public statuses fill home; the stranger's direct statuses to the viewer interleave with them.
+			const authors = [FRIEND_ID, STRANGER_ID]
+			for (let i = 0; i < perAuthor * authors.length; i++) {
+				const by = authors[i % authors.length] ?? FRIEND_ID
+				const direct = by === STRANGER_ID
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					VALUES (?, ?, ?, ?, '<p>hello</p>', ?)`,
+					status(i),
+					`https://far.example/objects/${status(i)}`,
+					by,
+					direct ? 'direct' : 'public',
+					new Date(NOW).toISOString()
+				)
+				if (direct) {
+					sql.exec(
+						'INSERT INTO status_mentions (status_id, account_id, requires_mention, author_id) VALUES (?, ?, 1, ?)',
+						status(i),
+						VIEWER_ID,
+						by
+					)
+				}
+			}
+		})
+		return store
+	}
+
+	it('reads the same rows with 20 or 2,000 statuses per author', async () => {
+		const few = await histories(20)
+		const many = await histories(2000)
+		const credential = { tokenHash: SKIP_TOKEN, scope: 'read', now: NOW } as const
+		const reads: [string, StoreOperation<never, unknown>, unknown, number][] = [
+			// A full page of the friend's statuses, none of the stranger's.
+			['home', homeTimeline, { credential, page: PAGE, present: PRESENT }, PAGE.limit],
+		]
+		const grown: string[] = []
+		for (const [name, operation, input, expected] of reads) {
+			const shownBy = async (store: StoreStub) =>
+				runInDurableObject(store, (_instance, state) => shown(operation.run(state.storage.sql, input as never)))
+			expect([name, await shownBy(few), await shownBy(many)]).toEqual([name, expected, expected])
+			const fewRows = await rowsRead({ store: few }, operation, input as never)
+			const manyRows = await rowsRead({ store: many }, operation, input as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
 			}
 		}
 		expect(grown).toEqual([])

@@ -160,7 +160,13 @@ describe('convert and verify-conversion', () => {
 			{ public: 1, listed: 1, n: expect.any(Number) },
 		])
 		// A mention is marked as one home's mentions stream reads exactly when its status is direct or limited
-		// (REQUIRES_MENTION_SQL in src/domain/audience.ts, which this Node suite does not load).
+		// (REQUIRES_MENTION_SQL in src/domain/audience.ts, which this Node suite does not load), and names the status's
+		// author.
+		expect(
+			value(
+				'SELECT count(*) FROM status_mentions m JOIN statuses s ON s.id = m.status_id WHERE m.author_id IS NOT s.account_id'
+			)
+		).toBe(0)
 		expect(
 			db
 				.prepare(
@@ -229,6 +235,11 @@ describe('convert and verify-conversion', () => {
 			[
 				'a public mention is marked',
 				"UPDATE status_mentions SET requires_mention = 1 WHERE status_id IN (SELECT id FROM statuses WHERE visibility = 'public' AND reblog_of_id IS NULL)",
+				'audience',
+			],
+			[
+				'a mention names another author',
+				"UPDATE status_mentions SET author_id = (SELECT id FROM accounts WHERE uri LIKE '%/users/r4') WHERE status_id = (SELECT id FROM statuses WHERE content LIKE '%secret direct%')",
 				'audience',
 			],
 			[
