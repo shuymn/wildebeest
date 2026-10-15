@@ -2,6 +2,7 @@ import fc from 'fast-check'
 import { inject } from 'vitest'
 
 import type { Visibility } from '../src/domain/audience'
+import type { RepliesPolicy } from '../src/domain/lists'
 
 // A generated world for the policy oracle (test/policy-oracle.test.ts) and the bounds harness
 // (test/policy-bounds.test.ts): local accounts (one of them may be suspended, some may hide their network), remote
@@ -10,8 +11,8 @@ import type { Visibility } from '../src/domain/audience'
 // a reply, as a purge leaves a reply to the account it removes), and the edges the rules read: follows (pending and
 // accepted), blocks both ways, mutes with and without an expiry and with and without notifications, and domain blocks
 // in their stored form; and local accounts' lists, exclusive or not, with each replies_policy, whose members are their
-// owner and accounts it follows, accepted or pending (whatever else the owner blocks, mutes or domain-blocks). Accounts,
-// statuses and lists are referred to by index; writeWorld gives them fixed ids.
+// owner and accounts it follows, accepted or pending (whatever else the owner blocks, mutes or domain-blocks).
+// Accounts, statuses and lists are referred to by index; writeWorld gives them fixed ids.
 
 declare module 'vitest' {
 	interface ProvidedContext {
@@ -44,6 +45,7 @@ export const BLOCKABLE_DOMAINS = [
 ] as const
 
 const VISIBILITIES: readonly Visibility[] = ['public', 'unlisted', 'private', 'direct', 'limited']
+const REPLIES_POLICIES: readonly RepliesPolicy[] = ['followed', 'list', 'none']
 // The times a world may be judged at, an hour apart, so a mute's expiry falls before, at or after them.
 const TIMES = ['2026-10-12T00:00:00.000Z', '2026-10-12T01:00:00.000Z', '2026-10-12T02:00:00.000Z'] as const
 const HOUR_MS = 3_600_000
@@ -94,13 +96,11 @@ function actorHost(form: (typeof HOSTS)[number], domain: string): string {
 	}
 }
 
-export const REPLIES_POLICIES = ['followed', 'list', 'none'] as const
-
 // A list of a local account. Its members are the owner or accounts the owner follows (in either state): a Store holds
 // no other (migration 0007_list_members, the converter), so the world has none.
 export type WorldList = {
 	owner: number
-	repliesPolicy: (typeof REPLIES_POLICIES)[number]
+	repliesPolicy: RepliesPolicy
 	exclusive: boolean
 	members: number[]
 }

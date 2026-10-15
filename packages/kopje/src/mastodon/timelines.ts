@@ -11,8 +11,8 @@ import { mastodonError } from './errors'
 import { pageQuery, pageResponse } from './pagination'
 import { parseBoolean } from './params'
 
-// Timelines (B4a): home, a list's, public, hashtag, an account's statuses, bookmarks and favourites. Status lists default to
-// 20 and allow up to 40, as Mastodon's.
+// Timelines (B4a): home, a list's, public, hashtag, an account's statuses, bookmarks and favourites. Status lists
+// default to 20 and allow up to 40, as Mastodon's.
 
 const STATUS_LIMIT = 20
 const MAX_STATUS_LIMIT = 40
