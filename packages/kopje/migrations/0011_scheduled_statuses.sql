@@ -1,4 +1,4 @@
--- Kopje Store schema 0012: scheduled statuses. Never edit after release (checksummed).
+-- Kopje Store schema 0011: scheduled statuses. Never edit after release (checksummed).
 --
 -- A scheduled status is a post a local account asked to publish later (Mastodon's ScheduledStatus): the parameters
 -- of the post, checked when it was scheduled, and the time it is due. It belongs to its account alone and goes with

@@ -697,8 +697,8 @@ describe('Store migration runner', () => {
 		expect(large - small).toBeLessThanOrEqual(5 * added)
 	}, 60_000)
 
-	it('upgrades a Store with 0012_scheduled_statuses: uploads stay as they were, and scheduled statuses hold theirs and go with their account', async () => {
-		const index = NAMES.indexOf('0012_scheduled_statuses')
+	it('upgrades a Store with 0011_scheduled_statuses: uploads stay as they were, and scheduled statuses hold theirs and go with their account', async () => {
+		const index = NAMES.indexOf('0011_scheduled_statuses')
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
 			const sql = state.storage.sql
@@ -758,8 +758,8 @@ describe('Store migration runner', () => {
 		})
 	})
 
-	it('0012_scheduled_statuses reads each stored upload a bounded number of times, however many there are', async () => {
-		const index = NAMES.indexOf('0012_scheduled_statuses')
+	it('0011_scheduled_statuses reads each stored upload a bounded number of times, however many there are', async () => {
+		const index = NAMES.indexOf('0011_scheduled_statuses')
 		const statements = (MIGRATIONS[index]?.sql ?? '')
 			.split('\n')
 			.filter((line) => !line.startsWith('--'))

@@ -864,7 +864,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   display names at 2,048 (`src/security/html.ts`, `src/federation/remote-actor.ts`). _Enforced (main)_ for scheduled
   statuses: `scheduled_at` is read only up to 64 characters, and a scheduled status's params are a JSON object of a
   fixed shape built from checked fields (the status text's raw bound, at most four media ids), refused over 128 KiB in
-  the Store and by the schema (migration `0012_scheduled_statuses`); `test/migrations.test.ts`,
+  the Store and by the schema (migration `0011_scheduled_statuses`); `test/migrations.test.ts`,
   `test/scheduled-statuses.test.ts`. `scheduled_at` must name a date and time the calendar has (Ruby's
   `DateTime.parse`: no February 29 outside leap years, no 31st of a 30-day month, minutes and hours in range), checked
   before its offset applies. Other query strings: _Gap._

@@ -7,7 +7,7 @@ import m0005 from '../../migrations/0005_hide_collections.sql'
 import m0006 from '../../migrations/0006_account_deletion.sql'
 import m0007 from '../../migrations/0007_list_members.sql'
 import m0008 from '../../migrations/0008_status_mentions_requires_mention.sql'
-import m0012 from '../../migrations/0012_scheduled_statuses.sql'
+import m0011 from '../../migrations/0011_scheduled_statuses.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
 // never change. Each file runs in its own transaction, must finish well under 30 seconds, and must be pure SQL.
@@ -21,5 +21,5 @@ export const MIGRATIONS: readonly { name: string; sql: string }[] = [
 	{ name: '0006_account_deletion', sql: m0006 },
 	{ name: '0007_list_members', sql: m0007 },
 	{ name: '0008_status_mentions_requires_mention', sql: m0008 },
-	{ name: '0012_scheduled_statuses', sql: m0012 },
+	{ name: '0011_scheduled_statuses', sql: m0011 },
 ]

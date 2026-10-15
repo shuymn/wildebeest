@@ -43,7 +43,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
       author. Its work grows linearly with the mentions stored (one pass, with a lookup of each one's status); locally,
       200,000 mentions took under a second.
-    - `0012_scheduled_statuses`: adds the `scheduled_statuses` table and `media_attachments.scheduled_status_id`, with
+    - `0011_scheduled_statuses`: adds the `scheduled_statuses` table and `media_attachments.scheduled_status_id`, with
       their indexes. Its work grows linearly with the media stored (one pass to add the column and one to build its
       partial index).
 - `wrangler.jsonc`: unchanged.

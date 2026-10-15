@@ -163,7 +163,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R24 list timeline         | `homeFilterSql` in `listTimeline`, with the list's active members, the follow's options and the list's `replies_policy`; the owner's lists only (`ownList` in `lists.ts`).                                                                                                                                                                                                                                                         |
 | R25 scheduled statuses    | `scheduledOwnSql` in every read of `scheduled_statuses`, all in `scheduled-statuses.ts`: the owner's alone, anyone else's not found; published through `writePost`, after which R1 to R24 apply.                                                                                                                                                                                                                                   |
 
-A scheduled status (`src/domain/scheduled-statuses.ts`, migration `0012_scheduled_statuses`) is not a status: it is
+A scheduled status (`src/domain/scheduled-statuses.ts`, migration `0011_scheduled_statuses`) is not a status: it is
 a row of `scheduled_statuses` with the post's parameters, and its owner's alone (R25, `scheduledOwnSql`). No read,
 notification or delivery path reads that table (the architecture test below), so nothing of it is listed, notified or
 sent before it is published. The cron publishes it, when it is due, through `preparePost` and `writePost` in
