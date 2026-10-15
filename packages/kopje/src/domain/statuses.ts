@@ -714,12 +714,11 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 // Deleting
 // ---------------------------------------------------------------------------------------------------------------
 
-// Deletes an own status (or boost) and answers with it as it was, source text included, for redrafting. Its media,
-// also what earlier edits dropped (as Mastodon nullifies every media of the status), is detached, so a redraft can
-// attach it again within the grace period; with deleteMedia it is doomed at once and
-// the media sweep deletes it and its R2 objects (the Worker starts a sweep after the call). Only the deleted status
-// itself carries its source; a boost's original is shown only if the viewer may still see it (presentOwnStatus), and
-// never with its source.
+// Deletes an own status (or boost) and answers with it as it was, source text included, for redrafting. Its media, also
+// what earlier edits dropped (as Mastodon nullifies every media of the status), is detached, so a redraft can attach it
+// again within the grace period; with deleteMedia it is doomed at once and the media sweep deletes it and its R2
+// objects (the Worker starts a sweep after the call). Only the deleted status itself carries its source; a boost's
+// original is shown only if the viewer may still see it (presentOwnStatus), and never with its source.
 export const deleteStatus = userMediaDeleteOperation<
 	{ id: string; deleteMedia: boolean; now: number; present: Present },
 	Viewed<Status>
