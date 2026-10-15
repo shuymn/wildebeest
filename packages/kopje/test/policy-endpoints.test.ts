@@ -427,10 +427,12 @@ function check(sql: SqlStorage, c: Case): string[] {
 		}
 
 		// Home: exactly what the home rule allows the viewer, newest first.
-		const home = pages((page) => ok<Page<Status>>(run(homeTimeline, { ...user, page, present: PRESENT }), 'home')).map(
-			(value) => status('home', viewer, value, (s) => m.home(s, viewer))
+		equal(
+			'home',
+			viewer,
+			feed('home', homeTimeline, { present: PRESENT }),
+			newestFirst(all.filter((s) => m.home(s, viewer)))
 		)
-		equal('home', viewer, home, newestFirst(all.filter((s) => m.home(s, viewer))))
 
 		// Status search over the viewer's library: only what the list rule allows.
 		const results = ok<{ statuses: Status[] }>(

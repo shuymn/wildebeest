@@ -217,10 +217,7 @@ export class PolicyModel {
 	// Of others' statuses, a boost needs the follow's show_reblogs, and a reply passes only when its partner is known
 	// and is the author, the viewer or an account the viewer follows. Then homeFilter. (The world's statuses have no
 	// language, so a follow's languages filter nothing.)
-	home(s: number, viewer: Viewer): boolean {
-		if (viewer === null) {
-			return false
-		}
+	home(s: number, viewer: number): boolean {
 		const { author, visibility, reblogOf } = this.status(s)
 		if (author !== viewer) {
 			const follow = this.world.follows.find((f) => f.from === viewer && f.to === author && f.accepted)
