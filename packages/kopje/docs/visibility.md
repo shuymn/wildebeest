@@ -95,6 +95,35 @@ to an account the owner follows; `list`, one to a member of the list (pending in
 `homeFilterSql` applies for the owner. Exclusive does not change the list's own timeline. Only the owner reads or
 changes a list; to anyone else it is not found.
 
+Conversations (`src/domain/conversations.ts`, Mastodon's `AccountConversation` and `Api::V1::ConversationsController`)
+are written when a direct status is stored, never worked out when read (R25). A local author's own direct status joins
+the author's conversation (`FanOutOnWriteService#deliver_to_conversation!`), read; a direct status a local account is
+notified of as a mention joins that account's (`NotifyService#push_to_conversation!`, called from `notify`), unread. So
+the notification rule (R15) decides who receives one: a status from an account the owner blocks or mutes with
+notifications adds nothing, and a limited status (a silent recipient) is not a direct message. A conversation is keyed
+by its owner, its thread and its participants (`src/domain/conversation-rows.ts`): the participants are the status's
+author and its mentions (not silent) less the owner; the thread is `statuses.thread`, Mastodon's `conversation_id`,
+written once when a status is stored and never changed: a reply to a status stored takes that status's thread; a
+received status that names its conversation (Mastodon's `conversation`, which `ActivityPub::Activity::Create` reads)
+takes that identifier, so the statuses of a thread delivered out of order share it; otherwise a reply to a status not
+stored takes the uri it names (`in_reply_to_uri`), and any other status its own uri (the trigger `statuses_thread`).
+Any identifier is taken, whatever its origin, as Mastodon takes it: a sender can only group its own statuses with
+others, and a conversation is also keyed by its participants, the sender among them. Deleting a status or a conversation changes no other status's thread, so a later reply joins
+the thread its parent was stored in. Migration `0009_conversations` gives the statuses already stored theirs by the
+same rule, from the start of each reply chain down (a status in a cycle of replies, or below one, takes what a start
+would), reading the conversation a received status named from the object it keeps (`raw`),
+with the same checks as the receive path. A status leaves its
+conversations however it is deleted (a delete, an inbound `Delete`, a purge): its `conversation_statuses` rows cascade,
+and the trigger `conversation_statuses_removed` of migration `0009_conversations` moves the last status back to the
+newest left, or deletes the conversation when none is left (`AccountConversation.remove_status`). A block ends the
+blocker's conversations with the blocked account (`AfterBlockService#clear_conversations!`). The list reads only the
+owner's rows, newest last status first, through the `(account_id, last_status_id)` index; anyone else's conversation
+is not found, read, marked or deleted. Mastodon renders a conversation's last status with no read rule; Kopje shows it
+only when the owner may still see it (`statusReads` under `visible`, R2), and otherwise shows `last_status: null`, as
+Mastodon does for a last status it can no longer load: so a last status whose author is suspended or blocks the owner
+is not shown, while the conversation and its participants stay. The participants are presented as accounts are
+elsewhere (an unavailable one redacted); with nobody else in it, the owner's own account.
+
 Notifications: `shownSql(r, type, from, status, now)` is R15, one rule for writing (`notify`), listing and reading
 notifications, and for sending their pushes (`domain/push.ts`, judged again at the time of sending). The sender is not
 the recipient, is available, is neither blocked (either way), muted with notifications nor domain-blocked by the
@@ -161,6 +190,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R22 addressing            | `addressingOf` for a status; for a boost, `addresses` (through `boostAnnounce`): the `Announce` leaves out an author the booster blocks or domain-blocks, its `Undo` names them. See "Outbound recipients".                                                                                                                                                                                                                        |
 | R23 delivery targets      | `recipientsFor`, by `outboundKind`, turned into inboxes by `audienceTargets` in `deliveries.ts`. See "Outbound recipients".                                                                                                                                                                                                                                                                                                        |
 | R24 list timeline         | `homeFilterSql` in `listTimeline`, with the list's active members, the follow's options and the list's `replies_policy`; the owner's lists only (`ownList` in `lists.ts`).                                                                                                                                                                                                                                                         |
+| R25 conversations         | `visibleSql` (through `statusReads`) for each last status; rows are the owner's only (`listConversations`, `markConversation`, `deleteConversation` in `conversations.ts`).                                                                                                                                                                                                                                                        |
 
 ## Filters
 
@@ -265,6 +295,7 @@ author. The callers:
 | status search                                              | `select` under `listable`, with its candidates as a `WITH` table                                     |
 | notifications (list and one)                               | `notifications`                                                                                      |
 | web profile and status pages                               | `select` under `visible` with no viewer; the parent through `viewableStatusId`                       |
+| conversations (list, read, unread)                         | `select` under `visible` of each last status                                                         |
 | single status, history, actions (favourite, bookmark, ...) | `viewableStatusId`                                                                                   |
 | search resolution                                          | `viewableStatusId`, after the domain block of the author                                             |
 | post, edit, delete, boost (and their repeats)              | `ownStatusId`, then `presentOwnStatus`                                                               |
@@ -336,8 +367,8 @@ prints the shrunk world, the pairs only one side accepts, and the seed; `FC_SEED
 test/policy-oracle.test.ts` replays it.
 
 `test/policy-bounds.test.ts` takes one generated world, for a fixed seed, in which every endpoint below shows the viewer
-something. It runs home, the public and tag feeds, account statuses, notifications, context, favourites, bookmarks,
-`favourited_by`, `reblogged_by`, relationships, the followers and following of an account (one that no unrelated account
+something. It runs home, the public and tag feeds, account statuses, notifications, context, conversations, favourites,
+bookmarks, `favourited_by`, `reblogged_by`, relationships, the followers and following of an account (one that no unrelated account
 follows), a list's timeline (a list of every account of the world), status and hashtag search, and account search among the viewer's follows (a search of every account reads the
 newest accounts the instance knows, a window that grows with them up to its limit) on that world alone, and again with
 1,000 unrelated remote accounts and 100 unrelated local ones: their statuses (never public, though they carry the
@@ -349,7 +380,9 @@ statuses, accounts, notifications and hashtags in the same order, and the same r
 reads (RES-7) may grow by at most 10. A second case grows the history of each author home and a list read instead:
 the viewer, who follows seven accounts and has a list of them, and those accounts, from 20 statuses each to 2,000, one
 of the accounts posting only direct statuses addressed to another account. The newest page, a page from the middle of
-the longer histories and the oldest page of home and of the list must each be full and read at most 10 rows more.
+the longer histories and the oldest page of home and of the list must each be full and read at most 10 rows more. A
+third case does the same for the conversation list, with 20 or 2,000 conversations of the viewer, each a thread of
+three direct statuses.
 
 A third case grows the generated world's own history: the same world with every status replicated 40 and 400 times,
 each copy a new status older than every original, with its original's author, visibility, mentions, hashtag and
@@ -372,19 +405,20 @@ notifications added, for each available local viewer and, where the endpoint ans
 one. No endpoint may show a status or an account the model does not allow the viewer by the endpoint's rule, and a
 boost must come with its own original (never `reblog: null` on a read), which the viewer may see:
 
-| Endpoint                                                   | Asserted                                                                                                                                                        |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| public feed, tag feed, account statuses (of every account) | exactly the model's members the rule allows (R10, R11), newest first, over pages of 3                                                                           |
-| favourites, bookmarks                                      | exactly the viewer's edges the list rule allows (R8), newest edge first, over pages                                                                             |
-| home                                                       | exactly the model's members home allows (R9: membership, exclusive lists, the follow's options and `homeFilterSql`), newest first, page by page (below)         |
-| list timeline (of each of the viewer's lists)              | exactly what the model allows of the list's members (R24), page by page as home; another account's list is not found                                            |
-| single status, context                                     | nothing for a status the viewer may not view (R3); context members listable (R8)                                                                                |
-| `favourited_by`, `reblogged_by`                            | nothing for a status the viewer may not view; only listed interactors (R12)                                                                                     |
-| status search                                              | listable statuses only (R8)                                                                                                                                     |
-| notifications                                              | only the viewer's, as written, that the rule shows (R15), with statuses they may view                                                                           |
-| followers, following (of every account)                    | exactly the accepted follows the list rule shows (R13), newest first, over pages of 3                                                                           |
-| account search                                             | exactly the accounts the viewer may find (R14)                                                                                                                  |
-| search resolution (of every stored account and status)     | an account exactly when account search finds it (R14); a status exactly when the single-status read shows it (R3), unless the viewer blocks its author's domain |
+| Endpoint                                                   | Asserted                                                                                                                                                                                                                                                |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| public feed, tag feed, account statuses (of every account) | exactly the model's members the rule allows (R10, R11), newest first, over pages of 3                                                                                                                                                                   |
+| favourites, bookmarks                                      | exactly the viewer's edges the list rule allows (R8), newest edge first, over pages                                                                                                                                                                     |
+| home                                                       | exactly the model's members home allows (R9: membership, exclusive lists, the follow's options and `homeFilterSql`), newest first, page by page (below)                                                                                                 |
+| list timeline (of each of the viewer's lists)              | exactly what the model allows of the list's members (R24), page by page as home; another account's list is not found                                                                                                                                    |
+| single status, context                                     | nothing for a status the viewer may not view (R3); context members listable (R8)                                                                                                                                                                        |
+| `favourited_by`, `reblogged_by`                            | nothing for a status the viewer may not view; only listed interactors (R12)                                                                                                                                                                             |
+| status search                                              | listable statuses only (R8)                                                                                                                                                                                                                             |
+| notifications                                              | only the viewer's, as written, that the rule shows (R15), with statuses they may view                                                                                                                                                                   |
+| followers, following (of every account)                    | exactly the accepted follows the list rule shows (R13), newest first, over pages of 3                                                                                                                                                                   |
+| account search                                             | exactly the accounts the viewer may find (R14)                                                                                                                                                                                                          |
+| conversations                                              | exactly the viewer's conversations the model makes of the direct statuses and the mentions seeded (R25), newest last status first, both ways over pages; each last status only if the viewer may see it (R2), else null; another account's is not found |
+| search resolution (of every stored account and status)     | an account exactly when account search finds it (R14); a status exactly when the single-status read shows it (R3), unless the viewer blocks its author's domain                                                                                         |
 
 Home and each list are read page by page: by `max_id` in pages of 3 and by `min_id` from the oldest in pages of 2,
 each page exactly the next of the model's members, so a page cannot come back short while members remain; and the
@@ -409,7 +443,10 @@ the cleanup). After each action the model (`outboundKindOf`, `statusAudience`, `
   remote follower;
 - every notification written satisfies R15, and every push recorded R16, at the time of the action;
 - a list holds what it held before the action, less each account its owner no longer follows in either state; its
-  owner stays.
+  owner stays;
+- the conversations hold what `AccountConversation.add_status` and `remove_status` make of the action (R25): a direct
+  status joins its author's conversation and that of each local account the notification rule lets it notify, by
+  thread and participants, and leaves each when it is deleted, the last status moving back or the conversation going.
 
 The property runs 500 cases from a fixed seed (`FC_SEED` replays another). Next to it, witnesses (cases written by
 hand) run each scenario it must check: content leaving out an account being deleted while its retraction reaches it,

@@ -48,6 +48,7 @@ import {
 	userReadOperation,
 	userWriteOperation,
 } from './auth'
+import { addToConversation } from './conversations'
 import { beginRetraction } from './deliveries'
 import { activeFilters } from './filters'
 import { allocateLocalId } from './ids'
@@ -339,6 +340,8 @@ export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusRe
 		for (const mention of composed.mentions) {
 			notify(db, { recipientId: mention.id, type: 'mention', fromId: accountId, statusId: id, now: input.now })
 		}
+		// FanOutOnWriteService#deliver_to_conversation!: the author's own direct status joins their conversation.
+		addToConversation(db, accountId, id)
 		// FeedInsertWorker#notify?: followers who asked to be notified hear of a post that is not a reply to someone else
 		// (or to an unknown partner) and that their home would show (the follow's languages); notify() applies the audience
 		// rule.

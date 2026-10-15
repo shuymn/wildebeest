@@ -4,6 +4,7 @@ import { requireAccess, type RouteAccess } from './access'
 import * as accounts from './accounts'
 import * as blocks from './blocks'
 import type { ApiDeps, ApiEnv, ApiHandler } from './context'
+import * as conversations from './conversations'
 import * as filters from './filters'
 import * as instance from './instance'
 import * as lists from './lists'
@@ -416,6 +417,31 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'PUT', path: '/api/v2/filters/:id', access: { scope: 'write:filters' }, handler: filters.updateFilter },
 	{ method: 'PATCH', path: '/api/v2/filters/:id', access: { scope: 'write:filters' }, handler: filters.updateFilter },
 	{ method: 'DELETE', path: '/api/v2/filters/:id', access: { scope: 'write:filters' }, handler: filters.deleteFilter },
+	// Conversations (mastodon/conversations.ts).
+	{
+		method: 'GET',
+		path: '/api/v1/conversations',
+		access: { scope: 'read:statuses' },
+		handler: conversations.conversations,
+	},
+	{
+		method: 'DELETE',
+		path: '/api/v1/conversations/:id',
+		access: { scope: 'write:conversations' },
+		handler: conversations.deleteConversation,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/conversations/:id/read',
+		access: { scope: 'write:conversations' },
+		handler: conversations.readConversation,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/conversations/:id/unread',
+		access: { scope: 'write:conversations' },
+		handler: conversations.unreadConversation,
+	},
 
 	{ method: 'POST', path: '/api/v1/media', access: { scope: 'write:media' }, handler: media.uploadMedia },
 	{ method: 'POST', path: '/api/v2/media', access: { scope: 'write:media' }, handler: media.uploadMedia },

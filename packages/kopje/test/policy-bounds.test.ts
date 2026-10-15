@@ -11,6 +11,8 @@ import { rowsRead } from './read-helpers'
 import { Db } from '../src/db/sql'
 import { listFollows, relationships, userinfo } from '../src/domain/accounts'
 import { canView, visibleSql, type Visibility } from '../src/domain/audience'
+import { backfillConversations } from '../src/domain/conversation-rows'
+import { listConversations } from '../src/domain/conversations'
 import {
 	getFilter,
 	listFilterKeywords,
@@ -328,6 +330,9 @@ async function worldWith(unrelated: number): Promise<StoreStub> {
 		writeWorld(state.storage.sql, WORLD)
 		writeViewer(state.storage.sql)
 		writeUnrelated(state.storage.sql, unrelated)
+		// The conversations of the direct statuses and mentions written, as migration 0009 makes them: the viewer's,
+		// and the unrelated local accounts'.
+		backfillConversations({ exec: (query: string) => state.storage.sql.exec(query) })
 	})
 	return store
 }
@@ -410,6 +415,9 @@ async function replicated(factor: number): Promise<StoreStub> {
 		writeWorld(state.storage.sql, WORLD)
 		writeCopies(state.storage.sql, factor)
 		writeViewer(state.storage.sql)
+		// The conversations of the direct statuses and the viewer's mentions, copies included, as migration 0009 makes
+		// them.
+		backfillConversations({ exec: (query: string) => state.storage.sql.exec(query) })
 	})
 	return store
 }
@@ -419,7 +427,7 @@ const target = { credential, now: NOW, id: statusId(TARGET), present: PRESENT }
 const searchInput = { credential, limit: 20, offset: 0, following: false, localDomain: 'kopje.test', present: PRESENT }
 const timeline = { credential, now: NOW, page: PAGE, local: false, remote: false, onlyMedia: false, present: PRESENT }
 
-// What an endpoint that pages a viewer's history pages by: statuses (by status id), the viewer's notifications,
+// What an endpoint that pages a viewer's history pages by: statuses (by status id: conversations by their last status's), the viewer's notifications,
 // favourites or bookmarks (by their ids), or a status's interactors (accounts, which are not replicated).
 type Paging = 'statuses' | 'notifications' | 'favourites' | 'bookmarks' | 'interactors'
 
@@ -453,6 +461,7 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 		'notifications',
 	],
 	['context', statusContext, target],
+	['conversations', listConversations, { credential, page: PAGE, present: PRESENT }, 'statuses'],
 	['favourites', favourites, { credential, page: PAGE, present: PRESENT }, 'favourites'],
 	['bookmarks', bookmarks, { credential, page: PAGE, present: PRESENT }, 'bookmarks'],
 	['favourited_by', interactors, { ...target, kind: 'favourited_by', page: PAGE }, 'interactors'],
@@ -562,6 +571,10 @@ function identities(output: unknown): unknown {
 	}
 	if ('visibility' in value && 'account' in value) {
 		return { id: value.id, reblog: (value.reblog as Entity | null)?.id ?? null }
+	}
+	// A conversation by what it shows: its id is numbered with the conversations a Store holds.
+	if ('last_status' in value && 'unread' in value) {
+		return { unread: value.unread, accounts: identities(value.accounts), last_status: identities(value.last_status) }
 	}
 	if ('acct' in value) {
 		return value.id
@@ -928,6 +941,106 @@ describe("home and list timelines read a page per author, not each author's hist
 				if (manyRows > fewRows + ALLOWANCE) {
 					grown.push(`${name} ${JSON.stringify(page)}: ${fewRows} -> ${manyRows}`)
 				}
+			}
+		}
+		expect(grown).toEqual([])
+	}, 60_000)
+})
+
+// The conversation list reads a page of the viewer's conversations through the (account, last status) index, and each
+// one's last status and participants, however many conversations the viewer has and however long each is: the viewer
+// has 20 or 2,000 conversations, each a thread of three direct statuses with one of ten remote accounts.
+describe('the conversation list reads a page, not the history (RES-7)', () => {
+	const VIEWER_ID = '800000000000000001'
+	const HISTORY_TOKEN = 'conversations-token'
+	const PARTNERS = 10
+	const partner = (i: number) => String(810000000000000000n + BigInt(i))
+	const status = (i: number) => String(820000000000000000n + BigInt(i))
+
+	async function conversations(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('history', 'secret', 'history', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'history', ?, 'read')",
+				HISTORY_TOKEN,
+				VIEWER_ID
+			)
+			for (let p = 0; p < PARTNERS; p++) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, ?)',
+					partner(p),
+					`https://far${p}.example/users/p${p}`,
+					`p${p}`,
+					`far${p}.example`
+				)
+			}
+			// Each conversation: the partner writes, the viewer answers, the partner answers again.
+			for (let c = 0; c < count; c++) {
+				const with_ = partner(c % PARTNERS)
+				for (let k = 0; k < 3; k++) {
+					const id = status(3 * c + k)
+					const author = k === 1 ? VIEWER_ID : with_
+					const parent = k === 0 ? null : status(3 * c + k - 1)
+					sql.exec(
+						`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, in_reply_to_account_id,
+							visibility, content, published_at)
+						VALUES (?, ?, ?, ?, ?, ?, 'direct', '<p>psst</p>', ?)`,
+						id,
+						`https://kopje.test/objects/${id}`,
+						author,
+						parent === null ? null : `https://kopje.test/objects/${parent}`,
+						parent,
+						parent === null ? null : k === 1 ? with_ : VIEWER_ID,
+						new Date(NOW).toISOString()
+					)
+					sql.exec(
+						'INSERT INTO status_mentions (status_id, account_id) VALUES (?, ?)',
+						id,
+						author === VIEWER_ID ? with_ : VIEWER_ID
+					)
+					if (author !== VIEWER_ID) {
+						sql.exec(
+							"INSERT INTO notifications (account_id, type, from_account_id, status_id) VALUES (?, 'mention', ?, ?)",
+							VIEWER_ID,
+							author,
+							id
+						)
+					}
+				}
+			}
+			backfillConversations({ exec: (query: string) => sql.exec(query) })
+		})
+		return store
+	}
+
+	it('reads the same rows with 20 or 2,000 conversations, on the newest, a middle and the oldest page', async () => {
+		const few = await conversations(20)
+		const many = await conversations(2000)
+		const credential = { tokenHash: HISTORY_TOKEN, scope: 'read', now: NOW } as const
+		const grown: string[] = []
+		// A page from the middle of the longer history is above every conversation of the shorter one.
+		const middle = status(3 * 1000 + 2)
+		for (const page of [PAGE, { ...PAGE, maxId: middle }, { ...PAGE, minId: '1' }]) {
+			const input = { credential, page, present: PRESENT }
+			const shownBy = async (store: StoreStub) =>
+				runInDurableObject(store, (_instance, state) => shown(listConversations.run(state.storage.sql, input)))
+			expect([await shownBy(few), await shownBy(many)]).toEqual([PAGE.limit, PAGE.limit])
+			const fewRows = await rowsRead({ store: few }, listConversations, input)
+			const manyRows = await rowsRead({ store: many }, listConversations, input)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${JSON.stringify(page)}: ${fewRows} -> ${manyRows}`)
 			}
 		}
 		expect(grown).toEqual([])
