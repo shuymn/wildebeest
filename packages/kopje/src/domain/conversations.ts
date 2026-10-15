@@ -122,17 +122,18 @@ function presentConversations(
 }
 
 // GET /api/v1/conversations: the viewer's conversations, newest last status first, paged by the last status's id
-// (AccountConversation.to_a_paginated_by_id).
+// (AccountConversation.to_a_paginated_by_id). The cursor is a plain range (no cursor is ':' or '', above and below every
+// id), so the read starts in the (account, last status) index at the cursor.
 export const listConversations = userReadOperation<{ page: PageQuery; present: Present }, Page<Conversation>>(
 	(db, { page, present }, _viewer, viewer) => {
 		const ascending = page.minId !== undefined
 		const rows = db.all<ConversationRow>(
 			`SELECT ${COLUMNS} FROM conversations
-			WHERE account_id = ?1 AND (?2 IS NULL OR last_status_id < ?2) AND (?3 IS NULL OR last_status_id > ?3)
+			WHERE account_id = ?1 AND last_status_id < ?2 AND last_status_id > ?3
 			ORDER BY last_status_id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			viewer.accountId,
-			statusCursor(page.maxId),
-			statusCursor(page.minId ?? page.sinceId),
+			statusCursor(page.maxId) ?? ':',
+			statusCursor(page.minId ?? page.sinceId) ?? '',
 			page.limit
 		)
 		if (ascending) {
