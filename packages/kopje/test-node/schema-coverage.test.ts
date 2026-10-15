@@ -30,6 +30,8 @@ const NOT_CARRIED: Record<string, string> = {
 	account_pins:
 		'legacy never wrote its endorsements table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	backup_media: 'the backup media index of one bucket; a converted Store starts a fresh baseline',
+	conversation_mutes:
+		'legacy never wrote its conversation_mutes table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	deliveries: 'outbound queue; legacy queues are not carried',
 	domain_block_cleanups: 'pending work of a domain block made in Kopje',
 	fedify_kv: 'federation cache',
@@ -55,6 +57,8 @@ const NOT_CARRIED: Record<string, string> = {
 	push_subscriptions: 'push subscriptions are not carried: clients register again',
 	remote_keys: 'fetched again on demand',
 	scheduled_statuses: 'posts scheduled in Kopje; legacy Wildebeest has no scheduled statuses',
+	status_pins:
+		'legacy never wrote its status_pins table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 }
 
 // Tables the converter fills through Kopje's own code, over the rows it carried, rather than with SQL of its own: the

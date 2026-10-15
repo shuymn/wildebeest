@@ -22,6 +22,7 @@ const SCHEMA_TABLES = [
 	'accounts',
 	'blocks',
 	'bookmarks',
+	'conversation_mutes',
 	'conversation_statuses',
 	'conversations',
 	'deliveries',
@@ -51,6 +52,7 @@ const SCHEMA_TABLES = [
 	'remote_keys',
 	'scheduled_statuses',
 	'status_edits',
+	'status_pins',
 	'status_mentions',
 	'status_tags',
 	'statuses',
@@ -1015,6 +1017,8 @@ describe('Store migration runner', () => {
 			expect([threadOf(r.id), threadOf(s.id)]).toEqual([conversation, s.id])
 
 			// After it, P replies to R and Q to P, and Q arrives first: all of them are in one thread and one conversation.
+			// They are received by this build's code, so the Store takes this build's later migrations first.
+			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({ ok: true })
 			const db = new Db(sql)
 			const p = note(2, { inReplyTo: r.id })
 			const q = note(3, { inReplyTo: p.id })
@@ -1182,6 +1186,77 @@ describe('Store migration runner', () => {
 			sql.exec('DELETE FROM local_accounts WHERE account_id = ?', id(1))
 			expect(pins()).toEqual([{ account_id: id(2), target_account_id: id(3) }])
 			expect(sql.exec('SELECT count(*) AS n FROM account_notes').one()).toEqual({ n: 0 })
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('upgrades a Store with 0018_status_pins_and_conversation_mutes: pins go with their status and account, mutes with their account', async () => {
+		const at = NAMES.indexOf('0018_status_pins_and_conversation_mutes')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			expect(tableNames(sql)).not.toContain('status_pins')
+			const id = (n: number) => String(100000000000000000n + BigInt(n))
+			for (const n of [1, 2]) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+					id(n),
+					`https://kopje.test/ap/users/u${n}`,
+					`u${n}`
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'k')",
+					id(n),
+					`u${n}@example.com`
+				)
+			}
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://remote.example/users/r', 'r', 'remote.example')",
+				id(3)
+			)
+			for (const [status, author] of [
+				[10, 1],
+				[11, 1],
+				[12, 2],
+			] as const) {
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					VALUES (?, ?, ?, 'public', '', '2026-10-01T00:00:00.000Z')`,
+					id(status),
+					`https://kopje.test/ap/o/${status}`,
+					id(author)
+				)
+			}
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0018_status_pins_and_conversation_mutes'],
+			})
+			const pin = (account: string, status: string) =>
+				sql.exec('INSERT INTO status_pins (account_id, status_id) VALUES (?, ?)', account, status)
+			const muteThread = (account: string, thread: string) =>
+				sql.exec('INSERT INTO conversation_mutes (account_id, thread) VALUES (?, ?)', account, thread)
+			pin(id(1), id(10))
+			pin(id(1), id(11))
+			pin(id(2), id(12))
+			expect(() => pin(id(1), id(10))).toThrow(/UNIQUE|PRIMARY KEY/)
+			// Only a local account pins or mutes.
+			expect(() => pin(id(3), id(12))).toThrow(/FOREIGN KEY/)
+			expect(() => muteThread(id(3), 'https://kopje.test/ap/o/10')).toThrow(/FOREIGN KEY/)
+			muteThread(id(1), 'https://kopje.test/ap/o/10')
+			muteThread(id(2), 'https://kopje.test/ap/o/10')
+			expect(() => muteThread(id(1), 'https://kopje.test/ap/o/10')).toThrow(/UNIQUE|PRIMARY KEY/)
+			const pins = () => sql.exec('SELECT account_id, status_id FROM status_pins ORDER BY 1, 2').toArray()
+			// A pin goes with its status; a mute outlives the statuses of its thread.
+			sql.exec('DELETE FROM statuses WHERE id = ?', id(10))
+			expect(pins()).toEqual([
+				{ account_id: id(1), status_id: id(11) },
+				{ account_id: id(2), status_id: id(12) },
+			])
+			expect(sql.exec('SELECT count(*) AS n FROM conversation_mutes').one()).toEqual({ n: 2 })
+			sql.exec('DELETE FROM local_accounts WHERE account_id = ?', id(1))
+			expect(pins()).toEqual([{ account_id: id(2), status_id: id(12) }])
+			expect(sql.exec('SELECT account_id FROM conversation_mutes').toArray()).toEqual([{ account_id: id(2) }])
 			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
 		})
 	})
