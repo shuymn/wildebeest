@@ -1,7 +1,12 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
+import { NOW } from './app-helpers'
 import { act, block, community, follow, getJson, ids, post, remoteAccount, seedStatus } from './status-helpers'
+import { Db } from '../src/db/sql'
+import { purgeBatch } from '../src/domain/inbox'
 
 describe('timeline paging', () => {
 	it('pages home with max_id, since_id and min_id and a Link header', async () => {
@@ -57,6 +62,75 @@ describe('home', () => {
 		await act(h, alice, `/api/v1/accounts/${bob.id}/follow`, { reblogs: false })
 		expect(await ids(h, '/api/v1/timelines/home', alice.token)).toEqual([thread.id, own.id])
 		expect(replyToCarol.id).not.toBe('')
+	})
+
+	it('leaves out replies whose partner is unknown, and keeps out a reply whose partner is purged', async () => {
+		const h = await community(['alice', 'bob', 'carol'])
+		const { alice, bob, carol } = h.users
+		await follow(h, alice, bob.id)
+		await follow(h, carol, bob.id)
+		const remote = await remoteAccount(h.store, 'rem')
+		await sql(
+			h.store,
+			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+			carol.id,
+			remote
+		)
+		const rems = await seedStatus(h.store, { accountId: remote, visibility: 'public' })
+		// bob replies to rem's status and continues his own reply (the partner stays rem).
+		const toRem = await post(h, bob, { status: 'to rem', in_reply_to_id: rems })
+		const thread = await post(h, bob, { status: 'more', in_reply_to_id: toRem.id })
+		// A reply to a status never stored: its parent and partner are unknown.
+		const orphan = await seedStatus(h.store, { accountId: bob.id, visibility: 'public' })
+		await sql(
+			h.store,
+			"UPDATE statuses SET in_reply_to_uri = 'https://elsewhere.example/objects/1' WHERE id = ?",
+			orphan
+		)
+		const own = await post(h, bob, { status: 'own' })
+		expect(await ids(h, '/api/v1/timelines/home', alice.token)).toEqual([own.id])
+		expect(await ids(h, '/api/v1/timelines/home', carol.token)).toEqual([own.id, thread.id, toRem.id, rems])
+		// The author's own home shows them all.
+		expect(await ids(h, '/api/v1/timelines/home', bob.token)).toEqual([own.id, orphan, thread.id, toRem.id])
+
+		// rem's account is purged: its status, carol's follow of it and the partner of bob's replies go. alice's home is
+		// unchanged; carol's loses the replies with her follow of rem, as an unfollow would.
+		const [{ uri }] = (await sql<{ uri: string }>(h.store, 'SELECT uri FROM accounts WHERE id = ?', remote)) as [
+			{ uri: string },
+		]
+		await runInDurableObject(h.store, (_instance, state) => {
+			while (purgeBatch(new Db(state.storage.sql), uri, NOW)) {
+				// another batch
+			}
+		})
+		expect(
+			await sql(
+				h.store,
+				'SELECT id, in_reply_to_id, in_reply_to_account_id FROM statuses WHERE id IN (?, ?) ORDER BY id',
+				toRem.id,
+				thread.id
+			)
+		).toEqual([
+			{ id: toRem.id, in_reply_to_id: null, in_reply_to_account_id: null },
+			{ id: thread.id, in_reply_to_id: toRem.id, in_reply_to_account_id: null },
+		])
+		expect(await ids(h, '/api/v1/timelines/home', alice.token)).toEqual([own.id])
+		expect(await ids(h, '/api/v1/timelines/home', carol.token)).toEqual([own.id])
+		expect(await ids(h, '/api/v1/timelines/home', bob.token)).toEqual([own.id, orphan, thread.id, toRem.id])
+	})
+
+	it('keeps showing a reply whose parent is deleted, by the partner it keeps', async () => {
+		const h = await community(['alice', 'bob', 'carol'])
+		const { alice, bob, carol } = h.users
+		await follow(h, alice, bob.id)
+		await follow(h, alice, carol.id)
+		const carols = await post(h, carol, { status: 'carol' })
+		const reply = await post(h, bob, { status: 'to carol', in_reply_to_id: carols.id })
+		expect(await ids(h, '/api/v1/timelines/home', alice.token)).toEqual([reply.id, carols.id])
+		expect((await h.request(`/api/v1/statuses/${carols.id}`, bearer(carol.token, { method: 'DELETE' }))).status).toBe(
+			200
+		)
+		expect(await ids(h, '/api/v1/timelines/home', alice.token)).toEqual([reply.id])
 	})
 })
 
