@@ -1,3 +1,5 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
@@ -5,9 +7,10 @@ import { NOW } from './app-helpers'
 import { LEGACY } from './federation-helpers'
 import { PNG_PLAIN } from './fixtures/images'
 import { bytes, mediaForm, pathOf, TestCodec, uploaded } from './media-helpers'
+import { rowsRead } from './read-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
 import { ORIGIN } from './web-helpers'
-import { PROFILE_PAGE_SIZE } from '../src/domain/web-pages'
+import { PROFILE_PAGE_SIZE, profilePage } from '../src/domain/web-pages'
 
 // The public pages (B5): /@user and /@user/:id. VIS-4: an anonymous viewer sees only public and unlisted statuses of
 // local accounts that are not suspended; everything else is the same 404. HTML-1, HTML-3: stored HTML is sanitized at
@@ -133,7 +136,7 @@ describe('profile page', () => {
 		const h = await community(['alice', 'bob'])
 		const { alice, bob } = h.users
 		const featured = await h.request('/api/v1/featured_tags', bearer(alice.token, json({ name: 'Cats' })))
-		const url = new URL(((await featured.json()) as { url: string }).url)
+		const url = new URL((await featured.json<{ url: string }>()).url)
 		expect(url.pathname).toBe('/@alice/tagged/cats')
 		await post(h, alice, { status: '#cats alpha' })
 		await post(h, alice, { status: '#cats bravo', visibility: 'unlisted' })
@@ -160,6 +163,51 @@ describe('profile page', () => {
 		expect((await page(h, '/@alice/tagged/a-b')).response.status).toBe(404)
 		expect((await page(h, '/@nobody/tagged/cats')).response.status).toBe(404)
 	})
+
+	it('reads the account’s own posts for a tagged page, not other accounts’ posts with the hashtag (RES-7)', async () => {
+		const measure = async (others: number) => {
+			const h = await community(['alice'])
+			for (let i = 0; i < PROFILE_PAGE_SIZE + 5; i++) {
+				await seedStatus(h.store, {
+					accountId: h.users.alice.id,
+					visibility: 'public',
+					tags: ['cats'],
+					published: NOW - 3_600_000 + i * 1000,
+				})
+			}
+			const carol = await remoteAccount(h.store, 'carol')
+			// Newer public statuses of another account with the same hashtag.
+			await sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+				INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+				SELECT CAST(900000000000000000 + i AS TEXT), 'https://remote.example/o/' || i, ?1, 'public', '2026-01-01T00:00:00.000Z'
+				FROM n`,
+				carol,
+				others
+			)
+			await sql(
+				h.store,
+				"INSERT INTO status_tags (status_id, name, public) SELECT id, 'cats', 1 FROM statuses WHERE account_id = ?",
+				carol
+			)
+			const input = { username: 'alice', tag: 'cats', present: { origin: ORIGIN }, now: NOW }
+			const newest = await runInDurableObject(h.store, (_instance, state) =>
+				profilePage.run(state.storage.sql, { ...input, maxId: null })
+			)
+			expect(newest.status === 'ok' ? newest.statuses.length : 0).toBe(PROFILE_PAGE_SIZE)
+			const maxId = newest.status === 'ok' ? newest.next : null
+			expect(maxId).not.toBeNull()
+			return [
+				await rowsRead(h, profilePage, { ...input, maxId: null }),
+				await rowsRead(h, profilePage, { ...input, maxId }),
+			]
+		}
+		const [fewNewest = 0, fewOlder = 0] = await measure(100)
+		const [manyNewest = 0, manyOlder = 0] = await measure(2000)
+		expect(manyNewest).toBeLessThanOrEqual(fewNewest + 10)
+		expect(manyOlder).toBeLessThanOrEqual(fewOlder + 10)
+	}, 60_000)
 
 	it('sanitizes stored HTML at the sink and drops non-http links (HTML-1, HTML-3)', async () => {
 		const h = await community(['alice'])

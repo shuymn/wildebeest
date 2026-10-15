@@ -21,8 +21,9 @@ export type ProfilePage =
 
 // A local account's page: its profile and its own posts, newest first, as Mastodon's "Posts" tab shows them to a
 // signed-out visitor (public and unlisted, replies to others and boosts left out). `maxId` pages older posts. With
-// `tag` (a featured hashtag's URL, /@username/tagged/:tag), only the posts with that hashtag, read from the hashtag's
-// index (status_tags_name) from the cursor; a name that is not a hashtag is not found.
+// `tag` (a featured hashtag's URL, /@username/tagged/:tag), only the posts with that hashtag: the account's own posts are
+// read from the cursor as without it, each checked for the hashtag by its key, so the read follows the account's own
+// posts, never other accounts' posts with the hashtag; a name that is not a hashtag is not found.
 export const profilePage = readOperation<
 	{ username: string; maxId: string | null; tag?: string | null; present: Present; now: number },
 	ProfilePage
@@ -45,19 +46,13 @@ export const profilePage = readOperation<
 		.select(
 			db,
 			'visible',
-			tag === null
-				? {
-						where: 's.account_id = ?2 AND s.reblog_of_id IS NULL',
-						and: `${NOT_A_REPLY_TO_OTHERS} AND (?3 IS NULL OR s.id < ?3)`,
-						tail: 'ORDER BY s.id DESC LIMIT ?4',
-					}
-				: {
-						from: 'status_tags t CROSS JOIN',
-						join: 'ON s.id = t.status_id',
-						where: "t.name = ?5 AND t.status_id < coalesce(?3, ':') AND s.account_id = ?2 AND s.reblog_of_id IS NULL",
-						and: NOT_A_REPLY_TO_OTHERS,
-						tail: 'ORDER BY t.status_id DESC LIMIT ?4',
-					},
+			{
+				where: 's.account_id = ?2 AND s.reblog_of_id IS NULL',
+				and: `${NOT_A_REPLY_TO_OTHERS} AND (?3 IS NULL OR s.id < ?3)${
+					tag === null ? '' : ' AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = ?5)'
+				}`,
+				tail: 'ORDER BY s.id DESC LIMIT ?4',
+			},
 			null,
 			row.id,
 			maxId !== null && STATUS_ID.test(maxId) ? maxId : null,
