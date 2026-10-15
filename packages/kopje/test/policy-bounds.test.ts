@@ -8,8 +8,9 @@ import { migratedStore } from './helpers'
 import { PolicyModel } from './policy-model'
 import { accountId, REMOTE_DOMAINS, statusId, type World, worldArb, writeWorld } from './policy-world'
 import { rowsRead } from './read-helpers'
+import { Db } from '../src/db/sql'
 import { listFollows, relationships } from '../src/domain/accounts'
-import type { Visibility } from '../src/domain/audience'
+import { canView, visibleSql, type Visibility } from '../src/domain/audience'
 import { listNotifications } from '../src/domain/notifications'
 import { search } from '../src/domain/search'
 import { interactors, statusContext } from '../src/domain/statuses'
@@ -418,4 +419,106 @@ describe('read endpoints do not read more rows as unrelated data grows (RES-7)',
 		}
 		expect(grown).toEqual([])
 	}, 60_000)
+})
+
+// R2's domain term is looked up only for a remote viewer: a local or anonymous viewer reads the same rows however many
+// public statuses of other authors (remote, on several domains) the rule passes, and a remote viewer on a domain the
+// author blocks sees none.
+describe("the author's domain block costs a local viewer nothing per status (R2, RES-7)", () => {
+	const LOCAL_VIEWER = '500000000000000001'
+	const BLOCKING_AUTHOR = '500000000000000002'
+	const REMOTE_VIEWER = '500000000000000003'
+	const OTHER_VIEWER = '500000000000000004'
+	const author = (i: number) => String(510000000000000000n + BigInt(i))
+	const status = (i: number) => String(520000000000000000n + BigInt(i))
+	const BLOCKED_STATUS = '529999999999999999'
+	const PUBLIC_TOKEN = 'public-statuses-token'
+	const AUTHORS = 20
+
+	async function publicStatuses(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			const account = (id: string, uri: string, username: string, domain: string | null) =>
+				sql.exec('INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, ?)', id, uri, username, domain)
+			const local = (id: string, username: string) => {
+				account(id, `https://kopje.test/ap/users/${username}`, username, null)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'test')",
+					id,
+					`${username}@example.com`
+				)
+			}
+			const insertStatus = (id: string, by: string) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					VALUES (?, ?, ?, 'public', '<p>hello</p>', ?)`,
+					id,
+					`https://kopje.test/objects/${id}`,
+					by,
+					new Date(NOW).toISOString()
+				)
+			local(LOCAL_VIEWER, 'viewer')
+			local(BLOCKING_AUTHOR, 'author')
+			account(REMOTE_VIEWER, 'https://blocked.example/users/r', 'r', 'blocked.example')
+			account(OTHER_VIEWER, 'https://open.example/users/o', 'o', 'open.example')
+			sql.exec("INSERT INTO domain_blocks (account_id, domain) VALUES (?, 'blocked.example')", BLOCKING_AUTHOR)
+			insertStatus(BLOCKED_STATUS, BLOCKING_AUTHOR)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('rows', 'secret', 'rows', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'rows', ?, 'read')",
+				PUBLIC_TOKEN,
+				LOCAL_VIEWER
+			)
+			// The same authors, all followed, whatever the count: home reads a few rows per followed account.
+			for (let a = 0; a < AUTHORS; a++) {
+				account(author(a), `https://far${a % 10}.example/users/a${a}`, `a${a}`, `far${a % 10}.example`)
+				sql.exec(
+					"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+					LOCAL_VIEWER,
+					author(a)
+				)
+			}
+			for (let i = 0; i < count; i++) {
+				insertStatus(status(i), author(i % AUTHORS))
+			}
+		})
+		return store
+	}
+
+	// Every status the read rule passes for the viewer, so the rule is judged once per stored status.
+	const visibleCount = (viewer: string | null): StoreOperation<null, unknown> => ({
+		kind: 'read',
+		run: (sql) =>
+			sql.exec(`SELECT count(*) AS n FROM main.statuses s WHERE ${visibleSql('s', '?1')}`, viewer).toArray(),
+	})
+
+	it('reads the same rows for a local viewer with 20 or 200 visible public statuses', async () => {
+		const few = await publicStatuses(20)
+		const many = await publicStatuses(200)
+		const credential = { tokenHash: PUBLIC_TOKEN, scope: 'read', now: NOW } as const
+		const input = { credential, now: NOW, page: PAGE, present: PRESENT, local: false, remote: false, onlyMedia: false }
+		const page = async (store: StoreStub) => rowsRead({ store }, publicTimeline, input as never)
+		expect(await page(many)).toBeLessThanOrEqual((await page(few)) + ALLOWANCE)
+		// Over every stored status (home, for one, judges each status of the accounts the viewer follows), a local viewer
+		// reads at most one row more than the anonymous viewer: the check that it is not remote, once per query.
+		for (const store of [few, many]) {
+			const local = await rowsRead({ store }, visibleCount(LOCAL_VIEWER), null)
+			const anonymous = await rowsRead({ store }, visibleCount(null), null)
+			expect(local - anonymous).toBeLessThanOrEqual(1)
+		}
+	})
+
+	it('hides a public status from a remote viewer on a domain its author blocks, and from no one else', async () => {
+		const store = await publicStatuses(1)
+		await runInDurableObject(store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			expect(canView(db, REMOTE_VIEWER, BLOCKED_STATUS)).toBe(false)
+			expect(canView(db, OTHER_VIEWER, BLOCKED_STATUS)).toBe(true)
+			expect(canView(db, LOCAL_VIEWER, BLOCKED_STATUS)).toBe(true)
+			expect(canView(db, null, BLOCKED_STATUS)).toBe(true)
+		})
+	})
 })

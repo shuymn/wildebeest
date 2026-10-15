@@ -202,7 +202,8 @@ export function followListedSql(x: string, owner: string, viewer: string, now: s
 // ---- Statuses. `s` is the alias of a statuses row.
 
 // Whether `viewer` is a remote account (accounts.domain is set). It does not depend on a status, so SQLite evaluates
-// it once per query, and a local viewer pays one row for it however many statuses are judged.
+// it once per query, and a local viewer pays one row for it however many statuses are judged. A rule guards a lookup
+// with it in a CASE, which skips the lookup when it is false (an AND may evaluate both operands).
 function remoteSql(viewer: string): string {
 	return `EXISTS (SELECT 1 FROM main.accounts pv WHERE pv.id = ${viewer} AND pv.domain IS NOT NULL)`
 }
@@ -221,7 +222,7 @@ export function visibleSql(s: string, viewer: string): string {
 		AND (${s}.account_id IS ${viewer}
 			OR (NOT ${blocksSql(`${s}.account_id`, viewer)}
 				AND (CASE WHEN ${s}.visibility IN ${DISTRIBUTABLE_SQL}
-					THEN NOT (${remoteSql(viewer)} AND ${domainBlocksSql(`${s}.account_id`, viewer)})
+					THEN CASE WHEN ${remoteSql(viewer)} THEN NOT ${domainBlocksSql(`${s}.account_id`, viewer)} ELSE 1 END
 					ELSE (${s}.visibility = 'private' AND EXISTS (SELECT 1 FROM main.follows fo
 							WHERE fo.account_id IS ${viewer} AND fo.target_account_id = ${s}.account_id AND fo.state = 'accepted'))
 						OR EXISTS (SELECT 1 FROM main.status_mentions sm WHERE sm.status_id = ${s}.id AND sm.account_id IS ${viewer})
