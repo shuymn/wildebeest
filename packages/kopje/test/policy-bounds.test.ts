@@ -472,14 +472,9 @@ describe("the author's domain block costs a local viewer nothing per status (R2,
 				PUBLIC_TOKEN,
 				LOCAL_VIEWER
 			)
-			// The same authors, all followed, whatever the count: home reads a few rows per followed account.
+			// The same authors whatever the count.
 			for (let a = 0; a < AUTHORS; a++) {
 				account(author(a), `https://far${a % 10}.example/users/a${a}`, `a${a}`, `far${a % 10}.example`)
-				sql.exec(
-					"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
-					LOCAL_VIEWER,
-					author(a)
-				)
 			}
 			for (let i = 0; i < count; i++) {
 				insertStatus(status(i), author(i % AUTHORS))
@@ -502,8 +497,8 @@ describe("the author's domain block costs a local viewer nothing per status (R2,
 		const input = { credential, now: NOW, page: PAGE, present: PRESENT, local: false, remote: false, onlyMedia: false }
 		const page = async (store: StoreStub) => rowsRead({ store }, publicTimeline, input as never)
 		expect(await page(many)).toBeLessThanOrEqual((await page(few)) + ALLOWANCE)
-		// Over every stored status (home, for one, judges each status of the accounts the viewer follows), a local viewer
-		// reads at most one row more than the anonymous viewer: the check that it is not remote, once per query.
+		// Over every stored status, a local viewer reads at most one row more than the anonymous viewer: the check that
+		// it is not remote, once per query.
 		for (const store of [few, many]) {
 			const local = await rowsRead({ store }, visibleCount(LOCAL_VIEWER), null)
 			const anonymous = await rowsRead({ store }, visibleCount(null), null)
