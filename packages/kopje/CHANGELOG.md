@@ -169,6 +169,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- A `Move` whose new account a follower may not follow (the follower blocks it, or its domain) leaves that follower's
+  follow of the old account, and the old account in the follower's lists, as they are, as in Mastodon. Before, the old
+  follow was ended anyway.
+
 - The cutover reads a legacy export that holds `d1_kv`, a table D1 now creates in a database by itself: the table list
   of the export (`kopje-admin fingerprint tables-sql`) leaves it out, as it leaves out `_cf_*`, and the fingerprint and
   the conversion ignore both in an export that has them. Before, such an export was refused as a schema mismatch.
