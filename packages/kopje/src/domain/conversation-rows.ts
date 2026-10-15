@@ -11,6 +11,27 @@
 //   - the participants are the status's author and the accounts it mentions (not silently), less the row's owner, as
 //     a JSON array of account ids in order (AccountConversation.participants_from_status).
 
+// The longest conversation identifier a received status may name, in UTF-8 bytes; a longer one, or an empty one, is
+// none. The receive path (federation/remote-status.ts) and the backfill (conversationSql) check the same.
+export const MAX_CONVERSATION_BYTES = 4096
+
+// Whether `conversation` is an identifier a status's thread may take.
+export function isConversationId(conversation: unknown): conversation is string {
+	if (typeof conversation !== 'string') {
+		return false
+	}
+	const bytes = new TextEncoder().encode(conversation).length
+	return bytes > 0 && bytes <= MAX_CONVERSATION_BYTES
+}
+
+// The conversation the received object `raw` (a statuses.raw expression, JSON or NULL) names, by isConversationId's
+// checks; NULL when it names none.
+export function conversationSql(raw: string): string {
+	return `(CASE WHEN json_type(${raw}, '$.conversation') = 'text'
+		AND length(CAST(json_extract(${raw}, '$.conversation') AS BLOB)) BETWEEN 1 AND ${MAX_CONVERSATION_BYTES}
+		THEN json_extract(${raw}, '$.conversation') END)`
+}
+
 // The participants of the status `s` (a statuses alias) for the owner `owner`: its author and its mentions (not
 // silent), less the owner, as a JSON array of account ids in order.
 export function participantsSql(s: string, owner: string): string {
@@ -21,10 +42,10 @@ export function participantsSql(s: string, owner: string): string {
 
 // The threads of the statuses stored and the conversations of the direct ones, as the write path makes them, in work
 // that grows linearly with the statuses:
-//   1. the thread of every status, the rule applied from the start of each chain down (the conversation a received
-//      status named was never stored, so it is not used): a status that
-//      replies to no status stored takes in_reply_to_uri, else its own uri, and each reply below it takes its thread.
-//      A status in a cycle of replies, or below one, starts no chain and takes in_reply_to_uri, else its own uri;
+//   1. the thread of every status, as the receive path gives it, from the start of each chain down: a status that
+//      replies to no status stored takes the conversation its stored object (raw) names, by the receive path's
+//      checks, else in_reply_to_uri, else its own uri; each reply below it takes its thread. A status in a cycle of
+//      replies, or below one, starts no chain and takes the same as a start would;
 //   2. each (owner, status), as Mastodon's own migration of account conversations made them: a direct status (not a
 //      boost) of a local author, for its author, and one a local account holds a mention notification of, for that
 //      account (NotifyService#push_to_conversation!);
@@ -39,14 +60,14 @@ export const CONVERSATIONS_BACKFILL = `CREATE TABLE conversation_threads (
 
 INSERT INTO conversation_threads (id, thread)
 WITH RECURSIVE down (id, thread) AS (
-  SELECT id, COALESCE(in_reply_to_uri, uri) FROM statuses WHERE in_reply_to_id IS NULL
+  SELECT id, COALESCE(${conversationSql('raw')}, in_reply_to_uri, uri) FROM statuses WHERE in_reply_to_id IS NULL
   UNION ALL
   SELECT s.id, down.thread FROM down JOIN statuses s ON s.in_reply_to_id = down.id
 )
 SELECT id, thread FROM down;
 
 UPDATE statuses SET thread = COALESCE((SELECT t.thread FROM conversation_threads t WHERE t.id = statuses.id),
-  in_reply_to_uri, uri);
+  ${conversationSql('raw')}, in_reply_to_uri, uri);
 
 DROP TABLE conversation_threads;
 

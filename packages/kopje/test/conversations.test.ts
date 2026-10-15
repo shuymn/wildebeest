@@ -29,6 +29,7 @@ import {
 } from './status-helpers'
 import { addToConversation } from '../src/domain/conversations'
 import { writeOperation } from '../src/domain/operation'
+import { parseRemoteStatus } from '../src/federation/remote-status'
 
 // Conversations through the API (domain/conversations.ts, mastodon/conversations.ts), as Mastodon 4.5 has them: the
 // rows the write paths make (AccountConversation.add_status), what deletes and blocks take away
@@ -446,6 +447,14 @@ describe('threads of received statuses', () => {
 		expect(await threads(t)).toEqual([conversation])
 		const { body } = await t.api<Conversation[]>('/api/v1/conversations')
 		expect(body.map((c) => c.last_status?.uri)).toEqual([c2.id])
+	})
+
+	it('takes a conversation of 1 to 4,096 UTF-8 bytes only', () => {
+		const named = (conversation: unknown) =>
+			parseRemoteStatus({ id: 'https://mastodon.example/statuses/1', type: 'Note', content: '', conversation })
+				?.conversation ?? null
+		expect(named('é'.repeat(2048))).toBe('é'.repeat(2048))
+		expect([named('é'.repeat(2049)), named(''), named(42), named(undefined)]).toEqual([null, null, null, null])
 	})
 
 	it('groups replies to a status never stored that name the same conversation', async () => {

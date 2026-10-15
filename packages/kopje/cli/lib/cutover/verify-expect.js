@@ -231,13 +231,14 @@ function metaSizes(meta) {
 
 /**
  * The thread of each status, from the reply records alone, each status walked once: a status that replies to no status
- * carried takes the inReplyTo it names, else its own URI, and each reply below it takes its thread; a status in a cycle
- * of replies, or below one, takes its own inReplyTo, else its URI.
+ * carried takes the conversation its stored object names, else the inReplyTo it names, else its own URI, and each
+ * reply below it takes its thread; a status in a cycle of replies, or below one, takes the same as a start would.
  * @param {Record<string, string>} replies the `replies` records: status URI -> [inReplyTo, the carried parent's URI]
  * @param {Record<string, string>} statuses the `statuses` records, by status URI
+ * @param {Map<string, string>} [conversations] status URI -> the conversation its stored object names
  * @returns {(uri: string) => string}
  */
-export function threadsOf(replies, statuses) {
+export function threadsOf(replies, statuses, conversations = new Map()) {
 	/** @type {Map<string, string | null>} status URI -> what it replies to (in_reply_to_uri) */
 	const inReplyToOf = new Map()
 	/** @type {Map<string, string>} status URI -> the carried status it replies to */
@@ -250,7 +251,7 @@ export function threadsOf(replies, statuses) {
 		}
 	}
 	/** @param {string} uri */
-	const ownThread = (uri) => inReplyToOf.get(uri) ?? uri
+	const ownThread = (uri) => conversations.get(uri) ?? inReplyToOf.get(uri) ?? uri
 	/** @type {Map<string, string | null>} status URI -> its thread, or null when no chain start is above it */
 	const chained = new Map()
 	/** @param {string} uri @returns {string} */
@@ -487,6 +488,8 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	for (const h of all('SELECT value, object_id FROM note_hashtags')) {
 		recordedTags.set(String(h.object_id), [...(recordedTags.get(String(h.object_id)) ?? []), hashtagName(h.value)])
 	}
+	/** @type {Map<string, string>} status URI -> the conversation its object names */
+	const namedConversations = new Map()
 	for (const o of objects) {
 		const id = String(o.id)
 		const uri = statusUri.get(id)
@@ -494,6 +497,14 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			continue
 		}
 		const p = parse(o.properties)
+		// The conversation a remote status's object names (Mastodon's `conversation`): a string of 1 to 4,096 UTF-8 bytes,
+		// as Kopje reads one when it receives a status and from the object it keeps.
+		if (o.local !== 1 && typeof p.conversation === 'string') {
+			const bytes = new TextEncoder().encode(p.conversation).length
+			if (bytes > 0 && bytes <= 4096) {
+				namedConversations.set(uri, p.conversation)
+			}
+		}
 		const author = String(o.original_actor_id)
 		const isLocal = o.local === 1
 		const spoiler = isLocal ? text(p.spoiler_text) || text(p.summary) : text(p.summary) || text(p.spoiler_text)
@@ -889,7 +900,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	// Threads and conversations, worked out here on their own from the records above, each status once. A status's
 	// thread: a status that replies to no status carried takes the inReplyTo it names, else its own URI, and each reply
 	// below it takes its thread; a status in a cycle of replies, or below one, takes its own inReplyTo, else its URI.
-	const threadOf = threadsOf(out.replies ?? {}, out.statuses ?? {})
+	const threadOf = threadsOf(out.replies ?? {}, out.statuses ?? {}, namedConversations)
 	for (const uri of Object.keys(out.statuses ?? {})) {
 		put('threads', uri, threadOf(uri))
 	}

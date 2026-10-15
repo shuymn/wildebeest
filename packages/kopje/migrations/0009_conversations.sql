@@ -17,8 +17,8 @@
 -- rows go with it (ON DELETE CASCADE), and the trigger conversation_statuses_removed moves the conversation's last status
 -- back to the newest one left, or deletes the conversation when none is left (AccountConversation.remove_status).
 --
--- The backfill gives every status stored its thread, from the start of each reply chain down (it does not know the
--- conversation a received status named, which no earlier release stored), and makes the
+-- The backfill gives every status stored its thread, from the start of each reply chain down, as the receive path
+-- gives it (the conversation a received status named is read from the object it keeps, raw), and makes the
 -- conversations of the direct statuses as Mastodon's own migration of them did (MigrateAccountConversations): each
 -- local author's direct statuses, and each direct status a local account holds a mention notification of. It is the
 -- text of CONVERSATIONS_BACKFILL in src/domain/conversation-rows.ts, which the cutover's converter runs too, through
@@ -55,14 +55,18 @@ CREATE TABLE conversation_threads (
 
 INSERT INTO conversation_threads (id, thread)
 WITH RECURSIVE down (id, thread) AS (
-  SELECT id, COALESCE(in_reply_to_uri, uri) FROM statuses WHERE in_reply_to_id IS NULL
+  SELECT id, COALESCE((CASE WHEN json_type(raw, '$.conversation') = 'text'
+		AND length(CAST(json_extract(raw, '$.conversation') AS BLOB)) BETWEEN 1 AND 4096
+		THEN json_extract(raw, '$.conversation') END), in_reply_to_uri, uri) FROM statuses WHERE in_reply_to_id IS NULL
   UNION ALL
   SELECT s.id, down.thread FROM down JOIN statuses s ON s.in_reply_to_id = down.id
 )
 SELECT id, thread FROM down;
 
 UPDATE statuses SET thread = COALESCE((SELECT t.thread FROM conversation_threads t WHERE t.id = statuses.id),
-  in_reply_to_uri, uri);
+  (CASE WHEN json_type(raw, '$.conversation') = 'text'
+		AND length(CAST(json_extract(raw, '$.conversation') AS BLOB)) BETWEEN 1 AND 4096
+		THEN json_extract(raw, '$.conversation') END), in_reply_to_uri, uri);
 
 DROP TABLE conversation_threads;
 

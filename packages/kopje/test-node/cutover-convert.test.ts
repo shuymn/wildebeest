@@ -110,7 +110,8 @@ describe('convert and verify-conversion', () => {
 			expect.objectContaining({ owner: 'alice', participants: 'r0', unread: 0, newest: 1 }),
 			expect.objectContaining({
 				owner: 'alice',
-				thread: expect.stringMatching(/^https:\/\/remote\.example\/users\/r1\/statuses\//),
+				// The conversation r1's object names, which alice's answer takes too.
+				thread: 'tag:remote.example,2024-03-01:objectId=171:objectType=Conversation',
 				participants: 'r1',
 				unread: 0,
 				statuses: expect.stringMatching(/just us<\/p> \| <p>@r1 just us, then<\/p>$/),

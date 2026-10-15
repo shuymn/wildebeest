@@ -455,6 +455,8 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		// Defaults: published a minute before `minutes`, not updated.
 		published?: string
 		updated?: string
+		// Mastodon's conversation identifier, kept in the object.
+		conversation?: string
 	}
 	const remoteNote = (input: RemoteNote): Note => {
 		const proxy = objectId()
@@ -477,6 +479,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 			contentMap: input.contentMap ?? { ja: input.content },
 			attachment: input.attachment ?? [],
 			tag: input.tags ?? [],
+			...(input.conversation === undefined ? {} : { conversation: input.conversation }),
 		}
 		const original = input.lostOriginal === true ? (level >= 21 ? proxy : null) : uri
 		insert('objects', {
@@ -701,6 +704,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 				cc: [],
 				mastodonId: snowflake(171, 3),
 				tags: [{ type: 'Mention', href: alice, name: '@alice@kopje.test' }],
+				conversation: 'tag:remote.example,2024-03-01:objectId=171:objectType=Conversation',
 			})
 		: null
 	if (directToAlice !== null) {

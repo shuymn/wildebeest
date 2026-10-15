@@ -110,9 +110,9 @@ stored takes the uri it names (`in_reply_to_uri`), and any other status its own 
 Any identifier is taken, whatever its origin, as Mastodon takes it: a sender can only group its own statuses with
 others, and a conversation is also keyed by its participants, the sender among them. Deleting a status or a conversation changes no other status's thread, so a later reply joins
 the thread its parent was stored in. Migration `0009_conversations` gives the statuses already stored theirs by the
-same rule, from the start of each reply chain down (a status in a cycle of replies, or below one, takes its own
-`in_reply_to_uri`, else its uri); it cannot use the conversation a received status named, which no earlier release
-stored. A status leaves its
+same rule, from the start of each reply chain down (a status in a cycle of replies, or below one, takes what a start
+would), reading the conversation a received status named from the object it keeps (`raw`),
+with the same checks as the receive path. A status leaves its
 conversations however it is deleted (a delete, an inbound `Delete`, a purge): its `conversation_statuses` rows cascade,
 and the trigger `conversation_statuses_removed` of migration `0009_conversations` moves the last status back to the
 newest left, or deletes the conversation when none is left (`AccountConversation.remove_status`). A block ends the

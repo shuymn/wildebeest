@@ -4,9 +4,12 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { BUILD, freshStore, rejectionOf, tableNames, testKernel as kernel } from './helpers'
 import { MIGRATIONS } from '../src/db/migrations'
+import { Db } from '../src/db/sql'
 import { REQUIRES_MENTION_SQL } from '../src/domain/audience'
 import { CONVERSATIONS_BACKFILL } from '../src/domain/conversation-rows'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
+import { storeRemoteStatus } from '../src/domain/remote-statuses'
+import { parseRemoteStatus } from '../src/federation/remote-status'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
 
 // The shipped migrations, in order; test-only files are named after them (9999_*).
@@ -889,6 +892,76 @@ describe('Store migration runner', () => {
 			expect(threads("id = '400000000000000002'")).toEqual(['https://remote.example/objects/300000000000000002'])
 		})
 	}, 60_000)
+
+	it('0009_conversations threads a received status by the conversation its stored object names', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, CONVERSATIONS)).upgrade()
+			const alice = '100000000000000001'
+			const bob = '100000000000000002'
+			const aliceUri = 'https://kopje.test/ap/users/alice'
+			sql.exec("INSERT INTO accounts (id, uri, username) VALUES (?, ?, 'alice')", alice, aliceUri)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'alice@example.com', X'00', X'00', 'k')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://mastodon.example/users/bob', 'bob', 'mastodon.example')",
+				bob
+			)
+			const conversation = 'tag:mastodon.example,2026-10-11:objectId=1:objectType=Conversation'
+			const note = (n: number, extra: Record<string, unknown> = {}) => ({
+				id: `https://mastodon.example/users/bob/statuses/${n}`,
+				type: 'Note',
+				attributedTo: 'https://mastodon.example/users/bob',
+				to: [aliceUri],
+				cc: [],
+				published: `2026-10-11T12:0${n}:00Z`,
+				content: `<p>${n}</p>`,
+				tag: [{ type: 'Mention', href: aliceUri }],
+				conversation,
+				...extra,
+			})
+			// Stored before the upgrade: R naming its conversation, and S naming one too long to be one (as no release
+			// stored a thread then, both without one).
+			const before = (n: number, raw: Record<string, unknown>) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, published_at, raw)
+					VALUES (?, ?, ?, 'direct', '2026-10-11T12:00:00.000Z', ?)`,
+					`20000000000000000${n}`,
+					raw.id,
+					bob,
+					JSON.stringify(raw)
+				)
+			const r = note(1)
+			before(1, r)
+			const s = note(5, { conversation: 'x'.repeat(4097) })
+			before(5, s)
+			expect(await kernel(state, MIGRATIONS.slice(0, CONVERSATIONS + 1)).upgrade()).toMatchObject({ ok: true })
+			const threadOf = (uri: string) =>
+				sql.exec<{ thread: string }>('SELECT thread FROM statuses WHERE uri = ?', uri).one().thread
+			expect([threadOf(r.id), threadOf(s.id)]).toEqual([conversation, s.id])
+
+			// After it, P replies to R and Q to P, and Q arrives first: all of them are in one thread and one conversation.
+			const db = new Db(sql)
+			const p = note(2, { inReplyTo: r.id })
+			const q = note(3, { inReplyTo: p.id })
+			for (const object of [q, p]) {
+				const input = parseRemoteStatus(object)
+				expect(input).not.toBeNull()
+				const outcome = storeRemoteStatus(db, { id: bob, uri: 'https://mastodon.example/users/bob' }, input!, {
+					now: Date.parse('2026-10-11T13:00:00Z'),
+					origin: 'https://kopje.test',
+					deliveredTo: alice,
+					fetched: false,
+				})
+				expect(outcome).toMatchObject({ applied: true })
+			}
+			expect([r, p, q].map((n) => threadOf(n.id))).toEqual([conversation, conversation, conversation])
+			expect(sql.exec('SELECT count(*) AS n FROM conversations WHERE account_id = ?', alice).one()).toEqual({ n: 1 })
+		})
+	})
 
 	it('0009_conversations reads each status a bounded number of times, and each direct one a few more', async () => {
 		const migration = MIGRATIONS[CONVERSATIONS]!
