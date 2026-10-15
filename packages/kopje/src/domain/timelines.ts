@@ -62,6 +62,11 @@ function ids<Id>(rows: { id: Id }[]): Id[] {
 	return rows.map((row) => row.id)
 }
 
+// The reply rule home applies, and a list whose replies_policy is followed (?1 the viewer): a reply to an account the
+// viewer follows (accepted), and any reply of the viewer's own.
+const FOLLOWED_REPLIES_SQL = `s.account_id = ?1 OR EXISTS (SELECT 1 FROM follows hr
+	WHERE hr.account_id = ?1 AND hr.target_account_id = s.in_reply_to_account_id AND hr.state = 'accepted')`
+
 // The follow's options that home and a list timeline apply to others' statuses, after homeFilterSql (?1 the viewer):
 // a boost needs the follow's show_reblogs; a reply passes when its partner is known and is the author or the viewer, or
 // when `partner` (the feed's own rule) passes; and a follow's languages filter its own posts. A boost row has language
@@ -100,11 +105,7 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 		const cursor = statusPage(page)
 		const order = cursor.ascending ? 'ASC' : 'DESC'
 		const read = statusReads(viewer, { viewer: '?1', now: '?5' })
-		// After homeFilterSql: the follow's options.
-		const options = followOptionsSql(
-			`s.account_id = ?1 OR EXISTS (SELECT 1 FROM follows hr
-				WHERE hr.account_id = ?1 AND hr.target_account_id = s.in_reply_to_account_id AND hr.state = 'accepted')`
-		)
+		const options = followOptionsSql(FOLLOWED_REPLIES_SQL)
 		const tail = `ORDER BY s.id ${order} LIMIT ?4`
 		const rows = read.union(
 			db,
@@ -154,8 +155,7 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 function repliesPolicySql(policy: RepliesPolicy): string {
 	switch (policy) {
 		case 'followed':
-			return `s.account_id = ?1 OR EXISTS (SELECT 1 FROM follows hr
-				WHERE hr.account_id = ?1 AND hr.target_account_id = s.in_reply_to_account_id AND hr.state = 'accepted')`
+			return FOLLOWED_REPLIES_SQL
 		case 'list':
 			return 'EXISTS (SELECT 1 FROM list_accounts lr WHERE lr.list_id = ?6 AND lr.account_id = s.in_reply_to_account_id)'
 		case 'none':
@@ -164,10 +164,10 @@ function repliesPolicySql(policy: RepliesPolicy): string {
 }
 
 // A list's timeline (Mastodon's ListFeed, filled by FanOutOnWriteService#deliver_to_lists and FeedManager#filter with
-// timeline_type :list): the public, unlisted and private statuses and boosts of its active members, the owner (when a
-// member) and the accounts the owner follows (accepted; a member with a pending request contributes nothing until it is
-// accepted). Home's filters apply as filter_from_home applies them to a list (homeFilterSql, and the follow's boosts and
-// languages), with the list's replies_policy deciding which replies to others pass; exclusive does not matter here.
+// timeline_type :list): the public, unlisted and private statuses and boosts of its active members, the owner (when
+// a member) and the accounts the owner follows (accepted; a member with a pending request contributes nothing until it
+// is accepted). Home's filters apply as filter_from_home applies them to a list (homeFilterSql, and the follow's boosts
+// and languages), with the list's replies_policy deciding which replies to others pass; exclusive does not matter here.
 // Null when the list is not the viewer's.
 export const listTimeline = userReadOperation<{ id: string; page: PageQuery; present: Present }, Page<Status> | null>(
 	(db, { id, page, present }, _viewer, viewer) => {
