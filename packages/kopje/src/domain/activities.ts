@@ -310,7 +310,7 @@ export function updateActivity(facts: StatusFacts, editId: string): OutboundEnve
 // recorded. It reaches the poll's remote voters too (DistributePollUpdateWorker), as recipientsFor decides (R23).
 export function pollUpdateActivity(facts: StatusFacts, at: number): OutboundEnvelope {
 	const update = updateActivity(facts, `poll-${at}`)
-	return { activity: update.activity, audience: { ...statusAudience(facts), pollVoters: facts.id } }
+	return { activity: update.activity, audience: { ...update.audience, pollVoters: facts.id } }
 }
 
 // A local account's vote in a remote poll (ActivityPub::VoteSerializer): a Create of a Note naming the choice, in reply

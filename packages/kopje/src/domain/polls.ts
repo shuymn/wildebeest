@@ -174,27 +174,26 @@ function resetPoll(db: Db, statusId: string, removed: boolean): void {
 
 // The live poll of a status (not removed), with what a change of it compares.
 function livePoll(db: Db, statusId: string) {
-	return db.first<{ options: string; multiple: number; expires_at: string | null; removed: number }>(
-		'SELECT options, multiple, expires_at, removed FROM polls WHERE status_id = ?',
+	return db.first<{ options: string; multiple: number; removed: number }>(
+		'SELECT options, multiple, removed FROM polls WHERE status_id = ?',
 		statusId
 	)
 }
 
 // UpdateStatusService#update_poll! for an edit of a local status: a poll sent replaces the status's (its end moves to
-// `expiresIn` from now, and changed choices or a changed multiple drop the votes cast); none removes it. Whether the
-// poll changed, which makes the edit significant.
-export function editPoll(db: Db, statusId: string, poll: PollInput | null, now: number): boolean {
+// `expiresIn` from now, and changed choices or a changed multiple drop the votes cast); none removes it.
+export function editPoll(db: Db, statusId: string, poll: PollInput | null, now: number): void {
 	const row = livePoll(db, statusId)
 	const previous = row?.removed === 0 ? row : undefined
 	if (poll === null) {
 		if (previous !== undefined) {
 			resetPoll(db, statusId, true)
 		}
-		return previous !== undefined
+		return
 	}
 	if (row === undefined) {
 		writePoll(db, statusId, poll, now)
-		return true
+		return
 	}
 	const expiresAt = iso(now + poll.expiresIn * 1000)
 	// A poll added again where one was removed starts from the removal's reset.
@@ -219,7 +218,6 @@ export function editPoll(db: Db, statusId: string, poll: PollInput | null, now: 
 		poll.options.length,
 		JSON.stringify(poll.options.map(() => 0))
 	)
-	return previous === undefined || reset || previous.expires_at !== expiresAt
 }
 
 // Deletes at most `limit` votes of past generations, of polls marked stale, through the stale polls' index and each
@@ -340,14 +338,11 @@ export function presentPolls(
 	)
 }
 
-// The poll `id` the viewer may see (R3, viewableStatusId): its status's id, or null.
+// The status of the poll `id` if the viewer may see it (R3, viewableStatusId), or null; whether it has a live poll is
+// for the caller's read of it (presentPolls, votedPoll) to say.
 function viewablePoll(db: Db, viewerId: string | null, id: string): string | null {
 	const statusId = resolveApiId(db, 'statuses', id)
-	const visible = statusId === null ? null : viewableStatusId(db, viewerId, statusId)
-	return visible === null ||
-		db.first('SELECT 1 AS x FROM polls WHERE status_id = ? AND removed = 0', visible) === undefined
-		? null
-		: visible
+	return statusId === null ? null : viewableStatusId(db, viewerId, statusId)
 }
 
 // GET /api/v1/polls/:id: the poll, if the viewer may see its status (Api::V1::PollsController authorizes
@@ -372,13 +367,13 @@ type VotedPoll = {
 	author_id: string
 	author_uri: string
 	local: number
-	options: string
+	options: string[]
 	multiple: number
 	hide_totals: number
 	expires_at: string | null
 	ended: number
 	generation: number
-	cut_options: string
+	cut_options: number[]
 }
 
 // Expireable#expired?: a poll has ended once its end has passed (expires_at < now), the boundary every read, vote and
@@ -401,11 +396,7 @@ function voteErrors(poll: VotedPoll, voterId: string, choice: number, votes: num
 		errors.push('The poll has already ended')
 	}
 	// A remote choice cut to MAX_REMOTE_OPTION_LENGTH: its name would match nothing on its server.
-	if (
-		choice < 0 ||
-		choice >= (JSON.parse(poll.options) as string[]).length ||
-		(JSON.parse(poll.cut_options) as number[]).includes(choice)
-	) {
+	if (choice < 0 || choice >= poll.options.length || poll.cut_options.includes(choice)) {
 		errors.push('The chosen vote option does not exist')
 	}
 	if (voterId === poll.author_id) {
@@ -469,14 +460,18 @@ function updateSoon(db: Db, poll: VotedPoll, now: number): void {
 	}
 }
 
+// The live poll `pollId` with its choices and cut choices read once.
 function votedPoll(db: Db, pollId: string): VotedPoll | undefined {
-	return db.first<VotedPoll>(
+	const row = db.first<Omit<VotedPoll, 'options' | 'cut_options'> & { options: string; cut_options: string }>(
 		`SELECT p.status_id, s.uri AS status_uri, s.account_id AS author_id, a.uri AS author_uri, a.domain IS NULL AS local,
 			p.options, p.multiple, p.hide_totals, p.expires_at, p.ended, p.generation, p.cut_options
 		FROM polls p JOIN statuses s ON s.id = p.status_id JOIN accounts a ON a.id = s.account_id
 		WHERE p.status_id = ? AND p.removed = 0`,
 		pollId
 	)
+	return row === undefined
+		? undefined
+		: { ...row, options: JSON.parse(row.options) as string[], cut_options: JSON.parse(row.cut_options) as number[] }
 }
 
 function mayVote(db: Db, voterId: string, statusId: string): boolean {
@@ -531,7 +526,6 @@ export const vote = userWriteOperation<{ id: string; choices: string[]; now: num
 			updateSoon(db, poll, input.now)
 		} else {
 			const actorUri = db.first<{ uri: string }>('SELECT uri FROM accounts WHERE id = ?', accountId)?.uri ?? ''
-			const options = JSON.parse(poll.options) as string[]
 			choices.forEach((choice, i) => {
 				recordOutbound(
 					db,
@@ -539,7 +533,7 @@ export const vote = userWriteOperation<{ id: string; choices: string[]; now: num
 					voteActivity({
 						voteUri: `${actorUri}#votes/${ids[i] ?? ''}`,
 						actorUri,
-						name: options[choice] ?? '',
+						name: poll.options[choice] ?? '',
 						statusUri: poll.status_uri,
 						authorUri: poll.author_uri,
 						authorId: poll.author_id,
@@ -563,7 +557,7 @@ export function receiveVote(db: Db, input: RemoteVote): boolean {
 	if (poll === undefined || poll.local !== 1) {
 		return false
 	}
-	const choice = (JSON.parse(poll.options) as string[]).indexOf(input.name)
+	const choice = poll.options.indexOf(input.name)
 	if (choice < 0 || !mayVote(db, input.voterId, poll.status_id)) {
 		return false
 	}

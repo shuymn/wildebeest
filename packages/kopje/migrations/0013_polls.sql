@@ -4,13 +4,14 @@
 -- CASCADE); its API id is its status's id. src/domain/polls.ts writes and reads it.
 --
 -- options are the choices' titles, a JSON array (at most 4 for a local poll, 100 of at most 1,000 code units for a
--- remote one), bounded here to 640 KiB (six bytes a code unit, the longest JSON escape); cut_options the indexes of
--- the remote choices cut to that length, in which no vote is cast (its name would not match); tallies the votes per choice, a JSON array of as many counts (Mastodon's cached_tallies), and votes_count
--- their sum; voters_count the accounts that voted (NULL when a remote poll does not say). They are counted as votes
--- are cast, or taken as the remote server reports them, and never recounted from poll_votes on read. expires_at is
--- when the poll ends (NULL: a remote poll without an end). ended marks a poll whose end the cron has handled (the
--- 'poll' notifications, once), and update_due_at when the Update of a local poll's counts is due (Mastodon's
--- DistributePollUpdateWorker, debounced); each has a partial index for the cron's rounds.
+-- remote one), bounded here to 640 KiB (six bytes a code unit, the longest JSON escape); cut_options the indexes of the
+-- remote choices cut to that length, in which no vote is cast (its name would not match); tallies the votes per choice,
+-- a JSON array of as many counts (Mastodon's cached_tallies), and votes_count their sum; voters_count the accounts that
+-- voted (NULL when a remote poll does not say). They are counted as votes are cast, or taken as the remote server
+-- reports them, and never recounted from poll_votes on read. expires_at is when the poll ends (NULL: a remote poll
+-- without an end). ended marks a poll whose end the cron has handled (the 'poll' notifications, once), and
+-- update_due_at when the Update of a local poll's counts is due (Mastodon's DistributePollUpdateWorker, debounced);
+-- each has a partial index for the cron's rounds.
 --
 -- generation counts the resets of a poll: an edit that changes its choices (or its multiple), or removes it, drops the
 -- votes cast so far by moving to the next generation, and only the votes of the current one count or are shown. The
