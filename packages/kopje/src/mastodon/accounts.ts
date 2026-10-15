@@ -10,6 +10,7 @@ import {
 	userCredential,
 } from './context'
 import { mastodonError } from './errors'
+import { sweepSoon } from './media'
 import { linkHeader, pageQuery } from './pagination'
 import { type Params, parseBoolean } from './params'
 import { MAX_SEARCH_OFFSET, searchParams } from './search'
@@ -22,6 +23,7 @@ import {
 	type RelationshipResult,
 	type Visibility,
 } from '../domain/accounts'
+import type { ProfileImage } from '../domain/media'
 
 // /api/v1/accounts (B3): credentials, lookup, search, relationships, follow, and follower lists.
 
@@ -117,6 +119,27 @@ export const updateCredentials: ApiHandler = async (c, deps) => {
 	)
 	return account === null ? NOT_FOUND() : c.json(account)
 }
+
+// DELETE /api/v1/profile/avatar and /api/v1/profile/header: the account shows the default image again and other
+// servers receive the Update; the removed image's files go with the sweep after the response.
+function removeProfileImage(kind: ProfileImage): ApiHandler {
+	return async (c, deps) => {
+		const credential = userCredential(c, deps)
+		const account = authorized(
+			await storeCall(c, deps, (s, b) =>
+				s.removeProfileImage(b, { credential, kind, present: present(c), now: deps.now() })
+			)
+		)
+		if (account === null) {
+			return NOT_FOUND()
+		}
+		sweepSoon(c, deps)
+		return c.json(account)
+	}
+}
+
+export const removeAvatar = removeProfileImage('avatar')
+export const removeHeader = removeProfileImage('header')
 
 export const getAccount: ApiHandler = async (c, deps) => {
 	const id = c.req.param('id') ?? ''

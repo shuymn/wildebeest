@@ -1031,8 +1031,16 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, media.updateMedia, input)
 	}
 
+	deleteMedia(callerBuild: string, input: OperationInput<typeof media.deleteMedia>) {
+		return this.#kernel.execute(callerBuild, media.deleteMedia, input)
+	}
+
 	setProfileImage(callerBuild: string, input: OperationInput<typeof media.setProfileImage>) {
 		return this.#kernel.execute(callerBuild, media.setProfileImage, input)
+	}
+
+	removeProfileImage(callerBuild: string, input: OperationInput<typeof media.removeProfileImage>) {
+		return this.#kernel.execute(callerBuild, media.removeProfileImage, input)
 	}
 
 	startTransforms(callerBuild: string, input: OperationInput<typeof media.startTransforms>) {

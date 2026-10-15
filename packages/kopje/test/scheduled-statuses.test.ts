@@ -371,7 +371,7 @@ describe('the scheduled_statuses endpoints', () => {
 		})
 	})
 
-	it('holds its media: not swept as unattached, not attached elsewhere, not made a profile image', async () => {
+	it('holds its media: not swept as unattached, not attached elsewhere, not made a profile image, not deleted', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		const media = await upload(h, alice, 1)
@@ -388,6 +388,11 @@ describe('the scheduled_statuses endpoints', () => {
 			status: 'ok',
 			value: false,
 		})
+		expect(await refusal(await send(h, alice, 'DELETE', `/api/v1/media/${media}`))).toEqual({
+			status: 422,
+			body: { error: 'Media attachment is currently used by a status' },
+		})
+		expect(await sql(h.store, 'SELECT gc_at FROM media_attachments')).toEqual([{ gc_at: null }])
 	})
 })
 

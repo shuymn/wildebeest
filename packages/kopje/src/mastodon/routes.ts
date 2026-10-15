@@ -478,6 +478,21 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'POST', path: '/api/v2/media', access: { scope: 'write:media' }, handler: media.uploadMedia },
 	{ method: 'GET', path: '/api/v1/media/:id', access: { scope: 'write:media' }, handler: media.getMedia },
 	{ method: 'PUT', path: '/api/v1/media/:id', access: { scope: 'write:media' }, handler: media.updateMedia },
+	{ method: 'PATCH', path: '/api/v1/media/:id', access: { scope: 'write:media' }, handler: media.updateMedia },
+	{ method: 'DELETE', path: '/api/v1/media/:id', access: { scope: 'write:media' }, handler: media.deleteMedia },
+	// Profile images (mastodon/accounts.ts); they are set from the settings page.
+	{
+		method: 'DELETE',
+		path: '/api/v1/profile/avatar',
+		access: { scope: 'write:accounts' },
+		handler: accounts.removeAvatar,
+	},
+	{
+		method: 'DELETE',
+		path: '/api/v1/profile/header',
+		access: { scope: 'write:accounts' },
+		handler: accounts.removeHeader,
+	},
 
 	// Unauthenticated search is refused (design §6): it would enumerate accounts and load the Store.
 	{ method: 'GET', path: '/api/v2/search', access: { scope: 'read:search' }, handler: search.search },
