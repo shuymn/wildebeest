@@ -19,18 +19,25 @@ import { readFileSync } from 'node:fs'
 import { basename } from 'node:path'
 
 import { checkSizes, exportFiles } from './export-files.js'
-import { decodeBudget, ExportError, exportOrder, parseStatement, splitStatements } from './sql-script.js'
+import {
+	decodeBudget,
+	ExportError,
+	exportOrder,
+	isPlatformTable,
+	parseStatement,
+	splitStatements,
+} from './sql-script.js'
 
 export const FINGERPRINT_FORMAT = 'kopje-fingerprint/2'
 const SEQUENCE_TABLE = 'sqlite_sequence'
 const NOTIFICATIONS = 'actor_notifications'
 
-// The table list of the export loop: every table but internal ones (sqlite_*, D1's _cf_*), virtual tables (the full-text
-// index) and their shadow tables. sqlite_sequence is exported on its own (the runbook names it).
+// The table list of the export loop: every table but internal ones (sqlite_*, D1's _cf_* and d1_kv), virtual tables
+// (the full-text index) and their shadow tables. sqlite_sequence is exported on its own (the runbook names it).
 export const TABLES_SQL = [
 	'SELECT m.name AS name FROM sqlite_schema AS m',
 	"WHERE m.type = 'table'",
-	"AND substr(m.name, 1, 7) <> 'sqlite_' AND substr(m.name, 1, 4) <> '_cf_'",
+	"AND substr(m.name, 1, 7) <> 'sqlite_' AND substr(m.name, 1, 4) <> '_cf_' AND m.name <> 'd1_kv'",
 	"AND m.sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
 	"AND NOT EXISTS (SELECT 1 FROM sqlite_schema AS v WHERE v.type = 'table' AND v.sql LIKE 'CREATE VIRTUAL TABLE%'",
 	"AND substr(m.name, 1, length(v.name) + 1) = v.name || '_')",
@@ -96,6 +103,9 @@ export function fingerprintExport(exportPath) {
 		for (const statement of splitStatements(readFileSync(file, 'utf8'))) {
 			const parsed = parseStatement(statement, budget)
 			order(parsed)
+			if ((parsed.kind === 'create-table' || parsed.kind === 'insert') && isPlatformTable(parsed.table)) {
+				continue
+			}
 			// The reset D1 writes before the counter rows says that sqlite_sequence was exported, as its CREATE would.
 			if (parsed.kind === 'create-table' || parsed.kind === 'sequence-reset') {
 				const table = parsed.kind === 'create-table' ? parsed.table : SEQUENCE_TABLE

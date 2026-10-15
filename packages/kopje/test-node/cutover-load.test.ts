@@ -95,6 +95,25 @@ describe('loading and bridging an export', () => {
 		expect(report.level).toBe(39)
 	})
 
+	it("leaves out D1's own tables, _cf_KV and d1_kv, which D1 creates by itself", async () => {
+		const fixture = await buildLegacyFixture({ level: 39 })
+		const texts = new Map(fixture.texts)
+		texts.set(
+			'_cf_KV',
+			'PRAGMA defer_foreign_keys=TRUE;\nCREATE TABLE _cf_KV (key TEXT PRIMARY KEY, value BLOB) WITHOUT ROWID;\n' +
+				`INSERT INTO "_cf_KV" ("key","value") VALUES('k',X'00');\n`
+		)
+		texts.set(
+			'd1_kv',
+			'PRAGMA defer_foreign_keys=TRUE;\nCREATE TABLE d1_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);\n' +
+				`INSERT INTO "d1_kv" ("key","value") VALUES('k','v');\n`
+		)
+		const { db, report } = loadLegacyExport({ texts: texts.values() })
+		expect(report.level).toBe(39)
+		const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]
+		expect(tables.map((t) => t.name).filter((name) => name === 'd1_kv' || name.startsWith('_cf_'))).toEqual([])
+	})
+
 	it('stops on rows the bridge removes until deletions are accepted, and reports their counts', async () => {
 		const fixture = await buildLegacyFixture({ level: 5, withDeletions: true })
 		const error = errorOf(() => loadLegacyExport({ texts: fixture.texts.values() }))

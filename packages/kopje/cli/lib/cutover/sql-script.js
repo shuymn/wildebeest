@@ -16,6 +16,14 @@ export class ExportError extends Error {
 	}
 }
 
+// D1's own tables: _cf_* and d1_kv, which D1 creates in a database by itself. They hold none of the instance's data,
+// so the export leaves them out (fingerprint.js, TABLES_SQL) and the fingerprint and the conversion ignore them in an
+// export that has them.
+/** @param {string} name */
+export function isPlatformTable(name) {
+	return name.startsWith('_cf_') || name === 'd1_kv'
+}
+
 // A short digest of an untrusted identifier (a table name, an object type) for reports.
 /** @param {string} text */
 export function digestOf(text) {
