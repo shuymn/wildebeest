@@ -28,6 +28,5 @@ CREATE INDEX status_pins_status ON status_pins (status_id);
 CREATE TABLE conversation_mutes (
   account_id TEXT NOT NULL REFERENCES local_accounts (account_id) ON DELETE CASCADE,
   thread TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   PRIMARY KEY (account_id, thread)
 ) WITHOUT ROWID;

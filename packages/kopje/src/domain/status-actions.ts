@@ -111,38 +111,31 @@ function recordFeatured(db: Db, type: 'Add' | 'Remove', accountId: string, statu
 	)
 }
 
-// POST /api/v1/statuses/:id/mute (Account#mute_conversation!): the viewer mutes the status's conversation, its thread
-// (a boost's own, as Mastodon gives a boost a conversation of its own). Muting it again changes nothing. A status
-// without a thread raises Mastodon::ValidationError, as one without a conversation does.
-export const muteConversation = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
-	const id = viewable(db, accountId, input.id)
-	if (id === null) {
-		return { status: 'not_found' }
-	}
-	const thread = db.first<{ thread: string | null }>('SELECT thread FROM statuses WHERE id = ?', id)?.thread ?? null
-	if (thread === null) {
-		return { status: 'invalid', error: 'Mastodon::ValidationError' }
-	}
-	db.run(
-		'INSERT INTO conversation_mutes (account_id, thread, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
-		accountId,
-		thread,
-		iso(input.now)
-	)
-	return presented(db, id, viewer, input.present)
+// A change to the viewer's mute of a status's conversation, its thread (a boost's own, as Mastodon gives a boost a
+// conversation of its own). A status without a thread raises Mastodon::ValidationError, as one without a conversation
+// does.
+const conversationMuteChange = (change: (db: Db, accountId: string, thread: string) => void) =>
+	userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
+		const id = viewable(db, accountId, input.id)
+		if (id === null) {
+			return { status: 'not_found' }
+		}
+		const thread = db.first<{ thread: string | null }>('SELECT thread FROM statuses WHERE id = ?', id)?.thread ?? null
+		if (thread === null) {
+			return { status: 'invalid', error: 'Mastodon::ValidationError' }
+		}
+		change(db, accountId, thread)
+		return presented(db, id, viewer, input.present)
+	})
+
+// POST /api/v1/statuses/:id/mute (Account#mute_conversation!): the viewer mutes the status's conversation. Muting it
+// again changes nothing.
+export const muteConversation = conversationMuteChange((db, accountId, thread) => {
+	db.run('INSERT INTO conversation_mutes (account_id, thread) VALUES (?, ?) ON CONFLICT DO NOTHING', accountId, thread)
 })
 
 // POST /api/v1/statuses/:id/unmute (Account#unmute_conversation!): the mute of the status's conversation goes, if
 // there is one.
-export const unmuteConversation = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
-	const id = viewable(db, accountId, input.id)
-	if (id === null) {
-		return { status: 'not_found' }
-	}
-	const thread = db.first<{ thread: string | null }>('SELECT thread FROM statuses WHERE id = ?', id)?.thread ?? null
-	if (thread === null) {
-		return { status: 'invalid', error: 'Mastodon::ValidationError' }
-	}
+export const unmuteConversation = conversationMuteChange((db, accountId, thread) => {
 	db.run('DELETE FROM conversation_mutes WHERE account_id = ? AND thread = ?', accountId, thread)
-	return presented(db, id, viewer, input.present)
 })
