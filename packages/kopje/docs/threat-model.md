@@ -188,10 +188,10 @@ against their own instance. TLS is assumed between all parties.
 Content authorization (may this viewer see this status at all) is separate from filtering (does this viewer want it in a
 list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 
-- **VIS-1: one rule decides who may see a status**, Mastodon's `StatusPolicy#show?`: a suspended author's statuses are
-  seen by nobody; the author sees all their own; an author who blocks the viewer hides everything from them; `public`
+- **VIS-1: one rule decides who may see a status**, Mastodon's `StatusPolicy#show?`: the statuses of an unavailable
+  author (a suspended local account, or a remote account whose deletion has started) are seen by nobody; the author sees all their own; an author who blocks the viewer hides everything from them; `public`
   and `unlisted` are seen by everyone else; `private` by accepted followers and the mentioned (silent included);
-  `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule, from the one policy module (`docs/visibility.md`; `test/policy.test.ts` keeps the rule out of other modules). _Enforced (main):_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
+  `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule, from the one policy module (`docs/visibility.md`; `test/policy.test.ts` keeps the rule out of other modules). A remote account is unavailable from the first transaction of its purge (`accounts.deleted_at`), so nothing of it is shown while the purge's batches remove its relationships and statuses (`test/inbox-regressions.test.ts`, "shows nothing of the actor from the Delete on"). _Enforced (main):_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
   `test/visibility.test.ts` (single status, context, history, source, `favourited_by`, timelines, account statuses,
   notifications, bookmarks, favourites). _Enforced (main)_ for search: `src/domain/search.ts`;
   `test/search.test.ts` ("never returns a status the viewer may not see", "drops a boosted status that became
@@ -670,7 +670,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **NET-5: snapshots come only from authoritative local data.** A rescue snapshot holds only a canonical actor,
   WebFinger or NodeInfo document rendered on the fixed domain from Store columns, and is kept only if its source still
   matches the Store when saved. Request hosts, arbitrary queries and remote documents never create or change one.
-  _Enforced (main):_ `src/domain/snapshot.ts`, `src/federation/routes.ts`; `test/snapshot.test.ts`.
+  Suspending an account removes the snapshots of its actor document and WebFinger answers in the same transaction, so
+  the rescue path answers 503 for them, never with the document from before the suspension, until a live request keeps
+  the redacted one. _Enforced (main):_ `src/domain/snapshot.ts`, `src/federation/routes.ts`; `test/snapshot.test.ts`
+  ("snapshots of a suspended actor").
 
 ### Content (HTML)
 
@@ -950,14 +953,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   refusal. A key an actor lists by reference is taken from the verification that just resolved it, not fetched again. A Move moves 100
   followers per batch and carries at most 100 blocks and mutes; a deleted actor's purge writes at most 500 rows per batch in all, every
   write counted (SQLite's `total_changes()`): deletions, counter recounts (`followers_count`, `following_count`,
-  `statuses_count`, status counters) and the Undo intent of a withdrawn boost with its target chunks. Its relationships
-  go first; then local boosts of its statuses, each withdrawn once: the Undo intent is recorded, then its targets
+  `statuses_count`, status counters) and the Undo intent of a withdrawn boost with its target chunks. The account is
+  unavailable from the first batch's transaction on (VIS-1), so the order of the steps shows nothing of it, and no
+  boost of its statuses is accepted and no status of it fetched while it lasts. Its follows, notifications, mentions
+  and other relationships go first; then local boosts of its statuses, each withdrawn once: the Undo intent is recorded, then its targets
   (the boost's receipts among them) are staged a chunk per row over as many batches as they need, the receipts kept
   until all are written (`beginRetraction` and `stageRetraction` in `src/domain/deliveries.ts`); B2's delivery rounds
   expand them 100 at a time; then the purge deletes the receipts a batch at a time before the boost and its
   booster's recount; then its statuses, each
   deleted only after its children (edits, media, mentions, tags, favourites, bookmarks, notifications, receipts,
-  boosts, reply links), so no delete cascades. A user's own unboost keeps B2's path unchanged. Local media is detached
+  boosts, reply links), so no delete cascades. Blocks and mutes of the account go last, once nothing they filter is
+  left (`test/inbox-regressions.test.ts`, "keeps filtering a post that mentions the actor"). A user's own unboost keeps B2's path unchanged. Local media is detached
   for B4b's media sweep, never deleted from R2 here. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
   Queue message nor maintenance stops them, and waiting out maintenance spends no retry. `test/inbox.test.ts`,
   `test/inbox-regressions.test.ts`, `test/inbox-verify4.test.ts` ("writes the targets of a withdrawal that needs more

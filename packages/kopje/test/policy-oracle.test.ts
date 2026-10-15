@@ -112,11 +112,15 @@ describe('the policy fragments agree with the model of their rules', () => {
 			accounts(m.world).flatMap((x) => (m.available(x) ? [name(m.world, x)] : []))
 		))
 
+	// The local form, over the local accounts it is given.
 	it('availableLocalSql (R1)', () =>
 		agree(
-			pairs(`SELECT a.id AS x FROM accounts a LEFT JOIN local_accounts l ON l.account_id = a.id
+			pairs(`SELECT a.id AS x FROM accounts a JOIN local_accounts l ON l.account_id = a.id
 				WHERE ${availableLocalSql('l')}`),
-			(m) => accounts(m.world).flatMap((x) => (m.available(x) ? [name(m.world, x)] : []))
+			(m) =>
+				accounts(m.world).flatMap((x) =>
+					m.world.accounts[x]?.local === true && m.available(x) ? [name(m.world, x)] : []
+				)
 		))
 
 	// Every (owner, x) pair of accounts a two-account predicate accepts.

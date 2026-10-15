@@ -75,13 +75,18 @@ export function tagPublicSql(id: string): string {
 
 // ---- Accounts. `x` is an expression for an account id, never a status or edge alias.
 
-// R1 (Account#unavailable?): a suspended local account is seen by nobody, and nothing of it is shown or delivered.
+// R1 (Account#unavailable?): a suspended local account, and a remote account whose deletion has started
+// (accounts.deleted_at, set in the first transaction of its purge), is seen by nobody, and nothing of it is shown or
+// delivered. Two seeks: the local_accounts row, and the partial index of the accounts being deleted, which holds no
+// entry for any other account (INDEXED BY keeps the plan from reading the account's row instead), so the rule reads
+// no row of an available account but its local_accounts row. An unknown id is available.
 export function availableSql(x: string): string {
-	return `(NOT EXISTS (SELECT 1 FROM main.local_accounts pl WHERE pl.account_id = ${x} AND pl.suspended_at IS NOT NULL))`
+	return `(NOT EXISTS (SELECT 1 FROM main.local_accounts pl WHERE pl.account_id = ${x} AND pl.suspended_at IS NOT NULL
+		UNION ALL SELECT 1 FROM main.accounts pa INDEXED BY accounts_deleted WHERE pa.id = ${x} AND pa.deleted_at IS NOT NULL))`
 }
 
-// The same rule for a local_accounts row `l` already joined to the account (a LEFT JOIN's NULL row, a remote account,
-// passes), so a query that has the row does not look it up again.
+// The same rule for a local account whose local_accounts row `l` is already joined, so a query that has the row does
+// not look it up again. A local account is never deleted that way (the schema refuses deleted_at on it).
 export function availableLocalSql(l: string): string {
 	return `${l}.suspended_at IS NULL`
 }
@@ -187,8 +192,8 @@ export function followListsShownSql(owner: string, viewer: string): string {
 
 // R13 (Account#excluded_from_timeline_account_ids): whether the account `x` is listed among the followers or following
 // of `owner` to `viewer` at `now`. An anonymous viewer and the owner see every entry; anyone else does not see an
-// account they block or mute (while the mute applies), or one that blocks them. A suspended account stays listed (and
-// is presented redacted), as Mastodon lists it.
+// account they block or mute (while the mute applies), or one that blocks them. An unavailable account stays listed
+// (and is presented redacted), as Mastodon lists a suspended one, until a purge removes its follows.
 export function followListedSql(x: string, owner: string, viewer: string, now: string): string {
 	return `(${viewer} IS NULL OR ${viewer} IS ${owner}
 		OR NOT (${blocksSql(viewer, x)} OR ${blocksSql(x, viewer)} OR ${mutesSql(viewer, x, now)}))`

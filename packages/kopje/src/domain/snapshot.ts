@@ -71,3 +71,30 @@ export const saveSnapshot = writeOperation<
 	)
 	return 'body' in stored
 })
+
+// Removes the kept snapshots of a local account's actor document and its WebFinger answers, so the rescue path answers
+// 503 for them until a live request saves them again. Suspension calls it: a document saved before the suspension
+// would otherwise be served unredacted while the Store refuses, and a save rendered before it is refused (its source
+// no longer matches). The keys are the canonical ones the Worker keeps (federation/routes.ts, federation/snapshot.ts):
+// the actor path and the acct: and actor URI WebFinger resources of the stored username.
+export function forgetActorSnapshots(db: Db, accountId: string): void {
+	const actor = db.first<{ username: string; domain: string | null }>(
+		`SELECT a.username, (SELECT value FROM instance_settings WHERE name = 'domain') AS domain
+		FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ? AND a.domain IS NULL`,
+		accountId
+	)
+	if (actor === undefined) {
+		return
+	}
+	const keys = [`path:/ap/users/${actor.username}`]
+	if (actor.domain !== null) {
+		keys.push(
+			`webfinger:acct:${actor.username}@${actor.domain}`,
+			`webfinger:https://${actor.domain}/ap/users/${actor.username}`
+		)
+	}
+	db.run(
+		'DELETE FROM kopje_state WHERE name IN (SELECT value FROM json_each(?))',
+		JSON.stringify(keys.map((key) => `${SNAPSHOT_STATE_PREFIX}${key}`))
+	)
+}
