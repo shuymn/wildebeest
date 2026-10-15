@@ -172,6 +172,38 @@ describe('featured hashtags', () => {
 		expect(await counts()).toMatchObject({ shown: '0', statuses_count: 0, last_status_at: null })
 	})
 
+	it('keeps the time of another status published at the same moment when one is deleted or untagged', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		// Both posts are published at the harness's fixed time.
+		const first = await post(h, alice, { status: '#cats 1', visibility: 'public' })
+		await post(h, alice, { status: '#cats 2', visibility: 'public' })
+		await feature(h, alice, 'cats')
+		const counts = async () =>
+			(
+				await sql<{ statuses_count: number; last_status_at: string | null }>(
+					h.store,
+					'SELECT statuses_count, last_status_at FROM featured_tags'
+				)
+			)[0]
+		const at = (await counts())?.last_status_at
+		expect(at).not.toBeNull()
+		const edited = await h.request(
+			`/api/v1/statuses/${first.id}`,
+			bearer(alice.token, json({ status: 'no tag' }, { method: 'PUT' }))
+		)
+		expect(edited.status).toBe(200)
+		expect(await counts()).toEqual({ statuses_count: 1, last_status_at: at })
+		const back = await h.request(
+			`/api/v1/statuses/${first.id}`,
+			bearer(alice.token, json({ status: '#cats back' }, { method: 'PUT' }))
+		)
+		expect(back.status).toBe(200)
+		expect(await counts()).toEqual({ statuses_count: 2, last_status_at: at })
+		expect((await send(h, alice, 'DELETE', `/api/v1/statuses/${first.id}`)).status).toBe(200)
+		expect(await counts()).toEqual({ statuses_count: 1, last_status_at: at })
+	})
+
 	it('suggests the hashtags of the viewer’s recent statuses that they do not feature, the most used first', async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice, bob } = h.users

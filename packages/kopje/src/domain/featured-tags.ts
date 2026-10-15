@@ -323,9 +323,10 @@ export function uncountFeaturedTags(db: Db, statusId: string): void {
 	}
 }
 
-// FeaturedTag#decrement for the status's featured hashtags `names`: one less, and when the status was the newest
-// with the hashtag, the time of the newest before it, found by walking the account's statuses back from it (the work
-// Mastodon also does there). The last one leaves the count at zero and no time.
+// FeaturedTag#decrement for the status's featured hashtags `names`: one less, and when no other status with the
+// hashtag is newer, the time of the newest left, found by walking the account's statuses from the newest and leaving
+// out this one (the work Mastodon also does there), so another status published at the same time still counts. The last
+// one leaves the count at zero and no time.
 function decrement(db: Db, status: FeaturedOfStatus): void {
 	if (status.names.length === 0) {
 		return
@@ -336,7 +337,7 @@ function decrement(db: Db, status: FeaturedOfStatus): void {
 				WHEN statuses_count <= 1 THEN NULL
 				WHEN last_status_at > ?3 THEN last_status_at
 				ELSE (SELECT s.published_at FROM statuses s
-					WHERE s.account_id = ?1 AND s.id < ?4 AND s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL}
+					WHERE s.account_id = ?1 AND s.id <> ?4 AND s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL}
 						AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = featured_tags.name)
 					ORDER BY s.id DESC LIMIT 1)
 			END
