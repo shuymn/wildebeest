@@ -161,6 +161,17 @@ export class PolicyModel {
 		)
 	}
 
+	// R28: the accounts an owner endorses are listed to anyone, the owner included, while the owner is available; no
+	// block, mute or hidden network changes that.
+	endorsementsShown(owner: number): boolean {
+		return this.available(owner)
+	}
+
+	// R28: an endorsed account is listed while it is available, whoever endorses it and whoever asks.
+	endorsementListed(x: number): boolean {
+		return this.available(x)
+	}
+
 	// R14: the viewer finds x by account search or search resolution: available, and not on a domain the viewer blocks.
 	findableBy(x: number, viewer: Viewer): boolean {
 		return this.available(x) && !this.domainBlocks(viewer, x)

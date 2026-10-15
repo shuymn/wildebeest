@@ -127,6 +127,15 @@ const RULES: readonly Rule[] = [
 		},
 	},
 	{
+		// R28: a private note is shown to its author alone.
+		name: 'reads account_notes',
+		pattern: reads('account_notes'),
+		allowed: {
+			'../src/domain/accounts.ts': 'the viewer’s own notes, in their relationships (relationshipsOf), and their writes',
+			'../src/domain/inbox.ts': 'an actor purge deletes the notes on the account',
+		},
+	},
+	{
 		// R26: nothing of a scheduled status is shown, notified or delivered before it is published.
 		name: 'reads or writes scheduled_statuses',
 		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['scheduled_statuses'])}`, 'i'),

@@ -90,7 +90,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       on an unfollow; the followed hashtags and the suggestions below show each hashtag with an empty `history`, as
       search's do.
 - Featured hashtags, as Mastodon 4.5 has them: `GET` and `POST /api/v1/featured_tags`, `DELETE
-  /api/v1/featured_tags/:id`, `GET /api/v1/featured_tags/suggestions` (the hashtags of your newest 1,000 statuses you
+/api/v1/featured_tags/:id`, `GET /api/v1/featured_tags/suggestions` (the hashtags of your newest 1,000 statuses you
   do not feature yet, the most used first), `POST /api/v1/tags/:id/feature` and `/unfeature` (scopes
   `read:accounts` and `write:accounts`), and `GET /api/v1/accounts/:id/featured_tags`, public, empty for a suspended
   account. An account features at most 10 hashtags, with Mastodon's validation and messages. Each shows the number of
@@ -100,6 +100,23 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       `Remove` of the `Hashtag`. Kopje does not read the featured hashtags of remote accounts.
     - Where Kopje differs from Mastodon: an edit that adds a hashtag to an older status keeps the newest date rather
       than taking the older status's.
+- The remaining account endpoints of Mastodon 4.5:
+    - Private notes: `POST /api/v1/accounts/:id/note` (`comment`, at most 2,000 characters; a blank one deletes the
+      note) answers the Relationship. Every Relationship now carries your note on the account in `note`; nobody else
+      is shown it.
+    - Endorsements: `POST /api/v1/accounts/:id/endorse` and `/unendorse` (also as `/pin` and `/unpin`), which answer
+      the Relationship, now with a real `endorsed`; `GET /api/v1/endorsements` (yours, 40 by default and at most 80
+      with Link headers, or all at once with `limit=0`, up to 1,000), which no longer answers empty; and
+      `GET /api/v1/accounts/:id/endorsements` (anyone's, to anyone). You can endorse only an account you follow (else
+      422 with Mastodon's message), and the endorsement goes when the follow ends, however it ends. Suspended accounts
+      and accounts being deleted are not listed. Endorsements are not federated, as in Mastodon 4.5.
+    - `POST /api/v1/accounts/:id/remove_from_followers` ends the account's follow of you: a remote follower is sent a
+      `Reject`, as when a block ends its follow. A pending request is left alone.
+    - `GET /api/v1/accounts?id[]=` shows up to 40 accounts at once, as `GET /api/v1/accounts/:id` shows each; more
+      answer 422.
+    - `GET /api/v1/accounts/:id/identity_proofs` answers `[]`, as Mastodon's deprecated endpoint does.
+    - `POST /api/v1/accounts` (registration) answers as Mastodon does with registrations closed: 403 `Forbidden` for an
+      app token with `write:accounts`, after Mastodon's token checks. Kopje has no open registration.
 
 ### Changed
 
@@ -111,9 +128,18 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   mention of you, and the statuses of an account that blocks you, that you block, or that is suspended or being deleted
   are no longer read to show its empty profile.
 
+### Fixed
+
+- Media an edit removes from a status stays with the status, as with Mastodon, so the status's edit history still
+  shows it: it is no longer deleted a day after the edit. The status no longer shows it, and it cannot be attached to
+  another status or a scheduled status; a later edit of the same status can attach it again, and it is deleted with
+  the status (at once with `delete_media`, otherwise after the grace period, as the status's other media). An image
+  that only earlier versions of a converted status show now belongs to that status too, so it is no longer offered as
+  an unattached upload, and goes with the status.
+
 ### Instance changes
 
-- Store schema: adds seven migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds nine migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
@@ -133,6 +159,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       with the Store.
     - `0013_polls`: adds the `polls` and `poll_votes` tables, with their indexes, and `status_edits.poll_options`. It is
       quick.
+    - `0014_account_notes_and_pins`: adds the `account_notes` and `account_pins` tables, empty, and the trigger that
+      deletes an endorsement with its follow. Its work does not grow with the Store.
+    - `0015_media_shown`: adds `media_attachments.shown`, rebuilds the index `media_attachments_status` with it, and
+      gives back to its status, not shown, each kept upload that earlier versions of exactly one status of its author
+      name (an image the cutover kept for earlier versions, or media an edit detached that is more than an hour from
+      its sweep); other uploads stay as they are. Its work grows linearly with the media and the edits stored (one pass
+      over the media for the column and one for the index, and one over the edits' media, grouped by id, with a
+      lookup of each named upload).
     - `0016_tags`: adds the `tag_follows` and `featured_tags` tables, empty. It is quick.
 - `wrangler.jsonc`: unchanged.
 

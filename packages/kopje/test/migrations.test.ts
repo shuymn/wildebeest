@@ -17,6 +17,8 @@ const NAMES = MIGRATIONS.map((m) => m.name)
 const LATEST = NAMES.at(-1)
 
 const SCHEMA_TABLES = [
+	'account_notes',
+	'account_pins',
 	'accounts',
 	'blocks',
 	'bookmarks',
@@ -1105,6 +1107,85 @@ describe('Store migration runner', () => {
 		expect(large - small).toBeLessThanOrEqual(6 * added + 20 * (added / 10))
 	}, 60_000)
 
+	it('upgrades a Store with 0014_account_notes_and_pins: notes and endorsements go with their account, endorsements with the follow', async () => {
+		const at = NAMES.indexOf('0014_account_notes_and_pins')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			expect(tableNames(sql)).not.toContain('account_pins')
+			const id = (n: number) => String(100000000000000000n + BigInt(n))
+			for (const n of [1, 2]) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+					id(n),
+					`https://kopje.test/ap/users/u${n}`,
+					`u${n}`
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'k')",
+					id(n),
+					`u${n}@example.com`
+				)
+			}
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://remote.example/users/r', 'r', 'remote.example')",
+				id(3)
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0014_account_notes_and_pins'],
+			})
+			const pins = () => sql.exec('SELECT account_id, target_account_id FROM account_pins ORDER BY 1, 2').toArray()
+			const note = (account: string, target: string, comment: string) =>
+				sql.exec(
+					'INSERT INTO account_notes (account_id, target_account_id, comment) VALUES (?, ?, ?)',
+					account,
+					target,
+					comment
+				)
+			for (const [account, target] of [
+				[id(1), id(2)],
+				[id(1), id(3)],
+				[id(2), id(3)],
+			] as const) {
+				sql.exec(
+					"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+					account,
+					target
+				)
+				sql.exec('INSERT INTO account_pins (account_id, target_account_id) VALUES (?, ?)', account, target)
+			}
+			expect(() =>
+				sql.exec('INSERT INTO account_pins (account_id, target_account_id) VALUES (?, ?)', id(1), id(2))
+			).toThrow(/UNIQUE/)
+			expect(() =>
+				sql.exec('INSERT INTO account_pins (account_id, target_account_id) VALUES (?, ?)', id(1), id(1))
+			).toThrow(/CHECK/)
+			// Only a local account endorses or keeps notes.
+			expect(() =>
+				sql.exec('INSERT INTO account_pins (account_id, target_account_id) VALUES (?, ?)', id(3), id(1))
+			).toThrow(/FOREIGN KEY/)
+			expect(() => note(id(3), id(1), 'x')).toThrow(/FOREIGN KEY/)
+			note(id(1), id(3), '𝒜'.repeat(2000))
+			note(id(1), id(1), 'me')
+			expect(() => note(id(2), id(3), '')).toThrow(/CHECK/)
+			expect(() => note(id(2), id(3), 'a'.repeat(2001))).toThrow(/CHECK/)
+			expect(() => note(id(1), id(3), 'again')).toThrow(/UNIQUE|PRIMARY KEY/)
+
+			// A follow's end takes its endorsement, and only that one.
+			sql.exec('DELETE FROM follows WHERE account_id = ? AND target_account_id = ?', id(1), id(3))
+			expect(pins()).toEqual([
+				{ account_id: id(1), target_account_id: id(2) },
+				{ account_id: id(2), target_account_id: id(3) },
+			])
+			sql.exec('DELETE FROM local_accounts WHERE account_id = ?', id(1))
+			expect(pins()).toEqual([{ account_id: id(2), target_account_id: id(3) }])
+			expect(sql.exec('SELECT count(*) AS n FROM account_notes').one()).toEqual({ n: 0 })
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
 	it('upgrades a Store with 0010_markers: a new table whose rows go with their local account', async () => {
 		// By name, not position: the files before it are whatever this build ships.
 		const at = NAMES.indexOf('0010_markers')
@@ -1366,6 +1447,169 @@ describe('Store migration runner', () => {
 			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
 		})
 	})
+	it('upgrades a Store with 0015_media_shown: media only earlier versions of one status name goes back to it, unshown', async () => {
+		const index = NAMES.indexOf('0015_media_shown')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, index)).upgrade()).toMatchObject({ ok: true })
+			const [alice, bob] = ['100000000000000001', '100000000000000002']
+			for (const [id, name] of [
+				[alice, 'alice'],
+				[bob, 'bob'],
+			] as const) {
+				sql.exec(
+					`INSERT INTO accounts (id, uri, username, domain, avatar_url) VALUES (?, ?, ?, NULL, ?)`,
+					id,
+					`https://kopje.test/ap/users/${name}`,
+					name,
+					`https://kopje.test/media/${name}-avatar/full.png`
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'k')",
+					id,
+					`${name}@example.com`
+				)
+			}
+			const [edited, other] = ['200000000000000001', '200000000000000002']
+			for (const id of [edited, other]) {
+				sql.exec(
+					"INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES (?, ?, ?, 'public', '2026-01-01T00:00:00.000Z')",
+					id,
+					`https://kopje.test/ap/o/${id}`,
+					alice
+				)
+			}
+			const later = (ms: number) => new Date(Date.now() + ms).toISOString()
+			const HOUR = 60 * 60 * 1000
+			// id: [account, status_id, gc_at, token, url]
+			const rows: Record<string, [string, string | null, string | null, string | null, string]> = {
+				// Shown now; kept for good by the cutover; detached by an edit a day ago, or an hour and a half before its
+				// sweep, or half an hour before it; doomed.
+				'800000000000000001': [alice, edited, null, 't1', 'https://kopje.test/media/t1/full.png'],
+				'800000000000000002': [alice, null, null, 't2', 'https://kopje.test/media/t2/full.png'],
+				'800000000000000003': [alice, null, later(23 * HOUR), 't3', 'https://kopje.test/media/t3/full.png'],
+				'800000000000000004': [alice, null, later(HOUR / 2), 't4', 'https://kopje.test/media/t4/full.png'],
+				'800000000000000005': [alice, null, '1970-01-01T00:00:00.000Z', 't5', 'https://kopje.test/media/t5/full.png'],
+				// Named by earlier versions of two statuses; named by none; alice's avatar; bob's; a remote file.
+				'800000000000000006': [alice, null, null, 't6', 'https://kopje.test/media/t6/full.png'],
+				'800000000000000007': [alice, null, null, 't7', 'https://kopje.test/media/t7/full.png'],
+				'800000000000000008': [alice, null, null, 'alice-avatar', 'https://kopje.test/media/alice-avatar/full.png'],
+				'800000000000000009': [bob, null, null, 't9', 'https://kopje.test/media/t9/full.png'],
+				'800000000000000010': [alice, null, null, null, 'https://remote.example/a.png'],
+			}
+			for (const [id, [account, status, gcAt, token, url]] of Object.entries(rows)) {
+				sql.exec(
+					'INSERT INTO media_attachments (id, account_id, status_id, type, url, file_token, gc_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+					id,
+					account,
+					status,
+					'image',
+					url,
+					token,
+					gcAt
+				)
+			}
+			const named = (ids: string[]) => JSON.stringify(ids.map((id) => ({ id, type: 'image', url: rows[id]?.[4] })))
+			const edit = (status: string, media: string) =>
+				sql.exec(
+					"INSERT INTO status_edits (status_id, content, media_json, created_at) VALUES (?, 'old', ?, '2026-01-01T00:00:00.000Z')",
+					status,
+					media
+				)
+			edit(edited, named(['800000000000000001', '800000000000000002', '800000000000000003', '800000000000000004']))
+			edit(edited, named(['800000000000000005', '800000000000000006', '800000000000000008', '800000000000000009']))
+			edit(edited, named(['800000000000000010']))
+			edit(edited, '{"id":"800000000000000007"}')
+			edit(other, named(['800000000000000006']))
+
+			expect(await kernel(state, MIGRATIONS.slice(0, index + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: [NAMES[index]],
+			})
+			const after = sql
+				.exec<{ id: string; status_id: string | null; shown: number; gc_at: string | null }>(
+					'SELECT id, status_id, shown, gc_at FROM media_attachments ORDER BY id'
+				)
+				.toArray()
+			const linked = (id: string) => ({ id, status_id: edited, shown: 0, gc_at: null })
+			const unchanged = (id: string) => ({ id, status_id: rows[id]?.[1], shown: 1, gc_at: rows[id]?.[2] })
+			expect(after).toEqual([
+				unchanged('800000000000000001'),
+				linked('800000000000000002'),
+				linked('800000000000000003'),
+				...[4, 5, 6, 7, 8, 9, 10].map((n) => unchanged(String(800000000000000000n + BigInt(n)))),
+			])
+			// Unshown media has a status; the index seeks what statuses show.
+			expect(() => sql.exec("UPDATE media_attachments SET shown = 0 WHERE id = '800000000000000007'")).toThrow(/CHECK/)
+			expect(() => sql.exec("UPDATE media_attachments SET shown = 2 WHERE id = '800000000000000001'")).toThrow(/CHECK/)
+			expect(
+				sql
+					.exec<{ name: string }>("SELECT name FROM pragma_index_info('media_attachments_status') ORDER BY seqno")
+					.toArray()
+			).toEqual([{ name: 'status_id' }, { name: 'shown' }, { name: 'position' }])
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('0015_media_shown reads each upload and each edit a bounded number of times, however many there are', async () => {
+		const index = NAMES.indexOf('0015_media_shown')
+		const statements = (MIGRATIONS[index]?.sql ?? '')
+			.split('\n')
+			.filter((line) => !line.startsWith('--'))
+			.join('\n')
+			.split(';')
+			.filter((statement) => statement.trim() !== '')
+		const measure = async (count: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, index)).upgrade()
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES ('100000000000000001', 'https://kopje.test/ap/users/alice', 'alice', NULL)"
+				)
+				// Each status shows one upload, and its earlier version names another, kept unattached.
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+					SELECT CAST(200000000000000000 + i AS TEXT), 'https://kopje.test/ap/o/' || i, '100000000000000001', 'public',
+						'2026-01-01T00:00:00.000Z' FROM n`,
+					count
+				)
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO media_attachments (id, account_id, status_id, type, url, file_token)
+					SELECT CAST(800000000000000000 + i * 2 + k AS TEXT), '100000000000000001',
+						CASE k WHEN 0 THEN CAST(200000000000000000 + i AS TEXT) END, 'image', 'https://kopje.test/media/' || i || '-' || k,
+						i || '-' || k
+					FROM n, (SELECT 0 AS k UNION ALL SELECT 1)`,
+					count
+				)
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO status_edits (status_id, content, media_json, created_at)
+					SELECT CAST(200000000000000000 + i AS TEXT), 'old',
+						json_array(json_object('id', CAST(800000000000000000 + i * 2 AS TEXT)),
+							json_object('id', CAST(800000000000000000 + i * 2 + 1 AS TEXT))),
+						'2026-01-01T00:00:00.000Z' FROM n`,
+					count
+				)
+				let read = 0
+				for (const statement of statements) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				expect(sql.exec('SELECT count(*) AS n FROM media_attachments WHERE shown = 0').one()).toEqual({ n: count })
+				return read
+			})
+		}
+		const small = await measure(1000)
+		const large = await measure(10_000)
+		// The column's check and the index build read each upload once, the link each edit's media once and each named
+		// upload, its status and its account once: nothing per pair of rows.
+		expect(large - small).toBeLessThanOrEqual(20 * (10_000 - 1000))
+	}, 60_000)
 
 	it('stays readonly with exact bookkeeping when a file fails, and lets a fixed build continue', async () => {
 		const store = freshStore()

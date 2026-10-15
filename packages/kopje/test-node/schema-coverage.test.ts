@@ -25,6 +25,10 @@ const NOT_DUMPED: Record<string, string> = {
 
 // Tables the cutover never carries: the converter writes nothing to them (docs/cutover.md, "Clients and settings").
 const NOT_CARRIED: Record<string, string> = {
+	account_notes:
+		'legacy never wrote its account_notes table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
+	account_pins:
+		'legacy never wrote its endorsements table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	backup_media: 'the backup media index of one bucket; a converted Store starts a fresh baseline',
 	deliveries: 'outbound queue; legacy queues are not carried',
 	domain_block_cleanups: 'pending work of a domain block made in Kopje',

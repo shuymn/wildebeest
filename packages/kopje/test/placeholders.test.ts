@@ -10,7 +10,6 @@ describe('features without data yet', () => {
 	const userLists: [string, string][] = [
 		['/api/v1/filters', 'read:filters'],
 		['/api/v2/filters', 'read:filters'],
-		['/api/v1/endorsements', 'read:accounts'],
 		['/api/v1/suggestions', 'read:accounts'],
 		['/api/v2/suggestions', 'read:accounts'],
 	]

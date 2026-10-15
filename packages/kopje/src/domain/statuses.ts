@@ -171,9 +171,10 @@ function compose(db: Db, text: string, author: Author, origin: string): Composed
 	return { content, source: text, mentions: [...unique.values()], tags: parsed.tags }
 }
 
-// Own media that is already attached to `statusId`, or unattached, processed and not doomed, in the order given
-// (MEDIA-1). Media of other accounts, still processing, or past its grace period is left out, as Mastodon leaves out
-// what `current_account.media_attachments.where(status_id: nil)` does not find. Media a scheduled status holds is
+// Own media that is already attached to `statusId` (shown, or dropped by an earlier edit, as Mastodon's
+// `status_id: [nil, @status.id]`), or unattached, processed and not doomed, in the order given (MEDIA-1). Media of
+// other accounts, still processing, or past its grace period is left out, as Mastodon leaves out what
+// `current_account.media_attachments.where(status_id: nil)` does not find. Media a scheduled status holds is
 // attachable only by that scheduled status's publication (`scheduledId`).
 function attachableMedia(
 	db: Db,
@@ -201,18 +202,18 @@ function attachableMedia(
 		.map((row) => row.id)
 }
 
-// Attaches `mediaIds` in order (from a scheduled status too); media the status stops using is detached and may be
-// attached again for a day.
-function attachMedia(db: Db, statusId: string, mediaIds: readonly string[], now: number): void {
+// Attaches `mediaIds` in order (from a scheduled status too). Media the status stops using stays attached but no
+// longer shown (migration 0015_media_shown), as Mastodon keeps it attached and leaves it out of
+// ordered_media_attachment_ids: earlier versions still show it, and a later edit may show it again.
+function attachMedia(db: Db, statusId: string, mediaIds: readonly string[]): void {
 	db.run(
-		`UPDATE media_attachments SET status_id = NULL, position = 0, gc_at = ?3
-		WHERE status_id = ?1 AND id NOT IN (SELECT value FROM json_each(?2))`,
+		`UPDATE media_attachments SET shown = 0
+		WHERE status_id = ?1 AND shown = 1 AND id NOT IN (SELECT value FROM json_each(?2))`,
 		statusId,
-		JSON.stringify(mediaIds),
-		iso(now + DETACHED_GRACE_MS)
+		JSON.stringify(mediaIds)
 	)
 	db.run(
-		`UPDATE media_attachments SET status_id = ?1, scheduled_status_id = NULL, gc_at = NULL,
+		`UPDATE media_attachments SET status_id = ?1, scheduled_status_id = NULL, gc_at = NULL, shown = 1,
 			position = (SELECT j.key FROM json_each(?2) j WHERE j.value = media_attachments.id)
 		WHERE id IN (SELECT value FROM json_each(?2))`,
 		statusId,
@@ -360,7 +361,7 @@ export function writePost(
 	)
 	writeMentions(db, id, composed.mentions, [])
 	writeTags(db, id, composed.tags)
-	attachMedia(db, id, media, input.now)
+	attachMedia(db, id, media)
 	if (input.poll !== undefined) {
 		writePoll(db, id, input.poll, input.now)
 	}
@@ -552,7 +553,10 @@ function ownStatus(db: Db, accountId: string, id: string): OwnStatus | null {
 
 function mediaSnapshot(db: Db, statusId: string): MediaAttachment[] {
 	return db
-		.all<MediaRow>(`SELECT ${MEDIA_COLUMNS} FROM media_attachments WHERE status_id = ? ORDER BY position, id`, statusId)
+		.all<MediaRow>(
+			`SELECT ${MEDIA_COLUMNS} FROM media_attachments WHERE status_id = ? AND shown = 1 ORDER BY position, id`,
+			statusId
+		)
 		.map(presentMedia)
 }
 
@@ -602,7 +606,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	const sensitive = (input.sensitive ?? false) || input.spoilerText !== ''
 	const language = input.language ?? current.language
 	const currentMedia = db.all<{ id: string; description: string; focus_x: number; focus_y: number }>(
-		'SELECT id, description, focus_x, focus_y FROM media_attachments WHERE status_id = ? ORDER BY position, id',
+		'SELECT id, description, focus_x, focus_y FROM media_attachments WHERE status_id = ? AND shown = 1 ORDER BY position, id',
 		current.id
 	)
 	// Only attributes of media this edit attaches (own media, checked by attachableMedia) are applied.
@@ -671,7 +675,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 		accountId
 	)
 	writeTags(db, current.id, composed.tags)
-	attachMedia(db, current.id, media, input.now)
+	attachMedia(db, current.id, media)
 	for (const a of attributes) {
 		db.run(
 			`UPDATE media_attachments SET description = COALESCE(?, description), focus_x = COALESCE(?, focus_x),
@@ -714,11 +718,11 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 // Deleting
 // ---------------------------------------------------------------------------------------------------------------
 
-// Deletes an own status (or boost) and answers with it as it was, source text included, for redrafting. Its media
-// is detached, so a redraft can attach it again within the grace period; with deleteMedia it is doomed at once and
-// the media sweep deletes it and its R2 objects (the Worker starts a sweep after the call). Only the deleted status
-// itself carries its source; a boost's original is shown only if the viewer may still see it (presentOwnStatus), and
-// never with its source.
+// Deletes an own status (or boost) and answers with it as it was, source text included, for redrafting. Its media, also
+// what earlier edits dropped (as Mastodon nullifies every media of the status), is detached, so a redraft can attach it
+// again within the grace period; with deleteMedia it is doomed at once and the media sweep deletes it and its R2
+// objects (the Worker starts a sweep after the call). Only the deleted status itself carries its source; a boost's
+// original is shown only if the viewer may still see it (presentOwnStatus), and never with its source.
 export const deleteStatus = userMediaDeleteOperation<
 	{ id: string; deleteMedia: boolean; now: number; present: Present },
 	Viewed<Status>
@@ -741,7 +745,7 @@ export const deleteStatus = userMediaDeleteOperation<
 		.map((row) => row.account_id)
 	// Detached before the delete, so the rows (and the R2 keys they name) do not cascade away before the sweep.
 	db.run(
-		'UPDATE media_attachments SET status_id = NULL, position = 0, gc_at = ? WHERE status_id = ?',
+		'UPDATE media_attachments SET status_id = NULL, position = 0, shown = 1, gc_at = ? WHERE status_id = ?',
 		input.deleteMedia ? DOOMED_AT : iso(input.now + DETACHED_GRACE_MS),
 		current.id
 	)

@@ -1,7 +1,9 @@
-import { type ApiHandler, authorized, credential, storeCall } from './context'
+import { type ApiHandler, authorized, credential, present, storeCall } from './context'
+import { mastodonError } from './errors'
 
-// Features Kopje has no data for yet (endorsements, announcements, trends, suggestions), answered truthfully as
-// empty, because clients call them at startup and a 404 can stop a client starting. Each is replaced when its feature arrives with its own tables. No write endpoint exists for them.
+// Features Kopje has no data for yet (announcements, trends, suggestions), answered truthfully as empty, because
+// clients call them at startup and a 404 can stop a client starting. Each is replaced when its feature arrives with its
+// own tables. No write endpoint exists for them.
 
 // A list of the signed-in user: the token is checked (validity, the route's scope if any, suspension) and must belong
 // to a user before the empty answer. announcements declares no scope, as Mastodon's (any user token).
@@ -16,3 +18,21 @@ export const emptyUserList: ApiHandler = async (c, deps) => {
 
 // A public list.
 export const emptyList: ApiHandler = (c) => Promise.resolve(c.json([]))
+
+// An empty list, for an account that exists.
+const emptyAccountList: ApiHandler = async (c, deps) => {
+	const id = c.req.param('id') ?? ''
+	const account = await storeCall(c, deps, (s, b) => s.getAccount(b, { id, present: present(c) }))
+	return account === null ? mastodonError(404, 'Record not found') : c.json([])
+}
+
+// GET /api/v1/accounts/:id/identity_proofs: [] for an account that exists, as Mastodon's deprecated
+// Accounts::IdentityProofsController answers, to a user token (require_user!, no scope).
+export const identityProofs: ApiHandler = async (c, deps) => {
+	const value = credential(c, deps)
+	const viewer = authorized(await storeCall(c, deps, (s, b) => s.checkCredential(b, value)))
+	if (viewer.accountId === null) {
+		authorized({ status: 'user_required' })
+	}
+	return emptyAccountList(c, deps)
+}

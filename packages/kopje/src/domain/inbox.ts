@@ -1110,7 +1110,8 @@ const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
 // SQLite's total_changes() so that nothing escapes the count: deletions, counter recounts, and the Undo intent of a
 // local boost and its target chunks. Each step is limited beforehand to what is left, so a batch never writes more
 // than PURGE_BATCH rows:
-//   1. the account's follows, notifications, mentions, favourites and keys, with the counters they counted;
+//   1. the account's list memberships, the endorsements of it and the notes on it, its follows, notifications,
+//      mentions, favourites and keys, with the counters they counted;
 //   2. local boosts of its statuses: each boost's Undo is recorded once (withdrawLocalBoost; the job's cursor keeps
 //      the boost being withdrawn), its targets are written a chunk per row over as many batches as they need
 //      (stageRetraction), and B2's delivery rounds expand them in their own bounded steps; then the boost is deleted
@@ -1192,14 +1193,30 @@ function spend(db: Db, budget: Budget, sql: string, ...params: SqlStorageValue[]
 }
 
 function purgeRelationships(db: Db, id: string, budget: Budget): void {
-	// The account's list memberships go before its follows: a follow's delete also deletes the followed account's rows
-	// in the follower's lists (migration 0007_list_members), and with them gone it deletes none, so a follow stays two
-	// rows. Until they are all gone, the budget is spent and no follow is read.
+	// The account's list memberships and endorsements go before its follows: a follow's delete also deletes the followed
+	// account's rows in the follower's lists and its endorsement (migrations 0007_list_members and
+	// 0014_account_notes_and_pins), and with them gone it deletes none, so a follow stays two rows. Until they are all
+	// gone, the budget is spent and no follow is read.
 	spend(
 		db,
 		budget,
 		`DELETE FROM list_accounts WHERE account_id = ?1
 			AND list_id IN (SELECT list_id FROM list_accounts WHERE account_id = ?1 LIMIT ?2)`,
+		id
+	)
+	spend(
+		db,
+		budget,
+		`DELETE FROM account_pins WHERE target_account_id = ?1
+			AND account_id IN (SELECT account_id FROM account_pins WHERE target_account_id = ?1 LIMIT ?2)`,
+		id
+	)
+	// Local users' private notes on the account.
+	spend(
+		db,
+		budget,
+		`DELETE FROM account_notes WHERE target_account_id = ?1
+			AND account_id IN (SELECT account_id FROM account_notes WHERE target_account_id = ?1 LIMIT ?2)`,
 		id
 	)
 	// A follow's delete and its local side's recount: two rows each at most.
@@ -1345,11 +1362,12 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 	)
 	// The votes in its poll; the poll itself, one row, goes with the status.
 	deletePollVotes(db, statusId, budget.left())
-	// Local uploads are detached for the media sweep, which deletes their R2 objects; remote rows only name URLs.
+	// Local uploads, also those an edit dropped, are detached for the media sweep, which deletes their R2 objects;
+	// remote rows only name URLs.
 	spend(
 		db,
 		budget,
-		`UPDATE media_attachments SET status_id = NULL, position = 0, gc_at = ?1
+		`UPDATE media_attachments SET status_id = NULL, position = 0, shown = 1, gc_at = ?1
 		WHERE id IN (SELECT id FROM media_attachments WHERE status_id = ?2 AND file_token IS NOT NULL LIMIT ?3)`,
 		new Date(0).toISOString(),
 		statusId
@@ -1446,6 +1464,8 @@ function accountHasRows(db: Db, id: string, filters = true): boolean {
 				OR (?2 AND EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 OR target_account_id = ?1))
 				OR (?2 AND EXISTS (SELECT 1 FROM mutes WHERE target_account_id = ?1))
 				OR EXISTS (SELECT 1 FROM list_accounts WHERE account_id = ?1)
+				OR EXISTS (SELECT 1 FROM account_pins WHERE target_account_id = ?1)
+				OR EXISTS (SELECT 1 FROM account_notes WHERE target_account_id = ?1)
 				OR EXISTS (SELECT 1 FROM notifications WHERE from_account_id = ?1)
 				OR EXISTS (SELECT 1 FROM status_mentions WHERE account_id = ?1)
 				OR EXISTS (SELECT 1 FROM statuses WHERE in_reply_to_account_id = ?1)

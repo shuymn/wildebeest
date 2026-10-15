@@ -22,6 +22,7 @@ import { checkCredential, type Credential, type UserCredential } from './domain/
 import * as blocks from './domain/blocks'
 import * as conversations from './domain/conversations'
 import * as deliveries from './domain/deliveries'
+import * as endorsements from './domain/endorsements'
 import * as featuredTags from './domain/featured-tags'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import * as filters from './domain/filters'
@@ -639,6 +640,37 @@ export class Store extends DurableObject<Env> {
 
 	listFollows(callerBuild: string, input: OperationInput<typeof accounts.listFollows>) {
 		return this.#kernel.execute(callerBuild, accounts.listFollows, input)
+	}
+
+	// Accounts by id, private notes, endorsements and the removal of a follower (domain/accounts.ts,
+	// domain/endorsements.ts, domain/blocks.ts).
+
+	getAccounts(callerBuild: string, input: OperationInput<typeof accounts.getAccounts>) {
+		return this.#kernel.execute(callerBuild, accounts.getAccounts, input)
+	}
+
+	setNote(callerBuild: string, input: OperationInput<typeof accounts.setNote>) {
+		return this.#kernel.execute(callerBuild, accounts.setNote, input)
+	}
+
+	endorse(callerBuild: string, input: OperationInput<typeof endorsements.endorse>) {
+		return this.#kernel.execute(callerBuild, endorsements.endorse, input)
+	}
+
+	unendorse(callerBuild: string, input: OperationInput<typeof endorsements.unendorse>) {
+		return this.#kernel.execute(callerBuild, endorsements.unendorse, input)
+	}
+
+	listEndorsements(callerBuild: string, input: OperationInput<typeof endorsements.listEndorsements>) {
+		return this.#kernel.execute(callerBuild, endorsements.listEndorsements, input)
+	}
+
+	accountEndorsements(callerBuild: string, input: OperationInput<typeof endorsements.accountEndorsements>) {
+		return this.#kernel.execute(callerBuild, endorsements.accountEndorsements, input)
+	}
+
+	removeFromFollowers(callerBuild: string, input: OperationInput<typeof blocks.removeFromFollowers>) {
+		return this.#kernel.execute(callerBuild, blocks.removeFromFollowers, input)
 	}
 
 	// Blocks, mutes and domain blocks (domain/blocks.ts).

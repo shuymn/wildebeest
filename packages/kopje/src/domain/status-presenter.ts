@@ -212,7 +212,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 	const media = groupBy(
 		db.all<MediaRow & { status_id: string }>(
 			`SELECT ${MEDIA_COLUMNS}, status_id FROM media_attachments
-			WHERE status_id IN (SELECT value FROM json_each(?1)) ORDER BY status_id, position, id`,
+			WHERE status_id IN (SELECT value FROM json_each(?1)) AND shown = 1 ORDER BY status_id, position, id`,
 			all
 		)
 	)

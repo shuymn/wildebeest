@@ -9,10 +9,11 @@ import { PolicyModel } from './policy-model'
 import { accountId, REMOTE_DOMAINS, statusId, type World, worldArb, writeWorld } from './policy-world'
 import { rowsRead } from './read-helpers'
 import { Db } from '../src/db/sql'
-import { listFollows, type PageQuery, relationships, userinfo } from '../src/domain/accounts'
+import { getAccounts, listFollows, type PageQuery, relationships, userinfo } from '../src/domain/accounts'
 import { canView, visibleSql, type Visibility } from '../src/domain/audience'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { listConversations } from '../src/domain/conversations'
+import { accountEndorsements, listEndorsements } from '../src/domain/endorsements'
 import { accountFeaturedTags, listFeaturedTags } from '../src/domain/featured-tags'
 import {
 	getFilter,
@@ -28,7 +29,7 @@ import { listNotifications } from '../src/domain/notifications'
 import { getPoll, vote } from '../src/domain/polls'
 import { dueScheduled, listScheduled, publishScheduled } from '../src/domain/scheduled-statuses'
 import { search } from '../src/domain/search'
-import { interactors, statusContext } from '../src/domain/statuses'
+import { getStatus, interactors, statusContext } from '../src/domain/statuses'
 import { featuredTagSuggestions, followedTags, MAX_FOLLOWED_TAGS } from '../src/domain/tags'
 import {
 	accountStatuses,
@@ -154,6 +155,17 @@ function writeViewer(sql: SqlStorage): void {
 		`INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')
 		ON CONFLICT (account_id, target_account_id) DO UPDATE SET state = 'accepted'`,
 		accountId(LISTED),
+		viewer
+	)
+	// The viewer endorses every account it follows and keeps a note on each.
+	sql.exec(
+		`INSERT INTO account_pins (account_id, target_account_id)
+		SELECT account_id, target_account_id FROM follows WHERE account_id = ? AND state = 'accepted'`,
+		viewer
+	)
+	sql.exec(
+		`INSERT INTO account_notes (account_id, target_account_id, comment)
+		SELECT account_id, target_account_id, 'note' FROM follows WHERE account_id = ?`,
 		viewer
 	)
 	sql.exec("INSERT INTO lists (id, account_id, title) VALUES (?, ?, 'everyone')", VIEWER_LIST, viewer)
@@ -369,6 +381,9 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 		for (const member of followed) {
 			sql.exec("INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')", owner, member)
 			sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', list, member)
+			// Endorsed, with a note: rows of the world's accounts no read of the viewer's touches.
+			sql.exec('INSERT INTO account_pins (account_id, target_account_id) VALUES (?, ?)', owner, member)
+			sql.exec("INSERT INTO account_notes (account_id, target_account_id, comment) VALUES (?, ?, 'n')", owner, member)
 		}
 		sql.exec(
 			'INSERT INTO mutes (account_id, target_account_id, hide_notifications, expires_at) VALUES (?, ?, ?, ?)',
@@ -585,6 +600,13 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 	['featured tags', listFeaturedTags, { credential, present: PRESENT }],
 	['account featured tags', accountFeaturedTags, { id: accountId(VIEWER), present: PRESENT }],
 	['featured tag suggestions', featuredTagSuggestions, { credential, present: PRESENT }],
+	['endorsements', listEndorsements, { credential, page: PAGE, present: PRESENT }],
+	[
+		'account endorsements',
+		accountEndorsements,
+		{ credential, now: NOW, account: accountId(VIEWER), page: PAGE, present: PRESENT },
+	],
+	['accounts by id', getAccounts, { ids: WORLD.accounts.map((_, x) => accountId(x)), present: PRESENT }],
 ]
 
 // How many rows a read may add when the unrelated rows grow from none to UNRELATED: a few for a planner's choice, far
@@ -648,6 +670,8 @@ function identities(output: unknown): unknown {
 			muting,
 			muting_notifications,
 			domain_blocking,
+			endorsed,
+			note,
 		} = value
 		return {
 			id,
@@ -659,6 +683,8 @@ function identities(output: unknown): unknown {
 			muting,
 			muting_notifications,
 			domain_blocking,
+			endorsed,
+			note,
 		}
 	}
 	if ('type' in value && 'account' in value) {
@@ -1545,6 +1571,91 @@ describe("markers read the viewer's rows, not every account's (RES-7)", () => {
 	})
 })
 
+// Endorsements and private notes (R28) add a dimension: the accounts one account endorses and keeps notes on. A page
+// of endorsements reads the owner's from the cursor through the primary key, and a relationship looks its endorsement
+// and note up by pair, so they read the same rows whether the viewer endorses and keeps notes on 20 accounts or 2,000.
+describe('endorsements and notes read a page, however many an account has (RES-7)', () => {
+	const VIEWER_ID = '640000000000000000'
+	const ENDORSING_TOKEN = 'endorsing-token'
+	const target = (i: number) => String(641000000000000000n + BigInt(i))
+
+	async function endorsing(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://far' || (i % 10) || '.example/users/u' || i, 'u' || i,
+					'far' || (i % 10) || '.example'
+				FROM n`,
+				count,
+				target(0)
+			)
+			sql.exec(
+				`INSERT INTO follows (account_id, target_account_id, state)
+				SELECT ?1, id, 'accepted' FROM accounts WHERE id <> ?1`,
+				VIEWER_ID
+			)
+			sql.exec(
+				'INSERT INTO account_pins (account_id, target_account_id) SELECT account_id, target_account_id FROM follows'
+			)
+			sql.exec(
+				"INSERT INTO account_notes (account_id, target_account_id, comment) SELECT account_id, target_account_id, 'n' FROM follows"
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('endorsing', 'secret', 'endorsing', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'endorsing', ?, 'read')",
+				ENDORSING_TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 20 or 2,000, on the newest, a middle and the oldest page', async () => {
+		const few = await endorsing(20)
+		const many = await endorsing(2000)
+		const credential = { tokenHash: ENDORSING_TOKEN, scope: 'read', now: NOW } as const
+		const grown: string[] = []
+		// The newest page; a page from the middle of the longer list (above every account of the shorter one, so its
+		// newest page); the oldest page.
+		const pages = [PAGE, { ...PAGE, maxId: target(1000) }, { ...PAGE, minId: '1' }]
+		const reads: [string, StoreOperation<never, unknown>, unknown][] = [
+			...pages.flatMap((page): [string, StoreOperation<never, unknown>, unknown][] => [
+				[`endorsements ${JSON.stringify(page)}`, listEndorsements, { credential, page, present: PRESENT }],
+				[
+					`account endorsements ${JSON.stringify(page)}`,
+					accountEndorsements,
+					{ credential: null, now: NOW, account: VIEWER_ID, page, present: PRESENT },
+				],
+			]),
+			['relationships', relationships, { credential, ids: Array.from({ length: 20 }, (_, i) => target(i)) }],
+		]
+		for (const [name, operation, input] of reads) {
+			const shownBy = async (store: StoreStub) =>
+				runInDurableObject(store, (_instance, state) => shown(operation.run(state.storage.sql, input as never)))
+			expect([name, await shownBy(few), await shownBy(many)]).toEqual([name, PAGE.limit, PAGE.limit])
+			const fewRows = await rowsRead({ store: few }, operation, input as never)
+			const manyRows = await rowsRead({ store: many }, operation, input as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 60_000)
+})
+
 // The rows an operation reads, writes included (rowsRead in read-helpers.ts counts reads only).
 async function rowsTouched<I>(store: StoreStub, operation: StoreOperation<I, unknown>, input: I): Promise<number> {
 	return runInDurableObject(store, (_instance, state) => {
@@ -1920,5 +2031,108 @@ describe("followed hashtags read the viewer's rows, not every account's (RES-7)"
 			const large = await rowsRead({ store: many }, operation, input as never)
 			expect(large, name).toBeLessThanOrEqual(small + ALLOWANCE)
 		}
+	}, 60_000)
+})
+
+// Media an edit drops stays with its status, not shown (migration 0015_media_shown), up to four per edit. What a status
+// shows is sought in the index media_attachments_status past what it no longer shows, so the reads of a status and of
+// the media-only feeds do not grow with the media its edits dropped.
+describe('statuses cost the media they show, not the media their edits dropped (RES-7)', () => {
+	const AUTHOR_ID = '690000000000000001'
+	const MEDIA_TOKEN = 'media-token'
+	const status = (i: number) => String(691000000000000000n + BigInt(i))
+	const media = (i: number, m: number) => String(692000000000000000n + BigInt(i * 1000 + m))
+	const STATUSES = 25
+
+	async function store(dropped: number): Promise<StoreStub> {
+		const stub = await migratedStore()
+		await runInDurableObject(stub, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/author', 'author')",
+				AUTHOR_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'author@example.com', X'00', X'00', 'test')",
+				AUTHOR_ID
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('media', 'secret', 'media', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'media', ?, 'read')",
+				MEDIA_TOKEN,
+				AUTHOR_ID
+			)
+			for (let i = 0; i < STATUSES; i++) {
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					VALUES (?, ?, ?, 'public', '<p>hello</p>', ?)`,
+					status(i),
+					`https://kopje.test/objects/${status(i)}`,
+					AUTHOR_ID,
+					new Date(NOW).toISOString()
+				)
+				// The status shows one image; its edits dropped the others, the oldest first.
+				for (let m = 0; m <= dropped; m++) {
+					sql.exec(
+						`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, shown)
+						VALUES (?, ?, ?, 0, 'image', ?, ?)`,
+						media(i, m),
+						AUTHOR_ID,
+						status(i),
+						`https://kopje.test/media/${media(i, m)}/full.png`,
+						m === dropped ? 1 : 0
+					)
+				}
+			}
+		})
+		return stub
+	}
+
+	it('reads the same rows with 4 or 396 media dropped per status', async () => {
+		const credential = { tokenHash: MEDIA_TOKEN, scope: 'read', now: NOW } as const
+		const reads: [string, StoreOperation<never, unknown>, unknown][] = [
+			['status', getStatus, { credential, id: status(STATUSES - 1), present: PRESENT }],
+			[
+				'public, only media',
+				publicTimeline,
+				{ credential, now: NOW, page: PAGE, local: false, remote: false, onlyMedia: true, present: PRESENT },
+			],
+			[
+				'account statuses, only media',
+				accountStatuses,
+				{
+					credential,
+					now: NOW,
+					account: AUTHOR_ID,
+					page: PAGE,
+					onlyMedia: true,
+					excludeReplies: false,
+					excludeReblogs: false,
+					pinned: false,
+					tagged: null,
+					present: PRESENT,
+				},
+			],
+		]
+		const [few, many] = [await store(4), await store(396)]
+		const grown: string[] = []
+		for (const [name, operation, input] of reads) {
+			const output = await runInDurableObject(many, (_instance, state) =>
+				operation.run(state.storage.sql, input as never)
+			)
+			// The newest status shows its one image, and none it dropped.
+			expect(JSON.stringify(output)).toContain(media(STATUSES - 1, 396))
+			expect(JSON.stringify(output)).not.toContain(media(STATUSES - 1, 395))
+			const counts = [
+				await rowsRead({ store: few }, operation, input as never),
+				await rowsRead({ store: many }, operation, input as never),
+			]
+			if ((counts[1] ?? Infinity) > (counts[0] ?? 0) + ALLOWANCE) {
+				grown.push(`${name}: ${counts[0]} -> ${counts[1]}`)
+			}
+		}
+		expect(grown).toEqual([])
 	}, 60_000)
 })

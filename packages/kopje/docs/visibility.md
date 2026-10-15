@@ -3,7 +3,7 @@
 Who may see a status or an account, what a viewer filters out, who is notified and whom an author may address are
 decided in one module: `src/domain/audience.ts`. It is plain SQL fragments, spliced into the queries that read and
 write. No read path, notification path or delivery path keeps its own copy of a rule. The threat model states the
-invariants (VIS-1 to VIS-16, NET-2, PUSH-3); this page describes how the code applies them.
+invariants (VIS-1 to VIS-19, NET-2, PUSH-3); this page describes how the code applies them.
 
 ## The viewer context
 
@@ -36,6 +36,7 @@ Accounts (always over an account id, never over a status or a follow row):
 | `listedForSql(x, viewer, now)`                                             | R12: `x` may be listed among others (who favourited or boosted): available, not filtered, and not blocking the viewer.                                                                                |
 | `followListsShownSql(owner, viewer)`                                       | R13: the viewer is shown the owner's followers and following: the owner is available and, unless the viewer is the owner, neither hides its network (`hide_collections`) nor blocks the viewer.       |
 | `followListedSql(x, owner, viewer, now)`                                   | R13: `x` is listed among the owner's followers or following: to an anonymous viewer and the owner, always; to anyone else, unless they block or mute `x` (while the mute applies) or `x` blocks them. |
+| `endorsementsShownSql(owner)`, `endorsementListedSql(x)`                   | R28: the accounts the owner endorses are listed, to anyone, while the owner is available; an endorsed account is listed while it is available.                                                        |
 | `findableBySql(x, viewer)`                                                 | R14: the viewer finds `x` by account search or search resolution: available, and not on a domain the viewer blocks.                                                                                   |
 | `mentionableBySql(x, author)`                                              | R17: the author may mention or address `x`: available, and the author blocks neither it nor its domain.                                                                                               |
 | `followableBySql(x, viewer)`                                               | R21: the viewer may follow `x`: available, someone else, no block either way, no domain block by the viewer.                                                                                          |
@@ -206,6 +207,18 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R26 scheduled statuses    | `scheduledOwnSql` in every read of `scheduled_statuses`, all in `scheduled-statuses.ts`: the owner's alone, anyone else's not found; published through `writePost`, after which R1 to R25 apply.                                                                                                                                                                                                                                   |
 | R29 hashtags              | `tag_follows` read in `tags.ts` (the viewer's own) and in home's `TagWindows` (R9) alone; featured hashtags (`featured-tags.ts`) shown to anyone for an available account (R1, `availableSql`), none for an unavailable one, and in the actor's `featuredTags` collection for an available local actor.                                                                                                                            |
 | R27 polls                 | `viewableStatusId` (R3) for a poll's status in `getPoll`, `vote` and the presenter's callers; `mayVoteSql` (R3, and the voter blocks neither the author nor its domain) for a local vote and a received one; `poll_votes` read in `polls.ts` alone, only the viewer's own.                                                                                                                                                         |
+| R28 endorsements, notes   | `endorsementsShownSql` and `endorsementListedSql` in `endorsedPage` (`endorsements.ts`): an account's endorsements, to anyone, and the viewer's own. A private note is its author's alone: read only in the viewer's relationships (`relationshipsOf` in `accounts.ts`).                                                                                                                                                           |
+
+Endorsements (`src/domain/endorsements.ts`, Mastodon's `AccountPin`, migration `0014_account_notes_and_pins`) are
+the accounts a local user features. An account is endorsed only while its endorser follows it (an accepted follow,
+`AccountPin#validate_follow_relationship`): the trigger `account_pins_follow_ended` deletes the endorsement with the
+follow, whatever ends it, as `Follow#remove_endorsements` does. They are public (R28): `GET
+/api/v1/accounts/:id/endorsements` lists an account's to anyone, viewer or not, and `GET /api/v1/endorsements` the
+viewer's own, by the same rule: nothing while the owner is unavailable, and of the endorsed accounts only the available
+ones (`Account.without_suspended`). No block, mute or hidden network changes the list, as in Mastodon 4.5, whose
+`Accounts::EndorsementsController` checks none. They are not federated: Mastodon 4.5's actor has no endorsements
+collection. A private note (`account_notes`, Mastodon's `AccountNote`) is shown only to its author, as the `note` of
+their Relationship with the account; no other path reads it (the architecture test below).
 
 A scheduled status (`src/domain/scheduled-statuses.ts`, migration `0011_scheduled_statuses`) is not a status: it is
 a row of `scheduled_statuses` with the post's parameters, and its owner's alone (R26, `scheduledOwnSql`). No read,
@@ -378,6 +391,8 @@ module:
   (`scheduledOwnSql`, R26).
 - reads or writes `poll_votes` outside `polls.ts`, which shows only counts and a viewer's own votes (R27).
 - reads or writes `tag_follows` outside `tags.ts` and home's windows in `timelines.ts`, each the viewer's own (R29).
+- reads `account_notes` outside `accounts.ts`, which reads only the viewer's own (R28) and writes them, and `inbox.ts`,
+  whose actor purge deletes the notes on the account.
 
 An allowed file that no longer matches fails the test too, so the list does not outlive its reason.
 
@@ -418,13 +433,13 @@ test/policy-oracle.test.ts` replays it.
 
 `test/policy-bounds.test.ts` takes one generated world, for a fixed seed, in which every endpoint below shows the viewer
 something. It runs home, the public and tag feeds, account statuses, notifications, context, conversations, favourites,
-bookmarks, `favourited_by`, `reblogged_by`, relationships, the followers and following of an account (one that no unrelated account
-follows), a list's timeline (a list of every account of the world), the viewer's timeline markers, status and hashtag search, the viewer's scheduled statuses, and account search among the viewer's follows (a search of every account reads the
+bookmarks, `favourited_by`, `reblogged_by`, relationships (with the viewer's endorsement of and note on each account), the followers and following of an account (one that no unrelated account
+follows), a list's timeline (a list of every account of the world), the viewer's timeline markers, status and hashtag search, the viewer's scheduled statuses, the viewer's endorsements (of every account it follows) through both endpoints, the world's accounts by id, and account search among the viewer's follows (a search of every account reads the
 newest accounts the instance knows, a window that grows with them up to its limit) on that world alone, and again with
 1,000 unrelated remote accounts and 100 unrelated local ones: their statuses (never public, though they carry the
 hashtag the tag feed reads), replies and boosts, their follows, blocks, mutes and domain blocks of the world's accounts
 and domains, their favourites, bookmarks and notifications, their exclusive lists of the world's accounts and their
-own, and their timeline markers and scheduled statuses, together with the viewer's own blocks and mutes of those
+own, their endorsements of and notes on those accounts, and their timeline markers and scheduled statuses, together with the viewer's own blocks and mutes of those
 accounts and domain blocks of domains nobody lives on. Each endpoint must show the same with them as without (the same
 statuses, accounts, notifications and hashtags in the same order, and the same relationship flags), and the rows it
 reads (RES-7) may grow by at most 10. A second case grows the history of each author home and a list read instead:
@@ -455,14 +470,16 @@ Another case grows the accounts with timeline markers from 10 to 2,000: the view
 more. The world gives every original status a poll of four choices with the viewer's vote, and the unrelated accounts
 polls and votes of their own and votes in the target's poll (rows only); the target's poll (`GET /api/v1/polls/:id`) is
 an endpoint of both cases. A last poll case grows the votes in each of a page's 20 polls from 10 to 1,000: the account
-statuses page, the poll and a vote in it must each read at most 10 rows more. The viewer also follows the world's
-hashtag and another, and features both; the followed hashtags, the featured hashtags (the viewer's and their account's)
-and the suggestions are endpoints of both cases (the suggestions exempt from the history case: they read the viewer's
-newest 1,000 statuses, a window that grows with the history up to that limit). The unrelated local accounts follow and
-feature hashtags too, and a case of its own grows the accounts that follow hashtags from 10 to 2,000: home and the
-followed hashtags must read at most 10 rows more. A last case follows `MAX_FOLLOWED_TAGS` hashtags, each with 40 or 400
-public statuses: home's newest and oldest pages must read the same rows (at most 10 more), and at most a window per
-hashtag more than with none.
+statuses page, the poll and a vote in it must each read at most 10 rows more. Another grows the accounts the viewer
+endorses and keeps notes on from 20 to 2,000: the newest, a middle and the oldest page of the viewer's endorsements
+through both endpoints, and the relationships of 20 of them, read at most 10 rows more. The viewer also follows the
+world's hashtag and another, and features both; the followed hashtags, the featured hashtags (the viewer's and their
+account's) and the suggestions are endpoints of both cases (the suggestions exempt from the history case: they read the
+viewer's newest 1,000 statuses, a window that grows with the history up to that limit). The unrelated local accounts
+follow and feature hashtags too, and a case of its own grows the accounts that follow hashtags from 10 to 2,000: home
+and the followed hashtags must read at most 10 rows more. A last case follows `MAX_FOLLOWED_TAGS` hashtags, each with 40
+or 400 public statuses: home's newest and oldest pages must read the same rows (at most 10 more), and at most a window
+per hashtag more than with none.
 
 `test/policy-endpoints.test.ts` runs the read endpoints themselves on generated worlds, with favourites, bookmarks and
 notifications added, for each available local viewer and, where the endpoint answers without a token, the anonymous
@@ -508,6 +525,8 @@ the cleanup). After each action the model (`outboundKindOf`, `statusAudience`, `
 - every notification written satisfies R15, and every push recorded R16, at the time of the action;
 - a list holds what it held before the action, less each account its owner no longer follows in either state; its
   owner stays;
+- every local account endorses each account it follows (accepted), and keeps after the action what it endorsed
+  before, less each account it no longer follows (accepted);
 - the conversations hold what `AccountConversation.add_status` and `remove_status` make of the action (R25): a direct
   status joins its author's conversation and that of each local account the notification rule lets it notify, by
   thread and participants, and leaves each when it is deleted, the last status moving back or the conversation going.
