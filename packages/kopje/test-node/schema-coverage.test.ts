@@ -91,6 +91,8 @@ const NOT_CONVERTED: Record<string, string> = {
 	'media_attachments.scheduled_status_id': 'held by a scheduled status of Kopje; legacy has none',
 	'mutes.expires_at': 'legacy mutes never expire',
 	'mutes.id': ASSIGNED,
+	'notifications.group_key':
+		'legacy never grouped notifications: carried ones stay ungrouped, as stored ones do in 0017',
 	'status_edits.id': ASSIGNED,
 	'status_edits.poll_options': 'legacy has no polls',
 	'statuses.thread': 'written by the trigger statuses_thread and given again by backfillConversations (DERIVED)',
@@ -143,6 +145,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'mutes.created_at': TIME,
 	'mutes.id': DEFAULT,
 	'notifications.created_at': TIME,
+	'notifications.group_key': DEFAULT,
 	'oauth_clients.created_at': TIME,
 	'status_edits.created_at': TIME,
 	'status_edits.id': DEFAULT,

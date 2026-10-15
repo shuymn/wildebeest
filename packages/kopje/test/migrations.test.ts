@@ -1015,6 +1015,8 @@ describe('Store migration runner', () => {
 			expect([threadOf(r.id), threadOf(s.id)]).toEqual([conversation, s.id])
 
 			// After it, P replies to R and Q to P, and Q arrives first: all of them are in one thread and one conversation.
+			// This build's code writes them, over the schema it ships.
+			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({ ok: true })
 			const db = new Db(sql)
 			const p = note(2, { inReplyTo: r.id })
 			const q = note(3, { inReplyTo: p.id })
@@ -1233,6 +1235,99 @@ describe('Store migration runner', () => {
 			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
 		})
 	})
+
+	it('upgrades a Store with 0017_notification_groups: stored notifications stay ungrouped, and new ones are indexed by group', async () => {
+		const at = NAMES.indexOf('0017_notification_groups')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			const alice = '100000000000000001'
+			const bob = '100000000000000002'
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://remote.example/users/bob', 'bob', 'remote.example')",
+				bob
+			)
+			sql.exec("INSERT INTO notifications (account_id, type, from_account_id) VALUES (?, 'follow', ?)", alice, bob)
+
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0017_notification_groups'],
+			})
+			expect(sql.exec('SELECT type, group_key FROM notifications').toArray()).toEqual([
+				{ type: 'follow', group_key: null },
+			])
+			sql.exec(
+				"INSERT INTO notifications (account_id, type, from_account_id, status_id, group_key) VALUES (?, 'mention', ?, NULL, 'follow-1')",
+				alice,
+				bob
+			)
+			const plan = sql
+				.exec<{ detail: string }>(
+					'EXPLAIN QUERY PLAN SELECT id FROM notifications WHERE account_id = ? AND group_key = ? ORDER BY id DESC',
+					alice,
+					'follow-1'
+				)
+				.toArray()
+				.map((row) => row.detail)
+			expect(plan.join('\n')).toContain('notifications_group')
+			sql.exec('DELETE FROM local_accounts WHERE account_id = ?', alice)
+			expect(sql.exec('SELECT count(*) AS n FROM notifications').one()).toEqual({ n: 0 })
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('0017_notification_groups reads each stored notification a bounded number of times, however many there are', async () => {
+		const index = NAMES.indexOf('0017_notification_groups')
+		const statements = (MIGRATIONS[index]?.sql ?? '')
+			.split('\n')
+			.filter((line) => !line.startsWith('--'))
+			.join('\n')
+			.split(';')
+			.filter((statement) => statement.trim() !== '')
+		const measure = async (count: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, index)).upgrade()
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username) VALUES ('100000000000000001', 'https://kopje.test/ap/users/alice', 'alice')"
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES ('100000000000000001', 'a@example.com', X'00', X'00', 'k')"
+				)
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO accounts (id, uri, username, domain) SELECT CAST(200000000000000000 + i AS TEXT),
+						'https://remote.example/users/u' || i, 'u' || i, 'remote.example' FROM n`,
+					count
+				)
+				sql.exec(
+					`INSERT INTO notifications (account_id, type, from_account_id)
+					SELECT '100000000000000001', 'follow', id FROM accounts WHERE domain = 'remote.example'`
+				)
+				let read = 0
+				for (const statement of statements) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				return read
+			})
+		}
+		const small = await measure(1000)
+		const large = await measure(10_000)
+		// The column is added without a pass, and the partial index's build reads each notification once.
+		expect(large - small).toBeLessThanOrEqual(3 * (10_000 - 1000))
+	}, 60_000)
 
 	it('upgrades a Store with 0011_scheduled_statuses: uploads stay as they were, and scheduled statuses hold theirs and go with their account', async () => {
 		const index = NAMES.indexOf('0011_scheduled_statuses')

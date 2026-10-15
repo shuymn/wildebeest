@@ -7,7 +7,7 @@ import { act, community, follow, getJson, ids, post, type Status } from './statu
 type Notification = { id: string; type: string; created_at: string; account: { id: string }; status?: Status }
 
 describe('notifications', () => {
-	it('notifies mentions, favourites, reblogs and follows in the Mastodon 4.0.2 shape', async () => {
+	it('notifies mentions, favourites, reblogs and follows in the Mastodon 4.5 shape', async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice, bob } = h.users
 		await follow(h, bob, alice.id)
@@ -28,6 +28,7 @@ describe('notifications', () => {
 			id: expect.stringMatching(/^\d+$/),
 			type: 'follow',
 			created_at: new Date(NOW).toISOString(),
+			group_key: `follow-${Math.floor(NOW / 3_600_000)}`,
 			account: expect.objectContaining({ id: bob.id, acct: 'bob' }),
 		})
 		expect(body[0]?.status).toMatchObject({ account: { id: bob.id }, favourited: false })
