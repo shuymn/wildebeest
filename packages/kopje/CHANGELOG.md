@@ -96,6 +96,21 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `GET /api/v1/accounts/:id/identity_proofs` answers `[]`, as Mastodon's deprecated endpoint does.
     - `POST /api/v1/accounts` (registration) answers as Mastodon does with registrations closed: 403 `Forbidden` for an
       app token with `write:accounts`, after Mastodon's token checks. Kopje has no open registration.
+- The remaining status actions of Mastodon 4.5:
+    - Pins: `POST /api/v1/statuses/:id/pin` and `/unpin` (scope `write:accounts`), which answer the status. You can pin
+      up to 5 of your own statuses, not boosts or direct statuses; anything else answers 422 with Mastodon's messages,
+      and pinning a status again answers 422 `Duplicate record`. Your statuses now carry a real `pinned`, and
+      `GET /api/v1/accounts/:id/statuses?pinned=true` lists an account's pins, newest pin first, to whoever may see
+      each. Your actor publishes its `featured` collection of pins (the post of a public or unlisted one, the address
+      of any other), and your followers' servers are sent an `Add` or `Remove` when you pin or unpin. Deleting a pinned
+      status unpins it.
+    - Conversation mutes: `POST /api/v1/statuses/:id/mute` and `/unmute` (scope `write:mutes`) mute the conversation
+      of a status you may see, and every status of it then shows `muted: true` to you. While it is muted, nothing in
+      it notifies you (mentions, favourites, boosts, poll ends, edits), and its direct statuses no longer reach your
+      conversations; notifications you already had stay.
+    - `GET /api/v1/statuses?id[]=` shows up to 20 statuses at once, those you may see and have not filtered out by a
+      block, mute or domain block, each as `GET /api/v1/statuses/:id` shows it, in the order asked; more answer 422.
+    - `PATCH /api/v1/statuses/:id` edits a status, as `PUT` does.
 
 ### Changed
 
@@ -118,7 +133,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds eight migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds nine migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
@@ -146,6 +161,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       its sweep); other uploads stay as they are. Its work grows linearly with the media and the edits stored (one pass
       over the media for the column and one for the index, and one over the edits' media, grouped by id, with a
       lookup of each named upload).
+    - `0018_status_pins_and_conversation_mutes`: adds the `status_pins` and `conversation_mutes` tables, empty. Its
+      work does not grow with the Store.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.5] - 2026-10-15

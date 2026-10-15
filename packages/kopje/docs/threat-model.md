@@ -469,6 +469,21 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/account-relations.test.ts`, `test/inbox.test.ts` ("endorsements and inbound activities"),
   `test/inbox-regressions.test.ts`, `test/migrations.test.ts`, `test/policy-oracle.test.ts`,
   `test/policy-bounds.test.ts`, `test/policy-writes.test.ts`.
+- **VIS-22: a pin shows only what its status shows, and a conversation mute is its owner's alone.** A pin
+  (`StatusPin`) is of the pinner's own status, never a boost or a direct or limited one, at most five per account
+  (`StatusPinValidator`). Pins are public, as Mastodon's: `GET /api/v1/accounts/:id/statuses?pinned=true` lists them
+  through the account statuses rule (R11, VIS-1), so a viewer sees only the pins it may see; the actor's `featured`
+  collection serves the Note of a public or unlisted pin, as the object endpoint does (VIS-4), and only the uri of any
+  other; `Add` and `Remove` carry the uri alone to the pinner's followers (R23). A conversation mute
+  (`ConversationMute`) is read only by the policy module (`conversationMutedSql`, `test/policy.test.ts`): it shows in
+  its owner's `muted` and keeps notify from writing a notification about a status of the muted conversation
+  (`notifiedSql`, R15 with R31); it is never federated. A remote status's removal deletes its pins within its batches
+  (RES-6). _Implemented on branch `kopje/status-actions`:_ `src/domain/status-actions.ts`, `getFeatured` and
+  `featuredActivity` in `src/domain/activities.ts`, `accountStatuses` in `src/domain/timelines.ts`, the presenter's
+  viewer flags, `notifiedSql` and `conversationMutedSql` in `src/domain/audience.ts`, `deleteStatusWithin` in
+  `src/domain/inbox.ts`, migration `0018_status_pins_and_conversation_mutes`; `test/status-actions.test.ts`,
+  `test/inbox-regressions.test.ts`, `test/migrations.test.ts`, `test/policy-oracle.test.ts`,
+  `test/policy-endpoints.test.ts`, `test/policy-bounds.test.ts`, `test/policy-writes.test.ts`.
 
 ### Authorization (AUTH)
 
