@@ -86,6 +86,48 @@ describe('followed hashtags', () => {
 		expect((await getJson<Tag[]>(h, '/api/v1/followed_tags', bob.token)).body.map((tag) => tag.name)).toEqual(['b1'])
 	})
 
+	it('pages by the follow’s number across a digit boundary, both ways', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const names = Array.from({ length: 12 }, (_, i) => `t${i + 1}`)
+		for (const name of names) {
+			await followTag(h, alice, name)
+		}
+		const page = async (query: string) => {
+			const response = await h.request(`/api/v1/followed_tags?${query}`, bearer(alice.token))
+			const link = response.headers.get('link') ?? ''
+			const cursor = (rel: string, key: string) => new RegExp(`[?&]${key}=(\\d+)[^>]*>; rel="${rel}"`).exec(link)?.[1]
+			return {
+				names: ((await response.json()) as Tag[]).map((tag) => tag.name),
+				next: cursor('next', 'max_id'),
+				prev: cursor('prev', 'min_id'),
+			}
+		}
+		const newest = [...names].reverse()
+		const seen: string[] = []
+		let query = 'limit=5'
+		for (let i = 0; i < 5; i++) {
+			const result = await page(query)
+			seen.push(...result.names)
+			if (result.next === undefined) {
+				break
+			}
+			query = `limit=5&max_id=${result.next}`
+		}
+		expect(seen).toEqual(newest)
+		const ascending: string[] = []
+		query = 'limit=5&min_id=0'
+		for (let i = 0; i < 5; i++) {
+			const result = await page(query)
+			if (result.names.length === 0) {
+				break
+			}
+			ascending.unshift(...result.names)
+			query = `limit=5&min_id=${result.prev ?? ''}`
+		}
+		expect(ascending).toEqual(newest)
+	})
+
 	it('takes the scopes Mastodon asks for, and a user (AUTH-2)', async () => {
 		const h = await community(['alice'])
 		for (const scope of ['write:follows', 'follow', 'write']) {

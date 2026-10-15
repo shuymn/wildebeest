@@ -175,8 +175,9 @@ export const followedTags = userReadOperation<{ page: PageQuery; present: Presen
 	(db, { page, present }, { accountId }) => {
 		const ascending = page.minId !== undefined
 		const rows = db.all<{ id: string; name: string }>(
-			`SELECT CAST(id AS TEXT) AS id, name FROM tag_follows WHERE account_id = ?1 AND ${edgeRangeSql('id', '?2', '?3')}
-			ORDER BY id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+			`SELECT CAST(f.id AS TEXT) AS id, f.name FROM tag_follows f
+			WHERE f.account_id = ?1 AND ${edgeRangeSql('f.id', '?2', '?3')}
+			ORDER BY f.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			accountId,
 			page.maxId ?? null,
 			page.minId ?? page.sinceId ?? null,
