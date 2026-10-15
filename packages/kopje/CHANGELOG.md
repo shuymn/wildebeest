@@ -8,6 +8,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Changed
+
+- The public timeline, account statuses, notifications, favourites and bookmarks read a bounded number of rows for a
+  page anywhere in the history, and home and list timelines no longer read the statuses of followed accounts they
+  hide entirely.
+
 ## [0.1.0-rc.5] - 2026-10-15
 
 A fifth release candidate of the first release, published under the npm dist-tag `next`.

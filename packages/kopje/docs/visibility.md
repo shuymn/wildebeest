@@ -326,6 +326,19 @@ the viewer, who follows seven accounts and has a list of them, and those account
 of the accounts posting only direct statuses addressed to another account. The newest page, a page from the middle of
 the longer histories and the oldest page of home and of the list must each be full and read at most 10 rows more.
 
+A third case grows the generated world's own history: the same world with every status replicated 40 and 400 times,
+each copy a new status older than every original, with its original's author, visibility, mentions, hashtag and
+reply or boost (to the copy of its parent or original in the same replica), and the viewer's favourite, bookmark and
+notification of it. Accounts, follows, blocks, mutes, domain blocks and list memberships are not replicated. Because
+the composition stays the same, a read that walks past what it hides or filters reads a constant multiple of a page
+once each author's history holds more than a page of what it shows, while a read that walks or sorts a whole history
+grows with the factor. Each endpoint that pages statuses or the viewer's edges is read on its newest page, a page from
+the middle of the replicated history and its oldest page, and the others once; every read must show the viewer
+something, the newest pages must be the same at both factors, and the rows read may grow by at most 10. Status and
+hashtag search are exempt (their windows grow with the history up to their documented limits), and so is home, whose
+mentions stream walks the viewer's mentions that it does not show. The case does not grow the author set (no follow cap
+bounds it yet), and it does not build skewed histories, where one author's statuses dominate.
+
 `test/policy-endpoints.test.ts` runs the read endpoints themselves on generated worlds, with favourites, bookmarks and
 notifications added, for each available local viewer and, where the endpoint answers without a token, the anonymous
 one. No endpoint may show a status or an account the model does not allow the viewer by the endpoint's rule, and a
