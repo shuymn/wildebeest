@@ -8,8 +8,19 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- `GET` and `POST /oauth/userinfo`, as Mastodon 4.5 has it: for a token with the `profile` scope, the OpenID Connect
+  claims of its account (`iss`, `sub`, `name`, `preferred_username`, `profile`, `picture`). A token without `profile`
+  is refused with 403, an app token with 422.
+- `GET /.well-known/oauth-authorization-server` (RFC 8414), as Mastodon 4.5 has it: the OAuth endpoints, including
+  `userinfo_endpoint` and Mastodon's `app_registration_endpoint`, the scopes, and the supported response types and
+  modes, grant types, client authentication methods and PKCE methods.
+
 ### Changed
 
+- A missing, unknown or expired bearer token is refused with a `WWW-Authenticate: Bearer` challenge
+  (`error="invalid_token"`), as Mastodon refuses it.
 - The public timeline, account statuses, notifications, favourites and bookmarks read a bounded number of rows for a
   page anywhere in the history, and home and list timelines no longer read the statuses of followed accounts they
   hide entirely. Home reads only the mentions of you in direct and limited statuses by accounts you follow, not every

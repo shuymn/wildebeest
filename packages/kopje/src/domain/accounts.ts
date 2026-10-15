@@ -355,6 +355,33 @@ export const verifyCredentials = userReadOperation<{ present: Present }, Credent
 	(db, { present }, viewer) => credentialAccount(db, viewer.accountId, present)
 )
 
+// GET /oauth/userinfo (Mastodon's OAuthUserinfoSerializer): OpenID Connect claims of the token's own account, with the
+// display name, profile URL and avatar as the account presenter shows them.
+export type Userinfo = {
+	iss: string
+	sub: string
+	name: string
+	preferred_username: string
+	profile: string
+	picture: string
+}
+
+export const userinfo = userReadOperation<{ present: Present }, Userinfo | null>((db, { present }, viewer) => {
+	const row = accountRow(db, viewer.accountId)
+	if (row === undefined) {
+		return null
+	}
+	const account = presentAccount(row, present)
+	return {
+		iss: `${present.origin}/`,
+		sub: row.uri,
+		name: account.display_name,
+		preferred_username: account.username,
+		profile: account.url,
+		picture: account.avatar,
+	}
+})
+
 // GET /api/v1/preferences (Mastodon's REST::PreferencesSerializer): the posting defaults the account stores, and
 // Mastodon's defaults for the reading preferences Kopje has no setting for. The language is null when none is set.
 export type Preferences = {

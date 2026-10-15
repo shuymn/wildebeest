@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 
-import { mastodonError } from './errors'
+import { INVALID_TOKEN, invalidTokenError, mastodonError } from './errors'
 import { type Params, readParams } from './params'
 import type { Present } from '../domain/accounts'
 import type { AuthFailure, Authorized, Credential, UserCredential } from '../domain/auth'
@@ -55,7 +55,7 @@ export function present(c: Context): Present {
 export function credential(c: ApiContext, deps: Pick<ApiDeps, 'now'>): Credential {
 	const value = c.get('credential')
 	if (value === null) {
-		throw new HTTPException(401, { message: AUTH_ERRORS.unauthenticated.message })
+		throw authError('unauthenticated')
 	}
 	return { ...value, now: deps.now() }
 }
@@ -80,7 +80,7 @@ export function optionalTokenCredential(c: ApiContext, deps: Pick<ApiDeps, 'now'
 }
 
 const AUTH_ERRORS: Record<AuthFailure['status'], { status: 401 | 403 | 422; message: string }> = {
-	unauthenticated: { status: 401, message: 'The access token is invalid' },
+	unauthenticated: { status: 401, message: INVALID_TOKEN },
 	suspended: { status: 403, message: 'Your login is currently disabled' },
 	insufficient_scope: { status: 403, message: 'This action is outside the authorized scopes' },
 	user_required: { status: 422, message: 'This method requires an authenticated user' },
@@ -89,10 +89,16 @@ const AUTH_ERRORS: Record<AuthFailure['status'], { status: 401 | 403 | 422; mess
 // The value of an authorized Store operation; an authorization failure becomes Mastodon's error answer.
 export function authorized<O>(result: Authorized<O>): O {
 	if (result.status !== 'ok') {
-		const { status, message } = AUTH_ERRORS[result.status]
-		throw new HTTPException(status, { message })
+		throw authError(result.status)
 	}
 	return result.value
+}
+
+// The error answer to an authorization failure, carried to the app's error handler; an invalid token's carries its
+// Bearer challenge.
+function authError(failure: AuthFailure['status']): HTTPException {
+	const { status, message } = AUTH_ERRORS[failure]
+	return new HTTPException(status, { message, res: failure === 'unauthenticated' ? invalidTokenError() : undefined })
 }
 
 // A request error the Worker found before calling the Store. Mastodon authenticates first, so a request with a bad

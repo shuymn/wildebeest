@@ -2,13 +2,31 @@
 	"mastodon": "4.5.11",
 	"generatedBy": "(in packages/kopje) node scripts/mastodon-scopes.mjs <checkout of Mastodon v4.5.11>",
 	"note": [
-		"Generated from config/routes.rb and app/controllers/api/** by reading the Ruby source; do not edit by hand.",
+		"Generated from config/routes.rb, app/controllers/api/** and the API controllers outside /api (/oauth/userinfo) by reading the Ruby source; do not edit by hand.",
 		"token: required (doorkeeper_authorize!, require_user!, valid_doorkeeper_token?), optional (authorize_if_got_token!, or the controller reads the current user), none.",
 		"scopes: any one of them is accepted (null: no scope check). user: a token without a user is refused.",
 		"Not read: instance settings (DISALLOW_UNAUTHENTICATED_API_ACCESS, limited federation mode), serializers that read the current user.",
 		"unresolved: the Ruby could not be read with certainty; the route is not compared until an exception says why."
 	],
 	"routes": [
+		{
+			"method": "GET",
+			"path": "/oauth/userinfo",
+			"controller": "oauth/userinfo",
+			"action": "show",
+			"token": "required",
+			"scopes": ["profile"],
+			"user": true
+		},
+		{
+			"method": "POST",
+			"path": "/oauth/userinfo",
+			"controller": "oauth/userinfo",
+			"action": "show",
+			"token": "required",
+			"scopes": ["profile"],
+			"user": true
+		},
 		{
 			"method": "GET",
 			"path": "/api/oembed",

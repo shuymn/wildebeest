@@ -152,7 +152,18 @@ KEK. The steps below hold outgoing work with the `MAINTENANCE` variable for thos
       empty): unset reads as the empty KEK.
     - `USER_KEK`: the new KEK.
 
-3. **Rewrap the keys:**
+3. **Wait for the new version.** A deployment reaches the Worker first and the Store a little later, up to about a
+   minute. A rewrap run before both run it meets the previous version:
+    - a previous Worker still reads the previous variables. It answers `kek-empty` when the previous KEK was empty. When
+      it was not, it counts every key as already under `USER_KEK` and moves none, so the rewrap looks done when it is
+      not.
+    - a new Worker in front of a previous Store gets `version-mismatch`.
+
+    `kopje-admin health` shows when the new version is everywhere: the `store` check's `build` equals the report's
+    `build`, and the `keys` check fails with `unwrap-failed`, because the keys are still under the previous KEK, rather
+    than passing or warning `USER_KEK is empty`.
+
+4. **Rewrap the keys:**
 
     ```sh
     kopje-admin keys rewrap
@@ -166,10 +177,10 @@ KEK. The steps below hold outgoing work with the `MAINTENANCE` variable for thos
     is safe: keys already under `USER_KEK` are skipped. It refuses to run while `USER_KEK` is empty or equals
     `USER_KEK_PREVIOUS`.
 
-4. **Check** with `kopje-admin health`: the `keys` check passes with no failures and no `USER_KEK is empty` warning.
-5. **Remove `MAINTENANCE`** (or set it to `off`) and **remove `USER_KEK_PREVIOUS`**. Deliveries resume and spooled
+5. **Check** with `kopje-admin health`: the `keys` check passes with no failures and no `USER_KEK is empty` warning.
+6. **Remove `MAINTENANCE`** (or set it to `off`) and **remove `USER_KEK_PREVIOUS`**. Deliveries resume and spooled
    inbox activities are replayed.
-6. **Deal with what was saved before.** Backups, `kopje-admin dump` files and cutover exports made before the rotation
+7. **Deal with what was saved before.** Backups, `kopje-admin dump` files and cutover exports made before the rotation
    hold the keys under the previous KEK, and the rotation cannot change them. Delete them, or accept that they protect
    the keys only as well as the previous KEK did (not at all, when it was empty). Backups taken afterwards hold the keys
    under the new KEK.

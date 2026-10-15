@@ -9,7 +9,7 @@ import { PolicyModel } from './policy-model'
 import { accountId, REMOTE_DOMAINS, statusId, type World, worldArb, writeWorld } from './policy-world'
 import { rowsRead } from './read-helpers'
 import { Db } from '../src/db/sql'
-import { listFollows, relationships } from '../src/domain/accounts'
+import { listFollows, relationships, userinfo } from '../src/domain/accounts'
 import { canView, visibleSql, type Visibility } from '../src/domain/audience'
 import { listNotifications } from '../src/domain/notifications'
 import { search } from '../src/domain/search'
@@ -107,10 +107,10 @@ const HIDDEN: readonly Visibility[] = ['unlisted', 'private', 'direct', 'limited
 function writeViewer(sql: SqlStorage): void {
 	const viewer = accountId(VIEWER)
 	sql.exec(
-		"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('bounds', 'secret', 'bounds', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+		"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('bounds', 'secret', 'bounds', 'urn:ietf:wg:oauth:2.0:oob', 'read profile')"
 	)
 	sql.exec(
-		"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'bounds', ?, 'read')",
+		"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'bounds', ?, 'read profile')",
 		TOKEN_HASH,
 		viewer
 	)
@@ -424,6 +424,7 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 	['account search', search, { ...searchInput, query: 'account', types: ['accounts'], following: true }],
 	['status search', search, { ...searchInput, query: 'status', types: ['statuses'] }],
 	['hashtag search', search, { ...searchInput, query: 'cats', types: ['hashtags'] }],
+	['userinfo', userinfo, { credential: { ...credential, scope: 'profile' }, present: PRESENT }],
 ]
 
 // How many rows a read may add when the unrelated rows grow from none to UNRELATED: a few for a planner's choice, far
@@ -431,8 +432,8 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 const ALLOWANCE = 10
 const UNRELATED = 1000
 
-// What an endpoint showed: the items of a page, the members of a context, the results of a search, or the entries of a
-// list, through the operation's ok result.
+// What an endpoint showed: the items of a page, the members of a context, the results of a search, the entries of a
+// list, or the account userinfo claims, through the operation's ok result.
 function shown(output: unknown): number {
 	if (Array.isArray(output)) {
 		return output.length
@@ -443,6 +444,9 @@ function shown(output: unknown): number {
 	}
 	if (Array.isArray(value.items)) {
 		return value.items.length
+	}
+	if (typeof value.sub === 'string') {
+		return 1
 	}
 	if (Array.isArray(value.descendants) && Array.isArray(value.ancestors)) {
 		return value.ancestors.length + value.descendants.length
@@ -1006,5 +1010,62 @@ describe("reads skip an author's history the viewer never sees (RES-7)", () => {
 			}
 		}
 		expect(grown).toEqual([])
+	}, 60_000)
+})
+
+// Userinfo reads the token's own account: its newest public, unlisted or private status (last_status_at) comes from the
+// partial index statuses_feed, so the rows read do not grow with the account's history, nor with its direct statuses,
+// which are its newest here.
+describe("userinfo reads the account, not the account's history (RES-7)", () => {
+	const OWNER_ID = '800000000000000001'
+	const OWNER_TOKEN = 'userinfo-token'
+	const status = (i: number) => String(810000000000000000n + BigInt(i))
+
+	async function history(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/owner', 'owner')",
+				OWNER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'owner@example.com', X'00', X'00', 'test')",
+				OWNER_ID
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('userinfo', 'secret', 'userinfo', 'urn:ietf:wg:oauth:2.0:oob', 'profile')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'userinfo', ?, 'profile')",
+				OWNER_TOKEN,
+				OWNER_ID
+			)
+			// The oldest quarter is public, every later status direct.
+			for (let i = 0; i < count; i++) {
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					VALUES (?, ?, ?, ?, '<p>hello</p>', ?)`,
+					status(i),
+					`https://kopje.test/objects/${status(i)}`,
+					OWNER_ID,
+					i < count / 4 ? 'public' : 'direct',
+					new Date(NOW).toISOString()
+				)
+			}
+		})
+		return store
+	}
+
+	it('reads the same rows with 20 or 2,000 statuses', async () => {
+		const input = { credential: { tokenHash: OWNER_TOKEN, scope: 'profile', now: NOW }, present: PRESENT } as const
+		const counts: number[] = []
+		for (const store of [await history(20), await history(2000)]) {
+			const output = await runInDurableObject(store, (_instance, state) => userinfo.run(state.storage.sql, input))
+			expect(output).toMatchObject({ status: 'ok', value: { sub: 'https://kopje.test/ap/users/owner' } })
+			counts.push(await rowsRead({ store }, userinfo, input))
+		}
+		const [few = 0, many = 0] = counts
+		expect(many).toBeLessThanOrEqual(few + ALLOWANCE)
 	}, 60_000)
 })
