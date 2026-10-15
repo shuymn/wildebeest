@@ -504,14 +504,30 @@ export type RemotePollInput = {
 	options: string[]
 	tallies: number[]
 	multiple: boolean
+	// The end the Question names (closed, else endTime); closedNow: closed without a time, which ends it when received.
 	expiresAt: string | null
+	closedNow: boolean
 	votersCount: number | null
 }
 
-// Writes or refreshes the poll of a remote status: a new one, or, when `significant` changes are allowed, new choices
-// or a new multiple (which drop the votes cast: Poll#reset_votes!); otherwise only the counts, the end and the voters
-// (an implicit update: ProcessStatusUpdateService#update_poll! without significant changes). An end that has passed is
-// never ended again. Whether the poll changed.
+// Whether `poll` changes the choices or the multiple of the stored poll of `statusId`, or adds or removes one
+// (PollParser#significantly_changes?): such a change is an edit of the status, and drops the votes cast.
+export function remotePollChanges(db: Db, statusId: string, poll: RemotePollInput | null): boolean {
+	const previous = db.first<{ options: string; multiple: number }>(
+		'SELECT options, multiple FROM polls WHERE status_id = ?',
+		statusId
+	)
+	if (previous === undefined || poll === null) {
+		return (previous === undefined) !== (poll === null)
+	}
+	return previous.options !== JSON.stringify(poll.options) || previous.multiple !== (poll.multiple ? 1 : 0)
+}
+
+// Writes or refreshes the poll of a remote status as ProcessStatusUpdateService#update_poll! does. With `significant`
+// (a new status, or an Update newer than the stored version), anything: a new poll, new choices or a new multiple
+// (which drop the votes cast, Poll#reset_votes!), or no poll any more. Otherwise (an implicit update, such as the
+// Update of counts Mastodon's DistributePollUpdateWorker sends) only the counts, the end and the voters of a poll whose
+// choices stay. Whether anything was written. A poll whose end has been handled is never ended again.
 export function storeRemotePoll(
 	db: Db,
 	statusId: string,
@@ -519,17 +535,19 @@ export function storeRemotePoll(
 	significant: boolean,
 	now: number
 ): boolean {
-	const previous = db.first<{ options: string; multiple: number }>(
-		'SELECT options, multiple FROM polls WHERE status_id = ?',
-		statusId
-	)
+	const exists = db.first('SELECT 1 AS x FROM polls WHERE status_id = ?', statusId) !== undefined
+	const changes = remotePollChanges(db, statusId, poll)
+	if (changes && !significant) {
+		return false
+	}
 	if (poll === null) {
-		return significant && previous !== undefined && db.run('DELETE FROM polls WHERE status_id = ?', statusId) > 0
+		return exists && db.run('DELETE FROM polls WHERE status_id = ?', statusId) > 0
 	}
 	const options = JSON.stringify(poll.options)
 	const tallies = JSON.stringify(poll.tallies)
 	const votes = poll.tallies.reduce((sum, n) => sum + n, 0)
-	if (previous === undefined) {
+	const expiresAt = poll.closedNow ? iso(now) : poll.expiresAt
+	if (!exists) {
 		db.run(
 			`INSERT INTO polls (status_id, options, tallies, multiple, expires_at, votes_count, voters_count, created_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -537,32 +555,30 @@ export function storeRemotePoll(
 			options,
 			tallies,
 			poll.multiple ? 1 : 0,
-			poll.expiresAt,
+			expiresAt,
 			votes,
 			poll.votersCount,
 			iso(now)
 		)
 		return true
 	}
-	const changed = previous.options !== options || previous.multiple !== (poll.multiple ? 1 : 0)
-	if (changed && !significant) {
-		return false
-	}
-	if (changed) {
+	if (changes) {
 		db.run('DELETE FROM poll_votes WHERE poll_id = ?', statusId)
 	}
-	db.run(
-		`UPDATE polls SET options = ?2, multiple = ?3, tallies = ?4, votes_count = ?5, voters_count = ?6, expires_at = ?7
-		WHERE status_id = ?1`,
-		statusId,
-		options,
-		poll.multiple ? 1 : 0,
-		tallies,
-		votes,
-		poll.votersCount,
-		poll.expiresAt
+	return (
+		db.run(
+			`UPDATE polls SET options = ?2, multiple = ?3, tallies = ?4, votes_count = ?5, voters_count = ?6, expires_at = ?7
+			WHERE status_id = ?1 AND (options IS NOT ?2 OR multiple IS NOT ?3 OR tallies IS NOT ?4
+				OR voters_count IS NOT ?6 OR expires_at IS NOT ?7)`,
+			statusId,
+			options,
+			poll.multiple ? 1 : 0,
+			tallies,
+			votes,
+			poll.votersCount,
+			expiresAt
+		) > 0
 	)
-	return changed
 }
 
 // ---- Purges (inbox.ts): votes go in bounded batches, so a status or account with many never deletes them at once.
