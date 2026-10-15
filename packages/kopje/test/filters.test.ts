@@ -984,6 +984,28 @@ describe('filter matching at a cut, and filter statuses in batched deletes', () 
 		expect((await getJson<Status>(h, `/api/v1/statuses/${capped}`, alice.token)).body.filtered).toEqual([])
 	})
 
+	it('stops at a cut next to or inside an astral code point, matching nothing past it', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const remote = await remoteAccount(h.store, 'carol')
+		// Cut at MAX_FILTER_TEXT: the emoji starts right at the cut, or straddles it (its high surrogate before the cut).
+		const after = `${'y '.repeat(4999)}😀 more`
+		const inside = `${'y '.repeat(4998)}y😀 more`
+		expect([2 + after.indexOf('😀'), 2 + inside.indexOf('😀')]).toEqual([MAX_FILTER_TEXT, MAX_FILTER_TEXT - 1])
+		const ids = [
+			await seedStatus(h.store, { accountId: remote, visibility: 'public', content: `<p>${after}</p>` }),
+			await seedStatus(h.store, { accountId: remote, visibility: 'public', content: `<p>${inside}</p>` }),
+		]
+		await createFilter(h, alice, {
+			title: 'e',
+			context: ['home'],
+			keywords_attributes: [{ keyword: '😀' }, { keyword: 'y😀', whole_word: false }],
+		})
+		for (const id of ids) {
+			expect((await getJson<Status>(h, `/api/v1/statuses/${id}`, alice.token)).body.filtered).toEqual([])
+		}
+	})
+
 	it('deletes the filter statuses of a remote status over batches, each within PURGE_BATCH', async () => {
 		const h = await community(['alice'])
 		const remote = await remoteAccount(h.store, 'carol')

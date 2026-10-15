@@ -251,7 +251,10 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		const limits = filterTextLimits(full.map((text) => Math.min(text.length, MAX_FILTER_TEXT)))
 		ids.forEach((id, i) => {
 			const text = full[i] ?? ''
-			const cut = limits[i] ?? 0
+			// A cut inside a surrogate pair moves back to the pair's start, so the code point after it is whole.
+			const limit = limits[i] ?? 0
+			const unit = text.charCodeAt(limit)
+			const cut = limit > 0 && limit < text.length && unit >= 0xdc00 && unit <= 0xdfff ? limit - 1 : limit
 			// The code point after a cut is kept for the boundary after a match, so the cut is not taken for one.
 			const next = cut < text.length ? String.fromCodePoint(text.codePointAt(cut) ?? 0) : ''
 			texts.set(id, { text: text.slice(0, cut) + next, cut })

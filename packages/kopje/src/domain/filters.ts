@@ -882,15 +882,19 @@ export function applyFilters(
 	for (const { filter, keywords, hasStatuses } of active.filters) {
 		let keywordMatches: string[] | null = null
 		if (keywords !== null) {
-			// The leftmost match that ends by the cut; one crossing it starts within a keyword's length of it, so the
-			// search goes on from the next position a bounded number of times.
+			// The leftmost match that ends by the cut. One crossing it starts before the cut, within a keyword's length of
+			// it, so the search goes on from the next code point (a whole one: the u flag moves a lastIndex inside a
+			// surrogate pair back to its start) and stops at the cut, where no match can end by it.
 			keywords.lastIndex = 0
 			for (let match = keywords.exec(target.text); match !== null; match = keywords.exec(target.text)) {
 				if (match.index + match[0].length <= target.cut) {
 					keywordMatches = [match[0]]
 					break
 				}
-				keywords.lastIndex = match.index + 1
+				if (match.index >= target.cut) {
+					break
+				}
+				keywords.lastIndex = match.index + ((target.text.codePointAt(match.index) ?? 0) > 0xffff ? 2 : 1)
 			}
 		}
 		const named = target.ids.filter((id) => statusMatches.get(id)?.has(filter.id) === true)
