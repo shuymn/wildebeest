@@ -11,6 +11,12 @@
 -- 'poll' notifications, once), and update_due_at when the Update of a local poll's counts is due (Mastodon's
 -- DistributePollUpdateWorker, debounced); each has a partial index for the cron's rounds.
 --
+-- generation counts the resets of a poll: an edit that changes its choices (or its multiple), or removes it, drops the
+-- votes cast so far by moving to the next generation, and only the votes of the current one count or are shown. The
+-- older ones are deleted in bounded batches, by the cron (stale marks a poll that still has some, through its partial
+-- index) or with the status, so a reset never deletes an unbounded number of rows at once. removed marks a poll an edit
+-- removed: it is no poll for any read, and stays only until its votes are swept (or a later edit adds a poll again).
+--
 -- poll_votes are the votes cast: by a local account (in any poll it may see) or by a remote one (in a local poll), one
 -- row per choice. A vote goes with its poll and with its account. uri is a remote vote's Note id. Only polls.ts reads
 -- the table, and only a viewer's own votes are shown: who voted is never (R27).
@@ -32,6 +38,9 @@ CREATE TABLE polls (
   voters_count INTEGER CHECK (voters_count IS NULL OR voters_count >= 0),
   ended INTEGER NOT NULL DEFAULT 0 CHECK (ended IN (0, 1)),
   update_due_at TEXT,
+  generation INTEGER NOT NULL DEFAULT 0 CHECK (generation >= 0),
+  stale INTEGER NOT NULL DEFAULT 0 CHECK (stale IN (0, 1)),
+  removed INTEGER NOT NULL DEFAULT 0 CHECK (removed IN (0, 1)),
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   CHECK (json_array_length(tallies) = json_array_length(options))
 );
@@ -40,14 +49,17 @@ CREATE INDEX polls_ending ON polls (expires_at) WHERE ended = 0 AND expires_at I
 
 CREATE INDEX polls_update_due ON polls (update_due_at) WHERE update_due_at IS NOT NULL;
 
+CREATE INDEX polls_stale ON polls (status_id) WHERE stale = 1;
+
 CREATE TABLE poll_votes (
   id INTEGER PRIMARY KEY,
   poll_id TEXT NOT NULL REFERENCES polls (status_id) ON DELETE CASCADE,
   account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
   choice INTEGER NOT NULL CHECK (choice >= 0 AND choice < 100),
+  generation INTEGER NOT NULL DEFAULT 0 CHECK (generation >= 0),
   uri TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  UNIQUE (poll_id, account_id, choice)
+  UNIQUE (poll_id, generation, account_id, choice)
 );
 
 CREATE INDEX poll_votes_account ON poll_votes (account_id);

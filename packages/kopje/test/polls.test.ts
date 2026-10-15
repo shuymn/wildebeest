@@ -22,6 +22,8 @@ import {
 import { Db } from '../src/db/sql'
 import { deleteStatusBatch, PURGE_BATCH, purgeBatch } from '../src/domain/inbox'
 import {
+	pollRound,
+	STALE_SWEEP,
 	MAX_EXPIRATION_S,
 	MAX_OPTION_CHARS,
 	MAX_OPTIONS,
@@ -578,4 +580,71 @@ describe('RES-6: votes go in bounded batches with their status and with their ac
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM poll_votes')).toEqual([{ n: 0 }])
 		expect(await sql(h.store, 'SELECT sum(votes_count) AS n FROM polls')).toEqual([{ n: 700 }])
 	})
+})
+
+describe('RES-6: an edit that drops the votes of a poll deletes none at once', () => {
+	async function withVotes(h: ApiHarness, status: string, count: number) {
+		await remoteAccounts(h, 7, Math.ceil(count / 7))
+		await sql(
+			h.store,
+			"INSERT INTO poll_votes (poll_id, account_id, choice) SELECT ?, id, 0 FROM accounts WHERE domain LIKE 'd%.example' LIMIT ?",
+			status,
+			count
+		)
+		await sql(
+			h.store,
+			'UPDATE polls SET tallies = json_array(?, 0), votes_count = ?, voters_count = ?',
+			count,
+			count,
+			count
+		)
+	}
+
+	// Runs the cron's rounds until no vote of a past generation is left, and returns the rows each wrote.
+	async function sweep(h: ApiHarness): Promise<number[]> {
+		const written: number[] = []
+		for (let i = 0; i < 20; i++) {
+			const result = await runInDurableObject(h.store, (_instance, state) => {
+				const db = new Db(state.storage.sql)
+				const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
+				const before = changes()
+				const round = state.storage.transactionSync(() => pollRound.run(state.storage.sql, { now: NOW }))
+				return { swept: round.swept, changes: changes() - before }
+			})
+			written.push(result.changes)
+			if (result.swept === 0) {
+				return written
+			}
+		}
+		throw new Error('never swept')
+	}
+
+	for (const kind of ['changes its choices', 'removes it'] as const) {
+		it(`${kind}: the votes leave the poll at once and their rows go in bounded rounds`, async () => {
+			const h = await community(['alice', 'bob'])
+			const { alice, bob } = h.users
+			const status = await polled(h, alice, { options: ['a', 'b'], expires_in: 600 })
+			await voteOn(h, bob, status.id, [0])
+			await withVotes(h, status.id, 700)
+			const body = kind === 'removes it' ? {} : { poll: { options: ['a', 'c'], expires_in: 600 } }
+			const edited = await send(h, alice, `/api/v1/statuses/${status.id}`, { status: 'which?', ...body }, 'PUT')
+			expect(edited.status).toBe(200)
+			// Nothing deleted by the edit itself.
+			expect(await sql(h.store, 'SELECT count(*) AS n FROM poll_votes')).toEqual([{ n: 701 }])
+			const poll = (await getJson<PolledStatus>(h, `/api/v1/statuses/${status.id}`, bob.token)).body.poll
+			if (kind === 'removes it') {
+				expect(poll).toBeNull()
+				expect((await getJson(h, `/api/v1/polls/${status.id}`, bob.token)).status).toBe(404)
+			} else {
+				expect(poll).toMatchObject({ votes_count: 0, voters_count: 0, voted: false, own_votes: [] })
+				// A voter of the dropped generation votes again.
+				expect(await (await voteOn(h, bob, status.id, [0])).json()).toMatchObject({ own_votes: [0], votes_count: 1 })
+			}
+			const written = await sweep(h)
+			expect(written.length).toBeGreaterThan(1)
+			expect(Math.max(...written)).toBeLessThanOrEqual(STALE_SWEEP + 10)
+			expect(await sql(h.store, 'SELECT count(*) AS n FROM poll_votes')).toEqual([{ n: kind === 'removes it' ? 0 : 1 }])
+			expect(await sql(h.store, 'SELECT stale FROM polls')).toEqual([{ stale: 0 }])
+		})
+	}
 })

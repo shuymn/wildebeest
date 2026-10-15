@@ -116,7 +116,7 @@ function pollFacts(db: Db, statusId: string): PollFacts | null {
 		ended: number
 		voters_count: number | null
 	}>(
-		'SELECT options, tallies, multiple, hide_totals, expires_at, ended, voters_count FROM polls WHERE status_id = ?',
+		'SELECT options, tallies, multiple, hide_totals, expires_at, ended, voters_count FROM polls WHERE status_id = ? AND removed = 0',
 		statusId
 	)
 	return row === undefined

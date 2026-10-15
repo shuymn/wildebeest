@@ -153,33 +153,58 @@ export function writePoll(db: Db, statusId: string, poll: PollInput, now: number
 	)
 }
 
+// Poll#reset_votes!, bounded: the poll moves to its next generation, so the votes cast so far no longer count or show,
+// and its counts start again; the older votes are swept in bounded batches (sweepStaleVotes, deleteStatusWithin). With
+// `removed`, the poll is also no poll any more for every read until an edit adds one again.
+function resetPoll(db: Db, statusId: string, removed: boolean): void {
+	db.run(
+		`UPDATE polls SET generation = generation + 1, stale = 1, removed = ?2, votes_count = 0,
+			voters_count = CASE WHEN voters_count IS NULL THEN NULL ELSE 0 END,
+			tallies = (SELECT json_group_array(0) FROM json_each(polls.tallies)), update_due_at = NULL,
+			ended = CASE WHEN ?2 THEN 1 ELSE 0 END
+		WHERE status_id = ?1`,
+		statusId,
+		removed ? 1 : 0
+	)
+}
+
+// The live poll of a status (not removed), with what a change of it compares.
+function livePoll(db: Db, statusId: string) {
+	return db.first<{ options: string; multiple: number; expires_at: string | null; removed: number }>(
+		'SELECT options, multiple, expires_at, removed FROM polls WHERE status_id = ?',
+		statusId
+	)
+}
+
 // UpdateStatusService#update_poll! for an edit of a local status: a poll sent replaces the status's (its end moves to
 // `expiresIn` from now, and changed choices or a changed multiple drop the votes cast); none removes it. Whether the
 // poll changed, which makes the edit significant.
 export function editPoll(db: Db, statusId: string, poll: PollInput | null, now: number): boolean {
-	const previous = db.first<{ options: string; multiple: number; expires_at: string | null }>(
-		'SELECT options, multiple, expires_at FROM polls WHERE status_id = ?',
-		statusId
-	)
+	const row = livePoll(db, statusId)
+	const previous = row?.removed === 0 ? row : undefined
 	if (poll === null) {
-		return previous !== undefined && db.run('DELETE FROM polls WHERE status_id = ?', statusId) > 0
+		if (previous !== undefined) {
+			resetPoll(db, statusId, true)
+		}
+		return previous !== undefined
 	}
-	if (previous === undefined) {
+	if (row === undefined) {
 		writePoll(db, statusId, poll, now)
 		return true
 	}
 	const expiresAt = iso(now + poll.expiresIn * 1000)
-	const reset = previous.options !== JSON.stringify(poll.options) || previous.multiple !== (poll.multiple ? 1 : 0)
+	// A poll added again where one was removed starts from the removal's reset.
+	const reset =
+		previous !== undefined &&
+		(previous.options !== JSON.stringify(poll.options) || previous.multiple !== (poll.multiple ? 1 : 0))
 	if (reset) {
-		db.run('DELETE FROM poll_votes WHERE poll_id = ?', statusId)
+		resetPoll(db, statusId, false)
 	}
 	// A poll that ends later again is ended again by the cron (PollExpirationNotifyWorker, queued anew).
 	db.run(
-		`UPDATE polls SET options = ?2, multiple = ?3, hide_totals = ?4, expires_at = ?5,
-			ended = CASE WHEN ?5 > ?6 THEN 0 ELSE ended END,
-			tallies = CASE WHEN ?7 THEN ?8 ELSE tallies END,
-			votes_count = CASE WHEN ?7 THEN 0 ELSE votes_count END,
-			voters_count = CASE WHEN ?7 THEN 0 ELSE voters_count END
+		`UPDATE polls SET options = ?2, multiple = ?3, hide_totals = ?4, expires_at = ?5, removed = 0,
+			ended = CASE WHEN ?5 > ?6 OR removed = 1 THEN 0 ELSE ended END,
+			tallies = CASE WHEN json_array_length(tallies) = ?7 THEN tallies ELSE ?8 END
 		WHERE status_id = ?1`,
 		statusId,
 		JSON.stringify(poll.options),
@@ -187,15 +212,49 @@ export function editPoll(db: Db, statusId: string, poll: PollInput | null, now: 
 		poll.hideTotals ? 1 : 0,
 		expiresAt,
 		iso(now),
-		reset ? 1 : 0,
+		poll.options.length,
 		JSON.stringify(poll.options.map(() => 0))
 	)
-	return reset || previous.expires_at !== expiresAt
+	return previous === undefined || reset || previous.expires_at !== expiresAt
+}
+
+// Deletes at most `limit` votes of past generations, of polls marked stale, through the stale polls' index and each
+// poll's (poll, generation) index; a poll with none left is no longer stale. How many votes it deleted.
+export function sweepStaleVotes(db: Db, limit: number): number {
+	let left = limit
+	const polls = db.all<{ status_id: string; generation: number }>(
+		'SELECT status_id, generation FROM polls WHERE stale = 1 ORDER BY status_id LIMIT ?',
+		POLL_ROUND
+	)
+	for (const poll of polls) {
+		if (left <= 0) {
+			break
+		}
+		left -= db.run(
+			`DELETE FROM poll_votes WHERE id IN (SELECT id FROM poll_votes WHERE poll_id = ?1 AND generation < ?2 LIMIT ?3)`,
+			poll.status_id,
+			poll.generation,
+			left
+		)
+		if (
+			db.first(
+				'SELECT 1 AS x FROM poll_votes WHERE poll_id = ? AND generation < ? LIMIT 1',
+				poll.status_id,
+				poll.generation
+			) === undefined
+		) {
+			db.run('UPDATE polls SET stale = 0 WHERE status_id = ?', poll.status_id)
+		}
+	}
+	return limit - left
 }
 
 // The choices of a status's poll, for its edit history (StatusEdit's poll_options): a JSON array, or null.
 export function pollOptionsJson(db: Db, statusId: string): string | null {
-	return db.first<{ options: string }>('SELECT options FROM polls WHERE status_id = ?', statusId)?.options ?? null
+	return (
+		db.first<{ options: string }>('SELECT options FROM polls WHERE status_id = ? AND removed = 0', statusId)?.options ??
+		null
+	)
 }
 
 // ---- Presenting.
@@ -252,7 +311,8 @@ export function presentPolls(
 	}
 	const ids = JSON.stringify(statusIds)
 	const rows = db.all<PollRow>(
-		`SELECT ${POLL_COLUMNS} FROM json_each(?1) j CROSS JOIN polls p ON p.status_id = j.value JOIN statuses s ON s.id = p.status_id`,
+		`SELECT ${POLL_COLUMNS} FROM json_each(?1) j CROSS JOIN polls p ON p.status_id = j.value JOIN statuses s ON s.id = p.status_id
+		WHERE p.removed = 0`,
 		ids
 	)
 	if (rows.length === 0) {
@@ -260,8 +320,10 @@ export function presentPolls(
 	}
 	const votes = new Map<string, number[]>()
 	if (viewerId !== null) {
+		// The viewer's votes of each poll's current generation only.
 		for (const vote of db.all<{ poll_id: string; choice: number }>(
-			`SELECT v.poll_id, v.choice FROM json_each(?2) j CROSS JOIN poll_votes v ON v.poll_id = j.value AND v.account_id = ?1
+			`SELECT v.poll_id, v.choice FROM json_each(?2) j CROSS JOIN polls p ON p.status_id = j.value
+				CROSS JOIN poll_votes v ON v.poll_id = p.status_id AND v.generation = p.generation AND v.account_id = ?1
 			ORDER BY v.id`,
 			viewerId,
 			JSON.stringify(rows.map((row) => row.status_id))
@@ -278,7 +340,8 @@ export function presentPolls(
 function viewablePoll(db: Db, viewerId: string | null, id: string): string | null {
 	const statusId = resolveApiId(db, 'statuses', id)
 	const visible = statusId === null ? null : viewableStatusId(db, viewerId, statusId)
-	return visible === null || db.first('SELECT 1 AS x FROM polls WHERE status_id = ?', visible) === undefined
+	return visible === null ||
+		db.first('SELECT 1 AS x FROM polls WHERE status_id = ? AND removed = 0', visible) === undefined
 		? null
 		: visible
 }
@@ -310,6 +373,7 @@ type VotedPoll = {
 	hide_totals: number
 	expires_at: string | null
 	ended: number
+	generation: number
 }
 
 // Expireable#expired?: a poll has ended once its end has passed (expires_at < now), the boundary every read, vote and
@@ -357,7 +421,8 @@ function countVotes(
 	const ids: string[] = []
 	for (const choice of choices) {
 		const row = db.first<{ id: string }>(
-			`INSERT INTO poll_votes (poll_id, account_id, choice, uri, created_at) VALUES (?, ?, ?, ?, ?)
+			`INSERT INTO poll_votes (poll_id, generation, account_id, choice, uri, created_at)
+			VALUES (?1, (SELECT generation FROM polls WHERE status_id = ?1), ?2, ?3, ?4, ?5)
 			RETURNING CAST(id AS TEXT) AS id`,
 			pollId,
 			voterId,
@@ -397,8 +462,9 @@ function updateSoon(db: Db, poll: VotedPoll, now: number): void {
 function votedPoll(db: Db, pollId: string): VotedPoll | undefined {
 	return db.first<VotedPoll>(
 		`SELECT p.status_id, s.uri AS status_uri, s.account_id AS author_id, a.uri AS author_uri, a.domain IS NULL AS local,
-			p.options, p.multiple, p.hide_totals, p.expires_at, p.ended
-		FROM polls p JOIN statuses s ON s.id = p.status_id JOIN accounts a ON a.id = s.account_id WHERE p.status_id = ?`,
+			p.options, p.multiple, p.hide_totals, p.expires_at, p.ended, p.generation
+		FROM polls p JOIN statuses s ON s.id = p.status_id JOIN accounts a ON a.id = s.account_id
+		WHERE p.status_id = ? AND p.removed = 0`,
 		pollId
 	)
 }
@@ -432,7 +498,12 @@ export const vote = userWriteOperation<{ id: string; choices: string[]; now: num
 		}
 		const now = iso(input.now)
 		const before = db
-			.all<{ choice: number }>('SELECT choice FROM poll_votes WHERE poll_id = ? AND account_id = ?', pollId, accountId)
+			.all<{ choice: number }>(
+				'SELECT choice FROM poll_votes WHERE poll_id = ? AND generation = ? AND account_id = ?',
+				pollId,
+				poll.generation,
+				accountId
+			)
 			.map((row) => row.choice)
 		const votes = [...before]
 		const choices: number[] = []
@@ -488,8 +559,9 @@ export function receiveVote(db: Db, input: RemoteVote): boolean {
 	}
 	const votes = db
 		.all<{ choice: number }>(
-			'SELECT choice FROM poll_votes WHERE poll_id = ? AND account_id = ?',
+			'SELECT choice FROM poll_votes WHERE poll_id = ? AND generation = ? AND account_id = ?',
 			poll.status_id,
+			poll.generation,
 			input.voterId
 		)
 		.map((row) => row.choice)
@@ -522,7 +594,7 @@ export type RemotePollInput = {
 // (PollParser#significantly_changes?): such a change is an edit of the status, and drops the votes cast.
 export function remotePollChanges(db: Db, statusId: string, poll: RemotePollInput | null): boolean {
 	const previous = db.first<{ options: string; multiple: number }>(
-		'SELECT options, multiple FROM polls WHERE status_id = ?',
+		'SELECT options, multiple FROM polls WHERE status_id = ? AND removed = 0',
 		statusId
 	)
 	if (previous === undefined || poll === null) {
@@ -543,13 +615,18 @@ export function storeRemotePoll(
 	significant: boolean,
 	now: number
 ): boolean {
-	const exists = db.first('SELECT 1 AS x FROM polls WHERE status_id = ?', statusId) !== undefined
+	const row = db.first<{ removed: number }>('SELECT removed FROM polls WHERE status_id = ?', statusId)
+	const exists = row !== undefined
+	const live = row?.removed === 0
 	const changes = remotePollChanges(db, statusId, poll)
 	if (changes && !significant) {
 		return false
 	}
 	if (poll === null) {
-		return exists && db.run('DELETE FROM polls WHERE status_id = ?', statusId) > 0
+		if (live) {
+			resetPoll(db, statusId, true)
+		}
+		return live
 	}
 	const options = JSON.stringify(poll.options)
 	const tallies = JSON.stringify(poll.tallies)
@@ -570,13 +647,14 @@ export function storeRemotePoll(
 		)
 		return true
 	}
-	if (changes) {
-		db.run('DELETE FROM poll_votes WHERE poll_id = ?', statusId)
+	if (changes && live) {
+		resetPoll(db, statusId, false)
 	}
 	return (
 		db.run(
-			`UPDATE polls SET options = ?2, multiple = ?3, tallies = ?4, votes_count = ?5, voters_count = ?6, expires_at = ?7
-			WHERE status_id = ?1 AND (options IS NOT ?2 OR multiple IS NOT ?3 OR tallies IS NOT ?4
+			`UPDATE polls SET options = ?2, multiple = ?3, tallies = ?4, votes_count = ?5, voters_count = ?6, expires_at = ?7,
+				removed = 0, ended = CASE WHEN removed = 1 THEN 0 ELSE ended END
+			WHERE status_id = ?1 AND (removed = 1 OR options IS NOT ?2 OR multiple IS NOT ?3 OR tallies IS NOT ?4
 				OR voters_count IS NOT ?6 OR expires_at IS NOT ?7)`,
 			statusId,
 			options,
@@ -629,8 +707,10 @@ export function hasPollVotes(db: Db, by: { statusId?: string; accountId?: string
 function remoteVoters(db: Db, pollId: string): string[] {
 	return db
 		.all<{ id: string }>(
-			`SELECT DISTINCT v.account_id AS id FROM poll_votes v JOIN accounts a ON a.id = v.account_id
-			WHERE v.poll_id = ? AND a.domain IS NOT NULL`,
+			`SELECT DISTINCT v.account_id AS id FROM polls p
+				JOIN poll_votes v ON v.poll_id = p.status_id AND v.generation = p.generation
+				JOIN accounts a ON a.id = v.account_id
+			WHERE p.status_id = ? AND a.domain IS NOT NULL`,
 			pollId
 		)
 		.map((row) => row.id)
@@ -643,7 +723,10 @@ function recordPollUpdate(db: Db, statusId: string, authorId: string, now: numbe
 	}
 }
 
-export type PollRound = { ended: number; updated: number }
+export type PollRound = { ended: number; updated: number; swept: number }
+
+// At most this many votes of past generations are deleted per cron run (RES-6).
+export const STALE_SWEEP = 500
 
 // One round of the cron (RES-6), at most POLL_ROUND polls of each kind, each through its partial index:
 //   - polls that have ended (PollExpirationNotifyWorker): the author of a local one and the local voters of any are
@@ -651,6 +734,7 @@ export type PollRound = { ended: number; updated: number }
 //     end and final counts. Each is marked ended in the same transaction, so it is notified once.
 //   - local polls whose Update of counts is due (DistributePollUpdateWorker): one Update each, to the status's audience
 //     and the remote voters; an Update supersedes the earlier ones still waiting (deliveries.ts).
+//   - votes of past generations (a reset or a removal by an edit): at most STALE_SWEEP (sweepStaleVotes).
 export const pollRound = writeOperation<{ now: number }, PollRound>((db, { now }) => {
 	const at = iso(now)
 	const ending = db.all<{ status_id: string; author_id: string; local: number }>(
@@ -668,8 +752,10 @@ export const pollRound = writeOperation<{ now: number }, PollRound>((db, { now }
 			recordPollUpdate(db, poll.status_id, poll.author_id, now)
 		}
 		const voters = db.all<{ account_id: string }>(
-			`SELECT DISTINCT v.account_id FROM poll_votes v JOIN local_accounts l ON l.account_id = v.account_id
-			WHERE v.poll_id = ?`,
+			`SELECT DISTINCT v.account_id FROM polls p
+				JOIN poll_votes v ON v.poll_id = p.status_id AND v.generation = p.generation
+				JOIN local_accounts l ON l.account_id = v.account_id
+			WHERE p.status_id = ?`,
 			poll.status_id
 		)
 		for (const voter of voters) {
@@ -688,5 +774,5 @@ export const pollRound = writeOperation<{ now: number }, PollRound>((db, { now }
 		db.run('UPDATE polls SET update_due_at = NULL WHERE status_id = ?', poll.status_id)
 		recordPollUpdate(db, poll.status_id, poll.author_id, now)
 	}
-	return { ended: ending.length, updated: due.length }
+	return { ended: ending.length, updated: due.length, swept: sweepStaleVotes(db, STALE_SWEEP) }
 })

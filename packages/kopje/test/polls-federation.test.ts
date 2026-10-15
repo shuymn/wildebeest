@@ -156,6 +156,9 @@ describe('a remote Question', () => {
 		expect(await sql(t.store, 'SELECT options, votes_count FROM polls')).toEqual([
 			{ options: '["birds","fish"]', votes_count: 0 },
 		])
+		expect((await api<Poll>(t, `/api/v1/polls/${id}`)).body).toMatchObject({ voted: false, own_votes: [] })
+		// The dropped votes go in the cron's next round.
+		await endPolls(t.env, { build: () => BUILD, now: () => NOW, store: () => t.store })
 		expect(await sql(t.store, 'SELECT count(*) AS n FROM poll_votes')).toEqual([{ n: 0 }])
 		const history = await api<{ poll: unknown }[]>(t, `/api/v1/statuses/${id}/history`)
 		expect(history.body.map((entry) => entry.poll)).toEqual([
