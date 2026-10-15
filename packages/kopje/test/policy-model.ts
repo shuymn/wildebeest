@@ -8,6 +8,41 @@ import type { NotificationType } from '../src/domain/notifications'
 
 export type Viewer = number | null
 
+// What an outbound activity does to its audience (R23): content carries a status or a boost to it, a retraction
+// withdraws what was sent, and anything else is neither.
+export type OutboundKind = 'content' | 'retraction' | 'other'
+
+// Content is a Create, an Update of a status (not of an actor) or an Announce; a retraction is a Delete or an Undo of
+// anything (a Reject that ends an accepted follow too, which the write properties do not send).
+export function outboundKindOf(activity: { type?: unknown; object?: unknown }): OutboundKind {
+	const objectType =
+		typeof activity.object === 'object' && activity.object !== null
+			? (activity.object as { type?: unknown }).type
+			: undefined
+	switch (activity.type) {
+		case 'Create':
+		case 'Announce':
+			return 'content'
+		case 'Update':
+			return ['Person', 'Service', 'Group', 'Application', 'Organization'].includes(String(objectType))
+				? 'other'
+				: 'content'
+		case 'Delete':
+		case 'Undo':
+			return 'retraction'
+		default:
+			return 'other'
+	}
+}
+
+// A Web Push subscription as R16 reads it: the alerts it has on, its policy, and its token's expiry.
+export type ModelSubscription = {
+	recipient: number
+	alerts: readonly string[]
+	policy: 'all' | 'followed' | 'follower' | 'none'
+	tokenExpiresAt: string | null
+}
+
 // Every notification type the server writes; the type below fails to compile when it misses one.
 export const NOTIFICATION_TYPES = [
 	'mention',
@@ -129,7 +164,7 @@ export class PolicyModel {
 		return this.available(x) && x !== viewer && !this.blocks(x, viewer) && !this.blocked(viewer, x)
 	}
 
-	private follows(from: Viewer, to: number): boolean {
+	follows(from: Viewer, to: number): boolean {
 		return this.world.follows.some((f) => f.from === from && f.to === to && f.accepted)
 	}
 
@@ -248,6 +283,78 @@ export class PolicyModel {
 				return s !== null && this.homeFilter(s, r)
 			default:
 				return true
+		}
+	}
+
+	// R16: a push of a notification of `type` from `from` about `s` is recorded for the subscription: the notification
+	// is shown (R15) to a local, available recipient, the subscription's token is still valid, its alert for the type
+	// is on, and its policy lets the sender through (followed: the recipient follows the sender; follower: the sender
+	// follows the recipient; none: nobody).
+	pushed(sub: ModelSubscription, type: NotificationType, from: number, s: number | null): boolean {
+		const r = sub.recipient
+		const policy =
+			sub.policy === 'all' ||
+			(sub.policy === 'followed' && this.follows(r, from)) ||
+			(sub.policy === 'follower' && this.follows(from, r))
+		return (
+			this.account(r).local &&
+			this.available(r) &&
+			this.shown(r, type, from, s) &&
+			(sub.tokenExpiresAt === null || sub.tokenExpiresAt > this.world.now) &&
+			sub.alerts.includes(type) &&
+			policy
+		)
+	}
+
+	// The audience of an activity about the local status s (Create, Update, Delete): its followers unless only the
+	// mentioned may see it, and its mentions (silent included), with, for a public or unlisted status, the remote
+	// accounts that boosted it and the remote author of the status it replies to.
+	statusAudience(s: number): { followers: boolean; accounts: number[] } {
+		const status = this.status(s)
+		const distributable = status.visibility === 'public' || status.visibility === 'unlisted'
+		const reached = distributable
+			? [
+					...this.world.statuses.flatMap((b) => (b.reblogOf === s && !this.account(b.author).local ? [b.author] : [])),
+					...(status.replyTo !== null && !this.account(this.status(status.replyTo).author).local
+						? [this.status(status.replyTo).author]
+						: []),
+				]
+			: []
+		return {
+			followers: status.visibility !== 'direct' && status.visibility !== 'limited',
+			accounts: [...new Set([...status.mentions.map((m) => m.account), ...reached])],
+		}
+	}
+
+	// R22: whether an activity of `kind` by `signer` names (and reaches, if available) the account x it is addressed
+	// to: content names no one the signer blocks or whose domain it blocks; anything else names its whole audience.
+	names(kind: OutboundKind, signer: number, x: number): boolean {
+		return kind !== 'content' || !this.blocked(signer, x)
+	}
+
+	// R23: the remote accounts an activity of `kind` by `signer` for `audience` reaches: the accepted remote followers
+	// when the audience has them, less, for content, unavailable ones and those on a domain the signer blocks; and the
+	// remote accounts of the audience it names (R22), less, for content, unavailable ones. A retraction also reaches
+	// every inbox that received what it withdraws (the caller's).
+	reaches(
+		kind: OutboundKind,
+		signer: number,
+		audience: { followers: boolean; accounts: readonly number[] }
+	): { followers: number[]; accounts: number[] } {
+		const remote = (x: number) => !this.account(x).local
+		return {
+			followers: audience.followers
+				? this.world.accounts.flatMap((_, f) =>
+						remote(f) &&
+						this.follows(f, signer) &&
+						!(kind === 'content' && (!this.available(f) || this.domainBlocks(signer, f)))
+							? [f]
+							: []
+					)
+				: [],
+			accounts: audience.accounts.filter(
+				(x) => remote(x) && this.names(kind, signer, x) && (kind !== 'content' || this.available(x))
+			),
 		}
 	}
 }
