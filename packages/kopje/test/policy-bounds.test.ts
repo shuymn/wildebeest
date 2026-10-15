@@ -614,6 +614,17 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 const ALLOWANCE = 10
 const UNRELATED = 1000
 
+// Endpoints allowed more than ALLOWANCE in the unrelated-rows case, each with why. The extra rows are constant: the same
+// with ten times the unrelated rows.
+const UNRELATED_EXTRA: Record<string, { rows: number; why: string }> = {
+	home: {
+		rows: 1,
+		why:
+			"each followed hashtag's window judges its statuses again through homeFilterSql, and its probe of the viewer's " +
+			'blocks and mutes reads the next index entry, which unrelated accounts provide',
+	},
+}
+
 // What an endpoint showed: the items of a page, the members of a context, the results of a search, the entries of a
 // list, the timelines of markers, or the account userinfo claims, through the operation's ok result.
 function shown(output: unknown): number {
@@ -730,7 +741,7 @@ describe('read endpoints do not read more rows as unrelated data grows (RES-7)',
 		for (const [name, operation, input] of ENDPOINTS) {
 			const few = await rowsRead({ store: alone }, operation, input as never)
 			const many = await rowsRead({ store: crowded }, operation, input as never)
-			if (many > few + ALLOWANCE) {
+			if (many > few + ALLOWANCE + (UNRELATED_EXTRA[name]?.rows ?? 0)) {
 				grown.push(`${name}: ${few} -> ${many}`)
 			}
 		}

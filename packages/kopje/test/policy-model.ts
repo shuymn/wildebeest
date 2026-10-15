@@ -310,7 +310,8 @@ export class PolicyModel {
 		return this.homeByFollow(s, viewer) || this.byFollowedTag(s, viewer)
 	}
 
-	private homeByFollow(s: number, viewer: number): boolean {
+	// R9 without the followed hashtags.
+	homeByFollow(s: number, viewer: number): boolean {
 		const { author, visibility, reblogOf } = this.status(s)
 		if (author !== viewer) {
 			const follow = this.world.follows.find((f) => f.from === viewer && f.to === author && f.accepted)

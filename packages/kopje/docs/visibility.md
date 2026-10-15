@@ -433,21 +433,26 @@ test/policy-oracle.test.ts` replays it.
 
 `test/policy-bounds.test.ts` takes one generated world, for a fixed seed, in which every endpoint below shows the viewer
 something. It runs home, the public and tag feeds, account statuses, notifications, context, conversations, favourites,
-bookmarks, `favourited_by`, `reblogged_by`, relationships (with the viewer's endorsement of and note on each account), the followers and following of an account (one that no unrelated account
-follows), a list's timeline (a list of every account of the world), the viewer's timeline markers, status and hashtag search, the viewer's scheduled statuses, the viewer's endorsements (of every account it follows) through both endpoints, the world's accounts by id, and account search among the viewer's follows (a search of every account reads the
-newest accounts the instance knows, a window that grows with them up to its limit) on that world alone, and again with
-1,000 unrelated remote accounts and 100 unrelated local ones: their statuses (never public, though they carry the
-hashtag the tag feed reads), replies and boosts, their follows, blocks, mutes and domain blocks of the world's accounts
-and domains, their favourites, bookmarks and notifications, their exclusive lists of the world's accounts and their
-own, their endorsements of and notes on those accounts, and their timeline markers and scheduled statuses, together with the viewer's own blocks and mutes of those
+bookmarks, `favourited_by`, `reblogged_by`, relationships (with the viewer's endorsement of and note on each account),
+the followers and following of an account (one that no unrelated account follows), a list's timeline (a list of every
+account of the world), the viewer's timeline markers, status and hashtag search, the viewer's scheduled statuses, the
+viewer's endorsements (of every account it follows) through both endpoints, the world's accounts by id, and account
+search among the viewer's follows (a search of every account reads the newest accounts the instance knows, a window that
+grows with them up to its limit) on that world alone, and again with 1,000 unrelated remote accounts and 100 unrelated
+local ones: their statuses (never public, though they carry the hashtag the tag feed reads), replies and boosts, their
+follows, blocks, mutes and domain blocks of the world's accounts and domains, their favourites, bookmarks and
+notifications, their exclusive lists of the world's accounts and their own, their endorsements of and notes on those
+accounts, and their timeline markers and scheduled statuses, together with the viewer's own blocks and mutes of those
 accounts and domain blocks of domains nobody lives on. Each endpoint must show the same with them as without (the same
 statuses, accounts, notifications and hashtags in the same order, and the same relationship flags), and the rows it
-reads (RES-7) may grow by at most 10. A second case grows the history of each author home and a list read instead:
-the viewer, who follows seven accounts and has a list of them, and those accounts, from 20 statuses each to 2,000, one
-of the accounts posting only direct statuses addressed to another account. The newest page, a page from the middle of
-the longer histories and the oldest page of home and of the list must each be full and read at most 10 rows more. A
-third case does the same for the conversation list, with 20 or 2,000 conversations of the viewer, each a thread of
-three direct statuses.
+reads (RES-7) may grow by at most 10 (home by 11: each followed hashtag's window judges its statuses again, and the
+probe of the viewer's blocks and mutes reads the next index entry, which the unrelated accounts provide; the same with
+ten times the unrelated rows). A second case grows the history of each author home and a list read instead: the viewer,
+who follows seven accounts and has a list of them, and those accounts, from 20 statuses each to 2,000, one of the
+accounts posting only direct statuses addressed to another account. The newest page, a page from the middle of the
+longer histories and the oldest page of home and of the list must each be full and read at most 10 rows more. A third
+case does the same for the conversation list, with 20 or 2,000 conversations of the viewer, each a thread of three
+direct statuses.
 
 A third case grows the generated world's own history: the same world with every status replicated 40 and 400 times,
 each copy a new status older than every original, with its original's author, visibility, mentions, hashtag and
@@ -501,10 +506,10 @@ boost must come with its own original (never `reblog: null` on a read), which th
 | conversations                                              | exactly the viewer's conversations the model makes of the direct statuses and the mentions seeded (R25), newest last status first, both ways over pages; each last status only if the viewer may see it (R2), else null; another account's is not found |
 | search resolution (of every stored account and status)     | an account exactly when account search finds it (R14); a status exactly when the single-status read shows it (R3), unless the viewer blocks its author's domain                                                                                         |
 
-Home and each list are read page by page: by `max_id` in pages of 3 and by `min_id` from the oldest in pages of 2,
-each page exactly the next of the model's members, so a page cannot come back short while members remain; and the
-`since_id` and `min_id` pages above the middle member. Each endpoint must show something in some case, so a property
-cannot pass by showing nothing.
+Home and each list are read page by page: by `max_id` in pages of 3 and by `min_id` from the oldest in pages of 2, each
+page exactly the next of the model's members, so a page cannot come back short while members remain; and the `since_id`
+and `min_id` pages above the middle member. Each endpoint must show something in some case, so a property cannot pass by
+showing nothing, and some case's home must hold a status only a followed hashtag brings.
 
 `test/policy-writes.test.ts` runs the write paths on generated worlds, with remote accounts given personal and some
 shared inboxes and local accounts given Web Push subscriptions (alerts, policy, valid or expired token). Each case
