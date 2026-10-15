@@ -201,6 +201,35 @@ describe('a remote Question', () => {
 		])
 	})
 
+	it('keeps a long choice Mastodon allows whole, and refuses a vote in a choice it had to cut', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		// 50 grapheme clusters, as Mastodon counts them, of 11 code units each.
+		const family = '👨‍👩‍👧‍👦'.repeat(50)
+		const tooLong = 'x'.repeat(1001)
+		const object = question(bob, {
+			oneOf: [
+				{ type: 'Note', name: family },
+				{ type: 'Note', name: tooLong },
+			],
+		})
+		const id = await remotePoll(t, bob, object)
+		const vote = (choice: string) =>
+			api<{ error?: string }>(t, `/api/v1/polls/${id}/votes`, {
+				method: 'POST',
+				body: JSON.stringify({ choices: [choice] }),
+			})
+		expect(await vote('1')).toEqual({
+			status: 422,
+			body: { error: 'Validation failed: The chosen vote option does not exist' },
+		})
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM poll_votes')).toEqual([{ n: 0 }])
+		expect((await vote('0')).status).toBe(200)
+		const names = (await outbound(t.store)).map((o) => (o.activity.object as { name?: string } | undefined)?.name)
+		expect(names.filter((name) => name !== undefined)).toEqual([family])
+	})
+
 	it('notifies its local voters when it ends', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')

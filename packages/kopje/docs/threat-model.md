@@ -900,8 +900,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **POLL-3: polls cost bounded work (RES).** Presenting reads each poll's row and the viewer's own votes, never the
   votes; the cron ends at most 25 polls and records at most 25 Updates of counts a run, through partial indexes; the
   Update of a local poll's counts is debounced (3 minutes after the first vote since the last one sent, one Update for
-  all, superseding any still waiting), never one per vote; a remote poll keeps at most 100 choices of at most 200
-  code units; a status's or account's votes go in bounded batches of a purge. _Enforced (main):_
+  all, superseding any still waiting), never one per vote; a remote poll keeps at most 100 choices of at most 1,000
+  code units (Mastodon's and Misskey's own choices fit whole; a vote in a choice cut to that is refused, as its name
+  would match nothing); a status's or account's votes go in bounded batches of a purge, and the votes an edit drops
+  (a new generation of the poll) in bounded rounds of the cron. _Enforced (main):_
   `test/policy-bounds.test.ts` ("polls are presented from their counts, not their votes"), `test/polls.test.ts`
   ("ends at most 25 polls a run", "falls due a while after the first vote", "RES-6: votes go in bounded batches").
 - **POLL-4: polls federate as Mastodon's (AP).** A local poll's status is a Question (`oneOf`/`anyOf`, `endTime`,

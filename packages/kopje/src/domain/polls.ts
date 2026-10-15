@@ -22,9 +22,10 @@ export const MIN_EXPIRATION_S = 5 * 60
 export const MAX_EXPIRATION_S = 2_629_746
 
 // A remote poll keeps at most this many choices, each cut to this many code units (RES-4; Mastodon's PollParser
-// keeps 500 choices, whole).
+// keeps 500 choices, whole). The length holds Mastodon's 50 grapheme clusters at 20 code units each (an emoji tag
+// sequence takes 14) and Misskey's 50 code units, so a choice either server allows is kept whole.
 export const MAX_REMOTE_OPTIONS = 100
-export const MAX_REMOTE_OPTION_LENGTH = 200
+export const MAX_REMOTE_OPTION_LENGTH = 1000
 
 // VoteService#distribute_poll!: the Update of a local poll's counts waits this long after a vote, and one Update
 // carries every vote cast meanwhile.
@@ -377,6 +378,7 @@ type VotedPoll = {
 	expires_at: string | null
 	ended: number
 	generation: number
+	cut_options: string
 }
 
 // Expireable#expired?: a poll has ended once its end has passed (expires_at < now), the boundary every read, vote and
@@ -398,7 +400,12 @@ function voteErrors(poll: VotedPoll, voterId: string, choice: number, votes: num
 	if (poll.ended === 1 || hasEnded(poll.expires_at, now)) {
 		errors.push('The poll has already ended')
 	}
-	if (choice < 0 || choice >= (JSON.parse(poll.options) as string[]).length) {
+	// A remote choice cut to MAX_REMOTE_OPTION_LENGTH: its name would match nothing on its server.
+	if (
+		choice < 0 ||
+		choice >= (JSON.parse(poll.options) as string[]).length ||
+		(JSON.parse(poll.cut_options) as number[]).includes(choice)
+	) {
 		errors.push('The chosen vote option does not exist')
 	}
 	if (voterId === poll.author_id) {
@@ -465,7 +472,7 @@ function updateSoon(db: Db, poll: VotedPoll, now: number): void {
 function votedPoll(db: Db, pollId: string): VotedPoll | undefined {
 	return db.first<VotedPoll>(
 		`SELECT p.status_id, s.uri AS status_uri, s.account_id AS author_id, a.uri AS author_uri, a.domain IS NULL AS local,
-			p.options, p.multiple, p.hide_totals, p.expires_at, p.ended, p.generation
+			p.options, p.multiple, p.hide_totals, p.expires_at, p.ended, p.generation, p.cut_options
 		FROM polls p JOIN statuses s ON s.id = p.status_id JOIN accounts a ON a.id = s.account_id
 		WHERE p.status_id = ? AND p.removed = 0`,
 		pollId
@@ -591,6 +598,8 @@ export type RemotePollInput = {
 	expiresAt: string | null
 	closedNow: boolean
 	votersCount: number | null
+	// The indexes of the choices cut to MAX_REMOTE_OPTION_LENGTH.
+	cut: number[]
 }
 
 // Whether `poll` changes the choices or the multiple of the stored poll of `statusId`, or adds or removes one
@@ -637,8 +646,9 @@ export function storeRemotePoll(
 	const expiresAt = poll.closedNow ? iso(now) : poll.expiresAt
 	if (!exists) {
 		db.run(
-			`INSERT INTO polls (status_id, options, tallies, multiple, expires_at, votes_count, voters_count, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO polls (status_id, options, tallies, multiple, expires_at, votes_count, voters_count, created_at,
+				cut_options)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			statusId,
 			options,
 			tallies,
@@ -646,7 +656,8 @@ export function storeRemotePoll(
 			expiresAt,
 			votes,
 			poll.votersCount,
-			iso(now)
+			iso(now),
+			JSON.stringify(poll.cut)
 		)
 		return true
 	}
@@ -656,7 +667,7 @@ export function storeRemotePoll(
 	return (
 		db.run(
 			`UPDATE polls SET options = ?2, multiple = ?3, tallies = ?4, votes_count = ?5, voters_count = ?6, expires_at = ?7,
-				removed = 0, ended = CASE WHEN removed = 1 THEN 0 ELSE ended END
+				removed = 0, ended = CASE WHEN removed = 1 THEN 0 ELSE ended END, cut_options = ?8
 			WHERE status_id = ?1 AND (removed = 1 OR options IS NOT ?2 OR multiple IS NOT ?3 OR tallies IS NOT ?4
 				OR voters_count IS NOT ?6 OR expires_at IS NOT ?7)`,
 			statusId,
@@ -665,7 +676,8 @@ export function storeRemotePoll(
 			tallies,
 			votes,
 			poll.votersCount,
-			expiresAt
+			expiresAt,
+			JSON.stringify(poll.cut)
 		) > 0
 	)
 }

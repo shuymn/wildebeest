@@ -228,6 +228,7 @@ function pollOf(object: Json): RemotePollInput | null {
 	}
 	const options: string[] = []
 	const tallies: number[] = []
+	const cut: number[] = []
 	for (const item of items) {
 		if (options.length >= MAX_REMOTE_OPTIONS) {
 			break
@@ -235,6 +236,9 @@ function pollOf(object: Json): RemotePollInput | null {
 		const title = isObject(item) ? (text(item.name) ?? text(item.content)) : null
 		if (title === null || !isObject(item)) {
 			continue
+		}
+		if (title.length > MAX_REMOTE_OPTION_LENGTH) {
+			cut.push(options.length)
 		}
 		options.push(title.slice(0, MAX_REMOTE_OPTION_LENGTH))
 		tallies.push((isObject(item.replies) ? count(item.replies.totalItems) : null) ?? 0)
@@ -251,6 +255,7 @@ function pollOf(object: Json): RemotePollInput | null {
 		expiresAt: typeof closed === 'string' ? isoOf(closed) : closedNow ? null : isoOf(object.endTime),
 		closedNow,
 		votersCount: count(object.votersCount),
+		cut,
 	}
 }
 

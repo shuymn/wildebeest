@@ -3,8 +3,9 @@
 -- A poll belongs to its status (Mastodon's Poll, at most one per status), local or remote, and goes with it (ON DELETE
 -- CASCADE); its API id is its status's id. src/domain/polls.ts writes and reads it.
 --
--- options are the choices' titles, a JSON array (at most 4 for a local poll, 100 for a remote one), bounded here to
--- 128 KiB; tallies the votes per choice, a JSON array of as many counts (Mastodon's cached_tallies), and votes_count
+-- options are the choices' titles, a JSON array (at most 4 for a local poll, 100 of at most 1,000 code units for a
+-- remote one), bounded here to 640 KiB (six bytes a code unit, the longest JSON escape); cut_options the indexes of
+-- the remote choices cut to that length, in which no vote is cast (its name would not match); tallies the votes per choice, a JSON array of as many counts (Mastodon's cached_tallies), and votes_count
 -- their sum; voters_count the accounts that voted (NULL when a remote poll does not say). They are counted as votes
 -- are cast, or taken as the remote server reports them, and never recounted from poll_votes on read. expires_at is
 -- when the poll ends (NULL: a remote poll without an end). ended marks a poll whose end the cron has handled (the
@@ -29,7 +30,8 @@
 CREATE TABLE polls (
   status_id TEXT NOT NULL PRIMARY KEY REFERENCES statuses (id) ON DELETE CASCADE,
   options TEXT NOT NULL CHECK (json_valid(options) AND json_type(options) = 'array'
-    AND json_array_length(options) BETWEEN 1 AND 100 AND length(CAST(options AS BLOB)) <= 131072),
+    AND json_array_length(options) BETWEEN 1 AND 100 AND length(CAST(options AS BLOB)) <= 655360),
+  cut_options TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(cut_options) AND json_type(cut_options) = 'array'),
   tallies TEXT NOT NULL CHECK (json_valid(tallies) AND json_type(tallies) = 'array'),
   multiple INTEGER NOT NULL DEFAULT 0 CHECK (multiple IN (0, 1)),
   hide_totals INTEGER NOT NULL DEFAULT 0 CHECK (hide_totals IN (0, 1)),
