@@ -17,6 +17,8 @@ const NAMES = MIGRATIONS.map((m) => m.name)
 const LATEST = NAMES.at(-1)
 
 const SCHEMA_TABLES = [
+	'account_notes',
+	'account_pins',
 	'accounts',
 	'blocks',
 	'bookmarks',
@@ -1104,6 +1106,85 @@ describe('Store migration runner', () => {
 		const added = 10_000 - 1000
 		expect(large - small).toBeLessThanOrEqual(6 * added + 20 * (added / 10))
 	}, 60_000)
+
+	it('upgrades a Store with 0014_account_notes_and_pins: notes and endorsements go with their account, endorsements with the follow', async () => {
+		const at = NAMES.indexOf('0014_account_notes_and_pins')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			expect(tableNames(sql)).not.toContain('account_pins')
+			const id = (n: number) => String(100000000000000000n + BigInt(n))
+			for (const n of [1, 2]) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+					id(n),
+					`https://kopje.test/ap/users/u${n}`,
+					`u${n}`
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'k')",
+					id(n),
+					`u${n}@example.com`
+				)
+			}
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://remote.example/users/r', 'r', 'remote.example')",
+				id(3)
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0014_account_notes_and_pins'],
+			})
+			const pins = () => sql.exec('SELECT account_id, target_account_id FROM account_pins ORDER BY 1, 2').toArray()
+			const note = (account: string, target: string, comment: string) =>
+				sql.exec(
+					'INSERT INTO account_notes (account_id, target_account_id, comment) VALUES (?, ?, ?)',
+					account,
+					target,
+					comment
+				)
+			for (const [account, target] of [
+				[id(1), id(2)],
+				[id(1), id(3)],
+				[id(2), id(3)],
+			] as const) {
+				sql.exec(
+					"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+					account,
+					target
+				)
+				sql.exec('INSERT INTO account_pins (account_id, target_account_id) VALUES (?, ?)', account, target)
+			}
+			expect(() =>
+				sql.exec('INSERT INTO account_pins (account_id, target_account_id) VALUES (?, ?)', id(1), id(2))
+			).toThrow(/UNIQUE/)
+			expect(() =>
+				sql.exec('INSERT INTO account_pins (account_id, target_account_id) VALUES (?, ?)', id(1), id(1))
+			).toThrow(/CHECK/)
+			// Only a local account endorses or keeps notes.
+			expect(() =>
+				sql.exec('INSERT INTO account_pins (account_id, target_account_id) VALUES (?, ?)', id(3), id(1))
+			).toThrow(/FOREIGN KEY/)
+			expect(() => note(id(3), id(1), 'x')).toThrow(/FOREIGN KEY/)
+			note(id(1), id(3), '𝒜'.repeat(2000))
+			note(id(1), id(1), 'me')
+			expect(() => note(id(2), id(3), '')).toThrow(/CHECK/)
+			expect(() => note(id(2), id(3), 'a'.repeat(2001))).toThrow(/CHECK/)
+			expect(() => note(id(1), id(3), 'again')).toThrow(/UNIQUE|PRIMARY KEY/)
+
+			// A follow's end takes its endorsement, and only that one.
+			sql.exec('DELETE FROM follows WHERE account_id = ? AND target_account_id = ?', id(1), id(3))
+			expect(pins()).toEqual([
+				{ account_id: id(1), target_account_id: id(2) },
+				{ account_id: id(2), target_account_id: id(3) },
+			])
+			sql.exec('DELETE FROM local_accounts WHERE account_id = ?', id(1))
+			expect(pins()).toEqual([{ account_id: id(2), target_account_id: id(3) }])
+			expect(sql.exec('SELECT count(*) AS n FROM account_notes').one()).toEqual({ n: 0 })
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
 
 	it('upgrades a Store with 0010_markers: a new table whose rows go with their local account', async () => {
 		// By name, not position: the files before it are whatever this build ships.

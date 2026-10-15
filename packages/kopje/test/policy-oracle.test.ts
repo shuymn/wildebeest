@@ -14,6 +14,8 @@ import {
 	blocksSql,
 	canView,
 	domainBlocksSql,
+	endorsementListedSql,
+	endorsementsShownSql,
 	filteredForSql,
 	findableBySql,
 	followableBySql,
@@ -223,6 +225,17 @@ describe('the policy fragments agree with the model of their rules', () => {
 						)
 					)
 				)
+		))
+
+	// R28 depends on no viewer: every account as an owner, and as an endorsed account.
+	it('endorsementsShownSql (R28)', () =>
+		agree(pairs(`SELECT a.id AS x FROM accounts a WHERE ${endorsementsShownSql('a.id')}`), (m) =>
+			accounts(m.world).flatMap((owner) => (m.endorsementsShown(owner) ? [name(m.world, owner)] : []))
+		))
+
+	it('endorsementListedSql (R28)', () =>
+		agree(pairs(`SELECT a.id AS x FROM accounts a WHERE ${endorsementListedSql('a.id')}`), (m) =>
+			accounts(m.world).flatMap((x) => (m.endorsementListed(x) ? [name(m.world, x)] : []))
 		))
 
 	it('findableBySql (R14)', () => viewerAccountPairs(findableBySql, (m, x, viewer) => m.findableBy(x, viewer)))

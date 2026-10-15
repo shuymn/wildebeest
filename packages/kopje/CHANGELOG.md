@@ -79,6 +79,23 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - `DELETE /api/v1/profile/avatar` and `DELETE /api/v1/profile/header`, as Mastodon 4.5 has them (scope
   `write:accounts`): the account shows the default image again, the removed image's files are deleted, followers'
   servers receive the profile `Update`, and the answer is your `CredentialAccount`.
+- The remaining account endpoints of Mastodon 4.5:
+    - Private notes: `POST /api/v1/accounts/:id/note` (`comment`, at most 2,000 characters; a blank one deletes the
+      note) answers the Relationship. Every Relationship now carries your note on the account in `note`; nobody else
+      is shown it.
+    - Endorsements: `POST /api/v1/accounts/:id/endorse` and `/unendorse` (also as `/pin` and `/unpin`), which answer
+      the Relationship, now with a real `endorsed`; `GET /api/v1/endorsements` (yours, 40 by default and at most 80
+      with Link headers, or all at once with `limit=0`, up to 1,000), which no longer answers empty; and
+      `GET /api/v1/accounts/:id/endorsements` (anyone's, to anyone). You can endorse only an account you follow (else
+      422 with Mastodon's message), and the endorsement goes when the follow ends, however it ends. Suspended accounts
+      and accounts being deleted are not listed. Endorsements are not federated, as in Mastodon 4.5.
+    - `POST /api/v1/accounts/:id/remove_from_followers` ends the account's follow of you: a remote follower is sent a
+      `Reject`, as when a block ends its follow. A pending request is left alone.
+    - `GET /api/v1/accounts?id[]=` shows up to 40 accounts at once, as `GET /api/v1/accounts/:id` shows each; more
+      answer 422.
+    - `GET /api/v1/accounts/:id/identity_proofs` answers `[]`, as Mastodon's deprecated endpoint does.
+    - `POST /api/v1/accounts` (registration) answers as Mastodon does with registrations closed: 403 `Forbidden` for an
+      app token with `write:accounts`, after Mastodon's token checks. Kopje has no open registration.
 
 ### Changed
 
@@ -101,7 +118,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds seven migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds eight migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
@@ -121,6 +138,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       with the Store.
     - `0013_polls`: adds the `polls` and `poll_votes` tables, with their indexes, and `status_edits.poll_options`. It is
       quick.
+    - `0014_account_notes_and_pins`: adds the `account_notes` and `account_pins` tables, empty, and the trigger that
+      deletes an endorsement with its follow. Its work does not grow with the Store.
     - `0015_media_shown`: adds `media_attachments.shown`, rebuilds the index `media_attachments_status` with it, and
       gives back to its status, not shown, each kept upload that earlier versions of exactly one status of its author
       name (an image the cutover kept for earlier versions, or media an edit detached that is more than an hour from

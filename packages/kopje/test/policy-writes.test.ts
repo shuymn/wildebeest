@@ -43,6 +43,9 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 //     time of the action;
 //   - list members leave with the follow: after each action, a list holds what it held before, less each account its
 //     owner no longer follows in either state (migration 0007_list_members); its owner stays;
+//   - endorsements leave with the follow: every local account endorses each account it follows (accepted), and after
+//     each action holds what it held before, less each account it no longer follows (accepted) (migration
+//     0014_account_notes_and_pins);
 //   - conversations hold what Mastodon's AccountConversation.add_status and remove_status would make of the actions:
 //     a direct status joins its author's conversation and each local recipient's it notifies (R15), by thread and
 //     participants, and leaves each when it is deleted; the last status is the newest left, and a conversation with
@@ -129,6 +132,7 @@ const SCENARIOS = [
 	'conversation goes with its last status',
 	'conversation moves back to an earlier status',
 	'conversation of a recipient',
+	'endorsement leaves with the follow',
 	'list member leaves with the follow',
 	'notification',
 	'push',
@@ -265,7 +269,7 @@ const WITNESSES: { name: string; scenarios: Scenario[]; case: Case }[] = [
 	},
 	{
 		name: 'a block of an account in the blocker’s lists, and of one whose list holds the blocker',
-		scenarios: ['list member leaves with the follow'],
+		scenarios: ['list member leaves with the follow', 'endorsement leaves with the follow'],
 		case: witness(
 			2,
 			{
@@ -380,6 +384,12 @@ function writeCase(
 		sql.exec(`DELETE FROM ${table}`)
 	}
 	writeWorld(sql, c.world)
+	// Each local account endorses every account it follows (accepted), as the endorsement API allows.
+	sql.exec(
+		`INSERT INTO account_pins (account_id, target_account_id)
+		SELECT f.account_id, f.target_account_id FROM follows f JOIN local_accounts l ON l.account_id = f.account_id
+		WHERE f.state = 'accepted'`
+	)
 	const inboxes = new Map<number, Inboxes>()
 	const subscriptions = new Map<number, ModelSubscription>()
 	const before = new Date(Date.parse(c.world.now) - 60_000).toISOString()
@@ -646,6 +656,14 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 	}
 	let objects = 0
 
+	// Every endorsement.
+	const pinRows = () =>
+		sql
+			.exec<{ account_id: string; target_account_id: string }>(
+				'SELECT account_id, target_account_id FROM account_pins ORDER BY account_id, target_account_id'
+			)
+			.toArray()
+
 	// Every list row, with its list's owner.
 	const listRows = () =>
 		sql
@@ -696,6 +714,7 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 			break
 		}
 		const membersBefore = listRows()
+		const pinsBefore = pinRows()
 		const ids = [...before.byId.keys()]
 		const uris = [...before.byUri.keys()]
 		const statuses = before.world.statuses.map((status, s) => ({ ...status, s, id: ids[s]!, uri: uris[s]! }))
@@ -1053,6 +1072,20 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 		}
 		if (membersKept.length < membersBefore.length) {
 			saw.add('list member leaves with the follow')
+		}
+
+		// Endorsements leave with the follow: an account keeps those of the accounts it still follows (accepted).
+		const accepted = (owner: string, target: string) =>
+			after.world.follows.some((f) => f.accepted && accountId(f.from) === owner && accountId(f.to) === target)
+		const pinsKept = pinsBefore.filter((row) => accepted(row.account_id, row.target_account_id))
+		const pinsAfter = pinRows()
+		if (JSON.stringify(pinsAfter) !== JSON.stringify(pinsKept)) {
+			problems.push(
+				`${label}: endorsements [${pinsAfter.map((row) => `${row.account_id}:${row.target_account_id}`).join(' ')}], the model [${pinsKept.map((row) => `${row.account_id}:${row.target_account_id}`).join(' ')}]`
+			)
+		}
+		if (pinsKept.length < pinsBefore.length) {
+			saw.add('endorsement leaves with the follow')
 		}
 
 		const model = new PolicyModel(after.world)

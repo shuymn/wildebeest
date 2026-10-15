@@ -767,6 +767,48 @@ describe('second review: deletion, keys and generations', () => {
 		expect(await count(t.store, 'SELECT 1 FROM outbound_activities')).toBe(1)
 	})
 
+	it('purges the endorsements of the account and the notes on it in bounded batches too (RES-6)', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await t.post(bob, follow(bob))
+		const bobId = (await accountId(t.store, bob.uri))!
+		// More local accounts than a batch, each following and endorsing bob, with a note on him.
+		const locals = PURGE_BATCH + 1
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+			INSERT INTO accounts (id, uri, username) SELECT printf('5%017d', i), ? || '/ap/users/l' || i, 'l' || i FROM n`,
+			locals,
+			LOCAL
+		)
+		await sql(
+			t.store,
+			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+			SELECT id, username || '@example.com', X'00', X'00', 'k' FROM accounts WHERE id GLOB '5*'`
+		)
+		for (const query of [
+			"INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?, 'accepted' FROM accounts WHERE id GLOB '5*'",
+			"INSERT INTO account_pins (account_id, target_account_id) SELECT id, ? FROM accounts WHERE id GLOB '5*'",
+			"INSERT INTO account_notes (account_id, target_account_id, comment) SELECT id, ?, 'bob' FROM accounts WHERE id GLOB '5*'",
+		]) {
+			await sql(t.store, query, bobId)
+		}
+		const left = async () => [
+			await count(t.store, 'SELECT 1 FROM account_pins'),
+			await count(t.store, 'SELECT 1 FROM account_notes'),
+			await count(t.store, 'SELECT 1 FROM follows'),
+		]
+		t.web.fail(bob.uri, 410)
+		expect(await t.post(bob, deleteSelf(bob))).toBe(202)
+		// One batch writes at most PURGE_BATCH rows: the endorsements go first, before any follow is read.
+		const [pins, notes, edges] = await left()
+		expect(pins).toBe(locals - PURGE_BATCH)
+		expect([notes, edges]).toEqual([locals, locals + 1])
+		await runScheduledJobs({ ...t.env, MAINTENANCE: 'off' } as Env, t.deps)
+		expect(await left()).toEqual([0, 0, 0])
+		expect(await accountId(t.store, bob.uri)).toBeUndefined()
+	})
+
 	it('purges relationships and notifications in bounded batches too (RES-6)', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
