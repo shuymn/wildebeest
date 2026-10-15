@@ -547,12 +547,6 @@ describe("read endpoints read the same rows however long the world's history (RE
 		// middle 1720 -> 5320, oldest 2056 -> 9256; list newest 1852 -> 4732, middle 1689 -> 3129, oldest 1851 -> 4731.
 		'home',
 		'list',
-		// TODO(RES-7): notifications, favourites and bookmarks take max_id as `?2 IS NULL OR id < CAST(?2 AS INTEGER)`,
-		// not an index range, so a page from the middle reads from the newest down to the cursor. Middle page:
-		// notifications 1668 -> 4368 rows, favourites and bookmarks 1315 -> 5275.
-		'notifications',
-		'favourites',
-		'bookmarks',
 		// Search reads windows of the viewer's library (LIBRARY_SOURCE_LIMIT per source) and, for hashtags, of their own
 		// entries and the newest public statuses (HASHTAG_LIBRARY_LIMIT, HASHTAG_PUBLIC_WINDOW): they grow with the
 		// history up to those limits.

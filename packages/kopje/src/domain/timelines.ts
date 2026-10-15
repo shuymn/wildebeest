@@ -1,4 +1,4 @@
-import { type Page, type PageQuery, type Present, resolveAccountId } from './accounts'
+import { edgeRangeSql, type Page, type PageQuery, type Present, resolveAccountId } from './accounts'
 import {
 	blocksSql,
 	filteredForSql,
@@ -370,7 +370,7 @@ function edgeList(table: 'bookmarks' | 'favourites') {
 					from: `${table} e JOIN`,
 					join: 'ON s.id = e.status_id',
 					where: 'e.account_id = ?1',
-					and: '(?2 IS NULL OR e.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR e.id > CAST(?3 AS INTEGER))',
+					and: edgeRangeSql('e.id', '?2', '?3'),
 					tail: `ORDER BY e.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 					columns: { cursor: 'CAST(e.id AS TEXT)' },
 				},

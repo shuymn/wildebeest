@@ -834,6 +834,14 @@ export function relationshipResult(db: Db, viewerId: string, targetId: string, n
 // they are read with CAST(id AS TEXT) and compared in SQL, never as JS numbers (which are exact only up to 2^53).
 export type PageQuery = { maxId?: string; sinceId?: string; minId?: string; limit: number }
 
+// The cursor on an edge table's INTEGER id as a plain range, with `max` and `min` the cursor parameters (NULL for none):
+// no cursor is the largest or smallest INTEGER, which AUTOINCREMENT ids from 1 never reach. A read in an index ending in
+// the id then starts at the cursor, not at the newest.
+export function edgeRangeSql(column: string, max: string, min: string): string {
+	return `${column} < coalesce(CAST(${max} AS INTEGER), 9223372036854775807)
+		AND ${column} > coalesce(CAST(${min} AS INTEGER), -9223372036854775808)`
+}
+
 export type Page<T> = { items: T[]; newest: string | null; oldest: string | null }
 
 export type ListFollowsInput = {
