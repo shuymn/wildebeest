@@ -417,7 +417,8 @@ export async function sweepMedia(env: Env, deps: SweepDeps): Promise<number> {
 	}
 }
 
-// Runs a sweep after the response (delete_media, a deleted upload or profile image), so the files go now rather than at the next cron.
+// Runs a sweep after the response (delete_media, a deleted upload or profile image), so the files go now rather than
+// at the next cron.
 export function sweepSoon(c: ApiContext, deps: ApiDeps): void {
 	const sweep = sweepMedia(c.env, deps).catch((error: unknown) => {
 		console.error({ event: 'kopje.media.sweep_failed', ...errorFields(error) })
