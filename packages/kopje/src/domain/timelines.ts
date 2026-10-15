@@ -235,7 +235,7 @@ export type PublicTimelineInput = {
 function publicConditions(local: boolean, remote: boolean, onlyMedia: boolean): string {
 	return `s.visibility = 'public' AND s.reblog_of_id IS NULL
 		${local ? 'AND pa.domain IS NULL' : ''} ${remote ? 'AND pa.domain IS NOT NULL' : ''}
-		${onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments pm WHERE pm.status_id = s.id)' : ''}`
+		${onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments pm WHERE pm.status_id = s.id AND pm.shown = 1)' : ''}`
 }
 
 export const publicTimeline = optionalUserReadOperation<PublicTimelineInput, Page<Status>>((db, input, viewer) => {
@@ -350,7 +350,7 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 				and: `NOT ${blocksSql('?1', 's.account_id')}
 					AND (s.reblog_of_id IS NULL OR EXISTS (SELECT 1 FROM statuses o WHERE o.id = s.reblog_of_id
 						AND ${visibleSql('o', '?1')} AND NOT ${filteredForSql('o.account_id', '?1', '?7')}))
-					${input.onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments um WHERE um.status_id = s.id)' : ''}
+					${input.onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments um WHERE um.status_id = s.id AND um.shown = 1)' : ''}
 					${input.excludeReplies ? `AND ${NOT_A_REPLY_TO_OTHERS}` : ''}
 					${input.excludeReblogs ? 'AND s.reblog_of_id IS NULL' : ''}
 					AND (?6 IS NULL OR EXISTS (SELECT 1 FROM status_tags ut WHERE ut.status_id = s.id AND ut.name = ?6))

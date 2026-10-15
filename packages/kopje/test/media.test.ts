@@ -407,13 +407,121 @@ describe('PATCH and DELETE /api/v1/media/:id', () => {
 	})
 })
 
+describe('media an edit drops', () => {
+	async function dropped(h: Awaited<ReturnType<typeof users>>) {
+		const { alice } = h.users
+		await remoteFollows(h.store, await remoteAccount(h.store, 'fan'), alice.id)
+		const [kept, drop] = [
+			await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS), { description: 'kept' })),
+			await uploaded(h, alice, mediaForm(bytes(JPEG_WITH_GPS), { description: 'dropped' })),
+		]
+		const status = await post(h, alice, { status: 'two', media_ids: [kept.id, drop.id] })
+		const edit = await h.request(
+			`/api/v1/statuses/${status.id}`,
+			bearer(alice.token, json({ status: 'one', media_ids: [kept.id] }, { method: 'PUT' }))
+		)
+		expect(edit.status).toBe(200)
+		expect(((await edit.json()) as Status).media_attachments).toMatchObject([{ id: kept.id }])
+		return { status, kept, drop, keys: await keysOf(h, drop.id) }
+	}
+
+	it('stays with its status for the history, however long after the grace period', async () => {
+		const h = await users()
+		const { alice, bob } = h.users
+		const { status, kept, drop, keys } = await dropped(h)
+
+		expect(await sweep(h, NOW + 30 * 24 * HOUR)).toBe(0)
+		expect(await stored(keys)).toEqual(keys)
+		expect(await row(h, drop.id)).toMatchObject({ status_id: status.id, gc_at: null })
+		const history = await getJson<{ media_attachments: { id: string; url: string }[] }[]>(
+			h,
+			`/api/v1/statuses/${status.id}/history`,
+			bob.token
+		)
+		expect(history.body.map((version) => version.media_attachments.map((m) => m.id))).toEqual([
+			[kept.id, drop.id],
+			[kept.id],
+		])
+		expect(history.body[0]?.media_attachments[1]?.url).toBe(drop.url)
+		expect((await h.request(pathOf(drop.url))).status).toBe(200)
+		// The status shows only what it shows now, in the API and in the Update.
+		expect((await getJson<Status>(h, `/api/v1/statuses/${status.id}`, bob.token)).body.media_attachments).toMatchObject(
+			[{ id: kept.id }]
+		)
+		// The activity the edit recorded (an Update, or the Create of the current version still pending) carries it.
+		const latest = (await outbound(h.store)).at(-1)?.activity.object as { attachment: { url: string }[] }
+		expect(latest.attachment.map((a) => a.url)).toEqual([kept.url])
+		// It is the status's: neither shown, updated nor deleted as an upload.
+		expect((await h.request(`/api/v1/media/${drop.id}`, bearer(alice.token))).status).toBe(404)
+		const destroy = await h.request(`/api/v1/media/${drop.id}`, bearer(alice.token, { method: 'DELETE' }))
+		expect([destroy.status, await destroy.json()]).toEqual([
+			422,
+			{ error: 'Media attachment is currently used by a status' },
+		])
+	})
+
+	it('may be shown again by a later edit of the same status, and by nothing else', async () => {
+		const h = await users()
+		const { alice } = h.users
+		const { status, kept, drop } = await dropped(h)
+
+		const other = await post(h, alice, { status: 'other', media_ids: [drop.id] })
+		expect(other.media_attachments).toEqual([])
+		const scheduled = await h.request(
+			'/api/v1/statuses',
+			bearer(
+				alice.token,
+				json({ status: 'later', media_ids: [drop.id], scheduled_at: new Date(NOW + HOUR).toISOString() })
+			)
+		)
+		expect(scheduled.status).toBe(200)
+		expect(await scheduled.json()).toMatchObject({ media_attachments: [] })
+		const otherEdit = await h.request(
+			`/api/v1/statuses/${other.id}`,
+			bearer(alice.token, json({ status: 'other', media_ids: [drop.id] }, { method: 'PUT' }))
+		)
+		expect(((await otherEdit.json()) as Status).media_attachments).toEqual([])
+		expect(await row(h, drop.id)).toMatchObject({ status_id: status.id })
+
+		const again = await h.request(
+			`/api/v1/statuses/${status.id}`,
+			bearer(alice.token, json({ status: 'both', media_ids: [drop.id, kept.id] }, { method: 'PUT' }))
+		)
+		expect(again.status).toBe(200)
+		expect(((await again.json()) as Status).media_attachments).toMatchObject([{ id: drop.id }, { id: kept.id }])
+	})
+
+	it('goes with its status, after the grace period or at once with delete_media', async () => {
+		for (const deleteMedia of [false, true]) {
+			const h = await users()
+			const { alice } = h.users
+			const { status, kept, drop, keys } = await dropped(h)
+			const deleted = await h.request(
+				`/api/v1/statuses/${status.id}${deleteMedia ? '?delete_media=true' : ''}`,
+				bearer(alice.token, { method: 'DELETE' })
+			)
+			expect(deleted.status).toBe(200)
+			expect(((await deleted.json()) as Status).media_attachments).toMatchObject([{ id: kept.id }])
+			expect(await sql(h.store, 'SELECT id FROM media_attachments WHERE status_id IS NOT NULL')).toEqual([])
+			if (!deleteMedia) {
+				expect(await sweep(h, NOW + 23 * HOUR)).toBe(0)
+				expect(await stored(keys)).toEqual(keys)
+			}
+			expect(await sweep(h, NOW + 25 * HOUR)).toBe(deleteMedia ? 0 : 2)
+			expect(await stored(keys)).toEqual([])
+			expect(await row(h, drop.id)).toBeUndefined()
+			expect(await row(h, kept.id)).toBeUndefined()
+		}
+	})
+})
+
 describe('media the cutover kept', () => {
-	it('refuses to delete an image only earlier versions of a status show, and keeps its files', async () => {
+	it('refuses to delete an image the cutover kept unattached, and keeps its files', async () => {
 		const h = await users()
 		const { alice } = h.users
 		const status = await post(h, alice, { status: 'edited' })
-		// As the converter writes it: an unattached, processed row of the author with a file token and no gc_at, named
-		// by an earlier version of the status.
+		// A row migration 0015_media_shown did not link to a status: unattached and processed, of the author, with a
+		// file token and no gc_at. The earlier version naming it is written after the Store was migrated.
 		const id = '100000000000000088'
 		const token = 'E'.repeat(43)
 		const url = `https://kopje.test/media/${token}/full.png`
@@ -576,11 +684,8 @@ describe('media lifecycle', () => {
 		const redraft = await post(h, alice, { status: 'again', media_ids: [media.id] })
 		expect(redraft.media_attachments).toMatchObject([{ id: media.id }])
 
-		// An edit that drops it detaches it again; after a day it can no longer be attached and is swept.
-		await h.request(
-			`/api/v1/statuses/${redraft.id}`,
-			bearer(alice.token, json({ status: 'no media' }, { method: 'PUT' }))
-		)
+		// Deleted again, it is detached again; after a day it can no longer be attached and is swept.
+		await h.request(`/api/v1/statuses/${redraft.id}`, bearer(alice.token, { method: 'DELETE' }))
 		expect(await row(h, media.id)).toMatchObject({ status_id: null })
 		expect(await sweep(h, NOW + 25 * HOUR)).toBe(1)
 		expect(await stored(keys)).toEqual([])
