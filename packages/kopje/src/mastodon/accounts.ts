@@ -2,6 +2,7 @@ import {
 	type ApiContext,
 	type ApiHandler,
 	authorized,
+	credential as tokenCredential,
 	optionalCredential,
 	present,
 	refuseAfterAuth,
@@ -10,20 +11,22 @@ import {
 	userCredential,
 } from './context'
 import { mastodonError } from './errors'
-import { linkHeader, pageQuery } from './pagination'
+import { linkHeader, pageQuery, pageResponse } from './pagination'
 import { type Params, parseBoolean } from './params'
 import { MAX_SEARCH_OFFSET, searchParams } from './search'
 import {
 	type CredentialChanges,
 	type FieldSource,
+	MAX_ACCOUNTS_BY_ID,
 	MAX_FIELD_NAME,
 	MAX_FIELD_VALUE,
 	MAX_FIELDS,
 	type RelationshipResult,
 	type Visibility,
 } from '../domain/accounts'
+import { grantsAny } from '../security/scopes'
 
-// /api/v1/accounts (B3): credentials, lookup, search, relationships, follow, and follower lists.
+// /api/v1/accounts (B3): credentials, lookup, search, relationships, follow, follower lists, notes and endorsements.
 
 const NOT_FOUND = () => mastodonError(404, 'Record not found')
 
@@ -124,6 +127,35 @@ export const getAccount: ApiHandler = async (c, deps) => {
 	return account === null ? NOT_FOUND() : c.json(account)
 }
 
+// GET /api/v1/accounts?id[]= (AccountsController#index): the accounts getAccount would show, in one read. More than
+// DEFAULT_ACCOUNTS_LIMIT distinct ids raise Mastodon::ValidationError, which answers 422 with the class's name.
+export const getAccounts: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const ids = [...new Set(p.getAll('id'))]
+	if (ids.length > MAX_ACCOUNTS_BY_ID) {
+		return mastodonError(422, 'Mastodon::ValidationError')
+	}
+	return c.json(await storeCall(c, deps, (s, b) => s.getAccounts(b, { ids, present: present(c) })))
+}
+
+// POST /api/v1/accounts (AccountsController#create): Kopje has no open registration, so it answers as Mastodon does
+// with registrations closed, after Mastodon's checks in their order: the token (doorkeeper_authorize! :write,
+// :'write:accounts'), then an app token (require_client_credentials!), then check_enabled_registrations's `forbidden`.
+export const register: ApiHandler = async (c, deps) => {
+	const value = tokenCredential(c, deps)
+	const viewer = authorized(await storeCall(c, deps, (s, b) => s.checkCredential(b, value)))
+	if (!grantsAny(viewer.scopes, 'write:accounts')) {
+		authorized({ status: 'insufficient_scope' })
+	}
+	if (viewer.accountId !== null) {
+		return mastodonError(403, 'This method requires an client credentials authentication')
+	}
+	return mastodonError(403, 'Forbidden')
+}
+
 // acct is "user" or "user@domain"; the instance's own host means a local account.
 export const lookupAccount: ApiHandler = async (c, deps) => {
 	const acct = (c.req.query('acct') ?? '').trim().replace(/^@/, '')
@@ -213,6 +245,75 @@ export const unfollow: ApiHandler = async (c, deps) => {
 	const credential = userCredential(c, deps)
 	const input = { credential, target, now: deps.now() }
 	return relationshipResponse(c, authorized(await storeCall(c, deps, (s, b) => s.unfollow(b, input))))
+}
+
+// POST /api/v1/accounts/:id/remove_from_followers (RemoveFromFollowersService).
+export const removeFromFollowers: ApiHandler = async (c, deps) => {
+	const input = { credential: userCredential(c, deps), target: c.req.param('id') ?? '', now: deps.now() }
+	return relationshipResponse(c, authorized(await storeCall(c, deps, (s, b) => s.removeFromFollowers(b, input))))
+}
+
+function validationError(errors: string[]): Response {
+	return mastodonError(422, `Validation failed: ${errors.join(', ')}`)
+}
+
+// POST /api/v1/accounts/:id/note (Accounts::NotesController): the viewer's private note, `comment`.
+export const note: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const input = {
+		credential: userCredential(c, deps),
+		target: c.req.param('id') ?? '',
+		comment: p.get('comment'),
+		now: deps.now(),
+	}
+	const result = authorized(await storeCall(c, deps, (s, b) => s.setNote(b, input)))
+	return result.status === 'invalid' ? validationError(result.errors) : relationshipResponse(c, result)
+}
+
+// POST /api/v1/accounts/:id/endorse and /pin, /unendorse and /unpin (Accounts::EndorsementsController).
+export const endorse: ApiHandler = async (c, deps) => {
+	const input = { credential: userCredential(c, deps), target: c.req.param('id') ?? '', now: deps.now() }
+	const result = authorized(await storeCall(c, deps, (s, b) => s.endorse(b, input)))
+	return result.status === 'invalid' ? validationError(result.errors) : relationshipResponse(c, result)
+}
+
+export const unendorse: ApiHandler = async (c, deps) => {
+	const input = { credential: userCredential(c, deps), target: c.req.param('id') ?? '', now: deps.now() }
+	return relationshipResponse(c, authorized(await storeCall(c, deps, (s, b) => s.unendorse(b, input))))
+}
+
+// GET /api/v1/endorsements (EndorsementsController): the viewer's, 40 by default and at most 80 with Link headers, or
+// every one at once with limit=0, without them.
+export const endorsements: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const page = p.get('limit') === '0' ? null : pageQuery(p)
+	const input = { credential: userCredential(c, deps), page, present: present(c) }
+	const result = authorized(await storeCall(c, deps, (s, b) => s.listEndorsements(b, input)))
+	return page === null ? c.json(result.items) : pageResponse(c, result, page.limit)
+}
+
+// GET /api/v1/accounts/:id/endorsements (Accounts::EndorsementsController#index): public.
+export const accountEndorsements: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const page = pageQuery(p)
+	const input = {
+		credential: optionalCredential(c, deps),
+		account: c.req.param('id') ?? '',
+		page,
+		now: deps.now(),
+		present: present(c),
+	}
+	const result = authorized(await storeCall(c, deps, (s, b) => s.accountEndorsements(b, input)))
+	return result === null ? NOT_FOUND() : pageResponse(c, result, page.limit)
 }
 
 function followList(direction: 'followers' | 'following'): ApiHandler {

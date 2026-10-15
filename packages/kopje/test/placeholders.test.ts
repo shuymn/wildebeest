@@ -12,7 +12,6 @@ describe('features without data yet', () => {
 		['/api/v2/filters', 'read:filters'],
 		['/api/v1/followed_tags', 'read:follows'],
 		['/api/v1/featured_tags', 'read:accounts'],
-		['/api/v1/endorsements', 'read:accounts'],
 		['/api/v1/suggestions', 'read:accounts'],
 		['/api/v2/suggestions', 'read:accounts'],
 	]

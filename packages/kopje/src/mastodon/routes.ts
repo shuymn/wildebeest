@@ -97,7 +97,7 @@ export const ROUTES: readonly Route[] = [
 		method: 'GET',
 		path: '/api/v1/endorsements',
 		access: { scope: 'read:accounts' },
-		handler: placeholders.emptyUserList,
+		handler: accounts.endorsements,
 	},
 	{ method: 'GET', path: '/api/v1/announcements', access: 'token', handler: placeholders.emptyUserList },
 	{ method: 'GET', path: '/api/v1/trends', access: 'public', handler: placeholders.emptyList },
@@ -142,6 +142,10 @@ export const ROUTES: readonly Route[] = [
 		handler: accounts.searchAccounts,
 	},
 	{ method: 'GET', path: '/api/v1/accounts/lookup', access: 'public', handler: accounts.lookupAccount },
+	// Accounts by id, as /api/v1/accounts/:id shows them; registration answers as Mastodon's with registrations closed
+	// (any token here: the handler checks write:accounts, then that the token has no user).
+	{ method: 'GET', path: '/api/v1/accounts', access: 'public', handler: accounts.getAccounts },
+	{ method: 'POST', path: '/api/v1/accounts', access: 'token', handler: accounts.register },
 	{ method: 'GET', path: '/api/v1/accounts/:id', access: 'public', handler: accounts.getAccount },
 	{ method: 'POST', path: '/api/v1/accounts/:id/follow', access: { scope: 'write:follows' }, handler: accounts.follow },
 	{
@@ -185,6 +189,47 @@ export const ROUTES: readonly Route[] = [
 		path: '/api/v1/accounts/:id/statuses',
 		access: { scope: 'read:statuses', optional: true },
 		handler: timelines.accountStatuses,
+	},
+
+	// Removing a follower, private notes and endorsements.
+	{
+		method: 'POST',
+		path: '/api/v1/accounts/:id/remove_from_followers',
+		access: { scope: 'write:follows' },
+		handler: accounts.removeFromFollowers,
+	},
+	{ method: 'POST', path: '/api/v1/accounts/:id/note', access: { scope: 'write:accounts' }, handler: accounts.note },
+	{
+		method: 'POST',
+		path: '/api/v1/accounts/:id/endorse',
+		access: { scope: 'write:accounts' },
+		handler: accounts.endorse,
+	},
+	{ method: 'POST', path: '/api/v1/accounts/:id/pin', access: { scope: 'write:accounts' }, handler: accounts.endorse },
+	{
+		method: 'POST',
+		path: '/api/v1/accounts/:id/unendorse',
+		access: { scope: 'write:accounts' },
+		handler: accounts.unendorse,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/accounts/:id/unpin',
+		access: { scope: 'write:accounts' },
+		handler: accounts.unendorse,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/accounts/:id/endorsements',
+		access: { scope: 'read:accounts', optional: true },
+		handler: accounts.accountEndorsements,
+	},
+	// Any token at the route; the handler refuses one without a user (require_user!).
+	{
+		method: 'GET',
+		path: '/api/v1/accounts/:id/identity_proofs',
+		access: 'token',
+		handler: placeholders.identityProofs,
 	},
 
 	{

@@ -73,6 +73,17 @@ const EXCEPTIONS: Record<string, Exception> = {
 		mastodon: 'required token, scopes any, user required',
 		reason: 'any token at the route; placeholders.emptyUserList refuses one without a user',
 	},
+	'GET /api/v1/accounts/:id/identity_proofs': {
+		kopje: 'required token, scopes any, no user required',
+		mastodon: 'required token, scopes any, user required',
+		reason: 'any token at the route; placeholders.identityProofs refuses one without a user',
+	},
+	'POST /api/v1/accounts': {
+		kopje: 'required token, scopes any, no user required',
+		mastodon: 'required token, scopes write write:accounts, no user required',
+		reason:
+			'RouteAccess has no "scope without a user" form; accounts.register checks write:accounts, then that the token has no user',
+	},
 	'GET /api/v1/statuses/:id/source': {
 		kopje: 'required token, scopes read read:statuses, user required',
 		mastodon:
@@ -132,6 +143,11 @@ const EXCEPTIONS: Record<string, Exception> = {
 		kopje: 'none token, scopes any, no user required',
 		mastodon: 'optional token, scopes read read:accounts, no user required',
 		reason: 'a stale token is not read (access.ts); Mastodon checks a token sent',
+	},
+	'GET /api/v1/accounts': {
+		kopje: 'none token, scopes any, no user required',
+		mastodon: 'optional token, scopes read read:accounts, no user required',
+		reason: 'shows what GET /api/v1/accounts/:id shows, which reads no token either (access.ts)',
 	},
 	'GET /api/v2/search': {
 		kopje: 'required token, scopes read read:search, user required',
