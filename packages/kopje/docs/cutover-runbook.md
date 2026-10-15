@@ -167,8 +167,9 @@ None of this affects the legacy instance.
     - when it names `userKEK` or `USER_KEY`, set `USER_KEK` to that secret's value.
 
     The keys move wrapped as they are (DATA-14). Under the empty KEK they are wrapped under a known value, so at rest
-    they are as readable as the Store's data. Kopje cannot rewrap them under a new KEK, after publication or before
-    (a Gap in [threat-model.md](threat-model.md), DATA-14): setting `USER_KEK` later makes them fail to unwrap.
+    they are as readable as the Store's data. After publication, move them to a new KEK with `kopje-admin keys rewrap`
+    (see "Rotating the KEK" in [setup.md](setup.md#rotating-the-kek)). Do not set `USER_KEK` before then: changing it alone
+    makes every key fail to unwrap until the rewrap has run.
 
 3. **Deploy Kopje** from the instance template ([deploy/README.md](../../../deploy/README.md)), with:
     - `MAINTENANCE=full` as a plain-text variable, before anything can reach it;

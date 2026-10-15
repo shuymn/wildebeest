@@ -3,6 +3,7 @@ import type { BackupState } from '../platform/backup-state'
 import { type Config, type ConfigResult, userKek } from '../platform/config'
 import { errorMessage } from '../platform/error-message'
 import type { StoreStub } from '../platform/store-client'
+import { wrapsAlike } from '../security/key-wrap'
 import { checkKey } from '../security/keyring'
 
 type Check = { ok: boolean; [detail: string]: unknown }
@@ -54,10 +55,11 @@ export async function healthReport(
 }
 
 // Every local key (users and the instance actor) must unwrap with the configured KEK, and a signature made with it must
-// verify against the stored public key. An empty KEK is legal but reported as a warning.
+// verify against the stored public key. An empty KEK, or one that wraps as the empty KEK does (wrapsAlike), is legal but
+// reported as a warning.
 async function keysCheck(build: string, config: Config, store: () => HealthStore): Promise<Check> {
 	const kek = userKek(config)
-	const warning = kek === '' ? { warning: 'USER_KEK is empty' } : {}
+	const warning = (await wrapsAlike(kek, '')) ? { warning: 'USER_KEK is empty' } : {}
 	try {
 		const keys = await store().localKeys(build)
 		const failures: { owner: string; result: string }[] = []

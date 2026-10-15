@@ -4,12 +4,13 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 
 import { drainJournal } from './cutover'
 import { healthReport } from './health'
+import { rewrapKeys } from './key-rewrap'
 import type { LoaderDeps } from '../federation/loader'
 import { rebuildMedia } from '../mastodon/media-rebuild'
 import { type AccessSettings, adminRefusal, adminUsable, normalizeTeamDomain } from '../platform/access-settings'
 import { readBackupConfig } from '../platform/backup-config'
 import { readBoundedBody } from '../platform/body'
-import { readConfig } from '../platform/config'
+import { previousUserKek, readConfig, userKek } from '../platform/config'
 import { errorMessage } from '../platform/error-message'
 import type { ImageCodec } from '../platform/images'
 import { readQueueBacklog } from '../platform/queue-backlog'
@@ -342,6 +343,32 @@ export function adminRoutes({ build, store, fetch, now, doorbell, loader, images
 				monthlyTransforms: config.ok ? config.config.IMAGES_MONTHLY_TRANSFORMS : 0,
 			},
 			{ after: typeof after === 'string' ? after : null, dryRun: dryRun === true }
+		)
+		return reply(c, result)
+	})
+
+	// ---- the KEK rewrap (app/key-rewrap.ts): one page of local keys moved from USER_KEK_PREVIOUS to USER_KEK; the CLI
+	// follows `next` until `done`. Access admin only: the import token and import sessions never reach this path, and the
+	// Store checks the admin again where it writes.
+
+	admin.post('/keys/rewrap', async (c) => {
+		const { after } = await jsonBody(c)
+		if (after !== undefined && after !== null && (typeof after !== 'string' || !/^\d{18}$/.test(after))) {
+			return c.json({ error: 'expected {"after"?: account id}' }, 400)
+		}
+		const config = readConfig(c.env)
+		if (!config.ok) {
+			return c.json({ error: 'the Worker configuration is invalid (see kopje-admin health)', code: 'invalid-env' }, 409)
+		}
+		const result = await rewrapKeys(
+			{
+				build: build(c.env),
+				store: stub(c),
+				authority: c.get('auth'),
+				kek: userKek(config.config),
+				previous: previousUserKek(config.config),
+			},
+			{ after: typeof after === 'string' ? after : null }
 		)
 		return reply(c, result)
 	})
