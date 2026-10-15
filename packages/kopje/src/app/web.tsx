@@ -123,12 +123,12 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 
 	// ---- public pages
 
-	app.get('/:handle{@[^/]+}', setup, async (c) => {
-		const username = localUsername(c.req.param('handle'), c.get('domain'))
+	const profile = async (c: WebContext, tag: string | null) => {
+		const username = localUsername(c.req.param('handle') ?? '', c.get('domain'))
 		if (username === null || username === '') {
 			return notFound(c)
 		}
-		if (wantsActivityPub(c.req.header('accept'))) {
+		if (tag === null && wantsActivityPub(c.req.header('accept'))) {
 			// The account first, case-insensitively: the actor endpoint answers only its stored spelling, and serves a
 			// suspended actor redacted.
 			const account = await storeCall(c, deps, (s, b) =>
@@ -140,7 +140,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 		}
 		const maxId = c.req.query('max_id') ?? null
 		const page = await storeCall(c, deps, (s, b) =>
-			s.profilePage(b, { username, maxId, present: present(c), now: deps.now() })
+			s.profilePage(b, { username, maxId, tag, present: present(c), now: deps.now() })
 		)
 		if (page.status === 'not_found') {
 			return notFound(c)
@@ -161,9 +161,13 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 				next={page.next}
 				domain={domain}
 				actorUri={actorUri}
+				tag={tag}
 			/>
 		)
-	})
+	}
+	app.get('/:handle{@[^/]+}', setup, (c) => profile(c, null))
+	// A featured hashtag's URL (Mastodon's short_account_tag_url): the profile's posts with the hashtag.
+	app.get('/:handle{@[^/]+}/tagged/:tag', setup, (c) => profile(c, c.req.param('tag')))
 
 	// VIS-4: a status an anonymous viewer may see, or 404 for anything else, alike.
 	app.get('/:handle{@[^/]+}/:id', setup, async (c) => {

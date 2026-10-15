@@ -96,7 +96,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   do not feature yet, the most used first), `POST /api/v1/tags/:id/feature` and `/unfeature` (scopes
   `read:accounts` and `write:accounts`), and `GET /api/v1/accounts/:id/featured_tags`, public, empty for a suspended
   account. An account features at most 10 hashtags, with Mastodon's validation and messages. Each shows the number of
-  your public and unlisted statuses with it and the date of the newest, kept as you post, edit and delete.
+  your public and unlisted statuses with it and the date of the newest, kept as you post, edit and delete. Its `url`,
+  `/@username/tagged/:tag`, is your public profile page with only your posts with the hashtag.
     - Over ActivityPub, the actor publishes `featuredTags` (its featured hashtags as `Hashtag`s) and `featured` (empty:
       Kopje has no pinned statuses), and featuring or unfeaturing a hashtag sends your followers Mastodon's `Add` or
       `Remove` of the `Hashtag`; before an account's first one, its followers are sent the actor again, as servers that

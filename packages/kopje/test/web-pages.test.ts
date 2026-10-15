@@ -129,6 +129,38 @@ describe('profile page', () => {
 		expect(older.html).not.toContain('max_id=')
 	})
 
+	it('serves the URL of a featured hashtag: the profile’s posts with it, paged', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const featured = await h.request('/api/v1/featured_tags', bearer(alice.token, json({ name: 'Cats' })))
+		const url = new URL(((await featured.json()) as { url: string }).url)
+		expect(url.pathname).toBe('/@alice/tagged/cats')
+		await post(h, alice, { status: '#cats alpha' })
+		await post(h, alice, { status: '#cats bravo', visibility: 'unlisted' })
+		await post(h, alice, { status: '#cats charlie', visibility: 'private' })
+		await post(h, alice, { status: '#dogs delta' })
+		await post(h, bob, { status: '#cats echo' })
+		const { response, html } = await page(h, url.pathname)
+		expect(response.status).toBe(200)
+		expect(html).toContain('alpha')
+		expect(html).toContain('bravo')
+		expect(html).toContain('<h2>#cats</h2>')
+		for (const hidden of ['charlie', 'delta', 'echo']) {
+			expect(html, hidden).not.toContain(hidden)
+		}
+		for (let i = 0; i < PROFILE_PAGE_SIZE; i++) {
+			await post(h, alice, { status: `#cats more ${i}.` })
+		}
+		const first = await page(h, url.pathname)
+		const next = /href="(\/@alice\/tagged\/cats\?max_id=\d{18})"/.exec(first.html)?.[1]
+		expect(next).toBeDefined()
+		const older = await page(h, next ?? '')
+		expect(older.html).toContain('alpha')
+		expect(older.html).not.toContain(`more ${PROFILE_PAGE_SIZE - 1}.`)
+		expect((await page(h, '/@alice/tagged/a-b')).response.status).toBe(404)
+		expect((await page(h, '/@nobody/tagged/cats')).response.status).toBe(404)
+	})
+
 	it('sanitizes stored HTML at the sink and drops non-http links (HTML-1, HTML-3)', async () => {
 		const h = await community(['alice'])
 		await sql(
