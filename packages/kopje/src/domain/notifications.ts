@@ -1,6 +1,6 @@
 import { type Account, edgeRangeSql, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
 import { shownSql, statusReads, type WithVisibleStatus } from './audience'
-import { userReadOperation, userWriteOperation } from './auth'
+import { type UserContext, userReadOperation, userWriteOperation } from './auth'
 import { addToConversation } from './conversations'
 import { presentStatuses, type Status } from './status-presenter'
 import type { Db } from '../db/sql'
@@ -126,7 +126,7 @@ const NOTIFICATION_COLUMNS = {
 function presentNotifications(
 	db: Db,
 	rows: WithVisibleStatus<NotificationRow, 'status_id'>[],
-	viewerId: string,
+	viewer: UserContext,
 	present: Present
 ): Notification[] {
 	const accounts = presentAccountsById(
@@ -135,9 +135,7 @@ function presentNotifications(
 		present
 	)
 	const statusIds = [...new Set(rows.flatMap((row) => (row.status_id === null ? [] : [row.status_id])))]
-	const statuses = new Map(
-		presentStatuses(db, statusIds, { ...present, viewerId }).map((status) => [status.id, status])
-	)
+	const statuses = new Map(presentStatuses(db, statusIds, { ...present, viewer }).map((status) => [status.id, status]))
 	return rows.flatMap((row) => {
 		const account = accounts.get(row.from_account_id)
 		const status = row.status_id === null ? undefined : statuses.get(row.status_id)
@@ -194,7 +192,7 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 			rows.reverse()
 		}
 		return {
-			items: presentNotifications(db, rows, viewerId, input.present),
+			items: presentNotifications(db, rows, viewer, input.present),
 			newest: rows[0]?.id ?? null,
 			oldest: rows.at(-1)?.id ?? null,
 		}
@@ -217,7 +215,7 @@ export const getNotification = userReadOperation<{ id: string; present: Present 
 			id,
 			now
 		)
-		return presentNotifications(db, rows, viewerId, present)[0] ?? null
+		return presentNotifications(db, rows, viewer, present)[0] ?? null
 	}
 )
 

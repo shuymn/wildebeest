@@ -150,9 +150,18 @@ const TEXT_OPTIONS: sanitizeHtml.IOptions = {
 
 const ENTITIES: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'" }
 
+// sanitizeHtml's text with TEXT_OPTIONS, its entities decoded.
+function htmlText(html: string): string {
+	return sanitizeHtml(html, TEXT_OPTIONS).replace(/&(?:amp|lt|gt|quot|#39);/g, (entity) => ENTITIES[entity] ?? entity)
+}
+
 export function remoteHtmlText(html: string): string {
-	return sanitizeHtml(html.replace(/<br>|<\/p>/g, ' $&'), TEXT_OPTIONS).replace(
-		/&(?:amp|lt|gt|quot|#39);/g,
-		(entity) => ENTITIES[entity] ?? entity
-	)
+	return htmlText(html.replace(/<br>|<\/p>/g, ' $&'))
+}
+
+// The text of sanitized remote HTML as Mastodon's PlainTextFormatter extracts it for a remote status (what filters
+// match): a newline after each run of <br> and </p>, tags dropped (with the content of those Mastodon drops whole),
+// the entities sanitize-html writes decoded, and one trailing newline removed (Ruby's chomp).
+export function remotePlainText(html: string): string {
+	return htmlText(html.replace(/(?:<br \/>|<br>|<\/p>)+/g, '$&\n')).replace(/(?:\r\n|\r|\n)$/, '')
 }
