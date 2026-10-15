@@ -622,7 +622,6 @@ export function addresses(db: Db, kind: OutboundKind, signerId: string, accountI
 export type AddressedAccount = { uri: string; inbox_url: string | null; shared_inbox_url: string | null }
 
 export type OutboundRecipients = {
-	kind: OutboundKind
 	// The inboxes of the signer's accepted remote followers the activity reaches, when its audience has the followers:
 	// each one's shared inbox when it has one, else its personal inbox, deduplicated (possibly null or '').
 	followerInboxes: (string | null)[]
@@ -660,5 +659,5 @@ export function recipientsFor(
 		JSON.stringify(audience.accounts),
 		...(kind === 'content' ? [signerId] : [])
 	)
-	return { kind, followerInboxes, accounts }
+	return { followerInboxes, accounts }
 }

@@ -93,7 +93,6 @@ describe('addressingOf (Mastodon TagManager#to and #cc)', () => {
 	})
 })
 
-// The read rule against the real schema, viewer by viewer (Mastodon's spec/policies/status_policy_spec.rb #show?).
 describe('the recipient rule (recipientsFor, addresses)', () => {
 	it('classifies content, retractions and everything else', () => {
 		const note = { id: 'https://kopje.test/ap/o/1', type: 'Note' }
@@ -135,17 +134,16 @@ describe('the recipient rule (recipientsFor, addresses)', () => {
 			return rows.map((r) => [r.type, r.content, r.inbox_url])
 		}
 		// The first Create was recorded before the deletion started; the new post and the edit do not reach the account.
-		expect(await targets()).toEqual(
+		const recorded = await targets()
+		expect(recorded).toEqual(
 			expect.arrayContaining([
 				['Create', expect.stringContaining('hello</p>'), 'https://gone.example/inbox'],
 				['Create', expect.stringContaining('a new post'), 'https://other.example/inbox'],
 			])
 		)
-		expect(JSON.stringify((await targets()).filter((t) => t[2] === 'https://gone.example/inbox'))).not.toContain(
-			'again'
-		)
-		expect((await targets()).filter((t) => t[1]?.includes('a new post') === true)).toHaveLength(1)
-		expect((await targets()).some((t) => t[1]?.includes('again') === true)).toBe(true)
+		expect(JSON.stringify(recorded.filter((t) => t[2] === 'https://gone.example/inbox'))).not.toContain('again')
+		expect(recorded.filter((t) => t[1]?.includes('a new post') === true)).toHaveLength(1)
+		expect(recorded.some((t) => t[1]?.includes('again') === true)).toBe(true)
 
 		expect((await h.request(`/api/v1/statuses/${first.id}`, bearer(alice.token, { method: 'DELETE' }))).status).toBe(
 			200
@@ -182,7 +180,7 @@ describe('the recipient rule (recipientsFor, addresses)', () => {
 				return {
 					followers: recipients.followerInboxes,
 					accounts: recipients.accounts.map((a) => a.uri),
-					named: [carol.id, bob, far].map((x) => addresses(db, recipients.kind, alice.id, x)),
+					named: [carol.id, bob, far].map((x) => addresses(db, outboundKind({ type }), alice.id, x)),
 				}
 			}
 			return { content: of('Announce'), retraction: of('Delete'), other: of('Like') }
@@ -198,6 +196,7 @@ describe('the recipient rule (recipientsFor, addresses)', () => {
 	})
 })
 
+// The read rule against the real schema, viewer by viewer (Mastodon's spec/policies/status_policy_spec.rb #show?).
 describe('canView and the list rule', () => {
 	type Cast = Record<'author' | 'follower' | 'mentioned' | 'silent' | 'stranger' | 'blocked' | 'pending', string>
 

@@ -125,8 +125,7 @@ export function isDeliverableInbox(value: string | null): value is string {
 export type DeliveryAudience = { followers: boolean; accounts: string[] }
 
 // The targets an activity goes to (NET-2), from the stored audience only, for the recipients the policy gives it
-// (recipientsFor in audience.ts: content leaves out unavailable accounts, the followers on a domain the signer blocks
-// and the addressed accounts it blocks or whose domain it blocks; anything else leaves out no one):
+// (recipientsFor in audience.ts):
 //   - followers: by shared inbox when they have one (deduplicated);
 //   - addressed accounts named in to/cc: by shared inbox, as Mastodon's StatusReachFinder;
 //   - addressed accounts the activity reaches without naming them: on an addressed activity (one with to), a silent
@@ -173,8 +172,8 @@ export function audienceTargets(
 			)
 		}
 	}
-	const { object } = subjectOf(activity, withdraws)
-	if (recipients.kind === 'retraction' && object !== null) {
+	const { object, retracts } = subjectOf(activity, withdraws)
+	if (retracts && object !== null) {
 		for (const inbox of receiversOf(db, signerId, object)) {
 			add(inbox, null)
 		}
