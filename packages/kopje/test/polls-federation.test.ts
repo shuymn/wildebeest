@@ -317,6 +317,28 @@ describe('a remote vote in a local poll', () => {
 		expect(await sql(t.store, 'SELECT update_due_at IS NOT NULL AS due FROM polls')).toEqual([{ due: 1 }])
 	})
 
+	it("sends the voter's server the Update of the counts, not a Create, though no delivery of the status is recorded", async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const status = await localPoll(t)
+		await t.post(bob, voteNote(bob, status.uri, 'dogs', 1))
+		await endPolls(t.env, { build: () => BUILD, now: () => NOW + 3 * 60_000, store: () => t.store })
+		const [inbox] = await sql<{ inbox: string }>(
+			t.store,
+			"SELECT COALESCE(NULLIF(shared_inbox_url, ''), inbox_url) AS inbox FROM accounts WHERE uri = ?",
+			bob.uri
+		)
+		const sent = await sql<{ type: string }>(
+			t.store,
+			`SELECT json_extract(o.body, '$.activity.type') AS type FROM outbound_activities o
+			WHERE EXISTS (SELECT 1 FROM deliveries d WHERE d.activity_id = o.id AND d.inbox_url = ?1)
+				OR EXISTS (SELECT 1 FROM outbound_targets c, json_each(c.targets) x
+					WHERE c.activity_id = o.id AND json_extract(x.value, '$.inbox') = ?1)`,
+			inbox!.inbox
+		)
+		expect(sent).toEqual([{ type: 'Update' }])
+	})
+
 	it('is refused from an account the author blocks (R27), and after the poll ends', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
