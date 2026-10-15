@@ -547,12 +547,8 @@ describe("read endpoints read the same rows however long the world's history (RE
 		// middle 1720 -> 5320, oldest 2056 -> 9256; list newest 1852 -> 4732, middle 1689 -> 3129, oldest 1851 -> 4731.
 		'home',
 		'list',
-		// TODO(RES-7): the public feed and account statuses take max_id as `?2 IS NULL OR s.id < ?2`, not an index range,
-		// so a page from the middle reads from the newest down to the cursor. Middle page: public 802 -> 1342 rows,
-		// account statuses 802 -> 2062.
-		'public',
-		'account statuses',
-		// TODO(RES-7): the same for notifications, favourites and bookmarks on the edge's INTEGER id. Middle page:
+		// TODO(RES-7): notifications, favourites and bookmarks take max_id as `?2 IS NULL OR id < CAST(?2 AS INTEGER)`,
+		// not an index range, so a page from the middle reads from the newest down to the cursor. Middle page:
 		// notifications 1668 -> 4368 rows, favourites and bookmarks 1315 -> 5275.
 		'notifications',
 		'favourites',

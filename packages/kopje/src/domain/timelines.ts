@@ -36,11 +36,6 @@ function statusPage(page: PageQuery): Cursor {
 	}
 }
 
-// The cursor condition on a status id column, with the cursor parameters at ?2 (max) and ?3 (min).
-function cursorSql(column: string): string {
-	return `(?2 IS NULL OR ${column} < ?2) AND (?3 IS NULL OR ${column} > ?3)`
-}
-
 // The cursor as a plain range, with ?2 and ?3 bound by rangeParams: no cursor is '' or ':', below and above every id of
 // digits. A read in an index ending in the column then starts at the cursor, not at the newest.
 function rangeSql(column: string): string {
@@ -248,12 +243,11 @@ export const publicTimeline = optionalUserReadOperation<PublicTimelineInput, Pag
 		{
 			join: 'JOIN accounts pa ON pa.id = s.account_id',
 			where: publicConditions(input.local, input.remote, input.onlyMedia),
-			and: `${NOT_A_REPLY_TO_OTHERS} AND ${cursorSql('s.id')}`,
+			and: `${NOT_A_REPLY_TO_OTHERS} AND ${rangeSql('s.id')}`,
 			tail: `ORDER BY s.id ${cursor.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 		},
 		viewerId,
-		cursor.max,
-		cursor.min,
+		...rangeParams(cursor),
 		cursor.limit,
 		now
 	)
@@ -347,12 +341,11 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 					${input.excludeReplies ? `AND ${NOT_A_REPLY_TO_OTHERS}` : ''}
 					${input.excludeReblogs ? 'AND s.reblog_of_id IS NULL' : ''}
 					AND (?6 IS NULL OR EXISTS (SELECT 1 FROM status_tags ut WHERE ut.status_id = s.id AND ut.name = ?6))
-					AND ${cursorSql('s.id')}`,
+					AND ${rangeSql('s.id')}`,
 				tail: `ORDER BY s.id ${cursor.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			},
 			viewerId,
-			cursor.max,
-			cursor.min,
+			...rangeParams(cursor),
 			cursor.limit,
 			accountId,
 			input.tagged === null ? null : normalizeTag(input.tagged),
