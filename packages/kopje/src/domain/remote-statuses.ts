@@ -396,7 +396,8 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 	writeTags(db, id, input.tags.slice(0, MAX_STATUS_TAGS))
 	writeMedia(db, id, author, input.media, ctx)
 	recountStatus(db, parent?.id ?? null)
-	linkReplies(db, { id, uri: input.uri, accountId: author.id, replyTarget, isReply: input.inReplyTo !== null })
+	const isReply = input.inReplyTo !== null
+	linkReplies(db, { id, uri: input.uri, accountId: author.id, replyTarget, isReply })
 	if (!ctx.fetched) {
 		notifyCreated(db, {
 			id,
@@ -405,7 +406,7 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 			audience,
 			language: input.language,
 			replyTarget,
-			isReply: input.inReplyTo !== null,
+			isReply,
 			now: ctx.now,
 		})
 	}

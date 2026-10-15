@@ -1,9 +1,8 @@
 import { type Account, ACCOUNT_COLUMNS, ACCOUNT_FROM, type AccountRow, type Present, presentAccount } from './accounts'
-import { statusReads, viewableStatusId } from './audience'
+import { NOT_A_REPLY_TO_OTHERS, statusReads, viewableStatusId } from './audience'
 import { readOperation } from './operation'
 import { presentStatus, presentStatuses, type Status } from './status-presenter'
 import { resolveStatusId } from './statuses'
-import { NOT_A_REPLY_TO_OTHERS } from './timelines'
 
 // What the public web pages show (B5): a local profile and a local status, to an anonymous viewer. Both go through the
 // read rule with no viewer (visibleSql with NULL, VIS-1), so only public and unlisted statuses of an account that is

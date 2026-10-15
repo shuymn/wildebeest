@@ -2,6 +2,7 @@ import { type Page, type PageQuery, type Present, resolveAccountId } from './acc
 import {
 	blocksSql,
 	filteredForSql,
+	NOT_A_REPLY_TO_OTHERS,
 	REACHES_FOLLOWERS_SQL,
 	REQUIRES_MENTION_SQL,
 	type StatusSelect,
@@ -22,10 +23,6 @@ import type { Db } from '../db/sql'
 // statuses_feed declares (REACHES_FOLLOWERS_SQL).
 
 const FEED = `s.visibility IN ${REACHES_FOLLOWERS_SQL}`
-
-// Status.without_replies: not a reply, or a reply in the author's own conversation (in_reply_to_account_id carries
-// the partner through self-replies, so continuing a reply to someone else is still a reply to them).
-export const NOT_A_REPLY_TO_OTHERS = '(s.in_reply_to_uri IS NULL OR s.in_reply_to_account_id = s.account_id)'
 
 type Cursor = { max: string | null; min: string | null; ascending: boolean; limit: number }
 
@@ -72,7 +69,7 @@ function ids<Id>(rows: { id: Id }[]): Id[] {
 // original that mentions an account the viewer blocks or mutes; the viewer's own statuses always pass, as in
 // FeedManager#filter_from_home). A reply whose partner is unknown (in_reply_to_account_id NULL: its parent was never
 // stored, or the partner's account was purged) is left out too, so a purge does not bring back a reply home hid. A
-// reply whose parent is deleted keeps its partner, and home shows it as before.
+// reply whose parent is deleted keeps its partner.
 export const homeTimeline = userReadOperation<{ page: PageQuery; present: Present }, Page<Status>>(
 	(db, { page, present }, _viewer, viewer) => {
 		const { accountId, now } = viewer

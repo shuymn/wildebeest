@@ -423,6 +423,10 @@ export function ownStatusId(db: Db, authorId: string, statusId: string): OwnStat
 
 // ---- Notifications.
 
+// Status.without_replies: not a reply, or a reply in the author's own conversation (in_reply_to_account_id carries
+// the partner through self-replies, so continuing a reply to someone else is still a reply to them).
+export const NOT_A_REPLY_TO_OTHERS = '(s.in_reply_to_uri IS NULL OR s.in_reply_to_account_id = s.account_id)'
+
 // Whether `r` blocks the account `a`, or mutes it with notifications at `now`.
 function silencedSql(r: string, a: string, now: string): string {
 	return `(${blocksSql(r, a)} OR ${mutesSql(r, a, now, true)})`
@@ -450,9 +454,8 @@ export function shownSql(r: string, type: string, from: string, status: string, 
 			AND (EXISTS (SELECT 1 FROM main.status_mentions mm WHERE mm.status_id = mt.id AND mm.silent = 0
 					AND ${silencedSql(r, 'mm.account_id', now)})
 				OR (mt.in_reply_to_account_id IS NOT NULL AND ${silencedSql(r, 'mt.in_reply_to_account_id', now)}))))
-		AND (${type} <> 'status' OR EXISTS (SELECT 1 FROM main.statuses hs WHERE hs.id = ${status}
-			AND (hs.in_reply_to_uri IS NULL OR hs.in_reply_to_account_id = hs.account_id)
-			AND ${homeFilterSql('hs', r, now)})))`
+		AND (${type} <> 'status' OR EXISTS (SELECT 1 FROM main.statuses s WHERE s.id = ${status}
+			AND ${NOT_A_REPLY_TO_OTHERS} AND ${homeFilterSql('s', r, now)})))`
 }
 
 // ---------------------------------------------------------------------------------------------------------------

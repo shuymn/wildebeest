@@ -58,7 +58,7 @@ self-replies) is known and is the author, the viewer or an account the viewer fo
 unknown is left out: its parent was never stored (the partner is written with the parent), it continues such a reply,
 or the partner's account was purged (the purge clears the partner and ends every follow of that account, so no
 follow would let the reply through anyway, and a reply home left out stays out). A reply whose parent is deleted keeps
-its partner and stays as it was. Then `homeFilterSql` applies.
+its partner. Then `homeFilterSql` applies.
 
 Notifications: `shownSql(r, type, from, status, now)` is R15, one rule for writing (`notify`), listing and reading
 notifications, and for sending their pushes (`domain/push.ts`, judged again at the time of sending). The sender is not
