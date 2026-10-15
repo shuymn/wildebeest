@@ -46,6 +46,19 @@ export async function unwrapPkcs8(kek: string, { privkey, salt }: WrappedKey): P
 	return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: salt }, key, privkey))
 }
 
+// Whether one KEK unwraps what the other wraps. They need not be equal strings: PBKDF2's HMAC pads a short KEK with
+// zero bytes, so '' and '\0', or a KEK and the same KEK with a NUL appended, wrap alike.
+export async function wrapsAlike(a: string, b: string): Promise<boolean> {
+	const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES))
+	const privkey = await wrapPkcs8(a, new Uint8Array(1), salt)
+	try {
+		await unwrapPkcs8(b, { privkey, salt })
+		return true
+	} catch {
+		return false
+	}
+}
+
 // The same private key wrapped under another KEK, with a fresh salt (the KEK rewrap, app/key-rewrap.ts). Throws as
 // unwrapPkcs8 does when `from` does not unwrap it.
 export async function rewrapPkcs8(from: string, to: string, key: WrappedKey): Promise<WrappedKey> {

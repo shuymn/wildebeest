@@ -223,6 +223,9 @@ describe('kopje-admin keys rewrap', () => {
 			[{}, 'kek-empty'],
 			[{ USER_KEK: '' }, 'kek-empty'],
 			[{ USER_KEK: NEW_KEK, USER_KEK_PREVIOUS: NEW_KEK }, 'kek-unchanged'],
+			// Not equal strings, but they wrap alike (wrapsAlike).
+			[{ USER_KEK: '\u0000' }, 'kek-empty'],
+			[{ USER_KEK: `${NEW_KEK}\u0000`, USER_KEK_PREVIOUS: NEW_KEK }, 'kek-unchanged'],
 		] as const) {
 			const h = await setup(overrides)
 			await seedUsers(h.store, 1)

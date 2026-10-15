@@ -1,7 +1,7 @@
 import type { RewrapKey } from '../domain/actors'
 import type { ImportAuthority } from '../platform/store-admin'
 import type { StoreStub } from '../platform/store-client'
-import { rewrapPkcs8 } from '../security/key-wrap'
+import { rewrapPkcs8, wrapsAlike } from '../security/key-wrap'
 import { checkKey } from '../security/keyring'
 
 // The KEK rewrap (`kopje-admin keys rewrap`, docs/setup.md "Rotating the KEK"): every local key (the local users and
@@ -51,10 +51,11 @@ export const INSTANCE_ACTOR_OWNER = '(instance actor)'
 
 export async function rewrapKeys(deps: RewrapDeps, input: { after: string | null }): Promise<RewrapStep> {
 	const { build, store, authority, kek, previous } = deps
-	if (kek === '') {
+	// Compared by what they unwrap, not as strings (wrapsAlike): a KEK the empty KEK can stand in for protects nothing.
+	if (await wrapsAlike(kek, '')) {
 		return { ok: false, code: 'kek-empty', message: 'set USER_KEK to the new KEK before rewrapping' }
 	}
-	if (kek === previous) {
+	if (await wrapsAlike(kek, previous)) {
 		return {
 			ok: false,
 			code: 'kek-unchanged',
