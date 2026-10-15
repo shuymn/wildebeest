@@ -27,6 +27,7 @@ import { getMarkers, MARKER_TIMELINES } from '../src/domain/markers'
 import {
 	getNotificationGroup,
 	GROUP_COUNT,
+	GROUP_WALK,
 	listGroupedNotifications,
 	notificationGroupAccounts,
 	unreadCount,
@@ -1979,8 +1980,9 @@ describe('statuses cost the media they show, not the media their edits dropped (
 
 // Grouped notifications add a dimension: the notifications of one group. A status favourited by `count` accounts
 // within the hours of one group, between older follows and newer follow requests: a page of groups, a group, its
-// accounts and the unread counts read the same rows with 500 favourites or 5,000, since a walk reads at most
-// GROUP_WALK notifications and a group's accounts are paged by its index.
+// accounts and the unread counts read the same rows with 2,500 favourites or 5,000 (one group dominating the walk,
+// past its limit), since a walk reads at most GROUP_WALK notifications, a group counts at most GROUP_COUNT and a
+// group's accounts are paged by its index.
 describe('grouped notifications read a walk, however many notifications a group holds (RES-7)', () => {
 	const VIEWER_ID = '650000000000000000'
 	const STATUS_ID = '651000000000000000'
@@ -2046,8 +2048,10 @@ describe('grouped notifications read a walk, however many notifications a group 
 		return store
 	}
 
-	it('reads the same rows with 500 or 5,000 notifications in a group, on the newest, a middle and the oldest page', async () => {
-		const few = await grouping(500)
+	it('reads the same rows with 2,500 or 5,000 notifications in a group, on the newest, a middle and the oldest page', async () => {
+		// Both sizes are past the walk's limit, so the group dominates it at either.
+		expect(GROUP_WALK).toBeLessThan(2500)
+		const few = await grouping(2500)
 		const many = await grouping(5000)
 		const credential = { tokenHash: GROUP_TOKEN, scope: 'read', now: NOW } as const
 		const groups = {

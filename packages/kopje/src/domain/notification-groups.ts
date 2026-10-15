@@ -15,10 +15,11 @@ import type { Db } from '../db/sql'
 // Mastodon walks the notifications newest first and keeps the first of each group until it has a page of groups, then
 // reads each group's notifications up to the page's upper end (NotificationGroup.load_groups_data): its count, its
 // sample accounts and its newest, however far below the page they reach, and its oldest from the page's lower end.
-// Kopje does the same, through the group index, with two bounds (RES-7): a walk reads at most groupWalkLimit(limit)
-// notifications it shows, and a group's count reads at most GROUP_COUNT of them. When a page's walk meets more than
-// that (a status favourited by hundreds within a few hours), the page ends early with the groups found, and its Link
-// continues from the last one read, so the walk goes on in the next page.
+// Kopje does the same, through the group index, with two bounds (RES-7): a walk reads at most GROUP_WALK
+// notifications it shows, skipping those of the groups it has found, and a group's count reads at most GROUP_COUNT of
+// them. Only a group of more than GROUP_WALK notifications within a page's walk (a status favourited by thousands
+// within a few hours) ends a page early, with the groups found; its Link continues from the last one read, so the
+// walk goes on in the next page.
 //
 // Dismissing a group and clearing delete at once, in the request, as Mastodon's destroy_all and delete_all do.
 
@@ -30,16 +31,11 @@ export const MAX_UNREAD_LIMIT = 1_000
 // NotificationGroup::SAMPLE_ACCOUNTS_SIZE.
 const SAMPLE_ACCOUNTS = 8
 
-// How many shown notifications a walk for `limit` groups reads at most: GROUP_WALK, or twice the limit when that is
-// more (an unread count of up to MAX_UNREAD_LIMIT groups).
-export const GROUP_WALK = 400
+// How many shown notifications a walk reads at most, for a page or an unread count (at most MAX_UNREAD_LIMIT groups).
+export const GROUP_WALK = 2_000
 
 // How many of a group's shown notifications its count reads at most: a larger group counts this many.
 export const GROUP_COUNT = 400
-
-function groupWalkLimit(limit: number): number {
-	return Math.max(GROUP_WALK, 2 * limit)
-}
 
 // The types whose notifications show their status (REST::NotificationGroupSerializer#status_type?).
 const STATUS_TYPES = new Set(['favourite', 'reblog', 'status', 'mention', 'poll', 'update'])
@@ -140,17 +136,16 @@ function groupedOf(groupedTypes: string[] | null): readonly string[] {
 }
 
 // Walks the viewer's shown notifications from the cursor (newest first, or oldest first when ascending) in chunks of a
-// page, keeping the first notification of each group, until `limit` groups are found, the notifications run out, or
-// groupWalkLimit(limit) are read.
+// page and then in chunks twice as large as the last, keeping the first notification of each group, until `limit`
+// groups are found, the notifications run out, or GROUP_WALK are read.
 function walkGroups(db: Db, viewer: UserContext, input: WalkInput): Walk {
 	const grouped = groupedOf(input.groupedTypes)
 	const groups = new Map<string, Found>()
-	const budget = groupWalkLimit(input.limit)
 	let { maxId, minId } = input
 	let read = 0
 	let last: string | null = null
 	while (input.limit > 0) {
-		const chunk = Math.min(input.limit, budget - read)
+		const chunk = Math.min(Math.max(input.limit, read), GROUP_WALK - read)
 		const rows = shownNotifications(
 			db,
 			viewer,
@@ -179,7 +174,7 @@ function walkGroups(db: Db, viewer: UserContext, input: WalkInput): Walk {
 		if (rows.length < chunk) {
 			break
 		}
-		if (read >= budget) {
+		if (read >= GROUP_WALK) {
 			return { groups: [...groups.values()], full: false, cut: true, last }
 		}
 		if (input.ascending) {
@@ -506,7 +501,7 @@ export const unreadCount = userReadOperation<UnreadCountInput, { count: number }
 })
 
 // GET /api/v2/notifications/unread_count: how many groups the notifications newer than the marker make, walked oldest
-// first as a page above it, up to `limit` (and within groupWalkLimit(limit) notifications read).
+// first as a page above it, up to `limit` (and within GROUP_WALK notifications read).
 export const unreadGroupCount = userReadOperation<UnreadCountInput, { count: number }>((db, input, _viewer, viewer) => {
 	const walk = walkGroups(db, viewer, {
 		ascending: true,

@@ -456,10 +456,10 @@ is an endpoint of both cases. A last poll case grows the votes in each of a page
 account statuses page, the poll and a vote in it must each read at most 10 rows more. Another grows the accounts the
 viewer endorses and keeps notes on from 20 to 2,000: the newest, a middle and the oldest page of the viewer's
 endorsements through both endpoints, and the relationships of 20 of them, read at most 10 rows more. Another grows
-the notifications of one group (favourites of the viewer's status) from 500 to 5,000, between older follows and newer
-follow requests: the newest page of groups, one from the middle of the group and one above the follows, the group, a
-newest, a middle and the oldest page of its accounts and both unread counts read at most 10 rows more, since a walk
-reads at most 400 notifications it shows.
+the notifications of one group (favourites of the viewer's status) from 2,500 to 5,000, past the walk's limit,
+between older follows and newer follow requests: the newest page of groups, one from the middle of the group and one
+above the follows, the group, a newest, a middle and the oldest page of its accounts and both unread counts read at
+most 10 rows more, since a walk reads at most 2,000 notifications it shows and a group counts at most 400.
 
 `test/policy-endpoints.test.ts` runs the read endpoints themselves on generated worlds, with favourites, bookmarks and
 notifications added, for each available local viewer and, where the endpoint answers without a token, the anonymous

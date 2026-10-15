@@ -246,6 +246,36 @@ describe('grouped notifications (API v2)', () => {
 		})
 	})
 
+	it('reaches past a large group to the groups below it', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const status = await post(h, alice, { status: 'hello' })
+		const key = `favourite-${status.id}-${BUCKET}`
+		// An older mention, then 600 favourites in one group.
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 600)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT CAST(660000000000000000 + i AS TEXT), 'https://far.example/users/f' || i, 'f' || i, 'far.example' FROM n`
+		)
+		await sql(
+			h.store,
+			`INSERT INTO notifications (account_id, type, from_account_id, status_id, group_key)
+			SELECT ?1, CASE WHEN id = '660000000000000000' THEN 'mention' ELSE 'favourite' END, id,
+				CASE WHEN id = '660000000000000000' THEN NULL ELSE ?2 END,
+				CASE WHEN id = '660000000000000000' THEN NULL ELSE ?3 END
+			FROM accounts WHERE domain = 'far.example' ORDER BY id`,
+			alice.id,
+			status.id,
+			key
+		)
+		const { body } = await grouped(h, '/api/v2/notifications', alice.token)
+		expect(body.notification_groups.map((g) => [g.type, g.notifications_count])).toEqual([
+			['favourite', 400],
+			['mention', 1],
+		])
+	})
+
 	it('shows one group by its key, and the accounts of a group by page', async () => {
 		const { h, alice, bob, carol, dave, status, id } = await scene()
 		const favourites = `favourite-${status.id}-${BUCKET}`
