@@ -277,7 +277,8 @@ export function actualFromDump(text) {
 					}
 					put('media_files', t('file_token') ?? '', [t('url'), t('preview_url'), t('content_type'), sizesOf(meta)])
 				}
-				const owner = status(t('status_id'))
+				// What the status shows now; an image only its earlier versions show (shown 0) is compared through them.
+				const owner = int(row.shown) === 0 ? undefined : status(t('status_id'))
 				if (owner !== undefined) {
 					media.set(owner.uri, [
 						...(media.get(owner.uri) ?? []),
