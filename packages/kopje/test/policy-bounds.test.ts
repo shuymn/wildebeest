@@ -13,6 +13,15 @@ import { listFollows, relationships, userinfo } from '../src/domain/accounts'
 import { canView, visibleSql, type Visibility } from '../src/domain/audience'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { listConversations } from '../src/domain/conversations'
+import {
+	getFilter,
+	listFilterKeywords,
+	listFilters,
+	listFiltersV1,
+	listFilterStatuses,
+	MAX_FILTER_KEYWORDS,
+	MAX_FILTERS,
+} from '../src/domain/filters'
 import { getMarkers, MARKER_TIMELINES } from '../src/domain/markers'
 import { listNotifications } from '../src/domain/notifications'
 import { getPoll, vote } from '../src/domain/polls'
@@ -97,6 +106,8 @@ function authored(x: number): number {
 }
 
 const VIEWER_LIST = '700000000000000001'
+// The viewer's filter: warn, in every context, by keywords some of the world's statuses match and by the target status.
+const VIEWER_FILTER = '720000000000000001'
 const TOKEN_HASH = 'policy-bounds-token'
 const PRESENT = { origin: 'https://kopje.test' }
 const PAGE = { limit: 20 }
@@ -108,6 +119,7 @@ const PAGE = { limit: 20 }
 const UNRELATED_ACCOUNT_BASE = 300000000000000000n
 const UNRELATED_STATUS_BASE = 400000000000000000n
 const UNRELATED_LIST_BASE = 710000000000000000n
+const UNRELATED_FILTER_BASE = 730000000000000000n
 const HIDDEN: readonly Visibility[] = ['unlisted', 'private', 'direct', 'limited']
 
 function writeViewer(sql: SqlStorage): void {
@@ -143,6 +155,22 @@ function writeViewer(sql: SqlStorage): void {
 		viewer
 	)
 	sql.exec("INSERT INTO lists (id, account_id, title) VALUES (?, ?, 'everyone')", VIEWER_LIST, viewer)
+	sql.exec(
+		`INSERT INTO filters (id, account_id, title, context)
+		VALUES (?, ?, 'some', '["home","notifications","public","thread","account"]')`,
+		VIEWER_FILTER,
+		viewer
+	)
+	sql.exec(
+		`INSERT INTO filter_keywords (id, filter_id, keyword, whole_word) VALUES
+			('720000000000000002', ?1, 'status 1', 1), ('720000000000000003', ?1, 'STATUS 2', 0)`,
+		VIEWER_FILTER
+	)
+	sql.exec(
+		"INSERT INTO filter_statuses (id, filter_id, status_id) VALUES ('720000000000000004', ?, ?)",
+		VIEWER_FILTER,
+		statusId(TARGET)
+	)
 	WORLD.accounts.forEach((_, x) => {
 		sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', VIEWER_LIST, accountId(x))
 	})
@@ -321,6 +349,27 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 			j % 3 === 0 ? null : new Date(NOW + (j % 3 === 1 ? -1 : 1) * 3_600_000).toISOString()
 		)
 		sql.exec('INSERT INTO domain_blocks (account_id, domain) VALUES (?, ?)', owner, REMOTE_DOMAINS[j % 2] ?? '')
+		// A hide filter of the owner's in every context, by a keyword every world status matches and by world statuses.
+		const filter = String(UNRELATED_FILTER_BASE + BigInt(j))
+		sql.exec(
+			`INSERT INTO filters (id, account_id, title, context, action)
+			VALUES (?, ?, 'f', '["home","notifications","public","thread","account"]', 'hide')`,
+			filter,
+			owner
+		)
+		sql.exec(
+			"INSERT INTO filter_keywords (id, filter_id, keyword) VALUES (?, ?, 'status')",
+			String(UNRELATED_FILTER_BASE + 100_000n + BigInt(j)),
+			filter
+		)
+		WORLD.statuses.forEach((_, s) => {
+			sql.exec(
+				'INSERT INTO filter_statuses (id, filter_id, status_id) VALUES (?, ?, ?)',
+				String(UNRELATED_FILTER_BASE + 200_000n + BigInt(j * 100 + s)),
+				filter,
+				statusId(s)
+			)
+		})
 		writeScheduled(sql, owner, UNRELATED_SCHEDULED_BASE + BigInt(j * 100), 30)
 		for (let k = 0; k < 10; k++) {
 			const target = status(3 * (j * 10 + k))
@@ -495,6 +544,11 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 	['status search', search, { ...searchInput, query: 'status', types: ['statuses'] }],
 	['hashtag search', search, { ...searchInput, query: 'cats', types: ['hashtags'] }],
 	['userinfo', userinfo, { credential: { ...credential, scope: 'profile' }, present: PRESENT }],
+	['filters', listFilters, { credential }],
+	['filter', getFilter, { credential, id: VIEWER_FILTER }],
+	['filter keywords', listFilterKeywords, { credential, filterId: VIEWER_FILTER }],
+	['filter statuses', listFilterStatuses, { credential, filterId: VIEWER_FILTER }],
+	['filters v1', listFiltersV1, { credential }],
 	['markers', getMarkers, { credential, timelines: [...MARKER_TIMELINES] }],
 	['scheduled statuses', listScheduled, { credential, page: PAGE }],
 	['poll', getPoll, { credential, id: statusId(TARGET), now: NOW }],
@@ -526,6 +580,10 @@ function shown(output: unknown): number {
 	}
 	if (Array.isArray(value.descendants) && Array.isArray(value.ancestors)) {
 		return value.ancestors.length + value.descendants.length
+	}
+	// A filter with its rules.
+	if (Array.isArray(value.keywords) && Array.isArray(value.statuses)) {
+		return 1
 	}
 	if (Array.isArray(value.accounts) && Array.isArray(value.statuses) && Array.isArray(value.hashtags)) {
 		return value.accounts.length + value.statuses.length + value.hashtags.length
@@ -1248,6 +1306,155 @@ describe("userinfo reads the account, not the account's history (RES-7)", () => 
 		const [few = 0, many = 0] = counts
 		expect(many).toBeLessThanOrEqual(few + ALLOWANCE)
 	}, 60_000)
+})
+
+// Filters are reported as a page is presented (filters.ts): each read for a signed-in viewer reads the viewer's active
+// filters, compiled once, and seeks the page's statuses in the filters that name statuses. So a page costs the viewer's
+// filter rows, which the caps bound (MAX_FILTERS, MAX_FILTER_KEYWORDS), and no more as the history grows, however many
+// statuses the filters name. The viewer follows one author whose public statuses mention them; the filters, in every
+// context, match none of them, so every page is full.
+describe('filters cost a page their own rows, up to the caps, not the history (RES-7)', () => {
+	const VIEWER_ID = '660000000000000001'
+	const AUTHOR_ID = '660000000000000002'
+	const FILTER_TOKEN = 'filter-token'
+	const status = (i: number) => String(670000000000000000n + BigInt(i))
+	const filter = (f: number) => String(680000000000000000n + BigInt(f))
+	const CONTEXTS = '["home","notifications","public","thread","account"]'
+
+	async function store(perAuthor: number, filters: number): Promise<StoreStub> {
+		const stub = await migratedStore()
+		await runInDurableObject(stub, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://far.example/users/a', 'a', 'far.example')",
+				AUTHOR_ID
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('filters', 'secret', 'filters', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'filters', ?, 'read')",
+				FILTER_TOKEN,
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+				VIEWER_ID,
+				AUTHOR_ID
+			)
+			for (let i = 0; i < perAuthor; i++) {
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					VALUES (?, ?, ?, 'public', ?, ?)`,
+					status(i),
+					`https://far.example/objects/${status(i)}`,
+					AUTHOR_ID,
+					`<p>hello viewer, number ${i}</p>`,
+					new Date(NOW).toISOString()
+				)
+				sql.exec(
+					"INSERT INTO notifications (account_id, type, from_account_id, status_id) VALUES (?, 'mention', ?, ?)",
+					VIEWER_ID,
+					AUTHOR_ID,
+					status(i)
+				)
+			}
+			// Each filter has the most keywords (none of which the statuses hold) and names one of the author's oldest statuses,
+			// below the newest page.
+			for (let f = 0; f < filters; f++) {
+				sql.exec(
+					"INSERT INTO filters (id, account_id, title, context, action) VALUES (?, ?, 'f', ?, ?)",
+					filter(f),
+					VIEWER_ID,
+					CONTEXTS,
+					f % 2 === 0 ? 'hide' : 'warn'
+				)
+				for (let k = 0; k < MAX_FILTER_KEYWORDS; k++) {
+					sql.exec(
+						'INSERT INTO filter_keywords (id, filter_id, keyword, whole_word) VALUES (?, ?, ?, ?)',
+						String(690000000000000000n + BigInt(f * 1000 + k)),
+						filter(f),
+						`absent ${f} ${k}`,
+						k % 2
+					)
+				}
+				sql.exec(
+					'INSERT INTO filter_statuses (id, filter_id, status_id) VALUES (?, ?, ?)',
+					String(695000000000000000n + BigInt(f)),
+					filter(f),
+					status(f % PAGE.limit)
+				)
+			}
+		})
+		return stub
+	}
+
+	const credential = { tokenHash: FILTER_TOKEN, scope: 'read', now: NOW } as const
+	const reads: [string, StoreOperation<never, unknown>, unknown][] = [
+		['home', homeTimeline, { credential, page: PAGE, present: PRESENT }],
+		['public', publicTimeline, { ...timeline, credential }],
+		[
+			'account statuses',
+			accountStatuses,
+			{
+				credential,
+				now: NOW,
+				account: AUTHOR_ID,
+				page: PAGE,
+				onlyMedia: false,
+				excludeReplies: false,
+				excludeReblogs: false,
+				pinned: false,
+				tagged: null,
+				present: PRESENT,
+			},
+		],
+		[
+			'notifications',
+			listNotifications,
+			{ credential, page: PAGE, types: [], excludeTypes: [], accountId: null, present: PRESENT },
+		],
+	]
+
+	async function measure(perAuthor: number, filters: number): Promise<Record<string, number>> {
+		const stub = await store(perAuthor, filters)
+		const rows: Record<string, number> = {}
+		for (const [name, operation, input] of reads) {
+			const output = await runInDurableObject(stub, (_instance, state) =>
+				operation.run(state.storage.sql, input as never)
+			)
+			expect([name, shown(output)]).toEqual([name, PAGE.limit])
+			rows[name] = await rowsRead({ store: stub }, operation, input as never)
+		}
+		return rows
+	}
+
+	it('reads the same rows with 40 or 2,000 statuses at the caps, and at most the filter rows more than with none', async () => {
+		const none = await measure(40, 0)
+		const few = await measure(40, MAX_FILTERS)
+		const many = await measure(2000, MAX_FILTERS)
+		const grown: string[] = []
+		for (const [name] of reads) {
+			const [base = 0, capped = 0, longer = 0] = [none[name], few[name], many[name]]
+			// Per filter: its row, its contexts, its keywords (each through a json_each list of the filters), whether it
+			// names statuses, and a seek per status of the page (and its json_each entry).
+			if (capped > base + MAX_FILTERS * (2 * MAX_FILTER_KEYWORDS + 2 * PAGE.limit + 10) + ALLOWANCE) {
+				grown.push(`${name} with filters: ${base} -> ${capped}`)
+			}
+			if (longer > capped + ALLOWANCE) {
+				grown.push(`${name} with history: ${capped} -> ${longer}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 120_000)
 })
 
 // Markers read the viewer's own rows through the (account_id, timeline) key: at most one per timeline, however many

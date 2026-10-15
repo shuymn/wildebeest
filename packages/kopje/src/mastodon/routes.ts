@@ -5,6 +5,7 @@ import * as accounts from './accounts'
 import * as blocks from './blocks'
 import type { ApiDeps, ApiEnv, ApiHandler } from './context'
 import * as conversations from './conversations'
+import * as filters from './filters'
 import * as instance from './instance'
 import * as lists from './lists'
 import * as markers from './markers'
@@ -75,8 +76,6 @@ export const ROUTES: readonly Route[] = [
 		handler: accounts.familiarFollowers,
 	},
 	{ method: 'GET', path: '/api/v1/tags/:id', access: { optional: true }, handler: tags.getTag },
-	{ method: 'GET', path: '/api/v1/filters', access: { scope: 'read:filters' }, handler: placeholders.emptyUserList },
-	{ method: 'GET', path: '/api/v2/filters', access: { scope: 'read:filters' }, handler: placeholders.emptyUserList },
 	{
 		method: 'GET',
 		path: '/api/v1/followed_tags',
@@ -343,6 +342,84 @@ export const ROUTES: readonly Route[] = [
 		handler: lists.removeListAccounts,
 	},
 
+	// Filters (mastodon/filters.ts): v2, and v1 over the same filters. Fixed paths before their :id siblings.
+	{ method: 'GET', path: '/api/v1/filters', access: { scope: 'read:filters' }, handler: filters.listFiltersV1 },
+	{ method: 'POST', path: '/api/v1/filters', access: { scope: 'write:filters' }, handler: filters.createFilterV1 },
+	{ method: 'GET', path: '/api/v1/filters/:id', access: { scope: 'read:filters' }, handler: filters.getFilterV1 },
+	{ method: 'PUT', path: '/api/v1/filters/:id', access: { scope: 'write:filters' }, handler: filters.updateFilterV1 },
+	{ method: 'PATCH', path: '/api/v1/filters/:id', access: { scope: 'write:filters' }, handler: filters.updateFilterV1 },
+	{
+		method: 'DELETE',
+		path: '/api/v1/filters/:id',
+		access: { scope: 'write:filters' },
+		handler: filters.deleteFilterV1,
+	},
+	{ method: 'GET', path: '/api/v2/filters', access: { scope: 'read:filters' }, handler: filters.listFilters },
+	{ method: 'POST', path: '/api/v2/filters', access: { scope: 'write:filters' }, handler: filters.createFilter },
+	{
+		method: 'GET',
+		path: '/api/v2/filters/keywords/:id',
+		access: { scope: 'read:filters' },
+		handler: filters.getFilterKeyword,
+	},
+	{
+		method: 'PUT',
+		path: '/api/v2/filters/keywords/:id',
+		access: { scope: 'write:filters' },
+		handler: filters.updateFilterKeyword,
+	},
+	{
+		method: 'PATCH',
+		path: '/api/v2/filters/keywords/:id',
+		access: { scope: 'write:filters' },
+		handler: filters.updateFilterKeyword,
+	},
+	{
+		method: 'DELETE',
+		path: '/api/v2/filters/keywords/:id',
+		access: { scope: 'write:filters' },
+		handler: filters.deleteFilterKeyword,
+	},
+	{
+		method: 'GET',
+		path: '/api/v2/filters/statuses/:id',
+		access: { scope: 'read:filters' },
+		handler: filters.getFilterStatus,
+	},
+	{
+		method: 'DELETE',
+		path: '/api/v2/filters/statuses/:id',
+		access: { scope: 'write:filters' },
+		handler: filters.deleteFilterStatus,
+	},
+	{
+		method: 'GET',
+		path: '/api/v2/filters/:filter_id/keywords',
+		access: { scope: 'read:filters' },
+		handler: filters.listFilterKeywords,
+	},
+	{
+		method: 'POST',
+		path: '/api/v2/filters/:filter_id/keywords',
+		access: { scope: 'write:filters' },
+		handler: filters.createFilterKeyword,
+	},
+	{
+		method: 'GET',
+		path: '/api/v2/filters/:filter_id/statuses',
+		access: { scope: 'read:filters' },
+		handler: filters.listFilterStatuses,
+	},
+	{
+		method: 'POST',
+		path: '/api/v2/filters/:filter_id/statuses',
+		access: { scope: 'write:filters' },
+		handler: filters.createFilterStatus,
+	},
+	{ method: 'GET', path: '/api/v2/filters/:id', access: { scope: 'read:filters' }, handler: filters.getFilter },
+	{ method: 'PUT', path: '/api/v2/filters/:id', access: { scope: 'write:filters' }, handler: filters.updateFilter },
+	{ method: 'PATCH', path: '/api/v2/filters/:id', access: { scope: 'write:filters' }, handler: filters.updateFilter },
+	{ method: 'DELETE', path: '/api/v2/filters/:id', access: { scope: 'write:filters' }, handler: filters.deleteFilter },
 	// Conversations (mastodon/conversations.ts).
 	{
 		method: 'GET',

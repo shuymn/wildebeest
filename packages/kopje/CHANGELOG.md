@@ -16,6 +16,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - `GET /.well-known/oauth-authorization-server` (RFC 8414), as Mastodon 4.5 has it: the OAuth endpoints, including
   `userinfo_endpoint` and Mastodon's `app_registration_endpoint`, the scopes, and the supported response types and
   modes, grant types, client authentication methods and PKCE methods.
+- Filters, as Mastodon 4.5 has them: `/api/v2/filters` with keywords (`keywords_attributes`, `_destroy`) and statuses,
+  `/api/v2/filters/:id/keywords`, `/api/v2/filters/keywords/:id`, `/api/v2/filters/:id/statuses` and
+  `/api/v2/filters/statuses/:id`, and the v1 `/api/v1/filters` over the same filters. Every status shown to you carries
+  in `filtered` your active filters that match it, whatever their context and action, and your client hides or warns by
+  context, as with Mastodon. An account has at most 50 filters, a filter 20 keywords and 200 statuses. A status is
+  matched on the beginning of its text: at most 10,000 characters each, and a response's statuses share 400,000 (short
+  ones whole, long ones on an equal share), so a page is matched in full but a keyword deep in a long status of a very
+  large thread may be missed (filtered statuses always match). Keywords match case-insensitively by simple Unicode case
+  folding; the multi-character folds Mastodon also applies (ß and ss, İ and i̇) do not match. Deleting a v1 filter also
+  deletes its filter when that leaves it with no keyword and no status.
 - Conversations in the Mastodon API, as Mastodon 4.5 has them: `GET /api/v1/conversations` (paged by the last status
   with Link headers, 20 by default and at most 40), `DELETE /api/v1/conversations/:id` and
   `POST /api/v1/conversations/:id/read` and `/unread`. Scopes are `read:statuses` and `write:conversations` (or `read`
@@ -70,7 +80,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds five migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds six migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
@@ -86,6 +96,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0011_scheduled_statuses`: adds the `scheduled_statuses` table and `media_attachments.scheduled_status_id`, with
       their indexes. Its work grows linearly with the media stored (one pass to add the column and one to build its
       partial index).
+    - `0012_filters`: adds the `filters`, `filter_keywords` and `filter_statuses` tables, empty. Its work does not grow
+      with the Store.
     - `0013_polls`: adds the `polls` and `poll_votes` tables, with their indexes, and `status_edits.poll_options`. It is
       quick.
 - `wrangler.jsonc`: unchanged.

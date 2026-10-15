@@ -41,7 +41,13 @@ import {
 	type Visibility,
 	viewableStatusId,
 } from './audience'
-import { optionalUserReadOperation, userMediaDeleteOperation, userReadOperation, userWriteOperation } from './auth'
+import {
+	optionalUserReadOperation,
+	type UserContext,
+	userMediaDeleteOperation,
+	userReadOperation,
+	userWriteOperation,
+} from './auth'
 import { addToConversation } from './conversations'
 import { beginRetraction } from './deliveries'
 import { allocateLocalId } from './ids'
@@ -57,7 +63,7 @@ import {
 	presentOwnStatus,
 	type PresentOwnOptions,
 	presentStatus,
-	presentStatuses,
+	presentStatusPair,
 	type Status,
 } from './status-presenter'
 import { exceedsRawLength, mentionKey, type MentionRef, parseStatusText, renderStatusHtml } from './status-text'
@@ -392,41 +398,42 @@ export function writePost(
 }
 
 // The status the Idempotency-Key `key` made for the account, as its own: a repeat answers with it.
-export function ownStatusByKey(db: Db, accountId: string, key: string, present: Present, now: number): Status | null {
+export function ownStatusByKey(db: Db, viewer: UserContext, key: string, present: Present): Status | null {
 	const existing = db.first<{ id: string }>(
 		'SELECT id FROM statuses WHERE account_id = ? AND client_key = ?',
-		accountId,
+		viewer.accountId,
 		key
 	)
-	return existing === undefined
-		? null
-		: presentOwn(db, accountId, existing.id, { ...present, viewerId: accountId, now: iso(now) })
+	return existing === undefined ? null : presentOwn(db, viewer.accountId, existing.id, { ...present, viewer })
 }
 
 // Posts at once: the checks, then the write, answered with the new status.
-export function postNow(db: Db, accountId: string, input: CreateStatusInput): CreateStatusResult {
+export function postNow(db: Db, viewer: UserContext, input: CreateStatusInput): CreateStatusResult {
+	const { accountId } = viewer
 	const prepared = preparePost(db, accountId, input, null)
 	if (!isPrepared(prepared)) {
 		return prepared
 	}
 	const id = writePost(db, accountId, { ...input, origin: input.present.origin }, prepared)
-	const status = presentOwn(db, accountId, id, { ...input.present, viewerId: accountId, now: iso(input.now) })
+	const status = presentOwn(db, accountId, id, { ...input.present, viewer })
 	if (status === null) {
 		throw new Error('created status cannot be presented')
 	}
 	return { status: 'ok', value: status }
 }
 
-export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusResult>((db, input, { accountId }) => {
-	if (input.idempotencyKey !== undefined) {
-		// The key is the status's natural key: a repeat answers with the status the first request made.
-		const status = ownStatusByKey(db, accountId, input.idempotencyKey, input.present, input.now)
-		if (status !== null) {
-			return { status: 'ok', value: status }
+export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusResult>(
+	(db, input, { accountId }, viewer) => {
+		if (input.idempotencyKey !== undefined) {
+			// The key is the status's natural key: a repeat answers with the status the first request made.
+			const status = ownStatusByKey(db, viewer, input.idempotencyKey, input.present)
+			if (status !== null) {
+				return { status: 'ok', value: status }
+			}
 		}
+		return postNow(db, viewer, input)
 	}
-	return postNow(db, accountId, input)
-})
+)
 
 type ReplyParent = {
 	id: string
@@ -572,8 +579,8 @@ export function recordEdit(db: Db, statusId: string, at: string): string {
 // added by an edit is linked in the text but adds no recipient, notification or delivery, so neither the status nor
 // its history reaches anyone who could not see the original. Public and unlisted statuses follow Mastodon: a new
 // mention is a mention and is notified. Either way, a mention removed by an edit stays as a silent mention.
-export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db, input, { accountId }) => {
-	const options = { ...input.present, viewerId: accountId, now: iso(input.now) }
+export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db, input, { accountId }, viewer) => {
+	const options = { ...input.present, viewer }
 	const current = ownStatus(db, accountId, input.id)
 	if (current === null || current.reblog_of_id !== null) {
 		return { status: 'not_found' }
@@ -711,17 +718,12 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 export const deleteStatus = userMediaDeleteOperation<
 	{ id: string; deleteMedia: boolean; now: number; present: Present },
 	Viewed<Status>
->((db, input, { accountId }) => {
+>((db, input, { accountId }, viewer) => {
 	const current = ownStatus(db, accountId, input.id)
 	if (current === null) {
 		return { status: 'not_found' }
 	}
-	const value = presentOwn(db, accountId, current.id, {
-		...input.present,
-		viewerId: accountId,
-		source: true,
-		now: iso(input.now),
-	})
+	const value = presentOwn(db, accountId, current.id, { ...input.present, viewer, source: true })
 	if (value === null) {
 		return { status: 'not_found' }
 	}
@@ -768,9 +770,9 @@ function viewable(db: Db, viewerId: string | null, id: string) {
 }
 
 export const getStatus = optionalUserReadOperation<{ id: string; present: Present }, Viewed<Status>>(
-	(db, { id, present }, { accountId: viewerId, now }) => {
-		const resolved = viewable(db, viewerId, id)
-		return viewed(resolved === null ? null : presentStatus(db, resolved, { ...present, viewerId, now }))
+	(db, { id, present }, viewer) => {
+		const resolved = viewable(db, viewer.accountId, id)
+		return viewed(resolved === null ? null : presentStatus(db, resolved, { ...present, viewer }))
 	}
 )
 
@@ -824,22 +826,14 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 			limits.descendants,
 			now
 		)
-		const options = { ...present, viewerId, now }
-		return {
-			status: 'ok',
-			value: {
-				ancestors: presentStatuses(
-					db,
-					ancestors.map((row) => row.id),
-					options
-				),
-				descendants: presentStatuses(
-					db,
-					descendants.map((row) => row.id),
-					options
-				),
-			},
-		}
+		// Presented as one response, so the filters' text budget is shared by both lists.
+		const [presentedAncestors, presentedDescendants] = presentStatusPair(
+			db,
+			ancestors.map((row) => row.id),
+			descendants.map((row) => row.id),
+			{ ...present, viewer }
+		)
+		return { status: 'ok', value: { ancestors: presentedAncestors, descendants: presentedDescendants } }
 	}
 )
 
@@ -904,9 +898,10 @@ function editPollOf(options: string | null): StatusEdit['poll'] {
 
 // Edit history, oldest first. A status never edited has one entry: itself.
 export const statusHistory = optionalUserReadOperation<{ id: string; present: Present }, Viewed<StatusEdit[]>>(
-	(db, { id, present }, { accountId: viewerId, now }) => {
+	(db, { id, present }, viewer) => {
+		const { accountId: viewerId } = viewer
 		const resolved = viewable(db, viewerId, id)
-		const status = resolved === null ? null : presentStatus(db, resolved, { ...present, viewerId, now })
+		const status = resolved === null ? null : presentStatus(db, resolved, { ...present, viewer })
 		if (resolved === null || status === null) {
 			return { status: 'not_found' }
 		}
@@ -1010,15 +1005,15 @@ function viewerUri(db: Db, accountId: string): string {
 	return localAuthor(db, accountId).uri
 }
 
-function presented(db: Db, id: string, viewerId: string, present: Present, now: number): Viewed<Status> {
-	const visible = viewableStatusId(db, viewerId, id)
-	return viewed(visible === null ? null : presentStatus(db, visible, { ...present, viewerId, now: iso(now) }))
+function presented(db: Db, id: string, viewer: UserContext, present: Present): Viewed<Status> {
+	const visible = viewableStatusId(db, viewer.accountId, id)
+	return viewed(visible === null ? null : presentStatus(db, visible, { ...present, viewer }))
 }
 
 type ActionInput = { id: string; now: number; present: Present }
 
 // StatusPolicy#favourite?: the status is visible and the viewer does not block its author.
-export const favourite = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }) => {
+export const favourite = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
 	const target = actionTarget(db, accountId, input.id)
 	if (target === null) {
 		return { status: 'not_found' }
@@ -1052,10 +1047,10 @@ export const favourite = userWriteOperation<ActionInput, Acted<Status>>((db, inp
 			input.now
 		)
 	}
-	return presented(db, target.id, accountId, input.present, input.now)
+	return presented(db, target.id, viewer, input.present)
 })
 
-export const unfavourite = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }) => {
+export const unfavourite = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
 	const id = originalId(db, input.id)
 	if (id === null) {
 		return { status: 'not_found' }
@@ -1090,10 +1085,10 @@ export const unfavourite = userWriteOperation<ActionInput, Acted<Status>>((db, i
 			)
 		}
 	}
-	return presented(db, id, accountId, input.present, input.now)
+	return presented(db, id, viewer, input.present)
 })
 
-export const bookmark = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }) => {
+export const bookmark = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
 	const target = actionTarget(db, accountId, input.id)
 	if (target === null) {
 		return { status: 'not_found' }
@@ -1104,16 +1099,16 @@ export const bookmark = userWriteOperation<ActionInput, Acted<Status>>((db, inpu
 		target.id,
 		iso(input.now)
 	)
-	return presented(db, target.id, accountId, input.present, input.now)
+	return presented(db, target.id, viewer, input.present)
 })
 
-export const unbookmark = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }) => {
+export const unbookmark = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
 	const id = originalId(db, input.id)
 	if (id === null) {
 		return { status: 'not_found' }
 	}
 	db.run('DELETE FROM bookmarks WHERE account_id = ? AND status_id = ?', accountId, id)
-	return presented(db, id, accountId, input.present, input.now)
+	return presented(db, id, viewer, input.present)
 })
 
 export type ReblogInput = ActionInput & { visibility?: ApiVisibility; objectId: string }
@@ -1121,7 +1116,7 @@ export type ReblogInput = ActionInput & { visibility?: ApiVisibility; objectId: 
 // StatusPolicy#reblog?: visible, not direct or limited, private only by its author, and the viewer does not block
 // the author. A private status is boosted as private; otherwise the requested visibility or the viewer's default,
 // with direct (which a boost cannot be) read as private.
-export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input, { accountId }) => {
+export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input, { accountId }, viewer) => {
 	const target = actionTarget(db, accountId, input.id)
 	if (target === null) {
 		return { status: 'not_found' }
@@ -1133,7 +1128,7 @@ export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input,
 	) {
 		return { status: 'forbidden' }
 	}
-	const options = { ...input.present, viewerId: accountId, now: iso(input.now) }
+	const options = { ...input.present, viewer }
 	const existing = db.first<{ id: string }>(
 		'SELECT id FROM statuses WHERE account_id = ? AND reblog_of_id = ?',
 		accountId,
@@ -1306,7 +1301,7 @@ function removeReblog(db: Db, accountId: string, reblogId: string, originalId: s
 	)
 }
 
-export const unreblog = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }) => {
+export const unreblog = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
 	const id = originalId(db, input.id)
 	if (id === null) {
 		return { status: 'not_found' }
@@ -1319,7 +1314,7 @@ export const unreblog = userWriteOperation<ActionInput, Acted<Status>>((db, inpu
 	if (own !== undefined) {
 		removeReblog(db, accountId, own.id, id, input.now)
 	}
-	return presented(db, id, accountId, input.present, input.now)
+	return presented(db, id, viewer, input.present)
 })
 
 // ---------------------------------------------------------------------------------------------------------------

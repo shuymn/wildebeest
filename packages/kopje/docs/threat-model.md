@@ -439,6 +439,21 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `conversation_statuses_removed`);
   `test/conversations.test.ts`, `test/migrations.test.ts`, `test/policy-endpoints.test.ts`,
   `test/policy-bounds.test.ts`, `test/policy-writes.test.ts`.
+- **VIS-18: a filter changes only what its owner is told.** Filters (`CustomFilter`) belong to a local account; another
+  account's filter, keyword or filter status is not found, read or written. They apply after the read rule (VIS-1,
+  VIS-5), in the presenter, for their owner only: each status presented to the owner carries in `filtered` the owner's
+  active filters that match it, whatever their context and action, and the client decides by context, as Mastodon's;
+  nothing is removed on the server. Nothing a filter reports names a status other than the one it is on or its original.
+  A filter status is accepted only for a status the owner may view; one they may not view is refused as a missing status
+  is ("Status must exist"), so the two cannot be told apart, and it is listed by id only. Matching is bounded (RES-1,
+  RES-7): at most 50 filters per account, 20 keywords of 512 characters per filter and 200 statuses per filter, each
+  status matched on at most 10,000 code units of its text and the statuses of one response on 400,000 together, shared
+  by water-filling (short texts whole, long ones up to one level; a page of 40 is always matched in full, but a keyword
+  deep in a long status of a very large response may be missed, while filter statuses always match), each keyword an
+  escaped literal pattern (the `iu` flags, no quantifier) that cannot backtrack. _Implemented on branch
+  `kopje/filters`:_ `src/domain/filters.ts`, `src/domain/status-presenter.ts`, migration `0012_filters`;
+  `test/filters.test.ts` (API, ownership, matching, the worst case at the caps), `test/policy-filters.test.ts`
+  (generated worlds), `test/policy-bounds.test.ts` (rows read up to the caps).
 
 ### Authorization (AUTH)
 

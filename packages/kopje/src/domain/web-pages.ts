@@ -55,8 +55,7 @@ export const profilePage = readOperation<
 		account: presentAccount(row, present),
 		statuses: presentStatuses(db, ids.slice(0, PROFILE_PAGE_SIZE), {
 			...present,
-			viewerId: null,
-			now: new Date(now).toISOString(),
+			viewer: { accountId: null, now: new Date(now).toISOString() },
 		}),
 		next,
 	}
@@ -98,7 +97,10 @@ export const statusPage = readOperation<{ username: string; id: string; present:
 		if (resolved !== id) {
 			return { status: 'moved', username: row.username, id: resolved }
 		}
-		const status = presentStatus(db, row.id, { ...present, viewerId: null, now: new Date(now).toISOString() })
+		const status = presentStatus(db, row.id, {
+			...present,
+			viewer: { accountId: null, now: new Date(now).toISOString() },
+		})
 		if (status === null) {
 			return { status: 'not_found' }
 		}
@@ -106,7 +108,7 @@ export const statusPage = readOperation<{ username: string; id: string; present:
 		const parent =
 			parentId === null
 				? null
-				: presentStatus(db, parentId, { ...present, viewerId: null, now: new Date(now).toISOString() })
+				: presentStatus(db, parentId, { ...present, viewer: { accountId: null, now: new Date(now).toISOString() } })
 		return {
 			status: 'ok',
 			value: status,

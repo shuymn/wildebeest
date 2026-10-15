@@ -29,6 +29,11 @@ const NOT_CARRIED: Record<string, string> = {
 	deliveries: 'outbound queue; legacy queues are not carried',
 	domain_block_cleanups: 'pending work of a domain block made in Kopje',
 	fedify_kv: 'federation cache',
+	filter_keywords:
+		'legacy never wrote filters (its filter_keywords is in UNUSED_LEGACY_TABLES, which stops the conversion)',
+	filter_statuses:
+		'legacy never wrote filters (its filter_statuses is in UNUSED_LEGACY_TABLES, which stops the conversion)',
+	filters: 'legacy never wrote filters (its filters is in UNUSED_LEGACY_TABLES, which stops the conversion)',
 	inbound_jobs: 'inbound queue; legacy queues are not carried',
 	inbound_retractions: 'inbound queue state',
 	inbound_spool: 'inbound queue state',

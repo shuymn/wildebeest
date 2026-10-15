@@ -1391,6 +1391,13 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 		'DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE status_id = ? LIMIT ?)',
 		statusId
 	)
+	// Filters naming the status (migration 0012_filters): any number of them, of any accounts.
+	spend(
+		db,
+		budget,
+		'DELETE FROM filter_statuses WHERE id IN (SELECT id FROM filter_statuses WHERE status_id = ? LIMIT ?)',
+		statusId
+	)
 	// Receipts of a withdrawn local boost are deleted here, a batch at a time, after its Undo has taken them as targets.
 	spend(
 		db,
@@ -1413,6 +1420,7 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 			OR EXISTS (SELECT 1 FROM favourites WHERE status_id = ?1)
 			OR EXISTS (SELECT 1 FROM bookmarks WHERE status_id = ?1)
 			OR EXISTS (SELECT 1 FROM notifications WHERE status_id = ?1)
+			OR EXISTS (SELECT 1 FROM filter_statuses WHERE status_id = ?1)
 			OR EXISTS (SELECT 1 FROM outbound_receipts WHERE status_id = ?1)
 			OR EXISTS (SELECT 1 FROM statuses WHERE in_reply_to_id = ?1 OR reblog_of_id = ?1)`,
 		statusId

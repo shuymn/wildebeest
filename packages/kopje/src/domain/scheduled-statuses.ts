@@ -256,12 +256,12 @@ export type ScheduleResult = CreateStatusResult | { status: 'scheduled'; value: 
 // a scheduled status is never posted twice, once now and once when it is published). Then no scheduled_at, or a time
 // not in the future, posts at once; otherwise the post is checked as an immediate one (the status replied to, the
 // media, a blank text), then against ScheduledStatus's validations, and kept with its media held.
-export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db, input, { accountId }) => {
+export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db, input, { accountId }, viewer) => {
 	if (input.scheduledAt !== undefined && !isTime(input.scheduledAt)) {
 		return { status: 'invalid', error: 'Record invalid' }
 	}
 	if (input.idempotencyKey !== undefined) {
-		const status: Status | null = ownStatusByKey(db, accountId, input.idempotencyKey, input.present, input.now)
+		const status: Status | null = ownStatusByKey(db, viewer, input.idempotencyKey, input.present)
 		if (status !== null) {
 			return { status: 'ok', value: status }
 		}
@@ -275,7 +275,7 @@ export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db,
 		}
 	}
 	if (input.scheduledAt === undefined || Date.parse(input.scheduledAt) <= input.now) {
-		return postNow(db, accountId, input)
+		return postNow(db, viewer, input)
 	}
 	const scheduledAt = input.scheduledAt
 	const prepared = preparePost(db, accountId, input, null)

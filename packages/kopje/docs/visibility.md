@@ -217,6 +217,23 @@ author's own poll the one notification from oneself). Its `Question` goes to its
 Update of counts also to the remote voters of a public or unlisted status; a local vote in a remote poll goes to the
 poll's author alone.
 
+## Filters
+
+A viewer's filters (`src/domain/filters.ts`, Mastodon's `CustomFilter`) are applied after the rules above, to what that
+viewer is shown and to nobody else's reads. They are not a visibility rule and are not in `audience.ts`: a read first
+selects what the rules let the viewer see, and the presenter then reports, in each status's `filtered`, every active
+(unexpired) filter of the viewer that matches it, whatever its context and action (`warn`, `hide`, `blur`), as
+Mastodon's `StatusRelationshipsPresenter` does; a boost and its original report the same. Nothing is removed on the
+server: the client decides by context, so pages and cursors are those of the read. A filter matches a status by a
+keyword in its spoiler text, text (a remote status's lines as Mastodon's `PlainTextFormatter` extracts them), poll
+choices or media descriptions (of the original, for a boost), with `whole_word` as Mastodon's regex reads it, or by a status it names
+(the status or, for a boost, its original). A filter status can be added only for a status the viewer may view
+(`canView`); one they may not view is refused as a missing one is, and a filter status is listed by its ids alone,
+whatever the viewer may see of it later. `test/policy-filters.test.ts` checks the endpoints on generated worlds against
+a model of the matching. Matching is bounded: each status is matched on at most 10,000 code units of its text, and the
+statuses of one response on 400,000 together, by water-filling (short texts whole, long ones up to one level), so a
+keyword deep in a long status of a very large response may be missed; filter statuses always match.
+
 ## Outbound recipients
 
 `recipientsFor(db, signer, activity, audience)` decides whom an activity of a local account reaches (R23), and

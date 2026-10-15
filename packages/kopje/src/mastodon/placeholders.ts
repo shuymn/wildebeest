@@ -1,7 +1,7 @@
 import { type ApiHandler, authorized, credential, present, storeCall } from './context'
 import { mastodonError } from './errors'
 
-// Features Kopje has no data for yet (filters, followed and featured tags, endorsements, announcements, trends,
+// Features Kopje has no data for yet (followed and featured tags, endorsements, announcements, trends,
 // suggestions), answered truthfully as empty, because clients call them at startup and a 404 can stop a client
 // starting. Each is replaced when its feature arrives with its own tables. No write endpoint exists for them.
 
