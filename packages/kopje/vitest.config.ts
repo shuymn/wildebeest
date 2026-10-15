@@ -3,6 +3,8 @@ import { fileURLToPath } from 'node:url'
 import { cloudflareTest } from '@cloudflare/vitest-plugin'
 import { defineConfig } from 'vitest/config'
 
+import { sqlDepthService } from './test-node/sql-depth'
+
 export default defineConfig({
 	plugins: [
 		cloudflareTest({
@@ -15,6 +17,8 @@ export default defineConfig({
 					APP_REGISTRATION_LIMIT: { namespace_id: '4201', simple: { limit: 1_000_000, period: 60 } },
 					LOGIN_LIMIT: { namespace_id: '4202', simple: { limit: 1_000_000, period: 60 } },
 				},
+				// Measures the expression depth of the statements a suite ran, on Node (test/sql-depth-setup.ts).
+				serviceBindings: { SQL_DEPTH: sqlDepthService },
 			},
 		}),
 	],
@@ -25,6 +29,7 @@ export default defineConfig({
 		// Converts a synthetic legacy export on Node for test/cutover-import.test.ts (node:sqlite is not in workerd).
 		globalSetup: [fileURLToPath(new URL('./test-node/cutover-global-setup.ts', import.meta.url))],
 		include: [fileURLToPath(new URL('./test/**/*.test.ts', import.meta.url))],
+		setupFiles: [fileURLToPath(new URL('./test/sql-depth-setup.ts', import.meta.url))],
 		// The suites drive the real Store through workerd; on a loaded CI runner a heavy test can pass 5 s.
 		testTimeout: 20_000,
 		// FC_SEED replays a property test's run (test/policy-world.ts).
