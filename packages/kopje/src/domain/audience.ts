@@ -173,7 +173,7 @@ export function findableBySql(x: string, viewer: string): string {
 
 // Whether the account `x` hides its network (Account#hide_collections). Only a local account stores the setting; Kopje
 // does not learn a remote account's, so a remote account hides nothing.
-function hidesCollectionsSql(x: string): string {
+export function hidesCollectionsSql(x: string): string {
 	return `EXISTS (SELECT 1 FROM main.local_accounts ph WHERE ph.account_id = ${x} AND ph.hide_collections = 1)`
 }
 

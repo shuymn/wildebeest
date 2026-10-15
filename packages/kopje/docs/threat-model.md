@@ -297,18 +297,18 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   accounts the viewer blocks or mutes", "shows a follower whose mute has expired, and hides one on a domain the viewer
   blocks", "shows no more than the followers and following lists show"). The followers and following lists
   (`GET /api/v1/accounts/:id/followers` and `/following`, Mastodon 4.5's `FollowerAccountsController` and
-  `FollowingAccountsController`) read the viewer from an optional token and list nothing when the account is
-  suspended, or, to anyone but the account itself, when it hides its network (`hide_collections`, set through
-  `update_credentials`) or blocks the viewer; other viewers do not see the accounts they block, mute (while the mute
-  applies) or are blocked by. Familiar followers leave out an account that hides its network and a follower that hides
-  its own. The ActivityPub followers and following collections of a suspended actor answer 404, and those of an actor
-  that hides its network show `totalItems` only and answer a page with 403. Kopje does not learn a remote account's
-  setting, so a remote account's lists are never hidden. _Implemented on branch `kopje/account-lists`:_ `followListsShownSql` and
-  `followListedSql` in `src/domain/audience.ts`, `listFollows` and `familiarFollowers` in `src/domain/accounts.ts`,
-  `getCollection` in `src/domain/actors.ts`; `test/accounts.test.ts` ("follower lists for the viewer (R13)"),
-  `test/account-reads.test.ts` ("leaves out an account that hides its network"), `test/federation.test.ts` ("shows
-  only the size of the collections of an actor that hides its network"), `test/policy-oracle.test.ts`,
-  `test/policy-endpoints.test.ts`.
+  `FollowingAccountsController`) read the viewer from an optional token and list nothing when the account is suspended,
+  or, to anyone but the account itself, when it hides its network (`hide_collections`, set through `update_credentials`)
+  or blocks the viewer; other viewers do not see the accounts they block, mute (while the mute applies) or are blocked
+  by. Familiar followers show no followers of an account that hides its network, to anyone, the account itself included,
+  and leave out a follower that hides its own (Mastodon's `FamiliarFollowersPresenter`). The ActivityPub followers and
+  following collections of a suspended actor answer 404, and those of an actor that hides its network show `totalItems`
+  only and answer a page with 403. Kopje does not learn a remote account's setting, so a remote account's lists are
+  never hidden. _Implemented on branch `kopje/account-lists`:_ `followListsShownSql` and `followListedSql` in
+  `src/domain/audience.ts`, `listFollows` and `familiarFollowers` in `src/domain/accounts.ts`, `getCollection` in
+  `src/domain/actors.ts`; `test/accounts.test.ts` ("follower lists for the viewer (R13)"), `test/account-reads.test.ts`
+  ("shows no followers of an account that hides its network"), `test/federation.test.ts` ("shows only the size of the
+  collections of an actor that hides its network"), `test/policy-oracle.test.ts`, `test/policy-endpoints.test.ts`.
 - **VIS-9: only the followed side accepts.** A pending follow of a local account becomes `accepted` only by that
   account's own authorize call; a pending remote follow only by an `Accept` that passes ID-6. _Enforced (main):_ `answerFollowRequest` in `src/domain/accounts.ts` (`POST
 /api/v1/follow_requests/:id/authorize` and `/reject`, the viewer from the credential; a remote requester gets the

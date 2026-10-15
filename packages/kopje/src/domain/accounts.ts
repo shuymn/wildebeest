@@ -10,6 +10,7 @@ import {
 	followableBySql,
 	followListedSql,
 	followListsShownSql,
+	hidesCollectionsSql,
 	REACHES_FOLLOWERS_SQL,
 } from './audience'
 import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
@@ -520,12 +521,11 @@ export const relationships = userReadOperation<{ ids: string[] }, Relationship[]
 )
 
 // GET /api/v1/accounts/familiar_followers (Mastodon's FamiliarFollowersPresenter): for each requested account, the
-// accounts the viewer follows that follow it. Both follows are accepted ones (VIS-8). It shows no more than
-// GET /api/v1/accounts/:id/followers of the account and /following of each follower show the same viewer
-// (followListsShownSql, R13): an account whose followers the viewer is not shown (unknown, suspended, hiding its
-// network or blocking the viewer) has no entry, and a follower whose following the viewer is not shown is left out, as
-// Mastodon's FamiliarFollowersPresenter leaves out accounts that hide their network. So is a follower the viewer
-// filters out of lists (filteredForSql: a block, a mute that applies at the request time, or a block of its domain).
+// accounts the viewer follows that follow it. Both follows are accepted ones (VIS-8). As Mastodon's
+// FamiliarFollowersController and FamiliarFollowersPresenter: an unknown or suspended account has no entry; an account
+// that hides its network has an entry with no accounts, whoever asks (the account itself included); a follower that
+// hides its network, or is suspended, is left out. So is a follower the viewer filters out of lists (filteredForSql: a
+// block, a mute that applies at the request time, or a block of its domain).
 // Bounds (RES-3, RES-7): at most MAX_FAMILIAR_FOLLOWERS_IDS accounts. For each, the candidates are the viewer's own
 // accepted follows (at most FAMILIAR_FOLLOWERS_WINDOW, through the partial index of accepted follows), each checked
 // for an accepted follow of the account through the unique pair index (CROSS JOIN keeps SQLite to that order), so
@@ -545,16 +545,24 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 			.slice(0, MAX_FAMILIAR_FOLLOWERS_IDS)
 			.map((id) => resolveAccountId(db, id))
 			.filter((id) => id !== null)
-		const targets = [...new Set(resolved)].filter(
-			(id) => db.first(`SELECT 1 AS shown WHERE ${followListsShownSql('?1', '?2')}`, id, viewerId) !== undefined
-		)
-		return targets.map((target) => {
+		const targets = [...new Set(resolved)].flatMap((id) => {
+			const row = db.first<{ hidden: number }>(
+				`SELECT ${hidesCollectionsSql('?1')} AS hidden WHERE ${availableSql('?1')}`,
+				id
+			)
+			return row === undefined ? [] : [{ id, hidden: row.hidden === 1 }]
+		})
+		return targets.map(({ id: target, hidden }) => {
+			if (hidden) {
+				return { id: target, accounts: [] }
+			}
 			const followers = db
 				.all<{ id: string }>(
 					`SELECT x.account_id AS id
 					FROM (SELECT target_account_id FROM follows WHERE account_id = ?2 AND state = 'accepted' LIMIT ?3) mine
 					CROSS JOIN follows x ON x.account_id = mine.target_account_id AND x.target_account_id = ?1 AND x.state = 'accepted'
-					WHERE ${followListsShownSql('x.account_id', '?2')} AND NOT ${filteredForSql('x.account_id', '?2', '?5')}
+					WHERE ${availableSql('x.account_id')} AND NOT ${hidesCollectionsSql('x.account_id')}
+						AND NOT ${filteredForSql('x.account_id', '?2', '?5')}
 					ORDER BY x.id DESC LIMIT ?4`,
 					target,
 					viewerId,

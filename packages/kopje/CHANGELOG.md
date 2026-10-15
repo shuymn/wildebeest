@@ -60,11 +60,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `/api/v1/endorsements`, `/api/v1/announcements` (any user token), `/api/v1/trends` (and `/trends/tags`,
   `/trends/statuses`, `/trends/links`), `/api/v1/suggestions` and `/api/v2/suggestions`.
 
-- `hide_collections`, Mastodon's setting to hide an account's network: `PATCH /api/v1/accounts/update_credentials`
-  takes it, and the Account entity and the credential account's `source` show it (`null` for a remote account, whose
-  setting Kopje does not learn). While it is on, the account's followers and following are listed to nobody but the
-  account itself, familiar followers leave it out, and the ActivityPub followers and following collections show their
-  size (`totalItems`) only and refuse a page (403), as Mastodon's do.
+- `hide_collections`, Mastodon's setting to hide an account's network: `PATCH /api/v1/accounts/update_credentials` takes
+  it, and the Account entity and the credential account's `source` show it (`null` for a remote account, whose setting
+  Kopje does not learn). While it is on, the account's followers and following are listed to nobody but the account
+  itself, familiar followers show none of its followers (to anyone, as Mastodon) and leave it out as a follower, and the
+  ActivityPub followers and following collections show their size (`totalItems`) only and refuse a page (403), as
+  Mastodon's do.
 
 - The `profile` OAuth scope, as Mastodon 4.5 has it: an app may register and request it alone or with other scopes. A
   `profile` token reads `GET /api/v1/accounts/verify_credentials` (the same answer as with `read:accounts`) and no other
