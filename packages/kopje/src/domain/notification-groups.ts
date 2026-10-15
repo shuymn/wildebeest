@@ -1,7 +1,7 @@
 import { type Account, edgeRangeSql, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
 import { statusReads } from './audience'
 import { type UserContext, userReadOperation, userWriteOperation } from './auth'
-import { GROUPABLE_TYPES, NOTIFICATION_ID } from './notifications'
+import { GROUPABLE_TYPES, NOTIFICATION_COLUMNS, NOTIFICATION_ID } from './notifications'
 import { presentStatuses, type Status } from './status-presenter'
 import type { Db } from '../db/sql'
 
@@ -17,9 +17,9 @@ import type { Db } from '../db/sql'
 // sample accounts and its newest, however far below the page they reach, and its oldest from the page's lower end.
 // Kopje does the same, through the group index, with two bounds (RES-7): a walk reads at most GROUP_WALK
 // notifications it shows, skipping those of the groups it has found, and a group's count reads at most GROUP_COUNT of
-// them. Only a group of more than GROUP_WALK notifications within a page's walk (a status favourited by thousands
-// within a few hours) ends a page early, with the groups found; its Link continues from the last one read, so the
-// walk goes on in the next page.
+// them. A page ends early, with the groups found, only when its walk meets more than GROUP_WALK notifications of the
+// groups it has already found (in practice a status favourited by thousands within a few hours); its Link continues
+// from the last one read, so the walk goes on in the next page.
 //
 // Dismissing a group and clearing delete at once, in the request, as Mastodon's destroy_all and delete_all do.
 
@@ -69,15 +69,6 @@ export type ExpandAccounts = 'full' | 'partial_avatars'
 
 type ShownColumns = { id: string; type: string; from_account_id: string; created_at: string; group_key: string | null }
 
-// The columns of a shown notification besides status_id, which StatusReads.notifications selects first.
-const COLUMNS: Record<keyof ShownColumns, string> = {
-	id: 'CAST(n.id AS TEXT)',
-	type: 'n.type',
-	from_account_id: 'n.from_account_id',
-	created_at: 'n.created_at',
-	group_key: 'n.group_key',
-}
-
 // The viewer's notifications the rule shows them that match `where` (over the parameters: ?1 is the viewer, ?2 the
 // time of the read), in the order and number `tail` gives.
 function shownNotifications(
@@ -90,7 +81,7 @@ function shownNotifications(
 	const read = statusReads(viewer, { viewer: '?1', now: '?2' })
 	return read.notifications<ShownColumns>(
 		db,
-		{ where: `n.account_id = ?1 AND ${where}`, tail, columns: COLUMNS },
+		{ where: `n.account_id = ?1 AND ${where}`, tail, columns: NOTIFICATION_COLUMNS },
 		viewer.accountId,
 		viewer.now,
 		...params
@@ -274,8 +265,8 @@ function presentGroups(
 			status,
 		})
 	})
-	const unique = <T extends { id: string }>(items: T[]) =>
-		items.filter((item, i) => items.findIndex((other) => other.id === item.id) === i)
+	// Each id names one object (the presenters' maps), so a Set keeps the first of each, in order.
+	const unique = <T>(items: T[]) => [...new Set(items)]
 	const statusesShown = unique(shown.flatMap(({ status }) => (status === undefined ? [] : [status])))
 	const notification_groups = shown.map(({ group }) => group)
 	if (options.expandAccounts === 'full') {
@@ -286,8 +277,9 @@ function presentGroups(
 		}
 	}
 	const full = unique(shown.flatMap(({ accounts: sampled }) => sampled.slice(0, 1)))
+	const fullIds = new Set(full.map((account) => account.id))
 	const partial = unique(shown.flatMap(({ accounts: sampled }) => sampled.slice(1))).filter(
-		(account) => !full.some((other) => other.id === account.id)
+		(account) => !fullIds.has(account.id)
 	)
 	return {
 		accounts: full,

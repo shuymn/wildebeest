@@ -153,7 +153,7 @@ type NotificationRow = {
 }
 
 // The columns of a notification row besides status_id, which StatusReads.notifications selects first.
-const NOTIFICATION_COLUMNS = {
+export const NOTIFICATION_COLUMNS = {
 	id: 'CAST(n.id AS TEXT)',
 	type: 'n.type',
 	from_account_id: 'n.from_account_id',
