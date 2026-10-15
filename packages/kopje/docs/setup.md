@@ -152,7 +152,12 @@ KEK. The steps below hold outgoing work with the `MAINTENANCE` variable for thos
       empty): unset reads as the empty KEK.
     - `USER_KEK`: the new KEK.
 
-3. **Rewrap the keys:**
+3. **Wait for the new version.** A deployment reaches the Worker first and the Store a little later, up to about a
+   minute. Until both run it, a request can still meet the previous version, and the rewrap then answers `kek-empty`
+   or `kek-unchanged` although the variables are set. `kopje-admin health` shows when it is done: the `store` check's
+   `build` equals the report's `build`, and the `keys` check fails with `unwrap-failed` (the keys are still under the
+   previous KEK) instead of warning `USER_KEK is empty`.
+4. **Rewrap the keys:**
 
     ```sh
     kopje-admin keys rewrap
@@ -166,10 +171,10 @@ KEK. The steps below hold outgoing work with the `MAINTENANCE` variable for thos
     is safe: keys already under `USER_KEK` are skipped. It refuses to run while `USER_KEK` is empty or equals
     `USER_KEK_PREVIOUS`.
 
-4. **Check** with `kopje-admin health`: the `keys` check passes with no failures and no `USER_KEK is empty` warning.
-5. **Remove `MAINTENANCE`** (or set it to `off`) and **remove `USER_KEK_PREVIOUS`**. Deliveries resume and spooled
+5. **Check** with `kopje-admin health`: the `keys` check passes with no failures and no `USER_KEK is empty` warning.
+6. **Remove `MAINTENANCE`** (or set it to `off`) and **remove `USER_KEK_PREVIOUS`**. Deliveries resume and spooled
    inbox activities are replayed.
-6. **Deal with what was saved before.** Backups, `kopje-admin dump` files and cutover exports made before the rotation
+7. **Deal with what was saved before.** Backups, `kopje-admin dump` files and cutover exports made before the rotation
    hold the keys under the previous KEK, and the rotation cannot change them. Delete them, or accept that they protect
    the keys only as well as the previous KEK did (not at all, when it was empty). Backups taken afterwards hold the keys
    under the new KEK.
