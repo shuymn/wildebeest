@@ -10,6 +10,7 @@ import { accountId, REMOTE_DOMAINS, statusId, type World, worldArb, writeWorld }
 import { rowsRead } from './read-helpers'
 import { Db } from '../src/db/sql'
 import { getAccounts, listFollows, type PageQuery, relationships, userinfo } from '../src/domain/accounts'
+import { getOutbox } from '../src/domain/activities'
 import { canView, visibleSql, type Visibility } from '../src/domain/audience'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { listConversations } from '../src/domain/conversations'
@@ -24,6 +25,7 @@ import {
 	MAX_FILTER_KEYWORDS,
 	MAX_FILTERS,
 } from '../src/domain/filters'
+import { inboxOwnerExists } from '../src/domain/inbox'
 import { listAccounts } from '../src/domain/lists'
 import { getMarkers, MARKER_TIMELINES } from '../src/domain/markers'
 import { listNotifications } from '../src/domain/notifications'
@@ -1736,6 +1738,52 @@ describe("a list's members read a page, however many it holds (RES-7)", () => {
 		}
 		expect(grown).toEqual([])
 	}, 60_000)
+})
+
+// A local account looked up by its exact username (a personal inbox, the outbox) is found through the index on
+// lower(username), so the lookup reads the same rows whether the instance has 20 local accounts or 2,000.
+describe('a local account is found by username, however many local accounts there are (RES-7)', () => {
+	async function knowing(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES ('660000000000000000', 'https://kopje.test/ap/users/alice', 'alice')"
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES ('660000000000000000', 'alice@example.com', X'00', X'00', 'test')"
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username)
+				SELECT CAST(661000000000000000 + i AS TEXT), 'https://kopje.test/ap/users/u' || i, 'u' || i FROM n`,
+				count
+			)
+			sql.exec(
+				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+				SELECT id, username || '@example.com', X'00', X'00', 'test' FROM accounts WHERE username GLOB 'u[0-9]*'`
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 20 or 2,000 local accounts', async () => {
+		const few = await knowing(20)
+		const many = await knowing(2000)
+		const reads: [string, StoreOperation<never, unknown>, unknown][] = [
+			['inbox owner', inboxOwnerExists, { username: 'alice' }],
+			['outbox', getOutbox, { username: 'alice', before: null }],
+		]
+		const grown: string[] = []
+		for (const [name, operation, input] of reads) {
+			const fewRows = await rowsRead({ store: few }, operation, input as never)
+			const manyRows = await rowsRead({ store: many }, operation, input as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	})
 })
 
 // The rows an operation reads, writes included (rowsRead in read-helpers.ts counts reads only).
