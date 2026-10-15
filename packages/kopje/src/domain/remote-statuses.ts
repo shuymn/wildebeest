@@ -421,7 +421,9 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 	)
 	writeTags(db, id, input.tags.slice(0, MAX_STATUS_TAGS))
 	writeMedia(db, id, author, input.media, ctx)
-	storeRemotePoll(db, id, input.poll ?? null, true, ctx.now)
+	if (input.poll !== null && input.poll !== undefined) {
+		storeRemotePoll(db, id, input.poll, true, ctx.now)
+	}
 	recountStatus(db, parent?.id ?? null)
 	const isReply = input.inReplyTo !== null
 	linkReplies(db, { id, uri: input.uri, accountId: author.id, replyTarget, isReply })
