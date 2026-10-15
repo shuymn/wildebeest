@@ -47,7 +47,8 @@ export function participantsSql(s: string, owner: string): string {
 //      (NotifyService#push_to_conversation!);
 //   4. a conversation of each owner, thread and participants, its last status the newest, unread when that status is
 //      someone else's, numbered in the order their first status came; and its statuses.
-// Two work tables hold the steps and are dropped at the end.
+// Two work tables hold the steps and are dropped at the end. With no conversation made, the counter the insert left
+// goes too, so an empty Store stays empty.
 export const CONVERSATIONS_BACKFILL = `CREATE TABLE conversation_backfill (
   id TEXT NOT NULL PRIMARY KEY,
   parent TEXT,
@@ -113,7 +114,9 @@ JOIN conversations c ON c.account_id = m.account_id AND c.thread = m.thread AND 
 
 DROP TABLE conversation_backfill_members;
 
-DROP TABLE conversation_backfill;`
+DROP TABLE conversation_backfill;
+
+DELETE FROM sqlite_sequence WHERE name = 'conversations' AND seq = 0;`
 
 // Fills the conversations of a database whose conversation tables are empty: the cutover's converter, once the rows
 // it carries are written.

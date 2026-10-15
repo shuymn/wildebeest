@@ -106,6 +106,8 @@ DROP TABLE conversation_backfill_members;
 
 DROP TABLE conversation_backfill;
 
+DELETE FROM sqlite_sequence WHERE name = 'conversations' AND seq = 0;
+
 -- Reads the conversation's newest status left through the primary key: a few rows, however many it holds.
 CREATE TRIGGER conversation_statuses_removed AFTER DELETE ON conversation_statuses
 BEGIN
