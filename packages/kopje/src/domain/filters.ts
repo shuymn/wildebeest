@@ -870,9 +870,27 @@ function findKeyword(text: Prepared, keyword: CompiledKeyword): number {
 	return -1
 }
 
+// Kopje's bound on the text matched, where Mastodon matches all of it: each status's searchable text up to
+// MAX_FILTER_TEXT code units, and a request's statuses together up to MAX_FILTER_REQUEST_TEXT, shared evenly among them
+// but never below MIN_FILTER_TEXT each (a status of Mastodon's default length). With the keyword caps, a page compares
+// at most MAX_FILTER_REQUEST_TEXT code units of text with each keyword, and a thread of the most members (CONTEXT_LIMITS
+// in statuses.ts) about ten times that; indexOf with the boundary tables keeps each comparison near linear (RES-2).
+export const MAX_FILTER_TEXT = 10_000
+export const MAX_FILTER_REQUEST_TEXT = 400_000
+export const MIN_FILTER_TEXT = 500
+
+// The text each of `statuses` statuses is matched on, in code units.
+export function filterTextLimit(statuses: number): number {
+	return Math.max(
+		MIN_FILTER_TEXT,
+		Math.min(MAX_FILTER_TEXT, Math.floor(MAX_FILTER_REQUEST_TEXT / Math.max(statuses, 1)))
+	)
+}
+
 // What a status is matched by: its text (Status#searchable_text, of the boosted original for a boost), and the ids
 // filter statuses may name (the status and, for a boost, its original).
-export type FilterTarget = { text: string; ids: readonly string[] }
+// limit: the code units of the text matched (filterTextLimit).
+export type FilterTarget = { text: string; ids: readonly string[]; limit: number }
 
 // CustomFilter.apply_cached_filters: for each active filter, the first keyword match (the leftmost in the text, the
 // earlier keyword at the same place, as Regexp.union finds it) and the ids of the target a filter status names. A
@@ -888,7 +906,7 @@ export function applyFilters(
 	for (const { filter, keywords, hasStatuses } of active.filters) {
 		let keywordMatches: string[] | null = null
 		if (keywords.length > 0) {
-			prepared ??= prepare(target.text)
+			prepared ??= prepare(target.text.slice(0, target.limit))
 			let best = -1
 			let length = 0
 			for (const keyword of keywords) {

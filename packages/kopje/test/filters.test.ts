@@ -14,7 +14,7 @@ import {
 	type Status,
 	type User,
 } from './status-helpers'
-import { MAX_FILTER_KEYWORDS, MAX_FILTERS } from '../src/domain/filters'
+import { MAX_FILTER_KEYWORDS, MAX_FILTER_TEXT, MAX_FILTERS } from '../src/domain/filters'
 
 // Filters through the API (domain/filters.ts, mastodon/filters.ts), as Mastodon 4.5 has them: the v2 endpoints with
 // their keywords and statuses, the v1 layer over the same rows, their errors, and the filters applied where statuses
@@ -646,4 +646,29 @@ describe('filter matching work', () => {
 		expect(shown).toHaveLength(40)
 		expect(elapsed).toBeLessThan(5_000)
 	}, 60_000)
+
+	it('matches a status on its first MAX_FILTER_TEXT code units only', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const remote = await remoteAccount(h.store, 'carol')
+		const early = await seedStatus(h.store, {
+			accountId: remote,
+			visibility: 'public',
+			content: `<p>${'x '.repeat(MAX_FILTER_TEXT / 2 - 10)}needle</p>`,
+		})
+		const late = await seedStatus(h.store, {
+			accountId: remote,
+			visibility: 'public',
+			content: `<p>${'x '.repeat(MAX_FILTER_TEXT / 2)}needle</p>`,
+		})
+		await createFilter(h, alice, {
+			title: 'needle',
+			context: ['account'],
+			filter_action: 'hide',
+			keywords_attributes: [{ keyword: 'needle' }],
+		})
+		const shown = await timeline(h, `/api/v1/accounts/${remote}/statuses`, alice.token)
+		expect(shown.map((s) => s.id)).toEqual([late])
+		expect(shown.map((s) => s.id)).not.toContain(early)
+	})
 })
