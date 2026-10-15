@@ -194,10 +194,7 @@ describe('the policy fragments agree with the model of their rules', () => {
 	it('listedForSql (R12)', () => viewerAccountPairs(listedForSql, (m, x, viewer) => m.listedFor(x, viewer)))
 
 	it('followListsShownSql (R13)', () =>
-		viewerAccountPairs(
-			(owner, viewer) => followListsShownSql(owner, viewer),
-			(m, owner, viewer) => m.followListsShown(owner, viewer)
-		))
+		viewerAccountPairs(followListsShownSql, (m, owner, viewer) => m.followListsShown(owner, viewer)))
 
 	// Every (viewer, owner, x): x is listed among the owner's followers or following to the viewer.
 	it('followListedSql (R13)', () =>
@@ -224,11 +221,7 @@ describe('the policy fragments agree with the model of their rules', () => {
 				)
 		))
 
-	it('findableBySql (R14)', () =>
-		viewerAccountPairs(
-			(x, viewer) => findableBySql(x, viewer),
-			(m, x, viewer) => m.findableBy(x, viewer)
-		))
+	it('findableBySql (R14)', () => viewerAccountPairs(findableBySql, (m, x, viewer) => m.findableBy(x, viewer)))
 
 	// Every (viewer, status) pair a status predicate accepts at the world's time: of every viewer, or of the list rules'.
 	function viewerStatusPairs(

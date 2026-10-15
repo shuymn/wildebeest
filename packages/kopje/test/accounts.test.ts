@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { type ApiHarness, apiHarness, bearer, form, json, login, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { appToken, scopedToken } from './read-helpers'
-import { block, community, domainBlock, follow, getJson, mute, remoteFollows } from './status-helpers'
+import { block, community, domainBlock, follow, getJson, ids as listIds, mute, remoteFollows } from './status-helpers'
 
 type Account = Record<string, unknown> & { id: string }
 
@@ -530,11 +530,8 @@ describe('follower lists for the viewer (R13)', () => {
 			carol.id,
 			erin
 		)
-		const ids = async (direction: 'followers' | 'following', token?: string) => {
-			const { status, body } = await getJson<{ id: string }[]>(h, `/api/v1/accounts/${carol.id}/${direction}`, token)
-			expect(status).toBe(200)
-			return body.map((account) => account.id).sort()
-		}
+		const ids = async (direction: 'followers' | 'following', token?: string) =>
+			(await listIds(h, `/api/v1/accounts/${carol.id}/${direction}`, token)).sort()
 		return { h, erin, ids }
 	}
 
