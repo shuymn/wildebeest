@@ -198,6 +198,30 @@ describe('the export against the conversion manifest', () => {
 		expect(report).toMatchObject({ result: 'PASS', exportDiffers: [] })
 	})
 
+	it("ignores D1's own tables, _cf_KV and d1_kv, in an export that has them", async () => {
+		const { db } = await live()
+		const texts = exportDatabase(db, { sequence: true })
+		const plain = fingerprintExport(await writeExport(space.dir, texts, 'without-platform'))
+		texts.set(
+			'_cf_KV',
+			'PRAGMA defer_foreign_keys=TRUE;\nCREATE TABLE _cf_KV (key TEXT PRIMARY KEY, value BLOB) WITHOUT ROWID;\n' +
+				`INSERT INTO "_cf_KV" ("key","value") VALUES('k',X'00');\n`
+		)
+		texts.set(
+			'd1_kv',
+			'PRAGMA defer_foreign_keys=TRUE;\nCREATE TABLE d1_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);\n' +
+				`INSERT INTO "d1_kv" ("key","value") VALUES('k','v');\n`
+		)
+		const path = await writeExport(space.dir, texts, 'with-platform')
+		const fingerprint = fingerprintExport(path)
+		expect(fingerprint).toEqual(plain)
+		const { manifest } = await convert(space.dir, path, { out: 'out-platform' })
+		expect(compareFingerprints(fingerprint, fingerprint, parseManifest(manifest))).toMatchObject({
+			result: 'PASS',
+			exportDiffers: [],
+		})
+	})
+
 	it('fails on another count or another notification counter', async () => {
 		const { final, manifest } = await converted()
 		const parsed = parseManifest(manifest)

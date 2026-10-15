@@ -147,8 +147,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 ### Fixed
 
 - The cutover reads a legacy export that holds `d1_kv`, a table D1 now creates in a database by itself: the table list
-  of the export (`kopje-admin fingerprint tables-sql`) leaves it out, as it leaves out `_cf_*`, and the conversion
-  ignores it in an export that has it. Before, such an export was refused as a schema mismatch.
+  of the export (`kopje-admin fingerprint tables-sql`) leaves it out, as it leaves out `_cf_*`, and the fingerprint and
+  the conversion ignore both in an export that has them. Before, such an export was refused as a schema mismatch.
 
 - A remote actor that deletes itself again, after its earlier deletion's 30-day record has expired and it was stored
   again, is purged to the end and its record renewed, also when the expired record has not been cleaned up yet.

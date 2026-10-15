@@ -22,6 +22,7 @@ import {
 	digestOf,
 	ExportError,
 	exportOrder,
+	isPlatformTable,
 	parseStatement,
 	quoteIdentifier,
 	splitStatements,
@@ -59,12 +60,6 @@ export function lineOf(level) {
 /** @param {string} name */
 function isSearchTable(name) {
 	return name === 'search_fts' || name.startsWith('search_fts_')
-}
-
-// D1's own tables: _cf_* and d1_kv, which D1 creates in a database by itself. Their rows are not the instance's data.
-/** @param {string} name */
-function isPlatformTable(name) {
-	return name.startsWith('_cf_') || name === 'd1_kv'
 }
 
 /** @param {string} name */
