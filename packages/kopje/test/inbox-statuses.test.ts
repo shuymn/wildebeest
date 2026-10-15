@@ -280,6 +280,11 @@ describe('Create (Mastodon and Misskey)', () => {
 		await sql(t.store, 'UPDATE follows SET notify = 1 WHERE account_id = ? AND target_account_id = ?', ALICE, bobId)
 		await t.post(bob, create(bob, mastodonNote(bob)))
 		expect(await notifications(t.store)).toEqual([{ account_id: ALICE, type: 'status' }])
+		// A reply to a status never stored has no known partner: no post notification, as home leaves it out.
+		const orphan = mastodonNote(bob, { inReplyTo: `${OTHER}/notes/unknown` })
+		await t.post(bob, create(bob, orphan))
+		expect(await statusRow(t.store, orphan.id)).toMatchObject({ in_reply_to_id: null, in_reply_to_account_id: null })
+		expect(await notifications(t.store)).toEqual([{ account_id: ALICE, type: 'status' }])
 
 		const local = await localStatus(t, { status: 'hello', visibility: 'public' }, 'dave')
 		const erin = await mastodonActor(t.web, 'erin', { origin: OTHER, key: 3 })

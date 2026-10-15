@@ -214,7 +214,16 @@ const WITNESSES: { name: string; scenarios: Scenario[]; case: Case }[] = [
 			2,
 			{
 				statuses: [
-					{ name: 'S0', author: R0, visibility: 'public', mentions: [], reblogOf: null, replyTo: null, tagged: false },
+					{
+						name: 'S0',
+						author: R0,
+						visibility: 'public',
+						mentions: [],
+						reblogOf: null,
+						replyTo: null,
+						replyToUnknown: false,
+						tagged: false,
+					},
 				],
 				followers: [R1],
 			},
@@ -428,6 +437,10 @@ function readWorld(sql: SqlStorage, base: World): Snapshot {
 					.map((m) => ({ account: account(m.account_id), silent: m.silent === 1 })),
 				reblogOf: row.reblog_of_id === null ? null : (byId.get(row.reblog_of_id) ?? null),
 				replyTo: row.in_reply_to_id === null ? null : (byId.get(row.in_reply_to_id) ?? null),
+				// The actions reply only to stored statuses. A reply whose parent was deleted since keeps its partner
+				// in the Store, which the model cannot state; read as no reply, the model allows at least what the
+				// Store shows of it, which is what this check needs.
+				replyToUnknown: false,
 				tagged: false,
 			})),
 			follows: sql

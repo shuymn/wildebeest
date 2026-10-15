@@ -434,6 +434,10 @@ export function ownStatusId(db: Db, authorId: string, statusId: string): OwnStat
 
 // ---- Notifications.
 
+// Status.without_replies: not a reply, or a reply in the author's own conversation (in_reply_to_account_id carries
+// the partner through self-replies, so continuing a reply to someone else is still a reply to them).
+export const NOT_A_REPLY_TO_OTHERS = '(s.in_reply_to_uri IS NULL OR s.in_reply_to_account_id = s.account_id)'
+
 // Whether `r` blocks the account `a`, or mutes it with notifications at `now`.
 function silencedSql(r: string, a: string, now: string): string {
 	return `(${blocksSql(r, a)} OR ${mutesSql(r, a, now, true)})`
@@ -445,8 +449,9 @@ function silencedSql(r: string, a: string, now: string): string {
 // and the recipient may see the status. A reblog notification names the original; the boost itself (the sender's one
 // boost of it) must be visible to the recipient too, so a followers-only or direct boost is not revealed to an author
 // outside its audience. A mention is left out when its status mentions or replies to an account the recipient
-// silences (FeedManager#filter_from_mentions), and a post notification (`status`) when home would leave its status
-// out (homeFilterSql, which also hides a sender the recipient mutes without notifications).
+// silences (FeedManager#filter_from_mentions), and a post notification (`status`) when its status is a reply other
+// than in the author's own conversation (a partner that is someone else or unknown, as FeedInsertWorker#notify?) or
+// when home would leave it out (homeFilterSql, which also hides a sender the recipient mutes without notifications).
 export function shownSql(r: string, type: string, from: string, status: string, now: string): string {
 	return `(${from} <> ${r}
 		AND ${availableSql(from)}
@@ -460,8 +465,8 @@ export function shownSql(r: string, type: string, from: string, status: string, 
 			AND (EXISTS (SELECT 1 FROM main.status_mentions mm WHERE mm.status_id = mt.id AND mm.silent = 0
 					AND ${silencedSql(r, 'mm.account_id', now)})
 				OR (mt.in_reply_to_account_id IS NOT NULL AND ${silencedSql(r, 'mt.in_reply_to_account_id', now)}))))
-		AND (${type} <> 'status' OR EXISTS (SELECT 1 FROM main.statuses hs WHERE hs.id = ${status}
-			AND ${homeFilterSql('hs', r, now)})))`
+		AND (${type} <> 'status' OR EXISTS (SELECT 1 FROM main.statuses s WHERE s.id = ${status}
+			AND ${NOT_A_REPLY_TO_OTHERS} AND ${homeFilterSql('s', r, now)})))`
 }
 
 // ---------------------------------------------------------------------------------------------------------------

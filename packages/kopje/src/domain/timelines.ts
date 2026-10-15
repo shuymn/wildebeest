@@ -2,6 +2,7 @@ import { type Page, type PageQuery, type Present, resolveAccountId } from './acc
 import {
 	blocksSql,
 	filteredForSql,
+	NOT_A_REPLY_TO_OTHERS,
 	REACHES_FOLLOWERS_SQL,
 	REQUIRES_MENTION_SQL,
 	type StatusSelect,
@@ -22,10 +23,6 @@ import type { Db } from '../db/sql'
 // statuses_feed declares (REACHES_FOLLOWERS_SQL).
 
 const FEED = `s.visibility IN ${REACHES_FOLLOWERS_SQL}`
-
-// Status.without_replies: not a reply, or a reply in the author's own conversation (in_reply_to_account_id carries
-// the partner through self-replies, so continuing a reply to someone else is still a reply to them).
-export const NOT_A_REPLY_TO_OTHERS = '(s.in_reply_to_uri IS NULL OR s.in_reply_to_account_id = s.account_id)'
 
 type Cursor = { max: string | null; min: string | null; ascending: boolean; limit: number }
 
@@ -66,10 +63,13 @@ function ids<Id>(rows: { id: Id }[]): Id[] {
 
 // Home (Mastodon's FeedManager#filter_from_home): the viewer's own statuses and those of accounts they follow,
 // public, unlisted and private; direct and limited statuses of their own, and of followed accounts that address
-// them. Boosts from follows with show_reblogs off, replies (of others) in conversations with accounts the viewer does
-// not follow, and posts outside a follow's languages are left out, and so is what home hides for the viewer's choices
-// (homeFilterSql: blocks, mutes, domain blocks, invisible originals, and a status or boosted original that mentions an
-// account the viewer blocks or mutes; the viewer's own statuses always pass, as in FeedManager#filter_from_home).
+// them. Boosts from follows with show_reblogs off, replies (of others) unless they are to the author, to the viewer or
+// to an account the viewer follows, and posts outside a follow's languages are left out, and so is what home hides for
+// the viewer's choices (homeFilterSql: blocks, mutes, domain blocks, invisible originals, and a status or boosted
+// original that mentions an account the viewer blocks or mutes; the viewer's own statuses always pass, as in
+// FeedManager#filter_from_home). A reply whose partner is unknown (in_reply_to_account_id NULL: its parent was never
+// stored, or the partner's account was purged) is left out too, so a purge does not bring back a reply home hid. A
+// reply whose parent is deleted keeps its partner.
 export const homeTimeline = userReadOperation<{ page: PageQuery; present: Present }, Page<Status>>(
 	(db, { page, present }, _viewer, viewer) => {
 		const { accountId, now } = viewer
@@ -79,7 +79,7 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 		// After homeFilterSql: the follow's options.
 		const options = `(s.reblog_of_id IS NULL OR s.account_id = ?1 OR EXISTS (SELECT 1 FROM follows hf
 				WHERE hf.account_id = ?1 AND hf.target_account_id = s.account_id AND hf.show_reblogs = 1))
-			AND (s.account_id = ?1 OR s.in_reply_to_account_id IS NULL OR s.in_reply_to_account_id IN (?1, s.account_id)
+			AND (s.account_id = ?1 OR s.in_reply_to_uri IS NULL OR s.in_reply_to_account_id IN (?1, s.account_id)
 				OR EXISTS (SELECT 1 FROM follows hr
 					WHERE hr.account_id = ?1 AND hr.target_account_id = s.in_reply_to_account_id AND hr.state = 'accepted'))
 			-- A follow's languages filter its own posts. A boost row has language NULL, so boosts pass whatever the

@@ -99,6 +99,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - A post notification (`notify` on a follow) is no longer created, shown or pushed for a post by an account you mute,
   even with a mute that keeps notifications, as Mastodon creates none: home leaves that post out.
 
+- Home leaves out a reply whose conversation partner is unknown: a reply to a status the instance never stored, or one
+  continuing such a reply, as Mastodon's home does. A reply to an account whose deletion has been processed counts as
+  one, so removing that account no longer brings into home a reply that home left out. A reply whose parent is deleted
+  keeps its partner and stays in home as before. Your own replies are shown as before. Such a reply also creates, lists
+  and pushes no post notification (`notify` on a follow), as home leaves it out.
+
 - The cutover converts a legacy domain block as Kopje's API stores one: lowercase, in punycode and without a trailing
   dot, the form domain blocks are matched in. Rows that become the same block are merged, and a value that is no
   domain name is dropped and counted (`domain_blocks:invalid-domain`), so the conversion stops on it until

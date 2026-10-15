@@ -49,13 +49,25 @@ Statuses:
 | `listableSql(s, viewer, now)`                      | R8 (`StatusFilter`): viewable, and the viewer filters neither the author nor a reblogged original's author. Feeds, context, bookmarks, favourites and search.                                                                                                                                                                                                                         |
 | `homeFilterSql(s, viewer, now)`                    | R9, what home hides for the viewer's choices (`FeedManager#filter_from_home`): what the list rule hides, and a status or boosted original that mentions (not silently) an account the viewer blocks or mutes. The viewer's own statuses pass. Home membership and the follow's options (boosts, replies, languages) stay in the home query.                                           |
 
+Home (`homeTimeline` in `src/domain/timelines.ts`, R9 with `FeedManager#filter_from_home`) has the viewer's own
+statuses, the public, unlisted and private statuses of the accounts the viewer follows (accepted), and their direct
+and limited statuses that mention the viewer. Of these, a status that is not the viewer's also needs the follow's
+options: a boost needs `show_reblogs`, a post in a language needs the follow's languages (if any) to include it, and a
+reply (`in_reply_to_uri` set) passes only when its conversation partner (`in_reply_to_account_id`, carried through
+self-replies) is known and is the author, the viewer or an account the viewer follows. A reply whose partner is
+unknown is left out: its parent was never stored (the partner is written with the parent), it continues such a reply,
+or the partner's account was purged (the purge clears the partner and ends every follow of that account, so no
+follow would let the reply through anyway, and a reply home left out stays out). A reply whose parent is deleted keeps
+its partner. Then `homeFilterSql` applies.
+
 Notifications: `shownSql(r, type, from, status, now)` is R15, one rule for writing (`notify`), listing and reading
 notifications, and for sending their pushes (`domain/push.ts`, judged again at the time of sending). The sender is not
 the recipient, is available, is neither blocked (either way), muted with notifications nor domain-blocked by the
 recipient, and the recipient may see the status. A reblog notification also needs the sender's boost to be visible to
 the recipient. A mention is left out when its status mentions or replies to an account the recipient blocks or mutes
-with notifications. A post notification (`status`) is shown only when `homeFilterSql` passes for its status, as
-Mastodon's `FeedInsertWorker` notifies only of what home shows: so a sender the recipient mutes, with or without
+with notifications. A post notification (`status`) is shown only for a status that is not a reply, or is one in the
+author's own conversation (its partner is the author; an unknown partner does not count), and only when
+`homeFilterSql` passes for it, as Mastodon's `FeedInsertWorker` notifies only of what home shows: so a sender the recipient mutes, with or without
 notifications, sends none.
 
 An account becomes unavailable when its deletion starts: a remote actor's `Delete` writes `accounts.deleted_at` in the
@@ -99,7 +111,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R6 history                | `canView`, with the audience frozen at write time (`editStatus`).                                                                                                                                                                                                                                                                                                                                                                  |
 | R7 filtered               | `filteredForSql`, inside `listableSql`, account statuses (boosted originals), familiar followers.                                                                                                                                                                                                                                                                                                                                  |
 | R8 listable               | `listableSql`: public, tag, bookmarks, favourites, context, status and hashtag search.                                                                                                                                                                                                                                                                                                                                             |
-| R9 home                   | `homeFilterSql` in `homeTimeline`, with its membership and the follow's options.                                                                                                                                                                                                                                                                                                                                                   |
+| R9 home                   | `homeFilterSql` in `homeTimeline`, with its membership and the follow's options (boosts, languages, reply partners).                                                                                                                                                                                                                                                                                                               |
 | R10 public and tag feeds  | `publicConditions` in `timelines.ts` on `listableSql`; the tag feed and a tag's history take their candidates from the hashtags of public statuses (`status_tags.public`, written with `tagPublicSql`).                                                                                                                                                                                                                            |
 | R11 account statuses      | `visibleSql`, `blocksSql` (the viewer blocks the account), and `visibleSql` with `filteredForSql` for a boosted original.                                                                                                                                                                                                                                                                                                          |
 | R12 listed accounts       | `listedForSql` in `favourited_by` and `reblogged_by` (`DISTRIBUTABLE_SQL` boosts only).                                                                                                                                                                                                                                                                                                                                            |
@@ -239,8 +251,9 @@ the rules of this page in plain TypeScript, without importing the module. `test/
 two or three remote accounts on two domains (some with an actor id on a subdomain, with a port, with a trailing dot or
 on the other domain; one may be being deleted, with its statuses and edges still stored), up to 22 statuses of every
 visibility with mentions (some silent), boosts, replies and replies that continue the author's own thread (written
-with the conversation partner `statuses.ts` carries over), accepted and pending follows, blocks both ways, mutes that
-have expired, expire at the time of the read or later, or never, with or without notifications, and domain blocks in
+with the conversation partner `statuses.ts` carries over), replies to a status never stored (no parent and no
+partner) and replies continuing those (a parent but no partner, as a purge leaves a reply to the account it removes),
+accepted and pending follows, blocks both ways, mutes that have expired, expire at the time of the read or later, or never, with or without notifications, and domain blocks in
 their stored form, including the instance's own domain and a domain nobody lives on. Each property writes a world into one Store and evaluates its fragment over every pair the rule takes: every
 viewer (each account and the anonymous one) with every account or status (for the list rules, `listableSql` and
 `homeFilterSql`, the viewers their callers judge: each local account and the anonymous one), every owner with every
@@ -270,7 +283,7 @@ boost must come with its own original (never `reblog: null` on a read), which th
 | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | public feed, tag feed, account statuses (of every account) | exactly the model's members the rule allows (R10, R11), newest first, over pages of 3                                                                           |
 | favourites, bookmarks                                      | exactly the viewer's edges the list rule allows (R8), newest edge first, over pages                                                                             |
-| home                                                       | no status home hides (R9)                                                                                                                                       |
+| home                                                       | exactly the model's members home allows (R9: membership, the follow's options and `homeFilterSql`), newest first, over pages of 3                               |
 | single status, context                                     | nothing for a status the viewer may not view (R3); context members listable (R8)                                                                                |
 | `favourited_by`, `reblogged_by`                            | nothing for a status the viewer may not view; only listed interactors (R12)                                                                                     |
 | status search                                              | listable statuses only (R8)                                                                                                                                     |
