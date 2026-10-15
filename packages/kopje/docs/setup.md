@@ -153,10 +153,16 @@ KEK. The steps below hold outgoing work with the `MAINTENANCE` variable for thos
     - `USER_KEK`: the new KEK.
 
 3. **Wait for the new version.** A deployment reaches the Worker first and the Store a little later, up to about a
-   minute. Until both run it, a request can still meet the previous version, and the rewrap then answers `kek-empty`
-   or `kek-unchanged` although the variables are set. `kopje-admin health` shows when it is done: the `store` check's
-   `build` equals the report's `build`, and the `keys` check fails with `unwrap-failed` (the keys are still under the
-   previous KEK) instead of warning `USER_KEK is empty`.
+   minute. A rewrap run before both run it meets the previous version:
+    - a previous Worker still reads the previous variables. It answers `kek-empty` when the previous KEK was empty. When
+      it was not, it counts every key as already under `USER_KEK` and moves none, so the rewrap looks done when it is
+      not.
+    - a new Worker in front of a previous Store gets `version-mismatch`.
+
+    `kopje-admin health` shows when the new version is everywhere: the `store` check's `build` equals the report's
+    `build`, and the `keys` check fails with `unwrap-failed`, because the keys are still under the previous KEK, rather
+    than passing or warning `USER_KEK is empty`.
+
 4. **Rewrap the keys:**
 
     ```sh
