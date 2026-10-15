@@ -77,6 +77,11 @@ the follow are shown too, and they leave home when the follow ends (Mastodon's `
 Home reads a window of each followed hashtag's public statuses (`TagWindows` below), through the partial index
 `status_tags_public`, so a hashtag's unlisted, private, direct and limited statuses are never read; an account follows
 at most `MAX_FOLLOWED_TAGS` (100) hashtags, Kopje's cap where Mastodon has none, so the windows of a page are bounded.
+Each window inspects at most two pages (at least 40) of the hashtag's public statuses from the cursor, whatever the rule
+leaves out of them: Mastodon filters a hashtag's statuses as they arrive, Kopje as home is read, so a hashtag whose
+newest statuses are mostly hidden from the viewer (a blocked author's) shows fewer of its statuses on that page instead
+of costing home its whole history; those below a longer hidden stretch appear once home's other streams move the page
+past it.
 Home and a list's timeline read a window of each author's statuses (`AuthorWindows` below): for each account home
 shows (for a list, each active member), the newest public, unlisted and private statuses of theirs inside the cursor
 that pass every filter above, at most a page, through the partial index `statuses_feed` from the cursor; then the

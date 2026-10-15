@@ -2147,3 +2147,86 @@ describe('statuses cost the media they show, not the media their edits dropped (
 		expect(grown).toEqual([])
 	}, 60_000)
 })
+
+// A followed hashtag whose newest statuses are a blocked author's: home inspects a bounded number of the hashtag's
+// statuses (two pages, at least 40), so the blocked author's tagged history costs nothing more as it grows.
+describe("a followed hashtag's hidden statuses cost home a bounded window (RES-7)", () => {
+	const VIEWER_ID = '860000000000000001'
+	const BLOCKED_ID = '860000000000000002'
+	const AUTHOR_ID = '860000000000000003'
+	const HIDDEN_TOKEN = 'hidden-token'
+
+	async function store(hidden: number): Promise<StoreStub> {
+		const stub = await migratedStore()
+		await runInDurableObject(stub, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			for (const [id, name] of [
+				[BLOCKED_ID, 'spam'],
+				[AUTHOR_ID, 'a'],
+			]) {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, 'far.example')",
+					id,
+					`https://far.example/users/${name}`,
+					name
+				)
+			}
+			sql.exec('INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?)', VIEWER_ID, BLOCKED_ID)
+			sql.exec("INSERT INTO tag_follows (account_id, name) VALUES (?, 'cats')", VIEWER_ID)
+			// 40 shown statuses of the hashtag, older than the blocked author's.
+			const write = (base: bigint, count: number, author: string) => {
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+					INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					SELECT CAST(?2 + i AS TEXT), 'https://far.example/objects/' || ?2 || '-' || i, ?3, 'public', '<p>cats</p>', ?4
+					FROM n`,
+					count,
+					String(base),
+					author,
+					new Date(NOW).toISOString()
+				)
+				sql.exec(
+					`INSERT INTO status_tags (status_id, name, public) SELECT id, 'cats', 1 FROM statuses WHERE account_id = ?`,
+					author
+				)
+			}
+			write(870000000000000000n, 40, AUTHOR_ID)
+			write(880000000000000000n, hidden, BLOCKED_ID)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('hidden', 'secret', 'hidden', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'hidden', ?, 'read')",
+				HIDDEN_TOKEN,
+				VIEWER_ID
+			)
+		})
+		return stub
+	}
+
+	it('reads the same rows with 100 or 2,000 newer statuses of a blocked author with the hashtag', async () => {
+		const credential = { tokenHash: HIDDEN_TOKEN, scope: 'read', now: NOW } as const
+		const input = { credential, page: PAGE, present: PRESENT }
+		const measure = async (hidden: number) => {
+			const stub = await store(hidden)
+			const output = await runInDurableObject(stub, (_instance, state) =>
+				homeTimeline.run(state.storage.sql, input as never)
+			)
+			return { shown: shown(output), rows: await rowsRead({ store: stub }, homeTimeline, input as never) }
+		}
+		// With fewer hidden statuses than the window inspects, the shown ones below them fill the page.
+		expect((await measure(20)).shown).toBe(PAGE.limit)
+		const few = await measure(100)
+		const many = await measure(2000)
+		expect(many.shown).toBe(few.shown)
+		expect(many.rows).toBeLessThanOrEqual(few.rows + ALLOWANCE)
+	}, 60_000)
+})
