@@ -36,6 +36,12 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'POST', path: '/oauth/revoke', access: 'public', handler: oauth.revokeHandler },
 	{ method: 'GET', path: '/oauth/userinfo', access: { scope: 'profile' }, handler: oauth.userinfo },
 	{ method: 'POST', path: '/oauth/userinfo', access: { scope: 'profile' }, handler: oauth.userinfo },
+	{
+		method: 'GET',
+		path: '/.well-known/oauth-authorization-server',
+		access: 'public',
+		handler: oauth.authorizationServerMetadata,
+	},
 
 	{ method: 'GET', path: '/api/v1/instance', access: 'public', handler: instance.instanceV1 },
 	{ method: 'GET', path: '/api/v2/instance', access: 'public', handler: instance.instanceV2 },

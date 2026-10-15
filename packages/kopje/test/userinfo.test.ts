@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { apiHarness, bearer, form, registerApp, seedAccount, sql } from './api-helpers'
+import { apiHarness, bearer, form, login, registerApp, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { scopedToken } from './read-helpers'
+import { SCOPES } from '../src/security/scopes'
 
-// GET and POST /oauth/userinfo (Mastodon 4.5's OAuth::UserinfoController).
+// GET and POST /oauth/userinfo (Mastodon 4.5's OAuth::UserinfoController) and the authorization server metadata that
+// names it (/.well-known/oauth-authorization-server).
 
 const BEARER_CHALLENGE =
 	'Bearer realm="Doorkeeper", error="invalid_token", error_description="The access token is invalid"'
@@ -130,5 +132,48 @@ describe('/oauth/userinfo', () => {
 		const denied = await h.request('/oauth/userinfo', { headers: { origin: 'https://web-client.test' } })
 		expect(denied.status).toBe(401)
 		expect(denied.headers.get('access-control-allow-origin')).toBe('*')
+	})
+})
+
+describe('/.well-known/oauth-authorization-server', () => {
+	it('describes the endpoints, scopes and flows Kopje supports', async () => {
+		const h = await withAlice()
+		const response = await h.request('/.well-known/oauth-authorization-server', {
+			headers: { origin: 'https://web-client.test' },
+		})
+		expect(response.status).toBe(200)
+		expect(response.headers.get('content-type')).toMatch(/^application\/json/)
+		expect(response.headers.get('access-control-allow-origin')).toBe('*')
+		expect(await response.json()).toEqual({
+			issuer: 'https://kopje.test/',
+			authorization_endpoint: 'https://kopje.test/oauth/authorize',
+			token_endpoint: 'https://kopje.test/oauth/token',
+			revocation_endpoint: 'https://kopje.test/oauth/revoke',
+			userinfo_endpoint: 'https://kopje.test/oauth/userinfo',
+			scopes_supported: SCOPES,
+			response_types_supported: ['code'],
+			response_modes_supported: ['query'],
+			grant_types_supported: ['authorization_code', 'client_credentials'],
+			token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
+			code_challenge_methods_supported: ['S256'],
+			service_documentation: 'https://docs.joinmastodon.org/',
+			app_registration_endpoint: 'https://kopje.test/api/v1/apps',
+		})
+	})
+
+	it('names endpoints that answer as it says', async () => {
+		const h = await withAlice()
+		const metadata = await (await h.request('/.well-known/oauth-authorization-server')).json<Record<string, string>>()
+		const path = (name: string) => new URL(metadata[name] ?? '').pathname
+		const app = await registerApp(h, { scopes: 'profile' })
+		expect(path('app_registration_endpoint')).toBe('/api/v1/apps')
+		const { token } = await login(h, { app, scope: 'profile' })
+		expect((await h.request(path('userinfo_endpoint'), bearer(token))).status).toBe(200)
+		const revoked = await h.request(
+			path('revocation_endpoint'),
+			form({ token, client_id: app.client_id, client_secret: app.client_secret })
+		)
+		expect(revoked.status).toBe(200)
+		expect((await h.request(path('userinfo_endpoint'), bearer(token))).status).toBe(401)
 	})
 })
