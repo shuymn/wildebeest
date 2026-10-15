@@ -8,17 +8,25 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.5] - 2026-10-15
+
+A fifth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - `kopje-admin keys rewrap` moves the private keys of local accounts and the instance actor from the KEK in
   `USER_KEK_PREVIOUS` (unset reads as the empty KEK) to `USER_KEK`, keeping the same key pairs. Keys already under
   `USER_KEK` are skipped, so it can run again; a key neither KEK unwraps is reported and left unchanged. See "Rotating
-  the KEK" in docs/setup.md. No schema change and no `wrangler.jsonc` change; `USER_KEK_PREVIOUS` is a new optional
-  secret.
+  the KEK" in docs/setup.md.
 
 ### Changed
 
 - Home and list timelines read a bounded number of rows per page.
+
+### Instance changes
+
+- Store schema: unchanged.
+- `wrangler.jsonc`: unchanged. `USER_KEK_PREVIOUS` is a new optional secret, set only while rotating the KEK.
 
 ## [0.1.0-rc.4] - 2026-10-15
 
