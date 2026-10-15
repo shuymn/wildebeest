@@ -70,8 +70,8 @@ const RULES: readonly Rule[] = [
 		},
 	},
 	{
-		name: 'judges suspension',
-		pattern: /\bsuspended_at\s+IS\s+(?:NOT\s+)?NULL\b/i,
+		name: 'judges suspension or deletion',
+		pattern: /\b(?:suspended_at|deleted_at)\s+IS\s+(?:NOT\s+)?NULL\b/i,
 		allowed: POLICY_ONLY,
 	},
 	{
@@ -130,7 +130,8 @@ describe('policy boundary', () => {
 		const files = {
 			[POLICY]: 'FROM blocks b',
 			'../src/domain/a.ts': 'SELECT 1 FROM mutes m JOIN domain_blocks d WHERE l.suspended_at IS NOT NULL',
-			'../src/domain/b.ts': "WHERE s.visibility IN ('public', 'unlisted') AND x\nINSERT INTO notifications (id)",
+			'../src/domain/b.ts':
+				"WHERE s.visibility IN ('public', 'unlisted') AND a.deleted_at IS NULL\nINSERT INTO notifications (id)",
 			'../src/domain/c.ts': 'SELECT 1',
 		}
 		const rules: Rule[] = [
@@ -140,7 +141,8 @@ describe('policy boundary', () => {
 		expect(violations(files, rules)).toEqual([
 			'../src/domain/a.ts reads mutes',
 			'../src/domain/a.ts reads domain_blocks',
-			'../src/domain/a.ts judges suspension',
+			'../src/domain/a.ts judges suspension or deletion',
+			'../src/domain/b.ts judges suspension or deletion',
 			'../src/domain/b.ts spells a set of visibilities',
 			'../src/domain/b.ts writes notifications',
 			'../src/domain/c.ts no longer reads lists: drop it from the list',

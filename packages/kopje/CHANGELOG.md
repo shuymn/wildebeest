@@ -115,6 +115,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   order from the page's cursor and stops once it has a page, so a page's work no longer grows with the tag's history.
   What they show is unchanged. The cutover writes the mark and `verify-conversion` compares it.
 
+- The content of an account being deleted is hidden as soon as its deletion starts: from the transaction that accepts a
+  remote account's `Delete`, its statuses, boosts, notifications and interactions are shown to nobody, it cannot be
+  followed, mentioned or found, and the account itself is shown redacted (`suspended: true`), while its purge removes
+  what it has in the background.
+
 ### Fixed
 
 - Home applies its rule to your own direct and limited statuses too. A converted Store can hold a legacy direct boost
@@ -124,7 +129,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds five migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds six migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0001_blocks_and_mutes`: `mutes.expires_at` with an index, and the `domain_block_cleanups` table. It is quick.
     - `0002_web_push`: the subscription's encoding and sealed token on `push_subscriptions`, and the
@@ -136,6 +141,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       Its work grows linearly with the hashtags stored (one pass, with a lookup of each one's status); locally, 500,000
       hashtags took a few seconds.
     - `0005_hide_collections`: adds `local_accounts.hide_collections`, 0 for every account. It is quick.
+    - `0006_account_deletion`: adds `accounts.deleted_at` with a partial index, and marks the account of a purge that
+      is still running. Its work grows linearly with the accounts stored (one check and one index pass); locally,
+      200,000 accounts took under a second.
 - `wrangler.jsonc`: unchanged. Set the `VAPID_JWK` secret to turn Web Push on.
 
 ## [0.1.0-rc.3] - 2026-10-14

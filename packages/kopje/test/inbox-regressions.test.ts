@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { bearer, sql } from './api-helpers'
+import { bearer, json, sql } from './api-helpers'
 import { harness, inboxDeps, NOW } from './app-helpers'
 import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
 import { BUILD, completeSetup, migratedStore } from './helpers'
@@ -869,5 +869,75 @@ describe('with outbound delivery (B2)', () => {
 		).toBe(202)
 		expect((await t.deliveries()).map((d) => [d.type, d.inbox_url])).toEqual([['Undo', 'https://new.example/inbox']])
 		expect(await count(t.h.store, 'SELECT 1 FROM follows WHERE account_id = ?', t.alice.id)).toBe(0)
+	})
+})
+
+describe('an actor whose deletion has started (R1)', () => {
+	it('shows nothing of the actor from the Delete on, while its purge still removes what it has', async () => {
+		const h = await community(['alice', 'carol'])
+		const { alice, carol } = h.users
+		const aliceUri = (await sql<{ uri: string }>(h.store, 'SELECT uri FROM accounts WHERE id = ?', alice.id))[0]!.uri
+		const web = new RemoteWeb()
+		const inbox = harness(h.store, {}, BUILD, { keygen: fixtureKeyGen, loader: web.loader })
+		const post = async (actor: TestActor, activity: unknown) =>
+			(await inbox.request('/inbox', await signedInit(actor, '/inbox', activity))).status
+		const bob = await mastodonActor(web, 'bob')
+		expect(await post(bob, follow(bob, nextId(bob), aliceUri))).toBe(202)
+		const bobId = (await accountId(h.store, bob.uri))!
+		await seedStatuses(h.store, bob.uri, PURGE_BATCH * 2 + 1)
+		// Carol mutes bob (his notifications still shown); alice has bob's follow notification.
+		await h.request(`/api/v1/accounts/${bobId}/mute`, bearer(carol.token, json({ notifications: false })))
+		const read = async (token: string | null, path: string) => {
+			const response = await h.request(path, token === null ? {} : bearer(token))
+			return { status: response.status, body: (await response.json()) as unknown }
+		}
+		const bobStatuses = async (token: string | null) =>
+			((await read(token, '/api/v1/timelines/public?limit=40')).body as { account: { id: string } }[]).filter(
+				(s) => s.account.id === bobId
+			).length
+		const fromBob = async () =>
+			((await read(alice.token, '/api/v1/notifications')).body as { account: { id: string } }[]).filter(
+				(n) => n.account.id === bobId
+			).length
+		expect(await bobStatuses(null)).toBe(40)
+		expect(await bobStatuses(carol.token)).toBe(0)
+		expect(await fromBob()).toBe(1)
+		expect((await read(alice.token, `/api/v1/accounts/${bobId}`)).body).toMatchObject({
+			display_name: 'bob <b>display</b>',
+		})
+
+		web.fail(bob.uri, 410)
+		expect(await post(bob, deleteSelf(bob))).toBe(202)
+		// The first batch removed carol's mute and bob's follow; most of his statuses are left.
+		expect(await count(h.store, 'SELECT 1 FROM mutes')).toBe(0)
+		expect(await count(h.store, 'SELECT 1 FROM statuses WHERE account_id = ?', bobId)).toBeGreaterThan(PURGE_BATCH)
+		expect(await bobStatuses(null)).toBe(0)
+		expect(await bobStatuses(carol.token)).toBe(0)
+		expect(await bobStatuses(alice.token)).toBe(0)
+		expect(await fromBob()).toBe(0)
+		const [left] = await sql<{ id: string }>(h.store, 'SELECT id FROM statuses WHERE account_id = ? LIMIT 1', bobId)
+		expect((await read(alice.token, `/api/v1/statuses/${left!.id}`)).status).toBe(404)
+		expect((await read(alice.token, `/api/v1/accounts/${bobId}`)).body).toMatchObject({
+			display_name: '',
+			suspended: true,
+		})
+		expect((await h.request(`/api/v1/accounts/${bobId}/follow`, bearer(alice.token, { method: 'POST' }))).status).toBe(
+			404
+		)
+		expect(await count(h.store, 'SELECT 1 FROM follows WHERE target_account_id = ?', bobId)).toBe(0)
+
+		// The actor's own activity and a fetch of its document while the purge runs do not bring it back.
+		web.serve(bob.uri, bob.document)
+		expect(await post(bob, follow(bob, nextId(bob), aliceUri))).toBe(202)
+		expect(await count(h.store, 'SELECT 1 FROM follows WHERE account_id = ?', bobId)).toBe(0)
+		expect(await sql(h.store, 'SELECT deleted_at FROM accounts WHERE id = ?', bobId)).toEqual([
+			{ deleted_at: new Date(NOW).toISOString() },
+		])
+
+		await runScheduledJobs(
+			{ ...inbox.env, MAINTENANCE: 'off' } as Env,
+			inboxDeps(() => h.store, web.loader)
+		)
+		expect(await accountId(h.store, bob.uri)).toBeUndefined()
 	})
 })

@@ -49,6 +49,7 @@ const DEFAULT = 'left at its default by the converter (NOT_CONVERTED)'
 // Columns of carried tables the converter leaves at their schema defaults.
 const NOT_CONVERTED: Record<string, string> = {
 	'accounts.confirmed_username': 'set when Kopje confirms a WebFinger domain; legacy has none',
+	'accounts.deleted_at': 'set when a remote actor deletes itself in Kopje; legacy has no account being deleted',
 	'blocks.id': ASSIGNED,
 	'bookmarks.id': ASSIGNED,
 	'domain_blocks.id': ASSIGNED,
@@ -76,6 +77,7 @@ const FROM_RAW = 'remote: read from raw, which is compared byte for byte; local:
 const NOT_VERIFIED: Record<string, string> = {
 	'accounts.confirmed_username': DEFAULT,
 	'accounts.created_at': TIME,
+	'accounts.deleted_at': DEFAULT,
 	'accounts.fetched_at': TIME,
 	'accounts.followers_count': COUNTER,
 	'accounts.following_count': COUNTER,

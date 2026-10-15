@@ -1071,13 +1071,19 @@ const updateActor: Handler<'UpdateActor'> = (_db, _actor, _activity, input) =>
 
 // Mastodon's DeleteAccountService for a remote account, as a durable job: the purge job (the actor's tombstone) is
 // written with the first batch, and each batch removes a bounded part of what the account has (purgeBatch); the
-// account row goes with the last one.
+// account row goes with the last one. The account is unavailable from this transaction on (accounts.deleted_at,
+// availableSql), so nothing of it is shown while the batches remove it, whatever order they remove it in.
 const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
 	db.run(
 		"INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('purge', ?, ?, ?) ON CONFLICT DO NOTHING",
 		actor.uri,
 		actor.uri,
 		now
+	)
+	db.run(
+		'UPDATE accounts SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ? AND domain IS NOT NULL',
+		new Date(now).toISOString(),
+		actor.id
 	)
 	return applied('actor-deleted', purgeBatch(db, actor.uri, now))
 }

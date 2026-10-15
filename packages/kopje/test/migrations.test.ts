@@ -362,6 +362,98 @@ describe('Store migration runner', () => {
 		})
 	})
 
+	it('upgrades a Store at 0005_hide_collections with 0006_account_deletion: an account whose purge runs is marked', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, 6)).upgrade()).toMatchObject({ ok: true })
+			const alice = '100000000000000001'
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice', NULL)",
+				alice
+			)
+			// bob's purge runs, carol's finished (her row is gone) and dan has none.
+			for (const [i, name] of ['bob', 'dan'].entries()) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, ?)',
+					String(100000000000000002n + BigInt(i)),
+					`https://remote.example/users/${name}`,
+					name,
+					'remote.example'
+				)
+			}
+			const started = Date.parse('2026-10-14T12:34:56.789Z')
+			sql.exec(
+				`INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('purge', ?1, ?1, ?2)`,
+				'https://remote.example/users/bob',
+				started
+			)
+			sql.exec(
+				`INSERT INTO inbound_jobs (kind, key, actor_uri, done_at, expires_at, created_at) VALUES ('purge', ?1, ?1, ?2, ?3, ?2)`,
+				'https://remote.example/users/carol',
+				started,
+				started + 1
+			)
+
+			expect(await kernel(state, MIGRATIONS.slice(0, 7)).upgrade()).toMatchObject({ ok: true, applied: [NAMES[6]] })
+			expect(sql.exec('SELECT username, deleted_at FROM accounts ORDER BY id').toArray()).toEqual([
+				{ username: 'alice', deleted_at: null },
+				{ username: 'bob', deleted_at: '2026-10-14T12:34:56.789Z' },
+				{ username: 'dan', deleted_at: null },
+			])
+			// A local account is never marked.
+			expect(() => sql.exec("UPDATE accounts SET deleted_at = '2026-10-15T00:00:00.000Z' WHERE id = ?", alice)).toThrow(
+				/CHECK constraint failed/
+			)
+			expect(
+				sql.exec("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'accounts_deleted'").toArray()
+			).toEqual([{ sql: expect.stringContaining('WHERE deleted_at IS NOT NULL') }])
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('0006_account_deletion reads each account a bounded number of times, however many there are', async () => {
+		const migration = MIGRATIONS.find((m) => m.name === '0006_account_deletion')!
+		const statements = migration.sql
+			.split('\n')
+			.filter((line) => !line.startsWith('--'))
+			.join('\n')
+			.split(';')
+			.filter((statement) => statement.trim() !== '')
+		const measure = async (count: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, 6)).upgrade()
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO accounts (id, uri, username, domain)
+					SELECT CAST(100000000000000000 + i AS TEXT), 'https://remote.example/users/u' || i, 'u' || i, 'remote.example'
+					FROM n`,
+					count
+				)
+				// Ten running purges, whatever the number of accounts.
+				sql.exec(
+					`INSERT INTO inbound_jobs (kind, key, actor_uri, created_at)
+					SELECT 'purge', uri, uri, 1 FROM accounts ORDER BY id LIMIT 10`
+				)
+				let read = 0
+				for (const statement of statements) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				expect(sql.exec('SELECT count(*) AS n FROM accounts WHERE deleted_at IS NOT NULL').one()).toEqual({ n: 10 })
+				return read
+			})
+		}
+		const small = await measure(1000)
+		const large = await measure(10_000)
+		// A few reads per account added (the CHECK's pass over the table, the index build's pass), none per pair.
+		const added = 10_000 - 1000
+		expect(large - small).toBeLessThanOrEqual(5 * added)
+	}, 60_000)
+
 	it('stays readonly with exact bookkeeping when a file fails, and lets a fixed build continue', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
