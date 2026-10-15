@@ -689,9 +689,8 @@ export type ResolveResult = { accounts: Account[]; statuses: Status[] }
 // a status by the rule of a single status (canView, R3, as Mastodon's ResolveURLService authorizes show?), unless the
 // viewer blocks its author's domain. A private object a server answered the instance actor with is stored with its
 // audience and shown to nobody else.
-export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db, input, _viewer, context) => {
+export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db, input, { accountId }) => {
 	const { resolved, now, origin } = input
-	const { accountId } = context
 	const options = { ...input.present, viewerId: accountId }
 	const account = (id: string | undefined): ResolveResult => {
 		const findable =

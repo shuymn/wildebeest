@@ -408,6 +408,7 @@ export const updateCredentials = userWriteOperation<
 	}
 	const before = actorSnapshot(db, accountId)
 	const displayName = changes.displayName ?? current.display_name
+	const hide = bit(changes.hideCollections)
 	const actorType =
 		changes.bot === undefined || !['Person', 'Service'].includes(current.actor_type)
 			? current.actor_type
@@ -437,14 +438,13 @@ export const updateCredentials = userWriteOperation<
 		changes.language === undefined ? 0 : 1,
 		changes.language ?? null,
 		changes.fields === undefined ? null : JSON.stringify(changes.fields.slice(0, MAX_FIELDS)),
-		bit(changes.hideCollections),
+		hide,
 		accountId
 	)
 	// Other servers learn of the change (Update(Person)), only if the published document changed, or if the account
 	// shows or hides its network: the document does not carry that, but a server that receives the Update fetches the
 	// collections again and learns it from them, as Mastodon's ProcessAccountService does.
-	const hideChanged =
-		changes.hideCollections !== undefined && (changes.hideCollections ? 1 : 0) !== current.hide_collections
+	const hideChanged = hide !== null && hide !== current.hide_collections
 	recordActorUpdate(db, accountId, hideChanged ? null : before, now)
 	return credentialAccount(db, accountId, present)
 })
@@ -545,16 +545,16 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 			.slice(0, MAX_FAMILIAR_FOLLOWERS_IDS)
 			.map((id) => resolveAccountId(db, id))
 			.filter((id) => id !== null)
-		const targets = [...new Set(resolved)].flatMap((id) => {
+		return [...new Set(resolved)].flatMap((target) => {
 			const row = db.first<{ hidden: number }>(
 				`SELECT ${hidesCollectionsSql('?1')} AS hidden WHERE ${availableSql('?1')}`,
-				id
+				target
 			)
-			return row === undefined ? [] : [{ id, hidden: row.hidden === 1 }]
-		})
-		return targets.map(({ id: target, hidden }) => {
-			if (hidden) {
-				return { id: target, accounts: [] }
+			if (row === undefined) {
+				return []
+			}
+			if (row.hidden === 1) {
+				return [{ id: target, accounts: [] }]
 			}
 			const followers = db
 				.all<{ id: string }>(
@@ -572,7 +572,7 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 				)
 				.map((row) => row.id)
 			const accounts = presentAccountsById(db, followers, present)
-			return { id: target, accounts: followers.flatMap((id) => accounts.get(id) ?? []) }
+			return [{ id: target, accounts: followers.flatMap((id) => accounts.get(id) ?? []) }]
 		})
 	}
 )

@@ -309,10 +309,11 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 					})
 				: federation.setFollowingDispatcher('/ap/users/{identifier}/following', dispatcher)
 		setters
-			.authorize(
-				async (ctx, identifier) =>
-					ctx.url.searchParams.get('cursor') === null || (await collection(kind, identifier, null))?.hidden !== true
-			)
+			.authorize(async (ctx, identifier) => {
+				// Fedify asks only after the dispatcher answered, so the page's result is already read.
+				const cursor = ctx.url.searchParams.get('cursor')
+				return cursor === null || (await collection(kind, identifier, parsePage(cursor)))?.hidden !== true
+			})
 			.setCounter(async (_ctx, identifier) => (await collection(kind, identifier, null))?.total ?? null)
 			.setFirstCursor(async (_ctx, identifier) => {
 				const result = await collection(kind, identifier, null)
