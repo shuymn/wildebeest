@@ -89,6 +89,15 @@ function idOf(value: unknown): string | null {
 	return null
 }
 
+// The subject of an Add or Remove: the pair of its target collection and its object, so the Add and the Remove of one
+// object in one collection share it (and nothing else does), whatever their own ids. The later of the two supersedes
+// the earlier (enqueueActivity), so an Add the operator retries cannot undo a Remove sent since, or the reverse.
+function collectionSubject(activity: Activity): string | null {
+	const target = idOf(activity.target)
+	const object = idOf(activity.object)
+	return target === null || object === null ? null : JSON.stringify([target, object])
+}
+
 // The local object an activity is about, and whether it retracts it (outboundKind in audience.ts).
 // retracts: the activity withdraws work already sent, so it supersedes what it names and admission never refuses it.
 // A Reject withdraws only when it ends a follow we had accepted (withdraws); a Reject of a request never accepted (a
@@ -103,6 +112,9 @@ function subjectOf(activity: Activity, withdraws: boolean): { object: string | n
 		case 'Reject':
 		case 'Accept':
 			return { object: idOf(activity.object), retracts }
+		case 'Add':
+		case 'Remove':
+			return { object: collectionSubject(activity), retracts }
 		default:
 			return { object: typeof activity.id === 'string' ? activity.id : null, retracts }
 	}
@@ -243,8 +255,10 @@ export function enqueueActivity(
 ): void {
 	const { targets, voters } = targetsOf(db, signerId, envelope.activity, envelope.audience, options.withdraws === true)
 	const { object, retracts } = subjectOf(envelope.activity, options.withdraws === true)
-	if (object !== null && (retracts || envelope.activity.type === 'Update')) {
-		supersede(db, signerId, object, retracts)
+	// An Add or Remove supersedes every earlier one of its subject (collectionSubject): only they have it.
+	const collection = envelope.activity.type === 'Add' || envelope.activity.type === 'Remove'
+	if (object !== null && (retracts || collection || envelope.activity.type === 'Update')) {
+		supersede(db, signerId, object, retracts || collection)
 	}
 	if (object !== null && retracts) {
 		db.run(

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
+import { NOW } from './app-helpers'
+import { BUILD } from './helpers'
 import {
 	act,
 	community,
@@ -15,6 +17,7 @@ import {
 	seedStatus,
 	type Status,
 } from './status-helpers'
+import type { DeliveryOutcome } from '../src/domain/deliveries'
 import { PIN_ERRORS } from '../src/domain/status-actions'
 import { MAX_STATUSES_BY_ID } from '../src/domain/statuses'
 
@@ -201,6 +204,52 @@ describe('pins', () => {
 		expect((await h.request('/ap/users/nobody/collections/featured', AP)).status).toBe(404)
 		await sql(h.store, "UPDATE local_accounts SET suspended_at = '2026-10-12T00:00:00Z' WHERE account_id = ?", alice.id)
 		expect((await h.request('/ap/users/alice/collections/featured', AP)).status).toBe(404)
+	})
+
+	it('never resends an Add or a Remove that a later Remove or Add of the same pin follows', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const fan = await remoteAccount(h.store, 'fan', 'fans.example')
+		await remoteFollows(h.store, fan, alice.id)
+		const status = await post(h, alice, { status: 'pin me' })
+		let at = NOW
+		// Delivers every due row of the pins, the first with `first` and the rest as sent.
+		const deliver = async (first: DeliveryOutcome) => {
+			at += 1000
+			const { deliveries } = await h.store.claimDeliveries(BUILD, { now: at, leaseToken: `t${at}` })
+			for (const d of deliveries) {
+				await h.store.completeDelivery(BUILD, { id: d.id, leaseToken: `t${at}`, now: at, outcome: first })
+			}
+		}
+		const states = () =>
+			sql<{ type: string; id: string; state: string }>(
+				h.store,
+				`SELECT json_extract(o.body, '$.activity.type') AS type, json_extract(o.body, '$.activity.id') AS id, d.state
+				FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id
+				WHERE json_extract(o.body, '$.activity.type') IN ('Add', 'Remove') ORDER BY d.id`
+			)
+		const GONE: DeliveryOutcome = { kind: 'failed', status: 410, error: 'HTTP 410', permanent: true }
+		const OK: DeliveryOutcome = { kind: 'delivered', status: 202 }
+		await deliver(OK)
+		// An Add that gave up, then a Remove that arrived: retrying everything sends no Add.
+		await act(h, alice, `/api/v1/statuses/${status.id}/pin`)
+		await deliver(GONE)
+		await act(h, alice, `/api/v1/statuses/${status.id}/unpin`)
+		await deliver(OK)
+		expect(await h.store.retryDeliveries(BUILD, { ids: 'all', now: at + 1 })).toMatchObject({ ok: true, retried: 0 })
+		expect((await states()).filter((r) => r.state !== 'delivered' && r.state !== 'gave_up')).toEqual([])
+		// The inverse: a Remove that gave up, then an Add that arrived.
+		await act(h, alice, `/api/v1/statuses/${status.id}/pin`)
+		await deliver(OK)
+		await act(h, alice, `/api/v1/statuses/${status.id}/unpin`)
+		await deliver(GONE)
+		await act(h, alice, `/api/v1/statuses/${status.id}/pin`)
+		await deliver(OK)
+		expect(await h.store.retryDeliveries(BUILD, { ids: 'all', now: at + 1 })).toMatchObject({ ok: true, retried: 0 })
+		expect((await states()).filter((r) => r.state !== 'delivered' && r.state !== 'gave_up')).toEqual([])
+		// Each keeps its own id.
+		const sent = (await outbound(h.store)).filter((o) => o.activity.type === 'Add' || o.activity.type === 'Remove')
+		expect(new Set(sent.map((o) => o.activity.id)).size).toBe(sent.length)
 	})
 
 	it('goes with its status, without a Remove', async () => {
