@@ -64,14 +64,18 @@ of the viewer's exclusive lists, a pending member included (`EXCLUSIVE_MEMBERS` 
 own filter, not part of `homeFilterSql`: Mastodon's `FeedInsertWorker#notify?` refuses only `:filter`, so an exclusive
 member's post still notifies a follower with `notify` on, as the post notification rule below has it.
 
-Home and a list's timeline read a window of each author's statuses (`AuthorWindows` below): for the viewer and each
-account home shows (for a list, each active member), the newest statuses of theirs inside the cursor that pass every
-filter above, at most a page, through the `(account_id, id)` index from the cursor; then the newest page of all those
-windows. A status of the page is within its author's window, so the page is the one a single query over every author's
-statuses would give, and the filters apply inside each window, so an author whose newest statuses are all left out
-still shows older ones on the same page. A page reads at most a page of shown statuses per author, and the ones left
-out on the way, however long each author's history. Home has no membership by visibility: the read rule passes all of
-the viewer's own statuses and a followed account's direct or limited status only when it addresses the viewer.
+Home and a list's timeline read a window of each author's statuses (`AuthorWindows` below): for each account home
+shows (for a list, each active member), the newest public, unlisted and private statuses of theirs inside the cursor
+that pass every filter above, at most a page, through the partial index `statuses_feed` from the cursor; then the
+newest page of all those windows. A status of the page is within its author's window, so the page is the one a single
+query over every author's statuses would give, and the filters apply inside each window, so an author whose newest
+statuses are all left out still shows older ones on the same page. Home merges two more streams: the viewer's own
+statuses, whatever their visibility (the read rule shows the viewer all of them, so this reads at most a page), and the
+direct and limited statuses that mention the viewer, from the viewer's mentions in status id order from the cursor. A
+page reads a page of shown statuses per author however long each author's history, and a followed account's direct
+and limited statuses to others are never read. What a follow's options (boosts, languages, replies) and
+`homeFilterSql` leave out is still read on the way: an author whose recent statuses are mostly left out costs those
+rows. The mentions stream grows with the viewer's mentions that home does not show.
 
 A list (`src/domain/lists.ts`) belongs to a local account and holds the owner or accounts the owner follows or has
 asked to follow (Mastodon's `ListAccount#validate_relationship`). A member leaves the owner's lists when that follow
@@ -229,7 +233,7 @@ author. The callers:
 
 | Caller                                                     | Ids from                                                                         |
 | ---------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| home                                                       | `union` of one `AuthorWindows` under `homeFilter`: the viewer and its follows    |
+| home                                                       | `union` under `homeFilter` of an `AuthorWindows` (follows), own, and mentions    |
 | list timeline                                              | `union` of one `AuthorWindows` under `homeFilter`: the list's active members     |
 | public feed, bookmarks and favourites, context             | `select` under `listable`; the tag feed a `union` of its names under it          |
 | account statuses                                           | `select` under `visible`, with `visibleSql` and `filteredForSql` for an original |
@@ -318,9 +322,9 @@ own, together with the viewer's own blocks and mutes of those
 accounts and domain blocks of domains nobody lives on. Each endpoint must show the same with them as without (the same
 statuses, accounts, notifications and hashtags in the same order, and the same relationship flags), and the rows it
 reads (RES-7) may grow by at most 10. A second case grows the history of each author home and a list read instead:
-the viewer, who follows six accounts and has a list of them, and those accounts, from 20 statuses each to 2,000. The
-newest page, a page from the middle of the longer histories and the oldest page of home and of the list must each be
-full and read at most 10 rows more.
+the viewer, who follows seven accounts and has a list of them, and those accounts, from 20 statuses each to 2,000, one
+of the accounts posting only direct statuses addressed to another account. The newest page, a page from the middle of
+the longer histories and the oldest page of home and of the list must each be full and read at most 10 rows more.
 
 `test/policy-endpoints.test.ts` runs the read endpoints themselves on generated worlds, with favourites, bookmarks and
 notifications added, for each available local viewer and, where the endpoint answers without a token, the anonymous
