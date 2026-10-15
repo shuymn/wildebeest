@@ -605,14 +605,20 @@ export type RemotePollInput = {
 // Whether `poll` changes the choices or the multiple of the stored poll of `statusId`, or adds or removes one
 // (PollParser#significantly_changes?): such a change is an edit of the status, and drops the votes cast.
 export function remotePollChanges(db: Db, statusId: string, poll: RemotePollInput | null): boolean {
-	const previous = db.first<{ options: string; multiple: number }>(
-		'SELECT options, multiple FROM polls WHERE status_id = ? AND removed = 0',
+	const previous = db.first<{ options: string; multiple: number; cut_options: string }>(
+		'SELECT options, multiple, cut_options FROM polls WHERE status_id = ? AND removed = 0',
 		statusId
 	)
 	if (previous === undefined || poll === null) {
 		return (previous === undefined) !== (poll === null)
 	}
-	return previous.options !== JSON.stringify(poll.options) || previous.multiple !== (poll.multiple ? 1 : 0)
+	// Which choices were cut is part of the choices: a choice lengthened past the cut keeps its stored title, but is
+	// another choice on its server.
+	return (
+		previous.options !== JSON.stringify(poll.options) ||
+		previous.multiple !== (poll.multiple ? 1 : 0) ||
+		previous.cut_options !== JSON.stringify(poll.cut)
+	)
 }
 
 // Writes or refreshes the poll of a remote status as ProcessStatusUpdateService#update_poll! does. With `significant`
@@ -669,7 +675,7 @@ export function storeRemotePoll(
 			`UPDATE polls SET options = ?2, multiple = ?3, tallies = ?4, votes_count = ?5, voters_count = ?6, expires_at = ?7,
 				removed = 0, ended = CASE WHEN removed = 1 THEN 0 ELSE ended END, cut_options = ?8
 			WHERE status_id = ?1 AND (removed = 1 OR options IS NOT ?2 OR multiple IS NOT ?3 OR tallies IS NOT ?4
-				OR voters_count IS NOT ?6 OR expires_at IS NOT ?7)`,
+				OR voters_count IS NOT ?6 OR expires_at IS NOT ?7 OR cut_options IS NOT ?8)`,
 			statusId,
 			options,
 			poll.multiple ? 1 : 0,

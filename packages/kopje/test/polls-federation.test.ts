@@ -247,6 +247,41 @@ describe('a remote Question', () => {
 		expect(await outbound(t.store)).toHaveLength(before)
 	})
 
+	it('refuses a vote in a choice an edit lengthened past the cut, though its stored title stays the same', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const exact = 'x'.repeat(1000)
+		const object = question(bob, {
+			oneOf: [
+				{ type: 'Note', name: exact },
+				{ type: 'Note', name: 'b' },
+			],
+		})
+		const id = await remotePoll(t, bob, object)
+		const lengthened = {
+			...object,
+			oneOf: [
+				{ type: 'Note', name: `${exact}y` },
+				{ type: 'Note', name: 'b' },
+			],
+		}
+		expect(await t.post(bob, update(bob, lengthened, '2026-10-11T12:30:00Z'))).toBe(202)
+		expect(
+			await sql(t.store, 'SELECT options = ? AS same, cut_options FROM polls', JSON.stringify([exact, 'b']))
+		).toEqual([{ same: 1, cut_options: '[0]' }])
+		const refused = await api(t, `/api/v1/polls/${id}/votes`, {
+			method: 'POST',
+			body: JSON.stringify({ choices: ['0'] }),
+		})
+		expect(refused.status).toBe(422)
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM poll_votes')).toEqual([{ n: 0 }])
+		// The same version shortening it back is a change of choices too, which only a newer version makes.
+		const shortened = { ...object, id: object.id }
+		await t.post(bob, { ...update(bob, shortened, '2026-10-11T12:30:00Z'), id: `${object.id}#updates/again` })
+		expect(await sql(t.store, 'SELECT cut_options FROM polls')).toEqual([{ cut_options: '[0]' }])
+	})
+
 	it('notifies its local voters when it ends', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
