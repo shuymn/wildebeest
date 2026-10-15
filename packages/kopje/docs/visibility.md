@@ -103,12 +103,16 @@ the notification rule (R15) decides who receives one: a status from an account t
 notifications adds nothing, and a limited status (a silent recipient) is not a direct message. A conversation is keyed
 by its owner, its thread and its participants (`src/domain/conversation-rows.ts`): the participants are the status's
 author and its mentions (not silent) less the owner; the thread is `statuses.thread`, Mastodon's `conversation_id`,
-written once when a status is stored and never changed (the trigger `statuses_thread`): a reply to a
-status stored takes that status's thread, a reply to a status not stored the uri it names (`in_reply_to_uri`), any
-other status its own uri. Deleting a status or a conversation changes no other status's thread, so a later reply joins
+written once when a status is stored and never changed: a reply to a status stored takes that status's thread; a
+received status that names its conversation (Mastodon's `conversation`, which `ActivityPub::Activity::Create` reads)
+takes that identifier, so the statuses of a thread delivered out of order share it; otherwise a reply to a status not
+stored takes the uri it names (`in_reply_to_uri`), and any other status its own uri (the trigger `statuses_thread`).
+Any identifier is taken, whatever its origin, as Mastodon takes it: a sender can only group its own statuses with
+others, and a conversation is also keyed by its participants, the sender among them. Deleting a status or a conversation changes no other status's thread, so a later reply joins
 the thread its parent was stored in. Migration `0009_conversations` gives the statuses already stored theirs by the
 same rule, from the start of each reply chain down (a status in a cycle of replies, or below one, takes its own
-`in_reply_to_uri`, else its uri). A status leaves its
+`in_reply_to_uri`, else its uri); it cannot use the conversation a received status named, which no earlier release
+stored. A status leaves its
 conversations however it is deleted (a delete, an inbound `Delete`, a purge): its `conversation_statuses` rows cascade,
 and the trigger `conversation_statuses_removed` of migration `0009_conversations` moves the last status back to the
 newest left, or deletes the conversation when none is left (`AccountConversation.remove_status`). A block ends the

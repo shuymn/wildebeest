@@ -419,3 +419,81 @@ describe('conversations of inbound statuses', () => {
 		expect(await sql(t.store, 'SELECT count(*) AS n FROM conversations')).toEqual([{ n: 0 }])
 	})
 })
+
+describe('threads of received statuses', () => {
+	const toAlice = (bob: TestActor, extra: Record<string, unknown> = {}) =>
+		mastodonNote(bob, {
+			to: [ALICE_URI],
+			cc: [],
+			tag: [{ type: 'Mention', href: ALICE_URI, name: '@alice' }],
+			...extra,
+		})
+	const threads = (t: Setup) =>
+		sql<{ thread: string }>(t.store, 'SELECT DISTINCT thread FROM statuses').then((rows) => rows.map((r) => r.thread))
+
+	it('keeps a thread delivered out of order in one conversation, by the conversation its statuses name', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const conversation = 'tag:mastodon.example,2026-10-11:objectId=1:objectType=Conversation'
+		const at = (minute: number) => `2026-10-11T12:0${minute}:00Z`
+		const r = toAlice(bob, { conversation, published: at(1) })
+		const p = toAlice(bob, { conversation, inReplyTo: r.id, published: at(2) })
+		const c1 = toAlice(bob, { conversation, inReplyTo: p.id, published: at(3) })
+		const c2 = toAlice(bob, { conversation, inReplyTo: p.id, published: at(4) })
+		for (const note of [r, c1, p, c2]) {
+			expect(await t.post(bob, create(bob, note))).toBe(202)
+		}
+		expect(await threads(t)).toEqual([conversation])
+		const { body } = await t.api<Conversation[]>('/api/v1/conversations')
+		expect(body.map((c) => c.last_status?.uri)).toEqual([c2.id])
+	})
+
+	it('groups replies to a status never stored that name the same conversation', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const conversation = 'https://mastodon.example/contexts/1'
+		for (const parent of ['https://mastodon.example/statuses/gone-1', 'https://mastodon.example/statuses/gone-2']) {
+			expect(await t.post(bob, create(bob, toAlice(bob, { conversation, inReplyTo: parent })))).toBe(202)
+		}
+		expect(await threads(t)).toEqual([conversation])
+		expect((await t.api<Conversation[]>('/api/v1/conversations')).body).toHaveLength(1)
+	})
+})
+
+describe('dismissing a long conversation', () => {
+	it('deletes each of its rows once, without working out a last status for each', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const erin = await remoteAccount(h.store, 'erin')
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5000)
+			INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+			SELECT CAST(300000000000000000 + i AS TEXT), 'https://remote.example/objects/' || i, ?, 'direct',
+				'2026-10-01T00:00:00.000Z' FROM n`,
+			erin
+		)
+		await sql(
+			h.store,
+			`INSERT INTO conversations (account_id, thread, participants, last_status_id, unread)
+			VALUES (?, 'https://remote.example/objects/1', json_array(?), '300000000000000000', 1)`,
+			alice.id,
+			erin
+		)
+		await sql(
+			h.store,
+			'INSERT INTO conversation_statuses (conversation_id, status_id) SELECT c.id, s.id FROM conversations c, statuses s'
+		)
+		const [conversation] = await list(h, alice)
+		const measured = await runInDurableObject(h.store, (_instance, state) => {
+			const cursor = state.storage.sql.exec('DELETE FROM conversations WHERE id = ?', Number(conversation?.id))
+			cursor.toArray()
+			return { read: cursor.rowsRead, written: cursor.rowsWritten }
+		})
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM conversation_statuses')).toEqual([{ n: 0 }])
+		// A write and a few reads per row: the cascade's own (four) and the trigger's check that its conversation is gone
+		// (one), which spares it the two of working out a last status.
+		expect(measured.read).toBeLessThanOrEqual(5 * 5000 + 10)
+		expect(measured.written).toBeLessThanOrEqual(5000 + 10)
+	})
+})

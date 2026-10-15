@@ -3,10 +3,11 @@
 // and the text of CONVERSATIONS_BACKFILL is also in migration 0009_conversations (test/migrations.test.ts checks it).
 //
 // A conversation row belongs to a local account and is keyed, as Mastodon keys it, by its thread and its participants:
-//   - the thread is statuses.thread, Mastodon's conversation_id: written once when a status is stored,
-//     by the trigger statuses_thread of migration 0009, and never changed. A reply to a status stored takes that
-//     status's thread; a reply to a status not stored takes the uri it names (in_reply_to_uri); any other status its
-//     own uri. Deleting a status or a conversation changes no other status's thread;
+//   - the thread is statuses.thread, Mastodon's conversation_id: written once when a status is stored, and never
+//     changed. A reply to a status stored takes that status's thread; a received status that names its conversation
+//     (Mastodon's `conversation`) takes that identifier (remote-statuses.ts); otherwise a reply to a status not stored
+//     takes the uri it names (in_reply_to_uri), and any other status its own uri (the trigger statuses_thread of
+//     migration 0009). Deleting a status or a conversation changes no other status's thread;
 //   - the participants are the status's author and the accounts it mentions (not silently), less the row's owner, as
 //     a JSON array of account ids in order (AccountConversation.participants_from_status).
 
@@ -20,7 +21,8 @@ export function participantsSql(s: string, owner: string): string {
 
 // The threads of the statuses stored and the conversations of the direct ones, as the write path makes them, in work
 // that grows linearly with the statuses:
-//   1. the thread of every status, the same rule applied from the start of each chain down: a status that
+//   1. the thread of every status, the rule applied from the start of each chain down (the conversation a received
+//      status named was never stored, so it is not used): a status that
 //      replies to no status stored takes in_reply_to_uri, else its own uri, and each reply below it takes its thread.
 //      A status in a cycle of replies, or below one, starts no chain and takes in_reply_to_uri, else its own uri;
 //   2. each (owner, status), as Mastodon's own migration of account conversations made them: a direct status (not a

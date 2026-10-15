@@ -21,7 +21,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `POST /api/v1/conversations/:id/read` and `/unread`. Scopes are `read:statuses` and `write:conversations` (or `read`
   and `write`); another account's conversation answers 404.
     - Your direct statuses, and the direct statuses you are notified of as a mention, are grouped by thread and by the
-      other accounts in them. A new status from someone else marks the conversation unread; your own does not.
+      other accounts in them. A received status that names its conversation, as Mastodon's do, joins that thread even
+      when it arrives before the status it replies to. A new status from someone else marks the conversation unread; your own does not.
     - Deleting a status takes it out of its conversations; a conversation with none left goes. Deleting a
       conversation keeps its statuses, and a later one makes a new conversation. Blocking an account ends your
       conversations with it.

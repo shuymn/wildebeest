@@ -1,9 +1,11 @@
 -- Kopje Store schema 0009: conversations, the direct-message list. Never edit after release (checksummed).
 --
 -- statuses.thread is Mastodon's conversation_id: the thread a status belongs to, written once when the status is
--- stored and never changed (the trigger statuses_thread below). A reply to a status stored takes that status's thread;
--- a reply to a status not stored takes the uri it names (in_reply_to_uri); any other status its own uri. Deleting a
--- status or a conversation changes no other status's thread.
+-- stored and never changed. A reply to a status stored takes that status's thread; a received status that names its
+-- conversation (Mastodon's `conversation`) takes that identifier, so the replies of a thread delivered out of order
+-- share it; otherwise a reply to a status not stored takes the uri it names (in_reply_to_uri), and any other status
+-- its own uri (the trigger statuses_thread below fills these). Deleting a status or a conversation changes no other
+-- status's thread.
 --
 -- conversations is Mastodon's account_conversations, written when a direct status is stored
 -- (AccountConversation.add_status): a local author's own direct status goes into the author's conversation, and a
@@ -15,7 +17,8 @@
 -- rows go with it (ON DELETE CASCADE), and the trigger conversation_statuses_removed moves the conversation's last status
 -- back to the newest one left, or deletes the conversation when none is left (AccountConversation.remove_status).
 --
--- The backfill gives every status stored its thread, from the start of each reply chain down, and makes the
+-- The backfill gives every status stored its thread, from the start of each reply chain down (it does not know the
+-- conversation a received status named, which no earlier release stored), and makes the
 -- conversations of the direct statuses as Mastodon's own migration of them did (MigrateAccountConversations): each
 -- local author's direct statuses, and each direct status a local account holds a mention notification of. It is the
 -- text of CONVERSATIONS_BACKFILL in src/domain/conversation-rows.ts, which the cutover's converter runs too, through
@@ -111,8 +114,10 @@ BEGIN
     WHERE id = NEW.id;
 END;
 
--- Reads the conversation's newest status left through the primary key: a few rows, however many it holds.
+-- Reads the conversation's newest status left through the primary key: a few rows, however many it holds. A
+-- conversation deleted itself (dismissed, or its owner gone) takes its rows with it, and nothing is left to update.
 CREATE TRIGGER conversation_statuses_removed AFTER DELETE ON conversation_statuses
+WHEN EXISTS (SELECT 1 FROM conversations WHERE id = OLD.conversation_id)
 BEGIN
   UPDATE conversations
     SET last_status_id = (SELECT max(status_id) FROM conversation_statuses WHERE conversation_id = OLD.conversation_id)
