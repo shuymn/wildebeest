@@ -2,10 +2,10 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { seedAccount, sql } from './api-helpers'
+import { bearer, json, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
-import { block, community, domainBlock, mute, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
+import { block, community, domainBlock, mute, post, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
 import {
 	addresses,
@@ -107,6 +107,56 @@ describe('the recipient rule (recipientsFor, addresses)', () => {
 		expect(outboundKind({ type: 'Reject', object: {} }, true)).toBe('retraction')
 		expect(outboundKind({ type: 'Delete', object: note })).toBe('retraction')
 		expect(outboundKind({ type: 'Undo', object: { type: 'Announce' } })).toBe('retraction')
+	})
+
+	it('delivers no content to an account being deleted, and still delivers its retractions', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const gone = await remoteAccount(h.store, 'gone', 'gone.example')
+		await remoteFollows(h.store, gone, alice.id)
+		await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'other.example'), alice.id)
+		const first = await post(h, alice, { status: '@gone@gone.example hello' })
+		// Its deletion starts (an inbound Delete of the actor), before the purge removes its follows and mentions.
+		await sql(h.store, 'UPDATE accounts SET deleted_at = ? WHERE id = ?', new Date(NOW).toISOString(), gone)
+
+		await post(h, alice, { status: 'a new post' })
+		const edited = await h.request(
+			`/api/v1/statuses/${first.id}`,
+			bearer(alice.token, json({ status: '@gone@gone.example hello again' }, { method: 'PUT' }))
+		)
+		expect(edited.status).toBe(200)
+		const targets = async () => {
+			const rows = await sql<{ type: string; content: string | null; inbox_url: string }>(
+				h.store,
+				`SELECT json_extract(o.body, '$.activity.type') AS type, json_extract(o.body, '$.activity.object.content') AS content,
+					d.inbox_url
+				FROM outbound_activities o JOIN deliveries d ON d.activity_id = o.id ORDER BY o.id, d.inbox_url`
+			)
+			return rows.map((r) => [r.type, r.content, r.inbox_url])
+		}
+		// The first Create was recorded before the deletion started; the new post and the edit do not reach the account.
+		expect(await targets()).toEqual(
+			expect.arrayContaining([
+				['Create', expect.stringContaining('hello</p>'), 'https://gone.example/inbox'],
+				['Create', expect.stringContaining('a new post'), 'https://other.example/inbox'],
+			])
+		)
+		expect(JSON.stringify((await targets()).filter((t) => t[2] === 'https://gone.example/inbox'))).not.toContain(
+			'again'
+		)
+		expect((await targets()).filter((t) => t[1]?.includes('a new post') === true)).toHaveLength(1)
+		expect((await targets()).some((t) => t[1]?.includes('again') === true)).toBe(true)
+
+		expect((await h.request(`/api/v1/statuses/${first.id}`, bearer(alice.token, { method: 'DELETE' }))).status).toBe(
+			200
+		)
+		// The edit could no longer mention the account, so it is a silent recipient now: the Delete reaches it at its
+		// personal inbox too, and at the shared inbox its Create went to.
+		expect((await targets()).filter((t) => t[0] === 'Delete').map((t) => t[2])).toEqual([
+			'https://gone.example/inbox',
+			'https://gone.example/users/gone/inbox',
+			'https://other.example/inbox',
+		])
 	})
 
 	it('leaves unavailable and blocked accounts out of content only; a retraction names them all', async () => {

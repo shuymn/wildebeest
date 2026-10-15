@@ -69,8 +69,9 @@ const ACTION_KINDS = [
 ] as const
 
 type Action = {
-	// A witness may also have every remote follower of the author leave at once.
-	kind: (typeof ACTION_KINDS)[number] | 'followers leave'
+	// A witness may also have every remote follower of the author leave at once, or start the deletion of a remote
+	// account (`account`), as an inbound Delete of the actor does.
+	kind: (typeof ACTION_KINDS)[number] | 'followers leave' | 'deletion starts'
 	// Indices, taken modulo what the world offers when the action runs.
 	actor: number
 	target: number
@@ -117,11 +118,13 @@ const caseArb: fc.Arbitrary<Case> = fc.record({
 const SCENARIOS = [
 	'actor Update to a domain-blocked follower',
 	'content leaves out a domain-blocked follower',
+	'content leaves out an unavailable account',
 	'content to a silent recipient',
 	'notification',
 	'push',
 	'retraction reaches a blocked receiver',
 	'retraction reaches an outstanding target',
+	'retraction reaches an unavailable receiver',
 	'retraction reaches an unexpanded target',
 	'retraction reaches what was delivered',
 	'Undo(Announce) names a blocked author',
@@ -143,6 +146,7 @@ function witness(
 			name: `L${i}`,
 			local: true,
 			suspended: false,
+			deleting: false,
 			hidesCollections: false,
 			domain: null,
 			uri: `https://kopje.test/ap/users/l${i}`,
@@ -154,6 +158,7 @@ function witness(
 			name: `R${i}`,
 			local: false,
 			suspended: false,
+			deleting: false,
 			hidesCollections: false,
 			domain,
 			uri: `https://${domain}/users/r${i}`,
@@ -192,6 +197,17 @@ const R0 = 4
 const R1 = 5
 
 const WITNESSES: { name: string; scenarios: Scenario[]; case: Case }[] = [
+	{
+		name: 'a post and a delete after the deletion of a mentioned follower starts',
+		scenarios: ['content leaves out an unavailable account', 'retraction reaches an unavailable receiver'],
+		case: witness(2, { followers: [R0, R1] }, [
+			{ kind: 'post', mentions: [R0] },
+			{ kind: 'deliver' },
+			{ kind: 'deletion starts', account: R0 },
+			{ kind: 'post', mentions: [R0] },
+			{ kind: 'delete' },
+		]),
+	},
 	{
 		name: 'a boost of an author on a blocked domain, and its Undo',
 		scenarios: ['Undo(Announce) names a blocked author'],
@@ -387,6 +403,12 @@ function readWorld(sql: SqlStorage, base: World): Snapshot {
 		}>('SELECT id, uri, account_id, visibility, reblog_of_id, in_reply_to_id FROM statuses ORDER BY id')
 		.toArray()
 	const byId = new Map(rows.map((row, s) => [row.id, s]))
+	const deleting = new Set(
+		sql
+			.exec<{ id: string }>('SELECT id FROM accounts WHERE deleted_at IS NOT NULL')
+			.toArray()
+			.map((row) => row.id)
+	)
 	const mentions = sql
 		.exec<{ status_id: string; account_id: string; silent: number }>(
 			'SELECT status_id, account_id, silent FROM status_mentions ORDER BY account_id'
@@ -396,7 +418,8 @@ function readWorld(sql: SqlStorage, base: World): Snapshot {
 		byId,
 		byUri: new Map(rows.map((row, s) => [row.uri, s])),
 		world: {
-			accounts: base.accounts,
+			// Whether each remote account's deletion has started, as the Store has it now.
+			accounts: base.accounts.map((account, x) => ({ ...account, deleting: deleting.has(accountId(x)) })),
 			statuses: rows.map((row, s) => ({
 				name: `S${s}`,
 				author: account(row.account_id),
@@ -723,6 +746,11 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 				}
 				break
 			}
+			case 'deletion starts':
+				if (action.account !== undefined) {
+					sql.exec('UPDATE accounts SET deleted_at = ? WHERE id = ?', world.now, accountId(action.account))
+				}
+				break
 			case 'followers leave':
 				sql.exec(
 					'DELETE FROM follows WHERE target_account_id = ? AND account_id IN (SELECT id FROM accounts WHERE domain IS NOT NULL)',
@@ -860,6 +888,14 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 				for (const target of targets) {
 					contentInboxes.add(target.inbox)
 				}
+				const whole = m.reaches('other', signer, audience)
+				if (
+					[...whole.followers, ...whole.accounts].some(
+						(x) => !m.available(x) && inboxesOf(x).every((inbox) => inbox === null || !sent.has(inbox))
+					)
+				) {
+					saw.add('content leaves out an unavailable account')
+				}
 			}
 
 			// A retraction reaches every inbox that received what it withdraws, or may still, the blocked included.
@@ -886,6 +922,9 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 						)
 					) {
 						saw.add('retraction reaches a blocked receiver')
+					}
+					if (world.accounts.some((_, x) => !m.available(x) && inboxesOf(x).includes(inbox))) {
+						saw.add('retraction reaches an unavailable receiver')
 					}
 				}
 			}

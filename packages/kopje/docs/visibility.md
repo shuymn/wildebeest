@@ -284,7 +284,8 @@ the cleanup). After each action the model (`outboundKindOf`, `statusAudience`, `
 - every notification written satisfies R15, and every push recorded R16, at the time of the action.
 
 The property runs 500 cases from a fixed seed (`FC_SEED` replays another). Next to it, witnesses (cases written by
-hand) run each scenario it must check: a delivered retraction reaching a blocked receiver, one reaching a target still
+hand) run each scenario it must check: content leaving out an account being deleted while its retraction reaches it,
+a delivered retraction reaching a blocked receiver, one reaching a target still
 queued after its follower left, one reaching targets not yet expanded (more followers than an expansion step, who
 leave before the `Delete`), the `Undo` of a boost naming a blocked author, a profile `Update` to a domain-blocked
 follower, content leaving one out, a personal copy, notifications and pushes. So coverage never depends on chance.
