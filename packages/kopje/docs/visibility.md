@@ -3,7 +3,7 @@
 Who may see a status or an account, what a viewer filters out, who is notified and whom an author may address are
 decided in one module: `src/domain/audience.ts`. It is plain SQL fragments, spliced into the queries that read and
 write. No read path, notification path or delivery path keeps its own copy of a rule. The threat model states the
-invariants (VIS-1 to VIS-15, NET-2, PUSH-3); this page describes how the code applies them.
+invariants (VIS-1 to VIS-16, NET-2, PUSH-3); this page describes how the code applies them.
 
 ## The viewer context
 
@@ -58,7 +58,26 @@ self-replies) is known and is the author, the viewer or an account the viewer fo
 unknown is left out: its parent was never stored (the partner is written with the parent), it continues such a reply,
 or the partner's account was purged (the purge clears the partner and ends every follow of that account, so no
 follow would let the reply through anyway, and a reply home left out stays out). A reply whose parent is deleted keeps
-its partner. Then `homeFilterSql` applies.
+its partner. Then `homeFilterSql` applies. A status that is not the viewer's is also left out when its author is in one
+of the viewer's exclusive lists, a pending member included (`EXCLUSIVE_MEMBERS` in `timelines.ts`: Mastodon's
+`FeedManager#filter_from_home` answers `:skip_home` for an author in `crutches_exclusive_list_users`). It is home's
+own filter, not part of `homeFilterSql`: Mastodon's `FeedInsertWorker#notify?` refuses only `:filter`, so an exclusive
+member's post still notifies a follower with `notify` on, as the post notification rule below has it.
+
+A list (`src/domain/lists.ts`) belongs to a local account and holds the owner or accounts the owner follows or has
+asked to follow (Mastodon's `ListAccount#validate_relationship`). A member leaves the owner's lists when that follow
+ends, whatever ends it: the trigger `list_members_follow_ended` of migration `0007_list_members` deletes the rows with
+the follow, as Mastodon's foreign keys from `list_accounts` to `follows` and `follow_requests` do. A request accepted
+later keeps its row. A list's timeline (`listTimeline` in `src/domain/timelines.ts`, Mastodon's `ListFeed` as
+`FanOutOnWriteService#deliver_to_lists` and `FeedManager#filter` with `timeline_type` `:list` fill it) has the public,
+unlisted and private statuses and boosts of its active members: the owner, when a member, and the members the owner
+follows (accepted). A member with a pending request contributes nothing until the request is accepted. Of these, a
+status that is not the owner's needs the follow's options as in home (`show_reblogs`, languages), and a reply passes
+when its partner is known and is the author or the owner, or by the list's `replies_policy`
+(`FeedManager#filter_from_list?` with the list's `crutches_following`): `followed`, any reply of the owner's own and one
+to an account the owner follows; `list`, one to a member of the list (pending included); `none`, nothing more. Then
+`homeFilterSql` applies for the owner. Exclusive does not change the list's own timeline. Only the owner reads or
+changes a list; to anyone else it is not found.
 
 Notifications: `shownSql(r, type, from, status, now)` is R15, one rule for writing (`notify`), listing and reading
 notifications, and for sending their pushes (`domain/push.ts`, judged again at the time of sending). The sender is not
@@ -111,7 +130,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R6 history                | `canView`, with the audience frozen at write time (`editStatus`).                                                                                                                                                                                                                                                                                                                                                                  |
 | R7 filtered               | `filteredForSql`, inside `listableSql`, account statuses (boosted originals), familiar followers.                                                                                                                                                                                                                                                                                                                                  |
 | R8 listable               | `listableSql`: public, tag, bookmarks, favourites, context, status and hashtag search.                                                                                                                                                                                                                                                                                                                                             |
-| R9 home                   | `homeFilterSql` in `homeTimeline`, with its membership and the follow's options (boosts, languages, reply partners).                                                                                                                                                                                                                                                                                                               |
+| R9 home                   | `homeFilterSql` in `homeTimeline`, with its membership, the follow's options (boosts, languages, reply partners) and the viewer's exclusive lists.                                                                                                                                                                                                                                                                                 |
 | R10 public and tag feeds  | `publicConditions` in `timelines.ts` on `listableSql`; the tag feed and a tag's history take their candidates from the hashtags of public statuses (`status_tags.public`, written with `tagPublicSql`).                                                                                                                                                                                                                            |
 | R11 account statuses      | `visibleSql`, `blocksSql` (the viewer blocks the account), and `visibleSql` with `filteredForSql` for a boosted original.                                                                                                                                                                                                                                                                                                          |
 | R12 listed accounts       | `listedForSql` in `favourited_by` and `reblogged_by` (`DISTRIBUTABLE_SQL` boosts only).                                                                                                                                                                                                                                                                                                                                            |
@@ -125,6 +144,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R21 follow                | `followableBySql` for a local follow and for each follower a `Move` carries; an inbound `Follow` is ignored when the actor blocks the target (`blocksSql`) and rejected when the target blocks it or its domain (`blockedSql`).                                                                                                                                                                                                    |
 | R22 addressing            | `addressingOf` for a status; for a boost, `addresses` (through `boostAnnounce`): the `Announce` leaves out an author the booster blocks or domain-blocks, its `Undo` names them. See "Outbound recipients".                                                                                                                                                                                                                        |
 | R23 delivery targets      | `recipientsFor`, by `outboundKind`, turned into inboxes by `audienceTargets` in `deliveries.ts`. See "Outbound recipients".                                                                                                                                                                                                                                                                                                        |
+| R24 list timeline         | `homeFilterSql` in `listTimeline`, with the list's active members, the follow's options and the list's `replies_policy`; the owner's lists only (`ownList` in `lists.ts`).                                                                                                                                                                                                                                                         |
 
 ## Outbound recipients
 
@@ -192,6 +212,7 @@ author. The callers:
 | Caller                                                     | Ids from                                                                         |
 | ---------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | home                                                       | `union` of its three membership branches under `homeFilter`                      |
+| list timeline                                              | `select` under `homeFilter`, with the list's active members                      |
 | public feed, bookmarks and favourites, context             | `select` under `listable`; the tag feed a `union` of its names under it          |
 | account statuses                                           | `select` under `visible`, with `visibleSql` and `filteredForSql` for an original |
 | status search                                              | `select` under `listable`, with its candidates as a `WITH` table                 |
@@ -256,7 +277,10 @@ visibility with mentions (some silent), boosts, replies and replies that continu
 with the conversation partner `statuses.ts` carries over), replies to a status never stored (no parent and no
 partner) and replies continuing those (a parent but no partner, as a purge leaves a reply to the account it removes),
 accepted and pending follows, blocks both ways, mutes that have expired, expire at the time of the read or later, or never, with or without notifications, and domain blocks in
-their stored form, including the instance's own domain and a domain nobody lives on. Each property writes a world into one Store and evaluates its fragment over every pair the rule takes: every
+their stored form, including the instance's own domain and a domain nobody lives on, and lists of local accounts, exclusive or not, with each
+`replies_policy`, whose members are their owner and accounts it follows, accepted or pending, whatever else the owner
+blocks, mutes or domain-blocks (a Store holds no other member: the trigger, migration `0007_list_members` and the
+converter keep it so). Each property writes a world into one Store and evaluates its fragment over every pair the rule takes: every
 viewer (each account and the anonymous one) with every account or status (for the list rules, `listableSql` and
 `homeFilterSql`, the viewers their callers judge: each local account and the anonymous one), every owner with every
 account, for `followListedSql` every viewer with every owner and account, and, for `shownSql`, every local recipient
@@ -267,11 +291,12 @@ test/policy-oracle.test.ts` replays it.
 `test/policy-bounds.test.ts` takes one generated world, for a fixed seed, in which every endpoint below shows the viewer
 something. It runs home, the public and tag feeds, account statuses, notifications, context, favourites, bookmarks,
 `favourited_by`, `reblogged_by`, relationships, the followers and following of an account (one that no unrelated account
-follows), status and hashtag search, and account search among the viewer's follows (a search of every account reads the
+follows), a list's timeline (a list of every account of the world), status and hashtag search, and account search among the viewer's follows (a search of every account reads the
 newest accounts the instance knows, a window that grows with them up to its limit) on that world alone, and again with
 1,000 unrelated remote accounts and 100 unrelated local ones: their statuses (never public, though they carry the
 hashtag the tag feed reads), replies and boosts, their follows, blocks, mutes and domain blocks of the world's accounts
-and domains, and their favourites, bookmarks and notifications, together with the viewer's own blocks and mutes of those
+and domains, their favourites, bookmarks and notifications, and their exclusive lists of the world's accounts and their
+own, together with the viewer's own blocks and mutes of those
 accounts and domain blocks of domains nobody lives on. Each endpoint must show the same with them as without (the same
 statuses, accounts, notifications and hashtags in the same order, and the same relationship flags), and the rows it
 reads (RES-7) may grow by at most 10.
@@ -285,7 +310,8 @@ boost must come with its own original (never `reblog: null` on a read), which th
 | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | public feed, tag feed, account statuses (of every account) | exactly the model's members the rule allows (R10, R11), newest first, over pages of 3                                                                           |
 | favourites, bookmarks                                      | exactly the viewer's edges the list rule allows (R8), newest edge first, over pages                                                                             |
-| home                                                       | exactly the model's members home allows (R9: membership, the follow's options and `homeFilterSql`), newest first, over pages of 3                               |
+| home                                                       | exactly the model's members home allows (R9: membership, exclusive lists, the follow's options and `homeFilterSql`), newest first, over pages of 3              |
+| list timeline (of each of the viewer's lists)              | exactly what the model allows of the list's members (R24), newest first, over pages of 3; another account's list is not found                                   |
 | single status, context                                     | nothing for a status the viewer may not view (R3); context members listable (R8)                                                                                |
 | `favourited_by`, `reblogged_by`                            | nothing for a status the viewer may not view; only listed interactors (R12)                                                                                     |
 | status search                                              | listable statuses only (R8)                                                                                                                                     |
@@ -312,11 +338,14 @@ the cleanup). After each action the model (`outboundKindOf`, `statusAudience`, `
 - a retraction is recorded, and reaches every inbox something about its object was delivered to, is still queued for
   (a deliveries row in any state) or is still in a chunk of targets not yet expanded; a profile change reaches every
   remote follower;
-- every notification written satisfies R15, and every push recorded R16, at the time of the action.
+- every notification written satisfies R15, and every push recorded R16, at the time of the action;
+- a list holds what it held before the action, less each account its owner no longer follows in either state; its
+  owner stays.
 
 The property runs 500 cases from a fixed seed (`FC_SEED` replays another). Next to it, witnesses (cases written by
 hand) run each scenario it must check: content leaving out an account being deleted while its retraction reaches it,
 a delivered retraction reaching a blocked receiver, one reaching a target still
 queued after its follower left, one reaching targets not yet expanded (more followers than an expansion step, who
 leave before the `Delete`), the `Undo` of a boost naming a blocked author, a profile `Update` to a domain-blocked
-follower, content leaving one out, a personal copy, notifications and pushes. So coverage never depends on chance.
+follower, content leaving one out, a personal copy, notifications and pushes, and list members leaving with a block
+either way. So coverage never depends on chance.
