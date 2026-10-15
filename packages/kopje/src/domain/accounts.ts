@@ -298,6 +298,17 @@ export const getAccount = readOperation<{ id: string; present: Present }, Accoun
 	return row === undefined ? null : presentAccount(row, present)
 })
 
+// GET /api/v1/accounts?id[]= (AccountsController#index): the accounts getAccount shows one by one, read in one query,
+// in the order asked, each once; an id that names no account is left out. Kopje has no unapproved accounts
+// (`without_unapproved`). The caller limits the ids (MAX_ACCOUNTS_BY_ID).
+export const MAX_ACCOUNTS_BY_ID = 40
+
+export const getAccounts = readOperation<{ ids: string[]; present: Present }, Account[]>((db, { ids, present }) => {
+	const resolved = [...new Set(ids.slice(0, MAX_ACCOUNTS_BY_ID).flatMap((id) => resolveAccountId(db, id) ?? []))]
+	const accounts = presentAccountsById(db, resolved, present)
+	return resolved.flatMap((id) => accounts.get(id) ?? [])
+})
+
 // domain null means a local account.
 export const lookupAccount = readOperation<
 	{ username: string; domain: string | null; present: Present },
@@ -496,9 +507,13 @@ type RelationshipRow = {
 	muting_notifications: number | null
 	muting_expires_at: string | null
 	domain_blocking: number
+	endorsed: number
+	note: string | null
 }
 
-// The viewer's relationships with each account, as they stand at `now` (an expired mute no longer counts).
+// The viewer's relationships with each account, as they stand at `now` (an expired mute no longer counts), with the
+// viewer's endorsement of it and the viewer's own private note on it (Account.endorsed_map and account_note_map), each
+// read through its pair key.
 export function relationshipsOf(db: Db, viewerId: string, accountIds: string[], now: number): Relationship[] {
 	const rows = db.all<RelationshipRow>(
 		`SELECT a.id,
@@ -507,11 +522,14 @@ export function relationshipsOf(db: Db, viewerId: string, accountIds: string[], 
 			${blocksSql('?1', 'a.id')} AS blocking,
 			${blocksSql('a.id', '?1')} AS blocked_by,
 			m.account_id IS NOT NULL AS muting, m.hide_notifications AS muting_notifications, m.expires_at AS muting_expires_at,
-			${domainBlocksSql('?1', 'a.id')} AS domain_blocking
+			${domainBlocksSql('?1', 'a.id')} AS domain_blocking,
+			p.account_id IS NOT NULL AS endorsed, n.comment AS note
 		FROM json_each(?2) j
 		JOIN accounts a ON a.id = j.value
 		LEFT JOIN follows fo ON fo.account_id = ?1 AND fo.target_account_id = a.id
 		LEFT JOIN follows fb ON fb.account_id = a.id AND fb.target_account_id = ?1
+		LEFT JOIN account_pins p ON p.account_id = ?1 AND p.target_account_id = a.id
+		LEFT JOIN account_notes n ON n.account_id = ?1 AND n.target_account_id = a.id
 		${activeMuteJoinSql('m', '?1', 'a.id', '?3')}
 		ORDER BY j.key`,
 		viewerId,
@@ -533,8 +551,8 @@ export function relationshipsOf(db: Db, viewerId: string, accountIds: string[], 
 		muting_expires_at: row.muting_expires_at,
 		requested: row.following === 'pending',
 		domain_blocking: row.domain_blocking === 1,
-		endorsed: false,
-		note: '',
+		endorsed: row.endorsed === 1,
+		note: row.note ?? '',
 	}))
 }
 
@@ -850,6 +868,43 @@ function recountFollows(db: Db, viewerId: string, target: TargetRow): void {
 		)
 	}
 }
+
+// POST /api/v1/accounts/:id/note (Accounts::NotesController, AccountNote): the viewer's private note on any stored
+// account, the viewer's own included. A blank comment (absent, empty or whitespace) deletes the note; a longer one than
+// AccountNote::COMMENT_SIZE_LIMIT characters is refused with Rails' message, after the account is found. The note is
+// kept as sent, and only its author is shown it (relationshipsOf).
+export const MAX_NOTE_COMMENT = 2_000
+
+export type NoteResult = RelationshipResult | { status: 'invalid'; errors: string[] }
+
+export const setNote = userWriteOperation<{ target: string; comment: string | undefined; now: number }, NoteResult>(
+	(db, { target, comment, now }, { accountId: viewerId }) => {
+		const id = resolveAccountId(db, target)
+		if (id === null) {
+			return { status: 'not_found' }
+		}
+		// Ruby's String#blank?.
+		if (comment === undefined || /^\s*$/u.test(comment)) {
+			db.run('DELETE FROM account_notes WHERE account_id = ? AND target_account_id = ?', viewerId, id)
+		} else if ([...comment].length > MAX_NOTE_COMMENT) {
+			return { status: 'invalid', errors: [`Comment is too long (maximum is ${MAX_NOTE_COMMENT} characters)`] }
+		} else {
+			// An unchanged note is not written again (`@note.save! if @note.changed?`).
+			db.run(
+				`INSERT INTO account_notes (account_id, target_account_id, comment, created_at, updated_at)
+				VALUES (?1, ?2, ?3, ?4, ?4)
+				ON CONFLICT (account_id, target_account_id) DO UPDATE SET comment = excluded.comment,
+					updated_at = excluded.updated_at
+				WHERE comment IS NOT excluded.comment`,
+				viewerId,
+				id,
+				comment,
+				new Date(now).toISOString()
+			)
+		}
+		return relationshipResult(db, viewerId, id, now)
+	}
+)
 
 export function relationshipResult(db: Db, viewerId: string, targetId: string, now: number): RelationshipResult {
 	const [relationship] = relationshipsOf(db, viewerId, [targetId], now)
