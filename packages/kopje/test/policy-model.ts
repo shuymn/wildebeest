@@ -139,8 +139,8 @@ export class PolicyModel {
 	}
 
 	// R2: an available author; the author sees all of their own; an author who blocks the viewer hides everything from
-	// them; public and unlisted are seen by everyone else, private by accepted followers and the mentioned, direct and
-	// limited by the mentioned only (silent mentions included).
+	// them; public and unlisted are seen by everyone else but a remote viewer on a domain the author blocks, private by
+	// accepted followers and the mentioned, direct and limited by the mentioned only (silent mentions included).
 	visible(s: number, viewer: Viewer): boolean {
 		const { author, visibility } = this.status(s)
 		if (!this.available(author)) {
@@ -155,7 +155,7 @@ export class PolicyModel {
 		switch (visibility) {
 			case 'public':
 			case 'unlisted':
-				return true
+				return viewer === null || !this.domainBlocks(author, viewer)
 			case 'private':
 				return this.follows(viewer, author) || this.mentioned(s, viewer)
 			case 'direct':
