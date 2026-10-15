@@ -19,7 +19,8 @@ Some things cannot be done from the wizard. Do these in the Cloudflare dashboard
    payment details. Add a login method; a one-time PIN is enough.
 3. **Set the secrets** of the Worker:
     - `SETUP_TOKEN`: at least 32 random characters, for example `openssl rand -base64 33`. Only the wizard reads it.
-    - `USER_KEK`: wraps the private keys of local accounts. Set it before the admin is created.
+    - `USER_KEK`: wraps the private keys of local accounts. Set it before the admin is created. To change it later,
+      see [Rotating the KEK](#rotating-the-kek).
     - `VAPID_JWK`, optional: turns on Web Push. An EC P-256 private key as a JWK; the instance template's README shows
       how to make one. Kopje never makes or replaces it: without it, push notifications are unavailable, and replacing
       it once clients have subscribed breaks their subscriptions.
@@ -122,6 +123,56 @@ Checks show pass, warning or fail, with a hint on what to fix. Each can be run a
 - Set up the daily backup: see [backup.md](backup.md).
 - Before the first update, read [upgrade.md](upgrade.md): how updates arrive, what the Store does on a new version,
   and how to roll back.
+
+## Rotating the KEK
+
+`USER_KEK` wraps the private key of every local account and of the instance actor. `kopje-admin keys rewrap` moves
+them to a new KEK: each key is unwrapped with the previous KEK and wrapped again with the new one. The keys themselves
+do not change, so other servers see nothing and signatures made before still verify. Rotate when the KEK is empty (an
+instance whose keys came over from Wildebeest under the empty KEK, where `kopje-admin health` warns `USER_KEK is empty`),
+or when the KEK may have leaked.
+
+Signing uses `USER_KEK` only. From the moment it changes until the rewrap has run, keys still under the previous KEK
+cannot sign: deliveries fail and wait for their next attempt (each failed attempt counts toward the 15 a delivery has),
+inbox requests that need a signed fetch to check their signature answer 503 for the sender to retry, and searches that
+resolve remote accounts fail. Actor documents keep serving, from the stored public keys, and Web Push does not use the
+KEK. The steps below hold outgoing work with the `MAINTENANCE` variable for those minutes.
+
+1. **Make a new KEK** and keep a copy somewhere safe:
+
+    ```sh
+    openssl rand -base64 32
+    ```
+
+2. **Set the variables** on the Worker (dashboard: Settings, Variables and Secrets), together in one deployment:
+    - `MAINTENANCE=readonly`, as a plain-text variable: deliveries and the cron pause and the inbox spools, so no
+      attempt is spent while keys cannot sign. Reads and sign-ins still work; writes answer 503. Use the variable, not
+      `kopje-admin maintenance on`: the Store's own maintenance refuses the rewrap's writes.
+    - `USER_KEK_PREVIOUS`, a secret: the current KEK. Leave it unset when the current KEK is empty (`USER_KEK` unset or
+      empty): unset reads as the empty KEK.
+    - `USER_KEK`: the new KEK.
+
+3. **Rewrap the keys:**
+
+    ```sh
+    kopje-admin keys rewrap
+    ```
+
+    It works through the keys a page at a time and prints how many were rewrapped, how many were already under
+    `USER_KEK`, and the keys it could not move, by owner, with a reason: `changed` (the key changed while it ran; run
+    the command again), `unwrap-failed` (neither KEK unwraps it: check `USER_KEK_PREVIOUS`), `pubkey-mismatch` (it
+    unwraps, but does not match its account's public key) or `recheck-failed` (the rewrapped key did not pass its check
+    and was not written). It exits 3 when any key failed. A key it could not move is left as it was. Running it again
+    is safe: keys already under `USER_KEK` are skipped. It refuses to run while `USER_KEK` is empty or equals
+    `USER_KEK_PREVIOUS`.
+
+4. **Check** with `kopje-admin health`: the `keys` check passes with no failures and no `USER_KEK is empty` warning.
+5. **Remove `MAINTENANCE`** (or set it to `off`) and **remove `USER_KEK_PREVIOUS`**. Deliveries resume and spooled
+   inbox activities are replayed.
+6. **Deal with what was saved before.** Backups, `kopje-admin dump` files and cutover exports made before the rotation
+   hold the keys under the previous KEK, and the rotation cannot change them. Delete them, or accept that they protect
+   the keys only as well as the previous KEK did (not at all, when it was empty). Backups taken afterwards hold the keys
+   under the new KEK.
 
 ## Things to check on a real account
 

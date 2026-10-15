@@ -8,6 +8,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- `kopje-admin keys rewrap` moves the private keys of local accounts and the instance actor from the KEK in
+  `USER_KEK_PREVIOUS` (unset reads as the empty KEK) to `USER_KEK`, keeping the same key pairs. Keys already under
+  `USER_KEK` are skipped, so it can run again; a key neither KEK unwraps is reported and left unchanged. See "Rotating
+  the KEK" in docs/setup.md. No schema change and no `wrangler.jsonc` change; `USER_KEK_PREVIOUS` is a new optional
+  secret.
+
 ### Changed
 
 - Home and list timelines read a bounded number of rows per page.
