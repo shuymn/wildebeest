@@ -1,4 +1,4 @@
-import { deleteAudience, mentionsFilteredFor } from './audience'
+import { canView, deleteAudience, mentionsFilteredFor } from './audience'
 import { authorize, authorizeStream, listenerContext, type UserContext } from './auth'
 import { streamedConversation } from './conversations'
 import { ownList } from './lists'
@@ -30,9 +30,9 @@ import { grantsAny } from '../security/scopes'
 //       V's (listStatus in timelines.ts), with the same real-time window for `update`;
 //     - `update` and `status.update` on `public[:local|:remote][:media]` and `hashtag[:local]:<tag>`: the public or the
 //       hashtag's timeline positioned at x (publicStatus and tagStatus in timelines.ts: public statuses, not boosts,
-//       not replies to others, of authors V neither blocks, mutes nor domain-blocks and who do not block V), with the
-//       same real-time window for `update`, less a status that mentions an account V blocks or mutes (Mastodon's
-//       streaming server filters these per connection; mentionsFilteredFor in audience.ts);
+//       on `public*` not replies to others, of authors V neither blocks, mutes nor domain-blocks and who do not block
+//       V), with the same real-time window for `update`, less a status that mentions an account V blocks or mutes
+//       (Mastodon's streaming server filters these per connection; mentionsFilteredFor in audience.ts);
 //     - `conversation` on `direct`: the conversation relation, V's row x, presented as the list presents it
 //       (streamedConversation in conversations.ts, R25);
 //     - `notifications_merged` on `user` (with a notification scope) and `user:notification`: V's transition to no
@@ -75,14 +75,7 @@ export const STREAM_NAMES: readonly string[] = [
 ]
 
 // The `public*` streams, each one public timeline (PublicFeed).
-const PUBLIC_STREAMS: readonly string[] = [
-	'public',
-	'public:local',
-	'public:remote',
-	'public:media',
-	'public:local:media',
-	'public:remote:media',
-]
+const PUBLIC_STREAMS: readonly string[] = STREAM_NAMES.filter((name) => name === 'public' || name.startsWith('public:'))
 
 // A subscription's key, as the registry (stream_subscriptions) and a socket's attachment hold it: the stream's name,
 // `list:<id>` for a list, or `hashtag:<tag>` and `hashtag:local:<tag>` for a hashtag (the tag normalized as status_tags
@@ -245,9 +238,9 @@ export type StreamEvent = { id: number; kind: string; subject: string; viewers: 
 // account listening on `user` or a list, and for an edit on `user`, `user:notification` or a list (the registry's, at
 // most 256, read once a scan), and for either, while the status is public and not a boost, every account listening on
 // a `public*` stream (read once a scan) or on a hashtag of the status (each of its hashtags, at most MAX_STATUS_TAGS, a
-// seek of stream_subscriptions_key for each of the two hashtag streams). A delete's units are not read here. The event of a position within an event is read
-// again (for its units after the position's), and a finished one is not, so a full window means more may follow. Also
-// the journal's span.
+// seek of stream_subscriptions_key for each of the two hashtag streams, once a scan for each status). A delete's units
+// are not read here. The event of a position within an event is read again (for its units after the position's), and a
+// finished one is not, so a full window means more may follow. Also the journal's span.
 export const streamEvents = readOperation<
 	{ limit: number },
 	{ position: StreamPosition; ceiling: number; events: StreamEvent[]; head: number; tail: number }
@@ -279,8 +272,18 @@ export const streamEvents = readOperation<
 		return accounts
 	}
 	let publicListeners: string[] | null = null
-	// The accounts listening on a `public*` stream or a hashtag of the status, while it is public and not a boost.
+	// The accounts listening on a `public*` stream or a hashtag of the status, while it is public and not a boost; read
+	// once a scan for each status (the scan is one transaction).
+	const fedByStatus = new Map<string, string[]>()
 	const fed = (statusId: string) => {
+		let found = fedByStatus.get(statusId)
+		if (found === undefined) {
+			found = readFed(statusId)
+			fedByStatus.set(statusId, found)
+		}
+		return found
+	}
+	const readFed = (statusId: string): string[] => {
 		const shown = db.first(
 			"SELECT 1 AS x FROM statuses WHERE id = ? AND visibility = 'public' AND reblog_of_id IS NULL",
 			statusId
@@ -614,10 +617,11 @@ function tombstoneFeeds(db: Db, eventId: number, subject: string, feeds: readonl
 // view the status (R3): those listening on `user` or a list, each with the boosts of it the account may view
 // (deleteAudience in audience.ts, at most CAPTURE_LIMITS.boosts), and for the status and each boost the account's
 // subscribed lists whose read positioned at it returns it (listStatus: at most 16 lists, each a narrowed read); and
-// those listening only on feeds the status's tombstone matches, without boosts. The tombstone (stream_delete_tombstones)
-// is written for a public status that is not a boost while some account listens on a `public*` stream or a hashtag of
-// it: whether it is local and has media, and its hashtags that some account subscribes to. Nothing is written when
-// nobody listening may view it, or when the journal is full (the fan-out stalled; logged as the triggers' events are).
+// those listening only on feeds the status's tombstone matches, without boosts (canView alone). The tombstone
+// (stream_delete_tombstones) is written for a public status that is not a boost while some account listens on a
+// `public*` stream or a hashtag of it: whether it is local and has media, and its hashtags that some account subscribes
+// to. Nothing is written when nobody listening may view it, or when the journal is full (the fan-out stalled; logged as
+// the triggers' events are).
 // The rows are at most 1 + 256 (the registry's accounts), each within CAPTURE_LIMITS.viewerBytes, and the tombstone
 // within CAPTURE_LIMITS.tombstoneBytes; a row over it is truncated and logged, never refused, so the capture never
 // fails the delete.
@@ -654,11 +658,12 @@ export function streamDelete(db: Db, statusId: string, now: number): void {
 	if (journalFull(db, 'delete')) {
 		return
 	}
-	const viewers = [...listening.keys(), ...fed].sort()
-	// A feed's listener is sent the status's delete only (never a boost's): its boosts are not captured.
-	const audience = deleteAudience(db, statusId, viewers, CAPTURE_LIMITS.boosts).map((viewer) =>
-		listening.has(viewer.accountId) ? viewer : { ...viewer, boosts: [] }
-	)
+	// A feed's listener is sent the status's delete only (never a boost's): its boosts are not read. Every viewer in
+	// account id order, as the rows are written.
+	const audience = [
+		...deleteAudience(db, statusId, [...listening.keys()].sort(), CAPTURE_LIMITS.boosts),
+		...fed.flatMap((accountId) => (canView(db, accountId, statusId) ? [{ accountId, boosts: [] }] : [])),
+	].sort((a, b) => (a.accountId < b.accountId ? -1 : a.accountId > b.accountId ? 1 : 0))
 	if (audience.length === 0) {
 		return
 	}
@@ -697,8 +702,9 @@ export function streamDelete(db: Db, statusId: string, now: number): void {
 }
 
 // The tombstone of the status `statusId` if it is public and not a boost (Mastodon publishes no other delete on its
-// feeds), with its hashtags that one of `keys` (the subscribed feeds) names, each at most once: at most MAX_STATUS_TAGS,
-// read by the status's key, within CAPTURE_LIMITS.tombstoneBytes (the last dropped while over, logged).
+// feeds), with its hashtags that one of `keys` (the subscribed feeds) names, each at most once: at most
+// MAX_STATUS_TAGS, read by the status's key, within CAPTURE_LIMITS.tombstoneBytes (the last dropped while over,
+// logged).
 function tombstoneOf(db: Db, statusId: string, keys: readonly string[]): Tombstone | null {
 	const status = db.first<{ local: number; media: number }>(
 		`SELECT a.domain IS NULL AS local,
