@@ -11,7 +11,7 @@ import {
 	type VisibleStatusId,
 	visibleSql,
 } from './audience'
-import { optionalUserReadOperation, userReadOperation } from './auth'
+import { optionalUserReadOperation, type UserContext, userReadOperation } from './auth'
 import { ownList, type RepliesPolicy } from './lists'
 import { presentStatuses, type Status } from './status-presenter'
 import { statusCursor } from './statuses'
@@ -99,6 +99,17 @@ const EXCLUSIVE_MEMBERS = `(SELECT ela.account_id FROM lists el JOIN list_accoun
 const FOLLOWED = `SELECT target_account_id AS account_id FROM follows WHERE account_id = ?1 AND state = 'accepted'
 	AND target_account_id NOT IN ${EXCLUSIVE_MEMBERS}`
 
+// FOLLOWED for home narrowed to the status ?7 (homeStatus): its author, if the viewer follows it (accepted) and it is in
+// none of their exclusive lists. The exclusion is read from the viewer's lists (lists_account, at most MAX_LISTS), each
+// checked through the (list_id, account_id) key, so it reads neither the members of those lists nor the lists of other
+// owners that hold the author.
+const FOLLOWED_AUTHOR = `SELECT hf.target_account_id AS account_id FROM follows hf
+	WHERE hf.account_id = ?1 AND hf.state = 'accepted'
+		AND hf.target_account_id = (SELECT ha.account_id FROM statuses ha WHERE ha.id = ?7)
+		AND NOT EXISTS (SELECT 1 FROM lists el CROSS JOIN list_accounts ela
+			ON ela.list_id = el.id AND ela.account_id = hf.target_account_id
+			WHERE el.account_id = ?1 AND el.exclusive = 1)`
+
 // Home (Mastodon's FeedManager#filter_from_home): the viewer's own statuses and those of accounts they follow,
 // public, unlisted and private; direct and limited statuses of their own, and of followed accounts that address
 // them. Boosts from follows with show_reblogs off, replies (of others) unless they are to the author, to the viewer or
@@ -125,70 +136,89 @@ const FOLLOWED = `SELECT target_account_id AS account_id FROM follows WHERE acco
 // (MAX_FOLLOWED_TAGS in tags.ts).
 export const homeTimeline = userReadOperation<{ page: PageQuery; present: Present }, Page<Status>>(
 	(db, { page, present }, _viewer, viewer) => {
-		const { accountId, now } = viewer
 		const cursor = statusPage(page)
-		const order = cursor.ascending ? 'ASC' : 'DESC'
-		const read = statusReads(viewer, { viewer: '?1', now: '?5' })
-		const options = followOptionsSql(FOLLOWED_REPLIES_SQL)
-		const tail = `ORDER BY s.id ${order} LIMIT ?4`
-		const rows = read.union(
-			db,
-			'homeFilter',
-			{
-				// A status may come from more than one stream (a followed account's, with a followed hashtag).
-				all: false,
-				branches: [
-					// The public, unlisted and private statuses of the accounts home shows: a window of each, on statuses_feed.
-					{
-						authors: FOLLOWED,
-						where: `${FEED} AND ${rangeSql('s.id')}`,
-						and: options,
-						tail,
-					},
-					// The viewer's own, whatever their visibility: the rule shows them all, so this reads at most a page. No
-					// follow's options apply (nobody follows themselves).
-					{ where: `s.account_id = ?1 AND ${rangeSql('s.id')}`, tail },
-					// Direct and limited statuses of the accounts home shows that address the viewer: a window of each, from
-					// the viewer's mentions by that account in such statuses (status_mentions_requires_mention).
-					{
-						authors: FOLLOWED,
-						from: 'status_mentions m JOIN',
-						join: 'ON s.id = m.status_id',
-						author: 'm.author_id',
-						where: `m.account_id = ?1 AND m.requires_mention = 1 AND ${rangeSql('m.status_id')}
-							AND s.visibility IN ${REQUIRES_MENTION_SQL}`,
-						and: options,
-						tail: `ORDER BY m.status_id ${order} LIMIT ?4`,
-					},
-					// The public statuses, not boosts, with a hashtag the viewer follows: a window of each, on status_tags_public,
-					// cut at its bound (followedTagBounds).
-					{
-						tags: "SELECT json_extract(value, '$.name') AS name, json_extract(value, '$.bound') AS bound FROM json_each(?6)",
-						tag: 't.name',
-						from: 'status_tags t CROSS JOIN',
-						join: 'ON s.id = t.status_id',
-						// One bound on each side, so both are bounds of the index walk: the cursor's on one, the window's on the
-						// other (inclusive; the cursor's own status is left out by inequality).
-						where: `t.public = 1 AND ${
-							cursor.ascending
-								? 't.status_id > ?3 AND t.status_id <= g.bound AND t.status_id <> ?2'
-								: 't.status_id < ?2 AND t.status_id >= g.bound AND t.status_id <> ?3'
-						}`,
-						and: "s.visibility = 'public' AND s.reblog_of_id IS NULL",
-						tail: `ORDER BY t.status_id ${order} LIMIT ?4`,
-					},
-				],
-				tail: `ORDER BY id ${order} LIMIT ?4`,
-			},
-			accountId,
-			...rangeParams(cursor),
-			cursor.limit,
-			now,
-			followedTagBounds(db, accountId, cursor)
-		)
-		return statusesPage(db, ids(rows), cursor, viewer, present)
+		return statusesPage(db, ids(homeRows(db, viewer, cursor, null)), cursor, viewer, present)
 	}
 )
+
+// R33 for `update` and `status.update` on the `user` stream (streaming.ts): home positioned at the status `statusId`,
+// that is the read with max_id just above it and limit 1, narrowed to it (statusReads' `only`): its author's window
+// alone, the exclusive-list exclusion for that author alone, and the followed hashtags among its own, whose windows
+// it heads (followedTagBounds). The status, if that read returns it; each narrowed set is read through an index, so the
+// work does not grow with the viewer's follows, lists, followed hashtags or anyone's statuses.
+export function homeStatus(db: Db, viewer: UserContext, statusId: string) {
+	if (!/^\d{18}$/.test(statusId)) {
+		return null
+	}
+	const cursor: Cursor = { max: statusCursor(String(BigInt(statusId) + 1n)), min: null, ascending: false, limit: 1 }
+	return homeRows(db, viewer, cursor, statusId)[0]?.id ?? null
+}
+
+// Home's statuses from the cursor, or, with `only`, the read narrowed to that status.
+function homeRows(db: Db, viewer: UserContext, cursor: Cursor, only: string | null) {
+	const { accountId, now } = viewer
+	const order = cursor.ascending ? 'ASC' : 'DESC'
+	const read = statusReads(viewer, { viewer: '?1', now: '?5', ...(only === null ? {} : { only: '?7' }) })
+	const options = followOptionsSql(FOLLOWED_REPLIES_SQL)
+	const tail = `ORDER BY s.id ${order} LIMIT ?4`
+	const authors = only === null ? FOLLOWED : FOLLOWED_AUTHOR
+	return read.union(
+		db,
+		'homeFilter',
+		{
+			// A status may come from more than one stream (a followed account's, with a followed hashtag).
+			all: false,
+			branches: [
+				// The public, unlisted and private statuses of the accounts home shows: a window of each, on statuses_feed.
+				{
+					authors,
+					where: `${FEED} AND ${rangeSql('s.id')}`,
+					and: options,
+					tail,
+				},
+				// The viewer's own, whatever their visibility: the rule shows them all, so this reads at most a page. No
+				// follow's options apply (nobody follows themselves).
+				{ where: `s.account_id = ?1 AND ${rangeSql('s.id')}`, tail },
+				// Direct and limited statuses of the accounts home shows that address the viewer: a window of each, from
+				// the viewer's mentions by that account in such statuses (status_mentions_requires_mention).
+				{
+					authors,
+					from: 'status_mentions m JOIN',
+					join: 'ON s.id = m.status_id',
+					author: 'm.author_id',
+					where: `m.account_id = ?1 AND m.requires_mention = 1 AND ${rangeSql('m.status_id')}
+							AND s.visibility IN ${REQUIRES_MENTION_SQL}`,
+					and: options,
+					tail: `ORDER BY m.status_id ${order} LIMIT ?4`,
+				},
+				// The public statuses, not boosts, with a hashtag the viewer follows: a window of each, on status_tags_public,
+				// cut at its bound (followedTagBounds).
+				{
+					tags: "SELECT json_extract(value, '$.name') AS name, json_extract(value, '$.bound') AS bound FROM json_each(?6)",
+					tag: 't.name',
+					from: 'status_tags t CROSS JOIN',
+					join: 'ON s.id = t.status_id',
+					// One bound on each side, so both are bounds of the index walk: the cursor's on one, the window's on the
+					// other (inclusive; the cursor's own status is left out by inequality).
+					where: `t.public = 1 AND ${
+						cursor.ascending
+							? 't.status_id > ?3 AND t.status_id <= g.bound AND t.status_id <> ?2'
+							: 't.status_id < ?2 AND t.status_id >= g.bound AND t.status_id <> ?3'
+					}`,
+					and: "s.visibility = 'public' AND s.reblog_of_id IS NULL",
+					tail: `ORDER BY t.status_id ${order} LIMIT ?4`,
+				},
+			],
+			tail: `ORDER BY id ${order} LIMIT ?4`,
+		},
+		accountId,
+		...rangeParams(cursor),
+		cursor.limit,
+		now,
+		followedTagBounds(db, accountId, cursor, only),
+		...(only === null ? [] : [only])
+	)
+}
 
 // How many of a followed hashtag's public statuses from the cursor home inspects for a page: two pages, and at least 40.
 // Mastodon filters a hashtag's statuses as they arrive (FeedManager#filter_from_tags? at fan-out); Kopje filters them
@@ -203,7 +233,20 @@ function tagCandidates(limit: number): number {
 // The viewer's followed hashtags, each with the bound of its window: its tagCandidates-th public status from the
 // cursor (none when it has fewer), found by one seek of status_tags_public that reads at most that many entries. The
 // window's walk then stops there, whatever the rule leaves out. As JSON, for home's TagWindows.
-function followedTagBounds(db: Db, viewerId: string, cursor: Cursor): string {
+// With `only` (a status id x, the cursor just above it), only the followed hashtags among x's own are read, each by
+// its key (tag_follows' (account_id, name)): at most MAX_STATUS_TAGS seeks, however many hashtags the viewer follows.
+// Their bounds are not walked: from the cursor at x, x is the first candidate of each of its hashtags' windows, so each
+// bound would be at or below x and cut nothing the narrowed read returns; x itself is the bound.
+function followedTagBounds(db: Db, viewerId: string, cursor: Cursor, only: string | null): string {
+	if (only !== null) {
+		const rows = db.all<{ name: string }>(
+			`SELECT f.name FROM status_tags xt CROSS JOIN tag_follows f ON f.account_id = ?1 AND f.name = xt.name
+			WHERE xt.status_id = ?2`,
+			viewerId,
+			only
+		)
+		return JSON.stringify(rows.map((row) => ({ name: row.name, bound: only })))
+	}
 	const order = cursor.ascending ? 'ASC' : 'DESC'
 	const rows = db.all<{ name: string; bound: string | null }>(
 		`SELECT f.name, (SELECT c.status_id FROM status_tags c WHERE c.name = f.name AND c.public = 1 AND ${rangeSql('c.status_id')}

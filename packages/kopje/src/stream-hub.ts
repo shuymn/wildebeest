@@ -1,6 +1,6 @@
 import {
-	carriesNotifications,
 	JOURNAL_SPAN,
+	mayCarry,
 	maySubscribe,
 	SERVED_STREAMS,
 	type ServedStream,
@@ -13,12 +13,13 @@ import {
 	type StreamGrant,
 	streamEvents,
 	type StreamKeys,
-	streamNotificationUnit,
 	type StreamPosition,
 	streamPrune,
+	type StreamSubject,
 	streamReconcile,
 	streamRegister,
 	streamTokens,
+	streamUnit,
 } from './domain/streaming'
 import { errorFields } from './platform/error-message'
 import { toStoreUnavailable } from './platform/store-errors'
@@ -56,8 +57,8 @@ export const STREAM_LIMITS = {
 type Charge = { checks: number; presentations: number; bytes: number; sends: number }
 
 // What one turn may do, and what one unit may do at most: 16 token checks and the reference reads of 16 keys and a
-// mention (design §4.4; this release reads one reference), one presentation, and a send to each of 16 subscriptions on
-// each of 16 sockets.
+// mention (design §4.4; this release reads at most two: home and the mention), one presentation, and a send to each
+// of 16 subscriptions on each of 16 sockets.
 export const TURN_BUDGET: Charge = { checks: 512, presentations: 64, bytes: 4 * 1024 * 1024, sends: 4096 }
 const UNIT_WORST: Charge = { checks: 33, presentations: 1, bytes: STREAM_LIMITS.payloadBytes, sends: 256 }
 
@@ -80,6 +81,9 @@ type Attachment = {
 }
 
 type Socket = { ws: WebSocket; at: Attachment }
+
+// One subject of an event for one viewer, with the viewer's sockets that may carry it.
+type Unit = { subject: StreamSubject; viewer: string; sockets: Socket[] }
 
 class Budget {
 	readonly #left: Charge
@@ -446,7 +450,7 @@ export class StreamHub {
 			for (const event of scan.events) {
 				const units = this.#units(event)
 				if (units.length === 0) {
-					skipTo = { event: event.id, account: null }
+					skipTo = { event: event.id, subject: 0, account: null }
 					continue
 				}
 				if (skipTo !== null) {
@@ -460,7 +464,11 @@ export class StreamHub {
 					if (!budget.covers(UNIT_WORST)) {
 						return true
 					}
-					const to = { event: event.id, account: i === units.length - 1 ? null : unit.viewer }
+					const to = {
+						event: event.id,
+						subject: unit.subject.index,
+						account: i === units.length - 1 ? null : unit.viewer,
+					}
 					if (!(await this.#unit(event, unit, from, to, budget))) {
 						return false
 					}
@@ -481,38 +489,43 @@ export class StreamHub {
 		}
 	}
 
-	// The units of an event in order: each viewer the journal names with an open socket that opened before the event
-	// and has a subscription that may carry it.
-	#units(event: StreamEvent): { viewer: string; sockets: Socket[] }[] {
-		return event.viewers.flatMap((viewer) => {
-			const sockets = this.#open(accountTag(viewer)).filter(
-				({ at }) => at.since < event.id && at.subs.some((sub) => carriesNotifications(at.grant, sub))
-			)
-			return sockets.length === 0 ? [] : [{ viewer, sockets }]
-		})
+	// The units of an event in order: for each subject, each viewer the journal names with an open socket that opened
+	// before the event and has a subscription that may carry it.
+	#units(event: StreamEvent): Unit[] {
+		return event.subjects.flatMap((subject) =>
+			subject.viewers.flatMap((viewer) => {
+				const sockets = this.#open(accountTag(viewer)).filter(
+					({ at }) => at.since < event.id && at.subs.some((sub) => mayCarry(event.kind, at.grant, sub))
+				)
+				return sockets.length === 0 ? [] : [{ subject, viewer, sockets }]
+			})
+		)
 	}
 
-	// One unit: made in its own transaction (tokens checked, the reference read, the presentation), the position moved
+	// One unit: made in its own transaction (tokens checked, the reference reads, the presentation), the position moved
 	// past it, then sent. Returns false when another turn moved the position first.
 	async #unit(
 		event: StreamEvent,
-		unit: { viewer: string; sockets: Socket[] },
+		unit: Unit,
 		from: StreamPosition,
 		to: StreamPosition,
 		budget: Budget
 	): Promise<boolean> {
 		const tokenHashes = [...new Set(unit.sockets.map(({ at }) => at.tokenHash))]
-		const made = await this.#run(streamNotificationUnit, {
+		const made = await this.#run(streamUnit, {
+			kind: event.kind,
+			subject: unit.subject.id,
 			accountId: unit.viewer,
 			tokenHashes,
-			notificationId: event.subject,
 			now: Date.now(),
 		})
-		budget.charge({ checks: tokenHashes.length + 1 })
+		budget.charge({ checks: tokenHashes.length + made.checks })
 		let payload: string | null = null
-		if (made.notification !== null) {
-			payload = JSON.stringify(JSON.stringify(made.notification))
-			budget.charge({ presentations: 1, bytes: payload.length })
+		if (made.streams.length > 0) {
+			payload = JSON.stringify(typeof made.payload === 'string' ? made.payload : JSON.stringify(made.payload))
+			if (typeof made.payload !== 'string') {
+				budget.charge({ presentations: 1, bytes: payload.length })
+			}
 			if (exceeds(payload, STREAM_LIMITS.payloadBytes)) {
 				console.warn({ event: 'kopje.stream.payload-skipped', kind: event.kind })
 				payload = null
@@ -530,10 +543,11 @@ export class StreamHub {
 			}
 			if (payload !== null) {
 				for (const sub of socket.at.subs) {
-					if (carriesNotifications(grant, sub)) {
+					const target = made.streams.find(({ stream }) => stream === sub)
+					if (target !== undefined && grants(grant, target.needs)) {
 						let text = envelopes.get(sub)
 						if (text === undefined) {
-							text = envelope(sub, 'notification', payload)
+							text = envelope(sub, made.event, payload)
 							envelopes.set(sub, text)
 						}
 						messages.push({ ws: socket.ws, text })
@@ -604,6 +618,11 @@ export class StreamHub {
 }
 
 const TOKEN_HASH = /^[0-9a-f]{64}$/
+
+// Whether a token's grant has every scope `needs` names.
+function grants(grant: StreamGrant, needs: StreamGrant): boolean {
+	return (!needs.statuses || grant.statuses) && (!needs.notifications || grant.notifications)
+}
 
 function accountTag(accountId: string): string {
 	return `a:${accountId}`

@@ -11,7 +11,7 @@ import { rowsRead } from './read-helpers'
 import { Db } from '../src/db/sql'
 import { getAccounts, listFollows, type PageQuery, relationships, userinfo } from '../src/domain/accounts'
 import { getFeatured, getLocalNote, getOutbox } from '../src/domain/activities'
-import { canView, visibleSql, type Visibility } from '../src/domain/audience'
+import { canView, deleteAudience, visibleSql, type Visibility } from '../src/domain/audience'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { listConversations } from '../src/domain/conversations'
 import { directory, DIRECTORY_WINDOW } from '../src/domain/directory'
@@ -49,7 +49,7 @@ import {
 	runNotificationRequestJobs,
 } from '../src/domain/notification-requests'
 import { clearNotifications, listNotifications, REMOVAL_BATCHES, REMOVAL_WINDOW } from '../src/domain/notifications'
-import { writeOperation } from '../src/domain/operation'
+import { readOperation, writeOperation } from '../src/domain/operation'
 import { getPoll, vote } from '../src/domain/polls'
 import {
 	claimCollectionSync,
@@ -69,7 +69,7 @@ import {
 	MAX_STATUSES_BY_ID,
 	statusContext,
 } from '../src/domain/statuses'
-import { streamAccept, streamEvents, streamNotificationUnit, streamTokens } from '../src/domain/streaming'
+import { streamAccept, streamEvents, streamTokens, streamUnit } from '../src/domain/streaming'
 import { featuredTagSuggestions, followedTags, MAX_FOLLOWED_TAGS } from '../src/domain/tags'
 import {
 	accountStatuses,
@@ -4066,9 +4066,10 @@ describe('a streamed notification reads its item, however many notifications the
 		const few = await notified(20)
 		const many = await notified(2000)
 		const unit = (notificationId: string) => ({
+			kind: 'notification',
+			subject: notificationId,
 			accountId: VIEWER_ID,
 			tokenHashes: [TOKEN],
-			notificationId,
 			now: NOW,
 		})
 		const grown: string[] = []
@@ -4078,12 +4079,13 @@ describe('a streamed notification reads its item, however many notifications the
 			const fewInput = unit(fewTargets[i]!)
 			const manyInput = unit(manyTargets[i]!)
 			// Not vacuous: the shown ones are presented, the filtered one is not.
-			const made = await runInDurableObject(many, (_instance, state) =>
-				streamNotificationUnit.run(state.storage.sql, manyInput)
-			)
-			expect([name, made.notification?.type ?? null]).toEqual([name, name === 'filtered' ? null : 'follow'])
-			const fewRows = await rowsRead({ store: few }, streamNotificationUnit, fewInput)
-			const manyRows = await rowsRead({ store: many }, streamNotificationUnit, manyInput)
+			const made = await runInDurableObject(many, (_instance, state) => streamUnit.run(state.storage.sql, manyInput))
+			expect([name, (made.payload as { type: string } | null)?.type ?? null]).toEqual([
+				name,
+				name === 'filtered' ? null : 'follow',
+			])
+			const fewRows = await rowsRead({ store: few }, streamUnit, fewInput)
+			const manyRows = await rowsRead({ store: many }, streamUnit, manyInput)
 			if (manyRows > fewRows + ALLOWANCE) {
 				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
 			}
@@ -4122,5 +4124,261 @@ describe('a streamed notification reads its item, however many notifications the
 			}
 		}
 		expect(grown).toEqual([])
+	}, 120_000)
+})
+
+describe("a streamed status reads its item, however large the viewer's home and others' data (RES-7)", () => {
+	const VIEWER_ID = '695000000000000000'
+	// A followed author, an unfollowed author who mentions the viewer, and an unfollowed author of followed-hashtag posts.
+	const AUTHOR_ID = '695000000000000001'
+	const MENTIONER_ID = '695000000000000002'
+	const TAGGER_ID = '695000000000000003'
+	const OTHERS = 696000000000000000n
+	const BOOSTERS = 697000000000000000n
+	const AUTHOR_STATUSES = 790000000000000000n
+	const TAGGED_STATUSES = 791000000000000000n
+	const MENTION_STATUSES = 792000000000000000n
+	const OTHER_STATUSES = 793000000000000000n
+	const BOOSTS = 794000000000000000n
+	const TAG_STATUSES = 795000000000000000n
+	const TOKEN = 'stream-home-token'
+
+	type Size = {
+		perAuthor: number
+		follows: number
+		exclusive: number
+		tags: number
+		notifications: number
+		boosts: number
+	}
+
+	// The viewer follows the author and `follows` other accounts (each with a status), has an exclusive list of
+	// `exclusive` other accounts, follows #cats and `tags` other hashtags (each with a status), and has `notifications`
+	// mentions from the mentioner. The author has `perAuthor` public statuses, the tagger as many with #cats, the
+	// mentioner as many direct statuses mentioning the viewer; the author's newest is boosted by five followed accounts
+	// and `boosts` unfollowed ones.
+	async function home(size: Size): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			const at = new Date(NOW).toISOString()
+			sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje.test')")
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			for (const [id, name] of [
+				[AUTHOR_ID, 'author'],
+				[MENTIONER_ID, 'mentioner'],
+				[TAGGER_ID, 'tagger'],
+			]) {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, 'far.example')",
+					id,
+					`https://far.example/users/${name}`,
+					name
+				)
+			}
+			// Others: the followed accounts, then the exclusive list's members, then the unfollowed boosters.
+			const accounts = (base: bigint, count: number, prefix: string) =>
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+					INSERT INTO accounts (id, uri, username, domain)
+					SELECT CAST(?2 + i AS TEXT), 'https://many.example/users/' || ?3 || i, ?3 || i, 'many.example' FROM n
+					WHERE ?1 > 0`,
+					count,
+					String(base),
+					prefix
+				)
+			accounts(OTHERS, size.follows + size.exclusive, 'o')
+			accounts(BOOSTERS, size.boosts, 'b')
+			sql.exec(
+				"INSERT INTO follows (account_id, target_account_id, state, created_at) VALUES (?, ?, 'accepted', ?)",
+				VIEWER_ID,
+				AUTHOR_ID,
+				at
+			)
+			sql.exec(
+				`INSERT INTO follows (account_id, target_account_id, state, created_at)
+				SELECT ?1, id, 'accepted', ?2 FROM accounts WHERE id GLOB '696*' ORDER BY id LIMIT ?3`,
+				VIEWER_ID,
+				at,
+				size.follows
+			)
+			sql.exec(
+				"INSERT INTO lists (id, account_id, title, exclusive) VALUES ('698000000000000000', ?, 'exclusive', 1)",
+				VIEWER_ID
+			)
+			sql.exec(
+				`INSERT INTO list_accounts (list_id, account_id)
+				SELECT '698000000000000000', id FROM accounts WHERE id GLOB '696*' ORDER BY id LIMIT -1 OFFSET ?`,
+				size.follows
+			)
+			const statuses = (base: bigint, author: string, count: number, visibility: string) =>
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+					INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at)
+					SELECT CAST(?2 + i AS TEXT), 'https://far.example/objects/' || (?2 + i), ?3, ?4, '<p>x</p>', ?5, ?5 FROM n`,
+					count,
+					String(base),
+					author,
+					visibility,
+					at
+				)
+			statuses(AUTHOR_STATUSES, AUTHOR_ID, size.perAuthor, 'public')
+			statuses(TAGGED_STATUSES, TAGGER_ID, size.perAuthor, 'public')
+			sql.exec(
+				"INSERT INTO status_tags (status_id, name, public) SELECT id, 'cats', 1 FROM statuses WHERE account_id = ?",
+				TAGGER_ID
+			)
+			statuses(MENTION_STATUSES, MENTIONER_ID, size.notifications, 'direct')
+			sql.exec(
+				`INSERT INTO status_mentions (status_id, account_id, silent, requires_mention, author_id)
+				SELECT id, ?1, 0, 1, account_id FROM statuses WHERE account_id = ?2`,
+				VIEWER_ID,
+				MENTIONER_ID
+			)
+			sql.exec(
+				`INSERT INTO notifications (account_id, type, from_account_id, status_id)
+				SELECT ?1, 'mention', account_id, id FROM statuses WHERE account_id = ?2 ORDER BY id`,
+				VIEWER_ID,
+				MENTIONER_ID
+			)
+			// One status of each other account (followed or listed).
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at)
+				SELECT CAST(?1 + CAST(id AS INTEGER) - ?2 AS TEXT), 'https://many.example/objects/' || id, id, 'public',
+					'<p>x</p>', ?3, ?3
+				FROM accounts WHERE id GLOB '696*'`,
+				String(OTHER_STATUSES),
+				String(OTHERS),
+				at
+			)
+			// The hashtags: #cats and `tags` others, each of the others with a status of a followed account.
+			sql.exec("INSERT INTO tag_follows (account_id, name) VALUES (?, 'cats')", VIEWER_ID)
+			for (let t = 0; t < size.tags; t++) {
+				sql.exec('INSERT INTO tag_follows (account_id, name) VALUES (?, ?)', VIEWER_ID, `other${t}`)
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at)
+					VALUES (?, ?, ?, 'public', '<p>x</p>', ?, ?)`,
+					String(TAG_STATUSES + BigInt(t)),
+					`https://far.example/objects/tag-${t}`,
+					TAGGER_ID,
+					at,
+					at
+				)
+				sql.exec(
+					'INSERT INTO status_tags (status_id, name, public) VALUES (?, ?, 1)',
+					String(TAG_STATUSES + BigInt(t)),
+					`other${t}`
+				)
+			}
+			// The author's newest, boosted by five followed accounts and by the unfollowed boosters.
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, content, published_at, created_at)
+				SELECT CAST(?1 + row_number() OVER (ORDER BY id) AS TEXT), 'https://boost.example/' || id, id, ?2, 'public', '',
+					?3, ?3
+				FROM (SELECT * FROM (SELECT id FROM accounts WHERE id GLOB '696*' ORDER BY id LIMIT 5)
+					UNION ALL SELECT id FROM accounts WHERE id GLOB '697*')`,
+				String(BOOSTS),
+				String(AUTHOR_STATUSES + BigInt(size.perAuthor - 1)),
+				at
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('stream-home', 'secret', 'stream-home', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'stream-home', ?, 'read')",
+				TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	// The checks, by name: [kind, status id, the event and streams it must make in the grown world].
+	function checks(size: Size): [string, string, string, string, string[]][] {
+		const author = (i: number) => String(AUTHOR_STATUSES + BigInt(i))
+		return [
+			['newest of the author', 'status', author(size.perAuthor - 1), 'update', ['user']],
+			['middle of the author', 'status', author(Math.floor(size.perAuthor / 2)), 'update', ['user']],
+			['oldest of the author', 'status', author(0), 'update', ['user']],
+			['a followed account', 'status', String(OTHER_STATUSES), 'update', ['user']],
+			['an exclusive member', 'status', String(OTHER_STATUSES + BigInt(size.follows)), '', []],
+			[
+				'the newest followed-hashtag post',
+				'status',
+				String(TAGGED_STATUSES + BigInt(size.perAuthor - 1)),
+				'update',
+				['user'],
+			],
+			// Positioned at it, the oldest is the first of its window (R33's documented window difference).
+			['the oldest followed-hashtag post', 'status', String(TAGGED_STATUSES), 'update', ['user']],
+			['an edit in home', 'edit', author(size.perAuthor - 1), 'status.update', ['user']],
+			[
+				'an edit of the newest mention',
+				'edit',
+				String(MENTION_STATUSES + BigInt(size.notifications - 1)),
+				'status.update',
+				['user', 'user:notification'],
+			],
+			[
+				'an edit of the oldest mention',
+				'edit',
+				String(MENTION_STATUSES),
+				'status.update',
+				['user', 'user:notification'],
+			],
+		]
+	}
+
+	it('reads the same rows with 20 or 2,000 statuses per author, 10 or 1,000 follows, 0 or 1,000 exclusive-list members, 0 or 40 unrelated followed hashtags, 20 or 2,000 notifications', async () => {
+		const small: Size = { perAuthor: 20, follows: 10, exclusive: 0, tags: 0, notifications: 20, boosts: 0 }
+		const large: Size = { perAuthor: 2000, follows: 1000, exclusive: 1000, tags: 40, notifications: 2000, boosts: 0 }
+		const few = await home(small)
+		const many = await home(large)
+		const unit = (kind: string, subject: string) => ({
+			kind,
+			subject,
+			accountId: VIEWER_ID,
+			tokenHashes: [TOKEN],
+			now: NOW,
+		})
+		const grown: string[] = []
+		const fewChecks = checks(small)
+		for (const [i, [name, kind, subject, event, streams]] of checks(large).entries()) {
+			// Not vacuous: each check in the grown world makes what it must.
+			const made = await runInDurableObject(many, (_instance, state) =>
+				streamUnit.run(state.storage.sql, unit(kind, subject))
+			)
+			expect([name, made.event, made.streams.map((s) => s.stream)]).toEqual([name, event, streams])
+			const fewRows = await rowsRead({ store: few }, streamUnit, unit(kind, fewChecks[i]![2]))
+			const manyRows = await rowsRead({ store: many }, streamUnit, unit(kind, subject))
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 120_000)
+
+	// R32's capture reads the viewer's own boost and their follows' (the follow limit caps those), never the status's
+	// other boosts.
+	it("captures a delete's boosts with the same rows with 20 or 2,000 unfollowed boosters", async () => {
+		const small: Size = { perAuthor: 20, follows: 10, exclusive: 0, tags: 0, notifications: 20, boosts: 20 }
+		const few = await home(small)
+		const many = await home({ ...small, boosts: 2000 })
+		const capture = readOperation<{ statusId: string }, { accountId: string; boosts: string[] }[]>((db, input) =>
+			deleteAudience(db, input.statusId, [VIEWER_ID], 40)
+		)
+		const input = { statusId: String(AUTHOR_STATUSES + BigInt(small.perAuthor - 1)) }
+		const made = await runInDurableObject(many, (_instance, state) => capture.run(state.storage.sql, input))
+		expect(made.map((viewer) => viewer.boosts.length)).toEqual([5])
+		const fewRows = await rowsRead({ store: few }, capture, input)
+		const manyRows = await rowsRead({ store: many }, capture, input)
+		expect(manyRows).toBeLessThanOrEqual(fewRows + ALLOWANCE)
 	}, 120_000)
 })
