@@ -8,6 +8,36 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Changed
+
+- Hashtags are normalized as Mastodon 4.5 normalizes them (HashtagNormalizer): NFKC, lowercase, Latin letters with
+  diacritics folded to ASCII by Mastodon's table, and the characters a hashtag cannot hold dropped. `#Café`, `#cafe`
+  and `#CAFÉ` are one hashtag, as on Mastodon, wherever a hashtag is named: in a posted or received status (a received
+  `Hashtag` loses every `#` with the rest), on hashtag timelines, in home through a followed hashtag, in search, on
+  the tagged profile page, and among featured hashtags, so featuring `blahaj` after `BLÅHAJ` is refused as taken.
+  A hashtag in status text that leaves nothing once normalized (a lone combining mark) stays text, and hashtag search
+  drops the spaces of its query rather than finding nothing. The cutover and `verify-conversion` name hashtags the same
+  way. Stored names are renormalized by the migration below.
+
+### Instance changes
+
+- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0019_tag_normalization`: renames the stored hashtags (`status_tags`, `tag_follows`, `featured_tags`) to
+      Mastodon's normalization. Names that become one are merged: a status keeps one row of the hashtag, an account
+      keeps its earliest follow and its earliest featured hashtag (with its spelling), and the featured hashtags left
+      are recounted from the account's statuses; a featured hashtag merged away sends no `Remove`, since Mastodon
+      servers already hold the names as one featured hashtag. A name that leaves nothing is deleted. A stored name
+      made from a word-final capital sigma keeps its `ς` (Mastodon would store `σ`), since the stored name cannot tell
+      it from a typed `ς`. It reads each table once to find the names with a character other than `a`–`z`, `0`–`9`
+      and `_`, walks each such distinct name's characters, and rewrites the rows of the renamed names through indexes,
+      so its work grows linearly with the hashtag rows stored.
+- `wrangler.jsonc`: unchanged.
+
+## [0.1.0-rc.6] - 2026-10-16
+
+A sixth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - `GET` and `POST /oauth/userinfo`, as Mastodon 4.5 has it: for a token with the `profile` scope, the OpenID Connect
@@ -98,8 +128,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   account. An account features at most 10 hashtags, with Mastodon's validation and messages. Each shows the number of
   your public and unlisted statuses with it and the date of the newest, kept as you post, edit and delete. Its `url`,
   `/@username/tagged/:tag`, is your public profile page with only your posts with the hashtag.
-    - Over ActivityPub, the actor publishes `featuredTags` (its featured hashtags as `Hashtag`s) and `featured` (empty:
-      Kopje has no pinned statuses), and featuring or unfeaturing a hashtag sends your followers Mastodon's `Add` or
+    - Over ActivityPub, the actor publishes `featuredTags` (its featured hashtags as `Hashtag`s) and `featured` (its
+      pinned statuses, below), and featuring or unfeaturing a hashtag sends your followers Mastodon's `Add` or
       `Remove` of the `Hashtag`; before an account's first one, its followers are sent the actor again, as servers that
       stored it earlier know no `featured` collection to add to. Kopje does not read the featured hashtags of remote
       accounts.
@@ -122,6 +152,22 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `GET /api/v1/accounts/:id/identity_proofs` answers `[]`, as Mastodon's deprecated endpoint does.
     - `POST /api/v1/accounts` (registration) answers as Mastodon does with registrations closed: 403 `Forbidden` for an
       app token with `write:accounts`, after Mastodon's token checks. Kopje has no open registration.
+- The remaining status actions of Mastodon 4.5:
+    - Pins: `POST /api/v1/statuses/:id/pin` and `/unpin` (scope `write:accounts`), which answer the status. You can pin
+      up to 5 of your own statuses, not boosts or direct statuses; anything else answers 422 with Mastodon's messages,
+      and pinning a status again answers 422 `Duplicate record`. Your statuses now carry a real `pinned`, and
+      `GET /api/v1/accounts/:id/statuses?pinned=true` lists an account's pins, newest pin first, to whoever may see
+      each. Your actor publishes its `featured` collection of pins (the post of a public or unlisted one, the address
+      of any other), and your followers' servers are sent an `Add` or `Remove` when you pin or unpin; before an
+      account's first one, pin or featured hashtag, its followers are sent the actor again. A later `Add` or `Remove` of
+      the same status replaces an earlier one still waiting or given up. Deleting a pinned status unpins it.
+    - Conversation mutes: `POST /api/v1/statuses/:id/mute` and `/unmute` (scope `write:mutes`) mute the conversation
+      of a status you may see, and every status of it then shows `muted: true` to you. While it is muted, nothing in
+      it notifies you (mentions, favourites, boosts, poll ends, edits), and its direct statuses no longer reach your
+      conversations; notifications you already had stay.
+    - `GET /api/v1/statuses?id[]=` shows up to 20 statuses at once, those you may see and have not filtered out by a
+      block, mute or domain block, each as `GET /api/v1/statuses/:id` shows it, in the order asked; more answer 422.
+    - `PATCH /api/v1/statuses/:id` edits a status, as `PUT` does.
 - Grouped notifications, as Mastodon 4.5 has them: `GET /api/v2/notifications` answers `accounts`, `statuses` and
   `notification_groups` (with `types[]`, `exclude_types[]`, `grouped_types[]`, `expand_accounts=partial_avatars` and
   paging with Link headers, 40 groups by default and at most 80), `GET /api/v2/notifications/:group_key` shows one
@@ -156,14 +202,6 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   are no longer read to show its empty profile.
 - A page of a list's members (`GET /api/v1/lists/:id/accounts` with `max_id` or `min_id`) is read from its cursor, not
   from the newest member.
-- Hashtags are normalized as Mastodon 4.5 normalizes them (HashtagNormalizer): NFKC, lowercase, Latin letters with
-  diacritics folded to ASCII by Mastodon's table, and the characters a hashtag cannot hold dropped. `#Café`, `#cafe`
-  and `#CAFÉ` are one hashtag, as on Mastodon, wherever a hashtag is named: in a posted or received status (a received
-  `Hashtag` loses every `#` with the rest), on hashtag timelines, in home through a followed hashtag, in search, on
-  the tagged profile page, and among featured hashtags, so featuring `blahaj` after `BLÅHAJ` is refused as taken.
-  A hashtag in status text that leaves nothing once normalized (a lone combining mark) stays text, and hashtag search
-  drops the spaces of its query rather than finding nothing. The cutover and `verify-conversion` name hashtags the same
-  way. Stored names are renormalized by the migration below.
 
 ### Fixed
 
@@ -209,15 +247,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0017_notification_groups`: adds `notifications.group_key`, empty for the notifications stored, and its partial
       index by recipient and group. It reads each notification once to build the index, so its work grows linearly
       with the notifications stored.
-    - `0019_tag_normalization`: renames the stored hashtags (`status_tags`, `tag_follows`, `featured_tags`) to
-      Mastodon's normalization. Names that become one are merged: a status keeps one row of the hashtag, an account
-      keeps its earliest follow and its earliest featured hashtag (with its spelling), and the featured hashtags left
-      are recounted from the account's statuses; a featured hashtag merged away sends no `Remove`, since Mastodon
-      servers already hold the names as one featured hashtag. A name that leaves nothing is deleted. A stored name
-      made from a word-final capital sigma keeps its `ς` (Mastodon would store `σ`), since the stored name cannot tell
-      it from a typed `ς`. It reads each table once to find the names with a character other than `a`–`z`, `0`–`9`
-      and `_`, walks each such distinct name's characters, and rewrites the rows of the renamed names through indexes,
-      so its work grows linearly with the hashtag rows stored.
+    - `0018_status_pins_and_conversation_mutes`: adds the `status_pins` and `conversation_mutes` tables, empty. Its
+      work does not grow with the Store.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.5] - 2026-10-15

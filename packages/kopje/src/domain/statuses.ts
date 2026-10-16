@@ -65,6 +65,7 @@ import {
 	type PresentOwnOptions,
 	presentStatus,
 	presentStatusPair,
+	presentStatuses,
 	type Status,
 } from './status-presenter'
 import { exceedsRawLength, mentionKey, type MentionRef, parseStatusText, renderStatusHtml } from './status-text'
@@ -773,7 +774,7 @@ export const deleteStatus = userMediaDeleteOperation<
 // ---------------------------------------------------------------------------------------------------------------
 
 // The status `id` if the viewer may see it.
-function viewable(db: Db, viewerId: string | null, id: string) {
+export function viewable(db: Db, viewerId: string | null, id: string) {
 	const resolved = resolveStatusId(db, id)
 	return resolved === null ? null : viewableStatusId(db, viewerId, resolved)
 }
@@ -782,6 +783,34 @@ export const getStatus = optionalUserReadOperation<{ id: string; present: Presen
 	(db, { id, present }, viewer) => {
 		const resolved = viewable(db, viewer.accountId, id)
 		return viewed(resolved === null ? null : presentStatus(db, resolved, { ...present, viewer }))
+	}
+)
+
+// GET /api/v1/statuses?id[]= takes at most this many distinct ids (Api::V1::StatusesController#check_statuses_limit,
+// DEFAULT_STATUSES_LIMIT); more answer 422.
+export const MAX_STATUSES_BY_ID = 20
+
+// GET /api/v1/statuses?id[]= (StatusesController#index, Status.permitted_statuses_from_ids): of the statuses with the
+// ids, those the list rule passes for the viewer (R8, StatusFilter: viewable, and the viewer filters neither the
+// author nor a boosted original's), each as getStatus shows it, in one read, in the order of the ids; an id with no
+// status, or with one the rule refuses, is left out.
+export const getStatuses = optionalUserReadOperation<{ ids: readonly string[]; present: Present }, Status[]>(
+	(db, { ids, present }, viewer) => {
+		const resolved = [...new Set(ids.slice(0, MAX_STATUSES_BY_ID).flatMap((id) => resolveStatusId(db, id) ?? []))]
+		if (resolved.length === 0) {
+			return []
+		}
+		const order = new Map(resolved.map((id, i) => [id, i]))
+		const rows = statusReads(viewer, { viewer: '?1', now: '?3' }).select(
+			db,
+			'listable',
+			{ where: 's.id IN (SELECT value FROM json_each(?2))' },
+			viewer.accountId,
+			JSON.stringify(resolved),
+			viewer.now
+		)
+		const visible = rows.map((row) => row.id).sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
+		return presentStatuses(db, visible, { ...present, viewer })
 	}
 )
 
@@ -1014,7 +1043,8 @@ function viewerUri(db: Db, accountId: string): string {
 	return localAuthor(db, accountId).uri
 }
 
-function presented(db: Db, id: string, viewer: UserContext, present: Present): Viewed<Status> {
+// The status `id` as the response to the viewer's action on it, if they may see it.
+export function presented(db: Db, id: string, viewer: UserContext, present: Present): Viewed<Status> {
 	const visible = viewableStatusId(db, viewer.accountId, id)
 	return viewed(visible === null ? null : presentStatus(db, visible, { ...present, viewer }))
 }

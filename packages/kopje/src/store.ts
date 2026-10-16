@@ -42,6 +42,7 @@ import * as scheduled from './domain/scheduled-statuses'
 import { search } from './domain/search'
 import * as setup from './domain/setup'
 import { saveSnapshot } from './domain/snapshot'
+import * as statusActions from './domain/status-actions'
 import * as statuses from './domain/statuses'
 import * as tags from './domain/tags'
 import * as timelines from './domain/timelines'
@@ -986,6 +987,28 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, statuses.interactors, input)
 	}
 
+	// Statuses by id, pins and conversation mutes (domain/statuses.ts, domain/status-actions.ts).
+
+	getStatuses(callerBuild: string, input: OperationInput<typeof statuses.getStatuses>) {
+		return this.#kernel.execute(callerBuild, statuses.getStatuses, input)
+	}
+
+	pin(callerBuild: string, input: OperationInput<typeof statusActions.pin>) {
+		return this.#kernel.execute(callerBuild, statusActions.pin, input)
+	}
+
+	unpin(callerBuild: string, input: OperationInput<typeof statusActions.unpin>) {
+		return this.#kernel.execute(callerBuild, statusActions.unpin, input)
+	}
+
+	muteConversation(callerBuild: string, input: OperationInput<typeof statusActions.muteConversation>) {
+		return this.#kernel.execute(callerBuild, statusActions.muteConversation, input)
+	}
+
+	unmuteConversation(callerBuild: string, input: OperationInput<typeof statusActions.unmuteConversation>) {
+		return this.#kernel.execute(callerBuild, statusActions.unmuteConversation, input)
+	}
+
 	homeTimeline(callerBuild: string, input: OperationInput<typeof timelines.homeTimeline>) {
 		return this.#kernel.execute(callerBuild, timelines.homeTimeline, input)
 	}
@@ -1268,6 +1291,10 @@ export class Store extends DurableObject<Env> {
 
 	outbox(callerBuild: string, input: OperationInput<typeof activities.getOutbox>) {
 		return this.#kernel.execute(callerBuild, activities.getOutbox, input)
+	}
+
+	featured(callerBuild: string, input: OperationInput<typeof activities.getFeatured>) {
+		return this.#kernel.execute(callerBuild, activities.getFeatured, input)
 	}
 
 	override async alarm(): Promise<void> {

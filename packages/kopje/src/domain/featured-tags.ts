@@ -1,6 +1,6 @@
 import { resolveAccountId } from './accounts'
 import { recordOutbound } from './activities'
-import { recordActorUpdate } from './actor-update'
+import { announceFeatured } from './actor-update'
 import { availableSql, DISTRIBUTABLE_SQL } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
@@ -242,15 +242,8 @@ function recordFeaturedChange(
 	if (actor === undefined) {
 		return
 	}
-	// Servers that stored the actor before it published its featured collection match the target against nothing, so
-	// the actor goes first, once (local_accounts.featured_announced; recordActorUpdate sets it).
-	const announced = db.first<{ featured_announced: number }>(
-		'SELECT featured_announced FROM local_accounts WHERE account_id = ?',
-		accountId
-	)
-	if (announced?.featured_announced === 0) {
-		recordActorUpdate(db, accountId, null, now)
-	}
+	// Servers that stored the actor before it published its featured collection match the target against nothing.
+	announceFeatured(db, accountId, now)
 	recordOutbound(
 		db,
 		accountId,
