@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.6] - 2026-10-16
+
+A sixth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - `GET` and `POST /oauth/userinfo`, as Mastodon 4.5 has it: for a token with the `profile` scope, the OpenID Connect
