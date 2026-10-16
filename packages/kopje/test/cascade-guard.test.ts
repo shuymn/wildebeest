@@ -40,10 +40,12 @@ const ACCOUNT_EXEMPT: Record<string, string> = {
 	push_deliveries: 'below notifications, which go a batch at a time; at most MAX_PUSH_BACKLOG (1,000) wait in all',
 }
 
-// Triggers that write when a row is deleted or updated. A batched delete or purge counts every row changed
-// (total_changes()), so each such write must be counted where the batch decides it has room. Each one is named here
-// with where that is.
+// Triggers that write. A batched delete or purge counts every row changed (total_changes()), so a trigger its writes
+// fire must have its own writes counted where the batch decides it has room. Each one is named here with where that
+// is, or why no batch fires it.
 const WRITING_TRIGGERS: Record<string, string> = {
+	statuses_thread: 'fires on a status insert, which no batched delete or purge makes',
+	statuses_last_status_stored: 'fires on a status insert, which no batched delete or purge makes',
 	list_members_follow_ended:
 		"a follow's delete deletes the follower's list rows of the account; the purge deletes the account's list rows first (purgeRelationships), so then it writes none",
 	account_pins_follow_ended:
@@ -110,23 +112,20 @@ describe('cascade guard (RES-6)', () => {
 		})
 	})
 
-	it('names every trigger that writes on a delete or an update, with where its writes are counted', async () => {
+	it('names every trigger that writes, with where its writes are counted', async () => {
 		await runInDurableObject(await migratedStore(), (_instance, state) => {
 			const triggers = state.storage.sql
 				.exec<{ name: string; sql: string }>("SELECT name, sql FROM sqlite_schema WHERE type = 'trigger'")
 				.toArray()
-			// A trigger fires on a delete or an update when its head (before BEGIN) says so, and writes when its body holds
-			// an INSERT, UPDATE or DELETE; one that only RAISEs writes nothing.
+			// A trigger writes when its body (after BEGIN) holds an INSERT, REPLACE, UPDATE or DELETE; one that only RAISEs
+			// writes nothing. A cheap reading of the text, not a parser: a migration could fool it on purpose.
 			const writing = triggers
-				.filter(({ sql }) => {
-					const [head = '', body = ''] = sql.split(/\bBEGIN\b/i)
-					return /\b(DELETE|UPDATE)\b/i.test(head) && /\b(INSERT|UPDATE|DELETE)\b/i.test(body)
-				})
+				.filter(({ sql }) => /\b(INSERT|REPLACE|UPDATE|DELETE)\b/i.test(sql.split(/\bBEGIN\b/i)[1] ?? ''))
 				.map(({ name }) => name)
 				.sort()
 			expect(
-				writing.filter((name) => WRITING_TRIGGERS[name] === undefined),
-				'these triggers write when a row is deleted or updated: count their writes where the batched delete or purge decides it has room (src/domain/inbox.ts), and name each in WRITING_TRIGGERS with where'
+				writing.filter((name) => !Object.hasOwn(WRITING_TRIGGERS, name)),
+				'these triggers write: count their writes where a batched delete or purge that fires them decides it has room (src/domain/inbox.ts), and name each in WRITING_TRIGGERS with where, or why no batch fires it'
 			).toEqual([])
 			expect(Object.keys(WRITING_TRIGGERS).filter((name) => !writing.includes(name))).toEqual([])
 		})
