@@ -384,6 +384,11 @@ type Row = Record<string, SqlStorageValue>
 // each query (a viewer with no time, the web pages', has only `viewer` and no rule that takes a time); a query runs only
 // with them bound to the viewer's account id and time. Every query is written here: the caller gives the parts of a
 // StatusSelect, and the ids it returns are ones the rule passed for the viewer. Nothing is parsed.
+// With `at.only` (a parameter holding a status id x), each status read is narrowed to x, for the streaming API's
+// positioned reads (R33, streaming.ts): every SELECT and window gets `s.id = x`, an AuthorWindows' authors are cut to
+// x's author and a TagWindows' hashtags to x's own, each a seek. The caller sets its cursor at x, so with the cursor's
+// windows and bounds the narrowed read returns x exactly when the read positioned at x does; the conjuncts remove
+// only rows other than x.
 export type StatusReads = {
 	// One SELECT, after an optional WITH clause its parts may read, with further columns (name: expression) after the id.
 	select<Extra extends Row = Record<never, never>>(
@@ -437,7 +442,7 @@ export type StatusReads = {
 
 export function statusReads(
 	viewer: ViewerContext | null,
-	at: { readonly viewer: string; readonly now?: string }
+	at: { readonly viewer: string; readonly now?: string; readonly only?: string }
 ): StatusReads {
 	const now = () => {
 		if (viewer === null || at.now === undefined) {
@@ -466,9 +471,10 @@ export function statusReads(
 				return `, ${expression} AS ${name}`
 			})
 			.join('')
+	const only = at.only === undefined ? undefined : `s.id = ${at.only}`
 	const selectSql = (rule: string, q: StatusSelect, extra?: Record<string, string>) =>
 		`SELECT s.id AS id${columns(extra, 'id')} FROM ${q.from ?? ''} main.statuses s ${q.join ?? ''}
-		WHERE ${where(q.where, rule, q.and)} ${q.tail ?? ''}`
+		WHERE ${where(only, q.where, rule, q.and)} ${q.tail ?? ''}`
 	// The part of the rule over the author `x` alone, which every status of theirs passes if any does: the author is
 	// available and, unless the viewer, does not block them; for the list and home rules, the viewer does not filter
 	// them either.
@@ -485,7 +491,11 @@ export function statusReads(
 				and: q.and,
 				tail: q.tail,
 			})
-			return `SELECT w.id AS id FROM (${q.tags}) g CROSS JOIN main.statuses w ON w.id IN (${window})`
+			const tags =
+				at.only === undefined
+					? q.tags
+					: `SELECT * FROM (${q.tags}) WHERE name IN (SELECT ot.name FROM main.status_tags ot WHERE ot.status_id = ${at.only})`
+			return `SELECT w.id AS id FROM (${tags}) g CROSS JOIN main.statuses w ON w.id IN (${window})`
 		}
 		if (!('authors' in q)) {
 			return selectSql(ruleSql(rule), q)
@@ -497,7 +507,11 @@ export function statusReads(
 			and: q.and,
 			tail: q.tail,
 		})
-		const authors = `SELECT wa.account_id FROM (${q.authors}) wa WHERE ${authorRuleSql(rule, 'wa.account_id')}`
+		const author =
+			at.only === undefined
+				? undefined
+				: `wa.account_id = (SELECT oa.account_id FROM main.statuses oa WHERE oa.id = ${at.only})`
+		const authors = `SELECT wa.account_id FROM (${q.authors}) wa WHERE ${where(author, authorRuleSql(rule, 'wa.account_id'))}`
 		return `SELECT w.id AS id FROM (${authors}) a CROSS JOIN main.statuses w ON w.id IN (${window})`
 	}
 	const run = <T extends Row>(db: Db, query: string, params: SqlStorageValue[]): T[] => {
@@ -569,6 +583,59 @@ export function statusReads(
 			)
 		},
 	}
+}
+
+// How many of a status's boosts R32's capture reads to find each viewer's (deleteAudience); a status with more is
+// read from each viewer's follows instead.
+export const CAPTURE_BOOST_SCAN = 2000
+
+// R32 (stream delete; streaming.ts streamDelete captures it): of `viewers`, those who may view the status `statusId`
+// by itself (R3: viewableSql on the status, so a boost whose booster is being purged is not viewable), each with the
+// boosts of it they may view by themselves that they or an account they follow (accepted) made, oldest first, at most
+// `boosts`: the boosts their home could have shown. Each viewer's are found from the smaller side: the status's boosts
+// (statuses_reblog), read once up to `scan` with one more to tell an overflow, each booster checked against the
+// viewer's follows by key; or, past `scan`, the viewer's own boost and follows (follows_accepted), one key lookup of
+// statuses_reblog each. A status without boosts reads one index probe for all its viewers.
+export function deleteAudience(
+	db: Db,
+	statusId: string,
+	viewers: readonly string[],
+	boosts: number,
+	scan = CAPTURE_BOOST_SCAN
+): { accountId: string; boosts: string[] }[] {
+	const found = db.all<{ id: string }>(
+		'SELECT id FROM main.statuses WHERE reblog_of_id = ? LIMIT ?',
+		statusId,
+		scan + 1
+	).length
+	const candidates =
+		found <= scan
+			? `SELECT r.id FROM main.statuses r WHERE r.reblog_of_id = ?2 AND (r.account_id = ?1
+				OR EXISTS (SELECT 1 FROM main.follows f
+					WHERE f.account_id = ?1 AND f.target_account_id = r.account_id AND f.state = 'accepted'))`
+			: `SELECT r.id FROM main.statuses r WHERE r.reblog_of_id = ?2 AND r.account_id = ?1
+				UNION SELECT r.id FROM main.follows f CROSS JOIN main.statuses r
+					ON r.reblog_of_id = ?2 AND r.account_id = f.target_account_id
+				WHERE f.account_id = ?1 AND f.state = 'accepted'`
+	return viewers.flatMap((viewerId) => {
+		if (!canView(db, viewerId, statusId)) {
+			return []
+		}
+		const ids =
+			found === 0
+				? []
+				: db
+						.all<{ id: string }>(
+							`SELECT b.id FROM (${candidates}) b
+							WHERE EXISTS (SELECT 1 FROM main.statuses s WHERE s.id = b.id AND ${viewableSql('s', '?1')})
+							ORDER BY b.id LIMIT ?3`,
+							viewerId,
+							statusId,
+							boosts
+						)
+						.map((row) => row.id)
+		return [{ accountId: viewerId, boosts: ids }]
+	})
 }
 
 // The status `statusId`, if `viewerId` (null: anonymous) may see it by itself (canView).

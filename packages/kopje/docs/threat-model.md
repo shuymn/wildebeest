@@ -559,15 +559,28 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   message is made later in its own transaction, which authorizes the socket's token again and runs the reference for
   its event and stream (R33): for a `notification` on `user` or `user:notification`, the recipient's notification
   list positioned at it (R15: kept, and not filtered by their policy, as Mastodon pushes none of those), presented as
-  REST presents it. Nothing authorized is kept across units. Each unit is sent at most once: the position past it is
+  REST presents it; for an `update` on `user`, home positioned at the status (R9, the read with `max_id` just above it,
+  narrowed to it), for a status published within 6 hours of its arrival; for a `status.update`, home positioned at it
+  or, only with `read:notifications`, the viewer's mention notification of it (R15), and on `user:notification` the
+  mention alone. A `delete` is the one message judged at write time (R32): captured once, before anything changes the
+  status's audience (a local delete or unboost, a remote `Delete` when its job is created and before its first batch
+  removes the mentions, a remote `Delete` or `Undo` of a boost), it names only the accounts listening on `user` that
+  could view the status, and each one's boosts of it that it could view, at most 40, in rows of proven size that a
+  truncation keeps within bounds without failing the delete. Nothing authorized is kept across units. Each unit is sent at most once: the position past it is
   persisted by compare-and-set before its messages go, and a send that fails closes the sockets left without it
   (1011), whose clients read REST again. Every turn checks every open socket's token again, so the socket of a revoked
   token, a signed-out web session or a suspended account closes (1008) at the next turn, which any write starts, and an
-  expired token's at the cron's turn within 5 minutes. The other streams answer `Unknown stream type` for now. The work
-  is bounded (RES-6, RES-7). _Implemented on branch `kopje/streaming-1`:_ `src/mastodon/streaming.ts`,
-  `src/stream-hub.ts`, `src/domain/streaming.ts`, `authorizeStream` in `src/domain/auth.ts`, `streamedNotification`
-  in `src/domain/notifications.ts`, migration `0026_streaming`; `test/streaming/streaming.test.ts`,
-  `test/policy-bounds.test.ts`, `test/log-redaction.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`.
+  expired token's at the cron's turn within 5 minutes. The other streams (`public*`, `hashtag*`, `list`, `direct`)
+  answer `Unknown stream type` for now. The work is bounded (RES-6, RES-7). _Implemented on branch
+  `kopje/streaming-1`:_ `src/mastodon/streaming.ts`, `src/stream-hub.ts`, `src/domain/streaming.ts`,
+  `authorizeStream` in `src/domain/auth.ts`, `streamedNotification` in `src/domain/notifications.ts`, migration
+  `0026_streaming`; `test/streaming/streaming.test.ts`, `test/policy-bounds.test.ts`, `test/log-redaction.test.ts`,
+  `test/migrations.test.ts`, `test/cascade-guard.test.ts`. _Implemented on branch `kopje/streaming-2`:_ the home
+  events: `homeStatus` in `src/domain/timelines.ts` (with `statusReads`' `only`), `mentionedStatus` in
+  `src/domain/notifications.ts`, `deleteAudience` in `src/domain/audience.ts`, `streamUnit` and `streamDelete` in
+  `src/domain/streaming.ts`, migration `0028_streaming_home`; `test/streaming/home.test.ts`,
+  `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`, `test/layering.test.ts`,
+  `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`.
 
 - **VIS-29: admin views and actions disclose and change only through the admin account.** Only the OAuth admin,
   through a token covering the route's admin scope, reads or acts through `/api/v1/admin/*` and `/api/v2/admin/*`
@@ -1245,7 +1258,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   allowance: a turn spends at most 512 checks, 64 presentations, 4 MiB of presented payload and 4,096 sends, runs a
   unit only while what is left covers a unit's worst case (33 checks, one presentation, 256 sends) and leaves the
   rest to the next turn; a payload over 512 KiB is skipped and logged. The journal records nothing once it spans 4,096
-  ids, and is pruned 500 rows a turn behind the position. `src/stream-hub.ts`, `src/domain/streaming.ts`;
+  ids, and is pruned behind the position, at most 500 rows a call: the finished journal rows first, so the span shrinks
+  at once, then a delete's capture rows, in further turns until none is left. A turn that read anything moves the
+  position, also past what it read with nothing to send, before it stops for its budget. _Implemented on branch
+  `kopje/streaming-2`:_ a delete's capture is one journal row and at most one row per account in the registry (256),
+  each at most 16 KiB (40 boosts); a row over it drops boosts, then list ids, and is logged, and the delete goes on.
+  A unit is one subject (the status, or one captured boost) for one viewer, so a delete with 40 boosts is 41 units for
+  each viewer, each within a unit's worst case; the position names the viewer and the subject within the event. The status and edit
+  triggers write one journal row per status write, under the same span, and no batched delete or purge fires them. `src/stream-hub.ts`, `src/domain/streaming.ts`;
   `test/streaming/streaming.test.ts`. _Gap:_ the budgets count work, not CPU time; a turn at the limits is to be
   measured on a deployed instance, as is how long a hibernated idle socket stays open.
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
@@ -1309,6 +1329,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   The streaming fan-out reads a window of the journal from its position (64 events, each bound of the journal one
   seek) and each unit's notification by key, positioned at it, so neither grows with the journal, the recipient's
   notifications or anyone else's (`test/policy-bounds.test.ts`, "a streamed notification reads its item").
+  _Implemented on branch `kopje/streaming-2`:_ a streamed status's checks are narrowed to it: home positioned at it
+  reads its author's window alone, the exclusive-list exclusion for that author from the viewer's lists (at most 50),
+  and the viewer's followed hashtags among the status's own by key; the mention reference is one key lookup
+  (`notifications_natural`). They read the same rows however many statuses an author has, however many accounts,
+  exclusive-list members and hashtags the viewer follows, and however many notifications they have; a delete's
+  capture reads, for each listening account, the smaller side: the status's boosts (read once, at most 2,000, each
+  booster checked against the account's follows by key), or past that the account's follows, one key lookup each
+  (`test/policy-bounds.test.ts`, "a streamed status reads its item" and "R32: a delete's capture"). A turn reads a
+  delete's units eight viewers at a time from the position, each page charged to the turn, never the whole capture.
+  _Gap:_ a status with more than 2,000 boosts costs each listening account its follows (at most 256 accounts, each
+  within the follow limit).
 
 ### Data and keys (DATA)
 

@@ -231,9 +231,11 @@ describe('what a notification stream does not carry', () => {
 		await post(h, h.users.dave, { status: '@alice blocked', visibility: 'public' })
 		await absent(h, inbox)
 
-		// Another account's notification.
+		// Another account's notification: alice's own post reaches her home (`update`), and no notification.
 		await post(h, h.users.alice, { status: '@bob yours', visibility: 'public' })
-		await absent(h, inbox)
+		await drained(h, inbox)
+		expect(inbox.rest().map((m) => [m.stream, m.event])).toEqual([[['user'], 'update']])
+		await inbox.next()
 
 		// The control: a mention alice's policy accepts arrives on both streams.
 		await post(h, h.users.erin, { status: '@alice shown', visibility: 'public' })

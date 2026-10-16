@@ -261,9 +261,22 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R27 polls                    | `viewableStatusId` (R3) for a poll's status in `getPoll`, `vote` and the presenter's callers; `mayVoteSql` (R3, and the voter blocks neither the author nor its domain) for a local vote and a received one; `poll_votes` read in `polls.ts` alone, only the viewer's own.                                                                                                                                                                                                                                                                                                                                                                             |
 | R28 endorsements, notes      | `endorsementsShownSql` and `endorsementListedSql` in `endorsedPage` (`endorsements.ts`): an account's endorsements, to anyone, and the viewer's own. A private note is its author's alone: read only in the viewer's relationships (`relationshipsOf` in `accounts.ts`).                                                                                                                                                                                                                                                                                                                                                                               |
 | R31 pins, conversation mutes | Pins: `accountStatuses` with `pinned` (R11 over the account's pins), `getFeatured` in `activities.ts` (R4: the Note of a public or unlisted pin, the uri of any other). Conversation mutes: `conversationMutedSql`, read only in `audience.ts`, for the viewer's `muted` (the presenter) and in `notifiedSql`, which `notify` applies (R15 at write time).                                                                                                                                                                                                                                                                                             |
-| R33 stream membership        | `streamNotificationUnit` (`streaming.ts`): a `notification` on `user` (with `read:notifications`) or `user:notification` is sent only if the recipient's notification list positioned at it shows it (`streamedNotification`: R15, kept, unfiltered), in the transaction that authorizes the socket's token again (`authorizeStream`). The journal (migration `0026_streaming`) holds ids only.                                                                                                                                                                                                                                                        |
+| R32 stream delete            | `streamDelete` (`streaming.ts`), at four sites before a status's audience first changes (`test/layering.test.ts`): a row per account listening on `user` that may view the status (R3, `deleteAudience` in `audience.ts`), with the boosts of it the account may view that it or an account it follows made, at most 40. A `delete` goes only where the capture allows.                                                                                                                                                                                                                                                                                |
+| R33 stream membership        | `streamUnit` (`streaming.ts`), re-authorizing the token (`authorizeStream`): a `notification` if the notification list positioned at it shows it (`streamedNotification`); `update` if home positioned at it does (`homeStatus`, R9) within the real-time window; `status.update` if home or, with a notification scope, the mention reference does (`mentionedStatus`).                                                                                                                                                                                                                                                                               |
 | R34 reports                  | `reports` read and written only in `reports.ts` (the reporter's own report, answered once, and the OAuth admin's reads and actions under R37) and deleted by a remote account's purge (`inbox.ts`); a reported status passes `accountStatusIds` in `timelines.ts` (R11 less the reporter's own block of the account, as Mastodon's `AccountStatusesFilter`); the Flag of a forwarded report goes to `reportForwardees` (R23), signed by the instance actor.                                                                                                                                                                                            |
 | R37 admin views              | Only the OAuth admin (`adminAccountId`, `admin-authority.ts`: the one local account whose email matches `admin_email`, failing closed), through a token covering the route's admin scope, reads or acts through `/api/v1/admin/*` (`adminReadOperation`, `adminWriteOperation` in `auth.ts`, checked in the operation's transaction, and only for the permissions in `ADMIN_PERMISSIONS`). The admin sees every report and its accounts (`presentAdminAccounts`, local emails included); a report's statuses only while its reporter may still see them (`accountStatusIds` with `viewerOf(admin, reporter)`), presented with the admin as the viewer. |
+
+The streaming API (`src/domain/streaming.ts`, `src/stream-hub.ts`) judges each message when it is made, never when the
+write is journaled (R33), and a `delete` by what was captured before the status's audience changed (R32). "Positioned at
+x" is the REST read with `max_id` just above x and `limit` 1: its predicates, cursor and windows. `statusReads` takes
+`only` for it, which adds `s.id = x` to every branch, cuts an author window to x's author and the followed hashtags to
+x's own; home's exclusive-list exclusion is read for x's author alone, from the viewer's lists, and each of x's followed
+hashtags is bounded at x, whose window it heads. Positioned membership agrees with a page read from the top for every
+per-row predicate. It differs only for home's followed-hashtag windows, which a page cuts at `tagCandidates` candidates
+from its cursor: a post of a followed hashtag behind 40 or more newer posts the viewer's home hides is sent, though the
+first page of home leaves it out. That is what `max_id` paging returns, and the post passes R9; the difference is
+accepted. R32 differs from Mastodon in two accepted ways: at most 40 boosts of a deleted status are deleted on each
+viewer's stream (those by the viewer and the accounts it follows), and an account's purge sends no `delete`.
 
 Pins and conversation mutes (`src/domain/status-actions.ts`, Mastodon's `StatusPin` and `ConversationMute`, migration
 `0018_status_pins_and_conversation_mutes`) act on a status the viewer may see by itself (R3; anything else is not
@@ -684,3 +697,22 @@ queued after its follower left, one reaching targets not yet expanded (more foll
 leave before the `Delete`), the `Undo` of a boost naming a blocked author, a profile `Update` to a domain-blocked
 follower, content leaving one out, a personal copy, notifications and pushes, and list members leaving with a block
 either way. So coverage never depends on chance.
+
+`test/streaming-oracle.test.ts` checks R33 for the `user` stream's statuses on generated worlds, with the mention
+notifications `notify` would write (some filtered by the recipient's policy): for every local viewer and every status,
+with each kind of token (`read`, `read:statuses`, `read:notifications`), the streams the unit sends an `update` and a
+`status.update` on must be those the references give: home read with `max_id` just above the status and `limit` 1,
+and the viewer's mention notifications listed in full. Its window cases pin the documented difference: a post of a
+followed hashtag behind 41 newer hidden posts (sent; a page from the top leaves it out), at the 40th candidate (both),
+with ascending `min_id` paging, and an empty home. `test/policy-bounds.test.ts` grows what a streamed status's checks
+could read, at once, from 20 statuses per author to 2,000, 10 follows to 1,000, no exclusive-list members to 1,000,
+none of 40 unrelated followed hashtags and 20 of the viewer's mention notifications to 2,000: the `update` of the
+author's newest, middle and oldest status, a followed account's, an exclusive member's (not sent) and a followed
+hashtag's newest and oldest, and the `status.update` of a status in home and of the newest and oldest mention, must
+each read at most 10 rows more. A delete's capture reads the same with 10 or 1,000 follows per listening account when
+the status has few boosts, a constant per listening account, and, past 2,000 boosts by unfollowed accounts, the same
+with 2,000 or 20,000; the journal's scan and a page of a delete's units read the same with 1 or 256 captured viewers.
+`test/stream-delete.test.ts` checks R32's capture: once, when a remote `Delete`'s job is created, through every batch
+and a redelivery, for a direct status and a private one a mention authorizes; by its own id for a boost removed by
+`Delete` or `Undo`; without a booster whose purge has begun or one the viewer does not follow; at most 40 boosts, and a
+row over its bound truncated while the delete still happens.
