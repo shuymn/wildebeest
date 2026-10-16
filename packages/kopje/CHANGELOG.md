@@ -21,6 +21,34 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       status answers 404, as its page does), and `/@alice@this.domain/:id` and the object URI (`/ap/o/...`) are taken;
       the HTML says "View on Kopje" without Mastodon's logo; the script is at `/assets/embed.js` (Mastodon:
       `/embed.js`) and frames only the `blockquote` embeds (not the older `iframe` ones).
+- A remote account's pinned posts, featured hashtags and hidden network, learned as Mastodon 4.5 learns them:
+  `GET /api/v1/accounts/:id/statuses?pinned=true` and `GET /api/v1/accounts/:id/featured_tags` now show a remote
+  account's, and its `hide_collections` is shown and hides its followers and following lists as a local account's
+  setting does.
+    - Kopje reads the account's `featured` and `featuredTags` collections, and whether its `followers` or `following`
+      collection hides its items, each time it stores the account's profile, in the background rounds a few minutes
+      apart at most. A pinned post it does not have is fetched, signed by a local follower of the account if it has
+      one. An `Add` or `Remove` of a post or a hashtag to the account's own featured collection (or of a hashtag to its
+      featuredTags collection) changes one pin or featured hashtag at once.
+    - Pins and featured hashtags are shown by the same rules as a local account's: a followers-only pin only to the
+      account's followers, nothing of an account that blocks you. A featured hashtag counts the account's public and
+      unlisted posts with it that Kopje has, and the count follows as they arrive and are deleted.
+    - Where Kopje differs from Mastodon: an account keeps at most 20 pins and 10 featured hashtags (Mastodon keeps any
+      number for a remote account); a collection is read only on the account's own server, and a pin only when it is
+      the account's own post there; a collection that cannot be read for now (a timeout, a 5xx) leaves what was learned
+      as it was, where Mastodon retries, or for its followers and following, takes it as hidden; a sync is tried at
+      most three times; and a newly learned pin is ordered as the collection lists it (the first is the newest).
+
+### Instance changes
+
+- Store schema: adds a migration, applied on the first request after the deploy; a rollback to an earlier version needs
+  the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0025_remote_collections`: lets `status_pins` and `featured_tags` hold any account's rows (each table is rebuilt
+      and its rows copied), adds `accounts.hide_collections`, and adds the empty `collection_syncs` table. Only local
+      accounts have pins and featured hashtags until then, at most five and ten each, so its work grows with the local
+      accounts alone (about four rows read per pin or featured hashtag), and the remote accounts and statuses are not
+      read.
+- `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.7] - 2026-10-16
 
