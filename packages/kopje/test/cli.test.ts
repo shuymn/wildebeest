@@ -326,7 +326,7 @@ describe('kopje-admin', () => {
 		expect(awake.err).toContain('@alice is not suspended')
 		await runInDurableObject(store, (_instance, state) => {
 			state.storage.sql.exec(
-				"UPDATE local_accounts SET suspended_at = '2026-10-01T00:00:00.000Z', tokens_valid_after = '2026-10-01T00:00:00.000Z' WHERE account_id = (SELECT id FROM accounts WHERE username = 'alice')"
+				"UPDATE local_accounts SET suspended_at = '2026-10-01T00:00:00.000Z', credential_epoch = 1 WHERE account_id = (SELECT id FROM accounts WHERE username = 'alice')"
 			)
 		})
 		expect(JSON.parse((await cli(['account', 'unsuspend', '@alice'], { fetch })).out)).toEqual({ username: 'alice' })

@@ -126,9 +126,9 @@ const logRows = (store: StoreStub) =>
 
 const suspendedAt = async (store: StoreStub, id: string) =>
 	(
-		await sql<{ suspended_at: string | null; tokens_valid_after: string | null }>(
+		await sql<{ suspended_at: string | null; credential_epoch: number }>(
 			store,
-			'SELECT suspended_at, tokens_valid_after FROM local_accounts WHERE account_id = ?',
+			'SELECT suspended_at, credential_epoch FROM local_accounts WHERE account_id = ?',
 			id
 		)
 	)[0]
@@ -165,7 +165,7 @@ describe('the account action and unsuspend: who is answered (R37, VIS-29)', () =
 			expect(await unsuspend(h, narrow, alice.id)).toEqual(outside)
 		}
 		expect(await act(h, 'not-a-token', alice.id, { type: 'suspend' })).toMatchObject({ status: 401 })
-		expect(await suspendedAt(h.store, alice.id)).toEqual({ suspended_at: null, tokens_valid_after: null })
+		expect(await suspendedAt(h.store, alice.id)).toEqual({ suspended_at: null, credential_epoch: 0 })
 		expect(await logRows(h.store)).toEqual([])
 
 		// The admin, through the route's own scope.
@@ -173,7 +173,7 @@ describe('the account action and unsuspend: who is answered (R37, VIS-29)', () =
 		expect(await act(h, narrow, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
 		expect(await suspendedAt(h.store, alice.id)).toEqual({
 			suspended_at: new Date(NOW).toISOString(),
-			tokens_valid_after: new Date(NOW).toISOString(),
+			credential_epoch: 1,
 		})
 		const shown = await unsuspend(h, admin, alice.id)
 		expect(shown).toMatchObject({ status: 200, body: { id: alice.id, suspended: false, account: { id: alice.id } } })
@@ -268,7 +268,7 @@ describe('the account action types (Admin::AccountAction)', () => {
 	})
 })
 
-describe('the token fence (VIS-29)', () => {
+describe('the credential epoch (VIS-29)', () => {
 	it('refuses access tokens, codes, web sessions and pushes at once, and still after the unsuspension', async () => {
 		const { h, admin, alice, bob } = await world({ VAPID_JWK: VAPID.env })
 		// Alice's API token, a pushing token with its subscription, a code not exchanged yet, and a web session.
@@ -324,12 +324,12 @@ describe('the token fence (VIS-29)', () => {
 		expect((await exchange(h, app, after)).status).toBe(400)
 		expect((await settings()).status).toBe(302)
 		expect((await h.request('/api/v1/push/subscription', bearer(pushing))).status).toBe(401)
-		// A new notification queues no push for the fenced token, and none is claimed.
+		// A new notification queues no push for the old token, and none is claimed.
 		await favourited(1)
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM push_deliveries')).toEqual([{ n: 0 }])
 		expect(await pushes()).toBe(0)
 
-		// A sign-in after the unsuspension works; the tokens job deletes only what the fence refuses.
+		// A sign-in after the unsuspension works; the tokens job deletes only the credentials of the earlier epoch.
 		const fresh = await userToken(h, 'alice@example.com', 'read')
 		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(fresh))).status).toBe(200)
 		await settle(h.store)
@@ -445,12 +445,13 @@ describe('the tokens job (RES-6)', () => {
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM push_deliveries')).toEqual([{ n: 650 }])
 
 		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
-		// 5 tokens issued after the suspension committed, dated after its fence, are not the job's to delete.
+		// 5 tokens issued after the suspension committed, in its epoch, are not the job's to delete.
 		await sql(
 			h.store,
 			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5)
-			INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes, created_at)
-			SELECT printf('u%05d', i), 'access', ?1, ?2, 'read', '2027-01-01T00:00:00.000Z' FROM n`,
+			INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes, created_at, epoch)
+			SELECT printf('u%05d', i), 'access', ?1, ?2, 'read', '2026-01-01T00:00:00.000Z',
+				(SELECT credential_epoch FROM local_accounts WHERE account_id = ?2) FROM n`,
 			client,
 			alice.id
 		)
@@ -537,17 +538,18 @@ describe('report resolution, bound to the generation', () => {
 
 	it('ends the jobs of a suspension that a second one replaced', async () => {
 		const { h, admin, alice, report, states } = await reported()
+		h.now.mockReturnValue(NOW - 1000)
 		await report()
+		h.now.mockReturnValue(NOW)
 		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
-		// The same request time: the second suspension still gets a generation of its own.
+		// The same request time: the second suspension still gets an epoch of its own.
 		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
-		const generations = await sql<{ generation: string }>(
+		const generations = await sql<{ generation: number }>(
 			h.store,
 			"SELECT generation FROM moderation_jobs WHERE kind = 'suspension' ORDER BY id"
 		)
-		expect(generations).toHaveLength(2)
-		expect(generations[0]!.generation < generations[1]!.generation).toBe(true)
-		expect((await suspendedAt(h.store, alice.id))?.suspended_at).toBe(generations[1]!.generation)
+		expect(generations).toEqual([{ generation: 1 }, { generation: 2 }])
+		expect((await suspendedAt(h.store, alice.id))?.credential_epoch).toBe(2)
 		await settle(h.store)
 		expect((await states()).map((row) => row.resolved)).toEqual([1])
 		// One Update of each generation was recorded; only the second's carries targets.
@@ -720,11 +722,11 @@ describe('the sender rule (R1)', () => {
 	})
 })
 
-describe('review regressions (A3b round 1)', () => {
-	it('fences a token committed before the suspension whose caller clock stamped it later', async () => {
+describe('review regressions (A3b rounds 1 and 2)', () => {
+	it('refuses an old token stamped far ahead, and signs in again at once after the unsuspension', async () => {
 		const { h, admin, alice } = await world()
 		const client = (await sql<{ id: string }>(h.store, 'SELECT client_id AS id FROM oauth_tokens LIMIT 1'))[0]!.id
-		// Issued by a caller whose clock runs a minute ahead of the admin's, committed before the suspension.
+		// Issued before the suspension by a caller whose clock ran years ahead.
 		const late = 'late-token-0123456789abcdef'
 		await sql(
 			h.store,
@@ -732,23 +734,75 @@ describe('review regressions (A3b round 1)', () => {
 			await sha256Hex(late),
 			client,
 			alice.id,
-			new Date(NOW + 60_000).toISOString()
+			'2030-01-01T00:00:00.000Z'
 		)
 		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
 		expect(await suspendedAt(h.store, alice.id)).toEqual({
 			suspended_at: new Date(NOW).toISOString(),
-			tokens_valid_after: new Date(NOW + 60_000).toISOString(),
+			credential_epoch: 1,
 		})
-		h.now.mockReturnValue(NOW + 120_000)
+		h.now.mockReturnValue(NOW + 1000)
 		expect((await unsuspend(h, admin, alice.id)).status).toBe(200)
 		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(late))).status).toBe(401)
-		// The tokens job deletes it with the others; a sign-in after the fence works.
+		// A sign-in right after the unsuspension works, through a code and the web, whatever the old token's time.
+		const fresh = await userToken(h, 'alice@example.com', 'read')
+		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(fresh))).status).toBe(200)
+		const browser = await signIn(h, 'alice@example.com')
+		expect((await h.request('/settings', { headers: { cookie: browser.cookie } })).status).toBe(200)
+		// The tokens job deletes the old one with the others, and leaves the new ones.
 		await settle(h.store)
 		expect(
 			await sql(h.store, 'SELECT count(*) AS n FROM oauth_tokens WHERE token_hash = ?', await sha256Hex(late))
 		).toEqual([{ n: 0 }])
+		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(fresh))).status).toBe(200)
+	})
+
+	it('ends the credentials of a suspension made before the epoch existed when it is lifted', async () => {
+		const { h, admin, alice } = await world()
+		await sql(
+			h.store,
+			'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
+			new Date(NOW).toISOString(),
+			alice.id
+		)
+		h.now.mockReturnValue(NOW + 1000)
+		expect((await unsuspend(h, admin, alice.id)).status).toBe(200)
+		expect(await suspendedAt(h.store, alice.id)).toEqual({ suspended_at: null, credential_epoch: 1 })
+		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(alice.token))).status).toBe(401)
 		const fresh = await userToken(h, 'alice@example.com', 'read')
 		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(fresh))).status).toBe(200)
+	})
+
+	it('leaves open a report reopened after a re-suspension, before its job runs', async () => {
+		const { h, admin, alice } = await world()
+		const client = (await sql<{ id: string }>(h.store, 'SELECT client_id AS id FROM oauth_tokens LIMIT 1'))[0]!.id
+		await sql(
+			h.store,
+			"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes, created_at) VALUES ('ahead', 'access', ?, ?, 'read', ?)",
+			client,
+			alice.id,
+			new Date(NOW + 60_000).toISOString()
+		)
+		const reporter = await userToken(h, 'bob@example.com', 'write:reports')
+		h.now.mockReturnValue(NOW - 1000)
+		const report = (
+			await (
+				await h.request('/api/v1/reports', bearer(reporter, json({ account_id: alice.id })))
+			).json<{ id: string }>()
+		).id
+		await h.request(`/api/v1/admin/reports/${report}/resolve`, bearer(admin, { method: 'POST' }))
+		h.now.mockReturnValue(NOW)
+		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+		h.now.mockReturnValue(NOW + 1000)
+		expect((await unsuspend(h, admin, alice.id)).status).toBe(200)
+		h.now.mockReturnValue(NOW + 2000)
+		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+		h.now.mockReturnValue(NOW + 3000)
+		expect((await h.request(`/api/v1/admin/reports/${report}/reopen`, bearer(admin, { method: 'POST' }))).status).toBe(
+			200
+		)
+		await settle(h.store)
+		expect(await sql(h.store, 'SELECT action_taken_at IS NOT NULL AS resolved FROM reports')).toEqual([{ resolved: 0 }])
 	})
 
 	it("keeps the newer suspension's Update when the replaced one's job ends, its intent id reused", async () => {
@@ -892,11 +946,11 @@ describe('POST /admin/accounts/unsuspend (AUTH-5)', () => {
 		team = await adminTeam()
 	})
 
-	it('unsuspends a local account through Access only, keeps its fence, and logs the Access identity', async () => {
+	it('unsuspends a local account through Access only, keeps its epoch, and logs the Access identity', async () => {
 		const store = await migratedStore()
 		await setTeamAccess(store, team)
 		const alice = await seedAccount(store, { username: 'alice', email: 'alice@example.com' })
-		const fence = await runInDurableObject(store, (_instance, state) =>
+		await runInDurableObject(store, (_instance, state) =>
 			state.storage.transactionSync(() => suspendLocal(new Db(state.storage.sql), alice, null, NOW))
 		)
 		const { as, request, jobs } = adminHarness(store, team)
@@ -909,7 +963,7 @@ describe('POST /admin/accounts/unsuspend (AUTH-5)', () => {
 		expect(jobs).not.toHaveBeenCalled()
 		expect(await call({ username: '@Alice' })).toEqual({ status: 200, body: { username: 'alice' } })
 		expect(jobs).toHaveBeenCalledTimes(1)
-		expect(await suspendedAt(store, alice)).toEqual({ suspended_at: null, tokens_valid_after: fence })
+		expect(await suspendedAt(store, alice)).toEqual({ suspended_at: null, credential_epoch: 1 })
 		expect(await sql(store, "SELECT kind FROM moderation_jobs WHERE kind = 'reach'")).toEqual([{ kind: 'reach' }])
 		expect(await call({ username: 'alice' })).toMatchObject({ status: 409, body: { code: 'not-suspended' } })
 		expect(

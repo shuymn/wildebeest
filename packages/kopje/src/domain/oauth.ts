@@ -1,3 +1,4 @@
+import { CREDENTIAL_EPOCH_SQL } from './auth'
 import { readOperation, sessionOperation, writeOperation } from './operation'
 import { sweepWebState } from './web-session'
 import type { Db } from '../db/sql'
@@ -233,8 +234,8 @@ export const issueCode = sessionOperation<IssueCodeInput, IssueCodeResult>((db, 
 	}
 	db.run(
 		`INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes, redirect_uri, code_challenge,
-			expires_at, created_at)
-		VALUES (?, 'code', ?, ?, ?, ?, ?, ?, ?)`,
+			expires_at, created_at, epoch)
+		VALUES (?, 'code', ?, ?, ?, ?, ?, ?, ?, ${CREDENTIAL_EPOCH_SQL})`,
 		input.codeHash,
 		input.clientId,
 		account.accountId,
@@ -242,7 +243,8 @@ export const issueCode = sessionOperation<IssueCodeInput, IssueCodeResult>((db, 
 		input.redirectUri,
 		input.codeChallenge,
 		new Date(input.now + CODE_LIFETIME_MS).toISOString(),
-		new Date(input.now).toISOString()
+		new Date(input.now).toISOString(),
+		account.accountId
 	)
 	return { status: 'ok' }
 })
@@ -292,10 +294,10 @@ export function consumeCode(db: Db, input: CodeInput): { accountId: string; scop
 		redirect_uri: string
 		code_challenge: string | null
 		expires_at: string
-		created_at: string
+		epoch: number
 	}>(
 		`DELETE FROM oauth_tokens WHERE token_hash = ? AND kind = 'code'
-		RETURNING client_id, account_id, scopes, redirect_uri, code_challenge, expires_at, created_at`,
+		RETURNING client_id, account_id, scopes, redirect_uri, code_challenge, expires_at, epoch`,
 		input.codeHash
 	)
 	const nowIso = new Date(input.now).toISOString()
@@ -311,13 +313,14 @@ export function consumeCode(db: Db, input: CodeInput): { accountId: string; scop
 	) {
 		return null
 	}
-	// A code of a suspended account, or one issued before its account's token fence (unfencedSql), grants nothing.
-	const account = db.first<{ suspended_at: string | null; tokens_valid_after: string | null }>(
-		'SELECT suspended_at, tokens_valid_after FROM local_accounts WHERE account_id = ?',
+	// A code of a suspended account, or one of an earlier credential epoch (currentCredentialSql), grants nothing.
+	const account = db.first<{ suspended_at: string | null; credential_epoch: number }>(
+		'SELECT suspended_at, credential_epoch FROM local_accounts WHERE account_id = ?',
 		code.account_id
 	)
-	const fenced = account?.tokens_valid_after != null && code.created_at <= account.tokens_valid_after
-	return account?.suspended_at === null && !fenced ? { accountId: code.account_id, scopes: code.scopes } : null
+	return account?.suspended_at === null && account.credential_epoch === code.epoch
+		? { accountId: code.account_id, scopes: code.scopes }
+		: null
 }
 
 export type AppTokenInput = {
@@ -351,14 +354,15 @@ export function insertAccessToken(
 	expiresAt: string | null
 ): void {
 	db.run(
-		`INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes, expires_at, created_at)
-		VALUES (?, 'access', ?, ?, ?, ?, ?)`,
+		`INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes, expires_at, created_at, epoch)
+		VALUES (?, 'access', ?, ?, ?, ?, ?, ${CREDENTIAL_EPOCH_SQL})`,
 		tokenHash,
 		clientId,
 		accountId,
 		scopes,
 		expiresAt,
-		createdAt
+		createdAt,
+		accountId
 	)
 }
 

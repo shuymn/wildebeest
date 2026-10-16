@@ -11,19 +11,19 @@ import type { Db } from '../db/sql'
 // suspends and unsuspends through the Mastodon admin API (admin-accounts.ts), the Access admin unsuspends through
 // /admin; both call suspendLocal and unsuspendLocal here.
 //
-// A suspension commits in one bounded transaction (RES-6): the account's suspended_at and token fence
-// (tokens_valid_after) at its time S, the frozen bounds (the newest report and follow), two jobs, the Update of its
+// A suspension commits in one bounded transaction (RES-6): the account's suspended_at at its time S and a new
+// credential epoch, the frozen bounds (the newest report and follow), two jobs bound to that epoch, the Update of its
 // actor with no targets yet, and the removal of its actor's snapshots. Everything that grows with the account runs
 // afterwards in rounds of the jobs (runModerationJobs, with the inbound jobs, store.ts):
 //
-//   - tokens: deletes the fenced tokens child-first (TOKEN_CHILDREN), so no delete cascades, at most
-//     TOKEN_ROUND_ROWS rows written per round. The fence already refuses them (auth.ts unfencedSql): API calls, web
-//     sessions, code exchange, streaming and pushes. Never cancelled; the fence outlives an unsuspension, so the user
-//     signs in again.
-//   - suspension, bound to S: resolves the reports frozen at S (reports.ts resolveSuspensionReports), then stages the
-//     Update's audience, then writes it. A round that finds the account no longer suspended at S ends the job.
-//   - reach (an unsuspension's), bound to the fence of the suspension it lifts: stages the restoration Update's
-//     audience the same way, and ends once the account is suspended again.
+//   - tokens: deletes the account's credentials of earlier epochs child-first (TOKEN_CHILDREN), so no delete
+//     cascades, at most TOKEN_ROUND_ROWS rows written per round. The epoch already refuses them (auth.ts
+//     currentCredentialSql): API calls, web sessions, code exchange, streaming and pushes. Never cancelled; an
+//     unsuspension keeps the epoch, so the user signs in again, at once.
+//   - suspension: resolves the reports frozen at S (reports.ts resolveSuspensionReports), then stages the Update's
+//     audience, then writes it. A round that finds the account unsuspended or in a later epoch ends the job.
+//   - reach (an unsuspension's), bound to the epoch the unsuspension keeps: stages the restoration Update's audience
+//     the same way, and ends once the account is suspended again.
 //
 // The audience is AccountReachFinder's (app/lib/account_reach_finder.rb), read from indexed ranges at most REACH_ROUND
 // rows per round into moderation_reach, so each inbox appears once: the accepted followers up to the frozen bound
@@ -66,7 +66,10 @@ type Job = {
 	id: number
 	kind: JobKind
 	account_id: string
-	generation: string
+	// The credential epoch the job was made in.
+	generation: number
+	// The suspension's time S (a suspension job's), which its reports are judged against.
+	since: string | null
 	actor_account_id: string | null
 	intent_id: string | null
 	report_bound: number | null
@@ -97,12 +100,13 @@ function followBound(db: Db): number {
 
 function insertJob(db: Db, job: Omit<Job, 'id' | 'state'>, now: number): void {
 	db.run(
-		`INSERT INTO moderation_jobs (kind, account_id, generation, actor_account_id, intent_id, report_bound, follow_bound,
-			cutoff, phase, created_at)
-		VALUES (?, ?, ?, ?, CAST(? AS INTEGER), ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+		`INSERT INTO moderation_jobs (kind, account_id, generation, since, actor_account_id, intent_id, report_bound,
+			follow_bound, cutoff, phase, created_at)
+		VALUES (?, ?, ?, ?, ?, CAST(? AS INTEGER), ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
 		job.kind,
 		job.account_id,
 		job.generation,
+		job.since,
 		job.actor_account_id,
 		job.intent_id,
 		job.report_bound,
@@ -113,74 +117,53 @@ function insertJob(db: Db, job: Omit<Job, 'id' | 'state'>, now: number): void {
 	)
 }
 
-// The time of a new generation: now, or just after the account's last suspension or fence when the clock has not
-// passed them, so each generation differs from the one before.
-function generationAt(now: number, ...earlier: (string | null)[]): string {
-	const after = earlier.filter((at) => at !== null).map((at) => Date.parse(at) + 1)
-	return iso(Math.max(now, ...after))
-}
-
-type LocalState = { suspended_at: string | null; tokens_valid_after: string | null }
+type LocalState = { suspended_at: string | null; credential_epoch: number }
 
 function localState(db: Db, accountId: string): LocalState | undefined {
 	return db.first<LocalState>(
-		'SELECT suspended_at, tokens_valid_after FROM local_accounts WHERE account_id = ?',
+		'SELECT suspended_at, credential_epoch FROM local_accounts WHERE account_id = ?',
 		accountId
 	)
 }
 
-// Suspends a local account in one bounded transaction (above): a new generation S, also when it is suspended already
-// (Mastodon's suspend! sets suspended_at again and runs the suspension anew), which ends the jobs of the generation
-// before. `by` is the admin who suspends, whom the resolved reports name. Returns S, or null for an account that is not
-// local.
+// Suspends a local account in one bounded transaction (above): its time S and a new credential epoch, also when it is
+// suspended already (Mastodon's suspend! sets suspended_at again and runs the suspension anew), which ends the jobs of
+// the epoch before. `by` is the admin who suspends, whom the resolved reports name. Returns S, or null for an account
+// that is not local.
 export function suspendLocal(db: Db, accountId: string, by: string | null, now: number): string | null {
-	const state = localState(db, accountId)
-	if (state === undefined) {
+	const at = iso(now)
+	const epoch = db.first<{ epoch: number }>(
+		`UPDATE local_accounts SET suspended_at = ?, credential_epoch = credential_epoch + 1 WHERE account_id = ?
+		RETURNING credential_epoch AS epoch`,
+		at,
+		accountId
+	)?.epoch
+	if (epoch === undefined) {
 		return null
 	}
-	const at = generationAt(now, state.suspended_at, state.tokens_valid_after)
-	// The fence is S, or the newest credential of the account when a caller's clock stamped one later: every token, code
-	// and web session committed before this transaction is at or below it, whatever the clocks that stamped them. Push
-	// subscriptions are refused through their token. This reads the account's credentials (its own history), and
-	// writes nothing for them.
-	const newest = db.first<{ at: string | null }>(
-		'SELECT max(created_at) AS at FROM oauth_tokens INDEXED BY oauth_tokens_account WHERE account_id = ?',
-		accountId
-	)?.at
-	const fence = newest != null && newest > at ? newest : at
-	db.run(
-		'UPDATE local_accounts SET suspended_at = ?, tokens_valid_after = ? WHERE account_id = ?',
-		at,
-		fence,
-		accountId
-	)
-	insertJob(
-		db,
-		{
-			kind: 'tokens',
-			account_id: accountId,
-			generation: fence,
-			actor_account_id: null,
-			intent_id: null,
-			report_bound: null,
-			follow_bound: null,
-			cutoff: null,
-			phase: 'tokens',
-		},
-		now
-	)
+	const job = {
+		account_id: accountId,
+		generation: epoch,
+		since: null,
+		actor_account_id: null,
+		intent_id: null,
+		report_bound: null,
+		follow_bound: null,
+		cutoff: null,
+	}
+	insertJob(db, { ...job, kind: 'tokens', phase: 'tokens' }, now)
 	const update = moderationUpdate(db, accountId, now)!
 	insertJob(
 		db,
 		{
+			...job,
 			kind: 'suspension',
-			account_id: accountId,
-			generation: at,
+			since: at,
 			actor_account_id: by,
 			intent_id: beginStagedUpdate(db, accountId, update, now),
 			report_bound: reportBound(db),
 			follow_bound: followBound(db),
-			cutoff: iso(Date.parse(at) - RECENT_MS),
+			cutoff: iso(now - RECENT_MS),
 			phase: 'reports',
 		},
 		now
@@ -190,23 +173,30 @@ export function suspendLocal(db: Db, accountId: string, by: string | null, now: 
 }
 
 // Unsuspends a local account: clears suspended_at, which ends the suspension job at its next round, and records the
-// restoration Update with its reach job, bound to the fence of the suspension it lifts. The fence stays. Returns false
-// for an account that is not local or not suspended.
+// restoration Update with its reach job, bound to the account's epoch. The epoch stays, so the credentials from before
+// the suspension stay refused and new ones are valid at once. Returns false for an account that is not local or not
+// suspended.
 export function unsuspendLocal(db: Db, accountId: string, now: number): boolean {
 	const state = localState(db, accountId)
 	if (state?.suspended_at == null) {
 		return false
 	}
-	// A suspension from before the fence existed gets one at its time, so the reach job has a generation to hold to.
-	const fence = state.tokens_valid_after ?? state.suspended_at
-	db.run('UPDATE local_accounts SET suspended_at = NULL, tokens_valid_after = ? WHERE account_id = ?', fence, accountId)
+	// A suspension from before the epoch existed (0032_admin_suspension) never moved it: it moves once now, so the
+	// credentials from before that suspension end too.
+	const epoch = db.first<{ epoch: number }>(
+		`UPDATE local_accounts SET suspended_at = NULL,
+			credential_epoch = credential_epoch + (credential_epoch = 0) WHERE account_id = ?
+		RETURNING credential_epoch AS epoch`,
+		accountId
+	)!.epoch
 	const update = moderationUpdate(db, accountId, now)!
 	insertJob(
 		db,
 		{
 			kind: 'reach',
 			account_id: accountId,
-			generation: fence,
+			generation: epoch,
+			since: null,
 			actor_account_id: null,
 			intent_id: beginStagedUpdate(db, accountId, update, now),
 			report_bound: null,
@@ -221,7 +211,8 @@ export function unsuspendLocal(db: Db, accountId: string, now: number): boolean 
 }
 
 // Suspends a local account with no admin to name (suspendLocal), unlogged: the owner console calls it in a later
-// stage. Token validation and authorize refuse the account from then on, and the token fence its tokens and codes.
+// stage. Token validation and authorize refuse the account from then on, and its credential epoch its tokens and
+// codes.
 export const suspendAccount = writeOperation<{ accountId: string; now: number }, { suspended: boolean }>(
 	(db, { accountId, now }) => ({ suspended: suspendLocal(db, accountId, null, now) !== null })
 )
@@ -240,15 +231,15 @@ function finish(db: Db, job: Job): void {
 	db.run('DELETE FROM moderation_jobs WHERE id = ?', job.id)
 }
 
-// One round of the tokens job: the account's tokens after the cursor, in token order (oauth_tokens_account), each
-// fenced one deleted child-first; one created after the fence is passed over. The round stops before writing more than
+// One round of the tokens job: the account's tokens after the cursor, in token order (oauth_tokens_account), each one
+// of an epoch before the job's deleted child-first; one of the job's epoch or later is passed over. The round stops before writing more than
 // TOKEN_ROUND_ROWS rows, and the job ends once the walk reaches the last token.
 function tokensRound(db: Db, job: Job, state: JobState): void {
 	const start = totalChanges(db)
 	// What the round may still write, keeping one row for the job's own update or delete.
 	const room = () => TOKEN_ROUND_ROWS - 1 - (totalChanges(db) - start)
-	const tokens = db.all<{ token_hash: string; created_at: string }>(
-		`SELECT token_hash, created_at FROM oauth_tokens INDEXED BY oauth_tokens_account
+	const tokens = db.all<{ token_hash: string; epoch: number }>(
+		`SELECT token_hash, epoch FROM oauth_tokens INDEXED BY oauth_tokens_account
 		WHERE account_id = ? AND token_hash > ? ORDER BY token_hash LIMIT ?`,
 		job.account_id,
 		String(state.cursor ?? ''),
@@ -257,7 +248,7 @@ function tokensRound(db: Db, job: Job, state: JobState): void {
 	let cursor = String(state.cursor ?? '')
 	let stopped = false
 	for (const token of tokens) {
-		if (token.created_at <= job.generation) {
+		if (token.epoch < job.generation) {
 			const subscription = db.first<{ id: number }>(
 				'SELECT id FROM push_subscriptions WHERE token_hash = ?',
 				token.token_hash
@@ -297,16 +288,15 @@ function tokensRound(db: Db, job: Job, state: JobState): void {
 	}
 }
 
-// Whether the generation a job was made for still holds: the account still suspended at S (suspension), or still
-// unsuspended from the suspension whose fence the job carries (reach).
+// Whether the generation a job was made for still holds: the account still in the job's epoch, and still suspended
+// (suspension) or still unsuspended (reach).
 function current(db: Db, job: Job): boolean {
 	const state = localState(db, job.account_id)
-	if (state === undefined) {
-		return false
-	}
-	return job.kind === 'suspension'
-		? state.suspended_at === job.generation
-		: state.suspended_at === null && state.tokens_valid_after === job.generation
+	return (
+		state !== undefined &&
+		state.credential_epoch === job.generation &&
+		(state.suspended_at !== null) === (job.kind === 'suspension')
+	)
 }
 
 // Stages the inboxes of remote accounts; returns how many were not staged yet. A capped source counts only these, as
@@ -338,7 +328,7 @@ function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 				db,
 				job.account_id,
 				job.report_bound ?? 0,
-				job.generation,
+				job.since ?? '',
 				job.actor_account_id,
 				Number(state.cursor ?? 0),
 				REPORT_ROUND,
@@ -521,7 +511,7 @@ function mentionsRound(db: Db, job: Job, state: JobState): void {
 	}
 }
 
-const JOB_COLUMNS = `id, kind, account_id, generation, actor_account_id, CAST(intent_id AS TEXT) AS intent_id, report_bound,
+const JOB_COLUMNS = `id, kind, account_id, generation, since, actor_account_id, CAST(intent_id AS TEXT) AS intent_id, report_bound,
 	follow_bound, cutoff, phase, state`
 
 // One round of the next job after `after` (a job id), or of the oldest job when none comes after it, so the jobs of

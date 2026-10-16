@@ -611,20 +611,24 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   and answers 422 rather than an unordered or empty page. `listAdminAccounts`, `getAdminAccount` and
   `actOnAdminAccount` in `src/domain/admin-accounts.ts`, `src/mastodon/admin.ts`, migrations `0030_admin_accounts` and
   `0031_admin_accounts_available`; `test/admin-accounts.test.ts`, `test/policy-bounds.test.ts`,
-  `test/migrations.test.ts`. Local suspension, self-protection and the token fence are _implemented on branch
+  `test/migrations.test.ts`. Local suspension, self-protection and the credential epoch are _implemented on branch
   `kopje/admin-a3b`_, which grants manage_users (`ADMIN_PERMISSIONS = 1040`): the OAuth admin's `action` (`none`, which
   resolves the report it names, and `suspend` of a local account) and `unsuspend`; `disable`, `sensitive`, `silence`
   and a remote `suspend` answer 422, and any action on the admin's own account 403. A suspension commits, in one
-  bounded transaction, the account's `suspended_at` and its token fence `tokens_valid_after` at the same time S, the
-  frozen report and follow bounds, its jobs and its actor's `Update` with no targets. From that commit every access
-  token and code issued at or before the fence is refused (`unfencedSql`: API calls, web sessions, code exchange,
-  streaming, and pushes, queued or claimed), also after an unsuspension, which keeps the fence; the tokens job deletes
-  them later. The jobs are bound to their generation: the suspension's job resolves only the reports filed up to the
-  bound and untouched since S, and stops when the account is no longer suspended at S; an unsuspension's job stops when
-  the account is suspended again. A suspended local sender's queued deliveries are dropped when claimed, except
+  bounded transaction, the account's `suspended_at` (its time S) and a new credential epoch
+  (`local_accounts.credential_epoch`, incremented), the frozen report and follow bounds, its jobs and its actor's
+  `Update` with no targets. Every token, code and web session is stamped with its account's epoch in the transaction
+  that inserts it (`oauth_tokens.epoch`), and is valid only while that epoch is its account's, with no clock involved:
+  from the suspension's commit every credential issued before it is refused (`currentCredentialSql`: API calls, web
+  sessions, code exchange, streaming, pushes queued, claimed or confirmed, and the authorized apps listed), also after
+  an unsuspension, which keeps the epoch, so credentials issued after it are valid at once; the tokens job deletes the
+  older ones later. An unsuspension of a suspension made before the epoch existed moves it once. The jobs are bound to
+  their epoch: the suspension's job resolves only the reports filed up to the bound and last touched before S, and
+  stops when the account is unsuspended or in a later epoch; an unsuspension's job stops when the account is suspended
+  again. Reversed caller clocks between a reopen and the suspension (the same operator) are an accepted limit. A suspended local sender's queued deliveries are dropped when claimed, except
   retractions and its suspension `Update` (R1); a delivery leased before the suspension committed may still be sent
   while its lease lasts (the claim is the boundary until a send-time confirmation exists). `actOnAccount` and
-  `unsuspendAdminAccount` in `src/domain/admin-accounts.ts`, `src/domain/suspension.ts`, `unfencedSql` in
+  `unsuspendAdminAccount` in `src/domain/admin-accounts.ts`, `src/domain/suspension.ts`, `currentCredentialSql` in
   `src/domain/auth.ts`, `refusedSender` in `src/domain/deliveries.ts`, migration `0032_admin_suspension`;
   `test/admin-suspension.test.ts`, `test/cascade-guard.test.ts`, `test/migrations.test.ts`.
 
@@ -682,7 +686,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/admin-reports.test.ts` ("set-email"), `test/cli.test.ts`); unsuspending is _implemented on branch
   `kopje/admin-a3b`_ (`POST /admin/accounts/unsuspend` and `kopje-admin account unsuspend <username>`,
   `unsuspendAccount` in `src/domain/admin-accounts.ts`, checked with `accessAdminRefusal` in its transaction, the same
-  unsuspension as the admin API's, its token fence kept, logged with the Access identity;
+  unsuspension as the admin API's, its credential epoch kept, logged with the Access identity;
   `test/admin-suspension.test.ts` ("POST /admin/accounts/unsuspend"), `test/cli.test.ts`). It is how a suspended
   OAuth admin is recovered: no OAuth admin can unsuspend it.
 - **AUTH-6: a user acts only on what that user may touch.** User operations take the acting account from the validated
@@ -1205,7 +1209,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   however many follows the user has, and always succeeds (VIS-15, `test/blocks.test.ts`). Local suspension:
   _Implemented on branch `kopje/admin-a3b`:_ the suspension's transaction writes a fixed number of rows whatever the
   account's history; its work runs in durable `moderation_jobs` rounds with the inbound jobs, the jobs taking turns, at
-  most 4 rounds a run. The tokens job deletes a fenced token's push deliveries, then its subscription, then the token
+  most 4 rounds a run. The tokens job deletes an earlier epoch's token's push deliveries, then its subscription, then the token
   (`TOKEN_CHILDREN`, which the cascade guard keeps complete), so no delete cascades, at most 200 rows a round
   (`total_changes()`, its own row included). The suspension job resolves at most 100 reports a round, then stages the
   `Update`'s audience into `moderation_reach` from indexed ranges, 500 rows a round, each source capped as Mastodon's

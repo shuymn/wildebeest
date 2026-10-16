@@ -40,17 +40,24 @@ export type AuthFailure =
 
 export type Authorized<O> = AuthFailure | { status: 'ok'; value: O }
 
-// The token fence (migration 0032_admin_suspension): whether the token `t` (an oauth_tokens row, access or code) was
-// created after its account's fence, local_accounts.tokens_valid_after, read by key. A suspension sets the fence to
-// its time, so every token and code issued before it is refused at once and after the account is unsuspended, while
-// the tokens job deletes them in rounds (domain/suspension.ts). An app token has no account and no fence.
-export function unfencedSql(t: string): string {
+// The credential epoch (migration 0032_admin_suspension): whether the credential `t` (an oauth_tokens row: an access
+// token, a code or a web session) was issued in its account's current epoch, local_accounts.credential_epoch, read by
+// key. Every insert stamps the account's epoch (credentialEpochSql) and a suspension increments it, in their
+// transactions, so every credential issued before a suspension is refused from its commit on, also after an
+// unsuspension (which keeps the epoch), with no clock involved, while the tokens job deletes them in rounds
+// (domain/suspension.ts). An app token has no account and no epoch.
+export function currentCredentialSql(t: string): string {
 	return `NOT EXISTS (SELECT 1 FROM main.local_accounts fl WHERE fl.account_id = ${t}.account_id
-		AND fl.tokens_valid_after IS NOT NULL AND ${t}.created_at <= fl.tokens_valid_after)`
+		AND fl.credential_epoch <> ${t}.epoch)`
 }
 
+// The epoch a credential of the account bound to `?` is stamped with when it is inserted: its current one, 0 for an
+// app token.
+export const CREDENTIAL_EPOCH_SQL =
+	'coalesce((SELECT credential_epoch FROM main.local_accounts WHERE account_id = ?), 0)'
+
 // One indexed lookup by the token's sha256. A suspended account's tokens are refused even if one survived the
-// suspension, and a token behind its account's fence is refused as invalid (unfencedSql).
+// suspension, and a token of an earlier epoch is refused as invalid (currentCredentialSql).
 export function authorize(db: Db, credential: Credential): AuthFailure | { status: 'ok'; viewer: Viewer } {
 	const row = db.first<{
 		scopes: string
@@ -60,10 +67,10 @@ export function authorize(db: Db, credential: Credential): AuthFailure | { statu
 		name: string
 		website: string | null
 		suspended_at: string | null
-		fenced: number
+		stale: number
 	}>(
 		`SELECT t.scopes, t.account_id, t.expires_at, c.id AS client_id, c.name, c.website, l.suspended_at,
-			coalesce(t.created_at <= l.tokens_valid_after, 0) AS fenced
+			coalesce(t.epoch <> l.credential_epoch, 0) AS stale
 		FROM oauth_tokens t
 		JOIN oauth_clients c ON c.id = t.client_id
 		LEFT JOIN local_accounts l ON l.account_id = t.account_id
@@ -76,7 +83,7 @@ export function authorize(db: Db, credential: Credential): AuthFailure | { statu
 	if (row.suspended_at !== null) {
 		return { status: 'suspended' }
 	}
-	if (row.fenced === 1) {
+	if (row.stale === 1) {
 		return { status: 'unauthenticated' }
 	}
 	const scopes = row.scopes.split(' ')

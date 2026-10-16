@@ -1,5 +1,12 @@
 import { type CredentialAccount, credentialAccount, type Present } from './accounts'
-import { authorize, type AuthFailure, type Authorized, type UserCredential, type UserViewer } from './auth'
+import {
+	authorize,
+	type AuthFailure,
+	type Authorized,
+	currentCredentialSql,
+	type UserCredential,
+	type UserViewer,
+} from './auth'
 import { consumeCode, insertAccessToken, webClientId, WEB_CLIENT_SETTING } from './oauth'
 import { readOperation, sessionOperation } from './operation'
 import type { Db } from '../db/sql'
@@ -291,8 +298,8 @@ export type Authorization = {
 
 export type Authorizations = { apps: Authorization[]; otherSessions: number }
 
-// The apps the user has authorized (live tokens and pending codes, per app), as Mastodon's "Authorized apps" lists
-// them, and how many other web sessions the user has.
+// The apps the user has authorized (live tokens and pending codes of the current credential epoch, per app), as
+// Mastodon's "Authorized apps" lists them, and how many other web sessions the user has.
 function authorizationsOf(
 	db: Db,
 	accountId: string,
@@ -305,14 +312,15 @@ function authorizationsOf(
 		`SELECT c.id, c.name, c.website, group_concat(t.scopes, ' ') AS scopes, min(t.created_at) AS authorized_at
 		FROM oauth_tokens t JOIN oauth_clients c ON c.id = t.client_id
 		WHERE t.account_id = ?1 AND t.client_id <> ?2 AND (t.expires_at IS NULL OR t.expires_at > ?3)
+			AND ${currentCredentialSql('t')}
 		GROUP BY c.id ORDER BY authorized_at, c.id`,
 		accountId,
 		webClient,
 		nowIso
 	)
 	const others = db.first<{ n: number }>(
-		`SELECT COUNT(*) AS n FROM oauth_tokens WHERE account_id = ? AND client_id = ? AND kind = 'access'
-			AND token_hash <> ? AND (expires_at IS NULL OR expires_at > ?)`,
+		`SELECT COUNT(*) AS n FROM oauth_tokens t WHERE account_id = ? AND client_id = ? AND kind = 'access'
+			AND token_hash <> ? AND (expires_at IS NULL OR expires_at > ?) AND ${currentCredentialSql('t')}`,
 		accountId,
 		webClient,
 		tokenHash,

@@ -3515,33 +3515,34 @@ describe('0032_admin_suspension', () => {
 		)
 	}
 
-	it('adds the token fence and the jobs, whose staged audience a job deletes itself', async () => {
+	it('adds the credential epochs and the jobs, whose staged audience a job deletes itself', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
 			const sql = state.storage.sql
 			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
-			seed(sql, 2)
+			seed(sql, 2, 1)
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
 				ok: true,
 				applied: ['0032_admin_suspension'],
 			})
-			expect(sql.exec('SELECT tokens_valid_after FROM local_accounts').toArray()).toEqual([
-				{ tokens_valid_after: null },
-				{ tokens_valid_after: null },
+			expect(sql.exec('SELECT DISTINCT epoch FROM oauth_tokens').toArray()).toEqual([{ epoch: 0 }])
+			expect(sql.exec('SELECT credential_epoch FROM local_accounts').toArray()).toEqual([
+				{ credential_epoch: 0 },
+				{ credential_epoch: 0 },
 			])
 			sql.exec(
-				"INSERT INTO moderation_jobs (kind, account_id, generation, phase, created_at) VALUES ('suspension', ?, 'g', 'reports', 1)",
+				"INSERT INTO moderation_jobs (kind, account_id, generation, phase, created_at) VALUES ('suspension', ?, 1, 'reports', 1)",
 				id(1)
 			)
 			expect(() =>
 				sql.exec(
-					"INSERT INTO moderation_jobs (kind, account_id, generation, phase, created_at) VALUES ('suspension', ?, 'g', 'x', 1)",
+					"INSERT INTO moderation_jobs (kind, account_id, generation, phase, created_at) VALUES ('suspension', ?, 1, 'x', 1)",
 					id(1)
 				)
 			).toThrow(/UNIQUE constraint failed/)
 			expect(() =>
 				sql.exec(
-					"INSERT INTO moderation_jobs (kind, account_id, generation, phase, created_at) VALUES ('silence', ?, 'g', 'x', 1)",
+					"INSERT INTO moderation_jobs (kind, account_id, generation, phase, created_at) VALUES ('silence', ?, 1, 'x', 1)",
 					id(1)
 				)
 			).toThrow(/CHECK constraint failed/)

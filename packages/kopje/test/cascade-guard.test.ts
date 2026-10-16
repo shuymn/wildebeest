@@ -210,7 +210,7 @@ describe('cascade guard below local_accounts (RES-6)', () => {
 })
 
 describe('cascade guard below oauth_tokens (RES-6)', () => {
-	// The tokens job of a suspension (src/domain/suspension.ts) deletes a fenced token's rows child-first, in
+	// The tokens job of a suspension (src/domain/suspension.ts) deletes the rows of a token of an earlier epoch child-first, in
 	// TOKEN_CHILDREN's order, and the token last, so no delete cascades and each round counts what it writes. A table
 	// that cascades from oauth_tokens but is missing there would be emptied by the token's delete, unbounded.
 	it('lists every table that cascades from oauth_tokens, each before the tables it cascades from', async () => {

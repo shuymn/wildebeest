@@ -367,7 +367,7 @@ deletion has started) as suspended, its nested account redacted as everywhere. T
 
 The admin suspends a local account other than its own (`POST .../action` with `suspend`, `src/domain/suspension.ts`),
 which makes it unavailable (R1) at once, and unsuspends it. The suspension refuses every token and code issued before
-it, also after the unsuspension (the token fence), resolves the reports on the account frozen at its time, and sends an
+it, also after the unsuspension (the credential epoch, which a suspension moves and an unsuspension keeps), resolves the reports on the account frozen at its time, and sends an
 `Update` of the redacted actor; the unsuspension sends one of the full actor. Both go to the audience of Mastodon's
 `AccountReachFinder` (R23, `reachFollowers`, `reachMentioned` and `reachFollowing` in `audience.ts`): the accepted
 remote followers, the remote accounts its newest 200 statuses of the two days before the suspension mention (at most

@@ -79,9 +79,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `POST /api/v1/admin/accounts/:id/unsuspend` lifts a local suspension and returns the account.
     - A suspended account is unavailable at once: hidden as before, and every access token, web session, unused
       authorization code and push subscription it had is refused from that moment, also after it is unsuspended, so
-      the user signs in again. Its tokens are deleted afterwards, in the background.
+      the user signs in again, which works as soon as it is unsuspended. This needs no clock: each credential carries
+      the account's credential epoch, which a suspension moves. Its tokens are deleted afterwards, in the background.
     - Its unresolved reports filed before the suspension are resolved, in the background, unless the admin changed one
-      since; a report filed later stays open.
+      since, even in the suspension's own millisecond; a report filed later stays open.
     - Other servers are sent an `Update` of its actor, redacted and marked `suspended`, and on unsuspension one of the
       full actor, as Mastodon sends them: to its remote followers, the remote accounts its posts of the two days
       before the suspension mention, and those it followed or asked to follow in those days. The audience is gathered
@@ -125,9 +126,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0031_admin_accounts_available`: adds an index of the accounts whose deletion has not started, by id, so the
       admin's list of active accounts skips none awaiting their purge. It reads only the accounts: on the same
       benchmark store its upgrade took 2.8 seconds.
-    - `0032_admin_suspension`: adds the token fence column to the local accounts and the empty tables of the
-      moderation jobs and their staged audience. It reads no row: on the same benchmark store its upgrade took
-      3.0 seconds (4.1 in a first run on a busier machine), the kernel's own fixed cost.
+    - `0032_admin_suspension`: adds the credential epoch columns to the local accounts and the OAuth tokens, and the
+      empty tables of the moderation jobs and their staged audience. The columns have a constant default, so it reads
+      no row: on the same benchmark store its upgrade took 2.3 seconds.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.9] - 2026-10-16
