@@ -1267,15 +1267,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   for status cursors: `statusCursor` in `src/domain/statuses.ts` (_Gap: untested_).
 - **DATA-7: the instance key signs only recipient-neutral fetches and the instance actor's own activities.** Fetches
   without a specific recipient are signed by the instance actor; fetches for a personal inbox by the recipient's key;
-  activities by their author's key. The instance key never signs an activity attributed to a user: the one activity
-  it signs is a forwarded report's `Flag`, whose actor is the instance actor (Mastodon's `Account.representative`).
+  activities by their author's key. The instance key never signs an activity attributed to a user: the one activity it
+  signs is a forwarded report's `Flag`, whose actor is the instance actor (Mastodon's `Account.representative`).
   _Enforced (main)_ for fetches: `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("signed fetches").
   Activities: _Enforced (main):_ a delivery is signed with the key of its lane's account, unwrapped once per round
   (`src/jobs/deliver.ts`); `test/delivery-post.test.ts` ("signs the activity with its author key"). _Implemented on
   branch `kopje/reports`:_ an intent recorded with `signedBy: 'instance'` (only `flagActivity` in
-  `src/domain/activities.ts` makes one, with the instance actor as its actor) is signed with the instance key
-  (`claimDeliveries` in `src/domain/deliveries.ts`); `test/reports.test.ts` ("posts the Flag signed with the instance
-  actor's key").
+  `src/domain/activities.ts` makes one, with the instance actor as its actor) is signed with the instance key, which the
+  delivery round loads through `instanceActorKey` (`src/federation/federation.ts`, the race-safe initialization signed
+  fetches and `/actor` use), creating it if nothing has yet (`deliveryRound` in `src/jobs/deliver.ts`);
+  `test/reports.test.ts` ("posts the Flag signed with the instance actor's key", "creates the instance actor's key
+  when no fetch has yet").
 - **DATA-9: backup credentials stay out of the Store, logs and reports, and are scoped.** The S3 key is a Worker
   secret, read apart from the main config so a bad backup setting stops only the backup. Config issues name the
   variable, never its value. Failures are recorded and logged as fixed reason codes (`s3-<op>-<status|timeout>`,

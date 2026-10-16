@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { bearer, json, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { LEGACY } from './federation-helpers'
+import { fixtureKeyGen, LEGACY } from './federation-helpers'
 import { scopedToken } from './read-helpers'
 import { block, community, outbound, remoteAccount, seedStatus, type User } from './status-helpers'
 import { Db } from '../src/db/sql'
@@ -37,6 +37,22 @@ async function report(
 ) {
 	const response = await h.request('/api/v1/reports', bearer(user.token, json(body)))
 	return { status: response.status, body: (await response.json()) as ReportBody & { error?: string } }
+}
+
+// The instance actor's document as a receiver fetches it, with the given public key.
+function instanceActorLoader(publicKeyPem: string): DocumentLoader {
+	return (url) =>
+		Promise.resolve({
+			contextUrl: null,
+			documentUrl: url,
+			document: {
+				'@context': ['https://www.w3.org/ns/activitystreams', 'https://w3id.org/security/v1'],
+				id: INSTANCE_ACTOR,
+				type: 'Application',
+				inbox: `${INSTANCE_ACTOR}/inbox`,
+				publicKey: { id: `${INSTANCE_ACTOR}#main-key`, owner: INSTANCE_ACTOR, publicKeyPem },
+			},
+		})
 }
 
 async function count(store: StoreStub, query: string, ...params: SqlStorageValue[]): Promise<number> {
@@ -414,36 +430,44 @@ describe('forwarding a report (R23, DATA-7)', () => {
 		const [request] = sent
 		expect(request?.url).toBe('https://remote.example/inbox')
 		expect(request?.headers.get('signature')).toContain(`keyId="${INSTANCE_ACTOR}#main-key"`)
-		const loader: DocumentLoader = (url) =>
-			Promise.resolve({
-				contextUrl: null,
-				documentUrl: url,
-				document: {
-					'@context': ['https://www.w3.org/ns/activitystreams', 'https://w3id.org/security/v1'],
-					id: INSTANCE_ACTOR,
-					type: 'Application',
-					inbox: `${INSTANCE_ACTOR}/inbox`,
-					publicKey: { id: `${INSTANCE_ACTOR}#main-key`, owner: INSTANCE_ACTOR, publicKeyPem: LEGACY.pubkey },
-				},
-			})
-		expect(await verifyRequestDetailed(request!.clone(), { documentLoader: loader })).toMatchObject({ verified: true })
+		expect(
+			await verifyRequestDetailed(request!.clone(), { documentLoader: instanceActorLoader(LEGACY.pubkey) })
+		).toMatchObject({ verified: true })
 		expect(JSON.parse(await request!.text())).toMatchObject({ type: 'Flag', actor: INSTANCE_ACTOR })
 	})
 
-	it('retries a Flag while the instance actor has no key yet', async () => {
-		const { h, alice, carol } = await reporting()
-		await report(h, alice, { account_id: carol, forward: true })
-		const fetch = vi.fn() as unknown as typeof globalThis.fetch
+	it('creates the instance actor’s key when no fetch has yet, and posts the Flag signed with it', async () => {
+		const { h, alice, carol, status } = await reporting()
+		// A fresh instance that knows carol through a personal inbox alone has never signed as the instance actor.
+		expect(await sql(h.store, "SELECT 1 FROM instance_settings WHERE name = 'instance_actor_key'")).toEqual([])
+		await report(h, alice, { account_id: carol, status_ids: [status], forward: true })
+		const sent: Request[] = []
+		const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			sent.push(new Request(input, init))
+			return new Response(null, { status: 202 })
+		}) as unknown as typeof globalThis.fetch
 		const result = await deliveryRound({ ...env, USER_KEK: LEGACY.kek } as unknown as Env, {
 			build: () => env.CF_VERSION_METADATA.id,
 			store: () => h.store,
 			now: () => NOW,
 			fetch,
 			checkHost: () => Promise.resolve(),
+			keygen: fixtureKeyGen,
 		})
-		expect(result).toMatchObject({ claimed: 1, settled: ['retry'] })
-		expect(fetch).not.toHaveBeenCalled()
-		expect(await sql(h.store, 'SELECT last_error FROM deliveries')).toEqual([{ last_error: 'signing key unavailable' }])
+		expect(result).toMatchObject({ claimed: 1, settled: ['delivered'] })
+		const [stored] = await sql<{ value: string }>(
+			h.store,
+			"SELECT value FROM instance_settings WHERE name = 'instance_actor_key'"
+		)
+		const { pubkey } = JSON.parse(stored!.value) as { pubkey: string }
+		const [request] = sent
+		expect(request?.url).toBe('https://remote.example/inbox')
+		expect(request?.headers.get('signature')).toContain(`keyId="${INSTANCE_ACTOR}#main-key"`)
+		expect(
+			await verifyRequestDetailed(request!.clone(), { documentLoader: instanceActorLoader(pubkey) })
+		).toMatchObject({ verified: true })
+		expect(JSON.parse(await request!.text())).toMatchObject({ type: 'Flag', actor: INSTANCE_ACTOR })
+		expect(await count(h.store, 'SELECT 1 FROM deliveries')).toBe(0)
 	})
 })
 

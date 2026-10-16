@@ -1,4 +1,3 @@
-import { decodeKey, readInstanceKey } from './actors'
 import { isActorObject, outboundKind, recipientsFor } from './audience'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
@@ -694,6 +693,8 @@ export type Claim = {
 	leaseUntil: number
 	deliveries: ClaimedDelivery[]
 	signers: Record<string, DeliverySigner>
+	// The instance actor's URI when a claimed delivery is the instance actor's (INSTANCE_SIGNER), else null.
+	instanceActor: string | null
 	nextDueAt: number | null
 }
 
@@ -757,20 +758,10 @@ function bodyFor(activity: string, addressee: string | null): string {
 	return JSON.stringify(parsed)
 }
 
-// The key of claim.signers for the instance actor: no account id, which is 18 digits, can be it.
+// The signer of a delivery the instance actor signs: no account id, which is 18 digits, can be it. Its key is not in
+// claim.signers; the Worker loads it, creating it if it does not exist yet (instanceActorKey in federation.ts), and
+// signs as claim.instanceActor.
 export const INSTANCE_SIGNER = 'instance'
-
-// The instance actor (Mastodon's Account.representative, served at /actor) as a signer, or null before its key exists
-// (federation.ts creates it on first use; a delivery without a key is retried).
-function instanceSigner(db: Db): DeliverySigner | null {
-	const domain = db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'domain'")?.value
-	const key = readInstanceKey(db)
-	if (domain === undefined || key === null) {
-		return null
-	}
-	const { privkey, salt, pubkey } = decodeKey(key)
-	return { actorUri: `https://${domain}/actor`, privkey, salt, pubkey }
-}
 
 // Expands one step, then leases up to `limit` due lane heads (RES-6: a claim reads and returns a bounded number of
 // rows). An expired lease is due again; one that has used up its attempts is given up instead of claimed.
@@ -816,10 +807,6 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 		const signers: Record<string, DeliverySigner> = {}
 		for (const accountId of new Set(claimed.map((c) => c.signer))) {
 			if (accountId === INSTANCE_SIGNER) {
-				const signer = instanceSigner(db)
-				if (signer !== null) {
-					signers[accountId] = signer
-				}
 				continue
 			}
 			const key = db.first<{ uri: string; privkey: ArrayBuffer; privkey_salt: ArrayBuffer; pubkey: string }>(
@@ -836,7 +823,10 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 				}
 			}
 		}
-		return { leaseToken, leaseUntil, deliveries: claimed, signers, nextDueAt: nextDueAt(db, now) }
+		const domain = db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'domain'")?.value
+		const instanceActor =
+			domain !== undefined && claimed.some((c) => c.signer === INSTANCE_SIGNER) ? `https://${domain}/actor` : null
+		return { leaseToken, leaseUntil, deliveries: claimed, signers, instanceActor, nextDueAt: nextDueAt(db, now) }
 	}
 )
 
