@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.7] - 2026-10-16
+
+A seventh release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - The notification policy and notification requests, as Mastodon 4.5 has them: `GET`, `PATCH` and `PUT` of
