@@ -290,6 +290,41 @@ describe('kopje-admin', () => {
 		expect((await cli(['deliveries', '--before', 'x'], { fetch })).code).toBe(2)
 	})
 
+	it("sets a local account's email and shows the moderation log (VIS-29, AUTH-5)", async () => {
+		const store = await sourceStore(0)
+		const { fetch } = edge(store)
+		expect(JSON.parse((await cli(['account', 'set-email', 'alice', ADMIN_EMAIL], { fetch })).out)).toEqual({
+			username: 'alice',
+			email: ADMIN_EMAIL,
+		})
+		expect(JSON.parse((await cli(['health'], { fetch })).out)).toMatchObject({
+			oauthAdmin: { status: 'ok', username: 'alice' },
+		})
+		const log = JSON.parse((await cli(['moderation-log'], { fetch })).out)
+		expect(log).toMatchObject({
+			entries: [
+				{
+					actor: 'access',
+					action: 'change_email',
+					target_type: 'Account',
+					// The service token's client id; the CLI masks its own credentials in what it prints.
+					detail: { username: 'alice', identity: '***' },
+				},
+			],
+			next: null,
+		})
+		expect(JSON.parse((await cli(['moderation-log', '--before', log.entries[0].id], { fetch })).out)).toEqual({
+			entries: [],
+			next: null,
+		})
+		const missing = await cli(['account', 'set-email', 'nobody', 'n@example.com'], { fetch })
+		expect(missing.code).toBe(1)
+		expect(missing.err).toContain('no local account @nobody')
+		expect((await cli(['account', 'set-email', 'alice'], { fetch })).code).toBe(2)
+		expect((await cli(['account', 'unsuspend', 'alice'], { fetch })).code).toBe(2)
+		expect((await cli(['moderation-log', '--before', 'x'], { fetch })).code).toBe(2)
+	})
+
 	it('checks its arguments', async () => {
 		const { fetch } = edge(await sourceStore(0))
 		expect((await cli([], { fetch })).code).toBe(2)

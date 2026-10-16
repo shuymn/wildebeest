@@ -95,7 +95,12 @@ describe('the OAuth admin (adminAccountId)', () => {
 		const token = await userToken(h, OWNER)
 		expect(await run(h.store, reportsRead, token)).toEqual({
 			status: 'ok',
-			value: { accountId: owner, clientId: expect.any(String), now: NOW },
+			value: {
+				accountId: owner,
+				clientId: expect.any(String),
+				now: NOW,
+				context: { accountId: owner, now: new Date(NOW).toISOString() },
+			},
 		})
 	})
 
@@ -211,24 +216,42 @@ describe('admin operations', () => {
 		expect(await run(h.store, usersRead, token, 'admin:read:accounts')).toEqual({ status: 'forbidden' })
 	})
 
-	it('grant no permission yet (ADMIN_PERMISSIONS = 0), so every admin operation refuses the admin', async () => {
-		const { h } = await withAdmin()
-		expect(ADMIN_PERMISSIONS).toBe(0)
+	it('grant manage_reports only (ADMIN_PERMISSIONS = 16), so every other admin operation refuses the admin', async () => {
+		const { h, owner } = await withAdmin()
+		expect(ADMIN_PERMISSIONS).toBe(ADMIN_PERMISSION.manageReports)
 		const token = await userToken(h, OWNER)
 		for (const permission of Object.values(ADMIN_PERMISSION)) {
-			const read = adminReadOperation(permission, () => 'read')
-			const write = adminWriteOperation(permission, () => 'written')
-			expect(await run(h.store, read as Operation, token, 'admin:read')).toEqual({ status: 'forbidden' })
-			expect(await run(h.store, write as Operation, token, 'admin:write')).toEqual({ status: 'forbidden' })
+			const read = adminReadOperation(permission, (_db, _input, admin) => admin.accountId)
+			const write = adminWriteOperation(permission, (_db, _input, admin) => admin.accountId)
+			const want =
+				permission === ADMIN_PERMISSION.manageReports ? { status: 'ok', value: owner } : { status: 'forbidden' }
+			expect(await run(h.store, read as Operation, token, 'admin:read')).toEqual(want)
+			expect(await run(h.store, write as Operation, token, 'admin:write')).toEqual(want)
 		}
 	})
 
-	it("leave every account's role the default one", async () => {
+	it("present the OAuth admin's role as Owner with the permissions served, and everyone else's as the default", async () => {
 		const { h } = await withAdmin()
-		const response = await h.request('/api/v1/accounts/verify_credentials', bearer(await userToken(h, OWNER)))
-		expect(await response.json()).toMatchObject({
-			role: { id: '-99', name: '', permissions: '0', color: '', highlighted: false },
+		const role = async (email: string) =>
+			(
+				await (
+					await h.request('/api/v1/accounts/verify_credentials', bearer(await userToken(h, email)))
+				).json<{
+					role: unknown
+				}>()
+			).role
+		expect(await role(OWNER)).toEqual({ id: '3', name: 'Owner', permissions: '16', color: '', highlighted: true })
+		expect(await role('alice@example.com')).toEqual({
+			id: '-99',
+			name: '',
+			permissions: '0',
+			color: '',
+			highlighted: false,
 		})
+		// The role follows the match: once admin_email names alice, she is the Owner and the owner is not.
+		await setSetting(h.store, 'admin_email', 'alice@example.com')
+		expect(await role('alice@example.com')).toMatchObject({ id: '3', name: 'Owner' })
+		expect(await role(OWNER)).toMatchObject({ id: '-99' })
 	})
 })
 
@@ -238,10 +261,13 @@ describe('admin routes (AUTH-2)', () => {
 	const UNSTORED = /\/admin\/(domain_blocks|domain_allows|ip_blocks|email_domain_blocks|canonical_email_blocks)\/:id$/
 	const TRENDS = /^\/api\/v1\/admin\/trends\/(tags|links|statuses)$/
 
-	const expected = (path: string): { status: number; body: unknown } =>
-		TRENDS.test(path)
+	// Reports are served (manage_reports): to the admin, the list (empty here) and, for an id that is not a report,
+	// 404; to everyone else 403, as to a role without the permission.
+	const REPORTS = /^\/api\/v1\/admin\/reports(\/|$)/
+	const expected = (path: string, who = 'user'): { status: number; body: unknown } =>
+		TRENDS.test(path) || (who === 'admin' && path === '/api/v1/admin/reports')
 			? { status: 200, body: [] }
-			: UNSTORED.test(path)
+			: UNSTORED.test(path) || (who === 'admin' && REPORTS.test(path))
 				? { status: 404, body: { error: 'Record not found' } }
 				: { status: 403, body: { error: 'This action is not allowed' } }
 
@@ -260,7 +286,7 @@ describe('admin routes (AUTH-2)', () => {
 		expect(answers.filter((status) => status === 403)).toHaveLength(46)
 	})
 
-	it('answer anonymous callers, app tokens, other users and the admin alike', async () => {
+	it('answer anonymous callers, app tokens and other users alike, and the admin so for the routes not served', async () => {
 		const h = await apiHarness()
 		await seedAccount(h.store, { username: 'owner', email: OWNER })
 		await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
@@ -268,8 +294,8 @@ describe('admin routes (AUTH-2)', () => {
 		const callers = await tokens(h)
 		for (const route of adminRoutes) {
 			const path = route.path.replace(/:\w+/g, '1')
-			const want = expected(route.path)
 			for (const [who, token] of Object.entries(callers)) {
+				const want = expected(route.path, who)
 				const init = { method: route.method }
 				const response = await h.request(path, token === null ? init : bearer(token, init))
 				expect(response.status, `${route.method} ${route.path} as ${who}`).toBe(want.status)

@@ -12,6 +12,14 @@ Commands
   deliveries [--before <id>]    delivery backlog and the deliveries that gave up, newest first
   deliveries retry <id>...|--all
                                 put given-up deliveries back in their lanes with fresh attempts
+  moderation-log [--before <id>]
+                                the moderation log, newest first: every admin write through the Mastodon admin API
+                                and every account repair below, with who made it
+  account set-email <username> <email>
+                                set a local account's email (it signs in with it through Access). Refused when another
+                                local account's email is the same after trimming and lowercasing. Repairs the Mastodon
+                                admin API's admin, the one local account whose email matches admin_email (health shows
+                                oauthAdmin); logged in the moderation log
   maintenance on|off            enter or leave the Store's readonly maintenance
   upgrade retry                 re-run a failed schema upgrade for the current build
   media-rebuild [--dry-run]     make the served files of local media whose files are missing (a restore, the
@@ -667,6 +675,25 @@ export async function run({
 					throw new UsageError('--before takes a delivery id')
 				}
 				print(await client.get(`/admin/deliveries${before === undefined ? '' : `?before=${before}`}`))
+				return 0
+			}
+			case 'moderation-log': {
+				if (rest.length > 0) {
+					throw new UsageError('moderation-log [--before <id>]')
+				}
+				const before = flags.before
+				if (before !== undefined && (typeof before !== 'string' || !/^\d{1,19}$/.test(before))) {
+					throw new UsageError('--before takes a log entry id')
+				}
+				print(await client.get(`/admin/moderation-log${before === undefined ? '' : `?before=${before}`}`))
+				return 0
+			}
+			case 'account': {
+				const [action, username, email] = rest
+				if (action !== 'set-email' || username === undefined || email === undefined || rest.length !== 3) {
+					throw new UsageError('account set-email <username> <email>')
+				}
+				print(await client.post('/admin/accounts/email', { username, email }))
 				return 0
 			}
 			case 'catalog':

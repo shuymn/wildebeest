@@ -171,11 +171,13 @@ const RULES: readonly Rule[] = [
 		},
 	},
 	{
-		// R34: a report is its reporter's; only its writer reads it, and a purge deletes the reports of the account.
+		// R34: a report is its reporter's; only its writer reads it, then the OAuth admin (R37), and a purge deletes the
+		// reports of the account.
 		name: 'reads or writes reports',
 		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['reports'])}`, 'i'),
 		allowed: {
-			'../src/domain/reports.ts': 'the reporter’s report, written and answered once (createReport)',
+			'../src/domain/reports.ts':
+				'the reporter’s report, written and answered once (createReport), and the OAuth admin’s reads and actions (R37)',
 			'../src/domain/inbox.ts': 'an actor purge deletes the reports of the account',
 		},
 	},

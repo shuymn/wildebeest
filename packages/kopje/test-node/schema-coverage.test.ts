@@ -32,6 +32,7 @@ const NOT_CARRIED: Record<string, string> = {
 		'legacy never wrote its account_notes table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	account_pins:
 		'legacy never wrote its endorsements table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
+	admin_actions: 'the moderation log of Kopje; legacy Wildebeest has no admin API and logs no moderation',
 	backup_media: 'the backup media index of one bucket; a converted Store starts a fresh baseline',
 	collection_syncs: "work Kopje asks for when it stores a remote account's document; legacy has none",
 	collection_pins_pending: 'pinned statuses a sync of Kopje has yet to fetch; legacy has none',
